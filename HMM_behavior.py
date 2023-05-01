@@ -191,4 +191,4 @@ plt.suptitle('Hidden Markov Model Inference', fontsize=16)
 
 format = 'png'
 f.tight_layout()
-plt.savefig('../figures/HMM_behavior.' + format, format=format)
+plt.savefig('./figures/HMM_behavior.' + format, format=format)

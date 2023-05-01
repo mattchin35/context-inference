@@ -31,20 +31,20 @@ if __name__ == '__main__':
     # plt.plot(x_moving, y, label='moving average action, n={}'.format(n), c='m')
     plt.yticks([0,1],['Left', 'Right'])
     plt.ylim([-.1,1.1])
-    plt.ylabel('Actions')
-    plt.xlabel('Trial')
-    plt.title('Reward-only model behavior')
+    plt.ylabel('Actions', fontsize=14)
+    plt.xlabel('Trial', fontsize=14)
+    plt.title('Reward-only model behavior', fontsize=16)
     ax = plt.gca()
     # ax.legend()
     ax2 = ax.twinx()
     plt.sca(ax2)
-    plt.plot(x, experiment.states, label='state', c='g')
-    plt.ylabel('States')
+    plt.plot(x, experiment.states, label='context', c='g')
+    plt.ylabel('Context', fontsize=14)
     # plt.legend()
 
     format = 'png'
     f.tight_layout()
-    plt.savefig('../figures/nonstationary_bandit_actions.' + format, format=format)
+    plt.savefig('./figures/nonstationary_bandit_actions.' + format, format=format)
 
     # ax[1].plot
     f1 = plt.figure()
@@ -67,5 +67,5 @@ if __name__ == '__main__':
     # # plt.plot(x, Q[:, 0], label='value, withhold')
     # plt.legend()
     f.tight_layout()
-    plt.savefig('../figures/nonstationary_bandit_rewards.' + format, format=format)
+    plt.savefig('./figures/nonstationary_bandit_rewards.' + format, format=format)
     # plt.show()
