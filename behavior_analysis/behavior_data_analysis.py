@@ -2,16 +2,10 @@ import pandas as pd
 import os
 import numpy as np
 import scipy as sp
-from tkinter import *
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import fileIO
-# from IPython.display import display, HTML
-# pd.set_option('display.max_rows', None) #these four lines permit printing of the entire data frame
-# pd.set_option('display.max_columns', None)
-# pd.set_option('display.width', None)
-# pd.set_option('display.max_colwidth', None)
-# display(HTML("<style>.container { width:100% !important; }</style>"))
+import re
 
 """
 Read and analyze ABC1C2 data as provided by Mitch. Not using a GUI to make the plots here - hardcoding only.
@@ -26,6 +20,8 @@ def generate_session_raster(session, fig_name, fig_path, timespan=None):
     """
     Create a raster plot from a single session.
     session is a dictionary of pandas dataframes.
+
+    TODO: renovate this program to use a dataframe of the session.
     """
     if timespan is None:
         timespan = (0, np.inf)
@@ -35,7 +31,6 @@ def generate_session_raster(session, fig_name, fig_path, timespan=None):
     cleaned_df = cleaned_df[cleaned_df['Output'] != 'exit_standby']
     events = np.unique(cleaned_df['Output'].values)
 
-    # behavior_outputs = ['left_entry', 'right_entry', 'pump1_reward_3', 'pump2_reward_3']
     event_list = ['left_entry', 'right_entry',
                   'pump1_reward_0', 'pump1_reward_3',
                   'pump2_reward_0', 'pump2_reward_3',
@@ -95,7 +90,7 @@ def generate_session_raster(session, fig_name, fig_path, timespan=None):
     # plt.show()
 
 
-def plot_binned_behavior(session, fig_name, fig_path, bin_range=None, plot=False):
+def plot_binned_behavior(session_df, fig_name, fig_path, bin_range=None, plot=False):
     """
     session is a dictionary of pandas dataframes.
     """
@@ -103,52 +98,53 @@ def plot_binned_behavior(session, fig_name, fig_path, bin_range=None, plot=False
         bin_range = (0, np.inf)
         # bin_range = [0, 30]
 
-    output_list = ['left_entry', 'right_entry', 'pump1_reward_0', 'pump1_reward_3',
-                   'pump2_reward_0', 'pump2_reward_3', 'current_ITI_2', 'current_ITI_3', 'current_ITI_4']
+    unique_events = session_df['Event'].unique()
+    event_list = ['left_entry', 'right_entry']
+        # , 'pump1_reward_0', 'pump1_reward_3', 'pump2_reward_0', 'pump2_reward_3'] #, 'current_ITI_2', 'current_ITI_3', 'current_ITI_4']
+
+    # regex search for the available pump options
+    for e in unique_events:
+        if re.fullmatch('pump.*', e):
+            event_list.append(e)
 
     transition_list = ['enter_ContextA', 'enter_ContextB', 'enter_intercontext_interval', 'enter_ContextC1',
                        'enter_ContextC2']
 
-    # Generate bins based on the timestamps of the transition list
-    bins = []
-    bin_type = []
-    for transition in transition_list:
-        if transition in session.keys():
-            timestamps = session[transition]['Time'].values
-            bins.extend(timestamps)  # collect the timestamps for every transition into one list
-            bin_type.extend([transition] * len(timestamps))
+    transition_ix = (session_df['Event'] == 'enter_ContextA') | (session_df['Event'] == 'enter_ContextB') | \
+         (session_df['Event'] == 'enter_ContextC1') | (session_df['Event'] == 'enter_ContextC2') | \
+         (session_df['Event'] == 'enter_intercontext_interval')
 
-    bins, bin_type = np.array(bins), np.array(bin_type)
-    ix = np.argsort(bins)  # make sure the bins are in ascending order
-    bins = bins[ix]
-    bins = np.round(bins, decimals=3)
-    bin_type = bin_type[ix][:-1]  # exclude the last bin - it's an ending intercontext interval
-    bin_centers = (bins[:-1] + bins[1:])/2
+    session_df = session_df.round({'Time': 3})
+    sorted_sess = session_df.sort_values(by=['Time'])
+    sorted_transitions = session_df[transition_ix].sort_values(by=['Time'])
 
-    # Iterate over the output list
-    bin_dict = dict(bin_type=bin_type)#, bin_bounds=np.around(intervals, decimals=3))
-    for output in output_list:
-        if output in session.keys():
-            # Bin the 'Time' values of the output
-            # session[output]['Bin'] = pd.cut(session[output]['Time'], bins, include_lowest=True)
-            session[output]['Bin'] = pd.cut(session[output]['Time'], bins)
+    bins = sorted_transitions['Time'].values
+    bin_type = sorted_transitions['Event'].values[:-1]  # exclude the last bin - it's an ending intercontext interval
+    bin_centers = (sorted_transitions[:-1]['Time'].values + sorted_transitions[1:]['Time'].values) / 2
+    bin_counts = dict()
 
-            # Count the number of 'Time' values in each bin
-            counts = session[output].groupby('Bin').count()
-            bin_dict[output] = counts['Time'].values
+    session_df['Bin'] = np.zeros(session_df['Time'].size)
+    for event in event_list:
+        if event in session_df['Event'].values:
+            ix = session_df['Event'] == event
+            b = pd.cut(session_df.loc[ix, 'Time'], bins)
+            session_df.loc[ix, 'Bin'] = b
+            counts = session_df.loc[ix, 'Time'].groupby(b).count()
+            bin_counts[event] = counts.values
 
-    intervals = []
     # roundbins = np.round(bins, decimals=3)
+    intervals = []
     for j, b in enumerate(bin_type):
         iv = pd.Interval(bins[j], bins[j + 1], closed='right')
         intervals.append(iv)
-    bin_dict['intervals'] = intervals
 
-    bin_df = pd.DataFrame(bin_dict)
+    bin_counts['bin_type'] = bin_type
+    bin_counts['intervals'] = intervals
+    bin_counts = pd.DataFrame(bin_counts)
+
     if plot:
         # colors = ['red', 'green', 'red', 'purple', 'orange']  # Add more colors if needed
         colors = ['cyan', 'darkgreen', 'lightgray', 'plum', 'indigo']  # Add more colors if needed
-
         cmap = {transition: color for transition, color in zip(transition_list, colors)}
 
         fig, ax = plt.subplots(figsize=(12, 6))
@@ -162,7 +158,7 @@ def plot_binned_behavior(session, fig_name, fig_path, bin_range=None, plot=False
         plot_outputs = ['left_entry', 'right_entry']
         plt_options = (('Left lick', '-', 'k'), ('Right lick', '--', 'gray'))
         for j, o in enumerate(plot_outputs):
-            y = bin_df[o].values
+            y = bin_counts[o].values
             ax.plot(bin_centers, y, linewidth=1, label=plt_options[j][0], linestyle=plt_options[j][1],
                     color=plt_options[j][2])
 
@@ -184,7 +180,7 @@ def plot_binned_behavior(session, fig_name, fig_path, bin_range=None, plot=False
         savename = os.path.join(fig_path, '{}.{}'.format(fig_name, fig_format))
         fig.savefig(savename, format=fig_format)
 
-    return bin_df, session, bins
+    return bin_counts, session_df, bins
 
 
 """
@@ -202,14 +198,14 @@ Trials within session
 """
 
 
-def block_analysis(bin_df, session, sess_ID):
+def block_analysis(bin_counts, session_df, sess_ID, plot=False):
     # left vs right
     # get context blocks (i.e. no intercontext intervals)
-    block_ix = (bin_df['bin_type'] == 'enter_ContextA') | (bin_df['bin_type'] == 'enter_ContextB') | \
-               (bin_df['bin_type'] == 'enter_ContextC1') | (bin_df['bin_type'] == 'enter_ContextC2')
+    block_ix = (bin_counts['bin_type'] == 'enter_ContextA') | (bin_counts['bin_type'] == 'enter_ContextB') | \
+               (bin_counts['bin_type'] == 'enter_ContextC1') | (bin_counts['bin_type'] == 'enter_ContextC2')
 
     # block_ix = block_ix.values
-    blocks = bin_df[block_ix]
+    blocks = bin_counts[block_ix]
     nblocks = np.sum(block_ix.values)
     # criterion = bins['bin_type'].map(lambda x: x in ['enter_ContextA', 'enter_ContextB'])
     # blocks = bins[criterion]
@@ -234,41 +230,52 @@ def block_analysis(bin_df, session, sess_ID):
     percent_nan[active_ix] = percent
     percent_nan[~active_ix] = np.nan
 
-    f, ax = plt.subplots()
-
-    X = np.arange(nblocks)
-    ax.scatter(X[active_ix], percent)
-    plt.yticks([0,.5,1], ['100% Left', 'Split', '100% Right'])
-    plt.title('Percent Left vs Right licks per block')
+    if plot:
+        f, ax = plt.subplots()
+        X = np.arange(nblocks)
+        ax.scatter(X[active_ix], percent)
+        plt.yticks([0,.5,1], ['100% Left', 'Split', '100% Right'])
+        plt.title('Percent Left vs Right licks per block')
     # ax[1].scatter(X, percent_nan)
     # ax[1].plot(block_ix, np.ma.masked_where(norm == 0, ))
 
-    # correct vs incorrect choices/reward deliveries AND overall block correct
-    all_rewards = (blocks['pump1_reward_3'] + blocks['pump2_reward_3'] + blocks['pump1_reward_0'] + blocks['pump1_reward_0']).values
-    active_ix = all_rewards > 0
-    Lreward = np.zeros_like(all_rewards)
-    Lreward[active_ix] = blocks['pump1_reward_3'].values[active_ix] / all_rewards[active_ix]
-    Rreward = np.zeros_like(all_rewards)
-    Rreward[active_ix] = blocks['pump2_reward_3'].values[active_ix] / all_rewards[active_ix]
+    # do a bunch of regex stuff here for the whole fxn
+    events = session_df['Event'].unique()
+    # get the Rall, Lall ix
+    pump_events = [e for e in events if re.fullmatch('pump.*', e)]
+    pump1_events = [e for e in pump_events if re.fullmatch('pump1.*', e)]
+    pump1_rewards = [e for e in pump1_events if not re.fullmatch('pump1_reward_0', e)]
+    pump2_events = [e for e in events if re.fullmatch('pump2.*', e)]
+    pump2_rewards = [e for e in pump2_events if not re.fullmatch('pump2_reward_0', e)]
 
+    all_rewards = np.sum(np.array([blocks[e] for e in pump_events]), axis=0)
+    active_ix = all_rewards > 0
+    # get percent correct for L and R
+    Lreward_perc = np.sum(np.array([blocks[e] for e in pump1_rewards]), axis=0)
+    Lreward_perc[active_ix] = Lreward_perc[active_ix] / all_rewards[active_ix]
+    Rreward_perc = np.sum(np.array([blocks[e] for e in pump2_rewards]), axis=0)
+    Rreward_perc[active_ix] = Rreward_perc[active_ix] / all_rewards[active_ix]
+
+    # correct vs incorrect choices/reward deliveries AND overall block correct
     thresh = .7
     correct = np.zeros(nblocks)
-    correct[Aix] = Rreward[Aix]
-    correct[Bix] = Lreward[Bix]
-    correct[C1ix] = Lreward[C1ix]
-    correct[C2ix] = Lreward[C2ix]
+    correct[Aix] = Rreward_perc[Aix]
+    correct[Bix] = Lreward_perc[Bix]
+    correct[C1ix] = Rreward_perc[C1ix]
+    correct[C2ix] = Lreward_perc[C2ix]
     block_correct = correct > thresh
 
-    fCorr, axCorr = plt.subplots()
-    axCorr.scatter(X, correct)
-    axCorr.plot(X, block_correct, 'k--')
-    plt.title('Percent correct choices/reward delivery')
-    plt.ylabel('% Correct')
+    if plot:
+        fCorr, axCorr = plt.subplots()
+        axCorr.scatter(X, correct)
+        axCorr.plot(X, block_correct, 'k--')
+        plt.title('Percent correct choices/reward delivery')
+        plt.ylabel('% Correct')
 
-    # Choices per block/task engagement
-    fChoice, axChoice = plt.subplots()
-    plt.plot(X, all_rewards)
-    plt.title('Task engagement - Number of "choices" made')
+        # Choices per block/task engagement
+        fChoice, axChoice = plt.subplots()
+        plt.plot(X, all_rewards)
+        plt.title('Task engagement - Number of "choices" made')
 
     block_summary = dict(percent_right_lick=percent, percent_block_correct=correct, binary_block_correct=block_correct, thresh=thresh,
          n_choices=all_rewards)
@@ -298,10 +305,11 @@ def block_analysis(bin_df, session, sess_ID):
     else:
         C2_correct = np.nan
 
-    session_summary = dict(A_correct=A_correct, B_correct=B_correct, C1_correct=C1_correct, C2_correct=C2_correct, overall_correct=overall_correct)
+    session_summary = dict(A_correct=A_correct, B_correct=B_correct, C1_correct=C1_correct, C2_correct=C2_correct,
+                           overall_correct=overall_correct)
     session_summary = pd.DataFrame(data=session_summary, index=[sess_ID])
 
-    # A is rightlick
+    # A is rightlick; C1 is too
     # pump2 is right (so A=pump2=right)
 
     ### WITHIN BLOCKS ###
@@ -310,20 +318,13 @@ def block_analysis(bin_df, session, sess_ID):
     trials_to_correct, trials_to_thresh = [], []
     bin_types = blocks['bin_type'].values
     for j, iv in enumerate(blocks['intervals']):
-        Rreward_ix = session['pump1_reward_3']['Bin'] == iv
-        Rreward = session['pump1_reward_3']['Time'][Rreward_ix].values
+        Rreward_times = session_df.loc[(session_df['Event'] == 'pump1_reward_3') & (session_df['Bin'] == iv), 'Time']
+        Rfail_times = session_df.loc[(session_df['Event'] == 'pump1_reward_0') & (session_df['Bin'] == iv), 'Time']
+        Lreward_times = session_df.loc[(session_df['Event'] == 'pump2_reward_3') & (session_df['Bin'] == iv), 'Time']
+        Lfail_times = session_df.loc[(session_df['Event'] == 'pump2_reward_0') & (session_df['Bin'] == iv), 'Time']
 
-        Rfail_ix = session['pump1_reward_0']['Bin'] == iv
-        Rfail = session['pump1_reward_0']['Time'][Rfail_ix].values
-
-        Lreward_ix = session['pump2_reward_3']['Bin'] == iv
-        Lreward = session['pump2_reward_3']['Time'][Lreward_ix].values
-
-        Lfail_ix = session['pump2_reward_0']['Bin'] == iv
-        Lfail = session['pump2_reward_0']['Time'][Lfail_ix].values
-
-        Rall = np.sort(np.concatenate([Rreward, Rfail]))
-        Lall = np.sort(np.concatenate([Lreward, Lfail]))
+        Rall = np.sort(np.concatenate([Rreward_times, Rfail_times]))
+        Lall = np.sort(np.concatenate([Lreward_times, Lfail_times]))
         Tix = np.argsort(np.concatenate([Rall, Lall]))
         T = np.concatenate([Rall, Lall])[Tix]
 
@@ -366,17 +367,19 @@ def block_analysis(bin_df, session, sess_ID):
     trials_to_thresh = np.array(trials_to_thresh)
     trial_summary = dict(trials_to_correct=trials_to_correct, trials_to_thresh=trials_to_thresh)
 
-    fTTC, axTTC = plt.subplots()
-    plt.scatter(np.arange(trials_to_correct.size), trials_to_correct, label='trials to correct')
-    plt.scatter(np.arange(trials_to_thresh.size), trials_to_thresh, label='trials to threshold')
-    plt.title('Trials to correct choice')
-    plt.legend()
+    if plot:
+        fTTC, axTTC = plt.subplots()
+        plt.scatter(np.arange(trials_to_correct.size), trials_to_correct, label='trials to correct')
+        plt.scatter(np.arange(trials_to_thresh.size), trials_to_thresh, label='trials to threshold')
+        plt.title('Trials to correct choice')
+        plt.legend()
 
-    plt.show()
+        plt.show()
+
     return block_summary, session_summary, trial_summary
 
 
-def compare_sessions(session_list):
+def compare_sessions(session_list, plot_path, plot_name):
     """
     1. collect a number of sessions, load their session summaries
     session_list is a list of (mouse, date) pairs
@@ -384,30 +387,57 @@ def compare_sessions(session_list):
     """
 
     summaries = []
+    dates = []
     for mouse, date in session_list:
         sess_ID = mouse + '-' + date
-        data_dict = fileIO.load(mouse, date)
-        bin_df, session, bins = plot_binned_behavior(data_dict[mouse][0], 'sample_bin_plot', plot_path)
-        _, session_summary, _ = block_analysis(bin_df, session, sess_ID)
+        df = fileIO.load(mouse, date, reprocess=True)
+        bin_counts, session_df, bins = plot_binned_behavior(df, 'sample_bin_plot', plot_path, plot=False)
+        _, session_summary, _ = block_analysis(bin_counts, session_df, sess_ID)
         summaries.append(session_summary)
+        dates.append(date)
 
     summaries = pd.concat(summaries, axis=0)
+    print(summaries)
 
+    X = np.arange(len(session_list))
+    f, ax = plt.subplots()
+    plt.plot(X, summaries['A_correct'], label='A')
+    plt.plot(X, summaries['B_correct'], label='B')
+    plt.plot(X, summaries['C1_correct'], label='C1')
+    plt.plot(X, summaries['C2_correct'], label='C2')
+    plt.plot(X, summaries['overall_correct'], label='Overall')
+    plt.title('Percent Correct by Context Type')
+    plt.xticks(ticks=X, labels=dates)
+    plt.ylim([0,1])
+    plt.xlabel('Session Date')
+    plt.ylabel('Percent Correct')
+    plt.legend()
+    # plt.show()
+
+    fig_format = 'svg'
+    savename = os.path.join(plot_path, '{}.{}'.format(plot_name, fig_format))
+    f.savefig(savename, format=fig_format)
 
     pass
 
 
 if __name__ == '__main__':
-
     current_mouse = 'MF06'
     current_date = '2023-06-13'
     plot_path = '../figures'
     sess_ID = current_mouse + '-' + current_date
 
-    # retrieves a dictionary - call the mouse name to load the data
-    data_dict = fileIO.load(current_mouse, current_date)
-    # generate_session_raster(data_dict[current_mouse][0], 'sample_raster', plot_path)
-    bin_df, session, bins = plot_binned_behavior(data_dict[current_mouse][0], 'sample_bin_plot', plot_path)
-    block_analysis(bin_df, session, sess_ID)
+    """Analyze the data from a sample mouse session"""
+    # df = fileIO.load(current_mouse, current_date, reprocess=False)
+    # # generate_session_raster(data_dict[current_mouse][0], 'sample_raster', plot_path)
+    # bin_counts, session_df, bins = plot_binned_behavior(df, 'sample_bin_plot', plot_path, plot=False)
+    # block_analysis(bin_counts, session_df, sess_ID)
+
+    """Analyze data of a mouse across several sessions"""
+    sess_list = [('MF24', '2023-07-14'),
+                 ('MF24', '2023-07-17'),
+                 ('MF24', '2023-07-18'),
+                 ('MF24', '2023-07-19')]
+    compare_sessions(sess_list, plot_path, plot_name='MF24_sample')
 
 

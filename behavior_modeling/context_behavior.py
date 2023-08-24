@@ -11,7 +11,8 @@ np.random.seed(0)
 
 class TwoLeverAction():
 
-    def __init__(self, block_structure=None, default_blocklength=60, range_blocklength=15, p_switch=None):
+    def __init__(self, block_structure=None, default_blocklength=60, range_blocklength=15, p_switch=None, Qalpha=.1,
+                 logistic_params=np.array([1,2,1.5])):
         self.std_dev = 1
         self.means = [3, 2]  # correct reward center, incorrect reward center
 
@@ -21,6 +22,9 @@ class TwoLeverAction():
         self.cur_block = 0
         self.cur_blocklength = default_blocklength
         self.block_structure = block_structure
+        if block_structure is None:
+            self.block_structure = ['A', 'B', 'C1', 'C2']
+
         if self.block_structure:
             self.nblocks = len(self.block_structure)
         else:
@@ -50,13 +54,20 @@ class TwoLeverAction():
         self.belief = []
         self.phi = []
 
+        self.Qalpha = Qalpha
+        self.logistic_params = logistic_params  # alpha, beta, tau
         if p_switch is None:
-            p_switch = 1 / default_blocklength
+            # p_switch = 1 / default_blocklength
+            p_switch = .02
+        self.p_switch = p_switch
         # from-to, ABC1C2
-        self.transition_matrix = np.array([[1 - 3 * p_switch, p_switch, p_switch, p_switch],
-                                      [p_switch, 1 - 3 * p_switch, p_switch, p_switch],
-                                      [p_switch, p_switch, 1 - 3 * p_switch, p_switch],
-                                      [p_switch, p_switch, p_switch, 1 - 3 * p_switch]])
+
+    def set_transition_matrix(self):
+        p = self.p_switch
+        self.transition_matrix = np.array([[1 - 3 * p, p, p, p],
+                                           [p, 1 - 3 * p, p, p],
+                                           [p, p, 1 - 3 * p, p],
+                                           [p, p, p, 1 - 3 * p]])
 
     def get_state_ix(self):
         if self.cur_state == 'A':
@@ -142,7 +153,7 @@ class TwoLeverAction():
 
         return reward
 
-    def stateless_Qlearning(self, Q, N, alpha=.1, greedy=False, epsilon=.1):
+    def stateless_Qlearning(self, Q, N, greedy=False, epsilon=.1):
         """
         Q-learning action selection.
         N - count of times each action is selected
@@ -167,10 +178,10 @@ class TwoLeverAction():
         reward = self.stepTwoLever(action)
 
         N[action] += 1
-        Q[action] += alpha * (reward - Q[action])  # nonstationary update, biased towards recent rewards
+        Q[action] += self.Qalpha * (reward - Q[action])  # nonstationary update, biased towards recent rewards
         return action, reward, Q, N, dist
 
-    def state_Qlearning(self, Q, N, alpha=.1, greedy=False, epsilon=.1):
+    def state_Qlearning(self, Q, N, greedy=False, epsilon=.1):
         """
         Q-learning action selection for a model with complete state information.
         N - count of times each action is selected within a state
@@ -189,7 +200,7 @@ class TwoLeverAction():
 
         reward = self.stepTwoLever(action)
         N[ix, action] += 1
-        Q[ix, action] += alpha * (reward - Q[ix, action])
+        Q[ix, action] += self.Qalpha * (reward - Q[ix, action])
         return action, reward, Q, N, dist
 
     def observation_Qlearning(self, Q, N, alpha=.1, greedy=False, epsilon=.1):
@@ -213,7 +224,7 @@ class TwoLeverAction():
         N[ix, action] += 1
 
         # nonstationary Q update, biased towards recent rewards
-        Q[ix, action] += alpha * (reward - Q[ix, action])
+        Q[ix, action] += self.Qalpha * (reward - Q[ix, action])
         return action, reward, Q, N, dist
 
     def POMDP(self):
@@ -221,6 +232,34 @@ class TwoLeverAction():
         SHEEEESH
         """
         pass
+
+    def forgetting_Qlearning(self, Q, N, sticky=0, tau=5, temp=1):
+        """
+        Qlearning but with a decay for prior Q values.
+        Parameters determinine:
+        stickiness (repetition of prior choices)
+        temperature (stochasticity of choice)
+        decxay (higher tau
+        """
+        if self.t_total == 0:
+            prev = 0
+        else:
+            prev = 1 - self.actions[-1] * 2  # maps left (0) to 1 and right (1) to -1
+
+        dQ = Q[0] - Q[1]
+        psi = (sticky * prev + dQ) / temp
+        logit = sp.special.expit(psi)
+        dist = [logit, 1-logit]
+
+        action = np.random.choice(self.nActions, p=dist)
+        reward = self.stepTwoLever(action)
+
+        decay = np.exp(-1 / tau)
+        Q[action] = decay * Q[action] + (1-decay) * reward
+        Q[1-action] = decay * Q[1-action]
+        N[action] += 1
+
+        return action, reward, Q, N, dist
 
     def outcome_probability(self, action, reward):
         p = np.zeros(4)
@@ -246,22 +285,31 @@ class TwoLeverAction():
 
         return p
 
-    def HMM(self, prior, temperature=1, greedy=False, epsilon=.1):
+    def HMM(self, prior, temperature=1, greedy=False, epsilon=.1, sticky=0):
         """
         A hidden Markov model with Thompson-sampling action selection. Essentially the forward piece of the HMM algorithm.
+        Temperature: a parameter for determinism; higher temperature is less deterministic/more stochastic
+        sticky: parameter for "stickiness," bias to previous action
         """
-        # Thompson sampling of an action
-        _dist = np.array([prior[0] + prior[2], prior[1] + prior[3]])
-        dist = sp.special.softmax(_dist)
-        # dist = sp.special.expit(sp.special.logit(_dist) / temperature) # temp = 1 means softmax, temp -> 0 makes greedy
+        # Thompson sampling of an action. Get belief in left-optimal vs right-optimal state
+        # If desired, adjust with temperature parameter
+        if self.t_total == 0:
+            prev = 0
+        else:
+            # prev = self.actions[-1] * 2 - 1
+            prev = 1 - self.actions[-1] * 2
+
+        dist = np.array([prior[0] + prior[2], prior[1] + prior[3]])
+        pL = sp.special.expit((sp.special.logit(dist[0]) + prev * sticky) / temperature)  # temp = 1 means softmax, temp -> 0 makes greedy
+        pR = 1-pL
         if greedy:
             if np.random.rand() < epsilon:
                 action = np.random.choice(self.nActions)
             else:
-                action = np.argmax(dist)
+                action = np.argmax([pL, pR])
         else:
             # print(dist)
-            action = np.random.choice(self.nActions, p=dist)
+            action = np.random.choice(self.nActions, p=[pL, pR])
 
         reward = self.stepTwoLever(action)
 
@@ -276,9 +324,9 @@ class TwoLeverAction():
 
         return action, reward, posterior, dist
 
-    def logistic(self, dist, phi, alpha=.1, beta=.1, tau=1):
+    def logistic(self, dist, phi):
         """
-        Logistic regression model based on Beron et al, PNAS 2022. Switched 0 and 1 from their convention for
+        Logistic regression (RFLR) model based on Beron et al, PNAS 2022. Switched 0 and 1 from their convention for
         consistency with the other code here. Note that this option only models actions, not beliefs.
         prior - prior log odds
         phi - previous recursion for choice-reward
@@ -288,6 +336,7 @@ class TwoLeverAction():
         print(dist)
         action = np.random.choice(self.nActions, p=dist)  # 0 left, 1 right
         reward = self.stepTwoLever(action)
+        alpha, beta, tau = self.logistic_params
 
         cbar = 2 * action - 1  # -1 left, 1 right
         phi_t = beta * cbar * reward + np.exp(1/tau) * phi
@@ -296,7 +345,7 @@ class TwoLeverAction():
         posterior = np.array([p, 1-p])
         return action, reward, posterior, phi_t
 
-    def policy_TDlearning(self, Q, N, S, alpha=.1, epsilon=.1):
+    def policy_TDlearning(self, Q, N, S, epsilon=.1):
         """
         e-greedy TD learning algorithm.
         Commentary: This is basically your nonstationary bandit with state information. Q-learning and Sarsa are the same for bandit tasks, in which episodes are a single-action long and
@@ -309,7 +358,7 @@ class TwoLeverAction():
 
         reward = self.stepTwoLever(action)
         N[action] += 1
-        Q[S, action] += alpha * (reward - Q[S, action])  # In a bandit task, every action takes you to the terminal state; no need for Q[S',A']
+        Q[S, action] += self.Qalpha * (reward - Q[S, action])  # In a bandit task, every action takes you to the terminal state; no need for Q[S',A']
         return action, reward, Q, N
 
     def policy_fxnApprox(self):
@@ -336,7 +385,7 @@ class TwoLeverAction():
         # Q[action] += beta * (reward - Q[action])  # nonstationary update, biased towards recent rewards
         pass
 
-    def run_experiment(self, save_name, alpha=.1, model_name='stateless'):
+    def run_experiment(self, save_name,  model_name='stateless'):
         # self.cur_state = self.state_list[np.random.randint(4)]
         self.cur_state = self.state_list[0]
         self.cur_block = 0
@@ -345,8 +394,10 @@ class TwoLeverAction():
         else:
             self.cur_blocklength = self.default_blocklength
 
-        assert model_name in ['stateless', 'state_Q', 'observation_Q', 'POMDP', 'HMM', 'logistic', 'belief_RNN'], 'Model type does not exist!!!'
-        if model_name == 'stateless':
+        assert model_name in ['stateless', 'state_Q', 'observation_Q', 'POMDP', 'HMM', 'logistic', 'belief_RNN',
+                              'forgetting_Q'], 'Model type does not exist!!!'
+        self.set_transition_matrix()
+        if model_name == 'stateless' or model_name == 'forgetting_Q':
             Q = np.zeros(self.nActions)
             N = np.zeros(self.nActions)
         else:
@@ -361,11 +412,13 @@ class TwoLeverAction():
         # Incomplete state information available
         while self.cur_block < self.nblocks:
             if model_name == 'stateless':
-                action, reward, Q, N, dist = self.stateless_Qlearning(Q, N, alpha=alpha)
+                action, reward, Q, N, dist = self.stateless_Qlearning(Q, N)
             elif model_name == 'state_Q':
-                action, reward, Q, N, dist = self.state_Qlearning(Q, N, alpha=alpha)
+                action, reward, Q, N, dist = self.state_Qlearning(Q, N)
             elif model_name == 'observation_Q':
-                action, reward, Q, N, dist = self.observation_Qlearning(Q, N, alpha=alpha)
+                action, reward, Q, N, dist = self.observation_Qlearning(Q, N)
+            elif model_name == 'forgetting_Q':
+                action, reward, Q, N, dist = self.forgetting_Qlearning(Q, N)
             elif model_name == 'POMDP':
                 # self.HMM(B)
                 pass
@@ -373,7 +426,7 @@ class TwoLeverAction():
                 action, reward, prior, dist = self.HMM(prior)
             elif model_name == 'logistic':
                 # action, reward, dist, phi = self.logistic(dist, phi, alpha=.1, beta=.3, tau=10)  # closest I got so far to something decent
-                action, reward, dist, phi = self.logistic(dist, phi, alpha=0, beta=.5, tau=10)
+                action, reward, dist, phi = self.logistic(dist, phi, alpha=self.alpha, beta=.5, tau=10)
                 # action, reward, dist, phi = self.logistic(dist, phi, alpha=1, beta=2, tau=1.5)  # in paper parameters
             elif model_name == 'belief_RNN':
                 pass  #TODO
