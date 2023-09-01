@@ -100,7 +100,7 @@ def load(mouse, date, reprocess=False):
     found = False
     for i, (root, fname) in enumerate(files):
         if re.fullmatch('cleaned_.*', fname):
-            if reprocess is False:
+            if reprocess is False:  # supposedly I should make a program just to load the clean csv and call that from elsewhere
                 found = True
                 df = pd.read_csv(os.path.join(root, fname), sep=',')
                 break

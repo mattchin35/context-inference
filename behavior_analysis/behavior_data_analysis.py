@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import fileIO
 import re
+from typing import Iterable
+    
 
 """
 Read and analyze ABC1C2 data as provided by Mitch. Not using a GUI to make the plots here - hardcoding only.
@@ -16,81 +18,78 @@ That should be complicated enough for now....
 """
 
 
-def generate_session_raster(session, fig_name, fig_path, timespan=None):
-    """
-    Create a raster plot from a single session.
-    session is a dictionary of pandas dataframes.
+def generate_event_array(df: pd.DataFrame, events: list, timespan: tuple) -> np.ndarray:
+    event_array = []
+    for e in events:
+        event_df = df.loc[df['Event'] == e, 'Time']
+        ix = (event_df >= timespan[0]) & (event_df <= timespan[1])
+        event_array.append(event_df[ix].values)
+    return np.array(event_array, dtype=object)
 
-    TODO: renovate this program to use a dataframe of the session.
-    """
-    if timespan is None:
-        timespan = (0, np.inf)
 
-    # Concatenate the dataframes in the specific_subsets dictionary into a single dataframe
-    cleaned_df = pd.concat(session.values())
-    cleaned_df = cleaned_df[cleaned_df['Output'] != 'exit_standby']
-    events = np.unique(cleaned_df['Output'].values)
-
-    event_list = ['left_entry', 'right_entry',
-                  'pump1_reward_0', 'pump1_reward_3',
-                  'pump2_reward_0', 'pump2_reward_3',
-                  'enter_intercontext_interval']  # ITI is intertrial, in the same block; intercontext is between blocks
-
-    event_labels = ['Left lick', 'Right lick',
-                    'left reward 0', 'left reward 3',
-                    'right reward 0', 'right reward 3',
-                    'enter intercontext interval']
-
-    if 'enter_ContextA' and 'enter_ContextC1' in events:
-        session_type = 'full'
-        event_list += ['enter_ContextA', 'enter_ContextB', 'enter_ContextC1', 'enter_ContextC2']
-        event_labels += ['enter Context A', 'enter Context B', 'enter Context C1', 'enter Context C2']
-    elif 'enter_ContextA' in events:
-        session_type = 'AB'
-        event_list += ['enter_ContextA', 'enter_ContextB']
-        event_labels += ['enter Context A', 'enter Context B']
-    else:  # 'enter_ContextC1' in events:
-        session_type = 'C1C2'
-        event_list += ['enter_ContextC1', 'enter_ContextC2']
-        event_labels += ['enter Context C1', 'enter Context C2']
-
-    # output_list = ['left_entry', 'right_entry', 'pump1_reward_0', 'pump1_reward_3', 'pump2_reward_0',
-    #                'pump2_reward_3', 'ITI', 'enter_intercontext_interval',
-    #                'enter_ContextC1', 'enter_ContextC2', 'enter_ContextA', 'enter_ContextB']
-
-    arrays_dict = {}
-    for e in event_list:
-        sub_df = cleaned_df[cleaned_df['Output'] == e]
-        if e in ['enter_ContextA', 'enter_ContextB', 'enter_ContextC1', 'enter_ContextC2'] and sub_df.empty:
-            continue
-
-        arrays_dict[e + '_timestamp_array'] = np.array(sub_df['Time'])
-
-    abridged_arrays_dict = {}
-    for key, value in arrays_dict.items():
-        abridged_array = value[(value >= timespan[0]) & (value <= timespan[1])]
-        abridged_arrays_dict[key + '_abridged'] = abridged_array
-
-    array_of_timestamp_arrays = np.array(list(abridged_arrays_dict.values()), dtype=object)
-
+def plot_event_raster(array: np.ndarray, labels: Iterable[str]) -> plt.Figure:
     fig, ax = plt.subplots(1, 1)
     fig.set_figheight(10)
     fig.set_figwidth(18)
-    ax.eventplot(array_of_timestamp_arrays, linelengths=0.6, linewidths=0.15, color='black')
+    ax.eventplot(array, linelengths=0.6, linewidths=0.15, color='black')
     ax.set_title('Behavioral Raster Plot', fontsize=24)
     plt.xlabel("Time (seconds)", fontsize=24)
-    ax.set_yticks(np.arange(len(event_list)))
-    ax.set_yticklabels(event_labels, fontsize=20)
+    ax.set_yticks(np.arange(len(labels)))
+    ax.set_yticklabels(labels, fontsize=20)
+    # ax.set_yticks(np.arange(len(labels)), labels=labels, fontsize=20)  # not possible in earlier matplotlib versions
     plt.xticks(fontsize=20)
     plt.tight_layout()
+    return fig
 
-    fig_format = 'svg'
-    savename = os.path.join(fig_path, '{}.{}'.format(fig_name, fig_format))
-    fig.savefig(savename, format=fig_format)
+
+def get_pump_events(df: pd.DataFrame, event_list: list = []) -> list:
+    unique_events = np.unique(df['Event'].values)
+    for e in unique_events:
+        if re.fullmatch('pump.*', e):
+            event_list.append(e)
+
+    return event_list
+
+
+def get_context_events(df: pd.DataFrame, event_list: list = []) -> list:
+    unique_events = np.unique(df['Event'].values)
+    for e in unique_events:
+        if re.fullmatch('enter_Context.*', e):
+            event_list.append(e)
+
+    return event_list
+
+
+def make_event_labels(events: list) -> list:
+    event_labels = [s.replace('_', ' ') for s in events]
+    event_labels = [s.replace('pump1', 'right') for s in event_labels]
+    event_labels = [s.replace('pump2', 'left') for s in event_labels]
+    return event_labels
+
+
+def generate_session_raster(session_df: pd.DataFrame, fig_name: str, plot_path: str, timespan: tuple = (0, np.inf)) \
+        -> None:
+    """
+    Create a raster plot from a single behavior session.
+    """
+    cleaned_df = session_df[session_df['Event'] != 'exit_standby']
+
+    event_list = ['left_entry', 'right_entry', 'enter_intercontext_interval']
+    event_list = get_pump_events(cleaned_df, event_list)
+    event_list = get_context_events(cleaned_df, event_list)
+    event_labels = make_event_labels(event_list)
+    event_array = generate_event_array(cleaned_df, event_list, timespan)
+
+    raster_figure = plot_event_raster(event_array, event_labels)
+
     # plt.show()
+    fig_format = 'svg'
+    savename = os.path.join(plot_path, '{}.{}'.format(fig_name, fig_format))
+    raster_figure.savefig(savename, format=fig_format)
+    plt.close('all')
 
 
-def plot_binned_behavior(session_df, fig_name, fig_path, bin_range=None, plot=False):
+def plot_binned_behavior(session_df, fig_path, fig_name, bin_range=None, plot=False):
     """
     session is a dictionary of pandas dataframes.
     """
@@ -98,14 +97,15 @@ def plot_binned_behavior(session_df, fig_name, fig_path, bin_range=None, plot=Fa
         bin_range = (0, np.inf)
         # bin_range = [0, 30]
 
-    unique_events = session_df['Event'].unique()
     event_list = ['left_entry', 'right_entry']
+    event_list = get_pump_events(session_df, event_list)
         # , 'pump1_reward_0', 'pump1_reward_3', 'pump2_reward_0', 'pump2_reward_3'] #, 'current_ITI_2', 'current_ITI_3', 'current_ITI_4']
 
-    # regex search for the available pump options
-    for e in unique_events:
-        if re.fullmatch('pump.*', e):
-            event_list.append(e)
+    # unique_events = session_df['Event'].unique()
+    # # regex search for the available pump options
+    # for e in unique_events:
+    #     if re.fullmatch('pump.*', e):
+    #         event_list.append(e)
 
     transition_list = ['enter_ContextA', 'enter_ContextB', 'enter_intercontext_interval', 'enter_ContextC1',
                        'enter_ContextC2']
@@ -241,6 +241,7 @@ def block_analysis(bin_counts, session_df, sess_ID, plot=False):
 
     # do a bunch of regex stuff here for the whole fxn
     events = session_df['Event'].unique()
+
     # get the Rall, Lall ix
     pump_events = [e for e in events if re.fullmatch('pump.*', e)]
     pump1_events = [e for e in pump_events if re.fullmatch('pump1.*', e)]
@@ -284,7 +285,11 @@ def block_analysis(bin_counts, session_df, sess_ID, plot=False):
     # 1. Number and percent of correct blocks (70 % correct choices??)
     # 2. Number and percent of correct blocks by block type
     # contexts which are not present will return nan
-    overall_correct = np.sum(block_correct) / block_correct.size
+    if block_correct.size > 0:
+        overall_correct = np.sum(block_correct) / block_correct.size
+    else:
+        overall_correct = np.nan
+
     if correct[Aix].size > 0:
         A_correct = np.sum(correct[Aix]) / correct[Aix].size
     else:
@@ -388,19 +393,24 @@ def compare_sessions(session_list, plot_path, plot_name):
 
     summaries = []
     dates = []
+    water = []
     for mouse, date in session_list:
         sess_ID = mouse + '-' + date
         df = fileIO.load(mouse, date, reprocess=True)
-        bin_counts, session_df, bins = plot_binned_behavior(df, 'sample_bin_plot', plot_path, plot=False)
+        bin_counts, session_df, bins = plot_binned_behavior(df, plot_path, 'sample_bin_plot', plot=False)
         _, session_summary, _ = block_analysis(bin_counts, session_df, sess_ID)
+        w = count_water(df)
         summaries.append(session_summary)
         dates.append(date)
+        water.append(w)
 
     summaries = pd.concat(summaries, axis=0)
+    water = pd.concat(water, axis=0)
     print(summaries)
 
     X = np.arange(len(session_list))
-    f, ax = plt.subplots()
+    f, ax = plt.subplots(2, 1, figsize=(12, 6))
+    plt.sca(ax[0])
     plt.plot(X, summaries['A_correct'], label='A')
     plt.plot(X, summaries['B_correct'], label='B')
     plt.plot(X, summaries['C1_correct'], label='C1')
@@ -412,25 +422,66 @@ def compare_sessions(session_list, plot_path, plot_name):
     plt.xlabel('Session Date')
     plt.ylabel('Percent Correct')
     plt.legend()
-    # plt.show()
+
+    plt.sca(ax[1])
+    plt.plot(X, water.loc[water['water_source'] == 'right water', 'amount'], label='right rewards')
+    plt.plot(X, water.loc[water['water_source'] == 'left water', 'amount'], label='left rewards')
+    plt.plot(X, water.loc[water['water_source'] == 'total water', 'amount'], label='total rewards')
+    plt.title('Water rewards')
+    plt.xticks(ticks=X, labels=dates)
+    plt.xlabel('Session Date')
+    plt.ylabel('Water vol (uL)')
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
 
     fig_format = 'svg'
     savename = os.path.join(plot_path, '{}.{}'.format(plot_name, fig_format))
     f.savefig(savename, format=fig_format)
 
-    pass
+
+def count_water(session_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add all water delivery events to determine mouse water intake.
+    """
+
+    # get dataframe indices for all reward events
+    reward_event_types = get_pump_events(session_df)
+    ix = np.zeros(session_df.shape[0]).astype(bool)
+    for e in reward_event_types:
+        ix = ix | (session_df['Event'] == e)
+
+    # create lists of reward events of each type
+    reward_events = session_df.loc[ix, 'Event'].values
+    pump1_regex = re.compile("pump1.*")
+    pump2_regex = re.compile("pump2.*")
+    pump1_list = list(filter(pump1_regex.match, reward_events))  # Read Note below
+    pump2_list = list(filter(pump2_regex.match, reward_events))  # Read Note below
+
+    # add up events to determine total rewards
+    pump1_water = np.sum([float(re.findall(r'(\d+)', a)[1]) for a in pump1_list])
+    pump2_water = np.sum([float(re.findall(r'(\d+)', a)[1]) for a in pump2_list])
+    total_water = pump1_water + pump2_water
+    source = ['right water', 'left water', 'total water']
+    amount = [pump1_water, pump2_water, total_water]
+
+    session_water = pd.DataFrame(dict(water_source=source, amount=amount))
+    return session_water
 
 
 if __name__ == '__main__':
-    current_mouse = 'MF06'
-    current_date = '2023-06-13'
     plot_path = '../figures'
+
+    """Analyze the data from a single mouse session"""
+    current_mouse = 'HD005'
+    current_date = '2023-08-29'
     sess_ID = current_mouse + '-' + current_date
 
-    """Analyze the data from a sample mouse session"""
     # df = fileIO.load(current_mouse, current_date, reprocess=False)
-    # # generate_session_raster(data_dict[current_mouse][0], 'sample_raster', plot_path)
-    # bin_counts, session_df, bins = plot_binned_behavior(df, 'sample_bin_plot', plot_path, plot=False)
+    # generate_session_raster(df, sess_ID + '_raster', plot_path)
+    # water = count_water(df)
+    # bin_counts, session_df, bins = plot_binned_behavior(df,  plot_path, sess_ID + '_bin_plot', plot=False)
     # block_analysis(bin_counts, session_df, sess_ID)
 
     """Analyze data of a mouse across several sessions"""
