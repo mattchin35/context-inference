@@ -205,7 +205,7 @@ class TwoLeverAction():
 
     def observation_Qlearning(self, Q, N, alpha=.1, greedy=False, epsilon=.1):
         """
-        Q-learning action selection for a model with complete state information.
+        Q-learning action selection for a model with incomplete state information.
         N - the state is now being inferred; N is not used here.
         Q - action-values updated with rewards. Can be used to speed up learning with a priori knowledge.
         alpha - learning size parameter Q updates
@@ -321,13 +321,12 @@ class TwoLeverAction():
 
         posterior = pOutcome * np.dot(self.transition_matrix.T, prior)
         posterior /= np.sum(posterior)
-
         return action, reward, posterior, dist
 
     def logistic(self, dist, phi):
         """
         Logistic regression (RFLR) model based on Beron et al, PNAS 2022. Switched 0 and 1 from their convention for
-        consistency with the other code here. Note that this option only models actions, not beliefs.
+        consistency with the other code here. Note that this option only agents actions, not beliefs.
         prior - prior log odds
         phi - previous recursion for choice-reward
         beta - weight for phi recursion

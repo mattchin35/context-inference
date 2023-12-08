@@ -1,23 +1,28 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import lever_behavior
+import context_behavior
 import pandas as pd
 import seaborn as sns
 import os
 
 
 if __name__ == '__main__':
+
+    ### RUN EXPERIMENTS ###
     block_length = 60
     block_structure = ['A', 'B', 'C1', 'C2']
-    block_structure = block_structure + block_structure
-    print(block_structure)
-    # block_structure = ['A', 'B', 'C1', 'C2', 'B']
+    # block_structure = block_structure + block_structure
     nBlocks = len(block_structure)
     model_type = 'HMM'
-    experiment1 = lever_behavior.TwoLeverAction(block_structure=block_structure, default_blocklength=block_length, p_switch=.1)
-    experiment1.run_experiment(save_name='{}_fast'.format(model_type), model_name=model_type, alpha=.9)
-    experiment2 = lever_behavior.TwoLeverAction(block_structure=block_structure, default_blocklength=block_length, p_switch=.02)
-    experiment2.run_experiment(save_name='{}_slow'.format(model_type), model_name=model_type, alpha=.1)
+    save_name1 = '{}'.format(model_type)
+    experiment1 = context_behavior.TwoLeverAction(block_structure=block_structure, default_blocklength=block_length)
+    experiment1.p_switch = 1 / block_length
+    experiment1.run_experiment(save_name=save_name1, model_name=model_type)
+
+    model_type = 'stateless'
+    save_name2 = '{}'.format(model_type)
+    experiment2 = context_behavior.TwoLeverAction(block_structure=block_structure, default_blocklength=block_length)
+    experiment2.run_experiment(save_name=save_name2, model_name=model_type)
 
     ## how to load a previous run
     # experiment1 = lever_behavior.TwoLeverAction()
@@ -56,13 +61,13 @@ if __name__ == '__main__':
     dfFast = pd.DataFrame(data=dFast)
     dSlow = {'action': yB, 'trial': x, 'learning_rate': 'slow learning'}
     dfSlow = pd.DataFrame(data=dSlow)
-    df = pd.concat([dfFast,dfSlow])
+    df = pd.concat([dfFast, dfSlow])
 
     # plt.scatter(x, y, label='fast learning', s=4)
     # sns.swarmplot(df, x='trial', y='action', hue='learning_rate',s=4)#, dodge=True)
     sns.swarmplot(df, x='trial', y='action', hue='learning_rate',s=4, dodge=True)
 
-    # moving average
+    ### PLOT moving average actions
     n = 5
     y = experiment1.moving_average(experiment1.actions, n=5)
     x_moving = np.arange(y.size) + n - 1
@@ -72,6 +77,7 @@ if __name__ == '__main__':
     y2 = experiment1.moving_average(experiment2.actions, n=5)
     # plt.plot(x_moving, y2, label='slow moving average action')
 
+    ### SCATTERPLOT BEHAVIOR
     # plt.yticks([0,1],['Left', 'Right'])
     # plt.ylim([-.1,1.1])
     plt.ylabel('Actions', fontsize=12)
