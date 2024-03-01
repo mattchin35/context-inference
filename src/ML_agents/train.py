@@ -2,8 +2,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from behavior_modeling.task import config
-from models import RNN
+from src.behavior_modeling.task import config
+from src.ML_agents.models import RNN
 
 import os, time
 import pickle as pkl

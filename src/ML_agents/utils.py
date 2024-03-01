@@ -1,12 +1,12 @@
-import matplotlib
-matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
 import os
 import json
-import matplotlib.cm as cm
 import pickle
+import matplotlib
+import matplotlib.cm as cm
+import matplotlib.pyplot as plt
+import seaborn as sns
+matplotlib.use('TkAgg')
 
 def save_parameters(opts, save_name):
     cur_dict = opts.__dict__
@@ -15,6 +15,7 @@ def save_parameters(opts, save_name):
     # save_name = save_name + '_' + opts.losses
     with open(save_name + '.json', 'w') as f:
         json.dump(cur_dict, f)
+
 
 def load_parameters(save_path):
     """Load config."""
@@ -28,6 +29,7 @@ def load_parameters(save_path):
     for key, val in config_dict.items():
         setattr(config, key, val)
     return config
+
 
 def load_results(root_dir, subfile=None):
     dir = os.path.join(root_dir, 'files')
@@ -47,6 +49,7 @@ def load_results(root_dir, subfile=None):
         mse_loss.append(log['mse_loss'])
         loss.append(log['loss'])
     return xe_loss, loss, config
+
 
 def subimage_easy(tup, col, row, save_name, cbar=False, vmin=-1, vmax=1, tight_axes=False, image=False, orderC=True,
                   ax_op=['off', 'image']):
@@ -96,6 +99,7 @@ def subimage_easy(tup, col, row, save_name, cbar=False, vmin=-1, vmax=1, tight_a
         plt.tight_layout()
     fig.savefig(save_name, bbox_inches='tight', figsize=(14, 10), dpi=500)
     plt.close()
+
 
 def subplot_easy(tup, col, row, save_name, xlim=None, ylim=None, hide_ticks=False, ax_op=[],
                  suptitle=None, legends=None, scatter=False, tight_axes=False, scatter_size=None, orderC=True):
