@@ -1,4 +1,4 @@
-himport numpy as np
+import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
@@ -96,6 +96,7 @@ def plot_multiple_runs(value_dfs: List[pd.DataFrame], plot_name: str, action_df:
     plt.savefig('../figures/{}.{}'.format(plot_name, figure_format), format=figure_format, dpi=300)
     plt.close()
     print('saved figure as {}'.format(plot_name))
+
 
 def plot_experiment(df: pd.DataFrame, model_name: str, plot_name: str):
     df = df[:100]

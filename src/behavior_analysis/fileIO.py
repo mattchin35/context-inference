@@ -5,13 +5,14 @@ from pathlib import Path
 from typing import List, Any, Optional
 
 """
-Functions for loading behavior data files.
+Functions for loading behavior and preprocessing behavior data files.
 """
 
 
-def process_file(save_directory: str, file_path: str, filter_events: Optional[List[str]] = []) -> pd.DataFrame:
+def process_file(save_directory: Path, file_path: str, filter_events: Optional[List[str]] = []) -> pd.DataFrame:
     # Read the file into a DataFrame, skipping the first row
-    df = pd.read_csv(file_path, sep=';', skiprows=1, on_bad_lines='skip', usecols=[1, 3])
+    # df = pd.read_csv(file_path, sep=';', skiprows=1, on_bad_lines='skip', usecols=[1, 3])
+    df = pd.read_csv(file_path, sep=';', header=None, on_bad_lines='skip', usecols=[1, 3])
 
     # Rename the columns
     df.columns = ['Time', 'Event']
@@ -23,7 +24,7 @@ def process_file(save_directory: str, file_path: str, filter_events: Optional[Li
         exit_standby_time = df['Time'].min()
     df['Time'] = df['Time'] - exit_standby_time
 
-    # Remove rows with negative 'Time' values
+    # Remove any rows with negative 'Time' values
     df = df[df['Time'] >= 0]
 
     # You can use the str.replace() function
@@ -59,59 +60,47 @@ def process_file(save_directory: str, file_path: str, filter_events: Optional[Li
     # df_new = df_new.set_index('Event')
 
     # Save the new DataFrame to a CSV file
-    new_file_path = os.path.join(save_directory, 'cleaned_' + os.path.basename(file_path))
+    # new_file_path = os.path.join(save_directory, 'cleaned_' + os.path.basename(file_path))
+    new_file_path = save_directory / ('cleaned_' + Path(file_path).name)
     df_new.to_csv(new_file_path, index=False)
     print('cleaned_file_created')
     return df_new
 
 
-def find_files(search_dir: list, mouse, date) -> List[Path]:
-    start_path = Path.cwd()
-    match_files = []
-    for d in search_dir:
-        # Reset the working directory at the start of each iteration
-        os.chdir(start_path)
-        for root, dirs, files in os.walk(d):
-            for f in files:
-                if re.fullmatch('.*{}.*{}.*.log'.format(mouse, date), f):
-                    match_files.append(Path(root) / f)
-
-    os.chdir(start_path)
+def find_files(search_dir: Path, session_ID: str) -> List[Path]:
+    # match_files = list(search_dir.glob('*{}*.log'.format(session_ID)))  # non-recursive search
+    match_files = list(search_dir.glob('**/*{}*.log'.format(session_ID)))  # recursive search
     return match_files
 
 
-def separate_session_paths(files: List[Path]) -> List[Path]:
-    raw_file, cleaned_file = None, None
-    for i, filepath in enumerate(files):
-        if re.fullmatch('cleaned_.*', filepath.name):
-            cleaned_file = filepath.resolve()
-            files.pop(i)
-
-    raw_file = files[0].resolve()
-    return [raw_file, cleaned_file]
-
-
-def load(mouse: str, date: str, load_cleaned: bool = True):
-    """
-    Load the behavior data for a particular mouse on a particular day.
-    a larger structure.
-    """
-    directories = ["../behavior_data"]
-    files = find_files(directories, mouse, date)
-    assert files, "File not found!!!"
-
-    raw_file, clean_file = separate_session_paths(files)
-    if load_cleaned and bool(clean_file):
-        df = pd.read_csv(clean_file, sep=',')
-    else:
-        print('Processing raw file')
-        df = process_file('../behavior_data', raw_file)
-
+def load_raw_data(session_ID: str, data_path: Path, save_path: Path) -> pd.DataFrame:
+    file = find_session(session_ID, data_path)
+    print('Processing raw file')
+    df = process_file(save_path, file)
     return df
 
 
+def load_cleaned_data(session_id: str, data_path: Path):
+    file = find_session(session_id, data_path)
+    print('Loading cleaned file')
+    df = pd.read_csv(file, sep=',')
+    return df
+
+
+def find_session(session_id: str, data_path: Path) -> Path:
+    file = find_files(data_path, session_id)
+    assert file, "File for {} not found!!!".format(session_id)
+    assert len(file) == 1, "Multiple files for {} found!!!".format(session_id)
+    file = file[0]
+    return file
+
+
 if __name__ == '__main__':
-    current_mouse = 'MF23'
-    current_date = '2023-08-18'
-    df = load(current_mouse, current_date, load_cleaned=False)
-    # print(df)
+    mouse = 'MF23'
+    date = '2023-08-18'
+    sess_ID = mouse + '_' + date
+
+    data_path = Path('../../data/raw/Mitch_behavior')
+    save_path = Path('../../data/processed')
+    df = load_raw_data(sess_ID, data_path, save_path)
+    print(df)

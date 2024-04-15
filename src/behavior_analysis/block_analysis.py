@@ -10,79 +10,14 @@ from pathlib import Path
 from copy import deepcopy
 from collections import OrderedDict
 import pickle as pkl
+import collect_events
+import raster_plots as rp
+import session_overview
 
 
-def generate_event_array(df: pd.DataFrame, events: list, timespan: tuple) -> np.ndarray:
-    event_array = []
-    for e in events:
-        event_df = df.loc[df['Event'] == e, 'Time']
-        ix = (event_df >= timespan[0]) & (event_df <= timespan[1])
-        event_array.append(event_df[ix].values)
-    return np.array(event_array, dtype=object)
-
-
-def plot_event_raster(array: np.ndarray, labels: Iterable[str]) -> plt.Figure:
-    fig, ax = plt.subplots(1, 1)
-    fig.set_figheight(10)
-    fig.set_figwidth(18)
-    ax.eventplot(array, linelengths=0.6, linewidths=0.15, color='black')
-    ax.set_title('Behavioral Raster Plot', fontsize=24)
-    plt.xlabel("Time (seconds)", fontsize=24)
-    ax.set_yticks(np.arange(len(labels)))
-    ax.set_yticklabels(labels, fontsize=20)
-    # ax.set_yticks(np.arange(len(labels)), labels=labels, fontsize=20)  # not possible in earlier matplotlib versions
-    plt.xticks(fontsize=20)
-    plt.tight_layout()
-    return fig
-
-
-def get_choice_events(df: pd.DataFrame, event_list: list = []) -> list:
-    unique_events = np.unique(df['Event'].values)
-    for e in unique_events:
-        if re.fullmatch('pump.*', e) or re.fullmatch('.*choice.*', e):
-            event_list.append(e)
-
-    return event_list
-
-
-def get_context_events(df: pd.DataFrame, event_list: list = []) -> list:
-    unique_events = np.unique(df['Event'].values)
-    for e in unique_events:
-        if re.fullmatch('enter_.*', e):
-        # if re.fullmatch('enter_.*', e) or re.fullmatch('exit_.*', e):
-            event_list.append(e)
-
-    return event_list
-
-
-def make_event_labels(events: list) -> list:
-    event_labels = [s.replace('_', ' ') for s in events]
-    event_labels = [s.replace('pump1', 'right') for s in event_labels]
-    event_labels = [s.replace('pump2', 'left') for s in event_labels]
-    return event_labels
-
-
-def generate_session_raster(session_df: pd.DataFrame, fig_name: str, plot_path: str, timespan: tuple = (0, np.inf),
-                            fig_format: str = 'png') -> None:
-    """
-    Create a raster plot from a single behavior session.
-    """
-    cleaned_df = session_df[session_df['Event'] != 'exit_standby']
-
-    # event_list = ['left_entry', 'right_entry', 'enter_intercontext_interval']
-    event_list = ['left_entry', 'right_entry']
-    event_list = get_choice_events(cleaned_df, event_list)
-    event_list = get_context_events(cleaned_df, event_list)
-    event_labels = make_event_labels(event_list)
-    event_array = generate_event_array(cleaned_df, event_list, timespan)
-
-    raster_figure = plot_event_raster(event_array, event_labels)
-
-    # plt.show()
-    savename = os.path.join(plot_path, '{}.{}'.format(fig_name, fig_format))
-    raster_figure.savefig(savename, format=fig_format)
-    plt.close('all')
-    print("Saved raster plot as {}".format(savename))
+"""
+This was code to analyze changes from block to block, but it needs to be refactored.
+"""
 
 
 def _plot_bins(bin_counts, bin_range, bin_centers, transition_list,
@@ -127,12 +62,10 @@ def _plot_bins(bin_counts, bin_range, bin_centers, transition_list,
     fig.savefig(savename, format=fig_format)
 
 
-def plot_binned_behavior(session_df, fig_path, fig_name, bin_range=(0, np.inf), plot=False):
-    """
-    session is a dictionary of pandas dataframes.
-    """
+def plot_binned_behavior(session_df: pd.DataFrame, fig_path, fig_name, bin_range=(0, np.inf), plot=False):
+
     event_list = ['left_entry', 'right_entry']
-    event_list = get_choice_events(session_df, event_list)
+    event_list = rp.get_choice_events(session_df, event_list)
 
     transition_list = ['enter_ContextA', 'enter_ContextB', 'enter_intercontext_interval', 'enter_ContextC1',
                        'enter_ContextC2']
@@ -426,7 +359,7 @@ def compare_sessions(session_list, plot_path, plot_name):
         df = fileIO.load(mouse, date, load_cleaned=False)
         bin_counts, session_df, bins = plot_binned_behavior(df, plot_path, 'sample_bin_plot', plot=False)
         _, session_summary, _ = block_analysis(bin_counts, session_df, sess_ID)
-        w = count_water(df)
+        w = session_overview.total_water_delivery(df)
         summaries.append(session_summary)
         dates.append(date)
         water.append(w)
@@ -466,182 +399,3 @@ def compare_sessions(session_list, plot_path, plot_name):
     fig_format = 'svg'
     savename = os.path.join(plot_path, '{}.{}'.format(plot_name, fig_format))
     f.savefig(savename, format=fig_format)
-
-
-def count_water(session_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add all water delivery events to determine mouse water intake.
-    """
-
-    # get dataframe indices for all reward events
-    reward_event_types = get_choice_events(session_df)
-    ix = np.zeros(session_df.shape[0]).astype(bool)
-    for e in reward_event_types:
-        ix = ix | (session_df['Event'] == e)
-
-    # create lists of reward events of each type
-    reward_events = session_df.loc[ix, 'Event'].values
-    pump1_regex = re.compile("pump1.*")
-    pump2_regex = re.compile("pump2.*")
-    pump1_list = list(filter(pump1_regex.match, reward_events))  # Read Note below
-    pump2_list = list(filter(pump2_regex.match, reward_events))  # Read Note below
-
-    # add up events to determine total rewards
-    pump1_water = np.sum([float(re.findall(r'(\d+)', a)[1]) for a in pump1_list])
-    pump2_water = np.sum([float(re.findall(r'(\d+)', a)[1]) for a in pump2_list])
-    total_water = pump1_water + pump2_water
-    source = ['right water', 'left water', 'total water']
-    amount = [pump1_water, pump2_water, total_water]
-
-    session_water = pd.DataFrame(dict(water_source=source, amount=amount))
-    return session_water
-
-
-def collect_choice_events():
-    """collect all choice-events in the session for presentation to a behavior model.
-    - get dataframe
-    - collect pumpX_reward_X events as the choices made, together with their current context
-    - ALT: look at the binning by contexts. count the number of choices in each bin. that's it.
-    - think about C1C2 transition. A QL model has no strategy, does an inference one?
-    """
-    pass
-
-
-def make_performance_df(df: pd.DataFrame, id: str, save_name: str) -> pd.DataFrame:
-    """
-    Prepare an event dataframe for compatibility with computational agents.
-    Collect state, cur_trial, cur_block, cur_trial_in_block,
-    p_active_rew, p_inactive_rew,
-    stimulus, action, correct, reward, session_ID
-    """
-    df = df.sort_values(by=['Time'])
-    unique_events = df['Event'].unique()
-    context_events = get_context_events(df)
-    choice_events = get_choice_events(df)
-
-    # start from the first known context entry; throw out everything before that
-    ix = np.zeros(df.shape[0]).astype(bool)
-    for e in context_events:
-        ix = ix | (df['Event'] == e)
-
-    start_time = df.loc[ix, 'Time'].values[0]
-    df = df.loc[df['Time'] >= start_time]
-
-    cur_state = -1
-    cur_trial = -1
-    cur_trial_in_block = -1
-    cur_block = -1
-    p_active_rew, p_inactive_rew = .9, 0
-    _action = -1
-    _correct = -1
-    _reward = 0
-
-    states = []
-    trials = []
-    trials_in_block = []
-    blocks = []
-    actions = []
-    correct = []
-    rewards = []
-
-    # go through each event and build up lists of the above variables
-    for i, e in enumerate(df['Event'].values):
-        if e in context_events:  # update the background conditions, but do not append to lists
-            cur_state = e
-            cur_block += 1
-            cur_trial_in_block = -1
-
-        elif e in choice_events:  # update the trial and append to lists
-            cur_trial += 1
-            cur_trial_in_block += 1
-
-            # LEFT CHOICES
-            if e == 'wrong_choice_right_patch':
-                action = 1
-                _correct = 0
-                _reward = 0
-            elif e == 'pump2_reward_0':
-                action = 1
-                _correct = 1
-                _reward = 0
-            elif re.fullmatch('pump2.*', e):
-                action = 1
-                _correct = 1
-                _reward = 1
-
-            # RIGHT CHOICES
-            elif e == 'wrong_choice_left_patch':
-                action = 0
-                _correct = 0
-                _reward = 0
-            elif e == 'pump1_reward_0':
-                action = 0
-                _correct = 1
-                _reward = 0
-            elif re.fullmatch('pump1.*', e):
-                action = 0
-                _correct = 1
-                _reward = 1
-
-            else:
-                raise NameError('Unrecognized choice event: {}'.format(e))
-
-            states.append(cur_state)
-            trials.append(cur_trial)
-            trials_in_block.append(cur_trial_in_block)
-            blocks.append(cur_trial_in_block)
-            actions.append(action)
-            correct.append(_correct)
-            rewards.append(_reward)
-
-    assert -1 not in actions, "Action list contains -1s, which means there are unaccounted for events."
-
-    states = np.array(states)
-    states_int = np.zeros(states.size)
-    states_int[states == 'enter_right_patch'] = 0
-    states_int[states == 'enter_left_patch'] = 1
-    states_int.astype(int)
-
-    n_trials = len(states)
-    stimulus = np.zeros(n_trials) - 1
-    p_active_rew = np.zeros(n_trials) + p_active_rew
-    p_inactive_rew = np.zeros(n_trials) + p_inactive_rew
-    session_ID = [id] * n_trials
-
-    performance = pd.DataFrame({'state': states_int, 'cur_trial': trials, 'cur_trial_in_block': trials_in_block,
-                 'cur_block': blocks, 'p_active_rew': p_active_rew, 'p_inactive_rew': p_inactive_rew,
-                 'stimulus': stimulus, 'action': actions, 'correct': correct, 'reward': rewards,
-                 'session_ID': session_ID})
-
-    p = Path('../behavior_data') / (save_name + '.pkl')
-    with p.open('wb') as f:
-        pkl.dump(performance, f)
-
-    print("[***] Experiment saved as: {}".format(p.name))
-    return performance
-
-
-if __name__ == '__main__':
-    plot_path = '../figures'
-
-    """Analyze the data from a single mouse session"""
-    current_mouse = 'MF03'  # 'MF23'
-    current_date = '2023-10-03'  # '2023-08-18'
-    sess_ID = current_mouse + '-' + current_date
-
-    df = fileIO.load(current_mouse, current_date, load_cleaned=False)
-    generate_session_raster(df, sess_ID + '_raster', plot_path)
-    # water = count_water(df)
-    # print(water)
-
-    perf_df = make_performance_df(df, sess_ID, sess_ID + '_performance')
-    # bin_counts, session_df, bins = plot_binned_behavior(df,  plot_path, sess_ID + '_bin_plot', plot=True)
-    # block_analysis(bin_counts, session_df, sess_ID)
-
-    """Analyze data of a mouse across several sessions"""
-    # sess_list = [('MF24', '2023-07-14'),
-    #              ('MF24', '2023-07-17'),
-    #              ('MF24', '2023-07-18'),
-    #              ('MF24', '2023-07-19')]
-    # compare_sessions(sess_list, plot_path, plot_name='MF24_sample')
-    #

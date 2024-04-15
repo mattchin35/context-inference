@@ -8,6 +8,10 @@ from typing import Tuple, Protocol, Union
 from itertools import count
 from collections import deque
 
+"""
+Policy gradient saved_models for reinforcement learning. Intended for episodic tasks.
+"""
+
 device = torch.device("cpu")
 # device = torch.device("cuda:0") # Uncomment this to run on GPU
 eps = np.finfo(np.float32).eps.item()
@@ -16,18 +20,19 @@ N_ACTIONS = 2
 
 class Config(Protocol):
     rnn_size: int
-    EI: bool
-    proportion_excitatory: float
+    # EI: bool
+    # proportion_excitatory: float
 
     noise: bool
+    noise_intensity: float
     decay: float  # parameter from 0 to 1 - 1 has complete decay/complete replacement of prior state with new activity
-    activation_fn: str
 
     train_input_connections: bool
     output_probabilities: bool
 
     weight_loss: float
     activity_loss: float
+    activation_fn: str
 
     time_loss_start: Union[int, None]
     time_loss_end: Union[int, None]
@@ -39,13 +44,16 @@ class Config(Protocol):
 
 class RNN_reinforce(torch.nn.Module):
     """REINFORCE policy gradient model."""
-    def __init__(self, data_dims: Tuple[int, int, int], opts: Config):
+
+    def __init__(self, data_dims: dict, opts: Config):
         super().__init__()
         self.opts = opts
         self._build(data_dims)
+        self.name = 'RNN_reinforce'
 
-    def _build(self, data_dims: Tuple[int, int, int]) -> None:
-        dim_ipt, dim_opt, rnn_size = data_dims
+    def _build(self, data_dims: dict) -> None:
+        dim_ipt, dim_opt, rnn_size = data_dims['dim_ipt'], data_dims['dim_opt'], self.opts.rnn_size
+
         # requires_grad defaults to False
         Wxh = torch.empty([dim_ipt, rnn_size], device=device, requires_grad=self.opts.train_input_connections)
         Whh = torch.empty([rnn_size, rnn_size], device=device, requires_grad=True)
@@ -72,6 +80,13 @@ class RNN_reinforce(torch.nn.Module):
         self.state_series = [init_state]
         self.prediction_series = []
 
+        if self.opts.activation_fn == 'tanh':
+            self.activation_fn = F.tanh
+        elif self.opts.activation_fn == 'relu':
+            self.activation_fn = F.relu
+        elif self.opts.activation_fn == 'retanh':
+            self.activation_fn = lambda x: F.relu(F.tanh(x))
+
     def forward(self, inputs: torch.Tensor, noise: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # move one step forward in time
         next_state, predictions = self.step(self.state_series[-1], inputs, noise)
@@ -95,7 +110,6 @@ class RNN_reinforce(torch.nn.Module):
         #     rolling_rewards = r + self.discount * rolling_rewards
         #     returns.appendleft(rolling_rewards)
         # returns = torch.tensor(returns)
-
 
         returns = torch.tensor(self.rewards).float()
         # if self.opts.baseline:
@@ -126,7 +140,7 @@ class RNN_reinforce(torch.nn.Module):
         if self.opts.noise:
             hidden_activation += noise
 
-        state = (1. - self.opts.decay) * prev_state + self.opts.decay * F.relu(hidden_activation)
+        state = (1. - self.opts.decay) * prev_state + self.opts.decay * self.activation_fn(hidden_activation)
         action_scores = torch.matmul(state, self.Wout) + self.Wout_bias
         policy = F.softmax(action_scores, dim=1)
         return state, policy
@@ -145,6 +159,7 @@ class RNN_A2C(torch.nn.Module):
         super().__init__()
         self.opts = opts
         self._build(data_dims)
+        self.name = 'RNN_A2C'
 
     def _build(self, data_dims: Tuple[int, int, int]) -> None:
         dim_ipt, dim_opt, rnn_size = data_dims

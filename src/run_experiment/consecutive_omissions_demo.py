@@ -3,6 +3,7 @@ from typing import Tuple, List, Any, Iterable, Callable
 import datetime as dt
 import pickle as pkl
 from pathlib import Path
+from icecream import ic
 
 
 EPS = np.finfo(float).eps
@@ -169,6 +170,7 @@ def main():
     decay = np.arange(start=.1, stop=1, step=.1)
     qlearning_run = run_qlearning_demo(decay, n_trials=10)
     RL_switch = get_trials_to_switch(qlearning_run)
+    ic(qlearning_run)
 
     data['decay'] = decay
     data['qlearning'] = qlearning_run
@@ -184,7 +186,7 @@ def main():
             'reward omission. Matrix is N x T, where N is the number of decay values and T is the number of trials.\n'
             'Trials to switch collapses these matrices along the T dimension, so that the output is N x 1.')
 
-    save_runs(data, 'consecutive_omissions', note=note)
+    # save_runs(data, 'consecutive_omissions', note=note)
 
 
 if __name__ == '__main__':

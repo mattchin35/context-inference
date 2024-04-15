@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from src.behavior_modeling.task import config
-from src.ML_agents.models import RNN
+from src.example_ML_RL_agents.models import RNN
 
 import os, time
 import pickle as pkl

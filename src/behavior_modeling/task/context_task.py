@@ -8,7 +8,8 @@ import src.behavior_modeling.parameters.task_config as config
 import logging
 
 SEED = 12345
-rng = np.random.default_rng(SEED)
+# rng = np.random.default_rng(SEED)
+rng = np.random.default_rng()
 
 N_ACTIONS = 2
 RIGHT_IX = 0
@@ -133,14 +134,14 @@ class BaseMDP:
     def to_next_state(self) -> None:
         logging.info("choosing next block type")
         # self.cur_state = 1 - self.cur_state
+        prev_state = self.cur_state
 
         if self.cur_state == 'left':
             self.cur_state = 'right'
         elif self.cur_state == 'right':
             self.cur_state = 'left'
 
-        logging.info("new block: type {}".format(self.cur_state))
-
+        logging.info("new block: {}; old block: {}".format(self.cur_state, prev_state))
         if self.params.block_transition_style in ['markov', 'success_trigger', 'n_correct']:
             return
         elif self.params.block_transition_style == 'fixed':
@@ -148,14 +149,15 @@ class BaseMDP:
         else:
             raise AttributeError("block transition style not recognized")
 
-        if self.params.fixed_block_lengths:
-            self.cur_block_length = self.params.fixed_block_lengths[self.cur_block]
-        else:
-            self.cur_block_length = self.params.default_block_length
-            if self.params.block_length_variation > 0:
-                self.cur_block_length += rng.choice([-1, 1]) * \
-                                         rng.integers(low=0, high=self.params.block_length_variation)
+        # if self.params.fixed_block_lengths:
+        #     self.cur_block_length = self.params.fixed_block_lengths[self.cur_block]
+        # else:
+        self.cur_block_length = self.params.default_block_length
+        if self.params.block_length_variation > 0:
+            self.cur_block_length += rng.choice([-1, 1]) * \
+                                     rng.integers(low=0, high=self.params.block_length_variation)
 
+        # self.cur_trial_in_block = 0
         logging.info("new block: type {}, length {}".format(self.cur_state, self.cur_block_length))
 
     def step(self, action: int) -> Tuple[float, float]:
@@ -196,6 +198,12 @@ class BaseMDP:
 
         elif self.params.block_transition_style == 'success_trigger' and correct:
             change_block = rng.random() < self.params.state_transition_prob
+            # sample = rng.random()
+            # change_block = sample < self.params.state_transition_prob
+            # print(sample)
+            # if correct:
+            # else:
+            #     change_block = False
 
         elif self.params.block_transition_style == 'n_correct':
             change_block = self.correct_in_block >= self.params.success_trials_to_block_transition

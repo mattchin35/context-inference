@@ -9,7 +9,6 @@ import logging
 from src.behavior_modeling.parameters import task_config as config
 
 
-
 """
 refactor these codes to be independent of a class.
 """

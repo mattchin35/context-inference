@@ -2,19 +2,21 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
-import controller
-import demo_tasks
+# import controller
+# import demo_tasks
 from formulaic import model_matrix
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
 import pickle as pkl
 from pathlib import Path
+import src.behavior_analysis.fileIO as fileIO
+import src.behavior_analysis.decision_variable_counters as counters
 
 
 from typing import Tuple, List, Any, Iterable
 from collections import defaultdict
 
-plt.style.use('dark_background')
+# plt.style.use('dark_background')
 
 
 def get_relative_value(df, max_rewards):
@@ -48,82 +50,21 @@ def fig_1D(plot_name='Vertechi2020_1D'):
     plt.savefig('../figures/{}.{}'.format(plot_name, figure_format), format=figure_format, dpi=300)
 
 
-def get_session_switch_ix(df):
+def get_session_switch_ix(session_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     # df should only be for one session, not a bunch concatenated
-    actions = df['action'].values
-    states = df['state'].values
+    actions = session_df['action'].values
+    states = session_df['state'].values
     ix_action_switch = actions[1:] != actions[:-1]
     ix_state_switch = states[1:] != states[:-1]
     return ix_action_switch, ix_state_switch
-
-
-def consecutive_fail_counter(count: int, reward: int):
-    # via cazettes 2023
-    if reward == 0:  # failure
-        g = 1
-        c = 1
-    else:  # reward
-        g = 0
-        c = 0
-
-    count = g * count + c
-    return count
-
-
-def consecutive_fail_renewal_counter(count: int, reward: int, last_rewarded: bool):
-    if reward == 0:
-        g = 1 - int(last_rewarded)
-        c = 1
-    else:
-        g = 1
-        c = 0
-
-    count = g * count + c
-    return count
-
-
-def consecutive_reward_counter(count: int, reward: int):
-    # via cazettes 2023
-    if reward == 0:  # failure
-        g = 0
-        c = 0
-    else:  # reward
-        g = 1
-        c = 1
-
-    count = g * count + c
-    return count
-
-
-def consecutive_reward_renewal_counter(count: int, reward: int, last_rewarded: bool):
-    if reward == 0:  # failure
-        g = 1
-        c = 0
-    else:  # reward
-        g = int(last_rewarded)
-        c = 1
-
-    count = g * count + c
-    return count
-
-
-def negative_value_counter(count: int, reward: int):
-    # via cazettes 2023
-    if reward == 0:  # failure
-        g = 1
-        c = 1
-    else:  # reward
-        g = 1
-        c = -1
-
-    count = g * count + c
-    return count
 
 
 def count_consecutive_events(df) -> Tuple[pd.DataFrame, pd.DataFrame]:
     # df should only be for one session, not a bunch concatenated
     consecutive_rewards = 0
     consecutive_failures = 0
+    consecutive_rewards_renewal = 0
+    consecutive_failures_renewal = 0
     negative_value = 0
     previous_trial_rewarded = False
 
@@ -148,12 +89,12 @@ def count_consecutive_events(df) -> Tuple[pd.DataFrame, pd.DataFrame]:
     # 2. the last-seen version used, which resets when failures/rewards start anew but don't reset on switches
     for i in range(n_trials-1):
         reward = df.loc[i, 'reward']
-        negative_value = negative_value_counter(negative_value, reward)
-        consecutive_rewards_renewal = consecutive_reward_renewal_counter(consecutive_rewards, reward, previous_trial_rewarded)
-        consecutive_failures_renewal = consecutive_fail_renewal_counter(consecutive_failures, reward, previous_trial_rewarded)
+        negative_value = counters.negative_value_counter(negative_value, reward)
+        consecutive_rewards_renewal = counters.consecutive_reward_renewal_counter(consecutive_rewards_renewal, reward, previous_trial_rewarded)
+        consecutive_failures_renewal = counters.consecutive_fail_renewal_counter(consecutive_failures_renewal, reward, previous_trial_rewarded)
 
-        consecutive_rewards = consecutive_reward_counter(consecutive_rewards, reward)
-        consecutive_failures = consecutive_fail_counter(consecutive_failures, reward)
+        consecutive_rewards = counters.consecutive_reward_counter(consecutive_rewards, reward)
+        consecutive_failures = counters.consecutive_fail_counter(consecutive_failures, reward)
 
         # if ix_action_switch[i]:  # this array has one fewer element than the df; can leave as is or add a dummy zero at the start
         if ix_action_switch[i] and df.loc[i+1, 'correct']:
@@ -164,16 +105,11 @@ def count_consecutive_events(df) -> Tuple[pd.DataFrame, pd.DataFrame]:
             action_switch_dict['action_switched_from'].append(df.loc[i, 'action'])
             action_switch_dict['state_switched_from'].append(df.loc[i, 'state'])
 
-        if reward > 0:
-            previous_trial_rewarded = True
-        else:
-            previous_trial_rewarded = False
-
         future_switches = ix_state_switch[ix_state_switch > i]
         next_switch = np.append(future_switches, n_trials)[0]
+        # if i in ix_state_switch:
         if i in ix_state_switch:
             state_change_ix = i+1
-
             first_correct_trial_ix = (correct_trial_ix > state_change_ix) & (correct_trial_ix < next_switch)
             # first_correct_value_ix = (correct_value_ix > state_change_ix) & (correct_value_ix < next_switch)
             if first_correct_trial_ix.any():
@@ -190,9 +126,14 @@ def count_consecutive_events(df) -> Tuple[pd.DataFrame, pd.DataFrame]:
             # if first_correct_trial_ix.any() or first_correct_value_ix.any():
             if first_correct_trial_ix.any():
                 state_switch_dict['state_change_ix'].append(state_change_ix)
-                state_switch_dict['consecutive_rewards'].append(consecutive_rewards)
+                # state_switch_dict['consecutive_rewards'].append(consecutive_rewards)
+                state_switch_dict['consecutive_rewards'].append(consecutive_rewards_renewal)
+                state_switch_dict['consecutive_failures'].append(consecutive_failures_renewal)
+                state_switch_dict['negative_value'].append(negative_value)
                 state_switch_dict['trials_to_correct'].append(trials_to_correct)
                 # state_switch_dict['trials_to_value'].append(trials_to_value)
+
+        previous_trial_rewarded = reward > 0
 
     action_switch_df = pd.DataFrame(action_switch_dict)
     state_switch_df = pd.DataFrame(state_switch_dict)
@@ -216,40 +157,45 @@ def get_demo_switches(agent_type: str, p_reward: float, p_switch: float, max_rew
     return full_switch_df
 
 
-# def get_session_switches(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-#     action_df_list = []
-#     state_df_list = []
-#
-#     _action_switch_df, _state_switch_df = count_consecutive_events(df)
-#     action_df_list.append(_action_switch_df)
-#     state_df_list.append(_state_switch_df)
-#
-#     action_switch_df = pd.concat(action_df_list)
-#     state_switch_df = pd.concat(state_df_list)
-#     return action_switch_df, state_switch_df
-
-
-def get_multisession_switches(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def get_session_switches(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     action_df_list = []
     state_df_list = []
 
-    # run a single session at a time
-    agent_ids = np.unique(df['session_ID'])
-    for id in agent_ids:
-        ix = df['session_ID'] == id
-        _action_switch_df, _state_switch_df = count_consecutive_events(df.loc[ix])
-        action_df_list.append(_action_switch_df)
-        state_df_list.append(_state_switch_df)
+    _action_switch_df, _state_switch_df = count_consecutive_events(df)
+    action_df_list.append(_action_switch_df)
+    state_df_list.append(_state_switch_df)
 
     action_switch_df = pd.concat(action_df_list)
     state_switch_df = pd.concat(state_df_list)
     return action_switch_df, state_switch_df
 
 
-def count_consecutives(df: pd.DataFrame, key: Any, min_counts=20) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def get_multisession_switches(concatenated_sessions_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    action_df_list = []
+    state_df_list = []
+    # regression_coefs = []
+
+    # run a single session at a time
+    sess_ids = np.unique(concatenated_sessions_df['session_ID'])
+    for id in sess_ids:
+        ix = concatenated_sessions_df['session_ID'] == id
+        _action_switch_df, _state_switch_df = count_consecutive_events(concatenated_sessions_df.loc[ix])
+        action_df_list.append(_action_switch_df)
+        state_df_list.append(_state_switch_df)
+
+        # coef = session_stats(_state_switch_df, key='trials_to_correct')
+        # regression_coefs.append(coef)
+
+    action_switch_df = pd.concat(action_df_list)
+    state_switch_df = pd.concat(state_df_list)
+    return action_switch_df, state_switch_df
+
+
+def consecutive_summary_measures(df: pd.DataFrame, key: Any, min_counts=20) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     grouped_switches = df.groupby(['consecutive_rewards'])[key]
     counts = grouped_switches.count()
     # print(counts)
+
     ix = counts > min_counts
     mean = grouped_switches.mean()[ix]
     std = grouped_switches.std()[ix]
@@ -258,7 +204,7 @@ def count_consecutives(df: pd.DataFrame, key: Any, min_counts=20) -> Tuple[pd.Da
     return rewards, mean, std, sem
 
 
-def fig_1E(plot_name='Vertechi2020_1E'):ma
+def fig_1E(plot_name='Vertechi2020_1E'):
     # make the mean-subtracted (1E) and non-subtracted (2D) versions
     # With real data, will have to mold it into compatibility with these fxns: basically that's the HMM_df and QL_df
     # The rest should work fine
@@ -361,7 +307,7 @@ def compare_consecutive_rewards(p_reward: float, p_switch: float, key: Any, min_
     # load the mouse
     mouse = 'MF03'
     date = '2023-10-03'
-    sess_ID = mouse + '-' + date
+    sess_ID = mouse + '_' + date
     p = Path('../mouse_behavior') / (sess_ID + '_performance.pkl')
     with p.open('rb') as f:
         mouse_df = pkl.load(f)
@@ -375,9 +321,9 @@ def compare_consecutive_rewards(p_reward: float, p_switch: float, key: Any, min_
     HMM_df = demo_tasks.load_collected_runs(agent_type=agent_type, p_reward=p_reward, p_switch=p_switch, n_agents=10)
     _, HMM_state_df = get_multisession_switches(HMM_df)
 
-    HMM_rewards, HMM_mean, HMM_std, HMM_sem = count_consecutives(HMM_state_df, key=key, min_counts=min_counts)
-    FQL_rewards, FQL_mean, FQL_std, FQL_sem = count_consecutives(FQL_state_df, key=key)
-    mouse_rewards, mouse_mean, _, mouse_sem = count_consecutives(mouse_state_df, key=key)
+    HMM_rewards, HMM_mean, HMM_std, HMM_sem = consecutive_summary_measures(HMM_state_df, key=key, min_counts=min_counts)
+    FQL_rewards, FQL_mean, FQL_std, FQL_sem = consecutive_summary_measures(FQL_state_df, key=key)
+    mouse_rewards, mouse_mean, _, mouse_sem = consecutive_summary_measures(mouse_state_df, key=key)
 
     HMM_mean_subtracted = HMM_mean - HMM_mean.mean()
     FQL_mean_subtracted = FQL_mean - FQL_mean.mean()
@@ -427,11 +373,14 @@ def compare_consecutive_rewards(p_reward: float, p_switch: float, key: Any, min_
 
 def collect_regression_coefficients(df: pd.DataFrame, sess_IDs: Iterable[Any]) -> np.ndarray:
     regression_coefs = []
+    n_switches = []
     for sess in sess_IDs:
         ix = df['session_ID'] == sess
         action_df, state_df = count_consecutive_events(df[ix])
         coef = session_stats(state_df, key='trials_to_correct')
         regression_coefs.append(coef)
+        n_switches.append(state_df.shape[0])
+    print('Number of switches:', n_switches)
     return np.array(regression_coefs)
 
 
@@ -478,8 +427,10 @@ def main():
     # compare_consecutive_rewards(HMM_df=HMM_state_df, FQL_df=FQL_state_df, key='trials_to_correct', min_counts=10)
     # compare_consecutive_rewards(HMM_df=HMM_state_df, FQL_df=FQL_state_df, key='trials_to_value', min_counts=10)
 
-    compare_consecutive_rewards(p_reward=p_reward, p_switch=p_switch, key='trials_to_correct', min_counts=10)
-    compare_regression_coefficients(p_reward=p_reward, p_switch=p_switch)
+    # compare_consecutive_rewards(p_reward=p_reward, p_switch=p_switch, key='trials_to_correct', min_counts=10)
+    # compare_regression_coefficients(p_reward=p_reward, p_switch=p_switch)
+
+    mouse_consecutive_rewards(df, key='trials_to_correct', min_counts=10)
 
 
 if __name__ == '__main__':

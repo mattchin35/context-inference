@@ -6,7 +6,8 @@ from abc import ABC
 import copy
 
 SEED = 12345
-rng = np.random.default_rng(SEED)
+# rng = np.random.default_rng(SEED)
+rng = np.random.default_rng()
 
 
 @dataclass
@@ -21,6 +22,7 @@ class TaskParams:
 
     # Task probability parameters, for markov and success_trigger. All between 0 and 1
     p_cue: float = .25
+    t_cue: int = 2
     # p_switch: float = .1
     state_transition_prob: float = .1  # true task dynamics, for markov and success_trigger
     active_reward_probability: float = .9
@@ -28,21 +30,21 @@ class TaskParams:
     reward_std_dev: float = 0
 
     # params for fixed block lengths
-    default_block_length: int = 30
+    default_block_length: int = 15
     block_length_variation: int = 0
     success_trials_to_block_transition: float = np.inf
     # max_consecutive_blocks: int = 2
 
     # reward size parameters
     mean_correct_reward: float = 1
-    mean_incorrect_reward: float = -1
-    ITI_lick_reward: float = -1  # for licking outside of go cue; don't think I'll use this
-    wait_reward: float = -1  # for not licking during go cue. Pick 0 (no waiting penalty) or -1 (waiting penalty)
+    mean_incorrect_reward: float = 0
+    ITI_lick_reward: float = 0  # for licking outside of go cue; don't think I'll use this
+    wait_reward: float = 0  # for not licking during go cue. Pick 0 (no waiting penalty) or -1 (waiting penalty)
 
-    fixed_block_sequence = []
-    fixed_block_lengths = []  # if this variable is set, the list of blocklengths must equal number of fixed blocks
+    # fixed_block_sequence = []
+    # fixed_block_lengths = []  # if this variable is set, the list of blocklengths must equal number of fixed blocks
 
-    n_trials: int = 1000
+    n_trials: int = 100
 
     # @property
     # def n_blocks(self) -> int:
@@ -68,12 +70,14 @@ class AgentParams:
 
 
 class MarkovDecisionProcess(Protocol):
-    states: List[str] = ['right_cued', 'left_cued', 'right_uncued', 'left_uncued', 'intercontext_interval']
+    # states: List[str] = ['right_cued', 'left_cued', 'right_uncued', 'left_uncued', 'intercontext_interval']
+    # state_stimulus_dict['right_uncued'] = 2
+    # state_stimulus_dict['left_uncued'] = 2
+    # state_stimulus_dict['intercontext_interval'] = 3
+
+    states: List[str] = ['right', 'left']
     state_dict = {s: i for i, s in enumerate(states)}
     state_stimulus_dict = copy.deepcopy(state_dict)
-    state_stimulus_dict['right_uncued'] = 2
-    state_stimulus_dict['left_uncued'] = 2
-    state_stimulus_dict['intercontext_interval'] = 3
 
     cur_state: str
     cur_trial: int
@@ -81,7 +85,8 @@ class MarkovDecisionProcess(Protocol):
     params: TaskParams
 
     def get_stimulus(self) -> int:
-        return self.state_stimulus_dict[self.cur_state]
+        ...
+        # return self.state_stimulus_dict[self.cur_state]
 
     def step(self, action: int) -> Tuple[float, float]:
         ...
