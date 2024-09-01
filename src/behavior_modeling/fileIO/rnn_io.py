@@ -37,7 +37,7 @@ def save_experiment(save_name: str, data_dir: Path, task: rnn_task.RnnMDP, perfo
     print("[***] Experiment saved as: {}".format(p_dict.resolve()))
 
 
-def save_agent(save_name: str, model_dir: Path, agent: torch.nn.Module) -> None:
+def save_agent_state(save_name: str, model_dir: Path, agent: torch.nn.Module) -> None:
     date = str(dt.date.today().isoformat())
     save_dir = model_dir / date
     if not save_dir.exists():
@@ -45,6 +45,18 @@ def save_agent(save_name: str, model_dir: Path, agent: torch.nn.Module) -> None:
 
     p_agent = save_dir / (save_name + '_agent.pkl')
     torch.save(agent.state_dict(), p_agent)
+    print("[***] Agent saved as: {}".format(p_agent.resolve()))
+
+
+def save_agent_dict(save_name: str, model_dir: Path, agent: torch.nn.Module) -> None:
+    date = str(dt.date.today().isoformat())
+    save_dir = model_dir / date
+    if not save_dir.exists():
+        save_dir.mkdir(parents=True)
+
+    p_agent = save_dir / (save_name + '_agent.pkl')
+    with open(p_agent, 'wb') as f:
+        pkl.dump(agent.__dict__, f)
     print("[***] Agent saved as: {}".format(p_agent.resolve()))
 
 
@@ -70,5 +82,13 @@ def load_experiment(exp_path: str) -> Tuple[task_config.TaskParams, rnn_config.A
 
 def load_agent_state(agent: torch.nn.Module, agent_path: str) -> torch.nn.Module:
     agent.load_state_dict(torch.load(agent_path))
+    print("[***] Agent restored from path: {}".format(agent_path))
+    return agent
+
+
+def load_agent_dict(agent: torch.nn.Module, agent_path: str) -> torch.nn.Module:
+    with open(agent_path, 'rb') as f:
+        agent_dict = pkl.load(f)
+    agent.__dict__ = agent_dict
     print("[***] Agent restored from path: {}".format(agent_path))
     return agent

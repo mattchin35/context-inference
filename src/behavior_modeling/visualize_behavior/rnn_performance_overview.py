@@ -16,6 +16,7 @@ state_dict = {s: i for i, s in enumerate(states)}  # i.e. [0 right, 1 left]
 def performance_overview():
     agent_name = 'RNN_reinforce'
     date = '2024-04-11'
+    # p_reward = .5
     p_reward = .9
     p_switch = .1
     fixed_blocks = 10
@@ -50,17 +51,32 @@ def performance_overview():
     Y = np.concatenate([np.zeros(np.sum(Rstimulus)), np.ones(np.sum(Lstimulus))])
 
     f, ax = plt.subplots(1,4)
+    end_ix = 200
+    yticks = np.arange(0, end_ix, 25)
     plt.sca(ax[0])
-    sns.heatmap(states_int[go_cue][:200])
+    ax_map = sns.heatmap(states_int[go_cue][:end_ix], cbar=False)
+    plt.ylabel('Trial')
+    plt.yticks(yticks, yticks)
+    plt.xticks([])
     plt.title('States')
     plt.sca(ax[1])
-    sns.heatmap(action[go_cue][:200])
+    ax_map = sns.heatmap(action[go_cue][:end_ix], cbar=False)
+    # ax_map = plt.imshow(states_int[go_cue][:end_ix], cbar=False)
+    # cbar = f.colorbar(ax_map, ticks=[0, 1], orientation='vertical')
+    # cbar.ax.set_xticklabels(['Right', 'Left'])
+
+    plt.yticks(yticks, yticks)
+    plt.xticks([])
     plt.title('Actions')
     plt.sca(ax[2])
-    sns.heatmap(reward[go_cue][:200])
+    sns.heatmap(reward[go_cue][:end_ix], cbar=False)
+    plt.yticks(yticks, yticks)
+    plt.xticks([])
     plt.title('Rewards')
     plt.sca(ax[3])
-    sns.heatmap(inputs[go_cue][:200,2:])
+    sns.heatmap(inputs[go_cue][:end_ix,2:])#, cbar_kws={'ticks': [0,1]})
+    plt.yticks(yticks, yticks)
+    plt.xticks([.5,1.5], ['R', 'L'])
     # plt.imshow(inputs, aspect='auto', interpolation='none')
     plt.title('R cue/L cue')
 
@@ -69,14 +85,27 @@ def performance_overview():
     f.savefig(save_path, format='png', dpi=300)
     print('Saved as {}'.format(save_path.resolve()))
 
-    f2, ax2 = plt.subplots(1,1)
+    f2, ax2 = plt.subplots(1,1, figsize=(10,5))
+    Rstimulus = inputs[:, 2] > 0
+    Lstimulus = inputs[:, 3] > 0
+    allstimulus = np.zeros(inputs.shape[0])+.5
+    allstimulus[Rstimulus] = state_dict['right']
+    allstimulus[Lstimulus] = state_dict['left']
+
+    st_trial = 0
+    ntrials = 50
+    ix = np.arange(st_trial*2,st_trial*2+ntrials*2)
+    plt.plot(ix[::2], action[go_cue][st_trial:st_trial+ntrials].flatten(), 'o', label='action')#, alpha=.5)
+    # plt.plot(ix, action[ix].flatten(), 'o', label='action')#, alpha=.5)
+    # plt.plot(ix[::2], reward[go_cue][st:st+ntrials].flatten(), 'o', label='reward', alpha=.5)
+    plt.plot(ix, states_int[ix].flatten(), label='states')
+    plt.plot(ix, allstimulus[ix], '--', label='allstimulus')
     # plt.plot(correct[go_cue][:100].flatten(), label='correct')
     # plt.plot(reward[go_cue][:100].flatten(), label='reward')
-    # plt.plot(action[go_cue][:100].flatten(), label='action')
 
-    plt.plot(action[go_cue][:100].flatten(), 'o', label='action')
-    plt.plot(states_int[go_cue][:100].flatten(), label='states')
-    plt.plot(allstimulus[go_cue][:100], label='allstimulus')
+    # plt.plot(action[go_cue][100:200].flatten(), 'o', label='action')
+    # plt.plot(states_int[go_cue][100:200].flatten(), label='states')
+    # plt.plot(allstimulus[go_cue][100:200], label='allstimulus')
 
     # plt.plot(action[:200].flatten(), 'o', label='action')
     # plt.plot(states_int[:200].flatten(), label='states')
@@ -84,7 +113,7 @@ def performance_overview():
 
     # stim_ix = X < 100
     # plt.plot(X[stim_ix], Y[stim_ix], 'x', label='stimulus', markersize=20)
-    plt.legend()
+    plt.legend(fancybox=False)
 
     # f3, ax3 = plt.subplots(1, 2)
     # plt.sca(ax3[0])
@@ -99,14 +128,14 @@ def performance_overview():
     # plt.show()
 
 
-def agent_overview():
-    load_name = '{}_pReward_{}_pSwitch_{}'.format(agent_name, .9, .1)
-    date = '2024-04-10'
-    load_checkpoint = model_dir / date / (load_name + '_agent.pkl')
-    # load_checkpoint = ''
-    if load_checkpoint:
-        print('Loading from checkpoint {}'.format(load_checkpoint))
-        agent.load_state_dict(torch.load(load_checkpoint))
+# def agent_overview():
+#     load_name = '{}_pReward_{}_pSwitch_{}'.format(agent_name, .9, .1)
+#     date = '2024-04-10'
+#     load_checkpoint = model_dir / date / (load_name + '_agent.pkl')
+#     # load_checkpoint = ''
+#     if load_checkpoint:
+#         print('Loading from checkpoint {}'.format(load_checkpoint))
+#         agent.load_state_dict(torch.load(load_checkpoint))
 
 
 def main():
@@ -116,4 +145,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

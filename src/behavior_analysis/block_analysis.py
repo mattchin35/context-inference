@@ -10,8 +10,8 @@ from pathlib import Path
 from copy import deepcopy
 from collections import OrderedDict
 import pickle as pkl
+import raster_plots
 import collect_events
-import raster_plots as rp
 import session_overview
 
 
@@ -65,7 +65,7 @@ def _plot_bins(bin_counts, bin_range, bin_centers, transition_list,
 def plot_binned_behavior(session_df: pd.DataFrame, fig_path, fig_name, bin_range=(0, np.inf), plot=False):
 
     event_list = ['left_entry', 'right_entry']
-    event_list = rp.get_choice_events(session_df, event_list)
+    event_list = collect_events.get_choice_events(session_df, event_list)
 
     transition_list = ['enter_ContextA', 'enter_ContextB', 'enter_intercontext_interval', 'enter_ContextC1',
                        'enter_ContextC2']
@@ -350,52 +350,60 @@ def compare_sessions(session_list, plot_path, plot_name):
     session_list is a list of (mouse, date) pairs
     2. use the session summaries to plot blocks across days
     """
+    plot_path = Path('../../reports/figures')
+    data_path = Path('../../data/processed')
 
     summaries = []
     dates = []
     water = []
     for mouse, date in session_list:
-        sess_ID = mouse + '-' + date
-        df = fileIO.load(mouse, date, load_cleaned=False)
+        sess_ID = mouse + '_' + date
+        df = fileIO.load_cleaned_data(sess_ID, data_path)
         bin_counts, session_df, bins = plot_binned_behavior(df, plot_path, 'sample_bin_plot', plot=False)
-        _, session_summary, _ = block_analysis(bin_counts, session_df, sess_ID)
-        w = session_overview.total_water_delivery(df)
-        summaries.append(session_summary)
-        dates.append(date)
-        water.append(w)
+        # _, session_summary, _ = block_analysis(bin_counts, session_df, sess_ID)
+        # w = session_overview.total_water_delivery(df)
+        # summaries.append(session_summary)
+        # dates.append(date)
+        # water.append(w)
 
-    summaries = pd.concat(summaries, axis=0)
-    water = pd.concat(water, axis=0)
-    print(summaries)
+    # summaries = pd.concat(summaries, axis=0)
+    # water = pd.concat(water, axis=0)
+    # print(summaries)
+    #
+    # X = np.arange(len(session_list))
+    # f, ax = plt.subplots(2, 1, figsize=(12, 6))
+    # plt.sca(ax[0])
+    # plt.plot(X, summaries['A_correct'], label='A')
+    # plt.plot(X, summaries['B_correct'], label='B')
+    # plt.plot(X, summaries['C1_correct'], label='C1')
+    # plt.plot(X, summaries['C2_correct'], label='C2')
+    # plt.plot(X, summaries['overall_correct'], label='Overall')
+    # plt.title('Percent Correct by Context Type')
+    # plt.xticks(ticks=X, labels=dates)
+    # plt.ylim([0,1])
+    # plt.xlabel('Session Date')
+    # plt.ylabel('Percent Correct')
+    # plt.legend()
+    #
+    # plt.sca(ax[1])
+    # plt.plot(X, water.loc[water['water_source'] == 'right water', 'amount'], label='right rewards')
+    # plt.plot(X, water.loc[water['water_source'] == 'left water', 'amount'], label='left rewards')
+    # plt.plot(X, water.loc[water['water_source'] == 'total water', 'amount'], label='total rewards')
+    # plt.title('Water rewards')
+    # plt.xticks(ticks=X, labels=dates)
+    # plt.xlabel('Session Date')
+    # plt.ylabel('Water vol (uL)')
+    # plt.legend()
+    #
+    # plt.tight_layout()
+    # plt.show()
+    #
+    # fig_format = 'svg'
+    # savename = os.path.join(plot_path, '{}.{}'.format(plot_name, fig_format))
+    # f.savefig(savename, format=fig_format)
 
-    X = np.arange(len(session_list))
-    f, ax = plt.subplots(2, 1, figsize=(12, 6))
-    plt.sca(ax[0])
-    plt.plot(X, summaries['A_correct'], label='A')
-    plt.plot(X, summaries['B_correct'], label='B')
-    plt.plot(X, summaries['C1_correct'], label='C1')
-    plt.plot(X, summaries['C2_correct'], label='C2')
-    plt.plot(X, summaries['overall_correct'], label='Overall')
-    plt.title('Percent Correct by Context Type')
-    plt.xticks(ticks=X, labels=dates)
-    plt.ylim([0,1])
-    plt.xlabel('Session Date')
-    plt.ylabel('Percent Correct')
-    plt.legend()
 
-    plt.sca(ax[1])
-    plt.plot(X, water.loc[water['water_source'] == 'right water', 'amount'], label='right rewards')
-    plt.plot(X, water.loc[water['water_source'] == 'left water', 'amount'], label='left rewards')
-    plt.plot(X, water.loc[water['water_source'] == 'total water', 'amount'], label='total rewards')
-    plt.title('Water rewards')
-    plt.xticks(ticks=X, labels=dates)
-    plt.xlabel('Session Date')
-    plt.ylabel('Water vol (uL)')
-    plt.legend()
-
-    plt.tight_layout()
-    plt.show()
-
-    fig_format = 'svg'
-    savename = os.path.join(plot_path, '{}.{}'.format(plot_name, fig_format))
-    f.savefig(savename, format=fig_format)
+if __name__ == '__main__':
+    mice = ['CT002']
+    dates = ['2024-08-23']
+    sess_ids = [m + '_' + d for m, d in zip(mice, dates)]

@@ -5,6 +5,7 @@ import seaborn as sns
 # import controller
 # import demo_tasks
 from formulaic import model_matrix
+import scipy as sp
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
 import pickle as pkl
@@ -28,7 +29,8 @@ def get_relative_value(df, max_rewards):
     return mean_value, std_value, sem_value
 
 
-def fig_1D(plot_name='Vertechi2020_1D'):
+def value_accumulation_plot(plot_name='value_accumulation'):
+    """This function was originally made to copy figure 1D from Vertechi 2020, comparing HMM and FQ-learning."""
     df_HMM = demo_tasks.load_collected_runs(agent_type='HMM', p_reward=.9, p_switch=.3, rewards_before_switch=6)
     df_FQL = demo_tasks.load_collected_runs(agent_type='F-Qlearning', p_reward=.9, p_switch=.3, rewards_before_switch=6)
 
@@ -56,6 +58,9 @@ def get_session_switch_ix(session_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndar
     states = session_df['state'].values
     ix_action_switch = actions[1:] != actions[:-1]
     ix_state_switch = states[1:] != states[:-1]
+
+    ix_action_switch = np.nonzero(ix_action_switch)[0] + 1
+    ix_state_switch = np.nonzero(ix_state_switch)[0] + 1
     return ix_action_switch, ix_state_switch
 
 
@@ -69,7 +74,7 @@ def count_consecutive_events(df) -> Tuple[pd.DataFrame, pd.DataFrame]:
     previous_trial_rewarded = False
 
     ix_action_switch, ix_state_switch = get_session_switch_ix(df)
-    ix_state_switch = np.nonzero(ix_state_switch)[0]  # convert to indices
+    # ix_state_switch = np.nonzero(ix_state_switch)[0]  # convert to indices
     action_switch_dict = defaultdict(list)
     state_switch_dict = defaultdict(list)
     # trials_to_correct_dict = defaultdict(list)
@@ -77,9 +82,9 @@ def count_consecutive_events(df) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     n_trials = df.shape[0]
     # count = np.arange(n_trials)
-    correct_value_sign = np.zeros(n_trials)
-    correct_value_sign[df['state'] == 0] = -1
-    correct_value_sign[df['state'] == 1] = 1
+    # correct_value_sign = np.zeros(n_trials)
+    # correct_value_sign[df['state'] == 0] = -1
+    # correct_value_sign[df['state'] == 1] = 1
     # agent_value_sign = np.sign(df['relative_value'].values)
     # correct_value_ix = np.nonzero(agent_value_sign == correct_value_sign)[0]
     correct_trial_ix = np.nonzero(df['correct'].values)[0]
@@ -96,8 +101,8 @@ def count_consecutive_events(df) -> Tuple[pd.DataFrame, pd.DataFrame]:
         consecutive_rewards = counters.consecutive_reward_counter(consecutive_rewards, reward)
         consecutive_failures = counters.consecutive_fail_counter(consecutive_failures, reward)
 
-        # if ix_action_switch[i]:  # this array has one fewer element than the df; can leave as is or add a dummy zero at the start
-        if ix_action_switch[i] and df.loc[i+1, 'correct']:
+        # if ix_action_switch[i] and df.loc[i, 'correct']:
+        if i in ix_action_switch and df.loc[i, 'correct']:
             action_switch_dict['trial_ix'].append(i)
             action_switch_dict['consecutive_rewards'].append(consecutive_rewards_renewal)
             action_switch_dict['consecutive_failures'].append(consecutive_failures_renewal)
@@ -107,21 +112,16 @@ def count_consecutive_events(df) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         future_switches = ix_state_switch[ix_state_switch > i]
         next_switch = np.append(future_switches, n_trials)[0]
-        # if i in ix_state_switch:
         if i in ix_state_switch:
-            state_change_ix = i+1
+            # state_change_ix = i+1
+            state_change_ix = i
             first_correct_trial_ix = (correct_trial_ix > state_change_ix) & (correct_trial_ix < next_switch)
             # first_correct_value_ix = (correct_value_ix > state_change_ix) & (correct_value_ix < next_switch)
             if first_correct_trial_ix.any():
                 trials_to_correct = correct_trial_ix[first_correct_trial_ix][0] - i
+                # trials_to_value = correct_value_ix[first_correct_value_ix][0] - i
             else:
                 trials_to_correct = np.nan
-
-            # if first_correct_value_ix.any():
-            #     pass
-            #     # trials_to_value = correct_value_ix[first_correct_value_ix][0] - i
-            # else:
-            #     trials_to_value = np.nan
 
             # if first_correct_trial_ix.any() or first_correct_value_ix.any():
             if first_correct_trial_ix.any():
@@ -282,25 +282,28 @@ def session_stats(df: pd.DataFrame, key: Any, plot=False):
     y, X = model_matrix("y ~ a", stats_df)
     model = sm.OLS(y, X)
     results = model.fit()
+    r_value, p_value = results.rsquared, results.pvalues['a']
+    intercept, slope = results.params['Intercept'], results.params['a']
+
     # print(results.summary())
     # print("Parameters", results.params)
     # print("R-squared", results.rsquared)
     # print("Std Errors", results.bse)
 
-    if plot:
-        pred_ols = results.get_prediction()
-        iv_l = pred_ols.summary_frame()["obs_ci_lower"]
-        iv_u = pred_ols.summary_frame()["obs_ci_upper"]
+    # if plot:
+    #     pred_ols = results.get_prediction()
+    #     iv_l = pred_ols.summary_frame()["obs_ci_lower"]
+    #     iv_u = pred_ols.summary_frame()["obs_ci_upper"]
+    #
+    #     f, ax = plt.subplots()
+    #     ax.plot(df['consecutive_rewards'], df[key], "o", label="data")
+    #     ax.plot(df['consecutive_rewards'], results.fittedvalues, "r--.", label="OLS")
+    #     ax.plot(df['consecutive_rewards'], iv_u, "r--")
+    #     ax.plot(df['consecutive_rewards'], iv_l, "r--")
+    #     ax.legend(loc="best")
+    #     plt.show()
 
-        f, ax = plt.subplots()
-        ax.plot(df['consecutive_rewards'], df[key], "o", label="data")
-        ax.plot(df['consecutive_rewards'], results.fittedvalues, "r--.", label="OLS")
-        ax.plot(df['consecutive_rewards'], iv_u, "r--")
-        ax.plot(df['consecutive_rewards'], iv_l, "r--")
-        ax.legend(loc="best")
-        plt.show()
-
-    return results.params['a']
+    return slope
 
 
 def compare_consecutive_rewards(p_reward: float, p_switch: float, key: Any, min_counts=20):
@@ -371,7 +374,7 @@ def compare_consecutive_rewards(p_reward: float, p_switch: float, key: Any, min_
     print('Saved Vertechi 2020 Figure 2D')
 
 
-def collect_regression_coefficients(df: pd.DataFrame, sess_IDs: Iterable[Any]) -> np.ndarray:
+def collect_regression_coefficients(df: pd.DataFrame, sess_IDs: Iterable[Any]) -> Tuple[np.ndarray, np.ndarray]:
     regression_coefs = []
     n_switches = []
     for sess in sess_IDs:
@@ -380,8 +383,9 @@ def collect_regression_coefficients(df: pd.DataFrame, sess_IDs: Iterable[Any]) -
         coef = session_stats(state_df, key='trials_to_correct')
         regression_coefs.append(coef)
         n_switches.append(state_df.shape[0])
+
     print('Number of switches:', n_switches)
-    return np.array(regression_coefs)
+    return np.array(regression_coefs), np.array(n_switches)
 
 
 def compare_regression_coefficients(p_reward: float, p_switch: float):
@@ -430,7 +434,7 @@ def main():
     # compare_consecutive_rewards(p_reward=p_reward, p_switch=p_switch, key='trials_to_correct', min_counts=10)
     # compare_regression_coefficients(p_reward=p_reward, p_switch=p_switch)
 
-    mouse_consecutive_rewards(df, key='trials_to_correct', min_counts=10)
+    # mouse_consecutive_rewards(df, key='trials_to_correct', min_counts=10)
 
 
 if __name__ == '__main__':

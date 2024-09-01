@@ -5,7 +5,8 @@ from formulaic import model_matrix
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from typing import Any, Iterable
-import src.behavior_analysis.vertechi2020_demo_plots as vdp
+import src.behavior_analysis.context_switch_analysis as vdp
+
 
 def session_stats(df: pd.DataFrame, key: Any, plot=False):
     stats_df = pd.DataFrame({

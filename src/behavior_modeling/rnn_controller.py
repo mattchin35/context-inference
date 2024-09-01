@@ -139,6 +139,10 @@ def eval(task: rnn_task.RnnMDP, agent: torch.nn.Module, rnn_params: rnn_config.A
     rnn_dict['agent_name'] = agent.name
     rnn_dict['task_params'] = task.task_params
 
+    print('[*] total_loss=%.2f mse_loss=%.2f a_loss=%.2f, w_loss=%.2f'
+          % (total_loss, error_loss, activity_loss, weight_loss))
+    print("Performance: {}% correct".format(np.mean(performance['correct'])))
+
     # p_agent = Path('../saved_models') / (save_path + '.pkl')
     # with open(p_agent, 'wb') as f:
     #     pkl.dump(rnn_dict, f)
@@ -163,10 +167,11 @@ def set_params(task_params: task_config.TaskParams, rnn_params: rnn_config.Agent
     task_params.n_trials = 500
     task_params.mean_correct_reward = 1
     task_params.mean_incorrect_reward = -1
-    task_params.active_reward_probability = .9
+    task_params.active_reward_probability = .5
     task_params.inactive_reward_probability = 0
     task_params.reward_std_dev = 0
-    task_params.p_cue = .5
+    task_params.p_cue = .75
+    task_params.t_cue = 2
 
     task_params.block_transition_style = 'success_trigger'  # markov, success_trigger, n_correct, fixed
     task_params.default_block_length = 10  # for non-probablistic block lengths
@@ -191,7 +196,7 @@ def set_eval_params(task_params: task_config.TaskParams) -> task_config.TaskPara
     task_params.active_reward_probability = .9
     task_params.inactive_reward_probability = 0
     task_params.reward_std_dev = 0
-    task_params.p_cue = .5
+    task_params.p_cue = 1
 
     task_params.block_transition_style = 'success_trigger'  # markov, success_trigger, n_correct, fixed
     task_params.default_block_length = 10  # for non-probablistic block lengths
@@ -208,7 +213,7 @@ def main():
     task_params = task_config.TaskParams()
     rnn_params = rnn_config.AgentConfig()
     agent_name = 'RNN_reinforce'
-    note = 'overtrain'
+    note = 'overtrain3'
 
     ### ADJUST THE set_params FUNCTION TO SET THE PARAMETERS FOR THE TASK AND THE AGENT ###
     task_params, rnn_params = set_params(task_params, rnn_params)
@@ -230,23 +235,27 @@ def main():
     if note:
         session_name = session_name + '_' + note
 
-    load_name = '{}_pReward_{}_pSwitch_{}'.format(agent_name, .9, .1)
+    load_name = '{}_pReward_{}_pSwitch_{}'.format(agent_name, .5, .1)
     # load_name = '{}_pReward_{}_fixedBlocks_{}'.format(agent_name, .9, 10)
-    date = '2024-04-11'
-    load_note = 'overtrain'
+    date = '2024-04-29'
+    load_note = 'overtrain3'
     if load_note:
-        load_checkpoint = model_dir / date / (load_name + '_' + load_note + '_agent.pkl')
+        load_name = model_dir / date / (load_name + '_' + load_note + '_agent.pkl')
     else:
-        load_checkpoint = model_dir / date / (load_name + '_agent.pkl')
+        load_name = model_dir / date / (load_name + '_agent.pkl')
         # load_checkpoint = ''
-
-    if load_checkpoint:
-        # rnn_io.load_agent_state(agent, load_checkpoint)
-        print('Loading from checkpoint {}'.format(load_checkpoint.resolve()))
-        agent.load_state_dict(torch.load(load_checkpoint))
 
     train = True
     evaluate = True
+    load_checkpoint = True
+    performance_break = .9
+
+    if load_checkpoint:
+        # rnn_io.load_agent_state(agent, load_checkpoint)
+        print('Loading from checkpoint {}'.format(load_name.resolve()))
+        # agent.load_state_dict(torch.load(load_name))
+        agent = rnn_io.load_agent_dict(agent, load_name)
+
     if train:
         t = time.perf_counter()
         for ep in range(rnn_params.epoch):
@@ -265,6 +274,17 @@ def main():
                 print(f'{tnew - t} seconds elapsed')
                 t = tnew
 
+            if np.mean(performance['correct']) > performance_break:
+                print(f"Performance reached {np.mean(performance['correct'])} after {ep} epochs")
+                print('[*] Epoch %d  total_loss=%.2f mse_loss=%.2f a_loss=%.2f, w_loss=%.2f'
+                      % (ep + 1, total_loss, error_loss, activity_loss, weight_loss))
+                performance = pd.DataFrame(performance)
+                rnn_io.save_experiment(session_name, data_dir, task, performance, rnn_dict, agent_name, task_params,
+                                       rnn_params)
+                # rnn_io.save_agent_state(session_name, model_dir, agent)
+                rnn_io.save_agent_dict(session_name, model_dir, agent)
+                break
+
             # if np.abs(error_loss) < 1:
             #     print('[*] Epoch %d  total_loss=%.2f mse_loss=%.2f a_loss=%.2f, w_loss=%.2f'
             #           % (ep + 1, total_loss, error_loss, activity_loss, weight_loss))
@@ -277,7 +297,8 @@ def main():
             if (ep > 0 and (ep + 1) % 100 == 0) or ep == rnn_params.epoch - 1:
                 performance = pd.DataFrame(performance)
                 rnn_io.save_experiment(session_name, data_dir, task, performance, rnn_dict, agent_name, task_params, rnn_params)
-                rnn_io.save_agent(session_name, model_dir, agent)
+                # rnn_io.save_agent_state(session_name, model_dir, agent)
+                rnn_io.save_agent_dict(session_name, model_dir, agent)
                 # save_experiment(session_name, task, agent, performance, task_params, rnn_params)
 
     if evaluate:

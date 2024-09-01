@@ -27,8 +27,8 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[L
     # Remove any rows with negative 'Time' values
     df = df[df['Time'] >= 0]
 
-    # You can use the str.replace() function
-    df = df.replace({'Event': r'.*ITI.*'}, {'Event': 'ITI'}, regex=True)
+    # You can use the str.replace() function to replace messy event names. Ideally, just avoid using messy names.
+    # df = df.replace({'Event': r'.*ITI.*'}, {'Event': 'ITI'}, regex=True)
 
     # Get unique values from the 2nd column
     unique_events = df['Event'].unique().tolist()
@@ -40,12 +40,12 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[L
 
     # Extract specific keys from the subsets dictionary
     # will need to adjust this as events change and for the infinite options of reward_X that are possible
-    if filter_events:
-        for e in unique_events:
-            if re.fullmatch('pump.*', e):
-                filter_events.append(e)
-
-        subsets = {key: subsets[key] for key in filter_events if key in subsets}
+    # if filter_events:
+    #     for e in unique_events:
+    #         if re.fullmatch('pump.*', e):
+    #             filter_events.append(e)
+    #
+    #     subsets = {key: subsets[key] for key in filter_events if key in subsets}
 
     # specific_keys = ['exit_standby', 'left_entry', 'right_entry',
     #                  'ITI', 'enter_ContextA', 'enter_ContextB', 'enter_intercontext_interval',
@@ -60,9 +60,12 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[L
     # df_new = df_new.set_index('Event')
 
     # Save the new DataFrame to a CSV file
+    if not os.path.exists(save_directory):
+        os.makedirs(save_directory)
     # new_file_path = os.path.join(save_directory, 'cleaned_' + os.path.basename(file_path))
     new_file_path = save_directory / ('cleaned_' + Path(file_path).name)
     df_new.to_csv(new_file_path, index=False)
+    # df.to_csv(new_file_path, index=False)
     print('cleaned_file_created')
     return df_new
 
@@ -76,7 +79,7 @@ def find_files(search_dir: Path, session_ID: str) -> List[Path]:
 def load_raw_data(session_ID: str, data_path: Path, save_path: Path) -> pd.DataFrame:
     file = find_session(session_ID, data_path)
     print('Processing raw file')
-    df = process_file(save_path, file)
+    df = process_file(save_path, file_path=file)
     return df
 
 

@@ -168,8 +168,6 @@ class RnnMDP(BaseMDP):
                 self.correct_in_block = 0
                 self.cur_trial_in_block = 0
                 self.cur_block += 1
-                if self.cur_state == prev_state:
-                    0
             else:
                 pass
 

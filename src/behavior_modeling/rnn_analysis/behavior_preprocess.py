@@ -4,7 +4,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-import src.behavior_analysis.vertechi2020_demo_plots as vdp
+import src.behavior_analysis.context_switch_analysis as vdp
 import pandas as pd
 import scipy as sp
 import src.neural_similarity.inspect_abstraction_measures as iam
@@ -21,7 +21,7 @@ states = ['right', 'left']
 state_dict = {s: i for i, s in enumerate(states)}  # i.e. [0 right, 1 left]
 
 
-def preprocess_trials(experiment: dict, sess_id: str):
+def preprocess_rnn_trials(experiment: dict, sess_id: str):
     # agent_name = 'RNN_reinforce'
     # date = '2024-04-11'
     # p_reward = .9
@@ -42,10 +42,7 @@ def preprocess_trials(experiment: dict, sess_id: str):
 
     go_cue = inputs[:, 1] > 0
     go_cue = np.nonzero(go_cue)[0]
-
-    pre_go_cue = np.nonzero(go_cue)[0] - 1
-    pre_go_cue = pre_go_cue[pre_go_cue >= 0]
-    go_cue = go_cue[-pre_go_cue.shape[0]:]  # only keep the trials with a timestep before the go cue
+    go_cue = go_cue[go_cue > 0]  # only keep timesteps with activity before the first cue
 
     activity = np.squeeze(experiment['rnn_dict']['hidden_states'])
     go_cue_activity = activity[go_cue]
@@ -70,11 +67,9 @@ def preprocess_trials(experiment: dict, sess_id: str):
         'session_ID': [sess_id] * go_cue.shape[0]
     }
     behavior_df = pd.DataFrame(behavior_dict)
-
-    behavior_dict['activity'] = go_cue_activity
+    # behavior_dict['activity'] = go_cue_activity
 
     print("Performance: {}% correct".format(np.mean(behavior_df['correct'])))
-
     return behavior_df, go_cue_activity
 
 
@@ -122,9 +117,10 @@ def regress_behavior(df: pd.DataFrame, save_name: str):
     plt.tight_layout()
     save_path = plot_path / '{}_trials-to-switch.png'.format(save_name)
     f.savefig(save_path, format='png', dpi=300)
-    save_path = plot_path / '{}_trials-to-switch.svg'.format(save_name)
-    f.savefig(save_path, format='svg')
     print('Saved as {}'.format(save_path))
+    # save_path = plot_path / '{}_trials-to-switch.svg'.format(save_name)
+    # f.savefig(save_path, format='svg')
+    # print('Saved as {}'.format(save_path))
 
 
 def separate_conditions(behavior_df: pd.DataFrame, neural_data: pd.DataFrame) -> pd.DataFrame:
@@ -287,11 +283,11 @@ def process_activity(data_zscored: pd.DataFrame, ccgp_mode='centers'):
 
 def load_data():
     agent_name = 'RNN_reinforce'
-    date = '2024-04-11'
-    p_reward = .9
+    date = '2024-04-29'
+    p_reward = .5
     p_switch = .1
     fixed_blocks = 10
-    note = 'overtrain'
+    note = 'overtrain3'
 
     load_name = '{}_pReward_{}_pSwitch_{}'.format(agent_name, p_reward, p_switch)
     # load_name = '{}_pReward_{}_fixedBlocks_{}'.format(agent_name, p_reward, fixed_blocks)
@@ -309,14 +305,15 @@ def main():
         plot_path.mkdir(parents=True)
 
     experiment, sess_id = load_data()
-    behavior_df, activity = preprocess_trials(experiment, sess_id)
-    # regress_behavior(behavior_df, behavior_df['session_ID'].unique()[0])
+    behavior_df, activity = preprocess_rnn_trials(experiment, sess_id)
 
-    zscored_data = separate_conditions(behavior_df, activity)
-    correct_behavior, incorrect_behavior, correct_data, incorrect_data = separate_correct_trials(behavior_df, zscored_data)
+    regress_behavior(behavior_df, save_name=behavior_df['session_ID'].unique()[0])
+
+    # zscored_data = separate_conditions(behavior_df, activity)
+    # correct_behavior, incorrect_behavior, correct_data, incorrect_data = separate_correct_trials(behavior_df, zscored_data)
 
     # process_activity(correct_data, ccgp_mode='centers')
-    pca = pca_analysis(correct_data, n_components=3)
+    # pca = pca_analysis(correct_data, n_components=3)
 
 
 if __name__ == '__main__':

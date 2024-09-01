@@ -1,3 +1,9 @@
+"""
+This module contains functions that update the value of a decision variable based on the outcome of a trial.
+Source: Cazettes et al., Nature Neuroscience 2023
+"""
+
+
 def consecutive_fail_counter(count: int, reward: int):
     # via cazettes 2023
     if reward == 0:  # failure

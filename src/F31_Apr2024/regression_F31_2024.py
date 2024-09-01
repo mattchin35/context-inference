@@ -7,8 +7,9 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 import pickle as pkl
 from pathlib import Path
-import src.behavior_analysis.vertechi2020_demo_plots as vdp
+import src.behavior_analysis.context_switch_analysis as vdp
 from typing import Any, List, Tuple, Union
+from icecream import ic
 
 
 def plot_trials_to_switch(df: pd.DataFrame, key: Any, save_name: str, plot_path: Path, max_ix: int=None):
@@ -32,6 +33,24 @@ def plot_trials_to_switch(df: pd.DataFrame, key: Any, save_name: str, plot_path:
 
     save_path = plot_path / '{}_trials-to-switch.png'.format(save_name)
     f_2D.savefig(save_path, format='png', dpi=300)
+    print('Saved as {}'.format(save_path))
+
+
+def plot_single_session_regression(df: pd.DataFrame, key: Any, save_name: str, plot_path: Path):
+    f, ax = plt.subplots()
+    _, state_df = vdp.get_multisession_switches(df)
+    rewards, mean, std, sem = vdp.consecutive_summary_measures(state_df, key=key, min_counts=0)
+    plt.plot(mean.index, mean)
+    plt.fill_between(mean.index, mean - sem,
+                     mean + sem, alpha=.3, linewidth=0)
+
+    plt.xlabel('Consecutive rewards')
+    plt.ylabel(key)
+    plt.title('Trials to Switch vs Rewards'.format(key))
+    plt.tight_layout()
+
+    save_path = plot_path / '{}_trials-to-switch.png'.format(save_name)
+    f.savefig(save_path, format='png', dpi=300)
     print('Saved as {}'.format(save_path))
 
 
@@ -69,9 +88,33 @@ def plot_multiple_session_regression(df_list: List[pd.DataFrame], df_labels: Lis
     print('Saved as {}'.format(save_path))
 
 
+def visualize_switches(df_list: List[pd.DataFrame], df_labels: List[str]):
+    # _, state_df = vdp.get_multisession_switches(df)
+    # rewards, mean, std, sem = vdp.consecutive_summary_measures(state_df, key=key, min_counts=0)
+
+    f, ax = plt.subplots()
+    for i, df in enumerate(df_list):
+        _, state_df = vdp.get_multisession_switches(df)
+        plt.plot(state_df['consecutive_rewards'], state_df['trials_to_correct'], 'o',
+                 label=df_labels[i], alpha=0.5)
+
+        coef = vdp.session_stats(state_df, key='trials_to_correct')
+        print(coef)
+
+    plt.xlabel('Consecutive rewards', fontsize=18)
+    plt.ylabel("Trials to Switch", fontsize=16)
+    ax.spines['right'].set_visible(False)
+    ax.spines['top'].set_visible(False)
+    plt.legend(frameon=False, fontsize=14)
+    plt.tight_layout()
+    ax.legend()
+    plt.show()
+
+
 def plot_learning_curve(df: pd.DataFrame, save_name: str, plot_path: Path):
     sessions = np.unique(df['session_ID'])
-    coefs = vdp.collect_regression_coefficients(df, sessions)
+    coefs, switches_per_session = vdp.collect_regression_coefficients(df, sessions)
+    ic(coefs)
 
     f, ax = plt.subplots()
     plt.plot(np.arange(1, len(coefs)+1), coefs, 'k')
@@ -87,7 +130,7 @@ def plot_learning_curve(df: pd.DataFrame, save_name: str, plot_path: Path):
 
     plt.tight_layout()
     f.savefig(plot_path / '{}_learning-curve.png'.format(save_name), format='png', dpi=300)
-    f.savefig(plot_path / '{}_learning-curve.svg'.format(save_name), format='svg')
+    # f.savefig(plot_path / '{}_learning-curve.svg'.format(save_name), format='svg')
 
 
 def main_single_session():
@@ -102,8 +145,8 @@ def main_single_session():
     with p.open('rb') as f:
         df = pkl.load(f)
 
-    mouse_consecutive_rewards(df, key='trials_to_correct', save_name=sess_ID,
-                              plot_path=plot_path)
+    vdp.consecutive_summary_measures(df, key='trials_to_correct', save_name=sess_ID,
+                              plot_path=plot_path, min_counts=0)
 
 
 def main_multiple_sessions():
@@ -123,33 +166,41 @@ def main_multiple_sessions():
     mice = ['MF24'] * 4
     dates = ['2023-10-10', '2023-10-11', '2023-10-12', '2023-10-13']
     late_sess_ids = [m + '_' + d for m, d in zip(mice, dates)]
+    all_sess_ids = early_sess_ids + late_sess_ids
 
-    df_list = []
+    early_df_list = []
     for sess in early_sess_ids:
         # sess_ID = sess[0] + '_' + sess[1]
         p = data_path / (sess + '_events.pkl')
         with p.open('rb') as f:
             df = pkl.load(f)
-        df_list.append(df)
-    early_df = pd.concat(df_list)
+        early_df_list.append(df)
+    early_df = pd.concat(early_df_list)
 
-    df_list = []
+    late_df_list = []
     for sess in late_sess_ids:
         # sess_ID = sess[0] + '_' + sess[1]
         p = data_path / (sess + '_events.pkl')
         with p.open('rb') as f:
             df = pkl.load(f)
-        df_list.append(df)
-    late_df = pd.concat(df_list)
+        late_df_list.append(df)
+    late_df = pd.concat(late_df_list)
     full_df = pd.concat([early_df, late_df])
 
     # plot_trials_to_switch(df, key='trials_to_correct', save_name='MF24-early',
     #                           plot_path=plot_path)
 
-    plot_multiple_session_regression(df_list=[early_df, late_df], df_labels=['Early','Late'], key='trials_to_correct',
-                                     max_ix=5, save_name='MF24-early-vs-late', plot_path=plot_path)
+    for id in all_sess_ids:
+        _df = full_df[full_df['session_ID'] == id]
+        plot_single_session_regression(_df, key='trials_to_correct', save_name=id + '_regression', plot_path=plot_path)
 
-    plot_learning_curve(full_df, save_name='MF24-full', plot_path=plot_path)
+    # plot_multiple_session_regression(df_list=[early_df, late_df], df_labels=['Early','Late'], key='trials_to_correct',
+    #                                  max_ix=5, save_name='MF24-early-vs-late', plot_path=plot_path)
+
+    # plot_learning_curve(full_df, save_name='MF24-full', plot_path=plot_path)
+
+    # visualize_switches(full_df, key='trials_to_correct', save_name='MF24-full', plot_path=plot_path)
+    # visualize_switches(df_list=[early_df, late_df], df_labels=['Early','Late'])
 
 
 if __name__ == '__main__':

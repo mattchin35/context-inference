@@ -84,16 +84,17 @@ def generate_session_raster(session_df: pd.DataFrame, fig_name: str, plot_path: 
 
 if __name__ == '__main__':
     plot_path = Path('../../reports/figures/F31_Apr2024')
+    processed_path = Path('../../data/processed')
 
     """Analyze the data from a single mouse session"""
-    mouse = 'MF03'  # 'MF23'
-    date = '2023-10-03'  # '2023-08-18'
+    mouse = 'MF24'  # 'MF03'
+    date = '2023-10-13'  # '2023-10-03'
     sess_ID = mouse + '_' + date
 
-    data_path = Path('../../data/raw/Mitch_behavior')
-    df = fileIO.load_raw_data(sess_ID, data_path)
+    # data_path = Path('../../data/raw/Mitch_behavior')
+    # df = fileIO.load_raw_data(sess_ID, data_path, processed_path)
 
     # data_path = Path('../../data/processed')
-    # df = fileIO.load_cleaned_data(sess_ID, data_path)
+    df = fileIO.load_cleaned_data(sess_ID, processed_path)
 
     generate_session_raster(df, sess_ID + '_raster', plot_path, timespan=(0, 1000))
