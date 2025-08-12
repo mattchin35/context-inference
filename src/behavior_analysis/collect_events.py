@@ -16,7 +16,8 @@ def generate_event_array(df: pd.DataFrame, events: list, timespan: tuple) -> np.
 def get_choice_events(df: pd.DataFrame, event_list: list = []) -> list:
     unique_events = np.unique(df['Event'].values)
     for e in unique_events:
-        if re.fullmatch('pump.*', e) or re.fullmatch('.*choice.*', e):
+        # if re.fullmatch('pump.*', e):
+        if re.fullmatch('.*choice.*', e):
             event_list.append(e)
 
     return event_list
@@ -30,6 +31,15 @@ def get_context_events(df: pd.DataFrame, event_list: list = []) -> list:
             event_list.append(e)
 
         elif re.fullmatch('stimulus_*_.*', e):
+            event_list.append(e)
+
+    return event_list
+
+
+def get_reward_events(df: pd.DataFrame, event_list: list = []) -> list:
+    unique_events = np.unique(df['Event'].values)
+    for e in unique_events:
+        if re.fullmatch('pump.*', e):
             event_list.append(e)
 
     return event_list

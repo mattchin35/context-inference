@@ -13,9 +13,11 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[L
     # Read the file into a DataFrame, skipping the first row
     # df = pd.read_csv(file_path, sep=';', skiprows=1, on_bad_lines='skip', usecols=[1, 3])
     df = pd.read_csv(file_path, sep=';', header=None, on_bad_lines='skip', usecols=[1, 3])
+    # df = pd.read_csv(file_path, sep=';', header=None, on_bad_lines='skip', usecols=[1, 3, 4])
 
     # Rename the columns
     df.columns = ['Time', 'Event']
+    # df.columns = ['Time', 'Event', 'Reward']
 
     # Subtract 'exit_standby' time value from every element
     if 'exit_standby' in df['Event'].values:
@@ -57,11 +59,13 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[L
     # Save the specific subsets dictionary to a new DataFrame
     df_new = pd.concat(subsets.values())
     df_new.columns = ['Time', 'Event']
+    # df_new.columns = ['Time', 'Event', 'Reward']
     # df_new = df_new.set_index('Event')
 
     # Save the new DataFrame to a CSV file
     if not os.path.exists(save_directory):
         os.makedirs(save_directory)
+
     # new_file_path = os.path.join(save_directory, 'cleaned_' + os.path.basename(file_path))
     new_file_path = save_directory / ('cleaned_' + Path(file_path).name)
     df_new.to_csv(new_file_path, index=False)

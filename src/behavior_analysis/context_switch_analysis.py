@@ -53,7 +53,7 @@ def value_accumulation_plot(plot_name='value_accumulation'):
 
 
 def get_session_switch_ix(session_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
-    # df should only be for one session, not a bunch concatenated
+    # df should be for one session, not multiple sessions concatenated
     actions = session_df['action'].values
     states = session_df['state'].values
     ix_action_switch = actions[1:] != actions[:-1]
@@ -66,6 +66,7 @@ def get_session_switch_ix(session_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndar
 
 def count_consecutive_events(df) -> Tuple[pd.DataFrame, pd.DataFrame]:
     # df should only be for one session, not a bunch concatenated
+    # TODO - integrate with analyze_session.py code, this only works for agents with no skipped blocks
     consecutive_rewards = 0
     consecutive_failures = 0
     consecutive_rewards_renewal = 0
@@ -90,7 +91,7 @@ def count_consecutive_events(df) -> Tuple[pd.DataFrame, pd.DataFrame]:
     correct_trial_ix = np.nonzero(df['correct'].values)[0]
 
     # need 2 sets of counts
-    # 1. the integrate-and-reset params from cazettes
+    # 1. the integrate-and-reset params from Cazettes
     # 2. the last-seen version used, which resets when failures/rewards start anew but don't reset on switches
     for i in range(n_trials-1):
         reward = df.loc[i, 'reward']

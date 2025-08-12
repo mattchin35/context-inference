@@ -49,7 +49,7 @@ def consecutive_reward_counter(count: int, reward: int):
 def consecutive_reward_renewal_counter(count: int, reward: int, last_rewarded: bool):
     """
     Count the number of consecutive rewards, resetting the count when a new chain of rewards begins.
-    Holding the count during the string of omissions following the last reward.
+    Hold the count during the string of omissions following the last reward.
     """
     if reward == 0:  # omission
         g = 1

@@ -12,9 +12,6 @@ rng = np.random.default_rng()
 
 @dataclass
 class TaskParams:
-    ### hold the parameters for an MDP task ###
-    # blocks: Union[int, List[str]]  # why did I ever use this
-
     block_transition_style: str = 'success_trigger'  # 'success_trigger', 'markov', 'n_correct', 'fixed'
     n_states: int = 2
     n_actions = 2
@@ -30,8 +27,8 @@ class TaskParams:
     reward_std_dev: float = 0
 
     # params for fixed block lengths
-    default_block_length: int = 15
-    block_length_variation: int = 0
+    default_fixed_block_length: int = 15
+    fixed_block_length_variation: int = 0
     success_trials_to_block_transition: float = np.inf
     # max_consecutive_blocks: int = 2
 
@@ -53,6 +50,7 @@ class TaskParams:
     #     else:
     #         return self.blocks
 
+
 @dataclass
 class AgentParams:
     # behavior agent params for non-ML agents
@@ -67,6 +65,10 @@ class AgentParams:
     logistic_alpha: float = 1  # default 1
     logistic_beta: float = 2  # default 2
     logistic_tau: float = 1.5  # default 1.5
+
+    # for the HMM agent, you can play with using model parameters that are different from the true task parameters
+    HMM_active_reward_probability: float = .9
+    HMM_inactive_reward_probability: float = 0
 
 
 class MarkovDecisionProcess(Protocol):

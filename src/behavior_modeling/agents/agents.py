@@ -24,6 +24,8 @@ eps = np.finfo(float).eps
 
 
 def get_action_ix(action: int) -> int:
+    # right=0, left=1: map right to -1, left to +1
+    assert action in [0, 1], "action must be 0 or 1"
     return action * 2 - 1
 
 
@@ -136,15 +138,17 @@ class ForgettingQlearning(BehaviorAgent):
 
 
 class HMM(BehaviorAgent):
-    def __init__(self, params: config.TaskParams, p_cue: float = .5):
-        assert params.action_temperature > 0, "must have positive temperature"
 
-        self.temperature = params.action_temperature
-        self.greedy = params.greedy_action_selection
-        self.epsilon = params.greedy_epsilon
-        self.stickiness = params.action_stickiness
-        self.transition_prob = params.HMM_transition_prob
-        self.params = params
+    def __init__(self, agent_params: config.AgentParams, task_params: config.TaskParams):
+        assert agent_params.action_temperature > 0, "must have positive temperature"
+
+        self.temperature = agent_params.action_temperature
+        self.greedy = agent_params.greedy_action_selection
+        self.epsilon = agent_params.greedy_epsilon
+        self.stickiness = agent_params.action_stickiness
+        self.transition_prob = agent_params.HMM_transition_prob
+        self.agent_params = agent_params
+        self.task_params = task_params
         self.model_type = 'HMM'
 
         n_states = 2
@@ -152,19 +156,30 @@ class HMM(BehaviorAgent):
         self.prior = np.ones(n_states) / n_states
         self.value = 0  # relative value of L vs R actions
         self.action_dist = np.ones(N_ACTIONS) / N_ACTIONS
-        self.p_cue = p_cue
+        self.p_cue = task_params.p_cue
 
         self.last_action_ix = 0
         self.last_stimulus = 0
+        self.last_action = 0
 
-        self.alpha = params.logistic_alpha
-        self.tau = params.logistic_tau
+        self.alpha = agent_params.logistic_alpha
+        self.beta = agent_params.logistic_beta
+        self.tau = agent_params.logistic_tau
+
+        # self.q = (np.exp(-1 / agent_params.logistic_tau) + 1) / 2  # q, probability of no system state change
+        # self.p = sp.special.expit(
+        #     agent_params.logistic_beta / (2 * (2 * self.q - 1)))  # p, probability of reward delivery
+        # self.alpha = -(2 * self.q - 1) * sp.special.logit(self.p)  # stickiness
+        # self.beta = agent_params.logistic_beta
+        # self.tau = agent_params.logistic_tau
+        # self.exp = np.exp(-1 / self.tau)
+        # self.log_odds_L = sp.special.logit(.5)
 
     def choose_action(self, stimulus: int) -> Tuple[int, np.ndarray]:
         # self.update_observation_posterior(stimulus)
         # self.update_action_dist(self.last_action)
-        logging.info("action dist: {}".format(self.action_dist))
         # action, _ = super().choose_action(stimulus)
+        logging.info("action dist: {}".format(self.action_dist))
         if self.greedy:
             if rng.random() < self.epsilon:
                 action = rng.choice(N_ACTIONS)
@@ -205,10 +220,13 @@ class HMM(BehaviorAgent):
         logging.info("reward -> updated posterior: {}".format(posterior))
         self.prior = posterior
 
-        expected_rew_L = self.params.active_reward_probability * self.prior[1] + self.params.inactive_reward_probability * self.prior[0]
-        expected_rew_R = self.params.active_reward_probability * self.prior[0] + self.params.inactive_reward_probability * self.prior[1]
+        # value determination following Vertechi - uses expected reward, action sampling via relative value
+        expected_rew_L = self.agent_params.HMM_active_reward_probability * self.prior[1] + self.agent_params.HMM_inactive_reward_probability * self.prior[0]
+        expected_rew_R = self.agent_params.HMM_active_reward_probability * self.prior[0] + self.agent_params.HMM_inactive_reward_probability * self.prior[1]
         self.value = expected_rew_L - expected_rew_R  # relative value of L vs R actions
 
+        # value determination following Beron - uses Bayesian posterior, action sampling via Thompson (belief) sampling
+        # to match HMM and RFLR models, you need to use Thompson sampling
         # self.value = sp.special.logit(self.prior[1])
 
         self.update_action_dist(action)
@@ -234,23 +252,23 @@ class HMM(BehaviorAgent):
 
     def nonzero_reward_size_probability(self, reward, action):
         p = np.zeros(2)
-        if self.params.reward_std_dev > 0:
+        if self.task_params.reward_std_dev > 0:
             if action == 0:  # right choice - find probability of the reward under each context
-                p[0] = norm.pdf(reward, self.params.mean_correct_reward, self.params.reward_std_dev)
-                p[1] = norm.pdf(reward, self.params.mean_incorrect_reward, self.params.reward_std_dev)
+                p[0] = norm.pdf(reward, self.task_params.mean_correct_reward, self.task_params.reward_std_dev)
+                p[1] = norm.pdf(reward, self.task_params.mean_incorrect_reward, self.task_params.reward_std_dev)
 
             elif action == 1:  # left choice
-                p[0] = norm.pdf(reward, self.params.mean_incorrect_reward, self.params.reward_std_dev)
-                p[1] = norm.pdf(reward, self.params.mean_correct_reward, self.params.reward_std_dev)
+                p[0] = norm.pdf(reward, self.task_params.mean_incorrect_reward, self.task_params.reward_std_dev)
+                p[1] = norm.pdf(reward, self.task_params.mean_correct_reward, self.task_params.reward_std_dev)
 
         else:
             if action == 0:  # right choice - find probability of the reward under each context
-                p[0] = reward == self.params.mean_correct_reward
-                p[1] = reward == self.params.mean_incorrect_reward
+                p[0] = reward == self.task_params.mean_correct_reward
+                p[1] = reward == self.task_params.mean_incorrect_reward
 
             elif action == 1:  # left choice
-                p[0] = reward == self.params.mean_incorrect_reward
-                p[1] = reward == self.params.mean_correct_reward
+                p[0] = reward == self.task_params.mean_incorrect_reward
+                p[1] = reward == self.task_params.mean_correct_reward
 
             p = p.astype(float)
 
@@ -281,12 +299,12 @@ class HMM(BehaviorAgent):
     def reward_delivery_probability(self, action: int) -> np.ndarray:
         p = np.zeros(2)
         if action == 0:  # right choice - find probability of the right reward under each context
-            p[0] = self.params.active_reward_probability
-            p[1] = self.params.inactive_reward_probability
+            p[0] = self.agent_params.HMM_active_reward_probability
+            p[1] = self.agent_params.HMM_inactive_reward_probability
 
         elif action == 1:  # left choice - find probability of the left reward under each context
-            p[0] = self.params.inactive_reward_probability
-            p[1] = self.params.active_reward_probability
+            p[0] = self.agent_params.HMM_inactive_reward_probability
+            p[1] = self.agent_params.HMM_active_reward_probability
 
         return p
 
@@ -299,54 +317,79 @@ class HMM(BehaviorAgent):
         return state_transition_matrix
 
 
+class HMM_recursive(HMM):
+    """An HMM variant using the log-odds recursion described in Beron et al, PNAS 2022.
+    Primarily meant as a proof-of-concept/verification that the paper's math is legit."""
+
+    def __init__(self,  agent_params: config.AgentParams, task_params: config.TaskParams):
+        super().__init__(agent_params, task_params)
+        self.kappa = 0  # updated every trial
+
+        # using HMM transition and reward probabilities, calculate recursive parameters
+        self.q = 1 - agent_params.HMM_transition_prob  # q, probability of no system state change
+        self.p = agent_params.HMM_active_reward_probability  # p, probability of reward delivery
+        self.alpha = -(2*self.q - 1) * sp.special.logit(self.p)  # stickiness
+        self.beta = 2 * (2*self.q - 1) * sp.special.logit(self.p)  # learning rate
+        self.decay = 2 * self.q - 1
+        self.tau = -1 / np.log(2*self.q - 1)
+
+        self.model_type = 'HMM_recursive'
+        self.log_odds_L = sp.special.logit(.5)
+
+    def update_params(self, action, reward) -> None:
+        # prior update
+        self.log_odds_L = self.decay * self.log_odds_L + self.alpha * get_action_ix(action) + self.beta * reward * get_action_ix(action)
+        self.kappa = (self.agent_params.logistic_alpha - self.alpha) * get_action_ix(action) - self.decay * self.agent_params.logistic_alpha * self.last_action_ix
+        self.last_action_ix = get_action_ix(action)
+
+        prior_L = sp.special.expit(self.log_odds_L + self.kappa)
+        self.action_dist = np.array([1 - prior_L, prior_L])
+        self.prior = np.array([1 - prior_L, prior_L])  # action dist and prior are the same in Thompson sampling
+
+
 class HMM_RFLR(HMM):
     """
     Modification of the HMM to match the RFLR model from Beron et al, PNAS 2022.
-    The value is calculated recursively to match the RFLR.
+    For details, check the paper supplementals.
     """
 
-    def __init__(self, params: config.TaskParams, p_cue: float = .5):
-        super().__init__(params, p_cue)
-        self.kappa = 0
-        self.alpha = params.logistic_alpha
-        self.beta = params.logistic_beta
-        self.tau = params.logistic_tau
+    def __init__(self,  agent_params: config.AgentParams, task_params: config.TaskParams):
+        super().__init__(agent_params, task_params)
+        self.kappa = 0  # updated every trial
+
+        # using logistic tau and beta, calculate HMM probabilities (and thus a stickiness parameter)
+        # that match the logistic regression model by construction
+        self.q = (np.exp(-1 / agent_params.logistic_tau) + 1) / 2  # q, probability of no system state change
+        self.p = sp.special.expit(agent_params.logistic_beta / (2 * (2*self.q - 1)))  # p, probability of reward delivery
+        self.alpha = -(2*self.q - 1) * sp.special.logit(self.p)  # stickiness
+        self.beta = agent_params.logistic_beta
+        self.tau = agent_params.logistic_tau
+        self.decay = np.exp(-1/self.tau)
+        self.value = 0  # relative value of L vs R actions - not used in this model, use the log-odds or prior instead
 
         self.model_type = 'HMM_RFLR'
+        self.log_odds_L = sp.special.logit(.5)
 
     def update_params(self, action, reward) -> None:
-
         # prior update
-        p_reward_delivery = self.reward_probability(reward=reward, action=action)
-        posterior = p_reward_delivery * np.dot(self.transition_matrix.T, self.prior)  # todo - .T not be needed, it's symmetric...
-        posterior /= (np.sum(posterior) + eps)
-        logging.info("reward -> updated posterior: {}".format(posterior))
-        self.prior = posterior
+        action_ix = get_action_ix(action)
+        self.log_odds_L = self.decay * self.log_odds_L + self.alpha * action_ix + self.beta * reward * action_ix
+        self.kappa = (self.agent_params.logistic_alpha - self.alpha) * action_ix - self.decay * self.agent_params.logistic_alpha * self.last_action_ix
+        self.last_action_ix = get_action_ix(action)
 
-        # value conditioning step
-        q = 1 - self.params.HMM_transition_prob  # probability of no system state change
-        p = self.params.active_reward_probability
-        decay = 2*q - 1
-        stickiness = -decay * sp.special.logit(p)  # alpha
-        learning_rate = -2 * stickiness  # beta
-        action_ix = action * 2 - 1
+        prior_L = sp.special.expit(self.log_odds_L + self.kappa)
+        self.action_dist = np.array([1 - prior_L, prior_L])
+        self.prior = np.array([1 - prior_L, prior_L])  # action dist and prior are the same in Thompson sampling
 
-        self.kappa = (self.params.logistic_alpha - stickiness) * action_ix - \
-                decay * self.params.logistic_alpha * self.last_action_ix
-
-        self.value = decay * self.value + stickiness * action_ix + learning_rate * action_ix * reward
-
-        self.update_action_dist(action)
-
-    def update_action_dist(self, action: int) -> None:
-        # pL = sp.special.expit(self.value + self.kappa)
-        pL = sp.special.expit(self.value)
-        self.action_dist = np.array([1-pL, pL])
+    # def update_action_dist(self, action: int) -> None:
+    #     # pL = sp.special.expit(self.value + self.kappa)
+    #     pL = sp.special.expit(self.value)
+    #     self.action_dist = np.array([1-pL, pL])
 
 
 class Logistic(BehaviorAgent):
     """Logistic regression (RFLR) model based on Beron et al, PNAS 2022."""
-    def __init__(self, params: config.TaskParams):
+    def __init__(self, agent_params: config.AgentParams, task_params: config.TaskParams):
         self.N = np.zeros(N_ACTIONS)
         self.Q = np.zeros(N_ACTIONS)
         self.action_dist = np.ones(N_ACTIONS) / N_ACTIONS
@@ -355,34 +398,37 @@ class Logistic(BehaviorAgent):
 
         self.n_actions = N_ACTIONS
 
-        self.greedy = params.greedy_action_selection
-        self.epsilon = params.greedy_epsilon
+        self.greedy = agent_params.greedy_action_selection
+        self.epsilon = agent_params.greedy_epsilon
 
-        self.alpha = params.logistic_alpha
-        self.beta = params.logistic_beta
-        self.tau = params.logistic_tau
+        self.alpha = agent_params.logistic_alpha  # stickiness
+        self.beta = agent_params.logistic_beta  # learning rate
+        self.tau = agent_params.logistic_tau  # decay parameter
         self.phi = 0
+        self.log_odds_L = sp.special.logit(.5)
 
-        self.stickiness = params.action_stickiness
-        self.temperature = params.action_temperature
+        self.stickiness = agent_params.action_stickiness
+        self.temperature = agent_params.action_temperature
 
         self.model_type = 'Logistic regression'
 
     def update_params(self, action, reward) -> None:
         action_ix = get_action_ix(action)  # 1 left, -1 right
         decay = np.exp(-1 / self.tau)
-        learning_rate = self.beta  # use this to set learning rate directly
-        # learning_rate = (1 - decay) / self.temperature   # use this for equivalence with FQL
 
-        # indirect recursion
-        self.value = decay * self.value + learning_rate * action_ix * reward
-        self.update_action_dist(action)
-
-    def update_action_dist(self, action: int) -> None:
-        action_ix = get_action_ix(action)
-        logit_left = self.alpha * action_ix + self.value #/ self.temperature
-        pL = sp.special.expit(logit_left)
+        self.value = decay * self.value + self.beta * action_ix * reward
+        self.log_odds_L = self.alpha * action_ix + self.value
+        pL = sp.special.expit(self.log_odds_L)
         self.action_dist = np.array([1 - pL, pL])
+
+        # learning_rate = (1 - decay) / self.temperature   # use this for equivalence with FQL
+        # self.update_action_dist(action)
+
+    # def update_action_dist(self, action: int) -> None:
+    #     action_ix = get_action_ix(action)
+    #     logit_left = self.alpha * action_ix + self.value #/ self.temperature
+    #     pL = sp.special.expit(logit_left)
+    #     self.action_dist = np.array([1 - pL, pL])
 
 
 if __name__ == '__main__':

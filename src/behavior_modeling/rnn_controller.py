@@ -215,7 +215,6 @@ def main():
     agent_name = 'RNN_reinforce'
     note = 'overtrain3'
 
-    ### ADJUST THE set_params FUNCTION TO SET THE PARAMETERS FOR THE TASK AND THE AGENT ###
     task_params, rnn_params = set_params(task_params, rnn_params)
 
     task = rnn_task.RnnMDP(task_params=task_params, rnn_params=rnn_params)

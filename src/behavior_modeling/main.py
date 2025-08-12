@@ -5,7 +5,7 @@ from typing import Dict, Tuple, Any
 import logging
 
 import agents
-import context_task
+import task.context_task
 import MDP
 import controller
 
@@ -40,8 +40,14 @@ def run_figure_1D():
     # agent = agents.HMM_2state(params, transition_prob=.05, stickiness=0)
     # name = 'HMM_2state'
 
-    agent = agents.HMM_2state(params, transition_prob=.05, stickiness=.25)
-    name = 'StickyHMM_2state'
+    # agent = agents.HMM_2state(params, transition_prob=.05, stickiness=.25)
+    # name = 'StickyHMM_2state'
+
+    agent = agents.HMM(params, transition_prob=.05, stickiness=.25)
+    name = 'StickyHMM'
+
+    agent = agents.HMM_RFLR(params, transition_prob=.05, stickiness=.25)
+    name = 'StickyHMM'
 
     task = context_task.BaseMDP(params)
     task, agent, performance = controller.run_experiment(task, agent, params.n_blocks)

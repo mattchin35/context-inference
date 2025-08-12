@@ -27,14 +27,14 @@ class BaseMDP:
     - fixed block sequence/fixed block length updates - mostly for repeats, not wanted for base task
     """
 
-    def __init__(self, params: config.TaskParams):
-        self.params = params
+    def __init__(self, task_params: config.TaskParams):
+        self.params = task_params
 
         self.states: List[str] = ['right', 'left']
         self.state_dict = {s: i for i, s in enumerate(self.states)}
         self.state_stimulus_dict = copy.deepcopy(self.state_dict)
         self.state_stimulus_dict['uncued'] = -1
-        self.p_cue = params.p_cue
+        self.p_cue = task_params.p_cue
         self.initialize_task_state()
 
     def initialize_task_state(self):
@@ -44,9 +44,7 @@ class BaseMDP:
         self.cur_trial_in_block = 0
         self.correct_in_block = 0
 
-        if self.params.fixed_block_lengths:
-            self.cur_block_length = self.params.fixed_block_lengths[0]
-        else:
+        if self.params.block_transition_style == 'fixed':
             self.cur_block_length = self.params.default_block_length
 
     # @property

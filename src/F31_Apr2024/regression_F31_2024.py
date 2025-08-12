@@ -68,8 +68,8 @@ def plot_multiple_session_regression(df_list: List[pd.DataFrame], df_labels: Lis
         plt.fill_between(mean.index, mean - sem,
                          mean + sem, alpha=.3, linewidth=0)
 
-    plt.xlabel('Consecutive rewards', fontsize=18)
-    plt.ylabel("Trials to Switch", fontsize=16)
+    plt.xlabel('Consecutive Rewards', fontsize=18)
+    plt.ylabel('Trials to Switch', fontsize=16)
     # ax.tick_params(axis='y', which='major', labelsize=12)
     # ax.yticks(fontsize=18)
     ax.spines['right'].set_visible(False)
@@ -197,7 +197,7 @@ def main_multiple_sessions():
     # plot_multiple_session_regression(df_list=[early_df, late_df], df_labels=['Early','Late'], key='trials_to_correct',
     #                                  max_ix=5, save_name='MF24-early-vs-late', plot_path=plot_path)
 
-    # plot_learning_curve(full_df, save_name='MF24-full', plot_path=plot_path)
+    plot_learning_curve(full_df, save_name='MF24-full', plot_path=plot_path)
 
     # visualize_switches(full_df, key='trials_to_correct', save_name='MF24-full', plot_path=plot_path)
     # visualize_switches(df_list=[early_df, late_df], df_labels=['Early','Late'])
