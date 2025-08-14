@@ -3,6 +3,7 @@ import os
 import re
 from pathlib import Path
 from typing import List, Any, Optional
+import pickle as pkl
 
 """
 Functions for loading behavior and preprocessing behavior data files.
@@ -12,12 +13,11 @@ Functions for loading behavior and preprocessing behavior data files.
 def process_file(save_directory: Path, file_path: str, filter_events: Optional[List[str]] = []) -> pd.DataFrame:
     # Read the file into a DataFrame, skipping the first row
     # df = pd.read_csv(file_path, sep=';', skiprows=1, on_bad_lines='skip', usecols=[1, 3])
-    df = pd.read_csv(file_path, sep=';', header=None, on_bad_lines='skip', usecols=[1, 3])
+    df = pd.read_csv(file_path, sep=';', header=None, on_bad_lines='skip', usecols=[1, 3, 4])
     # df = pd.read_csv(file_path, sep=';', header=None, on_bad_lines='skip', usecols=[1, 3, 4])
 
     # Rename the columns
-    df.columns = ['Time', 'Event']
-    # df.columns = ['Time', 'Event', 'Reward']
+    df.columns = ['Time', 'Event', 'Note']
 
     # Subtract 'exit_standby' time value from every element
     if 'exit_standby' in df['Event'].values:
@@ -57,49 +57,47 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[L
     # These are now dataframes of times corresponding to each output type
 
     # Save the specific subsets dictionary to a new DataFrame
-    df_new = pd.concat(subsets.values())
-    df_new.columns = ['Time', 'Event']
-    # df_new.columns = ['Time', 'Event', 'Reward']
-    # df_new = df_new.set_index('Event')
+    # df_new = pd.concat(subsets.values())
+    # df_new.columns = ['Time', 'Event']
 
     # Save the new DataFrame to a CSV file
     if not os.path.exists(save_directory):
         os.makedirs(save_directory)
 
     # new_file_path = os.path.join(save_directory, 'cleaned_' + os.path.basename(file_path))
-    new_file_path = save_directory / ('cleaned_' + Path(file_path).name)
-    df_new.to_csv(new_file_path, index=False)
-    # df.to_csv(new_file_path, index=False)
+    # new_file_path = save_directory / ('cleaned_' + Path(file_path).name)
+    new_file_path = save_directory / ('cleaned_' + Path(file_path).stem + '.csv')
+    # df_new.to_csv(new_file_path, index=False)
+    df.to_csv(new_file_path, index=False)
     print('cleaned_file_created')
-    return df_new
+    # return df_new
+    return df
 
 
 def find_files(search_dir: Path, session_ID: str) -> List[Path]:
     # match_files = list(search_dir.glob('*{}*.log'.format(session_ID)))  # non-recursive search
-    match_files = list(search_dir.glob('**/*{}*.log'.format(session_ID)))  # recursive search
-    return match_files
+    match_files_log = list(search_dir.glob('**/*{}*.log'.format(session_ID)))  # recursive search
+    match_files_csv = list(search_dir.glob('**/*{}*.csv'.format(session_ID)))  # recursive search
+    return match_files_log + match_files_csv
 
 
 def load_raw_data(session_ID: str, data_path: Path, save_path: Path) -> pd.DataFrame:
     file = find_session(session_ID, data_path)
     print('Processing raw file')
-    df = process_file(save_path, file_path=file)
-    return df
+    return process_file(save_path, file_path=file)
 
 
 def load_cleaned_data(session_id: str, data_path: Path):
     file = find_session(session_id, data_path)
     print('Loading cleaned file')
-    df = pd.read_csv(file, sep=',')
-    return df
+    return pd.read_csv(file, sep=',')
 
 
 def find_session(session_id: str, data_path: Path) -> Path:
     file = find_files(data_path, session_id)
     assert file, "File for {} not found!!!".format(session_id)
     assert len(file) == 1, "Multiple files for {} found!!!".format(session_id)
-    file = file[0]
-    return file
+    return file[0]
 
 
 if __name__ == '__main__':
