@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import os
 import re
 from pathlib import Path
@@ -24,10 +25,13 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[L
         exit_standby_time = df.loc[df['Event'] == 'exit_standby', 'Time'].values[0]
     else:
         exit_standby_time = df['Time'].min()
-    df['Time'] = df['Time'] - exit_standby_time
 
     # Remove any rows with negative 'Time' values
-    df = df[df['Time'] >= 0]
+    # df['Time'] = df['Time'] - exit_standby_time
+    # df = df[df['Time'] >= 0]
+    df = df[df['Time'] - exit_standby_time >= 0]  # use this to keep unix times - needed for synchronization with ephys
+    df.reset_index(inplace=True, drop=True)
+    assert df.iloc[0]['Event'] == 'exit_standby', "First event should be 'exit_standby'"
 
     # You can use the str.replace() function to replace messy event names. Ideally, just avoid using messy names.
     # df = df.replace({'Event': r'.*ITI.*'}, {'Event': 'ITI'}, regex=True)
@@ -61,12 +65,12 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[L
     # df_new.columns = ['Time', 'Event']
 
     # Save the new DataFrame to a CSV file
-    if not os.path.exists(save_directory):
-        os.makedirs(save_directory)
+    if not save_directory.exists():
+        save_directory.mkdir(parents=True)
 
     # new_file_path = os.path.join(save_directory, 'cleaned_' + os.path.basename(file_path))
     # new_file_path = save_directory / ('cleaned_' + Path(file_path).name)
-    new_file_path = save_directory / ('cleaned_' + Path(file_path).stem + '.csv')
+    new_file_path = save_directory / (Path(file_path).stem + '.csv')
     # df_new.to_csv(new_file_path, index=False)
     df.to_csv(new_file_path, index=False)
     print('cleaned_file_created')

@@ -18,7 +18,7 @@ state_dict = {s: i for i, s in enumerate(states)}  # i.e. [0 right, 1 left]
 # pump1 = left, pump2 = right
 
 
-def total_water_delivery(session_df: pd.DataFrame) -> pd.DataFrame:
+def total_water_delivery(session_df: pd.DataFrame, session_info: dict) -> pd.DataFrame:
     """This fxn tries to calculate water delivery based on an older version of the event dataframe"""
     reward_event_types = collect_events.get_reward_events(session_df)
     ix = np.zeros(session_df.shape[0]).astype(bool)
@@ -26,20 +26,34 @@ def total_water_delivery(session_df: pd.DataFrame) -> pd.DataFrame:
         ix = ix | (session_df['Event'] == e)
 
     # create lists of reward events of each type
+    if session_info['ephys_rig']:
+        right_pump_regex = re.compile("pump3.*")
+        left_pump_regex = re.compile("pump2.*")
+    else:
+        right_pump_regex = re.compile("pump2.*")
+        left_pump_regex = re.compile("pump1.*")
+    # pump1_regex = re.compile("pump1.*")
+    # pump2_regex = re.compile("pump2.*")
     reward_events = session_df.loc[ix, 'Event'].values
-    pump1_regex = re.compile("pump1.*")
-    pump2_regex = re.compile("pump2.*")
-    pump1_list = list(filter(pump1_regex.match, reward_events))  # Read Note below
-    pump2_list = list(filter(pump2_regex.match, reward_events))  # Read Note below
+
+    # pump1_list = list(filter(pump1_regex.match, reward_events))  # Read Note below
+    # pump2_list = list(filter(pump2_regex.match, reward_events))  # Read Note below
+    right_list = list(filter(right_pump_regex.match, reward_events))
+    left_list = list(filter(left_pump_regex.match, reward_events))
 
     # add up events to determine total rewards
     # pump1_water = np.sum([float(re.findall(r'(\d+)', a)[1]) for a in pump1_list])
     # pump2_water = np.sum([float(re.findall(r'(\d+)', a)[1]) for a in pump2_list])
-    pump1_water = np.sum([int(re.findall(r'reward_amount: (\d+)', a)[0]) for a in pump1_list])
-    pump2_water = np.sum([int(re.findall(r'reward_amount: (\d+)', a)[0]) for a in pump2_list])
-    total_water = pump1_water + pump2_water
+    # pump1_water = np.sum([int(re.findall(r'reward_amount: (\d+)', a)[0]) for a in pump1_list])
+    # pump2_water = np.sum([int(re.findall(r'reward_amount: (\d+)', a)[0]) for a in pump2_list])
+    # total_water = pump1_water + pump2_water
+    right_water = np.sum([int(re.findall(r'reward_amount: (\d+)', a)[0]) for a in right_list])
+    left_water = np.sum([int(re.findall(r'reward_amount: (\d+)', a)[0]) for a in left_list])
+    total_water = right_water + left_water
+
     source = ['left water', 'right water', 'total water']
-    amount = [pump1_water, pump2_water, total_water]
+    # amount = [pump1_water, pump2_water, total_water]
+    amount = [left_water, right_water, total_water]
 
     session_water = pd.DataFrame(dict(water_source=source, amount=amount))
     return session_water
@@ -111,6 +125,16 @@ def choice_event_summary(event, nearby_events) -> Tuple[int, int, int]:
                     break
             except IndexError:
                 continue
+
+    elif event == 'giving_reward_left_patch':
+        action = 1
+        correct = 0
+        reward = 1
+
+    elif event == 'giving_reward_right_patch':
+        action = 0
+        correct = 0
+        reward = 1
 
     ## FOR BAD CODE BEFORE 9/2/24
     # LEFT CHOICES
@@ -217,6 +241,9 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
                                          start_time=cur_time, choice_time=None, reward_time=None,
                                          led_on_time=None, led_off_time=None)
 
+            elif e == 'trial_stop':
+                pass
+
             else:
                 raise NameError('Unrecognized context event: {}'.format(e))
 
@@ -243,6 +270,16 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
                 _action = 0
                 _correct = 1
                 _reward = 0
+
+            elif e == 'giving_reward_left_patch':
+                action = None
+                correct = 0
+                reward = 1
+
+            elif e == 'giving_reward_right_patch':
+                action = None
+                correct = 0
+                reward = 1
 
             else:
                 raise NameError('Unrecognized choice event: {}'.format(e))
@@ -354,13 +391,14 @@ def make_event_df(cleaned_data: pd.DataFrame, session_id: str, save_name: str, o
     # start_time = df.loc[ix, 'Time'].values[0]
     # df = df.loc[df['Time'] >= start_time]
 
-    p_active_rew, p_inactive_rew = session_info['correct_reward_probability'], session_info['incorrect_reward_probability']  # will want to load from session_info in the future
+    p_active_rew, p_inactive_rew = session_info['correct_reward_probability'], session_info['incorrect_reward_probability']
     event_df = iterate_trials(df, context_events, choice_events, reward_events, stimulus_events)
 
     # add in variables which are constant across all trials or will be updated as the behavior task is updated
     n_trials = len(event_df['state'])
     event_df['p_active_rew'] = np.ones(n_trials) * p_active_rew
     event_df['p_inactive_rew'] = np.ones(n_trials) * p_inactive_rew
+    event_df['p_switch'] = np.ones(n_trials) * session_info['switch_probability']
     event_df['session_ID'] = [session_id] * n_trials
 
     if not output_path.exists():
@@ -383,32 +421,43 @@ def load_event_df(session_id: str, data_path: Path) -> pd.DataFrame:
 
 if __name__ == '__main__':
     plot_path = Path('../../reports/figures')
+    experiment_folder = Path('/home/matt/Documents/EXPERIMENTS/')
     # raw_data_path = Path('../../data/raw')
-    raw_data_path = Path('/home/matt/Documents/RPi_transfer/CT011_2025-06-24_180128')
-    session_log = 'CT011_2025-06-24_180128.log'
-    session_info_path = 'CT011_2025-06-24_180128_session_info.pkl'
+    raw_data_path = Path('/home/matt/Documents/EXPERIMENTS/raw_behavior_data')
+    # processed_data_path = Path('../../data/processed')
+    processed_data_path = Path('/home/matt/Documents/EXPERIMENTS/processed_data')
 
-    processed_data_path = Path('../../data/processed')
-    current_mouse = 'CT011'  # 'MF23'
-    current_date = '2025-06-24'  # '2023-08-18'
+    current_mouse = 'CT010'
+    current_date = '2025-08-15'
+    sess_timestamp = '125111'
     sess_ID = current_mouse + '_' + current_date
+    sess_id_full = current_mouse + '_' + current_date + '_' + sess_timestamp
 
-    # cleaned_data = fileIO.process_file(save_directory=processed_data_path / current_mouse, file_path=raw_data_path / session_log)
-    with open(raw_data_path / session_info_path, 'rb') as f:
+    session_folder = raw_data_path / sess_id_full
+    session_log = '{}.log'.format(sess_id_full)
+    session_info_path = '{}_session_info.pkl'.format(sess_id_full)
+
+    output_path = processed_data_path / current_mouse / sess_id_full
+
+    cleaned_data = fileIO.process_file(save_directory=output_path, file_path=session_folder / session_log)
+    with open(session_folder / session_info_path, 'rb') as f:
         session_info = pkl.load(f)
 
     """Analyze the data from a single mouse session"""
-    # cleaned_data = fileIO.load_raw_data(session_ID=sess_ID, data_path=raw_data_path, save_path=processed_data_path / current_mouse)
-    cleaned_data = fileIO.load_cleaned_data(sess_ID, processed_data_path / current_mouse)
+    # cleaned_data = fileIO.load_raw_data(session_ID=sess_ID, data_path=session_folder, save_path=processed_data_path / current_mouse)
+    # cleaned_data = fileIO.load_cleaned_data(sess_ID, processed_data_path / current_mouse)
     event_df = make_event_df(cleaned_data=cleaned_data,
-                             session_id=sess_ID,
-                             save_name=sess_ID + '_events',
-                             output_path=processed_data_path / current_mouse,
+                             session_id=sess_id_full,
+                             save_name=sess_id_full + '_trials',
+                             output_path=output_path,
                              session_info=session_info)
     # some old events files came from here with the suffix _performance
 
-    event_df = load_event_df(sess_ID, processed_data_path / current_mouse)
-    water = total_water_delivery(cleaned_data)
+    # event_df = load_event_df(sess_ID, processed_data_path / current_mouse)
+    # with open(output_path / '{}_events.pkl'.format(sess_id_full), 'rb') as f:
+    #     event_df = pkl.load(f)
+
+    water = total_water_delivery(cleaned_data, session_info)
     print(water)
 
     # bin_counts, session_df, bins = plot_binned_behavior(df,  plot_path, sess_ID + '_bin_plot', plot=True)

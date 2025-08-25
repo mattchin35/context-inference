@@ -20,6 +20,9 @@ def get_choice_events(df: pd.DataFrame, event_list: list=[]) -> list:
         if re.fullmatch('.*choice.*', e):
             event_list.append(e)
 
+        elif re.fullmatch('giving_reward.*', e):
+            event_list.append(e)
+
     return event_list
 
 
