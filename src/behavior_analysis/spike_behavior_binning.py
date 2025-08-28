@@ -43,19 +43,19 @@ n_clusters = cluster_ids.size
 
 ic(event_df)
 # ic(session_info)
-ic(trial_df.loc[0])
+ic(trial_df.iloc[0])
 ic(spike_times)
 ic(spike_clusters)
 
 # lick_df = event_df[(event_df['Event'] == 'left_entry') | (event_df['Event'] == 'right_entry')]
 
 """
-TODO
+TODO 
 - bin spikes for each unit (50 ms) and licks 
-- gather spikes and licks around trials
+- gather spikes and licks around trials 
 - plot spikes and licks around trials 
-- decode choice from spikes within 50 ms bins
-- decode context from spikes within 50 ms bins
+- decode choice from spikes within 50 ms bins 
+- decode context from spikes within 50 ms bins 
 """
 
 
@@ -160,7 +160,7 @@ def plot_trial(trial_start: float, choice_t: float=None, reward_t: float=None,
     plt.title('Trial plot: {}'.format(sess_id_full))
     plt.show()
 
-
+# lists of dictionaries for each trial's bins
 p = output_path / ('{}_spikes_trial_binned.pkl'.format(sess_id_full))
 with p.open('rb') as f:
     spikes_trial_binned = pkl.load(f)
@@ -206,11 +206,68 @@ with p.open('rb') as f:
 
 
 # logistic regression
-all_spike_bins = np.concatenate([trial['binned_spikes'] for trial in spikes_trial_binned], axis=1)
-all_state_bins = np.concatenate([trial['bin_states'] for trial in spikes_trial_binned])
-all_choice_bins = np.concatenate([trial['bin_choices'] for trial in spikes_trial_binned])
-classifier, accuracy, _, _ = decode_from_spikes(all_spike_bins, all_choice_bins)
+# all_spike_bins = np.concatenate([trial['binned_spikes'] for trial in spikes_trial_binned], axis=1)
+# all_state_bins = np.concatenate([trial['bin_states'] for trial in spikes_trial_binned])
+# all_choice_bins = np.concatenate([trial['bin_choices'] for trial in spikes_trial_binned])
+# classifier, accuracy, _, _ = decode_from_spikes(all_spike_bins, all_choice_bins)
+# print(f"Choice decoding accuracy: {accuracy:.2f}")
+# classifier, accuracy, _, _ = decode_from_spikes(all_spike_bins, all_state_bins)
+# print(f"State decoding accuracy: {accuracy:.2f}")
+
+training_ix = (trial_df['reward'] == 1)  & (trial_df['correct'] == 1)
+incorrect_ix = (~np.isnan(trial_df['action'])) & (trial_df['correct'] == 0)
+withheld_ix = (trial_df['correct'] == 1) & (trial_df['reward'] == 0)
+
+# bins for the max probability period after choice
+train_spike_bins, train_state_bins, train_choice_bins = [], [], []
+incorrect_spike_bins, incorrect_state_bins, incorrect_choice_bins = [], [], []
+withheld_spike_bins, withheld_state_bins, withheld_choice_bins = [], [], []
+
+for ix in np.where(training_ix)[0]:
+    # trial_bin_ix = (spikes_trial_binned[ix]['bin_edges'] >= trial_df.iloc[ix]['choice_time'] + 0) & (spikes_trial_binned[ix]['bin_edges'] < (trial_df.iloc[ix]['choice_time'] + 1.5))
+    trial_bin_ix = (spikes_trial_binned[ix]['bin_edges'] >= trial_df.iloc[ix]['reward_time'] + 0) & (spikes_trial_binned[ix]['bin_edges'] < (trial_df.iloc[ix]['reward_time'] + 2))
+    _spike_bins = spikes_trial_binned[ix]['binned_spikes'][:, trial_bin_ix[:-1]]
+    _state_bins = spikes_trial_binned[ix]['bin_states'][trial_bin_ix[:-1]]
+    _choice_bins = spikes_trial_binned[ix]['bin_choices'][trial_bin_ix[:-1]]
+
+    train_spike_bins.append(_spike_bins)
+    train_state_bins.append(_state_bins)
+    train_choice_bins.append(_choice_bins)
+
+    # plot_trial(trial_start=trial_df.iloc[ix]['start_time'],
+    #            choice_t=trial_df.iloc[ix]['choice_time'],
+    #            reward_t=trial_df.iloc[ix]['reward_time'],
+    #            spike_times=spike_times,
+    #            cluster_ids=cluster_ids,
+    #            lick_times=event_df[(event_df['Event'] == 'left_entry') | (event_df['Event'] == 'right_entry')]['Time'].values,
+    #            pre_time=2.0, post_time=2.0, bin_size=0.05)
+
+for ix in np.where(incorrect_ix)[0]:
+    trial_bin_ix = (spikes_trial_binned[ix]['bin_edges'] >= trial_df.iloc[ix]['choice_time'] + 0) & (spikes_trial_binned[ix]['bin_edges'] < (trial_df.iloc[ix]['choice_time'] + 1.5))
+    _spike_bins = spikes_trial_binned[ix]['binned_spikes'][:, trial_bin_ix[:-1]]
+    _state_bins = spikes_trial_binned[ix]['bin_states'][trial_bin_ix[:-1]]
+    _choice_bins = spikes_trial_binned[ix]['bin_choices'][trial_bin_ix[:-1]]
+
+    incorrect_spike_bins.append(_spike_bins)
+    incorrect_state_bins.append(_state_bins)
+    incorrect_choice_bins.append(_choice_bins)
+
+for ix in np.where(withheld_ix)[0]:
+    trial_bin_ix = (spikes_trial_binned[ix]['bin_edges'] >= trial_df.iloc[ix]['choice_time'] + 0) & (spikes_trial_binned[ix]['bin_edges'] < (trial_df.iloc[ix]['choice_time'] + 1.5))
+    _spike_bins = spikes_trial_binned[ix]['binned_spikes'][:, trial_bin_ix[:-1]]
+    _state_bins = spikes_trial_binned[ix]['bin_states'][trial_bin_ix[:-1]]
+    _choice_bins = spikes_trial_binned[ix]['bin_choices'][trial_bin_ix[:-1]]
+
+    withheld_spike_bins.append(_spike_bins)
+    withheld_state_bins.append(_state_bins)
+    withheld_choice_bins.append(_choice_bins)
+
+train_spike_bins = np.concatenate(train_spike_bins, axis=1)
+train_state_bins = np.concatenate(train_state_bins)
+train_choice_bins = np.concatenate(train_choice_bins)
+
+choice_classifier, accuracy, _, _ = decode_from_spikes(train_spike_bins, train_choice_bins)
 print(f"Choice decoding accuracy: {accuracy:.2f}")
-classifier, accuracy, _, _ = decode_from_spikes(all_spike_bins, all_state_bins)
+state_classifier, accuracy, _, _ = decode_from_spikes(train_spike_bins, train_state_bins)
 print(f"State decoding accuracy: {accuracy:.2f}")
 

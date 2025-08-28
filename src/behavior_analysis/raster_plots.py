@@ -11,7 +11,7 @@ import collect_events
 import re
 
 
-def plot_event_raster(array: np.ndarray, labels: Iterable[str], linewidths=None) -> plt.Figure:
+def plot_event_raster(array: np.ndarray, labels: Iterable[str], linewidths=.75) -> plt.Figure:
     fig, ax = plt.subplots(1, 1)
     fig.set_figheight(10)
     fig.set_figwidth(18)
@@ -70,7 +70,7 @@ def colorblock_raster(session_df: pd.DataFrame, fig_name: str, plot_path: str, t
 
     cleaned_df = session_df[session_df['Event'] != 'exit_standby']
     if timespan[1] == np.inf:
-        timespan = (0, np.amax(cleaned_df['Time']))
+        timespan = (np.amin(cleaned_df['Time']), np.amax(cleaned_df['Time']))
 
     if plot_choices:
         # for bad code before 2024-09-02
@@ -126,8 +126,8 @@ def colorblock_raster(session_df: pd.DataFrame, fig_name: str, plot_path: str, t
         plt.axvspan(stim_st[i], stim_end[i], color='k', alpha=.2)
 
     # Add legend
-    # patches = [mpatches.Patch(color=color_dict[k], label=k) for k in color_dict.keys()]
-    # plt.legend(handles=patches, fontsize=20, fancybox=False)
+    patches = [mpatches.Patch(color=color_dict[k], label=k) for k in color_dict.keys()]
+    plt.legend(handles=patches, fontsize=20, fancybox=False)
     plt.ylim(-.4, 1.4)
     plt.xlabel("Time (seconds)", fontsize=40)
     ax.tick_params(axis='x', which='major', labelsize=25)
@@ -139,8 +139,8 @@ def colorblock_raster(session_df: pd.DataFrame, fig_name: str, plot_path: str, t
     # plt.show()
     savename = os.path.join(plot_path, '{}.{}'.format(fig_name, 'png'))
     raster_figure.savefig(savename, format='png')
-    savename = os.path.join(plot_path, '{}.{}'.format(fig_name, 'svg'))
-    raster_figure.savefig(savename, format='svg')
+    # savename = os.path.join(plot_path, '{}.{}'.format(fig_name, 'svg'))
+    # raster_figure.savefig(savename, format='svg')
 
     # savename = os.path.join(plot_path, '{}.svg'.format(fig_name, 'svg'))
     # raster_figure.savefig(savename, format='svg')

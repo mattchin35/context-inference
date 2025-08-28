@@ -479,16 +479,15 @@ def main_debug():
     # ic(Lsync.astype(np.int32), Rsync)
 
 
-def speed():
+def volts2speed(mVolts: np.ndarray) -> np.ndarray:
     """
     Calculate the speed of the mouse based on the treadmill data.
-    :return: Speed in ???
+    :param mVolts: Treadmill voltage signal in mV
     """
-    # Placeholder for speed calculation logic
-    dacval = volts * 3.3/4095
-    maxdacval = 2.5 / 3.3 * 4095  # 2.5V is the max voltage for the treadmill
-    analog_speed = (dacval / maxdacval - .5) * 2 * 1000
-    pass
+    maxDacVal = 2.5 / 3.3 * 4095  # 2.5V is the max voltage for the treadmill
+    dacVal = mVolts * 4095 / 3300  # convert mV to DAC value
+    vel = (dacVal / maxDacVal - .5) * 2 * 1000  # in mm/s
+    return vel
 
 
 def main():
@@ -513,14 +512,14 @@ def main():
     lfp_file = recording_path / 'run0_g0_tcat.imec0.lf.bin'
     imec_word = 0
     imec_line = [6]  # [0, 1, 6]
-    imec_syncline, imec_srate = read_digital_lines(ap_file, imec_word, imec_line)
-    imec_syncline_events = get_flipper_events(imec_syncline, sample_rate=imec_srate)
+    # imec_syncline, imec_srate = read_digital_lines(ap_file, imec_word, imec_line)
+    # imec_syncline_events = get_flipper_events(imec_syncline, sample_rate=imec_srate)
 
-    sorter_output = recording_path / 'kilosort4_2025-08-18_170053'
-    spike_clusters = sorter_output / 'spike_clusters.npy'
-    spike_times = sorter_output / 'spike_times.npy'
-    spike_clusters = np.load(spike_clusters, allow_pickle=True)
-    spike_times = np.load(spike_times, allow_pickle=True) / imec_srate  # raw times are in SAMPLES, must be converted to seconds
+    # sorter_output = recording_path / 'kilosort4_2025-08-18_170053'
+    # spike_clusters = sorter_output / 'spike_clusters.npy'
+    # spike_times = sorter_output / 'spike_times.npy'
+    # spike_clusters = np.load(spike_clusters, allow_pickle=True)
+    # spike_times = np.load(spike_times, allow_pickle=True) / imec_srate  # raw times are in SAMPLES, must be converted to seconds
 
     # ni file
     ni_file = ephys_data_root.joinpath('{}_{}_catgt/catgt_run0_g0/run0_g0_t0.nidq.bin'.format(current_mouse, current_date_ephys))
@@ -529,6 +528,37 @@ def main():
     daq_lines, daq_srate = read_digital_lines(ni_file, ni_word, ni_lines)
     daq_ephys = daq_lines[0]
     daq_flipper = daq_lines[1]
+    treadmill_signal = daq_lines[4]
+
+    # ni analog treadmill signal
+    tStart = 0
+    tEnd = 15
+    dataType = 'A'  # 'A' for analog, 'D' for digital data
+    chanList = [0]
+    meta = readSGLX.readMeta(ni_file)
+    # Rate = readSGLX.SampRate(meta)
+    firstSamp = int(daq_srate * tStart)
+    lastSamp = int(daq_srate * tEnd)
+    # array of times for plot
+    tDat = np.arange(firstSamp, lastSamp + 1, dtype='uint64')
+    tDat = 1000 * tDat / daq_srate  # plot time axis in msec
+    rawData = readSGLX.makeMemMapRaw(ni_file, meta)
+    selectData = rawData[chanList, firstSamp:lastSamp + 1]
+    MN, MA, XA, DW = readSGLX.ChannelCountsNI(meta)
+    ic("NI channel counts:", MN, MA, XA, DW)
+    # apply gain correction and convert to mV
+    convData = 1e3 * readSGLX.GainCorrectNI(selectData, chanList, meta)
+    convData = np.squeeze(convData)
+    speed = volts2speed(convData)  # in mm/s
+
+    f, ax = plt.subplots()
+    x = np.arange(treadmill_signal.size) / daq_srate
+    start_time = 0
+    end_time = 15  # seconds
+    # plt.plot(x[int(start_time*daq_srate):int(end_time*daq_srate)], treadmill_signal[int(start_time*daq_srate):int(end_time*daq_srate)])
+    ax.plot(tDat, convData)
+    # plt.title('Flipper signal')
+    plt.show()
 
     ni_ephys_events = get_flipper_events(daq_ephys, sample_rate=daq_srate)
     # ni_flipper_events = get_flipper_events(daq_flipper, sample_rate=daq_srate)

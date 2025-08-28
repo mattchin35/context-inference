@@ -223,18 +223,19 @@ def session_stats(dependent_var, independent_var) -> tuple[float, float, float, 
 
 
 def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataFrame, choices_df: pd.DataFrame,
-                  mouse: str, date: str, data_path: Path):
+                  sess_id: str, session_save_path: Path,
+                  # mouse: str, date: str, save_path: str=None):
+                  overall_save_path: Path=None):
     """Save the block to block performance and the overall session performance. If a file already exists for overall
     session performance, append to or update it."""
-    sess_ID = mouse + '_' + date
-    save_path = data_path / mouse
-    # save_path = data_path / mouse / 'session_performance'
-    if not save_path.exists():
-        save_path.mkdir()
+    # if not save_path.exists():
+    #     save_path.mkdir()
 
-    block_performance.to_csv(save_path / (sess_ID + '_block_performance.csv'), index=False)
-    choices_df.to_csv(save_path / (sess_ID + '_choices.csv'), index=False)
-    overall_fname = save_path / (mouse + '_overall_performance.csv')
+    # sess_ID = mouse + '_' + date
+    mouse, date, time = sess_id.split('_')
+    block_performance.to_csv(session_save_path / (sess_id + '_block_performance.csv'), index=False)
+    choices_df.to_csv(session_save_path / (sess_id + '_choices.csv'), index=False)
+    overall_fname = overall_save_path / (mouse + '_overall_performance.csv')
     if overall_fname.exists():
         overall_df = pd.read_csv(overall_fname)
         ix = overall_df['date'] == date
@@ -268,8 +269,8 @@ def main():
             '2024-09-07', '2024-09-09', '2024-09-10']
     mouse = ['CT001'] * len(date)
     for m, d in zip(mouse, date):
-        sess_ID = m + '_' + d
-        event_df = session_overview.load_event_df(sess_ID, data_path / m)
+        sess_id = m + '_' + d
+        event_df = session_overview.load_event_df(sess_id, data_path / m)
         session_performance, block_performance, choices_df = analyze_session(event_df, mouse=m, date=d)
 
         # rewards, mean, std, sem = summarize_block_switches(block_performance, min_counts=0)

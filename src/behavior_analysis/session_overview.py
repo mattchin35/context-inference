@@ -127,13 +127,13 @@ def choice_event_summary(event, nearby_events) -> Tuple[int, int, int]:
                 continue
 
     elif event == 'giving_reward_left_patch':
-        action = 1
-        correct = 0
+        action = None
+        correct = None
         reward = 1
 
     elif event == 'giving_reward_right_patch':
-        action = 0
-        correct = 0
+        action = None
+        correct = None
         reward = 1
 
     ## FOR BAD CODE BEFORE 9/2/24
@@ -186,8 +186,8 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
     cur_trial = -1
     cur_stimulus = None
     block_stimulus = None
-    _action = -1
-    _correct = -1
+    _action = None
+    _correct = 0
     _reward = 0
 
     states = []
@@ -369,7 +369,7 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
     return event_df
 
 
-def make_event_df(cleaned_data: pd.DataFrame, session_id: str, save_name: str, output_path: Path, session_info: dict) -> pd.DataFrame:
+def make_trial_df(cleaned_data: pd.DataFrame, session_id: str, save_name: str, output_path: Path, session_info: dict) -> pd.DataFrame:
     """
     Prepare an event dataframe with describing each trial of a session.
     Should be compatible with computational agents.
@@ -439,14 +439,14 @@ if __name__ == '__main__':
 
     output_path = processed_data_path / current_mouse / sess_id_full
 
-    cleaned_data = fileIO.process_file(save_directory=output_path, file_path=session_folder / session_log)
+    event_df = fileIO.process_file(save_directory=output_path, file_path=session_folder / session_log)
     with open(session_folder / session_info_path, 'rb') as f:
         session_info = pkl.load(f)
 
     """Analyze the data from a single mouse session"""
     # cleaned_data = fileIO.load_raw_data(session_ID=sess_ID, data_path=session_folder, save_path=processed_data_path / current_mouse)
     # cleaned_data = fileIO.load_cleaned_data(sess_ID, processed_data_path / current_mouse)
-    event_df = make_event_df(cleaned_data=cleaned_data,
+    trial_df = make_trial_df(cleaned_data=event_df,
                              session_id=sess_id_full,
                              save_name=sess_id_full + '_trials',
                              output_path=output_path,
@@ -457,7 +457,7 @@ if __name__ == '__main__':
     # with open(output_path / '{}_events.pkl'.format(sess_id_full), 'rb') as f:
     #     event_df = pkl.load(f)
 
-    water = total_water_delivery(cleaned_data, session_info)
+    water = total_water_delivery(event_df, session_info)
     print(water)
 
     # bin_counts, session_df, bins = plot_binned_behavior(df,  plot_path, sess_ID + '_bin_plot', plot=True)
