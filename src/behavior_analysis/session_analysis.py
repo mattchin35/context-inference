@@ -86,7 +86,7 @@ def summarize_trials_to_correct(block_performance: pd.DataFrame) -> dict:
 
 def analyze_session(event_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     sess_ID = mouse + '_' + date
-    # event_df = session_overview.load_event_df(sess_ID, data_path / mouse)
+    # event_df = session_overview.load_trial_df(sess_ID, data_path / mouse)
     decision_vars = count_decision_variables(event_df)
     choices_df = pd.concat([event_df, decision_vars], axis=1)
 
@@ -270,7 +270,7 @@ def main():
     mouse = ['CT001'] * len(date)
     for m, d in zip(mouse, date):
         sess_id = m + '_' + d
-        event_df = session_overview.load_event_df(sess_id, data_path / m)
+        event_df = session_overview.load_trial_df(sess_id, data_path / m)
         session_performance, block_performance, choices_df = analyze_session(event_df, mouse=m, date=d)
 
         # rewards, mean, std, sem = summarize_block_switches(block_performance, min_counts=0)

@@ -59,7 +59,7 @@ def get_stimulus_events(df: pd.DataFrame, event_list: list=[]) -> list:
 
         # elif re.fullmatch('stimulus_.*', e):
         #     event_list.append(e)
-
+        
     return event_list
 
 

@@ -203,17 +203,22 @@ def plot_learning_curve(coefficients: np.ndarray, switches_per_session: np.ndarr
 def main_single_session():
     plot_path = Path('../../reports/figures')
     data_path = Path('../../data/processed')
+    experiment_folder = Path('/home/matt/Documents/EXPERIMENTS/')
+    # experiment_folder = Path('C:/Users/mattc/EinsteinMed Dropbox/Matthew Chin/phd_data/remotework/EXPERIMENTS/')
+    raw_data_path = experiment_folder / 'raw_behavior_data'
+    processed_data_path = experiment_folder / 'processed_data'
 
     ### Plotting for a single session ###
-    mouse = 'CT005'
+    mouse = 'CT010'
     date = '2024-09-10'
     sess_ID = mouse + '_' + date
-    mouse_plot_path = plot_path / mouse / 'performance_plots'
-    if not mouse_plot_path.exists():
-        mouse_plot_path.mkdir()
+    mouse_plot_path = processed_data_path / mouse
+    # mouse_plot_path = plot_path / mouse / 'performance_plots'
+    # if not mouse_plot_path.exists():
+    #     mouse_plot_path.mkdir()
 
-    overall_df, block_performance, choices_df = session_analysis.load_analysis(mouse, date, data_path)
-    overall_df = overall_df[~overall_df['date'].isna()]
+    # overall_df, block_performance, choices_df = session_analysis.load_analysis(mouse, date, data_path)
+    # overall_df = overall_df[~overall_df['date'].isna()]
     # plot_session_correct(block_performance, mouse_plot_path, sess_ID)
     # plot_session_trials_to_correct(block_performance, mouse_plot_path, sess_ID)
     # plot_multisession_correct(overall_df, mouse_plot_path, figure_id=mouse)
@@ -224,49 +229,59 @@ def main_single_session():
     # scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
     #                           plot_path=mouse_plot_path, figure_id=sess_ID)
 
+    overall_df = pd.read_csv(processed_data_path / mouse / (mouse + '_overall_performance.csv'))
+    overall_df = overall_df.iloc[:4]
+
     plot_learning_curve(overall_df['slope'], overall_df['n_switches'], figure_id=mouse, plot_path=mouse_plot_path,
                         dates=overall_df['date'].values)
 
 
 def main_multiple_sessions():
     plot_path = Path('../../reports/figures')
-    data_path = Path('../../data/processed')
+    experiment_folder = Path('/home/matt/Documents/EXPERIMENTS/')
+    # experiment_folder = Path('C:/Users/mattc/EinsteinMed Dropbox/Matthew Chin/phd_data/remotework/EXPERIMENTS/')
+    raw_data_path = experiment_folder / 'raw_behavior_data'
+    processed_data_path = experiment_folder / 'processed_data'
+    # data_path = Path('../../data/processed')
 
     ### Plotting for multiple sessions ###
-    # mouse = ['HD005', 'HD005']
-    # date = ['2024-08-23', '2024-08-26']
+    mouse = ['CT010']
+    date = ['2024-08-23']
 
-    date = ['2024-08-22', '2024-08-23', '2024-08-26', '2024-08-28', '2024-08-29',
-            '2024-08-30', '2024-09-06', '2024-09-07']
-    mouse = ['CT005'] * len(date)
+    # date = ['2024-08-22', '2024-08-23', '2024-08-26', '2024-08-28', '2024-08-29',
+    #         '2024-08-30', '2024-09-06', '2024-09-07']
+    # mouse = ['CT005'] * len(date)
 
-    block_performance_list = []
-    for m, d in zip(mouse, date):
-        sess_ID = m + '_' + d
-        mouse_plot_path = plot_path / m / 'performance_plots'
-        if not mouse_plot_path.exists():
-            mouse_plot_path.mkdir()
+    # block_performance_list = []
+    # for m, d in zip(mouse, date):
+    #     sess_ID = m + '_' + d
+    #     mouse_plot_path = plot_path / m / 'performance_plots'
+    #     if not mouse_plot_path.exists():
+    #         mouse_plot_path.mkdir()
+    #
+    #     overall_df, block_performance, choices_df = session_analysis.load_analysis(m, d, data_path)
+    #     plot_session_correct(block_performance, mouse_plot_path, sess_ID)
+    #     plot_session_trials_to_correct(block_performance, mouse_plot_path, sess_ID)
+    #
+    #     ix = overall_df['date'] == d
+    #     if not ix.any():
+    #         print('No data for {}'.format(d))
+    #         continue
+    #
+    #     slope = overall_df.loc[overall_df['date'] == d, 'slope'].values[0]
+    #     intercept = overall_df.loc[overall_df['date'] == d, 'intercept'].values[0]
+    #     scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
+    #                               plot_path=mouse_plot_path, figure_id=sess_ID)
+    #
+    #     block_performance_list.append(block_performance)
 
-        overall_df, block_performance, choices_df = session_analysis.load_analysis(m, d, data_path)
-        plot_session_correct(block_performance, mouse_plot_path, sess_ID)
-        plot_session_trials_to_correct(block_performance, mouse_plot_path, sess_ID)
+    # block_performance_combined = pd.concat(block_performance_list, axis=0, ignore_index=True)
+    # plot_trials_to_correct_summary(block_performance_combined, mouse_plot_path, figure_id=mouse[0])
 
-        ix = overall_df['date'] == d
-        if not ix.any():
-            print('No data for {}'.format(d))
-            continue
-
-        slope = overall_df.loc[overall_df['date'] == d, 'slope'].values[0]
-        intercept = overall_df.loc[overall_df['date'] == d, 'intercept'].values[0]
-        scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
-                                  plot_path=mouse_plot_path, figure_id=sess_ID)
-
-        block_performance_list.append(block_performance)
-
-    block_performance_combined = pd.concat(block_performance_list, axis=0, ignore_index=True)
-    plot_trials_to_correct_summary(block_performance_combined, mouse_plot_path, figure_id=mouse[0])
+    overall_df = pd.read_csv(processed_data_path / mouse[0] / (mouse[0] + '_overall_performance.csv'))
     overall_df.sort_values(by='date', inplace=True)
-    plot_learning_curve(overall_df['slope'], overall_df['n_switches'], figure_id=mouse[0], plot_path=mouse_plot_path)
+    # plot_learning_curve(overall_df['slope'], overall_df['n_switches'], figure_id=mouse[0], plot_path=mouse_plot_path)
+    plot_learning_curve(overall_df['slope'], overall_df['n_switches'], figure_id=mouse[0], plot_path=processed_data_path / mouse[0] )
 
 
 def main():

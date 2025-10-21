@@ -81,8 +81,8 @@ def colorblock_raster(session_df: pd.DataFrame, fig_name: str, plot_path: str, t
                       'wrong_choice_left_patch', 'enter_left_patch', 'enter_right_patch', 'enter_dark_period']
         event_array = collect_events.generate_event_array(cleaned_df, event_list, timespan)
 
-        left_choice = np.concat([event_array[0], event_array[1]])
-        right_choice = np.concat([event_array[2], event_array[3]])
+        left_choice = np.concatenate([event_array[0], event_array[1]])
+        right_choice = np.concatenate([event_array[2], event_array[3]])
         event_array = [left_choice, right_choice, event_array[4], event_array[5], event_array[6]]
         event_labels = ['Left\nchoice', 'Right\nchoice', 'enter left patch', 'enter right patch', 'enter dark period']
         linewidths = 0.3

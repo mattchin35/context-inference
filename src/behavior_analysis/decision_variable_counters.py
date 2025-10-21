@@ -5,7 +5,6 @@ Source: Cazettes et al., Nature Neuroscience 2023
 
 
 def consecutive_fail_counter(count: int, reward: int):
-    # via cazettes 2023
     if reward == 0:  # failure
         g = 1
         c = 1
@@ -34,7 +33,6 @@ def consecutive_fail_renewal_counter(count: int, reward: int, last_rewarded: boo
 
 
 def consecutive_reward_counter(count: int, reward: int):
-    # via cazettes 2023
     if reward == 0:  # failure
         g = 0
         c = 0
@@ -63,7 +61,6 @@ def consecutive_reward_renewal_counter(count: int, reward: int, last_rewarded: b
 
 
 def negative_value_counter(count: int, reward: int):
-    # via cazettes 2023
     if reward == 0:  # failure
         g = 1
         c = 1

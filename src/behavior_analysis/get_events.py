@@ -491,9 +491,10 @@ def volts2speed(mVolts: np.ndarray) -> np.ndarray:
 
 
 def main():
-    experiment_folder = Path('/home/matt/Documents/EXPERIMENTS/')
+    # experiment_folder = Path('/home/matt/Documents/EXPERIMENTS/')
+    experiment_folder = Path('C:/Users/mattc/EinsteinMed Dropbox/Matthew Chin/phd_data/remotework/EXPERIMENTS/')
     behavior_data_root = experiment_folder.joinpath('raw_behavior_data')
-    ephys_data_root = experiment_folder.joinpath('raw_ephys_data')
+    ephys_data_root = experiment_folder.joinpath('processed_ephys_data')
     # raw_data_root = Path.home().joinpath('Documents', 'ephys_transfer')
     processed_data_root = experiment_folder / 'processed_data'
 
@@ -512,14 +513,14 @@ def main():
     lfp_file = recording_path / 'run0_g0_tcat.imec0.lf.bin'
     imec_word = 0
     imec_line = [6]  # [0, 1, 6]
-    # imec_syncline, imec_srate = read_digital_lines(ap_file, imec_word, imec_line)
-    # imec_syncline_events = get_flipper_events(imec_syncline, sample_rate=imec_srate)
+    imec_syncline, imec_srate = read_digital_lines(ap_file, imec_word, imec_line)
+    imec_syncline_events = get_flipper_events(imec_syncline, sample_rate=imec_srate)
 
-    # sorter_output = recording_path / 'kilosort4_2025-08-18_170053'
-    # spike_clusters = sorter_output / 'spike_clusters.npy'
-    # spike_times = sorter_output / 'spike_times.npy'
-    # spike_clusters = np.load(spike_clusters, allow_pickle=True)
-    # spike_times = np.load(spike_times, allow_pickle=True) / imec_srate  # raw times are in SAMPLES, must be converted to seconds
+    sorter_output = recording_path / 'kilosort4_2025-08-18_170053'
+    spike_clusters = sorter_output / 'spike_clusters.npy'
+    spike_times = sorter_output / 'spike_times.npy'
+    spike_clusters = np.load(spike_clusters, allow_pickle=True)
+    spike_times = np.load(spike_times, allow_pickle=True) / imec_srate  # raw times are in SAMPLES, must be converted to seconds
 
     # ni file
     ni_file = ephys_data_root.joinpath('{}_{}_catgt/catgt_run0_g0/run0_g0_t0.nidq.bin'.format(current_mouse, current_date_ephys))
@@ -551,14 +552,14 @@ def main():
     convData = np.squeeze(convData)
     speed = volts2speed(convData)  # in mm/s
 
-    f, ax = plt.subplots()
-    x = np.arange(treadmill_signal.size) / daq_srate
-    start_time = 0
-    end_time = 15  # seconds
+    # f, ax = plt.subplots()
+    # x = np.arange(treadmill_signal.size) / daq_srate
+    # start_time = 0
+    # end_time = 15  # seconds
     # plt.plot(x[int(start_time*daq_srate):int(end_time*daq_srate)], treadmill_signal[int(start_time*daq_srate):int(end_time*daq_srate)])
-    ax.plot(tDat, convData)
+    # ax.plot(tDat, convData)
     # plt.title('Flipper signal')
-    plt.show()
+    # plt.show()
 
     ni_ephys_events = get_flipper_events(daq_ephys, sample_rate=daq_srate)
     # ni_flipper_events = get_flipper_events(daq_flipper, sample_rate=daq_srate)

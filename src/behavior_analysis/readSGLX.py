@@ -311,7 +311,6 @@ def GainCorrectIM(dataArray, chanList, meta):
 # Return memmap for the raw data
 # Fortran ordering is used to match the MATLAB version
 # of these tools.
-#
 def makeMemMapRaw(binFullPath, meta, allowWrite=False):
     nChan = int(meta['nSavedChans'])
     nFileSamp = int(int(meta['fileSizeBytes'])/(2*nChan))

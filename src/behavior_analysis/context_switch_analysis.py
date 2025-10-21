@@ -10,8 +10,10 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 import pickle as pkl
 from pathlib import Path
-import src.behavior_analysis.fileIO as fileIO
-import src.behavior_analysis.decision_variable_counters as counters
+import fileIO
+import decision_variable_counters as counters
+# import src.behavior_analysis.fileIO as fileIO
+# import src.behavior_analysis.decision_variable_counters as counters
 
 
 from typing import Tuple, List, Any, Iterable

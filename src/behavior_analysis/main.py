@@ -10,7 +10,8 @@ import pandas as pd
 def process_sessions():
     """Prepare raw behavior data files for analysis."""
 
-    experiment_folder = Path('/home/matt/Documents/EXPERIMENTS/')
+    # experiment_folder = Path('/home/matt/Documents/EXPERIMENTS/')
+    experiment_folder = Path('C:/Users/mattc/EinsteinMed Dropbox/Matthew Chin/phd_data/remotework/EXPERIMENTS/')
     raw_data_path = experiment_folder / 'raw_behavior_data'
     processed_data_path = experiment_folder / 'processed_data'
     # plot_path = processed_data_path / 'figures'
@@ -45,9 +46,12 @@ def process_sessions():
     # mice = ['HD005', 'HD006', 'CT002', 'CT003', 'CT001', 'CT005']
     # dates = len(mice) * ['2024-09-10']
 
-    mice = ['CT010'] * 4
-    dates = ['2025-08-15', '2025-08-18', '2025-08-20', '2025-08-21']
-    timestamps = ['125111', '124026', '142917', '123406']
+    # mice = ['CT010'] * 4
+    # dates = ['2025-08-15', '2025-08-18', '2025-08-20', '2025-08-21']
+    # timestamps = ['125111', '124026', '142917', '123406']
+    mice = ['CT010'] 
+    dates = ['2025-08-15']
+    timestamps = ['125111']
 
     for m, d, t in zip(mice, dates, timestamps):
         sess_id = m + '_' + d
@@ -65,14 +69,14 @@ def process_sessions():
         # event_df = fileIO.process_file(save_directory=output_path, file_path=session_folder / session_log)
         event_df = pd.read_csv(output_path / (sess_id_full + '.csv'), sep=',')
 
-        # trial_df = session_overview.make_trial_df(cleaned_data=event_df,
-        #                                           session_id=sess_id_full,
-        #                                           save_name=sess_id_full + '_trials',
-        #                                           output_path=output_path,
-        #                                           session_info=session_info)
-        with open(output_path / '{}_trials.pkl'.format(sess_id_full), 'rb') as f:
-            trial_df = pkl.load(f)
-
+        trial_df = session_overview.make_trial_df(cleaned_data=event_df,
+                                                  session_id=sess_id_full,
+                                                  save_name=sess_id_full + '_trials',
+                                                  output_path=output_path,
+                                                  session_info=session_info)
+        # with open(output_path / '{}_trials.pkl'.format(sess_id_full), 'rb') as f:
+        #     trial_df = pkl.load(f)
+        
         mouse_plot_path = output_path / 'raster_plots'
         if not mouse_plot_path.exists():
             mouse_plot_path.mkdir()
@@ -101,3 +105,4 @@ def process_sessions():
 
 if __name__ == '__main__':
     process_sessions()
+
