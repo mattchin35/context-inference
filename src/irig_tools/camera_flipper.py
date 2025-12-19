@@ -35,7 +35,9 @@ def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
 
     # remove timecodes with bad lengths
     irig_frames = [frame for frame in irig_frames if len(frame) == 60]
-    irig.irig_h_to_datetime(irig_frames[0])
+    print('irig frame 0:',
+          irig_frames[0])
+    ic(irig.irig_h_to_datetime(irig_frames[0]))
     decoded = [irig.irig_h_to_posix(frame) for frame in irig_frames]
 
     # Handle invalid timecodes
@@ -45,7 +47,7 @@ def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
     return decoded, frame_ix
 
 # file_path = Path.home() / 'Documents/EXPERIMENTS/raw_behavior_data' / 'test-mouse_2025-10-14_205950/test-mouse_2025-10-14_205950_cam0_flipper.csv'
-file_path = Path('/home/matt/Documents/irig_mods/irig_signal_timestamps_2025-10-21_00-50-35.csv')
+file_path = Path('/home/matt/Documents/irig_mods/irig_signal_timestamps_2025-10-22_19-28-12.csv')
 df = pd.read_csv(file_path, sep=',', on_bad_lines='skip', usecols=[0,1])
 
 
@@ -83,9 +85,9 @@ irig_bits = np.zeros(irig_pulselen.size, dtype=object)
 irig_bits[irig_pulselen == .2] = False
 irig_bits[irig_pulselen == .5] = True
 irig_bits[irig_pulselen == .8] = 'P'
-ic(irig_bits)
+# ic(irig_bits)
 # ic(df[irig_ix]['time.time()'])
-ic(df[irig_ix]['Signal times'])
+# ic(df[irig_ix]['Signal times'])
 
 
 # irig_bits[(df['interval_time'] == .2) & irig_ix] = True

@@ -8,6 +8,52 @@ from typing import Generator, List, Optional, Tuple, Literal
 from datetime import datetime, timezone
 
 
+def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
+    irig_frames = []
+    tracking_start = None
+    frame_ix = []
+
+    for i in range(120):
+        if irig_bits[i] == 'P' and irig_bits[i + 1] == 'P':
+            tracking_start = i + 1
+            frame_ix.append(tracking_start)
+            break
+
+    if tracking_start is None:
+        raise ValueError('No starting position marker found.')
+
+    frame = []
+    for i in range(tracking_start, irig_bits.size - 1):
+        frame.append(irig_bits[i])
+        if irig_bits[i] == 'P' and irig_bits[i + 1] == 'P':
+            irig_frames.append(frame)
+            frame_ix.append(i+1)
+            frame = []
+
+    if len(frame_ix) > len(irig_frames):
+        frame_ix = frame_ix[:-1]
+
+    # remove timecodes with bad lengths
+    # irig_frames = [frame for frame in irig_frames if len(frame) == 60]
+    good_frames, good_frameix = [], []
+    for frame, ix in zip(irig_frames, frame_ix):
+        if len(frame) == 60:
+            good_frames.append(frame)
+            good_frameix.append(ix)
+    irig_frames = good_frames
+    frame_ix = good_frameix
+
+    # irig.irig_h_to_datetime(irig_frames[0])
+    posix_decoded = [irig.irig_h_to_posix(frame) for frame in irig_frames]
+    datetime_decoded = [irig.irig_h_to_datetime(frame) for frame in irig_frames]
+
+    # Handle invalid timecodes
+    # decoded = [item for item in decoded if item is not None]
+
+    print(f'List spliced! Splices: {len(posix_decoded)}')
+    return posix_decoded, frame_ix
+
+
 file_path = Path.home() / 'Documents/ephys_transfer' / 'treadmill_20251008' / 'CoolTerm Capture (Untitled_0) 2025-10-21 12-36-20-447.txt'
 # df = pd.read_csv(filepath, sep=';', header=None, on_bad_lines='skip', usecols=[1, 2, 4])
 
@@ -16,7 +62,6 @@ irig_labels = ['syncPinState']
 log_dicts = []
 
 pc_timestamp_present = False
-
 try:
     with open(file_path, 'r') as file:
         filesize = file_path.stat().st_size
@@ -45,7 +90,7 @@ for line in lines:
 
 df = pd.DataFrame(log_dicts)
 
-df['value'] = df['value'] == 'LOW'  # flip values to make Low = True, High = False - not sure why raw data is inverted
+# df['value'] = df['value'] == 'LOW'  # flip values to make Low = True, High = False - not sure why raw data is inverted
 df['time_value'] = df['time_value'].astype(float) / 1e6  # convert to seconds
 irig_ix = df['label'] == 'syncPinState'
 irig_cumulative_time = df[irig_ix]['time_value'].cumsum() - df[irig_ix]['time_value'].iloc[0]
@@ -62,79 +107,59 @@ cumulative_time[:first_irig_ix] = df['time_value'].iloc[:first_irig_ix]
     # cumulative_time[ix] = cumulative_time[first_irig_ix] - df['time_value'].iloc[ix]
 df['cumulative_time'] = cumulative_time
 
-endtime = 30
-time_ix = df['cumulative_time'] < endtime
-plt.plot(df['cumulative_time'][time_ix & irig_ix], df['value'][time_ix & irig_ix], drawstyle='steps')
-plt.show()
-
-"""
-TODO:
-- convert syncpinstates to irig bits 
-- convert irig codes to unix timestamps
-- obtain event times 
-"""
-
-# df[df['label']=='syncPinState']['value'] = ~df[df['label']=='syncPinState']['value']
-irig_ix = (df['label'] == 'syncPinState') & (df['value'] == True)
-# irig_bit_lengths = np.round(df[irig_ix]['time_value']/1e6,1)
-irig_bit_lengths = np.round(df['time_value']/1e6,1)
-irig_bits = np.ones(irig_ix.size, dtype=object) * np.nan
+# endtime = 30
+# time_ix = df['cumulative_time'] < endtime
+# plt.plot(df['cumulative_time'][time_ix & irig_ix], df['value'][time_ix & irig_ix], drawstyle='steps')
+# plt.show()
 
 
-# assigning bits uses pulse lengths of HIGH states
-irig_bits[(irig_bit_lengths == .2) & irig_ix] = False
-irig_bits[(irig_bit_lengths == .5) & irig_ix] = True
-irig_bits[(irig_bit_lengths == .8) & irig_ix] = 'P'
-df['irig_bit'] = irig_bits
-ic(df)
 
-# IRIG_BIT = Literal[True,False,'P'] # type for IRIG-H bits
-# irig_pulse_lengths = np.array([.2,.5,.8])
-# tol = 2e3  # tolerance for matching times in milliseconds
+irig_bit_ix = irig_ix & (df['value'] == 'HIGH')
+irig_bit_lengths = np.round(df['time_value'][irig_ix].to_numpy(),1)
+irig_bit_lengths[:-1] = irig_bit_lengths[1:]
+irig_bit_lengths[-1] = np.nan
 
+irig_bits = np.ones(irig_bit_lengths.shape[0], dtype=object) * np.nan
+irig_bits[(irig_bit_lengths == .2)] = False
+irig_bits[(irig_bit_lengths == .5)] = True
+irig_bits[(irig_bit_lengths == .8)] = 'P'
 
-def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
-    irig_frames = []
-    tracking_start = None
-    frame_ix = []
+irig_signal_values = df['value'][irig_ix].to_numpy()
+irig_signal_values[irig_signal_values == 'HIGH'] = 1
+irig_signal_values[irig_signal_values == 'LOW'] = 0
+irig_signal_values = irig_signal_values.astype(bool)
 
-    for i in range(120):
-        if irig_bits[i] == 'P' and irig_bits[i + 1] == 'P':
-            tracking_start = i + 1
-            frame_ix.append(i)
-            break
+irig_bits_fordf = np.ones(df.shape[0], dtype=object) * np.nan
+irig_bits_fordf[irig_ix] = irig_bits
+irig_bits_fordf[~irig_bit_ix] = np.nan
+df['irig_bit'] = irig_bits_fordf
+irig_bits = irig_bits[irig_signal_values]
 
-    if tracking_start is None:
-        raise ValueError('No starting position marker found.')
+t_decoded, frameix_decoded = decode_irig_bits(irig_bits)
+unix_time = np.zeros_like(irig_bits, dtype=float)
+unix_time[frameix_decoded] = t_decoded
 
-    frame = []
-    for i in range(tracking_start, irig_bits.size - 1):
-        frame.append(irig_bits[i])
-        if irig_bits[i] == 'P' and irig_bits[i + 1] == 'P':
-            irig_frames.append(frame)
-            frame_ix.append(i+1)
-            frame = []
-
-    if len(frame_ix) > len(irig_frames):
-        frame_ix = frame_ix[:-1]
-
-    # for i in range(starting_index, len(irig_bits) - 60, 60):
-    #     spliced.append((irig_h_to_posix([t[0] for t in irig_bits[i:i+60]]), irig_bits[i][1]))
-
-    # remove timecodes with bad lengths
-    irig_frames = [frame for frame in irig_frames if len(frame) == 60]
-    # irig.irig_h_to_datetime(irig_frames[0])
-    decoded = [irig.irig_h_to_posix(frame) for frame in irig_frames]
-    decoded = [irig.irig_h_to_datetime(frame) for frame in irig_frames]
-
-    # Handle invalid timecodes
-    decoded = [item for item in decoded if item is not None]
-
-    print(f'List spliced! Splices: {len(decoded)}')
-    return decoded, frame_ix
-
-# for val in df[irig_ix]['time_value']:
-
-t_decoded, frame_decoded = decode_irig_bits(irig_bits[irig_ix])
 ic(t_decoded)
-ic
+irig_bit_cumtime = df['cumulative_time'][irig_bit_ix].to_numpy()
+# pre_t = t_decoded[0] - (frameix_decoded[0] - np.array(range(frameix_decoded[0])))
+unix_time[:frameix_decoded[0]] = t_decoded[0] - (frameix_decoded[0] - np.array(range(frameix_decoded[0])))
+for ix, frame in enumerate(frameix_decoded[:-1]):
+    unix_time[frameix_decoded[ix]:frameix_decoded[ix+1]] = t_decoded[ix] + np.array(range(frameix_decoded[ix+1]-frameix_decoded[ix]))
+unix_time[frameix_decoded[-1]:] = t_decoded[-1] + np.array(range(irig_bits.size - frameix_decoded[-1]))
+
+unix_time_fordf = np.ones(df.shape[0]) * np.nan
+unix_time_fordf[irig_bit_ix] = unix_time
+
+first_unix_ix = np.where(~np.isnan(unix_time_fordf))[0][0]
+unix_time_fordf[:first_unix_ix] = unix_time[0] - (df['cumulative_time'].iloc[first_unix_ix] - df['cumulative_time'].iloc[:first_unix_ix][::-1])
+last_unixtime = unix_time_fordf[first_unix_ix]
+last_unixix = first_unix_ix
+for ix in range(first_unix_ix, df.shape[0]):
+    if irig_bit_ix[ix]:
+        last_unixtime = unix_time_fordf[ix]
+        last_unixix = ix
+    else:
+        unix_time_fordf[ix] = last_unixtime + (df['cumulative_time'].iloc[ix] - df['cumulative_time'].iloc[last_unixix])
+df['unix_time'] = unix_time_fordf
+ic(unix_time_fordf)
+print([datetime.fromtimestamp(t) for t in unix_time_fordf[~np.isnan(unix_time_fordf)][:10]])

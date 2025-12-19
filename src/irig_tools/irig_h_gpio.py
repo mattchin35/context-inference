@@ -546,27 +546,32 @@ class IrigHSender:
 
 
 if __name__ == "__main__":
-    # unix_time = 1761015311
+    # unix_time = 1761022236
     unix_time = time.time()
-
     t = dt.fromtimestamp(unix_time, tz=timezone.utc)
     irig_list = generate_irig_h_frame(t)
     dt_decode = irig_h_to_datetime(irig_list)
     posix_decode = irig_h_to_posix(irig_list)
-    ic(unix_time, t)
+    ic(unix_time, t, dt.fromtimestamp(unix_time))
     ic(dt_decode, posix_decode)
-    # ic(irig_list)
-    print(irig_list[29:50])
+    print(irig_list)
+    print(generate_irig_h_frame(dt.fromtimestamp(unix_time)))
+    # print(irig_list[19:30])
     irig_map = {'0':0, '1':1, 'P':2, 'True':1, 'False':0}
     irig_bits_mapped = [irig_map[str(bit)] for bit in irig_list]
-    # print(irig_bits_mapped)
+    print(irig_bits_mapped)
 
-    ic(dt.now().timetuple().tm_yday)
-    day_of_year_bcd = bcd_encode(dt.now().timetuple().tm_yday, DAY_OF_YEAR_WEIGHTS)
-    ic(day_of_year_bcd)
+    ic(dt.now(tz=timezone.utc).timetuple().tm_hour)
+    # day_of_year_bcd = bcd_encode(dt.now().timetuple().tm_yday, DAY_OF_YEAR_WEIGHTS)
+    # ic(day_of_year_bcd)
+    hour_bcd = bcd_encode(t.timetuple().tm_hour, HOURS_WEIGHTS)
+    ic(hour_bcd)
 
-    # irig_list=[2, 1, 0, 0, 0, 0, 1, 0, 0, 2, 1, 0, 1, 0, 0, 1, 0, 1, 0, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 1, 1, 0, 0, 0, 1, 0, 0, 1, 2, 0, 1 ,0, 0, 0, 0, 0, 0, 0, 2, 1, 0, 1, 0, 0, 0, 1, 0, 0, 2]
-    # dt_decode = irig_h_to_datetime(irig_list)
-    # ic(dt_decode)
+    irig_list=[2, 0, 1, 0, 0, 0, 0, 1, 0, 2, 1, 0, 1, 0, 0, 0, 0, 1, 0, 2, 1, 1, 1, 0, 0, 1, 0, 0, 0, 2, 1, 0, 1, 0, 0, 1, 0, 0, 1, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 1, 0, 1, 0, 0, 0, 1, 0, 0, 2]
+    dt_decode = irig_h_to_datetime(irig_list)
+    ic(dt_decode)
 
+    # irig_list = ['P', True, True, True, False, False, True, False, False, False, 'P']
+    # ic(bcd_encode(16, HOURS_WEIGHTS))
+    # ic(bcd_decode(irig_list, HOURS_WEIGHTS))
 
