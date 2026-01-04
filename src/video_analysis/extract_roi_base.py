@@ -179,7 +179,7 @@ def process_video(video_path, roi_box):
 # MAIN
 # ---------------------------------------------------
 if __name__ == "__main__":
-    video_file = "input.h264"
+    video_file = "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/rpi/CT014_2025-12-16_153200/CT014_2025-12-16_153200_cam0_output.h264"
 
     roi_box = choose_frame_and_roi(video_file)
 
