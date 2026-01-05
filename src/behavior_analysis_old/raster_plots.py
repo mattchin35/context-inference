@@ -26,12 +26,12 @@ def plot_event_raster(array: np.ndarray, labels: Iterable[str], linewidths=.75) 
     return fig, ax
 
 
-def generate_session_raster(trial_df: pd.DataFrame, fig_name: str, plot_path: str, timespan: tuple = (0, np.inf),
+def generate_session_raster(session_df: pd.DataFrame, fig_name: str, plot_path: str, timespan: tuple = (0, np.inf),
                             fig_format: str = 'png') -> None:
     """
     Create a raster plot from a single behavior session.
     """
-    cleaned_df = trial_df[session_df['Event'] != 'exit_standby']
+    cleaned_df = session_df[session_df['Event'] != 'exit_standby']
     if timespan[1] == np.inf:
         timespan = (0, np.amax(cleaned_df['Time']))
 
@@ -73,6 +73,10 @@ def colorblock_raster(session_df: pd.DataFrame, fig_name: str, plot_path: str, t
         timespan = (np.amin(cleaned_df['Time']), np.amax(cleaned_df['Time']))
 
     if plot_choices:
+        # for bad code before 2024-09-02
+        # event_list = ['correct_choice_left_patch', 'wrong_choice_left_patch', 'correct_choice_right_patch',
+        #               'wrong_choice_right_patch', 'enter_left_patch', 'enter_right_patch', 'enter_dark_period']
+        # for good code after 2024-09-02
         event_list = ['correct_choice_left_patch', 'wrong_choice_right_patch', 'correct_choice_right_patch',
                       'wrong_choice_left_patch', 'enter_left_patch', 'enter_right_patch', 'enter_dark_period']
         event_array = collect_events.generate_event_array(cleaned_df, event_list, timespan)
@@ -145,32 +149,27 @@ def colorblock_raster(session_df: pd.DataFrame, fig_name: str, plot_path: str, t
     print("Saved raster plot as {}".format(savename))
 
 
-def main1():
-    generate_session_raster(trial_df, sess_id_full + '_raster', figure_path)
-    colorblock_raster(trial_df, sess_id_full + '_lick_context_raster', figure_path, plot_choices=False)
-    colorblock_raster(trial_df, sess_id_full + '_choice_context_raster', figure_path, plot_choices=True)
-
-
-def plot_session():
-    data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/')
-    raw_behavior_folder = data_home / 'rpi/CT014_2025-12-16_153200'
-    processed_data_path = data_home / 'processed'
-    figure_path = data_home / 'figures'
-
-    mouse = 'CT014'
-    date = '2025-12-16'
-    timestamp = '153200'
-    sess_id = mouse + '_' + date
-    sess_id_full = mouse + '_' + date + '_' + timestamp
-    trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',')
-
-    if not figure_path.exists():
-        figure_path.mkdir()
-
-    generate_session_raster(trial_df, sess_id_full + '_raster', figure_path)
-    colorblock_raster(trial_df, sess_id_full + '_lick_context_raster', figure_path, plot_choices=False)
-    colorblock_raster(trial_df, sess_id_full + '_choice_context_raster', figure_path, plot_choices=True)
-
-
 if __name__ == '__main__':
-    plot_session()
+    # data_path = Path('../../data/raw/Mitch_behavior')
+    data_path = Path('../../data/processed') / 'cleaned_sessions'
+    figure_path = Path('../../reports/figures')
+    # plot_path = Path('../../reports/figures/F31_Apr2024')
+
+    """Analyze the data from a single mouse session"""
+    mouse = 'HD006'
+    date = '2024-09-07'  # '2023-08-18'
+    sess_ID = mouse + '_' + date
+
+    # df = fileIO.load(sess_ID, data_path, load_cleaned=False)
+    df = fileIO.load_cleaned_data(sess_ID, data_path)
+    print(df)
+    # generate_session_raster(df, sess_ID + '_raster', plot_path)
+    # plot_path = figure_path / mouse / 'raster_plots'
+    plot_path = figure_path / 'WIP_Mar2025'
+    # plot_path = figure_path / sess_ID
+    if not plot_path.exists():
+        plot_path.mkdir()
+
+    # generate_session_raster(df, sess_ID + '_raster', plot_path)
+    colorblock_raster(df, sess_ID + '_context_raster', plot_path, plot_choices=False, timespan=(0, 1000))
+    colorblock_raster(df, sess_ID + '_choice_context_raster', plot_path, plot_choices=True)

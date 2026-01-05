@@ -51,7 +51,7 @@ def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
     # decoded = [item for item in decoded if item is not None]
 
     print(f'List spliced! Splices: {len(posix_decoded)}')
-    return posix_decoded, frame_ix
+    return posix_decoded, datetime_decoded, frame_ix
 
 
 file_path = Path.home() / 'Documents/ephys_transfer' / 'treadmill_20251008' / 'CoolTerm Capture (Untitled_0) 2025-10-21 12-36-20-447.txt'
@@ -111,7 +111,6 @@ df['cumulative_time'] = cumulative_time
 # time_ix = df['cumulative_time'] < endtime
 # plt.plot(df['cumulative_time'][time_ix & irig_ix], df['value'][time_ix & irig_ix], drawstyle='steps')
 # plt.show()
-
 
 
 irig_bit_ix = irig_ix & (df['value'] == 'HIGH')
