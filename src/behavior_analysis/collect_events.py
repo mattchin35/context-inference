@@ -57,8 +57,8 @@ def get_stimulus_events(df: pd.DataFrame, event_list: list=[]) -> list:
         if re.fullmatch('LED_.*', e):
             event_list.append(e)
 
-        # elif re.fullmatch('stimulus_.*', e):
-        #     event_list.append(e)
+        elif re.fullmatch('stimulus_.*', e):# and session_info['visual_stimulus']:
+            event_list.append(e)
         
     return event_list
 

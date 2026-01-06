@@ -5,9 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from typing import Iterable
 from pathlib import Path
-from icecream import ic
-import fileIO
-import collect_events
+from src.behavior_analysis import collect_events
 import re
 import pickle as pkl
 
@@ -31,7 +29,7 @@ def generate_session_raster(event_df: pd.DataFrame, session_info: dict,
                             fig_name: str, plot_path: str, timespan: tuple = (0, np.inf),
                             fig_format: str = 'png') -> None:
     assert fig_format in ['png', 'pdf', 'svg', 'jpg'], "Provide a valid figure format. Choose from png, pdf, svg, jpg"
-    event_df = event_df[event_df['Event'] != 'exit_standby']
+    event_df = event_df[event_df['Event'] != 'exit_standby']  #potentially not needed
     if timespan[1] == np.inf:
         timespan = (np.amin(event_df['Time']), np.amax(event_df['Time']))
 
@@ -157,11 +155,6 @@ def colorblock_raster(event_df: pd.DataFrame, fig_name: str, plot_path: str, ses
 
     plt.close('all')
     print("Saved raster plot as {}".format(savename))
-
-
-def main1():
-    colorblock_raster(trial_df, sess_id_full + '_lick_context_raster', figure_path, plot_choices=False)
-    colorblock_raster(trial_df, sess_id_full + '_choice_context_raster', figure_path, plot_choices=True)
 
 
 def plot_session():

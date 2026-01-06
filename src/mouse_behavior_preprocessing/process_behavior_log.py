@@ -4,9 +4,8 @@ import re
 from typing import Optional
 from pathlib import Path
 import pickle as pkl
-import collect_events
+from src.behavior_analysis import collect_events
 from collections import OrderedDict
-import pynapple as nap
 
 
 """
@@ -62,6 +61,7 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[l
     df = df[df['Time'] - exit_standby_time >= 0]  # use this to keep unix times - needed for synchronization with ephys + treadmill
     df.reset_index(inplace=True, drop=True)
     assert df.iloc[0]['Event'] == 'exit_standby', "First event should be 'exit_standby'"
+    df = df[df['Time'] - exit_standby_time > 0]  # once you have the relevant events, throw out exit-standby to keep in-session bits
 
     # Could replace event names or extract specific keys to filter events dictionary - deleted here, but available
     # in "behavior_analysis_old/fileIO" if I need that functionality back

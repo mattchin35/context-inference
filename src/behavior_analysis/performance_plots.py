@@ -6,10 +6,6 @@ from typing import Iterable
 from pathlib import Path
 from icecream import ic
 import re
-import os
-import fileIO
-import collect_events
-import session_overview
 import session_analysis
 
 
@@ -281,7 +277,7 @@ def main_multiple_sessions():
     overall_df = pd.read_csv(processed_data_path / mouse[0] / (mouse[0] + '_overall_performance.csv'))
     overall_df.sort_values(by='date', inplace=True)
     # plot_learning_curve(overall_df['slope'], overall_df['n_switches'], figure_id=mouse[0], plot_path=mouse_plot_path)
-    plot_learning_curve(overall_df['slope'], overall_df['n_switches'], figure_id=mouse[0], plot_path=processed_data_path / mouse[0] )
+    plot_learning_curve(overall_df['slope'], overall_df['n_switches'], figure_id=mouse[0], plot_path=processed_data_path / mouse[0])
 
 
 def main():
