@@ -9,6 +9,7 @@ from icecream import ic
 import fileIO
 import collect_events
 import re
+import pickle as pkl
 
 
 def plot_event_raster(array: np.ndarray, labels: Iterable[str], linewidths=.75) -> plt.Figure:
@@ -26,27 +27,28 @@ def plot_event_raster(array: np.ndarray, labels: Iterable[str], linewidths=.75) 
     return fig, ax
 
 
-def generate_session_raster(trial_df: pd.DataFrame, fig_name: str, plot_path: str, timespan: tuple = (0, np.inf),
+def generate_session_raster(event_df: pd.DataFrame, session_info: dict,
+                            fig_name: str, plot_path: str, timespan: tuple = (0, np.inf),
                             fig_format: str = 'png') -> None:
-    """
-    Create a raster plot from a single behavior session.
-    """
-    cleaned_df = trial_df[session_df['Event'] != 'exit_standby']
+    assert fig_format in ['png', 'pdf', 'svg', 'jpg'], "Provide a valid figure format. Choose from png, pdf, svg, jpg"
+    event_df = event_df[event_df['Event'] != 'exit_standby']
     if timespan[1] == np.inf:
-        timespan = (0, np.amax(cleaned_df['Time']))
+        timespan = (np.amin(event_df['Time']), np.amax(event_df['Time']))
 
     event_list = ['left_entry', 'right_entry']
-    event_list = collect_events.get_choice_events(cleaned_df, event_list)
-    event_list = collect_events.get_context_events(cleaned_df, event_list)
-    event_list += ['giving_reward']
-    event_list += ['stimulus_A_on', 'stimulus_B_on']
-    event_labels = np.array(collect_events.make_event_labels(event_list))
-    event_array = collect_events.generate_event_array(cleaned_df, event_list, timespan)
+    event_list = collect_events.get_choice_events(event_df, event_list)
+    event_list = collect_events.get_context_events(event_df, event_list)
+    event_list = collect_events.get_reward_events(event_df, event_list)
+    # event_list += ['stimulus_A_on', 'stimulus_B_on']
+
+    event_labels = np.array(collect_events.make_event_labels(event_list, session_info))
+    event_array = collect_events.generate_event_array(event_df, event_list, timespan)
 
     # remove events to simplify visualization
     ix_no_reward = [i for i, e in enumerate(event_list) if re.findall('reward_amount: 0', e)]  # remove reward 0
     ix_wrong_choice = [i for i, e in enumerate(event_list) if re.findall('wrong_choice', e)]
-    ix_remove = np.concatenate((ix_no_reward, ix_wrong_choice)).astype(int)
+    ix_trial_t = [i for i, e in enumerate(event_list) if re.findall('trial_', e)]
+    ix_remove = np.concatenate((ix_no_reward, ix_wrong_choice, ix_trial_t)).astype(int)
 
     event_labels = np.delete(event_labels, ix_remove)
     event_array = np.delete(event_array, ix_remove, axis=0)
@@ -55,12 +57,12 @@ def generate_session_raster(trial_df: pd.DataFrame, fig_name: str, plot_path: st
     # plt.show()
     savename = os.path.join(plot_path, '{}.{}'.format(fig_name, fig_format))
     raster_figure.savefig(savename, format=fig_format)
-    plt.close('all')
     print("Saved raster plot as {}".format(savename))
+    plt.close('all')
 
 
-def colorblock_raster(session_df: pd.DataFrame, fig_name: str, plot_path: str, timespan: tuple = (0, np.inf),
-                      fig_format: str = 'png', plot_choices=False) -> None:
+def colorblock_raster(event_df: pd.DataFrame, fig_name: str, plot_path: str, session_info: dict,
+                      timespan: tuple = (0, np.inf), fig_format: str = 'png', plot_choices=False) -> None:
     """
     Create a raster plot from a single behavior session.
     """
@@ -68,30 +70,42 @@ def colorblock_raster(session_df: pd.DataFrame, fig_name: str, plot_path: str, t
     # 'right': 'cyan', 'left': 'darkgreen', 0: 'cyan', 1: 'darkkhaki'}
     state_dict = {0: 'right', 1: 'left'}
 
-    cleaned_df = session_df[session_df['Event'] != 'exit_standby']
+    cleaned_df = event_df[event_df['Event'] != 'exit_standby']
     if timespan[1] == np.inf:
         timespan = (np.amin(cleaned_df['Time']), np.amax(cleaned_df['Time']))
 
     if plot_choices:
         event_list = ['correct_choice_left_patch', 'wrong_choice_right_patch', 'correct_choice_right_patch',
-                      'wrong_choice_left_patch', 'enter_left_patch', 'enter_right_patch', 'enter_dark_period']
+                      'wrong_choice_left_patch', 'enter_left_patch', 'enter_right_patch']
+        if session_info['use_dark_period']:
+            event_list += ['enter_dark_period']
         event_array = collect_events.generate_event_array(cleaned_df, event_list, timespan)
 
         left_choice = np.concatenate([event_array[0], event_array[1]])
         right_choice = np.concatenate([event_array[2], event_array[3]])
-        event_array = [left_choice, right_choice, event_array[4], event_array[5], event_array[6]]
-        event_labels = ['Left\nchoice', 'Right\nchoice', 'enter left patch', 'enter right patch', 'enter dark period']
+        event_array = [left_choice, right_choice, event_array[4], event_array[5]]
+        event_labels = ['Left\nchoice', 'Right\nchoice', 'enter left patch', 'enter right patch']
+        if session_info['use_dark_period']:
+            event_array += [event_array[6]]
+            event_labels += ['enter dark period']
         linewidths = 0.3
 
     else:
-        event_list = ['left_entry', 'right_entry', 'enter_left_patch', 'enter_right_patch', 'enter_dark_period']
-        event_labels = ['Left\nlick', 'Right\nlick', 'enter left patch', 'enter right patch', 'enter dark period']
+        event_list = ['left_entry', 'right_entry', 'enter_left_patch', 'enter_right_patch']
+        event_labels = ['Left\nlick', 'Right\nlick', 'enter left patch', 'enter right patch']
+        if session_info['use_dark_period']:
+            event_list += ['enter dark period']
+            event_labels += ['enter dark period']
+
         event_array = collect_events.generate_event_array(cleaned_df, event_list, timespan)
         linewidths = 0.2
 
     end_time = np.amax([np.amax([np.amax(e) for e in event_array]), timespan[1]])
 
-    states = ['left active'] * len(event_array[2]) + ['right active'] * len(event_array[3]) + ['dark period'] * len(event_array[4])
+    states = ['left active'] * len(event_array[2]) + ['right active'] * len(event_array[3])
+    if session_info['use_dark_period']:
+        states + ['dark period'] * len(event_array[4])
+
     state_times = np.concatenate(event_array[2:])
     state_sort_ix = np.argsort(state_times)
     states = np.array(states)[state_sort_ix]
@@ -146,7 +160,6 @@ def colorblock_raster(session_df: pd.DataFrame, fig_name: str, plot_path: str, t
 
 
 def main1():
-    generate_session_raster(trial_df, sess_id_full + '_raster', figure_path)
     colorblock_raster(trial_df, sess_id_full + '_lick_context_raster', figure_path, plot_choices=False)
     colorblock_raster(trial_df, sess_id_full + '_choice_context_raster', figure_path, plot_choices=True)
 
@@ -162,15 +175,21 @@ def plot_session():
     timestamp = '153200'
     sess_id = mouse + '_' + date
     sess_id_full = mouse + '_' + date + '_' + timestamp
+    event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',')
     trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',')
+    session_log = raw_behavior_folder / '{}.log'.format(sess_id_full)
+    session_info_path = '{}_session_info.pkl'.format(sess_id_full)
+    with open(raw_behavior_folder / session_info_path, 'rb') as f:
+        session_info = pkl.load(f)
 
     if not figure_path.exists():
         figure_path.mkdir()
 
-    generate_session_raster(trial_df, sess_id_full + '_raster', figure_path)
-    colorblock_raster(trial_df, sess_id_full + '_lick_context_raster', figure_path, plot_choices=False)
-    colorblock_raster(trial_df, sess_id_full + '_choice_context_raster', figure_path, plot_choices=True)
+    generate_session_raster(event_df, session_info=session_info, fig_name=sess_id_full + '_raster', plot_path=figure_path, fig_format='png')
+    colorblock_raster(event_df, sess_id_full + '_lick_context_raster', session_info=session_info, plot_path=figure_path, plot_choices=False)
+    colorblock_raster(event_df, sess_id_full + '_choice_context_raster', session_info=session_info, plot_path=figure_path, plot_choices=True)
 
 
 if __name__ == '__main__':
     plot_session()
+

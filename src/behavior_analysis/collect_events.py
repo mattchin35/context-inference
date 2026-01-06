@@ -63,9 +63,16 @@ def get_stimulus_events(df: pd.DataFrame, event_list: list=[]) -> list:
     return event_list
 
 
-def make_event_labels(events: list) -> list:
+def make_event_labels(events: list, session_info: dict) -> list:
     event_labels = [s.replace('_', ' ') for s in events]
-    event_labels = [s.replace('pump1', 'left') for s in event_labels]
-    event_labels = [s.replace('pump2', 'right') for s in event_labels]
+    if session_info['ephys_rig']:
+        right_pump_regex = re.compile("pump3.*")
+        left_pump_regex = re.compile("pump2.*")
+    else:
+        right_pump_regex = re.compile("pump2.*")
+        left_pump_regex = re.compile("pump1.*")
+
+    event_labels = ["right pump" if re.fullmatch(right_pump_regex, item) else item for item in event_labels]
+    event_labels = ["left pump" if re.fullmatch(left_pump_regex, item) else item for item in event_labels]
     return event_labels
 
