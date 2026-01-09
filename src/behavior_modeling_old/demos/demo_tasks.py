@@ -23,6 +23,7 @@ def run_figure_1_data(params, agent_name, max_rewards=6):
 
         # need to reset task and agent between runs
         params.fixed_block_lengths = [rewards_before_switch, 50]
+
         performance_df = collect_agent_performance(params, agent_name, n_agents=2)
         save_collected_runs(performance_df, agent_name, session_name)
 
@@ -37,7 +38,8 @@ def get_demo_action(task, agent):
     return action, agent
 
 
-def select_agent(agent_name: str, params: MDP.TaskParams) -> MDP.MarkovDecisionProcess:
+def select_agent(agent_name: str, params: MDP.TaskParams) -> \
+        MDP.MarkovDecisionProcess:
     if agent_name == 'HMM':
         agent = agents.HMM(params)
     elif agent_name == 'HMM_RFLR':
@@ -88,6 +90,7 @@ def run_demo_task_cycle(task: MDP.MarkovDecisionProcess, agent: agents.BehaviorA
         reward = task.params.mean_correct_reward
 
     agent.update_params(action, reward)
+
     performance['action'].append(action)
     performance['correct'].append(correct)
     performance['reward'].append(reward)

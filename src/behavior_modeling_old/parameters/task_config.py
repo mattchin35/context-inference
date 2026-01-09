@@ -1,6 +1,7 @@
 import numpy as np
+
 from dataclasses import dataclass, field
-from typing import Protocol, Optional, Union
+from typing import Protocol, List, Tuple, Optional, Union
 from abc import ABC
 import copy
 
@@ -61,7 +62,6 @@ class AgentParams:
     greedy_epsilon: float = .1
     action_temperature: float = 1
 
-    # Forgetting Q-learning parameters...
     logistic_alpha: float = 1  # default 1
     logistic_beta: float = 2  # default 2
     logistic_tau: float = 1.5  # default 1.5

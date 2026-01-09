@@ -264,6 +264,7 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
                 trial_dict['led_off_time'] = cur_time
 
     # assert -1 not in actions, "Action list contains -1s, which means there are unaccounted for events."
+    # alternately, use -1 to represent trials to skip - noise, given rewards, etc. NONE doesn't show up in spreadsheets
     event_df = pd.DataFrame(trial_list)
     return event_df
 

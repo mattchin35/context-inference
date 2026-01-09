@@ -17,6 +17,11 @@ import session_overview
 
 """
 This was code to analyze changes from block to block, but it needs to be refactored.
+
+Goals of this file:
+1. Block-summary analyses, of things like nswitches (raw and normalized), trials to correct, block type, etc
+2. Raw-data block summaries, for things with multiple features (time to choice each trial, 
+
 """
 
 

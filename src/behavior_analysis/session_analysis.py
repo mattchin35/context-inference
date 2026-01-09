@@ -102,6 +102,22 @@ def summarize_trials_to_correct(block_performance: pd.DataFrame) -> dict:
                 overall_trials_to_correct=overall)
 
 
+def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
+    # handle any give_reward trials
+    actions = trial_df['action'].values
+    rewards = trial_df['reward'].values
+    for i, a in enumerate(actions):
+        if a is None or a == -1:
+            try:
+                actions[i] = actions[i - 1]
+            except IndexError:
+                actions[i] = actions[i + 1]
+
+    n_switches = np.sum(np.abs(np.diff(trial_df['action'])))
+    normalized_switches = n_switches / (trial_df.shape[0] - 1)  # must subtract 1 for n-1 opportunites to switch
+    return n_switches, normalized_switches
+
+
 def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     """
     Get trial decision variables, use them to create/modify an augmented trial_df.
@@ -112,6 +128,7 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     # collect decision variables - need to add these to a df of augmented trials
     decision_vars = count_decision_variables(trial_df)
     augmented_trial_df = pd.concat([trial_df, decision_vars], axis=1)
+    augmented_trial_df['time_to_choice'] = augmented_trial_df['choice_time'] - augmented_trial_df['start_time']
 
     # get block qualities: trials-to-switch, consecutive rewards, other augmentations. Add new variables here too
     blocks = np.unique(trial_df['cur_block'])
@@ -123,16 +140,30 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
         cur_block_df = augmented_trial_df[cur_block_ix]
 
         performance = percent_correct(cur_block_df)
+        n_switches, normalized_switches = get_block_switches(cur_block_df)
         correct_ix = np.nonzero(cur_block_df['correct'])[0]
         if correct_ix.size:
             trials_to_correct = correct_ix[0]
         else:
             trials_to_correct = np.nan  # for could occur on last block in session, or when the task switches to dark mode
 
-        performance = dict(block_ix=b, block_type=cur_block_df['block_type'].values[0], trials_to_correct=trials_to_correct,
-                           consecutive_rewards=cur_block_df['consecutive_rewards'].values[0],
+        # performance = dict(block_ix=b, block_type=cur_block_df['block_type'].values[0], trials_to_correct=trials_to_correct,
+        #                    consecutive_rewards=cur_block_df['consecutive_rewards'].values[0],
+        #                    percent_correct=performance['overall_correct'],
+        #                    session_ID=sess_id)
+        performance = dict(block_ix=b, block_type=cur_block_df['block_type'].values[0],
+                           trials_to_correct=trials_to_correct,
+                           prev_consecutive_rewards=cur_block_df['consecutive_rewards'].values[0],
+                           prev_consecutive_rewards_memory=cur_block_df['consecutive_rewards_memory'].values[0],
+                           n_switches=n_switches,
+                           normalized_switches=normalized_switches,
+                           n_correct=np.sum(cur_block_df['correct']),
                            percent_correct=performance['overall_correct'],
+                           n_rewarded=np.sum(cur_block_df['reward']),
+                           mean_choice_time=np.mean(cur_block_df['choice_time']),
+                           median_choice_time=np.median(cur_block_df['choice_time']),
                            session_ID=sess_id)
+
         block_performance.append(performance)
 
     block_performance = pd.DataFrame(block_performance)
@@ -227,17 +258,22 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
         session_performance.to_csv(overall_fname, index=False)
 
 
-def load_analysis(mouse: str, date: str, data_path: Path) -> tuple:
-    sess_ID = mouse + '_' + date
-    block_performance = pd.read_csv(data_path / mouse / (sess_ID + '_block_performance.csv'))
-    choices_df = pd.read_csv(data_path / mouse / (sess_ID + '_choices.csv'))
-    overall_df = pd.read_csv(data_path / mouse / (mouse + '_overall_performance.csv'))
-    return overall_df, block_performance, choices_df
+def load_analysis(sess_id_full: str, session_data_folder: Path, multisession_data_folder: Path) -> tuple:
+    pattern = r'(\w+)_([\d\-]+)_(\d+)'
+    match = re.search(pattern, sess_id_full)
+    mouse, date, timestamp = match.groups()
+    print(f"Mouse id: {mouse}")  # abc
+    print(f"Date: {date}")  # YYYY-MM-DD
+    print(f"Time: {timestamp}")  # HHMMSS
+
+    block_performance = pd.read_csv(session_data_folder / (sess_id_full + '_block_performance.csv'))
+    augmented_trial_df = pd.read_csv(session_data_folder / (sess_id_full + '_augmented_trials.csv'))
+    multisession_df = pd.read_csv(multisession_data_folder / (mouse + '_overall_performance.csv'))
+    return multisession_df, block_performance, augmented_trial_df
 
 
 def main():
     """Analyze the data from a single mouse session"""
-
     data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/')
     sess_id_full = 'CT014_2025-12-16_153200'
     raw_behavior_folder = data_home / 'rpi' / sess_id_full
@@ -249,7 +285,7 @@ def main():
     match = re.search(pattern, sess_id_full)
     if match:
         mouse, date, timestamp = match.groups()
-        print(f"Mouse id: {mouse}")  # abc
+        print(f"Mouse id: {mouse}")  # abc123
         print(f"Date: {date}")  # YYYY-MM-DD
         print(f"Time: {timestamp}")  # HHMMSS
     else:
@@ -262,7 +298,7 @@ def main():
 
     # rewards, mean, std, sem = summarize_block_switches(block_performance, min_counts=0)
     slope, intercept, r_value, p_value = session_stats(dependent_var=block_performance['trials_to_correct'],
-                                                       independent_var=block_performance['consecutive_rewards'])
+                                                       independent_var=block_performance['prev_consecutive_rewards'])
     session_performance['slope'] = slope
     session_performance['intercept'] = intercept
     session_performance['r_value'] = r_value
@@ -270,10 +306,11 @@ def main():
     session_performance['n_switches'] = block_performance.shape[0]
     ic(slope, intercept, r_value, p_value)
 
-    multisession_performance = pd.read_csv(processed_data_path / (sess_id_full + '_.csv'), sep=',')
+    # multisession_performance = pd.read_csv(processed_data_path / (sess_id_full + '_.csv'), sep=',')
+    # save_analysis(session_performance, block_performance, augmented_trial_df,
+    #               sess_id=sess_id_full, session_save_path=processed_data_path, overall_save_path=multi_session_save_path)
 
-    save_analysis(session_performance, block_performance, augmented_trial_df,
-                  sess_id=sess_id_full, session_save_path=processed_data_path, overall_save_path=multi_session_save_path)
+    multisession_df, block_performance, augmented_trial_df = load_analysis(sess_id_full, processed_data_path, multi_session_save_path)
 
     # TODO - allow combining new session analysis with old by replacing dates and sorting the matrix by date.
 

@@ -9,6 +9,10 @@ import logging
 from src.behavior_modeling.parameters import task_config as config
 
 
+"""
+refactor these codes to be independent of a class.
+"""
+
 SEED = 12345
 # np.random.seed(SEED)
 rng = np.random.default_rng(SEED)
@@ -52,6 +56,7 @@ class BehaviorAgent(ABC):
                 action = np.argmax(self.action_dist)
         else:
             action = rng.choice(N_ACTIONS, p=self.action_dist)
+
         return action, self.action_dist.copy()
 
     def update_action_dist(self, action: int) -> None:
@@ -238,7 +243,7 @@ class HMM(BehaviorAgent):
         elif stimulus == 1:  # i.e. left cued context
             p = np.array([0, self.p_cue])
             # p = np.array([0, 1])
-        else:
+        else:  #
             p = np.array([1-self.p_cue, 1-self.p_cue])
             # p = np.array([1, 1])
         return p

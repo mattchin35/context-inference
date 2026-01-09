@@ -28,10 +28,10 @@ def session_stats(df: pd.DataFrame, key: Any, plot=False):
         iv_u = pred_ols.summary_frame()["obs_ci_upper"]
 
         f, ax = plt.subplots()
-        ax.plot(df['consecutive_rewards'], df[key], "o", label="data")
-        ax.plot(df['consecutive_rewards'], results.fittedvalues, "r--.", label="OLS")
-        ax.plot(df['consecutive_rewards'], iv_u, "r--")
-        ax.plot(df['consecutive_rewards'], iv_l, "r--")
+        ax.plot(df['prev_consecutive_rewards'], df[key], "o", label="data")
+        ax.plot(df['prev_consecutive_rewards'], results.fittedvalues, "r--.", label="OLS")
+        ax.plot(df['prev_consecutive_rewards'], iv_u, "r--")
+        ax.plot(df['prev_consecutive_rewards'], iv_l, "r--")
         ax.legend(loc="best")
         plt.show()
 
