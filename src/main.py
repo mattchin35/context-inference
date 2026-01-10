@@ -61,15 +61,24 @@ def analyze_session(trial_df: pd.DataFrame, sess_id_full: str, within_session_da
     session_performance, block_performance, augmented_trial_df = session_analysis.analyze_session(trial_df, mouse=mouse, date=date)
 
     # rewards, mean, std, sem = summarize_block_switches(block_performance, min_counts=0)
-    slope, intercept, r_value, p_value = session_analysis.session_stats(dependent_var=block_performance['trials_to_correct'],
-                                                                        independent_var=block_performance['prev_consecutive_rewards'])
+    if block_performance['trials_to_correct'].iloc[-1] == 'None':
+        ix_valid = block_performance.shape[0] - 1
+        slope, intercept, r_value, p_value = session_analysis.session_stats(
+            dependent_var=block_performance['trials_to_correct'].iloc[:ix_valid].astype(int),
+            independent_var=block_performance['prev_consecutive_rewards'].iloc[:ix_valid])
+    else:
+        slope, intercept, r_value, p_value = session_analysis.session_stats(
+            dependent_var=block_performance['trials_to_correct'],
+            independent_var=block_performance['prev_consecutive_rewards'])
+
     session_performance['slope'] = slope
     session_performance['intercept'] = intercept
     session_performance['r_value'] = r_value
     session_performance['p_value'] = p_value
     session_performance['n_switches'] = block_performance.shape[0]
     session_analysis.save_analysis(session_performance, block_performance, augmented_trial_df,
-                                   sess_id=sess_id_full, session_save_path=within_session_data_path,
+                                   sess_id=sess_id_full,
+                                   session_save_path=within_session_data_path,
                                    overall_save_path=multi_session_save_path)
 
 
@@ -209,6 +218,8 @@ def main():
     multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(sess_id_full,
                                                                                             session_data_folder=processed_data_path,
                                                                                             multisession_data_folder=multi_session_save_path)
+
+
 
 
 if __name__ == '__main__':

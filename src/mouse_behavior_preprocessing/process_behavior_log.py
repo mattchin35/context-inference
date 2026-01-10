@@ -124,17 +124,16 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
                    stimulus_events:list) -> pd.DataFrame:
     """
     Iterate through the events to obtain full descriptions of each trial.
-
     Refactor this later to separate the different if/else cases for code cleanliness.
     """
-    cur_state = None
+    cur_state = 'None'
     cur_state_int = -1
     cur_block = -1
     cur_trial_in_block = -1
     cur_trial = -1
-    cur_stimulus = None
-    block_stimulus = None
-    _action = None
+    cur_stimulus = 'None'
+    block_stimulus = 'None'
+    _action = 'None'
     _correct = 0
     _reward = 0
 
@@ -153,20 +152,20 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
                 cur_state_int = 0
                 cur_block += 1
                 cur_trial_in_block = -1
-                cur_stimulus = None
-                block_stimulus = None
+                cur_stimulus = 'None'
+                block_stimulus = 'None'
             elif e == 'enter_left_patch':
                 cur_state = 'left_patch'
                 cur_state_int = 1
                 cur_block += 1
                 cur_trial_in_block = -1
-                cur_stimulus = None
-                block_stimulus = None
+                cur_stimulus = 'None'
+                block_stimulus = 'None'
             elif e == 'enter_dark_period':
                 cur_state = 'dark_period'
                 cur_state_int = 2
-                cur_stimulus = None
-                block_stimulus = None
+                cur_stimulus = 'None'
+                block_stimulus = 'None'
             elif e == 'trial_start':
                 if trial_dict is not None:
                     trial_list.append(trial_dict)
@@ -211,12 +210,11 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
                 _reward = 0
 
             elif e == 'giving_reward_left_patch':
-                _action = None
+                _action = 'None'
                 _correct = 0
                 _reward = 1
-
             elif e == 'giving_reward_right_patch':
-                _action = None
+                _action = 'None'
                 _correct = 0
                 _reward = 1
 
@@ -244,13 +242,13 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
                 cur_stimulus = 'A'
                 block_stimulus = 'A'
             elif e == 'stimulus_A_off':
-                cur_stimulus = None
+                cur_stimulus = 'None'
                 # block stimulus remains A
             elif e == 'stimulus_B_on':
                 cur_stimulus = 'B'
                 block_stimulus = 'B'
             elif e == 'stimulus_B_off':
-                cur_stimulus = None
+                cur_stimulus = 'None'
                 # block stimulus remains B
             elif e == 'stimulus_C_on':
                 pass  # for C, I might just leave the stimulus as None

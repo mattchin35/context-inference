@@ -8,8 +8,6 @@ from formulaic import model_matrix
 import statsmodels.api as sm
 from icecream import ic
 import statsmodels.formula.api as smf
-# import session_overview
-# import context_switch_analysis
 import scipy as sp
 
 """
@@ -18,10 +16,17 @@ overall AND within each block.
 """
 
 def get_block_types(trial_df: pd.DataFrame) -> np.array:
-    left_cued_ix = (trial_df['state'] == 'left_patch') & (~trial_df['block_stimulus'].isnull())  # left cued
-    left_uncued_ix = (trial_df['state'] == 'left_patch') & (trial_df['block_stimulus'].isnull())  # left uncued
-    right_cued_ix = (trial_df['state'] == 'right_patch') & (~trial_df['block_stimulus'].isnull())  # right cued
-    right_uncued_ix = (trial_df['state'] == 'right_patch') & (trial_df['block_stimulus'].isnull())  # right uncued
+    # left_cued_ix = (trial_df['state'] == 'left_patch') & (~trial_df['block_stimulus'].isnull())  # left cued
+    # left_uncued_ix = (trial_df['state'] == 'left_patch') & (trial_df['block_stimulus'].isnull())  # left uncued
+    # right_cued_ix = (trial_df['state'] == 'right_patch') & (~trial_df['block_stimulus'].isnull())  # right cued
+    # right_uncued_ix = (trial_df['state'] == 'right_patch') & (trial_df['block_stimulus'].isnull())  # right uncued
+
+    uncued_block = trial_df['block_stimulus'] == 'None' # or trial_df['block_stimulus'].isnull()
+    cued_block = ~uncued_block # or trial_df['block_stimulus'].isnull()
+    left_cued_ix = (trial_df['state'] == 'left_patch') & cued_block  # left cued
+    left_uncued_ix = (trial_df['state'] == 'left_patch') & uncued_block  # left uncued
+    right_cued_ix = (trial_df['state'] == 'right_patch') & cued_block  # right cued
+    right_uncued_ix = (trial_df['state'] == 'right_patch') & uncued_block  # right uncued
 
     block_types = np.zeros(trial_df.shape[0], dtype=object)
     block_types[left_cued_ix] = 'left_cued'
@@ -46,22 +51,26 @@ def percent_correct(augmented_trial_df: pd.DataFrame) -> dict:
     if left_cued_ix.sum():
         left_cued_correct = np.sum(augmented_trial_df.loc[left_cued_ix, 'correct']) / np.sum(left_cued_ix)
     else:
-        left_cued_correct = np.nan
+        # left_cued_correct = np.nan
+        left_cued_correct = 'None'
 
     if left_uncued_ix.sum():
         left_uncued_correct = np.sum(augmented_trial_df.loc[left_uncued_ix, 'correct']) / np.sum(left_uncued_ix)
     else:
-        left_uncued_correct = np.nan
+        # left_uncued_correct = np.nan
+        left_uncued_correct = 'None'
 
     if right_cued_ix.sum():
         right_cued_correct = np.sum(augmented_trial_df.loc[right_cued_ix, 'correct']) / np.sum(right_cued_ix)
     else:
-        right_cued_correct = np.nan
+        # right_cued_correct = np.nan
+        right_cued_correct = 'None'
 
     if right_uncued_ix.sum():
         right_uncued_correct = np.sum(augmented_trial_df.loc[right_uncued_ix, 'correct']) / np.sum(right_uncued_ix)
     else:
         right_uncued_correct = np.nan
+        right_uncued_correct = 'None'
 
     overall = np.sum(augmented_trial_df['correct']) / augmented_trial_df.shape[0]
     return dict(left_cued_correct=left_cued_correct, left_uncued_correct=left_uncued_correct,
@@ -76,25 +85,43 @@ def summarize_trials_to_correct(block_performance: pd.DataFrame) -> dict:
     right_cued_ix = block_performance['block_type'] == 'right_cued'
     right_uncued_ix = block_performance['block_type'] == 'right_uncued'
 
-    if np.sum(left_cued_ix) == 0:
-        left_cued_trials = np.nan
-    else:
-        left_cued_trials = np.mean(block_performance.loc[left_cued_ix, 'trials_to_correct'])
+    # condition to handle - last block may have no correct choices (lack of engagement, didn't get it right before session end)
+    # handle by removing this block entirely from overall summary as incomplete data
+    if block_performance['trials_to_correct'].iloc[-1] == 'None':
+        ix_valid = block_performance.shape[0] - 1
+        block_performance = block_performance.iloc[:ix_valid]
+        left_cued_ix = left_cued_ix.iloc[:ix_valid]
+        left_uncued_ix = left_uncued_ix.iloc[:ix_valid]
+        right_cued_ix = right_cued_ix.iloc[:ix_valid]
+        right_uncued_ix = right_uncued_ix.iloc[:ix_valid]
 
-    if np.sum(left_uncued_ix) == 0:
-        left_uncued_trials = np.nan
-    else:
-        left_uncued_trials = np.mean(block_performance.loc[left_uncued_ix, 'trials_to_correct'])
+    try:
+        if np.sum(left_cued_ix) == 0:
+            # left_cued_trials = np.nan
+            left_cued_trials = 'None'
+        else:
+            left_cued_trials = np.mean(block_performance.loc[left_cued_ix, 'trials_to_correct'])
 
-    if np.sum(right_cued_ix) == 0:
-        right_cued_trials = np.nan
-    else:
-        right_cued_trials = np.mean(block_performance.loc[right_cued_ix, 'trials_to_correct'])
+        if np.sum(left_uncued_ix) == 0:
+            # left_uncued_trials = np.nan
+            left_uncued_trials = 'None'
+        else:
+            left_uncued_trials = np.mean(block_performance.loc[left_uncued_ix, 'trials_to_correct'])
 
-    if np.sum(right_uncued_ix) == 0:
-        right_uncued_trials = np.nan
-    else:
-        right_uncued_trials = np.mean(block_performance.loc[right_uncued_ix, 'trials_to_correct'])
+        if np.sum(right_cued_ix) == 0:
+            # right_cued_trials = np.nan
+            right_cued_trials = 'None'
+        else:
+            right_cued_trials = np.mean(block_performance.loc[right_cued_ix, 'trials_to_correct'])
+
+        if np.sum(right_uncued_ix) == 0:
+            # right_uncued_trials = np.nan
+            right_uncued_trials = 'None'
+        else:
+            right_uncued_trials = np.mean(block_performance.loc[right_uncued_ix, 'trials_to_correct'])
+
+    except Exception as e:
+        print(e)
 
     overall = np.mean(block_performance['trials_to_correct'])
     return dict(left_cued_trials_to_correct=left_cued_trials, left_uncued_trials_to_correct=left_uncued_trials,
@@ -104,16 +131,17 @@ def summarize_trials_to_correct(block_performance: pd.DataFrame) -> dict:
 
 def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
     # handle any give_reward trials
-    actions = trial_df['action'].values
-    rewards = trial_df['reward'].values
+    actions = np.copy(trial_df['action'].values)
+    rewards = np.copy(trial_df['reward'].values)
     for i, a in enumerate(actions):
-        if a is None or a == -1:
+        if a in ['None', -1]:
             try:
                 actions[i] = actions[i - 1]
             except IndexError:
                 actions[i] = actions[i + 1]
 
-    n_switches = np.sum(np.abs(np.diff(trial_df['action'])))
+    actions = actions.astype(int)
+    n_switches = np.sum(np.abs(np.diff(actions)))
     normalized_switches = n_switches / (trial_df.shape[0] - 1)  # must subtract 1 for n-1 opportunites to switch
     return n_switches, normalized_switches
 
@@ -145,7 +173,7 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
         if correct_ix.size:
             trials_to_correct = correct_ix[0]
         else:
-            trials_to_correct = np.nan  # for could occur on last block in session, or when the task switches to dark mode
+            trials_to_correct = 'None' #np.nan  # could occur on last block in session, or when the task switches to dark mode
 
         # performance = dict(block_ix=b, block_type=cur_block_df['block_type'].values[0], trials_to_correct=trials_to_correct,
         #                    consecutive_rewards=cur_block_df['consecutive_rewards'].values[0],
@@ -160,8 +188,9 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
                            n_correct=np.sum(cur_block_df['correct']),
                            percent_correct=performance['overall_correct'],
                            n_rewarded=np.sum(cur_block_df['reward']),
-                           mean_choice_time=np.mean(cur_block_df['choice_time']),
-                           median_choice_time=np.median(cur_block_df['choice_time']),
+                           mean_choice_time=np.mean(cur_block_df['choice_time']-cur_block_df['start_time']),
+                           median_choice_time=np.median(cur_block_df['choice_time']-cur_block_df['start_time']),
+                           std_choice_time=np.std(cur_block_df['choice_time']-cur_block_df['start_time']),
                            session_ID=sess_id)
 
         block_performance.append(performance)
@@ -174,9 +203,13 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     return session_performance, block_performance, augmented_trial_df
 
 
-def count_decision_variables(event_df: pd.DataFrame) -> pd.DataFrame:
-    """Collect the decision variables for each trial; DVs reflect the trial history that influence choices,
-    and so do not include rewards and actions from the current trial."""
+def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Collect the decision variables for each trial; DVs reflect the trial history that influence choices,
+    and so do not include rewards and actions from the current trial.
+
+    Trials with experimenter-given rewards will not accumulate DV value.
+    """
     consecutive_rewards = 0
     consecutive_failures = 0
     consecutive_rewards_memory = 0
@@ -184,7 +217,7 @@ def count_decision_variables(event_df: pd.DataFrame) -> pd.DataFrame:
     negative_value = 0
     previous_trial_rewarded = False
 
-    n_trials = event_df.shape[0]
+    n_trials = trial_df.shape[0]
     decision_variable_dict = defaultdict(list)
 
     # need 2 sets of counts
@@ -197,7 +230,12 @@ def count_decision_variables(event_df: pd.DataFrame) -> pd.DataFrame:
         decision_variable_dict['consecutive_rewards'].append(consecutive_rewards)
         decision_variable_dict['consecutive_failures'].append(consecutive_failures)
 
-        reward = event_df.loc[i, 'reward']
+        # Don't update DVs for trials with experimenter-given rewards. These trials shouldn't be included in action
+        # prediction models either
+        if trial_df.loc[i, 'action'] == 'None':
+            continue
+
+        reward = trial_df.loc[i, 'reward']
         negative_value = counters.negative_value_counter(negative_value, reward)
         consecutive_rewards = counters.consecutive_reward_counter(consecutive_rewards, reward)
         consecutive_failures = counters.consecutive_fail_counter(consecutive_failures, reward)
@@ -245,11 +283,11 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
     augmented_trial_df.to_csv(session_save_path / (sess_id + '_augmented_trials.csv'), index=False)
     overall_fname = overall_save_path / (mouse + '_overall_performance.csv')
     if overall_fname.exists():
-        overall_df = pd.read_csv(overall_fname)
+        overall_df = pd.read_csv(overall_fname, na_filter=False)
         ix = overall_df['date'] == date
         if ix.any():
             overall_df[ix] = session_performance  # doing it this way allows updates to existing data
-            # overall_df.sort_values('date')  #double-check this when analyzing multiple sessions
+            # overall_df.sort_values('date')  # double-check this when analyzing multiple sessions
         else:
             overall_df = pd.concat([overall_df, session_performance], axis=0)
         overall_df.sort_values(by='date', inplace=True)
@@ -266,14 +304,15 @@ def load_analysis(sess_id_full: str, session_data_folder: Path, multisession_dat
     print(f"Date: {date}")  # YYYY-MM-DD
     print(f"Time: {timestamp}")  # HHMMSS
 
-    block_performance = pd.read_csv(session_data_folder / (sess_id_full + '_block_performance.csv'))
-    augmented_trial_df = pd.read_csv(session_data_folder / (sess_id_full + '_augmented_trials.csv'))
-    multisession_df = pd.read_csv(multisession_data_folder / (mouse + '_overall_performance.csv'))
+    block_performance = pd.read_csv(session_data_folder / (sess_id_full + '_block_performance.csv'), sep=',', na_filter=False)
+    augmented_trial_df = pd.read_csv(session_data_folder / (sess_id_full + '_augmented_trials.csv'), sep=',', na_filter=False)
+    multisession_df = pd.read_csv(multisession_data_folder / (mouse + '_overall_performance.csv'), sep=',', na_filter=False)
     return multisession_df, block_performance, augmented_trial_df
 
 
 def main():
     """Analyze the data from a single mouse session"""
+
     data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/')
     sess_id_full = 'CT014_2025-12-16_153200'
     raw_behavior_folder = data_home / 'rpi' / sess_id_full
@@ -293,12 +332,19 @@ def main():
         return
 
     sess_id_abbreviated = mouse + '_' + date
-    trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',')
+    trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',', na_filter=False)
     session_performance, block_performance, augmented_trial_df = analyze_session(trial_df, mouse=mouse, date=date)
+    if block_performance['trials_to_correct'].iloc[-1] == 'None':
+        ix_valid = block_performance.shape[0] - 1
+        slope, intercept, r_value, p_value = session_stats(dependent_var=block_performance['trials_to_correct'].iloc[:ix_valid].astype(int),
+                                                        independent_var=block_performance['prev_consecutive_rewards'].iloc[:ix_valid])
+    else:
+        slope, intercept, r_value, p_value = session_stats(
+            dependent_var=block_performance['trials_to_correct'],
+            independent_var=block_performance['prev_consecutive_rewards'])
+
 
     # rewards, mean, std, sem = summarize_block_switches(block_performance, min_counts=0)
-    slope, intercept, r_value, p_value = session_stats(dependent_var=block_performance['trials_to_correct'],
-                                                       independent_var=block_performance['prev_consecutive_rewards'])
     session_performance['slope'] = slope
     session_performance['intercept'] = intercept
     session_performance['r_value'] = r_value
@@ -306,11 +352,11 @@ def main():
     session_performance['n_switches'] = block_performance.shape[0]
     ic(slope, intercept, r_value, p_value)
 
-    # multisession_performance = pd.read_csv(processed_data_path / (sess_id_full + '_.csv'), sep=',')
-    # save_analysis(session_performance, block_performance, augmented_trial_df,
-    #               sess_id=sess_id_full, session_save_path=processed_data_path, overall_save_path=multi_session_save_path)
+    save_analysis(session_performance, block_performance, augmented_trial_df,
+                  sess_id=sess_id_full, session_save_path=processed_data_path, overall_save_path=multi_session_save_path)
 
-    multisession_df, block_performance, augmented_trial_df = load_analysis(sess_id_full, processed_data_path, multi_session_save_path)
+    # multisession_performance = pd.read_csv(processed_data_path / (sess_id_full + '_.csv'), sep=',', na_filter=False)
+    # multisession_df, block_performance, augmented_trial_df = load_analysis(sess_id_full, processed_data_path, multi_session_save_path)
 
     # TODO - allow combining new session analysis with old by replacing dates and sorting the matrix by date.
 

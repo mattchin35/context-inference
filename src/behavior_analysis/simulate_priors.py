@@ -91,6 +91,12 @@ def collect_agent_performance(trial_df: pd.DataFrame, agent: model_agents.Behavi
     rel_value = []
     actions = []
     for action, reward in zip(trial_df['action'], trial_df['reward']):
+        if action == 'None':  #skip any give_reward trials! This will also make output shorter, a 'None' needs to be added to this index...
+            action_dist.append(pd.DataFrame([['None', 'None']], columns=['p_right', 'p_left']))
+            rel_value.append('None')
+            actions.append('None')
+            continue
+
         action_dist.append(agent.get_action_dist())
         rel_value.append(agent.value)
         actions.append(np.argmax(agent.get_action_dist()))
@@ -132,7 +138,7 @@ def run_performance_collection():
         session_info = pkl.load(f)
 
     augmented_trial_df_path = processed_data_path / (sess_id_full + '_augmented_trials.csv')
-    augmented_trial_df = pd.read_csv(augmented_trial_df_path, sep=',')
+    augmented_trial_df = pd.read_csv(augmented_trial_df_path, sep=',', na_filter=False)
     params = TaskParams()
 
     # Task general params
@@ -179,6 +185,7 @@ def run_performance_collection():
     augmented_trial_df['HMM_rel_value'] = rel_value
     augmented_trial_df['HMM_greedy_action'] = actions
 
+    # make sure all the "None"s carry over to the augemented trial dataframe!!
     augmented_trial_df.to_csv(augmented_trial_df_path, index=False)
 
 
@@ -210,7 +217,7 @@ def grid_search_priors():
         session_info = pkl.load(f)
 
     trial_df_path = processed_data_path / (sess_id_full + '_augmented_trials.csv')
-    trial_df = pd.read_csv(trial_df_path, sep=',')
+    trial_df = pd.read_csv(trial_df_path, sep=',', na_filter=False)
     params = TaskParams()
 
     # RFLR parameters
@@ -266,6 +273,6 @@ def grid_search_priors():
 
 
 if __name__ == '__main__':
-    # run_performance_collection()
-    grid_search_priors()
+    run_performance_collection()
+    # grid_search_priors()
 
