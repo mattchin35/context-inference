@@ -6,7 +6,7 @@ from collections import defaultdict
 import src.behavior_analysis.decision_variable_counters as counters
 from formulaic import model_matrix
 import statsmodels.api as sm
-from icecream import ic
+# from icecream import ic
 import statsmodels.formula.api as smf
 import scipy as sp
 
@@ -69,7 +69,7 @@ def percent_correct(augmented_trial_df: pd.DataFrame) -> dict:
     if right_uncued_ix.sum():
         right_uncued_correct = np.sum(augmented_trial_df.loc[right_uncued_ix, 'correct']) / np.sum(right_uncued_ix)
     else:
-        right_uncued_correct = np.nan
+        # right_uncued_correct = np.nan
         right_uncued_correct = 'None'
 
     overall = np.sum(augmented_trial_df['correct']) / augmented_trial_df.shape[0]
@@ -163,9 +163,20 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     block_performance = []
     block_types = get_block_types(trial_df)
     augmented_trial_df['block_type'] = block_types
-    for b in blocks:
+    for ix, b in enumerate(blocks):
         cur_block_ix = augmented_trial_df['cur_block'] == b
         cur_block_df = augmented_trial_df[cur_block_ix]
+
+        if ix == 0:
+            prev_n_correct = 'None'
+            prev_n_rewarded = 'None'
+            prev_consecutive_rewards = 'None'
+            prev_consecutive_rewards_memory = 'None'
+        else:
+            prev_n_correct = performance['n_correct']
+            prev_n_rewarded = performance['n_rewarded']
+            prev_consecutive_rewards = cur_block_df['consecutive_rewards'].values[0]
+            prev_consecutive_rewards_memory = cur_block_df['consecutive_rewards_memory'].values[0]
 
         performance = percent_correct(cur_block_df)
         n_switches, normalized_switches = get_block_switches(cur_block_df)
@@ -181,10 +192,13 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
         #                    session_ID=sess_id)
         performance = dict(block_ix=b, block_type=cur_block_df['block_type'].values[0],
                            trials_to_correct=trials_to_correct,
-                           prev_consecutive_rewards=cur_block_df['consecutive_rewards'].values[0],
-                           prev_consecutive_rewards_memory=cur_block_df['consecutive_rewards_memory'].values[0],
+                           prev_consecutive_rewards=prev_consecutive_rewards,
+                           prev_consecutive_rewards_memory=prev_consecutive_rewards_memory,
+                           prev_n_correct=prev_n_correct,
+                           prev_n_rewarded=prev_n_rewarded,
                            n_switches=n_switches,
                            normalized_switches=normalized_switches,
+                           confusion_flag=n_switches > 3,
                            n_correct=np.sum(cur_block_df['correct']),
                            percent_correct=performance['overall_correct'],
                            n_rewarded=np.sum(cur_block_df['reward']),
@@ -334,15 +348,65 @@ def main():
     sess_id_abbreviated = mouse + '_' + date
     trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',', na_filter=False)
     session_performance, block_performance, augmented_trial_df = analyze_session(trial_df, mouse=mouse, date=date)
-    if block_performance['trials_to_correct'].iloc[-1] == 'None':
-        ix_valid = block_performance.shape[0] - 1
-        slope, intercept, r_value, p_value = session_stats(dependent_var=block_performance['trials_to_correct'].iloc[:ix_valid].astype(int),
-                                                        independent_var=block_performance['prev_consecutive_rewards'].iloc[:ix_valid])
-    else:
-        slope, intercept, r_value, p_value = session_stats(
-            dependent_var=block_performance['trials_to_correct'],
-            independent_var=block_performance['prev_consecutive_rewards'])
+    ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
 
+    # if block_performance['trials_to_correct'].iloc[-1] == 'None':
+    #     ix_valid = block_performance.shape[0] - 1
+    slope, intercept, r_value, p_value = session_stats(dependent_var=block_performance['trials_to_correct'][ix_valid].astype(int),
+                                                    independent_var=block_performance['prev_consecutive_rewards'][ix_valid].astype(int))
+    # else:
+    #     slope, intercept, r_value, p_value = session_stats(
+    #         dependent_var=block_performance['trials_to_correct'],
+    #         independent_var=block_performance['prev_consecutive_rewards'])
+
+    """
+    TTS vs prev rewards: condition by confusion (nswitch > 3 or so) 
+    TTS vs rewards by bias (TTS >> block rewards. Could quantify that - TTS / rewards (block, consec, or consec_memory) or TTS - rewards
+    Condition by mean, median or std choice time
+    """
+    # confusion - no changes needed. Greater than 1 is probably confused (3,5,etc)
+    # bias quantities
+    # bias_ratio = block_performance['trials_to_switch'] / block_performance['n_rewarded']
+    # bias_raw = block_performance['trials_to_switch'] - block_performance['n_rewarded']
+    # block_performance['bias_rl'] = np.zeros_like(block_performance['trials_to_correct'])
+    # block_performance['bias_inf'] = np.zeros_like(block_performance['trials_to_correct'])
+    # block_performance['bias_rl_flag'] = np.zeros_like(block_performance['trials_to_correct'])
+    # block_performance['bias_inf_flag'] = np.zeros_like(block_performance['trials_to_correct'])
+    # block_performance['bias_full_flag'] = np.zeros_like(block_performance['trials_to_correct'])
+    # block_performance['bias_rl'][~ix_valid] = 'None'
+    # block_performance['bias_inf'][~ix_valid] = 'None'
+    # block_performance['bias_rl_flag'][~ix_valid] = 'None'
+    # block_performance['bias_inf_flag'][~ix_valid] = 'None'
+    # block_performance['bias_full_flag'][~ix_valid] = 'None'
+    base_array = np.zeros_like(block_performance['trials_to_correct'])
+    base_array[~ix_valid] = 'None'
+
+    # using n_correct for biases as the maximum possible count for value comparison
+    _bias_rl = ((block_performance['trials_to_correct'][ix_valid] - block_performance['prev_n_correct'][ix_valid]) /
+               (block_performance['trials_to_correct'][ix_valid] + block_performance['prev_n_correct'][ix_valid]))
+    bias_rl = base_array.copy()
+    bias_rl[ix_valid] = _bias_rl.to_numpy()
+
+    _bias_inf = (block_performance['trials_to_correct'][ix_valid] - 5) / (block_performance['trials_to_correct'][ix_valid] + 5)
+    bias_inf = base_array.copy()
+    bias_inf[ix_valid] = _bias_inf.to_numpy()
+
+    bias_thresh = .2
+    _bias_rl_flag = _bias_rl > bias_thresh
+    _bias_inf_flag = _bias_inf > bias_thresh
+    _bias_full_flag = _bias_rl_flag & _bias_inf_flag
+    bias_rl_flag = base_array.copy()
+    bias_rl_flag[ix_valid] = _bias_rl_flag.to_numpy()
+    bias_inf_flag = base_array.copy()
+    bias_inf_flag[ix_valid] = _bias_inf_flag.to_numpy()
+    bias_full_flag = base_array.copy()
+    bias_full_flag[ix_valid] = _bias_full_flag.to_numpy()
+
+    block_performance['bias_rl'] = bias_rl
+    block_performance['bias_inf'] = bias_inf
+    block_performance['bias_rl_flag'] = bias_rl_flag
+    block_performance['bias_inf_flag'] = bias_inf_flag
+    block_performance['bias_full_flag'] = bias_full_flag
 
     # rewards, mean, std, sem = summarize_block_switches(block_performance, min_counts=0)
     session_performance['slope'] = slope
@@ -350,10 +414,13 @@ def main():
     session_performance['r_value'] = r_value
     session_performance['p_value'] = p_value
     session_performance['n_switches'] = block_performance.shape[0]
-    ic(slope, intercept, r_value, p_value)
+    # ic(slope, intercept, r_value, p_value)
+    print('slope: {}, intercept: {}, r_value: {}, p_value: {}'.format(slope, intercept, r_value, p_value))
+    block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
+    # augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
 
-    save_analysis(session_performance, block_performance, augmented_trial_df,
-                  sess_id=sess_id_full, session_save_path=processed_data_path, overall_save_path=multi_session_save_path)
+    # save_analysis(session_performance, block_performance, augmented_trial_df,
+    #               sess_id=sess_id_full, session_save_path=processed_data_path, overall_save_path=multi_session_save_path)
 
     # multisession_performance = pd.read_csv(processed_data_path / (sess_id_full + '_.csv'), sep=',', na_filter=False)
     # multisession_df, block_performance, augmented_trial_df = load_analysis(sess_id_full, processed_data_path, multi_session_save_path)

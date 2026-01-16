@@ -2,12 +2,27 @@
 # import raster_plots
 # import fileIO
 import re
-from behavior_analysis import raster_plots, session_analysis
+from behavior_analysis import raster_plots, session_analysis, simulate_priors
 from mouse_behavior_preprocessing import process_behavior_log
 import pickle as pkl
 from pathlib import Path
 import pandas as pd
 from dataclasses import dataclass
+
+@dataclass
+class Session:
+    multi_session_save_path = Path.home()
+    session_data_home = Path.home()
+    sess_id_full = 'mouseid_YYYY-MM-DD_hhmmss'
+    raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
+    processed_data_path = session_data_home / 'processed'
+    figure_path = session_data_home / 'figures'
+    mouse = 'test-mouse'
+    date = '1970-01-01'
+    timestamp = '000000'
+    session_info_fname = '{}_session_info.pkl'.format(sess_id_full)
+    session_info = None
+
 
 
 def preprocess_session_log(raw_behavior_folder: str, processed_data_path: str, sess_id_full: str):
@@ -218,8 +233,6 @@ def main():
     multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(sess_id_full,
                                                                                             session_data_folder=processed_data_path,
                                                                                             multisession_data_folder=multi_session_save_path)
-
-
 
 
 if __name__ == '__main__':

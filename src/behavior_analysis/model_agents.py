@@ -103,8 +103,6 @@ class Qlearning(BehaviorAgent):
 
     def __init__(self, params: TaskParams):
         self.model_type = 'Q-learning'
-        self.greedy_flag = params.greedy_action_selection
-        self.epsilon = params.greedy_epsilon
         self.n_actions = params.n_actions
         self.learning_rate = params.QL_learning_rate
         self.temperature = params.action_temperature
@@ -132,13 +130,9 @@ class ForgettingQlearning(BehaviorAgent):
         self.value = 0  # relative value of L vs R actions
         self.last_action_ix = 0
 
-        self.greedy_flag = params.greedy_action_selection
-        self.epsilon = params.greedy_epsilon
-
         self.stickiness = params.stickiness
         self.temperature = params.action_temperature
         self.decay = params.FQL_decay
-        self.tau = params.weight_decay
 
     def update_params(self, action, reward) -> None:
         # Via Vertechi Neuron 2020
@@ -168,16 +162,13 @@ class Logistic(BehaviorAgent):
         self.value = 0  # relative value of L vs R actions
         self.last_action_ix = 0
 
-        self.greedy_flag = params.greedy_action_selection
-        self.epsilon = params.greedy_epsilon
-
         self.alpha = params.stickiness  # stickiness
         self.beta = params.weight_reward_history  # learning rate
         self.tau = params.weight_decay  # decay parameter
         self.log_odds_L = sp.special.logit(.5)
 
         self.stickiness = params.stickiness
-        self.temperature = params.action_temperature
+        # self.temperature = params.action_temperature
 
     def update_params(self, action, reward) -> None:
         action_ix = get_action_ix(action)  # 1 left, -1 right
@@ -195,13 +186,14 @@ class Logistic(BehaviorAgent):
 class HMM(BehaviorAgent):
 
     def __init__(self, params: TaskParams):
-        assert params.action_temperature > 0, "must have positive temperature"
+        # assert params.action_temperature > 0, "must have positive temperature"
+        assert params.action_temperature >= 0, "must have nonnegative temperature"
+        if params.action_temperature == 0:
+            params.action_temperature += eps
 
         self.model_type = 'HMM'
         self.params = params
         self.temperature = params.action_temperature
-        self.greedy = params.greedy_action_selection
-        self.epsilon = params.greedy_epsilon
         self.stickiness = params.stickiness
         self.transition_prob = params.state_transition_prob
 
@@ -215,9 +207,6 @@ class HMM(BehaviorAgent):
         self.last_action_ix = 0
         self.last_stimulus = 0
         self.last_action = 0
-
-        self.beta = params.weight_reward_history
-        self.tau = params.weight_decay
 
         # self.q = (np.exp(-1 / agent_params.logistic_tau) + 1) / 2  # q, probability of no system state change
         # self.p = sp.special.expit(

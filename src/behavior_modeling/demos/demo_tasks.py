@@ -1,8 +1,8 @@
 from pathlib import Path
-import pickle as pkl
 from typing import Dict, Tuple, Any, Optional
-import logging
 from collections import defaultdict
+import logging
+import pickle as pkl
 
 import numpy as np
 import pandas as pd

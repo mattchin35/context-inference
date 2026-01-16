@@ -92,13 +92,20 @@ def plot_trials_to_correct_summary(block_performance: pd.DataFrame, plot_path: P
 def scatter_trials_to_correct(block_performance: pd.DataFrame, slope: float, intercept: float, plot_path: Path, figure_id: str):
     f1, ax1 = plt.subplots()
     x = np.arange(len(block_performance))
+    ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
+    block_performance = block_performance[ix_valid]
+
+    block_type = block_performance['block_type'].to_numpy()
+    trials_to_correct = block_performance['trials_to_correct'].astype(int).to_numpy()
+    prev_consecutive_rewards = block_performance['prev_consecutive_rewards'].astype(int).to_numpy()
+
     for b in block_types:
-        ix = np.where(block_performance['block_type'] == b)[0]
+        ix = np.where(block_type == b)[0]
         if len(ix) > 0:
-            ax1.plot(block_performance['prev_consecutive_rewards'][ix], block_performance['trials_to_correct'][ix],
+            ax1.plot(prev_consecutive_rewards[ix], trials_to_correct[ix],
                      'o', color=color_dict[b], label=b)
 
-    x = np.array([0, np.amax(block_performance['prev_consecutive_rewards'])])
+    x = np.array([0, np.amax(prev_consecutive_rewards)])
     ax1.plot(x, slope*x + intercept, 'k--')
 
     plt.ylabel('Trials to Correct')
@@ -307,3 +314,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

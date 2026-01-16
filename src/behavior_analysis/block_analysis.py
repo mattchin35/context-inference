@@ -5,10 +5,10 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import fileIO
 import re
-from typing import Iterable
 from pathlib import Path
-from copy import deepcopy
 from collections import OrderedDict
+from typing import Iterable
+from copy import deepcopy
 import pickle as pkl
 import raster_plots
 import collect_events
@@ -17,11 +17,9 @@ import session_overview
 
 """
 This was code to analyze changes from block to block, but it needs to be refactored.
-
 Goals of this file:
 1. Block-summary analyses, of things like nswitches (raw and normalized), trials to correct, block type, etc
 2. Raw-data block summaries, for things with multiple features (time to choice each trial, 
-
 """
 
 
@@ -68,7 +66,6 @@ def _plot_bins(bin_counts, bin_range, bin_centers, transition_list,
 
 
 def plot_binned_behavior(session_df: pd.DataFrame, fig_path, fig_name, bin_range=(0, np.inf), plot=False):
-
     event_list = ['left_entry', 'right_entry']
     event_list = collect_events.get_choice_events(session_df, event_list)
 
@@ -412,3 +409,4 @@ if __name__ == '__main__':
     mice = ['CT002']
     dates = ['2024-08-23']
     sess_ids = [m + '_' + d for m, d in zip(mice, dates)]
+

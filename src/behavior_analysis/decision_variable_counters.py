@@ -2,6 +2,7 @@
 This module contains functions that update the value of a decision variable based on the outcome of a trial.
 Source: Cazettes et al., Nature Neuroscience 2023
 """
+import numpy as np
 
 
 def consecutive_fail_counter(count: int, reward: int):
@@ -61,7 +62,11 @@ def consecutive_reward_renewal_counter(count: int, reward: int, last_rewarded: b
 
 
 def negative_value_counter(count: int, reward: int):
-    if reward == 0:  # failure
+    """
+    This should be a one-sided reward count, so a mouse would switch when the value is too low/the negative
+    value is too high. Increment the count on unrewarded trials.
+    """
+    if reward == 0:  # omission
         g = 1
         c = 1
     else:  # reward
@@ -70,3 +75,4 @@ def negative_value_counter(count: int, reward: int):
 
     count = g * count + c
     return count
+

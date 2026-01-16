@@ -98,12 +98,12 @@ def choice_event_summary(event: str, reward_note: str) -> tuple[int, int, int]:
         reward = 0
 
     elif event == 'giving_reward_left_patch':
-        action = None
+        action = 'None'
         correct = 0
         reward = 1
 
     elif event == 'giving_reward_right_patch':
-        action = None
+        action = 'None'
         correct = 0
         reward = 1
 
@@ -172,12 +172,18 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
 
                 cur_trial += 1
                 cur_trial_in_block += 1
+                # trial_dict = OrderedDict(state=cur_state, state_int=cur_state_int,
+                #                          cur_trial=cur_trial, cur_trial_in_block=cur_trial_in_block,
+                #                          cur_block=cur_block, action=None, correct=None, reward=None,
+                #                          active_stimulus=cur_stimulus, block_stimulus=block_stimulus,
+                #                          start_time=cur_time, choice_time=None, reward_time=None,
+                #                          led_on_time=None, led_off_time=None)
                 trial_dict = OrderedDict(state=cur_state, state_int=cur_state_int,
                                          cur_trial=cur_trial, cur_trial_in_block=cur_trial_in_block,
-                                         cur_block=cur_block, action=None, correct=None, reward=None,
+                                         cur_block=cur_block, action='None', correct='None', reward='None',
                                          active_stimulus=cur_stimulus, block_stimulus=block_stimulus,
-                                         start_time=cur_time, choice_time=None, reward_time=None,
-                                         led_on_time=None, led_off_time=None)
+                                         start_time=cur_time, choice_time='None', reward_time='None',
+                                         led_on_time='None', led_off_time='None')
 
             elif e == 'trial_stop':
                 pass
@@ -291,6 +297,9 @@ def make_trial_df(cleaned_data: pd.DataFrame, session_id: str, save_name: str, o
 
     p_active_rew, p_inactive_rew = session_info['correct_reward_probability'], session_info['incorrect_reward_probability']
     trial_df = iterate_trials(df, context_events, choice_events, reward_events, stimulus_events)
+    st_time = trial_df['start_time'].values[0]
+    trial_df['trial_time_since_start'] = trial_df['start_time'] - st_time
+    trial_df['choice_time_since_start'] = trial_df['choice_time'] - st_time
 
     # add in variables which are constant across all trials or will be updated as the behavior task is updated
     n_trials = len(trial_df['state'])
