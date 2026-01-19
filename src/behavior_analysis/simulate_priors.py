@@ -96,8 +96,9 @@ def collect_agent_performance(trial_df: pd.DataFrame, agent: model_agents.Behavi
     action_dist = []
     rel_value = []
     actions = []
-    for action, reward in zip(trial_df['action'], trial_df['reward']):
-        if action == 'None':  # skip any give_reward trials! This will also make output shorter, a 'None' needs to be added to this index...
+    for action, reward, give_reward in zip(trial_df['action'], trial_df['reward'], trial_df['give_reward']):
+        # if action == 'None':  # skip any give_reward trials! This will also make output shorter, a 'None' needs to be added to this index...
+        if give_reward == 1:  # skip any give_reward trials! This will also make output shorter, a 'None' needs to be added to this index...
             action_dist.append(pd.DataFrame([['None', 'None']], columns=['p_right', 'p_left']))
             rel_value.append('None')
             actions.append('None')

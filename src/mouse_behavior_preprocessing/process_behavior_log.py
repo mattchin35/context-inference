@@ -76,36 +76,43 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[l
     return df
 
 
-def choice_event_summary(event: str, reward_note: str) -> tuple[int, int, int]:
+def choice_event_summary(event: str, reward_note: str) -> tuple[int, int, int, int]:
     # LEFT CHOICES
     if event == 'wrong_choice_right_patch':
         action = 1  # state_dict['left']
         correct = 0
         reward = 0
+        give_reward = 0
     elif event == 'correct_choice_left_patch':
         action = 1  # state_dict['left']
         correct = 1
         reward = 0
+        give_reward = 0
 
     # RIGHT CHOICES
     elif event == 'wrong_choice_left_patch':
         action = 0  # state_dict['right']
         correct = 0
         reward = 0
+        give_reward = 0
     elif event == 'correct_choice_right_patch':
         action = 0  # state_dict['right']
         correct = 1
         reward = 0
+        give_reward = 0
 
     elif event == 'giving_reward_left_patch':
-        action = 'None'
+        # action = 'None'
+        action = 1
         correct = 0
         reward = 1
-
+        give_reward = 1
     elif event == 'giving_reward_right_patch':
-        action = 'None'
+        # action = 'None'
+        action = 0
         correct = 0
         reward = 1
+        give_reward = 1
 
     else:
         raise NameError('Unrecognized choice event: {}'.format(event))
@@ -117,7 +124,7 @@ def choice_event_summary(event: str, reward_note: str) -> tuple[int, int, int]:
     else:
         raise NameError('Unrecognized reward outcome note: {}'.format(reward_note))
 
-    return action, correct, reward
+    return action, correct, reward, give_reward
 
 
 def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: list, reward_events: list,
@@ -179,8 +186,8 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
                 #                          start_time=cur_time, choice_time=None, reward_time=None,
                 #                          led_on_time=None, led_off_time=None)
                 trial_dict = OrderedDict(state=cur_state, state_int=cur_state_int,
-                                         cur_trial=cur_trial, cur_trial_in_block=cur_trial_in_block,
-                                         cur_block=cur_block, action='None', correct='None', reward='None',
+                                         cur_trial=cur_trial, cur_trial_in_block=cur_trial_in_block, cur_block=cur_block,
+                                         action='None', correct='None', reward='None', give_reward='None',
                                          active_stimulus=cur_stimulus, block_stimulus=block_stimulus,
                                          start_time=cur_time, choice_time='None', reward_time='None',
                                          led_on_time='None', led_off_time='None')
@@ -200,29 +207,37 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
                 _action = 1 #state_dict['left']
                 _correct = 0
                 _reward = 0
+                _give_reward = 0
             elif e == 'correct_choice_left_patch':
                 _action = 1 #state_dict['left']
                 _correct = 1
                 _reward = 0
+                _give_reward = 0
 
             # RIGHT CHOICES
             elif e == 'wrong_choice_left_patch':
                 _action = 0  #state_dict['right']
                 _correct = 0
                 _reward = 0
+                _give_reward = 0
             elif e == 'correct_choice_right_patch':
                 _action = 0  #state_dict['right']
                 _correct = 1
                 _reward = 0
+                _give_reward = 0
 
             elif e == 'giving_reward_left_patch':
-                _action = 'None'
+                # _action = 'None'
+                _action = 1
                 _correct = 0
                 _reward = 1
+                _give_reward = 1
             elif e == 'giving_reward_right_patch':
-                _action = 'None'
+                # _action = 'None'
+                _action = 0
                 _correct = 0
                 _reward = 1
+                _give_reward = 1
 
             else:
                 raise NameError('Unrecognized choice event: {}'.format(e))
@@ -238,6 +253,7 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
             trial_dict['action'] = _action
             trial_dict['correct'] = _correct
             trial_dict['reward'] = _reward
+            trial_dict['give_reward'] = _give_reward
 
         elif e in reward_events:
             if re.fullmatch('pump.*', e):

@@ -40,13 +40,13 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
 
     # predictors = prev_rewards
-    predictors = np.concatenate([prev_rewards, n_switches, bias_flag], axis=1)
-    # predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
+    # predictors = np.concatenate([prev_rewards, n_switches, bias_flag], axis=1)
+    predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
     # predictors = np.concatenate([prev_rewards, n_switches], axis=1)
 
     # num states - start with 2, Inf/RL, then do 3 (inf/rl/biased). Would like Inf(maybe lo and hi thresh)/RL/biased/disengaged/confused. I think this is
     # what cross-validation is gonna be for. less is better!
-    num_states = 3
+    num_states = 2
     obs_dim = 1
     input_dim = predictors.shape[1]
 
@@ -287,16 +287,20 @@ def main():
     block_performance = pd.read_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), sep=',',
                                     na_filter=False)
 
-    mle_model_dict, block_performance = mle_block_states(block_performance, figure_path, sess_id_abbreviated, plot=True)
-    # map_model_dict, block_performance = map_block_states(block_performance, figure_path, sess_id_abbreviated, plot=True)
-    block_performance = declare_inferred_strategy(block_performance)
-    augmented_trial_df = trials_inherit_strategy(block_performance, augmented_trial_df)
-
-    # augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
-    # block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
+    # mle_model_dict, block_performance = mle_block_states(block_performance, figure_path, sess_id_abbreviated, plot=True)
     # mle_savename = processed_data_path / (sess_id_full + '_mle_statedict.pkl')
     # with open(mle_savename, 'wb') as file:
     #     pkl.dump(mle_model_dict, file)
+    map_model_dict, block_performance = map_block_states(block_performance, figure_path, sess_id_abbreviated, plot=True)
+    map_savename = processed_data_path / (sess_id_full + '_block_map_statedict.pkl')
+    with open(map_savename, 'wb') as file:
+        pkl.dump(map_model_dict, file)
+
+    block_performance = declare_inferred_strategy(block_performance)
+    block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
+
+    augmented_trial_df = trials_inherit_strategy(block_performance, augmented_trial_df)
+    augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
 
 
 def declare_inferred_strategy(block_df: pd.DataFrame) -> pd.DataFrame:
@@ -326,11 +330,15 @@ def declare_inferred_strategy(block_df: pd.DataFrame) -> pd.DataFrame:
 def trials_inherit_strategy(block_df: pd.DataFrame, trial_df: pd.DataFrame) -> pd.DataFrame:
     block_ix = block_df['block_ix'].to_numpy()
     inherited_strategy = np.zeros(trial_df.shape[0], dtype='object')
+    inherited_bias_flag = np.zeros(trial_df.shape[0], dtype='object')
     inferred_strategy = block_df['inferred_strategy'].to_numpy()
+    bias_flag = block_df['bias_full_flag'].to_numpy()
     for i in block_ix:
         tmp_ix = trial_df['cur_block'].to_numpy() == i
         inherited_strategy[tmp_ix] = inferred_strategy[i]
+        inherited_bias_flag[tmp_ix] = bias_flag[i]
     trial_df['inherited_strategy'] = inherited_strategy
+    trial_df['inherited_bias_flag'] = inherited_bias_flag
     return trial_df
 
 

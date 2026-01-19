@@ -143,7 +143,7 @@ def plot_experiment(states: np.ndarray, actions: np.ndarray, rewards: np.ndarray
     # FIGURE ADJUSTMENTS
     plt.yticks([-1,1],['Right', 'Left'])
     # plt.ylim([-.1,1.1])
-    plt.xticks(bins)
+    plt.xticks(bins,fontsize=8)
     plt.xlim([0, trial_ix[-1]])
     # task_str = 'pReward_{}_pSwitch_{}'.format(0,0)
     # model_str = 'pReward_{}_pSwitch_{}'.format(0,0)

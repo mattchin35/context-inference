@@ -5,7 +5,7 @@ import matplotlib.patches as mpatches
 from pathlib import Path
 import session_analysis
 from typing import Iterable
-from icecream import ic
+# from icecream import ic
 import re
 
 

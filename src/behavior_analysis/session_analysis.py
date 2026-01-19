@@ -4,16 +4,33 @@ import numpy as np
 import re
 from collections import defaultdict
 import src.behavior_analysis.decision_variable_counters as counters
+# import src.behavior_analysis.session_analysis as session_analysis
 from formulaic import model_matrix
 import statsmodels.api as sm
 # from icecream import ic
 import statsmodels.formula.api as smf
 import scipy as sp
+from typing import Protocol
+
 
 """
 Analyze behavior within a single session. Want trials to switch L/R/overall, % correct L/R/overall. Do for sessions
 overall AND within each block.
 """
+
+class Session(Protocol):
+    multi_session_save_path: Path
+    session_data_home: Path
+    sess_id_full: str
+    raw_behavior_folder: Path
+    processed_data_path: Path
+    figure_path: Path
+    mouse: str
+    date: str
+    timestamp: str
+    session_info_fname: str
+    session_info: dict
+
 
 def get_block_types(trial_df: pd.DataFrame) -> np.array:
     # left_cued_ix = (trial_df['state'] == 'left_patch') & (~trial_df['block_stimulus'].isnull())  # left cued
@@ -133,8 +150,10 @@ def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
     # handle any give_reward trials
     actions = np.copy(trial_df['action'].values)
     rewards = np.copy(trial_df['reward'].values)
-    for i, a in enumerate(actions):
-        if a in ['None', -1]:
+    give_reward = np.copy(trial_df['give_reward'].values)
+    for i, (a, g) in enumerate(zip(actions, give_reward)):
+        # if a in ['None', -1]:
+        if g in [1, '1']:
             try:
                 actions[i] = actions[i - 1]
             except IndexError:
@@ -168,10 +187,14 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
         cur_block_df = augmented_trial_df[cur_block_ix]
 
         if ix == 0:
-            prev_n_correct = 'None'
-            prev_n_rewarded = 'None'
-            prev_consecutive_rewards = 'None'
-            prev_consecutive_rewards_memory = 'None'
+            # prev_n_correct = 'None'
+            # prev_n_rewarded = 'None'
+            # prev_consecutive_rewards = 'None'
+            # prev_consecutive_rewards_memory = 'None'
+            prev_n_correct = 0
+            prev_n_rewarded = 0
+            prev_consecutive_rewards = 0
+            prev_consecutive_rewards_memory = 0
         else:
             prev_n_correct = performance['n_correct']
             prev_n_rewarded = performance['n_rewarded']
@@ -214,6 +237,16 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     session_performance = session_performance | summarize_trials_to_correct(block_performance)
     session_performance['date'] = date
     session_performance = pd.DataFrame(session_performance, index=[0])
+
+    prev_action = np.zeros(trial_df.shape[0], dtype='object')
+    prev_reward = np.zeros(trial_df.shape[0], dtype='object')
+    prev_action[0] = 'None'
+    prev_reward[0] = 'None'
+    prev_action[1:] = trial_df['action'].to_numpy()[:-1]
+    prev_reward[1:] = trial_df['reward'].to_numpy()[:-1]
+    augmented_trial_df['prev_action'] = prev_action
+    augmented_trial_df['prev_reward'] = prev_reward
+
     return session_performance, block_performance, augmented_trial_df
 
 
@@ -231,6 +264,12 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
     negative_value = 0
     previous_trial_rewarded = False
 
+    left_value = 0
+    right_value = 0
+    relative_value = 0
+    left_omissions = 0
+    right_omissions = 0
+
     n_trials = trial_df.shape[0]
     decision_variable_dict = defaultdict(list)
 
@@ -243,6 +282,18 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
         decision_variable_dict['consecutive_failures_memory'].append(consecutive_failures_memory)
         decision_variable_dict['consecutive_rewards'].append(consecutive_rewards)
         decision_variable_dict['consecutive_failures'].append(consecutive_failures)
+        
+        # counterfactual decision vars
+        decision_variable_dict['left_value'].append(left_value)
+        decision_variable_dict['right_value'].append(right_value)
+        decision_variable_dict['relative_value'].append(left_value-right_value)
+        decision_variable_dict['left_nonneg_value'].append(np.amax([left_value, 0]))
+        decision_variable_dict['right_nonneg_value'].append(np.amax([right_value,0]))
+        decision_variable_dict['relative_nonneg_value'].append(np.amax([left_value, 0]) -
+                                                               np.amax([right_value,0]))  # this can be negative, but the values it comes from cannot
+        decision_variable_dict['left_omissions'].append(left_omissions)
+        decision_variable_dict['right_omissions'].append(right_omissions)
+        decision_variable_dict['relative_omissions'].append(left_omissions-right_omissions)
 
         # Don't update DVs for trials with experimenter-given rewards. These trials shouldn't be included in action
         # prediction models either
@@ -250,12 +301,16 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
             continue
 
         reward = trial_df.loc[i, 'reward']
+        action = trial_df.loc[i, 'action']
         negative_value = counters.negative_value_counter(negative_value, reward)
         consecutive_rewards = counters.consecutive_reward_counter(consecutive_rewards, reward)
         consecutive_failures = counters.consecutive_fail_counter(consecutive_failures, reward)
         consecutive_rewards_memory = counters.consecutive_reward_renewal_counter(consecutive_rewards_memory, reward, previous_trial_rewarded)
         consecutive_failures_memory = counters.consecutive_fail_renewal_counter(consecutive_failures_memory, reward, previous_trial_rewarded)
         previous_trial_rewarded = reward > 0
+
+        left_value, right_value = counters.counterfactual_value_counter(left_value, right_value, action, reward)
+        left_omissions, right_omissions = counters.counterfactual_omissions_counter(left_omissions, right_omissions, action, reward)
 
     return pd.DataFrame(decision_variable_dict)
 
@@ -324,6 +379,70 @@ def load_analysis(sess_id_full: str, session_data_folder: Path, multisession_dat
     return multisession_df, block_performance, augmented_trial_df
 
 
+# def run_analysis(trial_df: pd.DataFrame, sess_id_full: str, processed_data_path: Path,):
+def run_analysis(trial_df: pd.DataFrame, session: Session):
+    session_performance, block_performance, augmented_trial_df = analyze_session(trial_df, mouse=session.mouse, date=session.date)
+    ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
+    slope, intercept, r_value, p_value = session_stats(
+        dependent_var=block_performance['trials_to_correct'][ix_valid].astype(int),
+        independent_var=block_performance['prev_consecutive_rewards'][ix_valid].astype(int))
+
+    """
+    TTS vs prev rewards: condition by confusion (nswitch > 3 or so) 
+    TTS vs rewards by bias (TTS >> block rewards. Could quantify that - TTS / rewards (block, consec, or consec_memory) or TTS - rewards
+    Condition by mean, median or std choice time
+    """
+    base_array = np.zeros_like(block_performance['trials_to_correct'])
+    base_array[~ix_valid] = 'None'
+
+    # using n_correct for biases as the maximum possible count for value comparison
+    _bias_rl = ((block_performance['trials_to_correct'][ix_valid] - block_performance['prev_n_correct'][ix_valid]) /
+                (block_performance['trials_to_correct'][ix_valid] + block_performance['prev_n_correct'][ix_valid]))
+    bias_rl = base_array.copy()
+    bias_rl[ix_valid] = _bias_rl.to_numpy()
+
+    _bias_inf = (block_performance['trials_to_correct'][ix_valid] - 5) / (
+                block_performance['trials_to_correct'][ix_valid] + 5)
+    bias_inf = base_array.copy()
+    bias_inf[ix_valid] = _bias_inf.to_numpy()
+
+    bias_thresh = .2
+    _bias_rl_flag = _bias_rl > bias_thresh
+    _bias_inf_flag = _bias_inf > bias_thresh
+    _bias_full_flag = _bias_rl_flag & _bias_inf_flag
+    bias_rl_flag = base_array.copy()
+    bias_rl_flag[ix_valid] = _bias_rl_flag.to_numpy()
+    bias_inf_flag = base_array.copy()
+    bias_inf_flag[ix_valid] = _bias_inf_flag.to_numpy()
+    bias_full_flag = base_array.copy()
+    bias_full_flag[ix_valid] = _bias_full_flag.to_numpy()
+
+    block_performance['bias_rl'] = bias_rl
+    block_performance['bias_inf'] = bias_inf
+    block_performance['bias_rl_flag'] = bias_rl_flag
+    block_performance['bias_inf_flag'] = bias_inf_flag
+    block_performance['bias_full_flag'] = bias_full_flag
+
+    # rewards, mean, std, sem = summarize_block_switches(block_performance, min_counts=0)
+    session_performance['slope'] = slope
+    session_performance['intercept'] = intercept
+    session_performance['r_value'] = r_value
+    session_performance['p_value'] = p_value
+    session_performance['n_switches'] = block_performance.shape[0]
+    # ic(slope, intercept, r_value, p_value)
+    print('slope: {}, intercept: {}, r_value: {}, p_value: {}'.format(slope, intercept, r_value, p_value))
+    # block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
+    # augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
+
+    save_analysis(session_performance, block_performance, augmented_trial_df,
+                  sess_id=session.sess_id_full, session_save_path=session.processed_data_path,
+                  overall_save_path=session.multi_session_save_path)
+
+    multisession_performance = pd.read_csv(session.processed_data_path / (session.sess_id_full + '_.csv'), sep=',', na_filter=False)
+    multisession_df, block_performance, augmented_trial_df = load_analysis(session.sess_id_full, session.processed_data_path,
+                                                                           session.multi_session_save_path)
+
+
 def main():
     """Analyze the data from a single mouse session"""
 
@@ -349,35 +468,14 @@ def main():
     trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',', na_filter=False)
     session_performance, block_performance, augmented_trial_df = analyze_session(trial_df, mouse=mouse, date=date)
     ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
-
-    # if block_performance['trials_to_correct'].iloc[-1] == 'None':
-    #     ix_valid = block_performance.shape[0] - 1
     slope, intercept, r_value, p_value = session_stats(dependent_var=block_performance['trials_to_correct'][ix_valid].astype(int),
                                                     independent_var=block_performance['prev_consecutive_rewards'][ix_valid].astype(int))
-    # else:
-    #     slope, intercept, r_value, p_value = session_stats(
-    #         dependent_var=block_performance['trials_to_correct'],
-    #         independent_var=block_performance['prev_consecutive_rewards'])
 
     """
     TTS vs prev rewards: condition by confusion (nswitch > 3 or so) 
     TTS vs rewards by bias (TTS >> block rewards. Could quantify that - TTS / rewards (block, consec, or consec_memory) or TTS - rewards
     Condition by mean, median or std choice time
     """
-    # confusion - no changes needed. Greater than 1 is probably confused (3,5,etc)
-    # bias quantities
-    # bias_ratio = block_performance['trials_to_switch'] / block_performance['n_rewarded']
-    # bias_raw = block_performance['trials_to_switch'] - block_performance['n_rewarded']
-    # block_performance['bias_rl'] = np.zeros_like(block_performance['trials_to_correct'])
-    # block_performance['bias_inf'] = np.zeros_like(block_performance['trials_to_correct'])
-    # block_performance['bias_rl_flag'] = np.zeros_like(block_performance['trials_to_correct'])
-    # block_performance['bias_inf_flag'] = np.zeros_like(block_performance['trials_to_correct'])
-    # block_performance['bias_full_flag'] = np.zeros_like(block_performance['trials_to_correct'])
-    # block_performance['bias_rl'][~ix_valid] = 'None'
-    # block_performance['bias_inf'][~ix_valid] = 'None'
-    # block_performance['bias_rl_flag'][~ix_valid] = 'None'
-    # block_performance['bias_inf_flag'][~ix_valid] = 'None'
-    # block_performance['bias_full_flag'][~ix_valid] = 'None'
     base_array = np.zeros_like(block_performance['trials_to_correct'])
     base_array[~ix_valid] = 'None'
 
@@ -416,14 +514,14 @@ def main():
     session_performance['n_switches'] = block_performance.shape[0]
     # ic(slope, intercept, r_value, p_value)
     print('slope: {}, intercept: {}, r_value: {}, p_value: {}'.format(slope, intercept, r_value, p_value))
-    block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
+    # block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
     # augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
 
-    # save_analysis(session_performance, block_performance, augmented_trial_df,
-    #               sess_id=sess_id_full, session_save_path=processed_data_path, overall_save_path=multi_session_save_path)
+    save_analysis(session_performance, block_performance, augmented_trial_df,
+                  sess_id=sess_id_full, session_save_path=processed_data_path, overall_save_path=multi_session_save_path)
 
-    # multisession_performance = pd.read_csv(processed_data_path / (sess_id_full + '_.csv'), sep=',', na_filter=False)
-    # multisession_df, block_performance, augmented_trial_df = load_analysis(sess_id_full, processed_data_path, multi_session_save_path)
+    multisession_performance = pd.read_csv(processed_data_path / (sess_id_full + '_.csv'), sep=',', na_filter=False)
+    multisession_df, block_performance, augmented_trial_df = load_analysis(sess_id_full, processed_data_path, multi_session_save_path)
 
     # TODO - allow combining new session analysis with old by replacing dates and sorting the matrix by date.
 
