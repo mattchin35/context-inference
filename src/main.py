@@ -1,21 +1,49 @@
 # import session_overview
 # import raster_plots
 # import fileIO
+import numpy as np
 import re
 from behavior_analysis import raster_plots, session_analysis, simulate_priors
 from mouse_behavior_preprocessing import process_behavior_log
 from behavior_analysis import block_state_space_modeling as bssm
 from behavior_analysis import trial_state_space_modeling as tssm
+import src.state_space_modeling.utilplot as utilplot
 import pickle as pkl
 from pathlib import Path
 import pandas as pd
 from dataclasses import dataclass
+import seaborn as sns
+from matplotlib.colors import ListedColormap
+
+
+sns.set_style("white")
+sns.set_context("talk")
+color_names = ["windows blue",
+               "red",
+               "amber",
+               "faded green",
+               "dusty purple",
+               "orange",
+               "clay",
+               "pink",
+               "greyish",
+               "mint",
+               "cyan",
+               "steel blue",
+               "forest green",
+               "pastel purple",
+               "salmon",
+               "dark brown"]
+colors = sns.xkcd_palette(color_names)
+cmap = ListedColormap(colors)
+
 
 @dataclass
 class Session:
     multi_session_save_path = Path.home()
     session_data_home = Path.home()
     sess_id_full = 'mouseid_YYYY-MM-DD_hhmmss'
+    sess_id_abbreviated = 'mouseid_abbreviated'
     raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
     processed_data_path = session_data_home / 'processed'
     figure_path = session_data_home / 'figures'
@@ -26,7 +54,7 @@ class Session:
     session_info = None
 
 
-def preprocess_session_log(raw_behavior_folder: str, processed_data_path: str, sess_id_full: str):
+def preprocess_session_log(raw_behavior_folder: str, processed_data_path: str, sess_id_full: str, min_time: float=0, max_time: float=np.inf):
     session_log = raw_behavior_folder / '{}.log'.format(sess_id_full)
     session_info_path = '{}_session_info.pkl'.format(sess_id_full)
     with open(raw_behavior_folder / session_info_path, 'rb') as f:
@@ -38,20 +66,22 @@ def preprocess_session_log(raw_behavior_folder: str, processed_data_path: str, s
                                                  session_id=sess_id_full,
                                                  save_name=sess_id_full + '_trials',
                                                  output_path=processed_data_path,
-                                                 session_info=session_info)
+                                                 session_info=session_info,
+                                                  min_time=min_time, max_time=max_time)
     water = process_behavior_log.calculate_water_delivery(event_df, session_info)
-    return trial_df, water
+    return trial_df, event_df, water
 
 
-def plot_session(raw_behavior_folder: str, processed_data_path: str, figure_path: str, sess_id_full: str):
-    event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',')
-    session_info_path = '{}_session_info.pkl'.format(sess_id_full)
-    with open(raw_behavior_folder / session_info_path, 'rb') as f:
-        session_info = pkl.load(f)
+def plot_session(event_df: pd.DataFrame, session_info: dict, raw_behavior_folder: str, processed_data_path: str, figure_path: str, sess_id_full: str):
+    # event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',')
+    # session_info_path = '{}_session_info.pkl'.format(sess_id_full)
+    # with open(raw_behavior_folder / session_info_path, 'rb') as f:
+    #     session_info = pkl.load(f)
 
     if not figure_path.exists():
         figure_path.mkdir()
 
+    event_df['Time'] -= event_df['Time'].min()
     raster_plots.generate_session_raster(event_df, session_info=session_info, fig_name=sess_id_full + '_raster',
                                          plot_path=figure_path, fig_format='png')
     raster_plots.colorblock_raster(event_df, sess_id_full + '_lick_context_raster', session_info=session_info,
@@ -98,7 +128,7 @@ def analyze_session(trial_df: pd.DataFrame, sess_id_full: str, within_session_da
                                    overall_save_path=multi_session_save_path)
 
 
-def block_state_space(block_performance: pd.DataFrame, trial_df: pd.DataFrame, sess_id_full: str,
+def block_hmm_model(block_performance: pd.DataFrame, trial_df: pd.DataFrame, sess_id_full: str,
                       processed_data_path: Path, figure_path: Path,):
     map_model_dict, block_performance = bssm.map_block_states(block_performance, figure_path, sess_id_full, plot=True)
     map_savename = processed_data_path / (sess_id_full + '_block_map_statedict.pkl')
@@ -210,8 +240,10 @@ def main():
     # prep data selection
 
     multi_session_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
-    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/')
+    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference')
     sess_id_full = 'CT014_2025-12-16_153200'
+    # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251204')
+    # sess_id_full = 'CT014_2025-12-04_123418'
     raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
     processed_data_path = session_data_home / 'processed'
     figure_path = session_data_home / 'figures'
@@ -229,41 +261,67 @@ def main():
         print("Double-check the session name!")
         return
 
-    session_info_path = '{}_session_info.pkl'.format(sess_id_full)
-    with open(raw_behavior_folder / session_info_path, 'rb') as f:
+    session_info_path = raw_behavior_folder / '{}_session_info.pkl'.format(sess_id_full)
+    assert session_info_path.exists(), "session_info at {} not found!".format(session_info_path)
+    with open(session_info_path, 'rb') as f:
         session_info = pkl.load(f)
 
     sess = Session()
-    multi_session_save_path = Path.home()
-    session_data_home = Path.home()
-    sess_id_full = 'mouseid_YYYY-MM-DD_hhmmss'
-    raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
-    processed_data_path = session_data_home / 'processed'
-    figure_path = session_data_home / 'figures'
-    mouse = 'test-mouse'
-    date = '1970-01-01'
-    timestamp = '000000'
-    session_info_fname = '{}_session_info.pkl'.format(sess_id_full)
-    session_info = None
+    sess.multi_session_save_path = multi_session_save_path
+    sess.session_data_home = session_data_home
+    sess.sess_id_full = sess_id_full
+    sess.sess_id_abbreviated = sess_id_abbreviated
+    sess.raw_behavior_folder = raw_behavior_folder
+    sess.processed_data_path = processed_data_path
+    sess.figure_path = figure_path
+    sess.mouse = mouse
+    sess.date = date
+    sess.timestamp = timestamp
+    sess.session_info_fname = session_info_path
+    sess.session_info = session_info
 
     # preprocess behavior log and save
-    # trial_df, water = preprocess_session_log(raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path, sess_id_full=sess_id_full)
+    # trial_df, event_df, water = preprocess_session_log(raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path, sess_id_full=sess_id_full,
+    #                                                    min_time=0, max_time=np.inf)
+
+    # load processed raw data
     event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',')
     trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',')
-    plot_session(raw_behavior_folder=raw_behavior_folder,
-                 processed_data_path=processed_data_path,
-                 figure_path=figure_path, sess_id_full=sess_id_full)
+
+    # plot_session(event_df, session_info,
+    #              raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path,
+    #              figure_path=figure_path, sess_id_full=sess_id_full)
 
     # analyze trials and save
-    analyze_session(trial_df, sess_id_full,
-                    within_session_data_path=processed_data_path,
-                    multi_session_save_path=multi_session_save_path)
+    # augmented_trial_df, block_performance, multisession_df = session_analysis.run_analysis(trial_df, session=sess)
     multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(sess_id_full,
                                                                                             session_data_folder=processed_data_path,
                                                                                             multisession_data_folder=multi_session_save_path)
 
-    session_analysis.run_analysis()
+    # model_selection = bssm.run_information_criteria(block_performance, session=sess, prior_alpha=1, prior_sigma=1)
+    block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=1,
+                                                                    prior_alpha=1, prior_sigma=1)
+    # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
+    # with open(block_model_dict_path, 'rb') as file:
+    #     block_model_dict = pkl.load(file)
 
+    # model_selection = tssm.run_information_criteria(augmented_trial_df, session=sess, algorithm='MAP', prior_alpha=1, prior_sigma=1)
+    # augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=2, prior_alpha=1, prior_sigma=1)
+
+
+def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
+    ix_valid = (block_df['trials_to_correct'] != 'None') & (block_df['prev_n_correct'] != 'None')
+    df = block_df[ix_valid]
+
+    consecutive_rewards = df['prev_consecutive_rewards'].to_numpy().reshape(-1, 1).astype(int)
+    prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
+    # prev_correct = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
+    trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
+    bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
+    predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
+    pred_labels = ['previous rewards', 'block bias flag']
+
+    utilplot.plot_postprob_obs_for_presentation(block_model_dict['map']['posterior_probs'], trials_to_correct, predictors, map_hmm, colors, cmap, predictor_labels = pred_labels)
 
 
 if __name__ == '__main__':

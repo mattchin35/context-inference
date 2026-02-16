@@ -4,7 +4,7 @@ from pathlib import Path
 import scipy as sp
 import sklearn
 import matplotlib.pyplot as plt
-from icecream import ic
+# from icecream import ic
 import pickle as pkl
 from one.api import ONE
 import brainbox.behavior.wheel as wh

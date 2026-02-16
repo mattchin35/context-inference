@@ -289,7 +289,8 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
     return event_df
 
 
-def make_trial_df(cleaned_data: pd.DataFrame, session_id: str, save_name: str, output_path: Path, session_info: dict) -> pd.DataFrame:
+def make_trial_df(cleaned_data: pd.DataFrame, session_id: str, save_name: str, output_path: Path, session_info: dict,
+                  min_time: float=0, max_time: float=np.inf) -> pd.DataFrame:
     """
     Prepare an event dataframe with describing each trial of a session.
     Should be compatible with computational agents.
@@ -323,6 +324,13 @@ def make_trial_df(cleaned_data: pd.DataFrame, session_id: str, save_name: str, o
     trial_df['p_inactive_rew'] = np.ones(n_trials) * p_inactive_rew
     trial_df['p_switch'] = np.ones(n_trials) * session_info['switch_probability']
     trial_df['session_ID'] = [session_id] * n_trials
+
+    if min_time > 0:
+        trial_df = trial_df[trial_df['trial_time_since_start'] > min_time]
+    if max_time < np.inf:
+        trial_df = trial_df[trial_df['trial_time_since_start'] < max_time]
+
+    trial_df.reset_index(drop=True, inplace=True)
 
     if not output_path.exists():
         output_path.mkdir()

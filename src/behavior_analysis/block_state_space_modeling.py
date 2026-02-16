@@ -4,15 +4,20 @@ Blockwise LM-HMM using the code from Cazettes et al 2023 made by Lucca Mazzucato
 
 import numpy as np
 import pandas as pd
+from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pickle as pkl
 import re
 from pathlib import Path
 import ssm # note this should be the forked ssm repo above
+# from matplotlib.font_manager import weight_dict
 from ssm.util import find_permutation
 from ssm.plots import gradient_cmap, white_to_color_cmap
 import src.state_space_modeling.utilplot as utilplot
+from typing import Protocol
+from joblib import Parallel, delayed
+
 
 color_names = [
     "windows blue",
@@ -25,9 +30,32 @@ color_names = [
 colors = sns.xkcd_palette(color_names)
 cmap = gradient_cmap(colors)
 
-np.random.seed(0)
+# np.random.seed(0)
 
-def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, plot: bool=False):
+# rl_cmap = plt.cm.autumn
+# inference_cmap = plt.cm.winter
+
+rl_colors = ["red","amber","orange"]
+inf_colors = ["windows blue", "dusty purple", "faded green"]
+
+
+class Session(Protocol):
+    multi_session_save_path: Path
+    session_data_home: Path
+    sess_id_full: str
+    sess_id_abbreviated: str
+    raw_behavior_folder: Path
+    processed_data_path: Path
+    figure_path: Path
+    mouse: str
+    date: str
+    timestamp: str
+    session_info_fname: str
+    session_info: dict
+
+
+def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, plot: bool=False, model_dict=None,
+                     num_states=2):
     """Maximum likelihood estimation of block strategies/states."""
     ix_valid = (block_df['trials_to_correct'] != 'None') & (block_df['prev_n_correct'] != 'None')
     df = block_df[ix_valid]
@@ -41,22 +69,26 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
 
     # predictors = prev_rewards
     # predictors = np.concatenate([prev_rewards, n_switches, bias_flag], axis=1)
-    predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
-    # predictors = np.concatenate([prev_rewards, n_switches], axis=1)
+    predictors = np.concatenate([prev_rewards, n_switches], axis=1)
+    # predictors = np.concatenate([prev_rewards, n_switches, bias_flag], axis=1)
 
     # num states - start with 2, Inf/RL, then do 3 (inf/rl/biased). Would like Inf(maybe lo and hi thresh)/RL/biased/disengaged/confused. I think this is
     # what cross-validation is gonna be for. less is better!
-    num_states = 2
+    # num_states = 2
     obs_dim = 1
     input_dim = predictors.shape[1]
 
-    model_dict = {}
+    if model_dict is None:
+        model_dict = {}
+    model_dict['mle'] = {}
+    weight_dict = {}
+
     mle_hmm = ssm.HMM(num_states, obs_dim, M=input_dim, observations="input_driven_obs_gaussian", transitions="standard")
     N_iters = 10000  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
     # fit_ll = mle_hmm.fit(obs, inputs=inpt, method="em", num_iters=N_iters, tolerance=10**-6)
     # fit_log_likelihood = mle_hmm.fit(trials_to_correct, inputs=prev_rewards, method="em", num_iters=N_iters, tolerance=10 ** -6)
     fit_log_likelihood = mle_hmm.fit(trials_to_correct, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
-    model_dict['fit_log_likelihood'] = fit_log_likelihood
+    model_dict['mle']['fit_log_likelihood'] = fit_log_likelihood
 
     # Plot the log probabilities of the true and fit models. Fit model final LL should be greater
     # than or equal to true LL.
@@ -79,28 +111,17 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     recovered_mus = mle_hmm.observations.mus
 
     # revisit this after fitting MAP
-    weight_dict = {}
-    weight_dict[0] = {}
-    weight_dict[0]['weights'] = recovered_weights
-    weight_dict[0]['mus'] = recovered_mus
-    weight_dict[0]['label'] = 'mle'
-    model_dict['weight_dict'] = weight_dict
-    if plot:
-        utilplot.plot_weights_comparison(weight_dict)
-        plt.title("recovered weights")
-        save_path = figure_path / '{}_mle_weights.png'.format(sess_id)
-        plt.gcf().savefig(save_path, format='png', dpi=300)
+    weight_dict['weights'] = recovered_weights
+    weight_dict['mus'] = recovered_mus
+    weight_dict['label'] = 'mle'
 
+    model_dict['mle']['weight_dict'] = weight_dict
+    if plot:
         mle_transition_mat = np.exp(mle_hmm.transitions.log_Ps)
         utilplot.plot_trans_matrix(mle_transition_mat)
         plt.title("MLE transition matrix", fontsize=15)
         save_path = figure_path / '{}_mle_transition_mat.png'.format(sess_id)
         plt.gcf().savefig(save_path, format='png', dpi=300)
-
-        # plt.subplot(1, 2, 2)
-        # plt.title("MAP transition matrix", fontsize=15)
-        # utilplot.plot_trans_matrix(map_transition_mat)
-        # f, ax = utilplot.plt.subplots_adjust(0, 0, 1, 1)
 
     ### Get expected states ###
     # posterior_probs = mle_hmm.expected_states(data=trials_to_correct, input=prev_rewards)[0]
@@ -113,10 +134,11 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         fig.savefig(save_path, format='png', dpi=300)
 
     inferred_state_list, inferred_durations = ssm.util.rle(most_likely_states)
-    model_dict['posterior_probs'] = posterior_probs
-    model_dict['inferred_state_list'] = inferred_state_list
-    model_dict['inferred_durations'] = inferred_durations
-    model_dict['hmm_z'] = most_likely_states
+    model_dict['mle']['posterior_probs'] = posterior_probs
+    model_dict['mle']['inferred_state_list'] = inferred_state_list
+    model_dict['mle']['inferred_durations'] = inferred_durations
+    model_dict['mle']['hmm_z'] = most_likely_states
+    model_dict['mle']['hmm'] = mle_hmm
 
     inferred_states = np.zeros(block_df.shape[0], dtype='object')
     inferred_states[ix_valid] = most_likely_states
@@ -138,42 +160,49 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         plt.title('Histogram of Inferred State Durations')
         # plt.show()
 
-    mle_savename = sess_id + '_mle_statedict.pkl'
-    with open(mle_savename, 'wb') as file:
-        pkl.dump(model_dict, file)
+    # mle_savename =  session.processed_data_path / (session.sess_id_full + '_statedict.pkl')
+    # with open(mle_savename, 'wb') as file:
+    #     pkl.dump(model_dict, file)
 
     return model_dict, block_df
 
 
-def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, plot: bool=False,
-                     prior_sigma=1, prior_alpha=1):
+def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = False,
+                     num_states=2, prior_sigma=1, prior_alpha=1, model_dict=None):
     """Maximum a priori estimation of block strategies/states. Using a prior helps with small-data problems."""
     ix_valid = (block_df['trials_to_correct'] != 'None') & (block_df['prev_n_correct'] != 'None')
     df = block_df[ix_valid]
 
-    consecutive_rewards = df['prev_consecutive_rewards'].to_numpy().reshape(-1, 1).astype(int)
+    # prev_rewards = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
     prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
-    #prev_correct = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
     trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
+    bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
+    predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
+    pred_labels = ['previous rewards', 'block bias flag']
 
-    # num states - start with 2, Inf/RL, then do 3 (inf/rl/biased). Would like Inf(maybe lo and hi thresh)/RL/biased/disengaged/confused. I think this is
-    # what cross-validation is gonna be for. less is better!
-    # prior_sigma = 1
-    # prior_alpha = 1
-    num_states = 2
     obs_dim = 1
-    input_dim = 1
+    # input_dim = 1
+    input_dim = predictors.shape[1]
 
-    model_dict = {}
+    if model_dict is None:
+        model_dict = {}
+
+    model_dict['map'] = {}
+    weight_dict = {}
+
     map_hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
                       observations="input_driven_obs_gaussian",
                       observation_kwargs=dict(prior_sigma=prior_sigma),
                       transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
 
-    N_iters = 10000  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
-    # fit_ll = mle_hmm.fit(obs, inputs=inpt, method="em", num_iters=N_iters, tolerance=10**-6)
-    fit_log_likelihood = map_hmm.fit(trials_to_correct, inputs=prev_rewards, method="em", num_iters=N_iters, tolerance=10 ** -6)
-    model_dict['fit_log_likelihood'] = fit_log_likelihood
+    # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
+    # was 10k before, should probably stop by 1k - if it doesn't work by then it's not realistic. Convergence ability is relevant, if it's too
+    # hard it may not be realistic/result in overfitting
+    N_iters = 1000
+
+    # fit_ll = map_hmm.fit(obs, inputs=inpt, method="em", num_iters=N_iters, tolerance=10**-6)
+    fit_log_likelihood = map_hmm.fit(trials_to_correct, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
+    model_dict['map']['fit_log_likelihood'] = fit_log_likelihood
 
     # Plot the log probabilities of the true and fit models. Fit model final LL should be greater
     # than or equal to true LL.
@@ -186,30 +215,29 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         # plt.xlim(0, len(fit_ll))
         plt.ylabel("Log Probability")
         plt.title("MAP EM fit of observed data")
-        save_path = figure_path / '{}_map_convergence.png'.format(sess_id)
+        save_path = session.figure_path / '{}_map_convergence.png'.format(session.sess_id_full)
         fig.savefig(save_path, format='png', dpi=300)
 
-    most_likely_states = map_hmm.most_likely_states(trials_to_correct, input=prev_rewards)
+    most_likely_states = map_hmm.most_likely_states(trials_to_correct, input=predictors)
     recovered_weights = map_hmm.observations.Wks
     recovered_mus = map_hmm.observations.mus
 
-    # revisit this after fitting MAP
-    weight_dict = {}
-    weight_dict[0] = {}
-    weight_dict[0]['weights'] = recovered_weights
-    weight_dict[0]['mus'] = recovered_mus
-    weight_dict[0]['label'] = 'mle'
-    model_dict['weight_dict'] = weight_dict
+    # weight_dict = {}
+    weight_dict['weights'] = recovered_weights
+    weight_dict['mus'] = recovered_mus
+    weight_dict['label'] = 'map'
+    weight_dict['weight_labels'] = pred_labels
+    model_dict['map']['weight_dict'] = weight_dict
     if plot:
-        utilplot.plot_weights_comparison(weight_dict)
-        plt.title("recovered weights")
-        save_path = figure_path / '{}_map_weights.png'.format(sess_id)
-        plt.gcf().savefig(save_path, format='png', dpi=300)
+        # utilplot.plot_weights_comparison(weight_dict['map'])
+        # plt.title("recovered weights")
+        # save_path = figure_path / '{}_map_weights.png'.format(sess_id)
+        # plt.gcf().savefig(save_path, format='png', dpi=300)
 
         map_transition_mat = np.exp(map_hmm.transitions.log_Ps)
         utilplot.plot_trans_matrix(map_transition_mat)
         plt.title("MAP transition matrix", fontsize=15)
-        save_path = figure_path / '{}_map_transition_mat.png'.format(sess_id)
+        save_path = session.figure_path / '{}_map_transition_mat.png'.format(session.sess_id_full)
         plt.gcf().savefig(save_path, format='png', dpi=300)
 
         # plt.subplot(1, 2, 2)
@@ -217,25 +245,54 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         # utilplot.plot_trans_matrix(map_transition_mat)
         # f, ax = utilplot.plt.subplots_adjust(0, 0, 1, 1)
 
+    recovered_weights =  np.squeeze(recovered_weights)
+    if recovered_weights.ndim > 1:
+        prev_reward_weight = np.squeeze(recovered_weights)[:,0]
+        present_colors = np.arange(len(prev_reward_weight), dtype=object)
+    else:
+        prev_reward_weight = recovered_weights[0]
+        present_colors = np.arange(1, dtype=object)
+
+    ix_inf = prev_reward_weight < .5
+    ix_rl = prev_reward_weight >= .5
+    n_inf = np.sum(ix_inf)
+    n_rl = np.sum(ix_rl)
+    # colors_inf = inference_cmap(np.linspace(0, 1, n_inf))
+    # colors_rl = rl_cmap(np.linspace(0, 1, n_rl))
+    # present_colors = np.arange(len(prev_reward_weight), dtype=object)
+    if recovered_weights.ndim > 1:
+        present_colors[ix_inf] = inf_colors[:n_inf]
+        present_colors[ix_rl] = rl_colors[:n_rl]
+    else:
+        present_colors = rl_colors if ix_rl else inf_colors
+
+    present_colors = sns.xkcd_palette(present_colors)
+    present_cmap = gradient_cmap(present_colors)
+
     ### Get expected states
-    posterior_probs = map_hmm.expected_states(data=trials_to_correct, input=prev_rewards)[0]
+    posterior_probs = map_hmm.expected_states(data=trials_to_correct, input=predictors)[0]
     if plot:
-        fig, ax = utilplot.plot_postprob_obs(posterior_probs, trials_to_correct, prev_rewards, map_hmm, colors, cmap)
-        plt.title("MAP HMM states")
-        save_path = figure_path / '{}_map_predicted_states.png'.format(sess_id)
+        # fig, ax = utilplot.plot_postprob_obs(posterior_probs, trials_to_correct, predictors, map_hmm, colors, cmap)
+        fig, ax = utilplot.plot_postprob_obs_for_presentation(posterior_probs, trials_to_correct, predictors, map_hmm,
+                                                              present_colors, present_cmap, predictor_labels=pred_labels)
+        # fig, ax = utilplot.plot_postprob_obs_for_presentation(posterior_probs, trials_to_correct, predictors, map_hmm,
+        #                                                       colors, cmap, predictor_labels=pred_labels)
+        # plt.title("MAP HMM states")
+        plt.title("HMM states")
+        save_path = session.figure_path / '{}_map_predicted_states.png'.format(session.sess_id_full)
         fig.savefig(save_path, format='png', dpi=300)
 
     inferred_state_list, inferred_durations = ssm.util.rle(most_likely_states)
-    model_dict['posterior_probs'] = posterior_probs
-    model_dict['inferred_state_list'] = inferred_state_list
-    model_dict['inferred_durations'] = inferred_durations
-    model_dict['hmm_z'] = most_likely_states
+    model_dict['map']['posterior_probs'] = posterior_probs
+    model_dict['map']['inferred_state_list'] = inferred_state_list
+    model_dict['map']['inferred_durations'] = inferred_durations
+    model_dict['map']['hmm_z'] = most_likely_states
+    model_dict['map']['hmm'] = map_hmm
 
     inferred_states = np.zeros(block_df.shape[0], dtype='object')
     inferred_states[ix_valid] = most_likely_states
     inferred_states[~ix_valid] = 'None'
     block_df['inferred_strategy'] = inferred_states
-
     if plot:
         ## Rearrange the lists of durations to be a nested list where
         ## the nth inner list is a list of durations for state n
@@ -251,11 +308,179 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         plt.title('Histogram of Inferred State Durations')
         # plt.show()
 
-    mle_savename = sess_id + '_map_statedict.pkl'
-    with open(mle_savename, 'wb') as file:
+    if num_states > 1:
+        if np.sum(~ix_valid) > 0:
+            cur_strategy_slope = np.zeros(block_df.shape[0], dtype='object')
+            cur_strategy_slope[ix_valid] = np.squeeze(recovered_weights)[:,0][inferred_states[ix_valid].astype(int)]
+            cur_strategy_slope[~ix_valid] = 'None'
+            block_df['cur_strategy_slope'] = cur_strategy_slope
+        else:
+            block_df['cur_strategy_slope'] = np.squeeze(recovered_weights)[:,0][inferred_states.astype(int)]
+    else:
+        block_df['cur_strategy_slope'] = np.ones(block_df.shape[0]) * np.squeeze(recovered_weights)[0]
+
+    map_savename = session.processed_data_path / (session.sess_id_full + '_block_statedict.pkl')
+    with open(map_savename, 'wb') as file:
         pkl.dump(model_dict, file)
 
     return model_dict, block_df
+
+
+def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.DataFrame, session: Session, num_states: int=2,
+                       prior_alpha=1, prior_sigma=1):
+
+    mle_model_dict, block_performance = mle_block_states(block_performance, session.figure_path, session.sess_id_abbreviated,
+                                                         plot=True, num_states=num_states)
+    # map_model_dict, block_performance = map_block_states(block_performance, session.figure_path, session.sess_id_abbreviated,
+    #                                                      plot=True, model_dict=mle_model_dict, num_states=num_states)
+    map_model_dict, block_performance = map_block_states(block_performance, session,
+                                                         plot=True, model_dict=mle_model_dict, num_states=num_states,
+                                                         prior_alpha=prior_alpha, prior_sigma=prior_sigma)
+    map_savename = session.processed_data_path / (session.sess_id_full + '_block_statedict.pkl')
+    with open(map_savename, 'wb') as file:
+        pkl.dump(map_model_dict, file)
+
+    block_performance = declare_inferred_strategy(block_performance)
+    block_performance.to_csv(session.processed_data_path / (session.sess_id_full + '_block_performance.csv'), index=False)
+
+    augmented_trial_df = trials_inherit_strategy(block_performance, augmented_trial_df)
+    augmented_trial_df.to_csv(session.processed_data_path / (session.sess_id_full + '_augmented_trials.csv'), index=False)
+
+    prev_reward_weight = np.squeeze(map_model_dict['map']['weight_dict']['weights'])
+    if prev_reward_weight.ndim > 1:
+        prev_reward_weight = prev_reward_weight[:, 0]
+    ix_inf = prev_reward_weight < .5
+    ix_rl = prev_reward_weight >= .5
+    n_inf = np.sum(ix_inf)
+    n_rl = np.sum(ix_rl)
+    present_colors = np.arange(len(prev_reward_weight), dtype=object)
+    present_colors[ix_inf] = inf_colors[:n_inf]
+    present_colors[ix_rl] = rl_colors[:n_rl]
+    present_colors = sns.xkcd_palette(present_colors)
+    present_cmap = gradient_cmap(present_colors)
+
+    # utilplot.plot_weights_comparison([map_model_dict['mle']['weight_dict'],map_model_dict['map']['weight_dict']])
+    utilplot.plot_weights_presentation(map_model_dict['map']['weight_dict'], present_colors, session=session)
+    # plt.title("recovered weights")
+    # save_path = session.figure_path / '{}_hmm_weights.png'.format(session.sess_id_full)
+    # plt.gcf().savefig(save_path, format='png', dpi=300)
+    return block_performance, augmented_trial_df
+
+
+def run_information_criteria(block_performance: pd.DataFrame, session: Session, prior_alpha: float, prior_sigma: float):
+    ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
+    df = block_performance[ix_valid]
+    # df = df[1:]
+
+    # prev_correct = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
+    prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
+    # prev_rewards = df['prev_consecutive_rewards'].to_numpy().reshape(-1, 1).astype(int)
+    trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
+    bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
+    n_switches = df['n_switches'].to_numpy().reshape(-1, 1).astype(int)
+    # predictors = np.concatenate([prev_rewards, n_switches, bias_flag], axis=1)
+    predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
+    # predictors = prev_rewards
+    min_states = 1
+    max_states = 4
+    n_threads = 4
+    n_runs = 5
+
+    states = np.arange(min_states,max_states+1)
+    AIC, BIC = calculate_information_criteria(observations=trials_to_correct, inputs=predictors, states=states,
+                                              nRunEM=n_runs, n_jobs=n_threads,
+                                              prior_alpha=prior_alpha, prior_sigma=prior_sigma)
+    model_selection = plot_information_criteria(AIC, BIC, states, session)
+    return model_selection
+
+
+def single_func(observations: np.ndarray, inputs: np.ndarray, num_states: int,
+                n_iter: int=1000, tol: float=10**-4, prior_alpha=1, prior_sigma=1):
+
+    obs_dim, input_dim = observations.shape[1], inputs.shape[1]
+
+    # MLE
+    # hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
+    #                    observations="input_driven_obs_gaussian", transitions="standard")
+
+    # MAP
+    hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
+                      observations="input_driven_obs_gaussian",
+                      observation_kwargs=dict(prior_sigma=prior_sigma),
+                      transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
+
+    hmm_lls = hmm.fit(observations, inputs=inputs, method="em", num_iters=n_iter, tolerance=tol)
+    out = hmm.log_likelihood(observations, inputs=inputs)
+    return out
+
+
+def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray, states: np.ndarray, nRunEM: int, n_jobs: int,
+                                   prior_alpha: float, prior_sigma: float):
+    # Number of parameters for the model: (transition matrix) + (mean values for each state) + (covariance matrix for each state)
+    obs_dim = observations.shape[1] # make sure observations are T x Dim??
+    n_timesteps = observations.shape[0]
+    input_dim = inputs.shape[1] # make sure inputs are T x Dim
+    n_states = states.size
+
+    BIC = np.zeros((n_states, nRunEM))
+    AIC = np.zeros((n_states, nRunEM))
+    for iS, num_states in enumerate(states):#range(2, n + 1)):
+        print("running {} state(s)".format(num_states))
+
+        K = (num_states + 1) * (num_states - 1) + num_states * (obs_dim * input_dim + 2 * obs_dim)
+        delayed_calls = [delayed(single_func)(observations, inputs, num_states, prior_alpha, prior_sigma) for iRun in range(nRunEM)]
+        results = Parallel(n_jobs=-1)(delayed_calls)
+        # results = Parallel(n_jobs=n_jobs)(delayed_calls)
+        # results = [single_func(observations, inputs, num_states) for iRun in range(nRunEM)]
+
+        for iRun in range(nRunEM):
+            BIC[iS, iRun] = K * np.log(n_timesteps) - 2 * results[iRun]
+            AIC[iS, iRun] = K * 2 - 2 * results[iRun]
+
+    return BIC, AIC
+
+
+def plot_information_criteria(aic, bic, states, session: Session):
+    # fig = plt.figure(figsize=(20, 10), dpi=80, facecolor='w', edgecolor='k')
+    f, ax = plt.subplots(facecolor='w', edgecolor='k')
+    n_states = states.size
+
+    # x = np.arange(1, n_states + 1)
+    y = np.mean(bic, 1)
+    error = np.std(bic, 1)
+    # plt.plot(x, y, label="BIC")
+    # plt.fill_between(x, y - error, y + error,
+    #                  alpha=0.5, edgecolor='#CC4F1B', facecolor='#FF9848')
+    plt.plot(states, y, label="BIC")
+    plt.fill_between(states, y - error, y + error,
+                     alpha=0.5, edgecolor='#CC4F1B', facecolor='#FF9848')
+
+    y = np.mean(aic, 1)
+    error = np.std(aic, 1)
+    # plt.plot(x, y, label="AIC")
+    plt.plot(states, y, label="AIC")
+    plt.xlabel("states")
+    # plt.xlim(0, max_states + 1)
+    # plt.xlim(np.amin(states)-1, np.amax(states) + 1)
+    # plt.xlim(np.amin(states) - .2, np.amax(states) + .2)
+    # plt.xticks(np.arange(1, n_states + 1, 1))
+    plt.xticks(states)
+    plt.ylabel("criterion")
+    plt.legend(loc="upper left", frameon=False)
+    plt.title("BIC and AIC", fontsize=20)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.tight_layout()
+
+    save_path = session.figure_path / '{}_block_HMM_AIC_BIC.png'.format(session.sess_id_full)
+    plt.tight_layout()
+    plt.gcf().savefig(save_path, format='png', dpi=300)
+    # plt.savefig(savefile, format="pdf", bbox_inches="tight")
+    plt.show()
+    # plt.close(fig)
+
+    model_selection = {'AIC': aic, 'BIC': bic}
+    return model_selection
 
 
 def main():
@@ -287,12 +512,14 @@ def main():
     block_performance = pd.read_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), sep=',',
                                     na_filter=False)
 
-    # mle_model_dict, block_performance = mle_block_states(block_performance, figure_path, sess_id_abbreviated, plot=True)
+    mle_model_dict, block_performance = mle_block_states(block_performance, figure_path, sess_id_abbreviated, plot=True)
     # mle_savename = processed_data_path / (sess_id_full + '_mle_statedict.pkl')
     # with open(mle_savename, 'wb') as file:
     #     pkl.dump(mle_model_dict, file)
-    map_model_dict, block_performance = map_block_states(block_performance, figure_path, sess_id_abbreviated, plot=True)
-    map_savename = processed_data_path / (sess_id_full + '_block_map_statedict.pkl')
+    map_model_dict, block_performance = map_block_states(block_performance, figure_path, sess_id_abbreviated,
+                                                         plot=True, weight_dict=mle_model_dict)
+
+    map_savename = processed_data_path / (sess_id_full + '_block_statedict.pkl')
     with open(map_savename, 'wb') as file:
         pkl.dump(map_model_dict, file)
 
@@ -313,11 +540,13 @@ def declare_inferred_strategy(block_df: pd.DataFrame) -> pd.DataFrame:
     df = block_df[ix_valid]
 
     strategy = np.zeros(df.shape[0], dtype='object')
-    rl_ix = df['inferred_strategy'].to_numpy().astype(int) == 0
-    inference_ix = df['inferred_strategy'].to_numpy().astype(int) == 1
+    # rl_ix = df['inferred_strategy'].to_numpy().astype(int) == 0
+    # inference_ix = df['inferred_strategy'].to_numpy().astype(int) == 1
+    rl_ix = df['cur_strategy_slope'].to_numpy() >= .5
+    inference_ix = df['cur_strategy_slope'].abs().to_numpy() < .5
     bias_ix = (df['bias_full_flag'] == 'True').to_numpy()
     strategy[inference_ix] = 'Inference'
-    strategy[bias_ix] = 'Bias'
+    # strategy[bias_ix] = 'Bias'  #bias is not a strategy, it's a block quality
     strategy[rl_ix] = 'Qlearning'
 
     declared_strategy = np.zeros(block_df.shape[0], dtype='object')
@@ -345,3 +574,4 @@ def trials_inherit_strategy(block_df: pd.DataFrame, trial_df: pd.DataFrame) -> p
 
 if __name__ == '__main__':
     main()
+

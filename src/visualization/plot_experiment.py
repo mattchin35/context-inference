@@ -295,6 +295,7 @@ def multiplot_main():
     p = Path('../saved_models') / (fname + '.pkl')
     _, _, HMM_df, _ = controller.load_experiment(p)
 
+
     alpha = .1
     beta = 1.5
     tau = 1
@@ -312,10 +313,6 @@ def multiplot_main():
     value_dfs = [(QL_df, 'Q-learning'), (HMM_df, 'HMM'), (LR_df, 'Logistic')]
 
     plot_multiple_runs(value_dfs, plot_name='mouse_comparison', action_df=action_df)
-
-
-
-
 
 
 if __name__ == '__main__':

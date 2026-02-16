@@ -60,7 +60,7 @@ def generate_session_raster(event_df: pd.DataFrame, session_info: dict,
 
 
 def colorblock_raster(event_df: pd.DataFrame, fig_name: str, plot_path: str, session_info: dict,
-                      timespan: tuple = (0, np.inf), fig_format: str = 'png', plot_choices=False) -> None:
+                      timespan: tuple = (0, np.inf), fig_format: str = 'png', plot_choices=False):
     """
     Create a raster plot from a single behavior session.
     """
@@ -70,7 +70,12 @@ def colorblock_raster(event_df: pd.DataFrame, fig_name: str, plot_path: str, ses
 
     cleaned_df = event_df[event_df['Event'] != 'exit_standby']
     if timespan[1] == np.inf:
-        timespan = (np.amin(cleaned_df['Time']), np.amax(cleaned_df['Time']))
+        timespan = np.array([np.amin(cleaned_df['Time']), np.amax(cleaned_df['Time'])])
+
+    # if relative_time:
+    #     sess_tstart = cleaned_df['Time'].min()
+    #     cleaned_df['Time'] -= sess_tstart
+    #     timespan -= sess_tstart
 
     if plot_choices:
         event_list = ['correct_choice_left_patch', 'wrong_choice_right_patch', 'correct_choice_right_patch',
@@ -127,6 +132,7 @@ def colorblock_raster(event_df: pd.DataFrame, fig_name: str, plot_path: str, ses
         #     unique_states.remove(states[i])
         # else:
         #     plt.axvspan(state_times[i], state_times[i + 1], color=color_dict[states[i]], alpha=state_alpha)
+
     plt.axvspan(state_times[-1], end_time, color=color_dict[states[-1]], alpha=state_alpha)
     plt.xlim(timespan)
 

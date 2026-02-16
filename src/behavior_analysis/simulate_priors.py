@@ -5,8 +5,8 @@ import copy
 from pathlib import Path
 import re
 import pickle as pkl
-import model_agents
-import session_analysis
+import src.behavior_analysis.model_agents as model_agents
+import src.behavior_analysis.session_analysis as session_analysis
 from typing import Protocol, Optional, Union
 import time
 import json

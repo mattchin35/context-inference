@@ -12,6 +12,8 @@ import statsmodels.formula.api as smf
 import scipy as sp
 from typing import Protocol
 
+eps = np.finfo(float).eps
+
 
 """
 Analyze behavior within a single session. Want trials to switch L/R/overall, % correct L/R/overall. Do for sessions
@@ -38,7 +40,8 @@ def get_block_types(trial_df: pd.DataFrame) -> np.array:
     # right_cued_ix = (trial_df['state'] == 'right_patch') & (~trial_df['block_stimulus'].isnull())  # right cued
     # right_uncued_ix = (trial_df['state'] == 'right_patch') & (trial_df['block_stimulus'].isnull())  # right uncued
 
-    uncued_block = trial_df['block_stimulus'] == 'None' # or trial_df['block_stimulus'].isnull()
+    # uncued_block = trial_df['block_stimulus'] == 'None' | trial_df['block_stimulus'] == None | np.isnan() # or trial_df['block_stimulus'].isnull()
+    uncued_block = trial_df['block_stimulus'].isnull()
     cued_block = ~uncued_block # or trial_df['block_stimulus'].isnull()
     left_cued_ix = (trial_df['state'] == 'left_patch') & cued_block  # left cued
     left_uncued_ix = (trial_df['state'] == 'left_patch') & uncued_block  # left uncued
@@ -161,7 +164,10 @@ def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
 
     actions = actions.astype(int)
     n_switches = np.sum(np.abs(np.diff(actions)))
-    normalized_switches = n_switches / (trial_df.shape[0] - 1)  # must subtract 1 for n-1 opportunites to switch
+    if trial_df.shape[0] > 1:
+        normalized_switches = n_switches / (trial_df.shape[0] - 1)  # must subtract 1 for n-1 opportunites to switch
+    else:
+        normalized_switches = 0
     return n_switches, normalized_switches
 
 
@@ -233,6 +239,8 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
         block_performance.append(performance)
 
     block_performance = pd.DataFrame(block_performance)
+    block_performance['block_ix'] = np.arange(len(block_performance))
+
     session_performance = percent_correct(augmented_trial_df)
     session_performance = session_performance | summarize_trials_to_correct(block_performance)
     session_performance['date'] = date
@@ -273,6 +281,8 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
     n_trials = trial_df.shape[0]
     decision_variable_dict = defaultdict(list)
 
+    # trial_df.reset_index(inplace=True)
+
     # need 2 sets of counts
     # 1. the integrate-and-reset params from Cazettes 2023. Why is value negative again?
     # 2. the last-seen/"memory" version used, which resets when failures/rewards start anew but don't reset on switches
@@ -298,6 +308,7 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
         # Don't update DVs for trials with experimenter-given rewards. These trials shouldn't be included in action
         # prediction models either
         if trial_df.loc[i, 'action'] == 'None':
+        # if trial_df['action'].to_numpy()[i] == 'None':
             continue
 
         reward = trial_df.loc[i, 'reward']
@@ -343,7 +354,7 @@ def session_stats(dependent_var, independent_var) -> tuple[float, float, float, 
 
 
 def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataFrame, augmented_trial_df: pd.DataFrame,
-                  sess_id: str, session_save_path: Path, overall_save_path: Path=None):
+                  sess_id: str, session_save_path: Path, overall_save_path: Path=None) -> pd.DataFrame:
     assert session_save_path.exists(), "within-session data save path does not exist"
     assert overall_save_path.exists(), "between-session data save path does not exist"
 
@@ -354,15 +365,21 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
     if overall_fname.exists():
         overall_df = pd.read_csv(overall_fname, na_filter=False)
         ix = overall_df['date'] == date
-        if ix.any():
-            overall_df[ix] = session_performance  # doing it this way allows updates to existing data
-            # overall_df.sort_values('date')  # double-check this when analyzing multiple sessions
-        else:
-            overall_df = pd.concat([overall_df, session_performance], axis=0)
+        overall_df = overall_df[~ix]
+        # if ix.any():
+        #     ix = np.squeeze(np.argwhere(overall_df['date'] == date))
+        #     overall_df[ix] = session_performance  # doing it this way allows updates to existing data
+        #     # overall_df.sort_values('date')  # double-check this when analyzing multiple sessions
+        # else:
+        overall_df = pd.concat([overall_df, session_performance], axis=0)
         overall_df.sort_values(by='date', inplace=True)
         overall_df.to_csv(overall_fname, index=False)
+
     else:
         session_performance.to_csv(overall_fname, index=False)
+        overall_df = session_performance
+
+    return overall_df
 
 
 def load_analysis(sess_id_full: str, session_data_folder: Path, multisession_data_folder: Path) -> tuple:
@@ -393,11 +410,13 @@ def run_analysis(trial_df: pd.DataFrame, session: Session):
     Condition by mean, median or std choice time
     """
     base_array = np.zeros_like(block_performance['trials_to_correct'])
-    base_array[~ix_valid] = 'None'
+    if np.sum(~ix_valid) > 0:
+        base_array.astype(object)
+        base_array[~ix_valid] = 'None'
 
     # using n_correct for biases as the maximum possible count for value comparison
     _bias_rl = ((block_performance['trials_to_correct'][ix_valid] - block_performance['prev_n_correct'][ix_valid]) /
-                (block_performance['trials_to_correct'][ix_valid] + block_performance['prev_n_correct'][ix_valid]))
+                (block_performance['trials_to_correct'][ix_valid] + block_performance['prev_n_correct'][ix_valid] + eps))
     bias_rl = base_array.copy()
     bias_rl[ix_valid] = _bias_rl.to_numpy()
 
@@ -438,9 +457,10 @@ def run_analysis(trial_df: pd.DataFrame, session: Session):
                   sess_id=session.sess_id_full, session_save_path=session.processed_data_path,
                   overall_save_path=session.multi_session_save_path)
 
-    multisession_performance = pd.read_csv(session.processed_data_path / (session.sess_id_full + '_.csv'), sep=',', na_filter=False)
+    # multisession_df = pd.read_csv(session.processed_data_path / (session.sess_id_full + '.csv'), sep=',', na_filter=False)
     multisession_df, block_performance, augmented_trial_df = load_analysis(session.sess_id_full, session.processed_data_path,
                                                                            session.multi_session_save_path)
+    return augmented_trial_df, block_performance, multisession_df
 
 
 def main():

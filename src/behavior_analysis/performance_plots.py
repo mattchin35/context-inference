@@ -9,8 +9,15 @@ from typing import Iterable
 import re
 
 
+cmap = plt.cm.tab20
+n_colors = cmap.N  # Number of discrete colors (10 for tab10)
+# Access by integer index (0 to N-1)
+all_colors = [cmap(i) for i in range(n_colors)]
+
 block_types = ['right_cued', 'left_cued', 'right_uncued', 'left_uncued', 'dark period']
-color_dict = {'right_cued': 'darkred', 'left_cued': 'darkblue', 'right_uncued': 'red', 'left_uncued': 'blue', 'dark period': 'black'}
+# color_dict = {'right_cued': 'darkred', 'left_cued': 'darkblue', 'right_uncued': 'red', 'left_uncued': 'blue', 'dark period': 'black'}
+color_dict = {'right_cued': all_colors[1], 'left_cued': all_colors[3],
+              'right_uncued': all_colors[0], 'left_uncued': all_colors[2], 'dark period': 'black'}
 state_dict = {0: 'right', 1: 'left'}
 
 
@@ -89,7 +96,8 @@ def plot_trials_to_correct_summary(block_performance: pd.DataFrame, plot_path: P
     plt.close('all')
 
 
-def scatter_trials_to_correct(block_performance: pd.DataFrame, slope: float, intercept: float, plot_path: Path, figure_id: str):
+def scatter_trials_to_correct(block_performance: pd.DataFrame, slope: float, intercept: float, plot_path: Path,
+                              figure_id: str, title=None):
     f1, ax1 = plt.subplots()
     x = np.arange(len(block_performance))
     ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
@@ -110,8 +118,15 @@ def scatter_trials_to_correct(block_performance: pd.DataFrame, slope: float, int
 
     plt.ylabel('Trials to Correct')
     plt.xlabel('Consecutive Rewards')
-    plt.title('{} Trials to Switch vs Rewards'.format(figure_id))
-    plt.legend(fancybox=False)
+    if title is not None:
+        plt.title('{} Trials to Switch vs Rewards'.format(title))
+    else:
+        plt.title('{} Trials to Switch vs Rewards'.format(figure_id))
+
+    # plt.legend(fancybox=False)
+    plt.legend(frameon=False)
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
 
     plt.tight_layout()
     save_path = plot_path / '{}_scatter_trials-to-correct.png'.format(figure_id)
@@ -162,7 +177,8 @@ def plot_session_nswitches(block_performance: pd.DataFrame, plot_path: Path, ses
     plt.close('all')
 
 
-def plot_multisession_trials_to_correct(overall_df: pd.DataFrame, plot_path: Path, figure_id: str, use_dates: bool=True):
+def plot_multisession_trials_to_correct(overall_df: pd.DataFrame, plot_path: Path, figure_id: str,
+                                        use_dates: bool=True):
     block_types = ['right_cued_trials_to_correct', 'left_cued_trials_to_correct',
                    'right_uncued_trials_to_correct', 'left_uncued_trials_to_correct']
     color_dict = {'right_cued_trials_to_correct': 'darkred', 'left_cued_trials_to_correct': 'darkblue',
@@ -197,7 +213,7 @@ def plot_multisession_trials_to_correct(overall_df: pd.DataFrame, plot_path: Pat
 
 def plot_learning_curve(coefficients: np.ndarray, switches_per_session: np.ndarray, figure_id: str, plot_path: Path, dates: list[str]=None):
     f, ax = plt.subplots()
-    plt.plot(np.arange(1, len(coefficients) + 1), coefficients, 'ko')
+    plt.plot(np.arange(1, len(coefficients) + 1), coefficients, 'ko-')
     plt.axhline(0, color='gray', linestyle='--')
     plt.xlabel('Day', fontsize=16)
     plt.ylabel('Regression Coefficient', fontsize=18)
@@ -254,57 +270,21 @@ def main_single_session():
     slope = multisession_df.loc[multisession_df['date']==date, 'slope'].values[0]
     intercept = multisession_df.loc[multisession_df['date']==date, 'intercept'].values[0]
     scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
-                              plot_path=session_figure_path, figure_id=sess_id_full)
-    plot_learning_curve(multisession_df['slope'], multisession_df['n_switches'], figure_id=mouse, plot_path=multisession_save_path,
-                        dates=multisession_df['date'].values)
+                              plot_path=session_figure_path, figure_id=sess_id_full,
+                              title=sess_id_abbreviated)
+    # plot_learning_curve(multisession_df['slope'], multisession_df['n_switches'], figure_id=mouse,
+    #                     plot_path=multisession_save_path, dates=multisession_df['date'].values)
 
 
 def main_multiple_sessions():
-    plot_path = Path('../../reports/figures')
-    experiment_folder = Path('/home/matt/Documents/EXPERIMENTS/')
-    # experiment_folder = Path('C:/Users/mattc/EinsteinMed Dropbox/Matthew Chin/phd_data/remotework/EXPERIMENTS/')
-    raw_data_path = experiment_folder / 'raw_behavior_data'
-    processed_data_path = experiment_folder / 'processed_data'
-    # data_path = Path('../../data/processed')
-
-    ### Plotting for multiple sessions ###
-    mouse = ['CT010']
-    date = ['2024-08-23']
-
-    # date = ['2024-08-22', '2024-08-23', '2024-08-26', '2024-08-28', '2024-08-29',
-    #         '2024-08-30', '2024-09-06', '2024-09-07']
-    # mouse = ['CT005'] * len(date)
-
-    # block_performance_list = []
-    # for m, d in zip(mouse, date):
-    #     sess_ID = m + '_' + d
-    #     mouse_plot_path = plot_path / m / 'performance_plots'
-    #     if not mouse_plot_path.exists():
-    #         mouse_plot_path.mkdir()
-    #
-    #     overall_df, block_performance, choices_df = session_analysis.load_analysis(m, d, data_path)
-    #     plot_session_correct(block_performance, mouse_plot_path, sess_ID)
-    #     plot_session_trials_to_correct(block_performance, mouse_plot_path, sess_ID)
-    #
-    #     ix = overall_df['date'] == d
-    #     if not ix.any():
-    #         print('No data for {}'.format(d))
-    #         continue
-    #
-    #     slope = overall_df.loc[overall_df['date'] == d, 'slope'].values[0]
-    #     intercept = overall_df.loc[overall_df['date'] == d, 'intercept'].values[0]
-    #     scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
-    #                               plot_path=mouse_plot_path, figure_id=sess_ID)
-    #
-    #     block_performance_list.append(block_performance)
-
-    # block_performance_combined = pd.concat(block_performance_list, axis=0, ignore_index=True)
-    # plot_trials_to_correct_summary(block_performance_combined, mouse_plot_path, figure_id=mouse[0])
-
-    overall_df = pd.read_csv(processed_data_path / mouse[0] / (mouse[0] + '_overall_performance.csv'))
-    overall_df.sort_values(by='date', inplace=True)
+    multisession_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
+    mouse = 'CT014'
+    multisession_df = pd.read_csv(multisession_save_path / (mouse + '_overall_performance.csv'), sep=',', na_filter=False)
+    multisession_df.sort_values(by='date', inplace=True)
     # plot_learning_curve(overall_df['slope'], overall_df['n_switches'], figure_id=mouse[0], plot_path=mouse_plot_path)
-    plot_learning_curve(overall_df['slope'], overall_df['n_switches'], figure_id=mouse[0], plot_path=processed_data_path / mouse[0])
+    plot_learning_curve(multisession_df['slope'], multisession_df['n_switches'], figure_id=mouse,
+                        plot_path=multisession_save_path,
+                        dates=multisession_df['date'].values)
 
 
 def main():
