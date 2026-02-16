@@ -298,9 +298,9 @@ def main():
                                                                                             session_data_folder=processed_data_path,
                                                                                             multisession_data_folder=multi_session_save_path)
 
-    # model_selection = bssm.run_information_criteria(block_performance, session=sess, prior_alpha=1, prior_sigma=1)
-    block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=1,
-                                                                    prior_alpha=1, prior_sigma=1)
+    model_selection = bssm.run_information_criteria(block_performance, session=sess, prior_alpha=1, prior_sigma=1)
+    # block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=1,
+    #                                                                 prior_alpha=1, prior_sigma=1)
     # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
     # with open(block_model_dict_path, 'rb') as file:
     #     block_model_dict = pkl.load(file)

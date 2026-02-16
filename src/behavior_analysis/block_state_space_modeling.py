@@ -382,7 +382,7 @@ def run_information_criteria(block_performance: pd.DataFrame, session: Session, 
     predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
     # predictors = prev_rewards
     min_states = 1
-    max_states = 4
+    max_states = 5
     n_threads = 4
     n_runs = 5
 
@@ -400,14 +400,14 @@ def single_func(observations: np.ndarray, inputs: np.ndarray, num_states: int,
     obs_dim, input_dim = observations.shape[1], inputs.shape[1]
 
     # MLE
-    # hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
-    #                    observations="input_driven_obs_gaussian", transitions="standard")
+    hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
+                       observations="input_driven_obs_gaussian", transitions="standard")
 
     # MAP
-    hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
-                      observations="input_driven_obs_gaussian",
-                      observation_kwargs=dict(prior_sigma=prior_sigma),
-                      transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
+    # hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
+    #                   observations="input_driven_obs_gaussian",
+    #                   observation_kwargs=dict(prior_sigma=prior_sigma),
+    #                   transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
 
     hmm_lls = hmm.fit(observations, inputs=inputs, method="em", num_iters=n_iter, tolerance=tol)
     out = hmm.log_likelihood(observations, inputs=inputs)
@@ -428,7 +428,17 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
         print("running {} state(s)".format(num_states))
 
         K = (num_states + 1) * (num_states - 1) + num_states * (obs_dim * input_dim + 2 * obs_dim)
-        delayed_calls = [delayed(single_func)(observations, inputs, num_states, prior_alpha, prior_sigma) for iRun in range(nRunEM)]
+        # delayed_calls = [delayed(single_func)(observations, inputs, num_states, prior_alpha, prior_sigma) for iRun in range(nRunEM)]
+        delayed_calls = [
+            delayed(single_func)(
+                observations, inputs, num_states,
+                n_iter=1000,
+                tol=1e-4,
+                prior_alpha=prior_alpha,
+                prior_sigma=prior_sigma
+            )
+            for iRun in range(nRunEM)
+        ]
         results = Parallel(n_jobs=-1)(delayed_calls)
         # results = Parallel(n_jobs=n_jobs)(delayed_calls)
         # results = [single_func(observations, inputs, num_states) for iRun in range(nRunEM)]
