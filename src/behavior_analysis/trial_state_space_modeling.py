@@ -750,17 +750,17 @@ def plot_information_criteria(aic, bic, states, session: Session):
     x = np.arange(1, n_states + 1)
     y = np.mean(bic, 1)
     error = np.std(bic, 1)
-    # plt.plot(x, y, label="BIC")
-    # plt.fill_between(x, y - error, y + error,
-    #                  alpha=0.5, edgecolor='#CC4F1B', facecolor='#FF9848')
-    plt.plot(states, y, label="BIC")
+    bic_line = plt.plot(states, y, label="BIC")[0]
+    bic_color = bic_line.get_color()
     plt.fill_between(states, y - error, y + error,
-                     alpha=0.5, edgecolor='#CC4F1B', facecolor='#FF9848')
+                     alpha=0.3, color=bic_color)
 
     y = np.mean(aic, 1)
     error = np.std(aic, 1)
-    # plt.plot(x, y, label="AIC")
-    plt.plot(states, y, label="AIC")
+    aic_line = plt.plot(states, y, label="AIC")[0]
+    aic_color = aic_line.get_color()
+    plt.fill_between(states, y - error, y + error,
+                     alpha=0.3, color=aic_color)
     plt.xlabel("states")
     # plt.xlim(0, max_states + 1)
     plt.xlim(np.amin(states)-.2, np.amax(states)+.2)

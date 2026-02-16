@@ -384,7 +384,7 @@ def run_information_criteria(block_performance: pd.DataFrame, session: Session, 
     predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
     # predictors = prev_rewards
     min_states = 1
-    max_states = 4
+    max_states = 5
     n_threads = 4
     n_runs = 5
 
@@ -399,27 +399,150 @@ def run_information_criteria(block_performance: pd.DataFrame, session: Session, 
     return model_selection
 
 
-def single_func(observations: np.ndarray, inputs: np.ndarray, num_states: int, algorithm: str = 'MLE',
-                n_iter: int=1000, tol: float=10**-4, prior_alpha=1, prior_sigma=1):
-
-    obs_dim, input_dim = observations.shape[1], inputs.shape[1]
-
+def build_input_driven_hmm(num_states: int, obs_dim: int, input_dim: int,
+                           algorithm: str = 'MLE', prior_alpha: float = 1, prior_sigma: float = 1):
+    """Build an input-driven LM-HMM using either MLE or MAP settings."""
     algorithm = algorithm.upper()
     if algorithm == 'MLE':
-        hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
-                      observations="input_driven_obs_gaussian", transitions="standard")
-    elif algorithm == 'MAP':
-        hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
-                      observations="input_driven_obs_gaussian",
-                      observation_kwargs=dict(prior_sigma=prior_sigma),
-                      transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
-    else:
-        raise ValueError(f"algorithm must be 'MLE' or 'MAP', got {algorithm}")
+        return ssm.HMM(num_states, obs_dim, M=input_dim,
+                       observations="input_driven_obs_gaussian", transitions="standard")
+    if algorithm == 'MAP':
+        return ssm.HMM(num_states, obs_dim, M=input_dim,
+                       observations="input_driven_obs_gaussian",
+                       observation_kwargs=dict(prior_sigma=prior_sigma),
+                       transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
+    raise ValueError(f"algorithm must be 'MLE' or 'MAP', got {algorithm}")
 
 
-    hmm_lls = hmm.fit(observations, inputs=inputs, method="em", num_iters=n_iter, tolerance=tol)
+def single_func(observations: np.ndarray, inputs: np.ndarray, num_states: int, algorithm: str = 'MLE',
+                n_iter: int=1000, tol: float=10**-4, prior_alpha=1, prior_sigma=1):
+    obs_dim, input_dim = observations.shape[1], inputs.shape[1]
+    hmm = build_input_driven_hmm(num_states=num_states, obs_dim=obs_dim, input_dim=input_dim,
+                                 algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma)
+    hmm.fit(observations, inputs=inputs, method="em", num_iters=n_iter, tolerance=tol)
     out = hmm.log_likelihood(observations, inputs=inputs)
     return out
+
+
+def single_crossval_func(observations: np.ndarray, inputs: np.ndarray, num_states: int, n_folds: int = 5,
+                         algorithm: str = 'MLE', n_iter: int = 1000, tol: float = 1e-4,
+                         prior_alpha: float = 1, prior_sigma: float = 1):
+    """Run contiguous-fold CV for one state count and one random initialization."""
+    n_timesteps = observations.shape[0]
+    if n_folds < 2 or n_folds > n_timesteps:
+        raise ValueError(f"n_folds must be in [2, {n_timesteps}], got {n_folds}")
+
+    obs_dim, input_dim = observations.shape[1], inputs.shape[1]
+    fold_indices = np.array_split(np.arange(n_timesteps), n_folds)
+    fold_log_likelihoods = np.zeros(n_folds)
+
+    for i_fold, test_idx in enumerate(fold_indices):
+        train_mask = np.ones(n_timesteps, dtype=bool)
+        train_mask[test_idx] = False
+
+        hmm = build_input_driven_hmm(num_states=num_states, obs_dim=obs_dim, input_dim=input_dim,
+                                     algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma)
+        hmm.fit(observations[train_mask], inputs=inputs[train_mask], method="em", num_iters=n_iter, tolerance=tol)
+        fold_log_likelihoods[i_fold] = hmm.log_likelihood(observations[test_idx], inputs=inputs[test_idx])
+
+    return fold_log_likelihoods
+
+
+def calculate_cross_validation_scores(observations: np.ndarray, inputs: np.ndarray, states: np.ndarray,
+                                      nRunEM: int = 5, n_folds: int = 5, n_jobs: int = 4,
+                                      algorithm: str = 'MLE', prior_alpha: float = 1, prior_sigma: float = 1):
+    """Compute held-out log-likelihoods with contiguous-fold cross-validation."""
+    n_states = states.size
+    cv_ll = np.zeros((n_states, nRunEM, n_folds))
+
+    for iS, num_states in enumerate(states):
+        print(f"cross-validating {num_states} state(s)")
+        delayed_calls = [
+            delayed(single_crossval_func)(
+                observations, inputs, num_states,
+                n_folds=n_folds,
+                algorithm=algorithm,
+                n_iter=1000,
+                tol=1e-4,
+                prior_alpha=prior_alpha,
+                prior_sigma=prior_sigma
+            )
+            for _ in range(nRunEM)
+        ]
+        run_results = Parallel(n_jobs=n_jobs)(delayed_calls)
+        cv_ll[iS] = np.asarray(run_results)
+
+    return cv_ll
+
+
+def plot_cross_validation_scores(cv_log_likelihoods: np.ndarray, states: np.ndarray, session: Session):
+    """Plot cross-validated held-out log likelihood by number of states."""
+    mean_ll = np.mean(cv_log_likelihoods, axis=(1, 2))
+    sem_ll = np.std(cv_log_likelihoods, axis=(1, 2)) / np.sqrt(cv_log_likelihoods.shape[1] * cv_log_likelihoods.shape[2])
+
+    f, ax = plt.subplots(facecolor='w', edgecolor='k')
+    cv_line = plt.plot(states, mean_ll, label="Cross-validated LL")[0]
+    cv_color = cv_line.get_color()
+    plt.fill_between(states, mean_ll - sem_ll, mean_ll + sem_ll, alpha=0.3, color=cv_color)
+    plt.xlabel("states")
+    plt.xticks(states)
+    plt.ylabel("held-out log likelihood")
+    plt.legend(loc="upper left", frameon=False)
+    plt.title("Cross-validated model selection", fontsize=20)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.tight_layout()
+
+    save_path = session.figure_path / f'{session.sess_id_full}_block_HMM_CV_loglikelihood.png'
+    plt.gcf().savefig(save_path, format='png', dpi=300)
+    plt.show()
+
+    return {'CV_log_likelihood': cv_log_likelihoods, 'states': states}
+
+
+def run_cross_validation(block_performance: pd.DataFrame, session: Session, algorithm: str = 'MLE',
+                         prior_alpha: float = 1, prior_sigma: float = 1,
+                         min_states: int = 1, max_states: int = 5,
+                         n_threads: int = 4, n_runs: int = 5, n_folds: int = 5):
+    """Run contiguous-fold cross-validation over number of hidden states for block LM-HMM."""
+    ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
+    df = block_performance[ix_valid]
+
+    prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
+    trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
+    bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
+    predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
+
+    states = np.arange(min_states, max_states + 1)
+    cv_ll = calculate_cross_validation_scores(observations=trials_to_correct, inputs=predictors, states=states,
+                                              nRunEM=n_runs, n_folds=n_folds, n_jobs=n_threads,
+                                              algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma)
+    return plot_cross_validation_scores(cv_ll, states, session)
+
+# def single_func(observations: np.ndarray, inputs: np.ndarray, num_states: int, algorithm: str = 'MLE',
+#                 n_iter: int=1000, tol: float=10**-4, prior_alpha=1, prior_sigma=1):
+#
+#     obs_dim, input_dim = observations.shape[1], inputs.shape[1]
+#
+#     algorithm = algorithm.upper()
+#     if algorithm == 'MLE':
+#         hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
+#                       observations="input_driven_obs_gaussian", transitions="standard")
+#     elif algorithm == 'MAP':
+#         hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
+#                       observations="input_driven_obs_gaussian",
+#                       observation_kwargs=dict(prior_sigma=prior_sigma),
+#                       transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
+#     else:
+#         raise ValueError(f"algorithm must be 'MLE' or 'MAP', got {algorithm}")
+#
+#
+#     hmm_lls = hmm.fit(observations, inputs=inputs, method="em", num_iters=n_iter, tolerance=tol)
+#     out = hmm.log_likelihood(observations, inputs=inputs)
+#     return out
+
+
+
 
 
 def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray, states: np.ndarray, nRunEM: int, n_jobs: int,
@@ -440,6 +563,7 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
         delayed_calls = [
             delayed(single_func)(
                 observations, inputs, num_states,
+                algorithm=algorithm,
                 n_iter=1000,
                 tol=1e-4,
                 prior_alpha=prior_alpha,
@@ -448,7 +572,6 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
             for iRun in range(nRunEM)
         ]
         results = Parallel(n_jobs=n_jobs)(delayed_calls)
-        # results = Parallel(n_jobs=n_jobs)(delayed_calls)
         # results = [single_func(observations, inputs, num_states) for iRun in range(nRunEM)]
 
         for iRun in range(nRunEM):
@@ -466,17 +589,17 @@ def plot_information_criteria(aic, bic, states, session: Session):
     # x = np.arange(1, n_states + 1)
     y = np.mean(bic, 1)
     error = np.std(bic, 1)
-    # plt.plot(x, y, label="BIC")
-    # plt.fill_between(x, y - error, y + error,
-    #                  alpha=0.5, edgecolor='#CC4F1B', facecolor='#FF9848')
-    plt.plot(states, y, label="BIC")
+    bic_line = plt.plot(states, y, label="BIC")[0]
+    bic_color = bic_line.get_color()
     plt.fill_between(states, y - error, y + error,
-                     alpha=0.5, edgecolor='#CC4F1B', facecolor='#FF9848')
+                     alpha=0.3, color=bic_color)
 
     y = np.mean(aic, 1)
     error = np.std(aic, 1)
-    # plt.plot(x, y, label="AIC")
-    plt.plot(states, y, label="AIC")
+    aic_line = plt.plot(states, y, label="AIC")[0]
+    aic_color = aic_line.get_color()
+    plt.fill_between(states, y - error, y + error,
+                     alpha=0.3, color=aic_color)
     plt.xlabel("states")
     # plt.xlim(0, max_states + 1)
     # plt.xlim(np.amin(states)-1, np.amax(states) + 1)
