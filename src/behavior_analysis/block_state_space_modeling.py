@@ -367,7 +367,9 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
     return block_performance, augmented_trial_df
 
 
-def run_information_criteria(block_performance: pd.DataFrame, session: Session, prior_alpha: float, prior_sigma: float):
+def run_information_criteria(block_performance: pd.DataFrame, session: Session, algorithm: str = 'MLE',
+                             prior_alpha: float = 1, prior_sigma: float = 1):
+    assert algorithm in ['MLE', 'MAP'], "algorithm must be either 'MLE' or 'MAP'"
     ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
     df = block_performance[ix_valid]
     # df = df[1:]
@@ -382,32 +384,38 @@ def run_information_criteria(block_performance: pd.DataFrame, session: Session, 
     predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
     # predictors = prev_rewards
     min_states = 1
-    max_states = 5
+    max_states = 4
     n_threads = 4
     n_runs = 5
 
     states = np.arange(min_states,max_states+1)
-    AIC, BIC = calculate_information_criteria(observations=trials_to_correct, inputs=predictors, states=states,
-                                              nRunEM=n_runs, n_jobs=n_threads,
+    # calculate_information_criteria returns (BIC, AIC) in that order.
+    # calculate_information_criteria returns (BIC, AIC) in that order.
+    BIC, AIC = calculate_information_criteria(observations=trials_to_correct, inputs=predictors, states=states,
+                                              nRunEM=n_runs, n_jobs=n_threads, algorithm=algorithm,
                                               prior_alpha=prior_alpha, prior_sigma=prior_sigma)
+
     model_selection = plot_information_criteria(AIC, BIC, states, session)
     return model_selection
 
 
-def single_func(observations: np.ndarray, inputs: np.ndarray, num_states: int,
+def single_func(observations: np.ndarray, inputs: np.ndarray, num_states: int, algorithm: str = 'MLE',
                 n_iter: int=1000, tol: float=10**-4, prior_alpha=1, prior_sigma=1):
 
     obs_dim, input_dim = observations.shape[1], inputs.shape[1]
 
-    # MLE
-    hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
-                       observations="input_driven_obs_gaussian", transitions="standard")
+    algorithm = algorithm.upper()
+    if algorithm == 'MLE':
+        hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
+                      observations="input_driven_obs_gaussian", transitions="standard")
+    elif algorithm == 'MAP':
+        hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
+                      observations="input_driven_obs_gaussian",
+                      observation_kwargs=dict(prior_sigma=prior_sigma),
+                      transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
+    else:
+        raise ValueError(f"algorithm must be 'MLE' or 'MAP', got {algorithm}")
 
-    # MAP
-    # hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
-    #                   observations="input_driven_obs_gaussian",
-    #                   observation_kwargs=dict(prior_sigma=prior_sigma),
-    #                   transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
 
     hmm_lls = hmm.fit(observations, inputs=inputs, method="em", num_iters=n_iter, tolerance=tol)
     out = hmm.log_likelihood(observations, inputs=inputs)
@@ -415,7 +423,7 @@ def single_func(observations: np.ndarray, inputs: np.ndarray, num_states: int,
 
 
 def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray, states: np.ndarray, nRunEM: int, n_jobs: int,
-                                   prior_alpha: float, prior_sigma: float):
+                                   algorithm: str = 'MLE', prior_alpha: float = 1, prior_sigma: float = 1):
     # Number of parameters for the model: (transition matrix) + (mean values for each state) + (covariance matrix for each state)
     obs_dim = observations.shape[1] # make sure observations are T x Dim??
     n_timesteps = observations.shape[0]
@@ -439,7 +447,7 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
             )
             for iRun in range(nRunEM)
         ]
-        results = Parallel(n_jobs=-1)(delayed_calls)
+        results = Parallel(n_jobs=n_jobs)(delayed_calls)
         # results = Parallel(n_jobs=n_jobs)(delayed_calls)
         # results = [single_func(observations, inputs, num_states) for iRun in range(nRunEM)]
 
