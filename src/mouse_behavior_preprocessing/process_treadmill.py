@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import re
@@ -5,8 +6,8 @@ from icecream import ic
 from pathlib import Path
 from datetime import datetime, timezone
 from src.irig_tools import irig_h_gpio as irig
-import pynapple as nap
 from typing import Optional, Any
+
 
 
 def read_treadmill_file(treadmill_file: str) -> list:
@@ -134,7 +135,7 @@ def calculate_cumuluative_times(treadmill_df: pd.DataFrame) -> pd.DataFrame:
     return treadmill_df
 
 
-def decode_irig_times(treadmill_df: pd.DataFrame) -> pd.DataFrame:
+def decode_irig_times(treadmill_df: pd.DataFrame, interpolate_irig=True) -> pd.DataFrame:
     """
     Get the Unix/UTC times for all events, combining the IRIG signals with the Teensy encoded times.
     Use the IRIG pulses to get the pulse times and interpolate the Teensy signals to the corresponding values,
@@ -185,24 +186,126 @@ def decode_irig_times(treadmill_df: pd.DataFrame) -> pd.DataFrame:
     #     unix_time[frameix_decoded[ix]:frameix_decoded[ix + 1]] = unix_time[frameix_decoded[ix]] + treadmill_df['cumulative_time'].iloc[frameix_decoded[ix]:frameix_decoded[ix + 1]] - treadmill_df['cumulative_time'].iloc[frameix_decoded[ix]]
     # unix_time[frameix_decoded[-1]:] = posix_decoded[-1] + treadmill_df['cumulative_time'].iloc[frameix_decoded[-1]:] - treadmill_df['cumulative_time'].iloc[frameix_decoded[-1]]
 
-    unix_time_fordf = np.ones(treadmill_df.shape[0]) * np.nan
-    unix_time_fordf[irig_bit_ix] = unix_time
+    if interpolate_irig:
+        ## interpolation strategy - use irig bit indices as the known points and interpolate the unix times for all other points based on the cumulative times
+        unix_time_fordf = np.ones(treadmill_df.shape[0]) * np.nan
+        unix_time_fordf[irig_bit_ix] = unix_time
 
-    # get all the other unix times based on the cumsum strategy from before. I should convert this to interpolation
-    first_unix_ix = np.where(~np.isnan(unix_time_fordf))[0][0]
-    unix_time_fordf[:first_unix_ix] = unix_time[0] - (
+        # Interpolate Unix time from IRIG-anchored points in cumulative-time space.
+        known_ix = np.where(~np.isnan(unix_time_fordf))[0]
+        known_unix = unix_time_fordf[known_ix]
+        cumulative_time = treadmill_df['cumulative_time'].to_numpy(dtype=float)
+        known_cumulative = cumulative_time[known_ix]
+
+        if known_ix.size < 2:
+            raise ValueError("Need at least two IRIG anchor points to interpolate unix times.")
+
+        unix_time_fordf = np.interp(cumulative_time, known_cumulative, known_unix)
+
+        # np.interp clamps outside bounds; replace with linear extrapolation at both ends.
+        left_mask = cumulative_time < known_cumulative[0]
+        right_mask = cumulative_time > known_cumulative[-1]
+
+        left_den = known_cumulative[1] - known_cumulative[0]
+        right_den = known_cumulative[-1] - known_cumulative[-2]
+        left_slope = (known_unix[1] - known_unix[0]) / left_den if left_den != 0 else 1.0
+        right_slope = (known_unix[-1] - known_unix[-2]) / right_den if right_den != 0 else 1.0
+
+        unix_time_fordf[left_mask] = known_unix[0] + (cumulative_time[left_mask] - known_cumulative[0]) * left_slope
+        unix_time_fordf[right_mask] = known_unix[-1] + (cumulative_time[right_mask] - known_cumulative[-1]) * right_slope
+
+        # Keep anchors exact after interpolation/extrapolation.
+        unix_time_fordf[known_ix] = known_unix
+
+    else:
+        # get all the other unix times based on the cumsum strategy from before
+        unix_time_fordf = np.ones(treadmill_df.shape[0]) * np.nan
+        unix_time_fordf[irig_bit_ix] = unix_time
+
+        first_unix_ix = np.where(~np.isnan(unix_time_fordf))[0][0]
+        unix_time_fordf[:first_unix_ix] = unix_time[0] - (
                 treadmill_df['cumulative_time'].iloc[first_unix_ix] - treadmill_df['cumulative_time'].iloc[:first_unix_ix][::-1])
-    last_unixtime = unix_time_fordf[first_unix_ix]
-    for ix in range(first_unix_ix, treadmill_df.shape[0]):
-        if irig_bit_ix[ix]:
-            last_unixtime = unix_time_fordf[ix]
-        else:
-            unix_time_fordf[ix] = last_unixtime + treadmill_df['time_value'].iloc[ix]
+        last_unixtime = unix_time_fordf[first_unix_ix]
+        for ix in range(first_unix_ix, treadmill_df.shape[0]):
+            if irig_bit_ix[ix]:
+                last_unixtime = unix_time_fordf[ix]
+            else:
+                unix_time_fordf[ix] = last_unixtime + treadmill_df['time_value'].iloc[ix]
 
     datetime_for_df = [datetime.fromtimestamp(t) for t in unix_time_fordf[~np.isnan(unix_time_fordf)]]
     treadmill_df['unix_time'] = unix_time_fordf
     treadmill_df['datetime'] = datetime_for_df
     return treadmill_df
+
+
+def gather_runspeed(treadmill_df: pd.DataFrame, plot=False) -> pd.DataFrame:
+    """
+    Pull the run speeds from the treadmill dataframe, alongside the times they occur.
+    """
+    ix = treadmill_df['event_label'] == 'runSpeed'
+    runspeed_df = treadmill_df.loc[ix, ['event_label', 'unix_time', 'event_value']].copy()
+    runspeed_df = runspeed_df.sort_values('unix_time').reset_index(drop=True)
+
+    if plot:
+        plt.figure(figsize=(10, 4))
+        plt.plot(runspeed_df['unix_time'], pd.to_numeric(runspeed_df['event_value'], errors='coerce'), drawstyle='steps-post')
+        plt.xlabel('Unix Time (s)')
+        plt.ylabel('Run Speed')
+        plt.title('Run Speed Over Time in Steps')
+        plt.show()
+
+    return runspeed_df
+
+
+def gather_runspeed_with_buffer(treadmill_df: pd.DataFrame, plot=False) -> pd.DataFrame:
+    """
+    Pull the run speeds from the treadmill dataframe, alongside the times they occur. Adds a zero runspeed before
+    after long periods at rest to allow for linear interpolation. But stepwise interpolation may be doable and better
+    """
+    ix = treadmill_df['event_label'] == 'runSpeed'
+    runspeed_df = treadmill_df.loc[ix, ['event_label', 'unix_time', 'event_value']].copy()
+    runspeed_df = runspeed_df.sort_values('unix_time').reset_index(drop=True)
+    unchanged_runspeed_df = runspeed_df.copy(deep=True)  # for sanity checking later, to make sure we aren't changing any values with the insertion of zero points
+
+    if runspeed_df.empty:
+        return runspeed_df
+
+    event_values = pd.to_numeric(runspeed_df['event_value'], errors='coerce')
+    run_times = runspeed_df['unix_time'].to_numpy(dtype=float)
+    zero_gap_threshold = 0.002  # 2 ms
+    insert_offset = 0.001  # 1 ms
+
+    inserted_rows = []
+    for i in range(len(runspeed_df) - 1):
+        if event_values.iloc[i] != 0:
+            continue
+
+        next_time = run_times[i + 1]
+        current_time = run_times[i]
+        if (next_time - current_time) > zero_gap_threshold:
+            inserted_rows.append(
+                {
+                    'event_label': 'runSpeed',
+                    'unix_time': next_time - insert_offset,
+                    'event_value': 0,
+                }
+            )
+
+    if inserted_rows:
+        runspeed_df = pd.concat([runspeed_df, pd.DataFrame(inserted_rows)], ignore_index=True)
+        runspeed_df = runspeed_df.sort_values('unix_time').reset_index(drop=True)
+
+    if plot:
+        plt.figure(figsize=(10, 4))
+        plt.plot(unchanged_runspeed_df['unix_time'], pd.to_numeric(unchanged_runspeed_df['event_value'], errors='coerce'), label='Original', drawstyle='steps-post')
+        plt.plot(runspeed_df['unix_time'], pd.to_numeric(runspeed_df['event_value'], errors='coerce'), label='With Inserted Zeros', drawstyle='steps-post')
+        plt.xlabel('Unix Time (s)')
+        plt.ylabel('Run Speed')
+        plt.title('Run Speed Over Time with Inserted Zero Points')
+        plt.legend()
+        plt.show()
+
+    return runspeed_df
 
 
 def main():
@@ -216,13 +319,16 @@ def main():
     sess_id = current_mouse + '_' + current_date
     sess_id_full = current_mouse + '_' + current_date + '_' + sess_timestamp
 
-    messages = read_treadmill_file(treadmill_file)
-    treadmill_df = interpret_treadmill_messages(messages)
-    treadmill_df = calculate_cumuluative_times(treadmill_df)
-    treadmill_df = decode_irig_times(treadmill_df)
-
+    # messages = read_treadmill_file(treadmill_file)
+    # treadmill_df = interpret_treadmill_messages(messages)
+    # treadmill_df = calculate_cumuluative_times(treadmill_df)
+    # treadmill_df = decode_irig_times(treadmill_df)
+    #
     p = processed_data_path / (sess_id_full + '_treadmill.csv')
-    treadmill_df.to_csv(p, index=False)
+    # treadmill_df.to_csv(p, index=False)
+
+    treadmill_df = pd.read_csv(p)
+    runspeed_df = gather_runspeed(treadmill_df, plot=False)
 
 
 if __name__ == '__main__':

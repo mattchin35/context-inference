@@ -6,7 +6,14 @@ from pathlib import Path
 import readSGLX
 from icecream import ic
 import time
+import numpy.typing as npt
+import re
+import pickle as pkl
 
+"""
+This module attempts to synchronize across the DAQ and probe sync lines. It appears to be intended for use AFTER SPIKE 
+SORTING, as it attempts to synchronize spike times.
+"""
 
 class DAQ:
 
@@ -31,7 +38,10 @@ class DAQ:
         return time * self.sample_rate
 
 
-def get_events(data: np.ndarray, sample_rate: float, threshold: float = 0.5, debounce=.0002):
+def get_events(data: np.ndarray, sample_rate: float, threshold: float = 0.5, debounce=.0002) -> \
+        tuple[npt.NDArray[np.int64], npt.NDArray[np.float64], npt.NDArray[np.int64], npt.NDArray[np.float64]]:
+    """Get positive and negative crossings from a digital signal. Returns the indices and timestamps of the crossings.
+    Timestamps are calculated by sample rate and indices, not UTC time."""
     # crossings = np.diff(data > threshold, prepend=False)
     boolean_signal = data.astype(bool)
     if len(data.shape) == 2:
@@ -54,7 +64,8 @@ def get_events(data: np.ndarray, sample_rate: float, threshold: float = 0.5, deb
     return pos_ix, pos_t, neg_ix, neg_t
 
 
-def get_positive_crossings(pos_ix: np.ndarray, neg_ix: np.ndarray, sample_rate: float, debounce: float) -> [np.ndarray, np.ndarray]:
+def get_positive_crossings(pos_ix: np.ndarray, neg_ix: np.ndarray, sample_rate: float, debounce: float) -> \
+        tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
     neg_ix = neg_ix[neg_ix > pos_ix[0]]
     pos_t, neg_t = pos_ix / sample_rate, neg_ix / sample_rate
     for p, n in zip(pos_t, neg_t):
@@ -66,7 +77,8 @@ def get_positive_crossings(pos_ix: np.ndarray, neg_ix: np.ndarray, sample_rate: 
     return pos_ix, pos_t
 
 
-def get_negative_crossings(pos_ix: np.ndarray, neg_ix: np.ndarray, sample_rate: float, debounce=float) -> [np.ndarray, np.ndarray]:
+def get_negative_crossings(pos_ix: np.ndarray, neg_ix: np.ndarray, sample_rate: float, debounce=float) -> \
+        tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
     pos_ix = pos_ix[pos_ix > neg_ix[0]]
     pos_t, neg_t = pos_ix / sample_rate, neg_ix / sample_rate
     for p, n in zip(pos_t, neg_t):
@@ -491,7 +503,33 @@ def volts2speed(mVolts: np.ndarray) -> np.ndarray:
 
 
 def main():
-    # experiment_folder = Path('/home/matt/Documents/EXPERIMENTS/')
+
+    ### Behavior paths ###
+    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference')
+    sess_id_full = 'CT014_2025-12-16_153200'
+    raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
+    processed_data_path = session_data_home / 'processed'
+    figure_path = session_data_home / 'figures'
+
+    pattern = r'(\w+)_([\d\-]+)_(\d+)'
+    match = re.search(pattern, sess_id_full)
+
+    if match:
+        mouse, date, timestamp = match.groups()
+        print(f"Mouse id: {mouse}")  # abc123
+        print(f"Date: {date}")  # YYYY-MM-DD
+        print(f"Time: {timestamp}")  # HHMMSS
+        sess_id_abbreviated = mouse + '_' + date
+    else:
+        print("Double-check the session name!")
+        return
+
+    session_info_path = raw_behavior_folder / '{}_session_info.pkl'.format(sess_id_full)
+    assert session_info_path.exists(), "session_info at {} not found!".format(session_info_path)
+    with open(session_info_path, 'rb') as f:
+        session_info = pkl.load(f)
+
+    ### ephys paths ###
     experiment_folder = Path('C:/Users/mattc/EinsteinMed Dropbox/Matthew Chin/phd_data/remotework/EXPERIMENTS/')
     behavior_data_root = experiment_folder.joinpath('raw_behavior_data')
     ephys_data_root = experiment_folder.joinpath('processed_ephys_data')
