@@ -13,6 +13,9 @@ import pickle as pkl
 """
 This module attempts to synchronize across the DAQ and probe sync lines. It appears to be intended for use AFTER SPIKE 
 SORTING, as it attempts to synchronize spike times.
+
+It uses flipper barcodes to provide bounds for the session start and end. It does NOT use IRIG. Newer code should use
+IRIG timecodes, but this is will be kept as a backup for manual synchronization if IRIG fails. 
 """
 
 class DAQ:
@@ -504,30 +507,30 @@ def volts2speed(mVolts: np.ndarray) -> np.ndarray:
 
 def main():
 
-    ### Behavior paths ###
-    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference')
-    sess_id_full = 'CT014_2025-12-16_153200'
-    raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
-    processed_data_path = session_data_home / 'processed'
-    figure_path = session_data_home / 'figures'
-
-    pattern = r'(\w+)_([\d\-]+)_(\d+)'
-    match = re.search(pattern, sess_id_full)
-
-    if match:
-        mouse, date, timestamp = match.groups()
-        print(f"Mouse id: {mouse}")  # abc123
-        print(f"Date: {date}")  # YYYY-MM-DD
-        print(f"Time: {timestamp}")  # HHMMSS
-        sess_id_abbreviated = mouse + '_' + date
-    else:
-        print("Double-check the session name!")
-        return
-
-    session_info_path = raw_behavior_folder / '{}_session_info.pkl'.format(sess_id_full)
-    assert session_info_path.exists(), "session_info at {} not found!".format(session_info_path)
-    with open(session_info_path, 'rb') as f:
-        session_info = pkl.load(f)
+    # ### Behavior paths ###
+    # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference')
+    # sess_id_full = 'CT014_2025-12-16_153200'
+    # raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
+    # processed_data_path = session_data_home / 'processed'
+    # figure_path = session_data_home / 'figures'
+    #
+    # pattern = r'(\w+)_([\d\-]+)_(\d+)'
+    # match = re.search(pattern, sess_id_full)
+    #
+    # if match:
+    #     mouse, date, timestamp = match.groups()
+    #     print(f"Mouse id: {mouse}")  # abc123
+    #     print(f"Date: {date}")  # YYYY-MM-DD
+    #     print(f"Time: {timestamp}")  # HHMMSS
+    #     sess_id_abbreviated = mouse + '_' + date
+    # else:
+    #     print("Double-check the session name!")
+    #     return
+    #
+    # session_info_path = raw_behavior_folder / '{}_session_info.pkl'.format(sess_id_full)
+    # assert session_info_path.exists(), "session_info at {} not found!".format(session_info_path)
+    # with open(session_info_path, 'rb') as f:
+    #     session_info = pkl.load(f)
 
     ### ephys paths ###
     experiment_folder = Path('C:/Users/mattc/EinsteinMed Dropbox/Matthew Chin/phd_data/remotework/EXPERIMENTS/')

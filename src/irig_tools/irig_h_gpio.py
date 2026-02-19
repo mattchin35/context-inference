@@ -205,7 +205,7 @@ def find_timecode_starts(binary_list) -> List[int]:
         return []
     
     starts = [0] if first_bit else [] # list of indexes for when the timecodes start
-    flips = 1 if first_bit else 0     # if its already recieving timcodes at the start, change starting behavior
+    flips = 1 if first_bit else 0     # if its already receiving timecodes at the start, change starting behavior
     
     prev_bit = first_bit
     i = 1

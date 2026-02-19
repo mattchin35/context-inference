@@ -218,7 +218,7 @@ def decode_irig_times(treadmill_df: pd.DataFrame, interpolate_irig=True) -> pd.D
         unix_time_fordf[known_ix] = known_unix
 
     else:
-        # get all the other unix times based on the cumsum strategy from before
+        # get all the other unix times based on the cumsum strategy from before, adding cumulative times to the last known unix time at each irig bit
         unix_time_fordf = np.ones(treadmill_df.shape[0]) * np.nan
         unix_time_fordf[irig_bit_ix] = unix_time
 

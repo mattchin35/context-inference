@@ -6,7 +6,7 @@ import pandas as pd
 from pathlib import Path
 import src.external_tools.readSGLX as readSGLX
 import time
-# from icecream import ic
+from icecream import ic
 import pickle as pkl
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.linear_model import LinearRegression, LogisticRegression
