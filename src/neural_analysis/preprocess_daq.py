@@ -498,25 +498,31 @@ def main():
     ic(first_barcode_present_utc, second_barcode_present_utc)
 
     # ni analog treadmill signal
-    # tStart = 0
-    # tEnd = 15
-    # dataType = 'A'  # 'A' for analog, 'D' for digital data
-    # chanList = [0]
-    # meta = readSGLX.readMeta(ni_file)
-    # # Rate = readSGLX.SampRate(meta)
-    # firstSamp = int(daq_srate * tStart)
-    # lastSamp = int(daq_srate * tEnd)
-    # # array of times for plot
-    # tDat = np.arange(firstSamp, lastSamp + 1, dtype='uint64')
-    # tDat = 1000 * tDat / daq_srate  # plot time axis in msec
-    # rawData = readSGLX.makeMemMapRaw(ni_file, meta)
-    # selectData = rawData[chanList, firstSamp:lastSamp + 1]
-    # MN, MA, XA, DW = readSGLX.ChannelCountsNI(meta)
-    # ic("NI channel counts:", MN, MA, XA, DW)
-    # # apply gain correction and convert to mV
-    # convData = 1e3 * readSGLX.GainCorrectNI(selectData, chanList, meta)
-    # convData = np.squeeze(convData)
-    # speed = volts2speed(convData)  # in mm/s
+    t_start = 15
+    t_end = 30
+    data_type = 'A'  # 'A' for analog, 'D' for digital data
+    chan_list = [0]  # must be a list for readSGLX functions
+    metadata = readSGLX.readMeta(ni_file)
+    # Rate = readSGLX.SampRate(meta)
+    first_samp = int(daq_srate * t_start)
+    last_samp = int(daq_srate * t_end)
+    # array of times for plot
+    sample_ix = np.arange(first_samp, last_samp + 1, dtype='uint64')
+    sample_t = 1000 * sample_ix / daq_srate  # plot time axis in msec
+
+    nidaq_analog = readSGLX.makeMemMapRaw(ni_file, metadata)
+    treadmill_analog = nidaq_analog[chan_list, first_samp:last_samp + 1]
+    MN, MA, XA, DW = readSGLX.ChannelCountsNI(metadata)
+    ic("NI channel counts:", MN, MA, XA, DW)
+    # apply gain correction and convert to mV
+    treadmill_analog = 1e3 * readSGLX.GainCorrectNI(treadmill_analog, chan_list, metadata)
+    treadmill_analog = np.squeeze(treadmill_analog)  # treadmill signal should now be 1D array of mV values
+    speed = volts2speed(treadmill_analog)  # in mm/s
+
+    plt.plot(sample_t,speed)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Treadmill speed (mm/s)')
+    plt.show()
 
 
 if __name__ == "__main__":

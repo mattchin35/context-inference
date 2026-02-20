@@ -19,6 +19,187 @@ def get_action_ix(action: int) -> int:
     return action * 2 - 1
 
 
+def qlearning_relative_value(actions, rewards, learning_rate=0.1, n_actions=N_ACTIONS):
+    """
+    Minimal Q-learning relative value feature.
+    Returns trial-wise pre-update value: Q_left - Q_right.
+    """
+    actions = np.asarray(actions)
+    rewards = np.asarray(rewards)
+    _validate_lengths(actions, rewards)
+
+    Q = np.zeros(n_actions)
+    relative_value = np.zeros(actions.shape[0], dtype=float)
+
+    for i, (action, reward) in enumerate(zip(actions, rewards)):
+        relative_value[i] = Q[LEFT_IX] - Q[RIGHT_IX]
+        action = _parse_action(action, n_actions)
+        reward = _parse_reward(reward)
+        if action is None or reward is None:
+            continue
+        Q[action] += learning_rate * (reward - Q[action])
+
+    return relative_value
+
+
+def forgetting_qlearning_relative_value(actions, rewards, decay=0.9, n_actions=N_ACTIONS):
+    """
+    Minimal forgetting Q-learning relative value feature.
+    Returns trial-wise pre-update value: Q_left - Q_right.
+    """
+    actions = np.asarray(actions)
+    rewards = np.asarray(rewards)
+    _validate_lengths(actions, rewards)
+    if not 0 <= decay <= 1:
+        raise ValueError("decay must be in [0, 1].")
+
+    Q = np.zeros(n_actions)
+    relative_value = np.zeros(actions.shape[0], dtype=float)
+
+    for i, (action, reward) in enumerate(zip(actions, rewards)):
+        relative_value[i] = Q[LEFT_IX] - Q[RIGHT_IX]
+        action = _parse_action(action, n_actions)
+        reward = _parse_reward(reward)
+        if action is None or reward is None:
+            continue
+
+        # Vertechi et al. Neuron 2020 update rule.
+        Q *= decay
+        Q[action] += (1 - decay) * reward
+
+    return relative_value
+
+
+def hmm_relative_value(
+    actions,
+    rewards,
+    state_transition_prob=0.2,
+    active_reward_probability=0.9,
+    inactive_reward_probability=0.0,
+    correct_reward_size=1.0,
+    incorrect_reward_size=0.0,
+    value_mode="expected_reward",
+    tanh_scale=1,
+):
+    """
+    Minimal HMM relative value feature.
+    Returns trial-wise pre-update value from belief state.
+
+    value_mode:
+        - "expected_reward": E[r_left] - E[r_right]
+        - "bayesian_log_odds": log(p_left / p_right)
+    """
+    actions = np.asarray(actions)
+    rewards = np.asarray(rewards)
+    _validate_lengths(actions, rewards)
+    if not 0 <= state_transition_prob <= 1:
+        raise ValueError("state_transition_prob must be in [0, 1].")
+    if value_mode not in ("expected_reward", "bayesian_log_odds"):
+        raise ValueError("value_mode must be 'expected_reward' or 'bayesian_log_odds'.")
+
+    prior = np.ones(2) / 2
+    relative_value = np.zeros(actions.shape[0], dtype=float)
+    transition_matrix = np.ones((2, 2)) * state_transition_prob
+    np.fill_diagonal(transition_matrix, 1 - state_transition_prob)
+
+    for i, (action, reward) in enumerate(zip(actions, rewards)):
+        if value_mode == "expected_reward":
+            expected_rew_left = active_reward_probability * prior[LEFT_IX] + inactive_reward_probability * prior[RIGHT_IX]
+            expected_rew_right = active_reward_probability * prior[RIGHT_IX] + inactive_reward_probability * prior[LEFT_IX]
+            relative_value[i] = expected_rew_left - expected_rew_right
+        else:
+            log_odds = np.log((prior[LEFT_IX] + eps) / (prior[RIGHT_IX] + eps))
+            relative_value[i] = np.tanh(log_odds * tanh_scale)
+
+        action = _parse_action(action, N_ACTIONS)
+        reward = _parse_reward(reward)
+        if action is None or reward is None:
+            continue
+
+        p_reward_delivery = _reward_delivery_probability(
+            action=action,
+            active_reward_probability=active_reward_probability,
+            inactive_reward_probability=inactive_reward_probability
+        )
+        p_reward_size = _nonzero_reward_size_probability(
+            reward=reward,
+            action=action,
+            correct_reward_size=correct_reward_size,
+            incorrect_reward_size=incorrect_reward_size
+        )
+
+        nonzero_reward_indicator = int(reward > 0)
+        p_no_reward = 1 - p_reward_delivery
+        p_reward = nonzero_reward_indicator * p_reward_delivery * p_reward_size + (1 - nonzero_reward_indicator) * p_no_reward
+
+        p_outcome = p_reward * prior
+        p_outcome /= (np.sum(p_outcome) + eps)
+
+        posterior = np.dot(transition_matrix.T, p_outcome)
+        posterior /= (np.sum(posterior) + eps)
+        prior = posterior
+
+    return relative_value
+
+
+def _validate_lengths(actions, rewards):
+    if actions.shape[0] != rewards.shape[0]:
+        raise ValueError("actions and rewards must have the same length.")
+
+
+def _parse_action(action, n_actions):
+    try:
+        if np.isnan(action):
+            return None
+    except TypeError:
+        pass
+
+    try:
+        action = int(action)
+    except (TypeError, ValueError):
+        return None
+
+    if action < 0 or action >= n_actions:
+        return None
+
+    return action
+
+
+def _parse_reward(reward):
+    try:
+        if np.isnan(reward):
+            return None
+    except TypeError:
+        pass
+
+    try:
+        return float(reward)
+    except (TypeError, ValueError):
+        return None
+
+
+def _reward_delivery_probability(action, active_reward_probability, inactive_reward_probability):
+    p = np.zeros(2)
+    if action == RIGHT_IX:
+        p[RIGHT_IX] = active_reward_probability
+        p[LEFT_IX] = inactive_reward_probability
+    elif action == LEFT_IX:
+        p[RIGHT_IX] = inactive_reward_probability
+        p[LEFT_IX] = active_reward_probability
+    return p
+
+
+def _nonzero_reward_size_probability(reward, action, correct_reward_size, incorrect_reward_size):
+    p = np.zeros(2)
+    if action == RIGHT_IX:
+        p[RIGHT_IX] = float(reward == correct_reward_size)
+        p[LEFT_IX] = float(reward == incorrect_reward_size)
+    elif action == LEFT_IX:
+        p[RIGHT_IX] = float(reward == incorrect_reward_size)
+        p[LEFT_IX] = float(reward == correct_reward_size)
+    return p
+
+
 def relative_omissions_index(R_omissions, L_omissions, epsilon=1e-8):
     """
     Compute relative omissions index in [-1, 1].
@@ -115,4 +296,89 @@ def relative_doubt_index(R_omissions, L_omissions, lam):
     H_L = 1 - np.exp(-lam * L)
 
     return H_R - H_L
+
+
+def perseveration_regressor(choices, decay=0.25):
+    """
+    Compute exponentially weighted perseveration regressor.
+
+    Parameters
+    ----------
+    choices : array-like of shape (T,)
+        Binary choices (0 = left, 1 = right).
+    decay : float
+        Exponential decay constant (lambda). Default = 0.25.
+
+    Returns
+    -------
+    pers : np.ndarray of shape (T,)
+        Perseveration regressor in [-1, 1].
+        pers[t] depends only on trials < t.
+    """
+    choices = np.asarray(choices)
+    T = len(choices)
+
+    # Convert to -1 / +1 coding
+    y = 2 * choices - 1
+
+    pers = np.zeros(T)
+    num = 0.0  # weighted numerator
+    den = 0.0  # weighted normalization
+    alpha = np.exp(-decay)
+
+    for t in range(1, T):
+        num = alpha * num + alpha * y[t - 1]
+        den = alpha * den + alpha
+        pers[t] = num / den if den > 0 else 0.0
+
+    return pers
+
+
+def perseveration_regressor_vectorized(choices, decay=0.25):
+    """
+    Vectorized exponentially weighted perseveration regressor.
+
+    Parameters
+    ----------
+    choices : array-like (T,)
+        Binary choices (0 = left, 1 = right)
+    decay : float
+        Exponential decay parameter (lambda)
+
+    Returns
+    -------
+    pers : np.ndarray (T,)
+        Perseveration regressor in [-1, 1]
+        pers[t] depends only on trials < t
+    """
+    choices = np.asarray(choices)
+    T = len(choices)
+
+    # Convert to -1 / +1
+    y = 2 * choices - 1
+
+    alpha = np.exp(-decay)
+
+    # Exponential multipliers
+    powers = alpha ** np.arange(T)
+
+    # Weighted cumulative numerator
+    weighted_y = y * powers
+    cumsum_num = np.cumsum(weighted_y)
+
+    # Denominator cumulative weights
+    cumsum_den = np.cumsum(powers)
+
+    # Shift to ensure pers[t] only uses trials < t
+    num = np.zeros(T)
+    den = np.zeros(T)
+
+    num[1:] = cumsum_num[:-1]
+    den[1:] = cumsum_den[:-1]
+
+    pers = np.zeros(T)
+    valid = den > 0
+    pers[valid] = num[valid] / den[valid]
+
+    return pers
 

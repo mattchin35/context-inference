@@ -328,7 +328,7 @@ def main():
     # treadmill_df.to_csv(p, index=False)
 
     treadmill_df = pd.read_csv(p)
-    runspeed_df = gather_runspeed(treadmill_df, plot=False)
+    runspeed_df = gather_runspeed(treadmill_df, plot=True)
 
 
 if __name__ == '__main__':
