@@ -245,10 +245,15 @@ def gather_runspeed(treadmill_df: pd.DataFrame, plot=False) -> pd.DataFrame:
     ix = treadmill_df['event_label'] == 'runSpeed'
     runspeed_df = treadmill_df.loc[ix, ['event_label', 'unix_time', 'event_value']].copy()
     runspeed_df = runspeed_df.sort_values('unix_time').reset_index(drop=True)
+    runspeed_df['utc_datetime'] = [
+        datetime.fromtimestamp(t) if pd.notna(t) else pd.NaT
+        for t in pd.to_numeric(runspeed_df['unix_time'], errors='coerce')
+    ]
 
     if plot:
         plt.figure(figsize=(10, 4))
-        plt.plot(runspeed_df['unix_time'], pd.to_numeric(runspeed_df['event_value'], errors='coerce'), drawstyle='steps-post')
+        # plt.plot(runspeed_df['unix_time'], pd.to_numeric(runspeed_df['event_value'], errors='coerce'), drawstyle='steps-post')
+        plt.plot(runspeed_df['utc_datetime'], pd.to_numeric(runspeed_df['event_value'], errors='coerce'), drawstyle='steps-post')
         plt.xlabel('Unix Time (s)')
         plt.ylabel('Run Speed')
         plt.title('Run Speed Over Time in Steps')
@@ -294,6 +299,11 @@ def gather_runspeed_with_buffer(treadmill_df: pd.DataFrame, plot=False) -> pd.Da
     if inserted_rows:
         runspeed_df = pd.concat([runspeed_df, pd.DataFrame(inserted_rows)], ignore_index=True)
         runspeed_df = runspeed_df.sort_values('unix_time').reset_index(drop=True)
+
+    runspeed_df['utc_datetime'] = [
+        datetime.fromtimestamp(t) if pd.notna(t) else pd.NaT
+        for t in pd.to_numeric(runspeed_df['unix_time'], errors='coerce')
+    ]
 
     if plot:
         plt.figure(figsize=(10, 4))

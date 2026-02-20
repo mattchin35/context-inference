@@ -12,6 +12,7 @@ import time
 import numpy.typing as npt
 import re
 import pickle as pkl
+from scipy.signal import savgol_filter, medfilt
 
 
 def read_digital_lines(binaryFilePath: str, digitalWord: int, digitalLines: list[int]) -> [np.ndarray, int]:
@@ -256,22 +257,24 @@ def map_digital_crossings_to_utc(
     )
 
 
-def map_sample_indices_to_utc(sample_ix: np.ndarray, irig_crossings_df: pd.DataFrame) -> pd.DataFrame:
+def map_sample_indices_to_utc(sample_ix: npt.ArrayLike, irig_crossings_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Map arbitrary sample indices to UTC using IRIG-derived sample->UTC mapping.
+    Map an arbitrary collection of sample indices to UTC using IRIG-derived sample->UTC mapping.
     """
+    sample_ix = np.asarray(sample_ix, dtype=float).reshape(-1)
+
     known = irig_crossings_df[np.isfinite(irig_crossings_df['utc_unix'])][['sample_ix', 'utc_unix']].copy()
     known = known.drop_duplicates(subset='sample_ix').sort_values('sample_ix')
     if known.shape[0] < 2:
         raise ValueError('Need at least two finite IRIG UTC points to map sample indices.')
 
     utc_unix = _interpolate_with_linear_extrapolation(
-        x_query=sample_ix.astype(float),
+        x_query=sample_ix,
         x_known=known['sample_ix'].to_numpy(dtype=float),
         y_known=known['utc_unix'].to_numpy(dtype=float),
     )
     utc_datetime = [datetime.fromtimestamp(t, tz=timezone.utc) for t in utc_unix]
-    return pd.DataFrame({'sample_ix': sample_ix, 'utc_unix': utc_unix, 'utc_datetime': utc_datetime})
+    return pd.DataFrame({'sample_ix': sample_ix.astype(np.int64), 'utc_unix': utc_unix, 'utc_datetime': utc_datetime})
 
 
 def get_flipper_events(data: np.ndarray, sample_rate: float, threshold: float = 0.5, debounce=.0002):
@@ -436,6 +439,73 @@ def get_flipper_barcode_presence_times_utc(
     return barcode_times_df.iloc[0]['utc_datetime'], barcode_times_df.iloc[1]['utc_datetime']
 
 
+def analyze_treadmill_signal(treadmill_analog: np.ndarray, sample_rate: float):
+    signal = np.asarray(treadmill_analog, dtype=float).squeeze()
+    if signal.ndim != 1 or signal.size < 2:
+        raise ValueError('treadmill_analog must be a 1D signal with at least 2 samples.')
+
+    # Remove DC to make narrow-band noise easier to spot.
+    signal = signal - np.nanmedian(signal)
+
+    nperseg = int(min(4096, signal.size))
+    if nperseg < 128:
+        nperseg = signal.size
+    noverlap = int(nperseg // 2)
+
+    f_spec, t_spec, sxx = sp.signal.spectrogram(
+        signal,
+        fs=sample_rate,
+        window='hann',
+        nperseg=nperseg,
+        noverlap=noverlap,
+        detrend='constant',
+        scaling='density',
+        mode='psd',
+    )
+    f_per, pxx = sp.signal.periodogram(
+        signal,
+        fs=sample_rate,
+        window='hann',
+        detrend='constant',
+        scaling='density',
+    )
+    f_welch, pxx_welch = sp.signal.welch(
+        signal,
+        fs=sample_rate,
+        window='hann',
+        nperseg=nperseg,
+        noverlap=noverlap,
+        detrend='constant',
+        scaling='density',
+    )
+
+    sxx_db = 10 * np.log10(sxx + 1e-20)
+    pxx_db = 10 * np.log10(pxx + 1e-20)
+    pxx_welch_db = 10 * np.log10(pxx_welch + 1e-20)
+
+    fig, axes = plt.subplots(3, 1, figsize=(10, 9), constrained_layout=True)
+
+    pcm = axes[0].pcolormesh(t_spec, f_spec, sxx_db, shading='auto')
+    axes[0].set_title('Treadmill Analog Spectrogram')
+    axes[0].set_xlabel('Time (s)')
+    axes[0].set_ylabel('Frequency (Hz)')
+    fig.colorbar(pcm, ax=axes[0], label='Power/Frequency (dB)')
+
+    axes[1].plot(f_per, pxx_db, lw=1.0)
+    axes[1].set_title('Treadmill Analog Periodogram')
+    axes[1].set_xlabel('Frequency (Hz)')
+    axes[1].set_ylabel('Power/Frequency (dB)')
+    axes[1].grid(alpha=0.3)
+
+    axes[2].plot(f_welch, pxx_welch_db, lw=1.0, color='tab:orange')
+    axes[2].set_title('Treadmill Analog Welch PSD')
+    axes[2].set_xlabel('Frequency (Hz)')
+    axes[2].set_ylabel('Power/Frequency (dB)')
+    axes[2].grid(alpha=0.3)
+
+    plt.show()
+
+
 def main():
     ### Behavior paths ###
     session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference')
@@ -498,17 +568,17 @@ def main():
     ic(first_barcode_present_utc, second_barcode_present_utc)
 
     # ni analog treadmill signal
-    t_start = 15
-    t_end = 30
+    t_start = 0
+    t_end = 60*10
     data_type = 'A'  # 'A' for analog, 'D' for digital data
     chan_list = [0]  # must be a list for readSGLX functions
     metadata = readSGLX.readMeta(ni_file)
     # Rate = readSGLX.SampRate(meta)
     first_samp = int(daq_srate * t_start)
     last_samp = int(daq_srate * t_end)
-    # array of times for plot
+    # sample indices for analog segment and their UTC times
     sample_ix = np.arange(first_samp, last_samp + 1, dtype='uint64')
-    sample_t = 1000 * sample_ix / daq_srate  # plot time axis in msec
+    sample_utc_df = map_sample_indices_to_utc(sample_ix, irig_crossings_df)
 
     nidaq_analog = readSGLX.makeMemMapRaw(ni_file, metadata)
     treadmill_analog = nidaq_analog[chan_list, first_samp:last_samp + 1]
@@ -517,12 +587,29 @@ def main():
     # apply gain correction and convert to mV
     treadmill_analog = 1e3 * readSGLX.GainCorrectNI(treadmill_analog, chan_list, metadata)
     treadmill_analog = np.squeeze(treadmill_analog)  # treadmill signal should now be 1D array of mV values
-    speed = volts2speed(treadmill_analog)  # in mm/s
+    savgol_result = savgol_filter(treadmill_analog, window_length=15, polyorder=3)
+    # median_result = medfilt(treadmill_analog, kernel_size=11)
 
-    plt.plot(sample_t,speed)
-    plt.xlabel('Time (s)')
+    speed_raw = volts2speed(treadmill_analog) # in mm/s
+    speed_raw = speed_raw - np.nanmedian(speed_raw)  # remove DC offset
+    speed_savgol = volts2speed(savgol_result)
+    speed_savgol = speed_savgol - np.nanmedian(speed_savgol)
+    # speed_median = volts2speed(median_result)
+    # speed_median = speed_median - np.nanmedian(speed_median)
+
+    ic(np.mean(treadmill_analog), np.median(treadmill_analog), np.std(treadmill_analog))
+    ic(np.mean(speed_raw), np.median(speed_raw), np.std(speed_raw))
+
+    # plt.plot(sample_utc_df['utc_datetime'], speed)
+    plt.plot(sample_utc_df['utc_datetime'], speed_raw, label='Raw signal')
+    plt.plot(sample_utc_df['utc_datetime'], speed_savgol, label='Savitzky-Golay')
+    # plt.plot(sample_utc_df['utc_datetime'], speed_median, label='Median Filter')
+    plt.xlabel('UTC time')
     plt.ylabel('Treadmill speed (mm/s)')
+    plt.legend()
     plt.show()
+
+    # analyze_treadmill_signal(treadmill_analog, daq_srate)
 
 
 if __name__ == "__main__":
