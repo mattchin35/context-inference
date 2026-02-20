@@ -196,6 +196,7 @@ class HMM(BehaviorAgent):
         self.temperature = params.action_temperature
         self.stickiness = params.stickiness
         self.transition_prob = params.state_transition_prob
+        self.value_mode = 'relative' # either relative or thompson
 
         n_states = 2
         self.n_states = n_states
@@ -262,13 +263,17 @@ class HMM(BehaviorAgent):
         self.prior = posterior
 
         # value determination following Vertechi - uses expected reward, action sampling via relative value
-        expected_rew_L = self.params.active_reward_probability * self.prior[1] + self.params.inactive_reward_probability * self.prior[0]
-        expected_rew_R = self.params.active_reward_probability * self.prior[0] + self.params.inactive_reward_probability * self.prior[1]
-        self.value = expected_rew_L - expected_rew_R  # relative value of L vs R actions
+        if self.value_mode == 'relative':
+            expected_rew_L = self.params.active_reward_probability * self.prior[1] + self.params.inactive_reward_probability * self.prior[0]
+            expected_rew_R = self.params.active_reward_probability * self.prior[0] + self.params.inactive_reward_probability * self.prior[1]
+            self.value = expected_rew_L - expected_rew_R  # relative value of L vs R actions
+        elif self.value_mode == 'thompson':
+            # value determination following Beron - uses Bayesian posterior, action sampling via Thompson (belief) sampling
+            # to match HMM and RFLR models, you need to use Thompson sampling
+            self.value = sp.special.logit(self.prior[1])
+        else:
+            ValueError("unknown value mode")
 
-        # value determination following Beron - uses Bayesian posterior, action sampling via Thompson (belief) sampling
-        # to match HMM and RFLR models, you need to use Thompson sampling
-        # self.value = sp.special.logit(self.prior[1])
         self.update_action_dist(action)
 
     def update_action_dist(self, action: int):
@@ -336,4 +341,5 @@ class HMM(BehaviorAgent):
         for i in range(2):
             state_transition_matrix[i, i] = 1 - self.transition_prob
         return state_transition_matrix
+
 

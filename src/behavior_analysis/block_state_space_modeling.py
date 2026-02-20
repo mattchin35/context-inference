@@ -61,7 +61,7 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     df = block_df[ix_valid]
 
     # consecutive_rewards = df['prev_consecutive_rewards'].to_numpy().reshape(-1, 1).astype(int)
-    # prev_correct = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
+    prev_correct = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
     prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
     n_switches = df['n_switches'].to_numpy().reshape(-1, 1).astype(int)
     bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
@@ -173,7 +173,7 @@ def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = Fals
     ix_valid = (block_df['trials_to_correct'] != 'None') & (block_df['prev_n_correct'] != 'None')
     df = block_df[ix_valid]
 
-    # prev_rewards = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
+    prev_correct = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
     prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
     trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
     bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
