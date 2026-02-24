@@ -80,7 +80,50 @@ def negative_value_counter(count: int, reward: int):
     return count
 
 
+def value_counter(count: int, reward: int):
+    """
+    A simple reward count, increasing with reward and decreasing with omissions.
+    """
+    if reward == 0:  # omission
+        g = 1
+        c = -1
+    elif reward == 1:
+        g = 1
+        c = 1
+    else:
+        raise ValueError('Reward must be 0 or 1.')
+
+    count = g * count + c
+    return count
+
+
+def sided_value_counter(left_count: int, right_count: int, action: int, reward: int, zero_min=False) -> tuple[int, int]:
+    """
+    This counter updates the value of the chosen action on each trial.
+    """
+    if action == state_dict['right']:
+        if reward == 0:
+            right_count -= 1
+        elif reward == 1:
+            right_count = np.amax([right_count, 0]) + 1
+
+    elif action == state_dict['left']:
+        if reward == 0:
+            left_count -= 1
+        elif reward == 1:
+            left_count = np.amax([left_count, 0]) + 1
+
+    if zero_min:
+        left_count = np.amax([left_count, 0])
+        right_count = np.amax([right_count, 0])
+
+    return left_count, right_count
+
+
 def counterfactual_value_counter(left_count: int, right_count: int, action: int, reward: int, zero_min=False) -> tuple[int, int]:
+    """
+    This counter resets the value of the unchosen action on rewarded trials to 0.
+    """
     if action == 0:
         if reward == 0:
             right_count -= 1

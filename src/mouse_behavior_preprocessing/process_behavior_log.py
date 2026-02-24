@@ -79,39 +79,33 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[l
 def choice_event_summary(event: str, reward_note: str) -> tuple[int, int, int, int]:
     # LEFT CHOICES
     if event == 'wrong_choice_right_patch':
-        action = 1  # state_dict['left']
+        action = state_dict['left']
         correct = 0
-        reward = 0
         give_reward = 0
     elif event == 'correct_choice_left_patch':
-        action = 1  # state_dict['left']
+        action = state_dict['left']
         correct = 1
-        reward = 0
         give_reward = 0
 
     # RIGHT CHOICES
     elif event == 'wrong_choice_left_patch':
-        action = 0  # state_dict['right']
+        action = state_dict['right']
         correct = 0
-        reward = 0
         give_reward = 0
     elif event == 'correct_choice_right_patch':
-        action = 0  # state_dict['right']
+        action = state_dict['right']
         correct = 1
-        reward = 0
         give_reward = 0
 
     elif event == 'giving_reward_left_patch':
         # action = 'None'
         action = 1
         correct = 0
-        reward = 1
         give_reward = 1
     elif event == 'giving_reward_right_patch':
         # action = 'None'
         action = 0
         correct = 0
-        reward = 1
         give_reward = 1
 
     else:
@@ -120,7 +114,7 @@ def choice_event_summary(event: str, reward_note: str) -> tuple[int, int, int, i
     if reward_note == 'reward_True':
         reward = 1
     elif reward_note == 'reward_False':
-        pass
+        reward = 0
     else:
         raise NameError('Unrecognized reward outcome note: {}'.format(reward_note))
 
@@ -199,57 +193,8 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
                 raise NameError('Unrecognized context event: {}'.format(e))
 
         elif e in choice_events:  # update the trial and append to lists
+            _action, _correct, _reward, _give_reward = choice_event_summary(e, raw_data['Note'].values[i])
             trial_dict['choice_time'] = cur_time
-
-            ## FOR GOOD CODE AFTER 9/2/24
-            # LEFT CHOICES
-            if e == 'wrong_choice_right_patch':
-                _action = 1 #state_dict['left']
-                _correct = 0
-                _reward = 0
-                _give_reward = 0
-            elif e == 'correct_choice_left_patch':
-                _action = 1 #state_dict['left']
-                _correct = 1
-                _reward = 0
-                _give_reward = 0
-
-            # RIGHT CHOICES
-            elif e == 'wrong_choice_left_patch':
-                _action = 0  #state_dict['right']
-                _correct = 0
-                _reward = 0
-                _give_reward = 0
-            elif e == 'correct_choice_right_patch':
-                _action = 0  #state_dict['right']
-                _correct = 1
-                _reward = 0
-                _give_reward = 0
-
-            elif e == 'giving_reward_left_patch':
-                # _action = 'None'
-                _action = 1
-                _correct = 0
-                _reward = 1
-                _give_reward = 1
-            elif e == 'giving_reward_right_patch':
-                # _action = 'None'
-                _action = 0
-                _correct = 0
-                _reward = 1
-                _give_reward = 1
-
-            else:
-                raise NameError('Unrecognized choice event: {}'.format(e))
-
-            reward_outcome = raw_data['Note'].values[i]
-            if reward_outcome == 'reward_True':
-                _reward = 1
-            elif reward_outcome == 'reward_False':
-                _reward = 0
-            else:
-                raise NameError('Unrecognized reward outcome note: {}'.format(reward_outcome))
-
             trial_dict['action'] = _action
             trial_dict['correct'] = _correct
             trial_dict['reward'] = _reward
@@ -336,7 +281,7 @@ def make_trial_df(cleaned_data: pd.DataFrame, session_id: str, save_name: str, o
         output_path.mkdir()
 
     p = output_path / (save_name + '.csv')
-    trial_df.to_csv(p, index=False)
+    trial_df.to_csv(p, index=False, na_rep='None')
     # p = output_path / (save_name + '.pkl')
     # with p.open('wb') as f:
     #     pkl.dump(event_df, f)

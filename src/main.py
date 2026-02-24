@@ -5,8 +5,8 @@ import numpy as np
 import re
 from behavior_analysis import raster_plots, session_analysis, simulate_priors
 from mouse_behavior_preprocessing import process_behavior_log
-from behavior_analysis import block_state_space_modeling as bssm
-from behavior_analysis import trial_state_space_modeling as tssm
+# from behavior_analysis import block_state_space_modeling as bssm
+# from behavior_analysis import trial_state_space_modeling as tssm
 import src.state_space_modeling.utilplot as utilplot
 import pickle as pkl
 from pathlib import Path
@@ -281,12 +281,12 @@ def main():
     sess.session_info = session_info
 
     # preprocess behavior log and save
-    # trial_df, event_df, water = preprocess_session_log(raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path, sess_id_full=sess_id_full,
-    #                                                    min_time=0, max_time=np.inf)
+    trial_df, event_df, water = preprocess_session_log(raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path, sess_id_full=sess_id_full,
+                                                       min_time=0, max_time=np.inf)
 
     # load processed raw data
-    event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',')
-    trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',')
+    # event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',')
+    # trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',')
 
     # plot_session(event_df, session_info,
     #              raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path,
@@ -294,14 +294,14 @@ def main():
 
     # analyze trials and save
     # augmented_trial_df, block_performance, multisession_df = session_analysis.run_analysis(trial_df, session=sess)
-    multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(sess_id_full,
-                                                                                            session_data_folder=processed_data_path,
-                                                                                            multisession_data_folder=multi_session_save_path)
+    # multisession_df, block_performance, augmented_trial_df = session_analysis.loadg_analysis(sess_id_full,
+    #                                                                                         session_data_folder=processed_data_path,
+    #                                                                                         multisession_data_folder=multi_session_save_path)
 
     # model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
     #                                                 prior_alpha=1, prior_sigma=1)
-    cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
-                                                   prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2)
+    # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
+    #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2)
 
     # block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=1,
     #                                                                 prior_alpha=1, prior_sigma=1)

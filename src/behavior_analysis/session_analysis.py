@@ -171,23 +171,54 @@ def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
     return n_switches, normalized_switches
 
 
+def make_augmented_trial_df(trial_df: pd.DataFrame) -> pd.DataFrame:
+    augmented_trial_df = trial_df.copy(deep=True)
+    block_types = get_block_types(trial_df)
+    augmented_trial_df['block_type'] = block_types
+    augmented_trial_df['time_to_choice'] = augmented_trial_df['choice_time'] - augmented_trial_df['start_time']
+
+    prev_action = np.zeros(trial_df.shape[0], dtype='object')
+    prev_reward = np.zeros(trial_df.shape[0], dtype='object')
+    prev_action[0] = 'None'
+    prev_reward[0] = 'None'
+    prev_action[1:] = trial_df['action'].to_numpy()[:-1]
+    prev_reward[1:] = trial_df['reward'].to_numpy()[:-1]
+    augmented_trial_df['prev_action'] = prev_action
+    augmented_trial_df['prev_reward'] = prev_reward
+
+    decision_vars = count_decision_variables(trial_df)
+    augmented_trial_df = pd.concat([augmented_trial_df, decision_vars], axis=1)
+
+    return augmented_trial_df
+
+
 def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     """
     Get trial decision variables, use them to create/modify an augmented trial_df.
     Get block trials to switch and consecutive rewards in previous block, use to create/modify a block df.
     """
     sess_id = mouse + '_' + date
-
-    # collect decision variables - need to add these to a df of augmented trials
-    decision_vars = count_decision_variables(trial_df)
-    augmented_trial_df = pd.concat([trial_df, decision_vars], axis=1)
-    augmented_trial_df['time_to_choice'] = augmented_trial_df['choice_time'] - augmented_trial_df['start_time']
+    augmented_trial_df = trial_df.copy(deep=True)
 
     # get block qualities: trials-to-switch, consecutive rewards, other augmentations. Add new variables here too
     blocks = np.unique(trial_df['cur_block'])
     block_performance = []
     block_types = get_block_types(trial_df)
     augmented_trial_df['block_type'] = block_types
+    augmented_trial_df['time_to_choice'] = augmented_trial_df['choice_time'] - augmented_trial_df['start_time']
+
+    prev_action = np.zeros(trial_df.shape[0], dtype='object')
+    prev_reward = np.zeros(trial_df.shape[0], dtype='object')
+    prev_action[0] = 'None'
+    prev_reward[0] = 'None'
+    prev_action[1:] = trial_df['action'].to_numpy()[:-1]
+    prev_reward[1:] = trial_df['reward'].to_numpy()[:-1]
+    augmented_trial_df['prev_action'] = prev_action
+    augmented_trial_df['prev_reward'] = prev_reward
+
+    decision_vars = count_decision_variables(trial_df)
+    augmented_trial_df = pd.concat([augmented_trial_df, decision_vars], axis=1)
+
     for ix, b in enumerate(blocks):
         cur_block_ix = augmented_trial_df['cur_block'] == b
         cur_block_df = augmented_trial_df[cur_block_ix]
@@ -246,15 +277,6 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     session_performance['date'] = date
     session_performance = pd.DataFrame(session_performance, index=[0])
 
-    prev_action = np.zeros(trial_df.shape[0], dtype='object')
-    prev_reward = np.zeros(trial_df.shape[0], dtype='object')
-    prev_action[0] = 'None'
-    prev_reward[0] = 'None'
-    prev_action[1:] = trial_df['action'].to_numpy()[:-1]
-    prev_reward[1:] = trial_df['reward'].to_numpy()[:-1]
-    augmented_trial_df['prev_action'] = prev_action
-    augmented_trial_df['prev_reward'] = prev_reward
-
     return session_performance, block_performance, augmented_trial_df
 
 
@@ -266,9 +288,9 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
     Trials with experimenter-given rewards will not accumulate DV value.
     """
     consecutive_rewards = 0
-    consecutive_failures = 0
+    consecutive_omissions = 0
     consecutive_rewards_memory = 0
-    consecutive_failures_memory = 0
+    consecutive_omissions_memory = 0
     negative_value = 0
     previous_trial_rewarded = False
 
@@ -289,11 +311,10 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
     for i in range(n_trials):
         decision_variable_dict['negative_value'].append(negative_value)
         decision_variable_dict['consecutive_rewards_memory'].append(consecutive_rewards_memory)
-        decision_variable_dict['consecutive_failures_memory'].append(consecutive_failures_memory)
+        decision_variable_dict['consecutive_omissions_memory'].append(consecutive_omissions_memory)
         decision_variable_dict['consecutive_rewards'].append(consecutive_rewards)
-        decision_variable_dict['consecutive_failures'].append(consecutive_failures)
-        
-        # counterfactual decision vars
+        decision_variable_dict['consecutive_omissions'].append(consecutive_omissions)
+
         decision_variable_dict['left_value'].append(left_value)
         decision_variable_dict['right_value'].append(right_value)
         decision_variable_dict['relative_value'].append(left_value-right_value)
@@ -307,7 +328,7 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
 
         # Don't update DVs for trials with experimenter-given rewards. These trials shouldn't be included in action
         # prediction models either
-        if trial_df.loc[i, 'action'] == 'None':
+        if trial_df.loc[i, 'give_reward'] == 1 or trial_df.loc[i, 'give_reward'] == '1':
         # if trial_df['action'].to_numpy()[i] == 'None':
             continue
 
@@ -315,9 +336,9 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
         action = trial_df.loc[i, 'action']
         negative_value = counters.negative_value_counter(negative_value, reward)
         consecutive_rewards = counters.consecutive_reward_counter(consecutive_rewards, reward)
-        consecutive_failures = counters.consecutive_fail_counter(consecutive_failures, reward)
+        consecutive_omissions = counters.consecutive_fail_counter(consecutive_omissions, reward)
         consecutive_rewards_memory = counters.consecutive_reward_renewal_counter(consecutive_rewards_memory, reward, previous_trial_rewarded)
-        consecutive_failures_memory = counters.consecutive_fail_renewal_counter(consecutive_failures_memory, reward, previous_trial_rewarded)
+        consecutive_omissions_memory = counters.consecutive_fail_renewal_counter(consecutive_omissions_memory, reward, previous_trial_rewarded)
         previous_trial_rewarded = reward > 0
 
         left_value, right_value = counters.counterfactual_value_counter(left_value, right_value, action, reward)

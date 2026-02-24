@@ -10,13 +10,13 @@ import seaborn as sns
 import pickle as pkl
 import re
 from pathlib import Path
-import ssm # note this should be the forked ssm repo above
 # from matplotlib.font_manager import weight_dict
+from typing import Protocol
+from joblib import Parallel, delayed
+import ssm # note this should be the forked ssm repo
 from ssm.util import find_permutation
 from ssm.plots import gradient_cmap, white_to_color_cmap
 import src.state_space_modeling.utilplot as utilplot
-from typing import Protocol
-from joblib import Parallel, delayed
 
 
 color_names = [
