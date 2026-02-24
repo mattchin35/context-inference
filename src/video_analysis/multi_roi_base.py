@@ -182,7 +182,7 @@ def process_video(video_path, rois):
 # MAIN
 # -----------------------------------------------------------------
 if __name__ == "__main__":
-    video_file = "input.h264"
+    video_file = "/home/matt/Documents/EXPERIMENTS/test_runs/test-mouse_2026-02-23_164141/test-mouse_2026-02-23_164141_cam0_output.h264"
 
     rois = choose_rois(video_file)
 

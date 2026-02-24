@@ -333,7 +333,7 @@ def main():
     # treadmill_df = interpret_treadmill_messages(messages)
     # treadmill_df = calculate_cumuluative_times(treadmill_df)
     # treadmill_df = decode_irig_times(treadmill_df)
-    #
+
     p = processed_data_path / (sess_id_full + '_treadmill.csv')
     # treadmill_df.to_csv(p, index=False)
 

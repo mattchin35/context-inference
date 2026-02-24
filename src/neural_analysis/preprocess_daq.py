@@ -13,6 +13,9 @@ import numpy.typing as npt
 import re
 import pickle as pkl
 from scipy.signal import savgol_filter, medfilt
+from src.neural_analysis import modified_sinc_smoother as mss
+import pywt
+from scipy import signal
 
 
 def read_digital_lines(binaryFilePath: str, digitalWord: int, digitalLines: list[int]) -> [np.ndarray, int]:
@@ -506,6 +509,69 @@ def analyze_treadmill_signal(treadmill_analog: np.ndarray, sample_rate: float):
     plt.show()
 
 
+def wavelet_hard_threshold(signal: np.ndarray, wavelet: str = 'sym8', level: int = 4) -> np.ndarray:
+    """
+    Removes baseline noise while preserving sharp peaks using Wavelet Hard Thresholding.
+    """
+    # 1. Decompose the signal into wavelet coefficients
+    # 'per' mode handles the boundaries cleanly
+    coeffs = pywt.wavedec(signal, wavelet, mode='per', level=level)
+
+    # 2. Estimate the noise floor
+    # We look at the finest detail coefficients (the last array in coeffs)
+    # Median Absolute Deviation (MAD) is the standard robust estimator for this
+    detail_coeffs = coeffs[-1]
+    mad = np.median(np.abs(detail_coeffs - np.median(detail_coeffs)))
+    sigma = mad / 0.6745  # 0.6745 relates the median to the standard deviation
+
+    # 3. Calculate the Universal Threshold (Donoho-Johnstone)
+    # This mathematically calculates the maximum expected height of pure white noise
+    threshold = sigma * np.sqrt(2 * np.log(len(signal)))
+
+    # 4. Apply the HARD threshold
+    # We keep coeffs[0] (the low-frequency baseline approximation) untouched
+    denoised_coeffs = [coeffs[0]]
+    for i in range(1, len(coeffs)):
+        # 'hard' mode sets values below threshold to 0, and leaves others completely unchanged
+        thresholded_array = pywt.threshold(coeffs[i], value=threshold, mode='hard')
+        denoised_coeffs.append(thresholded_array)
+
+    # 5. Reconstruct the clean signal
+    clean_signal = pywt.waverec(denoised_coeffs, wavelet, mode='per')
+
+    # Ensure the output length matches the input length exactly
+    return clean_signal[:len(signal)]
+
+
+def robust_spectral_subtraction(noisy_sig: np.ndarray, noise_ref: np.ndarray, fs: int = 25000):
+    """
+    Subtracts noise even if noise_ref and noisy_sig are different lengths.
+    """
+    # 1. Estimate the average noise magnitude spectrum using Welch
+    # nperseg should be roughly the length of your sharpest peak
+    freqs, noise_psd = signal.welch(noise_ref, fs=fs, nperseg=1024)
+    noise_mag_template = np.sqrt(noise_psd)
+
+    # 2. Use STFT to process the noisy signal in blocks
+    f, t, Zxx = signal.stft(noisy_sig, fs=fs, nperseg=1024)
+
+    # 3. Perform the subtraction on the magnitude
+    # Zxx is complex; we subtract from the absolute magnitude
+    magnitude = np.abs(Zxx)
+    phase = np.angle(Zxx)
+
+    # Subtract noise template (broadcasting across time)
+    # We use a 'noise_reduction_factor' (beta) to tune the aggressiveness
+    beta = 1.5
+    clean_mag = np.maximum(magnitude - beta * noise_mag_template[:, np.newaxis], 0)
+
+    # 4. Reconstruct and Inverse STFT
+    Zxx_clean = clean_mag * np.exp(1j * phase)
+    _, cleaned_sig = signal.istft(Zxx_clean, fs=fs)
+
+    return cleaned_sig
+
+
 def main():
     ### Behavior paths ###
     session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference')
@@ -587,22 +653,46 @@ def main():
     # apply gain correction and convert to mV
     treadmill_analog = 1e3 * readSGLX.GainCorrectNI(treadmill_analog, chan_list, metadata)
     treadmill_analog = np.squeeze(treadmill_analog)  # treadmill signal should now be 1D array of mV values
-    savgol_result = savgol_filter(treadmill_analog, window_length=15, polyorder=3)
+    # treadmill_analog -= np.nanmedian(treadmill_analog)  # remove DC offset
+    # savgol_result = savgol_filter(treadmill_analog, window_length=21, polyorder=3)
+    # ms_result = mss.smooth_ms(treadmill_analog, deg=6, m=15)
     # median_result = medfilt(treadmill_analog, kernel_size=11)
 
     speed_raw = volts2speed(treadmill_analog) # in mm/s
-    speed_raw = speed_raw - np.nanmedian(speed_raw)  # remove DC offset
+    speed_raw -= np.nanmedian(speed_raw)  # remove DC offset
     speed_savgol = volts2speed(savgol_result)
-    speed_savgol = speed_savgol - np.nanmedian(speed_savgol)
+    speed_savgol -= np.nanmedian(speed_savgol)
+    # speed_ms = volts2speed(ms_result)
     # speed_median = volts2speed(median_result)
-    # speed_median = speed_median - np.nanmedian(speed_median)
 
-    ic(np.mean(treadmill_analog), np.median(treadmill_analog), np.std(treadmill_analog))
-    ic(np.mean(speed_raw), np.median(speed_raw), np.std(speed_raw))
+    # 2. Define the noise floor
+    # (Assume the first 1000 samples are just idle background noise)
+    idle_noise = speed_savgol[0:1024*5]
+    # noise_mean = np.mean(idle_noise)
+    # noise_std = np.std(idle_noise)
+
+    # Set threshold to 4 standard deviations above the noise mean
+    # threshold = noise_mean + (5 * noise_std)
+
+    # 3. Apply the Noise Gate (Force everything below threshold to 0)
+    # gated_signal = np.where(np.abs(speed_savgol) < threshold, 0, speed_savgol)
+    # gated_signal = np.where(np.abs(speed_savgol) < 35, 0, speed_savgol) ## this will work but it's not ideal
+
+    # ic(np.mean(treadmill_analog), np.median(treadmill_analog), np.std(treadmill_analog))
+    # ic(np.mean(speed_raw), np.median(speed_raw), np.std(speed_raw))
+    # ic(np.mean(speed_savgol), np.median(speed_savgol), np.std(speed_savgol))
+    # ic(np.mean(speed_ms), np.median(speed_ms), np.std(speed_ms))
+
+    # Filter the signal
+    # 'sym8' (Symlets) or 'db4' (Daubechies) are excellent wavelets for sharp spikes
+    # filtered_signal = wavelet_hard_threshold(speed_raw, wavelet='sym8', level=5)
 
     # plt.plot(sample_utc_df['utc_datetime'], speed)
     plt.plot(sample_utc_df['utc_datetime'], speed_raw, label='Raw signal')
     plt.plot(sample_utc_df['utc_datetime'], speed_savgol, label='Savitzky-Golay')
+    plt.plot(sample_utc_df['utc_datetime'], gated_signal, label='Savitzky-Golay with noise gate')
+    # plt.plot(sample_utc_df['utc_datetime'], filtered_signal, label="Wavelet Output (Flat baseline, sharp peaks)")
+    # plt.plot(sample_utc_df['utc_datetime'], speed_ms, label='Modified Sinc')
     # plt.plot(sample_utc_df['utc_datetime'], speed_median, label='Median Filter')
     plt.xlabel('UTC time')
     plt.ylabel('Treadmill speed (mm/s)')
