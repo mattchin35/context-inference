@@ -281,20 +281,20 @@ def main():
     sess.session_info = session_info
 
     # preprocess behavior log and save
-    trial_df, event_df, water = preprocess_session_log(raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path, sess_id_full=sess_id_full,
-                                                       min_time=0, max_time=np.inf)
+    # trial_df, event_df, water = preprocess_session_log(raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path, sess_id_full=sess_id_full,
+    #                                                    min_time=0, max_time=np.inf)
 
     # load processed raw data
-    # event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',')
-    # trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',')
+    event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',')
+    trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',')
 
     # plot_session(event_df, session_info,
     #              raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path,
     #              figure_path=figure_path, sess_id_full=sess_id_full)
 
     # analyze trials and save
-    # augmented_trial_df, block_performance, multisession_df = session_analysis.run_analysis(trial_df, session=sess)
-    # multisession_df, block_performance, augmented_trial_df = session_analysis.loadg_analysis(sess_id_full,
+    augmented_trial_df, block_performance, multisession_df = session_analysis.run_analysis(trial_df, session=sess)
+    # multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(sess_id_full,
     #                                                                                         session_data_folder=processed_data_path,
     #                                                                                         multisession_data_folder=multi_session_save_path)
 

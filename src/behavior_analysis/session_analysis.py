@@ -198,26 +198,9 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     Get block trials to switch and consecutive rewards in previous block, use to create/modify a block df.
     """
     sess_id = mouse + '_' + date
-    augmented_trial_df = trial_df.copy(deep=True)
-
-    # get block qualities: trials-to-switch, consecutive rewards, other augmentations. Add new variables here too
+    augmented_trial_df = make_augmented_trial_df(trial_df)
     blocks = np.unique(trial_df['cur_block'])
     block_performance = []
-    block_types = get_block_types(trial_df)
-    augmented_trial_df['block_type'] = block_types
-    augmented_trial_df['time_to_choice'] = augmented_trial_df['choice_time'] - augmented_trial_df['start_time']
-
-    prev_action = np.zeros(trial_df.shape[0], dtype='object')
-    prev_reward = np.zeros(trial_df.shape[0], dtype='object')
-    prev_action[0] = 'None'
-    prev_reward[0] = 'None'
-    prev_action[1:] = trial_df['action'].to_numpy()[:-1]
-    prev_reward[1:] = trial_df['reward'].to_numpy()[:-1]
-    augmented_trial_df['prev_action'] = prev_action
-    augmented_trial_df['prev_reward'] = prev_reward
-
-    decision_vars = count_decision_variables(trial_df)
-    augmented_trial_df = pd.concat([augmented_trial_df, decision_vars], axis=1)
 
     for ix, b in enumerate(blocks):
         cur_block_ix = augmented_trial_df['cur_block'] == b
@@ -296,9 +279,13 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
 
     left_value = 0
     right_value = 0
-    relative_value = 0
     left_omissions = 0
     right_omissions = 0
+
+    left_value_cf = 0
+    right_value_cf = 0
+    left_omissions_cf = 0
+    right_omissions_cf = 0
 
     n_trials = trial_df.shape[0]
     decision_variable_dict = defaultdict(list)
@@ -309,27 +296,35 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
     # 1. the integrate-and-reset params from Cazettes 2023. Why is value negative again?
     # 2. the last-seen/"memory" version used, which resets when failures/rewards start anew but don't reset on switches
     for i in range(n_trials):
+        # Win-stay lose-shift decision variables
         decision_variable_dict['negative_value'].append(negative_value)
         decision_variable_dict['consecutive_rewards_memory'].append(consecutive_rewards_memory)
         decision_variable_dict['consecutive_omissions_memory'].append(consecutive_omissions_memory)
         decision_variable_dict['consecutive_rewards'].append(consecutive_rewards)
         decision_variable_dict['consecutive_omissions'].append(consecutive_omissions)
 
+        # 2-choice decision variables, with no task-structural information
         decision_variable_dict['left_value'].append(left_value)
         decision_variable_dict['right_value'].append(right_value)
         decision_variable_dict['relative_value'].append(left_value-right_value)
-        decision_variable_dict['left_nonneg_value'].append(np.amax([left_value, 0]))
-        decision_variable_dict['right_nonneg_value'].append(np.amax([right_value,0]))
-        decision_variable_dict['relative_nonneg_value'].append(np.amax([left_value, 0]) -
-                                                               np.amax([right_value,0]))  # this can be negative, but the values it comes from cannot
         decision_variable_dict['left_omissions'].append(left_omissions)
         decision_variable_dict['right_omissions'].append(right_omissions)
         decision_variable_dict['relative_omissions'].append(left_omissions-right_omissions)
 
+        # 2-choice decision variables, with task-structural/counterfactual information
+        decision_variable_dict['left_cf_value'].append(left_value_cf)
+        decision_variable_dict['right_cf_value'].append(right_value_cf)
+        decision_variable_dict['relative_cf_value'].append(left_value_cf - right_value_cf)
+        decision_variable_dict['left_cf_omissions'].append(left_omissions_cf)
+        decision_variable_dict['right_cf_omissions'].append(right_omissions_cf)
+        decision_variable_dict['relative_cf_omissions'].append(left_omissions_cf - right_omissions_cf)
+
         # Don't update DVs for trials with experimenter-given rewards. These trials shouldn't be included in action
         # prediction models either
-        if trial_df.loc[i, 'give_reward'] == 1 or trial_df.loc[i, 'give_reward'] == '1':
-        # if trial_df['action'].to_numpy()[i] == 'None':
+        give_reward = ((trial_df.loc[i, 'give_reward'] == 1) or
+                       (trial_df.loc[i, 'give_reward'] == '1') or
+                       (trial_df['action'].to_numpy()[i] == 'None'))
+        if give_reward:
             continue
 
         reward = trial_df.loc[i, 'reward']
@@ -341,8 +336,14 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
         consecutive_omissions_memory = counters.consecutive_fail_renewal_counter(consecutive_omissions_memory, reward, previous_trial_rewarded)
         previous_trial_rewarded = reward > 0
 
-        left_value, right_value = counters.counterfactual_value_counter(left_value, right_value, action, reward)
-        left_omissions, right_omissions = counters.counterfactual_omissions_counter(left_omissions, right_omissions, action, reward)
+        # 2-choice decision variables, with no task-structural information
+        left_value, right_value = counters.sided_value_counter(left_value, right_value, action, reward, zero_min=True, counterfactual=False)
+        left_omissions, right_omissions = counters.sided_omissions_counter(left_omissions, right_omissions, action, reward, counterfactual=False)
+
+        # 2-choice decision variables, with task-structural/counterfactual information
+        left_value_cf, right_value_cf = counters.sided_value_counter(left_value_cf, right_value_cf, action, reward, zero_min=True, counterfactual=True)
+        left_omissions_cf, right_omissions_cf = counters.sided_omissions_counter(left_omissions_cf, right_omissions_cf,
+                                                                                    action, reward, counterfactual=True)
 
     return pd.DataFrame(decision_variable_dict)
 
@@ -380,8 +381,8 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
     assert overall_save_path.exists(), "between-session data save path does not exist"
 
     mouse, date, time = sess_id.split('_')
-    block_performance.to_csv(session_save_path / (sess_id + '_block_performance.csv'), index=False)
-    augmented_trial_df.to_csv(session_save_path / (sess_id + '_augmented_trials.csv'), index=False)
+    block_performance.to_csv(session_save_path / (sess_id + '_block_performance.csv'), index=False, na_rep='None')
+    augmented_trial_df.to_csv(session_save_path / (sess_id + '_augmented_trials.csv'), index=False, na_rep='None')
     overall_fname = overall_save_path / (mouse + '_overall_performance.csv')
     if overall_fname.exists():
         overall_df = pd.read_csv(overall_fname, na_filter=False)
@@ -394,10 +395,10 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
         # else:
         overall_df = pd.concat([overall_df, session_performance], axis=0)
         overall_df.sort_values(by='date', inplace=True)
-        overall_df.to_csv(overall_fname, index=False)
+        overall_df.to_csv(overall_fname, index=False, na_rep='None')
 
     else:
-        session_performance.to_csv(overall_fname, index=False)
+        session_performance.to_csv(overall_fname, index=False, na_rep='None')
         overall_df = session_performance
 
     return overall_df

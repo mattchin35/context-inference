@@ -5,7 +5,7 @@ Source: Cazettes et al., Nature Neuroscience 2023
 import numpy as np
 
 states = ['right', 'left']
-state_dict = {s: i for i, s in enumerate(states)}  # i.e. [0 right, 1 left]
+side_dict = {s: i for i, s in enumerate(states)}  # i.e. [0 right, 1 left]
 
 
 def consecutive_fail_counter(count: int, reward: int):
@@ -97,46 +97,23 @@ def value_counter(count: int, reward: int):
     return count
 
 
-def sided_value_counter(left_count: int, right_count: int, action: int, reward: int, zero_min=False) -> tuple[int, int]:
-    """
-    This counter updates the value of the chosen action on each trial.
-    """
-    if action == state_dict['right']:
-        if reward == 0:
-            right_count -= 1
-        elif reward == 1:
-            right_count = np.amax([right_count, 0]) + 1
-
-    elif action == state_dict['left']:
-        if reward == 0:
-            left_count -= 1
-        elif reward == 1:
-            left_count = np.amax([left_count, 0]) + 1
-
-    if zero_min:
-        left_count = np.amax([left_count, 0])
-        right_count = np.amax([right_count, 0])
-
-    return left_count, right_count
-
-
-def counterfactual_value_counter(left_count: int, right_count: int, action: int, reward: int, zero_min=False) -> tuple[int, int]:
+def sided_value_counter(left_count: int, right_count: int, action: int, reward: int, zero_min=False, counterfactual=False) -> tuple[int, int]:
     """
     This counter resets the value of the unchosen action on rewarded trials to 0.
     """
-    if action == 0:
+    if action == side_dict['right']:
         if reward == 0:
             right_count -= 1
         elif reward == 1:
             right_count = np.amax([right_count, 0]) + 1
-            left_count = 0
+            left_count *= (0 if counterfactual else 1)
 
-    elif action == 1:
+    elif action == side_dict['left']:
         if reward == 0:
             left_count -= 1
         elif reward == 1:
             left_count = np.amax([left_count, 0]) + 1
-            right_count = 0
+            right_count *= (0 if counterfactual else 1)
 
     if zero_min:
         left_count = np.amax([left_count, 0])
@@ -145,22 +122,24 @@ def counterfactual_value_counter(left_count: int, right_count: int, action: int,
     return left_count, right_count
 
 
-def counterfactual_omissions_counter(left_count: int, right_count: int, action: int, reward: int) -> tuple[int, int]:
-    if action == 0: #right
+def sided_omissions_counter(left_count: int, right_count: int, action: int, reward: int, counterfactual=False) -> tuple[int, int]:
+    """
+    A counter of consecutive omissions, increasing the count on unrewarded trials and resetting the count on rewarded trials.
+    If counterfactual is True, also resets the value of the unchosen action on rewarded trials to 0.
+    """
+    if action == side_dict['right']:
         if reward == 0:
             right_count += 1
         elif reward == 1:
             right_count = 0
-            left_count = 0
+            left_count *= (0 if counterfactual else 1)
 
-    elif action == 1:
+    elif action == side_dict['left']:
         if reward == 0:
             left_count += 1
         elif reward == 1:
             left_count = 0
-            right_count = 0
+            right_count *= (0 if counterfactual else 1)
 
     return left_count, right_count
-
-
 

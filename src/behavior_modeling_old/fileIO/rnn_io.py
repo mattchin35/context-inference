@@ -44,7 +44,7 @@ def save_agent_state(save_name: str, model_dir: Path, agent: torch.nn.Module) ->
         save_dir.mkdir(parents=True)
 
     p_agent = save_dir / (save_name + '_agent.pkl')
-    torch.save(agent.state_dict(), p_agent)
+    torch.save(agent.side_dict(), p_agent)
     print("[***] Agent saved as: {}".format(p_agent.resolve()))
 
 

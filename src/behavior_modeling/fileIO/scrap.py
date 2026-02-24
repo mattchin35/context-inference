@@ -1,7 +1,7 @@
 def save_experiment(save_name: str, task: rnn_task.RnnMDP, agent: torch.nn.Module, performance: dict,
                     task_params: task_config.TaskParams, rnn_params: rnn_config.AgentConfig) -> None:
     exp_dict = dict(task=vars(task), task_params=vars(task_params), performance=performance, agent_params=vars(rnn_params),
-               agent_name=agent.name, state_dict=task.state_dict)
+                    agent_name=agent.name, state_dict=task.side_dict)
     date = str(dt.date.today().isoformat())
 
     # save the experiment
@@ -19,7 +19,7 @@ def save_experiment(save_name: str, task: rnn_task.RnnMDP, agent: torch.nn.Modul
         save_dir.mkdir(parents=True)
 
     p_agent = save_dir / (save_name + '_agent.pkl')
-    torch.save(agent.state_dict(), p_agent)
+    torch.save(agent.side_dict(), p_agent)
 
     print("[***] Experiment saved as: {}; Agent saved as: {}".format(p_dict.name, p_agent.name))
 
