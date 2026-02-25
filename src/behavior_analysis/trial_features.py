@@ -50,16 +50,33 @@ def qlearning_relative_value(actions, rewards, learning_rate=0.1, n_actions=N_AC
     return relative_value
 
 
-def forgetting_qlearning_relative_value(actions, rewards, decay=0.9, n_actions=N_ACTIONS, give_reward=None):
+def forgetting_qlearning_relative_value(
+    actions,
+    rewards,
+    decay=0.9,
+    reward_update_rate=None,
+    n_actions=N_ACTIONS,
+    give_reward=None,
+):
     """
     Minimal forgetting Q-learning relative value feature.
     Returns trial-wise pre-update value: Q_left - Q_right.
+
+    Update rule:
+        Q *= decay
+        Q[action] += reward_update_rate * reward
+
+    If reward_update_rate is None, defaults to (1 - decay), matching the original behavior.
     """
     actions = np.asarray(actions)
     rewards = np.asarray(rewards)
     _validate_lengths(actions, rewards)
     if not 0 <= decay <= 1:
         raise ValueError("decay must be in [0, 1].")
+    if reward_update_rate is None:
+        reward_update_rate = 1 - decay
+    if not 0 <= reward_update_rate <= 1:
+        raise ValueError("reward_update_rate must be in [0, 1].")
 
     skip_trials = _normalize_skip_trials(give_reward, actions.shape[0])
 
@@ -81,7 +98,7 @@ def forgetting_qlearning_relative_value(actions, rewards, decay=0.9, n_actions=N
 
         # Vertechi et al. Neuron 2020 update rule.
         Q *= decay
-        Q[action] += (1 - decay) * reward
+        Q[action] += reward_update_rate * reward
 
     return relative_value
 

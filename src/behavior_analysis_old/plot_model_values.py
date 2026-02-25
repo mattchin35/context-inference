@@ -6,7 +6,6 @@ from typing import Optional
 from pathlib import Path
 import pickle as pkl
 import re
-import json
 
 plt.style.use('dark_background')
 
@@ -59,7 +58,7 @@ def plot_multiple_runs(value_dfs: list[pd.DataFrame], plot_name: str, action_df:
         rewards = action_df['reward'].values
         x = np.arange(actions.size)
         action_ix = actions * 2 - 1
-        plt.scatter(x, action_ix, s=2, label='actions', c='ivory')
+        plt.scatter(x, action_ix, s=4, label='actions', c='ivory')
         rew_ix = rewards > 0
         plt.scatter(x[rew_ix], (rewards * action_ix)[rew_ix], s=10, c='ivory')  # , label='rewards')
 
@@ -255,6 +254,8 @@ def plot_one_model():
                     p_left=trial_df['HMM_prob_left'].values,
                     fig_title=agent_type + '_plot', filename=fname, figure_path=figure_path)
 
+
+
     stickiness = .3
     w_reward_hist = .5
     w_decay = 2.6
@@ -312,309 +313,64 @@ def plot_one_model():
     # plot_prior(df)
 
 
-def plot_combined_trial_feature_values():
-    """
-    Plot QL/FQL/HMM (log-odds) relative-value features from augmented_trial_df on a single axis.
-    Loads trial_feature_params.json written by gather_trial_features.
-    """
-    session_data_home = Path(
-        '/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/')
-    sess_id_full = 'CT014_2025-12-16_153200'
-    processed_data_path = session_data_home / 'processed'
-    figure_path = session_data_home / 'figures'
+def multiplot_main():
+    # load the mouse
+    mouse = 'MF03'
+    date = '2023-10-03'
+    sess_ID = mouse + '-' + date
+    p = Path('../mouse_behavior') / (sess_ID + '_performance.pkl')
+    with p.open('rb') as f:
+        mouse_df = pkl.load(f)
 
-    augmented_trial_df_path = processed_data_path / (sess_id_full + '_augmented_trials.csv')
-    trial_feature_params_path = processed_data_path / 'trial_feature_params.json'
+    alpha = .1
+    temp = .2
+    decay = .6
+    agent_type = 'F-Qlearning'
+    agent_param_str = '{}_alpha={}_temp={}_decay={}'.format(agent_type, alpha, temp, decay)
+    fname = sess_ID + '_' + agent_param_str
+    extras_str = 'comparison-model'
+    if extras_str:
+        fname += '_' + extras_str
 
-    trial_df = pd.read_csv(augmented_trial_df_path, sep=',', na_filter=False)
-    with open(trial_feature_params_path, 'r') as f:
-        params = json.load(f)
-
-    required_cols = (
-        'Qlearning_rel_value',
-        'FQlearning_rel_value',
-        'HMM_rel_value_logodds',
-        'action',
-        'reward',
-    )
-    missing_cols = [col for col in required_cols if col not in trial_df.columns]
-    if missing_cols:
-        raise ValueError(f"augmented_trial_df missing required columns: {missing_cols}")
-    if 'block_type' not in trial_df.columns:
-        raise ValueError("augmented_trial_df missing required column: ['block_type']")
-
-    x = np.arange(trial_df.shape[0])
-    ql = pd.to_numeric(trial_df['Qlearning_rel_value'], errors='coerce')
-    fql = pd.to_numeric(trial_df['FQlearning_rel_value'], errors='coerce')
-    hmm_logodds = pd.to_numeric(trial_df['HMM_rel_value_logodds'], errors='coerce')
-    actions = pd.to_numeric(trial_df['action'], errors='coerce').to_numpy()
-    rewards = pd.to_numeric(trial_df['reward'], errors='coerce').to_numpy()
-    states = trial_df['block_type'].to_numpy()
-
-    change_ix = states[:-1] != states[1:]
-    state_changes = np.arange(1, states.size)[change_ix]
-    bins = np.unique(np.concatenate(([0], state_changes, [states.size - 1])))
-    bin_types = states[bins]
-
-    f, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(x, ql, label='Qlearning_rel_value', linewidth=1.5)
-    ax.plot(x, fql, label='FQlearning_rel_value', linewidth=1.5)
-    ax.plot(x, hmm_logodds, label='HMM_rel_value_logodds', linewidth=1.5)
-    ax.axhline(0, color='gray', linewidth=1, alpha=0.6, linestyle='--')
-
-    valid_action_ix = ~np.isnan(actions)
-    action_trial_ix = x[valid_action_ix]
-    action_signed = actions[valid_action_ix] * 2 - 1
-    ax.scatter(action_trial_ix, action_signed, s=4, c='ivory', label='actions')
-
-    rewarded_ix = valid_action_ix & (rewards > 0)
-    rewarded_trial_ix = x[rewarded_ix]
-    rewarded_actions = actions[rewarded_ix] * 2 - 1
-    ax.scatter(rewarded_trial_ix, rewarded_actions, s=10, c='white', label='rewards')
-
-    def _state_color_label(state):
-        if state in color_dict:
-            return color_dict[state], state_dict.get(state, str(state))
-        state_str = str(state).lower()
-        if state_str in color_dict:
-            return color_dict[state_str], state_dict.get(state_str, state_str)
-        try:
-            state_int = int(state)
-            if state_int in color_dict:
-                return color_dict[state_int], state_dict.get(state_int, str(state_int))
-        except (TypeError, ValueError):
-            pass
-        return 'gray', str(state)
-
-    unique_bins = []
-    for i in range(bins.size - 1):
-        color, label = _state_color_label(bin_types[i])
-        if label not in unique_bins:
-            ax.axvspan(bins[i], bins[i + 1], color=color, alpha=.15, label=label)
-            unique_bins.append(label)
-        else:
-            ax.axvspan(bins[i], bins[i + 1], color=color, alpha=.15)
-
-    ax.set_xlabel('Trial')
-    ax.set_ylabel('Relative value / action')
-    ax.set_yticks([-1, 0, 1])
-    ax.set_yticklabels(['Right', '0', 'Left'])
-    ax.set_xticks(bins)
-    ax.set_title(
-        f"{sess_id_full} combined model values\n"
-        f"QL lr={params.get('QL_learning_rate')}, "
-        f"FQL decay={params.get('FQL_decay')}, "
-        f"HMM p_switch={params.get('state_transition_prob')}, "
-        f"HMM p_rew={params.get('active_reward_probability')}"
-    )
-    ax.legend(fancybox=False)
-    f.tight_layout()
-
-    figure_format = 'png'
-    plot_name = sess_id_full + '_combined_model_relative_values'
-    plt.savefig(figure_path / '{}.{}'.format(plot_name, figure_format), format=figure_format, dpi=300)
-    plt.close()
-    print('saved figure as {}'.format(plot_name))
+    p = Path('../saved_models') / (fname + '.pkl')
+    _, _, QL_df, _ = controller.load_experiment(p)
 
 
-def plot_combined_trial_index_features():
-    """
-    Plot relative_doubt_index and perseveration_regressor from augmented_trial_df on a separate axis.
-    """
-    session_data_home = Path(
-        '/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/')
-    sess_id_full = 'CT014_2025-12-16_153200'
-    processed_data_path = session_data_home / 'processed'
-    figure_path = session_data_home / 'figures'
+    alpha = 0
+    temp = .2
+    HMM_transition_prob = .1
+    agent_type = 'HMM'
+    agent_param_str = '{}_alpha={}_temp={}_model-Psw={}'.format(agent_type, alpha, temp, HMM_transition_prob)
+    fname = sess_ID + '_' + agent_param_str
+    extras_str = 'comparison-model'
+    if extras_str:
+        fname += '_' + extras_str
 
-    augmented_trial_df_path = processed_data_path / (sess_id_full + '_augmented_trials.csv')
-    trial_feature_params_path = processed_data_path / 'trial_feature_params.json'
+    p = Path('../saved_models') / (fname + '.pkl')
+    _, _, HMM_df, _ = controller.load_experiment(p)
 
-    trial_df = pd.read_csv(augmented_trial_df_path, sep=',', na_filter=False)
-    with open(trial_feature_params_path, 'r') as f:
-        params = json.load(f)
+    alpha = .1
+    beta = 1.5
+    tau = 1
+    agent_type = 'Logistic'  # RFLR, reduced-form-linear-regression
+    agent_param_str = '{}_alpha={}_beta={}_tau={}'.format(agent_type, alpha, beta, tau)
+    fname = sess_ID + '_' + agent_param_str
+    extras_str = 'comparison-model'
+    if extras_str:
+        fname += '_' + extras_str
 
-    required_cols = (
-        'relative_doubt_index',
-        'perseveration_regressor',
-        'action',
-        'reward',
-    )
-    missing_cols = [col for col in required_cols if col not in trial_df.columns]
-    if missing_cols:
-        raise ValueError(f"augmented_trial_df missing required columns: {missing_cols}")
-    if 'block_type' not in trial_df.columns:
-        raise ValueError("augmented_trial_df missing required column: ['block_type']")
+    p = Path('../saved_models') / (fname + '.pkl')
+    _, _, LR_df, _ = controller.load_experiment(p)
 
-    x = np.arange(trial_df.shape[0])
-    relative_doubt = pd.to_numeric(trial_df['relative_doubt_index'], errors='coerce')
-    perseveration = pd.to_numeric(trial_df['perseveration_regressor'], errors='coerce')
-    actions = pd.to_numeric(trial_df['action'], errors='coerce').to_numpy()
-    rewards = pd.to_numeric(trial_df['reward'], errors='coerce').to_numpy()
-    states = trial_df['block_type'].to_numpy()
+    action_df = mouse_df
+    value_dfs = [(QL_df, 'Q-learning'), (HMM_df, 'HMM'), (LR_df, 'Logistic')]
 
-    change_ix = states[:-1] != states[1:]
-    state_changes = np.arange(1, states.size)[change_ix]
-    bins = np.unique(np.concatenate(([0], state_changes, [states.size - 1])))
-    bin_types = states[bins]
-
-    f, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(x, relative_doubt, label='relative_doubt_index', linewidth=1.5)
-    ax.plot(x, perseveration, label='perseveration_regressor', linewidth=1.5)
-    ax.axhline(0, color='gray', linewidth=1, alpha=0.6, linestyle='--')
-
-    valid_action_ix = ~np.isnan(actions)
-    action_trial_ix = x[valid_action_ix]
-    action_signed = actions[valid_action_ix] * 2 - 1
-    ax.scatter(action_trial_ix, action_signed, s=4, c='ivory', label='actions')
-
-    rewarded_ix = valid_action_ix & (rewards > 0)
-    rewarded_trial_ix = x[rewarded_ix]
-    rewarded_actions = actions[rewarded_ix] * 2 - 1
-    ax.scatter(rewarded_trial_ix, rewarded_actions, s=10, c='white', label='rewards')
-
-    def _state_color_label(state):
-        if state in color_dict:
-            return color_dict[state], state_dict.get(state, str(state))
-        state_str = str(state).lower()
-        if state_str in color_dict:
-            return color_dict[state_str], state_dict.get(state_str, state_str)
-        try:
-            state_int = int(state)
-            if state_int in color_dict:
-                return color_dict[state_int], state_dict.get(state_int, str(state_int))
-        except (TypeError, ValueError):
-            pass
-        return 'gray', str(state)
-
-    unique_bins = []
-    for i in range(bins.size - 1):
-        color, label = _state_color_label(bin_types[i])
-        if label not in unique_bins:
-            ax.axvspan(bins[i], bins[i + 1], color=color, alpha=.15, label=label)
-            unique_bins.append(label)
-        else:
-            ax.axvspan(bins[i], bins[i + 1], color=color, alpha=.15)
-
-    ax.set_xlabel('Trial')
-    ax.set_ylabel('Index / action')
-    ax.set_yticks([-1, 0, 1])
-    ax.set_yticklabels(['Right', '0', 'Left'])
-    ax.set_xticks(bins)
-    ax.set_title(
-        f"{sess_id_full} trial index features\n"
-        f"omission_lam={params.get('omission_lam')}, "
-        f"perseveration_decay={params.get('perseveration_decay')}"
-    )
-    ax.legend(fancybox=False)
-    f.tight_layout()
-
-    figure_format = 'png'
-    plot_name = sess_id_full + '_combined_trial_index_features'
-    plt.savefig(figure_path / '{}.{}'.format(plot_name, figure_format), format=figure_format, dpi=300)
-    plt.close()
-    print('saved figure as {}'.format(plot_name))
-
-
-def plot_user_defined_trial_columns(
-    value_columns,
-    plot_name='custom_trial_columns',
-    plot_title='Custom trial feature plot',
-    session_data_home=Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/'),
-    sess_id_full='CT014_2025-12-16_153200',
-):
-    """
-    Plot a user-defined set of numeric columns from augmented_trial_df on one axis,
-    with action/reward overlays and task-state bin shading.
-    """
-    if not value_columns:
-        raise ValueError("value_columns must contain at least one column name.")
-
-    processed_data_path = session_data_home / 'processed'
-    figure_path = session_data_home / 'figures'
-
-    augmented_trial_df_path = processed_data_path / (sess_id_full + '_augmented_trials.csv')
-    trial_df = pd.read_csv(augmented_trial_df_path, sep=',', na_filter=False)
-
-    required_cols = list(value_columns) + ['action', 'reward', 'block_type']
-    missing_cols = [col for col in required_cols if col not in trial_df.columns]
-    if missing_cols:
-        raise ValueError(f"augmented_trial_df missing required columns: {missing_cols}")
-
-    x = np.arange(trial_df.shape[0])
-    actions = pd.to_numeric(trial_df['action'], errors='coerce').to_numpy()
-    rewards = pd.to_numeric(trial_df['reward'], errors='coerce').to_numpy()
-    states = trial_df['block_type'].to_numpy()
-
-    change_ix = states[:-1] != states[1:]
-    state_changes = np.arange(1, states.size)[change_ix]
-    bins = np.unique(np.concatenate(([0], state_changes, [states.size - 1])))
-    bin_types = states[bins]
-
-    f, ax = plt.subplots(figsize=(12, 5))
-    for col in value_columns:
-        y = pd.to_numeric(trial_df[col], errors='coerce')
-        ax.plot(x, y, label=col, linewidth=1.5)
-    ax.axhline(0, color='gray', linewidth=1, alpha=0.6, linestyle='--')
-
-    valid_action_ix = ~np.isnan(actions)
-    action_trial_ix = x[valid_action_ix]
-    action_signed = actions[valid_action_ix] * 2 - 1
-    ax.scatter(action_trial_ix, action_signed, s=4, c='ivory', label='actions')
-
-    rewarded_ix = valid_action_ix & (rewards > 0)
-    rewarded_trial_ix = x[rewarded_ix]
-    rewarded_actions = actions[rewarded_ix] * 2 - 1
-    ax.scatter(rewarded_trial_ix, rewarded_actions, s=10, c='white', label='rewards')
-
-    def _state_color_label(state):
-        if state in color_dict:
-            return color_dict[state], state_dict.get(state, str(state))
-        state_str = str(state).lower()
-        if state_str in color_dict:
-            return color_dict[state_str], state_dict.get(state_str, state_str)
-        try:
-            state_int = int(state)
-            if state_int in color_dict:
-                return color_dict[state_int], state_dict.get(state_int, str(state_int))
-        except (TypeError, ValueError):
-            pass
-        return 'gray', str(state)
-
-    unique_bins = []
-    for i in range(bins.size - 1):
-        color, label = _state_color_label(bin_types[i])
-        if label not in unique_bins:
-            ax.axvspan(bins[i], bins[i + 1], color=color, alpha=.15, label=label)
-            unique_bins.append(label)
-        else:
-            ax.axvspan(bins[i], bins[i + 1], color=color, alpha=.15)
-
-    ax.set_xlabel('Trial')
-    ax.set_ylabel('Value / action')
-    ax.set_yticks([-1, 0, 1])
-    ax.set_yticklabels(['Right', '0', 'Left'])
-    ax.set_xticks(bins)
-    ax.set_title(f"{sess_id_full} {plot_title}")
-    ax.legend(fancybox=False)
-    f.tight_layout()
-
-    figure_format = 'png'
-    output_name = sess_id_full + '_' + plot_name
-    plt.savefig(figure_path / '{}.{}'.format(output_name, figure_format), format=figure_format, dpi=300)
-    plt.close()
-    print('saved figure as {}'.format(output_name))
-
-
-def main():
-    plot_combined_trial_feature_values()
-    plot_combined_trial_index_features()
-    plot_user_defined_trial_columns(['FQlearning_rel_value',
-                                     'relative_doubt_index',
-                                     'perseveration_regressor'])
+    # plot_multiple_runs(value_dfs, plot_name='mouse_comparison', action_df=action_df)
 
 
 if __name__ == '__main__':
-    main()
+    plot_one_model()
+    # main()
     # rnn_main()
+    # multiplot_main()
 
