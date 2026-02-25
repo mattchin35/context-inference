@@ -11,7 +11,7 @@ LEFT_IX = 1
 eps = np.finfo(float).eps
 
 states = ['right', 'left']
-state_dict = {s: i for i, s in enumerate(states)}  # i.e. [0 right, 1 left]
+side_dict = {s: i for i, s in enumerate(states)}  # i.e. [0 right, 1 left]
 
 def get_action_ix(action: int) -> int:
     # right=0, left=1: map right to -1, left to +1
@@ -19,7 +19,7 @@ def get_action_ix(action: int) -> int:
     return action * 2 - 1
 
 
-def qlearning_relative_value(actions, rewards, learning_rate=0.1, n_actions=N_ACTIONS):
+def qlearning_relative_value(actions, rewards, learning_rate=0.1, n_actions=N_ACTIONS, give_reward=None):
     """
     Minimal Q-learning relative value feature.
     Returns trial-wise pre-update value: Q_left - Q_right.
@@ -28,10 +28,18 @@ def qlearning_relative_value(actions, rewards, learning_rate=0.1, n_actions=N_AC
     rewards = np.asarray(rewards)
     _validate_lengths(actions, rewards)
 
+    skip_trials = _normalize_skip_trials(give_reward, actions.shape[0])
+
     Q = np.zeros(n_actions)
-    relative_value = np.zeros(actions.shape[0], dtype=float)
+    if skip_trials is None:
+        relative_value = np.zeros(actions.shape[0], dtype=float)
+    else:
+        relative_value = np.full(actions.shape[0], None, dtype=object)
 
     for i, (action, reward) in enumerate(zip(actions, rewards)):
+        if skip_trials is not None and skip_trials[i]:
+            continue
+
         relative_value[i] = Q[LEFT_IX] - Q[RIGHT_IX]
         action = _parse_action(action, n_actions)
         reward = _parse_reward(reward)
@@ -42,7 +50,7 @@ def qlearning_relative_value(actions, rewards, learning_rate=0.1, n_actions=N_AC
     return relative_value
 
 
-def forgetting_qlearning_relative_value(actions, rewards, decay=0.9, n_actions=N_ACTIONS):
+def forgetting_qlearning_relative_value(actions, rewards, decay=0.9, n_actions=N_ACTIONS, give_reward=None):
     """
     Minimal forgetting Q-learning relative value feature.
     Returns trial-wise pre-update value: Q_left - Q_right.
@@ -53,10 +61,18 @@ def forgetting_qlearning_relative_value(actions, rewards, decay=0.9, n_actions=N
     if not 0 <= decay <= 1:
         raise ValueError("decay must be in [0, 1].")
 
+    skip_trials = _normalize_skip_trials(give_reward, actions.shape[0])
+
     Q = np.zeros(n_actions)
-    relative_value = np.zeros(actions.shape[0], dtype=float)
+    if skip_trials is None:
+        relative_value = np.zeros(actions.shape[0], dtype=float)
+    else:
+        relative_value = np.full(actions.shape[0], None, dtype=object)
 
     for i, (action, reward) in enumerate(zip(actions, rewards)):
+        if skip_trials is not None and skip_trials[i]:
+            continue
+
         relative_value[i] = Q[LEFT_IX] - Q[RIGHT_IX]
         action = _parse_action(action, n_actions)
         reward = _parse_reward(reward)
@@ -74,12 +90,13 @@ def hmm_relative_value(
     actions,
     rewards,
     state_transition_prob=0.2,
-    active_reward_probability=0.9,
+    active_reward_probability=0.8,
     inactive_reward_probability=0.0,
     correct_reward_size=1.0,
     incorrect_reward_size=0.0,
     value_mode="expected_reward",
     tanh_scale=1,
+    give_reward=None,
 ):
     """
     Minimal HMM relative value feature.
@@ -97,12 +114,20 @@ def hmm_relative_value(
     if value_mode not in ("expected_reward", "bayesian_log_odds"):
         raise ValueError("value_mode must be 'expected_reward' or 'bayesian_log_odds'.")
 
+    skip_trials = _normalize_skip_trials(give_reward, actions.shape[0])
+
     prior = np.ones(2) / 2
-    relative_value = np.zeros(actions.shape[0], dtype=float)
+    if skip_trials is None:
+        relative_value = np.zeros(actions.shape[0], dtype=float)
+    else:
+        relative_value = np.full(actions.shape[0], None, dtype=object)
     transition_matrix = np.ones((2, 2)) * state_transition_prob
     np.fill_diagonal(transition_matrix, 1 - state_transition_prob)
 
     for i, (action, reward) in enumerate(zip(actions, rewards)):
+        if skip_trials is not None and skip_trials[i]:
+            continue
+
         if value_mode == "expected_reward":
             expected_rew_left = active_reward_probability * prior[LEFT_IX] + inactive_reward_probability * prior[RIGHT_IX]
             expected_rew_right = active_reward_probability * prior[RIGHT_IX] + inactive_reward_probability * prior[LEFT_IX]
@@ -145,6 +170,41 @@ def hmm_relative_value(
 def _validate_lengths(actions, rewards):
     if actions.shape[0] != rewards.shape[0]:
         raise ValueError("actions and rewards must have the same length.")
+
+
+def _normalize_skip_trials(give_reward, n_trials):
+    if give_reward is None:
+        return None
+
+    give_reward = np.asarray(give_reward)
+    if give_reward.shape[0] != n_trials:
+        raise ValueError("give_reward must have the same length as actions and rewards.")
+
+    return np.array([_should_skip_trial(flag) for flag in give_reward], dtype=bool)
+
+
+def _should_skip_trial(flag):
+    if flag is None:
+        return False
+
+    try:
+        if np.isnan(flag):
+            return False
+    except TypeError:
+        pass
+
+    if isinstance(flag, str):
+        parsed = flag.strip().lower()
+        if parsed in {"1", "true", "t", "yes", "y"}:
+            return True
+        if parsed in {"0", "false", "f", "no", "n", "none", ""}:
+            return False
+        try:
+            return bool(int(float(parsed)))
+        except (TypeError, ValueError):
+            return False
+
+    return bool(flag)
 
 
 def _parse_action(action, n_actions):
@@ -217,20 +277,22 @@ def relative_omissions_index(R_omissions, L_omissions, epsilon=1e-8):
     -------
     O : float or np.ndarray
         Relative omissions index in [-1, 1].
-        +1 → only right accumulating omissions
-        -1 → only left accumulating omissions
+        +1 → only left accumulating omissions
+        -1 → only right accumulating omissions
          0 → equal omissions
     """
 
     R = np.asarray(R_omissions, dtype=float)
     L = np.asarray(L_omissions, dtype=float)
 
-    return (R - L) / (R + L + epsilon)
+    # Left-minus-right convention so left is positive and right is negative.
+    return (L - R) / (R + L + epsilon)
 
 
 def signed_omission_regressor(loss_streak, lam, choice_side):
     """
-    Compute signed omission regressor using exponential saturating doubt.
+    Compute signed omission regressor using exponential saturating doubt. This is for use with a combined omissions
+    count, reflecting overall doubt rather than side-specific doubt. The sign is determined by the current choice.
 
     Parameters
     ----------
@@ -242,7 +304,8 @@ def signed_omission_regressor(loss_streak, lam, choice_side):
         Current choice.
         Accepts:
             - 'right' / 'left'
-            - 1 (right) / -1 (left)
+            - 0 (right) / 1 (left)
+            - -1 (right) / +1 (left)
 
     Returns
     -------
@@ -256,11 +319,8 @@ def signed_omission_regressor(loss_streak, lam, choice_side):
     # Unsigned doubt in [0, 1)
     H = 1 - np.exp(-lam * D)
 
-    # Determine sign
-    if isinstance(choice_side, str):
-        sign = 1 if choice_side.lower() == 'right' else -1
-    else:
-        sign = np.asarray(choice_side)  # expects +1 (right) or -1 (left)
+    # Signed choice convention: left=+1, right=-1.
+    sign = _choice_to_signed(choice_side)
 
     return sign * H
 
@@ -283,8 +343,8 @@ def relative_doubt_index(R_omissions, L_omissions, lam):
     -------
     D : float or np.ndarray
         Relative doubt index in [-1, 1].
-        +1 → strong doubt on right only
-        -1 → strong doubt on left only
+        +1 → strong doubt on left only
+        -1 → strong doubt on right only
          0 → equal doubt
     """
 
@@ -295,7 +355,8 @@ def relative_doubt_index(R_omissions, L_omissions, lam):
     H_R = 1 - np.exp(-lam * R)
     H_L = 1 - np.exp(-lam * L)
 
-    return H_R - H_L
+    # Left-minus-right convention so left is positive and right is negative.
+    return H_L - H_R
 
 
 def perseveration_regressor(choices, decay=0.25):
@@ -305,7 +366,10 @@ def perseveration_regressor(choices, decay=0.25):
     Parameters
     ----------
     choices : array-like of shape (T,)
-        Binary choices (0 = left, 1 = right).
+        Choices coded as either:
+            - task-coded: 0 = right, 1 = left
+            - signed: -1 = right, +1 = left
+            - strings: 'right' / 'left'
     decay : float
         Exponential decay constant (lambda). Default = 0.25.
 
@@ -318,8 +382,8 @@ def perseveration_regressor(choices, decay=0.25):
     choices = np.asarray(choices)
     T = len(choices)
 
-    # Convert to -1 / +1 coding
-    y = 2 * choices - 1
+    # Signed choice convention: left=+1, right=-1.
+    y = _choice_to_signed(choices)
 
     pers = np.zeros(T)
     num = 0.0  # weighted numerator
@@ -341,7 +405,10 @@ def perseveration_regressor_vectorized(choices, decay=0.25):
     Parameters
     ----------
     choices : array-like (T,)
-        Binary choices (0 = left, 1 = right)
+        Choices coded as either:
+            - task-coded: 0 = right, 1 = left
+            - signed: -1 = right, +1 = left
+            - strings: 'right' / 'left'
     decay : float
         Exponential decay parameter (lambda)
 
@@ -354,8 +421,8 @@ def perseveration_regressor_vectorized(choices, decay=0.25):
     choices = np.asarray(choices)
     T = len(choices)
 
-    # Convert to -1 / +1
-    y = 2 * choices - 1
+    # Signed choice convention: left=+1, right=-1.
+    y = _choice_to_signed(choices)
 
     alpha = np.exp(-decay)
 
@@ -382,3 +449,48 @@ def perseveration_regressor_vectorized(choices, decay=0.25):
 
     return pers
 
+
+def _choice_to_signed(choice_side):
+    """
+    Map choices to sign convention used by relative-value features:
+    left -> +1, right -> -1.
+    """
+    choice_arr = np.asarray(choice_side)
+    if choice_arr.ndim == 0:
+        return _choice_token_to_signed(choice_arr.item())
+
+    signed = np.empty(choice_arr.shape, dtype=float)
+    for idx, token in np.ndenumerate(choice_arr):
+        signed[idx] = _choice_token_to_signed(token)
+    return signed
+
+
+def _choice_token_to_signed(token):
+    if isinstance(token, str):
+        parsed = token.strip().lower()
+        if parsed == "left":
+            return 1.0
+        if parsed == "right":
+            return -1.0
+        try:
+            token = float(parsed)
+        except ValueError as exc:
+            raise ValueError("choice values must be left/right, 0/1, or -1/+1.") from exc
+
+    try:
+        if np.isnan(token):
+            raise ValueError("choice values cannot be NaN.")
+    except TypeError:
+        pass
+
+    try:
+        value = float(token)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("choice values must be left/right, 0/1, or -1/+1.") from exc
+
+    if value in (1.0, float(LEFT_IX)):
+        return 1.0
+    if value in (-1.0, float(RIGHT_IX)):
+        return -1.0
+
+    raise ValueError("choice values must be left/right, 0/1, or -1/+1.")

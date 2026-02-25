@@ -408,9 +408,9 @@ def load_analysis(sess_id_full: str, session_data_folder: Path, multisession_dat
     pattern = r'(\w+)_([\d\-]+)_(\d+)'
     match = re.search(pattern, sess_id_full)
     mouse, date, timestamp = match.groups()
-    print(f"Mouse id: {mouse}")  # abc
-    print(f"Date: {date}")  # YYYY-MM-DD
-    print(f"Time: {timestamp}")  # HHMMSS
+    # print(f"Mouse id: {mouse}")  # abc
+    # print(f"Date: {date}")  # YYYY-MM-DD
+    # print(f"Time: {timestamp}")  # HHMMSS
 
     block_performance = pd.read_csv(session_data_folder / (sess_id_full + '_block_performance.csv'), sep=',', na_filter=False)
     augmented_trial_df = pd.read_csv(session_data_folder / (sess_id_full + '_augmented_trials.csv'), sep=',', na_filter=False)
