@@ -55,6 +55,8 @@ def forgetting_qlearning_relative_value(
     rewards,
     decay=0.9,
     reward_update_rate=None,
+    tanh_relative_value=False,
+    tanh_scale=1.0,
     n_actions=N_ACTIONS,
     give_reward=None,
 ):
@@ -67,6 +69,10 @@ def forgetting_qlearning_relative_value(
         Q[action] += reward_update_rate * reward
 
     If reward_update_rate is None, defaults to (1 - decay), matching the original behavior.
+    Optional output transform:
+        If tanh_relative_value is True, return tanh(tanh_scale * (Q_left - Q_right)).
+        This keeps values in [-1, 1] and is most useful when reward_update_rate differs
+        from (1 - decay).
     """
     actions = np.asarray(actions)
     rewards = np.asarray(rewards)
@@ -77,6 +83,15 @@ def forgetting_qlearning_relative_value(
         reward_update_rate = 1 - decay
     if not 0 <= reward_update_rate <= 1:
         raise ValueError("reward_update_rate must be in [0, 1].")
+    if not isinstance(tanh_relative_value, (bool, np.bool_)):
+        raise ValueError("tanh_relative_value must be a boolean.")
+    if tanh_relative_value:
+        try:
+            tanh_scale = float(tanh_scale)
+        except (TypeError, ValueError):
+            raise ValueError("tanh_scale must be a positive float when tanh_relative_value is True.")
+        if tanh_scale <= 0:
+            raise ValueError("tanh_scale must be > 0 when tanh_relative_value is True.")
 
     skip_trials = _normalize_skip_trials(give_reward, actions.shape[0])
 
@@ -90,13 +105,17 @@ def forgetting_qlearning_relative_value(
         if skip_trials is not None and skip_trials[i]:
             continue
 
-        relative_value[i] = Q[LEFT_IX] - Q[RIGHT_IX]
+        relative_value_raw = Q[LEFT_IX] - Q[RIGHT_IX]
+        if tanh_relative_value:
+            relative_value[i] = np.tanh(tanh_scale * relative_value_raw)
+        else:
+            relative_value[i] = relative_value_raw
         action = _parse_action(action, n_actions)
         reward = _parse_reward(reward)
         if action is None or reward is None:
             continue
 
-        # Vertechi et al. Neuron 2020 update rule.
+        # Vertechi et al. Neuron 2020 has reward update as (1 - decay) * reward
         Q *= decay
         Q[action] += reward_update_rate * reward
 
