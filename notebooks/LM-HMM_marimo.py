@@ -11,11 +11,20 @@ def _():
     return (mo,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # LM-HMM Tutorial Notebook
+
+    This notebook walks through synthetic LM-HMM generation, parameter recovery
+    with MLE/MAP, and optional model-selection analyses.
+    """)
+    return
+
+
 @app.cell
 def _():
     import sys, os
-    #print(sys.executable)
-    #print(os.environ.get("CONDA_PREFIX"))
 
     import matplotlib.pyplot as plt
     import autograd.numpy as np
@@ -63,6 +72,17 @@ def _():
     )
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Plotting Palette
+
+    Define the color palette and gradient colormap used consistently across all
+    diagnostic plots in the notebook.
+    """)
+    return
+
+
 @app.cell
 def _(gradient_cmap, sns):
     color_names = [
@@ -78,12 +98,23 @@ def _(gradient_cmap, sns):
     return cmap, colors
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Runtime Controls
+
+    Configure which expensive sections run, along with model-selection
+    hyperparameters and parallel worker settings.
+    """)
+    return
+
+
 @app.cell
 def _(multiprocessing):
     # Runtime controls for expensive sections.
     save_figures = True
     run_map = True
-    run_model_selection = False
+    run_model_selection = True
 
     # Model-selection defaults.
     num_sess = 3
@@ -191,6 +222,17 @@ def _(np, ssm):
     return input_dim, num_states, obs_dim, time_bins, trans0, true_hmm
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 1a.i Visualize Generative Parameters
+
+    Plot the true observation model parameters and transition matrix that will be
+    used to synthesize data.
+    """)
+    return
+
+
 @app.cell
 def _(plt, trans0, true_hmm, utilplot):
     # Plot generative parameters.
@@ -229,6 +271,17 @@ def _(input_dim, np, time_bins, true_hmm):
     return inpt, obs, true_ll, true_states
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 1b.i Scatter Plot by Latent State
+
+    Show observations in input-observation space, colored by true latent state,
+    to make state-dependent emission structure visible.
+    """)
+    return
+
+
 @app.cell
 def _(colors, inpt, num_states, obs, plt, true_states):
     plt.figure(figsize=(6, 6))
@@ -247,6 +300,17 @@ def _(colors, inpt, num_states, obs, plt, true_states):
     plt.ylabel("obs $y_1$")
     plt.title("Observation Distributions")
     plt.show()
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 1b.ii Posterior Ribbon for Ground Truth States
+
+    Build one-hot posterior probabilities from the known latent sequence and plot
+    them against observations.
+    """)
     return
 
 
@@ -293,11 +357,32 @@ def _(inpt, np, num_states, obs, obs_dim, plt, ssm, true_ll):
     return (mle_hmm,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 2a.i Align Recovered States
+
+    Resolve label switching by permuting inferred MLE states to best match the
+    ground-truth latent sequence.
+    """)
+    return
+
+
 @app.cell
 def _(find_permutation, inpt, mle_hmm, obs, true_states):
     most_likely_states = mle_hmm.most_likely_states(obs, input=inpt)
     mle_hmm.permute(find_permutation(true_states, most_likely_states))
     print("State permutation aligned to ground truth ordering.")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 2a.ii Compare Emission Parameters
+
+    Compare true and recovered observation weights and means after state alignment.
+    """)
     return
 
 
@@ -311,6 +396,16 @@ def _(mle_hmm, true_mus, true_weights, utilplot):
         1: {"weights": recovered_weights, "mus": recovered_mus, "label": "mle"},
     }
     utilplot.plot_weights_comparison(weight_dic)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 2a.iii Compare Transition Matrices
+
+    Visualize the true transition matrix alongside the matrix recovered by MLE.
+    """)
     return
 
 
@@ -333,6 +428,17 @@ def _(mle_hmm, np, plt, true_hmm, utilplot):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 2a.iv Compare Posterior State Probabilities
+
+    Plot posterior state probabilities from the fitted MLE model against the
+    ground-truth one-hot posteriors.
+    """)
+    return
+
+
 @app.cell
 def _(cmap, colors, inpt, mle_hmm, obs, posterior_probs0, true_hmm, utilplot):
     posterior_probs = mle_hmm.expected_states(data=obs, input=inpt)[0]
@@ -341,6 +447,16 @@ def _(cmap, colors, inpt, mle_hmm, obs, posterior_probs0, true_hmm, utilplot):
     utilplot.plot_postprob_obs(posterior_probs0, obs, inpt, true_hmm, colors, cmap)
     print("mle")
     utilplot.plot_postprob_obs(posterior_probs, obs, inpt, mle_hmm, colors, cmap)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 2a.v Duration Diagnostics
+
+    Compare true versus inferred run-length distributions for each latent state.
+    """)
     return
 
 
@@ -447,6 +563,16 @@ def _(
     return (map_hmm,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 2d.i Compare Final Log-Likelihoods
+
+    Summarize final data likelihood under true, MLE, and MAP models.
+    """)
+    return
+
+
 @app.cell
 def _(inpt, map_hmm, mle_hmm, obs, plt, true_hmm):
     true_likelihood = true_hmm.log_likelihood(obs, inputs=inpt)
@@ -466,6 +592,16 @@ def _(inpt, map_hmm, mle_hmm, obs, plt, true_hmm):
     plt.ylabel("loglikelihood", fontsize=12)
     plt.tight_layout()
     plt.show()
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 2d.ii Compare Emission Recovery Across Estimators
+
+    Extend the parameter comparison to include MAP estimates when available.
+    """)
     return
 
 
@@ -526,6 +662,16 @@ def _(inpt, np, num_sess, true_hmm):
     return inputs0, output0, ylabel_mouse
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 3a. Visualize Stratified CV Splits
+
+    Construct and plot fold assignments used for cross-validation.
+    """)
+    return
+
+
 @app.cell
 def _(
     Patch,
@@ -568,12 +714,33 @@ def _(
     return nKfold, synthetic_data
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 3b. Extract Dimensions for CV Models
+
+    Infer input and observation dimensions from stacked synthetic sessions.
+    """)
+    return
+
+
 @app.cell
 def _(inputs0, synthetic_data):
     synthetic_inpts = inputs0
     obs_dim_cv = len(synthetic_data[0])
     input_dim_cv = len(synthetic_inpts[0])
     return input_dim_cv, obs_dim_cv, synthetic_inpts
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 3c. Define Fold-Level Training Function
+
+    Implement a helper that fits MLE and MAP models on one training split and
+    returns per-trial train/held-out log-likelihoods.
+    """)
+    return
 
 
 @app.cell
@@ -640,6 +807,17 @@ def _(ssm):
     return (xval_func,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 3d. Run Cross-Validation Grid
+
+    Sweep hidden-state counts and random initializations across folds in
+    parallel, collecting train and held-out scores for MLE and MAP.
+    """)
+    return
+
+
 @app.cell
 def _(
     Parallel,
@@ -686,11 +864,11 @@ def _(
                 for _iRun, num_states0 in zip(runN, stN)
             )
 
-            for i in range(max_states * n_run_em):
-                ll_training[stN[i] - 1, iK, runN[i] - 1] = results[i]["ll_training"]
-                ll_heldout[stN[i] - 1, iK, runN[i] - 1] = results[i]["ll_heldout"]
-                ll_training_map[stN[i] - 1, iK, runN[i] - 1] = results[i]["ll_training_map"]
-                ll_heldout_map[stN[i] - 1, iK, runN[i] - 1] = results[i]["ll_heldout_map"]
+            for _i in range(max_states * n_run_em):
+                ll_training[stN[_i] - 1, iK, runN[_i] - 1] = results[_i]["ll_training"]
+                ll_heldout[stN[_i] - 1, iK, runN[_i] - 1] = results[_i]["ll_heldout"]
+                ll_training_map[stN[_i] - 1, iK, runN[_i] - 1] = results[_i]["ll_training_map"]
+                ll_heldout_map[stN[_i] - 1, iK, runN[_i] - 1] = results[_i]["ll_heldout_map"]
         ran_xval = True
     else:
         ll_training = None
@@ -700,6 +878,17 @@ def _(
         ran_xval = False
         print("Cross-validation skipped. Set run_model_selection = True to enable.")
     return ll_heldout, ll_heldout_map, ll_training, ll_training_map
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 3e. Compute Information Criteria
+
+    Fit full-data models across candidate state counts and compute AIC/BIC
+    distributions over random restarts.
+    """)
+    return
 
 
 @app.cell
@@ -745,27 +934,38 @@ def _(
                 obs_dim_cv * input_dim_cv + 2 * obs_dim_cv
             )
 
-            results = Parallel(n_jobs=1)(
+            _results = Parallel(n_jobs=1)(
                 delayed(single_func)(synthetic_data, synthetic_inpts, num_states_local)
                 for _ in range(n_run_em)
             )
 
             for iRun in range(n_run_em):
-                BIC[iS, iRun] = K * np.log(time_bins_all) - 2 * results[iRun]
-                AIC[iS, iRun] = K * 2 - 2 * results[iRun]
+                BIC[iS, iRun] = K * np.log(time_bins_all) - 2 * _results[iRun]
+                AIC[iS, iRun] = K * 2 - 2 * _results[iRun]
         ran_ic = True
     else:
         AIC = None
         BIC = None
         ran_ic = False
         print("BIC/AIC section skipped. Set run_model_selection = True to enable.")
-    return AIC, BIC
+    return AIC, BIC, iS
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 3f. Summarize Model-Selection Results
+
+    Plot cross-validation performance and information criteria versus state count.
+    """)
+    return
 
 
 @app.cell
 def _(
     AIC,
     BIC,
+    iS,
     interp1d,
     ll_heldout,
     ll_heldout_map,
@@ -794,30 +994,30 @@ def _(
         ll_training_map_plot = ll_training_map.reshape(max_states, nKfold * n_run_em)
         ll_heldout_map_plot = ll_heldout_map.reshape(max_states, nKfold * n_run_em)
 
-        for iS in range(max_states):
+        for _iS in range(max_states):
             plt.plot(
-                (iS + 1) * np.ones(nKfold * n_run_em),
+                (_iS + 1) * np.ones(nKfold * n_run_em),
                 ll_training_plot[iS, :],
                 color="tab:blue",
                 marker="o",
                 lw=0,
             )
             plt.plot(
-                (iS + 1) * np.ones(nKfold * n_run_em),
+                (_iS + 1) * np.ones(nKfold * n_run_em),
                 ll_heldout_plot[iS, :],
                 color="tab:orange",
                 marker="o",
                 lw=0,
             )
             plt.plot(
-                (iS + 1) * np.ones(nKfold * n_run_em),
+                (_iS + 1) * np.ones(nKfold * n_run_em),
                 ll_training_map_plot[iS, :],
                 color="tab:green",
                 marker="o",
                 lw=0,
             )
             plt.plot(
-                (iS + 1) * np.ones(nKfold * n_run_em),
+                (_iS + 1) * np.ones(nKfold * n_run_em),
                 ll_heldout_map_plot[iS, :],
                 color="tab:red",
                 marker="o",
@@ -888,28 +1088,38 @@ def _(
         }
     else:
         model_sel = {}
+    return error, x, y
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 3g. Criterion-Only Quick View
+
+    Generate a compact AIC/BIC-only diagnostic plot for rapid comparison.
+    """)
     return
 
 
 @app.cell
-def _(AIC, BIC, max_states, np, plt, run_model_selection):
+def _(AIC, BIC, error, max_states, np, plt, run_model_selection, x, y):
     if run_model_selection and BIC is not None and AIC is not None:
-        x = range(1, max_states + 1)
+        _x = range(1, max_states + 1)
 
-        y = np.mean(BIC, 1)
-        error = np.std(BIC, 1)
-        plt.plot(x, y, label="BIC")
+        _y = np.mean(BIC, 1)
+        _error = np.std(BIC, 1)
+        plt.plot(_x, _y, label="BIC")
         plt.fill_between(
-            x,
-            y - error,
-            y + error,
+            _x,
+            _y - error,
+            _y + error,
             alpha=0.5,
             edgecolor="#CC4F1B",
             facecolor="#FF9848",
         )
 
-        y = np.mean(AIC, 1)
-        error = np.std(AIC, 1)
+        _y = np.mean(AIC, 1)
+        _error = np.std(AIC, 1)
         plt.plot(x, y, label="AIC")
         plt.xlabel("states")
         plt.xlim(0, max_states + 1)
