@@ -15,8 +15,10 @@ def _():
 def _():
     import autograd.numpy as np
     import autograd.numpy.random as npr
+    import itertools
     import matplotlib.pyplot as plt
     import multiprocessing
+    from pathlib import Path
 
     from joblib import Parallel, delayed
     from matplotlib.patches import Patch
@@ -37,10 +39,45 @@ def _():
             return model.log_probability(data, inputs=inputs)
         return model.log_likelihood(data, inputs=inputs)
 
+    fig_prefix = "GLM-HMM"
+    fig_dir = Path(__file__).resolve().parent / "notebook_figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
+    if not hasattr(plt, "_notebook_orig_show"):
+        plt._notebook_orig_show = plt.show
+    if not hasattr(plt, "_notebook_save_enabled"):
+        plt._notebook_save_enabled = True
+    if not hasattr(plt, "_notebook_fig_counter_by_prefix"):
+        plt._notebook_fig_counter_by_prefix = {}
+
+    def configure_figure_saving(enabled):
+        plt._notebook_save_enabled = bool(enabled)
+
+    def _save_open_figures_with_prefix():
+        if fig_prefix not in plt._notebook_fig_counter_by_prefix:
+            plt._notebook_fig_counter_by_prefix[fig_prefix] = itertools.count(1)
+
+        counter_prefix = plt._notebook_fig_counter_by_prefix[fig_prefix]
+        for fig_num_prefix in plt.get_fignums():
+            fig_obj_prefix = plt.figure(fig_num_prefix)
+            fig_idx_prefix = next(counter_prefix)
+            out_path_prefix = fig_dir / f"{fig_prefix}_{fig_idx_prefix:03d}.png"
+            fig_obj_prefix.savefig(out_path_prefix, dpi=300, bbox_inches="tight")
+            print(f"Saved figure: {out_path_prefix}")
+
+    def _show_and_save_prefix(*args, **kwargs):
+        if getattr(plt, "_notebook_save_enabled", True):
+            _save_open_figures_with_prefix()
+        return plt._notebook_orig_show(*args, **kwargs)
+
+    plt.show = _show_and_save_prefix
+    configure_figure_saving(True)
+
     return (
         Parallel,
         Patch,
         StratifiedKFold,
+        configure_figure_saving,
         delayed,
         find_permutation,
         model_log_prob,
@@ -66,6 +103,29 @@ def _(mo):
     mo.md(r"""
     ## 1. Setup
     """)
+    return
+
+
+@app.cell
+def _():
+    save_figures = True
+    return (save_figures,)
+
+
+@app.cell(hide_code=True)
+def _(mo, save_figures):
+    mo.md(rf"""
+    **Figure Saving**
+
+    - `save_figures = {save_figures}`
+    - output directory: `notebooks/notebook_figures`
+    """)
+    return
+
+
+@app.cell
+def _(configure_figure_saving, save_figures):
+    configure_figure_saving(save_figures)
     return
 
 
@@ -539,24 +599,24 @@ def _(multiprocessing):
     prior_sigma_cv = 2
 
     # Information-criterion runtime controls.
-    run_information_criteria = False
+    run_information_criteria = True
     n_run_em_ic = 4
     n_iters_ic = 1000
     tol_ic = 1e-4
     return (
         max_states_cv,
         n_iters_cv,
+        n_iters_ic,
         n_kfold_cv,
         n_run_em_cv,
         n_run_em_ic,
-        n_iters_ic,
         num_threads_cv,
         prior_alpha_cv,
         prior_sigma_cv,
         run_information_criteria,
         run_model_selection,
-        tol_ic,
         tol_cv,
+        tol_ic,
     )
 
 
@@ -574,8 +634,8 @@ def _(
     prior_sigma_cv,
     run_information_criteria,
     run_model_selection,
-    tol_ic,
     tol_cv,
+    tol_ic,
 ):
     mo.md(rf"""
     **Section 5 Controls**
@@ -1120,7 +1180,6 @@ def _(
         AIC_map_cv = None
         BIC_map_cv = None
         print("Information criteria skipped. Set run_information_criteria = True to enable.")
-
     return AIC_map_cv, AIC_mle_cv, BIC_map_cv, BIC_mle_cv, state_values_ic
 
 
@@ -1211,7 +1270,6 @@ def _(
         best_state_bic_mle_ic = None
         best_state_aic_map_ic = None
         best_state_bic_map_ic = None
-
     return (
         best_state_aic_map_ic,
         best_state_aic_mle_ic,
@@ -1288,7 +1346,7 @@ def _(
         "best_state_aic_map_ic": best_state_aic_map_ic,
         "best_state_bic_map_ic": best_state_bic_map_ic,
     }
-    return (model_sel_glmhmm,)
+    return
 
 
 @app.cell(hide_code=True)

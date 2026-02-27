@@ -25,6 +25,8 @@ def _(mo):
 @app.cell
 def _():
     import sys, os
+    import itertools
+    from pathlib import Path
 
     import matplotlib.pyplot as plt
     import autograd.numpy as np
@@ -55,10 +57,45 @@ def _():
         from ssm import utilplot
     except Exception:
         import utilplot
+
+    fig_prefix = "LM-HMM"
+    fig_dir = Path(__file__).resolve().parent / "notebook_figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
+    if not hasattr(plt, "_notebook_orig_show"):
+        plt._notebook_orig_show = plt.show
+    if not hasattr(plt, "_notebook_save_enabled"):
+        plt._notebook_save_enabled = True
+    if not hasattr(plt, "_notebook_fig_counter_by_prefix"):
+        plt._notebook_fig_counter_by_prefix = {}
+
+    def configure_figure_saving(enabled):
+        plt._notebook_save_enabled = bool(enabled)
+
+    def _save_open_figures_with_prefix():
+        if fig_prefix not in plt._notebook_fig_counter_by_prefix:
+            plt._notebook_fig_counter_by_prefix[fig_prefix] = itertools.count(1)
+
+        counter_prefix = plt._notebook_fig_counter_by_prefix[fig_prefix]
+        for fig_num_prefix in plt.get_fignums():
+            fig_obj_prefix = plt.figure(fig_num_prefix)
+            fig_idx_prefix = next(counter_prefix)
+            out_path_prefix = fig_dir / f"{fig_prefix}_{fig_idx_prefix:03d}.png"
+            fig_obj_prefix.savefig(out_path_prefix, dpi=300, bbox_inches="tight")
+            print(f"Saved figure: {out_path_prefix}")
+
+    def _show_and_save_prefix(*args, **kwargs):
+        if getattr(plt, "_notebook_save_enabled", True):
+            _save_open_figures_with_prefix()
+        return plt._notebook_orig_show(*args, **kwargs)
+
+    plt.show = _show_and_save_prefix
+    configure_figure_saving(True)
     return (
         Parallel,
         Patch,
         StratifiedKFold,
+        configure_figure_saving,
         delayed,
         find_permutation,
         gradient_cmap,
@@ -166,6 +203,12 @@ def _(
 
     Edit the control cell above to change behavior.
     """)
+    return
+
+
+@app.cell
+def _(configure_figure_saving, save_figures):
+    configure_figure_saving(save_figures)
     return
 
 
@@ -647,7 +690,7 @@ def _(inpt, np, num_sess, true_hmm):
     output = []
     true_latents = []
 
-    for _ in range(num_sess):
+    for sess_idx_copy in range(num_sess):
         inputs.append(inpt)
     for sess in range(num_sess):
         true_z, true_y = true_hmm.sample(time_bins_cv, input=inputs[sess])
@@ -657,7 +700,7 @@ def _(inpt, np, num_sess, true_hmm):
     inputs0 = np.vstack(inputs)
     output0 = np.vstack(output)
 
-    ylabel_mouse = [idx * np.ones(len(x)) for idx, x in enumerate(output)]
+    ylabel_mouse = [idx * np.ones(len(bout_vec_copy)) for idx, bout_vec_copy in enumerate(output)]
     ylabel_mouse = np.hstack(ylabel_mouse)
     return inputs0, output0, ylabel_mouse
 
@@ -706,9 +749,6 @@ def _(
     )
     plt.tight_layout()
     fig.subplots_adjust(right=0.7)
-
-    if save_figures:
-        plt.savefig("CV_Stratified.pdf", format="pdf", bbox_inches="tight")
 
     plt.show()
     return nKfold, synthetic_data
@@ -936,7 +976,7 @@ def _(
 
             _results = Parallel(n_jobs=1)(
                 delayed(single_func)(synthetic_data, synthetic_inpts, num_states_local)
-                for _ in range(n_run_em)
+                for run_idx_ic in range(n_run_em)
             )
 
             for iRun in range(n_run_em):
@@ -982,8 +1022,8 @@ def _(
     _ = interp1d  # kept for parity with original notebook imports.
 
     if run_model_selection and all(
-        x is not None
-        for x in [ll_training, ll_heldout, ll_training_map, ll_heldout_map, AIC, BIC]
+        metric_item_cv is not None
+        for metric_item_cv in [ll_training, ll_heldout, ll_training_map, ll_heldout_map, AIC, BIC]
     ):
         plt.figure(figsize=(20, 10), dpi=80, facecolor="w", edgecolor="k")
 
@@ -1072,9 +1112,6 @@ def _(
         plt.xlim(0, max_states + 1)
         plt.ylabel("criterion")
         plt.legend(loc="lower left")
-
-        if save_figures:
-            plt.savefig("HMM_model_sel_concAllBouts.pdf", format="pdf", bbox_inches="tight")
 
         plt.show()
 
