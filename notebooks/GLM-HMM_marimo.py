@@ -32,7 +32,7 @@ def _():
             return model.log_probability(data, inputs=inputs)
         return model.log_likelihood(data, inputs=inputs)
 
-    return find_permutation, model_log_prob, np, npr, plt, ssm
+    return find_permutation, model_log_prob, np, plt, ssm
 
 
 @app.cell(hide_code=True)
@@ -85,7 +85,6 @@ def _(ssm):
         observation_kwargs=dict(C=num_categories),
         transitions="standard",
     )
-
     return input_dim, num_categories, num_states, obs_dim, true_glmhmm
 
 
@@ -105,24 +104,23 @@ def _(np, true_glmhmm):
     )
     true_glmhmm.observations.params = gen_weights
     true_glmhmm.transitions.params = gen_log_trans_mat
-
     return gen_log_trans_mat, gen_weights
 
 
 @app.cell
-def _(cols, gen_log_trans_mat, gen_weights, input_dim, num_states, np, plt):
+def _(cols, gen_log_trans_mat, gen_weights, input_dim, np, num_states, plt):
     fig = plt.figure(figsize=(8, 3), dpi=80, facecolor="w", edgecolor="k")
 
     plt.subplot(1, 2, 1)
-    for state_idx in range(num_states):
+    for state_idx_s2plot in range(num_states):
         plt.plot(
             range(input_dim),
-            gen_weights[state_idx][0],
+            gen_weights[state_idx_s2plot][0],
             marker="o",
-            color=cols[state_idx],
+            color=cols[state_idx_s2plot],
             linestyle="-",
             lw=1.5,
-            label="state " + str(state_idx + 1),
+            label="state " + str(state_idx_s2plot + 1),
         )
     plt.yticks(fontsize=10)
     plt.ylabel("GLM weight", fontsize=15)
@@ -135,12 +133,12 @@ def _(cols, gen_log_trans_mat, gen_weights, input_dim, num_states, np, plt):
     plt.subplot(1, 2, 2)
     gen_trans_mat = np.exp(gen_log_trans_mat)[0]
     plt.imshow(gen_trans_mat, vmin=-0.8, vmax=1, cmap="bone")
-    for row_idx in range(gen_trans_mat.shape[0]):
-        for col_idx in range(gen_trans_mat.shape[1]):
+    for row_idx_s2plot in range(gen_trans_mat.shape[0]):
+        for col_idx_s2plot in range(gen_trans_mat.shape[1]):
             plt.text(
-                col_idx,
-                row_idx,
-                str(np.around(gen_trans_mat[row_idx, col_idx], decimals=2)),
+                col_idx_s2plot,
+                row_idx_s2plot,
+                str(np.around(gen_trans_mat[row_idx_s2plot, col_idx_s2plot], decimals=2)),
                 ha="center",
                 va="center",
                 color="k",
@@ -155,7 +153,6 @@ def _(cols, gen_log_trans_mat, gen_weights, input_dim, num_states, np, plt):
     plt.title("Generative transition matrix", fontsize=15)
     plt.tight_layout()
     plt.show()
-
     return
 
 
@@ -175,7 +172,6 @@ def _(input_dim, np):
     stim_vals = [-1, -0.5, -0.25, -0.125, -0.0625, 0, 0.0625, 0.125, 0.25, 0.5, 1]
     inpts[:, :, 0] = np.random.choice(stim_vals, (num_sess, num_trials_per_sess))
     inpts = list(inpts)
-
     return inpts, num_sess, num_trials_per_sess, stim_vals
 
 
@@ -190,11 +186,10 @@ def _(mo):
 @app.cell
 def _(inpts, num_sess, num_trials_per_sess, true_glmhmm):
     true_latents, true_choices = [], []
-    for sess_idx in range(num_sess):
-        true_z, true_y = true_glmhmm.sample(num_trials_per_sess, input=inpts[sess_idx])
+    for sess_idx_synth in range(num_sess):
+        true_z, true_y = true_glmhmm.sample(num_trials_per_sess, input=inpts[sess_idx_synth])
         true_latents.append(true_z)
         true_choices.append(true_y)
-
     return true_choices, true_latents
 
 
@@ -216,7 +211,15 @@ def _(mo):
 
 
 @app.cell
-def _(input_dim, num_categories, num_states, obs_dim, ssm, true_choices, inpts):
+def _(
+    inpts,
+    input_dim,
+    num_categories,
+    num_states,
+    obs_dim,
+    ssm,
+    true_choices,
+):
     new_glmhmm = ssm.HMM(
         num_states,
         obs_dim,
@@ -234,13 +237,12 @@ def _(input_dim, num_categories, num_states, obs_dim, ssm, true_choices, inpts):
         num_iters=n_iters,
         tolerance=10**-4,
     )
-
     return fit_ll, n_iters, new_glmhmm
 
 
 @app.cell
 def _(fit_ll, np, plt, true_ll):
-    fig = plt.figure(figsize=(4, 3), dpi=80, facecolor="w", edgecolor="k")
+    _ = plt.figure(figsize=(4, 3), dpi=80, facecolor="w", edgecolor="k")
     plt.plot(fit_ll, label="EM")
     plt.plot([0, len(fit_ll)], true_ll * np.ones(2), ":k", label="True")
     plt.legend(loc="lower right")
@@ -249,7 +251,6 @@ def _(fit_ll, np, plt, true_ll):
     plt.ylabel("Log Probability")
     plt.tight_layout()
     plt.show()
-
     return
 
 
@@ -273,23 +274,23 @@ def _(find_permutation, inpts, new_glmhmm, true_choices, true_latents):
 
 @app.cell
 def _(cols, gen_weights, input_dim, new_glmhmm, num_states, plt):
-    fig = plt.figure(figsize=(4, 3), dpi=80, facecolor="w", edgecolor="k")
+    _ = plt.figure(figsize=(4, 3), dpi=80, facecolor="w", edgecolor="k")
     recovered_weights = new_glmhmm.observations.params
-    for state_idx in range(num_states):
-        if state_idx == 0:
+    for state_idx_recovery in range(num_states):
+        if state_idx_recovery == 0:
             plt.plot(
                 range(input_dim),
-                gen_weights[state_idx][0],
+                gen_weights[state_idx_recovery][0],
                 marker="o",
-                color=cols[state_idx],
+                color=cols[state_idx_recovery],
                 linestyle="-",
                 lw=1.5,
                 label="generative",
             )
             plt.plot(
                 range(input_dim),
-                recovered_weights[state_idx][0],
-                color=cols[state_idx],
+                recovered_weights[state_idx_recovery][0],
+                color=cols[state_idx_recovery],
                 lw=1.5,
                 label="recovered",
                 linestyle="--",
@@ -297,17 +298,17 @@ def _(cols, gen_weights, input_dim, new_glmhmm, num_states, plt):
         else:
             plt.plot(
                 range(input_dim),
-                gen_weights[state_idx][0],
+                gen_weights[state_idx_recovery][0],
                 marker="o",
-                color=cols[state_idx],
+                color=cols[state_idx_recovery],
                 linestyle="-",
                 lw=1.5,
                 label="",
             )
             plt.plot(
                 range(input_dim),
-                recovered_weights[state_idx][0],
-                color=cols[state_idx],
+                recovered_weights[state_idx_recovery][0],
+                color=cols[state_idx_recovery],
                 lw=1.5,
                 label="",
                 linestyle="--",
@@ -321,23 +322,22 @@ def _(cols, gen_weights, input_dim, new_glmhmm, num_states, plt):
     plt.title("Weight recovery", fontsize=15)
     plt.tight_layout()
     plt.show()
-
     return
 
 
 @app.cell
-def _(gen_log_trans_mat, new_glmhmm, num_states, np, plt):
+def _(gen_log_trans_mat, new_glmhmm, np, num_states, plt):
     fig = plt.figure(figsize=(5, 2.5), dpi=80, facecolor="w", edgecolor="k")
 
     plt.subplot(1, 2, 1)
     gen_trans_mat = np.exp(gen_log_trans_mat)[0]
     plt.imshow(gen_trans_mat, vmin=-0.8, vmax=1, cmap="bone")
-    for row_idx in range(gen_trans_mat.shape[0]):
-        for col_idx in range(gen_trans_mat.shape[1]):
+    for row_idx_transcmp in range(gen_trans_mat.shape[0]):
+        for col_idx_transcmp in range(gen_trans_mat.shape[1]):
             plt.text(
-                col_idx,
-                row_idx,
-                str(np.around(gen_trans_mat[row_idx, col_idx], decimals=2)),
+                col_idx_transcmp,
+                row_idx_transcmp,
+                str(np.around(gen_trans_mat[row_idx_transcmp, col_idx_transcmp], decimals=2)),
                 ha="center",
                 va="center",
                 color="k",
@@ -354,12 +354,12 @@ def _(gen_log_trans_mat, new_glmhmm, num_states, np, plt):
     plt.subplot(1, 2, 2)
     recovered_trans_mat = np.exp(new_glmhmm.transitions.log_Ps)
     plt.imshow(recovered_trans_mat, vmin=-0.8, vmax=1, cmap="bone")
-    for row_idx in range(recovered_trans_mat.shape[0]):
-        for col_idx in range(recovered_trans_mat.shape[1]):
+    for row_idx_transcmp in range(recovered_trans_mat.shape[0]):
+        for col_idx_transcmp in range(recovered_trans_mat.shape[1]):
             plt.text(
-                col_idx,
-                row_idx,
-                str(np.around(recovered_trans_mat[row_idx, col_idx], decimals=2)),
+                col_idx_transcmp,
+                row_idx_transcmp,
+                str(np.around(recovered_trans_mat[row_idx_transcmp, col_idx_transcmp], decimals=2)),
                 ha="center",
                 va="center",
                 color="k",
@@ -372,7 +372,6 @@ def _(gen_log_trans_mat, new_glmhmm, num_states, np, plt):
     plt.title("recovered", fontsize=15)
     plt.tight_layout()
     plt.show()
-
     return
 
 
@@ -394,15 +393,15 @@ def _(inpts, new_glmhmm, true_choices):
 
 
 @app.cell
-def _(cols, num_states, posterior_probs, plt):
+def _(cols, num_states, plt, posterior_probs):
     fig = plt.figure(figsize=(5, 2.5), dpi=80, facecolor="w", edgecolor="k")
     sess_id = 0
-    for state_idx in range(num_states):
+    for state_idx_post in range(num_states):
         plt.plot(
-            posterior_probs[sess_id][:, state_idx],
-            label="State " + str(state_idx + 1),
+            posterior_probs[sess_id][:, state_idx_post],
+            label="State " + str(state_idx_post + 1),
             lw=2,
-            color=cols[state_idx],
+            color=cols[state_idx_post],
         )
     plt.ylim((-0.01, 1.01))
     plt.yticks([0, 0.5, 1], fontsize=10)
@@ -410,7 +409,6 @@ def _(cols, num_states, posterior_probs, plt):
     plt.ylabel("p(state)", fontsize=15)
     plt.tight_layout()
     plt.show()
-
     return
 
 
@@ -420,15 +418,14 @@ def _(np, posterior_probs):
     state_max_posterior = np.argmax(posterior_probs_concat, axis=1)
     _, state_occupancies = np.unique(state_max_posterior, return_counts=True)
     state_occupancies = state_occupancies / np.sum(state_occupancies)
-
     return (state_occupancies,)
 
 
 @app.cell
 def _(cols, plt, state_occupancies):
     fig = plt.figure(figsize=(2, 2.5), dpi=80, facecolor="w", edgecolor="k")
-    for state_idx, occ in enumerate(state_occupancies):
-        plt.bar(state_idx, occ, width=0.8, color=cols[state_idx])
+    for state_idx_occ, occ_occ in enumerate(state_occupancies):
+        plt.bar(state_idx_occ, occ_occ, width=0.8, color=cols[state_idx_occ])
     plt.ylim((0, 1))
     plt.xticks([0, 1, 2], ["1", "2", "3"], fontsize=10)
     plt.yticks([0, 0.5, 1], ["0", "0.5", "1"], fontsize=10)
@@ -436,7 +433,6 @@ def _(cols, plt, state_occupancies):
     plt.ylabel("frac. occupancy", fontsize=15)
     plt.tight_layout()
     plt.show()
-
     return
 
 
@@ -461,12 +457,11 @@ def _(input_dim, num_categories, num_states, obs_dim, ssm):
         transitions="sticky",
         transition_kwargs=dict(alpha=prior_alpha, kappa=0),
     )
-
-    return map_glmhmm, prior_alpha, prior_sigma
+    return (map_glmhmm,)
 
 
 @app.cell
-def _(map_glmhmm, n_iters, true_choices, inpts):
+def _(inpts, map_glmhmm, n_iters, true_choices):
     _ = map_glmhmm.fit(
         true_choices,
         inputs=inpts,
@@ -482,7 +477,6 @@ def _(inpts, map_glmhmm, new_glmhmm, true_choices, true_glmhmm):
     true_likelihood = true_glmhmm.log_likelihood(true_choices, inputs=inpts)
     mle_final_ll = new_glmhmm.log_likelihood(true_choices, inputs=inpts)
     map_final_ll = map_glmhmm.log_likelihood(true_choices, inputs=inpts)
-
     return map_final_ll, mle_final_ll, true_likelihood
 
 
@@ -491,15 +485,14 @@ def _(map_final_ll, mle_final_ll, plt, true_likelihood):
     fig = plt.figure(figsize=(2, 2.5), dpi=80, facecolor="w", edgecolor="k")
     loglikelihood_vals = [true_likelihood, mle_final_ll, map_final_ll]
     colors_ll = ["Red", "Navy", "Purple"]
-    for model_idx, ll_val in enumerate(loglikelihood_vals):
-        plt.bar(model_idx, ll_val, width=0.8, color=colors_ll[model_idx])
+    for model_idx_fitcmp, ll_val_fitcmp in enumerate(loglikelihood_vals):
+        plt.bar(model_idx_fitcmp, ll_val_fitcmp, width=0.8, color=colors_ll[model_idx_fitcmp])
     plt.ylim((true_likelihood - 5, true_likelihood + 15))
     plt.xticks([0, 1, 2], ["true", "mle", "map"], fontsize=10)
     plt.xlabel("model", fontsize=15)
     plt.ylabel("loglikelihood", fontsize=15)
     plt.tight_layout()
     plt.show()
-
     return
 
 
@@ -512,48 +505,44 @@ def _(mo):
 
 
 @app.cell
-def _(input_dim, num_trials_per_sess, np, stim_vals):
+def _(input_dim, np, num_trials_per_sess, stim_vals):
     num_test_sess = 10
     test_inpts = np.ones((num_test_sess, num_trials_per_sess, input_dim))
     test_inpts[:, :, 0] = np.random.choice(stim_vals, (num_test_sess, num_trials_per_sess))
     test_inpts = list(test_inpts)
-
     return num_test_sess, test_inpts
 
 
 @app.cell
 def _(num_test_sess, num_trials_per_sess, test_inpts, true_glmhmm):
     test_latents, test_choices = [], []
-    for sess_idx in range(num_test_sess):
-        test_z, test_y = true_glmhmm.sample(num_trials_per_sess, input=test_inpts[sess_idx])
+    for _sess_idx in range(num_test_sess):
+        test_z, test_y = true_glmhmm.sample(num_trials_per_sess, input=test_inpts[_sess_idx])
         test_latents.append(test_z)
         test_choices.append(test_y)
-
-    return test_choices, test_latents
+    return (test_choices,)
 
 
 @app.cell
 def _(map_glmhmm, new_glmhmm, test_choices, test_inpts):
     mle_test_ll = new_glmhmm.log_likelihood(test_choices, inputs=test_inpts)
     map_test_ll = map_glmhmm.log_likelihood(test_choices, inputs=test_inpts)
-
     return map_test_ll, mle_test_ll
 
 
 @app.cell
 def _(map_test_ll, mle_test_ll, plt):
-    fig = plt.figure(figsize=(2, 2.5), dpi=80, facecolor="w", edgecolor="k")
+    _ = plt.figure(figsize=(2, 2.5), dpi=80, facecolor="w", edgecolor="k")
     loglikelihood_vals = [mle_test_ll, map_test_ll]
     colors_ll = ["Navy", "Purple"]
-    for model_idx, ll_val in enumerate(loglikelihood_vals):
-        plt.bar(model_idx, ll_val, width=0.8, color=colors_ll[model_idx])
+    for model_idx_holdout, ll_val_holdout in enumerate(loglikelihood_vals):
+        plt.bar(model_idx_holdout, ll_val_holdout, width=0.8, color=colors_ll[model_idx_holdout])
     plt.ylim((mle_test_ll - 2, mle_test_ll + 5))
     plt.xticks([0, 1], ["mle", "map"], fontsize=10)
     plt.xlabel("model", fontsize=15)
     plt.ylabel("loglikelihood", fontsize=15)
     plt.tight_layout()
     plt.show()
-
     return
 
 
@@ -573,20 +562,20 @@ def _(cols, gen_weights, input_dim, map_glmhmm, new_glmhmm, num_states, plt):
 
     plt.subplot(1, 2, 1)
     recovered_weights_mle = new_glmhmm.observations.params
-    for state_idx in range(num_states):
-        if state_idx == 0:
+    for state_idx_paramcmp in range(num_states):
+        if state_idx_paramcmp == 0:
             plt.plot(
                 range(input_dim),
-                gen_weights[state_idx][0],
+                gen_weights[state_idx_paramcmp][0],
                 marker="o",
-                color=cols[state_idx],
+                color=cols[state_idx_paramcmp],
                 lw=1.5,
                 label="generative",
             )
             plt.plot(
                 range(input_dim),
-                recovered_weights_mle[state_idx][0],
-                color=cols[state_idx],
+                recovered_weights_mle[state_idx_paramcmp][0],
+                color=cols[state_idx_paramcmp],
                 lw=1.5,
                 label="recovered",
                 linestyle="--",
@@ -594,16 +583,16 @@ def _(cols, gen_weights, input_dim, map_glmhmm, new_glmhmm, num_states, plt):
         else:
             plt.plot(
                 range(input_dim),
-                gen_weights[state_idx][0],
+                gen_weights[state_idx_paramcmp][0],
                 marker="o",
-                color=cols[state_idx],
+                color=cols[state_idx_paramcmp],
                 lw=1.5,
                 label="",
             )
             plt.plot(
                 range(input_dim),
-                recovered_weights_mle[state_idx][0],
-                color=cols[state_idx],
+                recovered_weights_mle[state_idx_paramcmp][0],
+                color=cols[state_idx_paramcmp],
                 lw=1.5,
                 label="",
                 linestyle="--",
@@ -618,20 +607,20 @@ def _(cols, gen_weights, input_dim, map_glmhmm, new_glmhmm, num_states, plt):
 
     plt.subplot(1, 2, 2)
     recovered_weights_map = map_glmhmm.observations.params
-    for state_idx in range(num_states):
+    for state_idx_paramcmp in range(num_states):
         plt.plot(
             range(input_dim),
-            gen_weights[state_idx][0],
+            gen_weights[state_idx_paramcmp][0],
             marker="o",
-            color=cols[state_idx],
+            color=cols[state_idx_paramcmp],
             lw=1.5,
             label="",
             linestyle="-",
         )
         plt.plot(
             range(input_dim),
-            recovered_weights_map[state_idx][0],
-            color=cols[state_idx],
+            recovered_weights_map[state_idx_paramcmp][0],
+            color=cols[state_idx_paramcmp],
             lw=1.5,
             label="",
             linestyle="--",
@@ -642,23 +631,22 @@ def _(cols, gen_weights, input_dim, map_glmhmm, new_glmhmm, num_states, plt):
     plt.title("MAP", fontsize=15)
     plt.tight_layout()
     plt.show()
-
     return
 
 
 @app.cell
-def _(gen_log_trans_mat, map_glmhmm, new_glmhmm, num_states, np, plt):
+def _(gen_log_trans_mat, map_glmhmm, new_glmhmm, np, num_states, plt):
     fig = plt.figure(figsize=(7, 2.5), dpi=80, facecolor="w", edgecolor="k")
 
     plt.subplot(1, 3, 1)
     gen_trans_mat = np.exp(gen_log_trans_mat)[0]
     plt.imshow(gen_trans_mat, vmin=-0.8, vmax=1, cmap="bone")
-    for row_idx in range(gen_trans_mat.shape[0]):
-        for col_idx in range(gen_trans_mat.shape[1]):
+    for row_idx_mapcmp in range(gen_trans_mat.shape[0]):
+        for col_idx_mapcmp in range(gen_trans_mat.shape[1]):
             plt.text(
-                col_idx,
-                row_idx,
-                str(np.around(gen_trans_mat[row_idx, col_idx], decimals=2)),
+                col_idx_mapcmp,
+                row_idx_mapcmp,
+                str(np.around(gen_trans_mat[row_idx_mapcmp, col_idx_mapcmp], decimals=2)),
                 ha="center",
                 va="center",
                 color="k",
@@ -675,12 +663,12 @@ def _(gen_log_trans_mat, map_glmhmm, new_glmhmm, num_states, np, plt):
     plt.subplot(1, 3, 2)
     recovered_trans_mat_mle = np.exp(new_glmhmm.transitions.log_Ps)
     plt.imshow(recovered_trans_mat_mle, vmin=-0.8, vmax=1, cmap="bone")
-    for row_idx in range(recovered_trans_mat_mle.shape[0]):
-        for col_idx in range(recovered_trans_mat_mle.shape[1]):
+    for row_idx_mapcmp in range(recovered_trans_mat_mle.shape[0]):
+        for col_idx_mapcmp in range(recovered_trans_mat_mle.shape[1]):
             plt.text(
-                col_idx,
-                row_idx,
-                str(np.around(recovered_trans_mat_mle[row_idx, col_idx], decimals=2)),
+                col_idx_mapcmp,
+                row_idx_mapcmp,
+                str(np.around(recovered_trans_mat_mle[row_idx_mapcmp, col_idx_mapcmp], decimals=2)),
                 ha="center",
                 va="center",
                 color="k",
@@ -695,12 +683,12 @@ def _(gen_log_trans_mat, map_glmhmm, new_glmhmm, num_states, np, plt):
     plt.subplot(1, 3, 3)
     recovered_trans_mat_map = np.exp(map_glmhmm.transitions.log_Ps)
     plt.imshow(recovered_trans_mat_map, vmin=-0.8, vmax=1, cmap="bone")
-    for row_idx in range(recovered_trans_mat_map.shape[0]):
-        for col_idx in range(recovered_trans_mat_map.shape[1]):
+    for row_idx_mapcmp in range(recovered_trans_mat_map.shape[0]):
+        for col_idx_mapcmp in range(recovered_trans_mat_map.shape[1]):
             plt.text(
-                col_idx,
-                row_idx,
-                str(np.around(recovered_trans_mat_map[row_idx, col_idx], decimals=2)),
+                col_idx_mapcmp,
+                row_idx_mapcmp,
+                str(np.around(recovered_trans_mat_map[row_idx_mapcmp, col_idx_mapcmp], decimals=2)),
                 ha="center",
                 va="center",
                 color="k",
@@ -714,7 +702,6 @@ def _(gen_log_trans_mat, map_glmhmm, new_glmhmm, num_states, np, plt):
 
     plt.tight_layout()
     plt.show()
-
     return
 
 
@@ -741,7 +728,6 @@ def _(ssm):
         observation_kwargs=dict(C=num_categories_multi),
         transitions="standard",
     )
-
     return (
         input_dim_multi,
         num_categories_multi,
@@ -763,7 +749,6 @@ def _(np, true_glmhmm_multi):
     )
     print(gen_weights_multi.shape)
     true_glmhmm_multi.observations.params = gen_weights_multi
-
     return (gen_weights_multi,)
 
 
@@ -782,7 +767,6 @@ def _(np, true_glmhmm_multi):
         )
     )
     true_glmhmm_multi.transitions.params = gen_log_trans_mat_multi
-
     return (gen_log_trans_mat_multi,)
 
 
@@ -796,20 +780,23 @@ def _(input_dim_multi, np):
         stim_vals_multi, (num_sess_multi, num_trials_per_sess_multi)
     )
     inpts_multi = list(inpts_multi)
-
     return inpts_multi, num_sess_multi, num_trials_per_sess_multi
 
 
 @app.cell
-def _(inpts_multi, num_sess_multi, num_trials_per_sess_multi, true_glmhmm_multi):
+def _(
+    inpts_multi,
+    num_sess_multi,
+    num_trials_per_sess_multi,
+    true_glmhmm_multi,
+):
     true_latents_multi, true_choices_multi = [], []
-    for sess_idx in range(num_sess_multi):
+    for sess_idx_multi in range(num_sess_multi):
         true_z, true_y = true_glmhmm_multi.sample(
-            num_trials_per_sess_multi, input=inpts_multi[sess_idx]
+            num_trials_per_sess_multi, input=inpts_multi[sess_idx_multi]
         )
         true_latents_multi.append(true_z)
         true_choices_multi.append(true_y)
-
     return true_choices_multi, true_latents_multi
 
 
@@ -823,7 +810,6 @@ def _(plt, true_choices_multi):
     plt.ylabel("observation class", fontsize=15)
     plt.tight_layout()
     plt.show()
-
     return
 
 
@@ -831,19 +817,18 @@ def _(plt, true_choices_multi):
 def _(inpts_multi, model_log_prob, true_choices_multi, true_glmhmm_multi):
     true_ll_multi = model_log_prob(true_glmhmm_multi, true_choices_multi, inpts_multi)
     print("true ll = " + str(true_ll_multi))
-
     return (true_ll_multi,)
 
 
 @app.cell
 def _(
+    inpts_multi,
     input_dim_multi,
     num_categories_multi,
     num_states_multi,
     obs_dim_multi,
     ssm,
     true_choices_multi,
-    inpts_multi,
 ):
     new_glmhmm_multi = ssm.HMM(
         num_states_multi,
@@ -862,7 +847,6 @@ def _(
         num_iters=n_iters_multi,
         tolerance=10**-4,
     )
-
     return fit_ll_multi, new_glmhmm_multi
 
 
@@ -877,19 +861,23 @@ def _(fit_ll_multi, np, plt, true_ll_multi):
     plt.ylabel("Log Probability")
     plt.tight_layout()
     plt.show()
-
     return
 
 
 @app.cell
-def _(find_permutation, inpts_multi, new_glmhmm_multi, true_choices_multi, true_latents_multi):
+def _(
+    find_permutation,
+    inpts_multi,
+    new_glmhmm_multi,
+    true_choices_multi,
+    true_latents_multi,
+):
     new_glmhmm_multi.permute(
         find_permutation(
             true_latents_multi[0],
             new_glmhmm_multi.most_likely_states(true_choices_multi[0], input=inpts_multi[0]),
         )
     )
-
     return
 
 
@@ -898,11 +886,11 @@ def _(
     gen_log_trans_mat_multi,
     gen_weights_multi,
     input_dim_multi,
+    new_glmhmm_multi,
+    np,
     num_categories_multi,
     num_states_multi,
-    np,
     plt,
-    new_glmhmm_multi,
 ):
     recovered_weights = new_glmhmm_multi.observations.params
     recovered_transitions = new_glmhmm_multi.transitions.params
@@ -922,48 +910,48 @@ def _(
         "#dede00",
     ]
 
-    for class_idx in range(num_categories_multi):
-        plt.subplot(2, num_categories_multi + 1, class_idx + 1)
-        if class_idx < num_categories_multi - 1:
-            for state_idx in range(num_states_multi):
+    for class_idx_multiplot in range(num_categories_multi):
+        plt.subplot(2, num_categories_multi + 1, class_idx_multiplot + 1)
+        if class_idx_multiplot < num_categories_multi - 1:
+            for state_idx_multiplot in range(num_states_multi):
                 plt.plot(
                     range(input_dim_multi),
-                    gen_weights_multi[state_idx, class_idx],
+                    gen_weights_multi[state_idx_multiplot, class_idx_multiplot],
                     marker="o",
-                    color=cols_multi[state_idx],
+                    color=cols_multi[state_idx_multiplot],
                     lw=1.5,
-                    label=f"state {state_idx + 1}; class {class_idx + 1}",
+                    label=f"state {state_idx_multiplot + 1}; class {class_idx_multiplot + 1}",
                 )
         else:
-            for state_idx in range(num_states_multi):
+            for state_idx_multiplot in range(num_states_multi):
                 plt.plot(
                     range(input_dim_multi),
                     np.zeros(input_dim_multi),
                     marker="o",
-                    color=cols_multi[state_idx],
+                    color=cols_multi[state_idx_multiplot],
                     lw=1.5,
-                    label=f"state {state_idx + 1}; class {class_idx + 1}",
+                    label=f"state {state_idx_multiplot + 1}; class {class_idx_multiplot + 1}",
                     alpha=0.5,
                 )
 
         plt.axhline(y=0, color="k", alpha=0.5, ls="--")
         plt.yticks(fontsize=10)
         plt.xticks([0, 1], ["", ""])
-        if class_idx == 0:
+        if class_idx_multiplot == 0:
             plt.ylabel("GLM weight", fontsize=15)
         plt.legend()
-        plt.title("Generative weights; class " + str(class_idx + 1), fontsize=15)
+        plt.title("Generative weights; class " + str(class_idx_multiplot + 1), fontsize=15)
         plt.ylim((-3, 10))
 
     plt.subplot(2, num_categories_multi + 1, num_categories_multi + 1)
     gen_trans_mat = np.exp(gen_log_trans_mat_multi)[0]
     plt.imshow(gen_trans_mat, vmin=-0.8, vmax=1, cmap="bone")
-    for row_idx in range(gen_trans_mat.shape[0]):
-        for col_idx in range(gen_trans_mat.shape[1]):
+    for row_idx_multitrans in range(gen_trans_mat.shape[0]):
+        for col_idx_multitrans in range(gen_trans_mat.shape[1]):
             plt.text(
-                col_idx,
-                row_idx,
-                str(np.around(gen_trans_mat[row_idx, col_idx], decimals=2)),
+                col_idx_multitrans,
+                row_idx_multitrans,
+                str(np.around(gen_trans_mat[row_idx_multitrans, col_idx_multitrans], decimals=2)),
                 ha="center",
                 va="center",
                 color="k",
@@ -977,51 +965,51 @@ def _(
     plt.xlabel("state t+1", fontsize=15)
     plt.title("Generative transition matrix", fontsize=15)
 
-    for class_idx in range(num_categories_multi):
-        plt.subplot(2, num_categories_multi + 1, num_categories_multi + class_idx + 2)
-        if class_idx < num_categories_multi - 1:
-            for state_idx in range(num_states_multi):
+    for class_idx_multiplot in range(num_categories_multi):
+        plt.subplot(2, num_categories_multi + 1, num_categories_multi + class_idx_multiplot + 2)
+        if class_idx_multiplot < num_categories_multi - 1:
+            for state_idx_multiplot in range(num_states_multi):
                 plt.plot(
                     range(input_dim_multi),
-                    recovered_weights[state_idx, class_idx],
+                    recovered_weights[state_idx_multiplot, class_idx_multiplot],
                     marker="o",
                     linestyle="--",
-                    color=cols_multi[state_idx],
+                    color=cols_multi[state_idx_multiplot],
                     lw=1.5,
-                    label=f"state {state_idx + 1}; class {class_idx + 1}",
+                    label=f"state {state_idx_multiplot + 1}; class {class_idx_multiplot + 1}",
                 )
         else:
-            for state_idx in range(num_states_multi):
+            for state_idx_multiplot in range(num_states_multi):
                 plt.plot(
                     range(input_dim_multi),
                     np.zeros(input_dim_multi),
                     marker="o",
                     linestyle="--",
-                    color=cols_multi[state_idx],
+                    color=cols_multi[state_idx_multiplot],
                     lw=1.5,
-                    label=f"state {state_idx + 1}; class {class_idx + 1}",
+                    label=f"state {state_idx_multiplot + 1}; class {class_idx_multiplot + 1}",
                     alpha=0.5,
                 )
 
         plt.axhline(y=0, color="k", alpha=0.5, ls="--")
         plt.yticks(fontsize=10)
         plt.xlabel("covariate", fontsize=15)
-        if class_idx == 0:
+        if class_idx_multiplot == 0:
             plt.ylabel("GLM weight", fontsize=15)
         plt.xticks([0, 1], ["stimulus", "bias"], fontsize=12, rotation=45)
         plt.legend()
-        plt.title("Recovered weights; class " + str(class_idx + 1), fontsize=15)
+        plt.title("Recovered weights; class " + str(class_idx_multiplot + 1), fontsize=15)
         plt.ylim((-3, 10))
 
     plt.subplot(2, num_categories_multi + 1, 2 * num_categories_multi + 2)
     recovered_trans_mat = np.exp(recovered_transitions)[0]
     plt.imshow(recovered_trans_mat, vmin=-0.8, vmax=1, cmap="bone")
-    for row_idx in range(recovered_trans_mat.shape[0]):
-        for col_idx in range(recovered_trans_mat.shape[1]):
+    for row_idx_multitrans in range(recovered_trans_mat.shape[0]):
+        for col_idx_multitrans in range(recovered_trans_mat.shape[1]):
             plt.text(
-                col_idx,
-                row_idx,
-                str(np.around(recovered_trans_mat[row_idx, col_idx], decimals=2)),
+                col_idx_multitrans,
+                row_idx_multitrans,
+                str(np.around(recovered_trans_mat[row_idx_multitrans, col_idx_multitrans], decimals=2)),
                 ha="center",
                 va="center",
                 color="k",
