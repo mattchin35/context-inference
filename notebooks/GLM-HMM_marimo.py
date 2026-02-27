@@ -16,6 +16,11 @@ def _():
     import autograd.numpy as np
     import autograd.numpy.random as npr
     import matplotlib.pyplot as plt
+    import multiprocessing
+
+    from joblib import Parallel, delayed
+    from matplotlib.patches import Patch
+    from sklearn.model_selection import StratifiedKFold
 
     try:
         import ssm
@@ -32,7 +37,18 @@ def _():
             return model.log_probability(data, inputs=inputs)
         return model.log_likelihood(data, inputs=inputs)
 
-    return find_permutation, model_log_prob, np, plt, ssm
+    return (
+        Parallel,
+        Patch,
+        StratifiedKFold,
+        delayed,
+        find_permutation,
+        model_log_prob,
+        multiprocessing,
+        np,
+        plt,
+        ssm,
+    )
 
 
 @app.cell(hide_code=True)
@@ -499,7 +515,463 @@ def _(map_final_ll, mle_final_ll, plt, true_likelihood):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## 5. Cross Validation (Held-Out Comparison)
+    ## 5. StratifiedKFold Cross-Validation Model Selection
+
+    Compare MLE and MAP held-out log-likelihood over candidate hidden-state
+    counts using session-stratified folds.
+    """)
+    return
+
+
+@app.cell
+def _(multiprocessing):
+    # Cross-validation runtime controls.
+    run_model_selection = False
+    max_states_cv = 4
+    n_iters_cv = 1000
+    tol_cv = 1e-4
+    n_run_em_cv = 4
+    n_kfold_cv = 4
+    num_threads_cv = max(1, (multiprocessing.cpu_count() - 1) * 2)
+
+    # MAP prior settings used inside CV.
+    prior_alpha_cv = 2
+    prior_sigma_cv = 2
+
+    return (
+        max_states_cv,
+        n_iters_cv,
+        n_kfold_cv,
+        n_run_em_cv,
+        num_threads_cv,
+        prior_alpha_cv,
+        prior_sigma_cv,
+        run_model_selection,
+        tol_cv,
+    )
+
+
+@app.cell(hide_code=True)
+def _(
+    max_states_cv,
+    mo,
+    n_iters_cv,
+    n_kfold_cv,
+    n_run_em_cv,
+    num_threads_cv,
+    prior_alpha_cv,
+    prior_sigma_cv,
+    run_model_selection,
+    tol_cv,
+):
+    mo.md(rf"""
+    **CV Controls**
+
+    - `run_model_selection = {run_model_selection}`
+    - `max_states_cv = {max_states_cv}`
+    - `n_kfold_cv = {n_kfold_cv}`
+    - `n_run_em_cv = {n_run_em_cv}`
+    - `n_iters_cv = {n_iters_cv}`
+    - `tol_cv = {tol_cv}`
+    - `num_threads_cv = {num_threads_cv}`
+    - `prior_alpha_cv = {prior_alpha_cv}`
+    - `prior_sigma_cv = {prior_sigma_cv}`
+
+    Edit the control cell above to change model-selection behavior.
+    """)
+    return
+
+
+@app.cell
+def _(inpts, np, num_sess, true_choices):
+    synthetic_data_cv = np.vstack(true_choices)
+    synthetic_inpts_cv = np.vstack(inpts)
+    trials_per_sess_cv = len(true_choices[0])
+    session_labels_cv = np.repeat(np.arange(num_sess), trials_per_sess_cv)
+    return session_labels_cv, synthetic_data_cv, synthetic_inpts_cv
+
+
+@app.cell
+def _(Patch, StratifiedKFold, n_kfold_cv, np, plt, session_labels_cv, synthetic_data_cv):
+    min_class_count_cv = int(np.min(np.bincount(session_labels_cv)))
+    nKfold_cv = max(2, min(n_kfold_cv, min_class_count_cv))
+
+    cv_for_plot_cv = StratifiedKFold(n_splits=nKfold_cv, shuffle=True, random_state=0)
+    fig_cvplot, ax_cvplot = plt.subplots(figsize=(6, 3))
+    cmap_cvplot = plt.cm.coolwarm
+    cmap_data_cvplot = plt.cm.Paired
+
+    for split_idx_cvplot, (train_idx_cvplot, test_idx_cvplot) in enumerate(
+        cv_for_plot_cv.split(X=synthetic_data_cv, y=session_labels_cv)
+    ):
+        index_marks_cvplot = np.array([np.nan] * len(synthetic_data_cv))
+        index_marks_cvplot[test_idx_cvplot] = 1
+        index_marks_cvplot[train_idx_cvplot] = 0
+        ax_cvplot.scatter(
+            range(len(index_marks_cvplot)),
+            [split_idx_cvplot + 0.5] * len(index_marks_cvplot),
+            c=index_marks_cvplot,
+            marker="_",
+            lw=8,
+            cmap=cmap_cvplot,
+            vmin=-0.2,
+            vmax=1.2,
+        )
+
+    ax_cvplot.scatter(
+        range(len(synthetic_data_cv)),
+        [nKfold_cv + 0.5] * len(synthetic_data_cv),
+        c=session_labels_cv,
+        marker="_",
+        lw=8,
+        cmap=cmap_data_cvplot,
+    )
+    ax_cvplot.set(
+        yticks=np.arange(nKfold_cv + 1) + 0.5,
+        yticklabels=list(range(nKfold_cv)) + ["session"],
+        xlabel="trial index",
+        ylabel="CV iteration",
+        ylim=[nKfold_cv + 1.2, -0.2],
+    )
+    ax_cvplot.set_title("StratifiedKFold", fontsize=14)
+    ax_cvplot.legend(
+        [Patch(color=cmap_cvplot(0.8)), Patch(color=cmap_cvplot(0.02))],
+        ["Testing set", "Training set"],
+        loc=(1.02, 0.8),
+    )
+    fig_cvplot.tight_layout()
+    fig_cvplot.subplots_adjust(right=0.75)
+    plt.show()
+
+    return (nKfold_cv,)
+
+
+@app.cell
+def _(model_log_prob, ssm):
+    def build_input_driven_glmhmm_cv(
+        num_states_cvlocal,
+        obs_dim_cvlocal,
+        input_dim_cvlocal,
+        num_categories_cvlocal,
+        algorithm_cvlocal="MLE",
+        prior_alpha_cvlocal=2,
+        prior_sigma_cvlocal=2,
+    ):
+        algorithm_cvlocal = algorithm_cvlocal.upper()
+        if algorithm_cvlocal == "MLE":
+            return ssm.HMM(
+                num_states_cvlocal,
+                obs_dim_cvlocal,
+                input_dim_cvlocal,
+                observations="input_driven_obs",
+                observation_kwargs=dict(C=num_categories_cvlocal),
+                transitions="standard",
+            )
+        if algorithm_cvlocal == "MAP":
+            return ssm.HMM(
+                num_states_cvlocal,
+                obs_dim_cvlocal,
+                input_dim_cvlocal,
+                observations="input_driven_obs",
+                observation_kwargs=dict(C=num_categories_cvlocal, prior_sigma=prior_sigma_cvlocal),
+                transitions="sticky",
+                transition_kwargs=dict(alpha=prior_alpha_cvlocal, kappa=0),
+            )
+        raise ValueError(f"Unknown algorithm: {algorithm_cvlocal}")
+
+    def xval_func_glmcv(data_in_glmcv, num_states_glmcv):
+        training_data_glmcv = data_in_glmcv["training_data"]
+        test_data_glmcv = data_in_glmcv["test_data"]
+        training_inpts_glmcv = data_in_glmcv["training_inpts"]
+        test_inpts_glmcv = data_in_glmcv["test_inpts"]
+        n_iters_glmcv = data_in_glmcv["N_iters"]
+        tol_glmcv = data_in_glmcv["TOL"]
+        num_categories_glmcv = data_in_glmcv["num_categories"]
+        prior_alpha_glmcv = data_in_glmcv["prior_alpha"]
+        prior_sigma_glmcv = data_in_glmcv["prior_sigma"]
+
+        obs_dim_glmcv = len(training_data_glmcv[0])
+        input_dim_glmcv = len(training_inpts_glmcv[0])
+        n_train_glmcv = len(training_data_glmcv)
+        n_test_glmcv = len(test_data_glmcv)
+
+        out_glmcv = {}
+
+        mle_hmm_glmcv = build_input_driven_glmhmm_cv(
+            num_states_glmcv,
+            obs_dim_glmcv,
+            input_dim_glmcv,
+            num_categories_glmcv,
+            algorithm_cvlocal="MLE",
+        )
+        mle_hmm_glmcv.fit(
+            training_data_glmcv,
+            inputs=training_inpts_glmcv,
+            method="em",
+            num_iters=n_iters_glmcv,
+            tolerance=tol_glmcv,
+        )
+        out_glmcv["ll_training"] = (
+            model_log_prob(mle_hmm_glmcv, training_data_glmcv, training_inpts_glmcv) / n_train_glmcv
+        )
+        out_glmcv["ll_heldout"] = (
+            model_log_prob(mle_hmm_glmcv, test_data_glmcv, test_inpts_glmcv) / n_test_glmcv
+        )
+
+        map_hmm_glmcv = build_input_driven_glmhmm_cv(
+            num_states_glmcv,
+            obs_dim_glmcv,
+            input_dim_glmcv,
+            num_categories_glmcv,
+            algorithm_cvlocal="MAP",
+            prior_alpha_cvlocal=prior_alpha_glmcv,
+            prior_sigma_cvlocal=prior_sigma_glmcv,
+        )
+        map_hmm_glmcv.fit(
+            training_data_glmcv,
+            inputs=training_inpts_glmcv,
+            method="em",
+            num_iters=n_iters_glmcv,
+            tolerance=tol_glmcv,
+        )
+        out_glmcv["ll_training_map"] = (
+            model_log_prob(map_hmm_glmcv, training_data_glmcv, training_inpts_glmcv) / n_train_glmcv
+        )
+        out_glmcv["ll_heldout_map"] = (
+            model_log_prob(map_hmm_glmcv, test_data_glmcv, test_inpts_glmcv) / n_test_glmcv
+        )
+
+        return out_glmcv
+
+    return build_input_driven_glmhmm_cv, xval_func_glmcv
+
+
+@app.cell
+def _(
+    Parallel,
+    StratifiedKFold,
+    delayed,
+    max_states_cv,
+    nKfold_cv,
+    n_iters_cv,
+    n_run_em_cv,
+    np,
+    num_categories,
+    num_threads_cv,
+    prior_alpha_cv,
+    prior_sigma_cv,
+    run_model_selection,
+    session_labels_cv,
+    synthetic_data_cv,
+    synthetic_inpts_cv,
+    tol_cv,
+    xval_func_glmcv,
+):
+    if run_model_selection:
+        ll_training_cv = np.zeros((max_states_cv, nKfold_cv, n_run_em_cv))
+        ll_heldout_cv = np.zeros((max_states_cv, nKfold_cv, n_run_em_cv))
+        ll_training_map_cv = np.zeros((max_states_cv, nKfold_cv, n_run_em_cv))
+        ll_heldout_map_cv = np.zeros((max_states_cv, nKfold_cv, n_run_em_cv))
+
+        state_grid_cv = np.flip(np.tile(np.arange(1, max_states_cv + 1), n_run_em_cv))
+        run_grid_cv = np.repeat(np.arange(1, n_run_em_cv + 1), max_states_cv, axis=0)
+
+        print(f"Running stratified CV with {num_threads_cv} workers")
+
+        cv_for_grid_cv = StratifiedKFold(n_splits=nKfold_cv, shuffle=True, random_state=0)
+        for fold_idx_cvgrid, (train_index_cvgrid, test_index_cvgrid) in enumerate(
+            cv_for_grid_cv.split(synthetic_data_cv, session_labels_cv)
+        ):
+            data_in_cvgrid = {
+                "training_data": synthetic_data_cv[train_index_cvgrid],
+                "test_data": synthetic_data_cv[test_index_cvgrid],
+                "training_inpts": synthetic_inpts_cv[train_index_cvgrid],
+                "test_inpts": synthetic_inpts_cv[test_index_cvgrid],
+                "num_categories": num_categories,
+                "N_iters": n_iters_cv,
+                "TOL": tol_cv,
+                "prior_alpha": prior_alpha_cv,
+                "prior_sigma": prior_sigma_cv,
+            }
+
+            results_cvgrid = Parallel(n_jobs=num_threads_cv)(
+                delayed(xval_func_glmcv)(data_in_cvgrid, num_states_cvgrid)
+                for run_idx_cvgrid, num_states_cvgrid in zip(run_grid_cv, state_grid_cv)
+            )
+
+            for result_idx_cvgrid in range(max_states_cv * n_run_em_cv):
+                ll_training_cv[
+                    state_grid_cv[result_idx_cvgrid] - 1, fold_idx_cvgrid, run_grid_cv[result_idx_cvgrid] - 1
+                ] = results_cvgrid[result_idx_cvgrid]["ll_training"]
+                ll_heldout_cv[
+                    state_grid_cv[result_idx_cvgrid] - 1, fold_idx_cvgrid, run_grid_cv[result_idx_cvgrid] - 1
+                ] = results_cvgrid[result_idx_cvgrid]["ll_heldout"]
+                ll_training_map_cv[
+                    state_grid_cv[result_idx_cvgrid] - 1, fold_idx_cvgrid, run_grid_cv[result_idx_cvgrid] - 1
+                ] = results_cvgrid[result_idx_cvgrid]["ll_training_map"]
+                ll_heldout_map_cv[
+                    state_grid_cv[result_idx_cvgrid] - 1, fold_idx_cvgrid, run_grid_cv[result_idx_cvgrid] - 1
+                ] = results_cvgrid[result_idx_cvgrid]["ll_heldout_map"]
+    else:
+        ll_training_cv = None
+        ll_heldout_cv = None
+        ll_training_map_cv = None
+        ll_heldout_map_cv = None
+        print("Model selection skipped. Set run_model_selection = True to enable.")
+
+    return ll_heldout_cv, ll_heldout_map_cv, ll_training_cv, ll_training_map_cv
+
+
+@app.cell
+def _(
+    ll_heldout_cv,
+    ll_heldout_map_cv,
+    ll_training_cv,
+    ll_training_map_cv,
+    max_states_cv,
+    nKfold_cv,
+    n_run_em_cv,
+    np,
+    plt,
+    run_model_selection,
+):
+    if run_model_selection and all(
+        metric_arr_cv is not None
+        for metric_arr_cv in [ll_training_cv, ll_heldout_cv, ll_training_map_cv, ll_heldout_map_cv]
+    ):
+        fig_cvsummary = plt.figure(figsize=(10, 4), dpi=80, facecolor="w", edgecolor="k")
+
+        ll_training_plot_cv = ll_training_cv.reshape(max_states_cv, nKfold_cv * n_run_em_cv)
+        ll_heldout_plot_cv = ll_heldout_cv.reshape(max_states_cv, nKfold_cv * n_run_em_cv)
+        ll_training_map_plot_cv = ll_training_map_cv.reshape(max_states_cv, nKfold_cv * n_run_em_cv)
+        ll_heldout_map_plot_cv = ll_heldout_map_cv.reshape(max_states_cv, nKfold_cv * n_run_em_cv)
+
+        cv_colors_summary = ["tab:blue", "tab:orange", "tab:green", "tab:red"]
+
+        for state_idx_cvsummary in range(max_states_cv):
+            plt.plot(
+                (state_idx_cvsummary + 1) * np.ones(nKfold_cv * n_run_em_cv),
+                ll_training_plot_cv[state_idx_cvsummary, :],
+                color=cv_colors_summary[0],
+                marker="o",
+                lw=0,
+                alpha=0.6,
+            )
+            plt.plot(
+                (state_idx_cvsummary + 1) * np.ones(nKfold_cv * n_run_em_cv),
+                ll_heldout_plot_cv[state_idx_cvsummary, :],
+                color=cv_colors_summary[1],
+                marker="o",
+                lw=0,
+                alpha=0.6,
+            )
+            plt.plot(
+                (state_idx_cvsummary + 1) * np.ones(nKfold_cv * n_run_em_cv),
+                ll_training_map_plot_cv[state_idx_cvsummary, :],
+                color=cv_colors_summary[2],
+                marker="o",
+                lw=0,
+                alpha=0.6,
+            )
+            plt.plot(
+                (state_idx_cvsummary + 1) * np.ones(nKfold_cv * n_run_em_cv),
+                ll_heldout_map_plot_cv[state_idx_cvsummary, :],
+                color=cv_colors_summary[3],
+                marker="o",
+                lw=0,
+                alpha=0.6,
+            )
+
+        x_states_cvsummary = range(1, max_states_cv + 1)
+
+        y_training_mle_cvsummary = ll_training_plot_cv.mean(axis=1)
+        err_training_mle_cvsummary = ll_training_plot_cv.std(axis=1)
+        plt.plot(x_states_cvsummary, y_training_mle_cvsummary, label="training_MLE", color=cv_colors_summary[0])
+        plt.fill_between(
+            x_states_cvsummary,
+            y_training_mle_cvsummary - err_training_mle_cvsummary,
+            y_training_mle_cvsummary + err_training_mle_cvsummary,
+            alpha=0.1,
+            color=cv_colors_summary[0],
+        )
+
+        y_test_mle_cvsummary = ll_heldout_plot_cv.mean(axis=1)
+        err_test_mle_cvsummary = ll_heldout_plot_cv.std(axis=1)
+        plt.plot(x_states_cvsummary, y_test_mle_cvsummary, label="test_MLE", color=cv_colors_summary[1])
+        plt.fill_between(
+            x_states_cvsummary,
+            y_test_mle_cvsummary - err_test_mle_cvsummary,
+            y_test_mle_cvsummary + err_test_mle_cvsummary,
+            alpha=0.1,
+            color=cv_colors_summary[1],
+        )
+
+        y_training_map_cvsummary = ll_training_map_plot_cv.mean(axis=1)
+        err_training_map_cvsummary = ll_training_map_plot_cv.std(axis=1)
+        plt.plot(x_states_cvsummary, y_training_map_cvsummary, label="training_MAP", color=cv_colors_summary[2])
+        plt.fill_between(
+            x_states_cvsummary,
+            y_training_map_cvsummary - err_training_map_cvsummary,
+            y_training_map_cvsummary + err_training_map_cvsummary,
+            alpha=0.1,
+            color=cv_colors_summary[2],
+        )
+
+        y_test_map_cvsummary = ll_heldout_map_plot_cv.mean(axis=1)
+        err_test_map_cvsummary = ll_heldout_map_plot_cv.std(axis=1)
+        plt.plot(x_states_cvsummary, y_test_map_cvsummary, label="test_MAP", color=cv_colors_summary[3])
+        plt.fill_between(
+            x_states_cvsummary,
+            y_test_map_cvsummary - err_test_map_cvsummary,
+            y_test_map_cvsummary + err_test_map_cvsummary,
+            alpha=0.1,
+            color=cv_colors_summary[3],
+        )
+
+        plt.legend(loc="lower right")
+        plt.xlabel("states")
+        plt.xlim(0, max_states_cv + 1)
+        plt.ylabel("Log-Likelihood per trial")
+        plt.title("StratifiedKFold model selection")
+        plt.tight_layout()
+        plt.show()
+
+        best_state_mle_cv = int(np.argmax(y_test_mle_cvsummary) + 1)
+        best_state_map_cv = int(np.argmax(y_test_map_cvsummary) + 1)
+        print(f"Best MLE states by held-out LL: {best_state_mle_cv}")
+        print(f"Best MAP states by held-out LL: {best_state_map_cv}")
+    else:
+        best_state_mle_cv = None
+        best_state_map_cv = None
+
+    return best_state_map_cv, best_state_mle_cv
+
+
+@app.cell(hide_code=True)
+def _(best_state_map_cv, best_state_mle_cv, mo):
+    if best_state_mle_cv is not None and best_state_map_cv is not None:
+        mo.md(rf"""
+        **CV Selection Summary**
+
+        - Best MLE model: `{best_state_mle_cv}` state(s)
+        - Best MAP model: `{best_state_map_cv}` state(s)
+        """)
+    else:
+        mo.md(r"""
+        **CV Selection Summary**
+
+        Cross-validation is currently skipped. Enable it by setting
+        `run_model_selection = True` in the control cell.
+        """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 5a. Optional Single Held-Out Comparison (Legacy)
+
+    This reproduces the original one-shot held-out split from the notebook.
     """)
     return
 
