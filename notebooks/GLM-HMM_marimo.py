@@ -537,15 +537,25 @@ def _(multiprocessing):
     # MAP prior settings used inside CV.
     prior_alpha_cv = 2
     prior_sigma_cv = 2
+
+    # Information-criterion runtime controls.
+    run_information_criteria = False
+    n_run_em_ic = 4
+    n_iters_ic = 1000
+    tol_ic = 1e-4
     return (
         max_states_cv,
         n_iters_cv,
         n_kfold_cv,
         n_run_em_cv,
+        n_run_em_ic,
+        n_iters_ic,
         num_threads_cv,
         prior_alpha_cv,
         prior_sigma_cv,
+        run_information_criteria,
         run_model_selection,
+        tol_ic,
         tol_cv,
     )
 
@@ -555,23 +565,31 @@ def _(
     max_states_cv,
     mo,
     n_iters_cv,
+    n_iters_ic,
     n_kfold_cv,
     n_run_em_cv,
+    n_run_em_ic,
     num_threads_cv,
     prior_alpha_cv,
     prior_sigma_cv,
+    run_information_criteria,
     run_model_selection,
+    tol_ic,
     tol_cv,
 ):
     mo.md(rf"""
-    **CV Controls**
+    **Section 5 Controls**
 
     - `run_model_selection = {run_model_selection}`
+    - `run_information_criteria = {run_information_criteria}`
     - `max_states_cv = {max_states_cv}`
     - `n_kfold_cv = {n_kfold_cv}`
     - `n_run_em_cv = {n_run_em_cv}`
+    - `n_run_em_ic = {n_run_em_ic}`
     - `n_iters_cv = {n_iters_cv}`
+    - `n_iters_ic = {n_iters_ic}`
     - `tol_cv = {tol_cv}`
+    - `tol_ic = {tol_ic}`
     - `num_threads_cv = {num_threads_cv}`
     - `prior_alpha_cv = {prior_alpha_cv}`
     - `prior_sigma_cv = {prior_sigma_cv}`
@@ -749,7 +767,47 @@ def _(model_log_prob, ssm):
 
         return out_glmcv
 
-    return (xval_func_glmcv,)
+    def count_glmhmm_params_ic(num_states_iclocal, input_dim_iclocal, num_categories_iclocal):
+        # Params: transition rows + initial-state probs + GLM weights.
+        n_transition_params_iclocal = num_states_iclocal * (num_states_iclocal - 1)
+        n_initial_params_iclocal = num_states_iclocal - 1
+        n_obs_params_iclocal = (
+            num_states_iclocal * (num_categories_iclocal - 1) * input_dim_iclocal
+        )
+        return n_transition_params_iclocal + n_initial_params_iclocal + n_obs_params_iclocal
+
+    def single_ic_func_glmcv(
+        observations_iclocal,
+        inputs_iclocal,
+        num_states_iclocal,
+        num_categories_iclocal,
+        n_iters_iclocal,
+        tol_iclocal,
+        algorithm_iclocal,
+        prior_alpha_iclocal,
+        prior_sigma_iclocal,
+    ):
+        obs_dim_iclocal = len(observations_iclocal[0])
+        input_dim_iclocal = len(inputs_iclocal[0])
+        hmm_iclocal = build_input_driven_glmhmm_cv(
+            num_states_iclocal,
+            obs_dim_iclocal,
+            input_dim_iclocal,
+            num_categories_iclocal,
+            algorithm_cvlocal=algorithm_iclocal,
+            prior_alpha_cvlocal=prior_alpha_iclocal,
+            prior_sigma_cvlocal=prior_sigma_iclocal,
+        )
+        hmm_iclocal.fit(
+            observations_iclocal,
+            inputs=inputs_iclocal,
+            method="em",
+            num_iters=n_iters_iclocal,
+            tolerance=tol_iclocal,
+        )
+        return model_log_prob(hmm_iclocal, observations_iclocal, inputs_iclocal)
+
+    return count_glmhmm_params_ic, single_ic_func_glmcv, xval_func_glmcv
 
 
 @app.cell
@@ -968,6 +1026,269 @@ def _(best_state_map_cv, best_state_mle_cv, mo):
         `run_model_selection = True` in the control cell.
         """)
     return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### 5b. Information Criteria (AIC/BIC)
+
+    Compute AIC/BIC across hidden-state counts and random restarts for both MLE
+    and MAP model families.
+    """)
+    return
+
+
+@app.cell
+def _(
+    Parallel,
+    count_glmhmm_params_ic,
+    delayed,
+    max_states_cv,
+    n_iters_ic,
+    n_run_em_ic,
+    np,
+    num_categories,
+    num_threads_cv,
+    prior_alpha_cv,
+    prior_sigma_cv,
+    run_information_criteria,
+    single_ic_func_glmcv,
+    synthetic_data_cv,
+    synthetic_inpts_cv,
+    tol_ic,
+):
+    if run_information_criteria:
+        state_values_ic = np.arange(1, max_states_cv + 1)
+        AIC_mle_cv = np.zeros((max_states_cv, n_run_em_ic))
+        BIC_mle_cv = np.zeros((max_states_cv, n_run_em_ic))
+        AIC_map_cv = np.zeros((max_states_cv, n_run_em_ic))
+        BIC_map_cv = np.zeros((max_states_cv, n_run_em_ic))
+
+        n_timesteps_ic = len(synthetic_data_cv)
+        input_dim_ic = len(synthetic_inpts_cv[0])
+
+        for state_idx_icgrid, num_states_icgrid in enumerate(state_values_ic):
+            n_params_ic = count_glmhmm_params_ic(num_states_icgrid, input_dim_ic, num_categories)
+
+            results_mle_ic = Parallel(n_jobs=num_threads_cv)(
+                delayed(single_ic_func_glmcv)(
+                    synthetic_data_cv,
+                    synthetic_inpts_cv,
+                    num_states_icgrid,
+                    num_categories,
+                    n_iters_ic,
+                    tol_ic,
+                    "MLE",
+                    prior_alpha_cv,
+                    prior_sigma_cv,
+                )
+                for run_idx_icgrid in range(n_run_em_ic)
+            )
+            results_map_ic = Parallel(n_jobs=num_threads_cv)(
+                delayed(single_ic_func_glmcv)(
+                    synthetic_data_cv,
+                    synthetic_inpts_cv,
+                    num_states_icgrid,
+                    num_categories,
+                    n_iters_ic,
+                    tol_ic,
+                    "MAP",
+                    prior_alpha_cv,
+                    prior_sigma_cv,
+                )
+                for run_idx_icgrid in range(n_run_em_ic)
+            )
+
+            for arr_idx_icpack in range(n_run_em_ic):
+                BIC_mle_cv[state_idx_icgrid, arr_idx_icpack] = (
+                    n_params_ic * np.log(n_timesteps_ic) - 2 * results_mle_ic[arr_idx_icpack]
+                )
+                AIC_mle_cv[state_idx_icgrid, arr_idx_icpack] = (
+                    2 * n_params_ic - 2 * results_mle_ic[arr_idx_icpack]
+                )
+                BIC_map_cv[state_idx_icgrid, arr_idx_icpack] = (
+                    n_params_ic * np.log(n_timesteps_ic) - 2 * results_map_ic[arr_idx_icpack]
+                )
+                AIC_map_cv[state_idx_icgrid, arr_idx_icpack] = (
+                    2 * n_params_ic - 2 * results_map_ic[arr_idx_icpack]
+                )
+    else:
+        state_values_ic = None
+        AIC_mle_cv = None
+        BIC_mle_cv = None
+        AIC_map_cv = None
+        BIC_map_cv = None
+        print("Information criteria skipped. Set run_information_criteria = True to enable.")
+
+    return AIC_map_cv, AIC_mle_cv, BIC_map_cv, BIC_mle_cv, state_values_ic
+
+
+@app.cell
+def _(
+    AIC_map_cv,
+    AIC_mle_cv,
+    BIC_map_cv,
+    BIC_mle_cv,
+    np,
+    plt,
+    run_information_criteria,
+    state_values_ic,
+):
+    if run_information_criteria and all(
+        metric_icplot is not None
+        for metric_icplot in [AIC_mle_cv, BIC_mle_cv, AIC_map_cv, BIC_map_cv, state_values_ic]
+    ):
+        fig_icplot = plt.figure(figsize=(10, 4), dpi=80, facecolor="w", edgecolor="k")
+
+        plt.subplot(1, 2, 1)
+        y_bic_mle_icplot = np.mean(BIC_mle_cv, axis=1)
+        err_bic_mle_icplot = np.std(BIC_mle_cv, axis=1)
+        y_aic_mle_icplot = np.mean(AIC_mle_cv, axis=1)
+        err_aic_mle_icplot = np.std(AIC_mle_cv, axis=1)
+        plt.plot(state_values_ic, y_bic_mle_icplot, label="BIC (MLE)", color="tab:orange")
+        plt.fill_between(
+            state_values_ic,
+            y_bic_mle_icplot - err_bic_mle_icplot,
+            y_bic_mle_icplot + err_bic_mle_icplot,
+            alpha=0.2,
+            color="tab:orange",
+        )
+        plt.plot(state_values_ic, y_aic_mle_icplot, label="AIC (MLE)", color="tab:blue")
+        plt.fill_between(
+            state_values_ic,
+            y_aic_mle_icplot - err_aic_mle_icplot,
+            y_aic_mle_icplot + err_aic_mle_icplot,
+            alpha=0.2,
+            color="tab:blue",
+        )
+        plt.xlabel("states")
+        plt.ylabel("criterion")
+        plt.title("MLE information criteria")
+        plt.xticks(state_values_ic)
+        plt.legend(loc="best")
+
+        plt.subplot(1, 2, 2)
+        y_bic_map_icplot = np.mean(BIC_map_cv, axis=1)
+        err_bic_map_icplot = np.std(BIC_map_cv, axis=1)
+        y_aic_map_icplot = np.mean(AIC_map_cv, axis=1)
+        err_aic_map_icplot = np.std(AIC_map_cv, axis=1)
+        plt.plot(state_values_ic, y_bic_map_icplot, label="BIC (MAP)", color="tab:red")
+        plt.fill_between(
+            state_values_ic,
+            y_bic_map_icplot - err_bic_map_icplot,
+            y_bic_map_icplot + err_bic_map_icplot,
+            alpha=0.2,
+            color="tab:red",
+        )
+        plt.plot(state_values_ic, y_aic_map_icplot, label="AIC (MAP)", color="tab:green")
+        plt.fill_between(
+            state_values_ic,
+            y_aic_map_icplot - err_aic_map_icplot,
+            y_aic_map_icplot + err_aic_map_icplot,
+            alpha=0.2,
+            color="tab:green",
+        )
+        plt.xlabel("states")
+        plt.ylabel("criterion")
+        plt.title("MAP information criteria")
+        plt.xticks(state_values_ic)
+        plt.legend(loc="best")
+
+        plt.tight_layout()
+        plt.show()
+
+        best_state_aic_mle_ic = int(state_values_ic[np.argmin(y_aic_mle_icplot)])
+        best_state_bic_mle_ic = int(state_values_ic[np.argmin(y_bic_mle_icplot)])
+        best_state_aic_map_ic = int(state_values_ic[np.argmin(y_aic_map_icplot)])
+        best_state_bic_map_ic = int(state_values_ic[np.argmin(y_bic_map_icplot)])
+        print(f"Best AIC MLE states: {best_state_aic_mle_ic}")
+        print(f"Best BIC MLE states: {best_state_bic_mle_ic}")
+        print(f"Best AIC MAP states: {best_state_aic_map_ic}")
+        print(f"Best BIC MAP states: {best_state_bic_map_ic}")
+    else:
+        best_state_aic_mle_ic = None
+        best_state_bic_mle_ic = None
+        best_state_aic_map_ic = None
+        best_state_bic_map_ic = None
+
+    return (
+        best_state_aic_map_ic,
+        best_state_aic_mle_ic,
+        best_state_bic_map_ic,
+        best_state_bic_mle_ic,
+    )
+
+
+@app.cell(hide_code=True)
+def _(
+    best_state_aic_map_ic,
+    best_state_aic_mle_ic,
+    best_state_bic_map_ic,
+    best_state_bic_mle_ic,
+    mo,
+):
+    if all(
+        val_icsummary is not None
+        for val_icsummary in [
+            best_state_aic_mle_ic,
+            best_state_bic_mle_ic,
+            best_state_aic_map_ic,
+            best_state_bic_map_ic,
+        ]
+    ):
+        mo.md(rf"""
+        **Information-Criterion Summary**
+
+        - Best AIC MLE model: `{best_state_aic_mle_ic}` state(s)
+        - Best BIC MLE model: `{best_state_bic_mle_ic}` state(s)
+        - Best AIC MAP model: `{best_state_aic_map_ic}` state(s)
+        - Best BIC MAP model: `{best_state_bic_map_ic}` state(s)
+        """)
+    else:
+        mo.md(r"""
+        **Information-Criterion Summary**
+
+        Information-criterion analysis is currently skipped. Enable it by setting
+        `run_information_criteria = True` in the control cell.
+        """)
+    return
+
+
+@app.cell
+def _(
+    AIC_map_cv,
+    AIC_mle_cv,
+    BIC_map_cv,
+    BIC_mle_cv,
+    best_state_aic_map_ic,
+    best_state_aic_mle_ic,
+    best_state_bic_map_ic,
+    best_state_bic_mle_ic,
+    best_state_map_cv,
+    best_state_mle_cv,
+    ll_heldout_cv,
+    ll_heldout_map_cv,
+    ll_training_cv,
+    ll_training_map_cv,
+):
+    model_sel_glmhmm = {
+        "ll_training_cv": ll_training_cv,
+        "ll_heldout_cv": ll_heldout_cv,
+        "ll_training_map_cv": ll_training_map_cv,
+        "ll_heldout_map_cv": ll_heldout_map_cv,
+        "AIC_mle_cv": AIC_mle_cv,
+        "BIC_mle_cv": BIC_mle_cv,
+        "AIC_map_cv": AIC_map_cv,
+        "BIC_map_cv": BIC_map_cv,
+        "best_state_mle_cv": best_state_mle_cv,
+        "best_state_map_cv": best_state_map_cv,
+        "best_state_aic_mle_ic": best_state_aic_mle_ic,
+        "best_state_bic_mle_ic": best_state_bic_mle_ic,
+        "best_state_aic_map_ic": best_state_aic_map_ic,
+        "best_state_bic_map_ic": best_state_bic_map_ic,
+    }
+    return (model_sel_glmhmm,)
 
 
 @app.cell(hide_code=True)
