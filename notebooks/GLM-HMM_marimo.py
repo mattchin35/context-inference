@@ -169,7 +169,7 @@ def _(cols, gen_log_trans_mat, gen_weights, input_dim, np, num_states, plt):
     plt.title("Generative transition matrix", fontsize=15)
     plt.tight_layout()
     plt.show()
-    return
+    return (gen_trans_mat,)
 
 
 @app.cell(hide_code=True)
@@ -342,14 +342,14 @@ def _(cols, gen_weights, input_dim, new_glmhmm, num_states, plt):
 
 
 @app.cell
-def _(gen_log_trans_mat, new_glmhmm, np, num_states, plt):
-    fig = plt.figure(figsize=(5, 2.5), dpi=80, facecolor="w", edgecolor="k")
+def _(gen_log_trans_mat, gen_trans_mat, new_glmhmm, np, num_states, plt):
+    _ = plt.figure(figsize=(5, 2.5), dpi=80, facecolor="w", edgecolor="k")
 
     plt.subplot(1, 2, 1)
-    gen_trans_mat = np.exp(gen_log_trans_mat)[0]
-    plt.imshow(gen_trans_mat, vmin=-0.8, vmax=1, cmap="bone")
-    for row_idx_transcmp in range(gen_trans_mat.shape[0]):
-        for col_idx_transcmp in range(gen_trans_mat.shape[1]):
+    gen_trans_mat_ = np.exp(gen_log_trans_mat)[0]
+    plt.imshow(gen_trans_mat_, vmin=-0.8, vmax=1, cmap="bone")
+    for row_idx_transcmp in range(gen_trans_mat_.shape[0]):
+        for col_idx_transcmp in range(gen_trans_mat_.shape[1]):
             plt.text(
                 col_idx_transcmp,
                 row_idx_transcmp,
@@ -368,14 +368,14 @@ def _(gen_log_trans_mat, new_glmhmm, np, num_states, plt):
     plt.title("generative", fontsize=15)
 
     plt.subplot(1, 2, 2)
-    recovered_trans_mat = np.exp(new_glmhmm.transitions.log_Ps)
-    plt.imshow(recovered_trans_mat, vmin=-0.8, vmax=1, cmap="bone")
-    for row_idx_transcmp in range(recovered_trans_mat.shape[0]):
-        for col_idx_transcmp in range(recovered_trans_mat.shape[1]):
+    recovered_trans_mat_ = np.exp(new_glmhmm.transitions.log_Ps)
+    plt.imshow(recovered_trans_mat_, vmin=-0.8, vmax=1, cmap="bone")
+    for row_idx_transcmp in range(recovered_trans_mat_.shape[0]):
+        for col_idx_transcmp in range(recovered_trans_mat_.shape[1]):
             plt.text(
                 col_idx_transcmp,
                 row_idx_transcmp,
-                str(np.around(recovered_trans_mat[row_idx_transcmp, col_idx_transcmp], decimals=2)),
+                str(np.around(recovered_trans_mat_[row_idx_transcmp, col_idx_transcmp], decimals=2)),
                 ha="center",
                 va="center",
                 color="k",
@@ -410,7 +410,7 @@ def _(inpts, new_glmhmm, true_choices):
 
 @app.cell
 def _(cols, num_states, plt, posterior_probs):
-    fig = plt.figure(figsize=(5, 2.5), dpi=80, facecolor="w", edgecolor="k")
+    _ = plt.figure(figsize=(5, 2.5), dpi=80, facecolor="w", edgecolor="k")
     sess_id = 0
     for state_idx_post in range(num_states):
         plt.plot(
@@ -439,7 +439,7 @@ def _(np, posterior_probs):
 
 @app.cell
 def _(cols, plt, state_occupancies):
-    fig = plt.figure(figsize=(2, 2.5), dpi=80, facecolor="w", edgecolor="k")
+    _ = plt.figure(figsize=(2, 2.5), dpi=80, facecolor="w", edgecolor="k")
     for state_idx_occ, occ_occ in enumerate(state_occupancies):
         plt.bar(state_idx_occ, occ_occ, width=0.8, color=cols[state_idx_occ])
     plt.ylim((0, 1))
@@ -498,7 +498,7 @@ def _(inpts, map_glmhmm, new_glmhmm, true_choices, true_glmhmm):
 
 @app.cell
 def _(map_final_ll, mle_final_ll, plt, true_likelihood):
-    fig = plt.figure(figsize=(2, 2.5), dpi=80, facecolor="w", edgecolor="k")
+    _ = plt.figure(figsize=(2, 2.5), dpi=80, facecolor="w", edgecolor="k")
     loglikelihood_vals = [true_likelihood, mle_final_ll, map_final_ll]
     colors_ll = ["Red", "Navy", "Purple"]
     for model_idx_fitcmp, ll_val_fitcmp in enumerate(loglikelihood_vals):
@@ -526,7 +526,7 @@ def _(mo):
 @app.cell
 def _(multiprocessing):
     # Cross-validation runtime controls.
-    run_model_selection = False
+    run_model_selection = True
     max_states_cv = 4
     n_iters_cv = 1000
     tol_cv = 1e-4
@@ -537,7 +537,6 @@ def _(multiprocessing):
     # MAP prior settings used inside CV.
     prior_alpha_cv = 2
     prior_sigma_cv = 2
-
     return (
         max_states_cv,
         n_iters_cv,
@@ -592,7 +591,15 @@ def _(inpts, np, num_sess, true_choices):
 
 
 @app.cell
-def _(Patch, StratifiedKFold, n_kfold_cv, np, plt, session_labels_cv, synthetic_data_cv):
+def _(
+    Patch,
+    StratifiedKFold,
+    n_kfold_cv,
+    np,
+    plt,
+    session_labels_cv,
+    synthetic_data_cv,
+):
     min_class_count_cv = int(np.min(np.bincount(session_labels_cv)))
     nKfold_cv = max(2, min(n_kfold_cv, min_class_count_cv))
 
@@ -642,7 +649,6 @@ def _(Patch, StratifiedKFold, n_kfold_cv, np, plt, session_labels_cv, synthetic_
     fig_cvplot.tight_layout()
     fig_cvplot.subplots_adjust(right=0.75)
     plt.show()
-
     return (nKfold_cv,)
 
 
@@ -743,7 +749,7 @@ def _(model_log_prob, ssm):
 
         return out_glmcv
 
-    return build_input_driven_glmhmm_cv, xval_func_glmcv
+    return (xval_func_glmcv,)
 
 
 @app.cell
@@ -818,7 +824,6 @@ def _(
         ll_training_map_cv = None
         ll_heldout_map_cv = None
         print("Model selection skipped. Set run_model_selection = True to enable.")
-
     return ll_heldout_cv, ll_heldout_map_cv, ll_training_cv, ll_training_map_cv
 
 
@@ -943,7 +948,6 @@ def _(
     else:
         best_state_mle_cv = None
         best_state_map_cv = None
-
     return best_state_map_cv, best_state_mle_cv
 
 
@@ -1174,7 +1178,7 @@ def _(gen_log_trans_mat, map_glmhmm, new_glmhmm, np, num_states, plt):
 
     plt.tight_layout()
     plt.show()
-    return
+    return (gen_trans_mat,)
 
 
 @app.cell(hide_code=True)
@@ -1496,7 +1500,7 @@ def _(
     plt.title("Recovered transition matrix", fontsize=15)
 
     plt.show()
-    return
+    return (gen_trans_mat,)
 
 
 if __name__ == "__main__":
