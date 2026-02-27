@@ -609,9 +609,10 @@ def plot_user_defined_trial_columns(
 def main():
     plot_combined_trial_feature_values()
     plot_combined_trial_index_features()
-    plot_user_defined_trial_columns(['FQlearning_rel_value',
-                                     'relative_doubt_index',
-                                     'perseveration_regressor'])
+    plot_user_defined_trial_columns(['HMM_rel_value_logodds_decay',
+                                     'FQlearning_rel_value'])
+                                     # 'relative_doubt_index',
+                                     # 'perseveration_regressor'],)
 
 
 if __name__ == '__main__':

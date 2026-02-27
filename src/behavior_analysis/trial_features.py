@@ -2,6 +2,7 @@ import numpy as np
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from scipy.stats import norm
+from scipy.special import expit, logit
 from typing import Protocol, Callable
 import logging
 
@@ -199,6 +200,130 @@ def hmm_relative_value(
         posterior = np.dot(transition_matrix.T, p_outcome)
         posterior /= (np.sum(posterior) + eps)
         prior = posterior
+
+    return relative_value
+
+
+def hmm_relative_value_reward_decay(
+    actions,
+    rewards,
+    state_transition_prob=0.2,
+    active_reward_probability=0.8,
+    inactive_reward_probability=0.0,
+    correct_reward_size=1.0,
+    incorrect_reward_size=0.0,
+    lambda_decay=0.2,
+    value_mode="bayesian_log_odds",
+    tanh_scale=1.0,
+    give_reward=None,
+):
+    """
+    HMM relative value variant with asymmetric outcome updates:
+      - reward=1: Bayesian update
+      - reward=0: passive decay in log-odds space
+
+    Output is signed belief only:
+        tanh(tanh_scale * logit(p_left_prior))
+
+    Notes:
+      - B_prior and transition_uncertainty are computed internally each trial
+        but not returned.
+      - For readability/comparison with hmm_relative_value, trial loop order is:
+        1) compute/store output from current prior
+        2) outcome update (reward vs omission)
+        3) hazard/transition update for next trial
+    """
+    actions = np.asarray(actions)
+    rewards = np.asarray(rewards)
+    _validate_lengths(actions, rewards)
+    if not 0 <= state_transition_prob <= 1:
+        raise ValueError("state_transition_prob must be in [0, 1].")
+    if not 0 <= lambda_decay <= 1:
+        raise ValueError("lambda_decay must be in [0, 1].")
+    if value_mode != "bayesian_log_odds":
+        raise ValueError("value_mode must be 'bayesian_log_odds'.")
+    try:
+        tanh_scale = float(tanh_scale)
+    except (TypeError, ValueError):
+        raise ValueError("tanh_scale must be a positive float.")
+    if tanh_scale <= 0:
+        raise ValueError("tanh_scale must be > 0.")
+
+    skip_trials = _normalize_skip_trials(give_reward, actions.shape[0])
+
+    # Belief vector order: [p_right, p_left]
+    prior = np.ones(2) / 2
+    if skip_trials is None:
+        relative_value = np.zeros(actions.shape[0], dtype=float)
+    else:
+        relative_value = np.full(actions.shape[0], None, dtype=object)
+
+    transition_matrix = np.ones((2, 2)) * state_transition_prob
+    np.fill_diagonal(transition_matrix, 1 - state_transition_prob)
+
+    for i, (action, reward) in enumerate(zip(actions, rewards)):
+        if skip_trials is not None and skip_trials[i]:
+            continue
+
+        # 1) Start-of-trial regressors from current prior belief
+        p_left_prior = np.clip(prior[LEFT_IX], eps, 1 - eps)
+        B_prior = logit(p_left_prior)
+        relative_value[i] = np.tanh(tanh_scale * B_prior)  # signed_belief
+        transition_uncertainty = 1 - np.abs(2 * p_left_prior - 1)  # computed but not returned
+        _ = transition_uncertainty
+
+        action = _parse_action(action, N_ACTIONS)
+        reward = _parse_reward(reward)
+        if action is None or reward is None:
+            continue
+
+        # 2) Outcome update
+        if np.isclose(reward, 1.0):
+            # Bayesian reward update on reward delivery
+            p_reward_delivery = _reward_delivery_probability(
+                action=action,
+                active_reward_probability=active_reward_probability,
+                inactive_reward_probability=inactive_reward_probability,
+            )
+            p_reward_size = _nonzero_reward_size_probability(
+                reward=reward,
+                action=action,
+                correct_reward_size=correct_reward_size,
+                incorrect_reward_size=incorrect_reward_size,
+            )
+            likelihood = p_reward_delivery * p_reward_size
+            posterior = likelihood * prior
+            posterior /= (np.sum(posterior) + eps)
+        elif np.isclose(reward, 0.0):
+            # Passive decay in log-odds space
+            B_post = (1 - lambda_decay) * B_prior
+            p_left_post = expit(B_post)
+            posterior = np.array([1 - p_left_post, p_left_post], dtype=float)
+        else:
+            # Fallback for non-binary rewards: treat positive as reward, non-positive as omission.
+            if reward > 0:
+                p_reward_delivery = _reward_delivery_probability(
+                    action=action,
+                    active_reward_probability=active_reward_probability,
+                    inactive_reward_probability=inactive_reward_probability,
+                )
+                p_reward_size = _nonzero_reward_size_probability(
+                    reward=reward,
+                    action=action,
+                    correct_reward_size=correct_reward_size,
+                    incorrect_reward_size=incorrect_reward_size,
+                )
+                likelihood = p_reward_delivery * p_reward_size
+                posterior = likelihood * prior
+                posterior /= (np.sum(posterior) + eps)
+            else:
+                B_post = (1 - lambda_decay) * B_prior
+                p_left_post = expit(B_post)
+                posterior = np.array([1 - p_left_post, p_left_post], dtype=float)
+
+        # 3) Hazard/transition update for next trial
+        prior = np.dot(transition_matrix.T, posterior)
+        prior /= (np.sum(prior) + eps)
 
     return relative_value
 

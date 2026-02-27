@@ -519,31 +519,6 @@ def run_cross_validation(block_performance: pd.DataFrame, session: Session, algo
                                               algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma)
     return plot_cross_validation_scores(cv_ll, states, session)
 
-# def single_func(observations: np.ndarray, inputs: np.ndarray, num_states: int, algorithm: str = 'MLE',
-#                 n_iter: int=1000, tol: float=10**-4, prior_alpha=1, prior_sigma=1):
-#
-#     obs_dim, input_dim = observations.shape[1], inputs.shape[1]
-#
-#     algorithm = algorithm.upper()
-#     if algorithm == 'MLE':
-#         hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
-#                       observations="input_driven_obs_gaussian", transitions="standard")
-#     elif algorithm == 'MAP':
-#         hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
-#                       observations="input_driven_obs_gaussian",
-#                       observation_kwargs=dict(prior_sigma=prior_sigma),
-#                       transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
-#     else:
-#         raise ValueError(f"algorithm must be 'MLE' or 'MAP', got {algorithm}")
-#
-#
-#     hmm_lls = hmm.fit(observations, inputs=inputs, method="em", num_iters=n_iter, tolerance=tol)
-#     out = hmm.log_likelihood(observations, inputs=inputs)
-#     return out
-
-
-
-
 
 def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray, states: np.ndarray, nRunEM: int, n_jobs: int,
                                    algorithm: str = 'MLE', prior_alpha: float = 1, prior_sigma: float = 1):
@@ -657,18 +632,18 @@ def main():
     # mle_savename = processed_data_path / (sess_id_full + '_mle_statedict.pkl')
     # with open(mle_savename, 'wb') as file:
     #     pkl.dump(mle_model_dict, file)
-    map_model_dict, block_performance = map_block_states(block_performance, figure_path, sess_id_abbreviated,
-                                                         plot=True, weight_dict=mle_model_dict)
+    # map_model_dict, block_performance = map_block_states(block_performance, figure_path, sess_id_abbreviated,
+    #                                                      plot=True, weight_dict=mle_model_dict)
 
     map_savename = processed_data_path / (sess_id_full + '_block_statedict.pkl')
-    with open(map_savename, 'wb') as file:
-        pkl.dump(map_model_dict, file)
+    # with open(map_savename, 'wb') as file:
+    #     pkl.dump(map_model_dict, file)
 
-    block_performance = declare_inferred_strategy(block_performance)
-    block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
+    # block_performance = declare_inferred_strategy(block_performance)
+    # block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
 
-    augmented_trial_df = trials_inherit_strategy(block_performance, augmented_trial_df)
-    augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
+    # augmented_trial_df = trials_inherit_strategy(block_performance, augmented_trial_df)
+    # augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
 
 
 def declare_inferred_strategy(block_df: pd.DataFrame) -> pd.DataFrame:

@@ -23,10 +23,12 @@ class TaskParams:
     correct_reward_size: float = 1
     incorrect_reward_size: float = 0
     tanh_scale: float = 1
+    hmm_reward_decay_lambda: float = 0.1
     # value_mode: str = 'bayesian_log_odds'  # 'expected_reward' or 'bayesian_log_odds'
 
     # Reinforcement learning parameters
     FQL_decay: float = .7  # for forgetting Q-learning agent
+    FQL_reward_update_rate_fast_learn: float = .5
     QL_learning_rate: float = .3  # for standard Q-learning agent
     omission_lam: float = 0.5
     perseveration_decay: float = 0.25
@@ -155,26 +157,24 @@ def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[Ta
         n_actions=params.n_actions,
         give_reward=give_reward,
     )
+    # Standard forgetting-Q: decay=.7 and default reward update rate (1 - decay).
     fql_rel_value = trial_features.forgetting_qlearning_relative_value(
         actions=actions,
         rewards=rewards,
-        decay=params.FQL_decay,
+        decay=0.7,
         n_actions=params.n_actions,
         give_reward=give_reward,
     )
-    hmm_rel_value_exprew = trial_features.hmm_relative_value(
+    # Fast-learn forgetting-Q: same decay but explicit reward update rate.
+    fql_rel_value_fast_learn = trial_features.forgetting_qlearning_relative_value(
         actions=actions,
         rewards=rewards,
-        state_transition_prob=params.state_transition_prob,
-        active_reward_probability=params.active_reward_probability,
-        inactive_reward_probability=params.inactive_reward_probability,
-        correct_reward_size=params.correct_reward_size,
-        incorrect_reward_size=params.incorrect_reward_size,
-        value_mode='expected_reward',
-        tanh_scale=params.tanh_scale,
+        decay=0.7,
+        reward_update_rate=params.FQL_reward_update_rate_fast_learn,
+        n_actions=params.n_actions,
         give_reward=give_reward,
     )
-    hmm_rel_value_logodds= trial_features.hmm_relative_value(
+    hmm_rel_value_logodds = trial_features.hmm_relative_value(
         actions=actions,
         rewards=rewards,
         state_transition_prob=params.state_transition_prob,
@@ -186,12 +186,26 @@ def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[Ta
         tanh_scale=params.tanh_scale,
         give_reward=give_reward,
     )
+    hmm_rel_value_logodds_decay = trial_features.hmm_relative_value_reward_decay(
+        actions=actions,
+        rewards=rewards,
+        state_transition_prob=params.state_transition_prob,
+        active_reward_probability=params.active_reward_probability,
+        inactive_reward_probability=params.inactive_reward_probability,
+        correct_reward_size=params.correct_reward_size,
+        incorrect_reward_size=params.incorrect_reward_size,
+        lambda_decay=params.hmm_reward_decay_lambda,
+        value_mode='bayesian_log_odds',
+        tanh_scale=params.tanh_scale,
+        give_reward=give_reward,
+    )
 
     augmented_trial_df = augmented_trial_df.copy()
     augmented_trial_df['Qlearning_rel_value'] = ql_rel_value
     augmented_trial_df['FQlearning_rel_value'] = fql_rel_value
-    augmented_trial_df['HMM_rel_value_exprew'] = hmm_rel_value_exprew
+    augmented_trial_df['FQlearning_rel_value_fast_learn'] = fql_rel_value_fast_learn
     augmented_trial_df['HMM_rel_value_logodds'] = hmm_rel_value_logodds
+    augmented_trial_df['HMM_rel_value_logodds_decay'] = hmm_rel_value_logodds_decay
 
     augmented_trial_df = collect_trial_index_features(
         augmented_trial_df,
