@@ -4,7 +4,7 @@ from src.behavior_modeling.task.context_task import BaseMDP
 import numpy as np
 import logging
 from typing import Tuple
-from icecream import ic
+# from icecream import ic
 
 
 SEED = 12345
@@ -190,8 +190,8 @@ def main():
         elif mdp.cur_state == 'left':
             action = 1
         reward, correct = mdp.step(action)
-        ic(mdp.cur_state, action)
-        ic(reward, correct)
+        # ic(mdp.cur_state, action)
+        # ic(reward, correct)
 
 
 if __name__ == '__main__':

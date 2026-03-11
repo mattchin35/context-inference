@@ -134,6 +134,15 @@ class HMM(BehaviorAgent):
 
     def __init__(self, agent_params: config.AgentParams, task_params: config.TaskParams):
         assert agent_params.action_temperature > 0, "must have positive temperature"
+        if agent_params.HMM_value_mode not in ['expected_reward', 'bayesian_log_odds']:
+            raise ValueError("HMM_value_mode must be 'expected_reward' or 'bayesian_log_odds'")
+        if agent_params.HMM_value_mode == 'bayesian_log_odds':
+            try:
+                tanh_scale = float(agent_params.HMM_log_odds_tanh_scale)
+            except (TypeError, ValueError):
+                raise ValueError("HMM_log_odds_tanh_scale must be a positive float for bayesian_log_odds mode")
+            if tanh_scale <= 0:
+                raise ValueError("HMM_log_odds_tanh_scale must be > 0 for bayesian_log_odds mode")
 
         self.temperature = agent_params.action_temperature
         self.greedy = agent_params.greedy_action_selection
@@ -158,6 +167,8 @@ class HMM(BehaviorAgent):
         self.alpha = agent_params.logistic_alpha
         self.beta = agent_params.logistic_beta
         self.tau = agent_params.logistic_tau
+        self.value_mode = agent_params.HMM_value_mode
+        self.log_odds_tanh_scale = agent_params.HMM_log_odds_tanh_scale
 
         # self.q = (np.exp(-1 / agent_params.logistic_tau) + 1) / 2  # q, probability of no system state change
         # self.p = sp.special.expit(
@@ -184,6 +195,17 @@ class HMM(BehaviorAgent):
         self.last_action = action
         self.last_stimulus = stimulus
         return action, self.action_dist.copy()
+
+    def compute_relative_value(self) -> float:
+        if self.value_mode == 'expected_reward':
+            expected_rew_left = self.agent_params.HMM_active_reward_probability * self.prior[LEFT_IX] + \
+                                self.agent_params.HMM_inactive_reward_probability * self.prior[RIGHT_IX]
+            expected_rew_right = self.agent_params.HMM_active_reward_probability * self.prior[RIGHT_IX] + \
+                                 self.agent_params.HMM_inactive_reward_probability * self.prior[LEFT_IX]
+            return expected_rew_left - expected_rew_right
+
+        log_odds = np.log((self.prior[LEFT_IX] + eps) / (self.prior[RIGHT_IX] + eps))
+        return np.tanh(log_odds * self.log_odds_tanh_scale)
 
     def update_params(self, action, reward) -> None:
         """
@@ -213,14 +235,7 @@ class HMM(BehaviorAgent):
         logging.info("reward -> updated posterior: {}".format(posterior))
         self.prior = posterior
 
-        # value determination following Vertechi - uses expected reward, action sampling via relative value
-        expected_rew_L = self.agent_params.HMM_active_reward_probability * self.prior[1] + self.agent_params.HMM_inactive_reward_probability * self.prior[0]
-        expected_rew_R = self.agent_params.HMM_active_reward_probability * self.prior[0] + self.agent_params.HMM_inactive_reward_probability * self.prior[1]
-        self.value = expected_rew_L - expected_rew_R  # relative value of L vs R actions
-
-        # value determination following Beron - uses Bayesian posterior, action sampling via Thompson (belief) sampling
-        # to match HMM and RFLR models, you need to use Thompson sampling
-        # self.value = sp.special.logit(self.prior[1])
+        self.value = self.compute_relative_value()
 
         self.update_action_dist(action)
 

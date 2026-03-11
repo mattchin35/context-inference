@@ -1,46 +1,186 @@
 from pathlib import Path
+import json
 import pickle as pkl
-from typing import Dict, Tuple, Any, Optional
+from typing import Dict, Tuple
 import logging
 from collections import defaultdict
-import time
 import datetime as dt
 
 import numpy as np
 import pandas as pd
-import torch
 
 import agents.agents as agents
 from task.context_task import BaseMDP
 from parameters import task_config
-# from config import AgentConfig
 
 SEED = 12345  # 0
 rng = np.random.default_rng(SEED)
-torch.manual_seed(SEED)
+SUPPORTED_SAMPLE_AGENTS = {
+    'HMM': 'HMM',
+    'F-Qlearning': 'FQL',
+    'Qlearning': 'QL',
+    'Logistic': 'RFLR',
+}
+
+TRIAL_DF_COLUMNS = [
+    'state',
+    'state_int',
+    'cur_trial',
+    'cur_trial_in_block',
+    'cur_block',
+    'action',
+    'correct',
+    'reward',
+    'p_active_rew',
+    'p_inactive_rew',
+    'p_switch',
+    'model_stimulus',
+    'agent_action_dist',
+    'agent_relative_value',
+    'agent_prior',
+]
+
+
+def get_agent_prior(agent: agents.BehaviorAgent) -> float:
+    if isinstance(agent, agents.HMM):
+        return agent.prior[1]
+    return np.nan
+
+
+def performance_to_dataframe(performance: Dict[str, list]) -> pd.DataFrame:
+    df = pd.DataFrame(performance)
+    return df.reindex(columns=TRIAL_DF_COLUMNS)
+
+
+def format_param_value(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)):
+        return f"{float(value):g}"
+    return str(value)
+
+
+def get_sample_agent_label(agent_name: str) -> str:
+    if agent_name not in SUPPORTED_SAMPLE_AGENTS:
+        raise ValueError(f"Unsupported sample-agent type: {agent_name}")
+    return SUPPORTED_SAMPLE_AGENTS[agent_name]
+
+
+def get_session_timestamp() -> str:
+    return dt.datetime.now().strftime('%Y-%m-%d_%H%M%S')
+
+
+def format_sample_agent_parameter_summary(
+    agent_name: str,
+    task_params: task_config.TaskParams,
+    agent_params: task_config.AgentParams,
+) -> str:
+    fields = [
+        f"pRew-{format_param_value(task_params.active_reward_probability)}",
+        f"pInc-{format_param_value(task_params.inactive_reward_probability)}",
+        f"pSwitch-{format_param_value(task_params.state_transition_prob)}",
+        f"nTrials-{format_param_value(task_params.n_trials)}",
+    ]
+
+    if agent_name == 'HMM':
+        fields.extend([
+            f"mode-{agent_params.HMM_value_mode}",
+            f"modelPsw-{format_param_value(agent_params.HMM_transition_prob)}",
+            f"alpha-{format_param_value(agent_params.logistic_alpha)}",
+            f"temp-{format_param_value(agent_params.action_temperature)}",
+        ])
+        if agent_params.HMM_value_mode == 'bayesian_log_odds':
+            fields.append(f"tanh-{format_param_value(agent_params.HMM_log_odds_tanh_scale)}")
+    elif agent_name == 'F-Qlearning':
+        fields.extend([
+            f"decay-{format_param_value(agent_params.FQL_decay)}",
+            f"alpha-{format_param_value(agent_params.logistic_alpha)}",
+            f"temp-{format_param_value(agent_params.action_temperature)}",
+        ])
+    elif agent_name == 'Qlearning':
+        fields.extend([
+            f"lr-{format_param_value(agent_params.QL_learning_rate)}",
+            f"temp-{format_param_value(agent_params.action_temperature)}",
+        ])
+    elif agent_name == 'Logistic':
+        fields.extend([
+            f"alpha-{format_param_value(agent_params.logistic_alpha)}",
+            f"beta-{format_param_value(agent_params.logistic_beta)}",
+            f"tau-{format_param_value(agent_params.logistic_tau)}",
+        ])
+    else:
+        raise ValueError(f"Unsupported sample-agent type: {agent_name}")
+
+    return '_'.join(fields)
+
+
+def build_sample_agent_session_name(
+    agent_name: str,
+    task_params: task_config.TaskParams,
+    agent_params: task_config.AgentParams,
+    session_timestamp: str,
+) -> str:
+    model_label = get_sample_agent_label(agent_name)
+    param_summary = format_sample_agent_parameter_summary(agent_name, task_params, agent_params)
+    return f"{model_label}_{session_timestamp}_{param_summary}"
+
+
+def save_sample_agent_run(
+    agent_name: str,
+    performance_df: pd.DataFrame,
+    task_params: task_config.TaskParams,
+    agent_params: task_config.AgentParams,
+    data_dir: Path,
+) -> tuple[Path, Path]:
+    model_label = get_sample_agent_label(agent_name)
+    session_timestamp = get_session_timestamp()
+    session_name = build_sample_agent_session_name(agent_name, task_params, agent_params, session_timestamp)
+    save_dir = data_dir / session_name
+    save_dir.mkdir(parents=True, exist_ok=False)
+
+    csv_path = save_dir / f"{session_name}.csv"
+    params_path = save_dir / f"{session_name}_params.json"
+
+    performance_df.to_csv(csv_path, index=False)
+
+    params_payload = {
+        'agent_name': agent_name,
+        'model_type_label': model_label,
+        'session_timestamp': session_timestamp,
+        'task_params': vars(task_params),
+        'agent_params': vars(agent_params),
+        'dataframe_columns': list(performance_df.columns),
+    }
+    with params_path.open('w') as f:
+        json.dump(params_payload, f, indent=2)
+
+    print("[***] Sample agent CSV saved as: {}".format(csv_path.resolve()))
+    print("[***] Sample agent params saved as: {}".format(params_path.resolve()))
+    return csv_path, params_path
 
 
 def run_task_cycle(task: BaseMDP, agent: agents.BehaviorAgent, performance: Dict[str, list]) -> \
         Tuple[BaseMDP, agents.BehaviorAgent, Dict[str, list]]:
 
     performance['state'].append(task.cur_state)
+    performance['state_int'].append(task.state_dict[task.cur_state])
     performance['cur_trial'].append(task.cur_trial)
     performance['cur_block'].append(task.cur_block)
     performance['cur_trial_in_block'].append(task.cur_trial_in_block)
-    performance['relative_value'].append(agent.value)
-    performance['p_active_reward'].append(task.params.active_reward_probability)
-    performance['p_inactive_reward'].append(task.params.inactive_reward_probability)
-    if agent.model_type == 'HMM':
-        performance['prior'].append(agent.prior.copy())
-    elif agent.model_type in ['Qlearning', 'Forgetting Q-learning']:
-        performance['q_values'].append(agent.Q.copy())
+    performance['agent_relative_value'].append(agent.value)
+    performance['p_active_rew'].append(task.params.active_reward_probability)
+    performance['p_inactive_rew'].append(task.params.inactive_reward_probability)
+    performance['p_switch'].append(task.params.state_transition_prob)
+    performance['agent_prior'].append(get_agent_prior(agent))
 
     stimulus = task.get_stimulus()
     action, action_dist = agent.choose_action(stimulus)
     reward, correct = task.step(action)
 
-    performance['stimulus'].append(stimulus)
-    performance['action_dist'].append(action_dist[0])
+    performance['model_stimulus'].append(stimulus)
+    performance['agent_action_dist'].append(action_dist[1])
     agent.update_params(action, reward)
 
     # this will get refactored out to a controller class/fxn
@@ -164,14 +304,16 @@ def set_params() -> tuple[task_config.TaskParams, task_config.AgentParams]:
 
     # for the HMM agent, you can play with using model parameters that are different from the true task parameters
     agent_params.HMM_transition_prob = task_params.state_transition_prob  # HMM agent's belief of state change probability
+    agent_params.HMM_value_mode = 'expected_reward'
+    agent_params.HMM_log_odds_tanh_scale = 1.0
     # agent_params.HMM_transition_prob = .1  # HMM agent's belief of task dynamics
     agent_params.HMM_active_reward_probability = .9  # HMM agent's belief of reward probability
     agent_params.HMM_inactive_reward_probability = 0  # HMM agent's belief of reward probability
 
     # Q-learning parameters
-    agent_params.FQL_decay = .6  # for forgetting Q-learning agent
-    agent_params.QL_learning_rate = .1  # for standard Q-learning agent
-    agent_params.action_temperature = .2  # .3 seems to work for FQL  ## temp=1 is default; temp->0 makes greedier; temp->inf increases randomness
+    agent_params.FQL_decay = .7  # for forgetting Q-learning agent
+    agent_params.QL_learning_rate = .3  # for standard Q-learning agent
+    agent_params.action_temperature = .3  # .3 seems to work for FQL  ## temp=1 is default; temp->0 makes greedier; temp->inf increases randomness
     agent_params.action_stickiness = 0  # tendency to repeat last action
     agent_params.greedy_action_selection = False
     agent_params.greedy_epsilon = .1
@@ -229,6 +371,7 @@ def load_experiment(load_name: str) -> Tuple[BaseMDP, agents.BehaviorAgent, pd.D
 
 def main():
     data_dir = Path('../../data/processed/model_experiments')
+    sample_agent_data_dir = Path('../../data/processed/sample_agents')
     model_dir = Path('../../saved_models/standard_models')
 
     log_path = Path('collection_task.log')
@@ -241,15 +384,15 @@ def main():
     # agent_name = 'F-Qlearning'
     # agent_param_str = 'alpha={}_temp={}_decay={}'.format(params.logistic_alpha, params.action_temperature, params.FQL_decay)
 
-    # agent_name = 'HMM'
-    # agent_param_str = 'alpha={}_temp={}_model-Psw={}'.format(params.logistic_alpha, params.action_temperature, params.HMM_transition_prob)
+    agent_name = 'HMM'
+    agent_param_str = 'alpha={}_temp={}_model-Psw={}'.format(agent_params.logistic_alpha, agent_params.action_temperature, agent_params.HMM_transition_prob)
 
     # agent_name = 'HMM_recursive'
     # agent_param_str = 'alpha={}_temp={}_model-Psw={}'.format(params.logistic_alpha, params.action_temperature, params.HMM_transition_prob)
 
-    agent_name = 'HMM_RFLR'
-    agent_param_str = 'alpha={}_beta={}_tau={}'.format(agent_params.logistic_alpha, agent_params.logistic_beta,
-                                                       agent_params.logistic_tau)
+    # agent_name = 'HMM_RFLR'
+    # agent_param_str = 'alpha={}_beta={}_tau={}'.format(agent_params.logistic_alpha, agent_params.logistic_beta,
+    #                                                    agent_params.logistic_tau)
 
     # agent_name = 'Logistic'
     # agent_param_str = 'alpha={}_beta={}_tau={}'.format(agent_params.logistic_alpha, agent_params.logistic_beta,
@@ -259,19 +402,20 @@ def main():
     # pick a filename based on task-specific params (pReward, pSwitch, rewards-before-state-switch, etc.)
 
     ### RUN A NEW EXPERIMENT ###
-    session_name = '{}_pReward_{}_pSwitch_{:.2f}'.format(agent_name,
-                                                     task_params.active_reward_probability,
-                                                     task_params.state_transition_prob)
-    fname = session_name + '_' + agent_param_str
-    if session_note:
-        fname += '_' + session_note
-
     task = BaseMDP(task_params)
     agent = select_agent(agent_name, agent_params, task_params)
     task, agent, performance = run_experiment(task, agent, task_params)
-    performance['session_ID'] = ['logistic_test'] * task.cur_trial
-    performance = pd.DataFrame(performance)
-    save_experiment(fname, data_dir, task, agent, performance, agent_params, task_params)
+    performance = performance_to_dataframe(performance)
+    if agent_name in SUPPORTED_SAMPLE_AGENTS:
+        save_sample_agent_run(agent_name, performance, task_params, agent_params, sample_agent_data_dir)
+    else:
+        session_name = '{}_pReward_{}_pSwitch_{:.2f}'.format(agent_name,
+                                                         task_params.active_reward_probability,
+                                                         task_params.state_transition_prob)
+        fname = session_name + '_' + agent_param_str
+        if session_note:
+            fname += '_' + session_note
+        save_experiment(fname, data_dir, task, agent, performance, agent_params, task_params)
 
     ### REPEAT THE TRIALS FROM A MODEL SESSION ###
     p_reward = .9

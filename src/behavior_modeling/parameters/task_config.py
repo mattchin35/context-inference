@@ -54,6 +54,8 @@ class TaskParams:
 class AgentParams:
     # behavior agent params for non-ML agents
     HMM_transition_prob: float = .05  # HMM agent's belief of task dynamics
+    HMM_value_mode: str = 'expected_reward'
+    HMM_log_odds_tanh_scale: float = 1.0
     FQL_decay: float = .9  # for forgetting Q-learning agent
     QL_learning_rate: float = .1  # for standard Q-learning agent
     action_stickiness: float = 0  # tendency to repeat last action
@@ -98,6 +100,5 @@ if __name__ == '__main__':
     Params = TaskParams()
     print(Params.n_blocks)
     print('test')
-
 
 
