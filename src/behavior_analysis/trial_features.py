@@ -1,18 +1,14 @@
 import numpy as np
-from dataclasses import dataclass
-from abc import ABC, abstractmethod
-from scipy.stats import norm
 from scipy.special import expit, logit
-from typing import Protocol, Callable
-import logging
 
 N_ACTIONS = 2
 RIGHT_IX = 0
 LEFT_IX = 1
 eps = np.finfo(float).eps
 
-states = ['right', 'left']
+states = ["right", "left"]
 side_dict = {s: i for i, s in enumerate(states)}  # i.e. [0 right, 1 left]
+
 
 def get_action_ix(action: int) -> int:
     # right=0, left=1: map right to -1, left to +1
@@ -20,7 +16,9 @@ def get_action_ix(action: int) -> int:
     return action * 2 - 1
 
 
-def qlearning_relative_value(actions, rewards, learning_rate=0.1, n_actions=N_ACTIONS, give_reward=None):
+def qlearning_relative_value(
+    actions, rewards, learning_rate=0.1, n_actions=N_ACTIONS, give_reward=None
+):
     """
     Minimal Q-learning relative value feature.
     Returns trial-wise pre-update value: Q_left - Q_right.
@@ -90,7 +88,9 @@ def forgetting_qlearning_relative_value(
         try:
             tanh_scale = float(tanh_scale)
         except (TypeError, ValueError):
-            raise ValueError("tanh_scale must be a positive float when tanh_relative_value is True.")
+            raise ValueError(
+                "tanh_scale must be a positive float when tanh_relative_value is True."
+            )
         if tanh_scale <= 0:
             raise ValueError("tanh_scale must be > 0 when tanh_relative_value is True.")
 
@@ -166,8 +166,14 @@ def hmm_relative_value(
             continue
 
         if value_mode == "expected_reward":
-            expected_rew_left = active_reward_probability * prior[LEFT_IX] + inactive_reward_probability * prior[RIGHT_IX]
-            expected_rew_right = active_reward_probability * prior[RIGHT_IX] + inactive_reward_probability * prior[LEFT_IX]
+            expected_rew_left = (
+                active_reward_probability * prior[LEFT_IX]
+                + inactive_reward_probability * prior[RIGHT_IX]
+            )
+            expected_rew_right = (
+                active_reward_probability * prior[RIGHT_IX]
+                + inactive_reward_probability * prior[LEFT_IX]
+            )
             relative_value[i] = expected_rew_left - expected_rew_right
         else:
             log_odds = np.log((prior[LEFT_IX] + eps) / (prior[RIGHT_IX] + eps))
@@ -181,24 +187,27 @@ def hmm_relative_value(
         p_reward_delivery = _reward_delivery_probability(
             action=action,
             active_reward_probability=active_reward_probability,
-            inactive_reward_probability=inactive_reward_probability
+            inactive_reward_probability=inactive_reward_probability,
         )
         p_reward_size = _nonzero_reward_size_probability(
             reward=reward,
             action=action,
             correct_reward_size=correct_reward_size,
-            incorrect_reward_size=incorrect_reward_size
+            incorrect_reward_size=incorrect_reward_size,
         )
 
         nonzero_reward_indicator = int(reward > 0)
         p_no_reward = 1 - p_reward_delivery
-        p_reward = nonzero_reward_indicator * p_reward_delivery * p_reward_size + (1 - nonzero_reward_indicator) * p_no_reward
+        p_reward = (
+            nonzero_reward_indicator * p_reward_delivery * p_reward_size
+            + (1 - nonzero_reward_indicator) * p_no_reward
+        )
 
         p_outcome = p_reward * prior
-        p_outcome /= (np.sum(p_outcome) + eps)
+        p_outcome /= np.sum(p_outcome) + eps
 
         posterior = np.dot(transition_matrix.T, p_outcome)
-        posterior /= (np.sum(posterior) + eps)
+        posterior /= np.sum(posterior) + eps
         prior = posterior
 
     return relative_value
@@ -269,7 +278,9 @@ def hmm_relative_value_reward_decay(
         p_left_prior = np.clip(prior[LEFT_IX], eps, 1 - eps)
         B_prior = logit(p_left_prior)
         relative_value[i] = np.tanh(tanh_scale * B_prior)  # signed_belief
-        transition_uncertainty = 1 - np.abs(2 * p_left_prior - 1)  # computed but not returned
+        transition_uncertainty = 1 - np.abs(
+            2 * p_left_prior - 1
+        )  # computed but not returned
         _ = transition_uncertainty
 
         action = _parse_action(action, N_ACTIONS)
@@ -293,7 +304,7 @@ def hmm_relative_value_reward_decay(
             )
             likelihood = p_reward_delivery * p_reward_size
             posterior = likelihood * prior
-            posterior /= (np.sum(posterior) + eps)
+            posterior /= np.sum(posterior) + eps
         elif np.isclose(reward, 0.0):
             # Passive decay in log-odds space
             B_post = (1 - lambda_decay) * B_prior
@@ -315,7 +326,7 @@ def hmm_relative_value_reward_decay(
                 )
                 likelihood = p_reward_delivery * p_reward_size
                 posterior = likelihood * prior
-                posterior /= (np.sum(posterior) + eps)
+                posterior /= np.sum(posterior) + eps
             else:
                 B_post = (1 - lambda_decay) * B_prior
                 p_left_post = expit(B_post)
@@ -323,7 +334,7 @@ def hmm_relative_value_reward_decay(
 
         # 3) Hazard/transition update for next trial
         prior = np.dot(transition_matrix.T, posterior)
-        prior /= (np.sum(prior) + eps)
+        prior /= np.sum(prior) + eps
 
     return relative_value
 
@@ -339,7 +350,9 @@ def _normalize_skip_trials(give_reward, n_trials):
 
     give_reward = np.asarray(give_reward)
     if give_reward.shape[0] != n_trials:
-        raise ValueError("give_reward must have the same length as actions and rewards.")
+        raise ValueError(
+            "give_reward must have the same length as actions and rewards."
+        )
 
     return np.array([_should_skip_trial(flag) for flag in give_reward], dtype=bool)
 
@@ -399,7 +412,9 @@ def _parse_reward(reward):
         return None
 
 
-def _reward_delivery_probability(action, active_reward_probability, inactive_reward_probability):
+def _reward_delivery_probability(
+    action, active_reward_probability, inactive_reward_probability
+):
     p = np.zeros(2)
     if action == RIGHT_IX:
         p[RIGHT_IX] = active_reward_probability
@@ -410,7 +425,9 @@ def _reward_delivery_probability(action, active_reward_probability, inactive_rew
     return p
 
 
-def _nonzero_reward_size_probability(reward, action, correct_reward_size, incorrect_reward_size):
+def _nonzero_reward_size_probability(
+    reward, action, correct_reward_size, incorrect_reward_size
+):
     p = np.zeros(2)
     if action == RIGHT_IX:
         p[RIGHT_IX] = float(reward == correct_reward_size)
@@ -636,7 +653,9 @@ def _choice_token_to_signed(token):
         try:
             token = float(parsed)
         except ValueError as exc:
-            raise ValueError("choice values must be left/right, 0/1, or -1/+1.") from exc
+            raise ValueError(
+                "choice values must be left/right, 0/1, or -1/+1."
+            ) from exc
 
     try:
         if np.isnan(token):

@@ -325,6 +325,124 @@ class HMM(BehaviorAgent):
         return state_transition_matrix
 
 
+class HMMRewardDecay(HMM):
+    """
+    HMM variant with asymmetric outcome updates:
+      - reward delivery: standard Bayesian reward update
+      - omission: passive decay in log-odds space
+
+    This mirrors `trial_features.hmm_relative_value_reward_decay` but updates
+    state online one trial at a time for interactive task simulation.
+    """
+
+    def __init__(self, agent_params: config.AgentParams, task_params: config.TaskParams):
+        super().__init__(agent_params, task_params)
+        if agent_params.HMM_value_mode != 'bayesian_log_odds':
+            raise ValueError("HMMRewardDecay requires HMM_value_mode == 'bayesian_log_odds'")
+        if not 0 <= agent_params.HMM_reward_decay_lambda <= 1:
+            raise ValueError("HMM_reward_decay_lambda must be in [0, 1].")
+
+        self.lambda_decay = agent_params.HMM_reward_decay_lambda
+        self.model_type = 'HMM_reward_decay'
+        self.value = self.compute_relative_value()
+
+    def compute_relative_value(self) -> float:
+        p_left = np.clip(self.prior[LEFT_IX], eps, 1 - eps)
+        log_odds = sp.special.logit(p_left)
+        return np.tanh(log_odds * self.log_odds_tanh_scale)
+
+    def _reward_posterior(self, action: int, reward: float) -> np.ndarray:
+        likelihood = (
+            self.reward_delivery_probability(action=action)
+            * self.nonzero_reward_size_probability(reward=reward, action=action)
+        )
+        posterior = likelihood * self.prior
+        posterior /= np.sum(posterior) + eps
+        return posterior
+
+    def _omission_posterior(self) -> np.ndarray:
+        p_left_prior = np.clip(self.prior[LEFT_IX], eps, 1 - eps)
+        belief_log_odds = sp.special.logit(p_left_prior)
+        belief_log_odds *= 1 - self.lambda_decay
+        p_left_post = sp.special.expit(belief_log_odds)
+        return np.array([1 - p_left_post, p_left_post], dtype=float)
+
+    def update_params(self, action, reward) -> None:
+        if np.isclose(reward, self.task_params.mean_correct_reward):
+            posterior = self._reward_posterior(action=action, reward=reward)
+        elif np.isclose(reward, 0.0):
+            posterior = self._omission_posterior()
+        elif reward > 0:
+            posterior = self._reward_posterior(action=action, reward=reward)
+        else:
+            posterior = self._omission_posterior()
+
+        self.prior = np.dot(self.transition_matrix.T, posterior)
+        self.prior /= np.sum(self.prior) + eps
+        self.value = self.compute_relative_value()
+        self.update_action_dist(action)
+
+
+class HMMRewardDecayRelativeDoubt(HMMRewardDecay):
+    """
+    Composite agent with separate latent state for:
+      - HMM reward-decay belief value
+      - side-specific counterfactual relative doubt
+
+    The action policy uses the combined value:
+        value = hmm_value - doubt_value
+    """
+
+    def __init__(self, agent_params: config.AgentParams, task_params: config.TaskParams):
+        super().__init__(agent_params, task_params)
+        if agent_params.relative_doubt_lambda <= 0:
+            raise ValueError("relative_doubt_lambda must be > 0.")
+
+        self.relative_doubt_lambda = agent_params.relative_doubt_lambda
+        self.left_omissions_cf = 0
+        self.right_omissions_cf = 0
+        self.hmm_value = self.value
+        self.doubt_value = 0.0
+        self.value = self.hmm_value - self.doubt_value
+        self.model_type = 'HMM_reward_decay_relative_doubt'
+        self.update_action_dist(self.last_action)
+
+    def compute_doubt_value(self) -> float:
+        doubt_right = 1 - np.exp(-self.relative_doubt_lambda * self.right_omissions_cf)
+        doubt_left = 1 - np.exp(-self.relative_doubt_lambda * self.left_omissions_cf)
+        return doubt_left - doubt_right
+
+    def update_doubt_state(self, action: int, reward: float) -> None:
+        rewarded = np.isclose(reward, self.task_params.mean_correct_reward)
+        omitted = np.isclose(reward, 0.0)
+
+        if not rewarded and not omitted:
+            rewarded = reward > 0
+            omitted = reward <= 0
+
+        if action == RIGHT_IX:
+            if omitted:
+                self.right_omissions_cf += 1
+            elif rewarded:
+                self.right_omissions_cf = 0
+                self.left_omissions_cf = 0
+        elif action == LEFT_IX:
+            if omitted:
+                self.left_omissions_cf += 1
+            elif rewarded:
+                self.left_omissions_cf = 0
+                self.right_omissions_cf = 0
+
+        self.doubt_value = self.compute_doubt_value()
+
+    def update_params(self, action, reward) -> None:
+        super().update_params(action, reward)
+        self.hmm_value = self.value
+        self.update_doubt_state(action, reward)
+        self.value = self.hmm_value - self.doubt_value
+        self.update_action_dist(action)
+
+
 class HMM_recursive(HMM):
     """An HMM variant using the log-odds recursion described in Beron et al, PNAS 2022.
     Primarily meant as a proof-of-concept/verification that the paper's math is legit."""

@@ -17,6 +17,8 @@ SEED = 12345  # 0
 rng = np.random.default_rng(SEED)
 SUPPORTED_SAMPLE_AGENTS = {
     'HMM': 'HMM',
+    'HMM_reward_decay': 'HMMdecay',
+    'HMM_reward_decay_relative_doubt': 'HMMdecayDoubt',
     'F-Qlearning': 'FQL',
     'Qlearning': 'QL',
     'Logistic': 'RFLR',
@@ -90,6 +92,27 @@ def format_sample_agent_parameter_summary(
             f"modelPsw-{format_param_value(agent_params.HMM_transition_prob)}",
             f"alpha-{format_param_value(agent_params.logistic_alpha)}",
             f"temp-{format_param_value(agent_params.action_temperature)}",
+        ])
+        if agent_params.HMM_value_mode == 'bayesian_log_odds':
+            fields.append(f"tanh-{format_param_value(agent_params.HMM_log_odds_tanh_scale)}")
+    elif agent_name == 'HMM_reward_decay':
+        fields.extend([
+            f"mode-{agent_params.HMM_value_mode}",
+            f"modelPsw-{format_param_value(agent_params.HMM_transition_prob)}",
+            f"alpha-{format_param_value(agent_params.logistic_alpha)}",
+            f"temp-{format_param_value(agent_params.action_temperature)}",
+            f"lambda-{format_param_value(agent_params.HMM_reward_decay_lambda)}",
+        ])
+        if agent_params.HMM_value_mode == 'bayesian_log_odds':
+            fields.append(f"tanh-{format_param_value(agent_params.HMM_log_odds_tanh_scale)}")
+    elif agent_name == 'HMM_reward_decay_relative_doubt':
+        fields.extend([
+            f"mode-{format_param_value(agent_params.HMM_value_mode)}",
+            f"modelPsw-{format_param_value(agent_params.HMM_transition_prob)}",
+            f"alpha-{format_param_value(agent_params.logistic_alpha)}",
+            f"temp-{format_param_value(agent_params.action_temperature)}",
+            f"lambda-{format_param_value(agent_params.HMM_reward_decay_lambda)}",
+            f"doubtLam-{format_param_value(agent_params.relative_doubt_lambda)}",
         ])
         if agent_params.HMM_value_mode == 'bayesian_log_odds':
             fields.append(f"tanh-{format_param_value(agent_params.HMM_log_odds_tanh_scale)}")
@@ -255,6 +278,10 @@ def run_experiment(task: BaseMDP, agent: agents.BehaviorAgent, task_params: task
 def select_agent(agent_name: str, agent_params: task_config.AgentParams, task_params: task_config.TaskParams) -> agents.BehaviorAgent:
     if agent_name == 'HMM':
         agent = agents.HMM(agent_params, task_params)
+    elif agent_name == 'HMM_reward_decay':
+        agent = agents.HMMRewardDecay(agent_params, task_params)
+    elif agent_name == 'HMM_reward_decay_relative_doubt':
+        agent = agents.HMMRewardDecayRelativeDoubt(agent_params, task_params)
     elif agent_name == 'HMM_RFLR':
         agent = agents.HMM_RFLR(agent_params, task_params)
     elif agent_name == 'HMM_recursive':
