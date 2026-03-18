@@ -67,9 +67,10 @@ from the trial history. For more details, see Ashwood et al, Neuron 2022
 and all the papers that followed it from the IBL group.
 
 - Relative value, by Q-learning or Forgetting Q-learning
-- Reward-omission based / doubt 
+- Reward-omission based doubt: a relative doubt signal derived from the recent history of unrewarded choices, expressed as a left-vs-right quantity that grows with repeated omissions and opposes confident commitment to one side
 - Signed belief by bayesian log-odds
-- Signed belief by bayesian log-odds with a decay
+- Signed belief by bayesian log-odds with a decay: a belief signal that updates by Bayesian inference on rewarded trials, but on omission trials decays passively toward uncertainty rather than treating each omission as full contrary evidence
+- Combined belief-doubt model: a constructed regressor that updates a Bayesian belief signal on rewards, applies omission-driven decay to belief on unrewarded trials, computes a separate doubt signal from omission history, and combines them into a single relative decision variable
 - Choice history-based / Perseveration
 
 GLM-HMM input:
@@ -129,6 +130,11 @@ combined into a relative value (this is the constructed model that I think will 
 
 Parameters for each strategy will be chosen to require information to be collected across multiple trials (i.e. an RL, 
 HMM-decay, or HMM-decay-doubt agent should require multiple unrewarded trials to switch).
+
+### Model reproducibility
+
+Behavior simulations should support repeatable runs with an optional user-chosen seed so that the same model, task
+parameters, and seed can reproduce the same simulated trajectory.
 
 Strategy swapping will be done in 3 ways:
 1. One agent will run at a time, updating its state as it goes. The other agents will not update their states when they are not active.
