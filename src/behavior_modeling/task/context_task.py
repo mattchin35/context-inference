@@ -7,8 +7,6 @@ import src.behavior_modeling.parameters.task_config as config
 import logging
 
 SEED = 12345
-# rng = np.random.default_rng(SEED)
-rng = np.random.default_rng()
 
 N_ACTIONS = 2
 RIGHT_IX = 0
@@ -26,8 +24,9 @@ class BaseMDP:
     - fixed block sequence/fixed block length updates - mostly for repeats, not wanted for base task
     """
 
-    def __init__(self, task_params: config.TaskParams):
+    def __init__(self, task_params: config.TaskParams, rng: np.random.Generator = None):
         self.params = task_params
+        self.rng = rng if rng is not None else np.random.default_rng()
 
         self.states: List[str] = ['right', 'left']
         self.state_dict = {s: i for i, s in enumerate(self.states)}
@@ -37,7 +36,7 @@ class BaseMDP:
         self.initialize_task_state()
 
     def initialize_task_state(self):
-        self.cur_state = rng.choice(self.states)
+        self.cur_state = self.rng.choice(self.states)
         self.cur_block = 0
         self.cur_trial = 0
         self.cur_trial_in_block = 0
@@ -93,7 +92,7 @@ class BaseMDP:
 
     def get_stimulus(self) -> int:
         cue = self.state_stimulus_dict[self.cur_state]
-        if rng.random() < self.p_cue:
+        if self.rng.random() < self.p_cue:
             return cue
         else:
             return -1  # indeterminate cue, either 2 or -1
@@ -115,13 +114,13 @@ class BaseMDP:
     def determine_action_reward(self, correct: bool) -> float:
         if correct:
             if self.params.reward_std_dev > 0:
-                reward = rng.normal(self.params.mean_correct_reward, self.params.reward_std_dev)
+                reward = self.rng.normal(self.params.mean_correct_reward, self.params.reward_std_dev)
             else:
                 reward = self.params.mean_correct_reward
 
         else:
             if self.params.reward_std_dev > 0:
-                reward = rng.normal(self.params.mean_incorrect_reward, self.params.reward_std_dev)
+                reward = self.rng.normal(self.params.mean_incorrect_reward, self.params.reward_std_dev)
             else:
                 reward = self.params.mean_incorrect_reward
 
@@ -151,8 +150,8 @@ class BaseMDP:
         # else:
         self.cur_block_length = self.params.default_block_length
         if self.params.block_length_variation > 0:
-            self.cur_block_length += rng.choice([-1, 1]) * \
-                                     rng.integers(low=0, high=self.params.block_length_variation)
+            self.cur_block_length += self.rng.choice([-1, 1]) * \
+                                     self.rng.integers(low=0, high=self.params.block_length_variation)
 
         # self.cur_trial_in_block = 0
         logging.info("new block: type {}, length {}".format(self.cur_state, self.cur_block_length))
@@ -160,9 +159,9 @@ class BaseMDP:
     def step(self, action: int) -> Tuple[float, float]:
         correct = self.is_action_correct(action)
         if correct:
-            give_reward = rng.random() < self.params.active_reward_probability
+            give_reward = self.rng.random() < self.params.active_reward_probability
         else:
-            give_reward = rng.random() < self.params.inactive_reward_probability
+            give_reward = self.rng.random() < self.params.inactive_reward_probability
 
         if give_reward:
             reward = self.determine_action_reward(correct)
@@ -191,10 +190,10 @@ class BaseMDP:
     def flag_block_transition(self, correct: bool) -> bool:
         """Determine whether to move to the next block, returning a boolean."""
         if self.params.block_transition_style == 'markov':
-            change_block = rng.random() < self.params.state_transition_prob
+            change_block = self.rng.random() < self.params.state_transition_prob
 
         elif self.params.block_transition_style == 'success_trigger' and correct:
-            change_block = rng.random() < self.params.state_transition_prob
+            change_block = self.rng.random() < self.params.state_transition_prob
             # sample = rng.random()
             # change_block = sample < self.params.state_transition_prob
             # print(sample)
@@ -219,10 +218,10 @@ class RepeatMDP(BaseMDP):
     """
     Repeat the exact trial conditions but with probabilistic rewards.
     """
-    def __init__(self, params: config.TaskParams, task_df: pd.DataFrame):
+    def __init__(self, params: config.TaskParams, task_df: pd.DataFrame, rng: np.random.Generator = None):
         self.task_df = task_df
         self.n_trials = task_df.shape[0]
-        super().__init__(params)
+        super().__init__(params, rng=rng)
 
     def reset(self):
         self.cur_state = self.task_df.loc[0, 'state']
@@ -240,10 +239,10 @@ class RepeatMDP(BaseMDP):
         correct = self.is_action_correct(action)
         if correct:
             # give_reward = rng.random() < self.task_df.loc[self.cur_trial, 'active_reward_probability']
-            give_reward = rng.random() < self.params.active_reward_probability
+            give_reward = self.rng.random() < self.params.active_reward_probability
         else:
             # give_reward = rng.random() < self.task_df.loc[self.cur_trial, 'inactive_reward_probability']
-            give_reward = rng.random() < self.params.inactive_reward_probability
+            give_reward = self.rng.random() < self.params.inactive_reward_probability
 
         if give_reward:
             reward = self.determine_action_reward(correct)

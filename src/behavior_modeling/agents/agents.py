@@ -3,15 +3,13 @@ import scipy as sp
 from scipy.stats import norm
 
 from dataclasses import dataclass
-from typing import Protocol, Callable, Tuple
+from typing import Optional, Protocol, Callable, Tuple
 from abc import ABC, abstractmethod
 import logging
 from src.behavior_modeling.parameters import task_config as config
 
 
 SEED = 12345
-# np.random.seed(SEED)
-rng = np.random.default_rng(SEED)
 
 N_ACTIONS = 2
 RIGHT_IX = 0
@@ -38,6 +36,7 @@ class BehaviorAgent(ABC):
     action_dist: np.ndarray
     stickiness: float  # bias to previous action
     temperature: float  # randomness factor. Fully random has hi temp (logit->0), deterministic has low temp (logit->inf)
+    rng: np.random.Generator
 
     @abstractmethod
     def update_params(self, action, reward) -> None:
@@ -46,12 +45,12 @@ class BehaviorAgent(ABC):
     def choose_action(self, stimulus: int) -> tuple[int, np.ndarray]:
         # eps-greedy action selection
         if self.greedy:
-            if rng.random() < self.epsilon:
-                action = rng.choice(N_ACTIONS)
+            if self.rng.random() < self.epsilon:
+                action = self.rng.choice(N_ACTIONS)
             else:
                 action = np.argmax(self.action_dist)
         else:
-            action = rng.choice(N_ACTIONS, p=self.action_dist)
+            action = self.rng.choice(N_ACTIONS, p=self.action_dist)
         return action, self.action_dist.copy()
 
     def update_action_dist(self, action: int) -> None:
@@ -64,7 +63,8 @@ class BehaviorAgent(ABC):
 
 class Qlearning(BehaviorAgent):
 
-    def __init__(self, params: config.TaskParams):
+    def __init__(self, params: config.TaskParams, rng: Optional[np.random.Generator] = None):
+        self.rng = rng if rng is not None else np.random.default_rng()
         self.greedy = params.greedy_action_selection
         self.epsilon = params.greedy_epsilon
         self.n_actions = N_ACTIONS
@@ -87,7 +87,8 @@ class Qlearning(BehaviorAgent):
 
 class ForgettingQlearning(BehaviorAgent):
 
-    def __init__(self, params: config.TaskParams):
+    def __init__(self, params: config.TaskParams, rng: Optional[np.random.Generator] = None):
+        self.rng = rng if rng is not None else np.random.default_rng()
         self.n_actions = N_ACTIONS
         self.N = np.zeros(N_ACTIONS)
         self.Q = np.zeros(N_ACTIONS)
@@ -132,7 +133,12 @@ class ForgettingQlearning(BehaviorAgent):
 
 class HMM(BehaviorAgent):
 
-    def __init__(self, agent_params: config.AgentParams, task_params: config.TaskParams):
+    def __init__(
+        self,
+        agent_params: config.AgentParams,
+        task_params: config.TaskParams,
+        rng: Optional[np.random.Generator] = None,
+    ):
         assert agent_params.action_temperature > 0, "must have positive temperature"
         if agent_params.HMM_value_mode not in ['expected_reward', 'bayesian_log_odds']:
             raise ValueError("HMM_value_mode must be 'expected_reward' or 'bayesian_log_odds'")
@@ -144,6 +150,7 @@ class HMM(BehaviorAgent):
             if tanh_scale <= 0:
                 raise ValueError("HMM_log_odds_tanh_scale must be > 0 for bayesian_log_odds mode")
 
+        self.rng = rng if rng is not None else np.random.default_rng()
         self.temperature = agent_params.action_temperature
         self.greedy = agent_params.greedy_action_selection
         self.epsilon = agent_params.greedy_epsilon
@@ -185,12 +192,12 @@ class HMM(BehaviorAgent):
         # action, _ = super().choose_action(stimulus)
         logging.info("action dist: {}".format(self.action_dist))
         if self.greedy:
-            if rng.random() < self.epsilon:
-                action = rng.choice(N_ACTIONS)
+            if self.rng.random() < self.epsilon:
+                action = self.rng.choice(N_ACTIONS)
             else:
                 action = np.argmax(self.action_dist)
         else:
-            action = rng.choice(N_ACTIONS, p=self.action_dist)
+            action = self.rng.choice(N_ACTIONS, p=self.action_dist)
 
         self.last_action = action
         self.last_stimulus = stimulus
@@ -335,8 +342,13 @@ class HMMRewardDecay(HMM):
     state online one trial at a time for interactive task simulation.
     """
 
-    def __init__(self, agent_params: config.AgentParams, task_params: config.TaskParams):
-        super().__init__(agent_params, task_params)
+    def __init__(
+        self,
+        agent_params: config.AgentParams,
+        task_params: config.TaskParams,
+        rng: Optional[np.random.Generator] = None,
+    ):
+        super().__init__(agent_params, task_params, rng=rng)
         if agent_params.HMM_value_mode != 'bayesian_log_odds':
             raise ValueError("HMMRewardDecay requires HMM_value_mode == 'bayesian_log_odds'")
         if not 0 <= agent_params.HMM_reward_decay_lambda <= 1:
@@ -393,8 +405,13 @@ class HMMRewardDecayRelativeDoubt(HMMRewardDecay):
         value = hmm_value - doubt_value
     """
 
-    def __init__(self, agent_params: config.AgentParams, task_params: config.TaskParams):
-        super().__init__(agent_params, task_params)
+    def __init__(
+        self,
+        agent_params: config.AgentParams,
+        task_params: config.TaskParams,
+        rng: Optional[np.random.Generator] = None,
+    ):
+        super().__init__(agent_params, task_params, rng=rng)
         if agent_params.relative_doubt_lambda <= 0:
             raise ValueError("relative_doubt_lambda must be > 0.")
 
@@ -447,8 +464,13 @@ class HMM_recursive(HMM):
     """An HMM variant using the log-odds recursion described in Beron et al, PNAS 2022.
     Primarily meant as a proof-of-concept/verification that the paper's math is legit."""
 
-    def __init__(self,  agent_params: config.AgentParams, task_params: config.TaskParams):
-        super().__init__(agent_params, task_params)
+    def __init__(
+        self,
+        agent_params: config.AgentParams,
+        task_params: config.TaskParams,
+        rng: Optional[np.random.Generator] = None,
+    ):
+        super().__init__(agent_params, task_params, rng=rng)
         self.kappa = 0  # updated every trial
 
         # using HMM transition and reward probabilities, calculate recursive parameters
@@ -479,8 +501,13 @@ class HMM_RFLR(HMM):
     For details, check the paper supplementals.
     """
 
-    def __init__(self,  agent_params: config.AgentParams, task_params: config.TaskParams):
-        super().__init__(agent_params, task_params)
+    def __init__(
+        self,
+        agent_params: config.AgentParams,
+        task_params: config.TaskParams,
+        rng: Optional[np.random.Generator] = None,
+    ):
+        super().__init__(agent_params, task_params, rng=rng)
         self.kappa = 0  # updated every trial
 
         # using logistic tau and beta, calculate HMM probabilities (and thus a stickiness parameter)
@@ -515,7 +542,13 @@ class HMM_RFLR(HMM):
 
 class Logistic(BehaviorAgent):
     """Logistic regression (RFLR) model based on Beron et al, PNAS 2022."""
-    def __init__(self, agent_params: config.AgentParams, task_params: config.TaskParams):
+    def __init__(
+        self,
+        agent_params: config.AgentParams,
+        task_params: config.TaskParams,
+        rng: Optional[np.random.Generator] = None,
+    ):
+        self.rng = rng if rng is not None else np.random.default_rng()
         self.N = np.zeros(N_ACTIONS)
         self.Q = np.zeros(N_ACTIONS)
         self.action_dist = np.ones(N_ACTIONS) / N_ACTIONS

@@ -61,12 +61,18 @@ class RunOutputOptions:
 
 
 @dataclass
+class RunExecutionOptions:
+    seed: Optional[int] = None
+
+
+@dataclass
 class RunArtifacts:
     performance_df: pd.DataFrame
     run_path: Optional[Path] = None
     plot_path: Optional[Path] = None
     figure: Optional[object] = None
     params_path: Optional[Path] = None
+    seed: Optional[int] = None
 
 
 def get_agent_prior(agent: agents.BehaviorAgent) -> float:
@@ -106,6 +112,15 @@ def get_sample_agent_label(agent_name: str) -> str:
 
 def get_session_timestamp() -> str:
     return dt.datetime.now().strftime('%Y-%m-%d_%H%M%S')
+
+
+def create_run_rngs(seed: Optional[int] = None) -> tuple[Optional[np.random.Generator], Optional[np.random.Generator]]:
+    if seed is None:
+        return None, None
+
+    seed_sequence = np.random.SeedSequence(seed)
+    task_seed, agent_seed = seed_sequence.spawn(2)
+    return np.random.default_rng(task_seed), np.random.default_rng(agent_seed)
 
 
 def format_sample_agent_parameter_summary(
@@ -284,6 +299,7 @@ def save_sample_agent_run(
     agent_params: task_config.AgentParams,
     csv_path: Path,
     params_path: Path,
+    run_seed: Optional[int] = None,
 ) -> tuple[Path, Path]:
     csv_path.parent.mkdir(parents=True, exist_ok=False)
     path_parts = csv_path.stem.split('_', 2)
@@ -294,6 +310,7 @@ def save_sample_agent_run(
         'agent_name': agent_name,
         'model_type_label': SUPPORTED_SAMPLE_AGENTS.get(agent_name, agent_name),
         'session_timestamp': session_timestamp,
+        'run_seed': run_seed,
         'task_params': vars(task_params),
         'agent_params': vars(agent_params),
         'dataframe_columns': list(performance_df.columns),
@@ -376,23 +393,28 @@ def run_agent_session(
     return task, agent, performance_to_dataframe(performance)
 
 
-def select_agent(agent_name: str, agent_params: task_config.AgentParams, task_params: task_config.TaskParams) -> agents.BehaviorAgent:
+def select_agent(
+    agent_name: str,
+    agent_params: task_config.AgentParams,
+    task_params: task_config.TaskParams,
+    rng: Optional[np.random.Generator] = None,
+) -> agents.BehaviorAgent:
     if agent_name == 'HMM':
-        agent = agents.HMM(agent_params, task_params)
+        agent = agents.HMM(agent_params, task_params, rng=rng)
     elif agent_name == 'HMM_reward_decay':
-        agent = agents.HMMRewardDecay(agent_params, task_params)
+        agent = agents.HMMRewardDecay(agent_params, task_params, rng=rng)
     elif agent_name == 'HMM_reward_decay_relative_doubt':
-        agent = agents.HMMRewardDecayRelativeDoubt(agent_params, task_params)
+        agent = agents.HMMRewardDecayRelativeDoubt(agent_params, task_params, rng=rng)
     elif agent_name == 'HMM_RFLR':
-        agent = agents.HMM_RFLR(agent_params, task_params)
+        agent = agents.HMM_RFLR(agent_params, task_params, rng=rng)
     elif agent_name == 'HMM_recursive':
-        agent = agents.HMM_recursive(agent_params, task_params)
+        agent = agents.HMM_recursive(agent_params, task_params, rng=rng)
     elif agent_name == 'Qlearning':
-        agent = agents.Qlearning(agent_params)
+        agent = agents.Qlearning(agent_params, rng=rng)
     elif agent_name == 'F-Qlearning':
-        agent = agents.ForgettingQlearning(agent_params)
+        agent = agents.ForgettingQlearning(agent_params, rng=rng)
     elif agent_name == 'Logistic':
-        agent = agents.Logistic(agent_params, task_params)
+        agent = agents.Logistic(agent_params, task_params, rng=rng)
     else:
         raise ValueError("Unknown agent name: {}".format(agent_name))
     return agent
@@ -479,6 +501,7 @@ def save_experiment_to_path(
     performance: pd.DataFrame,
     agent_params: task_config.AgentParams,
     task_params: task_config.TaskParams,
+    run_seed: Optional[int] = None,
 ) -> Path:
     exp = dict(
         task=vars(task),
@@ -486,6 +509,7 @@ def save_experiment_to_path(
         agent_params=vars(agent_params),
         task_params=vars(task_params),
         performance=performance,
+        run_seed=run_seed,
     )
     save_path.parent.mkdir(parents=True, exist_ok=True)
     with save_path.open('wb') as f:
@@ -502,6 +526,7 @@ def save_run_outputs(
     agent_params: task_config.AgentParams,
     run_path: Path,
     params_path: Optional[Path] = None,
+    run_seed: Optional[int] = None,
 ) -> tuple[Path, Optional[Path]]:
     if agent_name in SUPPORTED_SAMPLE_AGENTS:
         if params_path is None:
@@ -513,6 +538,7 @@ def save_run_outputs(
             agent_params,
             run_path,
             params_path,
+            run_seed=run_seed,
         )
 
     saved_path = save_experiment_to_path(
@@ -522,6 +548,7 @@ def save_run_outputs(
         performance_df,
         agent_params,
         task_params,
+        run_seed=run_seed,
     )
     return saved_path, None
 
@@ -558,6 +585,7 @@ def handle_run_outputs(
     sample_agent_data_dir: Path,
     experiment_data_dir: Path,
     session_note: str = '',
+    run_seed: Optional[int] = None,
 ) -> RunArtifacts:
     run_path, params_path, plot_path = resolve_run_output_paths(
         agent_name,
@@ -573,6 +601,7 @@ def handle_run_outputs(
         run_path=run_path,
         plot_path=plot_path,
         params_path=params_path,
+        seed=run_seed,
     )
 
     if output_options.save_run and run_path is not None:
@@ -585,6 +614,7 @@ def handle_run_outputs(
             agent_params,
             run_path,
             params_path=params_path,
+            run_seed=run_seed,
         )
         artifacts.run_path = saved_run_path
         artifacts.params_path = saved_params_path
@@ -647,6 +677,7 @@ def main():
 
     task_params, agent_params = set_params()
     session_note = ''
+    execution_options = RunExecutionOptions(seed=0)
     output_options = RunOutputOptions(
         save_run=True,
         save_plot=True,
@@ -673,8 +704,11 @@ def main():
     # pick a filename based on task-specific params (pReward, pSwitch, rewards-before-state-switch, etc.)
 
     ### RUN A NEW EXPERIMENT ###
-    task = BaseMDP(task_params)
-    agent = select_agent(agent_name, agent_params, task_params)
+    if execution_options.seed is not None:
+        print("[***] Using run seed: {}".format(execution_options.seed))
+    task_rng, agent_rng = create_run_rngs(execution_options.seed)
+    task = BaseMDP(task_params, rng=task_rng)
+    agent = select_agent(agent_name, agent_params, task_params, rng=agent_rng)
     task, agent, performance_df = run_agent_session(task, agent, task_params)
     handle_run_outputs(
         task,
@@ -687,6 +721,7 @@ def main():
         sample_agent_data_dir=sample_agent_data_dir,
         experiment_data_dir=data_dir,
         session_note=session_note,
+        run_seed=execution_options.seed,
     )
 
     ### REPEAT THE TRIALS FROM A MODEL SESSION ###
