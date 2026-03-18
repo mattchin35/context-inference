@@ -10,9 +10,9 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-import agents.agents as agents
-from task.context_task import BaseMDP
-from parameters import task_config
+from src.behavior_modeling.agents import agents
+from src.behavior_modeling.parameters import task_config
+from src.behavior_modeling.task.context_task import BaseMDP
 
 SEED = 12345  # 0
 rng = np.random.default_rng(SEED)
@@ -330,7 +330,9 @@ def plot_run_dataframe(
     show_plot: bool = False,
     value_columns: Optional[list[str]] = None,
 ):
-    from visualize_behavior.agent_run_plot import plot_run_dataframe as plot_agent_run_dataframe
+    from src.behavior_modeling.visualize_behavior.agent_run_plot import (
+        plot_run_dataframe as plot_agent_run_dataframe,
+    )
 
     plot_title = build_run_plot_title(agent_name, task_params, agent_params)
     return plot_agent_run_dataframe(

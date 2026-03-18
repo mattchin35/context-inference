@@ -1,13 +1,6 @@
-import sys
-from pathlib import Path
-
 import numpy as np
 import numpy.testing as npt
 import pytest
-
-ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / 'src' / 'behavior_modeling'))
 
 from src.behavior_analysis import trial_features
 from src.behavior_modeling import controller
@@ -18,7 +11,7 @@ from src.behavior_modeling.parameters import task_config
 def make_reward_decay_params() -> tuple[task_config.AgentParams, task_config.TaskParams]:
     agent_params = task_config.AgentParams(
         HMM_transition_prob=0.2,
-        HMM_value_mode='bayesian_log_odds',
+        HMM_value_mode="bayesian_log_odds",
         HMM_log_odds_tanh_scale=1.3,
         HMM_reward_decay_lambda=0.35,
         relative_doubt_lambda=0.4,
@@ -37,7 +30,7 @@ def make_reward_decay_params() -> tuple[task_config.AgentParams, task_config.Tas
 
 def test_hmm_reward_decay_requires_bayesian_log_odds():
     agent_params, task_params = make_reward_decay_params()
-    agent_params.HMM_value_mode = 'expected_reward'
+    agent_params.HMM_value_mode = "expected_reward"
 
     with pytest.raises(ValueError, match="bayesian_log_odds"):
         agents.HMMRewardDecay(agent_params, task_params)
@@ -64,7 +57,7 @@ def test_hmm_reward_decay_matches_trial_feature_values():
         correct_reward_size=task_params.mean_correct_reward,
         incorrect_reward_size=task_params.mean_incorrect_reward,
         lambda_decay=agent_params.HMM_reward_decay_lambda,
-        value_mode='bayesian_log_odds',
+        value_mode="bayesian_log_odds",
         tanh_scale=agent_params.HMM_log_odds_tanh_scale,
     )
 
@@ -74,9 +67,9 @@ def test_hmm_reward_decay_matches_trial_feature_values():
 def test_controller_selects_hmm_reward_decay():
     agent_params, task_params = make_reward_decay_params()
 
-    agent = controller.select_agent('HMM_reward_decay', agent_params, task_params)
+    agent = controller.select_agent("HMM_reward_decay", agent_params, task_params)
 
-    assert agent.model_type == 'HMM_reward_decay'
+    assert agent.model_type == "HMM_reward_decay"
 
 
 def test_hmm_reward_decay_relative_doubt_matches_component_updates():
@@ -130,7 +123,7 @@ def test_hmm_reward_decay_relative_doubt_matches_component_updates():
         correct_reward_size=task_params.mean_correct_reward,
         incorrect_reward_size=task_params.mean_incorrect_reward,
         lambda_decay=agent_params.HMM_reward_decay_lambda,
-        value_mode='bayesian_log_odds',
+        value_mode="bayesian_log_odds",
         tanh_scale=agent_params.HMM_log_odds_tanh_scale,
     )
     expected_combined_values = expected_hmm_values - np.asarray(expected_doubt_values)
@@ -143,6 +136,10 @@ def test_hmm_reward_decay_relative_doubt_matches_component_updates():
 def test_controller_selects_hmm_reward_decay_relative_doubt():
     agent_params, task_params = make_reward_decay_params()
 
-    agent = controller.select_agent('HMM_reward_decay_relative_doubt', agent_params, task_params)
+    agent = controller.select_agent(
+        "HMM_reward_decay_relative_doubt",
+        agent_params,
+        task_params,
+    )
 
-    assert agent.model_type == 'HMM_reward_decay_relative_doubt'
+    assert agent.model_type == "HMM_reward_decay_relative_doubt"

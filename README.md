@@ -31,4 +31,14 @@ Plotting is handled separately from run saving. The controller supports:
 Controller plots are built from the output dataframe and are intended to show actions, rewards, and model values
 together on a single figure so the model trajectory can be inspected alongside the observed simulated behavior.
 
+## Running tests
+
+This repository currently supports test execution through `uv` from the repository root:
+
+```bash
+uv run pytest
+```
+
+Pytest collection is intentionally scoped to `src/tests` in the initial packaging cleanup pass.
+
 

@@ -3,7 +3,6 @@ from typing import Tuple, List, Any, Iterable, Callable
 import datetime as dt
 import pickle as pkl
 from pathlib import Path
-from icecream import ic
 
 
 EPS = np.finfo(float).eps
@@ -101,11 +100,14 @@ def get_trials_to_switch(p_stay: np.ndarray):
     Use collected runs to determine the number of trials/consecutive failures to switch for a given p_active_reward.
     """
     if len(p_stay.shape) == 1:
-        return get_trial_switch_ix(p_stay)
+        return float(get_trial_switch_ix(p_stay))
     elif len(p_stay.shape) == 2:
-        return np.apply_along_axis(get_trial_switch_ix, 1, p_stay)
+        return np.asarray([get_trial_switch_ix(row) for row in p_stay], dtype=float)
     elif len(p_stay.shape) == 3:
-        return np.apply_along_axis(get_trial_switch_ix, 2, p_stay)
+        return np.asarray(
+            [[get_trial_switch_ix(row) for row in plane] for plane in p_stay],
+            dtype=float,
+        )
     else:
         raise ValueError("p_stay must be 1, 2, or 3 dimensional; got {} dimensions.".format(len(p_stay.shape)))
 
@@ -170,8 +172,6 @@ def main():
     decay = np.arange(start=.1, stop=1, step=.1)
     qlearning_run = run_qlearning_demo(decay, n_trials=10)
     RL_switch = get_trials_to_switch(qlearning_run)
-    ic(qlearning_run)
-
     data['decay'] = decay
     data['qlearning'] = qlearning_run
     data['RL_switch'] = RL_switch

@@ -1,4 +1,6 @@
-# Project Requirements Document: Mouse Behavior Analysis and Simulation
+# Project Requirements Document: Mouse Behavior Analysis and Simu1lation
+A slightly detailed description of the project goals, data, and analysis methods. This document is intended to be more 
+detailed than the overall description, but less implementation-specific than the Implementation Details document.
 
 ## Overview
 Mouse behavior and electrophysiology from a 2-choice bandit task with asymmetric rewards will be analyzed here. 
@@ -24,13 +26,13 @@ The optimal behavior then would be to choose the same option after a rewarded ch
 options after multiple unrewarded choices, with some uncertainty after a single unrewarded choice.
 
 Reward structure:
-- Correct side reward probability: p_reward = .8, .7, or .6 (varies by session)
+- Correct side reward probability: p_reward = .9, .8, .7, or .6 (varies by session)
 - Incorrect side reward probability: 0
 
 Context transitions:
 - After a correct choice, the context switches with probability p_switch. The transition is independent of reward 
 delivery, so the context can switch after a rewarded choice or an unrewarded choice.
-- p_switch = .2, or .3 (varies by session)
+- p_switch = .1, .2, or .3 (varies by session)
 - Otherwise, context remains the same
 
 Trial structure:
@@ -144,6 +146,7 @@ behavior strategy (Qlearning should have a decay, pure HMM should have a hazard/
 follow its decay rules)
 3. All agents will have a shared state, and on each trial the state will update based on the active strategy.
 
+### Strategy swapping 
 For simplicity, we will limit the number of agents in one session to 3. The GLM-HMM/LM-HMM may infer different numbers
 of states from the true number of states, potentially varying how many are found by the strategy that is used to swap 
 the states. This will allow us to test the sensitivity of the GLM-HMM/LM-HMM to detect strategy changes and 
@@ -155,7 +158,7 @@ For now agent switches will be handled simply by using agents in blocks of 50 tr
 Markov switching (ed note: this will be mathematically more complex even if it is conceptually simpler, potentially 
 involving hierarchical HMMs and other things I don't understand yet. I will not implement this until I understand it.)
 
-## Model Evaluation
+### Model Evaluation
 
 Simulation outputs will be evaluated using:
 
