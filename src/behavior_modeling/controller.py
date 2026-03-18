@@ -1,10 +1,11 @@
 from pathlib import Path
 import json
 import pickle as pkl
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 import logging
 from collections import defaultdict
 import datetime as dt
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -38,15 +39,48 @@ TRIAL_DF_COLUMNS = [
     'p_switch',
     'model_stimulus',
     'agent_action_dist',
+    'agent_hmm_value',
+    'agent_doubt_value',
     'agent_relative_value',
     'agent_prior',
 ]
+
+
+@dataclass
+class RunOutputOptions:
+    save_run: bool = False
+    save_plot: bool = False
+    show_plot: bool = False
+    run_data_dir: Optional[Path] = None
+    plot_path: Optional[Path] = None
+    value_columns: Optional[list[str]] = None
+
+    @property
+    def generate_plot(self) -> bool:
+        return self.save_plot or self.show_plot
+
+
+@dataclass
+class RunArtifacts:
+    performance_df: pd.DataFrame
+    run_path: Optional[Path] = None
+    plot_path: Optional[Path] = None
+    figure: Optional[object] = None
+    params_path: Optional[Path] = None
 
 
 def get_agent_prior(agent: agents.BehaviorAgent) -> float:
     if isinstance(agent, agents.HMM):
         return agent.prior[1]
     return np.nan
+
+
+def get_agent_value_component(agent: agents.BehaviorAgent, attr_name: str) -> float:
+    value = getattr(agent, attr_name, np.nan)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
 
 
 def performance_to_dataframe(performance: Dict[str, list]) -> pd.DataFrame:
@@ -150,27 +184,115 @@ def build_sample_agent_session_name(
     return f"{model_label}_{session_timestamp}_{param_summary}"
 
 
+def build_run_plot_title(
+    agent_name: str,
+    task_params: task_config.TaskParams,
+    agent_params: task_config.AgentParams,
+) -> str:
+    summary = format_agent_parameter_summary(agent_name, task_params, agent_params)
+    return f"{agent_name} run\n{summary}"
+
+
+def format_agent_parameter_summary(
+    agent_name: str,
+    task_params: task_config.TaskParams,
+    agent_params: task_config.AgentParams,
+) -> str:
+    try:
+        return format_sample_agent_parameter_summary(agent_name, task_params, agent_params)
+    except ValueError:
+        return (
+            f"agent-{agent_name}_"
+            f"pRew-{format_param_value(task_params.active_reward_probability)}_"
+            f"pInc-{format_param_value(task_params.inactive_reward_probability)}_"
+            f"pSwitch-{format_param_value(task_params.state_transition_prob)}_"
+            f"nTrials-{format_param_value(task_params.n_trials)}"
+        )
+
+
+def build_run_stem(
+    agent_name: str,
+    task_params: task_config.TaskParams,
+    agent_params: task_config.AgentParams,
+    *,
+    session_note: str = '',
+    include_timestamp: bool = False,
+) -> str:
+    label = SUPPORTED_SAMPLE_AGENTS.get(agent_name, agent_name)
+    param_summary = format_agent_parameter_summary(agent_name, task_params, agent_params)
+    parts = [label]
+    if include_timestamp:
+        parts.append(get_session_timestamp())
+    parts.append(param_summary)
+    if session_note:
+        parts.append(session_note)
+    return '_'.join(parts)
+
+
+def resolve_run_output_paths(
+    agent_name: str,
+    task_params: task_config.TaskParams,
+    agent_params: task_config.AgentParams,
+    output_options: RunOutputOptions,
+    *,
+    sample_agent_data_dir: Path,
+    experiment_data_dir: Path,
+    session_note: str = '',
+) -> tuple[Optional[Path], Optional[Path], Optional[Path]]:
+    run_path = None
+    params_path = None
+    plot_path = output_options.plot_path
+    is_sample_agent = agent_name in SUPPORTED_SAMPLE_AGENTS
+    run_root = output_options.run_data_dir or (
+        sample_agent_data_dir if is_sample_agent else experiment_data_dir
+    )
+
+    if is_sample_agent:
+        run_stem = build_run_stem(
+            agent_name,
+            task_params,
+            agent_params,
+            session_note=session_note,
+            include_timestamp=True,
+        )
+        output_dir = run_root / run_stem
+        if output_options.save_run:
+            run_path = output_dir / f"{run_stem}.csv"
+            params_path = output_dir / f"{run_stem}_params.json"
+        if output_options.save_plot and plot_path is None:
+            plot_path = output_dir / f"{run_stem}_plot.png"
+    else:
+        run_stem = build_run_stem(
+            agent_name,
+            task_params,
+            agent_params,
+            session_note=session_note,
+        )
+        output_dir = run_root / str(dt.date.today().isoformat())
+        if output_options.save_run:
+            run_path = output_dir / f"{run_stem}.pkl"
+        if output_options.save_plot and plot_path is None:
+            plot_path = output_dir / f"{run_stem}_plot.png"
+
+    return run_path, params_path, plot_path
+
+
 def save_sample_agent_run(
     agent_name: str,
     performance_df: pd.DataFrame,
     task_params: task_config.TaskParams,
     agent_params: task_config.AgentParams,
-    data_dir: Path,
+    csv_path: Path,
+    params_path: Path,
 ) -> tuple[Path, Path]:
-    model_label = get_sample_agent_label(agent_name)
-    session_timestamp = get_session_timestamp()
-    session_name = build_sample_agent_session_name(agent_name, task_params, agent_params, session_timestamp)
-    save_dir = data_dir / session_name
-    save_dir.mkdir(parents=True, exist_ok=False)
-
-    csv_path = save_dir / f"{session_name}.csv"
-    params_path = save_dir / f"{session_name}_params.json"
-
+    csv_path.parent.mkdir(parents=True, exist_ok=False)
+    path_parts = csv_path.stem.split('_', 2)
+    session_timestamp = path_parts[1] if len(path_parts) > 2 else get_session_timestamp()
     performance_df.to_csv(csv_path, index=False)
 
     params_payload = {
         'agent_name': agent_name,
-        'model_type_label': model_label,
+        'model_type_label': SUPPORTED_SAMPLE_AGENTS.get(agent_name, agent_name),
         'session_timestamp': session_timestamp,
         'task_params': vars(task_params),
         'agent_params': vars(agent_params),
@@ -178,10 +300,29 @@ def save_sample_agent_run(
     }
     with params_path.open('w') as f:
         json.dump(params_payload, f, indent=2)
-
-    print("[***] Sample agent CSV saved as: {}".format(csv_path.resolve()))
-    print("[***] Sample agent params saved as: {}".format(params_path.resolve()))
     return csv_path, params_path
+
+
+def plot_run_dataframe(
+    performance_df: pd.DataFrame,
+    agent_name: str,
+    task_params: task_config.TaskParams,
+    agent_params: task_config.AgentParams,
+    *,
+    plot_save_path: Optional[Path] = None,
+    show_plot: bool = False,
+    value_columns: Optional[list[str]] = None,
+):
+    from visualize_behavior.agent_run_plot import plot_run_dataframe as plot_agent_run_dataframe
+
+    plot_title = build_run_plot_title(agent_name, task_params, agent_params)
+    return plot_agent_run_dataframe(
+        performance_df,
+        title=plot_title,
+        value_columns=value_columns,
+        save_path=plot_save_path,
+        show=show_plot,
+    )
 
 
 def run_task_cycle(task: BaseMDP, agent: agents.BehaviorAgent, performance: Dict[str, list]) -> \
@@ -197,6 +338,8 @@ def run_task_cycle(task: BaseMDP, agent: agents.BehaviorAgent, performance: Dict
     performance['p_inactive_rew'].append(task.params.inactive_reward_probability)
     performance['p_switch'].append(task.params.state_transition_prob)
     performance['agent_prior'].append(get_agent_prior(agent))
+    performance['agent_hmm_value'].append(get_agent_value_component(agent, 'hmm_value'))
+    performance['agent_doubt_value'].append(get_agent_value_component(agent, 'doubt_value'))
 
     stimulus = task.get_stimulus()
     action, action_dist = agent.choose_action(stimulus)
@@ -213,44 +356,6 @@ def run_task_cycle(task: BaseMDP, agent: agents.BehaviorAgent, performance: Dict
     return task, agent, performance
 
 
-# def run_repeat_task_cycle(task: MDP.MarkovDecisionProcess, agent: agents.BehaviorAgent, performance: Dict[str, list],
-#                           task_df: pd.DataFrame, repeat_decisions: int = False) -> Tuple[MDP.MarkovDecisionProcess, agents.BehaviorAgent, Dict[str, list]]:
-#     """Repeat the trials from a prior session.
-#     TODO - debug this with updates from April 2024"""
-#     performance['state'].append(task.cur_state)
-#     performance['cur_trial'].append(task.cur_trial)
-#     performance['cur_block'].append(task.cur_block)
-#     performance['cur_trial_in_block'].append(task.cur_trial_in_block)
-#     performance['relative_value'].append(agent.value)
-#     performance['p_active_reward'].append(task.params.active_reward_probability)
-#     performance['p_inactive_reward'].append(task.params.inactive_reward_probability)
-#     if agent.model_type == 'HMM':
-#         performance['prior'].append(agent.prior.copy())
-#     elif agent.model_type in ['Qlearning', 'Forgetting Q-learning']:
-#         performance['q_values'].append(agent.Q.copy())
-#
-#     # for a repeat of a prior session, the action and its reward can be input rather than sampled
-#     stimulus = task_df['stimulus'].values[task.cur_trial]
-#     performance['stimulus'].append(stimulus)
-#     if repeat_decisions:
-#         action = task_df['action'].values[task.cur_trial]
-#         reward = task_df['reward'].values[task.cur_trial]
-#         _, action_dist = agent.choose_action(stimulus)
-#         _, correct = task.step(action)
-#     else:
-#         action, action_dist = agent.choose_action(stimulus)
-#         reward, correct = task.step(action)
-#
-#     performance['action_dist'].append(action_dist[0])
-#     agent.update_params(action, reward)
-#
-#     # this will get refactored out to a controller class/fxn
-#     performance['action'].append(action)
-#     performance['correct'].append(correct)
-#     performance['reward'].append(reward)
-#     return task, agent, performance
-
-
 def run_experiment(task: BaseMDP, agent: agents.BehaviorAgent, task_params: task_config.TaskParams) -> \
         Tuple[BaseMDP, agents.BehaviorAgent, Dict[str, list]]:
 
@@ -262,17 +367,13 @@ def run_experiment(task: BaseMDP, agent: agents.BehaviorAgent, task_params: task
     return task, agent, performance
 
 
-# def run_repeat_experiment(agent_type: str, params: MDP.TaskParams, task_df: pd.DataFrame, repeat_decisions: bool = False) -> \
-#             Tuple[MDP.MarkovDecisionProcess, agents.BehaviorAgent, Dict[str, list]]:
-#
-#     task = context_task.RepeatMDP(params, task_df)
-#     agent = select_agent(agent_type, params)
-#     performance = defaultdict(list)
-#     while task.cur_trial < task_df.shape[0]:
-#         logging.info("block {}, trial {}".format(task.cur_block, task.cur_trial))
-#         task, agent, performance = run_repeat_task_cycle(task, agent, performance, task_df, repeat_decisions)
-#
-#     return task, agent, performance
+def run_agent_session(
+    task: BaseMDP,
+    agent: agents.BehaviorAgent,
+    task_params: task_config.TaskParams,
+) -> tuple[BaseMDP, agents.BehaviorAgent, pd.DataFrame]:
+    task, agent, performance = run_experiment(task, agent, task_params)
+    return task, agent, performance_to_dataframe(performance)
 
 
 def select_agent(agent_name: str, agent_params: task_config.AgentParams, task_params: task_config.TaskParams) -> agents.BehaviorAgent:
@@ -355,7 +456,7 @@ def set_params() -> tuple[task_config.TaskParams, task_config.AgentParams]:
 
 
 def save_experiment(save_name: str, data_dir: Path, task: BaseMDP, agent: agents.BehaviorAgent, performance: dict,
-                    agent_params: task_config.AgentParams, task_params: task_config.TaskParams) -> None:
+                    agent_params: task_config.AgentParams, task_params: task_config.TaskParams) -> Path:
     exp = dict(task=vars(task), agent=vars(agent), agent_params=vars(agent_params), task_params=vars(task_params),
                performance=performance)
     date = str(dt.date.today().isoformat())
@@ -368,7 +469,145 @@ def save_experiment(save_name: str, data_dir: Path, task: BaseMDP, agent: agents
         pkl.dump(exp, f)
 
     # print("[***] Experiment saved as: {}".format(p.name))
-    print("[***] Experiment saved as: {}".format(p.resolve()))
+    return p
+
+
+def save_experiment_to_path(
+    save_path: Path,
+    task: BaseMDP,
+    agent: agents.BehaviorAgent,
+    performance: pd.DataFrame,
+    agent_params: task_config.AgentParams,
+    task_params: task_config.TaskParams,
+) -> Path:
+    exp = dict(
+        task=vars(task),
+        agent=vars(agent),
+        agent_params=vars(agent_params),
+        task_params=vars(task_params),
+        performance=performance,
+    )
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    with save_path.open('wb') as f:
+        pkl.dump(exp, f)
+    return save_path
+
+
+def save_run_outputs(
+    task: BaseMDP,
+    agent: agents.BehaviorAgent,
+    performance_df: pd.DataFrame,
+    agent_name: str,
+    task_params: task_config.TaskParams,
+    agent_params: task_config.AgentParams,
+    run_path: Path,
+    params_path: Optional[Path] = None,
+) -> tuple[Path, Optional[Path]]:
+    if agent_name in SUPPORTED_SAMPLE_AGENTS:
+        if params_path is None:
+            raise ValueError("params_path is required when saving sample-agent outputs.")
+        return save_sample_agent_run(
+            agent_name,
+            performance_df,
+            task_params,
+            agent_params,
+            run_path,
+            params_path,
+        )
+
+    saved_path = save_experiment_to_path(
+        run_path,
+        task,
+        agent,
+        performance_df,
+        agent_params,
+        task_params,
+    )
+    return saved_path, None
+
+
+def plot_run_outputs(
+    performance_df: pd.DataFrame,
+    agent_name: str,
+    task_params: task_config.TaskParams,
+    agent_params: task_config.AgentParams,
+    output_options: RunOutputOptions,
+    *,
+    plot_path: Optional[Path],
+):
+    return plot_run_dataframe(
+        performance_df,
+        agent_name,
+        task_params,
+        agent_params,
+        plot_save_path=plot_path if output_options.save_plot else None,
+        show_plot=output_options.show_plot,
+        value_columns=output_options.value_columns,
+    )
+
+
+def handle_run_outputs(
+    task: BaseMDP,
+    agent: agents.BehaviorAgent,
+    performance_df: pd.DataFrame,
+    agent_name: str,
+    task_params: task_config.TaskParams,
+    agent_params: task_config.AgentParams,
+    output_options: RunOutputOptions,
+    *,
+    sample_agent_data_dir: Path,
+    experiment_data_dir: Path,
+    session_note: str = '',
+) -> RunArtifacts:
+    run_path, params_path, plot_path = resolve_run_output_paths(
+        agent_name,
+        task_params,
+        agent_params,
+        output_options,
+        sample_agent_data_dir=sample_agent_data_dir,
+        experiment_data_dir=experiment_data_dir,
+        session_note=session_note,
+    )
+    artifacts = RunArtifacts(
+        performance_df=performance_df,
+        run_path=run_path,
+        plot_path=plot_path,
+        params_path=params_path,
+    )
+
+    if output_options.save_run and run_path is not None:
+        saved_run_path, saved_params_path = save_run_outputs(
+            task,
+            agent,
+            performance_df,
+            agent_name,
+            task_params,
+            agent_params,
+            run_path,
+            params_path=params_path,
+        )
+        artifacts.run_path = saved_run_path
+        artifacts.params_path = saved_params_path
+        print("[***] Agent run saved to: {}".format(saved_run_path.resolve()))
+        if saved_params_path is not None:
+            print("[***] Agent params saved to: {}".format(saved_params_path.resolve()))
+
+    if output_options.generate_plot:
+        figure, _ = plot_run_outputs(
+            performance_df,
+            agent_name,
+            task_params,
+            agent_params,
+            output_options,
+            plot_path=plot_path,
+        )
+        artifacts.figure = figure
+        if output_options.save_plot and plot_path is not None:
+            print("[***] Plot saved to: {}".format(plot_path.resolve()))
+        elif output_options.show_plot:
+            print("[***] Plot displayed (not saved to disk).")
+
+    return artifacts
 
 
 def load_experiment(load_name: str) -> Tuple[BaseMDP, agents.BehaviorAgent, pd.DataFrame, task_config.TaskParams, task_config.AgentParams]:
@@ -399,7 +638,8 @@ def load_experiment(load_name: str) -> Tuple[BaseMDP, agents.BehaviorAgent, pd.D
 def main():
     data_dir = Path('../../data/processed/model_experiments')
     sample_agent_data_dir = Path('../../data/processed/sample_agents')
-    model_dir = Path('../../saved_models/standard_models')
+    # model_dir = Path('../../saved_models/standard_models')
+    # figure_dir = Path('../../figures')
 
     log_path = Path('collection_task.log')
     log_path.unlink(missing_ok=True)
@@ -407,12 +647,16 @@ def main():
 
     task_params, agent_params = set_params()
     session_note = ''
+    output_options = RunOutputOptions(
+        save_run=True,
+        save_plot=True,
+        show_plot=False,
+    )
 
     # agent_name = 'F-Qlearning'
     # agent_param_str = 'alpha={}_temp={}_decay={}'.format(params.logistic_alpha, params.action_temperature, params.FQL_decay)
 
     agent_name = 'HMM'
-    agent_param_str = 'alpha={}_temp={}_model-Psw={}'.format(agent_params.logistic_alpha, agent_params.action_temperature, agent_params.HMM_transition_prob)
 
     # agent_name = 'HMM_recursive'
     # agent_param_str = 'alpha={}_temp={}_model-Psw={}'.format(params.logistic_alpha, params.action_temperature, params.HMM_transition_prob)
@@ -431,28 +675,29 @@ def main():
     ### RUN A NEW EXPERIMENT ###
     task = BaseMDP(task_params)
     agent = select_agent(agent_name, agent_params, task_params)
-    task, agent, performance = run_experiment(task, agent, task_params)
-    performance = performance_to_dataframe(performance)
-    if agent_name in SUPPORTED_SAMPLE_AGENTS:
-        save_sample_agent_run(agent_name, performance, task_params, agent_params, sample_agent_data_dir)
-    else:
-        session_name = '{}_pReward_{}_pSwitch_{:.2f}'.format(agent_name,
-                                                         task_params.active_reward_probability,
-                                                         task_params.state_transition_prob)
-        fname = session_name + '_' + agent_param_str
-        if session_note:
-            fname += '_' + session_note
-        save_experiment(fname, data_dir, task, agent, performance, agent_params, task_params)
+    task, agent, performance_df = run_agent_session(task, agent, task_params)
+    handle_run_outputs(
+        task,
+        agent,
+        performance_df,
+        agent_name,
+        task_params,
+        agent_params,
+        output_options,
+        sample_agent_data_dir=sample_agent_data_dir,
+        experiment_data_dir=data_dir,
+        session_note=session_note,
+    )
 
     ### REPEAT THE TRIALS FROM A MODEL SESSION ###
-    p_reward = .9
-    p_switch = .1
-    alpha = .5
-    beta = 2
-    tau = 1.5
-    temp = .2
-    decay = .7
-    HMM_transition_prob = .1
+    # p_reward = .9
+    # p_switch = .1
+    # alpha = .5
+    # beta = 2
+    # tau = 1.5
+    # temp = .2
+    # decay = .7
+    # HMM_transition_prob = .1
 
     # load_agent_name = 'F-Qlearning'
     # load_param_str = 'alpha={}_temp={}_decay={}'.format(alpha, temp, decay)
@@ -468,25 +713,6 @@ def main():
     #     load_fname += '_' + extras_str
     # p = Path('../saved_models') / (load_fname + '.pkl')
     # _, _, task_df, _ = load_experiment(p)
-
-
-    ### REPEAT THE TRIALS FROM A MOUSE SESSION ###
-    # mouse = 'MF03'
-    # date = '2023-10-03'
-    # sess_ID = mouse + '-' + date
-    # p = Path('../mouse_behavior') / (sess_ID + '_performance.pkl')
-    # with p.open('rb') as f:
-    #     task_df = pkl.load(f)
-    # fname = sess_ID + '_{}_{}'.format(agent_name, agent_param_str)
-    # if extras_str:
-    #     fname += '_' + extras_str
-    # task_df['state'] = task_df['state'].astype(int)
-    #
-    #
-    # task, agent, performance = run_repeat_experiment(agent_name, params, task_df, repeat_decisions=False)
-    # performance['session_ID'] = np.zeros(task.cur_trial)
-    # performance = pd.DataFrame(performance)
-    # save_experiment(fname, task, agent, performance, params)
 
 
 if __name__ == '__main__':
