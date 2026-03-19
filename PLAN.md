@@ -10,6 +10,12 @@ analyze some sample mouse behavior sessions. I need to make plots from these ana
 ## Validate the model agents 
 1. Implement switching between model agent strategies during model runs
 2. Make plots corresponding to each model agent, and make plots of switching strategies within a run
+3. Implement switching mode 3 for now as parallel model execution:
+   - all selected models run in parallel on the same trial stream
+   - the active model for that trial supplies the recorded value, action probabilities, and action output
+   - all models update from the executed action and observed reward, even if they would not have sampled that action themselves
+   - only the active model's outputs are recorded in the main run dataframe
+4. Revisit a true shared-state mode 3 later, after the shared latent state is specified more clearly
 
 ## Validate the GLM-HMM and LM-HMM implementations
 1. Finish implementing cross-validation and BIC for both LM-HMM and GLM-HMM 
