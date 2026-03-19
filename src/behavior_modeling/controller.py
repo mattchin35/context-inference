@@ -54,6 +54,7 @@ class RunOutputOptions:
     run_data_dir: Optional[Path] = None
     plot_path: Optional[Path] = None
     value_columns: Optional[list[str]] = None
+    theme: str = "light"
 
     @property
     def generate_plot(self) -> bool:
@@ -329,6 +330,7 @@ def plot_run_dataframe(
     plot_save_path: Optional[Path] = None,
     show_plot: bool = False,
     value_columns: Optional[list[str]] = None,
+    theme: str = "light",
 ):
     from src.behavior_modeling.visualize_behavior.agent_run_plot import (
         plot_run_dataframe as plot_agent_run_dataframe,
@@ -341,6 +343,7 @@ def plot_run_dataframe(
         value_columns=value_columns,
         save_path=plot_save_path,
         show=show_plot,
+        theme=theme,
     )
 
 
@@ -572,6 +575,7 @@ def plot_run_outputs(
         plot_save_path=plot_path if output_options.save_plot else None,
         show_plot=output_options.show_plot,
         value_columns=output_options.value_columns,
+        theme=output_options.theme,
     )
 
 

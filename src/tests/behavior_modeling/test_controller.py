@@ -9,6 +9,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 
 from src.behavior_modeling import controller
+from src.behavior_modeling.visualize_behavior import agent_run_plot as agent_run_plot_wrapper
 from src.behavior_modeling.parameters import task_config
 from src.behavior_modeling.task.context_task import BaseMDP
 
@@ -243,3 +244,34 @@ def test_unseeded_runs_still_execute():
 
     assert isinstance(df, pd.DataFrame)
     assert df.shape[0] == 20
+
+
+def test_controller_plot_run_dataframe_forwards_theme(monkeypatch):
+    agent_params, task_params = make_params()
+    performance_df = pd.DataFrame(
+        {
+            "state": ["left"],
+            "action": [1],
+            "reward": [1],
+            "agent_relative_value": [0.2],
+            "agent_hmm_value": [0.3],
+            "agent_doubt_value": [0.1],
+        }
+    )
+    captured = {}
+
+    def fake_plot_run_dataframe(*args, **kwargs):
+        captured["theme"] = kwargs.get("theme")
+        return object(), None
+
+    monkeypatch.setattr(agent_run_plot_wrapper, "plot_run_dataframe", fake_plot_run_dataframe)
+
+    controller.plot_run_dataframe(
+        performance_df,
+        "HMM_reward_decay_relative_doubt",
+        task_params,
+        agent_params,
+        theme="dark",
+    )
+
+    assert captured["theme"] == "dark"

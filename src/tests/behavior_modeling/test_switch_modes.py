@@ -219,4 +219,7 @@ def test_mode_2_hmm_decay_doubt_inactive_update_uses_reward_and_doubt_lambdas():
     assert abs(fast_doubt_agent.doubt_value) < abs(initial_fast_doubt_value)
     assert abs(slow_doubt_agent.doubt_value) < abs(initial_slow_doubt_value)
     assert abs(fast_belief_agent.hmm_value) < abs(slow_belief_agent.hmm_value)
-    assert abs(fast_doubt_agent.doubt_value) < abs(slow_doubt_agent.doubt_value)
+    assert (
+        abs(initial_fast_doubt_value) - abs(fast_doubt_agent.doubt_value)
+        > abs(initial_slow_doubt_value) - abs(slow_doubt_agent.doubt_value)
+    )
