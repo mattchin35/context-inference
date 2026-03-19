@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.20.2"
+__generated_with = "0.21.1"
 app = marimo.App(width="medium")
 
 
@@ -72,7 +72,6 @@ def _():
 
     plt.show = _show_and_save_prefix
     configure_figure_saving(True)
-
     return (
         Parallel,
         Patch,
@@ -1093,8 +1092,8 @@ def _(mo):
     mo.md(r"""
     ### 5b. Information Criteria (AIC/BIC)
 
-    Compute AIC/BIC across hidden-state counts and random restarts for both MLE
-    and MAP model families.
+    Compute AIC/BIC across hidden-state counts and random restarts for MLE
+    models only. Information criteria should only be run on MLE models.
     """)
     return
 
@@ -1122,8 +1121,6 @@ def _(
         state_values_ic = np.arange(1, max_states_cv + 1)
         AIC_mle_cv = np.zeros((max_states_cv, n_run_em_ic))
         BIC_mle_cv = np.zeros((max_states_cv, n_run_em_ic))
-        AIC_map_cv = np.zeros((max_states_cv, n_run_em_ic))
-        BIC_map_cv = np.zeros((max_states_cv, n_run_em_ic))
 
         n_timesteps_ic = len(synthetic_data_cv)
         input_dim_ic = len(synthetic_inpts_cv[0])
@@ -1145,20 +1142,6 @@ def _(
                 )
                 for run_idx_icgrid in range(n_run_em_ic)
             )
-            results_map_ic = Parallel(n_jobs=num_threads_cv)(
-                delayed(single_ic_func_glmcv)(
-                    synthetic_data_cv,
-                    synthetic_inpts_cv,
-                    num_states_icgrid,
-                    num_categories,
-                    n_iters_ic,
-                    tol_ic,
-                    "MAP",
-                    prior_alpha_cv,
-                    prior_sigma_cv,
-                )
-                for run_idx_icgrid in range(n_run_em_ic)
-            )
 
             for arr_idx_icpack in range(n_run_em_ic):
                 BIC_mle_cv[state_idx_icgrid, arr_idx_icpack] = (
@@ -1167,27 +1150,17 @@ def _(
                 AIC_mle_cv[state_idx_icgrid, arr_idx_icpack] = (
                     2 * n_params_ic - 2 * results_mle_ic[arr_idx_icpack]
                 )
-                BIC_map_cv[state_idx_icgrid, arr_idx_icpack] = (
-                    n_params_ic * np.log(n_timesteps_ic) - 2 * results_map_ic[arr_idx_icpack]
-                )
-                AIC_map_cv[state_idx_icgrid, arr_idx_icpack] = (
-                    2 * n_params_ic - 2 * results_map_ic[arr_idx_icpack]
-                )
     else:
         state_values_ic = None
         AIC_mle_cv = None
         BIC_mle_cv = None
-        AIC_map_cv = None
-        BIC_map_cv = None
         print("Information criteria skipped. Set run_information_criteria = True to enable.")
-    return AIC_map_cv, AIC_mle_cv, BIC_map_cv, BIC_mle_cv, state_values_ic
+    return AIC_mle_cv, BIC_mle_cv, state_values_ic
 
 
 @app.cell
 def _(
-    AIC_map_cv,
     AIC_mle_cv,
-    BIC_map_cv,
     BIC_mle_cv,
     np,
     plt,
@@ -1196,11 +1169,10 @@ def _(
 ):
     if run_information_criteria and all(
         metric_icplot is not None
-        for metric_icplot in [AIC_mle_cv, BIC_mle_cv, AIC_map_cv, BIC_map_cv, state_values_ic]
+        for metric_icplot in [AIC_mle_cv, BIC_mle_cv, state_values_ic]
     ):
-        fig_icplot = plt.figure(figsize=(10, 4), dpi=80, facecolor="w", edgecolor="k")
+        fig_icplot = plt.figure(figsize=(5, 4), dpi=80, facecolor="w", edgecolor="k")
 
-        plt.subplot(1, 2, 1)
         y_bic_mle_icplot = np.mean(BIC_mle_cv, axis=1)
         err_bic_mle_icplot = np.std(BIC_mle_cv, axis=1)
         y_aic_mle_icplot = np.mean(AIC_mle_cv, axis=1)
@@ -1227,85 +1199,42 @@ def _(
         plt.xticks(state_values_ic)
         plt.legend(loc="best")
 
-        plt.subplot(1, 2, 2)
-        y_bic_map_icplot = np.mean(BIC_map_cv, axis=1)
-        err_bic_map_icplot = np.std(BIC_map_cv, axis=1)
-        y_aic_map_icplot = np.mean(AIC_map_cv, axis=1)
-        err_aic_map_icplot = np.std(AIC_map_cv, axis=1)
-        plt.plot(state_values_ic, y_bic_map_icplot, label="BIC (MAP)", color="tab:red")
-        plt.fill_between(
-            state_values_ic,
-            y_bic_map_icplot - err_bic_map_icplot,
-            y_bic_map_icplot + err_bic_map_icplot,
-            alpha=0.2,
-            color="tab:red",
-        )
-        plt.plot(state_values_ic, y_aic_map_icplot, label="AIC (MAP)", color="tab:green")
-        plt.fill_between(
-            state_values_ic,
-            y_aic_map_icplot - err_aic_map_icplot,
-            y_aic_map_icplot + err_aic_map_icplot,
-            alpha=0.2,
-            color="tab:green",
-        )
-        plt.xlabel("states")
-        plt.ylabel("criterion")
-        plt.title("MAP information criteria")
-        plt.xticks(state_values_ic)
-        plt.legend(loc="best")
-
         plt.tight_layout()
         plt.show()
 
         best_state_aic_mle_ic = int(state_values_ic[np.argmin(y_aic_mle_icplot)])
         best_state_bic_mle_ic = int(state_values_ic[np.argmin(y_bic_mle_icplot)])
-        best_state_aic_map_ic = int(state_values_ic[np.argmin(y_aic_map_icplot)])
-        best_state_bic_map_ic = int(state_values_ic[np.argmin(y_bic_map_icplot)])
         print(f"Best AIC MLE states: {best_state_aic_mle_ic}")
         print(f"Best BIC MLE states: {best_state_bic_mle_ic}")
-        print(f"Best AIC MAP states: {best_state_aic_map_ic}")
-        print(f"Best BIC MAP states: {best_state_bic_map_ic}")
     else:
         best_state_aic_mle_ic = None
         best_state_bic_mle_ic = None
-        best_state_aic_map_ic = None
-        best_state_bic_map_ic = None
-    return (
-        best_state_aic_map_ic,
-        best_state_aic_mle_ic,
-        best_state_bic_map_ic,
-        best_state_bic_mle_ic,
-    )
+    return best_state_aic_mle_ic, best_state_bic_mle_ic
 
 
 @app.cell(hide_code=True)
 def _(
-    best_state_aic_map_ic,
     best_state_aic_mle_ic,
-    best_state_bic_map_ic,
     best_state_bic_mle_ic,
     mo,
 ):
     if all(
         val_icsummary is not None
-        for val_icsummary in [
-            best_state_aic_mle_ic,
-            best_state_bic_mle_ic,
-            best_state_aic_map_ic,
-            best_state_bic_map_ic,
-        ]
+        for val_icsummary in [best_state_aic_mle_ic, best_state_bic_mle_ic]
     ):
         mo.md(rf"""
         **Information-Criterion Summary**
 
+        Information criteria should only be run on MLE models.
+
         - Best AIC MLE model: `{best_state_aic_mle_ic}` state(s)
         - Best BIC MLE model: `{best_state_bic_mle_ic}` state(s)
-        - Best AIC MAP model: `{best_state_aic_map_ic}` state(s)
-        - Best BIC MAP model: `{best_state_bic_map_ic}` state(s)
         """)
     else:
         mo.md(r"""
         **Information-Criterion Summary**
+
+        Information criteria should only be run on MLE models.
 
         Information-criterion analysis is currently skipped. Enable it by setting
         `run_information_criteria = True` in the control cell.
@@ -1315,13 +1244,9 @@ def _(
 
 @app.cell
 def _(
-    AIC_map_cv,
     AIC_mle_cv,
-    BIC_map_cv,
     BIC_mle_cv,
-    best_state_aic_map_ic,
     best_state_aic_mle_ic,
-    best_state_bic_map_ic,
     best_state_bic_mle_ic,
     best_state_map_cv,
     best_state_mle_cv,
@@ -1337,14 +1262,10 @@ def _(
         "ll_heldout_map_cv": ll_heldout_map_cv,
         "AIC_mle_cv": AIC_mle_cv,
         "BIC_mle_cv": BIC_mle_cv,
-        "AIC_map_cv": AIC_map_cv,
-        "BIC_map_cv": BIC_map_cv,
         "best_state_mle_cv": best_state_mle_cv,
         "best_state_map_cv": best_state_map_cv,
         "best_state_aic_mle_ic": best_state_aic_mle_ic,
         "best_state_bic_mle_ic": best_state_bic_mle_ic,
-        "best_state_aic_map_ic": best_state_aic_map_ic,
-        "best_state_bic_map_ic": best_state_bic_map_ic,
     }
     return
 

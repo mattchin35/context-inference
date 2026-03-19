@@ -20,11 +20,11 @@ The scientific motivation and long-form requirements remain in `PRD.md`, and the
 1. Finish the behavior-model implementation and validation workflow needed for presentation-ready analyses.
 2. Finish GLM-HMM and LM-HMM model selection with BIC and cross-validation.
 3. Validate the HMM analyses on simulated switching runs.
-5. Analyze three example mouse behavior sessions from the same mouse:
+4. Analyze three example mouse behavior sessions from the same mouse:
    - `CT014_20251205_latentInference`
    - `CT014_20251216_latentInference`
    - `CT014_20251223_latentInference`
-6. Keep neural analysis work secondary until the behavior-modeling and HMM-analysis path is stable.
+5. Keep neural analysis work secondary until the behavior-modeling and HMM-analysis path is stable.
 
 ## Agreed implementation decisions
 

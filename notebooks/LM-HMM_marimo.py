@@ -926,7 +926,7 @@ def _(mo):
     ### 3e. Compute Information Criteria
 
     Fit full-data models across candidate state counts and compute AIC/BIC
-    distributions over random restarts.
+    distributions over random restarts. Information criteria should only be run on MLE models.
     """)
     return
 
