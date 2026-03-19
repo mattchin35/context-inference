@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from src.behavior_modeling import controller
+from src.behavior_modeling import parallel_agents
 from src.behavior_modeling.agents import agents
 from src.behavior_modeling.task.context_task import BaseMDP
 
@@ -105,6 +106,7 @@ def apply_inactive_updates(
         Switching mode. Supported values are:
         - `1`: inactive agents do not update
         - `2`: inactive agents apply strategy-specific passive updates
+        - `3`: all agents update from the executed action/reward stream
 
     Returns
     -------
@@ -140,7 +142,7 @@ def run_switched_agent_session(
         Explicit trial segments with keys `start_trial`, `end_trial`, and
         `strategy_name`.
     switching_mode : int
-        Switching mode to use. Supported values are `1` and `2`.
+        Switching mode to use. Supported values are `1`, `2`, and `3`.
     task_params : TaskParams
         Task parameters for the run. `task_params.n_trials` defines the required
         schedule coverage.
@@ -163,6 +165,16 @@ def run_switched_agent_session(
         allowed_strategies=allowed_strategies,
     )
     mutable_agents = dict(agents_by_name)
+
+    if switching_mode == 3:
+        return parallel_agents.run_parallel_switched_session(
+            task=task,
+            agents_by_name=mutable_agents,
+            active_strategy_labels=active_strategy_labels,
+            task_params=task_params,
+            switch_trial_df_columns=SWITCH_TRIAL_DF_COLUMNS,
+        )
+
     performance: dict[str, list] = defaultdict(list)
 
     while task.cur_trial < task_params.n_trials:
@@ -215,8 +227,8 @@ def _validate_switching_mode(switching_mode: int) -> None:
     None
         Raises on invalid mode values.
     """
-    if switching_mode not in (1, 2):
-        raise ValueError("switching_mode must be 1 or 2.")
+    if switching_mode not in (1, 2, 3):
+        raise ValueError("switching_mode must be 1, 2, or 3.")
 
 
 def _apply_single_inactive_update(agent: agents.BehaviorAgent) -> None:

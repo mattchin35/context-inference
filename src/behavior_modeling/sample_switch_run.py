@@ -151,7 +151,7 @@ def build_default_figure_path(
     Parameters
     ----------
     switching_mode : int
-        Supported switching mode identifier (`1` or `2`).
+        Supported switching mode identifier (`1`, `2`, or `3`).
     seed : int or None
         Seed used for the run. Included in the filename for reproducibility.
     figure_dir : Path or None, default None
@@ -183,7 +183,7 @@ def run_sample_switch_demo(
     Parameters
     ----------
     switching_mode : int
-        Supported switching mode identifier (`1` or `2`).
+        Supported switching mode identifier (`1`, `2`, or `3`).
     seed : int or None, default 123
         Seed controlling the task and agent random generators.
     n_trials_per_segment : int, default 25
@@ -262,7 +262,13 @@ def run_sample_switch_demo(
 def main() -> None:
     """Run a sample switched demo from the command line."""
     parser = argparse.ArgumentParser(description="Run a sample switched behavior-model demo.")
-    parser.add_argument("--mode", type=int, default=1, choices=[1, 2], help="Switching mode to run.")
+    parser.add_argument(
+        "--mode",
+        type=int,
+        default=1,
+        choices=[1, 2, 3],
+        help="Switching mode to run.",
+    )
     parser.add_argument("--seed", type=int, default=123, help="Random seed for the run.")
     parser.add_argument(
         "--n-trials-per-segment",
