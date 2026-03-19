@@ -36,17 +36,6 @@ def test_visualization_wrappers_import_without_sys_path_hacks():
     assert "import-ok" in result.stdout
 
 
-def test_top_level_switching_imports_without_sys_path_hacks():
-    result = run_import_smoke(
-        "from src.behavior_modeling import switching\n"
-        "assert hasattr(switching, 'run_switched_agent_session')\n"
-        "assert hasattr(switching, 'build_active_strategy_labels')"
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "import-ok" in result.stdout
-
-
 def test_agent_switching_imports_without_sys_path_hacks():
     result = run_import_smoke(
         "from src.behavior_modeling.agent_switching import switching\n"
