@@ -136,7 +136,11 @@ HMM-decay, or HMM-decay-doubt agent should require multiple unrewarded trials to
 ### Model reproducibility
 
 Behavior simulations should support repeatable runs with an optional user-chosen seed so that the same model, task
-parameters, and seed can reproduce the same simulated trajectory.
+parameters, and seed can reproduce the same simulated trajectory. Agent choices will be made probabilistically 
+(e.g. using an expit/logistic function). 
+
+
+### Strategy swapping 
 
 Strategy swapping will be done in 3 ways:
 1. One agent will run at a time, updating its state as it goes. The other agents will not update their states when they are not active.
@@ -144,19 +148,21 @@ This will give each agent an independent internal state.
 2. The active agent will update its state as it goes, and the inactive agents will have a slight decay according to their 
 behavior strategy (Qlearning should have a decay, pure HMM should have a hazard/transition matrix update, HMMs with decay should
 follow its decay rules)
-3. All agents will have a shared state, and on each trial the state will update based on the active strategy.
+3. All agents will run in parallel on the same trial stream, updating their states on each trial regardless of whether 
+they are active. The active agent will determine the recorded action and reward for that trial, but all agents will 
+update from the executed action and observed reward.
+4. All agents will have a shared state, and on each trial the state will update based on the active strategy.
 
-### Strategy swapping 
 For simplicity, we will limit the number of agents in one session to 3. The GLM-HMM/LM-HMM may infer different numbers
 of states from the true number of states, potentially varying how many are found by the strategy that is used to swap 
 the states. This will allow us to test the sensitivity of the GLM-HMM/LM-HMM to detect strategy changes and 
 to determine how many states are present.
 
-Agent choices will be made probabilistically (e.g. using an expit/logistic function). 
-The GLM-HMM and LM-HMM will be used to determine the number of agents present in a session, when each agent is active, and what strategy the agent is using.
-For now agent switches will be handled simply by using agents in blocks of 50 trials, but in the future we can implement
-Markov switching (ed note: this will be mathematically more complex even if it is conceptually simpler, potentially 
-involving hierarchical HMMs and other things I don't understand yet. I will not implement this until I understand it.)
+The GLM-HMM and LM-HMM will be used to determine the number of agents present in a session, when each agent is active, 
+and what strategy the agent is using. For now agent switches will be handled simply by using agents in blocks of 
+50 trials, but in the future we can implement Markov switching (ed note: this will be mathematically more complex even 
+if it is conceptually simpler, potentially involving hierarchical HMMs and other things I don't understand yet. I will 
+not implement this until I understand it.)
 
 ### Model Evaluation
 

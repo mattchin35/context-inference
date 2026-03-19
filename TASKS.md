@@ -1,6 +1,6 @@
 # Tasks
 
-Current development step: switching modes 1 and 2, the sample switched-run demo, and plot theming are implemented; the next switching task is mode 3 as parallel model updates, after which GLM-HMM/LM-HMM model selection and validation remain the main analysis priority.
+Current development step: switching modes 1, 2, and near-term mode 3 are implemented; the main remaining priority is GLM-HMM/LM-HMM model selection and validation on simulated switching runs.
 
 ## Purpose
 
@@ -10,17 +10,16 @@ The scientific motivation and long-form requirements remain in `PRD.md`, and the
 
 ## Implemented so far
 
-- Switching modes 1 and 2 are implemented with explicit trial schedules, strict schedule validation, and an `active_strategy` label in the run dataframe.
-- Switching mode 3 has been specified for near-term implementation as parallel model execution with active-model readout, while a true shared-state mode remains deferred.
+- Switching modes 1, 2, and near-term mode 3 are implemented with explicit trial schedules, strict schedule validation, and an `active_strategy` label in the run dataframe.
+- Switching internals now live under `src/behavior_modeling/agent_switching`, while `sample_switch_run.py` remains in the top-level `behavior_modeling` package.
 - A sample switched-run demo now exists for `HMM -> F-Qlearning -> HMM -> HMM_reward_decay_relative_doubt`, with default figure saving to `reports/figures/model_behavior/switching`.
 - The plotting code now supports `light` and `dark` themes, and light mode uses readable dark-gray combined-policy and action/reward markers on a white background.
 
 ## Current priorities
 
 1. Finish the behavior-model implementation and validation workflow needed for presentation-ready analyses.
-2. Implement agent strategy switching during simulated runs.
-3. Finish GLM-HMM and LM-HMM model selection with BIC and cross-validation.
-4. Validate the HMM analyses on simulated switching runs.
+2. Finish GLM-HMM and LM-HMM model selection with BIC and cross-validation.
+3. Validate the HMM analyses on simulated switching runs.
 5. Analyze three example mouse behavior sessions from the same mouse:
    - `CT014_20251205_latentInference`
    - `CT014_20251216_latentInference`
@@ -30,7 +29,7 @@ The scientific motivation and long-form requirements remain in `PRD.md`, and the
 ## Agreed implementation decisions
 
 - Switching modes 1 and 2 will be implemented first.
-- Switching mode 3 will be implemented next as a parallel-model approximation:
+- Near-term mode 3 is implemented as a parallel-model approximation:
   - all selected models run in parallel on the same trial stream
   - the active model supplies the recorded value, action probabilities, and action output for that trial
   - all models update from the executed action and observed reward, even if they would not have sampled that action themselves
@@ -61,30 +60,18 @@ The scientific motivation and long-form requirements remain in `PRD.md`, and the
 - Keep pytest collection scoped to `src/tests`.
 - Keep vendored `ssm` excluded from pytest collection.
 
-### 2. Implement strategy switching modes 1 and 2
+### 2. Switching implementation is in place
 
-- Add a switching layer in `src/behavior_modeling` rather than scattering switching logic across agents.
-- Record the ground-truth active strategy label on each trial.
-- Preserve reproducibility through explicit seeding.
-- Write tests first for:
-  - switch schedules
-  - mode 1 active/inactive update semantics
-  - mode 2 inactive-agent decay semantics
-  - reproducibility
+- The switching code is now organized under `src/behavior_modeling/agent_switching`.
+- Ground-truth active strategy labels are recorded on each trial.
+- Reproducibility is preserved through explicit seeding.
 
-### 3. Implement switching mode 3 as parallel model updates
-
-- Run the selected models in parallel on the same observed trial stream.
-- Use only the active model's value, action probabilities, and action output as the recorded run outputs for each trial.
-- Update all models from the executed action and observed reward, even if a given model would not have sampled that action itself.
-- Write mode 3 tests first before implementation.
-
-### 4. Revisit a true shared-state mode 3 later
+### 3. Revisit a true shared-state mode 3 later
 
 - Do not treat the parallel-model implementation as a true shared-state solution.
 - A genuine shared latent state across strategies is still scientifically underspecified and should be planned separately later.
 
-### 5. Finish GLM-HMM and LM-HMM model selection
+### 4. Finish GLM-HMM and LM-HMM model selection
 
 - Wrap or clean up the current model-selection code in `src/behavior_analysis`.
 - Do not reimplement GLM-HMM or LM-HMM outside `ssm`.
@@ -93,7 +80,7 @@ The scientific motivation and long-form requirements remain in `PRD.md`, and the
   - cross-validation scores across candidate state counts
   - a BIC-based selected state count
 
-### 6. Validate HMM analyses on simulated switching runs
+### 5. Validate HMM analyses on simulated switching runs
 
 - Use simulated runs with switching strategies to test whether GLM-HMM and LM-HMM can distinguish:
   - `FQL`
@@ -106,7 +93,7 @@ The scientific motivation and long-form requirements remain in `PRD.md`, and the
   - model-selection outputs
   - run seed
 
-### 7. Analyze the three CT014 sessions
+### 6. Analyze the three CT014 sessions
 
 - Build the relevant regressors for each session.
 - Run LM-HMM and GLM-HMM model selection.
@@ -114,7 +101,7 @@ The scientific motivation and long-form requirements remain in `PRD.md`, and the
 - Extract and inspect inferred states and regressor weights.
 - Generate only the plots needed to justify model choices and interpret recovered strategies.
 
-### 8. Defer neural-analysis expansion
+### 7. Defer neural-analysis expansion
 
 - For now, neural work remains limited to crude 500 ms pre-choice and post-choice analyses around behavior.
 - A more complete neural-analysis plan should be written later, after the behavior-analysis path is stable.
@@ -190,20 +177,18 @@ The scientific motivation and long-form requirements remain in `PRD.md`, and the
 
 ### Switching implementation and sample demo
 
-- Implemented `src/behavior_modeling/switching.py` to support switching modes 1 and 2.
+- Implemented switching modes 1, 2, and near-term mode 3.
 - Implemented strict schedule validation for explicit trial segments.
 - Implemented switched session execution with an `active_strategy` column in the run dataframe.
-- Implemented inactive-update behavior for mode 2:
-  - `F-Qlearning` applies passive forgetting decay
-  - `HMM` applies transition-matrix updates to its prior
-  - `HMM_reward_decay_relative_doubt` passively decays belief and doubt with their respective lambdas
-- Added a sample switched-run entry point in:
+- Mode 3 currently uses parallel model updates with active-model readout rather than a true shared latent state.
+- Reorganized switching internals under:
+  - `src/behavior_modeling/agent_switching`
+- Kept the sample switched-run entry point in:
   - `src/behavior_modeling/sample_switch_run.py`
-- Added a default sample schedule:
+- The sample demo uses:
   - `HMM -> F-Qlearning -> HMM -> HMM_reward_decay_relative_doubt`
-- Added default figure saving for the sample run in:
+- Default sample figures are saved in:
   - `reports/figures/model_behavior/switching`
-- Anchored the default sample figure directory to the repository root rather than the current working directory.
 
 ### Plot theming
 

@@ -9,6 +9,7 @@ analyze some sample mouse behavior sessions. I need to make plots from these ana
 
 ## Validate the model agents 
 1. Implement switching between model agent strategies during model runs
+   - done for agents with a hard switch (mode 1), decaying memory memory for unused agents (mode 2), and parallel execution (mode 3)
 2. Make plots corresponding to each model agent, and make plots of switching strategies within a run
 3. Implement switching mode 3 for now as parallel model execution:
    - all selected models run in parallel on the same trial stream
