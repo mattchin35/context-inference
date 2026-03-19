@@ -16,7 +16,7 @@ STRATEGY_NAMES = (
 
 
 def load_switching_module():
-    return importlib.import_module("src.behavior_modeling.switching")
+    return importlib.import_module("src.behavior_modeling.agent_switching.switching")
 
 
 def make_agent_params() -> task_config.AgentParams:

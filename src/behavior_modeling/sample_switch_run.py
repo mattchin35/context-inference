@@ -7,7 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
-from src.behavior_modeling import controller, switching
+from src.behavior_modeling import controller
+from src.behavior_modeling.agent_switching import switching
 from src.behavior_modeling.parameters import task_config
 from src.behavior_modeling.task.context_task import BaseMDP
 

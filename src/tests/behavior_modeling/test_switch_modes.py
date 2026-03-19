@@ -9,7 +9,7 @@ from src.behavior_modeling.task.context_task import BaseMDP
 
 
 def load_switching_module():
-    return importlib.import_module("src.behavior_modeling.switching")
+    return importlib.import_module("src.behavior_modeling.agent_switching.switching")
 
 
 def make_agent_params(
