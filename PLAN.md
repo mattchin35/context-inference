@@ -19,7 +19,7 @@ analyze some sample mouse behavior sessions. I need to make plots from these ana
 4. Revisit a true shared-state mode 3 later, after the shared latent state is specified more clearly
 
 ## Validate the GLM-HMM and LM-HMM implementations
-1. Finish implementing cross-validation and BIC for both LM-HMM and GLM-HMM 
+1. Finish implementing single-session model selection with AIC.BIC for both LM-HMM and GLM-HMM 
 2. Use model runs with strategy switching to validate the LM-HMM and GLM-HMM implementations,
 showing that they can distinguish the behaviors and that the combined HMM-decay-doubt agent can be distinguished from
 the simpler HMM and Forgetting Q-learning agents

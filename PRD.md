@@ -102,8 +102,9 @@ LM-HMM operates on block-level summaries:
   - block-level state assignments
   - state-dependent regression weights
 
-For GLM-HMM and LM-HMM models, both cases, the number of states will be determined by model comparison with BIC and 
-cross-validation. Models will be run with 1-5 states to pool BIC and cross-validation outcomes. 
+For GLM-HMM and LM-HMM models, both cases, the number of states will be determined by model comparison with AIC/BIC as 
+a primary method, and per-session blocked held-out likelihood, where the held-out data are contiguous chunks from that 
+same session, as a secondary method. Models will be run with 1-5 states to pool AIC/BIC outcomes. 
 When this is done well, I will be able to separate trials (GLM-HMM) or blocks (LM-HMM) into different groupings that 
 correspond to different strategies, and plotting each grouping on a traditional logistic regression or linear regression
 will show that the groupings make sense. For now those plots will be done in separate R code - I will have to 

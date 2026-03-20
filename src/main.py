@@ -5,10 +5,10 @@ import numpy as np
 import re
 from behavior_analysis import raster_plots, session_analysis, simulate_priors
 from mouse_behavior_preprocessing import process_behavior_log
-# from behavior_analysis import block_state_space_modeling as bssm
+from behavior_analysis import block_state_space_modeling as bssm
 # from behavior_analysis import trial_state_space_modeling as tssm
 import src.state_space_modeling.utilplot as utilplot
-import src.behavior_analysis.gather_trial_features as gtf
+# import src.behavior_analysis.gather_trial_features as gtf
 import pickle as pkl
 from pathlib import Path
 import pandas as pd
@@ -236,8 +236,6 @@ def block_hmm_model(block_performance: pd.DataFrame, trial_df: pd.DataFrame, ses
 #                         dates=multisession_df['date'].values)
 
 
-
-
 def main():
     """Analyze a single session from start to finish"""
     # prep data selection
@@ -296,14 +294,14 @@ def main():
     #              figure_path=figure_path, sess_id_full=sess_id_full)
 
     # analyze trials and save
-    augmented_trial_df, block_performance, multisession_df = session_analysis.run_analysis(trial_df, session=sess)
+    # augmented_trial_df, block_performance, multisession_df = session_analysis.run_analysis(trial_df, session=sess)
     multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(sess_id_full,
                                                                                             session_data_folder=processed_data_path,
                                                                                             multisession_data_folder=multi_session_save_path)
 
     # # Need to gather trial features
-    augmented_trial_df, task_params = gtf.collect_trial_features(augmented_trial_df)
-    gtf.save_trial_features(augmented_trial_df, task_params, processed_data_path, sess_id_full)
+    # augmented_trial_df, task_params = gtf.collect_trial_features(augmented_trial_df)
+    # gtf.save_trial_features(augmented_trial_df, task_params, processed_data_path, sess_id_full)
 
     # augmented_trial_df.to_csv(augmented_trial_df_path, index=False, na_rep='None')
     #
@@ -312,8 +310,8 @@ def main():
     # with open(json_fname, "w") as f:
     #     json.dump(asdict(params), f, indent=2)
 
-    # model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
-    #                                                 prior_alpha=1, prior_sigma=1)
+    model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
+                                                    prior_alpha=1, prior_sigma=1)
     # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
     #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2)
 
@@ -323,7 +321,7 @@ def main():
     # with open(block_model_dict_path, 'rb') as file:
     #     block_model_dict = pkl.load(file)
 
-    # model_selection = tssm.run_information_criteria(augmented_trial_df, session=sess, algorithm='MAP', prior_alpha=1, prior_sigma=1)
+    # model_selection = tssm.run_information_criteria(augmented_trial_df, session=sess, algorithm='MLE', prior_alpha=1, prior_sigma=1)
     # augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=2, prior_alpha=1, prior_sigma=1)
 
 

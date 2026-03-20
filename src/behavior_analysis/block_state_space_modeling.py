@@ -54,23 +54,108 @@ class Session(Protocol):
     session_info: dict
 
 
+def prepare_block_lm_hmm_data(
+    block_df: pd.DataFrame,
+    predictor_columns: tuple[str, ...] = ("prev_n_rewarded", "n_switches"),
+) -> dict[str, np.ndarray | list[str]]:
+    """Build session-wise LM-HMM observations and predictors from block data.
+
+    Parameters
+    ----------
+    block_df : pd.DataFrame
+        Blockwise dataframe where rows correspond to task blocks.
+        Required columns are `trials_to_correct`, `prev_n_correct`, and every
+        column named in `predictor_columns`.
+    predictor_columns : tuple[str, ...], default=("prev_n_rewarded", "n_switches")
+        Predictor columns used as LM-HMM inputs. Each predictor is returned as
+        one input dimension in the same order as provided here.
+
+    Returns
+    -------
+    dict[str, np.ndarray | list[str]]
+        Dictionary with:
+        - `observations`: np.ndarray, shape (n_valid_blocks, 1), integer-valued
+          `trials_to_correct`
+        - `inputs`: np.ndarray, shape (n_valid_blocks, n_predictors), integer-
+          valued predictor matrix
+        - `valid_mask`: np.ndarray, shape (n_blocks,), boolean mask selecting
+          rows with valid observations
+        - `predictor_labels`: list[str], predictor names in input-column order
+    """
+    valid_mask = (block_df["trials_to_correct"] != "None") & (block_df["prev_n_correct"] != "None")
+    df = block_df[valid_mask]
+
+    observations = df["trials_to_correct"].to_numpy().reshape(-1, 1).astype(int)
+    predictor_arrays = []
+    for predictor_name in predictor_columns:
+        column = df[predictor_name].to_numpy().reshape(-1, 1)
+        if predictor_name == "bias_full_flag":
+            predictor_arrays.append((column == "True").astype(int))
+        else:
+            predictor_arrays.append(column.astype(int))
+
+    inputs = np.concatenate(predictor_arrays, axis=1)
+    return {
+        "observations": observations,
+        "inputs": inputs,
+        "valid_mask": valid_mask.to_numpy(),
+        "predictor_labels": list(predictor_columns),
+    }
+
+
+def split_blocked_holdout_sequences(
+    observations: np.ndarray,
+    inputs: np.ndarray,
+    test_indices: np.ndarray,
+) -> tuple[list[np.ndarray], list[np.ndarray], np.ndarray, np.ndarray]:
+    """Split one session into disjoint training sequences and one held-out block.
+
+    Parameters
+    ----------
+    observations : np.ndarray
+        Observation array with shape (T, 1), where rows index consecutive blocks.
+    inputs : np.ndarray
+        Predictor array with shape (T, M), aligned row-wise to `observations`.
+    test_indices : np.ndarray
+        Integer indices of the contiguous held-out block, shape (K,).
+
+    Returns
+    -------
+    tuple[list[np.ndarray], list[np.ndarray], np.ndarray, np.ndarray]
+        - training observation sequences: list of arrays, each shape (T_i, 1)
+        - training input sequences: list of arrays, each shape (T_i, M)
+        - held-out observations: np.ndarray, shape (K, 1)
+        - held-out inputs: np.ndarray, shape (K, M)
+    """
+    test_indices = np.sort(np.asarray(test_indices, dtype=int))
+    train_mask = np.ones(observations.shape[0], dtype=bool)
+    train_mask[test_indices] = False
+
+    train_indices = np.flatnonzero(train_mask)
+    train_observation_sequences: list[np.ndarray] = []
+    train_input_sequences: list[np.ndarray] = []
+    if train_indices.size > 0:
+        split_points = np.where(np.diff(train_indices) != 1)[0] + 1
+        contiguous_segments = np.split(train_indices, split_points)
+        for segment_indices in contiguous_segments:
+            train_observation_sequences.append(observations[segment_indices])
+            train_input_sequences.append(inputs[segment_indices])
+
+    return (
+        train_observation_sequences,
+        train_input_sequences,
+        observations[test_indices],
+        inputs[test_indices],
+    )
+
+
 def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, plot: bool=False, model_dict=None,
                      num_states=2):
     """Maximum likelihood estimation of block strategies/states."""
-    ix_valid = (block_df['trials_to_correct'] != 'None') & (block_df['prev_n_correct'] != 'None')
-    df = block_df[ix_valid]
-
-    # consecutive_rewards = df['prev_consecutive_rewards'].to_numpy().reshape(-1, 1).astype(int)
-    prev_correct = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
-    prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
-    n_switches = df['n_switches'].to_numpy().reshape(-1, 1).astype(int)
-    bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
-    trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
-
-    # predictors = prev_rewards
-    # predictors = np.concatenate([prev_rewards, n_switches, bias_flag], axis=1)
-    predictors = np.concatenate([prev_rewards, n_switches], axis=1)
-    # predictors = np.concatenate([prev_rewards, n_switches, bias_flag], axis=1)
+    prepared = prepare_block_lm_hmm_data(block_df)
+    ix_valid = prepared["valid_mask"]
+    trials_to_correct = prepared["observations"]
+    predictors = prepared["inputs"]
 
     # num states - start with 2, Inf/RL, then do 3 (inf/rl/biased). Would like Inf(maybe lo and hi thresh)/RL/biased/disengaged/confused. I think this is
     # what cross-validation is gonna be for. less is better!
@@ -170,15 +255,11 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
 def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = False,
                      num_states=2, prior_sigma=1, prior_alpha=1, model_dict=None):
     """Maximum a priori estimation of block strategies/states. Using a prior helps with small-data problems."""
-    ix_valid = (block_df['trials_to_correct'] != 'None') & (block_df['prev_n_correct'] != 'None')
-    df = block_df[ix_valid]
-
-    prev_correct = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
-    prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
-    trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
-    bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
-    predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
-    pred_labels = ['previous rewards', 'block bias flag']
+    prepared = prepare_block_lm_hmm_data(block_df)
+    ix_valid = prepared["valid_mask"]
+    trials_to_correct = prepared["observations"]
+    predictors = prepared["inputs"]
+    pred_labels = prepared["predictor_labels"]
 
     obs_dim = 1
     # input_dim = 1
@@ -369,24 +450,16 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
 
 def run_information_criteria(block_performance: pd.DataFrame, session: Session, algorithm: str = 'MLE',
                              prior_alpha: float = 1, prior_sigma: float = 1):
-    assert algorithm in ['MLE', 'MAP'], "algorithm must be either 'MLE' or 'MAP'"
-    ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
-    df = block_performance[ix_valid]
-    # df = df[1:]
+    if algorithm.upper() != 'MLE':
+        raise ValueError("LM-HMM information criteria should only be run on MLE models.")
 
-    # prev_correct = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
-    prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
-    # prev_rewards = df['prev_consecutive_rewards'].to_numpy().reshape(-1, 1).astype(int)
-    trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
-    bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
-    n_switches = df['n_switches'].to_numpy().reshape(-1, 1).astype(int)
-    # predictors = np.concatenate([prev_rewards, n_switches, bias_flag], axis=1)
-    predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
-    # predictors = prev_rewards
+    prepared = prepare_block_lm_hmm_data(block_performance)
+    trials_to_correct = prepared["observations"]
+    predictors = prepared["inputs"]
     min_states = 1
     max_states = 5
     n_threads = 4
-    n_runs = 5
+    n_runs = 10
 
     states = np.arange(min_states,max_states+1)
     # calculate_information_criteria returns (BIC, AIC) in that order.
@@ -424,43 +497,138 @@ def single_func(observations: np.ndarray, inputs: np.ndarray, num_states: int, a
     return out
 
 
-def single_crossval_func(observations: np.ndarray, inputs: np.ndarray, num_states: int, n_folds: int = 5,
-                         algorithm: str = 'MLE', n_iter: int = 1000, tol: float = 1e-4,
-                         prior_alpha: float = 1, prior_sigma: float = 1):
-    """Run contiguous-fold CV for one state count and one random initialization."""
-    n_timesteps = observations.shape[0]
+def build_blocked_holdout_indices(n_timesteps: int, n_folds: int = 5) -> list[np.ndarray]:
+    """Create contiguous within-session held-out blocks.
+
+    Parameters
+    ----------
+    n_timesteps : int
+        Number of valid LM-HMM blocks in the session.
+    n_folds : int, default=5
+        Number of contiguous held-out blocks.
+
+    Returns
+    -------
+    list[np.ndarray]
+        List of contiguous test-index arrays. Each array indexes one held-out
+        block along the session time axis.
+    """
     if n_folds < 2 or n_folds > n_timesteps:
         raise ValueError(f"n_folds must be in [2, {n_timesteps}], got {n_folds}")
+    return [fold_indices.astype(int) for fold_indices in np.array_split(np.arange(n_timesteps), n_folds)]
 
+
+def single_blocked_holdout_func(
+    observations: np.ndarray,
+    inputs: np.ndarray,
+    num_states: int,
+    test_indices_list: list[np.ndarray],
+    algorithm: str = 'MLE',
+    n_iter: int = 1000,
+    tol: float = 1e-4,
+    prior_alpha: float = 1,
+    prior_sigma: float = 1,
+):
+    """Score one LM-HMM state count on blocked within-session held-out splits.
+
+    Parameters
+    ----------
+    observations : np.ndarray
+        Observation array with shape (T, 1), where T is the number of valid
+        session blocks and the single column is `trials_to_correct`.
+    inputs : np.ndarray
+        Predictor array with shape (T, M), aligned row-wise to `observations`.
+    num_states : int
+        Number of hidden LM-HMM states to fit.
+    test_indices_list : list[np.ndarray]
+        List of contiguous held-out block indices. Each entry is a 1D integer
+        array indexing one held-out block within the session.
+    algorithm : str, default='MLE'
+        Estimation family passed to the HMM builder. `MLE` is the primary
+        session-wise selector; `MAP` can be used for secondary held-out support.
+    n_iter : int, default=1000
+        Maximum EM iterations per fit.
+    tol : float, default=1e-4
+        EM convergence tolerance.
+    prior_alpha : float, default=1
+        Sticky-transition concentration for MAP fits.
+    prior_sigma : float, default=1
+        Observation prior scale for MAP fits.
+
+    Returns
+    -------
+    np.ndarray
+        Held-out log-likelihood per block, shape (n_folds,). Each score is
+        normalized by the number of held-out observations in that block.
+    """
+    fold_log_likelihoods = np.zeros(len(test_indices_list))
     obs_dim, input_dim = observations.shape[1], inputs.shape[1]
-    fold_indices = np.array_split(np.arange(n_timesteps), n_folds)
-    fold_log_likelihoods = np.zeros(n_folds)
 
-    for i_fold, test_idx in enumerate(fold_indices):
-        train_mask = np.ones(n_timesteps, dtype=bool)
-        train_mask[test_idx] = False
-
-        hmm = build_input_driven_hmm(num_states=num_states, obs_dim=obs_dim, input_dim=input_dim,
-                                     algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma)
-        hmm.fit(observations[train_mask], inputs=inputs[train_mask], method="em", num_iters=n_iter, tolerance=tol)
-        fold_log_likelihoods[i_fold] = hmm.log_likelihood(observations[test_idx], inputs=inputs[test_idx])
+    for i_fold, test_idx in enumerate(test_indices_list):
+        train_observations, train_inputs, test_observations, test_inputs = split_blocked_holdout_sequences(
+            observations=observations,
+            inputs=inputs,
+            test_indices=test_idx,
+        )
+        hmm = build_input_driven_hmm(
+            num_states=num_states,
+            obs_dim=obs_dim,
+            input_dim=input_dim,
+            algorithm=algorithm,
+            prior_alpha=prior_alpha,
+            prior_sigma=prior_sigma,
+        )
+        hmm.fit(train_observations, inputs=train_inputs, method="em", num_iters=n_iter, tolerance=tol)
+        fold_log_likelihoods[i_fold] = (
+            hmm.log_likelihood(test_observations, inputs=test_inputs) / len(test_observations)
+        )
 
     return fold_log_likelihoods
 
 
-def calculate_cross_validation_scores(observations: np.ndarray, inputs: np.ndarray, states: np.ndarray,
-                                      nRunEM: int = 5, n_folds: int = 5, n_jobs: int = 4,
-                                      algorithm: str = 'MLE', prior_alpha: float = 1, prior_sigma: float = 1):
-    """Compute held-out log-likelihoods with contiguous-fold cross-validation."""
+def calculate_blocked_holdout_scores(observations: np.ndarray, inputs: np.ndarray, states: np.ndarray,
+                                     nRunEM: int = 5, n_folds: int = 5, n_jobs: int = 4,
+                                     algorithm: str = 'MLE', prior_alpha: float = 1, prior_sigma: float = 1):
+    """Compute blocked within-session held-out log-likelihoods across state counts.
+
+    Parameters
+    ----------
+    observations : np.ndarray
+        Observation array with shape (T, 1), where rows index valid session
+        blocks and values are `trials_to_correct`.
+    inputs : np.ndarray
+        Predictor matrix with shape (T, M), aligned row-wise to `observations`.
+    states : np.ndarray
+        Candidate hidden-state counts, shape (n_states,).
+    nRunEM : int, default=5
+        Number of EM restarts per state count.
+    n_folds : int, default=5
+        Number of contiguous held-out blocks within the session.
+    n_jobs : int, default=4
+        Number of joblib workers used across EM restarts.
+    algorithm : str, default='MLE'
+        Estimation family passed to the HMM builder.
+    prior_alpha : float, default=1
+        Sticky-transition concentration for MAP fits.
+    prior_sigma : float, default=1
+        Observation prior scale for MAP fits.
+
+    Returns
+    -------
+    np.ndarray
+        Held-out log-likelihood per observation, shape
+        (n_states, n_restarts, n_folds).
+    """
     n_states = states.size
+    test_indices_list = build_blocked_holdout_indices(observations.shape[0], n_folds=n_folds)
     cv_ll = np.zeros((n_states, nRunEM, n_folds))
 
     for iS, num_states in enumerate(states):
-        print(f"cross-validating {num_states} state(s)")
+        print(f"evaluating blocked holdout for {num_states} state(s)")
         delayed_calls = [
-            delayed(single_crossval_func)(
+            delayed(single_blocked_holdout_func)(
                 observations, inputs, num_states,
-                n_folds=n_folds,
+                test_indices_list=test_indices_list,
                 algorithm=algorithm,
                 n_iter=1000,
                 tol=1e-4,
@@ -476,7 +644,7 @@ def calculate_cross_validation_scores(observations: np.ndarray, inputs: np.ndarr
 
 
 def plot_cross_validation_scores(cv_log_likelihoods: np.ndarray, states: np.ndarray, session: Session):
-    """Plot cross-validated held-out log likelihood by number of states."""
+    """Plot blocked within-session held-out log likelihood by number of states."""
     mean_ll = np.mean(cv_log_likelihoods, axis=(1, 2))
     sem_ll = np.std(cv_log_likelihoods, axis=(1, 2)) / np.sqrt(cv_log_likelihoods.shape[1] * cv_log_likelihoods.shape[2])
 
@@ -488,7 +656,7 @@ def plot_cross_validation_scores(cv_log_likelihoods: np.ndarray, states: np.ndar
     plt.xticks(states)
     plt.ylabel("held-out log likelihood")
     plt.legend(loc="upper left", frameon=False)
-    plt.title("Cross-validated model selection", fontsize=20)
+    plt.title("Blocked held-out model selection", fontsize=20)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     plt.tight_layout()
@@ -504,24 +672,27 @@ def run_cross_validation(block_performance: pd.DataFrame, session: Session, algo
                          prior_alpha: float = 1, prior_sigma: float = 1,
                          min_states: int = 1, max_states: int = 5,
                          n_threads: int = 4, n_runs: int = 5, n_folds: int = 5):
-    """Run contiguous-fold cross-validation over number of hidden states for block LM-HMM."""
-    ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
-    df = block_performance[ix_valid]
+    """Run blocked within-session held-out scoring over hidden-state count.
 
-    prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
-    trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
-    bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
-    predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
+    This is the secondary LM-HMM model-selection path. The primary selector is
+    MLE AIC/BIC fit independently within each session.
+    """
+    prepared = prepare_block_lm_hmm_data(block_performance)
+    trials_to_correct = prepared["observations"]
+    predictors = prepared["inputs"]
 
     states = np.arange(min_states, max_states + 1)
-    cv_ll = calculate_cross_validation_scores(observations=trials_to_correct, inputs=predictors, states=states,
-                                              nRunEM=n_runs, n_folds=n_folds, n_jobs=n_threads,
-                                              algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma)
+    cv_ll = calculate_blocked_holdout_scores(observations=trials_to_correct, inputs=predictors, states=states,
+                                             nRunEM=n_runs, n_folds=n_folds, n_jobs=n_threads,
+                                             algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma)
     return plot_cross_validation_scores(cv_ll, states, session)
 
 
 def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray, states: np.ndarray, nRunEM: int, n_jobs: int,
                                    algorithm: str = 'MLE', prior_alpha: float = 1, prior_sigma: float = 1):
+    if algorithm.upper() != 'MLE':
+        raise ValueError("LM-HMM information criteria should only be run on MLE models.")
+
     # Number of parameters for the model: (transition matrix) + (mean values for each state) + (covariance matrix for each state)
     obs_dim = observations.shape[1] # make sure observations are T x Dim??
     n_timesteps = observations.shape[0]
@@ -690,4 +861,3 @@ def trials_inherit_strategy(block_df: pd.DataFrame, trial_df: pd.DataFrame) -> p
 
 if __name__ == '__main__':
     main()
-

@@ -1273,9 +1273,11 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ### 5a. Optional Single Held-Out Comparison (Legacy)
+    ### 5a. Simple Held-Out MLE vs MAP Estimator Comparison
 
-    This reproduces the original one-shot held-out split from the notebook.
+    This section is a simple held-out estimator comparison between MLE and MAP.
+    It uses one held-out dataset generated from the same synthetic GLM-HMM setup.
+    It is not state-count model selection.
     """)
     return
 
@@ -1314,9 +1316,10 @@ def _(map_test_ll, mle_test_ll, plt):
     for model_idx_holdout, ll_val_holdout in enumerate(loglikelihood_vals):
         plt.bar(model_idx_holdout, ll_val_holdout, width=0.8, color=colors_ll[model_idx_holdout])
     plt.ylim((mle_test_ll - 2, mle_test_ll + 5))
-    plt.xticks([0, 1], ["mle", "map"], fontsize=10)
-    plt.xlabel("model", fontsize=15)
-    plt.ylabel("loglikelihood", fontsize=15)
+    plt.xticks([0, 1], ["MLE", "MAP"], fontsize=10)
+    plt.xlabel("estimator", fontsize=15)
+    plt.ylabel("held-out log likelihood", fontsize=15)
+    plt.title("Held-out estimator comparison", fontsize=12)
     plt.tight_layout()
     plt.show()
     return
