@@ -6,7 +6,7 @@ import re
 from behavior_analysis import raster_plots, session_analysis, simulate_priors
 from mouse_behavior_preprocessing import process_behavior_log
 from behavior_analysis import block_state_space_modeling as bssm
-# from behavior_analysis import trial_state_space_modeling as tssm
+from behavior_analysis import trial_state_space_modeling as tssm
 import src.state_space_modeling.utilplot as utilplot
 # import src.behavior_analysis.gather_trial_features as gtf
 import pickle as pkl
@@ -299,30 +299,31 @@ def main():
                                                                                             session_data_folder=processed_data_path,
                                                                                             multisession_data_folder=multi_session_save_path)
 
-    # # Need to gather trial features
+    ### Gather trial features ###
     # augmented_trial_df, task_params = gtf.collect_trial_features(augmented_trial_df)
     # gtf.save_trial_features(augmented_trial_df, task_params, processed_data_path, sess_id_full)
 
     # augmented_trial_df.to_csv(augmented_trial_df_path, index=False, na_rep='None')
-    #
-    # # Save to JSON
+
+    ### Save to JSON
     # json_fname = processed_data_path / 'trial_feature_params.json'
     # with open(json_fname, "w") as f:
     #     json.dump(asdict(params), f, indent=2)
 
-    model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
-                                                    prior_alpha=1, prior_sigma=1)
+    # block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
+    #                                                 prior_alpha=1, prior_sigma=1)
     # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
     #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2)
 
-    # block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=1,
+    # block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=3,
     #                                                                 prior_alpha=1, prior_sigma=1)
     # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
     # with open(block_model_dict_path, 'rb') as file:
     #     block_model_dict = pkl.load(file)
 
-    # model_selection = tssm.run_information_criteria(augmented_trial_df, session=sess, algorithm='MLE', prior_alpha=1, prior_sigma=1)
-    # augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=2, prior_alpha=1, prior_sigma=1)
+    ### trial state space modeling ###
+    # trial_model_selection = tssm.run_information_criteria(augmented_trial_df, session=sess, algorithm='MLE', prior_alpha=1, prior_sigma=1)
+    augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=1, prior_alpha=1, prior_sigma=1)
 
 
 def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):

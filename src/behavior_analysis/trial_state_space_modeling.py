@@ -47,6 +47,16 @@ inf_colors = ["windows blue", "dusty purple", "faded green"]
 # inf_colors_tab20 = [tab20_colors[0],tab20_colors[1]]
 
 
+TRIAL_GLM_PREDICTOR_LABELS = {
+    "FQlearning_rel_value": "FQlearning",
+    "HMM_rel_value_logodds": "HMM",
+    "HMM_rel_value_logodds_decay": "HMM_decay",
+    "relative_doubt_index": "doubt",
+    "perseveration_regressor": "perseveration",
+}
+DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS = tuple(TRIAL_GLM_PREDICTOR_LABELS.keys())
+
+
 class Session(Protocol):
     multi_session_save_path: Path
     session_data_home: Path
@@ -116,7 +126,7 @@ def plot_postprob_obs(posterior_probs: np.ndarray, observations: np.ndarray, inp
     a2.set_yticks([])
     a2.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     a2.set_xlabel("Context changes")
-    a2.set_ylim(0, abs(observations).max())
+    a2.set_ylim(0-.05, abs(observations).max()+.05)
     # a2.set_ylabel("inputs, obs")
 
     if session_lengths is not None:
@@ -146,8 +156,8 @@ def plot_labeled_observations(states1: np.ndarray, posterior_probs2: np.ndarray,
     # a1.set_yticks(-np.arange(obs_dim) * lim, ["$y_{{ {} }}$".format(n + 1) for n in range(obs_dim)])
     a0.set_yticks([])
     a0.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    a0.set_xlabel("Context changes")
-    a0.set_ylim(0, abs(observations).max())
+    a0.set_xlabel("Block context changes")
+    a0.set_ylim(0-.05, abs(observations).max()+.05)
     # a0.set_ylabel("inputs, obs")
 
     #############################################
@@ -159,7 +169,8 @@ def plot_labeled_observations(states1: np.ndarray, posterior_probs2: np.ndarray,
     cmap.set_under('w')
 
     Ey = hmm_fit.observations.Wk[:,:,-1][ind_state]   # refactor code later to identify the last input as 1s for bias and last weights as the means
-    EW = hmm_fit.o9[:,:,:-1][ind_state]
+    EW = hmm_fit.observations.Wk[:,:,:-1][ind_state]
+    # EW = hmm_fit.o9[:,:,:-1][ind_state]
     for d in range(obs_dim):
         a1.imshow(ind_state[None, :], aspect="auto", cmap=cmap, vmin=0, vmax=len(colors) - 1,
                   extent=(0, time_bins, -lim * obs_dim, lim), alpha=0.5)
@@ -170,8 +181,8 @@ def plot_labeled_observations(states1: np.ndarray, posterior_probs2: np.ndarray,
     # a1.set_yticks(-np.arange(obs_dim) * lim, ["$y_{{ {} }}$".format(n + 1) for n in range(obs_dim)])
     a1.set_yticks([])
     # a1.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    a1.set_xlabel("Context changes")
-    a1.set_ylim(0, abs(observations).max())
+    a1.set_xlabel("Trial context changes")
+    a1.set_ylim(0-.05, abs(observations).max()+.05)
     # a1.set_ylabel("inputs, obs")
 
     if session_lengths is not None:
@@ -194,86 +205,91 @@ def plot_labeled_observations(states1: np.ndarray, posterior_probs2: np.ndarray,
     return fig, (a0, a1, a2)
 
 
-def get_action_ix(action: int) -> int:
-    # right=0, left=1: map right to -1, left to +1
-    assert action in [0, 1], "action must be 0 or 1"
-    return action * 2 - 1
+# def get_action_ix(action: int) -> int:
+#     # right=0, left=1: map right to -1, left to +1
+#     assert action in [0, 1], "action must be 0 or 1"
+#     return action * 2 - 1
+#
+#
+# def decaying_reward(self, action, reward) -> None:
+#     action_ix = get_action_ix(action)  # 1 left, -1 right
+#     decay = np.exp(-1 / self.tau)
+#
+#     value = decay * self.value + self.beta * action_ix * reward
+#     self.log_odds_L = self.alpha * action_ix + self.value
+#     pL = sp.special.expit(self.log_odds_L)
+#     self.action_dist = np.array([1 - pL, pL])
+#
+#
+# def decaying_choice(self, action, reward) -> None:
+#     action_ix = get_action_ix(action)  # 1 left, -1 right
+#     decay = np.exp(-1 / self.tau)
+#
+#     self.value = decay * self.value + self.beta * action_ix * reward
+#     self.log_odds_L = self.alpha * action_ix + self.value
+#     pL = sp.special.expit(self.log_odds_L)
+#     self.action_dist = np.array([1 - pL, pL])
 
 
-def decaying_reward(self, action, reward) -> None:
-    action_ix = get_action_ix(action)  # 1 left, -1 right
-    decay = np.exp(-1 / self.tau)
-
-    value = decay * self.value + self.beta * action_ix * reward
-    self.log_odds_L = self.alpha * action_ix + self.value
-    pL = sp.special.expit(self.log_odds_L)
-    self.action_dist = np.array([1 - pL, pL])
-
-
-def decaying_choice(self, action, reward) -> None:
-    action_ix = get_action_ix(action)  # 1 left, -1 right
-    decay = np.exp(-1 / self.tau)
-
-    self.value = decay * self.value + self.beta * action_ix * reward
-    self.log_odds_L = self.alpha * action_ix + self.value
-    pL = sp.special.expit(self.log_odds_L)
-    self.action_dist = np.array([1 - pL, pL])
-
-
-def perseveration_regressor(choices, decay=0.25):
-    """
-    Compute exponentially weighted perseveration regressor.
-
-    Parameters
-    ----------
-    choices : array-like of shape (T,)
-        Binary choices (0 = left, 1 = right).
-    decay : float
-        Exponential decay constant (lambda). Default = 0.25.
-
-    Returns
-    -------
-    pers : np.ndarray of shape (T,)
-        Perseveration regressor in [-1, 1].
-        pers[t] depends only on trials < t.
-    """
-    choices = np.asarray(choices)
-    T = len(choices)
-
-    # Convert to -1 / +1 coding
-    y = 2 * choices - 1
-
-    pers = np.zeros(T)
-    num = 0.0  # weighted numerator
-    den = 0.0  # weighted normalization
-    alpha = np.exp(-decay)
-
-    for t in range(1, T):
-        num = alpha * num + alpha * y[t - 1]
-        den = alpha * den + alpha
-        pers[t] = num / den if den > 0 else 0.0
-
-    return pers
+# def perseveration_regressor(choices, decay=0.25):
+#     """
+#     Compute exponentially weighted perseveration regressor.
+#
+#     Parameters
+#     ----------
+#     choices : array-like of shape (T,)
+#         Binary choices (0 = left, 1 = right).
+#     decay : float
+#         Exponential decay constant (lambda). Default = 0.25.
+#
+#     Returns
+#     -------
+#     pers : np.ndarray of shape (T,)
+#         Perseveration regressor in [-1, 1].
+#         pers[t] depends only on trials < t.
+#     """
+#     choices = np.asarray(choices)
+#     T = len(choices)
+#
+#     # Convert to -1 / +1 coding
+#     y = 2 * choices - 1
+#
+#     pers = np.zeros(T)
+#     num = 0.0  # weighted numerator
+#     den = 0.0  # weighted normalization
+#     alpha = np.exp(-decay)
+#
+#     for t in range(1, T):
+#         num = alpha * num + alpha * y[t - 1]
+#         den = alpha * den + alpha
+#         pers[t] = num / den if den > 0 else 0.0
+#
+#     return pers
 
 
 def prepare_trial_glm_hmm_data(
     trial_df: pd.DataFrame,
     require_inherited_strategy: bool = False,
+    predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS,
 ) -> dict[str, np.ndarray | list[str]]:
     """Build session-wise GLM-HMM observations and predictors from trial data.
 
     Parameters
     ----------
     trial_df : pd.DataFrame
-        Trialwise dataframe where rows correspond to task trials. Required
-        columns are `prev_action`, `give_reward`, `action`, `prev_reward`,
-        `relative_value`, and `relative_omissions`. If
+        Trialwise dataframe where rows correspond to task trials. Required base
+        columns are `prev_action`, `give_reward`, and `action`, plus each
+        selected predictor column in `predictor_columns`. If
         `require_inherited_strategy=True`, `inherited_strategy` must also be
         present and non-`'None'` on valid rows.
     require_inherited_strategy : bool, default=False
         Whether valid trials must also have a non-`'None'`
         `inherited_strategy` label. This is only needed for plotting and
         block-trial comparison logic in the MAP fitting path.
+    predictor_columns : tuple[str, ...], default=DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS
+        Tuple of non-bias predictor column names to include in the GLM-HMM
+        input matrix. A bias column of ones is always appended as the final
+        predictor so one-predictor GLM-HMM fits remain valid.
 
     Returns
     -------
@@ -281,37 +297,51 @@ def prepare_trial_glm_hmm_data(
         Dictionary with:
         - `observations`: np.ndarray, shape (n_valid_trials, 1), binary action
           observations
-        - `inputs`: np.ndarray, shape (n_valid_trials, 5), GLM regressors in
-          the order `[relative_value, relative_omissions, prev_action,
-          prev_reward, bias]`
+        - `inputs`: np.ndarray, shape (n_valid_trials, n_predictors + 1), GLM
+          regressors in the requested predictor order with a final `bias`
+          column
         - `valid_mask`: np.ndarray, shape (n_trials,), boolean mask selecting
           valid trials
         - `predictor_labels`: list[str], regressor names in input-column order
     """
+    if isinstance(predictor_columns, str):
+        predictor_columns = (predictor_columns,)
+    if len(predictor_columns) == 0:
+        raise ValueError("predictor_columns must include at least one non-bias GLM predictor.")
+
+    required_columns = {"prev_action", "give_reward", "action"}
+    if require_inherited_strategy:
+        required_columns.add("inherited_strategy")
+    required_columns.update(predictor_columns)
+
+    missing_columns = sorted(required_columns.difference(trial_df.columns))
+    if missing_columns:
+        missing_summary = ", ".join(missing_columns)
+        raise ValueError(f"trial_df is missing required GLM-HMM columns: {missing_summary}")
+
+    unknown_predictors = [col for col in predictor_columns if col not in TRIAL_GLM_PREDICTOR_LABELS]
+    if unknown_predictors:
+        unknown_summary = ", ".join(unknown_predictors)
+        raise ValueError(f"Unknown GLM-HMM predictor columns requested: {unknown_summary}")
+
     valid_mask = (trial_df["prev_action"] != "None") & (trial_df["give_reward"] == 0)
     if require_inherited_strategy:
         valid_mask = valid_mask & (trial_df["inherited_strategy"] != "None")
     df = trial_df[valid_mask]
 
     observations = df["action"].to_numpy().reshape(-1, 1).astype(int)
-    prev_action = df["prev_action"].to_numpy().reshape(-1, 1).astype(float)
-    prev_reward = df["prev_reward"].to_numpy().reshape(-1, 1).astype(float)
     bias = np.ones((df.shape[0], 1), dtype=float)
-    relative_value = df["relative_value"].to_numpy().reshape(-1, 1).astype(float)
-    relative_omissions = df["relative_omissions"].to_numpy().reshape(-1, 1).astype(float)
-    inputs = np.concatenate([relative_value, relative_omissions, prev_action, prev_reward, bias], axis=1)
+    predictor_arrays = [
+        df[predictor_name].to_numpy().reshape(-1, 1).astype(float)
+        for predictor_name in predictor_columns
+    ]
+    inputs = np.concatenate([*predictor_arrays, bias], axis=1)
 
     return {
         "observations": observations,
         "inputs": inputs,
         "valid_mask": valid_mask.to_numpy(),
-        "predictor_labels": [
-            "relative_value",
-            "relative_omissions",
-            "prev_action",
-            "prev_reward",
-            "bias",
-        ],
+        "predictor_labels": [TRIAL_GLM_PREDICTOR_LABELS[col] for col in predictor_columns] + ["bias"],
     }
 
 
@@ -363,9 +393,10 @@ def split_blocked_holdout_sequences(
 
 
 def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, plot: bool=False, model_dict=None,
-                     num_states=2):
+                     num_states=2,
+                     predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS):
     """Maximum likelihood estimation of block strategies/states."""
-    prepared = prepare_trial_glm_hmm_data(trial_df)
+    prepared = prepare_trial_glm_hmm_data(trial_df, predictor_columns=predictor_columns)
     ix_valid = prepared["valid_mask"]
     df = trial_df[ix_valid]
 
@@ -416,6 +447,7 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         # plt.xlim(0, len(fit_ll))
         plt.ylabel("Log Probability")
         plt.title("MLE EM fit of observed data")
+        plt.tight_layout()
         save_path = figure_path / '{}_trial_mle_convergence.png'.format(sess_id)
         fig.savefig(save_path, format='png', dpi=300)
 
@@ -536,9 +568,14 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
 
 
 def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, plot: bool=False,
-                     num_states=1, prior_sigma=1, prior_alpha=2, model_dict=None, block_dict=None):
+                     num_states=1, prior_sigma=1, prior_alpha=2, model_dict=None, block_dict=None,
+                     predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS):
     """Maximum likelihood estimation of block strategies/states."""
-    prepared = prepare_trial_glm_hmm_data(trial_df, require_inherited_strategy=True)
+    prepared = prepare_trial_glm_hmm_data(
+        trial_df,
+        require_inherited_strategy=True,
+        predictor_columns=predictor_columns,
+    )
     ix_valid = prepared["valid_mask"]
     df = trial_df[ix_valid]
     n_trials = df.shape[0]
@@ -565,9 +602,6 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     # observations = np.concatenate([action, block_strategy], axis=1)
     observations = action
 
-    # num states - start with 2, Inf/RL, then do 3 (inf/rl/biased). Would like Inf(maybe lo and hi thresh)/RL/biased/disengaged/confused. I think this is
-    # what cross-validation is gonna be for. less is better!
-    # num_states = 4
     obs_dim = 1
     num_categories = 2
     input_dim = predictors.shape[1]
@@ -596,6 +630,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         # plt.xlim(0, len(fit_ll))
         plt.ylabel("Log Probability")
         plt.title("MAP EM fit of observed data")
+        plt.tight_layout()
         save_path = figure_path / '{}_trial_map_convergence.png'.format(sess_id)
         fig.savefig(save_path, format='png', dpi=300)
 
@@ -805,17 +840,20 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
 
 
 def run_trial_modeling(trial_df: pd.DataFrame, session: Session, num_states: int=2,
-                       prior_alpha=1, prior_sigma=1) -> pd.DataFrame:
+                       prior_alpha=1, prior_sigma=1,
+                       predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS) -> pd.DataFrame:
     block_dict_fname = session.processed_data_path / (session.sess_id_full + '_block_statedict.pkl')
     with open(block_dict_fname, 'rb') as file:
         block_dict = pkl.load(file)
 
     mle_model_dict, _ = mle_trial_states(trial_df, session.figure_path, session.sess_id_abbreviated,
-                                                         plot=True, num_states=num_states)
+                                                         plot=True, num_states=num_states,
+                                                         predictor_columns=predictor_columns)
     map_model_dict, augmented_trial_df = map_trial_states(trial_df, session.figure_path, session.sess_id_abbreviated,
                                                          plot=True, model_dict=mle_model_dict, num_states=num_states,
                                                           prior_alpha=prior_alpha, prior_sigma=prior_sigma,
-                                                          block_dict=block_dict['map'])
+                                                          block_dict=block_dict['map'],
+                                                          predictor_columns=predictor_columns)
     map_savename = session.processed_data_path / (session.sess_id_full + '_block_map_statedict.pkl')
     with open(map_savename, 'wb') as file:
         pkl.dump(map_model_dict, file)
@@ -998,6 +1036,7 @@ def plot_information_criteria(aic, bic, states, session: Session):
     save_path = session.figure_path / '{}_trial_HMM_AIC_BIC.png'.format(session.sess_id_full)
     plt.tight_layout()
     plt.gcf().savefig(save_path, format='png', dpi=300)
+    print(f"Saved AIC/BIC plot to {save_path}")
     plt.show()
 
     model_selection = {'AIC': aic, 'BIC': bic}
@@ -1190,13 +1229,14 @@ def plot_cross_validation_scores(cv_log_likelihoods: np.ndarray, states: npt.NDA
 def run_cross_validation(trial_df: pd.DataFrame, session: Session, algorithm='MLE',
                          prior_alpha=1, prior_sigma=1,
                          min_states: int = 1, max_states: int = 5,
-                         n_threads: int = 4, n_runs: int = 5, n_folds: int = 5):
+                         n_threads: int = 4, n_runs: int = 5, n_folds: int = 5,
+                         predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS):
     """Run blocked within-session held-out scoring over hidden-state count.
 
     This is the secondary GLM-HMM model-selection path. The primary selector is
     MLE AIC/BIC fit independently within each session.
     """
-    prepared = prepare_trial_glm_hmm_data(trial_df)
+    prepared = prepare_trial_glm_hmm_data(trial_df, predictor_columns=predictor_columns)
     observations = prepared["observations"]
     predictors = prepared["inputs"]
 
@@ -1216,18 +1256,19 @@ def run_cross_validation(trial_df: pd.DataFrame, session: Session, algorithm='ML
 
 
 def run_information_criteria(trial_df: pd.DataFrame, session: Session, algorithm='MLE',
-                             prior_alpha=1, prior_sigma=1, ):
+                             prior_alpha=1, prior_sigma=1,
+                             predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS):
     if algorithm.upper() != 'MLE':
         raise ValueError("GLM-HMM information criteria should only be run on MLE models.")
 
-    prepared = prepare_trial_glm_hmm_data(trial_df)
+    prepared = prepare_trial_glm_hmm_data(trial_df, predictor_columns=predictor_columns)
     action = prepared["observations"]
     predictors = prepared["inputs"]
 
     min_states = 1
     max_states = 5
     n_threads = 4
-    n_runs = 4
+    n_runs = 10
 
     states = np.arange(min_states,max_states+1)
     BIC, AIC = calculate_information_criteria(observations=action, inputs=predictors, states=states, algorithm='MLE',

@@ -56,7 +56,7 @@ class Session(Protocol):
 
 def prepare_block_lm_hmm_data(
     block_df: pd.DataFrame,
-    predictor_columns: tuple[str, ...] = ("prev_n_rewarded", "n_switches"),
+    predictor_columns: tuple[str, ...] = ("prev_n_rewarded",),
 ) -> dict[str, np.ndarray | list[str]]:
     """Build session-wise LM-HMM observations and predictors from block data.
 
@@ -66,7 +66,7 @@ def prepare_block_lm_hmm_data(
         Blockwise dataframe where rows correspond to task blocks.
         Required columns are `trials_to_correct`, `prev_n_correct`, and every
         column named in `predictor_columns`.
-    predictor_columns : tuple[str, ...], default=("prev_n_rewarded", "n_switches")
+    predictor_columns : tuple[str, ...], default=("prev_n_rewarded",)
         Predictor columns used as LM-HMM inputs. Each predictor is returned as
         one input dimension in the same order as provided here.
 
@@ -101,6 +101,43 @@ def prepare_block_lm_hmm_data(
         "valid_mask": valid_mask.to_numpy(),
         "predictor_labels": list(predictor_columns),
     }
+
+
+def normalize_lm_observation_parameters(
+    recovered_weights: np.ndarray,
+    recovered_mus: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Normalize LM-HMM observation parameters to stable array shapes.
+
+    Parameters
+    ----------
+    recovered_weights : np.ndarray
+        State-specific LM slopes returned by `ssm`, expected to describe
+        `(num_states, obs_dim, input_dim)` but sometimes consumed downstream
+        via shape-collapsing operations.
+    recovered_mus : np.ndarray
+        State-specific LM intercepts with expected shape `(num_states, obs_dim)`.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        - normalized_weights: np.ndarray, shape `(num_states, obs_dim, input_dim)`
+        - normalized_mus: np.ndarray, shape `(num_states, obs_dim)`
+    """
+    normalized_weights = np.asarray(recovered_weights, dtype=float)
+    normalized_mus = np.asarray(recovered_mus, dtype=float)
+
+    if normalized_weights.ndim == 1:
+        normalized_weights = normalized_weights[np.newaxis, np.newaxis, :]
+    elif normalized_weights.ndim == 2:
+        normalized_weights = normalized_weights[:, np.newaxis, :]
+
+    if normalized_mus.ndim == 0:
+        normalized_mus = normalized_mus[np.newaxis, np.newaxis]
+    elif normalized_mus.ndim == 1:
+        normalized_mus = normalized_mus[:, np.newaxis]
+
+    return normalized_weights, normalized_mus
 
 
 def split_blocked_holdout_sequences(
@@ -302,10 +339,14 @@ def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = Fals
     most_likely_states = map_hmm.most_likely_states(trials_to_correct, input=predictors)
     recovered_weights = map_hmm.observations.Wks
     recovered_mus = map_hmm.observations.mus
+    normalized_weights, normalized_mus = normalize_lm_observation_parameters(
+        recovered_weights=recovered_weights,
+        recovered_mus=recovered_mus,
+    )
 
     # weight_dict = {}
-    weight_dict['weights'] = recovered_weights
-    weight_dict['mus'] = recovered_mus
+    weight_dict['weights'] = normalized_weights
+    weight_dict['mus'] = normalized_mus
     weight_dict['label'] = 'map'
     weight_dict['weight_labels'] = pred_labels
     model_dict['map']['weight_dict'] = weight_dict
@@ -326,26 +367,19 @@ def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = Fals
         # utilplot.plot_trans_matrix(map_transition_mat)
         # f, ax = utilplot.plt.subplots_adjust(0, 0, 1, 1)
 
-    recovered_weights =  np.squeeze(recovered_weights)
-    if recovered_weights.ndim > 1:
-        prev_reward_weight = np.squeeze(recovered_weights)[:,0]
-        present_colors = np.arange(len(prev_reward_weight), dtype=object)
-    else:
-        prev_reward_weight = recovered_weights[0]
-        present_colors = np.arange(1, dtype=object)
+    state_weights = normalized_weights[:, 0, :]
+    primary_predictor_weights = state_weights[:, 0]
+    present_colors = np.arange(primary_predictor_weights.shape[0], dtype=object)
 
-    ix_inf = prev_reward_weight < .5
-    ix_rl = prev_reward_weight >= .5
+    ix_inf = primary_predictor_weights < .5
+    ix_rl = primary_predictor_weights >= .5
     n_inf = np.sum(ix_inf)
     n_rl = np.sum(ix_rl)
     # colors_inf = inference_cmap(np.linspace(0, 1, n_inf))
     # colors_rl = rl_cmap(np.linspace(0, 1, n_rl))
     # present_colors = np.arange(len(prev_reward_weight), dtype=object)
-    if recovered_weights.ndim > 1:
-        present_colors[ix_inf] = inf_colors[:n_inf]
-        present_colors[ix_rl] = rl_colors[:n_rl]
-    else:
-        present_colors = rl_colors if ix_rl else inf_colors
+    present_colors[ix_inf] = inf_colors[:n_inf]
+    present_colors[ix_rl] = rl_colors[:n_rl]
 
     present_colors = sns.xkcd_palette(present_colors)
     present_cmap = gradient_cmap(present_colors)
@@ -392,13 +426,13 @@ def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = Fals
     if num_states > 1:
         if np.sum(~ix_valid) > 0:
             cur_strategy_slope = np.zeros(block_df.shape[0], dtype='object')
-            cur_strategy_slope[ix_valid] = np.squeeze(recovered_weights)[:,0][inferred_states[ix_valid].astype(int)]
+            cur_strategy_slope[ix_valid] = primary_predictor_weights[inferred_states[ix_valid].astype(int)]
             cur_strategy_slope[~ix_valid] = 'None'
             block_df['cur_strategy_slope'] = cur_strategy_slope
         else:
-            block_df['cur_strategy_slope'] = np.squeeze(recovered_weights)[:,0][inferred_states.astype(int)]
+            block_df['cur_strategy_slope'] = primary_predictor_weights[inferred_states.astype(int)]
     else:
-        block_df['cur_strategy_slope'] = np.ones(block_df.shape[0]) * np.squeeze(recovered_weights)[0]
+        block_df['cur_strategy_slope'] = np.ones(block_df.shape[0]) * primary_predictor_weights[0]
 
     map_savename = session.processed_data_path / (session.sess_id_full + '_block_statedict.pkl')
     with open(map_savename, 'wb') as file:
@@ -427,14 +461,16 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
     augmented_trial_df = trials_inherit_strategy(block_performance, augmented_trial_df)
     augmented_trial_df.to_csv(session.processed_data_path / (session.sess_id_full + '_augmented_trials.csv'), index=False)
 
-    prev_reward_weight = np.squeeze(map_model_dict['map']['weight_dict']['weights'])
-    if prev_reward_weight.ndim > 1:
-        prev_reward_weight = prev_reward_weight[:, 0]
-    ix_inf = prev_reward_weight < .5
-    ix_rl = prev_reward_weight >= .5
+    normalized_weights, _ = normalize_lm_observation_parameters(
+        recovered_weights=map_model_dict['map']['weight_dict']['weights'],
+        recovered_mus=map_model_dict['map']['weight_dict']['mus'],
+    )
+    primary_predictor_weights = normalized_weights[:, 0, 0]
+    ix_inf = primary_predictor_weights < .5
+    ix_rl = primary_predictor_weights >= .5
     n_inf = np.sum(ix_inf)
     n_rl = np.sum(ix_rl)
-    present_colors = np.arange(len(prev_reward_weight), dtype=object)
+    present_colors = np.arange(len(primary_predictor_weights), dtype=object)
     present_colors[ix_inf] = inf_colors[:n_inf]
     present_colors[ix_rl] = rl_colors[:n_rl]
     present_colors = sns.xkcd_palette(present_colors)
@@ -762,6 +798,7 @@ def plot_information_criteria(aic, bic, states, session: Session):
     save_path = session.figure_path / '{}_block_HMM_AIC_BIC.png'.format(session.sess_id_full)
     plt.tight_layout()
     plt.gcf().savefig(save_path, format='png', dpi=300)
+    print("saved BIC/AIC plot to {}".format(save_path))
     # plt.savefig(savefile, format="pdf", bbox_inches="tight")
     plt.show()
     # plt.close(fig)
