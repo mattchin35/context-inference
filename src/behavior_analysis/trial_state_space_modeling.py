@@ -48,13 +48,23 @@ inf_colors = ["windows blue", "dusty purple", "faded green"]
 
 
 TRIAL_GLM_PREDICTOR_LABELS = {
-    "FQlearning_rel_value": "FQlearning",
-    "HMM_rel_value_logodds": "HMM",
+    # "FQlearning_rel_value": "FQlearning",
+    # "HMM_rel_value_logodds": "HMM",
     "HMM_rel_value_logodds_decay": "HMM_decay",
     "relative_doubt_index": "doubt",
-    "perseveration_regressor": "perseveration",
+    # "perseveration_regressor": "perseveration",
 }
 DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS = tuple(TRIAL_GLM_PREDICTOR_LABELS.keys())
+
+# Binary GLM note for this project:
+# - task actions are coded 0=right, 1=left
+# - many engineered regressors are left-minus-right, so positive regressor
+#   values indicate leftward evidence
+# - the local `ssm` binary `input_driven_obs` implementation stores weights for
+#   category 0 only, with category 1 as the zero-logit baseline
+# Therefore, raw `ssm` weights describe right-choice logits. For analysis and
+# weight plots in this file, we also store an interpreted left-choice view,
+# which is simply the sign-flipped version of the raw binary weights.
 
 
 class Session(Protocol):
@@ -345,6 +355,54 @@ def prepare_trial_glm_hmm_data(
     }
 
 
+def normalize_binary_glm_weights(raw_weights: np.ndarray) -> np.ndarray:
+    """Normalize binary GLM-HMM weights to shape (num_states, 1, num_predictors).
+
+    Parameters
+    ----------
+    raw_weights : np.ndarray
+        Raw `ssm` observation weights for a binary GLM-HMM. Expected logical
+        shape is `(num_states, 1, num_predictors)` because binary
+        `input_driven_obs` stores parameters for category 0 only.
+
+    Returns
+    -------
+    np.ndarray
+        Normalized raw weights with shape `(num_states, 1, num_predictors)`.
+    """
+    normalized = np.asarray(raw_weights, dtype=float)
+    if normalized.ndim == 1:
+        normalized = normalized[np.newaxis, np.newaxis, :]
+    elif normalized.ndim == 2:
+        normalized = normalized[:, np.newaxis, :]
+    if normalized.ndim != 3 or normalized.shape[1] != 1:
+        raise ValueError(
+            "Binary GLM-HMM weights must have shape (num_states, 1, num_predictors)."
+        )
+    return normalized
+
+
+def interpret_binary_glm_weights(raw_weights: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return raw and interpreted binary GLM-HMM weights.
+
+    Parameters
+    ----------
+    raw_weights : np.ndarray
+        Raw `ssm` binary GLM weights for category 0. In this task category 0 is
+        the right choice and category 1 is the left-choice baseline.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        - normalized raw weights with shape `(num_states, 1, num_predictors)`
+        - interpreted left-choice weights with the same shape, where positive
+          values mean the regressor promotes left choices
+    """
+    normalized_raw = normalize_binary_glm_weights(raw_weights)
+    interpreted_left_choice = -normalized_raw
+    return normalized_raw, interpreted_left_choice
+
+
 def split_blocked_holdout_sequences(
     observations: np.ndarray,
     inputs: np.ndarray,
@@ -452,14 +510,21 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         fig.savefig(save_path, format='png', dpi=300)
 
     most_likely_states = mle_hmm.most_likely_states(action, input=predictors)
-    # recovered_weights = mle_hmm.observations.Wk
-    recovered_weights = mle_hmm.observations.params
-    # recovered_mus = mle_hmm.observations.mu
+    raw_recovered_weights, interpreted_weights = interpret_binary_glm_weights(
+        mle_hmm.observations.params
+    )
 
-    weight_dict['weights'] = recovered_weights
-    # weight_dict['mus'] = recovered_mus
+    # `raw_weights` preserve the native `ssm` category-0/right-choice logits.
+    # `weights` are the binary-task interpretation used for analysis and plots:
+    # positive weights mean the predictor promotes left choices.
+    weight_dict['weights'] = interpreted_weights
+    weight_dict['raw_weights'] = raw_recovered_weights
     weight_dict['weight_labels'] = pred_labels
     weight_dict['label'] = 'mle'
+    weight_dict['weight_convention'] = (
+        "weights are interpreted left-choice coefficients; raw_weights are "
+        "binary ssm category 0 (right-choice) coefficients"
+    )
 
     model_dict['mle']['weight_dict'] = weight_dict
 
@@ -472,7 +537,7 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     if plot:
         f, ax = plt.subplots()
         for k in range(num_states):
-            plt.plot(range(input_dim), recovered_weights[k][0], color=colors[k],
+            plt.plot(range(input_dim), interpreted_weights[k][0], color=colors[k],
                      lw=1.5, linestyle='--')#, label='state {}'.format(k),)
 
         plt.yticks(fontsize=10)
@@ -481,9 +546,7 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         # plt.xticks(np.arange(len(pred_labels)), pred_labels, fontsize=12, rotation=45)
         plt.xticks(np.arange(len(pred_labels)), [lab.replace('_', ' ') for lab in pred_labels], fontsize=12, rotation=45)
         plt.axhline(y=0, color="k", alpha=0.5, ls="--")
-        # plt.legend()
-        # plt.title("Weight recovery", fontsize=15)
-        plt.title("Model weights", fontsize=15)
+        plt.title("Model weights (interpreted left-choice coefficients)", fontsize=15)
         plt.tight_layout()
         save_path = figure_path / '{}_trial_mle_weights.png'.format(sess_id)
         plt.gcf().savefig(save_path, format='png', dpi=300)
@@ -635,14 +698,21 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         fig.savefig(save_path, format='png', dpi=300)
 
     most_likely_states = map_hmm.most_likely_states(action, input=predictors)
-    # recovered_weights = mle_hmm.observations.Wk
-    recovered_weights = map_hmm.observations.params
-    # recovered_mus = mle_hmm.observations.mu
+    raw_recovered_weights, interpreted_weights = interpret_binary_glm_weights(
+        map_hmm.observations.params
+    )
 
-    weight_dict['weights'] = recovered_weights
+    # `raw_weights` preserve the native `ssm` category-0/right-choice logits.
+    # `weights` are the binary-task interpretation used for analysis and plots:
+    # positive weights mean the predictor promotes left choices.
+    weight_dict['weights'] = interpreted_weights
+    weight_dict['raw_weights'] = raw_recovered_weights
     weight_dict['weight_labels'] = pred_labels
-    # weight_dict['mus'] = recovered_mus
     weight_dict['label'] = 'map'
+    weight_dict['weight_convention'] = (
+        "weights are interpreted left-choice coefficients; raw_weights are "
+        "binary ssm category 0 (right-choice) coefficients"
+    )
     model_dict['map']['weight_dict'] = weight_dict
 
     # weight_dict = {}
@@ -654,7 +724,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     if plot:
         f, ax = plt.subplots()
         for k in range(num_states):
-            plt.plot(range(input_dim), recovered_weights[k][0], color=colors[k],
+            plt.plot(range(input_dim), interpreted_weights[k][0], color=colors[k],
                      lw=1.5, linestyle='--')#, label='state {}'.format(k),)
 
         plt.yticks(fontsize=10)
@@ -664,8 +734,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         plt.xticks(np.arange(len(pred_labels)), [lab.replace('_', ' ') for lab in pred_labels], fontsize=12,
                    rotation=45)
         plt.axhline(y=0, color="k", alpha=0.5, ls="--")
-        # plt.legend()
-        plt.title("Model weights", fontsize=15)
+        plt.title("Model weights (interpreted left-choice coefficients)", fontsize=15)
 
         plt.tight_layout()
         save_path = figure_path / '{}_trial_map_weights.png'.format(sess_id)

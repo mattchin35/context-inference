@@ -45,6 +45,38 @@ def save_trial_features(augmented_trial_df: pd.DataFrame, params: TaskParams, pr
         json.dump(asdict(params), f, indent=2)
 
 
+def collect_and_save_trial_features(
+    augmented_trial_df: pd.DataFrame,
+    processed_data_path: Path,
+    sess_id_full: str,
+    params: Optional[TaskParams] = None,
+) -> tuple[pd.DataFrame, TaskParams]:
+    """Collect trial features from an already loaded dataframe and save outputs.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe already loaded by the caller. Rows index trials and
+        must include the columns required by `collect_trial_features`.
+    processed_data_path : Path
+        Session-local processed-data directory where the updated augmented trial
+        CSV and feature parameter JSON will be written.
+    sess_id_full : str
+        Full session identifier used to name the augmented trial CSV.
+    params : Optional[TaskParams], default=None
+        Optional feature-generation parameters. If omitted, defaults are used.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, TaskParams]
+        - augmented_trial_df with feature columns added
+        - parameters used to compute and save those features
+    """
+    augmented_trial_df, params = collect_trial_features(augmented_trial_df, params=params)
+    save_trial_features(augmented_trial_df, params, processed_data_path, sess_id_full)
+    return augmented_trial_df, params
+
+
 def _get_column_or_raise(df: pd.DataFrame, candidates: tuple[str, ...]) -> pd.Series:
     for col in candidates:
         if col in df.columns:
@@ -217,8 +249,10 @@ def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[Ta
 
 def main():
     session_data_home = Path(
-        '/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/')
-    sess_id_full = 'CT014_2025-12-16_153200'
+        '/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251223_latentInference/')
+    # sess_id_full = 'CT014_2025-12-16_153200'
+    # sess_id_full = 'CT014_2025-12-05_165240'
+    sess_id_full = 'CT014_2025-12-23_163505'
     raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
     processed_data_path = session_data_home / 'processed'
 
@@ -246,13 +280,12 @@ def main():
     params.incorrect_reward_size = 0
     params.QL_learning_rate = .3
 
-    augmented_trial_df, params = collect_trial_features(augmented_trial_df, params=params)
-    augmented_trial_df.to_csv(augmented_trial_df_path, index=False, na_rep='None')
-
-    # Save to JSON
-    json_fname = processed_data_path / 'trial_feature_params.json'
-    with open(json_fname, "w") as f:
-        json.dump(asdict(params), f, indent=2)
+    augmented_trial_df, params = collect_and_save_trial_features(
+        augmented_trial_df,
+        processed_data_path=processed_data_path,
+        sess_id_full=sess_id_full,
+        params=params,
+    )
 
 
 if __name__ == '__main__':

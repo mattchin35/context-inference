@@ -140,6 +140,45 @@ def normalize_lm_observation_parameters(
     return normalized_weights, normalized_mus
 
 
+def build_presentation_colors(
+    primary_predictor_weights: np.ndarray,
+) -> tuple[list, object]:
+    """Build state colors and a plotting colormap for LM-HMM presentation figures.
+
+    Parameters
+    ----------
+    primary_predictor_weights : np.ndarray
+        One scalar slope per hidden state, shape `(num_states,)`. Positive
+        slopes are treated as Q-learning-like and smaller slopes as
+        inference-like for presentation coloring.
+
+    Returns
+    -------
+    tuple[list, object]
+        - present_colors: list-like palette with one entry per hidden state
+        - present_cmap: Matplotlib-compatible colormap. For one-state models a
+          single-color-safe map is created with `white_to_color_cmap` rather
+          than `gradient_cmap`, which requires bounds at both 0 and 1.
+    """
+    present_colors = np.arange(len(primary_predictor_weights), dtype=object)
+
+    ix_inf = primary_predictor_weights < 0.5
+    ix_rl = primary_predictor_weights >= 0.5
+    n_inf = np.sum(ix_inf)
+    n_rl = np.sum(ix_rl)
+
+    present_colors[ix_inf] = inf_colors[:n_inf]
+    present_colors[ix_rl] = rl_colors[:n_rl]
+    present_colors = sns.xkcd_palette(present_colors)
+
+    if len(present_colors) == 1:
+        present_cmap = white_to_color_cmap(present_colors[0])
+    else:
+        present_cmap = gradient_cmap(present_colors)
+
+    return present_colors, present_cmap
+
+
 def split_blocked_holdout_sequences(
     observations: np.ndarray,
     inputs: np.ndarray,
@@ -369,20 +408,7 @@ def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = Fals
 
     state_weights = normalized_weights[:, 0, :]
     primary_predictor_weights = state_weights[:, 0]
-    present_colors = np.arange(primary_predictor_weights.shape[0], dtype=object)
-
-    ix_inf = primary_predictor_weights < .5
-    ix_rl = primary_predictor_weights >= .5
-    n_inf = np.sum(ix_inf)
-    n_rl = np.sum(ix_rl)
-    # colors_inf = inference_cmap(np.linspace(0, 1, n_inf))
-    # colors_rl = rl_cmap(np.linspace(0, 1, n_rl))
-    # present_colors = np.arange(len(prev_reward_weight), dtype=object)
-    present_colors[ix_inf] = inf_colors[:n_inf]
-    present_colors[ix_rl] = rl_colors[:n_rl]
-
-    present_colors = sns.xkcd_palette(present_colors)
-    present_cmap = gradient_cmap(present_colors)
+    present_colors, present_cmap = build_presentation_colors(primary_predictor_weights)
 
     ### Get expected states
     posterior_probs = map_hmm.expected_states(data=trials_to_correct, input=predictors)[0]
@@ -466,15 +492,7 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         recovered_mus=map_model_dict['map']['weight_dict']['mus'],
     )
     primary_predictor_weights = normalized_weights[:, 0, 0]
-    ix_inf = primary_predictor_weights < .5
-    ix_rl = primary_predictor_weights >= .5
-    n_inf = np.sum(ix_inf)
-    n_rl = np.sum(ix_rl)
-    present_colors = np.arange(len(primary_predictor_weights), dtype=object)
-    present_colors[ix_inf] = inf_colors[:n_inf]
-    present_colors[ix_rl] = rl_colors[:n_rl]
-    present_colors = sns.xkcd_palette(present_colors)
-    present_cmap = gradient_cmap(present_colors)
+    present_colors, present_cmap = build_presentation_colors(primary_predictor_weights)
 
     # utilplot.plot_weights_comparison([map_model_dict['mle']['weight_dict'],map_model_dict['map']['weight_dict']])
     utilplot.plot_weights_presentation(map_model_dict['map']['weight_dict'], present_colors, session=session)
@@ -867,7 +885,7 @@ def declare_inferred_strategy(block_df: pd.DataFrame) -> pd.DataFrame:
     # rl_ix = df['inferred_strategy'].to_numpy().astype(int) == 0
     # inference_ix = df['inferred_strategy'].to_numpy().astype(int) == 1
     rl_ix = df['cur_strategy_slope'].to_numpy() >= .5
-    inference_ix = df['cur_strategy_slope'].abs().to_numpy() < .5
+    inference_ix = df['cur_strategy_slope'].to_numpy() < .5
     bias_ix = (df['bias_full_flag'] == 'True').to_numpy()
     strategy[inference_ix] = 'Inference'
     # strategy[bias_ix] = 'Bias'  #bias is not a strategy, it's a block quality
@@ -884,11 +902,15 @@ def trials_inherit_strategy(block_df: pd.DataFrame, trial_df: pd.DataFrame) -> p
     block_ix = block_df['block_ix'].to_numpy()
     inherited_strategy = np.zeros(trial_df.shape[0], dtype='object')
     inherited_bias_flag = np.zeros(trial_df.shape[0], dtype='object')
-    inferred_strategy = block_df['inferred_strategy'].to_numpy()
+    inherited_source = (
+        block_df['declared_strategy'].to_numpy()
+        if 'declared_strategy' in block_df.columns
+        else block_df['inferred_strategy'].to_numpy()
+    )
     bias_flag = block_df['bias_full_flag'].to_numpy()
     for i in block_ix:
         tmp_ix = trial_df['cur_block'].to_numpy() == i
-        inherited_strategy[tmp_ix] = inferred_strategy[i]
+        inherited_strategy[tmp_ix] = inherited_source[i]
         inherited_bias_flag[tmp_ix] = bias_flag[i]
     trial_df['inherited_strategy'] = inherited_strategy
     trial_df['inherited_bias_flag'] = inherited_bias_flag

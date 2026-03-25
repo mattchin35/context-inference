@@ -7,8 +7,8 @@ from behavior_analysis import raster_plots, session_analysis, simulate_priors
 from mouse_behavior_preprocessing import process_behavior_log
 from behavior_analysis import block_state_space_modeling as bssm
 from behavior_analysis import trial_state_space_modeling as tssm
+from behavior_analysis import gather_trial_features as gtf
 import src.state_space_modeling.utilplot as utilplot
-# import src.behavior_analysis.gather_trial_features as gtf
 import pickle as pkl
 from pathlib import Path
 import pandas as pd
@@ -241,8 +241,8 @@ def main():
     # prep data selection
 
     multi_session_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
-    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference')
-    sess_id_full = 'CT014_2025-12-16_153200'
+    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251223_latentInference')
+    sess_id_full = 'CT014_2025-12-23_163505'
     # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251204')
     # sess_id_full = 'CT014_2025-12-04_123418'
     raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
@@ -300,30 +300,26 @@ def main():
                                                                                             multisession_data_folder=multi_session_save_path)
 
     ### Gather trial features ###
-    # augmented_trial_df, task_params = gtf.collect_trial_features(augmented_trial_df)
-    # gtf.save_trial_features(augmented_trial_df, task_params, processed_data_path, sess_id_full)
-
-    # augmented_trial_df.to_csv(augmented_trial_df_path, index=False, na_rep='None')
-
-    ### Save to JSON
-    # json_fname = processed_data_path / 'trial_feature_params.json'
-    # with open(json_fname, "w") as f:
-    #     json.dump(asdict(params), f, indent=2)
+    # augmented_trial_df, task_params = gtf.collect_and_save_trial_features(
+    #     augmented_trial_df,
+    #     processed_data_path=processed_data_path,
+    #     sess_id_full=sess_id_full,
+    # )
 
     # block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
     #                                                 prior_alpha=1, prior_sigma=1)
     # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
     #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2)
 
-    # block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=3,
-    #                                                                 prior_alpha=1, prior_sigma=1)
+    block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=2,
+                                                                    prior_alpha=1, prior_sigma=1)
     # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
     # with open(block_model_dict_path, 'rb') as file:
     #     block_model_dict = pkl.load(file)
 
     ### trial state space modeling ###
     # trial_model_selection = tssm.run_information_criteria(augmented_trial_df, session=sess, algorithm='MLE', prior_alpha=1, prior_sigma=1)
-    augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=1, prior_alpha=1, prior_sigma=1)
+    # augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=2, prior_alpha=1, prior_sigma=1)
 
 
 def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
@@ -343,4 +339,3 @@ def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
 
 if __name__ == '__main__':
     main()
-
