@@ -902,11 +902,13 @@ def trials_inherit_strategy(block_df: pd.DataFrame, trial_df: pd.DataFrame) -> p
     block_ix = block_df['block_ix'].to_numpy()
     inherited_strategy = np.zeros(trial_df.shape[0], dtype='object')
     inherited_bias_flag = np.zeros(trial_df.shape[0], dtype='object')
-    inherited_source = (
-        block_df['declared_strategy'].to_numpy()
-        if 'declared_strategy' in block_df.columns
-        else block_df['inferred_strategy'].to_numpy()
-    )
+    # inherited_source = (
+    #     block_df['declared_strategy'].to_numpy()
+    #     if 'declared_strategy' in block_df.columns
+    #     else block_df['inferred_strategy'].to_numpy()
+    # )
+    inherited_source = block_df['inferred_strategy'].to_numpy()
+
     bias_flag = block_df['bias_full_flag'].to_numpy()
     for i in block_ix:
         tmp_ix = trial_df['cur_block'].to_numpy() == i
@@ -915,7 +917,6 @@ def trials_inherit_strategy(block_df: pd.DataFrame, trial_df: pd.DataFrame) -> p
     trial_df['inherited_strategy'] = inherited_strategy
     trial_df['inherited_bias_flag'] = inherited_bias_flag
     return trial_df
-
 
 
 if __name__ == '__main__':

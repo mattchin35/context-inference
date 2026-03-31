@@ -1,6 +1,7 @@
 # import session_overview
 # import raster_plots
 # import fileIO
+import json
 import numpy as np
 import re
 from behavior_analysis import raster_plots, session_analysis, simulate_priors
@@ -53,6 +54,48 @@ class Session:
     timestamp = '000000'
     session_info_fname = '{}_session_info.pkl'.format(sess_id_full)
     session_info = None
+
+
+def build_simulation_session(simulated_run_dir: Path, sess_id: str, session_info: dict) -> Session:
+    """Build a Session object for a saved switched-run analysis directory.
+
+    Parameters
+    ----------
+    simulated_run_dir : Path
+        Directory containing one saved simulated run and all analysis outputs.
+    sess_id : str
+        Full simulated run identifier with prefix, date, and time embedded in
+        the filename stem.
+    session_info : dict
+        JSON metadata loaded from the saved switched-run params file.
+
+    Returns
+    -------
+    Session
+        Session metadata configured for simulation analysis. Multisession
+        saving is disabled, and all outputs are written back into
+        `simulated_run_dir`.
+    """
+    pattern = r'(.+?)_(\d{4}-\d{2}-\d{2})_(\d{6})'
+    match = re.search(pattern, sess_id)
+    if match is None:
+        raise ValueError(f"simulated session id does not match expected pattern: {sess_id}")
+
+    prefix, date, timestamp = match.groups()
+    sess = Session()
+    sess.multi_session_save_path = None
+    sess.session_data_home = simulated_run_dir
+    sess.sess_id_full = sess_id
+    sess.sess_id_abbreviated = f"{prefix}_{date}_{timestamp}"
+    sess.raw_behavior_folder = simulated_run_dir
+    sess.processed_data_path = simulated_run_dir
+    sess.figure_path = simulated_run_dir
+    sess.mouse = prefix
+    sess.date = date
+    sess.timestamp = timestamp
+    sess.session_info_fname = simulated_run_dir / f"{sess_id}_params.json"
+    sess.session_info = session_info
+    return sess
 
 
 def preprocess_session_log(raw_behavior_folder: str, processed_data_path: str, sess_id_full: str, min_time: float=0, max_time: float=np.inf):
@@ -235,14 +278,58 @@ def block_hmm_model(block_performance: pd.DataFrame, trial_df: pd.DataFrame, ses
 #                         plot_path=multisession_save_path,
 #                         dates=multisession_df['date'].values)
 
+def main_simulation():
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    switching_run_data_dir = PROJECT_ROOT / "data/processed/switching_agents"
 
-def main():
+    sess_id = 'sample_switch_mode_1_2026-03-26_141941_agent-sample_switch_mode_1_pRew-0.8_pInc-0_pSwitch-0.2_nTrials-400'
+    simulated_run_dir = switching_run_data_dir / 'sample_switch_mode_1' / sess_id
+
+    trial_df_path = simulated_run_dir / '{}.csv'.format(sess_id)
+    session_info_path = simulated_run_dir / '{}_params.json'.format(sess_id)
+    assert simulated_run_dir.exists(), "simulated_run_dir at {} not found!".format(simulated_run_dir)
+    assert trial_df_path.exists(), "trial_df at {} not found!".format(trial_df_path)
+    assert session_info_path.exists(), "session_info at {} not found!".format(session_info_path)
+    trial_df = pd.read_csv(trial_df_path, sep=',')
+    with open(session_info_path, 'r') as file:
+        session_info = json.load(file)
+
+    sess = build_simulation_session(simulated_run_dir, sess_id, session_info)
+
+    # analyze trials and save
+    augmented_trial_df, block_performance, multisession_df = session_analysis.run_analysis(trial_df, session=sess)
+
+    ### Gather trial features ###
+    augmented_trial_df, task_params = gtf.collect_and_save_trial_features(
+        augmented_trial_df,
+        processed_data_path=sess.processed_data_path,
+        sess_id_full=sess.sess_id_full,
+    )
+
+    block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
+                                                    prior_alpha=1, prior_sigma=1)
+    # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
+    #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2)
+
+    # block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=2,
+    #                                                                 prior_alpha=1, prior_sigma=1)
+    # block_model_dict_path = sess.processed_data_path / (sess.sess_id_full + '_block_statedict.pkl')
+    # with open(block_model_dict_path, 'rb') as file:
+    #     block_model_dict = pkl.load(file)
+
+    ### trial state space modeling ###
+    # trial_model_selection = tssm.run_information_criteria(augmented_trial_df, session=sess, algorithm='MLE', prior_alpha=1, prior_sigma=1)
+    # augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=2, prior_alpha=1,
+    #                                              prior_sigma=1)
+
+
+def main_mouse():
     """Analyze a single session from start to finish"""
     # prep data selection
 
     multi_session_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
-    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251223_latentInference')
-    sess_id_full = 'CT014_2025-12-23_163505'
+    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251205_latentInference')
+    sess_id_full = 'CT014_2025-12-05_165240'
     # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251204')
     # sess_id_full = 'CT014_2025-12-04_123418'
     raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
@@ -311,15 +398,15 @@ def main():
     # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
     #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2)
 
-    block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=2,
-                                                                    prior_alpha=1, prior_sigma=1)
+    # block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=2,
+    #                                                                 prior_alpha=1, prior_sigma=1)
     # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
     # with open(block_model_dict_path, 'rb') as file:
     #     block_model_dict = pkl.load(file)
 
     ### trial state space modeling ###
     # trial_model_selection = tssm.run_information_criteria(augmented_trial_df, session=sess, algorithm='MLE', prior_alpha=1, prior_sigma=1)
-    # augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=2, prior_alpha=1, prior_sigma=1)
+    augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=2, prior_alpha=1, prior_sigma=1)
 
 
 def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
@@ -338,4 +425,5 @@ def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
 
 
 if __name__ == '__main__':
-    main()
+    # main_mouse()
+    main_simulation()

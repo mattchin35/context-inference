@@ -48,11 +48,11 @@ inf_colors = ["windows blue", "dusty purple", "faded green"]
 
 
 TRIAL_GLM_PREDICTOR_LABELS = {
-    # "FQlearning_rel_value": "FQlearning",
+    "FQlearning_rel_value": "FQlearning",
     # "HMM_rel_value_logodds": "HMM",
     "HMM_rel_value_logodds_decay": "HMM_decay",
     "relative_doubt_index": "doubt",
-    # "perseveration_regressor": "perseveration",
+    "perseveration_regressor": "perseveration",
 }
 DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS = tuple(TRIAL_GLM_PREDICTOR_LABELS.keys())
 
@@ -213,68 +213,6 @@ def plot_labeled_observations(states1: np.ndarray, posterior_probs2: np.ndarray,
 
     fig.tight_layout()
     return fig, (a0, a1, a2)
-
-
-# def get_action_ix(action: int) -> int:
-#     # right=0, left=1: map right to -1, left to +1
-#     assert action in [0, 1], "action must be 0 or 1"
-#     return action * 2 - 1
-#
-#
-# def decaying_reward(self, action, reward) -> None:
-#     action_ix = get_action_ix(action)  # 1 left, -1 right
-#     decay = np.exp(-1 / self.tau)
-#
-#     value = decay * self.value + self.beta * action_ix * reward
-#     self.log_odds_L = self.alpha * action_ix + self.value
-#     pL = sp.special.expit(self.log_odds_L)
-#     self.action_dist = np.array([1 - pL, pL])
-#
-#
-# def decaying_choice(self, action, reward) -> None:
-#     action_ix = get_action_ix(action)  # 1 left, -1 right
-#     decay = np.exp(-1 / self.tau)
-#
-#     self.value = decay * self.value + self.beta * action_ix * reward
-#     self.log_odds_L = self.alpha * action_ix + self.value
-#     pL = sp.special.expit(self.log_odds_L)
-#     self.action_dist = np.array([1 - pL, pL])
-
-
-# def perseveration_regressor(choices, decay=0.25):
-#     """
-#     Compute exponentially weighted perseveration regressor.
-#
-#     Parameters
-#     ----------
-#     choices : array-like of shape (T,)
-#         Binary choices (0 = left, 1 = right).
-#     decay : float
-#         Exponential decay constant (lambda). Default = 0.25.
-#
-#     Returns
-#     -------
-#     pers : np.ndarray of shape (T,)
-#         Perseveration regressor in [-1, 1].
-#         pers[t] depends only on trials < t.
-#     """
-#     choices = np.asarray(choices)
-#     T = len(choices)
-#
-#     # Convert to -1 / +1 coding
-#     y = 2 * choices - 1
-#
-#     pers = np.zeros(T)
-#     num = 0.0  # weighted numerator
-#     den = 0.0  # weighted normalization
-#     alpha = np.exp(-decay)
-#
-#     for t in range(1, T):
-#         num = alpha * num + alpha * y[t - 1]
-#         den = alpha * den + alpha
-#         pers[t] = num / den if den > 0 else 0.0
-#
-#     return pers
 
 
 def prepare_trial_glm_hmm_data(

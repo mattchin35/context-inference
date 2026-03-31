@@ -34,19 +34,124 @@ class Session(Protocol):
     session_info: dict
 
 
-def get_block_types(trial_df: pd.DataFrame) -> np.array:
-    # left_cued_ix = (trial_df['state'] == 'left_patch') & (~trial_df['block_stimulus'].isnull())  # left cued
-    # left_uncued_ix = (trial_df['state'] == 'left_patch') & (trial_df['block_stimulus'].isnull())  # left uncued
-    # right_cued_ix = (trial_df['state'] == 'right_patch') & (~trial_df['block_stimulus'].isnull())  # right cued
-    # right_uncued_ix = (trial_df['state'] == 'right_patch') & (trial_df['block_stimulus'].isnull())  # right uncued
+def _get_normalized_state_labels(trial_df: pd.DataFrame) -> np.ndarray:
+    """Normalize real-session and simulated state labels to `left`/`right`.
 
-    # uncued_block = trial_df['block_stimulus'] == 'None' | trial_df['block_stimulus'] == None | np.isnan() # or trial_df['block_stimulus'].isnull()
-    uncued_block = trial_df['block_stimulus'].isnull()
-    cued_block = ~uncued_block # or trial_df['block_stimulus'].isnull()
-    left_cued_ix = (trial_df['state'] == 'left_patch') & cued_block  # left cued
-    left_uncued_ix = (trial_df['state'] == 'left_patch') & uncued_block  # left uncued
-    right_cued_ix = (trial_df['state'] == 'right_patch') & cued_block  # right cued
-    right_uncued_ix = (trial_df['state'] == 'right_patch') & uncued_block  # right uncued
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table containing a `state` column. Real sessions use
+        `left_patch`/`right_patch`; simulated runs use `left`/`right`.
+
+    Returns
+    -------
+    np.ndarray
+        Normalized state labels with shape `(n_trials,)` and values drawn from
+        `{"left", "right"}` where possible. Unknown labels are preserved so
+        downstream boolean masks simply evaluate to False.
+    """
+    normalized_states = trial_df["state"].astype(str).to_numpy(dtype=object)
+    normalized_states[normalized_states == "left_patch"] = "left"
+    normalized_states[normalized_states == "right_patch"] = "right"
+    return normalized_states
+
+
+def _get_uncued_block_mask(trial_df: pd.DataFrame) -> np.ndarray:
+    """Return the uncued-block mask for real or simulated trial schemas.
+
+    Adapter logic:
+    - real sessions: uncued blocks have null-like `block_stimulus`
+    - simulated runs: uncued blocks have `model_stimulus == -1`
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table containing either `block_stimulus` or `model_stimulus`.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean mask with shape `(n_trials,)`, where True marks uncued trials.
+    """
+    if "block_stimulus" in trial_df.columns:
+        stimulus = trial_df["block_stimulus"]
+        return stimulus.isnull().to_numpy() | stimulus.astype(str).eq("None").to_numpy()
+
+    if "model_stimulus" in trial_df.columns:
+        stimulus = trial_df["model_stimulus"]
+        return stimulus.isnull().to_numpy() | stimulus.astype(str).eq("-1").to_numpy()
+
+    raise ValueError(
+        "trial_df must contain either 'block_stimulus' (real sessions) or "
+        "'model_stimulus' (simulated runs)."
+    )
+
+
+def _get_give_reward_array(trial_df: pd.DataFrame) -> np.ndarray:
+    """Return experimenter-given reward flags, defaulting missing values to zero.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table that may or may not contain a `give_reward` column.
+
+    Returns
+    -------
+    np.ndarray
+        Array of shape `(n_trials,)`. Missing columns are treated as zeros,
+        which is the correct behavior for simulated runs.
+    """
+    if "give_reward" not in trial_df.columns:
+        return np.zeros(trial_df.shape[0], dtype=int)
+    return np.copy(trial_df["give_reward"].to_numpy())
+
+
+def _get_choice_latency(trial_df: pd.DataFrame) -> np.ndarray:
+    """Return trialwise choice latencies or NaN when timing columns are absent.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table. Real sessions are expected to contain `choice_time` and
+        `start_time`; simulated runs typically do not.
+
+    Returns
+    -------
+    np.ndarray
+        Latency array with shape `(n_trials,)`. When timing columns are
+        missing, the array is filled with `np.nan`.
+    """
+    if {"choice_time", "start_time"}.issubset(trial_df.columns):
+        return (
+            trial_df["choice_time"].to_numpy(dtype=float)
+            - trial_df["start_time"].to_numpy(dtype=float)
+        )
+    return np.full(trial_df.shape[0], np.nan, dtype=float)
+
+
+def get_block_types(trial_df: pd.DataFrame) -> np.array:
+    """Assign block types for real or simulated runs.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table containing a `state` column and either:
+        - `block_stimulus` for real sessions
+        - `model_stimulus` for simulated runs
+
+    Returns
+    -------
+    np.ndarray
+        Block-type labels with shape `(n_trials,)`, values in
+        `{"left_cued", "left_uncued", "right_cued", "right_uncued"}`.
+    """
+    normalized_states = _get_normalized_state_labels(trial_df)
+    uncued_block = _get_uncued_block_mask(trial_df)
+    cued_block = ~uncued_block
+    left_cued_ix = (normalized_states == 'left') & cued_block
+    left_uncued_ix = (normalized_states == 'left') & uncued_block
+    right_cued_ix = (normalized_states == 'right') & cued_block
+    right_uncued_ix = (normalized_states == 'right') & uncued_block
 
     block_types = np.zeros(trial_df.shape[0], dtype=object)
     block_types[left_cued_ix] = 'left_cued'
@@ -99,11 +204,31 @@ def percent_correct(augmented_trial_df: pd.DataFrame) -> dict:
 
 
 def summarize_trials_to_correct(block_performance: pd.DataFrame) -> dict:
+    """Summarize blockwise trials-to-correct while tolerating `'None'` sentinels.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise summary dataframe containing `block_type` and
+        `trials_to_correct`. The latter may still use the legacy `'None'`
+        string sentinel for incomplete blocks.
+
+    Returns
+    -------
+    dict
+        Mean trials-to-correct by block type and overall. String sentinels are
+        ignored for the numeric summaries and conditions with no valid numeric
+        values return `'None'`.
+    """
     # 1. collect left and right choices 2. categorize choices as cued or uncued 3. calculate percentages
     left_cued_ix = block_performance['block_type'] == 'left_cued'
     left_uncued_ix = block_performance['block_type'] == 'left_uncued'
     right_cued_ix = block_performance['block_type'] == 'right_cued'
     right_uncued_ix = block_performance['block_type'] == 'right_uncued'
+    trials_to_correct_numeric = pd.to_numeric(
+        block_performance['trials_to_correct'],
+        errors='coerce',
+    )
 
     # condition to handle - last block may have no correct choices (lack of engagement, didn't get it right before session end)
     # handle by removing this block entirely from overall summary as incomplete data
@@ -120,30 +245,35 @@ def summarize_trials_to_correct(block_performance: pd.DataFrame) -> dict:
             # left_cued_trials = np.nan
             left_cued_trials = 'None'
         else:
-            left_cued_trials = np.mean(block_performance.loc[left_cued_ix, 'trials_to_correct'])
+            left_cued_values = trials_to_correct_numeric[left_cued_ix].dropna()
+            left_cued_trials = left_cued_values.mean() if not left_cued_values.empty else 'None'
 
         if np.sum(left_uncued_ix) == 0:
             # left_uncued_trials = np.nan
             left_uncued_trials = 'None'
         else:
-            left_uncued_trials = np.mean(block_performance.loc[left_uncued_ix, 'trials_to_correct'])
+            left_uncued_values = trials_to_correct_numeric[left_uncued_ix].dropna()
+            left_uncued_trials = left_uncued_values.mean() if not left_uncued_values.empty else 'None'
 
         if np.sum(right_cued_ix) == 0:
             # right_cued_trials = np.nan
             right_cued_trials = 'None'
         else:
-            right_cued_trials = np.mean(block_performance.loc[right_cued_ix, 'trials_to_correct'])
+            right_cued_values = trials_to_correct_numeric[right_cued_ix].dropna()
+            right_cued_trials = right_cued_values.mean() if not right_cued_values.empty else 'None'
 
         if np.sum(right_uncued_ix) == 0:
             # right_uncued_trials = np.nan
             right_uncued_trials = 'None'
         else:
-            right_uncued_trials = np.mean(block_performance.loc[right_uncued_ix, 'trials_to_correct'])
+            right_uncued_values = trials_to_correct_numeric[right_uncued_ix].dropna()
+            right_uncued_trials = right_uncued_values.mean() if not right_uncued_values.empty else 'None'
 
     except Exception as e:
         print(e)
 
-    overall = np.mean(block_performance['trials_to_correct'])
+    valid_trials = trials_to_correct_numeric.dropna()
+    overall = valid_trials.mean() if not valid_trials.empty else 'None'
     return dict(left_cued_trials_to_correct=left_cued_trials, left_uncued_trials_to_correct=left_uncued_trials,
                 right_cued_trials_to_correct=right_cued_trials, right_uncued_trials_to_correct=right_uncued_trials,
                 overall_trials_to_correct=overall)
@@ -153,7 +283,7 @@ def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
     # handle any give_reward trials
     actions = np.copy(trial_df['action'].values)
     rewards = np.copy(trial_df['reward'].values)
-    give_reward = np.copy(trial_df['give_reward'].values)
+    give_reward = _get_give_reward_array(trial_df)
     for i, (a, g) in enumerate(zip(actions, give_reward)):
         # if a in ['None', -1]:
         if g in [1, '1']:
@@ -175,7 +305,7 @@ def make_augmented_trial_df(trial_df: pd.DataFrame) -> pd.DataFrame:
     augmented_trial_df = trial_df.copy(deep=True)
     block_types = get_block_types(trial_df)
     augmented_trial_df['block_type'] = block_types
-    augmented_trial_df['time_to_choice'] = augmented_trial_df['choice_time'] - augmented_trial_df['start_time']
+    augmented_trial_df['time_to_choice'] = _get_choice_latency(trial_df)
 
     prev_action = np.zeros(trial_df.shape[0], dtype='object')
     prev_reward = np.zeros(trial_df.shape[0], dtype='object')
@@ -199,6 +329,7 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     """
     sess_id = mouse + '_' + date
     augmented_trial_df = make_augmented_trial_df(trial_df)
+    choice_latency = augmented_trial_df['time_to_choice'].to_numpy(dtype=float)
     blocks = np.unique(trial_df['cur_block'])
     block_performance = []
 
@@ -245,9 +376,9 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
                            n_correct=np.sum(cur_block_df['correct']),
                            percent_correct=performance['overall_correct'],
                            n_rewarded=np.sum(cur_block_df['reward']),
-                           mean_choice_time=np.mean(cur_block_df['choice_time']-cur_block_df['start_time']),
-                           median_choice_time=np.median(cur_block_df['choice_time']-cur_block_df['start_time']),
-                           std_choice_time=np.std(cur_block_df['choice_time']-cur_block_df['start_time']),
+                           mean_choice_time=np.mean(choice_latency[cur_block_ix.to_numpy()]),
+                           median_choice_time=np.median(choice_latency[cur_block_ix.to_numpy()]),
+                           std_choice_time=np.std(choice_latency[cur_block_ix.to_numpy()]),
                            session_ID=sess_id)
 
         block_performance.append(performance)
@@ -289,6 +420,7 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
 
     n_trials = trial_df.shape[0]
     decision_variable_dict = defaultdict(list)
+    give_reward_flags = _get_give_reward_array(trial_df)
 
     # trial_df.reset_index(inplace=True)
 
@@ -321,8 +453,8 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
 
         # Don't update DVs for trials with experimenter-given rewards. These trials shouldn't be included in action
         # prediction models either
-        give_reward = ((trial_df.loc[i, 'give_reward'] == 1) or
-                       (trial_df.loc[i, 'give_reward'] == '1') or
+        give_reward = ((give_reward_flags[i] == 1) or
+                       (give_reward_flags[i] == '1') or
                        (trial_df['action'].to_numpy()[i] == 'None'))
         if give_reward:
             continue
@@ -377,12 +509,42 @@ def session_stats(dependent_var, independent_var) -> tuple[float, float, float, 
 
 def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataFrame, augmented_trial_df: pd.DataFrame,
                   sess_id: str, session_save_path: Path, overall_save_path: Path=None) -> pd.DataFrame:
-    assert session_save_path.exists(), "within-session data save path does not exist"
-    assert overall_save_path.exists(), "between-session data save path does not exist"
+    """Save within-session outputs and optionally update multisession summaries.
 
-    mouse, date, time = sess_id.split('_')
+    Parameters
+    ----------
+    session_performance : pd.DataFrame
+        Single-row session summary dataframe.
+    block_performance : pd.DataFrame
+        Blockwise summary dataframe.
+    augmented_trial_df : pd.DataFrame
+        Trialwise augmented dataframe.
+    sess_id : str
+        Full session identifier.
+    session_save_path : Path
+        Directory where within-session CSV outputs are written.
+    overall_save_path : Path or None, default=None
+        Multisession summary directory. If None, only within-session outputs
+        are written and `session_performance` is returned unchanged.
+
+    Returns
+    -------
+    pd.DataFrame
+        Updated multisession dataframe if `overall_save_path` is provided,
+        otherwise the input `session_performance`.
+    """
+    assert session_save_path.exists(), "within-session data save path does not exist"
+
+    match = re.search(r"(.+?)_(\d{4}-\d{2}-\d{2})_(\d{6})", sess_id)
+    if match is None:
+        raise ValueError(f"sess_id does not match expected pattern: {sess_id}")
+    mouse, date, _time = match.groups()
     block_performance.to_csv(session_save_path / (sess_id + '_block_performance.csv'), index=False, na_rep='None')
     augmented_trial_df.to_csv(session_save_path / (sess_id + '_augmented_trials.csv'), index=False, na_rep='None')
+    if overall_save_path is None:
+        return session_performance
+
+    assert overall_save_path.exists(), "between-session data save path does not exist"
     overall_fname = overall_save_path / (mouse + '_overall_performance.csv')
     if overall_fname.exists():
         overall_df = pd.read_csv(overall_fname, na_filter=False)
@@ -420,6 +582,25 @@ def load_analysis(sess_id_full: str, session_data_folder: Path, multisession_dat
 
 # def run_analysis(trial_df: pd.DataFrame, sess_id_full: str, processed_data_path: Path,):
 def run_analysis(trial_df: pd.DataFrame, session: Session):
+    """Run single-session analysis with optional multisession persistence.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table for a real or simulated session.
+    session : Session
+        Session metadata. If `session.multi_session_save_path` is None, the
+        analysis saves only within-session outputs and skips multisession
+        summary save/load steps. This is the intended mode for simulated runs.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
+        - augmented trial dataframe
+        - block performance dataframe
+        - multisession dataframe when multisession saving is enabled, otherwise
+          the single-row `session_performance` dataframe
+    """
     session_performance, block_performance, augmented_trial_df = analyze_session(trial_df, mouse=session.mouse, date=session.date)
     ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
     slope, intercept, r_value, p_value = session_stats(
@@ -475,13 +656,24 @@ def run_analysis(trial_df: pd.DataFrame, session: Session):
     # block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
     # augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
 
-    save_analysis(session_performance, block_performance, augmented_trial_df,
-                  sess_id=session.sess_id_full, session_save_path=session.processed_data_path,
-                  overall_save_path=session.multi_session_save_path)
+    no_multisession = getattr(session, "multi_session_save_path", None) is None
+    save_analysis(
+        session_performance,
+        block_performance,
+        augmented_trial_df,
+        sess_id=session.sess_id_full,
+        session_save_path=session.processed_data_path,
+        overall_save_path=None if no_multisession else session.multi_session_save_path,
+    )
 
-    # multisession_df = pd.read_csv(session.processed_data_path / (session.sess_id_full + '.csv'), sep=',', na_filter=False)
-    multisession_df, block_performance, augmented_trial_df = load_analysis(session.sess_id_full, session.processed_data_path,
-                                                                           session.multi_session_save_path)
+    if no_multisession:
+        return augmented_trial_df, block_performance, session_performance
+
+    multisession_df, block_performance, augmented_trial_df = load_analysis(
+        session.sess_id_full,
+        session.processed_data_path,
+        session.multi_session_save_path,
+    )
     return augmented_trial_df, block_performance, multisession_df
 
 
