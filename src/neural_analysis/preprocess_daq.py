@@ -14,23 +14,37 @@ import re
 import pickle as pkl
 from scipy.signal import savgol_filter, medfilt
 from src.neural_analysis import modified_sinc_smoother as mss
+from src.neural_analysis.irig_sync_utils import (
+    assign_utc_to_irig_bits as shared_assign_utc_to_irig_bits,
+    classify_irig_h_pulses as shared_classify_irig_h_pulses,
+    decode_irig_h_frame_anchors as shared_decode_irig_h_frame_anchors,
+    decode_sync_line_to_irig_utc as shared_decode_sync_line_to_irig_utc,
+    find_signal_edges as shared_find_signal_edges,
+    interpolate_with_linear_extrapolation as shared_interpolate_with_linear_extrapolation,
+    map_digital_rising_edges_to_utc as shared_map_digital_rising_edges_to_utc,
+    map_sample_indices_to_utc as shared_map_sample_indices_to_utc,
+    pulse_lengths_from_edges as shared_pulse_lengths_from_edges,
+)
+from src.neural_analysis.spikeglx_sync_io import read_digital_lines as shared_read_digital_lines
 import pywt
 from scipy import signal
 
 
 def read_digital_lines(binaryFilePath: str, digitalWord: int, digitalLines: list[int]) -> [np.ndarray, int]:
-    meta = readSGLX.readMeta(binaryFilePath)
-    sampleRate = readSGLX.SampRate(meta)
-    nChan = int(meta['nSavedChans'])
-    nSamples = int(int(meta['fileSizeBytes']) / (2 * nChan))
+    """Read one or more SpikeGLX digital lines.
 
-    firstSamp = 0
-    lastSamp = nSamples - 1  # sample ix is 0-indexed but ExtracDigital is inclusive
+    Args:
+        binaryFilePath: Path to a SpikeGLX ``.bin`` file.
+        digitalWord: Digital word index used by ``ExtractDigital``.
+        digitalLines: Line indices within ``digitalWord``.
 
-    rawData = readSGLX.makeMemMapRaw(binaryFilePath, meta)
-    digArray = readSGLX.ExtractDigital(rawData, firstSamp, lastSamp, digitalWord, digitalLines, meta)
-    digArray = np.squeeze(digArray)
-    return digArray, sampleRate
+    Returns:
+        tuple[np.ndarray, int]:
+            - Digital signal array with shape ``(n_lines, n_samples)`` or
+              ``(n_samples,)`` stored as bool.
+            - Sampling rate in Hz.
+    """
+    return shared_read_digital_lines(binaryFilePath, digitalWord, digitalLines)
 
 
 def volts2speed(mVolts: np.ndarray) -> np.ndarray:
@@ -45,53 +59,21 @@ def volts2speed(mVolts: np.ndarray) -> np.ndarray:
 
 
 def find_signal_edges(binary_signal: npt.ArrayLike) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Find rising (positive threshold crossing) and falling edge sample indices.
-    """
-    sig = np.asarray(binary_signal, dtype=bool)
-    rising_ix = np.flatnonzero(~sig[:-1] & sig[1:]) + 1
-    falling_ix = np.flatnonzero(sig[:-1] & ~sig[1:]) + 1
-
-    if sig.size and sig[0]:
-        rising_ix = np.insert(rising_ix, 0, 0)
-    return rising_ix, falling_ix
+    """Find rising and falling edge sample indices for a digital signal."""
+    return shared_find_signal_edges(binary_signal)
 
 
 def pulse_lengths_from_edges(rising_ix: np.ndarray, falling_ix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Pair each rising edge to the next falling edge and return pulse lengths in samples.
-    """
-    if rising_ix.size == 0 or falling_ix.size == 0:
-        return np.array([], dtype=int), np.array([], dtype=float)
-
-    next_fall_pos = np.searchsorted(falling_ix, rising_ix, side='right')
-    valid = next_fall_pos < falling_ix.size
-    if not np.any(valid):
-        return np.array([], dtype=int), np.array([], dtype=float)
-
-    paired_rising = rising_ix[valid]
-    paired_falling = falling_ix[next_fall_pos[valid]]
-    lengths = (paired_falling - paired_rising).astype(float)
-    return paired_rising, lengths
+    """Pair each rising edge to the next falling edge and return pulse lengths."""
+    return shared_pulse_lengths_from_edges(rising_ix, falling_ix)
 
 
 def classify_irig_h_pulses(
     pulse_lengths_samples: np.ndarray,
     sample_rate: float,
     bit_period_s: float = 1.0) -> np.ndarray:
-    """
-    Classify IRIG-H pulse lengths into False(0), True(1), or 'P' marker.
-    """
-    samples_per_bit = sample_rate * bit_period_s
-    p_thresh = 0.75 * samples_per_bit
-    one_thresh = 0.45 * samples_per_bit
-    zero_thresh = 0.05 * samples_per_bit
-
-    bits = np.full(pulse_lengths_samples.shape, None, dtype=object)
-    bits[pulse_lengths_samples > p_thresh] = 'P'
-    bits[(pulse_lengths_samples > one_thresh) & (pulse_lengths_samples <= p_thresh)] = True
-    bits[(pulse_lengths_samples > zero_thresh) & (pulse_lengths_samples <= one_thresh)] = False
-    return bits
+    """Classify IRIG-H pulse lengths into False, True, or position markers."""
+    return shared_classify_irig_h_pulses(pulse_lengths_samples, sample_rate, bit_period_s)
 
 
 def _irig_frame_to_utc_unix(frame_bits: list[object]) -> Optional[float]:
@@ -106,61 +88,13 @@ def _irig_frame_to_utc_unix(frame_bits: list[object]) -> Optional[float]:
 
 
 def decode_irig_h_frame_anchors(irig_bits: np.ndarray) -> list[tuple[int, float]]:
-    """
-    Decode IRIG-H frame starts from bit labels and return (frame_start_bit_ix, frame_start_unix).
-    """
-    if irig_bits.size < 122:
-        return []
-
-    tracking_start = None
-    scan_max = min(120, irig_bits.size - 1)
-    for i in range(scan_max):
-        if irig_bits[i] == 'P' and irig_bits[i + 1] == 'P':
-            tracking_start = i + 1
-            break
-    if tracking_start is None:
-        return []
-
-    frame_bits = []
-    frame_ix = []
-    anchors: list[tuple[int, float]] = []
-    for i in range(tracking_start, irig_bits.size - 1):
-        frame_bits.append(irig_bits[i])
-        frame_ix.append(i)
-        if irig_bits[i] == 'P' and irig_bits[i + 1] == 'P':
-            if len(frame_bits) == 60:
-                posix = _irig_frame_to_utc_unix(frame_bits)
-                if posix is not None:
-                    anchors.append((frame_ix[0], float(posix)))
-            frame_bits = []
-            frame_ix = []
-    return anchors
+    """Decode IRIG-H frame starts from bit labels."""
+    return shared_decode_irig_h_frame_anchors(irig_bits)
 
 
 def assign_utc_to_irig_bits(n_bits: int, frame_anchors: list[tuple[int, float]]) -> np.ndarray:
-    """
-    Assign UTC unix seconds to each IRIG bit index using decoded frame anchors.
-    """
-    unix_time = np.full(n_bits, np.nan, dtype=float)
-    if n_bits == 0 or len(frame_anchors) == 0:
-        return unix_time
-
-    anchor_ix = np.array([a[0] for a in frame_anchors], dtype=int)
-    anchor_unix = np.array([a[1] for a in frame_anchors], dtype=float)
-    keep = np.concatenate(([True], np.diff(anchor_ix) > 0))
-    anchor_ix = anchor_ix[keep]
-    anchor_unix = anchor_unix[keep]
-    if anchor_ix.size == 0:
-        return unix_time
-
-    first_ix = anchor_ix[0]
-    unix_time[first_ix:] = anchor_unix[0] + np.arange(n_bits - first_ix, dtype=float)
-    unix_time[:first_ix] = anchor_unix[0] - np.arange(first_ix, 0, -1, dtype=float)
-
-    for k in range(1, anchor_ix.size):
-        start = anchor_ix[k]
-        unix_time[start:] = anchor_unix[k] + np.arange(n_bits - start, dtype=float)
-    return unix_time
+    """Assign UTC unix seconds to each IRIG bit index using frame anchors."""
+    return shared_assign_utc_to_irig_bits(n_bits, frame_anchors)
 
 
 def decode_daq_irig_h_crossings(
@@ -169,38 +103,12 @@ def decode_daq_irig_h_crossings(
     bit_period_s: float = 1.0,
     align_first_crossing_unix: Optional[float] = None,
 ) -> pd.DataFrame:
-    """
-    Decode IRIG-H from digital DAQ line and return UTC for each positive threshold crossing.
-    """
-    rising_ix, falling_ix = find_signal_edges(daq_irig)
-    paired_rising_ix, pulse_lengths = pulse_lengths_from_edges(rising_ix, falling_ix)
-    irig_bits = classify_irig_h_pulses(pulse_lengths, sample_rate=sample_rate, bit_period_s=bit_period_s)
-
-    valid_mask = np.array([bit is not None for bit in irig_bits], dtype=bool)
-    valid_bits = irig_bits[valid_mask]
-    anchors = decode_irig_h_frame_anchors(valid_bits)
-    valid_unix = assign_utc_to_irig_bits(valid_bits.size, anchors)
-
-    all_unix = np.full(irig_bits.shape[0], np.nan, dtype=float)
-    all_unix[valid_mask] = valid_unix
-
-    if align_first_crossing_unix is not None and np.isfinite(align_first_crossing_unix):
-        finite_ix = np.where(np.isfinite(all_unix))[0]
-        if finite_ix.size > 0:
-            shift_s = float(align_first_crossing_unix) - float(all_unix[finite_ix[0]])
-            all_unix = all_unix + shift_s
-
-    crossing_time_s = paired_rising_ix / float(sample_rate)
-    utc_datetime = [datetime.fromtimestamp(t, tz=timezone.utc) if np.isfinite(t) else pd.NaT for t in all_unix]
-    return pd.DataFrame(
-        {
-            'sample_ix': paired_rising_ix,
-            'recording_time_s': crossing_time_s,
-            'pulse_len_samples': pulse_lengths,
-            'irig_bit': irig_bits,
-            'utc_unix': all_unix,
-            'utc_datetime': utc_datetime,
-        }
+    """Decode IRIG-H from a digital DAQ line and return UTC for pulse onsets."""
+    return shared_decode_sync_line_to_irig_utc(
+        sync_signal=daq_irig,
+        sample_rate_hz=sample_rate,
+        bit_period_s=bit_period_s,
+        align_first_rising_edge_unix=align_first_crossing_unix,
     )
 
 
@@ -209,24 +117,8 @@ def _interpolate_with_linear_extrapolation(
     x_known: np.ndarray,
     y_known: np.ndarray,
 ) -> np.ndarray:
-    """
-    Interpolate y(x) for query points, with linear extrapolation beyond bounds.
-    """
-    y = np.interp(x_query.astype(float), x_known.astype(float), y_known.astype(float))
-    if x_known.size < 2:
-        return y
-
-    left_mask = x_query < x_known[0]
-    right_mask = x_query > x_known[-1]
-
-    left_dx = float(x_known[1] - x_known[0])
-    right_dx = float(x_known[-1] - x_known[-2])
-    left_slope = (y_known[1] - y_known[0]) / left_dx if left_dx != 0 else 0.0
-    right_slope = (y_known[-1] - y_known[-2]) / right_dx if right_dx != 0 else 0.0
-
-    y[left_mask] = y_known[0] + (x_query[left_mask] - x_known[0]) * left_slope
-    y[right_mask] = y_known[-1] + (x_query[right_mask] - x_known[-1]) * right_slope
-    return y
+    """Interpolate y(x) for query points, with linear extrapolation beyond bounds."""
+    return shared_interpolate_with_linear_extrapolation(x_query, x_known, y_known)
 
 
 def map_digital_crossings_to_utc(
@@ -234,50 +126,17 @@ def map_digital_crossings_to_utc(
     sample_rate: float,
     irig_crossings_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    """
-    Map positive crossings on a digital line to UTC using IRIG-derived crossing times.
-    """
-    rising_ix, _ = find_signal_edges(digital_signal)
-
-    known = irig_crossings_df[np.isfinite(irig_crossings_df['utc_unix'])][['sample_ix', 'utc_unix']].copy()
-    known = known.drop_duplicates(subset='sample_ix').sort_values('sample_ix')
-    if known.shape[0] < 2:
-        raise ValueError('Need at least two finite IRIG UTC points to map digital crossings.')
-
-    utc_unix = _interpolate_with_linear_extrapolation(
-        x_query=rising_ix.astype(float),
-        x_known=known['sample_ix'].to_numpy(dtype=float),
-        y_known=known['utc_unix'].to_numpy(dtype=float),
-    )
-    utc_datetime = [datetime.fromtimestamp(t, tz=timezone.utc) for t in utc_unix]
-    return pd.DataFrame(
-        {
-            'sample_ix': rising_ix,
-            'recording_time_s': rising_ix / float(sample_rate),
-            'utc_unix': utc_unix,
-            'utc_datetime': utc_datetime,
-        }
+    """Map positive crossings on a digital line to UTC using IRIG anchors."""
+    return shared_map_digital_rising_edges_to_utc(
+        digital_signal=digital_signal,
+        sample_rate_hz=sample_rate,
+        irig_df=irig_crossings_df,
     )
 
 
 def map_sample_indices_to_utc(sample_ix: npt.ArrayLike, irig_crossings_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Map an arbitrary collection of sample indices to UTC using IRIG-derived sample->UTC mapping.
-    """
-    sample_ix = np.asarray(sample_ix, dtype=float).reshape(-1)
-
-    known = irig_crossings_df[np.isfinite(irig_crossings_df['utc_unix'])][['sample_ix', 'utc_unix']].copy()
-    known = known.drop_duplicates(subset='sample_ix').sort_values('sample_ix')
-    if known.shape[0] < 2:
-        raise ValueError('Need at least two finite IRIG UTC points to map sample indices.')
-
-    utc_unix = _interpolate_with_linear_extrapolation(
-        x_query=sample_ix,
-        x_known=known['sample_ix'].to_numpy(dtype=float),
-        y_known=known['utc_unix'].to_numpy(dtype=float),
-    )
-    utc_datetime = [datetime.fromtimestamp(t, tz=timezone.utc) for t in utc_unix]
-    return pd.DataFrame({'sample_ix': sample_ix.astype(np.int64), 'utc_unix': utc_unix, 'utc_datetime': utc_datetime})
+    """Map an arbitrary collection of sample indices to UTC using IRIG anchors."""
+    return shared_map_sample_indices_to_utc(sample_ix, irig_crossings_df)
 
 
 def get_flipper_events(data: np.ndarray, sample_rate: float, threshold: float = 0.5, debounce=.0002):

@@ -43,6 +43,8 @@ For the 3 behavior sessions above, I will need to do crude analyses of my behavi
 500 ms periods directly before and directly after a choice is made. The analysis techniques may not improve for now - 
 any significant changes will likely be related to refactoring or integrating the code with pynapple.
 
+1. Neural data must have UTC timestamps for alignement with behavior 
+2. HPC and V1 spikes must be chosen by electrode sites, and binned into 500 ms bins around choice times.
 TODO: make a plan for neural behavior. Right now I need to finish up the model implementation, validation, and 
 analysis of mouse behavior sessions.
 
