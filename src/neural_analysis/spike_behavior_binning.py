@@ -171,6 +171,7 @@ def decode_from_spikes(binned_spikes: np.ndarray, bin_value: np.ndarray, label='
                       shuffle_pvalue=shuffle_pval, shuffle_acc=np.mean(shuffle_accuracies), shuffle_acc_std=np.std(shuffle_accuracies), label=''),
             binned_spikes, bin_value) #, shuffle_vals
 
+
 def shuffle_decode_only(binned_spikes: np.ndarray, bin_value: np.ndarray, label='') -> [object, float]:
     nanmask = np.isnan(bin_value)
     if np.any(nanmask):

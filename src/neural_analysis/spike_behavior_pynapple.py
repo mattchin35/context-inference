@@ -584,7 +584,7 @@ def main() -> None:
     """
 
     multi_session_save_path = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis")
-    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference")
+    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251223_latentInference")
     sess_id_full = "CT014_2025-12-16_153200"
     raw_behavior_folder = session_data_home / "rpi" / sess_id_full
     processed_data_path = session_data_home / "processed"

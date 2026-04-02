@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+
 import numpy as np
 
 
@@ -204,6 +206,66 @@ def get_depth_from_surface(vertical_pos, surface_y):
     return surface_y - np.asarray(vertical_pos)
 
 
+def serialize_shank_sites_for_json(shank_sites):
+    """Convert nested shank-site arrays into a JSON-safe schema.
+
+    Args:
+        shank_sites (dict[int, dict[str, np.ndarray]]): Mapping from shank index
+            to nested dictionaries with ``"in_brain"`` and ``"out_of_brain"``
+            zero-based channel-index arrays.
+
+    Returns:
+        dict[str, list[dict[str, object]]]: Dictionary with key ``"shanks"``
+        whose value is a list of dictionaries containing integer ``"shank"``
+        identifiers and list-valued ``"in_brain"`` / ``"out_of_brain"``
+        channel indices.
+    """
+    serialized_shanks = []
+    for shank, site_groups in shank_sites.items():
+        serialized_shanks.append(
+            {
+                "shank": int(shank),
+                "in_brain": np.asarray(site_groups["in_brain"], dtype=int).tolist(),
+                "out_of_brain": np.asarray(
+                    site_groups["out_of_brain"], dtype=int
+                ).tolist(),
+            }
+        )
+
+    return {"shanks": serialized_shanks}
+
+
+def save_shank_sites_json(output_path, shank_sites):
+    """Save nested shank-site arrays to ``shank_sites.json``.
+
+    Args:
+        output_path (str | Path): Existing directory where
+            ``shank_sites.json`` will be written.
+        shank_sites (dict[int, dict[str, np.ndarray]]): Mapping from shank index
+            to nested dictionaries with ``"in_brain"`` and ``"out_of_brain"``
+            zero-based channel-index arrays.
+
+    Returns:
+        Path: Path to the written ``shank_sites.json`` file.
+
+    Raises:
+        FileNotFoundError: If ``output_path`` does not exist or is not a
+            directory.
+    """
+    output_directory = Path(output_path)
+    if not output_directory.is_dir():
+        raise FileNotFoundError(
+            f"output_path must be an existing directory: {output_directory}"
+        )
+
+    output_file = output_directory / "shank_sites.json"
+    serialized_shank_sites = serialize_shank_sites_for_json(shank_sites)
+    with output_file.open("w", encoding="utf-8") as file_handle:
+        json.dump(serialized_shank_sites, file_handle, indent=2)
+
+    return output_file
+
+
 def sort_channels_within_shank(indices, vertical_pos, horizontal_pos, sort_order):
     """Sort channel indices by depth and horizontal position.
 
@@ -238,7 +300,9 @@ def sort_channels_within_shank(indices, vertical_pos, horizontal_pos, sort_order
 
 
 if __name__ == "__main__":
-    filepath = "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/ephys/catgt/catgt_run0_g0/run0_g0_imec1/probe_json.json"
+    home_folder = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251205_latentInference/ephys/catgt/catgt_run0_g0/run0_g0_imec1/")
+    filepath = home_folder / "probe_json.json"
+    output_path = home_folder
 
     data = load_probe_json(filepath)
 
@@ -254,7 +318,9 @@ if __name__ == "__main__":
     for shank, site_groups in shank_sites.items():
         print(f"Shank {shank}:")
         print("  In brain:")
-        print(site_groups["in_brain"] + 1)  # conversion for matlab indexing
+        print(site_groups["in_brain"] + 1)  # console conversion for matlab indexing
         print("  Out of brain:")
-        print(site_groups["out_of_brain"] + 1)  # conversion for matlab indexing
+        print(site_groups["out_of_brain"] + 1)  # console conversion for matlab indexing
         print()
+
+    save_shank_sites_json(output_path, shank_sites)

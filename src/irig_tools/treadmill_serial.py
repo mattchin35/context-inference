@@ -54,7 +54,7 @@ def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
     return posix_decoded, datetime_decoded, frame_ix
 
 
-file_path = Path.home() / 'Documents/ephys_transfer' / 'treadmill_20251008' / 'CoolTerm Capture (Untitled_0) 2025-10-21 12-36-20-447.txt'
+file_path = Path.home() / 'Documents' / 'ephys_transfer' / 'treadmill_20251008' / 'CoolTerm Capture (Untitled_0) 2025-10-21 12-36-20-447.txt'
 # df = pd.read_csv(filepath, sep=';', header=None, on_bad_lines='skip', usecols=[1, 2, 4])
 
 log_labels = ['Fdistance', 'Bdistance', 'dacval', 'runSpeed']
