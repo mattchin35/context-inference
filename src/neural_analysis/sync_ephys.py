@@ -262,19 +262,13 @@ def _require_existing_file(file_path: Path) -> Path:
     return file_path
 
 
-def main(
-    session_data_home: Path | str = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference"),
-    sess_id_full: str = "CT014_2025-12-16_153200",
-    sorting_output_name: str = "Kilosort2.5.2_2026-03-18_115111",
-    ni_event_lines: tuple[int, ...] = (2, 3),
-    output_root: Optional[Path | str] = None,
-) -> None:
+def main() -> None:
     """Run a brief example synchronization workflow for one IMEC stream and NI lines.
 
     Args:
         session_data_home: Session root directory containing ``ephys/raw`` and
             ``ephys/catgt`` subdirectories.
-        sess_id_full: Session identifier string for printed summaries.
+        sess_id: Session identifier string for printed summaries.
         sorting_output_name: Name of the sorting output directory containing
             ``spike_times.npy``.
         ni_event_lines: NI digital line indices to map to UTC from NI word 0.
@@ -284,30 +278,50 @@ def main(
     Returns:
         None: This example runner writes files and prints a short summary.
     """
-    session_data_home = Path(session_data_home)
-    output_root = Path(output_root) if output_root is not None else session_data_home / "ephys" / "aligned"
+    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251205_latentInference")
+    sess_id_full: str = "CT014_2025-12-05"
+    output_root = session_data_home / "ephys" / "aligned"
+    sorting0_output_name = 'Kilosort2.5.2_2026-03-19_165539'
+    sorting1_output_name = 'Kilosort2.5.2_2026-03-19_173016'
+    ni_event_lines = (2, 3)
 
     raw_ephys_folder = session_data_home / "ephys" / "raw" / "run0_g0"
     catgt_ephys_folder = session_data_home / "ephys" / "catgt" / "catgt_run0_g0"
     imec0_folder = catgt_ephys_folder / "run0_g0_imec0"
-    sorting_output = imec0_folder / sorting_output_name
+    ap0_file = _require_existing_file(imec0_folder / "run0_g0_tcat.imec0.ap.bin")
+    sorting_output0 = imec0_folder / sorting0_output_name
+    spike_times_file0 = _require_existing_file(sorting_output0 / "spike_times.npy")
+
+    imec1_folder = catgt_ephys_folder / "run0_g0_imec1"
+    sorting_output1 = imec1_folder / sorting1_output_name
+    ap1_file = _require_existing_file(imec1_folder / "run0_g0_tcat.imec1.ap.bin")
+    spike_times_file1 = _require_existing_file(sorting_output1 / "spike_times.npy")
 
     ni_file = _require_existing_file(raw_ephys_folder / "run0_g0_t0.nidq.bin")
-    ap_file = _require_existing_file(imec0_folder / "run0_g0_tcat.imec0.ap.bin")
-    spike_times_file = _require_existing_file(sorting_output / "spike_times.npy")
-
-    imec_output_dir = output_root / "aligned_imec0"
+    imec_output_dir = output_root / "aligned_imec"
     nidaq_output_dir = output_root / "aligned_nidaq"
 
     spike_df, imec_irig_df = sync_imec_spikes_to_utc(
-        imec_ap_file=ap_file,
-        spike_times_npy=spike_times_file,
+        imec_ap_file=ap0_file,
+        spike_times_npy=spike_times_file0,
         output_file=imec_output_dir / "imec0_sync.npz",
         digital_word=0,
         irig_line=6,
     )
     print(
         f"{sess_id_full} imec0: mapped {spike_df.shape[0]} spikes using "
+        f"{imec_irig_df.shape[0]} IRIG rising edges."
+    )
+
+    spike_df, imec_irig_df = sync_imec_spikes_to_utc(
+        imec_ap_file=ap1_file,
+        spike_times_npy=spike_times_file1,
+        output_file=imec_output_dir / "imec1_sync.npz",
+        digital_word=0,
+        irig_line=6,
+    )
+    print(
+        f"{sess_id_full} imec1: mapped {spike_df.shape[0]} spikes using "
         f"{imec_irig_df.shape[0]} IRIG rising edges."
     )
 

@@ -16,7 +16,7 @@ from sklearn.metrics import accuracy_score
 from sklearn.model_selection import permutation_test_score, train_test_split
 
 import src.external_tools.readSGLX as readSGLX
-
+import src.external_tools.get_brain_channels as get_brain_channels
 
 @dataclass
 class Session:
@@ -164,6 +164,10 @@ def load_sorter_spikes(sorter_output_path: Path, ap_bin_path: Path) -> tuple[np.
     return spike_times_seconds, spike_clusters, cluster_info
 
 
+def load_aligned_spikes():
+    pass
+
+
 def build_spike_tsgroup(
     spike_times: np.ndarray,
     spike_clusters: np.ndarray,
@@ -271,8 +275,9 @@ def select_units_by_channels(cluster_info: pd.DataFrame, region_channels: np.nda
     Parameters
     ----------
     cluster_info : pd.DataFrame
-        Cluster metadata table with columns ``cluster_id`` and ``ch``. ``ch`` is an integer
-        channel index with no physical-unit conversion.
+        Cluster metadata table with columns ``cluster_id``, ``ch``, and ``group``. ``ch`` is an
+        integer channel index with no physical-unit conversion. ``group`` is a cluster-quality
+        label, and only ``"good"`` and ``"mua"`` clusters are retained.
     region_channels : np.ndarray | list[int]
         One-dimensional list-like collection of channel indices with shape ``(n_channels,)``.
         Channel ids are integer labels with no physical-unit conversion.
@@ -281,16 +286,18 @@ def select_units_by_channels(cluster_info: pd.DataFrame, region_channels: np.nda
     -------
     np.ndarray
         One-dimensional integer array with shape ``(n_region_units,)`` containing cluster ids
-        whose main channel matches one of the requested channels.
+        whose main channel matches one of the requested channels and whose quality label is
+        ``"good"`` or ``"mua"``.
     """
 
-    required_columns = {"cluster_id", "ch"}
+    required_columns = {"cluster_id", "ch", "group"}
     missing_columns = required_columns - set(cluster_info.columns)
     if missing_columns:
         raise ValueError(f"cluster_info is missing required columns: {sorted(missing_columns)}")
 
     normalized_channels = normalize_region_channels(region_channels)
-    selected_mask = cluster_info["ch"].isin(normalized_channels)
+    normalized_groups = cluster_info["group"].astype(str).str.strip().str.lower()
+    selected_mask = cluster_info["ch"].isin(normalized_channels) & normalized_groups.isin({"good", "mua"})
     return cluster_info.loc[selected_mask, "cluster_id"].to_numpy(dtype=int)
 
 
@@ -666,6 +673,46 @@ def make_trial_type_masks(trial_df: pd.DataFrame) -> dict[str, pd.Series]:
     return masks
 
 
+def summarize_trial_masks(
+    trial_masks: Mapping[str, pd.Series],
+    condition_names: list[str],
+) -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
+    """
+    Summarize selected trial masks in a user-specified condition order.
+
+    Parameters
+    ----------
+    trial_masks : Mapping[str, pd.Series]
+        Mapping from condition name to boolean trial mask. Each mask must be one-dimensional and
+        indexed like the trial table.
+    condition_names : list[str]
+        Ordered list of condition names to summarize.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, dict[str, np.ndarray]]
+        ``(summary_df, condition_trial_indices)`` where ``summary_df`` has one row per requested
+        condition with columns ``condition`` and ``n_trials``, and ``condition_trial_indices``
+        maps each condition name to a one-dimensional integer array of selected trial indices.
+    """
+
+    summary_rows: list[dict[str, Any]] = []
+    condition_trial_indices: dict[str, np.ndarray] = {}
+    for condition_name in condition_names:
+        if condition_name not in trial_masks:
+            raise ValueError(f"Requested condition {condition_name!r} is not present in trial_masks.")
+        trial_indices = np.flatnonzero(np.asarray(trial_masks[condition_name], dtype=bool))
+        condition_trial_indices[condition_name] = trial_indices
+        summary_rows.append(
+            {
+                "condition": condition_name,
+                "n_trials": int(trial_indices.size),
+            }
+        )
+
+    return pd.DataFrame(summary_rows), condition_trial_indices
+
+
 def make_classifier_bins(
     region_trial_binned: list[dict[str, Any]],
     trial_df: pd.DataFrame,
@@ -744,6 +791,76 @@ def make_classifier_bins(
         np.concatenate(state_bins),
         np.concatenate(choice_bins),
     )
+
+
+def collect_condition_classifier_bins(
+    region_trial_binned: list[dict[str, Any]],
+    trial_df: pd.DataFrame,
+    trial_masks: Mapping[str, pd.Series],
+    condition_names: list[str],
+    windows: Mapping[str, tuple[float, float]],
+    event: str = "choice_time",
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """
+    Collect classifier-ready bins for ordered condition/window combinations.
+
+    Parameters
+    ----------
+    region_trial_binned : list[dict[str, Any]]
+        Output from ``bin_region_trials`` with one dictionary per trial.
+    trial_df : pd.DataFrame
+        Trial table with one row per trial. Must contain the requested alignment event column.
+    trial_masks : Mapping[str, pd.Series]
+        Mapping from condition name to boolean trial masks indexed like ``trial_df``.
+    condition_names : list[str]
+        Ordered list of condition names to extract.
+    windows : Mapping[str, tuple[float, float]]
+        Mapping from window label to relative event bounds in seconds.
+    event : str, optional
+        Alignment event name passed through to ``make_classifier_bins``.
+
+    Returns
+    -------
+    dict[tuple[str, str], dict[str, Any]]
+        Dictionary keyed by ``(condition_name, window_name)``. Each value contains either:
+        ``status == "ok"`` with ``spike_bins``, ``state_bins``, and ``choice_bins``,
+        or ``status == "failed"`` with a short failure reason.
+    """
+
+    collected_bins: dict[tuple[str, str], dict[str, Any]] = {}
+    for condition_name in condition_names:
+        if condition_name not in trial_masks:
+            raise ValueError(f"Requested condition {condition_name!r} is not present in trial_masks.")
+
+        for window_name, bounds in windows.items():
+            key = (condition_name, window_name)
+            try:
+                spike_bins, state_bins, choice_bins = make_classifier_bins(
+                    region_trial_binned=region_trial_binned,
+                    trial_df=trial_df,
+                    trial_mask=trial_masks[condition_name],
+                    event=event,
+                    bounds=bounds,
+                )
+            except ValueError as error:
+                collected_bins[key] = {
+                    "status": "failed",
+                    "reason": str(error),
+                    "event": event,
+                    "bounds": bounds,
+                }
+                continue
+
+            collected_bins[key] = {
+                "status": "ok",
+                "event": event,
+                "bounds": bounds,
+                "spike_bins": spike_bins,
+                "state_bins": state_bins,
+                "choice_bins": choice_bins,
+            }
+
+    return collected_bins
 
 
 def get_decode_target(trial_df: pd.DataFrame, target: str = "state_int") -> np.ndarray:
@@ -880,7 +997,8 @@ def cv_decodeability_score(
 
     classifier = LogisticRegression(
         solver="saga",
-        penalty="l1",
+        # penalty="l1",
+        l1_ratio=.5,  # L1 penalty is l1_ratio=1; for L2 set to 0; for elastic net set to .5
         max_iter=10000,
         random_state=random_state,
     )
@@ -905,6 +1023,39 @@ def cv_decodeability_score(
         "permutation_score_mean": float(np.mean(permutation_scores)),
         "permutation_score_std": float(np.std(permutation_scores)),
     }
+
+
+def summarize_decoding_results(
+    results_df: pd.DataFrame,
+    value_columns: list[str],
+) -> pd.DataFrame:
+    """
+    Select a compact, ordered subset of decoding-result columns for display.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        Decoding-results table with at least ``condition``, ``window``, ``status``, and ``reason`` columns.
+    value_columns : list[str]
+        Ordered list of metric columns to include after the core display columns.
+
+    Returns
+    -------
+    pd.DataFrame
+        A shallow copy of ``results_df`` containing only the requested display columns in a stable order.
+    """
+
+    required_columns = {"condition", "window", "status", "reason"}
+    missing_columns = required_columns - set(results_df.columns)
+    if missing_columns:
+        raise ValueError(f"results_df is missing required columns: {sorted(missing_columns)}")
+
+    selected_columns = ["condition", "window", "status", "reason", *value_columns]
+    for column_name in value_columns:
+        if column_name not in results_df.columns:
+            raise ValueError(f"results_df is missing requested value column {column_name!r}.")
+
+    return results_df.loc[:, selected_columns].copy()
 
 
 def train_single_decoder_with_shuffle_null(
@@ -963,7 +1114,8 @@ def train_single_decoder_with_shuffle_null(
 
     classifier = LogisticRegression(
         solver="saga",
-        penalty="l1",
+        # penalty="l1",
+        l1_ratio=1,  # L1 penalty is l1_ratio=1; for L2 set to 0; for elastic net set to .5
         max_iter=10000,
         random_state=random_state,
     )
@@ -1214,23 +1366,85 @@ def main() -> None:
     """
 
     multi_session_save_path = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis")
-    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251223_latentInference")
-    sess_id_full = "CT014_2025-12-23_163505"
+    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference")
+    sess_id_full = "CT014_2025-12-16_153200"
     raw_behavior_folder = session_data_home / "rpi" / sess_id_full
     processed_data_path = session_data_home / "processed"
     figure_path = session_data_home / "figures"
 
     pfc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/Kilosort2.5.2_2026-03-19_180103"
+    pfc_ap_bin_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/run0_g0_tcat.imec0.ap.bin"
     hpc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/Kilosort2.5.2_2026-03-19_183540"
     hpc_ap_bin_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/run0_g0_tcat.imec1.ap.bin"
+
+    aligned_spike_path = session_data_home / 'ephys/aligned/aligned_imec'
+    aligned_pfc_spike_path = aligned_spike_path / 'imec0_sync.npz'
+    aligned_hpc_spike_path = aligned_spike_path / 'imec1_sync.npz'
+
+    probe_json_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/probe_json.json"
 
     if not hpc_spike_path.exists():
         raise FileNotFoundError(f"HPC sorter output not found at {hpc_spike_path}")
     if not hpc_ap_bin_path.exists():
         raise FileNotFoundError(f"HPC AP binary not found at {hpc_ap_bin_path}")
+    assert probe_json_path.exists(), f"Probe JSON file not found at {probe_json_path}"
+    assert aligned_pfc_spike_path.exists(), f"Aligned PFC spike file not found at {aligned_hpc_spike_path}"
+    assert aligned_hpc_spike_path.exists(), f"Aligned HPC spike file not found at {aligned_hpc_spike_path}"
 
+    # probe_sites = get_brain_channels.load_probe_json(probe_json_path)
+    # brain_channels, shank_sites = get_brain_channels.get_brain_and_shank_sites(
+    #     probe_sites,
+    #     sort_order="shallow_to_deep",
+    # )
+
+    # aligned_pfc_spikes = np.load(aligned_pfc_spike_path)
+    aligned_hpc_spikes = np.load(aligned_hpc_spike_path)
+
+    decode_target = "state_int"
     region_name = "HPC"
-    region_channels = normalize_region_channels(np.arange(192, 240, dtype=int))
+    # print(", ".join(map(str, "your_array")))
+    hpc_channels_shank0 = np.array([
+        4, 3, 2, 1, 192, 191, 190, 189, 188, 187, 186, 185, 184, 183, 182, 181,
+        180, 179, 178, 177, 176, 175, 174, 173, 172, 171, 170, 169, 168, 167,
+        166, 165, 164, 163, 162, 161, 160, 159, 158, 157, 156, 155, 154, 153,
+        152, 151, 150, 149, 148, 147, 146, 145, 96, 95, 94, 93, 92, 91, 90, 89,
+        88, 87, 86, 85, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71,
+        70, 69, 68, 67, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53,
+        52, 51, 50, 49, 384, 383, 382, 381
+    ])
+    hpc_channels_shank3 = np.array([
+        255, 254, 253, 252, 251, 250, 249, 248, 247, 246, 245, 244, 243, 242,
+        241, 336, 335, 334, 333, 332, 331, 330, 329, 328, 327, 326, 325, 324,
+        323, 322, 321, 320, 319, 318, 317, 316, 315, 314, 313, 312, 311, 310,
+        309, 308, 307, 306, 305, 304, 303, 302, 301, 300, 299, 298, 297, 296,
+        295, 294, 293, 292, 291, 290, 289, 240, 239, 238, 237, 236, 235, 234,
+        233, 232, 231, 230, 229, 228, 227, 226, 225, 224, 223, 222, 221, 220,
+        219, 218, 217, 216, 215, 214, 213, 212, 211, 210, 209, 208, 207, 206,
+        205, 204, 203, 202, 201, 200, 199, 198, 197, 196, 195, 194, 193, 144,
+        143, 142, 141
+    ])
+    hpc_channels = np.concatenate([hpc_channels_shank0, hpc_channels_shank3])
+
+    # region_name = "V1"
+    v1_channels_shank0 = np.array([
+        138, 137, 136, 135, 134, 133, 132, 131, 130, 129, 128, 127, 126, 125,
+        124, 123, 122, 121, 120, 119, 118, 117, 116, 115, 114, 113, 112, 111,
+        110, 109, 108, 107, 106, 105, 104, 103, 102, 101, 100, 99, 98, 97,
+        48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32,
+        31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15,
+        14, 13, 12, 11, 10, 9, 8, 7, 6, 5
+    ])
+    v1_channels_shank3 = np.array([
+        78, 377, 376, 375, 374, 373, 372, 371, 370, 369, 368, 367, 366, 365,
+        364, 363, 362, 361, 360, 359, 358, 357, 356, 355, 354, 353, 352, 351,
+        350, 349, 348, 347, 346, 345, 344, 343, 342, 341, 340, 339, 338, 337,
+        288, 287, 286, 285, 284, 283, 282, 281, 280, 279, 278, 277, 276, 275,
+        274, 273, 272, 271, 270, 269, 268, 267, 266, 265, 264, 263, 262, 261,
+        260, 259, 258, 257, 256
+    ])
+    v1_channels = np.concatenate([v1_channels_shank0, v1_channels_shank3])
+
+    region_channels = normalize_region_channels(hpc_channels)
 
     mouse, date, timestamp = parse_session_id(sess_id_full)
     session_info_path = raw_behavior_folder / f"{sess_id_full}_session_info.pkl"
@@ -1278,6 +1492,43 @@ def main() -> None:
         pre_time=2.0,
         post_time=2.0,
     )
+    trial_masks = make_trial_type_masks(trial_df)
+    condition_names = [
+        "correct_rewarded",
+        "incorrect",
+        "omission",
+        "switch",
+        "stay",
+        "omission_switch",
+        "omission_stay",
+        "incorrect_switch",
+        "incorrect_stay",
+    ]
+    choice_windows = {
+        "pre_choice": (-0.5, 0.0),
+        "post_choice": (0.0, 0.5),
+    }
+    mask_summary_df, condition_trial_indices = summarize_trial_masks(
+        trial_masks=trial_masks,
+        condition_names=condition_names,
+    )
+    classifier_bins_by_condition = collect_condition_classifier_bins(
+        region_trial_binned=region_spike_bins,
+        trial_df=trial_df,
+        trial_masks=trial_masks,
+        condition_names=condition_names,
+        windows=choice_windows,
+        event="choice_time",
+    )
+    decoding_results = run_base_condition_decoding(
+        region_trial_binned=region_spike_bins,
+        trial_df=trial_df,
+        target=decode_target,
+        cv=5,
+        n_permutations=100,
+        n_shuffles=1000,
+        random_state=0,
+    )
 
     first_trial_end = resolve_trial_end(trial_df.iloc[0])
     first_trial_licks, _ = bin_licks_to_trial_pynapple(
@@ -1295,6 +1546,67 @@ def main() -> None:
     print(f"Trials binned: {len(region_spike_bins)}")
     print(f"First trial spike-bin shape: {region_spike_bins[0]['binned_spikes'].shape}")
     print(f"First trial lick-bin shape: {first_trial_licks.shape}")
+    print(f"Decode target: {decode_target}")
+    print("Trial condition counts:")
+    for _, summary_row in mask_summary_df.iterrows():
+        condition_name = str(summary_row["condition"])
+        condition_count = int(summary_row["n_trials"])
+        trial_indices = condition_trial_indices[condition_name].tolist()
+        print(f"  {condition_name}: {condition_count} trials {trial_indices}")
+
+    print("Classifier bin summary:")
+    for condition_name in condition_names:
+        for window_name in choice_windows:
+            collected_entry = classifier_bins_by_condition[(condition_name, window_name)]
+            if collected_entry["status"] == "ok":
+                print(
+                    f"  {condition_name} {window_name}: spike_bins {collected_entry['spike_bins'].shape}, "
+                    f"labels {collected_entry['state_bins'].shape[0]}"
+                )
+            else:
+                print(f"  {condition_name} {window_name}: failed ({collected_entry['reason']})")
+    print("CV decodeability summary:")
+    cv_summary_df = summarize_decoding_results(
+        decoding_results["decodeability_results"],
+        value_columns=["cv_score", "cv_pvalue"],
+    )
+    for _, summary_row in cv_summary_df.iterrows():
+        if summary_row["status"] == "ok":
+            print(
+                f"  {summary_row['condition']} {summary_row['window']}: "
+                f"cv_score={summary_row['cv_score']:.3f}, cv_pvalue={summary_row['cv_pvalue']:.3f}"
+            )
+        else:
+            print(
+                f"  {summary_row['condition']} {summary_row['window']}: "
+                f"failed ({summary_row['reason']})"
+            )
+    print("One-shot decoder summary:")
+    training_result = decoding_results["training_result"]
+    if training_result["status"] == "ok":
+        print(
+            "  trained on correct_rewarded pre_choice: "
+            f"train_acc={training_result['train_accuracy']:.3f}, "
+            f"test_acc={training_result['test_accuracy']:.3f}, "
+            f"shuffle_p={training_result['shuffle_pvalue']:.3f}"
+        )
+    else:
+        print(f"  training failed ({training_result['reason']})")
+    generalization_summary_df = summarize_decoding_results(
+        decoding_results["generalization_results"],
+        value_columns=["test_accuracy"],
+    )
+    for _, summary_row in generalization_summary_df.iterrows():
+        if summary_row["status"] == "ok":
+            print(
+                f"  {summary_row['condition']} {summary_row['window']}: "
+                f"accuracy={summary_row['test_accuracy']:.3f}"
+            )
+        else:
+            print(
+                f"  {summary_row['condition']} {summary_row['window']}: "
+                f"failed ({summary_row['reason']})"
+            )
 
 
 if __name__ == "__main__":

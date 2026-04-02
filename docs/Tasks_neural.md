@@ -52,3 +52,4 @@ to check and plot. The main change will be for repeating the decoder runs: the n
 a distribution of scores instead of as a single point, so that I would have (n_sessions * n_decoders) points instead of 
 just n_sessions points. It might be nice to show each session's distribution of scores in a different color,
 with the overall mean across sessions in black.
+

@@ -300,7 +300,7 @@ def sort_channels_within_shank(indices, vertical_pos, horizontal_pos, sort_order
 
 
 if __name__ == "__main__":
-    home_folder = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251205_latentInference/ephys/catgt/catgt_run0_g0/run0_g0_imec1/")
+    home_folder = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251223_latentInference/ephys/catgt/catgt_run0_g0/run0_g0_imec1/")
     filepath = home_folder / "probe_json.json"
     output_path = home_folder
 

@@ -205,3 +205,10 @@ The scientific motivation and long-form requirements remain in `PRD.md`, and the
   - controller theme forwarding
   - sample switched-run execution in both themes
 - Verified the full suite after these changes with `uv run pytest`.
+
+
+# Notes for changes inspired by testing:
+- The doubt regressor is fine for end-stage training, but mid-stage training might do better with a simple threshold 
+regressor - like if omissions > x, then doubt is 1, otherwise 0. How can x be made adjustable, so that it can vary
+with the found HMM states?
+
