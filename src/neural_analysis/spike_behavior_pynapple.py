@@ -11,12 +11,11 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 import pynapple as nap
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import permutation_test_score, train_test_split
 
 import src.external_tools.readSGLX as readSGLX
-
-
-HPC_CHANNEL_START = 192
-HPC_CHANNEL_STOP = 240
 
 
 @dataclass
@@ -240,21 +239,49 @@ def build_lick_time_dict(event_df: pd.DataFrame) -> dict[str, nap.Ts]:
     return lick_time_dict
 
 
-def select_hpc_units(cluster_info: pd.DataFrame) -> np.ndarray:
+def normalize_region_channels(region_channels: np.ndarray | list[int]) -> np.ndarray:
     """
-    Select cluster ids assigned to the legacy HPC channel range.
+    Normalize a user-provided channel specification for one brain region.
+
+    Parameters
+    ----------
+    region_channels : np.ndarray | list[int]
+        One-dimensional list-like collection of channel indices with shape ``(n_channels,)``.
+        Channel ids are integer labels with no physical-unit conversion.
+
+    Returns
+    -------
+    np.ndarray
+        One-dimensional integer array with shape ``(n_channels,)`` containing the requested
+        region channels.
+    """
+
+    normalized_channels = np.asarray(region_channels, dtype=int)
+    if normalized_channels.ndim != 1:
+        raise ValueError("region_channels must be one-dimensional.")
+    if normalized_channels.size == 0:
+        raise ValueError("region_channels must contain at least one channel.")
+    return normalized_channels
+
+
+def select_units_by_channels(cluster_info: pd.DataFrame, region_channels: np.ndarray | list[int]) -> np.ndarray:
+    """
+    Select cluster ids assigned to a user-provided set of channels.
 
     Parameters
     ----------
     cluster_info : pd.DataFrame
         Cluster metadata table with columns ``cluster_id`` and ``ch``. ``ch`` is an integer
         channel index with no physical-unit conversion.
+    region_channels : np.ndarray | list[int]
+        One-dimensional list-like collection of channel indices with shape ``(n_channels,)``.
+        Channel ids are integer labels with no physical-unit conversion.
 
     Returns
     -------
     np.ndarray
-        One-dimensional integer array with shape ``(n_hpc_units,)`` containing cluster ids
-        whose main channel lies in the inclusive range 192-239.
+        One-dimensional integer array with shape ``(n_region_units,)`` containing cluster ids
+        whose main channel matches one of the requested channels.
     """
 
     required_columns = {"cluster_id", "ch"}
@@ -262,8 +289,9 @@ def select_hpc_units(cluster_info: pd.DataFrame) -> np.ndarray:
     if missing_columns:
         raise ValueError(f"cluster_info is missing required columns: {sorted(missing_columns)}")
 
-    hpc_mask = cluster_info["ch"].between(HPC_CHANNEL_START, HPC_CHANNEL_STOP - 1)
-    return cluster_info.loc[hpc_mask, "cluster_id"].to_numpy(dtype=int)
+    normalized_channels = normalize_region_channels(region_channels)
+    selected_mask = cluster_info["ch"].isin(normalized_channels)
+    return cluster_info.loc[selected_mask, "cluster_id"].to_numpy(dtype=int)
 
 
 def resolve_trial_end(trial_row: pd.Series) -> float:
@@ -502,7 +530,7 @@ def bin_licks_to_trial_pynapple(
     return binned_licks, bin_edges
 
 
-def bin_hpc_trials(
+def bin_region_trials(
     trial_df: pd.DataFrame,
     spike_group: nap.TsGroup,
     cluster_ids: np.ndarray,
@@ -511,7 +539,7 @@ def bin_hpc_trials(
     post_time: float = 2.0,
 ) -> list[dict[str, Any]]:
     """
-    Bin HPC spikes for every trial while preserving the legacy output structure.
+    Bin region-selected spikes for every trial while preserving the legacy output structure.
 
     Parameters
     ----------
@@ -574,30 +602,635 @@ def bin_hpc_trials(
     return spikes_trial_binned
 
 
+def make_trial_type_masks(trial_df: pd.DataFrame) -> dict[str, pd.Series]:
+    """
+    Build boolean trial masks for simple neural-behavior analyses.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with one row per trial. Required columns are ``give_reward``, ``correct``,
+        ``reward``, and ``action``. ``give_reward`` is an experimenter-override flag where
+        nonzero values mark trials invalid for neural analysis. ``correct`` and ``reward``
+        are scalar trial outcomes with no unit conversion. ``action`` is a scalar choice label.
+
+    Returns
+    -------
+    dict[str, pd.Series]
+        Dictionary of boolean masks indexed like ``trial_df``. Keys are:
+        ``valid``,
+        ``correct_rewarded``,
+        ``rewarded``,
+        ``incorrect``,
+        ``omission``,
+        ``switch``,
+        ``stay``,
+        ``omission_switch``,
+        ``omission_stay``,
+        ``incorrect_switch``,
+        ``incorrect_stay``.
+    """
+
+    required_columns = {"give_reward", "correct", "reward", "action"}
+    missing_columns = required_columns - set(trial_df.columns)
+    if missing_columns:
+        raise ValueError(f"trial_df is missing required columns: {sorted(missing_columns)}")
+
+    valid = trial_df["give_reward"].eq(0)
+    correct_rewarded = valid & trial_df["correct"].eq(1) & trial_df["reward"].eq(1)
+    incorrect = valid & trial_df["correct"].eq(0) & trial_df["action"].notna()
+    omission = valid & trial_df["correct"].eq(1) & trial_df["reward"].eq(0)
+
+    current_unrewarded = valid & trial_df["reward"].eq(0)
+    current_action_valid = trial_df["action"].notna()
+    next_valid = trial_df["give_reward"].shift(-1).eq(0).fillna(False)
+    next_action = trial_df["action"].shift(-1)
+    next_action_valid = next_action.notna()
+    comparable_next_trial = current_unrewarded & current_action_valid & next_valid & next_action_valid
+    switch = comparable_next_trial & next_action.ne(trial_df["action"])
+    stay = comparable_next_trial & next_action.eq(trial_df["action"])
+
+    masks = {
+        "valid": valid,
+        "correct_rewarded": correct_rewarded,
+        "rewarded": correct_rewarded,
+        "incorrect": incorrect,
+        "omission": omission,
+        "switch": switch,
+        "stay": stay,
+    }
+    masks["omission_switch"] = masks["omission"] & masks["switch"]
+    masks["omission_stay"] = masks["omission"] & masks["stay"]
+    masks["incorrect_switch"] = masks["incorrect"] & masks["switch"]
+    masks["incorrect_stay"] = masks["incorrect"] & masks["stay"]
+    return masks
+
+
+def make_classifier_bins(
+    region_trial_binned: list[dict[str, Any]],
+    trial_df: pd.DataFrame,
+    trial_mask: pd.Series | np.ndarray,
+    event: str = "choice_time",
+    bounds: tuple[float, float] = (-0.5, 0.0),
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Extract classifier inputs from pre-binned trial spike counts.
+
+    Parameters
+    ----------
+    region_trial_binned : list[dict[str, Any]]
+        Output from ``bin_region_trials`` with one dictionary per trial. Each dictionary must
+        contain ``binned_spikes`` with shape ``(n_units, n_bins)``, ``bin_edges`` with shape
+        ``(n_bins + 1,)`` in seconds, ``bin_states`` with shape ``(n_bins,)``, and
+        ``bin_choices`` with shape ``(n_bins,)``.
+    trial_df : pd.DataFrame
+        Trial table with one row per trial. Required event columns are ``start_time`` and/or
+        ``choice_time`` depending on ``event``. Time values are in seconds.
+    trial_mask : pd.Series | np.ndarray
+        One-dimensional boolean selector with shape ``(n_trials,)`` indicating which trials to
+        include in the extracted classifier bins.
+    event : str, optional
+        Alignment event name. Supported values are ``"start_time"`` and ``"choice_time"``.
+    bounds : tuple[float, float], optional
+        Time window relative to ``event`` in seconds as ``(start_offset, end_offset)``.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        ``(spike_bins, state_bins, choice_bins)`` where ``spike_bins`` has shape
+        ``(n_units, n_selected_bins)``, and ``state_bins`` and ``choice_bins`` have shape
+        ``(n_selected_bins,)``.
+    """
+
+    if event not in {"start_time", "choice_time"}:
+        raise ValueError("event must be 'start_time' or 'choice_time'.")
+    if len(bounds) != 2:
+        raise ValueError("bounds must contain exactly two values.")
+    if len(region_trial_binned) != len(trial_df):
+        raise ValueError("region_trial_binned and trial_df must have the same number of trials.")
+
+    trial_mask_array = np.asarray(trial_mask, dtype=bool)
+    if trial_mask_array.ndim != 1 or trial_mask_array.shape[0] != len(trial_df):
+        raise ValueError("trial_mask must be a one-dimensional boolean selector matching trial_df.")
+
+    selected_trial_indices = np.flatnonzero(trial_mask_array)
+    if selected_trial_indices.size == 0:
+        raise ValueError("No trials were selected for classifier bin extraction.")
+
+    spike_bins = []
+    state_bins = []
+    choice_bins = []
+    for trial_index in selected_trial_indices:
+        event_time = trial_df.iloc[trial_index][event]
+        if pd.isna(event_time):
+            raise ValueError(f"Selected trial {trial_index} is missing {event}.")
+
+        bin_edges = np.asarray(region_trial_binned[trial_index]["bin_edges"], dtype=float)
+        trial_bin_mask = (
+            (bin_edges >= float(event_time) + bounds[0]) &
+            (bin_edges < float(event_time) + bounds[1])
+        )[:-1]
+        if not np.any(trial_bin_mask):
+            raise ValueError(
+                f"Selected trial {trial_index} has no bins in bounds {bounds} around {event}."
+            )
+
+        spike_bins.append(np.asarray(region_trial_binned[trial_index]["binned_spikes"], dtype=float)[:, trial_bin_mask])
+        state_bins.append(np.asarray(region_trial_binned[trial_index]["bin_states"], dtype=float)[trial_bin_mask])
+        choice_bins.append(np.asarray(region_trial_binned[trial_index]["bin_choices"], dtype=float)[trial_bin_mask])
+
+    return (
+        np.concatenate(spike_bins, axis=1),
+        np.concatenate(state_bins),
+        np.concatenate(choice_bins),
+    )
+
+
+def get_decode_target(trial_df: pd.DataFrame, target: str = "state_int") -> np.ndarray:
+    """
+    Extract one supported decoding target from the trial table.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with one row per trial. Must contain the requested target column.
+    target : str, optional
+        Name of the decode target column. Supported values are ``"state_int"`` and ``"action"``.
+
+    Returns
+    -------
+    np.ndarray
+        One-dimensional float array with shape ``(n_trials,)`` containing the requested target values.
+    """
+
+    if target not in {"state_int", "action"}:
+        raise ValueError("target must be 'state_int' or 'action'.")
+    if target not in trial_df.columns:
+        raise ValueError(f"trial_df is missing requested target column {target!r}.")
+    return pd.to_numeric(trial_df[target], errors="coerce").to_numpy(dtype=float)
+
+
+def _prepare_decode_inputs(
+    binned_spikes: np.ndarray,
+    target_values: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+    """
+    Filter decode inputs and summarize class counts.
+
+    Parameters
+    ----------
+    binned_spikes : np.ndarray
+        Spike-count matrix with shape ``(n_units, n_samples)``.
+    target_values : np.ndarray
+        One-dimensional target array with shape ``(n_samples,)``.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, dict[str, int]]
+        ``(filtered_spikes, filtered_targets, summary)`` where ``filtered_spikes`` retains shape
+        ``(n_units, n_valid_samples)``, ``filtered_targets`` has shape ``(n_valid_samples,)``,
+        and ``summary`` contains integer counts for ``n_samples`` and ``n_classes``.
+    """
+
+    filtered_targets = np.asarray(target_values, dtype=float)
+    filtered_spikes = np.asarray(binned_spikes, dtype=float)
+    if filtered_spikes.ndim != 2:
+        raise ValueError("binned_spikes must be a two-dimensional array with shape (n_units, n_samples).")
+    if filtered_targets.ndim != 1:
+        raise ValueError("target_values must be a one-dimensional array.")
+    if filtered_spikes.shape[1] != filtered_targets.shape[0]:
+        raise ValueError("binned_spikes and target_values must agree on sample count.")
+
+    valid_target_mask = ~np.isnan(filtered_targets)
+    filtered_spikes = filtered_spikes[:, valid_target_mask]
+    filtered_targets = filtered_targets[valid_target_mask]
+    summary = {
+        "n_samples": int(filtered_targets.shape[0]),
+        "n_classes": int(np.unique(filtered_targets).size),
+    }
+    return filtered_spikes, filtered_targets, summary
+
+
+def _failed_decode_result(reason: str, label: str = "", **extra_fields: Any) -> dict[str, Any]:
+    """
+    Build a standardized failed-decoding result dictionary.
+
+    Parameters
+    ----------
+    reason : str
+        Short machine-readable failure reason.
+    label : str, optional
+        Optional human-readable label for the attempted decode.
+    **extra_fields : Any
+        Additional key-value pairs to include in the result dictionary.
+
+    Returns
+    -------
+    dict[str, Any]
+        Result dictionary with ``status == "failed"`` and the supplied metadata.
+    """
+
+    result = {"status": "failed", "reason": reason, "label": label}
+    result.update(extra_fields)
+    return result
+
+
+def cv_decodeability_score(
+    binned_spikes: np.ndarray,
+    target_values: np.ndarray,
+    cv: int = 5,
+    n_permutations: int = 100,
+    random_state: int = 42,
+    label: str = "",
+) -> dict[str, Any]:
+    """
+    Compute a cross-validated decodeability score with a permutation-test null.
+
+    Parameters
+    ----------
+    binned_spikes : np.ndarray
+        Spike-count matrix with shape ``(n_units, n_samples)``.
+    target_values : np.ndarray
+        One-dimensional target array with shape ``(n_samples,)``. Values are class labels.
+    cv : int, optional
+        Number of cross-validation folds.
+    n_permutations : int, optional
+        Number of label permutations used for ``permutation_test_score``.
+    random_state : int, optional
+        Random seed passed to the permutation test and classifier.
+    label : str, optional
+        Human-readable label describing the decodeability run.
+
+    Returns
+    -------
+    dict[str, Any]
+        Result dictionary containing decodeability metrics or an explicit failure reason.
+    """
+
+    filtered_spikes, filtered_targets, summary = _prepare_decode_inputs(binned_spikes, target_values)
+    result_base = {"label": label, **summary}
+    if summary["n_samples"] == 0:
+        return _failed_decode_result("no_valid_samples", **result_base)
+    if summary["n_classes"] < 2:
+        return _failed_decode_result("insufficient_classes", **result_base)
+
+    class_counts = np.unique(filtered_targets, return_counts=True)[1]
+    if summary["n_samples"] < cv or int(class_counts.min()) < cv:
+        return _failed_decode_result("insufficient_samples", cv=cv, **result_base)
+
+    classifier = LogisticRegression(
+        solver="saga",
+        penalty="l1",
+        max_iter=10000,
+        random_state=random_state,
+    )
+    cv_score, permutation_scores, cv_pvalue = permutation_test_score(
+        classifier,
+        filtered_spikes.T,
+        filtered_targets,
+        scoring="accuracy",
+        cv=cv,
+        n_permutations=n_permutations,
+        random_state=random_state,
+    )
+    return {
+        "status": "ok",
+        "reason": "",
+        "label": label,
+        "n_samples": summary["n_samples"],
+        "n_classes": summary["n_classes"],
+        "cv_score": float(cv_score),
+        "cv_pvalue": float(cv_pvalue),
+        "permutation_scores": np.asarray(permutation_scores, dtype=float),
+        "permutation_score_mean": float(np.mean(permutation_scores)),
+        "permutation_score_std": float(np.std(permutation_scores)),
+    }
+
+
+def train_single_decoder_with_shuffle_null(
+    binned_spikes: np.ndarray,
+    target_values: np.ndarray,
+    test_size: float = 0.2,
+    n_shuffles: int = 1000,
+    random_state: int = 42,
+    label: str = "",
+) -> tuple[LogisticRegression | None, dict[str, Any]]:
+    """
+    Train one classifier and compare its held-out score against shuffled-label null fits.
+
+    Parameters
+    ----------
+    binned_spikes : np.ndarray
+        Spike-count matrix with shape ``(n_units, n_samples)``.
+    target_values : np.ndarray
+        One-dimensional target array with shape ``(n_samples,)``. Values are class labels.
+    test_size : float, optional
+        Fraction of samples reserved for held-out evaluation.
+    n_shuffles : int, optional
+        Number of shuffled-label null fits on the training split.
+    random_state : int, optional
+        Random seed passed to the train-test split and primary classifier.
+    label : str, optional
+        Human-readable label describing the training run.
+
+    Returns
+    -------
+    tuple[LogisticRegression | None, dict[str, Any]]
+        Fitted classifier and a metrics dictionary, or ``(None, failed_result)`` if fitting is not possible.
+    """
+
+    filtered_spikes, filtered_targets, summary = _prepare_decode_inputs(binned_spikes, target_values)
+    result_base = {"label": label, **summary}
+    if summary["n_samples"] == 0:
+        return None, _failed_decode_result("no_valid_samples", **result_base)
+    if summary["n_classes"] < 2:
+        return None, _failed_decode_result("insufficient_classes", **result_base)
+    if summary["n_samples"] < 2:
+        return None, _failed_decode_result("insufficient_samples", test_size=test_size, **result_base)
+
+    try:
+        x_train, x_test, y_train, y_test = train_test_split(
+            filtered_spikes.T,
+            filtered_targets,
+            test_size=test_size,
+            random_state=random_state,
+        )
+    except ValueError:
+        return None, _failed_decode_result("insufficient_samples", test_size=test_size, **result_base)
+
+    if np.unique(y_train).size < 2:
+        return None, _failed_decode_result("insufficient_classes_after_split", test_size=test_size, **result_base)
+
+    classifier = LogisticRegression(
+        solver="saga",
+        penalty="l1",
+        max_iter=10000,
+        random_state=random_state,
+    )
+    classifier.fit(x_train, y_train)
+    train_accuracy = accuracy_score(y_train, classifier.predict(x_train))
+    test_accuracy = accuracy_score(y_test, classifier.predict(x_test))
+
+    shuffle_accuracies = []
+    for shuffle_index in range(n_shuffles):
+        shuffled_targets = np.array(y_train, copy=True)
+        rng = np.random.default_rng(random_state + shuffle_index)
+        rng.shuffle(shuffled_targets)
+        if np.unique(shuffled_targets).size < 2:
+            continue
+        shuffle_classifier = LogisticRegression(max_iter=10000)
+        shuffle_classifier.fit(x_train, shuffled_targets)
+        shuffle_accuracies.append(accuracy_score(y_test, shuffle_classifier.predict(x_test)))
+
+    shuffle_accuracy_array = np.asarray(shuffle_accuracies, dtype=float)
+    shuffle_pvalue = float(np.mean(shuffle_accuracy_array >= test_accuracy)) if shuffle_accuracy_array.size else np.nan
+    return classifier, {
+        "status": "ok",
+        "reason": "",
+        "label": label,
+        "n_samples": summary["n_samples"],
+        "n_classes": summary["n_classes"],
+        "train_accuracy": float(train_accuracy),
+        "test_accuracy": float(test_accuracy),
+        "shuffle_pvalue": shuffle_pvalue,
+        "shuffle_accuracy_mean": float(np.mean(shuffle_accuracy_array)) if shuffle_accuracy_array.size else np.nan,
+        "shuffle_accuracy_std": float(np.std(shuffle_accuracy_array)) if shuffle_accuracy_array.size else np.nan,
+        "n_shuffles": int(n_shuffles),
+    }
+
+
+def evaluate_decoder_on_condition(
+    classifier: LogisticRegression | None,
+    binned_spikes: np.ndarray,
+    target_values: np.ndarray,
+    label: str = "",
+) -> dict[str, Any]:
+    """
+    Evaluate a fitted classifier on one condition-specific dataset.
+
+    Parameters
+    ----------
+    classifier : LogisticRegression | None
+        Fitted classifier from ``train_single_decoder_with_shuffle_null``.
+    binned_spikes : np.ndarray
+        Spike-count matrix with shape ``(n_units, n_samples)``.
+    target_values : np.ndarray
+        One-dimensional target array with shape ``(n_samples,)``. Values are class labels.
+    label : str, optional
+        Human-readable label for the evaluation set.
+
+    Returns
+    -------
+    dict[str, Any]
+        Evaluation result dictionary containing held-dataset accuracy or an explicit failure reason.
+    """
+
+    filtered_spikes, filtered_targets, summary = _prepare_decode_inputs(binned_spikes, target_values)
+    result_base = {"label": label, **summary}
+    if classifier is None:
+        return _failed_decode_result("missing_classifier", **result_base)
+    if summary["n_samples"] == 0:
+        return _failed_decode_result("no_valid_samples", **result_base)
+    if summary["n_classes"] < 2:
+        return _failed_decode_result("insufficient_classes", **result_base)
+
+    predictions = classifier.predict(filtered_spikes.T)
+    return {
+        "status": "ok",
+        "reason": "",
+        "label": label,
+        "n_samples": summary["n_samples"],
+        "n_classes": summary["n_classes"],
+        "test_accuracy": float(accuracy_score(filtered_targets, predictions)),
+    }
+
+
+def run_base_condition_decoding(
+    region_trial_binned: list[dict[str, Any]],
+    trial_df: pd.DataFrame,
+    target: str = "state_int",
+    cv: int = 5,
+    n_permutations: int = 100,
+    n_shuffles: int = 1000,
+    random_state: int = 42,
+) -> dict[str, Any]:
+    """
+    Run the simple base-condition decoding workflow around choice time.
+
+    Parameters
+    ----------
+    region_trial_binned : list[dict[str, Any]]
+        Output from ``bin_region_trials`` with one dictionary per trial.
+    trial_df : pd.DataFrame
+        Trial table containing mask columns, event times, and decode targets.
+    target : str, optional
+        Decode target column name. Supported values are ``"state_int"`` and ``"action"``.
+    cv : int, optional
+        Number of folds used for decodeability scoring.
+    n_permutations : int, optional
+        Number of permutations used for cross-validated decodeability scoring.
+    n_shuffles : int, optional
+        Number of shuffled-label null fits for the single trained decoder.
+    random_state : int, optional
+        Base random seed used for all stochastic decoding steps.
+
+    Returns
+    -------
+    dict[str, Any]
+        Dictionary containing the fitted classifier, training metrics, decodeability results,
+        and generalization results for base trial conditions and pre/post choice windows.
+    """
+
+    get_decode_target(trial_df, target=target)
+    trial_masks = make_trial_type_masks(trial_df)
+    base_conditions = ["correct_rewarded", "incorrect", "omission", "switch", "stay"]
+    windows = {
+        "pre_choice": (-0.5, 0.0),
+        "post_choice": (0.0, 0.5),
+    }
+
+    decodeability_rows: list[dict[str, Any]] = []
+    extracted_bins: dict[tuple[str, str], tuple[np.ndarray, np.ndarray, np.ndarray] | None] = {}
+    for condition in base_conditions:
+        for window_name, bounds in windows.items():
+            condition_label = f"{condition}_{window_name}"
+            try:
+                spike_bins, state_bins, choice_bins = make_classifier_bins(
+                    region_trial_binned=region_trial_binned,
+                    trial_df=trial_df,
+                    trial_mask=trial_masks[condition],
+                    event="choice_time",
+                    bounds=bounds,
+                )
+            except ValueError as error:
+                extracted_bins[(condition, window_name)] = None
+                decodeability_rows.append(
+                    {
+                        "condition": condition,
+                        "window": window_name,
+                        "target": target,
+                        **_failed_decode_result("no_selected_bins", label=condition_label, error=str(error)),
+                    }
+                )
+                continue
+
+            condition_targets = state_bins if target == "state_int" else choice_bins
+            extracted_bins[(condition, window_name)] = (spike_bins, condition_targets, np.array([]))
+            decodeability_result = cv_decodeability_score(
+                binned_spikes=spike_bins,
+                target_values=condition_targets,
+                cv=cv,
+                n_permutations=n_permutations,
+                random_state=random_state,
+                label=condition_label,
+            )
+            decodeability_rows.append(
+                {
+                    "condition": condition,
+                    "window": window_name,
+                    "target": target,
+                    **decodeability_result,
+                }
+            )
+
+    train_key = ("correct_rewarded", "pre_choice")
+    train_bins = extracted_bins.get(train_key)
+    if train_bins is None:
+        classifier = None
+        training_result = _failed_decode_result(
+            "missing_training_bins",
+            label="correct_rewarded_pre_choice",
+            condition="correct_rewarded",
+            window="pre_choice",
+            target=target,
+        )
+    else:
+        classifier, training_metrics = train_single_decoder_with_shuffle_null(
+            binned_spikes=train_bins[0],
+            target_values=train_bins[1],
+            n_shuffles=n_shuffles,
+            random_state=random_state,
+            label="correct_rewarded_pre_choice",
+        )
+        training_result = {
+            "condition": "correct_rewarded",
+            "window": "pre_choice",
+            "target": target,
+            **training_metrics,
+        }
+
+    generalization_rows: list[dict[str, Any]] = []
+    for condition in base_conditions:
+        for window_name in windows:
+            if condition == "correct_rewarded" and window_name == "pre_choice":
+                generalization_rows.append(
+                    {
+                        "condition": condition,
+                        "window": window_name,
+                        "target": target,
+                        **{key: value for key, value in training_result.items() if key not in {"shuffle_accuracy_mean", "shuffle_accuracy_std", "shuffle_pvalue", "n_shuffles"}},
+                        "test_accuracy": training_result.get("test_accuracy", np.nan),
+                    }
+                )
+                continue
+
+            condition_bins = extracted_bins.get((condition, window_name))
+            if condition_bins is None:
+                evaluation_result = _failed_decode_result(
+                    "no_selected_bins",
+                    label=f"{condition}_{window_name}",
+                )
+            else:
+                evaluation_result = evaluate_decoder_on_condition(
+                    classifier=classifier,
+                    binned_spikes=condition_bins[0],
+                    target_values=condition_bins[1],
+                    label=f"{condition}_{window_name}",
+                )
+            generalization_rows.append(
+                {
+                    "condition": condition,
+                    "window": window_name,
+                    "target": target,
+                    **evaluation_result,
+                }
+            )
+
+    return {
+        "classifier": classifier,
+        "training_result": training_result,
+        "decodeability_results": pd.DataFrame(decodeability_rows),
+        "generalization_results": pd.DataFrame(generalization_rows),
+    }
+
+
 def main() -> None:
     """
-    Run one hard-coded session example for HPC spike binning.
+    Run one hard-coded session example for user-defined region spike binning.
 
     The script loads processed behavior tables, loads sorter spikes from the current
-    example HPC probe, builds a Pynapple spike group, bins HPC spikes by trial, and
+    example HPC probe, builds a Pynapple spike group, bins region-selected spikes by trial, and
     prints a short summary. Times are handled in seconds throughout.
     """
 
     multi_session_save_path = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis")
     session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251223_latentInference")
-    sess_id_full = "CT014_2025-12-16_153200"
+    sess_id_full = "CT014_2025-12-23_163505"
     raw_behavior_folder = session_data_home / "rpi" / sess_id_full
     processed_data_path = session_data_home / "processed"
     figure_path = session_data_home / "figures"
 
-    pfc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/Kilosort2.5.2_2026-03-18_115111"
-    hpc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/Kilosort2.5.2_2026-03-18_122341"
-    hpc_ap_bin_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_tcat.imec1.ap.bin"
+    pfc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/Kilosort2.5.2_2026-03-19_180103"
+    hpc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/Kilosort2.5.2_2026-03-19_183540"
+    hpc_ap_bin_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/run0_g0_tcat.imec1.ap.bin"
 
     if not hpc_spike_path.exists():
         raise FileNotFoundError(f"HPC sorter output not found at {hpc_spike_path}")
     if not hpc_ap_bin_path.exists():
         raise FileNotFoundError(f"HPC AP binary not found at {hpc_ap_bin_path}")
+
+    region_name = "HPC"
+    region_channels = normalize_region_channels(np.arange(192, 240, dtype=int))
 
     mouse, date, timestamp = parse_session_id(sess_id_full)
     session_info_path = raw_behavior_folder / f"{sess_id_full}_session_info.pkl"
@@ -626,21 +1259,21 @@ def main() -> None:
         ap_bin_path=hpc_ap_bin_path,
     )
 
-    hpc_cluster_ids = select_hpc_units(cluster_info)
-    if hpc_cluster_ids.size == 0:
+    region_cluster_ids = select_units_by_channels(cluster_info, region_channels=region_channels)
+    if region_cluster_ids.size == 0:
         raise RuntimeError(
-            "No HPC units were found in the configured sorter output using the legacy channel range 192-239."
+            f"No {region_name} units were found in the configured sorter output for channels {region_channels.tolist()}."
         )
 
-    hpc_spike_group = build_spike_tsgroup(
+    region_spike_group = build_spike_tsgroup(
         spike_times=spike_times,
         spike_clusters=spike_clusters,
-        cluster_ids=hpc_cluster_ids,
+        cluster_ids=region_cluster_ids,
     )
-    hpc_spike_bins = bin_hpc_trials(
+    region_spike_bins = bin_region_trials(
         trial_df=trial_df,
-        spike_group=hpc_spike_group,
-        cluster_ids=hpc_cluster_ids,
+        spike_group=region_spike_group,
+        cluster_ids=region_cluster_ids,
         bin_size=0.5,
         pre_time=2.0,
         post_time=2.0,
@@ -657,9 +1290,10 @@ def main() -> None:
     )
 
     print(f"Session: {session.sess_id_full}")
-    print(f"HPC units: {hpc_cluster_ids.size}")
-    print(f"Trials binned: {len(hpc_spike_bins)}")
-    print(f"First trial spike-bin shape: {hpc_spike_bins[0]['binned_spikes'].shape}")
+    print(f"Region: {region_name}")
+    print(f"Region units: {region_cluster_ids.size}")
+    print(f"Trials binned: {len(region_spike_bins)}")
+    print(f"First trial spike-bin shape: {region_spike_bins[0]['binned_spikes'].shape}")
     print(f"First trial lick-bin shape: {first_trial_licks.shape}")
 
 

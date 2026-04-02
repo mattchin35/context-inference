@@ -171,7 +171,6 @@ def decode_from_spikes(binned_spikes: np.ndarray, bin_value: np.ndarray, label='
                       shuffle_pvalue=shuffle_pval, shuffle_acc=np.mean(shuffle_accuracies), shuffle_acc_std=np.std(shuffle_accuracies), label=''),
             binned_spikes, bin_value) #, shuffle_vals
 
-
 def shuffle_decode_only(binned_spikes: np.ndarray, bin_value: np.ndarray, label='') -> [object, float]:
     nanmask = np.isnan(bin_value)
     if np.any(nanmask):
@@ -247,7 +246,7 @@ def cv_decode_only(binned_spikes: np.ndarray, bin_value: np.ndarray, label='') -
     # scores = cross_val_score(clf, X_train, y_train, cv=5)
     score, permutation_scores, pvalue = permutation_test_score(clf, binned_spikes.T, bin_value, scoring="accuracy", cv=5, n_permutations=100)
     ic(score, pvalue)
-    return dict(cv_score=score, cv_pvalue=pvalue, label='')
+    return dict(cv_score=score, cv_pvalue=pvalue, label=label)
 
 
 def plot_trial(trial_start: float, choice_t: float=None, reward_t: float=None,
@@ -324,7 +323,7 @@ def make_classifier_bins(spikes_trial_binned, trial_df, trial_ix, event='choice_
         # trial_bin_ix = (spikes_trial_binned[ix]['bin_edges'] >= trial_df.iloc[ix]['start_time'] - .5) & (spikes_trial_binned[ix]['bin_edges'] < (trial_df.iloc[ix]['start_time'] + 0))
         # trial_bin_ix = (spikes_trial_binned[ix]['bin_edges'] >= trial_df.iloc[ix]['choice_time'] - .5) & (spikes_trial_binned[ix]['bin_edges'] < (trial_df.iloc[ix]['choice_time'] + 0))
         # trial_bin_ix = (spikes_trial_binned[ix]['bin_edges'] >= trial_df.iloc[ix]['reward_time'] + 0) & (spikes_trial_binned[ix]['bin_edges'] < (trial_df.iloc[ix]['reward_time'] + .5))
-        _spike_bins = spikes_trial_binned[ix]['binned_spikes'][:, trial_bin_ix[:-1]]
+        _spike_bins = spikes_trial_binned[ix]['binned_spikes'][:, trial_bin_ix[:-1]]  # exclude last bin edge which is the end of the last bin
         _state_bins = spikes_trial_binned[ix]['bin_states'][trial_bin_ix[:-1]]
         _choice_bins = spikes_trial_binned[ix]['bin_choices'][trial_bin_ix[:-1]]
 
