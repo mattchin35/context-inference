@@ -137,7 +137,7 @@ def load_state_decodability_sessions(session_csv_paths: list[Path] | tuple[Path,
 
 def load_state_decoder_performance_sessions(
     session_csv_paths: list[Path] | tuple[Path, ...],
-    decoder_run_index: int = DEFAULT_DECODER_RUN_INDEX,
+    decoder_run_index: int | None = DEFAULT_DECODER_RUN_INDEX,
 ) -> pd.DataFrame:
     """
     Load one decoder run from each per-session repeated-decoder CSV.
@@ -146,13 +146,16 @@ def load_state_decoder_performance_sessions(
     ----------
     session_csv_paths : list[Path] | tuple[Path, ...]
         Paths to per-session ``correct_rewarded_decoding_performance.csv`` files.
-    decoder_run_index : int, optional
-        Decoder-run index to extract from each session table.
+    decoder_run_index : int | None, optional
+        Decoder-run index to extract from each session table. If ``None``, all decoder runs
+        are loaded.
 
     Returns
     -------
     pd.DataFrame
-        One row per ``session x trial_condition`` with columns:
+        One row per ``session x trial_condition`` when ``decoder_run_index`` is an integer,
+        or one row per ``session x trial_condition x decoder_run`` when ``decoder_run_index``
+        is ``None``. Columns are:
         ``session``, ``mouse``, ``date``, ``region``, ``trial_condition``,
         ``decoder_run_index``, ``test_accuracy_before``, and ``test_accuracy_after``.
     """
@@ -165,25 +168,29 @@ def load_state_decoder_performance_sessions(
         if missing_columns:
             raise ValueError(f"{csv_path} is missing required columns: {sorted(missing_columns)}")
 
-        selected_rows = session_df.loc[session_df["decoder_run"] == int(decoder_run_index)]
-        if selected_rows.shape[0] != 1:
-            raise ValueError(
-                f"{csv_path} must contain exactly one row for decoder_run == {decoder_run_index}."
-            )
-        selected_row = selected_rows.iloc[0]
-        for condition_name in BASE_CONDITIONS:
-            rows.append(
-                {
-                    "session": selected_row["session_id"],
-                    "mouse": selected_row["mouse"],
-                    "date": selected_row["date"],
-                    "region": selected_row["region"],
-                    "trial_condition": condition_name,
-                    "decoder_run_index": int(decoder_run_index),
-                    "test_accuracy_before": selected_row[f"{condition_name}_test_accuracy_pre"],
-                    "test_accuracy_after": selected_row[f"{condition_name}_test_accuracy_post"],
-                }
-            )
+        if decoder_run_index is None:
+            selected_rows = session_df.copy()
+        else:
+            selected_rows = session_df.loc[session_df["decoder_run"] == int(decoder_run_index)]
+            if selected_rows.shape[0] != 1:
+                raise ValueError(
+                    f"{csv_path} must contain exactly one row for decoder_run == {decoder_run_index}."
+                )
+
+        for _, selected_row in selected_rows.iterrows():
+            for condition_name in BASE_CONDITIONS:
+                rows.append(
+                    {
+                        "session": selected_row["session_id"],
+                        "mouse": selected_row["mouse"],
+                        "date": selected_row["date"],
+                        "region": selected_row["region"],
+                        "trial_condition": condition_name,
+                        "decoder_run_index": int(selected_row["decoder_run"]),
+                        "test_accuracy_before": selected_row[f"{condition_name}_test_accuracy_pre"],
+                        "test_accuracy_after": selected_row[f"{condition_name}_test_accuracy_post"],
+                    }
+                )
 
     return pd.DataFrame(rows)
 
@@ -405,6 +412,187 @@ def plot_cross_session_decoder_accuracy(
     )
 
 
+def _compute_session_mean_decoder_table(
+    decoder_df: pd.DataFrame,
+    trial_condition: str,
+) -> pd.DataFrame:
+    """
+    Compute per-session decoder means for one trial condition.
+
+    Parameters
+    ----------
+    decoder_df : pd.DataFrame
+        Cross-session decoder table with one row per session, condition, and decoder run.
+    trial_condition : str
+        Condition name whose per-session decoder means should be computed.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per session with columns ``session``, ``test_accuracy_before``,
+        and ``test_accuracy_after`` representing the mean across decoder runs.
+    """
+
+    condition_df = decoder_df.loc[decoder_df["trial_condition"] == trial_condition].copy()
+    if condition_df.empty:
+        raise ValueError(f"No rows found for trial_condition={trial_condition!r}.")
+
+    return (
+        condition_df.groupby("session", as_index=False)[["test_accuracy_before", "test_accuracy_after"]]
+        .mean()
+        .sort_values("session")
+    )
+
+
+def plot_cross_session_decoder_superplot(
+    decoder_df: pd.DataFrame,
+    trial_condition: str,
+    *,
+    show: bool = True,
+) -> tuple[plt.Figure, plt.Axes]:
+    """
+    Plot all decoder runs, per-session means, and the mean of session means for one condition.
+
+    Parameters
+    ----------
+    decoder_df : pd.DataFrame
+        Cross-session decoder table with one row per session, condition, and decoder run.
+    trial_condition : str
+        Condition name to plot.
+    show : bool, optional
+        Whether to call ``plt.show()``.
+
+    Returns
+    -------
+    tuple[plt.Figure, plt.Axes]
+        Figure and axis containing the mixed-model style decoder super-plot.
+    """
+
+    condition_df = decoder_df.loc[decoder_df["trial_condition"] == trial_condition].copy()
+    if condition_df.empty:
+        raise ValueError(f"No rows found for trial_condition={trial_condition!r}.")
+
+    figure, axis = plt.subplots(figsize=(8, 6))
+    session_names = sorted(condition_df["session"].unique().tolist())
+    color_values = np.linspace(0.0, 1.0, max(len(session_names), 2))
+    session_colors = {
+        session_name: plt.cm.tab10(color_values[min(ix, 9)])
+        for ix, session_name in enumerate(session_names)
+    }
+
+    for session_name in session_names:
+        session_df = condition_df.loc[condition_df["session"] == session_name]
+        color = session_colors[session_name]
+        for _, decoder_row in session_df.iterrows():
+            axis.plot(
+                [0, 1],
+                [
+                    float(decoder_row["test_accuracy_before"]),
+                    float(decoder_row["test_accuracy_after"]),
+                ],
+                color=color,
+                alpha=0.25,
+                linewidth=1.0,
+            )
+
+    session_mean_df = _compute_session_mean_decoder_table(decoder_df, trial_condition=trial_condition)
+    for _, session_row in session_mean_df.iterrows():
+        axis.plot(
+            [0, 1],
+            [
+                float(session_row["test_accuracy_before"]),
+                float(session_row["test_accuracy_after"]),
+            ],
+            color=session_colors[str(session_row["session"])],
+            alpha=0.9,
+            linewidth=2.5,
+        )
+
+    overall_mean_before = float(session_mean_df["test_accuracy_before"].mean())
+    overall_mean_after = float(session_mean_df["test_accuracy_after"].mean())
+    axis.plot(
+        [0, 1],
+        [overall_mean_before, overall_mean_after],
+        color="k",
+        linestyle="--",
+        linewidth=2,
+    )
+    axis.set_xlim(-0.5, 1.5)
+    axis.set_ylim(0.0, 1.0)
+    axis.set_xticks([0, 1], ["Before\nchoice", "After\nchoice"])
+    axis.set_ylabel("Test accuracy")
+    axis.set_title(f"Decoder performance, {_format_condition_label(trial_condition)} trials")
+    figure.tight_layout()
+    if show:
+        plt.show()
+    return figure, axis
+
+
+def plot_cross_session_decoder_session_means(
+    decoder_df: pd.DataFrame,
+    trial_condition: str,
+    *,
+    show: bool = True,
+) -> tuple[plt.Figure, plt.Axes]:
+    """
+    Plot per-session decoder means and the mean of session means for one condition.
+
+    Parameters
+    ----------
+    decoder_df : pd.DataFrame
+        Cross-session decoder table with one row per session, condition, and decoder run.
+    trial_condition : str
+        Condition name to plot.
+    show : bool, optional
+        Whether to call ``plt.show()``.
+
+    Returns
+    -------
+    tuple[plt.Figure, plt.Axes]
+        Figure and axis containing the session-mean decoder plot.
+    """
+
+    session_mean_df = _compute_session_mean_decoder_table(decoder_df, trial_condition=trial_condition)
+
+    figure, axis = plt.subplots(figsize=(8, 6))
+    session_names = sorted(session_mean_df["session"].unique().tolist())
+    color_values = np.linspace(0.0, 1.0, max(len(session_names), 2))
+    session_colors = {
+        session_name: plt.cm.tab10(color_values[min(ix, 9)])
+        for ix, session_name in enumerate(session_names)
+    }
+    for _, session_row in session_mean_df.iterrows():
+        axis.plot(
+            [0, 1],
+            [
+                float(session_row["test_accuracy_before"]),
+                float(session_row["test_accuracy_after"]),
+            ],
+            color=session_colors[str(session_row["session"])],
+            alpha=0.9,
+            linewidth=2.0,
+        )
+
+    overall_mean_before = float(session_mean_df["test_accuracy_before"].mean())
+    overall_mean_after = float(session_mean_df["test_accuracy_after"].mean())
+    axis.plot(
+        [0, 1],
+        [overall_mean_before, overall_mean_after],
+        color="k",
+        linestyle="--",
+        linewidth=2,
+    )
+    axis.set_xlim(-0.5, 1.5)
+    axis.set_ylim(0.0, 1.0)
+    axis.set_xticks([0, 1], ["Before\nchoice", "After\nchoice"])
+    axis.set_ylabel("Test accuracy")
+    axis.set_title(f"Decoder performance, {_format_condition_label(trial_condition)} trials")
+    figure.tight_layout()
+    if show:
+        plt.show()
+    return figure, axis
+
+
 def main() -> None:
     """
     Gather per-session neural-analysis CSVs, save cross-session CSVs, and make legacy-style plots.
@@ -425,6 +613,10 @@ def main() -> None:
     decoder_df = load_state_decoder_performance_sessions(
         session_csvs["decoder_performance_csv_path"].tolist(),
         decoder_run_index=DEFAULT_DECODER_RUN_INDEX,
+    )
+    decoder_all_runs_df = load_state_decoder_performance_sessions(
+        session_csvs["decoder_performance_csv_path"].tolist(),
+        decoder_run_index=None,
     )
     decodability_csv_path, decoder_csv_path = save_cross_session_tables(
         DEFAULT_OUTPUT_DIR,
@@ -465,6 +657,28 @@ def main() -> None:
             dpi=300,
         )
         plt.close(decoder_figure)
+
+        decoder_superplot_figure, _ = plot_cross_session_decoder_superplot(
+            decoder_all_runs_df,
+            trial_condition=trial_condition,
+            show=False,
+        )
+        decoder_superplot_figure.savefig(
+            DEFAULT_OUTPUT_DIR / f"shuffle_decoder_superplot_{trial_condition}.png",
+            dpi=300,
+        )
+        plt.close(decoder_superplot_figure)
+
+        decoder_session_mean_figure, _ = plot_cross_session_decoder_session_means(
+            decoder_all_runs_df,
+            trial_condition=trial_condition,
+            show=False,
+        )
+        decoder_session_mean_figure.savefig(
+            DEFAULT_OUTPUT_DIR / f"shuffle_decoder_session_mean_{trial_condition}.png",
+            dpi=300,
+        )
+        plt.close(decoder_session_mean_figure)
 
     print(f"Saved cross-session decodability CSV: {decodability_csv_path}")
     print(f"Saved cross-session decoder CSV: {decoder_csv_path}")
