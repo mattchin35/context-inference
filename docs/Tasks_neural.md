@@ -42,14 +42,62 @@ create a null distribution. That decoder is passed onto downstream analyses. (sh
 2. The decoder from step 1 is then tested on the other desired trial conditions in the before and after choice time bins,
 only using sklearn's accuracy_score.
 
-This way of doing things is simple, but it could be mildly improved by running the entire process multiple times 
-so that each accuracy score has a distribution of scores from multiple decoders. Then the result would not be 
-so bound to the particular random state of the original decoder instantiation. 
+In this refactoring, I will train the decoder in step on correct-rewarded trials AFTER choice time.
+I will also improve the result by running the entire process multiple times so that each accuracy score has a 
+distribution of scores from multiple decoders. Then the result will not be bound to the particular random state 
+of the original decoder instantiation. I will run 5 decoders per session to start; this can be adjusted as needed.
+
+
+# Saved items
+Data from decodability analysis and from the correct-rewarded decoding performance analysis should be saved as .csv files.
+Decodability analysis will be one csv file per session, and these will have to be pulled across sessions for plotting.
+Decodability analysis will save the cv_score, p_value, and the score mean and std for each session, trial condition, and time bin.
+These values will have to be pulled across sessions to be shown in a single plot.
+
+Correct-rewarded decoding performance analysis will save from each decoder run the test accuracy for each 
+trial condition and time bin. The mean and std of the test accuracy across decoders will be computed on the fly
+after the csv file is loaded.
+These will also be saved as one csv file.
+
+## Specs
+Per session csvs:
+- state_decodability_analysis.csv: each row represents one trial condition, with columns for 
+  - cv_score_before
+  - cv_score_after
+  - p_value_before
+  - p_value_after
+  - score_mean_before
+  - score_mean_after
+  - score_std_before
+  - score_std_after
+- correct_rewarded_state_decoding_performance.csv: each row represents one decoder, with columns representing the test accuracy for each trial condition and time bin. Columns will be:
+  - test_accuracy_before for each condition
+  - test_accuracy_after for each condition
+  - in the correct_rewarded row, there should be 2 additional columns train_acc and shuffle_p from the decoder training step
+The mean and std will be computed from the loaded csv.
+
+Cross-session csvs:
+- state_decodability_analysis_cross_session.csv: each row represents one session and one trial condition
+  - columns: session, trial_condition, cv_score_before, cv_score_after, p_value_before, p_value_after
+- correct_rewarded_state_decoding_performance_cross_session.csv: each row represents one session and one trial condition.
+  - columns: session, trial_condition, decoder_run_index, test_accuracy_before, test_accuracy_after
 
 # Plotting
-Many of the previous plots can be repeated. The new trial conditions are just a new set of trials with accuracy scores
-to check and plot. The main change will be for repeating the decoder runs: the new plots would show each session as 
-a distribution of scores instead of as a single point, so that I would have (n_sessions * n_decoders) points instead of 
-just n_sessions points. It might be nice to show each session's distribution of scores in a different color,
-with the overall mean across sessions in black.
+Decodability values will have to be pulled across sessions, and the cv_score and p_value will be plotted. Each
+plot will show the before and after choice time bins for each trial condition, plotting all sessions together.
 
+Correct-rewarded decoding performance will also be pulled across sessions, and will be plotted twice:
+- once for each session, showing the distribution of test accuracy scores across decoders for each trial condition before 
+and after choice time.
+- across sessions, showing the mean test accuracy scores across decoders for each trial condition before and after choice time.
+
+This is probably an opportunity for mixed-model style analysis, with a super-plot showing all of the individual decoder 
+runs for each session in one faded color per session, with one bolder color for the session mean, 
+and then the overall mean in black. I would have (n_sessions * n_decoders) points instead of 
+just n_sessions points. 
+
+The previous plotstyle will generally be repeated, with the before/after for each decoder connected by a line. 
+The new trial conditions are just a new set of accuracy scores to plot. 
+
+Plots should all go into the "figures" folder for each session, or the cross_session_analysis folder for the mouse's 
+cross-session plots.

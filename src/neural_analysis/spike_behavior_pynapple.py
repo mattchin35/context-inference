@@ -1288,6 +1288,58 @@ def summarize_decoding_results(
     return results_df.loc[:, selected_columns].copy()
 
 
+def _collect_base_condition_decode_inputs(
+    region_trial_binned: list[dict[str, Any]],
+    trial_df: pd.DataFrame,
+    target: str,
+) -> dict[tuple[str, str], tuple[np.ndarray, np.ndarray] | None]:
+    """
+    Extract base-condition classifier bins for repeated decode workflows.
+
+    Parameters
+    ----------
+    region_trial_binned : list[dict[str, Any]]
+        Output from ``bin_region_trials`` with one dictionary per trial.
+    trial_df : pd.DataFrame
+        Trial table with mask columns, event times, and decode targets.
+    target : str
+        Decode target column name. Supported values are ``"state_int"`` and ``"action"``.
+
+    Returns
+    -------
+    dict[tuple[str, str], tuple[np.ndarray, np.ndarray] | None]
+        Mapping from ``(condition, window_name)`` to ``(spike_bins, target_values)``.
+        Missing or empty selections map to ``None``.
+    """
+
+    get_decode_target(trial_df, target=target)
+    trial_masks = make_trial_type_masks(trial_df)
+    base_conditions = ["correct_rewarded", "incorrect", "omission", "switch", "stay"]
+    windows = {
+        "pre_choice": (-0.5, 0.0),
+        "post_choice": (0.0, 0.5),
+    }
+
+    extracted_bins: dict[tuple[str, str], tuple[np.ndarray, np.ndarray] | None] = {}
+    for condition in base_conditions:
+        for window_name, bounds in windows.items():
+            try:
+                spike_bins, state_bins, choice_bins = make_classifier_bins(
+                    region_trial_binned=region_trial_binned,
+                    trial_df=trial_df,
+                    trial_mask=trial_masks[condition],
+                    event="choice_time",
+                    bounds=bounds,
+                )
+            except ValueError:
+                extracted_bins[(condition, window_name)] = None
+                continue
+
+            target_values = state_bins if target == "state_int" else choice_bins
+            extracted_bins[(condition, window_name)] = (spike_bins, target_values)
+    return extracted_bins
+
+
 def train_single_decoder_with_shuffle_null(
     binned_spikes: np.ndarray,
     target_values: np.ndarray,
@@ -1463,41 +1515,34 @@ def run_base_condition_decoding(
         and generalization results for base trial conditions and pre/post choice windows.
     """
 
-    get_decode_target(trial_df, target=target)
-    trial_masks = make_trial_type_masks(trial_df)
     base_conditions = ["correct_rewarded", "incorrect", "omission", "switch", "stay"]
     windows = {
         "pre_choice": (-0.5, 0.0),
         "post_choice": (0.0, 0.5),
     }
+    extracted_bin_inputs = _collect_base_condition_decode_inputs(
+        region_trial_binned=region_trial_binned,
+        trial_df=trial_df,
+        target=target,
+    )
 
     decodeability_rows: list[dict[str, Any]] = []
-    extracted_bins: dict[tuple[str, str], tuple[np.ndarray, np.ndarray, np.ndarray] | None] = {}
     for condition in base_conditions:
-        for window_name, bounds in windows.items():
+        for window_name in windows:
             condition_label = f"{condition}_{window_name}"
-            try:
-                spike_bins, state_bins, choice_bins = make_classifier_bins(
-                    region_trial_binned=region_trial_binned,
-                    trial_df=trial_df,
-                    trial_mask=trial_masks[condition],
-                    event="choice_time",
-                    bounds=bounds,
-                )
-            except ValueError as error:
-                extracted_bins[(condition, window_name)] = None
+            extracted_bin_entry = extracted_bin_inputs[(condition, window_name)]
+            if extracted_bin_entry is None:
                 decodeability_rows.append(
                     {
                         "condition": condition,
                         "window": window_name,
                         "target": target,
-                        **_failed_decode_result("no_selected_bins", label=condition_label, error=str(error)),
+                        **_failed_decode_result("no_selected_bins", label=condition_label),
                     }
                 )
                 continue
 
-            condition_targets = state_bins if target == "state_int" else choice_bins
-            extracted_bins[(condition, window_name)] = (spike_bins, condition_targets, np.array([]))
+            spike_bins, condition_targets = extracted_bin_entry
             decodeability_result = cv_decodeability_score(
                 binned_spikes=spike_bins,
                 target_values=condition_targets,
@@ -1515,15 +1560,15 @@ def run_base_condition_decoding(
                 }
             )
 
-    train_key = ("correct_rewarded", "pre_choice")
-    train_bins = extracted_bins.get(train_key)
+    train_key = ("correct_rewarded", "post_choice")
+    train_bins = extracted_bin_inputs.get(train_key)
     if train_bins is None:
         classifier = None
         training_result = _failed_decode_result(
             "missing_training_bins",
-            label="correct_rewarded_pre_choice",
+            label="correct_rewarded_post_choice",
             condition="correct_rewarded",
-            window="pre_choice",
+            window="post_choice",
             target=target,
         )
     else:
@@ -1532,11 +1577,11 @@ def run_base_condition_decoding(
             target_values=train_bins[1],
             n_shuffles=n_shuffles,
             random_state=random_state,
-            label="correct_rewarded_pre_choice",
+            label="correct_rewarded_post_choice",
         )
         training_result = {
             "condition": "correct_rewarded",
-            "window": "pre_choice",
+            "window": "post_choice",
             "target": target,
             **training_metrics,
         }
@@ -1544,7 +1589,7 @@ def run_base_condition_decoding(
     generalization_rows: list[dict[str, Any]] = []
     for condition in base_conditions:
         for window_name in windows:
-            if condition == "correct_rewarded" and window_name == "pre_choice":
+            if condition == "correct_rewarded" and window_name == "post_choice":
                 generalization_rows.append(
                     {
                         "condition": condition,
@@ -1556,7 +1601,7 @@ def run_base_condition_decoding(
                 )
                 continue
 
-            condition_bins = extracted_bins.get((condition, window_name))
+            condition_bins = extracted_bin_inputs.get((condition, window_name))
             if condition_bins is None:
                 evaluation_result = _failed_decode_result(
                     "no_selected_bins",
@@ -1586,6 +1631,358 @@ def run_base_condition_decoding(
     }
 
 
+def run_repeated_correct_rewarded_decoder(
+    region_trial_binned: list[dict[str, Any]],
+    trial_df: pd.DataFrame,
+    target: str = "state_int",
+    n_decoder_runs: int = 5,
+    n_shuffles: int = 1000,
+    random_state: int = 42,
+) -> dict[str, pd.DataFrame]:
+    """
+    Train multiple correct-rewarded post-choice decoders and evaluate each across base conditions.
+
+    Parameters
+    ----------
+    region_trial_binned : list[dict[str, Any]]
+        Output from ``bin_region_trials`` with one dictionary per trial.
+    trial_df : pd.DataFrame
+        Trial table with mask columns, event times, and decode targets.
+    target : str, optional
+        Decode target column name. Supported values are ``"state_int"`` and ``"action"``.
+    n_decoder_runs : int, optional
+        Number of independently seeded decoder fits to run.
+    n_shuffles : int, optional
+        Number of shuffled-label null fits per decoder run.
+    random_state : int, optional
+        Base random seed. Each decoder run uses ``random_state + decoder_run``.
+
+    Returns
+    -------
+    dict[str, pd.DataFrame]
+        Dictionary with ``training_results`` and ``generalization_results`` tables.
+    """
+
+    base_conditions = ["correct_rewarded", "incorrect", "omission", "switch", "stay"]
+    windows = ["pre_choice", "post_choice"]
+    extracted_bin_inputs = _collect_base_condition_decode_inputs(
+        region_trial_binned=region_trial_binned,
+        trial_df=trial_df,
+        target=target,
+    )
+
+    training_rows: list[dict[str, Any]] = []
+    generalization_rows: list[dict[str, Any]] = []
+    for decoder_run in range(int(n_decoder_runs)):
+        run_seed = int(random_state) + decoder_run
+        train_key = ("correct_rewarded", "post_choice")
+        train_bins = extracted_bin_inputs.get(train_key)
+        if train_bins is None:
+            classifier = None
+            training_result = _failed_decode_result(
+                "missing_training_bins",
+                label="correct_rewarded_post_choice",
+                training_condition="correct_rewarded",
+                training_window="post_choice",
+            )
+        else:
+            classifier, training_metrics = train_single_decoder_with_shuffle_null(
+                binned_spikes=train_bins[0],
+                target_values=train_bins[1],
+                n_shuffles=n_shuffles,
+                random_state=run_seed,
+                label="correct_rewarded_post_choice",
+            )
+            training_result = {
+                "training_condition": "correct_rewarded",
+                "training_window": "post_choice",
+                **training_metrics,
+            }
+
+        training_rows.append(
+            {
+                "decoder_run": decoder_run,
+                "target": target,
+                **training_result,
+            }
+        )
+
+        for condition in base_conditions:
+            for window_name in windows:
+                condition_bins = extracted_bin_inputs.get((condition, window_name))
+                if condition == "correct_rewarded" and window_name == "post_choice":
+                    evaluation_result = {
+                        "status": training_result["status"],
+                        "reason": training_result["reason"],
+                        "label": f"{condition}_{window_name}",
+                        "n_samples": training_result.get("n_samples", 0),
+                        "n_classes": training_result.get("n_classes", 0),
+                        "test_accuracy": training_result.get("test_accuracy", np.nan),
+                    }
+                elif condition_bins is None:
+                    evaluation_result = _failed_decode_result(
+                        "no_selected_bins",
+                        label=f"{condition}_{window_name}",
+                    )
+                else:
+                    evaluation_result = evaluate_decoder_on_condition(
+                        classifier=classifier,
+                        binned_spikes=condition_bins[0],
+                        target_values=condition_bins[1],
+                        label=f"{condition}_{window_name}",
+                    )
+
+                generalization_rows.append(
+                    {
+                        "decoder_run": decoder_run,
+                        "target": target,
+                        "condition": condition,
+                        "window": window_name,
+                        **evaluation_result,
+                    }
+                )
+
+    return {
+        "training_results": pd.DataFrame(training_rows),
+        "generalization_results": pd.DataFrame(generalization_rows),
+    }
+
+
+def build_state_decodability_session_table(
+    session: Session,
+    region_name: str,
+    decodeability_results: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Reshape state decodeability results into one row per condition with paired pre/post columns.
+
+    Parameters
+    ----------
+    session : Session
+        Session metadata providing the session identifier, mouse, and date strings.
+    region_name : str
+        Human-readable region label for the decoded units.
+    decodeability_results : pd.DataFrame
+        Long-form decodeability results from ``run_base_condition_decoding``. Required columns are
+        ``condition``, ``window``, ``status``, ``reason``, ``n_samples``, ``n_classes``,
+        ``cv_score``, ``cv_pvalue``, ``permutation_score_mean``, and ``permutation_score_std``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Wide per-session state decodeability table with one row per condition and paired
+        ``*_pre`` / ``*_post`` columns for the before- and after-choice bins.
+    """
+
+    required_columns = {
+        "condition",
+        "window",
+        "status",
+        "reason",
+        "n_samples",
+        "n_classes",
+        "cv_score",
+        "cv_pvalue",
+        "permutation_score_mean",
+        "permutation_score_std",
+    }
+    missing_columns = required_columns - set(decodeability_results.columns)
+    if missing_columns:
+        raise ValueError(f"decodeability_results is missing required columns: {sorted(missing_columns)}")
+
+    row_order = list(dict.fromkeys(decodeability_results["condition"].tolist()))
+    session_rows: list[dict[str, Any]] = []
+    for condition_name in row_order:
+        condition_rows = decodeability_results.loc[decodeability_results["condition"] == condition_name]
+        pre_row = condition_rows.loc[condition_rows["window"] == "pre_choice"]
+        post_row = condition_rows.loc[condition_rows["window"] == "post_choice"]
+        if pre_row.shape[0] != 1 or post_row.shape[0] != 1:
+            raise ValueError(f"Condition {condition_name!r} must have exactly one pre_choice and one post_choice row.")
+
+        pre_result = pre_row.iloc[0]
+        post_result = post_row.iloc[0]
+        session_rows.append(
+            {
+                "session_id": session.sess_id_full,
+                "mouse": session.mouse,
+                "date": session.date,
+                "region": region_name,
+                "condition": condition_name,
+                "status_pre": pre_result["status"],
+                "reason_pre": pre_result["reason"],
+                "n_trials_pre": pre_result["n_samples"],
+                "n_classes_pre": pre_result["n_classes"],
+                "cv_score_pre": pre_result["cv_score"],
+                "p_value_pre": pre_result["cv_pvalue"],
+                "score_mean_pre": pre_result["permutation_score_mean"],
+                "score_std_pre": pre_result["permutation_score_std"],
+                "status_post": post_result["status"],
+                "reason_post": post_result["reason"],
+                "n_trials_post": post_result["n_samples"],
+                "n_classes_post": post_result["n_classes"],
+                "cv_score_post": post_result["cv_score"],
+                "p_value_post": post_result["cv_pvalue"],
+                "score_mean_post": post_result["permutation_score_mean"],
+                "score_std_post": post_result["permutation_score_std"],
+            }
+        )
+
+    return pd.DataFrame(session_rows)
+
+
+def save_state_decodability_session_csv(
+    output_dir: Path | str,
+    state_decodability_table: pd.DataFrame,
+) -> Path:
+    """
+    Save the per-session state decodeability table to ``state_decodability_analysis.csv``.
+
+    Parameters
+    ----------
+    output_dir : Path | str
+        Directory where the CSV should be written.
+    state_decodability_table : pd.DataFrame
+        Wide per-session state decodeability table with one row per condition.
+
+    Returns
+    -------
+    Path
+        Saved CSV path.
+    """
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    csv_path = output_path / "state_decodability_analysis.csv"
+    state_decodability_table.to_csv(csv_path, index=False)
+    return csv_path
+
+
+def build_correct_rewarded_decoding_performance_session_table(
+    session: Session,
+    region_name: str,
+    training_results: pd.DataFrame,
+    generalization_results: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Reshape repeated decoder outputs into one row per decoder run with all condition results.
+
+    Parameters
+    ----------
+    session : Session
+        Session metadata providing the session identifier, mouse, and date strings.
+    region_name : str
+        Human-readable region label for the decoded units.
+    training_results : pd.DataFrame
+        One row per decoder run with training metrics.
+    generalization_results : pd.DataFrame
+        One row per ``decoder_run x condition x window`` with evaluation metrics.
+
+    Returns
+    -------
+    pd.DataFrame
+        Wide per-session decoder-performance table with one row per decoder run and paired
+        before/after columns for each base condition.
+    """
+
+    required_training_columns = {
+        "decoder_run",
+        "training_condition",
+        "training_window",
+        "train_accuracy",
+        "test_accuracy",
+        "shuffle_pvalue",
+        "shuffle_accuracy_mean",
+        "shuffle_accuracy_std",
+    }
+    missing_training = required_training_columns - set(training_results.columns)
+    if missing_training:
+        raise ValueError(f"training_results is missing required columns: {sorted(missing_training)}")
+
+    required_generalization_columns = {
+        "decoder_run",
+        "condition",
+        "window",
+        "status",
+        "reason",
+        "test_accuracy",
+        "n_samples",
+        "n_classes",
+    }
+    missing_generalization = required_generalization_columns - set(generalization_results.columns)
+    if missing_generalization:
+        raise ValueError(
+            f"generalization_results is missing required columns: {sorted(missing_generalization)}"
+        )
+
+    condition_order = list(dict.fromkeys(generalization_results["condition"].tolist()))
+    decoder_rows: list[dict[str, Any]] = []
+    for _, training_row in training_results.sort_values("decoder_run").iterrows():
+        decoder_run = int(training_row["decoder_run"])
+        row = {
+            "session_id": session.sess_id_full,
+            "mouse": session.mouse,
+            "date": session.date,
+            "region": region_name,
+            "decoder_run": decoder_run,
+            "training_condition": training_row["training_condition"],
+            "training_window": training_row["training_window"],
+            "train_accuracy": training_row.get("train_accuracy", np.nan),
+            "heldout_test_accuracy": training_row.get("test_accuracy", np.nan),
+            "shuffle_pvalue": training_row.get("shuffle_pvalue", np.nan),
+            "shuffle_accuracy_mean": training_row.get("shuffle_accuracy_mean", np.nan),
+            "shuffle_accuracy_std": training_row.get("shuffle_accuracy_std", np.nan),
+        }
+        decoder_generalization = generalization_results.loc[
+            generalization_results["decoder_run"] == decoder_run
+        ]
+        for condition_name in condition_order:
+            for window_name, suffix in (("pre_choice", "pre"), ("post_choice", "post")):
+                matching_rows = decoder_generalization.loc[
+                    (decoder_generalization["condition"] == condition_name)
+                    & (decoder_generalization["window"] == window_name)
+                ]
+                if matching_rows.shape[0] != 1:
+                    raise ValueError(
+                        f"Decoder run {decoder_run} condition {condition_name!r} must have exactly one {window_name} row."
+                    )
+                result_row = matching_rows.iloc[0]
+                row[f"{condition_name}_status_{suffix}"] = result_row["status"]
+                row[f"{condition_name}_reason_{suffix}"] = result_row["reason"]
+                row[f"{condition_name}_test_accuracy_{suffix}"] = result_row["test_accuracy"]
+                row[f"{condition_name}_n_trials_{suffix}"] = result_row["n_samples"]
+                row[f"{condition_name}_n_classes_{suffix}"] = result_row["n_classes"]
+        decoder_rows.append(row)
+
+    return pd.DataFrame(decoder_rows)
+
+
+def save_correct_rewarded_decoding_performance_session_csv(
+    output_dir: Path | str,
+    decoding_performance_table: pd.DataFrame,
+) -> Path:
+    """
+    Save the repeated decoder-performance table to ``correct_rewarded_decoding_performance.csv``.
+
+    Parameters
+    ----------
+    output_dir : Path | str
+        Directory where the CSV should be written.
+    decoding_performance_table : pd.DataFrame
+        Wide per-session decoder-performance table with one row per decoder run.
+
+    Returns
+    -------
+    Path
+        Saved CSV path.
+    """
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    csv_path = output_path / "correct_rewarded_decoding_performance.csv"
+    decoding_performance_table.to_csv(csv_path, index=False)
+    return csv_path
+
+
 def main() -> None:
     """
     Run one hard-coded session example for user-defined region spike binning.
@@ -1597,10 +1994,10 @@ def main() -> None:
     """
 
     multi_session_save_path = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis")
-    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251205_latentInference")
-    sess_id_full = "CT014_2025-12-05_165240"
-    pfc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/Kilosort2.5.2_2026-03-19_165539"
-    hpc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/Kilosort2.5.2_2026-03-19_173016"
+    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference")
+    sess_id_full = "CT014_2025-12-16_153200"
+    pfc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/Kilosort2.5.2_2026-03-18_115111"
+    hpc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/Kilosort2.5.2_2026-04-01_201033"
 
     raw_behavior_folder = session_data_home / "rpi" / sess_id_full
     processed_data_path = session_data_home / "processed"
@@ -1619,6 +2016,7 @@ def main() -> None:
     assert aligned_hpc_spike_path.exists(), f"Aligned HPC spike file not found at {aligned_hpc_spike_path}"
 
     decode_target = "state_int"  # state_int or action
+    n_decoder_runs = 5
     region_name = "HPC"
     # print(", ".join(map(str, "your_array")))
     hpc_channels_shank0 = np.array([
@@ -1747,8 +2145,39 @@ def main() -> None:
         cv=5,
         n_permutations=100,
         n_shuffles=1000,
-        random_state=0,
+        random_state=42,
     )
+    repeated_decoding_csv_path: Path | None = processed_data_path
+    if decode_target == "state_int":
+        repeated_decoding_results = run_repeated_correct_rewarded_decoder(
+            region_trial_binned=region_spike_bins,
+            trial_df=trial_df,
+            target=decode_target,
+            n_decoder_runs=n_decoder_runs,
+            n_shuffles=1000,
+            random_state=42,
+        )
+        repeated_decoding_table = build_correct_rewarded_decoding_performance_session_table(
+            session=session,
+            region_name=region_name,
+            training_results=repeated_decoding_results["training_results"],
+            generalization_results=repeated_decoding_results["generalization_results"],
+        )
+        repeated_decoding_csv_path = save_correct_rewarded_decoding_performance_session_csv(
+            output_dir=session.processed_data_path,
+            decoding_performance_table=repeated_decoding_table,
+        )
+    state_decodability_csv_path: Path | None = processed_data_path
+    if decode_target == "state_int":
+        state_decodability_table = build_state_decodability_session_table(
+            session=session,
+            region_name=region_name,
+            decodeability_results=decoding_results["decodeability_results"],
+        )
+        state_decodability_csv_path = save_state_decodability_session_csv(
+            output_dir=session.processed_data_path,
+            state_decodability_table=state_decodability_table,
+        )
 
     first_trial_end = resolve_trial_end(trial_df.iloc[0])
     first_trial_licks, _ = bin_licks_to_trial_pynapple(
@@ -1767,6 +2196,10 @@ def main() -> None:
     print(f"First trial spike-bin shape: {region_spike_bins[0]['binned_spikes'].shape}")
     print(f"First trial lick-bin shape: {first_trial_licks.shape}")
     print(f"Decode target: {decode_target}")
+    if state_decodability_csv_path is not None:
+        print(f"State decodability CSV: {state_decodability_csv_path}")
+    if repeated_decoding_csv_path is not None:
+        print(f"Repeated decoder performance CSV: {repeated_decoding_csv_path}")
     print("Trial condition counts:")
     for _, summary_row in mask_summary_df.iterrows():
         condition_name = str(summary_row["condition"])
@@ -1805,7 +2238,7 @@ def main() -> None:
     training_result = decoding_results["training_result"]
     if training_result["status"] == "ok":
         print(
-            "  trained on correct_rewarded pre_choice: "
+            "  trained on correct_rewarded post_choice: "
             f"train_acc={training_result['train_accuracy']:.3f}, "
             f"test_acc={training_result['test_accuracy']:.3f}, "
             f"shuffle_p={training_result['shuffle_pvalue']:.3f}"
@@ -1828,7 +2261,7 @@ def main() -> None:
                 f"failed ({summary_row['reason']})"
             )
 
-    plot_trial_ix: int | None = 30
+    plot_trial_ix: int | None = None
     plot_event = "choice_time"
     plot_time_mode = "session"  # utc, event, or session
     plot_pre_time = 2.0
