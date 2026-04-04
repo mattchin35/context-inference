@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pynapple as nap
@@ -15,7 +16,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import permutation_test_score, train_test_split
 
-import src.external_tools.readSGLX as readSGLX
 import src.external_tools.get_brain_channels as get_brain_channels
 
 @dataclass
@@ -132,40 +132,81 @@ def load_session_info(session_info_path: Path) -> Any:
         return pkl.load(file_handle)
 
 
-def load_sorter_spikes(sorter_output_path: Path, ap_bin_path: Path) -> tuple[np.ndarray, np.ndarray, pd.DataFrame]:
+def load_sorter_metadata(sorter_output_path: Path) -> tuple[np.ndarray, pd.DataFrame]:
     """
-    Load Kilosort spike arrays and convert times from samples to seconds.
+    Load sorter cluster assignments and cluster metadata for aligned-spike analyses.
 
     Parameters
     ----------
     sorter_output_path : Path
-        Path to a sorter output directory containing ``spike_times.npy``,
-        ``spike_clusters.npy``, and ``cluster_info.tsv``. Units: filesystem path.
-    ap_bin_path : Path
-        Path to the corresponding ``*.ap.bin`` file used to recover sample rate.
+        Path to a sorter output directory containing ``spike_clusters.npy`` and ``cluster_info.tsv``.
         Units: filesystem path.
 
     Returns
     -------
-    tuple[np.ndarray, np.ndarray, pd.DataFrame]
-        ``(spike_times_seconds, spike_clusters, cluster_info)`` where:
-        ``spike_times_seconds`` has shape ``(n_spikes,)`` and units seconds,
-        ``spike_clusters`` has shape ``(n_spikes,)`` and contains integer cluster ids,
+    tuple[np.ndarray, pd.DataFrame]
+        ``(spike_clusters, cluster_info)`` where:
+        ``spike_clusters`` has shape ``(n_spikes,)`` and contains integer cluster ids aligned
+        one-to-one with an external aligned spike-time array,
         ``cluster_info`` has one row per cluster with sorter metadata.
     """
 
-    imec_meta = readSGLX.readMeta(ap_bin_path)
-    imec_sample_rate = float(readSGLX.SampRate(imec_meta))
-
-    spike_times = np.squeeze(np.load(sorter_output_path / "spike_times.npy", allow_pickle=True)).astype(float)
-    spike_times_seconds = spike_times / imec_sample_rate
     spike_clusters = np.load(sorter_output_path / "spike_clusters.npy", allow_pickle=True).astype(int)
     cluster_info = pd.read_csv(sorter_output_path / "cluster_info.tsv", sep="\t")
-    return spike_times_seconds, spike_clusters, cluster_info
+    return spike_clusters, cluster_info
 
 
-def load_aligned_spikes():
-    pass
+def load_aligned_spikes(aligned_spike_path: Path) -> np.ndarray:
+    """
+    Load aligned spike timestamps for behavior-aligned neural analyses.
+
+    Parameters
+    ----------
+    aligned_spike_path : Path
+        Path to an ``.npz`` file containing behavior-aligned spike timestamps.
+        This file must include a ``spike_utc_unix`` array.
+
+    Returns
+    -------
+    np.ndarray
+        One-dimensional float array with shape ``(n_spikes,)`` containing aligned spike timestamps
+        in UTC Unix time, units seconds.
+    """
+
+    aligned_spike_file = np.load(aligned_spike_path)
+    if "spike_utc_unix" not in aligned_spike_file:
+        raise ValueError(
+            f"Aligned spike file {aligned_spike_path} is missing required 'spike_utc_unix' array."
+        )
+
+    aligned_spike_times = np.asarray(aligned_spike_file["spike_utc_unix"], dtype=float)
+    if aligned_spike_times.ndim != 1:
+        raise ValueError("Aligned spike times must be one-dimensional.")
+    return aligned_spike_times
+
+
+def validate_aligned_spike_inputs(aligned_spike_times: np.ndarray, spike_clusters: np.ndarray) -> None:
+    """
+    Validate that aligned spike times and sorter cluster ids describe the same spike sequence.
+
+    Parameters
+    ----------
+    aligned_spike_times : np.ndarray
+        One-dimensional aligned spike-time array with shape ``(n_spikes,)`` and units seconds.
+    spike_clusters : np.ndarray
+        One-dimensional cluster-id array with shape ``(n_spikes,)`` aligned spike-by-spike to
+        ``aligned_spike_times``.
+
+    Returns
+    -------
+    None
+        This function returns nothing and raises on invalid inputs.
+    """
+
+    if aligned_spike_times.ndim != 1 or spike_clusters.ndim != 1:
+        raise ValueError("aligned_spike_times and spike_clusters must both be one-dimensional arrays.")
+    if aligned_spike_times.shape[0] != spike_clusters.shape[0]:
+        raise ValueError("aligned_spike_times and spike_clusters must have the same length.")
 
 
 def build_spike_tsgroup(
@@ -241,6 +282,195 @@ def build_lick_time_dict(event_df: pd.DataFrame) -> dict[str, nap.Ts]:
         lick_time_dict[event_name] = nap.Ts(t=np.sort(event_times))
 
     return lick_time_dict
+
+
+def _transform_plot_times(
+    times: np.ndarray,
+    time_mode: str,
+    reference_time: float,
+    session_start_time: float | None,
+) -> np.ndarray:
+    """
+    Transform timestamps for trial-inspection plots.
+
+    Parameters
+    ----------
+    times : np.ndarray
+        One-dimensional float array with shape ``(n_times,)`` containing timestamps in UTC Unix
+        seconds.
+    time_mode : str
+        Plotting time base. Supported values are ``"utc"``, ``"session"``, and ``"event"``.
+    reference_time : float
+        Reference event timestamp for the selected trial, in UTC Unix seconds.
+    session_start_time : float | None
+        Session start timestamp in UTC Unix seconds. Required when ``time_mode == "session"``.
+
+    Returns
+    -------
+    np.ndarray
+        One-dimensional float array with shape ``(n_times,)``. Units are seconds in the requested
+        plotting frame.
+    """
+
+    if time_mode == "utc":
+        return times
+    if time_mode == "session":
+        if session_start_time is None:
+            raise ValueError("session_start_time is required when time_mode='session'.")
+        return times - float(session_start_time)
+    if time_mode == "event":
+        return times - reference_time
+    raise ValueError("time_mode must be one of {'utc', 'session', 'event'}.")
+
+
+def plot_trial_raster(
+    region_spike_group: nap.TsGroup,
+    trial_df: pd.DataFrame,
+    trial_ix: int,
+    lick_times: Mapping[str, nap.Ts] | None = None,
+    event: str = "choice_time",
+    time_mode: str = "utc",
+    session_start_time: float | None = None,
+    pre_time: float = 2.0,
+    post_time: float = 2.0,
+    show: bool = True,
+) -> tuple[plt.Figure, np.ndarray]:
+    """
+    Plot one trial's spikes and licks in an interactive two-panel raster view.
+
+    Parameters
+    ----------
+    region_spike_group : nap.TsGroup
+        Pynapple spike group keyed by integer cluster id. Spike timestamps must be in UTC Unix
+        seconds and all units share the same time base.
+    trial_df : pd.DataFrame
+        Trial table with one row per trial. The selected trial must contain the requested
+        alignment event column. Event timestamps are UTC Unix seconds.
+    trial_ix : int
+        Integer row index into ``trial_df`` selecting one trial to display.
+    lick_times : Mapping[str, nap.Ts] | None, optional
+        Mapping containing optional ``"right_entry"`` and ``"left_entry"`` lick series. Each
+        series is one-dimensional and uses UTC Unix seconds.
+    event : str, optional
+        Alignment event column name. Supported values are ``"choice_time"`` and ``"start_time"``.
+    time_mode : str, optional
+        X-axis time base. Supported values are ``"utc"``, ``"session"``, and ``"event"``.
+    session_start_time : float | None, optional
+        Session start timestamp in UTC Unix seconds. Required when ``time_mode == "session"``.
+    pre_time : float, optional
+        Seconds before the alignment event to include in the plot window.
+    post_time : float, optional
+        Seconds after the alignment event to include in the plot window.
+    show : bool, optional
+        If ``True``, display the figure immediately with ``plt.show()``.
+
+    Returns
+    -------
+    tuple[plt.Figure, np.ndarray]
+        ``(figure, axes)`` where ``axes`` has shape ``(2,)``. ``axes[0]`` is the spike raster axis
+        and ``axes[1]`` is the lick raster axis.
+    """
+
+    if event not in {"choice_time", "start_time"}:
+        raise ValueError("event must be 'choice_time' or 'start_time'.")
+    if time_mode not in {"utc", "session", "event"}:
+        raise ValueError("time_mode must be one of {'utc', 'session', 'event'}.")
+    if trial_ix not in trial_df.index:
+        raise ValueError(f"trial_ix {trial_ix} is not present in trial_df.")
+    if time_mode == "session" and session_start_time is None:
+        raise ValueError("session_start_time is required when time_mode='session'.")
+
+    trial_row = trial_df.loc[trial_ix]
+    reference_time = pd.to_numeric(pd.Series([trial_row[event]]), errors="coerce").iloc[0]
+    if pd.isna(reference_time):
+        raise ValueError(f"Trial {trial_ix} has no valid {event} timestamp.")
+    reference_time = float(reference_time)
+
+    window_start = reference_time - float(pre_time)
+    window_end = reference_time + float(post_time)
+    plot_interval = nap.IntervalSet(start=[window_start], end=[window_end])
+
+    restricted_spike_group = region_spike_group.restrict(plot_interval)
+    cluster_ids = list(restricted_spike_group.keys())
+    if cluster_ids:
+        spike_tsd = restricted_spike_group.to_tsd(np.arange(len(cluster_ids), dtype=float))
+        spike_x = _transform_plot_times(
+            times=np.asarray(spike_tsd.index.to_numpy(), dtype=float),
+            time_mode=time_mode,
+            reference_time=reference_time,
+            session_start_time=session_start_time,
+        )
+        spike_y = spike_tsd.values.astype(float)
+    else:
+        spike_x = np.array([], dtype=float)
+        spike_y = np.array([], dtype=float)
+
+    if time_mode == "event":
+        reference_x = 0.0
+    else:
+        reference_x = float(
+            _transform_plot_times(
+                times=np.array([reference_time], dtype=float),
+                time_mode=time_mode,
+                reference_time=reference_time,
+                session_start_time=session_start_time,
+            )[0]
+        )
+
+    figure, axes = plt.subplots(2, 1, sharex=True, figsize=(10, 6), height_ratios=[3, 1])
+    spike_axis, lick_axis = axes
+
+    spike_axis.scatter(spike_x, spike_y, marker="|", color="black", s=80)
+    spike_axis.axvline(reference_x, color="tab:red", linestyle="--", linewidth=1.5)
+    spike_axis.set_ylabel("Unit")
+    spike_axis.set_title(f"Trial {trial_ix} aligned to {event}")
+    if cluster_ids:
+        spike_axis.set_yticks(np.arange(len(cluster_ids), dtype=float))
+        spike_axis.set_yticklabels([str(cluster_id) for cluster_id in cluster_ids])
+
+    lick_axis.axvline(reference_x, color="tab:red", linestyle="--", linewidth=1.5)
+    lick_axis.set_ylabel("Lick")
+
+    lick_positions = {"right_entry": 1.0, "left_entry": 0.0}
+    lick_colors = {"right_entry": "tab:blue", "left_entry": "tab:orange"}
+    if lick_times is not None:
+        for lick_name in ("right_entry", "left_entry"):
+            if lick_name not in lick_times:
+                continue
+            restricted_licks = lick_times[lick_name].restrict(plot_interval)
+            transformed_licks = _transform_plot_times(
+                times=np.asarray(restricted_licks.index.to_numpy(), dtype=float),
+                time_mode=time_mode,
+                reference_time=reference_time,
+                session_start_time=session_start_time,
+            )
+            lick_axis.scatter(
+                transformed_licks,
+                np.full(transformed_licks.shape, lick_positions[lick_name], dtype=float),
+                marker="|",
+                color=lick_colors[lick_name],
+                s=120,
+                label=lick_name,
+            )
+
+    lick_axis.set_yticks([0.0, 1.0])
+    lick_axis.set_yticklabels(["left", "right"])
+    if lick_times is not None:
+        handles, labels = lick_axis.get_legend_handles_labels()
+        if handles:
+            lick_axis.legend(loc="upper right")
+
+    if time_mode == "utc":
+        lick_axis.set_xlabel("Time (UTC Unix s)")
+    elif time_mode == "session":
+        lick_axis.set_xlabel("Time Since Session Start (s)")
+    else:
+        lick_axis.set_xlabel(f"Time From {event} (s)")
+
+    figure.tight_layout()
+    if show:
+        plt.show()
+    return figure, axes
 
 
 def normalize_region_channels(region_channels: np.ndarray | list[int]) -> np.ndarray:
@@ -1360,22 +1590,21 @@ def main() -> None:
     """
     Run one hard-coded session example for user-defined region spike binning.
 
-    The script loads processed behavior tables, loads sorter spikes from the current
-    example HPC probe, builds a Pynapple spike group, bins region-selected spikes by trial, and
+    The script loads processed behavior tables, loads aligned spike times plus sorter cluster
+    metadata for the current example HPC probe, builds a Pynapple spike group, bins
+    region-selected spikes by trial, and
     prints a short summary. Times are handled in seconds throughout.
     """
 
     multi_session_save_path = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis")
-    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference")
-    sess_id_full = "CT014_2025-12-16_153200"
+    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251205_latentInference")
+    sess_id_full = "CT014_2025-12-05_165240"
+    pfc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/Kilosort2.5.2_2026-03-19_165539"
+    hpc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/Kilosort2.5.2_2026-03-19_173016"
+
     raw_behavior_folder = session_data_home / "rpi" / sess_id_full
     processed_data_path = session_data_home / "processed"
     figure_path = session_data_home / "figures"
-
-    pfc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/Kilosort2.5.2_2026-03-19_180103"
-    pfc_ap_bin_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/run0_g0_tcat.imec0.ap.bin"
-    hpc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/Kilosort2.5.2_2026-03-19_183540"
-    hpc_ap_bin_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/run0_g0_tcat.imec1.ap.bin"
 
     aligned_spike_path = session_data_home / 'ephys/aligned/aligned_imec'
     aligned_pfc_spike_path = aligned_spike_path / 'imec0_sync.npz'
@@ -1385,22 +1614,11 @@ def main() -> None:
 
     if not hpc_spike_path.exists():
         raise FileNotFoundError(f"HPC sorter output not found at {hpc_spike_path}")
-    if not hpc_ap_bin_path.exists():
-        raise FileNotFoundError(f"HPC AP binary not found at {hpc_ap_bin_path}")
     assert probe_json_path.exists(), f"Probe JSON file not found at {probe_json_path}"
     assert aligned_pfc_spike_path.exists(), f"Aligned PFC spike file not found at {aligned_hpc_spike_path}"
     assert aligned_hpc_spike_path.exists(), f"Aligned HPC spike file not found at {aligned_hpc_spike_path}"
 
-    # probe_sites = get_brain_channels.load_probe_json(probe_json_path)
-    # brain_channels, shank_sites = get_brain_channels.get_brain_and_shank_sites(
-    #     probe_sites,
-    #     sort_order="shallow_to_deep",
-    # )
-
-    # aligned_pfc_spikes = np.load(aligned_pfc_spike_path)
-    aligned_hpc_spikes = np.load(aligned_hpc_spike_path)
-
-    decode_target = "state_int"
+    decode_target = "state_int"  # state_int or action
     region_name = "HPC"
     # print(", ".join(map(str, "your_array")))
     hpc_channels_shank0 = np.array([
@@ -1468,9 +1686,11 @@ def main() -> None:
 
     event_df, trial_df = load_session_tables(session)
     lick_times = build_lick_time_dict(event_df)
-    spike_times, spike_clusters, cluster_info = load_sorter_spikes(
-        sorter_output_path=session.hpc_spike_path,
-        ap_bin_path=hpc_ap_bin_path,
+    aligned_spike_times = load_aligned_spikes(aligned_hpc_spike_path)
+    spike_clusters, cluster_info = load_sorter_metadata(sorter_output_path=session.hpc_spike_path)
+    validate_aligned_spike_inputs(
+        aligned_spike_times=aligned_spike_times,
+        spike_clusters=spike_clusters,
     )
 
     region_cluster_ids = select_units_by_channels(cluster_info, region_channels=region_channels)
@@ -1480,7 +1700,7 @@ def main() -> None:
         )
 
     region_spike_group = build_spike_tsgroup(
-        spike_times=spike_times,
+        spike_times=aligned_spike_times,
         spike_clusters=spike_clusters,
         cluster_ids=region_cluster_ids,
     )
@@ -1607,6 +1827,25 @@ def main() -> None:
                 f"  {summary_row['condition']} {summary_row['window']}: "
                 f"failed ({summary_row['reason']})"
             )
+
+    plot_trial_ix: int | None = 30
+    plot_event = "choice_time"
+    plot_time_mode = "session"  # utc, event, or session
+    plot_pre_time = 2.0
+    plot_post_time = 2.0
+    plot_session_start_time: float | None = trial_df['trial_time_since_start'].min() if plot_time_mode == "session" else None
+    if plot_trial_ix is not None:
+        plot_trial_raster(
+            region_spike_group=region_spike_group,
+            trial_df=trial_df,
+            trial_ix=plot_trial_ix,
+            lick_times=lick_times,
+            event=plot_event,
+            time_mode=plot_time_mode,
+            session_start_time=plot_session_start_time,
+            pre_time=plot_pre_time,
+            post_time=plot_post_time,
+        )
 
 
 if __name__ == "__main__":

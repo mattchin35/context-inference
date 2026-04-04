@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -47,11 +48,62 @@ def save_stream_sync_npz(
     return output_path
 
 
+def apply_utc_hour_offset(irig_df: pd.DataFrame, utc_offset_hours: float) -> pd.DataFrame:
+    """Shift decoded UTC timestamps by a user-specified number of hours.
+
+    Args:
+        irig_df: IRIG dataframe with one row per decoded pulse onset. Required
+            columns are ``utc_unix`` and ``utc_datetime``. ``utc_unix`` has
+            shape ``(n_pulses,)`` in seconds and ``utc_datetime`` contains
+            timezone-aware UTC datetimes or ``NaT`` values.
+        utc_offset_hours: Constant offset added to all decoded timestamps, in
+            hours.
+
+    Returns:
+        pd.DataFrame: Copy of ``irig_df`` with the same row count and metadata,
+        but with ``utc_unix`` shifted by ``utc_offset_hours * 3600`` seconds
+        and ``utc_datetime`` rebuilt from the shifted UTC unix values.
+    """
+    shifted_df = irig_df.copy(deep=True)
+    shift_seconds = float(utc_offset_hours) * 3600.0
+    shifted_unix = shifted_df["utc_unix"].to_numpy(dtype=float) + shift_seconds
+    shifted_df["utc_unix"] = shifted_unix
+    shifted_df["utc_datetime"] = [
+        datetime.fromtimestamp(unix_time, tz=timezone.utc) if np.isfinite(unix_time) else pd.NaT
+        for unix_time in shifted_unix
+    ]
+    return shifted_df
+
+
+def write_alignment_note(output_root: Path | str, utc_offset_hours: float) -> Path:
+    """Write a simple note describing the temporary UTC hour adjustment.
+
+    Args:
+        output_root: Root aligned-output directory where the note should be
+            written.
+        utc_offset_hours: Constant offset added to decoded timestamps, in
+            hours.
+
+    Returns:
+        Path: Path to the two-line text note written inside ``output_root``.
+    """
+    output_path = Path(output_root)
+    output_path.mkdir(parents=True, exist_ok=True)
+    note_path = output_path / "time_adjustment_note.txt"
+    note_lines = [
+        f"UTC hour adjustment: {float(utc_offset_hours)}",
+        f"Processed at: {datetime.now().astimezone().isoformat()}",
+    ]
+    note_path.write_text("\n".join(note_lines) + "\n")
+    return note_path
+
+
 def decode_binary_file_irig_utc(
     binary_file: Path | str,
     digital_word: int,
     irig_line: int,
     bit_period_s: float = 1.0,
+    utc_offset_hours: float = 0.0,
 ) -> tuple[pd.DataFrame, float]:
     """Decode IRIG-H UTC timestamps directly from one SpikeGLX digital line.
 
@@ -60,6 +112,8 @@ def decode_binary_file_irig_utc(
         digital_word: Digital word index used by ``ExtractDigital``.
         irig_line: Digital line index carrying IRIG-H.
         bit_period_s: IRIG bit period in seconds.
+        utc_offset_hours: Constant offset added to decoded UTC timestamps, in
+            hours. This is a temporary workaround for known alignment issues.
 
     Returns:
         tuple[pd.DataFrame, float]:
@@ -77,6 +131,7 @@ def decode_binary_file_irig_utc(
         sample_rate_hz=sample_rate_hz,
         bit_period_s=bit_period_s,
     )
+    irig_df = apply_utc_hour_offset(irig_df, utc_offset_hours=utc_offset_hours)
     return irig_df, sample_rate_hz
 
 
@@ -108,6 +163,7 @@ def sync_imec_spikes_to_utc(
     digital_word: int = 0,
     irig_line: int = 6,
     bit_period_s: float = 1.0,
+    utc_offset_hours: float = 0.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Decode IMEC IRIG and assign UTC timestamps to spikes.
 
@@ -119,6 +175,8 @@ def sync_imec_spikes_to_utc(
         digital_word: IMEC digital word index.
         irig_line: IMEC digital line index carrying IRIG-H.
         bit_period_s: IRIG bit period in seconds.
+        utc_offset_hours: Constant offset added to decoded UTC timestamps, in
+            hours. This is a temporary workaround for known alignment issues.
 
     Returns:
         tuple[pd.DataFrame, pd.DataFrame]:
@@ -130,6 +188,7 @@ def sync_imec_spikes_to_utc(
         digital_word=digital_word,
         irig_line=irig_line,
         bit_period_s=bit_period_s,
+        utc_offset_hours=utc_offset_hours,
     )
     spike_sample_ix = np.asarray(np.load(Path(spike_times_npy), allow_pickle=True), dtype=np.int64).reshape(-1)
     spike_df = map_spike_times_to_utc(spike_sample_ix, imec_irig_df)
@@ -143,6 +202,7 @@ def sync_imec_spikes_to_utc(
             "sample_rate_hz": float(sample_rate_hz),
             "digital_word": int(digital_word),
             "irig_line": int(irig_line),
+            "utc_offset_hours": float(utc_offset_hours),
             "units": {
                 "sample_ix": "samples",
                 "recording_time_s": "seconds",
@@ -175,6 +235,7 @@ def sync_ni_rising_edges_to_utc(
     digital_word: int = 0,
     irig_line: int = 0,
     bit_period_s: float = 1.0,
+    utc_offset_hours: float = 0.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Decode NI IRIG and assign UTC timestamps to one NI event line.
 
@@ -185,6 +246,8 @@ def sync_ni_rising_edges_to_utc(
         digital_word: NI digital word index.
         irig_line: NI digital line index carrying IRIG-H.
         bit_period_s: IRIG bit period in seconds.
+        utc_offset_hours: Constant offset added to decoded UTC timestamps, in
+            hours. This is a temporary workaround for known alignment issues.
 
     Returns:
         tuple[pd.DataFrame, pd.DataFrame]:
@@ -196,6 +259,7 @@ def sync_ni_rising_edges_to_utc(
         digital_word=digital_word,
         irig_line=irig_line,
         bit_period_s=bit_period_s,
+        utc_offset_hours=utc_offset_hours,
     )
     event_signal, event_sample_rate_hz = read_spikeglx_digital_line(
         binary_file=ni_file,
@@ -220,6 +284,7 @@ def sync_ni_rising_edges_to_utc(
             "digital_word": int(digital_word),
             "irig_line": int(irig_line),
             "event_line": int(event_line),
+            "utc_offset_hours": float(utc_offset_hours),
             "units": {
                 "sample_ix": "samples",
                 "recording_time_s": "seconds",
@@ -279,11 +344,14 @@ def main() -> None:
         None: This example runner writes files and prints a short summary.
     """
     session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251205_latentInference")
-    sess_id_full: str = "CT014_2025-12-05"
+    sess_id_full: str = "CT014_2025-12-05_165240"
     output_root = session_data_home / "ephys" / "aligned"
     sorting0_output_name = 'Kilosort2.5.2_2026-03-19_165539'
     sorting1_output_name = 'Kilosort2.5.2_2026-03-19_173016'
     ni_event_lines = (2, 3)
+    # Temporary workaround: set this to a nonzero value to shift all decoded
+    # IMEC and NI timestamps by a constant number of hours.
+    utc_offset_hours = 1.0
 
     raw_ephys_folder = session_data_home / "ephys" / "raw" / "run0_g0"
     catgt_ephys_folder = session_data_home / "ephys" / "catgt" / "catgt_run0_g0"
@@ -300,6 +368,7 @@ def main() -> None:
     ni_file = _require_existing_file(raw_ephys_folder / "run0_g0_t0.nidq.bin")
     imec_output_dir = output_root / "aligned_imec"
     nidaq_output_dir = output_root / "aligned_nidaq"
+    write_alignment_note(output_root=output_root, utc_offset_hours=utc_offset_hours)
 
     spike_df, imec_irig_df = sync_imec_spikes_to_utc(
         imec_ap_file=ap0_file,
@@ -307,6 +376,7 @@ def main() -> None:
         output_file=imec_output_dir / "imec0_sync.npz",
         digital_word=0,
         irig_line=6,
+        utc_offset_hours=utc_offset_hours,
     )
     print(
         f"{sess_id_full} imec0: mapped {spike_df.shape[0]} spikes using "
@@ -319,6 +389,7 @@ def main() -> None:
         output_file=imec_output_dir / "imec1_sync.npz",
         digital_word=0,
         irig_line=6,
+        utc_offset_hours=utc_offset_hours,
     )
     print(
         f"{sess_id_full} imec1: mapped {spike_df.shape[0]} spikes using "
@@ -332,6 +403,7 @@ def main() -> None:
             output_file=nidaq_output_dir / f"line{int(event_line)}_sync.npz",
             digital_word=0,
             irig_line=0,
+            utc_offset_hours=utc_offset_hours,
         )
         print(
             f"{sess_id_full} nidaq line {int(event_line)}: mapped {rising_df.shape[0]} rising edges using "
