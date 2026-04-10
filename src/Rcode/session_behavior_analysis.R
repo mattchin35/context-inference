@@ -9,189 +9,196 @@ require(randomForestSRC)  #not sure about flexplot compatibility
 #require(randomForest)
 library(varPro)
 
-source("preprocessing/trial_preprocessing.R")
-source("preprocessing/block_preprocessing.R")
+bootstrap_get_script_path <- function() {
+  frame_indices <- rev(seq_len(sys.nframe()))
+  
+  for (frame_index in frame_indices) {
+    frame_file <- sys.frame(frame_index)$ofile
+    if (!is.null(frame_file)) {
+      return(normalizePath(frame_file, winslash = "/", mustWork = TRUE))
+    }
+  }
+  
+  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  if (length(file_arg) > 0) {
+    return(normalizePath(sub("^--file=", "", file_arg[[1]]), winslash = "/", mustWork = TRUE))
+  }
+  
+  stop("Could not determine the current script path for source bootstrap.")
+}
+
+bootstrap_find_rcode_root <- function(start_path) {
+  current_path <- dirname(normalizePath(start_path, winslash = "/", mustWork = TRUE))
+  
+  repeat {
+    if (file.exists(file.path(current_path, "Rcode.Rproj"))) {
+      return(current_path)
+    }
+    
+    parent_path <- dirname(current_path)
+    if (identical(parent_path, current_path)) {
+      stop("Could not locate src/Rcode from script path: ", start_path)
+    }
+    current_path <- parent_path
+  }
+}
+
+source_utils_path <- file.path(
+  bootstrap_find_rcode_root(bootstrap_get_script_path()),
+  "source_utils.R"
+)
+source(source_utils_path, local = TRUE)
+
+source_rcode("preprocessing/trial_preprocessing.R")
+source_rcode("preprocessing/block_preprocessing.R")
 
 trial_df <- read.csv("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/processed/CT014_2025-12-16_153200_augmented_trials.csv",
                      header = TRUE)#,
 # trial_df <- read.csv("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251202/processed/CT014_2025-12-02_151940_augmented_trials.csv", 
 #                      header = TRUE)#,
 #stringsAsFactors = FALSE)  # Don't convert strings to factors
-trial_df <- cleanup_trial_dataframe(trial_df, include_model_regressors = FALSE)
+trial_df <- cleanup_trial_dataframe(trial_df, include_model_regressors = TRUE)
 clean_df <- curate_trial_analysis_dataframe(trial_df)
 
-#clean_df <- clean_df %>% select(-correct, -reward)
-#clean_df <- clean_df %>% select(-cur_block, -cur_trial, -trial_time_since_start, -choice_time_since_start)
-#clean_df <- clean_df %>% select(-negative_value, -consecutive_rewards_memory, -consecutive_failures_memory, -consecutive_rewards, -consecutive_failures)
-#clean_df <- clean_df %>% select(-RFLR_prob_left, -RFLR_rel_value, -RFLR_greedy_action) 
-#clean_df <- clean_df %>% select(-FQlearning_prob_left, -FQlearning_rel_value, -FQlearning_greedy_action)
-#clean_df <- clean_df %>% select(-Qlearning_prob_left, -Qlearning_rel_value, -Qlearning_greedy_action)
-#clean_df <- clean_df %>% select(-HMM_prob_left, -HMM_rel_value, -HMM_greedy_action)
+# Run a random-forest / VarPro comparison for a named predictor set.
+#
+# Args:
+#   data_frame: data.frame with shape (n_trials, n_columns). Trialwise analysis
+#     table containing an `action` column and all predictors listed below.
+#   predictors: character vector of predictor column names. Each predictor is a
+#     trialwise scalar regressor aligned to the rows in `data_frame`.
+#   label: character scalar used for printed output.
+#
+# Returns:
+#   named list with `rf_model` and `varfit` objects.
+run_choice_importance <- function(data_frame, predictors, label) {
+  analysis_columns <- c("action", predictors)
+  model_df <- data_frame %>% dplyr::select(dplyr::all_of(analysis_columns))
+  varpro_df <- model_df
+  
+  for (predictor_name in predictors) {
+    if (is.factor(varpro_df[[predictor_name]])) {
+      varpro_df[[predictor_name]] <- as.numeric(as.character(varpro_df[[predictor_name]]))
+    }
+  }
+  
+  model_formula <- stats::as.formula(
+    paste("action ~", paste(predictors, collapse = " + "))
+  )
+  
+  cat("\n###", label, "###\n")
+  rf_model <- rfsrc(model_formula, data = model_df)
+  varfit <- varpro(model_formula, data = varpro_df)
+  print(rf_model)
+  importance(varfit, plot.it = TRUE)
+  
+  list(rf_model = rf_model, varfit = varfit)
+}
 
-flexplot(relative_nonneg_value ~ 1, data=clean_df)  # negative_value is cooked in its python calculation
-#flexplot(reward_time ~ 1, data=trial_df)  # distribution hist is unclear, like reward_time
-#flexplot(time_to_choice ~ 1, data=trial_df)  # similar to above
+legacy_value_predictors <- c(
+  "relative_value", "relative_omissions", "relative_doubt_index",
+  "prev_action", "prev_reward"
+)
+legacy_cf_predictors <- c(
+  "relative_cf_value", "relative_omissions", "relative_doubt_index",
+  "prev_action", "prev_reward"
+)
+current_model_predictors <- c(
+  "FQlearning_rel_value", "HMM_rel_value_logodds", "HMM_rel_value_logodds_decay",
+  "relative_omissions", "relative_doubt_index", "prev_action", "prev_reward"
+)
 
-# cooked histograms but seemingly okay calculation - reward_time (also read in with wrong values to R), Qlearning/FQlearning Pleft and relative value
-# HMM Pleft and relative value are more intelligible? have same shape tho 
-# maybe those are better as tracking plots alongside choices
+flexplot(relative_value ~ 1, data = clean_df)
+flexplot(relative_cf_value ~ 1, data = clean_df)
+flexplot(FQlearning_rel_value ~ 1, data = clean_df)
+flexplot(HMM_rel_value_logodds ~ 1, data = clean_df)
+flexplot(HMM_rel_value_logodds_decay ~ 1, data = clean_df)
 
-############################################################################
-### maximum predictability with trial "correct" flag
-set.seed(1)
-#rf_model = randomforestthing(action~., data=trial_df)
-rf_model = rfsrc(action ~ ., data=clean_df)
-varfit = varpro(action ~ ., data=clean_df)
-imp = importance(varfit)
-print(rf_model)
-importance(varfit, plot.it = TRUE)
-#print(vimp(rf_model)$importance)
-#rf_estimates = estimates(rf_model)
+legacy_value_models <- run_choice_importance(clean_df, legacy_value_predictors, "Legacy relative_value predictors")
+legacy_cf_models <- run_choice_importance(clean_df, legacy_cf_predictors, "Legacy relative_cf_value predictors")
+current_model_models <- run_choice_importance(clean_df, current_model_predictors, "Current model-value predictors")
 
-#oo <- subsample(rf_model, verbose = FALSE)
-#vimpCI <- extract.subsample(oo)$var.jk.sel.Z
-#print(vimpCI)
-#plot.subsample(oo)
-#plot.variable(rf_model, xvar.names = "Month", partial = TRUE)
+flexplot(
+  action ~ FQlearning_prob_left_approx + FQlearning_rel_value,
+  method = "logistic",
+  data = clean_df,
+  jitter = c(.01, .1)
+)
+flexplot(
+  action ~ HMM_prob_left_logodds_approx | HMM_rel_value_logodds,
+  method = "logistic",
+  data = clean_df,
+  jitter = c(.01, .1)
+)
+flexplot(
+  action ~ HMM_prob_left_logodds_decay_approx | HMM_rel_value_logodds_decay,
+  method = "logistic",
+  data = clean_df,
+  jitter = c(.01, .1)
+)
 
-############################################################################
+full_current <- glm(
+  action ~ FQlearning_rel_value + HMM_rel_value_logodds + HMM_rel_value_logodds_decay +
+    relative_omissions + relative_doubt_index + prev_action + prev_reward,
+  data = clean_df,
+  family = binomial
+)
+reduced_fql <- glm(
+  action ~ FQlearning_rel_value + relative_omissions + relative_doubt_index + prev_action + prev_reward,
+  data = clean_df,
+  family = binomial
+)
+reduced_hmm_logodds <- glm(
+  action ~ HMM_rel_value_logodds + relative_omissions + relative_doubt_index + prev_action + prev_reward,
+  data = clean_df,
+  family = binomial
+)
+reduced_hmm_decay <- glm(
+  action ~ HMM_rel_value_logodds_decay + relative_omissions + relative_doubt_index + prev_action + prev_reward,
+  data = clean_df,
+  family = binomial
+)
 
-# iteratively removing things so all important predictors are left across all strategies
-set.seed(1)
-small_df <- clean_df %>% select(-cur_trial, -cur_trial_in_block, -trial_time_since_start, -choice_time_since_start)
-small_df <- small_df %>% select(-reward)
-small_df <- small_df %>% select(-correct)
-#small_df <- removeRowsByColumn(small_df, "correct", function(x) x == 1)
-#small_df <- removeRowsByColumn(small_df, "reward", function(x) x == 1)
-#small_df <- removeRowsByColumn(small_df, "inferred_strategy", function(x) x == 3)
-#small_df <- small_df %>% select(-RFLR_greedy_action, -FQlearning_greedy_action, -HMM_greedy_action, -Qlearning_greedy_action)
-#small_df <- clean_df %>% select(-RFLR_rel_value, -FQlearning_rel_value, -HMM_rel_value, -Qlearning_rel_value)
-#small_df <- clean_df %>% select(-RFLR_prob_left, -FQlearning_prob_left, -HMM_prob_left, -Qlearning_prob_left)
-small_df <- small_df %>% select(-consecutive_rewards_memory, -consecutive_failures_memory, -consecutive_failures, -consecutive_rewards)
-small_df <- small_df %>% select(-time_to_choice, -negative_value, -cur_block)
-# small_df <- small_df %>% select(-RFLR_prob_left, -RFLR_rel_value, -RFLR_greedy_action) 
-# small_df <- small_df %>% select(-FQlearning_prob_left, -FQlearning_rel_value, -FQlearning_greedy_action)
-# small_df <- small_df %>% select(-Qlearning_prob_left, -Qlearning_rel_value, -Qlearning_greedy_action)
-# small_df <- small_df %>% select(-HMM_prob_left, -HMM_rel_value, -HMM_greedy_action)
-small_df <- small_df %>% select(-inherited_strategy,-inherited_bias_flag)
-#small_df <- small_df %>% select(-inferred_strategy)
-#small_df <- small_df %>% select(-prev_action, -prev_reward)
-#small_df <- small_df %>% select(-prev_reward)
-#small_df <- small_df %>% select(-FQlearning_rel_value, -HMM_rel_value)#, -HMM_prob_left, -FQlearning_prob_left)
-#small_df <- small_df %>% select(-HMM_prob_left, -FQlearning_prob_left)
-#small_df <- small_df %>% select(-relative_value, -relative_nonneg_value, -relative_omissions)
-small_df <- small_df %>% select(-relative_value)
-small_df <- small_df %>% select(-right_omissions, -left_omissions)
-small_df <- small_df %>% select(-right_value, -left_value)
-small_df <- small_df %>% select(-right_nonneg_value, -left_nonneg_value)
-#print(small_df)
+model.comparison(full_current, reduced_fql)
+model.comparison(full_current, reduced_hmm_logodds)
+model.comparison(full_current, reduced_hmm_decay)
 
-rf_small = rfsrc(action ~ ., data=small_df)
-varfit_small = varpro(action ~ ., data=small_df)
-imp_small = importance(varfit_small)
-print(rf_small)
-importance(varfit_small, plot.it = TRUE)
+flexplot(
+  action ~ relative_value + relative_omissions | inferred_strategy + prev_action,
+  data = clean_df,
+  method = "logistic"
+)
+flexplot(
+  action ~ relative_cf_value + relative_doubt_index | inferred_strategy + prev_action,
+  data = clean_df,
+  method = "logistic"
+)
 
-#small_df <- small_df %>% select(-RFLR_greedy_action, -HMM_greedy_action, -Qlearning_greedy_action, -FQlearning_greedy_action)
-#small_df <- small_df %>% select(-consecutive_rewards_memory, -HMM_rel_value)
-#small_df <- small_df %>% select(-consecutive_failures, -consecutive_rewards, -time_to_choice)
-#small_df <- small_df %>% select(-RFLR_prob_left, -RFLR_rel_value, -Qlearning_prob_left, -Qlearning_rel_value)
-#small_df <- small_df %>% select(-Qlearning_rel_value, -HMM_rel_value, -consecutive_rewards_memory, -consecutive_failures)c
+control <- glmerControl(optimizer = "nloptwrap", optCtrl = list(algorithm = "NLOPT_LN_BOBYQA"))
+mixmod_relative_value <- glmer(
+  action ~ relative_value + relative_omissions + prev_action * prev_reward +
+    (relative_value + relative_omissions | inferred_strategy),
+  data = clean_df,
+  family = "binomial",
+  control = control
+)
+mixmod_relative_cf <- glmer(
+  action ~ relative_cf_value + relative_doubt_index + prev_action * prev_reward +
+    (relative_cf_value + relative_doubt_index | inferred_strategy),
+  data = clean_df,
+  family = "binomial",
+  control = control
+)
 
-# strategies: -HMM_prob_left, -HMM_rel_value, -Qlearning_rel_value, -Qlearning_prob_left, -RFLR_rel_value, -RFLR_prob_left, -FQlearning_prob_left, -FQlearning_rel_value, -correct, -reward)
-# decision variables: negative_value, consecutive_rewards_memory, consecutive_failures_memory, consecutive_rewards, consecutive_failures 
-# seemingly unimportant attributes (for now at least) -led_on_time, -led_off_time, -p_active_rew, -p_inactive_rew, -p_switch, -session_ID) # removing all of these stays fine
-# trial/block qualities: (-cur_trial, -cur_trial_in_block, -cur_block, -start_time, -choice_time, -reward_time, -time_to_choice, -reward_time))
+strategy_sample_size <- safe_group_sample_size(clean_df$inferred_strategy, requested_size = 3L)
+visualize(mixmod_relative_value, sample = strategy_sample_size)
+visualize(mixmod_relative_cf, sample = strategy_sample_size)
+estimates(mixmod_relative_value)
+estimates(mixmod_relative_cf)
+model.comparison(mixmod_relative_value, mixmod_relative_cf)
 
-# try another way!
-hmm_df <- clean_df %>% select(-Qlearning_rel_value, -Qlearning_prob_left, -RFLR_rel_value, -RFLR_prob_left, -FQlearning_prob_left, -FQlearning_rel_value, -correct, -reward)
-hmm_df <- hmm_df %>% select(-led_on_time, -led_off_time, -p_active_rew, -p_inactive_rew, -p_switch, -session_ID, -reward_time) # remove all of these on principle or because they should be unimportant for now
-#hmm_df <- hmm_df %>% select(-cur_trial, -cur_trial_in_block, -cur_block, -start_time, -choice_time, -time_to_choice)
-rf_hmm = rfsrc(action ~ ., data=hmm_df)
-print(rf_hmm)
-varfit_hmm = varpro(action ~ ., data=hmm_df)
-imp_hmm = importance(varfit_hmm)
-importance(varfit_hmm, plot.it = TRUE)
-
-### try some logistic relationships now! See how you compare to the RF plot, and why you might need some state/strategy predictors
-flexplot(action ~ HMM_prob_left | HMM_rel_value, method="logistic", data=clean_df, jitter=c(.01,.1)) # ghost.line="gray"
-flexplot(action ~ FQlearning_prob_left + FQlearning_rel_value, method="logistic", data=clean_df, jitter=c(.01,.1)) # ghost.line="gray"
-flexplot(action ~ HMM_prob_left | HMM_rel_value + FQlearning_prob_left , method="logistic", data=clean_df, jitter=c(.01,.1)) # ghost.line="gray"
-#flexplot(action ~ HMM_greedy_action + correct, data=small_df, jitter=c(.1,.1))
-
-full = glm(action ~ HMM_rel_value * correct + HMM_prob_left * correct + FQlearning_rel_value * correct + FQlearning_prob_left * correct, data=clean_df, family=binomial)
-#reduced = glm(action ~ HMM_rel_value * correct + HMM_prob_left * correct, data=clean_df, family=binomial)
-#compare.fits(action ~ HMM_rel_value | correct, data=clean_df, model1=full, model2=reduced)
-reduced = glm(action ~ FQlearning_rel_value * correct + FQlearning_prob_left * correct, data=clean_df, family=binomial)
-compare.fits(action ~ FQlearning_rel_value | correct, data=clean_df, model1=full, model2=reduced)
-model.comparison(full, reduced)
-#estimates(full)
-
-# compare HMM and FQL predictors to only using HMM or FQL
-full_multimodel = glm(action ~ HMM_rel_value * HMM_prob_left + FQlearning_rel_value * FQlearning_prob_left, data=clean_df, family=binomial)
-#reduced_hmm = glm(action ~ HMM_rel_value * HMM_prob_left, data=clean_df, family=binomial)
-#compare.fits(action ~ HMM_rel_value | HMM_prob_left, data=clean_df, model1=full, model2=reduced_hmm)
-#model.comparison(full, reduced_hmm)
-reduced_fql = glm(action ~ FQlearning_rel_value * FQlearning_prob_left, data=clean_df, family=binomial)
-compare.fits(action ~ FQlearning_prob_left , data=clean_df, model1=full_multimodel, model2=reduced_fql)
-model.comparison(full_multimodel, reduced_fql)
-
-# compare QL and FQL
-full_multimodel = glm(action ~ Qlearning_rel_value * Qlearning_prob_left + FQlearning_rel_value * FQlearning_prob_left, data=clean_df, family=binomial)
-reduced_ql = glm(action ~ Qlearning_rel_value * Qlearning_prob_left, data=clean_df, family=binomial)
-reduced_fql = glm(action ~ FQlearning_rel_value * FQlearning_prob_left, data=clean_df, family=binomial)
-compare.fits(action ~ FQlearning_prob_left | FQlearning_rel_value, data=clean_df, model1=full, model2=reduced_fql)
-model.comparison(full, reduced_fql)
-
-
-mod_hmm = glm(action ~ HMM_rel_value * correct + HMM_prob_left * correct, data=clean_df, family=binomial)
-mod_fql = glm(action ~FQlearning_rel_value * correct + FQlearning_prob_left * correct, data=clean_df, family=binomial)
-#compare.fits(action ~ HMM_rel_value | correct, data=clean_df, model1=mod_hmm, model2=mod_fql)
-model.comparison(mod_hmm, mod_fql)
-
-mod_hmm = glm(action ~ HMM_rel_value * HMM_prob_left, data=clean_df, family=binomial)
-mod_fql = glm(action ~FQlearning_rel_value * FQlearning_prob_left, data=clean_df, family=binomial)
-#compare.fits(action ~ HMM_rel_value | correct, data=clean_df, model1=mod_hmm, model2=mod_fql)
-model.comparison(mod_hmm, mod_fql)
-
-#compare.fits(action ~ .)
-
-# try some RFs where you only have HMM or only have FQL or only have Logistic
-FQL_df <- small_df %>% select(-Qlearning_rel_value, -Qlearning_prob_left, -RFLR_rel_value, -RFLR_prob_left, -HMM_prob_left, -HMM_rel_value) 
-rf_fql = rfsrc(action ~ ., data=FQL_df)
-print(rf_fql)
-varfit_fql = varpro(action ~ ., data=FQL_df)
-imp_fql = importance(varfit_fql)
-importance(varfit_fql, plot.it = TRUE)
-
-#* relative_omissions + prev_action + prev_reward
-### GLIM for Generalized mixed model. WOW STATS!!
-# flexplot(action ~ 1, data=clean_df)
-flexplot(action ~ relative_nonneg_value + relative_omissions | inferred_strategy  + prev_action, data=clean_df, method="logistic")
-control = glmerControl(optimizer = "nloptwrap", optCtrl = list(algorithm = "NLOPT_LN_NELDERMEAD"))
-control = glmerControl(optimizer = "nloptwrap", optCtrl = list(algorithm = "NLOPT_LN_BOBYQA"))
-#control = glmerControl(optimizer = "Nelder_Mead")
-mixmod_trials = glmer(action ~ relative_nonneg_value + relative_omissions + prev_action * prev_reward + (relative_nonneg_value + relative_omissions | inferred_strategy), 
-                      data=clean_df, family="binomial", control=control)
-mixmod_trials2 = glmer(action ~ relative_nonneg_value + relative_omissions + prev_action + (relative_nonneg_value + relative_omissions | inferred_strategy), 
-                      data=clean_df, family="binomial", control=control)
-mixmod_trials_red = glmer(action ~ relative_nonneg_value + relative_omissions + (relative_nonneg_value + relative_omissions | inferred_strategy),
-                      data=clean_df, family="binomial", control=control)
-mixmod_trials_small = glmer(action ~ relative_nonneg_value + relative_omissions + (1 | inferred_strategy),
-                          data=clean_df, family="binomial", control=control)
-
-#allFit(mixmod_trials)
-visualize(mixmod_trials)
-estimates(mixmod_trials)
-model.comparison(mixmod_trials, mixmod_trials2)
-model.comparison(mixmod_trials2, mixmod_trials_red)
-model.comparison(mixmod_trials_red, mixmod_trials_small)
-
-# Get predicted probabilities
-pred_probs <- predict(mixmod_trials_red, type = "response")
-# Convert to 0/1 predictions (assuming 0.5 threshold)
+pred_probs <- predict(mixmod_relative_cf, type = "response")
 predictions <- ifelse(pred_probs > 0.5, 1, 0)
-# Calculate percent correct
 mean(predictions == clean_df$action) * 100
 
 ##############################################################
@@ -260,20 +267,11 @@ mod_inferred = lm(trials_to_correct ~ prev_n_rewarded * inferred_strategy, data 
 visualize(mod_fullest)
 visualize(mod_inferred)
 estimates(mod_inferred)
-visualize(mod_declared)
-estimates(mod_declared)
-visualize(mod_bias)
-estimates(mod_bias)
 
 #compare.fits(trials_to_correct ~ prev_n_rewarded, data=block_df, model1=mod_inferred, model2=mod_declared)
 #model.comparison(mod_inferred, mod_declared)
 #compare.fits(trials_to_correct ~ prev_n_rewarded, data=block_df, model1=mod_declared, model2=mod_bias)
 #model.comparison(mod_declared, mod_bias)
-compare.fits(trials_to_correct ~ prev_n_rewarded | bias_full_flag + inferred_strategy, data=block_df, model1=mod_inferred, model2=mod_bias)
-model.comparison(mod_inferred, mod_bias)
-
-compare.fits(trials_to_correct ~ prev_n_rewarded | bias_full_flag + inferred_strategy, data=block_df, model1=mod_fullest, model2=mod_bias)
-model.comparison(mod_fullest, mod_bias)
 compare.fits(trials_to_correct ~ prev_n_rewarded | bias_full_flag + inferred_strategy, data=block_df, model1=mod_fullest, model2=mod_inferred)
 model.comparison(mod_fullest, mod_inferred)
 
@@ -288,17 +286,6 @@ model.comparison(mod_fullest, mod_inferred)
 # mixmod_declared = lmer(trials_to_correct ~ prev_n_rewarded + (prev_n_rewarded | declared_strategy), data = block_df)
 # mixmod_inferred = lmer(trials_to_correct ~ prev_n_rewarded + (prev_n_rewarded | inferred_strategy), data = block_df)
 #mixmod_rew = lmer(trials_to_correct ~ prev_n_rewarded + (1 | bias_full_flag), data = block_df)
-visualize(mixmod_hmm, plot = 'model', formula = trials_to_correct ~ prev_n_rewarded + bias_full_flag | inferred_strategy)
-visualize(mixmod_full, plot = 'model', formula = trials_to_correct ~ prev_n_rewarded + bias_full_flag + inferred_strategy)
-summary(mixmod_rew)
-visualize(mixmod_rew, plot = 'model', formula = trials_to_correct ~ prev_n_rewarded | bias_full_flag)
-visualize(mixmod_declared, plot = 'model', formula = trials_to_correct ~ prev_n_rewarded | declared_strategy)
-summary(mixmod_declared)
-visualize(mixmod_inferred, plot = 'model', formula = trials_to_correct ~ prev_n_rewarded | inferred_strategy)
-
-cluster_adjusted_scatter(trials_to_correct ~ prev_n_rewarded | inferred_strategy, object = mixmod_inferred)
-#cluster_adjusted_scatter(trials_to_correct ~ prev_n_rewarded | bias_full_flag, object = mixmod_rew, adjust="all")
-# allFit(mixmod_hmm)
 control = lmerControl(optimizer = "nloptwrap", optCtrl = list(algorithm = "NLOPT_LN_NELDERMEAD"))
 mod_rewards = lmer(trials_to_correct ~ prev_n_rewarded + (prev_n_rewarded | inferred_strategy),
                data = block_df, control=control)
@@ -331,4 +318,3 @@ print(rf_blocks)
 varfit_blocks = varpro(trials_to_correct ~ ., data=small_blocks)
 imp_blocks = importance(varfit_blocks)
 importance(varfit_blocks, plot.it = TRUE)
-

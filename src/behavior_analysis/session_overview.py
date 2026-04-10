@@ -61,36 +61,6 @@ def total_water_delivery(session_df: pd.DataFrame, session_info: dict) -> pd.Dat
 
 def choice_event_summary(event, nearby_events) -> Tuple[int, int, int]:
 
-    ### NOT IN USE ###
-    # LEFT CHOICES
-    # if event == 'wrong_choice_right_patch':
-    #     action = 1
-    #     correct = 0
-    #     reward = 0
-    # elif event == 'pump2_reward_0':
-    #     action = 1
-    #     correct = 1
-    #     reward = 0
-    # elif re.fullmatch('pump2.*', event) or event == 'correct_choice_right_patch':
-    #     action = 1
-    #     correct = 1
-    #     reward = 1
-    #
-    # # RIGHT CHOICES
-    # elif event == 'wrong_choice_left_patch':
-    #     action = 0
-    #     correct = 0
-    #     reward = 0
-    # elif event == 'pump1_reward_0':
-    #     action = 0
-    #     correct = 1
-    #     reward = 0
-    # elif re.fullmatch('pump1.*', event) or event == 'correct_choice_left_patch':
-    #     action = 0
-    #     correct = 1
-    #     reward = 1
-    ### END NOT IN USE ###
-
     ## FOR GOOD CODE AFTER 9/2/24
     # LEFT CHOICES
     if event == 'wrong_choice_right_patch':
@@ -135,39 +105,6 @@ def choice_event_summary(event, nearby_events) -> Tuple[int, int, int]:
         action = None
         correct = None
         reward = 1
-
-    ## FOR BAD CODE BEFORE 9/2/24
-    # LEFT CHOICES
-    # if event == 'wrong_choice_right_patch':
-    #     action = 0
-    #     correct = 0
-    #     reward = 0
-    # elif event == 'correct_choice_right_patch':
-    #     action = 0
-    #     correct = 1
-    #     reward = 0
-    #     for ne in nearby_events:
-    #         try:
-    #             if int(re.findall(r'reward_amount: (\d+)', ne)[0]) > 0:
-    #                 reward = 1
-    #                 break
-    #         except IndexError:
-    #             continue
-    # elif event == 'correct_choice_left_patch':
-    #     action = 1
-    #     correct = 1
-    #     reward = 0
-    #     for ne in nearby_events:
-    #         try:
-    #             if int(re.findall(r'reward_amount: (\d+)', ne)[0]) > 0:
-    #                 reward = 1
-    #                 break
-    #         except IndexError:
-    #             continue
-    # elif event == 'wrong_choice_left_patch':
-    #     action = 1
-    #     correct = 0
-    #     reward = 0
 
     else:
         raise NameError('Unrecognized choice event: {}'.format(event))

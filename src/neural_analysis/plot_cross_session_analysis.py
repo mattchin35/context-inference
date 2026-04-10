@@ -10,6 +10,9 @@ import pandas as pd
 DEFAULT_MOUSE_ROOT = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014")
 DEFAULT_OUTPUT_DIR = DEFAULT_MOUSE_ROOT / "cross_session_analysis"
 DEFAULT_DECODER_RUN_INDEX = 0
+# Shared horizontal limits for all paired before/after plots. Change this tuple to
+# tune the left/right whitespace without hunting through individual plot functions.
+BEFORE_AFTER_XLIM = (-0.2, 1.2)
 BASE_CONDITIONS = [
     "correct_rewarded",
     "incorrect",
@@ -232,6 +235,26 @@ def _format_condition_label(trial_condition: str) -> str:
     return trial_condition.replace("_", " ")
 
 
+def _format_session_date_label(session_row: pd.Series) -> str:
+    """
+    Format a session row into a date-only label for plot legends.
+
+    Parameters
+    ----------
+    session_row : pd.Series
+        One row containing at least a ``date`` field.
+
+    Returns
+    -------
+    str
+        Session date label for the legend.
+    """
+
+    if "date" not in session_row or pd.isna(session_row["date"]):
+        raise ValueError("Session-mean decoder plots require a non-null 'date' column for legend labels.")
+    return str(session_row["date"])
+
+
 def _plot_paired_before_after(
     values_df: pd.DataFrame,
     trial_condition: str,
@@ -296,7 +319,7 @@ def _plot_paired_before_after(
         linestyle="--",
         linewidth=2,
     )
-    axis.set_xlim(-0.5, 1.5)
+    axis.set_xlim(*BEFORE_AFTER_XLIM)
     axis.set_ylim(*y_limits)
     axis.set_xticks([0, 1], ["Before\nchoice", "After\nchoice"])
     axis.set_ylabel(ylabel)
@@ -429,17 +452,22 @@ def _compute_session_mean_decoder_table(
     Returns
     -------
     pd.DataFrame
-        One row per session with columns ``session``, ``test_accuracy_before``,
+        One row per session with columns ``session``, ``date``, ``test_accuracy_before``,
         and ``test_accuracy_after`` representing the mean across decoder runs.
     """
 
     condition_df = decoder_df.loc[decoder_df["trial_condition"] == trial_condition].copy()
     if condition_df.empty:
         raise ValueError(f"No rows found for trial_condition={trial_condition!r}.")
+    if "date" not in condition_df.columns:
+        condition_df["date"] = condition_df["session"].astype(str)
 
     return (
-        condition_df.groupby("session", as_index=False)[["test_accuracy_before", "test_accuracy_after"]]
-        .mean()
+        condition_df.groupby("session", as_index=False).agg(
+            date=("date", "first"),
+            test_accuracy_before=("test_accuracy_before", "mean"),
+            test_accuracy_after=("test_accuracy_after", "mean"),
+        )
         .sort_values("session")
     )
 
@@ -517,7 +545,7 @@ def plot_cross_session_decoder_superplot(
         linestyle="--",
         linewidth=2,
     )
-    axis.set_xlim(-0.5, 1.5)
+    axis.set_xlim(*BEFORE_AFTER_XLIM)
     axis.set_ylim(0.0, 1.0)
     axis.set_xticks([0, 1], ["Before\nchoice", "After\nchoice"])
     axis.set_ylabel("Test accuracy")
@@ -549,7 +577,7 @@ def plot_cross_session_decoder_session_means(
     Returns
     -------
     tuple[plt.Figure, plt.Axes]
-        Figure and axis containing the session-mean decoder plot.
+        Figure and axis containing the session-mean decoder plot with a date legend.
     """
 
     session_mean_df = _compute_session_mean_decoder_table(decoder_df, trial_condition=trial_condition)
@@ -571,6 +599,7 @@ def plot_cross_session_decoder_session_means(
             color=session_colors[str(session_row["session"])],
             alpha=0.9,
             linewidth=2.0,
+            label=_format_session_date_label(session_row),
         )
 
     overall_mean_before = float(session_mean_df["test_accuracy_before"].mean())
@@ -581,12 +610,14 @@ def plot_cross_session_decoder_session_means(
         color="k",
         linestyle="--",
         linewidth=2,
+        label="Overall mean",
     )
-    axis.set_xlim(-0.5, 1.5)
+    axis.set_xlim(*BEFORE_AFTER_XLIM)
     axis.set_ylim(0.0, 1.0)
     axis.set_xticks([0, 1], ["Before\nchoice", "After\nchoice"])
     axis.set_ylabel("Test accuracy")
     axis.set_title(f"Decoder performance, {_format_condition_label(trial_condition)} trials")
+    axis.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False)
     figure.tight_layout()
     if show:
         plt.show()

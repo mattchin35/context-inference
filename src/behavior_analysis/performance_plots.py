@@ -138,16 +138,31 @@ def scatter_trials_to_correct(block_performance: pd.DataFrame, slope: float, int
 def plot_session_trials_to_correct(block_performance: pd.DataFrame, plot_path: Path, sess_ID: str):
     """For a single session, plot the blockwise trials to the correct choice made by the agent."""
     f, ax = plt.subplots()
-    x = np.arange(len(block_performance))
+    plot_df = block_performance.loc[:, ['block_type', 'trials_to_correct']].copy()
+    plot_df['block_position'] = np.arange(len(block_performance))
+    plot_df['trials_to_correct_numeric'] = pd.to_numeric(
+        plot_df['trials_to_correct'],
+        errors='coerce',
+    )
+    plot_df = plot_df.dropna(subset=['trials_to_correct_numeric'])
+
     for b in block_types:
-        ix = np.where(block_performance['block_type'] == b)[0]
-        if len(ix) > 0:
-            ax.plot(x[ix], block_performance['trials_to_correct'][ix], 'o', color=color_dict[b], label=b)
+        block_df = plot_df[plot_df['block_type'] == b]
+        if not block_df.empty:
+            ax.plot(
+                block_df['block_position'].to_numpy(),
+                block_df['trials_to_correct_numeric'].astype(int).to_numpy(),
+                'o',
+                color=color_dict[b],
+                label=b,
+            )
 
     plt.ylabel('Trials to Correct')
     plt.xlabel('Block')
     plt.title('{} Blockwise Trials to Correct'.format(sess_ID))
-    plt.legend(fancybox=False)
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        plt.legend(fancybox=False)
 
     plt.tight_layout()
     save_path = plot_path / '{}_block_trials_to_correct.png'.format(sess_ID)

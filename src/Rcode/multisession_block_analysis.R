@@ -10,7 +10,47 @@ require(randomForestSRC)  #not sure about flexplot compatibility
 #require(randomForest)
 library(varPro)
 
-source("preprocessing/block_preprocessing.R")
+bootstrap_get_script_path <- function() {
+  frame_indices <- rev(seq_len(sys.nframe()))
+  
+  for (frame_index in frame_indices) {
+    frame_file <- sys.frame(frame_index)$ofile
+    if (!is.null(frame_file)) {
+      return(normalizePath(frame_file, winslash = "/", mustWork = TRUE))
+    }
+  }
+  
+  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  if (length(file_arg) > 0) {
+    return(normalizePath(sub("^--file=", "", file_arg[[1]]), winslash = "/", mustWork = TRUE))
+  }
+  
+  stop("Could not determine the current script path for source bootstrap.")
+}
+
+bootstrap_find_rcode_root <- function(start_path) {
+  current_path <- dirname(normalizePath(start_path, winslash = "/", mustWork = TRUE))
+  
+  repeat {
+    if (file.exists(file.path(current_path, "Rcode.Rproj"))) {
+      return(current_path)
+    }
+    
+    parent_path <- dirname(current_path)
+    if (identical(parent_path, current_path)) {
+      stop("Could not locate src/Rcode from script path: ", start_path)
+    }
+    current_path <- parent_path
+  }
+}
+
+source_utils_path <- file.path(
+  bootstrap_find_rcode_root(bootstrap_get_script_path()),
+  "source_utils.R"
+)
+source(source_utils_path, local = TRUE)
+
+source_rcode("preprocessing/block_preprocessing.R")
 
 
 
@@ -111,4 +151,3 @@ visualize(mod_blocks, plot = 'model', formula = trials_to_correct ~ prev_n_rewar
 # varfit_blocks = varpro(trials_to_correct ~ ., data=small_blocks)
 # imp_blocks = importance(varfit_blocks)
 # importance(varfit_blocks, plot.it = TRUE)
-

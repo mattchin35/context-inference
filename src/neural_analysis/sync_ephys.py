@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import numpy.typing as npt
@@ -21,6 +22,9 @@ from src.neural_analysis.irig_sync_utils import (
     pulse_lengths_from_edges,
 )
 from src.neural_analysis.spikeglx_sync_io import read_digital_line as read_spikeglx_digital_line
+
+
+NEW_YORK_TZ = ZoneInfo("America/New_York")
 
 
 def save_stream_sync_npz(
@@ -96,6 +100,27 @@ def write_alignment_note(output_root: Path | str, utc_offset_hours: float) -> Pa
     ]
     note_path.write_text("\n".join(note_lines) + "\n")
     return note_path
+
+
+def convert_utc_series_to_new_york(localizable_times: list[datetime | pd.Timestamp | Any]) -> list[datetime | pd.NaT]:
+    """Convert UTC datetimes into New York local datetimes.
+
+    Args:
+        localizable_times: Sequence of timezone-aware UTC datetimes or ``NaT``-like
+            values with shape ``(n_times,)``.
+
+    Returns:
+        list[datetime | pd.NaT]: Sequence with the same length where finite UTC
+        datetimes are converted to ``America/New_York`` and missing values remain
+        ``pd.NaT``.
+    """
+    local_times: list[datetime | pd.NaT] = []
+    for utc_time in localizable_times:
+        if pd.isna(utc_time):
+            local_times.append(pd.NaT)
+        else:
+            local_times.append(pd.Timestamp(utc_time).tz_convert(NEW_YORK_TZ).to_pydatetime())
+    return local_times
 
 
 def decode_binary_file_irig_utc(
@@ -327,22 +352,144 @@ def _require_existing_file(file_path: Path) -> Path:
     return file_path
 
 
-def main() -> None:
-    """Run a brief example synchronization workflow for one IMEC stream and NI lines.
+def decode_ni_irig_debug(
+    ni_file: Path | str,
+    digital_word: int = 0,
+    irig_line: int = 0,
+    bit_period_s: float = 1.0,
+    utc_offset_hours: float = 0.0,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Decode one NI IRIG line into pulse- and frame-level debug tables.
 
     Args:
-        session_data_home: Session root directory containing ``ephys/raw`` and
-            ``ephys/catgt`` subdirectories.
-        sess_id: Session identifier string for printed summaries.
-        sorting_output_name: Name of the sorting output directory containing
-            ``spike_times.npy``.
-        ni_event_lines: NI digital line indices to map to UTC from NI word 0.
-        output_root: Root output directory for per-stream ``.npz`` files. If
-            ``None``, defaults to ``session_data_home / 'ephys' / 'aligned'``.
+        ni_file: NI ``.nidq.bin`` file path.
+        digital_word: NI digital word index.
+        irig_line: NI digital line index carrying IRIG-H.
+        bit_period_s: IRIG bit period in seconds.
+        utc_offset_hours: Constant offset added to decoded UTC timestamps, in
+            hours.
 
     Returns:
-        None: This example runner writes files and prints a short summary.
+        tuple[pd.DataFrame, pd.DataFrame]:
+            - Pulse dataframe with one row per paired IRIG pulse onset. Columns
+              include sample indices, pulse widths, classified bit labels, and
+              decoded UTC values.
+            - Frame dataframe with one row per decoded IRIG frame start. Columns
+              include frame index, frame-start pulse/sample indices, and decoded
+              UTC values.
     """
+    ni_file = _require_existing_file(Path(ni_file))
+    irig_signal, sample_rate_hz = read_spikeglx_digital_line(
+        binary_file=ni_file,
+        digital_word=digital_word,
+        digital_line=irig_line,
+    )
+    rising_ix, falling_ix = find_signal_edges(irig_signal)
+    paired_rising_ix, pulse_lengths_samples = pulse_lengths_from_edges(rising_ix, falling_ix)
+    paired_falling_ix = paired_rising_ix + pulse_lengths_samples.astype(np.int64)
+    irig_bits = classify_irig_h_pulses(
+        pulse_lengths_samples=pulse_lengths_samples,
+        sample_rate_hz=sample_rate_hz,
+        bit_period_s=bit_period_s,
+    )
+
+    valid_mask = np.asarray([bit is not None for bit in irig_bits], dtype=bool)
+    valid_bits = irig_bits[valid_mask]
+    valid_pulse_ix = np.flatnonzero(valid_mask).astype(np.int64)
+    frame_anchors = decode_irig_h_frame_anchors(valid_bits)
+    valid_unix = assign_utc_to_irig_bits(valid_bits.size, frame_anchors)
+
+    all_unix = np.full(irig_bits.shape[0], np.nan, dtype=float)
+    all_unix[valid_mask] = valid_unix
+    if utc_offset_hours != 0.0:
+        all_unix = all_unix + float(utc_offset_hours) * 3600.0
+
+    pulse_df = pd.DataFrame(
+        {
+            "pulse_ix": np.arange(paired_rising_ix.size, dtype=np.int64),
+            "rising_sample_ix": paired_rising_ix.astype(np.int64),
+            "falling_sample_ix": paired_falling_ix.astype(np.int64),
+            "recording_time_s": paired_rising_ix.astype(float) / float(sample_rate_hz),
+            "pulse_width_samples": pulse_lengths_samples.astype(float),
+            "pulse_width_s": pulse_lengths_samples.astype(float) / float(sample_rate_hz),
+            "irig_bit": irig_bits,
+            "utc_unix": all_unix,
+            "utc_datetime": [
+                datetime.fromtimestamp(unix_time, tz=timezone.utc) if np.isfinite(unix_time) else pd.NaT
+                for unix_time in all_unix
+            ],
+        }
+    )
+    pulse_df["local_datetime"] = convert_utc_series_to_new_york(pulse_df["utc_datetime"].tolist())
+
+    frame_rows: list[dict[str, object]] = []
+    for frame_ix, (frame_start_valid_ix, frame_unix) in enumerate(frame_anchors):
+        frame_start_pulse_ix = int(valid_pulse_ix[frame_start_valid_ix])
+        if utc_offset_hours != 0.0:
+            frame_unix = float(frame_unix) + float(utc_offset_hours) * 3600.0
+        frame_rows.append(
+            {
+                "frame_ix": int(frame_ix),
+                "frame_start_pulse_ix": frame_start_pulse_ix,
+                "frame_start_sample_ix": int(paired_rising_ix[frame_start_pulse_ix]),
+                "utc_unix": float(frame_unix),
+                "utc_datetime": datetime.fromtimestamp(float(frame_unix), tz=timezone.utc),
+            }
+        )
+    frame_df = pd.DataFrame(frame_rows)
+    if not frame_df.empty:
+        frame_df["local_datetime"] = convert_utc_series_to_new_york(frame_df["utc_datetime"].tolist())
+    else:
+        frame_df["local_datetime"] = pd.Series(dtype=object)
+
+    return pulse_df, frame_df
+
+
+def main_ni_only(
+    ni_file: Path | str = Path(
+        "/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/irig_neurokairos_20260408/run0_g0/run0_g0_t0.nidq.bin"
+    ),
+    digital_word: int = 0,
+    irig_line: int = 0,
+    bit_period_s: float = 1.0,
+    utc_offset_hours: float = 0.0,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Run a lightweight NI-only IRIG decode for signal debugging.
+
+    Args:
+        ni_file: NI ``.nidq.bin`` file path.
+        digital_word: NI digital word index.
+        irig_line: NI digital line index carrying IRIG-H.
+        bit_period_s: IRIG bit period in seconds.
+        utc_offset_hours: Constant offset added to decoded UTC timestamps, in
+            hours.
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]:
+            - Pulse-level debug dataframe.
+            - Frame-level debug dataframe.
+    """
+    ni_file = _require_existing_file(Path(ni_file))
+    pulse_df, frame_df = decode_ni_irig_debug(
+        ni_file=ni_file,
+        digital_word=digital_word,
+        irig_line=irig_line,
+        bit_period_s=bit_period_s,
+        utc_offset_hours=utc_offset_hours,
+    )
+
+    bit_counts = pulse_df["irig_bit"].value_counts(dropna=False).to_dict()
+    print(f"Decoded {pulse_df.shape[0]} IRIG pulses from {ni_file}")
+    print(f"Decoded {frame_df.shape[0]} IRIG frames")
+    print(f"Bit counts: {bit_counts}")
+    if not pulse_df.empty:
+        print(pulse_df.head(5).to_string(index=False))
+    if not frame_df.empty:
+        print(frame_df.head(5).to_string(index=False))
+    return pulse_df, frame_df
+
+
+def main_workflow() -> None:
     session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251205_latentInference")
     sess_id_full: str = "CT014_2025-12-05_165240"
     output_root = session_data_home / "ephys" / "aligned"
@@ -351,7 +498,7 @@ def main() -> None:
     ni_event_lines = (2, 3)
     # Temporary workaround: set this to a nonzero value to shift all decoded
     # IMEC and NI timestamps by a constant number of hours.
-    utc_offset_hours = 1.0
+    utc_offset_hours = 0
 
     raw_ephys_folder = session_data_home / "ephys" / "raw" / "run0_g0"
     catgt_ephys_folder = session_data_home / "ephys" / "catgt" / "catgt_run0_g0"
@@ -412,4 +559,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # main_workflow()
+    main_ni_only()
