@@ -356,13 +356,18 @@ def main_simulation():
 def main_mouse():
     """Analyze a single behavior session from start to finish."""
 
+    ### USER FLAGS - CHOOSE THESE FOR EACH RUN ###
     preprocess_raw_session = False
 
+    ### HARDCODED DATA PATHS - CHOOSE THESE FOR EACH RUN ###
     multi_session_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
     # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251221_latentInference')
     # sess_id_full = 'CT014_2025-12-21_165755'
     session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251204')
     sess_id_full = 'CT014_2025-12-04_123418'
+
+
+    ### everything below this should be edited so it doesn't have to be commented in or out or have hardcodes changed ###
     raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
     processed_data_path = session_data_home / 'processed'
     figure_path = session_data_home / 'figures'
