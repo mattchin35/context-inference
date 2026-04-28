@@ -3,9 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from pathlib import Path
-import session_analysis
+from behavior_analysis import session_analysis
 from typing import Iterable
-# from icecream import ic
 import re
 
 

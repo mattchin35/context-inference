@@ -1,9 +1,7 @@
-# import session_overview
-# import raster_plots
-# import fileIO
 import json
 import numpy as np
 import re
+from behavior_analysis import performance_plots
 from behavior_analysis import raster_plots, session_analysis, simulate_priors
 from mouse_behavior_preprocessing import process_behavior_log
 from behavior_analysis import block_state_space_modeling as bssm
@@ -98,14 +96,47 @@ def build_simulation_session(simulated_run_dir: Path, sess_id: str, session_info
     return sess
 
 
-def preprocess_session_log(raw_behavior_folder: str, processed_data_path: str, sess_id_full: str, min_time: float=0, max_time: float=np.inf):
+def preprocess_session_log(
+    raw_behavior_folder: Path,
+    processed_data_path: Path,
+    sess_id_full: str,
+    min_time: float = 0,
+    max_time: float = np.inf,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Preprocess one raw behavior log into event and trial tables.
+
+    Parameters
+    ----------
+    raw_behavior_folder : Path
+        Directory containing `{sess_id_full}.log` and
+        `{sess_id_full}_session_info.pkl`.
+    processed_data_path : Path
+        Directory where processed event and trial CSV files are saved.
+    sess_id_full : str
+        Full session identifier formatted as `mouse_YYYY-MM-DD_HHMMSS`.
+    min_time : float, default=0
+        Minimum trial time since session start, in seconds, retained in the
+        saved trial table.
+    max_time : float, default=np.inf
+        Maximum trial time since session start, in seconds, retained in the
+        saved trial table.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
+        - trial table, shape `(n_trials, n_trial_columns)`
+        - event table, shape `(n_events, 3)` with columns `Time`, `Event`,
+          and `Note`; `Time` remains in log-file seconds
+        - water summary table, shape `(3, 2)`, with delivered amounts in the
+          task log reward units
+    """
     session_log = raw_behavior_folder / '{}.log'.format(sess_id_full)
     session_info_path = '{}_session_info.pkl'.format(sess_id_full)
     with open(raw_behavior_folder / session_info_path, 'rb') as f:
         session_info = pkl.load(f)
 
     event_df = process_behavior_log.process_file(save_directory=processed_data_path,
-                                                 file_path=raw_behavior_folder / session_log)
+                                                 file_path=session_log)
     trial_df = process_behavior_log.make_trial_df(cleaned_data=event_df,
                                                  session_id=sess_id_full,
                                                  save_name=sess_id_full + '_trials',
@@ -114,6 +145,57 @@ def preprocess_session_log(raw_behavior_folder: str, processed_data_path: str, s
                                                   min_time=min_time, max_time=max_time)
     water = process_behavior_log.calculate_water_delivery(event_df, session_info)
     return trial_df, event_df, water
+
+
+def load_or_preprocess_session(
+    raw_behavior_folder: Path,
+    processed_data_path: Path,
+    sess_id_full: str,
+    preprocess_raw_session: bool = False,
+    min_time: float = 0,
+    max_time: float = np.inf,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
+    """Load processed behavior tables, or regenerate them from the raw log.
+
+    Parameters
+    ----------
+    raw_behavior_folder : Path
+        Directory containing raw behavior log inputs when
+        `preprocess_raw_session` is True.
+    processed_data_path : Path
+        Directory containing or receiving `{sess_id_full}_events.csv` and
+        `{sess_id_full}_trials.csv`.
+    sess_id_full : str
+        Full session identifier formatted as `mouse_YYYY-MM-DD_HHMMSS`.
+    preprocess_raw_session : bool, default=False
+        If True, regenerate processed event and trial tables from the raw log.
+        If False, load existing processed CSV files.
+    min_time : float, default=0
+        Minimum trial time since session start, in seconds, used only during
+        preprocessing.
+    max_time : float, default=np.inf
+        Maximum trial time since session start, in seconds, used only during
+        preprocessing.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame or None]
+        - trial table, shape `(n_trials, n_trial_columns)`
+        - event table, shape `(n_events, n_event_columns)`
+        - water summary table when preprocessing was run, otherwise None
+    """
+    if preprocess_raw_session:
+        return preprocess_session_log(
+            raw_behavior_folder=raw_behavior_folder,
+            processed_data_path=processed_data_path,
+            sess_id_full=sess_id_full,
+            min_time=min_time,
+            max_time=max_time,
+        )
+
+    event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',')
+    trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',')
+    return trial_df, event_df, None
 
 
 def plot_session(event_df: pd.DataFrame, session_info: dict, raw_behavior_folder: str, processed_data_path: str, figure_path: str, sess_id_full: str):
@@ -185,98 +267,46 @@ def block_hmm_model(block_performance: pd.DataFrame, trial_df: pd.DataFrame, ses
     augmented_trial_df = bssm.trials_inherit_strategy(block_performance, trial_df)
     augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
 
-# def run_performance_collection():
-#     """
-#     For the stats plots, need to collect a forgetting Q-learning model with decay .6, stickiness 0, temp .3;
-#     2. A HMM with Psw .1, stickiness 0, temp 1
-#     """
-#     params = TaskParams()
-#
-#     # Task general params
-#     params.p_cue = 0
-#     params.state_transition_prob = .2
-#     params.active_reward_probability = .8
-#     params.inactive_reward_probability = 0
-#     params.correct_reward_size = 1
-#     params.incorrect_reward_size = 0
-#
-#     # Reinforcement learning parameters
-#     params.greedy_action_selection = True
-#     params.greedy_epsilon = 1
-#     params.QL_learning_rate = .1  # for standard Q-learning agent
-#     params.FQL_decay = .9  # for forgetting Q-learning agent
-#
-#     # Forgetting Q-learning/RFLR parameters...may need to fit this for best fit
-#     params.stickiness = 1  # default 1. tendency to repeat last action. "alpha" in Beron PNAS 2022
-#     params.weight_reward_history = 2  # default 2. Weight on reward history. "beta" in Beron PNAS 2022
-#     params.weight_decay = 1.5  # default 1.5. Reward history decay parameter (higher is faster decay, lower has longer "memory"). "tau" in Beron PNAS 2022
-#     params.action_temperature = 1  # randomness parameter for choices - higher temp converges to random choice, lower is probabilisitic to higher value
-#
-#     agent = model_agents.Qlearning(params)
-#     action_dist, actions, rel_value = collect_agent_performance(augmented_trial_df, agent, params)
-#     augmented_trial_df['Qlearning_prob_left'] = action_dist['p_left']
-#     augmented_trial_df['Qlearning_rel_value'] = rel_value
-#     augmented_trial_df['Qlearning_greedy_action'] = actions
-#
-#     agent = model_agents.ForgettingQlearning(params)
-#     action_dist, actions, rel_value = collect_agent_performance(augmented_trial_df, agent, params)
-#     augmented_trial_df['FQlearning_prob_left'] = action_dist['p_left']
-#     augmented_trial_df['FQlearning_rel_value'] = rel_value
-#     augmented_trial_df['FQlearning_greedy_action'] = actions
-#
-#     agent = model_agents.Logistic(params)
-#     action_dist, actions, rel_value = collect_agent_performance(augmented_trial_df, agent, params)
-#     augmented_trial_df['RFLR_prob_left'] = action_dist['p_left']
-#     augmented_trial_df['RFLR_rel_value'] = rel_value
-#     augmented_trial_df['RFLR_greedy_action'] = actions
-#
-#     agent = model_agents.HMM(params)
-#     action_dist, actions, rel_value = collect_agent_performance(augmented_trial_df, agent, params)
-#     augmented_trial_df['HMM_prob_left'] = action_dist['p_left']
-#     augmented_trial_df['HMM_rel_value'] = rel_value
-#     augmented_trial_df['HMM_greedy_action'] = actions
-#
-#     augmented_trial_df.to_csv(augmented_trial_df_path, index=False)
 
+def performance_plots_single_session():
+    multisession_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
+    session_data_home = Path(
+        '/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/')
+    sess_id_full = 'CT014_2025-12-16_153200'
+    processed_data_path = session_data_home / 'processed'
+    session_figure_path = session_data_home / 'figures'
 
-# def performance_plots_single_session():
-#     multisession_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
-#     session_data_home = Path(
-#         '/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/')
-#     sess_id_full = 'CT014_2025-12-16_153200'
-#     processed_data_path = session_data_home / 'processed'
-#     session_figure_path = session_data_home / 'figures'
-#
-#     pattern = r'(\w+)_([\d\-]+)_(\d+)'
-#     match = re.search(pattern, sess_id_full)
-#
-#     if match:
-#         mouse, date, timestamp = match.groups()
-#         print(f"Mouse id: {mouse}")  # abc123
-#         print(f"Date: {date}")  # YYYY-MM-DD
-#         print(f"Time: {timestamp}")  # HHMMSS
-#         sess_id_abbreviated = mouse + '_' + date
-#     else:
-#         print("Double-check the session name!")
-#         return
-#
-#     multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(sess_id_full,
-#                                                                                             session_data_folder=processed_data_path,
-#                                                                                             multisession_data_folder=multisession_save_path)
-#     overall_df = multisession_df[~multisession_df['date'].isna()]
-#     plot_session_correct(block_performance, session_figure_path, sess_id_full)
-#     plot_session_trials_to_correct(block_performance, session_figure_path, sess_id_full)
-#     plot_session_nswitches(block_performance, session_figure_path, sess_id_full)
-#     # plot_multisession_correct(overall_df, mouse_plot_path, figure_id=mouse)
-#     # plot_multisession_trials_to_correct(overall_df, mouse_plot_path, figure_id=mouse)
-#
-#     slope = multisession_df.loc[multisession_df['date'] == date, 'slope'].values[0]
-#     intercept = multisession_df.loc[multisession_df['date'] == date, 'intercept'].values[0]
-#     scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
-#                               plot_path=session_figure_path, figure_id=sess_id_full)
-#     plot_learning_curve(multisession_df['slope'], multisession_df['n_switches'], figure_id=mouse,
-#                         plot_path=multisession_save_path,
-#                         dates=multisession_df['date'].values)
+    pattern = r'(\w+)_([\d\-]+)_(\d+)'
+    match = re.search(pattern, sess_id_full)
+
+    if match:
+        mouse, date, timestamp = match.groups()
+        print(f"Mouse id: {mouse}")  # abc123
+        print(f"Date: {date}")  # YYYY-MM-DD
+        print(f"Time: {timestamp}")  # HHMMSS
+        sess_id_abbreviated = mouse + '_' + date
+    else:
+        print("Double-check the session name!")
+        return
+
+    multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(sess_id_full,
+                                                                                            session_data_folder=processed_data_path,
+                                                                                            multisession_data_folder=multisession_save_path)
+    overall_df = multisession_df[~multisession_df['date'].isna()]
+    plot_session_correct(block_performance, session_figure_path, sess_id_full)
+    plot_session_trials_to_correct(block_performance, session_figure_path, sess_id_full)
+    plot_session_nswitches(block_performance, session_figure_path, sess_id_full)
+    # plot_multisession_correct(overall_df, mouse_plot_path, figure_id=mouse)
+    # plot_multisession_trials_to_correct(overall_df, mouse_plot_path, figure_id=mouse)
+
+    slope = multisession_df.loc[multisession_df['date'] == date, 'slope'].values[0]
+    intercept = multisession_df.loc[multisession_df['date'] == date, 'intercept'].values[0]
+    scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
+                              plot_path=session_figure_path, figure_id=sess_id_full)
+    plot_learning_curve(multisession_df['slope'], multisession_df['n_switches'], figure_id=mouse,
+                        plot_path=multisession_save_path,
+                        dates=multisession_df['date'].values)
+
 
 def main_simulation():
     PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -324,14 +354,15 @@ def main_simulation():
 
 
 def main_mouse():
-    """Analyze a single session from start to finish"""
-    # prep data selection
+    """Analyze a single behavior session from start to finish."""
+
+    preprocess_raw_session = False
 
     multi_session_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
-    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251205_latentInference')
-    sess_id_full = 'CT014_2025-12-05_165240'
-    # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251204')
-    # sess_id_full = 'CT014_2025-12-04_123418'
+    # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251221_latentInference')
+    # sess_id_full = 'CT014_2025-12-21_165755'
+    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251204')
+    sess_id_full = 'CT014_2025-12-04_123418'
     raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
     processed_data_path = session_data_home / 'processed'
     figure_path = session_data_home / 'figures'
@@ -368,45 +399,61 @@ def main_mouse():
     sess.session_info_fname = session_info_path
     sess.session_info = session_info
 
-    # preprocess behavior log and save
-    # trial_df, event_df, water = preprocess_session_log(raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path, sess_id_full=sess_id_full,
-    #                                                    min_time=0, max_time=np.inf)
+    trial_df, event_df, water = load_or_preprocess_session(
+        raw_behavior_folder=raw_behavior_folder,
+        processed_data_path=processed_data_path,
+        sess_id_full=sess_id_full,
+        preprocess_raw_session=preprocess_raw_session,
+        min_time=0,
+        max_time=np.inf,
+    )
+    if water is not None:
+        print(f"Preprocessed session log for {sess_id_full}. Water delivered: {water}")
 
-    # load processed raw data
-    event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',')
-    trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',')
-
-    # plot_session(event_df, session_info,
-    #              raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path,
-    #              figure_path=figure_path, sess_id_full=sess_id_full)
+    plot_session(event_df, session_info,
+                 raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path,
+                 figure_path=figure_path, sess_id_full=sess_id_full)
 
     # analyze trials and save
-    # augmented_trial_df, block_performance, multisession_df = session_analysis.run_analysis(trial_df, session=sess)
+    augmented_trial_df, block_performance, multisession_df = session_analysis.run_analysis(trial_df, session=sess)
     multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(sess_id_full,
                                                                                             session_data_folder=processed_data_path,
                                                                                             multisession_data_folder=multi_session_save_path)
 
+    ### plot single session performance ###
+    performance_plots.plot_session_correct(block_performance, sess.figure_path, sess_id_full)
+    performance_plots.plot_session_trials_to_correct(block_performance, sess.figure_path, sess_id_full)
+    performance_plots.plot_session_nswitches(block_performance, sess.figure_path, sess_id_full)
+
+    slope = multisession_df.loc[multisession_df['date'] == date, 'slope'].values[0]
+    intercept = multisession_df.loc[multisession_df['date'] == date, 'intercept'].values[0]
+    performance_plots.scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
+                              plot_path=sess.figure_path, figure_id=sess_id_full,
+                              title=sess_id_abbreviated)
+
     ### Gather trial features ###
-    # augmented_trial_df, task_params = gtf.collect_and_save_trial_features(
-    #     augmented_trial_df,
-    #     processed_data_path=processed_data_path,
-    #     sess_id_full=sess_id_full,
-    # )
+    augmented_trial_df, task_params = gtf.collect_and_save_trial_features(
+        augmented_trial_df,
+        processed_data_path=processed_data_path,
+        sess_id_full=sess_id_full,
+    )
 
     # block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
     #                                                 prior_alpha=1, prior_sigma=1)
+
     # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
     #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2)
 
     # block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=2,
     #                                                                 prior_alpha=1, prior_sigma=1)
+
     # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
     # with open(block_model_dict_path, 'rb') as file:
     #     block_model_dict = pkl.load(file)
 
     ### trial state space modeling ###
     # trial_model_selection = tssm.run_information_criteria(augmented_trial_df, session=sess, algorithm='MLE', prior_alpha=1, prior_sigma=1)
-    augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=2, prior_alpha=1, prior_sigma=1)
+    # augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=2, prior_alpha=1, prior_sigma=1)
 
 
 def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
@@ -425,5 +472,5 @@ def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
 
 
 if __name__ == '__main__':
-    # main_mouse()
-    main_simulation()
+    main_mouse()
+    # main_simulation()

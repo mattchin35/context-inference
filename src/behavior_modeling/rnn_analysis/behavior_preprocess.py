@@ -4,14 +4,15 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-import src.behavior_analysis.context_switch_analysis as vdp
 import pandas as pd
 import scipy as sp
 import src.neural_similarity.inspect_abstraction_measures as iam
 import src.neural_similarity.similarity_measures as sm
 from sklearn import decomposition, svm
 from icecream import ic
-from typing import Tuple
+from typing import Any, Tuple
+from collections import defaultdict
+import src.behavior_analysis.decision_variable_counters as counters
 
 data_dir = Path('../../../data/processed/rnn_experiments')
 model_dir = Path('../../../saved_models/RNN')
@@ -19,6 +20,190 @@ plot_path = Path('../../../reports/figures/model_behavior')
 
 states = ['right', 'left']
 state_dict = {s: i for i, s in enumerate(states)}  # i.e. [0 right, 1 left]
+
+
+# Legacy switch-analysis helpers copied from `context_switch_analysis.py`.
+# These remain local so old RNN analysis scripts do not depend on the active
+# behavior-analysis package while that package is being cleaned up.
+def get_session_switch_ix(session_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+    """Find action and state switches within one RNN behavior session.
+
+    Parameters
+    ----------
+    session_df : pd.DataFrame
+        Trial table for one session, shape `(n_trials, n_columns)`. Required
+        columns are `action` and `state`; rows must be ordered by trial time.
+        `action` is a discrete choice label, and `state` is the latent task
+        state label.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        - action switch indices, shape `(n_action_switches,)`, in trial-index
+          units
+        - state switch indices, shape `(n_state_switches,)`, in trial-index
+          units
+    """
+    actions = session_df['action'].values
+    states = session_df['state'].values
+    ix_action_switch = actions[1:] != actions[:-1]
+    ix_state_switch = states[1:] != states[:-1]
+
+    ix_action_switch = np.nonzero(ix_action_switch)[0] + 1
+    ix_state_switch = np.nonzero(ix_state_switch)[0] + 1
+    return ix_action_switch, ix_state_switch
+
+
+def count_consecutive_events(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Summarize reward history at action and state switches for one session.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Trial table for one session, shape `(n_trials, n_columns)`. Required
+        columns are `action`, `state`, `correct`, and `reward`. Rows must be
+        ordered by trial time. `reward` is binary, where 1 means rewarded and 0
+        means omission. `correct` is boolean-like.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame]
+        - action switch summary dataframe, shape
+          `(n_rewarded_action_switches, n_columns)`
+        - state switch summary dataframe, shape
+          `(n_state_switches_with_future_correct_trial, n_columns)`
+    """
+    consecutive_rewards = 0
+    consecutive_failures = 0
+    consecutive_rewards_renewal = 0
+    consecutive_failures_renewal = 0
+    negative_value = 0
+    previous_trial_rewarded = False
+
+    ix_action_switch, ix_state_switch = get_session_switch_ix(df)
+    action_switch_dict = defaultdict(list)
+    state_switch_dict = defaultdict(list)
+
+    n_trials = df.shape[0]
+    correct_trial_ix = np.nonzero(df['correct'].values)[0]
+
+    for i in range(n_trials - 1):
+        reward = df.loc[i, 'reward']
+        negative_value = counters.negative_value_counter(negative_value, reward)
+        consecutive_rewards_renewal = counters.consecutive_reward_renewal_counter(
+            consecutive_rewards_renewal,
+            reward,
+            previous_trial_rewarded,
+        )
+        consecutive_failures_renewal = counters.consecutive_fail_renewal_counter(
+            consecutive_failures_renewal,
+            reward,
+            previous_trial_rewarded,
+        )
+
+        consecutive_rewards = counters.consecutive_reward_counter(consecutive_rewards, reward)
+        consecutive_failures = counters.consecutive_fail_counter(consecutive_failures, reward)
+
+        if i in ix_action_switch and df.loc[i, 'correct']:
+            action_switch_dict['trial_ix'].append(i)
+            action_switch_dict['consecutive_rewards'].append(consecutive_rewards_renewal)
+            action_switch_dict['consecutive_failures'].append(consecutive_failures_renewal)
+            action_switch_dict['negative_value'].append(negative_value)
+            action_switch_dict['action_switched_from'].append(df.loc[i, 'action'])
+            action_switch_dict['state_switched_from'].append(df.loc[i, 'state'])
+
+        future_switches = ix_state_switch[ix_state_switch > i]
+        next_switch = np.append(future_switches, n_trials)[0]
+        if i in ix_state_switch:
+            state_change_ix = i
+            first_correct_trial_ix = (correct_trial_ix > state_change_ix) & (
+                correct_trial_ix < next_switch
+            )
+            if first_correct_trial_ix.any():
+                trials_to_correct = correct_trial_ix[first_correct_trial_ix][0] - i
+                state_switch_dict['state_change_ix'].append(state_change_ix)
+                state_switch_dict['consecutive_rewards'].append(consecutive_rewards_renewal)
+                state_switch_dict['consecutive_failures'].append(consecutive_failures_renewal)
+                state_switch_dict['negative_value'].append(negative_value)
+                state_switch_dict['trials_to_correct'].append(trials_to_correct)
+
+        previous_trial_rewarded = reward > 0
+
+    action_switch_df = pd.DataFrame(action_switch_dict)
+    state_switch_df = pd.DataFrame(state_switch_dict)
+    return action_switch_df, state_switch_df
+
+
+def get_multisession_switches(concatenated_sessions_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Summarize action and state switches separately for each session.
+
+    Parameters
+    ----------
+    concatenated_sessions_df : pd.DataFrame
+        Trial table containing one or more sessions, shape
+        `(n_trials, n_columns)`. Required columns are `session_ID`, `action`,
+        `state`, `correct`, and `reward`. Rows must be ordered by trial time
+        within each `session_ID`.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame]
+        - concatenated action switch summaries across sessions
+        - concatenated state switch summaries across sessions
+    """
+    action_df_list = []
+    state_df_list = []
+
+    sess_ids = np.unique(concatenated_sessions_df['session_ID'])
+    for sess_id in sess_ids:
+        ix = concatenated_sessions_df['session_ID'] == sess_id
+        action_switch_df, state_switch_df = count_consecutive_events(
+            concatenated_sessions_df.loc[ix].reset_index(drop=True)
+        )
+        action_df_list.append(action_switch_df)
+        state_df_list.append(state_switch_df)
+
+    action_switch_df = pd.concat(action_df_list, ignore_index=True)
+    state_switch_df = pd.concat(state_df_list, ignore_index=True)
+    return action_switch_df, state_switch_df
+
+
+def consecutive_summary_measures(
+    df: pd.DataFrame,
+    key: Any,
+    min_counts: int = 20,
+) -> Tuple[pd.Index, pd.Series, pd.Series, pd.Series]:
+    """Summarize a switch metric by the number of consecutive rewards.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Switch summary dataframe, shape `(n_switches, n_columns)`. Required
+        columns are `consecutive_rewards` and the column named by `key`.
+    key : Any
+        Column name for the switch metric to summarize, typically
+        `trials_to_correct`.
+    min_counts : int, default=20
+        Minimum number of switches required for a consecutive-reward group to
+        be included.
+
+    Returns
+    -------
+    tuple[pd.Index, pd.Series, pd.Series, pd.Series]
+        - consecutive-reward group labels
+        - group means of `key`
+        - group standard deviations of `key`
+        - group standard errors of the mean of `key`
+    """
+    grouped_switches = df.groupby(['consecutive_rewards'])[key]
+    counts = grouped_switches.count()
+
+    ix = counts > min_counts
+    mean = grouped_switches.mean()[ix]
+    std = grouped_switches.std()[ix]
+    sem = grouped_switches.sem()[ix]
+    rewards = counts.index[ix]
+    return rewards, mean, std, sem
 
 
 def preprocess_rnn_trials(experiment: dict, sess_id: str):
@@ -79,15 +264,15 @@ def regress_behavior(df: pd.DataFrame, save_name: str):
     #                                      save_name=save_name, plot_path=plot_path)
 
     # compare cued to uncued switches
-    _, state_switch_df = vdp.get_multisession_switches(df)
+    _, state_switch_df = get_multisession_switches(df)
     stim_active = df['stimulus'][state_switch_df['state_change_ix']]
 
     # run the cued switches
     cued_switch_df = state_switch_df[stim_active.to_numpy()]
     uncued_switch_df = state_switch_df[~stim_active.to_numpy()]
 
-    rewards_cued, mean_cued, std_cued, sem_cued = vdp.consecutive_summary_measures(cued_switch_df, key='trials_to_correct', min_counts=0)
-    rewards_uncued, mean_uncued, std_uncued, sem_uncued = vdp.consecutive_summary_measures(uncued_switch_df, key='trials_to_correct', min_counts=0)
+    rewards_cued, mean_cued, std_cued, sem_cued = consecutive_summary_measures(cued_switch_df, key='trials_to_correct', min_counts=0)
+    rewards_uncued, mean_uncued, std_uncued, sem_uncued = consecutive_summary_measures(uncued_switch_df, key='trials_to_correct', min_counts=0)
 
     f, ax = plt.subplots()
     plt.plot(mean_cued.index, mean_cued, label='cued')

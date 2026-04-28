@@ -1,71 +1,63 @@
 # Current status
 
-Mouse behavior regressors are available but the code is messy. Model agents can be run, saved, and plotted.
-Neural data can be collected into 500 ms bins around choice times for simple decoding of context.
+Code was used to prepare preliminary behavior analyses with LM-HMM and GLM-HMM models. 
+Now I need to refactor it, analyze multiple sessions with the HMM analyses, and begin integrating HPC 
+and PFC analyses together. The goal is essentially to have all the analysis code I'd need for new sessions 
+ready to go, and to prepare the core of my analysis methods for a simple publication.
+I want to do the fancier analyses, but this content will be the core of my learning as a neurophysiologist.
 
 # Current goals
-I need to make sure model selection works, show that it works on some simulated models, and use the models to 
-analyze some sample mouse behavior sessions. I need to make plots from these analyses to prepare for a presentation.
+- Code needs to be refactored and read over to make sure that I understand and trust it (much of it was Codex generated).
+- Single-session behavior runs should go through the full pipeline.
+- Multisession analyses should combine a set of blocks or trials together to analyze the presence of behavior modes
+across sessions.
+- HPC analyses should be done by training phase (late training, mid-training, early training) to look for consistent patterns.
+- PFC and V1 analyses should repeat HPC analyses.
+- HPC and PFC single units can be analyzed for representation of context and choice variables.
+- HPC units can be used to predict PFC units.
+- HPC spike-phase-locking to HPC theta
+- PFC spike-phase-locking to HPC theta
+- PFC spike-phase-locking to PFC theta
 
-## Validate the model agents 
-1. Implement switching between model agent strategies during model runs
-   - done for agents with a hard switch (mode 1), decaying memory for unused agents (mode 2), and parallel execution (mode 3)
-2. Make plots corresponding to each model agent, and make plots of switching strategies within a run
-3. Implement switching mode 3 for now as parallel model execution:
-   - all selected models run in parallel on the same trial stream
-   - the active model for that trial supplies the recorded value, action probabilities, and action output
-   - all models update from the executed action and observed reward, even if they would not have sampled that action 
-themselves
-   - only the active model's outputs are recorded in the main run dataframe
-4. Revisit a true shared-state mode 3 later, after the shared latent state is specified more clearly
+Anything for single-unit analyses can work with "good" units as a first pass, but the code should be 
+designed to be easily applied to any unit desired.
 
-## Validate the GLM-HMM and LM-HMM implementations
-1. Finish implementing single-session model selection with AIC/BIC for both LM-HMM and GLM-HMM 
-2. Use model runs with strategy switching to validate the LM-HMM and GLM-HMM implementations, showing that they can 
-distinguish the behaviors and that the combined HMM-decay-doubt agent can be distinguished from the simpler HMM and 
-Forgetting Q-learning agents.
-   - Note: upon attempting to validate the HMMs, it seems that distinguishing them is not so easy. I will skip the 
-computational validation step for now, especially as we may not even stick with this modeling strategy long-term.
-3. Use the validated FQL, HMM, and HMM-decay-doubt regressors to analyze 3 mouse behavior sessions, extracting the 
-regressor weights and showing that they correspond to describable strategies in each session.
+## Single-session behavior analysis
+Debug code to do a full analysis of a single session. Refactor code used for readability, to remove dead code, 
+and to make sure Codex-generated code is trustworthy. I'll probably want to double-check on any 'None' vs np.nan 
+usage, in code and in saved csvs.
 
-## Prepare behavior for a presentation
-I will prepare a presentation using three example mouse behavior sessions. In particular, I will use 
-CT014_20251205_latentInference, CT014_20251216_latentInference, and CT014_20251223_latentInference.
+## Multi-session behavior analysis
+Given a set of sessions, I should be able to plot the learning curve, combine block data for LM-HMM analysis, 
+and combine trial data for GLM-HMM analysis. In the future this can be expanded to infinite HMM use. After creation,
+refactor/redesign/read code for readability and trustworthiness.
 
-1. Show for each session that I have selected a reasonable number of LM-HMM and GLM-HMM states based on the AIC and BIC.
-2. Show that using more states results in new states that do not learn anything (i.e. have very low weights for all regressors)
-3. Show that the LM-HMM has found distinguishable block strategies in each session, roughly 
-corresponding to inference and reinforcement learning strategies based on the LM-HMM fit weights.
-4. Show that the GLM-HMM has found distinguishable and meaningful states, particularly showing that later in training
-the GLM-HMM starts to weight the doubt regressor more.
+## Regional basic analyses
+1. Replicate HPC analyses for V1 units, compare to HPC.
+2. Replicate HPC analyses for PFC units, compare to HPC.
 
-It might also be good to show that spread of trials to switch alongside the LM-HMM results, instead of just 
-the correlation weights, so the scale is clear.
+Read and refactor code for readability and trustworthiness, and also to learn to use pynapple.
 
-## Integrate neural analyses with simple behavior analyses
-For the 3 behavior sessions above, I will need to do crude analyses of my behavior corresponding to analyzing the 
-500 ms periods directly before and directly after a choice is made. The analysis techniques may not improve for now - 
-any significant changes will likely be related to refactoring or integrating the code with pynapple.
+## Single-unit prediction analyses
+1. Use HPC units to predict PFC units. Start by using simple GLMs and poisson GLIMs.
+2. As a subgoal, you can try sparser regression methods (Lasso, Ridge, ElasticNet, "communication subspace" methods).
+Hopefully that can be dropped in easily after the base GLM analyses.
 
-1. Neural data must have UTC timestamps for alignment with behavior 
-2. HPC and V1 spikes must be chosen by electrode sites, and binned into 500 ms bins around choice times.
-3. Pre-existing analyses should be replicated. That is, 
-   - Train decoder on correct choices with rewards given in the 500 ms before choice time; 
-test on held-out correct choices in the training condition,
-correct choices with rewards given in the 500 ms after choice time, 
-incorrect choices in the 500 ms before AND after choice time,
-and correct choices with rewards withheld (omission trials) in the 500 ms before AND after choice time.
-4. For my only new analysis, I should incorporate lab meeting feedback: separate unrewarded trials into 
-those that lead to a behavior switch and those that don’t
-   - Can you see a sufficient change in belief to switch vs an insufficient change?
-   - So categorize unrewarded trials into those that are followed by a switch in behavior and those that are not
-   - Assess the change in HPC decoding of context in the 500 ms before and after choice time each category
+## Theta power and synchrony analyses
+1. Compute theta power in HPC and PFC over time; look for more theta power in good performance regimes
+2. Compute theta phase synchrony between HPC and PFC; look for more synchrony in good performance regimes
 
-## Prepare neural analysis for the presentation
-1. For each of the 3 sessions, make the plots showing the decoding performance before and after choice time for the different trial types.
-Make sure each session's data are seen grayed with an overall trend in black
-2. For the new analysis, show a plot for each condition (next trial switch vs no switch) as in 1
-3. Repeat the above 2 for putative V1 units
-4. Ideally repeat 1+2 for mPFC units; we'll see if this happens
+Hopefully Codex makes some of this fast to get started, but a lot of the work here will be learning phase analysis
+methods and using pynapple.
+
+## Spike-phase-locking analyses
+1. Compute spike-phase-locking of HPC units to HPC theta; look for more locking in good performance regimes
+2. Compute spike-phase-locking of PFC units to HPC theta; look for more locking in good performance regimes
+3. Compute spike-phase-locking of PFC units to PFC theta; I have no idea if this is supposed to be a thing, but the code
+from 1 and 2 should be easily adaptable to this.
+
+# Future
+Dimensionality (PCA, LDA, CCA) analysis, multi-selectivity and geometry of representations, and latent variable 
+decomposition. Use of Kanaka Rajan's techniques, Marcelo Mattar's techniques, RNNs for behavior modeling and brain modeling. 
+Really avoid doing any of that as a first pass though, get the essential analyses done first. 
 

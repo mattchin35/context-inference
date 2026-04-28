@@ -2,23 +2,18 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import re
+import warnings
 from collections import defaultdict
 import src.behavior_analysis.decision_variable_counters as counters
 # import src.behavior_analysis.session_analysis as session_analysis
 from formulaic import model_matrix
 import statsmodels.api as sm
-# from icecream import ic
 import statsmodels.formula.api as smf
 import scipy as sp
 from typing import Protocol
 
 eps = np.finfo(float).eps
 
-
-"""
-Analyze behavior within a single session. Want trials to switch L/R/overall, % correct L/R/overall. Do for sessions
-overall AND within each block.
-"""
 
 class Session(Protocol):
     multi_session_save_path: Path
@@ -204,79 +199,93 @@ def percent_correct(augmented_trial_df: pd.DataFrame) -> dict:
 
 
 def summarize_trials_to_correct(block_performance: pd.DataFrame) -> dict:
-    """Summarize blockwise trials-to-correct while tolerating `'None'` sentinels.
+    """Summarize blockwise trials-to-correct while tolerating invalid sentinels.
 
     Parameters
     ----------
     block_performance : pd.DataFrame
-        Blockwise summary dataframe containing `block_type` and
-        `trials_to_correct`. The latter may still use the legacy `'None'`
-        string sentinel for incomplete blocks.
+        Blockwise summary dataframe with shape `(n_blocks, n_columns)`
+        containing:
+        - `block_type` : str, block category for each block
+        - `trials_to_correct` : int-like or sentinel values such as `'None'`
+        - `block_ix` : optional integer-like block identifier used for
+          warning metadata
 
     Returns
     -------
     dict
-        Mean trials-to-correct by block type and overall. String sentinels are
-        ignored for the numeric summaries and conditions with no valid numeric
-        values return `'None'`.
+        Mean trials-to-correct by block type and overall. Invalid
+        `trials_to_correct` values are ignored for numeric summaries.
+        Conditions with no valid numeric values return `'None'`.
+        Non-final invalid values emit a warning and are reported via:
+        - `trials_to_correct_warning_flag` : bool
+        - `trials_to_correct_warning_message` : str or `'None'`
+        - `trials_to_correct_nonfinal_invalid_block_ix` : str or `'None'`
     """
-    # 1. collect left and right choices 2. categorize choices as cued or uncued 3. calculate percentages
-    left_cued_ix = block_performance['block_type'] == 'left_cued'
-    left_uncued_ix = block_performance['block_type'] == 'left_uncued'
-    right_cued_ix = block_performance['block_type'] == 'right_cued'
-    right_uncued_ix = block_performance['block_type'] == 'right_uncued'
-    trials_to_correct_numeric = pd.to_numeric(
-        block_performance['trials_to_correct'],
-        errors='coerce',
+    summary_df = block_performance.copy()
+    summary_df["trials_to_correct_numeric"] = pd.to_numeric(
+        summary_df["trials_to_correct"],
+        errors="coerce",
     )
 
-    # condition to handle - last block may have no correct choices (lack of engagement, didn't get it right before session end)
-    # handle by removing this block entirely from overall summary as incomplete data
-    if block_performance['trials_to_correct'].iloc[-1] == 'None':
-        ix_valid = block_performance.shape[0] - 1
-        block_performance = block_performance.iloc[:ix_valid]
-        left_cued_ix = left_cued_ix.iloc[:ix_valid]
-        left_uncued_ix = left_uncued_ix.iloc[:ix_valid]
-        right_cued_ix = right_cued_ix.iloc[:ix_valid]
-        right_uncued_ix = right_uncued_ix.iloc[:ix_valid]
+    invalid_mask = summary_df["trials_to_correct_numeric"].isna()
+    nonfinal_invalid_mask = invalid_mask.copy()
+    if nonfinal_invalid_mask.size:
+        nonfinal_invalid_mask.iloc[-1] = False
 
-    try:
-        if np.sum(left_cued_ix) == 0:
-            # left_cued_trials = np.nan
-            left_cued_trials = 'None'
-        else:
-            left_cued_values = trials_to_correct_numeric[left_cued_ix].dropna()
-            left_cued_trials = left_cued_values.mean() if not left_cued_values.empty else 'None'
+    if "block_ix" in summary_df.columns:
+        nonfinal_invalid_block_ix = summary_df.loc[
+            nonfinal_invalid_mask,
+            "block_ix",
+        ].astype(int).tolist()
+    else:
+        nonfinal_invalid_block_ix = summary_df.index[nonfinal_invalid_mask].astype(int).tolist()
 
-        if np.sum(left_uncued_ix) == 0:
-            # left_uncued_trials = np.nan
-            left_uncued_trials = 'None'
-        else:
-            left_uncued_values = trials_to_correct_numeric[left_uncued_ix].dropna()
-            left_uncued_trials = left_uncued_values.mean() if not left_uncued_values.empty else 'None'
+    warning_flag = len(nonfinal_invalid_block_ix) > 0
+    if warning_flag:
+        warning_message = (
+            "Non-final invalid trials_to_correct entries detected; "
+            f"excluding them from summaries. block_ix={nonfinal_invalid_block_ix}"
+        )
+        warnings.warn(warning_message, UserWarning, stacklevel=2)
+        nonfinal_invalid_block_ix_str = str(nonfinal_invalid_block_ix)
+    else:
+        warning_message = "None"
+        nonfinal_invalid_block_ix_str = "None"
 
-        if np.sum(right_cued_ix) == 0:
-            # right_cued_trials = np.nan
-            right_cued_trials = 'None'
-        else:
-            right_cued_values = trials_to_correct_numeric[right_cued_ix].dropna()
-            right_cued_trials = right_cued_values.mean() if not right_cued_values.empty else 'None'
+    def _mean_or_none(block_type: str) -> float | str:
+        """Return the mean trials-to-correct for one block type or `'None'`.
 
-        if np.sum(right_uncued_ix) == 0:
-            # right_uncued_trials = np.nan
-            right_uncued_trials = 'None'
-        else:
-            right_uncued_values = trials_to_correct_numeric[right_uncued_ix].dropna()
-            right_uncued_trials = right_uncued_values.mean() if not right_uncued_values.empty else 'None'
+        Parameters
+        ----------
+        block_type : str
+            Block label identifying one subset of `summary_df`.
 
-    except Exception as e:
-        print(e)
+        Returns
+        -------
+        float or str
+            Mean of valid numeric `trials_to_correct` entries for the selected
+            block type. Returns `'None'` when no valid numeric entries exist.
+        """
+        values = summary_df.loc[
+            summary_df["block_type"] == block_type,
+            "trials_to_correct_numeric",
+        ].dropna()
+        return values.mean() if not values.empty else "None"
 
-    valid_trials = trials_to_correct_numeric.dropna()
+    left_cued_trials = _mean_or_none("left_cued")
+    left_uncued_trials = _mean_or_none("left_uncued")
+    right_cued_trials = _mean_or_none("right_cued")
+    right_uncued_trials = _mean_or_none("right_uncued")
+
+    valid_trials = summary_df["trials_to_correct_numeric"].dropna()
     overall = valid_trials.mean() if not valid_trials.empty else 'None'
     return dict(left_cued_trials_to_correct=left_cued_trials, left_uncued_trials_to_correct=left_uncued_trials,
                 right_cued_trials_to_correct=right_cued_trials, right_uncued_trials_to_correct=right_uncued_trials,
-                overall_trials_to_correct=overall)
+                overall_trials_to_correct=overall,
+                trials_to_correct_warning_flag=warning_flag,
+                trials_to_correct_warning_message=warning_message,
+                trials_to_correct_nonfinal_invalid_block_ix=nonfinal_invalid_block_ix_str)
 
 
 def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
