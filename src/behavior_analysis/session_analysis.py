@@ -5,11 +5,8 @@ import re
 import warnings
 from collections import defaultdict
 import src.behavior_analysis.decision_variable_counters as counters
-# import src.behavior_analysis.session_analysis as session_analysis
 from formulaic import model_matrix
 import statsmodels.api as sm
-import statsmodels.formula.api as smf
-import scipy as sp
 from typing import Protocol
 
 eps = np.finfo(float).eps
@@ -102,20 +99,7 @@ def _get_give_reward_array(trial_df: pd.DataFrame) -> np.ndarray:
 
 
 def _get_choice_latency(trial_df: pd.DataFrame) -> np.ndarray:
-    """Return trialwise choice latencies or NaN when timing columns are absent.
-
-    Parameters
-    ----------
-    trial_df : pd.DataFrame
-        Trial table. Real sessions are expected to contain `choice_time` and
-        `start_time`; simulated runs typically do not.
-
-    Returns
-    -------
-    np.ndarray
-        Latency array with shape `(n_trials,)`. When timing columns are
-        missing, the array is filled with `np.nan`.
-    """
+    """Return trialwise choice latencies or NaN when timing columns are absent."""
     if {"choice_time", "start_time"}.issubset(trial_df.columns):
         return (
             trial_df["choice_time"].to_numpy(dtype=float)
@@ -291,12 +275,14 @@ def summarize_trials_to_correct(block_performance: pd.DataFrame) -> dict:
 def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
     # handle any give_reward trials
     actions = np.copy(trial_df['action'].values)
-    rewards = np.copy(trial_df['reward'].values)
     give_reward = _get_give_reward_array(trial_df)
     for i, (a, g) in enumerate(zip(actions, give_reward)):
-        # if a in ['None', -1]:
         if g in [1, '1']:
             try:
+                if i == 0:
+                    actions[i] = actions[i + 1]
+                    continue
+
                 actions[i] = actions[i - 1]
             except IndexError:
                 actions[i] = actions[i + 1]
@@ -331,15 +317,25 @@ def make_augmented_trial_df(trial_df: pd.DataFrame) -> pd.DataFrame:
     return augmented_trial_df
 
 
-def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
+def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: str) -> pd.DataFrame:
+    """Summarize performance for each task block in one session.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_columns)`. Required columns include
+        `cur_block`, `block_type`, `correct`, `reward`, `time_to_choice`, and
+        decision-variable columns from `make_augmented_trial_df`.
+    session_id : str
+        Session identifier copied into the `session_ID` output column.
+
+    Returns
+    -------
+    pd.DataFrame
+        Blockwise performance table with shape `(n_blocks, n_columns)`.
     """
-    Get trial decision variables, use them to create/modify an augmented trial_df.
-    Get block trials to switch and consecutive rewards in previous block, use to create/modify a block df.
-    """
-    sess_id = mouse + '_' + date
-    augmented_trial_df = make_augmented_trial_df(trial_df)
     choice_latency = augmented_trial_df['time_to_choice'].to_numpy(dtype=float)
-    blocks = np.unique(trial_df['cur_block'])
+    blocks = np.unique(augmented_trial_df['cur_block'])
     block_performance = []
 
     for ix, b in enumerate(blocks):
@@ -347,10 +343,6 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
         cur_block_df = augmented_trial_df[cur_block_ix]
 
         if ix == 0:
-            # prev_n_correct = 'None'
-            # prev_n_rewarded = 'None'
-            # prev_consecutive_rewards = 'None'
-            # prev_consecutive_rewards_memory = 'None'
             prev_n_correct = 0
             prev_n_rewarded = 0
             prev_consecutive_rewards = 0
@@ -369,10 +361,6 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
         else:
             trials_to_correct = 'None' #np.nan  # could occur on last block in session, or when the task switches to dark mode
 
-        # performance = dict(block_ix=b, block_type=cur_block_df['block_type'].values[0], trials_to_correct=trials_to_correct,
-        #                    consecutive_rewards=cur_block_df['consecutive_rewards'].values[0],
-        #                    percent_correct=performance['overall_correct'],
-        #                    session_ID=sess_id)
         performance = dict(block_ix=b, block_type=cur_block_df['block_type'].values[0],
                            trials_to_correct=trials_to_correct,
                            prev_consecutive_rewards=prev_consecutive_rewards,
@@ -388,17 +376,71 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
                            mean_choice_time=np.mean(choice_latency[cur_block_ix.to_numpy()]),
                            median_choice_time=np.median(choice_latency[cur_block_ix.to_numpy()]),
                            std_choice_time=np.std(choice_latency[cur_block_ix.to_numpy()]),
-                           session_ID=sess_id)
+                           session_ID=session_id)
 
         block_performance.append(performance)
 
     block_performance = pd.DataFrame(block_performance)
     block_performance['block_ix'] = np.arange(len(block_performance))
+    return block_performance
 
+
+def summarize_session_performance(
+    augmented_trial_df: pd.DataFrame,
+    block_performance: pd.DataFrame,
+    date: str,
+) -> pd.DataFrame:
+    """Summarize whole-session performance from trial and block tables.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_columns)`, including `block_type`
+        and `correct`.
+    block_performance : pd.DataFrame
+        Blockwise performance table with shape `(n_blocks, n_columns)`,
+        including `trials_to_correct` and `block_type`.
+    date : str
+        Session date copied into the `date` output column.
+
+    Returns
+    -------
+    pd.DataFrame
+        One-row session performance table.
+    """
     session_performance = percent_correct(augmented_trial_df)
     session_performance = session_performance | summarize_trials_to_correct(block_performance)
     session_performance['date'] = date
-    session_performance = pd.DataFrame(session_performance, index=[0])
+    return pd.DataFrame(session_performance, index=[0])
+
+
+def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
+    """Build trial, block, and session performance summaries.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_columns)`. Required columns
+        include `state`, `action`, `reward`, `correct`, and `cur_block`.
+    mouse : str
+        Mouse or simulated-agent identifier copied into the block-level
+        `session_ID` prefix.
+    date : str
+        Session date copied into the session summary and block-level
+        `session_ID`.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
+        `(session_performance, block_performance, augmented_trial_df)`, where
+        `session_performance` has one row, `block_performance` has shape
+        `(n_blocks, n_columns)`, and `augmented_trial_df` has shape
+        `(n_trials, n_columns)`.
+    """
+    session_id = mouse + '_' + date
+    augmented_trial_df = make_augmented_trial_df(trial_df)
+    block_performance = summarize_block_performance(augmented_trial_df, session_id=session_id)
+    session_performance = summarize_session_performance(augmented_trial_df, block_performance, date=date)
 
     return session_performance, block_performance, augmented_trial_df
 
@@ -502,11 +544,31 @@ def summarize_block_switches(block_performance: pd.DataFrame, min_counts=0) -> t
     return rewards, mean, std, sem
 
 
-def session_stats(dependent_var, independent_var) -> tuple[float, float, float, float]:
+def session_stats(dependent_var, independent_var) -> tuple[float | str, float | str, float | str, float | str]:
+    """Fit a simple linear model for paired numeric session summary values.
+
+    Parameters
+    ----------
+    dependent_var : array-like
+        One-dimensional numeric values with shape `(n_observations,)`.
+    independent_var : array-like
+        One-dimensional numeric values with shape `(n_observations,)`, aligned
+        row-wise to `dependent_var`.
+
+    Returns
+    -------
+    tuple[float or str, float or str, float or str, float or str]
+        `(slope, intercept, r_value, p_value)` for `dependent_var ~
+        independent_var`. Returns string `"None"` for all outputs when fewer
+        than two paired observations are available. Input filtering and numeric
+        conversion remain the caller's responsibility.
+    """
     stats_df = pd.DataFrame({
         'y': dependent_var,
         'a': independent_var,
     })
+    if stats_df.shape[0] < 2:
+        return "None", "None", "None", "None"
 
     y, X = model_matrix("y ~ a", stats_df)
     model = sm.OLS(y, X)
@@ -516,8 +578,205 @@ def session_stats(dependent_var, independent_var) -> tuple[float, float, float, 
     return slope, intercept, r_value, p_value
 
 
+def _get_valid_trials_to_correct_mask(
+    trials_to_correct: pd.Series,
+    prev_n_correct: pd.Series,
+) -> pd.Series:
+    """Identify block rows usable for trials-to-correct regression summaries.
+
+    Parameters
+    ----------
+    trials_to_correct : pd.Series
+        Blockwise trials-to-correct values with shape `(n_blocks,)`. Valid rows
+        contain integer-like values; invalid rows use the string sentinel
+        `"None"`.
+    prev_n_correct : pd.Series
+        Number of correct trials in the previous block, shape `(n_blocks,)`.
+        The first block uses `"None"` or another invalid sentinel when no
+        previous block exists.
+
+    Returns
+    -------
+    pd.Series
+        Boolean mask with shape `(n_blocks,)`, aligned to the input index.
+    """
+    return (trials_to_correct != "None") & (prev_n_correct != "None")
+
+
+def _add_regression_stats(
+    session_performance: pd.DataFrame,
+    column_prefix: str,
+    dependent_var: pd.Series,
+    independent_var: pd.Series,
+) -> pd.DataFrame:
+    """Add one simple-regression result to a one-row session summary.
+
+    Parameters
+    ----------
+    session_performance : pd.DataFrame
+        One-row session summary dataframe.
+    column_prefix : str
+        Prefix naming the independent variable in generated columns.
+    dependent_var : pd.Series
+        Numeric dependent values with shape `(n_observations,)`.
+    independent_var : pd.Series
+        Numeric independent values with shape `(n_observations,)`, aligned
+        row-wise to `dependent_var`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `session_performance` with `{column_prefix}_slope`,
+        `{column_prefix}_intercept`, `{column_prefix}_r_value`, and
+        `{column_prefix}_p_value` columns.
+    """
+    slope, intercept, r_value, p_value = session_stats(
+        dependent_var=dependent_var,
+        independent_var=independent_var,
+    )
+    session_performance[f"{column_prefix}_slope"] = slope
+    session_performance[f"{column_prefix}_intercept"] = intercept
+    session_performance[f"{column_prefix}_r_value"] = r_value
+    session_performance[f"{column_prefix}_p_value"] = p_value
+    return session_performance
+
+
+def add_regression_stats_to_session_performance(
+    session_performance: pd.DataFrame,
+    trials_to_correct: pd.Series,
+    prev_n_correct: pd.Series,
+    prev_consecutive_rewards: pd.Series,
+    n_blocks: int,
+) -> pd.DataFrame:
+    """Add block-learning regression summaries to a session summary.
+
+    Parameters
+    ----------
+    session_performance : pd.DataFrame
+        One-row session summary dataframe.
+    trials_to_correct : pd.Series
+        Blockwise trials-to-correct values with shape `(n_blocks,)`.
+    prev_n_correct : pd.Series
+        Previous-block correct-trial counts with shape `(n_blocks,)`.
+    prev_consecutive_rewards : pd.Series
+        Previous-block consecutive-reward counts with shape `(n_blocks,)`.
+    n_blocks : int
+        Number of analyzed blocks in the session.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `session_performance` with explicit regression-stat columns
+        for `prev_consecutive_rewards` and `prev_n_correct`, plus `n_blocks`.
+    """
+    session_performance = session_performance.copy()
+    valid_rows = _get_valid_trials_to_correct_mask(trials_to_correct, prev_n_correct)
+    dependent_var = trials_to_correct[valid_rows].astype(int)
+
+    session_performance = _add_regression_stats(
+        session_performance=session_performance,
+        column_prefix="prev_consecutive_rewards",
+        dependent_var=dependent_var,
+        independent_var=prev_consecutive_rewards[valid_rows].astype(int),
+    )
+    session_performance = _add_regression_stats(
+        session_performance=session_performance,
+        column_prefix="prev_n_correct",
+        dependent_var=dependent_var,
+        independent_var=prev_n_correct[valid_rows].astype(int),
+    )
+    session_performance["n_blocks"] = n_blocks
+    return session_performance
+
+
+def add_block_bias_columns(block_performance: pd.DataFrame) -> pd.DataFrame:
+    """Add legacy block-bias summaries to a block-performance table.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise performance dataframe with shape `(n_blocks, n_columns)`.
+        Required columns are `trials_to_correct` and `prev_n_correct`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `block_performance` with `bias_rl`, `bias_inf`,
+        `bias_rl_flag`, `bias_inf_flag`, and `bias_full_flag` columns.
+        Invalid block rows receive the string sentinel `"None"`.
+    """
+    block_performance = block_performance.copy()
+    valid_rows = _get_valid_trials_to_correct_mask(
+        block_performance["trials_to_correct"],
+        block_performance["prev_n_correct"],
+    )
+
+    base_array = np.zeros(block_performance.shape[0], dtype=object)
+    base_array[:] = 0
+    base_array[~valid_rows] = "None"
+
+    trials_to_correct = block_performance.loc[valid_rows, "trials_to_correct"].astype(int)
+    prev_n_correct = block_performance.loc[valid_rows, "prev_n_correct"].astype(int)
+
+    bias_rl_values = (
+        (trials_to_correct - prev_n_correct)
+        / (trials_to_correct + prev_n_correct + eps)
+    )
+    bias_rl = base_array.copy()
+    bias_rl[valid_rows] = bias_rl_values.to_numpy()
+
+    bias_inf_values = (trials_to_correct - 5) / (trials_to_correct + 5)
+    bias_inf = base_array.copy()
+    bias_inf[valid_rows] = bias_inf_values.to_numpy()
+
+    bias_thresh = .2
+    bias_rl_flag_values = bias_rl_values > bias_thresh
+    bias_inf_flag_values = bias_inf_values > bias_thresh
+    bias_full_flag_values = bias_rl_flag_values & bias_inf_flag_values
+
+    bias_rl_flag = base_array.copy()
+    bias_rl_flag[valid_rows] = bias_rl_flag_values.to_numpy()
+    bias_inf_flag = base_array.copy()
+    bias_inf_flag[valid_rows] = bias_inf_flag_values.to_numpy()
+    bias_full_flag = base_array.copy()
+    bias_full_flag[valid_rows] = bias_full_flag_values.to_numpy()
+
+    block_performance["bias_rl"] = bias_rl
+    block_performance["bias_inf"] = bias_inf
+    block_performance["bias_rl_flag"] = bias_rl_flag
+    block_performance["bias_inf_flag"] = bias_inf_flag
+    block_performance["bias_full_flag"] = bias_full_flag
+    return block_performance
+
+
+def assert_saved_csv(path: Path) -> None:
+    """Verify that a CSV save produced a non-empty file.
+
+    Parameters
+    ----------
+    path : Path
+        Expected CSV output path.
+
+    Returns
+    -------
+    None
+        Returns None when the file exists and has nonzero byte size.
+
+    Raises
+    ------
+    FileNotFoundError
+        If `path` does not exist.
+    OSError
+        If `path` exists but is empty.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"Expected saved CSV was not found: {path}")
+    if path.stat().st_size == 0:
+        raise OSError(f"Expected saved CSV is empty: {path}")
+
+
 def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataFrame, augmented_trial_df: pd.DataFrame,
-                  sess_id: str, session_save_path: Path, overall_save_path: Path=None) -> pd.DataFrame:
+                  sess_id: str, session_save_path: Path, multisession_save_path: Path=None) -> pd.DataFrame:
     """Save within-session outputs and optionally update multisession summaries.
 
     Parameters
@@ -532,14 +791,14 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
         Full session identifier.
     session_save_path : Path
         Directory where within-session CSV outputs are written.
-    overall_save_path : Path or None, default=None
+    multisession_save_path : Path or None, default=None
         Multisession summary directory. If None, only within-session outputs
         are written and `session_performance` is returned unchanged.
 
     Returns
     -------
     pd.DataFrame
-        Updated multisession dataframe if `overall_save_path` is provided,
+        Updated multisession dataframe if `multisession_save_path` is provided,
         otherwise the input `session_performance`.
     """
     assert session_save_path.exists(), "within-session data save path does not exist"
@@ -548,31 +807,32 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
     if match is None:
         raise ValueError(f"sess_id does not match expected pattern: {sess_id}")
     mouse, date, _time = match.groups()
-    block_performance.to_csv(session_save_path / (sess_id + '_block_performance.csv'), index=False, na_rep='None')
-    augmented_trial_df.to_csv(session_save_path / (sess_id + '_augmented_trials.csv'), index=False, na_rep='None')
-    if overall_save_path is None:
+    block_performance_path = session_save_path / (sess_id + '_block_performance.csv')
+    augmented_trial_path = session_save_path / (sess_id + '_augmented_trials.csv')
+
+    block_performance.to_csv(block_performance_path, index=False, na_rep='None')
+    augmented_trial_df.to_csv(augmented_trial_path, index=False, na_rep='None')
+    assert_saved_csv(block_performance_path)
+    assert_saved_csv(augmented_trial_path)
+
+    if multisession_save_path is None:
         return session_performance
 
-    assert overall_save_path.exists(), "between-session data save path does not exist"
-    overall_fname = overall_save_path / (mouse + '_overall_performance.csv')
-    if overall_fname.exists():
-        overall_df = pd.read_csv(overall_fname, na_filter=False)
-        ix = overall_df['date'] == date
-        overall_df = overall_df[~ix]
-        # if ix.any():
-        #     ix = np.squeeze(np.argwhere(overall_df['date'] == date))
-        #     overall_df[ix] = session_performance  # doing it this way allows updates to existing data
-        #     # overall_df.sort_values('date')  # double-check this when analyzing multiple sessions
-        # else:
-        overall_df = pd.concat([overall_df, session_performance], axis=0)
-        overall_df.sort_values(by='date', inplace=True)
-        overall_df.to_csv(overall_fname, index=False, na_rep='None')
-
+    assert multisession_save_path.exists(), "between-session data save path does not exist"
+    multisession_summary_path = multisession_save_path / (mouse + '_overall_performance.csv')
+    if multisession_summary_path.exists():
+        multisession_df = pd.read_csv(multisession_summary_path, na_filter=False)
+        current_session_date = multisession_df['date'] == date
+        multisession_df = multisession_df[~current_session_date]
+        multisession_df = pd.concat([multisession_df, session_performance], axis=0)
     else:
-        session_performance.to_csv(overall_fname, index=False, na_rep='None')
-        overall_df = session_performance
+        multisession_df = session_performance.copy()
 
-    return overall_df
+    multisession_df.sort_values(by='date', inplace=True)
+    multisession_df.reset_index(drop=True, inplace=True)
+    multisession_df.to_csv(multisession_summary_path, index=False, na_rep='None')
+    assert_saved_csv(multisession_summary_path)
+    return multisession_df
 
 
 def load_analysis(sess_id_full: str, session_data_folder: Path, multisession_data_folder: Path) -> tuple:
@@ -589,99 +849,61 @@ def load_analysis(sess_id_full: str, session_data_folder: Path, multisession_dat
     return multisession_df, block_performance, augmented_trial_df
 
 
-# def run_analysis(trial_df: pd.DataFrame, sess_id_full: str, processed_data_path: Path,):
 def run_analysis(trial_df: pd.DataFrame, session: Session):
     """Run single-session analysis with optional multisession persistence.
 
     Parameters
     ----------
     trial_df : pd.DataFrame
-        Trial table for a real or simulated session.
+        Trial table with shape `(n_trials, n_columns)`. Required columns match
+        `analyze_session`.
     session : Session
-        Session metadata. If `session.multi_session_save_path` is None, the
-        analysis saves only within-session outputs and skips multisession
-        summary save/load steps. This is the intended mode for simulated runs.
+        Session metadata. Required attributes are `mouse`, `date`,
+        `sess_id_full`, `processed_data_path`, and `multi_session_save_path`.
+        If `multi_session_save_path` is None, only within-session CSV outputs
+        are saved.
 
     Returns
     -------
     tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
-        - augmented trial dataframe
-        - block performance dataframe
-        - multisession dataframe when multisession saving is enabled, otherwise
-          the single-row `session_performance` dataframe
+        `(augmented_trial_df, block_performance, multisession_df)`. When
+        multisession saving is disabled, the third dataframe is the one-row
+        session summary instead of a loaded cross-session table.
     """
     session_performance, block_performance, augmented_trial_df = analyze_session(trial_df, mouse=session.mouse, date=session.date)
-    ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
-    slope, intercept, r_value, p_value = session_stats(
-        dependent_var=block_performance['trials_to_correct'][ix_valid].astype(int),
-        independent_var=block_performance['prev_consecutive_rewards'][ix_valid].astype(int))
+    session_performance = add_regression_stats_to_session_performance(
+        session_performance=session_performance,
+        trials_to_correct=block_performance["trials_to_correct"],
+        prev_n_correct=block_performance["prev_n_correct"],
+        prev_consecutive_rewards=block_performance["prev_consecutive_rewards"],
+        n_blocks=block_performance.shape[0],
+    )
+    block_performance = add_block_bias_columns(block_performance)
 
-    """
-    TTS vs prev rewards: condition by confusion (nswitch > 3 or so) 
-    TTS vs rewards by bias (TTS >> block rewards. Could quantify that - TTS / rewards (block, consec, or consec_memory) or TTS - rewards
-    Condition by mean, median or std choice time
-    """
-    base_array = np.zeros_like(block_performance['trials_to_correct'])
-    if np.sum(~ix_valid) > 0:
-        base_array.astype(object)
-        base_array[~ix_valid] = 'None'
+    print(
+        "prev_consecutive_rewards slope: {}, intercept: {}, r_value: {}, p_value: {}".format(
+            session_performance.loc[0, "prev_consecutive_rewards_slope"],
+            session_performance.loc[0, "prev_consecutive_rewards_intercept"],
+            session_performance.loc[0, "prev_consecutive_rewards_r_value"],
+            session_performance.loc[0, "prev_consecutive_rewards_p_value"],
+        )
+    )
+    print(
+        "prev_n_correct slope: {}, intercept: {}, r_value: {}, p_value: {}".format(
+            session_performance.loc[0, "prev_n_correct_slope"],
+            session_performance.loc[0, "prev_n_correct_intercept"],
+            session_performance.loc[0, "prev_n_correct_r_value"],
+            session_performance.loc[0, "prev_n_correct_p_value"],
+        )
+    )
 
-    # using n_correct for biases as the maximum possible count for value comparison
-    _bias_rl = ((block_performance['trials_to_correct'][ix_valid] - block_performance['prev_n_correct'][ix_valid]) /
-                (block_performance['trials_to_correct'][ix_valid] + block_performance['prev_n_correct'][ix_valid] + eps))
-    bias_rl = base_array.copy()
-    bias_rl[ix_valid] = _bias_rl.to_numpy()
-
-    _bias_inf = (block_performance['trials_to_correct'][ix_valid] - 5) / (
-                block_performance['trials_to_correct'][ix_valid] + 5)
-    bias_inf = base_array.copy()
-    bias_inf[ix_valid] = _bias_inf.to_numpy()
-
-    bias_thresh = .2
-    _bias_rl_flag = _bias_rl > bias_thresh
-    _bias_inf_flag = _bias_inf > bias_thresh
-    _bias_full_flag = _bias_rl_flag & _bias_inf_flag
-    bias_rl_flag = base_array.copy()
-    bias_rl_flag[ix_valid] = _bias_rl_flag.to_numpy()
-    bias_inf_flag = base_array.copy()
-    bias_inf_flag[ix_valid] = _bias_inf_flag.to_numpy()
-    bias_full_flag = base_array.copy()
-    bias_full_flag[ix_valid] = _bias_full_flag.to_numpy()
-
-    block_performance['bias_rl'] = bias_rl
-    block_performance['bias_inf'] = bias_inf
-    block_performance['bias_rl_flag'] = bias_rl_flag
-    block_performance['bias_inf_flag'] = bias_inf_flag
-    block_performance['bias_full_flag'] = bias_full_flag
-
-    # rewards, mean, std, sem = summarize_block_switches(block_performance, min_counts=0)
-    session_performance['slope'] = slope
-    session_performance['intercept'] = intercept
-    session_performance['r_value'] = r_value
-    session_performance['p_value'] = p_value
-    session_performance['n_switches'] = block_performance.shape[0]
-    # ic(slope, intercept, r_value, p_value)
-    print('slope: {}, intercept: {}, r_value: {}, p_value: {}'.format(slope, intercept, r_value, p_value))
-    # block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
-    # augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
-
-    no_multisession = getattr(session, "multi_session_save_path", None) is None
-    save_analysis(
+    multisession_df = save_analysis(
         session_performance,
         block_performance,
         augmented_trial_df,
         sess_id=session.sess_id_full,
         session_save_path=session.processed_data_path,
-        overall_save_path=None if no_multisession else session.multi_session_save_path,
-    )
-
-    if no_multisession:
-        return augmented_trial_df, block_performance, session_performance
-
-    multisession_df, block_performance, augmented_trial_df = load_analysis(
-        session.sess_id_full,
-        session.processed_data_path,
-        session.multi_session_save_path,
+        multisession_save_path=getattr(session, "multi_session_save_path", None),
     )
     return augmented_trial_df, block_performance, multisession_df
 
@@ -709,64 +931,15 @@ def main():
 
     sess_id_abbreviated = mouse + '_' + date
     trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',', na_filter=False)
-    session_performance, block_performance, augmented_trial_df = analyze_session(trial_df, mouse=mouse, date=date)
-    ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
-    slope, intercept, r_value, p_value = session_stats(dependent_var=block_performance['trials_to_correct'][ix_valid].astype(int),
-                                                    independent_var=block_performance['prev_consecutive_rewards'][ix_valid].astype(int))
+    sess = type("SessionConfig", (), {})()
+    sess.mouse = mouse
+    sess.date = date
+    sess.sess_id_full = sess_id_full
+    sess.processed_data_path = processed_data_path
+    sess.multi_session_save_path = multi_session_save_path
+    augmented_trial_df, block_performance, multisession_df = run_analysis(trial_df, session=sess)
 
-    """
-    TTS vs prev rewards: condition by confusion (nswitch > 3 or so) 
-    TTS vs rewards by bias (TTS >> block rewards. Could quantify that - TTS / rewards (block, consec, or consec_memory) or TTS - rewards
-    Condition by mean, median or std choice time
-    """
-    base_array = np.zeros_like(block_performance['trials_to_correct'])
-    base_array[~ix_valid] = 'None'
-
-    # using n_correct for biases as the maximum possible count for value comparison
-    _bias_rl = ((block_performance['trials_to_correct'][ix_valid] - block_performance['prev_n_correct'][ix_valid]) /
-               (block_performance['trials_to_correct'][ix_valid] + block_performance['prev_n_correct'][ix_valid]))
-    bias_rl = base_array.copy()
-    bias_rl[ix_valid] = _bias_rl.to_numpy()
-
-    _bias_inf = (block_performance['trials_to_correct'][ix_valid] - 5) / (block_performance['trials_to_correct'][ix_valid] + 5)
-    bias_inf = base_array.copy()
-    bias_inf[ix_valid] = _bias_inf.to_numpy()
-
-    bias_thresh = .2
-    _bias_rl_flag = _bias_rl > bias_thresh
-    _bias_inf_flag = _bias_inf > bias_thresh
-    _bias_full_flag = _bias_rl_flag & _bias_inf_flag
-    bias_rl_flag = base_array.copy()
-    bias_rl_flag[ix_valid] = _bias_rl_flag.to_numpy()
-    bias_inf_flag = base_array.copy()
-    bias_inf_flag[ix_valid] = _bias_inf_flag.to_numpy()
-    bias_full_flag = base_array.copy()
-    bias_full_flag[ix_valid] = _bias_full_flag.to_numpy()
-
-    block_performance['bias_rl'] = bias_rl
-    block_performance['bias_inf'] = bias_inf
-    block_performance['bias_rl_flag'] = bias_rl_flag
-    block_performance['bias_inf_flag'] = bias_inf_flag
-    block_performance['bias_full_flag'] = bias_full_flag
-
-    # rewards, mean, std, sem = summarize_block_switches(block_performance, min_counts=0)
-    session_performance['slope'] = slope
-    session_performance['intercept'] = intercept
-    session_performance['r_value'] = r_value
-    session_performance['p_value'] = p_value
-    session_performance['n_switches'] = block_performance.shape[0]
-    # ic(slope, intercept, r_value, p_value)
-    print('slope: {}, intercept: {}, r_value: {}, p_value: {}'.format(slope, intercept, r_value, p_value))
-    # block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
-    # augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
-
-    save_analysis(session_performance, block_performance, augmented_trial_df,
-                  sess_id=sess_id_full, session_save_path=processed_data_path, overall_save_path=multi_session_save_path)
-
-    multisession_performance = pd.read_csv(processed_data_path / (sess_id_full + '_.csv'), sep=',', na_filter=False)
-    multisession_df, block_performance, augmented_trial_df = load_analysis(sess_id_full, processed_data_path, multi_session_save_path)
-
-    # TODO - allow combining new session analysis with old by replacing dates and sorting the matrix by date.
+    # TODO - allow combining new session analysis with old by replacing dates and sorting the matrix by date. I might have done this already?
 
 
 if __name__ == '__main__':

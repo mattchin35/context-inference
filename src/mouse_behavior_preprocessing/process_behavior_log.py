@@ -33,13 +33,6 @@ class TaskState(IntEnum):
     DARK_PERIOD = 2
 
 
-states = ['right', 'left']
-state_dict = {
-    'right': int(ChoiceSide.RIGHT),
-    'left': int(ChoiceSide.LEFT),
-}  # i.e. [0 right, 1 left]
-
-
 @dataclass
 class TrialParserState:
     """Mutable state used while converting event rows into trial rows.
@@ -81,20 +74,6 @@ class TrialParserState:
 
 
 def _assert_supported_missing_value(missing_value: str) -> None:
-    """Validate the missing-value sentinel used in processed trial tables.
-
-    Parameters
-    ----------
-    missing_value : str
-        Missing-value sentinel to write into trial dataframe fields. Currently
-        only the literal string `"None"` is supported because downstream CSV
-        readers and analysis code check for this value explicitly.
-
-    Returns
-    -------
-    None
-        Raises AssertionError when a non-supported sentinel is requested.
-    """
     assert missing_value == MISSING_VALUE, (
         "Only string 'None' is currently supported for CSV/downstream compatibility. "
         "Python None or np.nan support should be added in a later compatibility refactor."
@@ -102,24 +81,6 @@ def _assert_supported_missing_value(missing_value: str) -> None:
 
 
 def _new_trial_dict(state: TrialParserState, start_time: float, missing_value: str) -> OrderedDict:
-    """Create an initialized processed-trial row.
-
-    Parameters
-    ----------
-    state : TrialParserState
-        Parser state after trial counters have been advanced for the new trial.
-    start_time : float
-        Trial start timestamp in seconds, matching the raw event table timebase.
-    missing_value : str
-        Missing-value sentinel for unset trial fields. Currently must be
-        `"None"`.
-
-    Returns
-    -------
-    OrderedDict
-        Trial row with fixed column order. Scalar fields describe one trial;
-        times are in seconds.
-    """
     return OrderedDict(
         state=state.current_state,
         state_int=state.current_state_int,
@@ -141,25 +102,7 @@ def _new_trial_dict(state: TrialParserState, start_time: float, missing_value: s
 
 
 def _start_new_trial(state: TrialParserState, start_time: float, missing_value: str) -> None:
-    """Finalize the previous trial and start a new active trial.
-
-    Parameters
-    ----------
-    state : TrialParserState
-        Mutable parser state. Updated in place.
-    start_time : float
-        Trial start timestamp in seconds, matching the raw event table timebase.
-    missing_value : str
-        Missing-value sentinel for unset trial fields. Currently must be
-        `"None"`.
-
-    Returns
-    -------
-    None
-        The previous active trial, if present, is appended to
-        `state.completed_trials`; `state.active_trial` is replaced by the new
-        initialized trial row.
-    """
+    """Finalize the previous trial and start a new active trial."""
     if state.active_trial is not None:
         state.completed_trials.append(state.active_trial)
 
@@ -169,46 +112,14 @@ def _start_new_trial(state: TrialParserState, start_time: float, missing_value: 
 
 
 def _require_active_trial(state: TrialParserState, event: str) -> OrderedDict:
-    """Return the active trial row or raise if an event appears outside a trial.
-
-    Parameters
-    ----------
-    state : TrialParserState
-        Mutable parser state for the current event stream.
-    event : str
-        Raw event name being handled. Unitless categorical string.
-
-    Returns
-    -------
-    OrderedDict
-        Active trial row to update.
-    """
+    """Return the active trial row or raise if an event appears outside a trial."""
     if state.active_trial is None:
         raise RuntimeError(f"Event {event!r} occurred before any trial_start event.")
     return state.active_trial
 
 
 def _handle_context_event(event: str, current_time: float, state: TrialParserState, missing_value: str) -> None:
-    """Update parser state for context and trial-boundary events.
-
-    Parameters
-    ----------
-    event : str
-        Raw context event name.
-    current_time : float
-        Event timestamp in seconds. Used as the trial start time for
-        `trial_start` events.
-    state : TrialParserState
-        Mutable parser state. Updated in place.
-    missing_value : str
-        Missing-value sentinel for unset trial fields. Currently must be
-        `"None"`.
-
-    Returns
-    -------
-    None
-        Updates task context or starts a new active trial.
-    """
+    """Update parser state for context and trial-boundary events."""
     if event == 'enter_right_patch':
         state.current_state = 'right_patch'
         state.current_state_int = int(TaskState.RIGHT_PATCH)
@@ -237,26 +148,7 @@ def _handle_context_event(event: str, current_time: float, state: TrialParserSta
 
 
 def _handle_choice_event(event: str, reward_note: str, current_time: float, state: TrialParserState) -> None:
-    """Update the active trial from a choice or experimenter-reward event.
-
-    Parameters
-    ----------
-    event : str
-        Raw choice-like event name.
-    reward_note : str
-        Raw reward outcome note. Expected values are `reward_True` or
-        `reward_False`.
-    current_time : float
-        Event timestamp in seconds, saved as `choice_time`.
-    state : TrialParserState
-        Mutable parser state. The active trial is updated in place.
-
-    Returns
-    -------
-    None
-        The active trial receives `choice_time`, `action`, `correct`, `reward`,
-        and `give_reward` values.
-    """
+    """Update the active trial from a choice or experimenter-reward event."""
     trial = _require_active_trial(state, event)
     action, correct, reward, give_reward = choice_event_summary(event, reward_note)
     trial['choice_time'] = current_time
@@ -267,47 +159,14 @@ def _handle_choice_event(event: str, reward_note: str, current_time: float, stat
 
 
 def _handle_reward_event(event: str, current_time: float, state: TrialParserState) -> None:
-    """Update reward timing for the active trial.
-
-    Parameters
-    ----------
-    event : str
-        Raw reward event name. Pump events are expected to match `pump.*`.
-    current_time : float
-        Event timestamp in seconds, saved as `reward_time`.
-    state : TrialParserState
-        Mutable parser state. The active trial is updated in place.
-
-    Returns
-    -------
-    None
-        Saves reward delivery time when the event is a pump event.
-    """
+    """Update reward timing for the active trial."""
     if re.fullmatch('pump.*', event):
         trial = _require_active_trial(state, event)
         trial['reward_time'] = current_time
 
 
 def _handle_stimulus_event(event: str, current_time: float, state: TrialParserState, missing_value: str) -> None:
-    """Update active stimulus, block stimulus, or LED timing.
-
-    Parameters
-    ----------
-    event : str
-        Raw stimulus or LED event name.
-    current_time : float
-        Event timestamp in seconds. Used for LED on/off fields.
-    state : TrialParserState
-        Mutable parser state. Updated in place.
-    missing_value : str
-        Missing-value sentinel for unset stimulus fields. Currently must be
-        `"None"`.
-
-    Returns
-    -------
-    None
-        Updates current stimulus context or LED timing on the active trial.
-    """
+    """Update active stimulus, block stimulus, or LED timing."""
     if event == 'stimulus_A_on':
         state.current_stimulus = 'A'
         state.block_stimulus = 'A'
@@ -365,10 +224,7 @@ def calculate_water_delivery(session_df: pd.DataFrame, session_info: dict) -> pd
 
 
 def process_file(save_directory: Path, file_path: str, filter_events: Optional[list[str]] = []) -> pd.DataFrame:
-    # Read the file into a DataFrame, skipping the first row
     df = pd.read_csv(file_path, sep=';', header=None, on_bad_lines='skip', usecols=[1, 3, 4])
-
-    # Rename the columns
     df.columns = ['Time', 'Event', 'Note']
 
     # Subtract 'exit_standby' time value from every element
@@ -387,7 +243,6 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[l
     # and deleted, but it is available in "behavior_analysis_old/fileIO" if desired. The filter_events input is kept
     # as a reminder.
 
-    # Save the new DataFrame to a CSV file
     if not save_directory.exists():
         save_directory.mkdir(parents=True)
 
@@ -398,28 +253,7 @@ def process_file(save_directory: Path, file_path: str, filter_events: Optional[l
 
 
 def choice_event_summary(event: str, reward_note: str) -> tuple[int, int, int, int]:
-    """Summarize one choice-like event into trial outcome fields.
-
-    Parameters
-    ----------
-    event : str
-        Raw event name for an animal choice or experimenter reward event.
-        Supported animal choices are correct/wrong left/right patch events.
-        Supported experimenter reward events are `giving_reward_left_patch` and
-        `giving_reward_right_patch`.
-    reward_note : str
-        Raw reward outcome note. Expected values are `reward_True` or
-        `reward_False`.
-
-    Returns
-    -------
-    tuple[int, int, int, int]
-        `(action, correct, reward, give_reward)` for one trial. `action` uses
-        `ChoiceSide` codes, where 0 is right and 1 is left. `correct`, `reward`,
-        and `give_reward` are binary 0/1 flags. Experimenter rewards currently
-        preserve the legacy side-as-action behavior for downstream
-        compatibility.
-    """
+    """Summarize one choice-like event into trial outcome fields."""
     # LEFT CHOICES
     if event == 'wrong_choice_right_patch':
         action = int(ChoiceSide.LEFT)
@@ -441,12 +275,10 @@ def choice_event_summary(event: str, reward_note: str) -> tuple[int, int, int, i
         give_reward = 0
 
     elif event == 'giving_reward_left_patch':
-        # action = 'None'
         action = int(ChoiceSide.LEFT)
         correct = 0
         give_reward = 1
     elif event == 'giving_reward_right_patch':
-        # action = 'None'
         action = int(ChoiceSide.RIGHT)
         correct = 0
         give_reward = 1
@@ -466,33 +298,7 @@ def choice_event_summary(event: str, reward_note: str) -> tuple[int, int, int, i
 
 def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: list, reward_events: list,
                    stimulus_events: list, missing_value: str = MISSING_VALUE) -> pd.DataFrame:
-    """Convert a raw event table into one processed row per completed trial.
-
-    Parameters
-    ----------
-    raw_data : pd.DataFrame
-        Raw event table with shape `(n_events, n_columns)`. Required columns are
-        `Time` in seconds, `Event` as raw event-name strings, and `Note` as raw
-        event-note strings.
-    context_events : list
-        Event names that update task context or mark trial boundaries.
-    choice_events : list
-        Event names that encode animal choices or experimenter rewards.
-    reward_events : list
-        Event names that encode pump reward delivery.
-    stimulus_events : list
-        Event names that encode stimulus or LED state changes.
-    missing_value : str, default="None"
-        Missing-value sentinel for unset trial fields. Only string `"None"` is
-        currently supported for CSV/downstream compatibility.
-
-    Returns
-    -------
-    pd.DataFrame
-        Trial table with shape `(n_completed_trials, n_trial_columns)`. Time
-        columns are in seconds. Trials are finalized only when a later
-        `trial_start` event begins the next trial, preserving legacy behavior.
-    """
+    """Convert a raw event table into one processed row per completed trial."""
     _assert_supported_missing_value(missing_value)
     parser_state = TrialParserState(
         current_state=missing_value,
@@ -561,14 +367,6 @@ def make_trial_df(cleaned_data: pd.DataFrame, session_id: str, save_name: str, o
     reward_events = collect_events.get_reward_events(df)
     stimulus_events = collect_events.get_stimulus_events(df)
 
-    # start from the first known context entry; throw out everything before that. I think this is unnecessary now
-    # ix = np.zeros(df.shape[0]).astype(bool)
-    # for e in context_events:
-    #     ix = ix | (df['Event'] == e)
-    #
-    # start_time = df.loc[ix, 'Time'].values[0]
-    # df = df.loc[df['Time'] >= start_time]
-
     p_active_rew = session_info['correct_reward_probability']
     p_inactive_rew = session_info['incorrect_reward_probability']
     trial_df = iterate_trials(
@@ -583,7 +381,6 @@ def make_trial_df(cleaned_data: pd.DataFrame, session_id: str, save_name: str, o
     trial_df['trial_time_since_start'] = trial_df['start_time'] - st_time
     trial_df['choice_time_since_start'] = trial_df['choice_time'] - st_time
 
-    # add in variables which are constant across all trials or will be updated as the behavior task is updated
     n_trials = len(trial_df['state'])
     trial_df['p_active_rew'] = np.ones(n_trials) * p_active_rew
     trial_df['p_inactive_rew'] = np.ones(n_trials) * p_inactive_rew

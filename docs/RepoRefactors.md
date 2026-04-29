@@ -63,3 +63,27 @@ Deferred refactor:
 - Add tests around preprocessing, `make_augmented_trial_df`, trial feature
   generation, and trial GLM-HMM preparation before making the data-contract
   change.
+
+# Session Stats Renaming
+
+Session-level regression statistics in `session_performance` were renamed from
+generic names such as `slope`, `intercept`, `r_value`, and `p_value` to names
+that identify the independent variable:
+
+- `prev_consecutive_rewards_slope`
+- `prev_consecutive_rewards_intercept`
+- `prev_consecutive_rewards_r_value`
+- `prev_consecutive_rewards_p_value`
+- `prev_n_correct_slope`
+- `prev_n_correct_intercept`
+- `prev_n_correct_r_value`
+- `prev_n_correct_p_value`
+
+The session-level block count was also renamed from `n_switches` to `n_blocks`.
+This avoids confusing the number of task blocks with mouse choice-switching
+behavior.
+
+General analysis functions are expected to work with the new names. Plotting and
+notebook code that reads older multisession CSVs may still need updates if it
+expects the generic stat columns. Plotting code can temporarily tolerate legacy
+`n_switches` for old CSVs, but new analysis outputs should save `n_blocks`.

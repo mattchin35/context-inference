@@ -3,7 +3,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from pathlib import Path
-from behavior_analysis import session_analysis
+try:
+    from . import session_analysis
+except ImportError:
+    from behavior_analysis import session_analysis
 from typing import Iterable
 import re
 
@@ -18,6 +21,31 @@ block_types = ['right_cued', 'left_cued', 'right_uncued', 'left_uncued', 'dark p
 color_dict = {'right_cued': all_colors[1], 'left_cued': all_colors[3],
               'right_uncued': all_colors[0], 'left_uncued': all_colors[2], 'dark period': 'black'}
 state_dict = {0: 'right', 1: 'left'}
+DEFAULT_LEARNING_REGRESSOR = "prev_consecutive_rewards"
+
+
+def get_session_block_count_column(multisession_df: pd.DataFrame) -> str:
+    """Return the session-level block-count column in a multisession summary.
+
+    Parameters
+    ----------
+    multisession_df : pd.DataFrame
+        Multisession summary table with shape `(n_sessions, n_columns)`.
+        New files contain `n_blocks`; legacy files may contain `n_switches`.
+
+    Returns
+    -------
+    str
+        Name of the block-count column to use for plotting.
+    """
+    if "n_blocks" in multisession_df.columns:
+        return "n_blocks"
+
+    if "n_switches" in multisession_df.columns:
+        # Legacy CSVs used `n_switches` for session block count; new outputs save `n_blocks`.
+        return "n_switches"
+
+    raise ValueError("multisession_df must contain 'n_blocks' or legacy 'n_switches'.")
 
 
 def plot_session_correct(block_performance: pd.DataFrame, plot_path: Path, sess_ID: str):
@@ -281,12 +309,20 @@ def main_single_session():
     # plot_multisession_correct(overall_df, mouse_plot_path, figure_id=mouse)
     # plot_multisession_trials_to_correct(overall_df, mouse_plot_path, figure_id=mouse)
 
-    slope = multisession_df.loc[multisession_df['date']==date, 'slope'].values[0]
-    intercept = multisession_df.loc[multisession_df['date']==date, 'intercept'].values[0]
+    slope = multisession_df.loc[
+        multisession_df['date'] == date,
+        f'{DEFAULT_LEARNING_REGRESSOR}_slope',
+    ].values[0]
+    intercept = multisession_df.loc[
+        multisession_df['date'] == date,
+        f'{DEFAULT_LEARNING_REGRESSOR}_intercept',
+    ].values[0]
     scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
                               plot_path=session_figure_path, figure_id=sess_id_full,
                               title=sess_id_abbreviated)
-    # plot_learning_curve(multisession_df['slope'], multisession_df['n_switches'], figure_id=mouse,
+    # block_count_col = get_session_block_count_column(multisession_df)
+    # plot_learning_curve(multisession_df[f'{DEFAULT_LEARNING_REGRESSOR}_slope'],
+    #                     multisession_df[block_count_col], figure_id=mouse,
     #                     plot_path=multisession_save_path, dates=multisession_df['date'].values)
 
 
@@ -295,8 +331,8 @@ def main_multiple_sessions():
     mouse = 'CT014'
     multisession_df = pd.read_csv(multisession_save_path / (mouse + '_overall_performance.csv'), sep=',', na_filter=False)
     multisession_df.sort_values(by='date', inplace=True)
-    # plot_learning_curve(overall_df['slope'], overall_df['n_switches'], figure_id=mouse[0], plot_path=mouse_plot_path)
-    plot_learning_curve(multisession_df['slope'], multisession_df['n_switches'], figure_id=mouse,
+    block_count_col = get_session_block_count_column(multisession_df)
+    plot_learning_curve(multisession_df[f'{DEFAULT_LEARNING_REGRESSOR}_slope'], multisession_df[block_count_col], figure_id=mouse,
                         plot_path=multisession_save_path,
                         dates=multisession_df['date'].values)
 
@@ -308,4 +344,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

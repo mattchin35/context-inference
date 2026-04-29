@@ -198,12 +198,44 @@ def load_or_preprocess_session(
     return trial_df, event_df, None
 
 
-def plot_session(event_df: pd.DataFrame, session_info: dict, raw_behavior_folder: str, processed_data_path: str, figure_path: str, sess_id_full: str):
-    # event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',')
-    # session_info_path = '{}_session_info.pkl'.format(sess_id_full)
-    # with open(raw_behavior_folder / session_info_path, 'rb') as f:
-    #     session_info = pkl.load(f)
+def load_or_run_session_analysis(
+    trial_df: pd.DataFrame,
+    session: Session,
+    run_session_analysis: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Run session analysis or load existing analysis outputs.
 
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_trial_columns)`. Used only when
+        `run_session_analysis` is True.
+    session : Session
+        Session metadata containing `sess_id_full`, `processed_data_path`, and
+        `multi_session_save_path`.
+    run_session_analysis : bool, default=False
+        If True, recompute and save session-analysis outputs. If False, load
+        existing saved analysis outputs.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
+        `(augmented_trial_df, block_performance, multisession_df)`. The load
+        path normalizes `session_analysis.load_analysis`, which returns
+        `(multisession_df, block_performance, augmented_trial_df)`.
+    """
+    if run_session_analysis:
+        return session_analysis.run_analysis(trial_df, session=session)
+
+    multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(
+        session.sess_id_full,
+        session_data_folder=session.processed_data_path,
+        multisession_data_folder=session.multi_session_save_path,
+    )
+    return augmented_trial_df, block_performance, multisession_df
+
+
+def plot_session(event_df: pd.DataFrame, session_info: dict, figure_path: Path, sess_id_full: str):
     if not figure_path.exists():
         figure_path.mkdir()
 
@@ -214,44 +246,6 @@ def plot_session(event_df: pd.DataFrame, session_info: dict, raw_behavior_folder
                                    plot_path=figure_path, plot_choices=False)
     raster_plots.colorblock_raster(event_df, sess_id_full + '_choice_context_raster', session_info=session_info,
                                    plot_path=figure_path, plot_choices=True)
-
-
-def analyze_session(trial_df: pd.DataFrame, sess_id_full: str, within_session_data_path: str, multi_session_save_path: str):
-    pattern = r'(\w+)_([\d\-]+)_(\d+)'
-    match = re.search(pattern, sess_id_full)
-    assert match, "session id does not have correct format"
-
-    if match:
-        mouse, date, timestamp = match.groups()
-        print(f"Mouse id: {mouse}")  # abc
-        print(f"Date: {date}")  # YYYY-MM-DD
-        print(f"Time: {timestamp}")  # HHMMSS
-    else:
-        print("Double-check the session name!")
-        return
-
-    session_performance, block_performance, augmented_trial_df = session_analysis.analyze_session(trial_df, mouse=mouse, date=date)
-
-    # rewards, mean, std, sem = summarize_block_switches(block_performance, min_counts=0)
-    if block_performance['trials_to_correct'].iloc[-1] == 'None':
-        ix_valid = block_performance.shape[0] - 1
-        slope, intercept, r_value, p_value = session_analysis.session_stats(
-            dependent_var=block_performance['trials_to_correct'].iloc[:ix_valid].astype(int),
-            independent_var=block_performance['prev_consecutive_rewards'].iloc[:ix_valid])
-    else:
-        slope, intercept, r_value, p_value = session_analysis.session_stats(
-            dependent_var=block_performance['trials_to_correct'],
-            independent_var=block_performance['prev_consecutive_rewards'])
-
-    session_performance['slope'] = slope
-    session_performance['intercept'] = intercept
-    session_performance['r_value'] = r_value
-    session_performance['p_value'] = p_value
-    session_performance['n_switches'] = block_performance.shape[0]
-    session_analysis.save_analysis(session_performance, block_performance, augmented_trial_df,
-                                   sess_id=sess_id_full,
-                                   session_save_path=within_session_data_path,
-                                   overall_save_path=multi_session_save_path)
 
 
 def block_hmm_model(block_performance: pd.DataFrame, trial_df: pd.DataFrame, sess_id_full: str,
@@ -293,17 +287,24 @@ def performance_plots_single_session():
                                                                                             session_data_folder=processed_data_path,
                                                                                             multisession_data_folder=multisession_save_path)
     overall_df = multisession_df[~multisession_df['date'].isna()]
-    plot_session_correct(block_performance, session_figure_path, sess_id_full)
-    plot_session_trials_to_correct(block_performance, session_figure_path, sess_id_full)
-    plot_session_nswitches(block_performance, session_figure_path, sess_id_full)
+    performance_plots.plot_session_correct(block_performance, session_figure_path, sess_id_full)
+    performance_plots.plot_session_trials_to_correct(block_performance, session_figure_path, sess_id_full)
+    performance_plots.plot_session_nswitches(block_performance, session_figure_path, sess_id_full)
     # plot_multisession_correct(overall_df, mouse_plot_path, figure_id=mouse)
     # plot_multisession_trials_to_correct(overall_df, mouse_plot_path, figure_id=mouse)
 
-    slope = multisession_df.loc[multisession_df['date'] == date, 'slope'].values[0]
-    intercept = multisession_df.loc[multisession_df['date'] == date, 'intercept'].values[0]
-    scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
+    slope = multisession_df.loc[
+        multisession_df['date'] == date,
+        'prev_consecutive_rewards_slope',
+    ].values[0]
+    intercept = multisession_df.loc[
+        multisession_df['date'] == date,
+        'prev_consecutive_rewards_intercept',
+    ].values[0]
+    performance_plots.scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
                               plot_path=session_figure_path, figure_id=sess_id_full)
-    plot_learning_curve(multisession_df['slope'], multisession_df['n_switches'], figure_id=mouse,
+    block_count_col = performance_plots.get_session_block_count_column(multisession_df)
+    performance_plots.plot_learning_curve(multisession_df['prev_consecutive_rewards_slope'], multisession_df[block_count_col], figure_id=mouse,
                         plot_path=multisession_save_path,
                         dates=multisession_df['date'].values)
 
@@ -358,6 +359,7 @@ def main_mouse():
 
     ### USER FLAGS - CHOOSE THESE FOR EACH RUN ###
     preprocess_raw_session = False
+    run_session_analysis = False
 
     ### HARDCODED DATA PATHS - CHOOSE THESE FOR EACH RUN ###
     multi_session_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
@@ -415,23 +417,28 @@ def main_mouse():
     if water is not None:
         print(f"Preprocessed session log for {sess_id_full}. Water delivered: {water}")
 
-    plot_session(event_df, session_info,
-                 raw_behavior_folder=raw_behavior_folder, processed_data_path=processed_data_path,
-                 figure_path=figure_path, sess_id_full=sess_id_full)
+    plot_session(event_df, session_info, figure_path=figure_path, sess_id_full=sess_id_full)
 
-    # analyze trials and save
-    augmented_trial_df, block_performance, multisession_df = session_analysis.run_analysis(trial_df, session=sess)
-    multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(sess_id_full,
-                                                                                            session_data_folder=processed_data_path,
-                                                                                            multisession_data_folder=multi_session_save_path)
+    # analyze trials and save, or load existing analysis outputs
+    augmented_trial_df, block_performance, multisession_df = load_or_run_session_analysis(
+        trial_df=trial_df,
+        session=sess,
+        run_session_analysis=run_session_analysis,
+    )
 
     ### plot single session performance ###
     performance_plots.plot_session_correct(block_performance, sess.figure_path, sess_id_full)
     performance_plots.plot_session_trials_to_correct(block_performance, sess.figure_path, sess_id_full)
     performance_plots.plot_session_nswitches(block_performance, sess.figure_path, sess_id_full)
 
-    slope = multisession_df.loc[multisession_df['date'] == date, 'slope'].values[0]
-    intercept = multisession_df.loc[multisession_df['date'] == date, 'intercept'].values[0]
+    slope = multisession_df.loc[
+        multisession_df['date'] == date,
+        'prev_consecutive_rewards_slope',
+    ].values[0]
+    intercept = multisession_df.loc[
+        multisession_df['date'] == date,
+        'prev_consecutive_rewards_intercept',
+    ].values[0]
     performance_plots.scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
                               plot_path=sess.figure_path, figure_id=sess_id_full,
                               title=sess_id_abbreviated)
