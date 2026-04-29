@@ -7,6 +7,7 @@ from collections import defaultdict
 import src.behavior_analysis.decision_variable_counters as counters
 from formulaic import model_matrix
 import statsmodels.api as sm
+from dataclasses import dataclass
 from typing import Protocol
 
 eps = np.finfo(float).eps
@@ -24,6 +25,25 @@ class Session(Protocol):
     timestamp: str
     session_info_fname: str
     session_info: dict
+
+
+@dataclass
+class DecisionVariableState:
+    """Mutable trial-history counters used to build decision variables."""
+    consecutive_rewards: int = 0
+    consecutive_omissions: int = 0
+    consecutive_rewards_memory: int = 0
+    consecutive_omissions_memory: int = 0
+    negative_value: int = 0
+    previous_trial_rewarded: bool = False
+    left_value: int = 0
+    right_value: int = 0
+    left_omissions: int = 0
+    right_omissions: int = 0
+    left_value_cf: int = 0
+    right_value_cf: int = 0
+    left_omissions_cf: int = 0
+    right_omissions_cf: int = 0
 
 
 def _get_normalized_state_labels(trial_df: pd.DataFrame) -> np.ndarray:
@@ -143,7 +163,6 @@ def get_block_types(trial_df: pd.DataFrame) -> np.array:
 def percent_correct(augmented_trial_df: pd.DataFrame) -> dict:
     """Calculate the percentage of correct choices made by the agent. Calculate for
     left uncued, right uncued, left cued, and right cued."""
-    # 1. collect left and right choices 2. categorize choices as cued or uncued 3. calculate percentages
     assert 'block_type' in augmented_trial_df.keys(), "'block_type' key was not found in dataframe."
     assert 'correct' in augmented_trial_df.keys(), "'correct' key was not found in dataframe."
 
@@ -155,31 +174,150 @@ def percent_correct(augmented_trial_df: pd.DataFrame) -> dict:
     if left_cued_ix.sum():
         left_cued_correct = np.sum(augmented_trial_df.loc[left_cued_ix, 'correct']) / np.sum(left_cued_ix)
     else:
-        # left_cued_correct = np.nan
         left_cued_correct = 'None'
 
     if left_uncued_ix.sum():
         left_uncued_correct = np.sum(augmented_trial_df.loc[left_uncued_ix, 'correct']) / np.sum(left_uncued_ix)
     else:
-        # left_uncued_correct = np.nan
         left_uncued_correct = 'None'
 
     if right_cued_ix.sum():
         right_cued_correct = np.sum(augmented_trial_df.loc[right_cued_ix, 'correct']) / np.sum(right_cued_ix)
     else:
-        # right_cued_correct = np.nan
         right_cued_correct = 'None'
 
     if right_uncued_ix.sum():
         right_uncued_correct = np.sum(augmented_trial_df.loc[right_uncued_ix, 'correct']) / np.sum(right_uncued_ix)
     else:
-        # right_uncued_correct = np.nan
         right_uncued_correct = 'None'
 
     overall = np.sum(augmented_trial_df['correct']) / augmented_trial_df.shape[0]
     return dict(left_cued_correct=left_cued_correct, left_uncued_correct=left_uncued_correct,
                 right_cued_correct=right_cued_correct, right_uncued_correct=right_uncued_correct,
                 overall_correct=overall)
+
+
+def add_numeric_trials_to_correct(block_performance: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy with numeric trials-to-correct values.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Block summary dataframe with shape `(n_blocks, n_columns)`, including
+        `trials_to_correct`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy with `trials_to_correct_numeric`; invalid values are `NaN`.
+    """
+    summary_df = block_performance.copy()
+    summary_df["trials_to_correct_numeric"] = pd.to_numeric(
+        summary_df["trials_to_correct"],
+        errors="coerce",
+    )
+    return summary_df
+
+
+def get_nonfinal_missing_trials_to_correct_block_ix(summary_df: pd.DataFrame) -> list[int]:
+    """Return non-final block IDs with missing trials-to-correct values.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Block summary dataframe with shape `(n_blocks, n_columns)`, including
+        `trials_to_correct_numeric` and optionally `block_ix`.
+
+    Returns
+    -------
+    list[int]
+        Block IDs for missing `trials_to_correct_numeric` rows, excluding the
+        final row.
+    """
+    missing_trials_to_correct = summary_df["trials_to_correct_numeric"].isna()
+    nonfinal_missing = missing_trials_to_correct.copy()
+    if nonfinal_missing.size:
+        nonfinal_missing.iloc[-1] = False
+
+    if "block_ix" in summary_df.columns:
+        return summary_df.loc[nonfinal_missing, "block_ix"].astype(int).tolist()
+
+    return summary_df.index[nonfinal_missing].astype(int).tolist()
+
+
+def summarize_missing_trials_to_correct_blocks(nonfinal_block_ix: list[int]) -> dict:
+    """Return warning metadata for non-final missing trials-to-correct blocks.
+
+    Parameters
+    ----------
+    nonfinal_block_ix : list[int]
+        Non-final block IDs with missing trials-to-correct values.
+
+    Returns
+    -------
+    dict
+        Warning metadata using the public session-summary key names.
+    """
+    warning_flag = len(nonfinal_block_ix) > 0
+    if warning_flag:
+        warning_message = (
+            "Non-final invalid trials_to_correct entries detected; "
+            f"excluding them from summaries. block_ix={nonfinal_block_ix}"
+        )
+        warnings.warn(warning_message, UserWarning, stacklevel=3)
+        nonfinal_block_ix_str = str(nonfinal_block_ix)
+    else:
+        warning_message = "None"
+        nonfinal_block_ix_str = "None"
+
+    return dict(
+        trials_to_correct_warning_flag=warning_flag,
+        trials_to_correct_warning_message=warning_message,
+        trials_to_correct_nonfinal_invalid_block_ix=nonfinal_block_ix_str,
+    )
+
+
+def mean_trials_to_correct_for_block_type(summary_df: pd.DataFrame, block_type: str) -> float | str:
+    """Return mean trials-to-correct for one block type.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Block summary dataframe with shape `(n_blocks, n_columns)`, including
+        `block_type` and `trials_to_correct_numeric`.
+    block_type : str
+        Block type to summarize.
+
+    Returns
+    -------
+    float or str
+        Mean valid trials-to-correct value, or `"None"` when no valid values
+        exist for `block_type`.
+    """
+    values = summary_df.loc[
+        summary_df["block_type"] == block_type,
+        "trials_to_correct_numeric",
+    ].dropna()
+    return values.mean() if not values.empty else "None"
+
+
+def mean_trials_to_correct(summary_df: pd.DataFrame) -> float | str:
+    """Return overall mean trials-to-correct across valid blocks.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Block summary dataframe with shape `(n_blocks, n_columns)`, including
+        `trials_to_correct_numeric`.
+
+    Returns
+    -------
+    float or str
+        Mean valid trials-to-correct value, or `"None"` when no valid values
+        exist.
+    """
+    valid_trials = summary_df["trials_to_correct_numeric"].dropna()
+    return valid_trials.mean() if not valid_trials.empty else "None"
 
 
 def summarize_trials_to_correct(block_performance: pd.DataFrame) -> dict:
@@ -206,70 +344,17 @@ def summarize_trials_to_correct(block_performance: pd.DataFrame) -> dict:
         - `trials_to_correct_warning_message` : str or `'None'`
         - `trials_to_correct_nonfinal_invalid_block_ix` : str or `'None'`
     """
-    summary_df = block_performance.copy()
-    summary_df["trials_to_correct_numeric"] = pd.to_numeric(
-        summary_df["trials_to_correct"],
-        errors="coerce",
+    summary_df = add_numeric_trials_to_correct(block_performance)
+    nonfinal_missing_block_ix = get_nonfinal_missing_trials_to_correct_block_ix(summary_df)
+    missing_summary = summarize_missing_trials_to_correct_blocks(nonfinal_missing_block_ix)
+    return dict(
+        left_cued_trials_to_correct=mean_trials_to_correct_for_block_type(summary_df, "left_cued"),
+        left_uncued_trials_to_correct=mean_trials_to_correct_for_block_type(summary_df, "left_uncued"),
+        right_cued_trials_to_correct=mean_trials_to_correct_for_block_type(summary_df, "right_cued"),
+        right_uncued_trials_to_correct=mean_trials_to_correct_for_block_type(summary_df, "right_uncued"),
+        overall_trials_to_correct=mean_trials_to_correct(summary_df),
+        **missing_summary,
     )
-
-    invalid_mask = summary_df["trials_to_correct_numeric"].isna()
-    nonfinal_invalid_mask = invalid_mask.copy()
-    if nonfinal_invalid_mask.size:
-        nonfinal_invalid_mask.iloc[-1] = False
-
-    if "block_ix" in summary_df.columns:
-        nonfinal_invalid_block_ix = summary_df.loc[
-            nonfinal_invalid_mask,
-            "block_ix",
-        ].astype(int).tolist()
-    else:
-        nonfinal_invalid_block_ix = summary_df.index[nonfinal_invalid_mask].astype(int).tolist()
-
-    warning_flag = len(nonfinal_invalid_block_ix) > 0
-    if warning_flag:
-        warning_message = (
-            "Non-final invalid trials_to_correct entries detected; "
-            f"excluding them from summaries. block_ix={nonfinal_invalid_block_ix}"
-        )
-        warnings.warn(warning_message, UserWarning, stacklevel=2)
-        nonfinal_invalid_block_ix_str = str(nonfinal_invalid_block_ix)
-    else:
-        warning_message = "None"
-        nonfinal_invalid_block_ix_str = "None"
-
-    def _mean_or_none(block_type: str) -> float | str:
-        """Return the mean trials-to-correct for one block type or `'None'`.
-
-        Parameters
-        ----------
-        block_type : str
-            Block label identifying one subset of `summary_df`.
-
-        Returns
-        -------
-        float or str
-            Mean of valid numeric `trials_to_correct` entries for the selected
-            block type. Returns `'None'` when no valid numeric entries exist.
-        """
-        values = summary_df.loc[
-            summary_df["block_type"] == block_type,
-            "trials_to_correct_numeric",
-        ].dropna()
-        return values.mean() if not values.empty else "None"
-
-    left_cued_trials = _mean_or_none("left_cued")
-    left_uncued_trials = _mean_or_none("left_uncued")
-    right_cued_trials = _mean_or_none("right_cued")
-    right_uncued_trials = _mean_or_none("right_uncued")
-
-    valid_trials = summary_df["trials_to_correct_numeric"].dropna()
-    overall = valid_trials.mean() if not valid_trials.empty else 'None'
-    return dict(left_cued_trials_to_correct=left_cued_trials, left_uncued_trials_to_correct=left_uncued_trials,
-                right_cued_trials_to_correct=right_cued_trials, right_uncued_trials_to_correct=right_uncued_trials,
-                overall_trials_to_correct=overall,
-                trials_to_correct_warning_flag=warning_flag,
-                trials_to_correct_warning_message=warning_message,
-                trials_to_correct_nonfinal_invalid_block_ix=nonfinal_invalid_block_ix_str)
 
 
 def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
@@ -279,7 +364,7 @@ def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
     for i, (a, g) in enumerate(zip(actions, give_reward)):
         if g in [1, '1']:
             try:
-                if i == 0:
+                if i == 0:  # I'll need a better handling of index 0 in the future
                     actions[i] = actions[i + 1]
                     continue
 
@@ -445,93 +530,239 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     return session_performance, block_performance, augmented_trial_df
 
 
+def append_decision_variables(
+    decision_variable_dict: dict[str, list],
+    state: DecisionVariableState,
+) -> None:
+    """Append the current pre-trial decision-variable state.
+
+    Parameters
+    ----------
+    decision_variable_dict : dict[str, list]
+        Output accumulator with one list per decision-variable column.
+    state : DecisionVariableState
+        Current trial-history state before the current trial outcome is used.
+
+    Returns
+    -------
+    None
+        Mutates `decision_variable_dict` in place.
+    """
+    decision_variable_dict['negative_value'].append(state.negative_value)
+    decision_variable_dict['consecutive_rewards_memory'].append(state.consecutive_rewards_memory)
+    decision_variable_dict['consecutive_omissions_memory'].append(state.consecutive_omissions_memory)
+    decision_variable_dict['consecutive_rewards'].append(state.consecutive_rewards)
+    decision_variable_dict['consecutive_omissions'].append(state.consecutive_omissions)
+    decision_variable_dict['left_value'].append(state.left_value)
+    decision_variable_dict['right_value'].append(state.right_value)
+    decision_variable_dict['relative_value'].append(state.left_value - state.right_value)
+    decision_variable_dict['left_omissions'].append(state.left_omissions)
+    decision_variable_dict['right_omissions'].append(state.right_omissions)
+    decision_variable_dict['relative_omissions'].append(state.left_omissions - state.right_omissions)
+    decision_variable_dict['left_cf_value'].append(state.left_value_cf)
+    decision_variable_dict['right_cf_value'].append(state.right_value_cf)
+    decision_variable_dict['relative_cf_value'].append(state.left_value_cf - state.right_value_cf)
+    decision_variable_dict['left_cf_omissions'].append(state.left_omissions_cf)
+    decision_variable_dict['right_cf_omissions'].append(state.right_omissions_cf)
+    decision_variable_dict['relative_cf_omissions'].append(state.left_omissions_cf - state.right_omissions_cf)
+
+
+def should_skip_decision_variable_update(give_reward: int | str, action: int | str) -> bool:
+    """Return whether a trial should leave decision-variable state unchanged.
+
+    Parameters
+    ----------
+    give_reward : int or str
+        Experimenter-reward flag for one trial.
+    action : int or str
+        Animal action for one trial; `"None"` marks no animal choice.
+
+    Returns
+    -------
+    bool
+        True when the trial should not update history counters.
+    """
+    return give_reward in [1, '1'] or action == 'None'
+
+
+def increment_reward_history_decision_vars(
+    state: DecisionVariableState,
+    reward: int,
+) -> DecisionVariableState:
+    """Update reward-history counters from one trial outcome.
+
+    Parameters
+    ----------
+    state : DecisionVariableState
+        Mutable decision-variable state before the current trial update.
+    reward : int
+        Current trial reward, encoded as 0 or 1.
+
+    Returns
+    -------
+    DecisionVariableState
+        The same state object after reward-history updates.
+    """
+    state.negative_value = counters.negative_value_counter(state.negative_value, reward)
+    state.consecutive_rewards = counters.consecutive_reward_counter(state.consecutive_rewards, reward)
+    state.consecutive_omissions = counters.consecutive_fail_counter(state.consecutive_omissions, reward)
+    state.consecutive_rewards_memory = counters.consecutive_reward_renewal_counter(
+        state.consecutive_rewards_memory,
+        reward,
+        state.previous_trial_rewarded,
+    )
+    state.consecutive_omissions_memory = counters.consecutive_fail_renewal_counter(
+        state.consecutive_omissions_memory,
+        reward,
+        state.previous_trial_rewarded,
+    )
+    state.previous_trial_rewarded = reward > 0
+    return state
+
+
+def increment_choice_value_decision_vars(
+    state: DecisionVariableState,
+    action: int,
+    reward: int,
+) -> DecisionVariableState:
+    """Update non-counterfactual side-specific counters.
+
+    Parameters
+    ----------
+    state : DecisionVariableState
+        Mutable decision-variable state before the current trial update.
+    action : int
+        Current trial action, encoded as 0 for right or 1 for left.
+    reward : int
+        Current trial reward, encoded as 0 or 1.
+
+    Returns
+    -------
+    DecisionVariableState
+        The same state object after side-specific updates.
+    """
+    state.left_value, state.right_value = counters.sided_value_counter(
+        state.left_value,
+        state.right_value,
+        action,
+        reward,
+        zero_min=True,
+        counterfactual=False,
+    )
+    state.left_omissions, state.right_omissions = counters.sided_omissions_counter(
+        state.left_omissions,
+        state.right_omissions,
+        action,
+        reward,
+        counterfactual=False,
+    )
+    return state
+
+
+def increment_counterfactual_decision_vars(
+    state: DecisionVariableState,
+    action: int,
+    reward: int,
+) -> DecisionVariableState:
+    """Update counterfactual side-specific counters.
+
+    Parameters
+    ----------
+    state : DecisionVariableState
+        Mutable decision-variable state before the current trial update.
+    action : int
+        Current trial action, encoded as 0 for right or 1 for left.
+    reward : int
+        Current trial reward, encoded as 0 or 1.
+
+    Returns
+    -------
+    DecisionVariableState
+        The same state object after counterfactual updates.
+    """
+    state.left_value_cf, state.right_value_cf = counters.sided_value_counter(
+        state.left_value_cf,
+        state.right_value_cf,
+        action,
+        reward,
+        zero_min=True,
+        counterfactual=True,
+    )
+    state.left_omissions_cf, state.right_omissions_cf = counters.sided_omissions_counter(
+        state.left_omissions_cf,
+        state.right_omissions_cf,
+        action,
+        reward,
+        counterfactual=True,
+    )
+    return state
+
+
+def update_decision_variable_state(
+    state: DecisionVariableState,
+    action: int,
+    reward: int,
+) -> DecisionVariableState:
+    """Update all decision-variable counters from one non-skipped trial.
+
+    Parameters
+    ----------
+    state : DecisionVariableState
+        Mutable decision-variable state before the current trial update.
+    action : int
+        Current trial action, encoded as 0 for right or 1 for left.
+    reward : int
+        Current trial reward, encoded as 0 or 1.
+
+    Returns
+    -------
+    DecisionVariableState
+        The same state object after all counter updates.
+    """
+    state = increment_reward_history_decision_vars(state, reward)
+    state = increment_choice_value_decision_vars(state, action, reward)
+    state = increment_counterfactual_decision_vars(state, action, reward)
+    return state
+
+
 def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
+    """Collect pre-trial decision variables for each trial.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial dataframe with shape `(n_trials, n_columns)`, including `action`,
+        `reward`, and optionally `give_reward`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Decision-variable dataframe with shape `(n_trials, n_decision_vars)`.
+        Each row describes trial history before the current trial outcome.
     """
-    Collect the decision variables for each trial; DVs reflect the trial history that influence choices,
-    and so do not include rewards and actions from the current trial.
-
-    Trials with experimenter-given rewards will not accumulate DV value.
-    """
-    consecutive_rewards = 0
-    consecutive_omissions = 0
-    consecutive_rewards_memory = 0
-    consecutive_omissions_memory = 0
-    negative_value = 0
-    previous_trial_rewarded = False
-
-    left_value = 0
-    right_value = 0
-    left_omissions = 0
-    right_omissions = 0
-
-    left_value_cf = 0
-    right_value_cf = 0
-    left_omissions_cf = 0
-    right_omissions_cf = 0
-
-    n_trials = trial_df.shape[0]
+    state = DecisionVariableState()
     decision_variable_dict = defaultdict(list)
     give_reward_flags = _get_give_reward_array(trial_df)
 
-    # trial_df.reset_index(inplace=True)
+    for i in range(trial_df.shape[0]):
+        append_decision_variables(decision_variable_dict, state)
 
-    # need 2 sets of counts
-    # 1. the integrate-and-reset params from Cazettes 2023. Why is value negative again?
-    # 2. the last-seen/"memory" version used, which resets when failures/rewards start anew but don't reset on switches
-    for i in range(n_trials):
-        # Win-stay lose-shift decision variables
-        decision_variable_dict['negative_value'].append(negative_value)
-        decision_variable_dict['consecutive_rewards_memory'].append(consecutive_rewards_memory)
-        decision_variable_dict['consecutive_omissions_memory'].append(consecutive_omissions_memory)
-        decision_variable_dict['consecutive_rewards'].append(consecutive_rewards)
-        decision_variable_dict['consecutive_omissions'].append(consecutive_omissions)
-
-        # 2-choice decision variables, with no task-structural information
-        decision_variable_dict['left_value'].append(left_value)
-        decision_variable_dict['right_value'].append(right_value)
-        decision_variable_dict['relative_value'].append(left_value-right_value)
-        decision_variable_dict['left_omissions'].append(left_omissions)
-        decision_variable_dict['right_omissions'].append(right_omissions)
-        decision_variable_dict['relative_omissions'].append(left_omissions-right_omissions)
-
-        # 2-choice decision variables, with task-structural/counterfactual information
-        decision_variable_dict['left_cf_value'].append(left_value_cf)
-        decision_variable_dict['right_cf_value'].append(right_value_cf)
-        decision_variable_dict['relative_cf_value'].append(left_value_cf - right_value_cf)
-        decision_variable_dict['left_cf_omissions'].append(left_omissions_cf)
-        decision_variable_dict['right_cf_omissions'].append(right_omissions_cf)
-        decision_variable_dict['relative_cf_omissions'].append(left_omissions_cf - right_omissions_cf)
-
-        # Don't update DVs for trials with experimenter-given rewards. These trials shouldn't be included in action
-        # prediction models either
-        give_reward = ((give_reward_flags[i] == 1) or
-                       (give_reward_flags[i] == '1') or
-                       (trial_df['action'].to_numpy()[i] == 'None'))
-        if give_reward:
+        action = trial_df.loc[i, 'action']
+        if should_skip_decision_variable_update(give_reward_flags[i], action):
             continue
 
-        reward = trial_df.loc[i, 'reward']
-        action = trial_df.loc[i, 'action']
-        negative_value = counters.negative_value_counter(negative_value, reward)
-        consecutive_rewards = counters.consecutive_reward_counter(consecutive_rewards, reward)
-        consecutive_omissions = counters.consecutive_fail_counter(consecutive_omissions, reward)
-        consecutive_rewards_memory = counters.consecutive_reward_renewal_counter(consecutive_rewards_memory, reward, previous_trial_rewarded)
-        consecutive_omissions_memory = counters.consecutive_fail_renewal_counter(consecutive_omissions_memory, reward, previous_trial_rewarded)
-        previous_trial_rewarded = reward > 0
-
-        # 2-choice decision variables, with no task-structural information
-        left_value, right_value = counters.sided_value_counter(left_value, right_value, action, reward, zero_min=True, counterfactual=False)
-        left_omissions, right_omissions = counters.sided_omissions_counter(left_omissions, right_omissions, action, reward, counterfactual=False)
-
-        # 2-choice decision variables, with task-structural/counterfactual information
-        left_value_cf, right_value_cf = counters.sided_value_counter(left_value_cf, right_value_cf, action, reward, zero_min=True, counterfactual=True)
-        left_omissions_cf, right_omissions_cf = counters.sided_omissions_counter(left_omissions_cf, right_omissions_cf,
-                                                                                    action, reward, counterfactual=True)
+        state = update_decision_variable_state(
+            state,
+            action=action,
+            reward=trial_df.loc[i, 'reward'],
+        )
 
     return pd.DataFrame(decision_variable_dict)
 
 
 def summarize_block_switches(block_performance: pd.DataFrame, min_counts=0) -> tuple:
+    """This function is not used anywhere, I may delete it"""
+
     grouped_switches = block_performance.groupby(['consecutive_rewards'])['trials_to_correct']
     counts = grouped_switches.count()
     # ic(counts)
@@ -938,8 +1169,6 @@ def main():
     sess.processed_data_path = processed_data_path
     sess.multi_session_save_path = multi_session_save_path
     augmented_trial_df, block_performance, multisession_df = run_analysis(trial_df, session=sess)
-
-    # TODO - allow combining new session analysis with old by replacing dates and sorting the matrix by date. I might have done this already?
 
 
 if __name__ == '__main__':

@@ -359,7 +359,7 @@ def main_mouse():
 
     ### USER FLAGS - CHOOSE THESE FOR EACH RUN ###
     preprocess_raw_session = False
-    run_session_analysis = False
+    run_session_analysis = True
 
     ### HARDCODED DATA PATHS - CHOOSE THESE FOR EACH RUN ###
     multi_session_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
