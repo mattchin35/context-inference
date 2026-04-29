@@ -114,6 +114,8 @@ Encapsulate behaviors in small, focused functions or classes that share a common
 
 When working with classes in Python 3.8+, define a Protocol for the required interface and type the dependency against it. This creates a clear boundary between the consuming class and the underlying implementation.
 
+In function-heavy scientific code, dependency injection often means passing only the specific data a function needs: a `pd.Series`, NumPy array, scalar parameter, or small configuration object. Avoid passing a whole session object or large dataframe into a helper when the helper only uses a few fields or columns. Passing a whole dataframe is appropriate when the function's responsibility is explicitly to transform or validate that dataframe as a unit.
+
 
 ## Depend on abstractions
 
@@ -150,12 +152,16 @@ Functions, classes, and modules should be written to minimize unnecessary depend
 - **Law of Demeter (Principle of Least Knowledge)**: units should only interact with closely related components and avoid depending on the internal structure of objects. Encapsulation (e.g., well-defined interfaces) helps enforce this.
 - **Control coupling**: a function takes control flags that determine multiple behaviors. This often indicates low cohesion and can be refactored into separate functions.
 
+Simple run-control flags are acceptable at the main script or pipeline boundary, where the user chooses whether to load, preprocess, rerun analysis, or plot. Avoid pushing those flags into lower-level computational functions when separate functions would make the behavior clearer.
+
 
 ### Inevitable coupling
 
 - **Import coupling**: modules depend on other modules or external libraries. This is often necessary, but consider whether dependencies can be reduced or abstracted.
 - **External coupling**: reliance on external APIs or services. Failures or access issues can propagate; abstractions can help reduce direct dependency.
 - **Stamp (data structure) coupling**: functions share complex data structures but only use part of them. This can be improved by passing only required data or by defining narrower interfaces (e.g., Protocols).
+
+In dataframe-based analysis code, stamp coupling often appears as a helper that accepts a full `DataFrame` but only reads one or two columns. Prefer passing those columns directly when that makes the dependency clearer. Keep the full `DataFrame` only when row alignment, validation, or the dataframe-level contract is central to the function.
 
 
 ### Good coupling
@@ -176,6 +182,8 @@ Related concepts:
 - **Open-closed principle**: design code so new behavior can be added without modifying existing structures.
 
 This pattern introduces additional structure, so it is often best applied after the core functionality and design of the codebase are understood.
+
+For scientific pipelines, the main script may construct paths, session objects, and run options. Analysis functions should receive the prepared inputs they need rather than constructing or loading those dependencies internally, unless loading or saving is the explicit responsibility of that function.
 
 
 ## Keep class behaviors close to the data
