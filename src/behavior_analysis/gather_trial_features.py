@@ -11,12 +11,12 @@ from typing import Optional
 
 @dataclass
 class TaskParams:
-    n_states: int = 2
-    n_actions: int = 2
+    n_states: int = 2  # could be 4 if I use the stimulus version, but that could also be 2 states but in some cases having information
+    n_actions: int = 2  # in practice I am not planning more than 2 choices, could I remove this?
 
     # Probability parameters
     # For HHM inference model, you can play with using model parameters that are different from the true task parameters
-    p_cue: float = 0
+    p_cue: float = 0  # 0 for uncued task, 1 for cued, between 0 and 1 for mixed. Must be between 0 and 1
     state_transition_prob: float = .2
     active_reward_probability: float = .8
     inactive_reward_probability: float = 0
@@ -34,15 +34,55 @@ class TaskParams:
     perseveration_decay: float = 0.25
 
 
+def assert_saved_file(path: Path) -> None:
+    """Verify that a save produced a non-empty file.
+
+    Parameters
+    ----------
+    path : Path
+        Expected output path.
+
+    Returns
+    -------
+    None
+        Returns None when the file exists and has nonzero byte size.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"Expected saved file was not found: {path}")
+    if path.stat().st_size == 0:
+        raise OSError(f"Expected saved file is empty: {path}")
+
+
 def save_trial_features(augmented_trial_df: pd.DataFrame, params: TaskParams, processed_data_path: Path,
-                        sess_id_full: str):
+                        sess_id_full: str) -> None:
+    """Save augmented trial features and feature-generation parameters.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with feature columns, shape `(n_trials, n_columns)`.
+    params : TaskParams
+        Parameters used to generate feature columns.
+    processed_data_path : Path
+        Session processed-data directory.
+    sess_id_full : str
+        Full session identifier used in the augmented-trials filename.
+
+    Returns
+    -------
+    None
+        Writes `{sess_id_full}_augmented_trials.csv` and
+        `trial_feature_params.json`.
+    """
     augmented_trial_df_path = processed_data_path / (sess_id_full + '_augmented_trials.csv')
     augmented_trial_df.to_csv(augmented_trial_df_path, index=False, na_rep='None')
 
-    # Save to JSON
     json_fname = processed_data_path / 'trial_feature_params.json'
     with open(json_fname, "w") as f:
         json.dump(asdict(params), f, indent=2)
+
+    assert_saved_file(augmented_trial_df_path)
+    assert_saved_file(json_fname)
 
 
 def collect_and_save_trial_features(
@@ -84,23 +124,21 @@ def _get_column_or_raise(df: pd.DataFrame, candidates: tuple[str, ...]) -> pd.Se
     raise ValueError(f"augmented_trial_df must contain one of columns: {candidates}")
 
 
-def _is_give_reward_flag(value) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str):
-        parsed = value.strip().lower()
-        if parsed in {"1", "true", "t", "yes", "y"}:
-            return True
-        if parsed in {"0", "false", "f", "no", "n", "none", ""}:
-            return False
-        try:
-            return bool(int(float(parsed)))
-        except (TypeError, ValueError):
-            return False
-    try:
-        return bool(int(value))
-    except (TypeError, ValueError):
-        return bool(value)
+def validate_trial_feature_inputs(augmented_trial_df: pd.DataFrame) -> None:
+    """Validate columns required for model-value feature generation.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`.
+
+    Returns
+    -------
+    None
+        Raises ValueError if required columns are missing.
+    """
+    if 'action' not in augmented_trial_df.columns or 'reward' not in augmented_trial_df.columns:
+        raise ValueError("augmented_trial_df must contain 'action' and 'reward' columns.")
 
 
 def collect_trial_index_features(
@@ -113,21 +151,17 @@ def collect_trial_index_features(
     """
     right_omissions = _get_column_or_raise(augmented_trial_df, ("right_omissions",)).to_numpy()
     left_omissions = _get_column_or_raise(augmented_trial_df, ("left_omissions",)).to_numpy()
-    right_omissions_cf = _get_column_or_raise(augmented_trial_df, ("right_cf_omissions",)).to_numpy()
-    left_omissions_cf = _get_column_or_raise(augmented_trial_df, ("left_cf_omissions",)).to_numpy()
+    right_omissions_counterfactual = _get_column_or_raise(augmented_trial_df, ("right_cf_omissions",)).to_numpy()
+    left_omissions_counterfactual = _get_column_or_raise(augmented_trial_df, ("left_cf_omissions",)).to_numpy()
     loss_streak = _get_column_or_raise(augmented_trial_df, ("consecutive_omissions",)).to_numpy()
     actions = _get_column_or_raise(augmented_trial_df, ("action",)).to_numpy()
 
     n_trials = augmented_trial_df.shape[0]
     give_reward = augmented_trial_df["give_reward"].to_numpy() if "give_reward" in augmented_trial_df.columns else np.zeros(n_trials)
 
-    skip_mask = np.array(
-        [
-            _is_give_reward_flag(gr) or str(action).strip().lower() == "none"
-            for gr, action in zip(give_reward, actions)
-        ],
-        dtype=bool,
-    )
+    skip_mask = trial_features.make_skip_trial_mask(give_reward=give_reward, actions=actions)
+    if skip_mask is None:
+        skip_mask = np.zeros(n_trials, dtype=bool)
     valid_mask = ~skip_mask
 
     relative_omissions_index = np.full(n_trials, None, dtype=object)
@@ -136,8 +170,8 @@ def collect_trial_index_features(
     perseveration_regressor = np.full(n_trials, None, dtype=object)
 
     rel_omission_valid = trial_features.relative_omissions_index(
-        R_omissions=right_omissions_cf[valid_mask],
-        L_omissions=left_omissions_cf[valid_mask],
+        R_omissions=right_omissions_counterfactual[valid_mask],
+        L_omissions=left_omissions_counterfactual[valid_mask],
     )
     signed_omission_valid = trial_features.signed_omission_regressor(
         loss_streak=loss_streak[valid_mask],
@@ -145,8 +179,8 @@ def collect_trial_index_features(
         choice_side=actions[valid_mask],
     )
     rel_doubt_valid = trial_features.relative_doubt_index(
-        R_omissions=right_omissions_cf[valid_mask],
-        L_omissions=left_omissions_cf[valid_mask],
+        R_omissions=right_omissions_counterfactual[valid_mask],
+        L_omissions=left_omissions_counterfactual[valid_mask],
         lam=omission_lam,
     )
     perseveration_valid = trial_features.perseveration_regressor(
@@ -167,17 +201,26 @@ def collect_trial_index_features(
     return augmented_trial_df
 
 
-def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[TaskParams] = None) -> tuple[pd.DataFrame, TaskParams]:
-    """
-    Add model-derived relative value features to an existing augmented trial dataframe.
-    This function is intended for import/use from other files.
-    """
-    if params is None:
-        params = TaskParams()
+def collect_model_value_features(
+    augmented_trial_df: pd.DataFrame,
+    params: TaskParams,
+) -> pd.DataFrame:
+    """Add model-derived relative-value features to an augmented trial table.
 
-    if 'action' not in augmented_trial_df.columns or 'reward' not in augmented_trial_df.columns:
-        raise ValueError("augmented_trial_df must contain 'action' and 'reward' columns.")
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`, including
+        `action`, `reward`, and optionally `give_reward`.
+    params : TaskParams
+        Parameters used by Q-learning and HMM feature functions.
 
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `augmented_trial_df` with model-value feature columns added.
+    """
+    validate_trial_feature_inputs(augmented_trial_df)
     actions = augmented_trial_df['action'].values
     rewards = augmented_trial_df['reward'].values
     give_reward = augmented_trial_df['give_reward'].values if 'give_reward' in augmented_trial_df.columns else None
@@ -238,7 +281,18 @@ def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[Ta
     augmented_trial_df['FQlearning_rel_value_fast_learn'] = fql_rel_value_fast_learn
     augmented_trial_df['HMM_rel_value_logodds'] = hmm_rel_value_logodds
     augmented_trial_df['HMM_rel_value_logodds_decay'] = hmm_rel_value_logodds_decay
+    return augmented_trial_df
 
+
+def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[TaskParams] = None) -> tuple[pd.DataFrame, TaskParams]:
+    """
+    Add model-derived relative value features to an existing augmented trial dataframe.
+    This function is intended for import/use from other files.
+    """
+    if params is None:
+        params = TaskParams()
+
+    augmented_trial_df = collect_model_value_features(augmented_trial_df, params=params)
     augmented_trial_df = collect_trial_index_features(
         augmented_trial_df,
         omission_lam=params.omission_lam,
@@ -253,23 +307,7 @@ def main():
     # sess_id_full = 'CT014_2025-12-16_153200'
     # sess_id_full = 'CT014_2025-12-05_165240'
     sess_id_full = 'CT014_2025-12-23_163505'
-    raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
     processed_data_path = session_data_home / 'processed'
-
-    pattern = r'(\w+)_([\d\-]+)_(\d+)'
-    match = re.search(pattern, sess_id_full)
-    if match:
-        mouse, date, timestamp = match.groups()
-        print(f"Mouse id: {mouse}")  # abc123
-        print(f"Date: {date}")  # YYYY-MM-DD
-        print(f"Time: {timestamp}")  # HHMMSS
-    else:
-        print("Double-check the session name!")
-        return
-
-    session_info_path = '{}_session_info.pkl'.format(sess_id_full)
-    with open(raw_behavior_folder / session_info_path, 'rb') as f:
-        session_info = pkl.load(f)
 
     augmented_trial_df_path = processed_data_path / (sess_id_full + '_augmented_trials.csv')
     augmented_trial_df = pd.read_csv(augmented_trial_df_path, sep=',', na_filter=False)

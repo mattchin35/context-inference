@@ -1,19 +1,14 @@
 import numpy as np
 from scipy.special import expit, logit
+from enum import IntEnum
 
 N_ACTIONS = 2
-RIGHT_IX = 0
-LEFT_IX = 1
 eps = np.finfo(float).eps
 
-states = ["right", "left"]
-side_dict = {s: i for i, s in enumerate(states)}  # i.e. [0 right, 1 left]
 
-
-def get_action_ix(action: int) -> int:
-    # right=0, left=1: map right to -1, left to +1
-    assert action in [0, 1], "action must be 0 or 1"
-    return action * 2 - 1
+class ChoiceSide(IntEnum):
+    RIGHT = 0
+    LEFT = 1
 
 
 def qlearning_relative_value(
@@ -26,8 +21,9 @@ def qlearning_relative_value(
     actions = np.asarray(actions)
     rewards = np.asarray(rewards)
     _validate_lengths(actions, rewards)
+    _validate_two_action_task(n_actions)
 
-    skip_trials = _normalize_skip_trials(give_reward, actions.shape[0])
+    skip_trials = make_skip_trial_mask(give_reward=give_reward, actions=actions)
 
     Q = np.zeros(n_actions)
     if skip_trials is None:
@@ -39,8 +35,8 @@ def qlearning_relative_value(
         if skip_trials is not None and skip_trials[i]:
             continue
 
-        relative_value[i] = Q[LEFT_IX] - Q[RIGHT_IX]
-        action = _parse_action(action, n_actions)
+        relative_value[i] = Q[ChoiceSide.LEFT] - Q[ChoiceSide.RIGHT]
+        action = _parse_choice_side(action, n_actions)
         reward = _parse_reward(reward)
         if action is None or reward is None:
             continue
@@ -76,6 +72,7 @@ def forgetting_qlearning_relative_value(
     actions = np.asarray(actions)
     rewards = np.asarray(rewards)
     _validate_lengths(actions, rewards)
+    _validate_two_action_task(n_actions)
     if not 0 <= decay <= 1:
         raise ValueError("decay must be in [0, 1].")
     if reward_update_rate is None:
@@ -94,7 +91,7 @@ def forgetting_qlearning_relative_value(
         if tanh_scale <= 0:
             raise ValueError("tanh_scale must be > 0 when tanh_relative_value is True.")
 
-    skip_trials = _normalize_skip_trials(give_reward, actions.shape[0])
+    skip_trials = make_skip_trial_mask(give_reward=give_reward, actions=actions)
 
     Q = np.zeros(n_actions)
     if skip_trials is None:
@@ -106,12 +103,12 @@ def forgetting_qlearning_relative_value(
         if skip_trials is not None and skip_trials[i]:
             continue
 
-        relative_value_raw = Q[LEFT_IX] - Q[RIGHT_IX]
+        relative_value_raw = Q[ChoiceSide.LEFT] - Q[ChoiceSide.RIGHT]
         if tanh_relative_value:
             relative_value[i] = np.tanh(tanh_scale * relative_value_raw)
         else:
             relative_value[i] = relative_value_raw
-        action = _parse_action(action, n_actions)
+        action = _parse_choice_side(action, n_actions)
         reward = _parse_reward(reward)
         if action is None or reward is None:
             continue
@@ -151,7 +148,7 @@ def hmm_relative_value(
     if value_mode not in ("expected_reward", "bayesian_log_odds"):
         raise ValueError("value_mode must be 'expected_reward' or 'bayesian_log_odds'.")
 
-    skip_trials = _normalize_skip_trials(give_reward, actions.shape[0])
+    skip_trials = make_skip_trial_mask(give_reward=give_reward, actions=actions)
 
     prior = np.ones(2) / 2
     if skip_trials is None:
@@ -167,19 +164,19 @@ def hmm_relative_value(
 
         if value_mode == "expected_reward":
             expected_rew_left = (
-                active_reward_probability * prior[LEFT_IX]
-                + inactive_reward_probability * prior[RIGHT_IX]
+                active_reward_probability * prior[ChoiceSide.LEFT]
+                + inactive_reward_probability * prior[ChoiceSide.RIGHT]
             )
             expected_rew_right = (
-                active_reward_probability * prior[RIGHT_IX]
-                + inactive_reward_probability * prior[LEFT_IX]
+                active_reward_probability * prior[ChoiceSide.RIGHT]
+                + inactive_reward_probability * prior[ChoiceSide.LEFT]
             )
             relative_value[i] = expected_rew_left - expected_rew_right
         else:
-            log_odds = np.log((prior[LEFT_IX] + eps) / (prior[RIGHT_IX] + eps))
+            log_odds = np.log((prior[ChoiceSide.LEFT] + eps) / (prior[ChoiceSide.RIGHT] + eps))
             relative_value[i] = np.tanh(log_odds * tanh_scale)
 
-        action = _parse_action(action, N_ACTIONS)
+        action = _parse_choice_side(action, N_ACTIONS)
         reward = _parse_reward(reward)
         if action is None or reward is None:
             continue
@@ -258,7 +255,7 @@ def hmm_relative_value_reward_decay(
     if tanh_scale <= 0:
         raise ValueError("tanh_scale must be > 0.")
 
-    skip_trials = _normalize_skip_trials(give_reward, actions.shape[0])
+    skip_trials = make_skip_trial_mask(give_reward=give_reward, actions=actions)
 
     # Belief vector order: [p_right, p_left]
     prior = np.ones(2) / 2
@@ -275,7 +272,7 @@ def hmm_relative_value_reward_decay(
             continue
 
         # 1) Start-of-trial regressors from current prior belief
-        p_left_prior = np.clip(prior[LEFT_IX], eps, 1 - eps)
+        p_left_prior = np.clip(prior[ChoiceSide.LEFT], eps, 1 - eps)
         B_prior = logit(p_left_prior)
         relative_value[i] = np.tanh(tanh_scale * B_prior)  # signed_belief
         transition_uncertainty = 1 - np.abs(
@@ -283,7 +280,7 @@ def hmm_relative_value_reward_decay(
         )  # computed but not returned
         _ = transition_uncertainty
 
-        action = _parse_action(action, N_ACTIONS)
+        action = _parse_choice_side(action, N_ACTIONS)
         reward = _parse_reward(reward)
         if action is None or reward is None:
             continue
@@ -344,20 +341,48 @@ def _validate_lengths(actions, rewards):
         raise ValueError("actions and rewards must have the same length.")
 
 
-def _normalize_skip_trials(give_reward, n_trials):
+def _validate_two_action_task(n_actions):
+    if n_actions != N_ACTIONS:
+        raise ValueError(
+            "trial_features currently supports only two actions: 0=right, 1=left."
+        )
+
+
+def make_skip_trial_mask(give_reward, actions):
+    """Return rows to skip for manual-reward or no-choice trials.
+
+    Parameters
+    ----------
+    give_reward : array-like or None
+        Experimenter-reward flags with shape `(n_trials,)`, or None when the
+        column is absent.
+    actions : array-like
+        Trial actions with shape `(n_trials,)`.
+
+    Returns
+    -------
+    np.ndarray or None
+        Boolean mask with shape `(n_trials,)`, or None when no rows should be
+        skipped.
+    """
+    actions = np.asarray(actions)
+    no_choice_mask = np.array([_is_no_choice_action(action) for action in actions], dtype=bool)
+
     if give_reward is None:
-        return None
+        return no_choice_mask if no_choice_mask.any() else None
 
     give_reward = np.asarray(give_reward)
-    if give_reward.shape[0] != n_trials:
+    if give_reward.shape[0] != actions.shape[0]:
         raise ValueError(
             "give_reward must have the same length as actions and rewards."
         )
 
-    return np.array([_should_skip_trial(flag) for flag in give_reward], dtype=bool)
+    skip_mask = np.array([_should_skip_give_reward(flag) for flag in give_reward], dtype=bool)
+    skip_mask = skip_mask | no_choice_mask
+    return skip_mask if skip_mask.any() else None
 
 
-def _should_skip_trial(flag):
+def _should_skip_give_reward(flag):
     if flag is None:
         return False
 
@@ -381,7 +406,21 @@ def _should_skip_trial(flag):
     return bool(flag)
 
 
-def _parse_action(action, n_actions):
+def _is_no_choice_action(action):
+    if action is None:
+        return True
+
+    if isinstance(action, str):
+        return action.strip().lower() in {"none", "no_choice", ""}
+
+    try:
+        return bool(np.isnan(action))
+    except TypeError:
+        return False
+
+
+def _parse_choice_side(action, n_actions=N_ACTIONS):
+    _validate_two_action_task(n_actions)
     try:
         if np.isnan(action):
             return None
@@ -393,10 +432,10 @@ def _parse_action(action, n_actions):
     except (TypeError, ValueError):
         return None
 
-    if action < 0 or action >= n_actions:
+    if action not in [ChoiceSide.RIGHT, ChoiceSide.LEFT]:
         return None
 
-    return action
+    return ChoiceSide(action)
 
 
 def _parse_reward(reward):
@@ -416,12 +455,12 @@ def _reward_delivery_probability(
     action, active_reward_probability, inactive_reward_probability
 ):
     p = np.zeros(2)
-    if action == RIGHT_IX:
-        p[RIGHT_IX] = active_reward_probability
-        p[LEFT_IX] = inactive_reward_probability
-    elif action == LEFT_IX:
-        p[RIGHT_IX] = inactive_reward_probability
-        p[LEFT_IX] = active_reward_probability
+    if action == ChoiceSide.RIGHT:
+        p[ChoiceSide.RIGHT] = active_reward_probability
+        p[ChoiceSide.LEFT] = inactive_reward_probability
+    elif action == ChoiceSide.LEFT:
+        p[ChoiceSide.RIGHT] = inactive_reward_probability
+        p[ChoiceSide.LEFT] = active_reward_probability
     return p
 
 
@@ -429,12 +468,12 @@ def _nonzero_reward_size_probability(
     reward, action, correct_reward_size, incorrect_reward_size
 ):
     p = np.zeros(2)
-    if action == RIGHT_IX:
-        p[RIGHT_IX] = float(reward == correct_reward_size)
-        p[LEFT_IX] = float(reward == incorrect_reward_size)
-    elif action == LEFT_IX:
-        p[RIGHT_IX] = float(reward == incorrect_reward_size)
-        p[LEFT_IX] = float(reward == correct_reward_size)
+    if action == ChoiceSide.RIGHT:
+        p[ChoiceSide.RIGHT] = float(reward == correct_reward_size)
+        p[ChoiceSide.LEFT] = float(reward == incorrect_reward_size)
+    elif action == ChoiceSide.LEFT:
+        p[ChoiceSide.RIGHT] = float(reward == incorrect_reward_size)
+        p[ChoiceSide.LEFT] = float(reward == correct_reward_size)
     return p
 
 
@@ -498,7 +537,7 @@ def signed_omission_regressor(loss_streak, lam, choice_side):
     H = 1 - np.exp(-lam * D)
 
     # Signed choice convention: left=+1, right=-1.
-    sign = _choice_to_signed(choice_side)
+    sign = _choices_to_signed_left_positive(choice_side)
 
     return sign * H
 
@@ -561,7 +600,7 @@ def perseveration_regressor(choices, decay=0.25):
     T = len(choices)
 
     # Signed choice convention: left=+1, right=-1.
-    y = _choice_to_signed(choices)
+    y = _choices_to_signed_left_positive(choices)
 
     pers = np.zeros(T)
     num = 0.0  # weighted numerator
@@ -600,7 +639,7 @@ def perseveration_regressor_vectorized(choices, decay=0.25):
     T = len(choices)
 
     # Signed choice convention: left=+1, right=-1.
-    y = _choice_to_signed(choices)
+    y = _choices_to_signed_left_positive(choices)
 
     alpha = np.exp(-decay)
 
@@ -619,22 +658,26 @@ def perseveration_regressor_vectorized(choices, decay=0.25):
     return pers
 
 
-def _choice_to_signed(choice_side):
+def _choices_to_signed_left_positive(choice_side):
     """
     Map choices to sign convention used by relative-value features:
     left -> +1, right -> -1.
     """
     choice_arr = np.asarray(choice_side)
     if choice_arr.ndim == 0:
-        return _choice_token_to_signed(choice_arr.item())
+        return _choice_token_to_signed_left_positive(choice_arr.item())
 
     signed = np.empty(choice_arr.shape, dtype=float)
     for idx, token in np.ndenumerate(choice_arr):
-        signed[idx] = _choice_token_to_signed(token)
+        signed[idx] = _choice_token_to_signed_left_positive(token)
     return signed
 
 
-def _choice_token_to_signed(token):
+def _choice_side_to_signed_left_positive(side: ChoiceSide) -> float:
+    return 1.0 if side == ChoiceSide.LEFT else -1.0
+
+
+def _choice_token_to_signed_left_positive(token):
     if isinstance(token, str):
         parsed = token.strip().lower()
         if parsed == "left":
@@ -659,9 +702,9 @@ def _choice_token_to_signed(token):
     except (TypeError, ValueError) as exc:
         raise ValueError("choice values must be left/right, 0/1, or -1/+1.") from exc
 
-    if value in (1.0, float(LEFT_IX)):
+    if value in (1.0, float(ChoiceSide.LEFT)):
         return 1.0
-    if value in (-1.0, float(RIGHT_IX)):
+    if value in (-1.0, float(ChoiceSide.RIGHT)):
         return -1.0
 
     raise ValueError("choice values must be left/right, 0/1, or -1/+1.")
