@@ -193,7 +193,7 @@ def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[Ta
     fql_rel_value = trial_features.forgetting_qlearning_relative_value(
         actions=actions,
         rewards=rewards,
-        decay=0.7,
+        decay=params.FQL_decay,
         n_actions=params.n_actions,
         give_reward=give_reward,
     )
@@ -201,7 +201,7 @@ def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[Ta
     fql_rel_value_fast_learn = trial_features.forgetting_qlearning_relative_value(
         actions=actions,
         rewards=rewards,
-        decay=0.7,
+        decay=params.FQL_decay,
         reward_update_rate=params.FQL_reward_update_rate_fast_learn,
         n_actions=params.n_actions,
         give_reward=give_reward,

@@ -604,26 +604,17 @@ def perseveration_regressor_vectorized(choices, decay=0.25):
 
     alpha = np.exp(-decay)
 
-    # Exponential multipliers
-    powers = alpha ** np.arange(T)
-
-    # Weighted cumulative numerator
-    weighted_y = y * powers
-    cumsum_num = np.cumsum(weighted_y)
-
-    # Denominator cumulative weights
-    cumsum_den = np.cumsum(powers)
-
-    # Shift to ensure pers[t] only uses trials < t
-    num = np.zeros(T)
-    den = np.zeros(T)
-
-    num[1:] = cumsum_num[:-1]
-    den[1:] = cumsum_den[:-1]
-
     pers = np.zeros(T)
-    valid = den > 0
-    pers[valid] = num[valid] / den[valid]
+    if T <= 1:
+        return pers
+
+    weights = alpha ** np.arange(1, T + 1)
+    # For pers[t], only choices < t are used. Convolution index t-1 contains
+    # y[t-1]*alpha + y[t-2]*alpha**2 + ... + y[0]*alpha**t, so recent choices
+    # have larger weights. This mirrors the iterative recurrence above.
+    history_num = np.convolve(y, weights, mode="full")[:T]
+    history_den = np.convolve(np.ones(T), weights, mode="full")[:T]
+    pers[1:] = history_num[:-1] / history_den[:-1]
 
     return pers
 
