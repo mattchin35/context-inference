@@ -517,7 +517,6 @@ def run_information_criteria(block_performance: pd.DataFrame, session: Session, 
 
     states = np.arange(min_states,max_states+1)
     # calculate_information_criteria returns (BIC, AIC) in that order.
-    # calculate_information_criteria returns (BIC, AIC) in that order.
     BIC, AIC = calculate_information_criteria(observations=trials_to_correct, inputs=predictors, states=states,
                                               nRunEM=n_runs, n_jobs=n_threads, algorithm=algorithm,
                                               prior_alpha=prior_alpha, prior_sigma=prior_sigma)

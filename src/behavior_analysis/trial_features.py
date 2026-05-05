@@ -11,6 +11,13 @@ class ChoiceSide(IntEnum):
     LEFT = 1
 
 
+SIGNED_RIGHT = -1.0
+SIGNED_LEFT = 1.0
+RIGHT_CHOICE_LABELS = {"right"}
+LEFT_CHOICE_LABELS = {"left"}
+NO_CHOICE_ACTION_LABELS = {"none", "no_choice", ""}
+
+
 def qlearning_relative_value(
     actions, rewards, learning_rate=0.1, n_actions=N_ACTIONS, give_reward=None
 ):
@@ -73,6 +80,7 @@ def forgetting_qlearning_relative_value(
     rewards = np.asarray(rewards)
     _validate_lengths(actions, rewards)
     _validate_two_action_task(n_actions)
+
     if not 0 <= decay <= 1:
         raise ValueError("decay must be in [0, 1].")
     if reward_update_rate is None:
@@ -162,6 +170,7 @@ def hmm_relative_value(
         if skip_trials is not None and skip_trials[i]:
             continue
 
+        # Start-of-trial value from current prior
         if value_mode == "expected_reward":
             expected_rew_left = (
                 active_reward_probability * prior[ChoiceSide.LEFT]
@@ -181,6 +190,7 @@ def hmm_relative_value(
         if action is None or reward is None:
             continue
 
+        # Outcome likelihood update
         p_reward_delivery = _reward_delivery_probability(
             action=action,
             active_reward_probability=active_reward_probability,
@@ -203,6 +213,7 @@ def hmm_relative_value(
         p_outcome = p_reward * prior
         p_outcome /= np.sum(p_outcome) + eps
 
+        # Hazard/transition update
         posterior = np.dot(transition_matrix.T, p_outcome)
         posterior /= np.sum(posterior) + eps
         prior = posterior
@@ -232,8 +243,6 @@ def hmm_relative_value_reward_decay(
         tanh(tanh_scale * logit(p_left_prior))
 
     Notes:
-      - B_prior and transition_uncertainty are computed internally each trial
-        but not returned.
       - For readability/comparison with hmm_relative_value, trial loop order is:
         1) compute/store output from current prior
         2) outcome update (reward vs omission)
@@ -275,10 +284,6 @@ def hmm_relative_value_reward_decay(
         p_left_prior = np.clip(prior[ChoiceSide.LEFT], eps, 1 - eps)
         B_prior = logit(p_left_prior)
         relative_value[i] = np.tanh(tanh_scale * B_prior)  # signed_belief
-        transition_uncertainty = 1 - np.abs(
-            2 * p_left_prior - 1
-        )  # computed but not returned
-        _ = transition_uncertainty
 
         action = _parse_choice_side(action, N_ACTIONS)
         reward = _parse_reward(reward)
@@ -287,53 +292,112 @@ def hmm_relative_value_reward_decay(
 
         # 2) Outcome update
         if np.isclose(reward, 1.0):
-            # Bayesian reward update on reward delivery
-            p_reward_delivery = _reward_delivery_probability(
+            posterior = _bayesian_reward_posterior(
+                prior=prior,
                 action=action,
+                reward=reward,
                 active_reward_probability=active_reward_probability,
                 inactive_reward_probability=inactive_reward_probability,
-            )
-            p_reward_size = _nonzero_reward_size_probability(
-                reward=reward,
-                action=action,
                 correct_reward_size=correct_reward_size,
                 incorrect_reward_size=incorrect_reward_size,
             )
-            likelihood = p_reward_delivery * p_reward_size
-            posterior = likelihood * prior
-            posterior /= np.sum(posterior) + eps
         elif np.isclose(reward, 0.0):
-            # Passive decay in log-odds space
-            B_post = (1 - lambda_decay) * B_prior
-            p_left_post = expit(B_post)
-            posterior = np.array([1 - p_left_post, p_left_post], dtype=float)
+            posterior = _decayed_log_odds_posterior(
+                B_prior=B_prior,
+                lambda_decay=lambda_decay,
+            )
         else:
             # Fallback for non-binary rewards: treat positive as reward, non-positive as omission.
             if reward > 0:
-                p_reward_delivery = _reward_delivery_probability(
+                posterior = _bayesian_reward_posterior(
+                    prior=prior,
                     action=action,
+                    reward=reward,
                     active_reward_probability=active_reward_probability,
                     inactive_reward_probability=inactive_reward_probability,
-                )
-                p_reward_size = _nonzero_reward_size_probability(
-                    reward=reward,
-                    action=action,
                     correct_reward_size=correct_reward_size,
                     incorrect_reward_size=incorrect_reward_size,
                 )
-                likelihood = p_reward_delivery * p_reward_size
-                posterior = likelihood * prior
-                posterior /= np.sum(posterior) + eps
             else:
-                B_post = (1 - lambda_decay) * B_prior
-                p_left_post = expit(B_post)
-                posterior = np.array([1 - p_left_post, p_left_post], dtype=float)
+                posterior = _decayed_log_odds_posterior(
+                    B_prior=B_prior,
+                    lambda_decay=lambda_decay,
+                )
 
         # 3) Hazard/transition update for next trial
         prior = np.dot(transition_matrix.T, posterior)
         prior /= np.sum(prior) + eps
 
     return relative_value
+
+
+def _bayesian_reward_posterior(
+    prior,
+    action,
+    reward,
+    active_reward_probability,
+    inactive_reward_probability,
+    correct_reward_size,
+    incorrect_reward_size,
+):
+    """Return normalized HMM reward posterior.
+
+    Parameters
+    ----------
+    prior : np.ndarray, shape (2,)
+        Prior state probabilities ordered as [right, left].
+    action : ChoiceSide
+        Parsed choice side for the current trial.
+    reward : float
+        Observed reward magnitude for the current trial.
+    active_reward_probability : float
+        Reward-delivery probability for the active side.
+    inactive_reward_probability : float
+        Reward-delivery probability for the inactive side.
+    correct_reward_size : float
+        Reward magnitude expected for rewarded correct choices.
+    incorrect_reward_size : float
+        Reward magnitude expected for unrewarded or incorrect choices.
+
+    Returns
+    -------
+    np.ndarray, shape (2,)
+        Posterior state probabilities ordered as [right, left].
+    """
+    p_reward_delivery = _reward_delivery_probability(
+        action=action,
+        active_reward_probability=active_reward_probability,
+        inactive_reward_probability=inactive_reward_probability,
+    )
+    p_reward_size = _nonzero_reward_size_probability(
+        reward=reward,
+        action=action,
+        correct_reward_size=correct_reward_size,
+        incorrect_reward_size=incorrect_reward_size,
+    )
+    posterior = p_reward_delivery * p_reward_size * prior
+    posterior /= np.sum(posterior) + eps
+    return posterior
+
+
+def _decayed_log_odds_posterior(B_prior, lambda_decay):
+    """Return posterior after passive omission decay in log-odds space.
+
+    Parameters
+    ----------
+    B_prior : float
+        Prior left-vs-right log odds for the current trial.
+    lambda_decay : float
+        Passive decay fraction in [0, 1].
+
+    Returns
+    -------
+    np.ndarray, shape (2,)
+        Posterior state probabilities ordered as [right, left].
+    """
+    B_post = (1 - lambda_decay) * B_prior
+    p_left_post = expit(B_post)
+    return np.array([1 - p_left_post, p_left_post], dtype=float)
 
 
 def _validate_lengths(actions, rewards):
@@ -411,7 +475,7 @@ def _is_no_choice_action(action):
         return True
 
     if isinstance(action, str):
-        return action.strip().lower() in {"none", "no_choice", ""}
+        return action.strip().lower() in NO_CHOICE_ACTION_LABELS
 
     try:
         return bool(np.isnan(action))
@@ -674,16 +738,17 @@ def _choices_to_signed_left_positive(choice_side):
 
 
 def _choice_side_to_signed_left_positive(side: ChoiceSide) -> float:
-    return 1.0 if side == ChoiceSide.LEFT else -1.0
+    return SIGNED_LEFT if side == ChoiceSide.LEFT else SIGNED_RIGHT
 
 
 def _choice_token_to_signed_left_positive(token):
+    # String labels
     if isinstance(token, str):
         parsed = token.strip().lower()
-        if parsed == "left":
-            return 1.0
-        if parsed == "right":
-            return -1.0
+        if parsed in LEFT_CHOICE_LABELS:
+            return SIGNED_LEFT
+        if parsed in RIGHT_CHOICE_LABELS:
+            return SIGNED_RIGHT
         try:
             token = float(parsed)
         except ValueError as exc:
@@ -691,20 +756,24 @@ def _choice_token_to_signed_left_positive(token):
                 "choice values must be left/right, 0/1, or -1/+1."
             ) from exc
 
+    # Missing values
     try:
         if np.isnan(token):
             raise ValueError("choice values cannot be NaN.")
     except TypeError:
         pass
 
+    # Numeric task-coded or signed choices
     try:
         value = float(token)
     except (TypeError, ValueError) as exc:
         raise ValueError("choice values must be left/right, 0/1, or -1/+1.") from exc
 
-    if value in (1.0, float(ChoiceSide.LEFT)):
-        return 1.0
-    if value in (-1.0, float(ChoiceSide.RIGHT)):
-        return -1.0
+    if value == float(ChoiceSide.RIGHT) or value == SIGNED_RIGHT:
+        return SIGNED_RIGHT
+    if value == float(ChoiceSide.LEFT):
+        # Numeric +1 is both task-coded left and signed left.
+        return SIGNED_LEFT
 
     raise ValueError("choice values must be left/right, 0/1, or -1/+1.")
+

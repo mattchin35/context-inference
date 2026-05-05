@@ -248,67 +248,6 @@ def plot_session(event_df: pd.DataFrame, session_info: dict, figure_path: Path, 
                                    plot_path=figure_path, plot_choices=True)
 
 
-def block_hmm_model(block_performance: pd.DataFrame, trial_df: pd.DataFrame, sess_id_full: str,
-                      processed_data_path: Path, figure_path: Path,):
-    map_model_dict, block_performance = bssm.map_block_states(block_performance, figure_path, sess_id_full, plot=True)
-    map_savename = processed_data_path / (sess_id_full + '_block_map_statedict.pkl')
-    with open(map_savename, 'wb') as file:
-        pkl.dump(map_model_dict, file)
-
-    block_performance = bssm.declare_inferred_strategy(block_performance)
-    block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
-
-    augmented_trial_df = bssm.trials_inherit_strategy(block_performance, trial_df)
-    augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
-
-
-def performance_plots_single_session():
-    multisession_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
-    session_data_home = Path(
-        '/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference/')
-    sess_id_full = 'CT014_2025-12-16_153200'
-    processed_data_path = session_data_home / 'processed'
-    session_figure_path = session_data_home / 'figures'
-
-    pattern = r'(\w+)_([\d\-]+)_(\d+)'
-    match = re.search(pattern, sess_id_full)
-
-    if match:
-        mouse, date, timestamp = match.groups()
-        print(f"Mouse id: {mouse}")  # abc123
-        print(f"Date: {date}")  # YYYY-MM-DD
-        print(f"Time: {timestamp}")  # HHMMSS
-        sess_id_abbreviated = mouse + '_' + date
-    else:
-        print("Double-check the session name!")
-        return
-
-    multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(sess_id_full,
-                                                                                            session_data_folder=processed_data_path,
-                                                                                            multisession_data_folder=multisession_save_path)
-    overall_df = multisession_df[~multisession_df['date'].isna()]
-    performance_plots.plot_session_correct(block_performance, session_figure_path, sess_id_full)
-    performance_plots.plot_session_trials_to_correct(block_performance, session_figure_path, sess_id_full)
-    performance_plots.plot_session_nswitches(block_performance, session_figure_path, sess_id_full)
-    # plot_multisession_correct(overall_df, mouse_plot_path, figure_id=mouse)
-    # plot_multisession_trials_to_correct(overall_df, mouse_plot_path, figure_id=mouse)
-
-    slope = multisession_df.loc[
-        multisession_df['date'] == date,
-        'prev_consecutive_rewards_slope',
-    ].values[0]
-    intercept = multisession_df.loc[
-        multisession_df['date'] == date,
-        'prev_consecutive_rewards_intercept',
-    ].values[0]
-    performance_plots.scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
-                              plot_path=session_figure_path, figure_id=sess_id_full)
-    block_count_col = performance_plots.get_session_block_count_column(multisession_df)
-    performance_plots.plot_learning_curve(multisession_df['prev_consecutive_rewards_slope'], multisession_df[block_count_col], figure_id=mouse,
-                        plot_path=multisession_save_path,
-                        dates=multisession_df['date'].values)
-
-
 def main_simulation():
     PROJECT_ROOT = Path(__file__).resolve().parents[1]
     switching_run_data_dir = PROJECT_ROOT / "data/processed/switching_agents"
