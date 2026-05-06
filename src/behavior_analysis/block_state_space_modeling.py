@@ -4,7 +4,6 @@ Blockwise LM-HMM using the code from Cazettes et al 2023 made by Lucca Mazzucato
 
 import numpy as np
 import pandas as pd
-from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pickle as pkl
@@ -14,9 +13,9 @@ from pathlib import Path
 from typing import Protocol
 from joblib import Parallel, delayed
 import ssm # note this should be the forked ssm repo
-from ssm.util import find_permutation
 from ssm.plots import gradient_cmap, white_to_color_cmap
 import src.state_space_modeling.utilplot as utilplot
+from src.behavior_analysis.project_utils import is_present_value
 
 
 color_names = [
@@ -54,6 +53,29 @@ class Session(Protocol):
     session_info: dict
 
 
+def make_valid_block_history_mask(block_df: pd.DataFrame) -> pd.Series:
+    """Return blocks with current outcome and previous-block history.
+
+    Parameters
+    ----------
+    block_df : pd.DataFrame
+        Blockwise dataframe with `trials_to_correct` and `prev_n_correct`
+        columns. `trials_to_correct` marks whether the current block has a
+        valid behavioral outcome. `prev_n_correct` is the canonical marker that
+        previous-block history exists, even when a model uses another previous-
+        block predictor such as `prev_n_rewarded`. Real NaN values and string
+        missing-value sentinels are invalid.
+
+    Returns
+    -------
+    pd.Series
+        Boolean mask with shape `(n_blocks,)`, aligned to `block_df.index`.
+    """
+    has_current_block_outcome = is_present_value(block_df["trials_to_correct"])
+    has_previous_block_history = is_present_value(block_df["prev_n_correct"])
+    return has_current_block_outcome & has_previous_block_history
+
+
 def prepare_block_lm_hmm_data(
     block_df: pd.DataFrame,
     predictor_columns: tuple[str, ...] = ("prev_n_rewarded",),
@@ -65,7 +87,9 @@ def prepare_block_lm_hmm_data(
     block_df : pd.DataFrame
         Blockwise dataframe where rows correspond to task blocks.
         Required columns are `trials_to_correct`, `prev_n_correct`, and every
-        column named in `predictor_columns`.
+        column named in `predictor_columns`. `prev_n_correct` is used as the
+        canonical previous-block-history marker even when it is not the chosen
+        LM-HMM predictor.
     predictor_columns : tuple[str, ...], default=("prev_n_rewarded",)
         Predictor columns used as LM-HMM inputs. Each predictor is returned as
         one input dimension in the same order as provided here.
@@ -82,7 +106,7 @@ def prepare_block_lm_hmm_data(
           rows with valid observations
         - `predictor_labels`: list[str], predictor names in input-column order
     """
-    valid_mask = (block_df["trials_to_correct"] != "None") & (block_df["prev_n_correct"] != "None")
+    valid_mask = make_valid_block_history_mask(block_df)
     df = block_df[valid_mask]
 
     observations = df["trials_to_correct"].to_numpy().reshape(-1, 1).astype(int)
@@ -321,10 +345,6 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         plt.title('Histogram of Inferred State Durations')
         # plt.show()
 
-    # mle_savename =  session.processed_data_path / (session.sess_id_full + '_statedict.pkl')
-    # with open(mle_savename, 'wb') as file:
-    #     pkl.dump(model_dict, file)
-
     return model_dict, block_df
 
 
@@ -460,11 +480,29 @@ def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = Fals
     else:
         block_df['cur_strategy_slope'] = np.ones(block_df.shape[0]) * primary_predictor_weights[0]
 
-    map_savename = session.processed_data_path / (session.sess_id_full + '_block_statedict.pkl')
-    with open(map_savename, 'wb') as file:
-        pkl.dump(model_dict, file)
-
     return model_dict, block_df
+
+
+def save_block_model_dict(model_dict: dict, session: Session) -> Path:
+    """Save a fitted block LM-HMM model dictionary.
+
+    Parameters
+    ----------
+    model_dict : dict
+        Model output dictionary containing fitted block-model results. Expected
+        top-level keys are workflow-dependent, commonly `mle` and `map`.
+    session : Session
+        Session metadata with `processed_data_path` and `sess_id_full`.
+
+    Returns
+    -------
+    Path
+        Pickle path with filename `{sess_id_full}_block_statedict.pkl`.
+    """
+    save_path = session.processed_data_path / f"{session.sess_id_full}_block_statedict.pkl"
+    with open(save_path, "wb") as file:
+        pkl.dump(model_dict, file)
+    return save_path
 
 
 def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.DataFrame, session: Session, num_states: int=2,
@@ -477,11 +515,9 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
     map_model_dict, block_performance = map_block_states(block_performance, session,
                                                          plot=True, model_dict=mle_model_dict, num_states=num_states,
                                                          prior_alpha=prior_alpha, prior_sigma=prior_sigma)
-    map_savename = session.processed_data_path / (session.sess_id_full + '_block_statedict.pkl')
-    with open(map_savename, 'wb') as file:
-        pkl.dump(map_model_dict, file)
+    save_block_model_dict(map_model_dict, session)
 
-    block_performance = declare_inferred_strategy(block_performance)
+    block_performance = hardcode_block_strategy(block_performance)  # These are kept for inspection, they are NOT used in modeling or passed down to trials
     block_performance.to_csv(session.processed_data_path / (session.sess_id_full + '_block_performance.csv'), index=False)
 
     augmented_trial_df = trials_inherit_strategy(block_performance, augmented_trial_df)
@@ -783,7 +819,6 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
 def plot_information_criteria(aic, bic, states, session: Session):
     # fig = plt.figure(figsize=(20, 10), dpi=80, facecolor='w', edgecolor='k')
     f, ax = plt.subplots(facecolor='w', edgecolor='k')
-    n_states = states.size
 
     # x = np.arange(1, n_states + 1)
     y = np.mean(bic, 1)
@@ -801,7 +836,7 @@ def plot_information_criteria(aic, bic, states, session: Session):
                      alpha=0.3, color=aic_color)
     plt.xlabel("states")
     # plt.xlim(0, max_states + 1)
-    # plt.xlim(np.amin(states)-1, np.amax(states) + 1)
+    # plt.xlim(np.amin(states) - 1, np.amax(states) + 1)
     # plt.xlim(np.amin(states) - .2, np.amax(states) + .2)
     # plt.xticks(np.arange(1, n_states + 1, 1))
     plt.xticks(states)
@@ -844,77 +879,84 @@ def main():
         print("Double-check the session name!")
         return
 
-    session_info_path = '{}_session_info.pkl'.format(sess_id_full)
-    with open(raw_behavior_folder / session_info_path, 'rb') as f:
-        session_info = pkl.load(f)
-
     augmented_trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), sep=',',
                                      na_filter=False)
     block_performance = pd.read_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), sep=',',
                                     na_filter=False)
 
     mle_model_dict, block_performance = mle_block_states(block_performance, figure_path, sess_id_abbreviated, plot=True)
-    # mle_savename = processed_data_path / (sess_id_full + '_mle_statedict.pkl')
-    # with open(mle_savename, 'wb') as file:
-    #     pkl.dump(mle_model_dict, file)
-    # map_model_dict, block_performance = map_block_states(block_performance, figure_path, sess_id_abbreviated,
-    #                                                      plot=True, weight_dict=mle_model_dict)
 
-    map_savename = processed_data_path / (sess_id_full + '_block_statedict.pkl')
-    # with open(map_savename, 'wb') as file:
-    #     pkl.dump(map_model_dict, file)
+    block_performance = hardcode_block_strategy(block_performance)
+    block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
 
-    # block_performance = declare_inferred_strategy(block_performance)
-    # block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)
-
-    # augmented_trial_df = trials_inherit_strategy(block_performance, augmented_trial_df)
-    # augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
+    augmented_trial_df = trials_inherit_strategy(block_performance, augmented_trial_df)
+    augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
 
 
-def declare_inferred_strategy(block_df: pd.DataFrame) -> pd.DataFrame:
+def hardcode_block_strategy(block_df: pd.DataFrame, inference_cutoff=.5) -> pd.DataFrame:
+    """Hardcode block strategy labels for inspection.
+
+    Parameters
+    ----------
+    block_df : pd.DataFrame
+        Blockwise dataframe with `trials_to_correct`, `prev_n_correct`, and
+        `cur_strategy_slope` columns. Labels are assigned only to blocks with a
+        valid current outcome and previous-block history.
+    inference_cutoff : float, default=.5
+        Strategy-slope cutoff below which blocks are labeled `Inference`; values
+        greater than or equal to the cutoff are labeled `Qlearning`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy-like reference to `block_df` with `hardcoded_strategy` added.
+        Hardcoded strategies are for inspection and comparison to HMM inferred
+        strategies, not for trial-level inheritance or model fitting.
     """
-    Hardcode the mouse's strategy for a block. YOU MUST DO THIS BY INSPECTING THE BIAS BLOCKS AND THE
-    INFERRED RL/INFERENCE BLOCKS. This is to prepare code for dataframe analysis, not an algorithm.
-    Bias supercedes any HMM inference.
-    """
-    ix_valid = (block_df['trials_to_correct'] != 'None') & (block_df['prev_n_correct'] != 'None')
+    ix_valid = make_valid_block_history_mask(block_df)
     df = block_df[ix_valid]
 
     strategy = np.zeros(df.shape[0], dtype='object')
-    # rl_ix = df['inferred_strategy'].to_numpy().astype(int) == 0
-    # inference_ix = df['inferred_strategy'].to_numpy().astype(int) == 1
-    rl_ix = df['cur_strategy_slope'].to_numpy() >= .5
-    inference_ix = df['cur_strategy_slope'].to_numpy() < .5
-    bias_ix = (df['bias_full_flag'] == 'True').to_numpy()
+    rl_ix = df['cur_strategy_slope'].to_numpy() >= inference_cutoff
+    inference_ix = df['cur_strategy_slope'].to_numpy() < inference_cutoff
     strategy[inference_ix] = 'Inference'
-    # strategy[bias_ix] = 'Bias'  #bias is not a strategy, it's a block quality
     strategy[rl_ix] = 'Qlearning'
 
-    declared_strategy = np.zeros(block_df.shape[0], dtype='object')
-    declared_strategy[ix_valid] = strategy
-    declared_strategy[~ix_valid] = 'None'
-    block_df['declared_strategy'] = declared_strategy
+    hardcoded_strategy = np.zeros(block_df.shape[0], dtype='object')
+    hardcoded_strategy[ix_valid] = strategy
+    hardcoded_strategy[~ix_valid] = 'None'
+    block_df['hardcoded_strategy'] = hardcoded_strategy
     return block_df
 
 
 def trials_inherit_strategy(block_df: pd.DataFrame, trial_df: pd.DataFrame) -> pd.DataFrame:
-    block_ix = block_df['block_ix'].to_numpy()
-    inherited_strategy = np.zeros(trial_df.shape[0], dtype='object')
-    inherited_bias_flag = np.zeros(trial_df.shape[0], dtype='object')
-    # inherited_source = (
-    #     block_df['declared_strategy'].to_numpy()
-    #     if 'declared_strategy' in block_df.columns
-    #     else block_df['inferred_strategy'].to_numpy()
-    # )
-    inherited_source = block_df['inferred_strategy'].to_numpy()
+    """Inherit HMM block states and block bias down to the trial level.
 
-    bias_flag = block_df['bias_full_flag'].to_numpy()
-    for i in block_ix:
-        tmp_ix = trial_df['cur_block'].to_numpy() == i
-        inherited_strategy[tmp_ix] = inherited_source[i]
-        inherited_bias_flag[tmp_ix] = bias_flag[i]
-    trial_df['inherited_strategy'] = inherited_strategy
-    trial_df['inherited_bias_flag'] = inherited_bias_flag
+    Parameters
+    ----------
+    block_df : pd.DataFrame
+        Blockwise dataframe with `block_ix`, `inferred_strategy`, and
+        `bias_full_flag` columns. `block_ix` values identify task blocks and do
+        not need to match dataframe row positions.
+    trial_df : pd.DataFrame
+        Trialwise dataframe with `cur_block`, one block id per trial.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `trial_df` with `inherited_block_strategy` and
+        `inherited_block_bias` columns. Trials with no matching block receive
+        the string `"None"` in both inherited columns.
+    """
+    strategy_by_block = dict(zip(block_df["block_ix"], block_df["inferred_strategy"]))
+    bias_by_block = dict(zip(block_df["block_ix"], block_df["bias_full_flag"]))
+
+    trial_df["inherited_block_strategy"] = (
+        trial_df["cur_block"].map(strategy_by_block).fillna("None")
+    )
+    trial_df["inherited_block_bias"] = (
+        trial_df["cur_block"].map(bias_by_block).fillna("None")
+    )
     return trial_df
 
 

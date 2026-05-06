@@ -19,6 +19,7 @@ import multiprocessing as mp
 from joblib import Parallel, delayed
 from typing import Protocol
 import scipy as sp
+from src.behavior_analysis.project_utils import is_present_value, is_zero_flag
 
 
 # tab20 = plt.cm.tab20
@@ -228,11 +229,12 @@ def prepare_trial_glm_hmm_data(
         Trialwise dataframe where rows correspond to task trials. Required base
         columns are `prev_action`, `give_reward`, and `action`, plus each
         selected predictor column in `predictor_columns`. If
-        `require_inherited_strategy=True`, `inherited_strategy` must also be
-        present and non-`'None'` on valid rows.
+        `require_inherited_strategy=True`, `inherited_block_strategy` must also be
+        present on valid rows. Real NaN values and string missing-value
+        sentinels are invalid.
     require_inherited_strategy : bool, default=False
-        Whether valid trials must also have a non-`'None'`
-        `inherited_strategy` label. This is only needed for plotting and
+        Whether valid trials must also have a present `inherited_block_strategy`
+        label. This is only needed for plotting and
         block-trial comparison logic in the MAP fitting path.
     predictor_columns : tuple[str, ...], default=DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS
         Tuple of non-bias predictor column names to include in the GLM-HMM
@@ -259,7 +261,7 @@ def prepare_trial_glm_hmm_data(
 
     required_columns = {"prev_action", "give_reward", "action"}
     if require_inherited_strategy:
-        required_columns.add("inherited_strategy")
+        required_columns.add("inherited_block_strategy")
     required_columns.update(predictor_columns)
 
     missing_columns = sorted(required_columns.difference(trial_df.columns))
@@ -272,9 +274,9 @@ def prepare_trial_glm_hmm_data(
         unknown_summary = ", ".join(unknown_predictors)
         raise ValueError(f"Unknown GLM-HMM predictor columns requested: {unknown_summary}")
 
-    valid_mask = (trial_df["prev_action"] != "None") & (trial_df["give_reward"] == 0)
+    valid_mask = is_present_value(trial_df["prev_action"]) & is_zero_flag(trial_df["give_reward"])
     if require_inherited_strategy:
-        valid_mask = valid_mask & (trial_df["inherited_strategy"] != "None")
+        valid_mask = valid_mask & is_present_value(trial_df["inherited_block_strategy"])
     df = trial_df[valid_mask]
 
     observations = df["action"].to_numpy().reshape(-1, 1).astype(int)
@@ -397,11 +399,11 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     df = trial_df[ix_valid]
 
     correct = df['correct'].to_numpy().reshape(-1,1).astype(int)
-    block_strategy = df['inherited_strategy'].to_numpy()
+    block_strategy = df['inherited_block_strategy'].to_numpy()
     block_strategy[block_strategy != 'None'] = block_strategy[block_strategy != 'None'].astype(int)
     block_strategy[block_strategy == 'None'] = np.amax(block_strategy[block_strategy != 'None']) + 1
     block_strategy = block_strategy.reshape(-1,1).astype(int) #+ 1
-    block_bias = df['inherited_bias_flag'].to_numpy()
+    block_bias = df['inherited_block_bias'].to_numpy()
     block_bias[block_bias != 'True'] = False
     block_bias[block_bias == 'True'] = True
     block_bias = block_bias.reshape(-1, 1).astype(int)
@@ -560,9 +562,6 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         plt.title('Histogram of Inferred State Durations')
         # plt.show()
 
-    # mle_savename = sess_id + '_trial_statedict.pkl'
-    # with open(mle_savename, 'wb') as file:
-    #     pkl.dump(model_dict, file)
 
     plt.close('all')
     return model_dict, trial_df
@@ -584,11 +583,11 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     # cmap = plt.cm.Set1
 
     correct = df['correct'].to_numpy().reshape(-1,1).astype(int)
-    block_strategy = df['inherited_strategy'].to_numpy()
+    block_strategy = df['inherited_block_strategy'].to_numpy()
     # block_strategy[block_strategy != 'None'] = block_strategy[block_strategy != 'None'].astype(int)
     # block_strategy[block_strategy == 'None'] = np.amax(block_strategy[block_strategy != 'None']) + 1
     block_strategy = block_strategy.reshape(-1,1).astype(int) #+ 1
-    block_bias = df['inherited_bias_flag'].to_numpy()
+    block_bias = df['inherited_block_bias'].to_numpy()
     block_bias[block_bias != 'True'] = False
     block_bias[block_bias == 'True'] = True
     block_bias = block_bias.reshape(-1, 1).astype(int)
@@ -839,11 +838,30 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     # else:
     #     block_df['cur_strategy_slope'] = np.ones(block_df.shape[0]) * np.squeeze(recovered_weights)[0]
 
-    map_savename = sess_id + '_trial_statedict.pkl'
-    with open(map_savename, 'wb') as file:
-        pkl.dump(model_dict, file)
 
     return model_dict, trial_df
+
+
+def save_trial_model_dict(model_dict: dict, session: Session) -> Path:
+    """Save a fitted trial GLM-HMM model dictionary.
+
+    Parameters
+    ----------
+    model_dict : dict
+        Model output dictionary containing fitted trial-model results. Expected
+        top-level keys are workflow-dependent, commonly `mle` and `map`.
+    session : Session
+        Session metadata with `processed_data_path` and `sess_id_full`.
+
+    Returns
+    -------
+    Path
+        Pickle path with filename `{sess_id_full}_trial_statedict.pkl`.
+    """
+    save_path = session.processed_data_path / f"{session.sess_id_full}_trial_statedict.pkl"
+    with open(save_path, "wb") as file:
+        pkl.dump(model_dict, file)
+    return save_path
 
 
 def run_trial_modeling(trial_df: pd.DataFrame, session: Session, num_states: int=2,
@@ -861,9 +879,7 @@ def run_trial_modeling(trial_df: pd.DataFrame, session: Session, num_states: int
                                                           prior_alpha=prior_alpha, prior_sigma=prior_sigma,
                                                           block_dict=block_dict['map'],
                                                           predictor_columns=predictor_columns)
-    map_savename = session.processed_data_path / (session.sess_id_full + '_block_map_statedict.pkl')
-    with open(map_savename, 'wb') as file:
-        pkl.dump(map_model_dict, file)
+    save_trial_model_dict(map_model_dict, session)
 
     augmented_trial_df.to_csv(session.processed_data_path / (session.sess_id_full + '_augmented_trials.csv'), index=False)
 

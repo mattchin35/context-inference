@@ -193,8 +193,8 @@ def load_or_preprocess_session(
             max_time=max_time,
         )
 
-    event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',')
-    trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',')
+    event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',', na_filter=False)
+    trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',', na_filter=False)
     return trial_df, event_df, None
 
 
@@ -408,7 +408,7 @@ def main_mouse():
 
 
 def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
-    ix_valid = (block_df['trials_to_correct'] != 'None') & (block_df['prev_n_correct'] != 'None')
+    ix_valid = bssm.make_valid_block_history_mask(block_df)
     df = block_df[ix_valid]
 
     consecutive_rewards = df['prev_consecutive_rewards'].to_numpy().reshape(-1, 1).astype(int)

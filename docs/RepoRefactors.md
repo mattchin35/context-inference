@@ -87,3 +87,21 @@ General analysis functions are expected to work with the new names. Plotting and
 notebook code that reads older multisession CSVs may still need updates if it
 expects the generic stat columns. Plotting code can temporarily tolerate legacy
 `n_switches` for old CSVs, but new analysis outputs should save `n_blocks`.
+
+# State-space session dependency injection
+
+`src/behavior_analysis/block_state_space_modeling.py` and
+`src/behavior_analysis/trial_state_space_modeling.py` still pass full session
+objects into lower-level fitting and plotting functions in places where only a
+few fields are needed. This makes demo code awkward and hides function data
+contracts.
+
+Deferred refactor:
+
+- Keep full `Session` dependencies in pipeline functions such as
+  `run_block_modeling()` and `run_trial_modeling()`.
+- Refactor lower-level fitting helpers to accept explicit paths, session ids,
+  and data inputs instead of a full session object.
+- Preserve dependency injection: functions should receive the concrete data they
+  need rather than reaching through broad session structures.
+

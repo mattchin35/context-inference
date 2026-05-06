@@ -5,6 +5,7 @@ import re
 import warnings
 from collections import defaultdict
 import src.behavior_analysis.decision_variable_counters as counters
+from src.behavior_analysis.project_utils import is_present_value
 from formulaic import model_matrix
 import statsmodels.api as sm
 from dataclasses import dataclass
@@ -819,19 +820,19 @@ def _get_valid_trials_to_correct_mask(
     ----------
     trials_to_correct : pd.Series
         Blockwise trials-to-correct values with shape `(n_blocks,)`. Valid rows
-        contain integer-like values; invalid rows use the string sentinel
-        `"None"`.
+        contain integer-like values; invalid rows use real missing values or
+        string missing-value sentinels such as `"None"`.
     prev_n_correct : pd.Series
         Number of correct trials in the previous block, shape `(n_blocks,)`.
-        The first block uses `"None"` or another invalid sentinel when no
-        previous block exists.
+        The first block uses a real missing value or string missing-value
+        sentinel when no previous block exists.
 
     Returns
     -------
     pd.Series
         Boolean mask with shape `(n_blocks,)`, aligned to the input index.
     """
-    return (trials_to_correct != "None") & (prev_n_correct != "None")
+    return is_present_value(trials_to_correct) & is_present_value(prev_n_correct)
 
 
 def _add_regression_stats(
