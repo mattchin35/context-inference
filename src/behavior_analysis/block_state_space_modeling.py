@@ -34,7 +34,7 @@ cmap = gradient_cmap(colors)
 # rl_cmap = plt.cm.autumn
 # inference_cmap = plt.cm.winter
 
-rl_colors = ["red","amber","orange"]
+rl_colors = ["red", "amber", "orange"]
 inf_colors = ["windows blue", "dusty purple", "faded green"]
 
 
@@ -164,6 +164,32 @@ def normalize_lm_observation_parameters(
     return normalized_weights, normalized_mus
 
 
+def sample_colormap(cmap, n_colors: int, low: float = 0.15, high: float = 0.85) -> list:
+    """Sample a readable range from a Matplotlib colormap.
+
+    Parameters
+    ----------
+    cmap : matplotlib.colors.Colormap
+        Colormap used to generate category colors.
+    n_colors : int
+        Number of colors to sample.
+    low : float, default=0.15
+        Lower colormap coordinate, unitless and in `[0, 1]`.
+    high : float, default=0.85
+        Upper colormap coordinate, unitless and in `[0, 1]`.
+
+    Returns
+    -------
+    list
+        RGBA color tuples with shape `(n_colors,)`.
+    """
+    if n_colors == 0:
+        return []
+    if n_colors == 1:
+        return [cmap((low + high) / 2)]
+    return list(cmap(np.linspace(low, high, n_colors)))
+
+
 def build_presentation_colors(
     primary_predictor_weights: np.ndarray,
 ) -> tuple[list, object]:
@@ -184,16 +210,25 @@ def build_presentation_colors(
           single-color-safe map is created with `white_to_color_cmap` rather
           than `gradient_cmap`, which requires bounds at both 0 and 1.
     """
-    present_colors = np.arange(len(primary_predictor_weights), dtype=object)
+    state_weights = np.asarray(primary_predictor_weights, dtype=float).reshape(-1)
+    if state_weights.size == 0:
+        raise ValueError("primary_predictor_weights must contain at least one state.")
 
-    ix_inf = primary_predictor_weights < 0.5
-    ix_rl = primary_predictor_weights >= 0.5
-    n_inf = np.sum(ix_inf)
-    n_rl = np.sum(ix_rl)
+    present_colors = np.empty(state_weights.size, dtype=object)
+    ix_inf = state_weights < 0.5
+    ix_rl = state_weights >= 0.5
 
-    present_colors[ix_inf] = inf_colors[:n_inf]
-    present_colors[ix_rl] = rl_colors[:n_rl]
-    present_colors = sns.xkcd_palette(present_colors)
+    for state_idx, color in zip(
+        np.flatnonzero(ix_inf),
+        sample_colormap(plt.cm.winter, int(np.sum(ix_inf))),
+    ):
+        present_colors[state_idx] = color
+    for state_idx, color in zip(
+        np.flatnonzero(ix_rl),
+        sample_colormap(plt.cm.autumn, int(np.sum(ix_rl))),
+    ):
+        present_colors[state_idx] = color
+    present_colors = list(present_colors)
 
     if len(present_colors) == 1:
         present_cmap = white_to_color_cmap(present_colors[0])
@@ -348,9 +383,35 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     return model_dict, block_df
 
 
-def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = False,
+def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_full: str, plot: bool = False,
                      num_states=2, prior_sigma=1, prior_alpha=1, model_dict=None):
-    """Maximum a priori estimation of block strategies/states. Using a prior helps with small-data problems."""
+    """Fit MAP block LM-HMM states and assign them back to the block table.
+
+    Parameters
+    ----------
+    block_df : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`. Required
+        columns are defined by `prepare_block_lm_hmm_data`.
+    figure_path : Path
+        Directory where diagnostic figures are saved when `plot=True`.
+    sess_id_full : str
+        Full session identifier used in saved figure filenames.
+    plot : bool, default=False
+        Whether to save diagnostic fit and state-summary figures.
+    num_states : int, default=2
+        Number of hidden LM-HMM states.
+    prior_sigma : float, default=1
+        Observation prior scale passed to the MAP HMM.
+    prior_alpha : float, default=1
+        Sticky-transition concentration passed to the MAP HMM.
+    model_dict : dict or None, default=None
+        Existing model dictionary to update. If None, a new dictionary is used.
+
+    Returns
+    -------
+    tuple[dict, pd.DataFrame]
+        Updated model dictionary and `block_df` with inferred state columns.
+    """
     prepared = prepare_block_lm_hmm_data(block_df)
     ix_valid = prepared["valid_mask"]
     trials_to_correct = prepared["observations"]
@@ -392,7 +453,7 @@ def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = Fals
         # plt.xlim(0, len(fit_ll))
         plt.ylabel("Log Probability")
         plt.title("MAP EM fit of observed data")
-        save_path = session.figure_path / '{}_map_convergence.png'.format(session.sess_id_full)
+        save_path = figure_path / '{}_map_convergence.png'.format(sess_id_full)
         fig.savefig(save_path, format='png', dpi=300)
 
     most_likely_states = map_hmm.most_likely_states(trials_to_correct, input=predictors)
@@ -418,7 +479,7 @@ def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = Fals
         map_transition_mat = np.exp(map_hmm.transitions.log_Ps)
         utilplot.plot_trans_matrix(map_transition_mat)
         plt.title("MAP transition matrix", fontsize=15)
-        save_path = session.figure_path / '{}_map_transition_mat.png'.format(session.sess_id_full)
+        save_path = figure_path / '{}_map_transition_mat.png'.format(sess_id_full)
         plt.gcf().savefig(save_path, format='png', dpi=300)
 
         # plt.subplot(1, 2, 2)
@@ -440,7 +501,7 @@ def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = Fals
         #                                                       colors, cmap, predictor_labels=pred_labels)
         # plt.title("MAP HMM states")
         plt.title("HMM states")
-        save_path = session.figure_path / '{}_map_predicted_states.png'.format(session.sess_id_full)
+        save_path = figure_path / '{}_map_predicted_states.png'.format(sess_id_full)
         fig.savefig(save_path, format='png', dpi=300)
 
     inferred_state_list, inferred_durations = ssm.util.rle(most_likely_states)
@@ -483,7 +544,7 @@ def map_block_states(block_df: pd.DataFrame, session: Session, plot: bool = Fals
     return model_dict, block_df
 
 
-def save_block_model_dict(model_dict: dict, session: Session) -> Path:
+def save_block_model_dict(model_dict: dict, processed_data_path: Path, sess_id_full: str) -> Path:
     """Save a fitted block LM-HMM model dictionary.
 
     Parameters
@@ -491,15 +552,17 @@ def save_block_model_dict(model_dict: dict, session: Session) -> Path:
     model_dict : dict
         Model output dictionary containing fitted block-model results. Expected
         top-level keys are workflow-dependent, commonly `mle` and `map`.
-    session : Session
-        Session metadata with `processed_data_path` and `sess_id_full`.
+    processed_data_path : Path
+        Directory where the block model pickle should be saved.
+    sess_id_full : str
+        Full session identifier used in the saved filename.
 
     Returns
     -------
     Path
         Pickle path with filename `{sess_id_full}_block_statedict.pkl`.
     """
-    save_path = session.processed_data_path / f"{session.sess_id_full}_block_statedict.pkl"
+    save_path = processed_data_path / f"{sess_id_full}_block_statedict.pkl"
     with open(save_path, "wb") as file:
         pkl.dump(model_dict, file)
     return save_path
@@ -510,12 +573,21 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
 
     mle_model_dict, block_performance = mle_block_states(block_performance, session.figure_path, session.sess_id_abbreviated,
                                                          plot=True, num_states=num_states)
-    # map_model_dict, block_performance = map_block_states(block_performance, session.figure_path, session.sess_id_abbreviated,
-    #                                                      plot=True, model_dict=mle_model_dict, num_states=num_states)
-    map_model_dict, block_performance = map_block_states(block_performance, session,
-                                                         plot=True, model_dict=mle_model_dict, num_states=num_states,
-                                                         prior_alpha=prior_alpha, prior_sigma=prior_sigma)
-    save_block_model_dict(map_model_dict, session)
+    map_model_dict, block_performance = map_block_states(
+        block_performance,
+        figure_path=session.figure_path,
+        sess_id_full=session.sess_id_full,
+        plot=True,
+        model_dict=mle_model_dict,
+        num_states=num_states,
+        prior_alpha=prior_alpha,
+        prior_sigma=prior_sigma,
+    )
+    save_block_model_dict(
+        map_model_dict,
+        processed_data_path=session.processed_data_path,
+        sess_id_full=session.sess_id_full,
+    )
 
     block_performance = hardcode_block_strategy(block_performance)  # These are kept for inspection, they are NOT used in modeling or passed down to trials
     block_performance.to_csv(session.processed_data_path / (session.sess_id_full + '_block_performance.csv'), index=False)
@@ -538,29 +610,6 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
     return block_performance, augmented_trial_df
 
 
-def run_information_criteria(block_performance: pd.DataFrame, session: Session, algorithm: str = 'MLE',
-                             prior_alpha: float = 1, prior_sigma: float = 1):
-    if algorithm.upper() != 'MLE':
-        raise ValueError("LM-HMM information criteria should only be run on MLE models.")
-
-    prepared = prepare_block_lm_hmm_data(block_performance)
-    trials_to_correct = prepared["observations"]
-    predictors = prepared["inputs"]
-    min_states = 1
-    max_states = 5
-    n_threads = 4
-    n_runs = 10
-
-    states = np.arange(min_states,max_states+1)
-    # calculate_information_criteria returns (BIC, AIC) in that order.
-    BIC, AIC = calculate_information_criteria(observations=trials_to_correct, inputs=predictors, states=states,
-                                              nRunEM=n_runs, n_jobs=n_threads, algorithm=algorithm,
-                                              prior_alpha=prior_alpha, prior_sigma=prior_sigma)
-
-    model_selection = plot_information_criteria(AIC, BIC, states, session)
-    return model_selection
-
-
 def build_input_driven_hmm(num_states: int, obs_dim: int, input_dim: int,
                            algorithm: str = 'MLE', prior_alpha: float = 1, prior_sigma: float = 1):
     """Build an input-driven LM-HMM using either MLE or MAP settings."""
@@ -576,8 +625,35 @@ def build_input_driven_hmm(num_states: int, obs_dim: int, input_dim: int,
     raise ValueError(f"algorithm must be 'MLE' or 'MAP', got {algorithm}")
 
 
-def single_func(observations: np.ndarray, inputs: np.ndarray, num_states: int, algorithm: str = 'MLE',
-                n_iter: int=1000, tol: float=10**-4, prior_alpha=1, prior_sigma=1):
+def fit_lm_hmm_and_score_log_likelihood(observations: np.ndarray, inputs: np.ndarray, num_states: int,
+                                         algorithm: str = 'MLE', n_iter: int = 1000, tol: float = 10**-4,
+                                         prior_alpha=1, prior_sigma=1):
+    """Fit one LM-HMM restart and return its training log likelihood.
+
+    Parameters
+    ----------
+    observations : np.ndarray
+        Observation matrix with shape `(n_blocks, observation_dimensions)`.
+    inputs : np.ndarray
+        Predictor matrix with shape `(n_blocks, input_dimensions)`.
+    num_states : int
+        Number of hidden states to fit.
+    algorithm : str, default='MLE'
+        Fitting mode passed to `build_input_driven_hmm`; either 'MLE' or 'MAP'.
+    n_iter : int, default=1000
+        Maximum EM iterations.
+    tol : float, default=1e-4
+        EM convergence tolerance.
+    prior_alpha : float, default=1
+        Sticky-transition prior concentration for MAP fits.
+    prior_sigma : float, default=1
+        Observation prior scale for MAP fits.
+
+    Returns
+    -------
+    float
+        Fitted model log likelihood on `observations`, in log-probability units.
+    """
     obs_dim, input_dim = observations.shape[1], inputs.shape[1]
     hmm = build_input_driven_hmm(num_states=num_states, obs_dim=obs_dim, input_dim=input_dim,
                                  algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma)
@@ -732,8 +808,30 @@ def calculate_blocked_holdout_scores(observations: np.ndarray, inputs: np.ndarra
     return cv_ll
 
 
-def plot_cross_validation_scores(cv_log_likelihoods: np.ndarray, states: np.ndarray, session: Session):
-    """Plot blocked within-session held-out log likelihood by number of states."""
+def plot_cross_validation_scores(
+    cv_log_likelihoods: np.ndarray,
+    states: np.ndarray,
+    figure_path: Path,
+    sess_id_full: str,
+):
+    """Plot blocked within-session held-out log likelihood by state count.
+
+    Parameters
+    ----------
+    cv_log_likelihoods : np.ndarray
+        Held-out log likelihoods with shape `(n_states, n_restarts, n_folds)`.
+    states : np.ndarray
+        Candidate state counts with shape `(n_states,)`.
+    figure_path : Path
+        Directory where the plot is saved.
+    sess_id_full : str
+        Full session identifier used in the saved figure filename.
+
+    Returns
+    -------
+    dict
+        Dictionary containing `CV_log_likelihood` and `states`.
+    """
     mean_ll = np.mean(cv_log_likelihoods, axis=(1, 2))
     sem_ll = np.std(cv_log_likelihoods, axis=(1, 2)) / np.sqrt(cv_log_likelihoods.shape[1] * cv_log_likelihoods.shape[2])
 
@@ -750,7 +848,7 @@ def plot_cross_validation_scores(cv_log_likelihoods: np.ndarray, states: np.ndar
     ax.spines['right'].set_visible(False)
     plt.tight_layout()
 
-    save_path = session.figure_path / f'{session.sess_id_full}_block_HMM_CV_loglikelihood.png'
+    save_path = figure_path / f'{sess_id_full}_block_HMM_CV_loglikelihood.png'
     plt.gcf().savefig(save_path, format='png', dpi=300)
     plt.show()
 
@@ -774,7 +872,89 @@ def run_cross_validation(block_performance: pd.DataFrame, session: Session, algo
     cv_ll = calculate_blocked_holdout_scores(observations=trials_to_correct, inputs=predictors, states=states,
                                              nRunEM=n_runs, n_folds=n_folds, n_jobs=n_threads,
                                              algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma)
-    return plot_cross_validation_scores(cv_ll, states, session)
+    return plot_cross_validation_scores(
+        cv_ll,
+        states,
+        figure_path=session.figure_path,
+        sess_id_full=session.sess_id_full,
+    )
+
+
+def run_information_criteria(block_performance: pd.DataFrame, session: Session, algorithm: str = 'MLE',
+                             prior_alpha: float = 1, prior_sigma: float = 1,
+                             min_states: int = 1, max_states: int = 5,
+                             n_threads: int = 4, n_runs: int = 10):
+    """Run LM-HMM AIC/BIC model selection for one session.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`.
+    session : Session
+        Session metadata providing `figure_path` and `sess_id_full`.
+    algorithm : str, default='MLE'
+        Fitting mode. Information criteria are currently restricted to 'MLE'.
+    prior_alpha : float, default=1
+        Transition prior concentration passed through to the scorer.
+    prior_sigma : float, default=1
+        Observation prior scale passed through to the scorer.
+    min_states : int, default=1
+        Smallest hidden-state count to evaluate.
+    max_states : int, default=5
+        Largest hidden-state count to evaluate, inclusive.
+    n_threads : int, default=4
+        Parallel jobs used across EM restarts.
+    n_runs : int, default=10
+        Number of EM restarts per state count.
+
+    Returns
+    -------
+    dict
+        Model-selection dictionary containing `AIC` and `BIC` arrays with shape
+        `(n_state_counts, n_runs)`.
+    """
+    if algorithm.upper() != 'MLE':
+        raise ValueError("LM-HMM information criteria should only be run on MLE models.")
+
+    prepared = prepare_block_lm_hmm_data(block_performance)
+    trials_to_correct = prepared["observations"]
+    predictors = prepared["inputs"]
+
+    states = np.arange(min_states,max_states+1)
+    AIC, BIC = calculate_information_criteria(observations=trials_to_correct, inputs=predictors, states=states,
+                                              nRunEM=n_runs, n_jobs=n_threads, algorithm=algorithm,
+                                              prior_alpha=prior_alpha, prior_sigma=prior_sigma)
+
+    plot_information_criteria(
+        AIC,
+        BIC,
+        states,
+        figure_path=session.figure_path,
+        sess_id_full=session.sess_id_full,
+    )
+    return {'AIC': AIC, 'BIC': BIC}
+
+
+def count_lm_hmm_parameters(num_states: int, obs_dim: int, input_dim: int) -> int:
+    """Count free parameters for block LM-HMM information criteria.
+
+    Parameters
+    ----------
+    num_states : int
+        Number of hidden LM-HMM states.
+    obs_dim : int
+        Observation dimensionality.
+    input_dim : int
+        Predictor dimensionality.
+
+    Returns
+    -------
+    int
+        Total free-parameter count used in AIC/BIC calculations.
+    """
+    transition_params = (num_states + 1) * (num_states - 1)
+    observation_params = num_states * (obs_dim * input_dim + 2 * obs_dim)
+    return transition_params + observation_params
 
 
 def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray, states: np.ndarray, nRunEM: int, n_jobs: int,
@@ -782,10 +962,9 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
     if algorithm.upper() != 'MLE':
         raise ValueError("LM-HMM information criteria should only be run on MLE models.")
 
-    # Number of parameters for the model: (transition matrix) + (mean values for each state) + (covariance matrix for each state)
-    obs_dim = observations.shape[1] # make sure observations are T x Dim??
+    obs_dim = observations.shape[1]
     n_timesteps = observations.shape[0]
-    input_dim = inputs.shape[1] # make sure inputs are T x Dim
+    input_dim = inputs.shape[1]
     n_states = states.size
 
     AIC = np.zeros((n_states, nRunEM))
@@ -793,10 +972,9 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
     for iS, num_states in enumerate(states):#range(2, n + 1)):
         print("running {} state(s)".format(num_states))
 
-        K = (num_states + 1) * (num_states - 1) + num_states * (obs_dim * input_dim + 2 * obs_dim)
-        # delayed_calls = [delayed(single_func)(observations, inputs, num_states, prior_alpha, prior_sigma) for iRun in range(nRunEM)]
+        K = count_lm_hmm_parameters(num_states=num_states, obs_dim=obs_dim, input_dim=input_dim)
         delayed_calls = [
-            delayed(single_func)(
+            delayed(fit_lm_hmm_and_score_log_likelihood)(
                 observations, inputs, num_states,
                 algorithm=algorithm,
                 n_iter=1000,
@@ -807,19 +985,37 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
             for iRun in range(nRunEM)
         ]
         results = Parallel(n_jobs=n_jobs)(delayed_calls)
-        # results = [single_func(observations, inputs, num_states) for iRun in range(nRunEM)]
 
         for iRun in range(nRunEM):
             AIC[iS, iRun] = K * 2 - 2 * results[iRun]
             BIC[iS, iRun] = K * np.log(n_timesteps) - 2 * results[iRun]
 
-    return BIC, AIC
+    return AIC, BIC
 
 
-def plot_information_criteria(aic, bic, states, session: Session):
+def plot_information_criteria(aic, bic, states, figure_path: Path, sess_id_full: str):
+    """Plot LM-HMM AIC/BIC scores by state count.
+
+    Parameters
+    ----------
+    aic : np.ndarray
+        AIC values with shape `(n_states, n_restarts)`.
+    bic : np.ndarray
+        BIC values with shape `(n_states, n_restarts)`.
+    states : np.ndarray
+        Candidate state counts with shape `(n_states,)`.
+    figure_path : Path
+        Directory where the plot is saved.
+    sess_id_full : str
+        Full session identifier used in the saved figure filename.
+
+    Returns
+    -------
+    None
+        Saves an AIC/BIC plot to `figure_path`.
+    """
     f, ax = plt.subplots(facecolor='w', edgecolor='k')
 
-    # x = np.arange(1, n_states + 1)
     y = np.mean(bic, 1)
     error = np.std(bic, 1)
     bic_line = plt.plot(states, y, label="BIC")[0]
@@ -834,10 +1030,6 @@ def plot_information_criteria(aic, bic, states, session: Session):
     plt.fill_between(states, y - error, y + error,
                      alpha=0.3, color=aic_color)
     plt.xlabel("states")
-    # plt.xlim(0, max_states + 1)
-    # plt.xlim(np.amin(states) - 1, np.amax(states) + 1)
-    # plt.xlim(np.amin(states) - .2, np.amax(states) + .2)
-    # plt.xticks(np.arange(1, n_states + 1, 1))
     plt.xticks(states)
     plt.ylabel("criterion")
     plt.legend(loc="upper left", frameon=False)
@@ -846,15 +1038,10 @@ def plot_information_criteria(aic, bic, states, session: Session):
     ax.spines['right'].set_visible(False)
     plt.tight_layout()
 
-    save_path = session.figure_path / '{}_block_HMM_AIC_BIC.png'.format(session.sess_id_full)
+    save_path = figure_path / '{}_block_HMM_AIC_BIC.png'.format(sess_id_full)
     plt.tight_layout()
     plt.gcf().savefig(save_path, format='png', dpi=300)
-    print("saved BIC/AIC plot to {}".format(save_path))
-    # plt.show()
-    # plt.close(fig)
-
-    model_selection = {'AIC': aic, 'BIC': bic}
-    return model_selection
+    print("saved AIC/BIC plot to {}".format(save_path))
 
 
 def main():

@@ -1014,22 +1014,35 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
             for iRun in range(nRunEM)
         ]
         results = Parallel(n_jobs=n_jobs)(delayed_calls)
-        # results = Parallel(n_jobs=n_jobs)(delayed_calls)
-        # results = [single_func(observations, inputs, num_states) for iRun in range(nRunEM)]
 
         for iRun in range(nRunEM):
             AIC[iS, iRun] = K * 2 - 2 * results[iRun]
             BIC[iS, iRun] = K * np.log(n_timesteps) - 2 * results[iRun]
 
-    return BIC, AIC
+    return AIC, BIC
 
 
 def plot_information_criteria(aic, bic, states, session: Session):
-    # f, ax = plt.subplots(figsize=(20, 10), facecolor='w', edgecolor='k')
-    f, ax = plt.subplots(facecolor='w', edgecolor='k')
-    n_states = states.size
+    """Plot GLM-HMM AIC/BIC scores by state count.
 
-    x = np.arange(1, n_states + 1)
+    Parameters
+    ----------
+    aic : np.ndarray
+        AIC values with shape `(n_states, n_restarts)`.
+    bic : np.ndarray
+        BIC values with shape `(n_states, n_restarts)`.
+    states : np.ndarray
+        Candidate state counts with shape `(n_states,)`.
+    session : Session
+        Session metadata with `figure_path` and `sess_id_full`.
+
+    Returns
+    -------
+    None
+        Saves an AIC/BIC plot to `session.figure_path`.
+    """
+    f, ax = plt.subplots(facecolor='w', edgecolor='k')
+
     y = np.mean(bic, 1)
     error = np.std(bic, 1)
     bic_line = plt.plot(states, y, label="BIC")[0]
@@ -1043,12 +1056,9 @@ def plot_information_criteria(aic, bic, states, session: Session):
     aic_color = aic_line.get_color()
     plt.fill_between(states, y - error, y + error,
                      alpha=0.3, color=aic_color)
-    plt.xlabel("states")
-    # plt.xlim(0, max_states + 1)
     plt.xlim(np.amin(states)-.2, np.amax(states)+.2)
-    # plt.xlim(.2, np.amax(states)+.2)
     plt.xlabel("Number of states")
-    plt.xticks(np.arange(1, n_states+1, 1))
+    plt.xticks(states)
     plt.ylabel("criterion")
     plt.legend(loc="upper left", frameon=False)
     plt.title("BIC and AIC", fontsize=20)
@@ -1061,9 +1071,6 @@ def plot_information_criteria(aic, bic, states, session: Session):
     plt.gcf().savefig(save_path, format='png', dpi=300)
     print(f"Saved AIC/BIC plot to {save_path}")
     plt.show()
-
-    model_selection = {'AIC': aic, 'BIC': bic}
-    return model_selection
 
 
 def build_blocked_holdout_indices(n_timesteps: int, n_folds: int = 5) -> list[np.ndarray]:
@@ -1280,7 +1287,40 @@ def run_cross_validation(trial_df: pd.DataFrame, session: Session, algorithm='ML
 
 def run_information_criteria(trial_df: pd.DataFrame, session: Session, algorithm='MLE',
                              prior_alpha=1, prior_sigma=1,
-                             predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS):
+                             predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS,
+                             min_states: int = 1, max_states: int = 5,
+                             n_threads: int = 4, n_runs: int = 10):
+    """Run GLM-HMM AIC/BIC model selection for one session.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`.
+    session : Session
+        Session metadata used by `plot_information_criteria`.
+    algorithm : str, default='MLE'
+        Fitting mode. Information criteria are currently restricted to 'MLE'.
+    prior_alpha : float, default=1
+        Transition prior concentration passed through to the scorer.
+    prior_sigma : float, default=1
+        Observation prior scale passed through to the scorer.
+    predictor_columns : tuple[str, ...]
+        Trial-level predictor columns used with an added bias column.
+    min_states : int, default=1
+        Smallest hidden-state count to evaluate.
+    max_states : int, default=5
+        Largest hidden-state count to evaluate, inclusive.
+    n_threads : int, default=4
+        Parallel jobs used across EM restarts.
+    n_runs : int, default=10
+        Number of EM restarts per state count.
+
+    Returns
+    -------
+    dict
+        Model-selection dictionary containing `AIC` and `BIC` arrays with shape
+        `(n_state_counts, n_runs)`.
+    """
     if algorithm.upper() != 'MLE':
         raise ValueError("GLM-HMM information criteria should only be run on MLE models.")
 
@@ -1288,17 +1328,12 @@ def run_information_criteria(trial_df: pd.DataFrame, session: Session, algorithm
     action = prepared["observations"]
     predictors = prepared["inputs"]
 
-    min_states = 1
-    max_states = 5
-    n_threads = 4
-    n_runs = 10
-
     states = np.arange(min_states,max_states+1)
-    BIC, AIC = calculate_information_criteria(observations=action, inputs=predictors, states=states, algorithm='MLE',
+    AIC, BIC = calculate_information_criteria(observations=action, inputs=predictors, states=states, algorithm='MLE',
                                               prior_alpha=prior_alpha, prior_sigma=prior_sigma,
                                               nRunEM=n_runs, n_jobs=n_threads)
-    model_selection = plot_information_criteria(AIC, BIC, states, session)
-    return model_selection
+    plot_information_criteria(AIC, BIC, states, session)
+    return {'AIC': AIC, 'BIC': BIC}
 
 
 def main():
