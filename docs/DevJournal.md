@@ -51,3 +51,33 @@ outputs.
 - Added focused pytest coverage around the session-analysis helper functions and
   reran related tests for session analysis, performance plotting, and main
   wrapper behavior.
+
+# 2026/05/06
+
+Refactored and bug-fixed the state-space modeling workflow for block-level
+LM-HMMs and trial-level GLM-HMMs. The priority was fixing behavior and data
+contracts before doing broader readability refactors.
+
+- In `src/behavior_analysis/block_state_space_modeling.py`, added a shared
+  valid-block-history mask so block LM-HMM fitting, hardcoded inspection labels,
+  and presentation plotting use the same criteria for valid block outcomes and
+  previous-block history.
+- Clarified the block strategy inheritance flow: hardcoded strategy labels are
+  kept only for inspection, while trial-level inheritance propagates the HMM
+  `inferred_strategy` and block bias using explicit
+  `inherited_block_strategy` and `inherited_block_bias` columns.
+- Centralized block model pickle saving with `save_block_model_dict()` so
+  `run_block_modeling()` owns the saved `{sess_id_full}_block_statedict.pkl`
+  artifact and `map_block_states()` only computes and returns model results.
+- In `src/behavior_analysis/trial_state_space_modeling.py`, updated trial
+  GLM-HMM preparation to use robust missing-value checks for `prev_action` and
+  inherited block strategy labels.
+- Added `project_utils.is_zero_flag()` and used it for `give_reward` filtering
+  so CSV-loaded string flags such as `"0"` and `"1"` are handled correctly, and
+  unexpected present nonnumeric flag values raise a `ValueError`.
+- Centralized trial model pickle saving with `save_trial_model_dict()` so
+  `run_trial_modeling()` owns the saved `{sess_id_full}_trial_statedict.pkl`
+  artifact and `map_trial_states()` no longer writes a duplicate/current-working-
+  directory pickle.
+- Added tests for block and trial model save ownership, robust missing/flag
+  handling, valid-mask behavior, and state-space preparation helpers.

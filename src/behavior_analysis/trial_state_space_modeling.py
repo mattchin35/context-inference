@@ -996,8 +996,8 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
     n_states = states.size
     num_categories = 2
 
-    BIC = np.zeros((n_states, nRunEM))
     AIC = np.zeros((n_states, nRunEM))
+    BIC = np.zeros((n_states, nRunEM))
     for iS, num_states in enumerate(states): #range(2, n + 1)):
         print("running {} state(s)".format(num_states))
 
@@ -1018,8 +1018,8 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
         # results = [single_func(observations, inputs, num_states) for iRun in range(nRunEM)]
 
         for iRun in range(nRunEM):
-            BIC[iS, iRun] = K * np.log(n_timesteps) - 2 * results[iRun]
             AIC[iS, iRun] = K * 2 - 2 * results[iRun]
+            BIC[iS, iRun] = K * np.log(n_timesteps) - 2 * results[iRun]
 
     return BIC, AIC
 

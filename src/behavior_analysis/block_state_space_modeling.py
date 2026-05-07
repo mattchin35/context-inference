@@ -788,8 +788,8 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
     input_dim = inputs.shape[1] # make sure inputs are T x Dim
     n_states = states.size
 
-    BIC = np.zeros((n_states, nRunEM))
     AIC = np.zeros((n_states, nRunEM))
+    BIC = np.zeros((n_states, nRunEM))
     for iS, num_states in enumerate(states):#range(2, n + 1)):
         print("running {} state(s)".format(num_states))
 
@@ -810,14 +810,13 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
         # results = [single_func(observations, inputs, num_states) for iRun in range(nRunEM)]
 
         for iRun in range(nRunEM):
-            BIC[iS, iRun] = K * np.log(n_timesteps) - 2 * results[iRun]
             AIC[iS, iRun] = K * 2 - 2 * results[iRun]
+            BIC[iS, iRun] = K * np.log(n_timesteps) - 2 * results[iRun]
 
     return BIC, AIC
 
 
 def plot_information_criteria(aic, bic, states, session: Session):
-    # fig = plt.figure(figsize=(20, 10), dpi=80, facecolor='w', edgecolor='k')
     f, ax = plt.subplots(facecolor='w', edgecolor='k')
 
     # x = np.arange(1, n_states + 1)
@@ -851,8 +850,7 @@ def plot_information_criteria(aic, bic, states, session: Session):
     plt.tight_layout()
     plt.gcf().savefig(save_path, format='png', dpi=300)
     print("saved BIC/AIC plot to {}".format(save_path))
-    # plt.savefig(savefile, format="pdf", bbox_inches="tight")
-    plt.show()
+    # plt.show()
     # plt.close(fig)
 
     model_selection = {'AIC': aic, 'BIC': bic}

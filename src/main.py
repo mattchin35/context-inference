@@ -752,9 +752,6 @@ def main_multisession():
     )
 
 
-
-
-
 def main_mouse():
     """Analyze a single behavior session from start to finish."""
 
