@@ -6,46 +6,21 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 import pickle as pkl
 import re
 from pathlib import Path
 import ssm
-from ssm.util import find_permutation
-from ssm.plots import gradient_cmap, white_to_color_cmap
 import src.state_space_modeling.utilplot as utilplot
-from ssm.util import find_permutation
-import multiprocessing as mp
 from joblib import Parallel, delayed
 from typing import Protocol
-import scipy as sp
 from src.behavior_analysis.project_utils import is_present_value, is_zero_flag
-
-
-# tab20 = plt.cm.tab20
-# tab10 = plt.cm.tab10
-# tab20_colors = [tab20(i) for i in range(tab20.N)]
-
-
-color_names = [
-    "windows blue",
-    "red",
-    "amber",
-    "faded green",
-    "dusty purple",
-    "orange"
-    ]
-colors = sns.xkcd_palette(color_names)
-cmap = gradient_cmap(colors)
+from src.behavior_analysis.plotting_utils import (
+    build_presentation_colors,
+    build_state_colormap,
+    get_state_colors,
+)
 
 np.random.seed(0)
-rl_cmap = plt.cm.autumn
-inference_cmap = plt.cm.winter
-
-rl_colors = ["red","amber","orange"]
-inf_colors = ["windows blue", "dusty purple", "faded green"]
-# rl_colors_tab20 = [tab20_colors[2],tab20_colors[3]]
-# inf_colors_tab20 = [tab20_colors[0],tab20_colors[1]]
 
 
 TRIAL_GLM_PREDICTOR_LABELS = {
@@ -104,7 +79,6 @@ def plot_postprob_obs(posterior_probs: np.ndarray, observations: np.ndarray, inp
 
     lim_input = 1.1 * abs(inputs).max()
     for d in range(input_dim):
-        # a1.imshow(ind_state[None,:], aspect="auto", cmap=cmap, vmin=0, vmax=len(colors)-1, extent=(0, time_bins, -lim*obs_dim, (obs_dim)*lim), alpha=0.5)
         # a1.plot(inputs[:, d] - lim_input * d, '-c', label='inpt dim ' + str(d))
         a1.plot(inputs[:, d] - lim_input * d, label='inpt dim ' + str(d))
     # a1.plot(observations[:, d], label='obs' * (d == 0))
@@ -343,6 +317,32 @@ def interpret_binary_glm_weights(raw_weights: np.ndarray) -> tuple[np.ndarray, n
     return normalized_raw, interpreted_left_choice
 
 
+def build_block_comparison_colors(block_weight_dict: dict) -> tuple[list, object]:
+    """Build semantic colors for trial plots that display block-model states.
+
+    Parameters
+    ----------
+    block_weight_dict : dict
+        Block-model weight dictionary containing `weights`. Expected weight
+        shape is `(num_states, obs_dim, input_dim)`, but squeezed one-state or
+        one-predictor arrays are accepted.
+
+    Returns
+    -------
+    tuple[list, object]
+        Semantic presentation colors and a matching state colormap.
+    """
+    block_weights = np.asarray(block_weight_dict["weights"], dtype=float)
+    if block_weights.ndim == 0:
+        primary_predictor_weights = block_weights.reshape(1)
+    elif block_weights.ndim == 1:
+        primary_predictor_weights = block_weights
+    else:
+        primary_predictor_weights = block_weights.reshape(block_weights.shape[0], -1)[:, 0]
+
+    return build_presentation_colors(primary_predictor_weights)
+
+
 def split_blocked_holdout_sequences(
     observations: np.ndarray,
     inputs: np.ndarray,
@@ -421,6 +421,8 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     obs_dim = 1
     input_dim = predictors.shape[1]
     num_categories = 2
+    state_colors = get_state_colors(num_states)
+    state_cmap = build_state_colormap(state_colors)
 
     if model_dict is None:
         model_dict = {}
@@ -477,7 +479,7 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     if plot:
         f, ax = plt.subplots()
         for k in range(num_states):
-            plt.plot(range(input_dim), interpreted_weights[k][0], color=colors[k],
+            plt.plot(range(input_dim), interpreted_weights[k][0], color=state_colors[k],
                      lw=1.5, linestyle='--')#, label='state {}'.format(k),)
 
         plt.yticks(fontsize=10)
@@ -509,25 +511,25 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         # sess_id = 0  # session id; can choose any index between 0 and num_sess-1
         for k in range(num_states):
             plt.plot(posterior_probs[:,k], label="State " + str(k + 1), lw=2,
-                     color=colors[k])
+                     color=state_colors[k])
         plt.ylim((-0.01, 1.01))
         plt.yticks([0, 0.5, 1], fontsize=10)
         plt.xlabel("trial #", fontsize=15)
         plt.ylabel("p(state)", fontsize=15)
-        # fig, ax = utilplot.plot_postprob_obs(posterior_probs, action, predictors, mle_hmm, colors, cmap)
+        # fig, ax = utilplot.plot_postprob_obs(posterior_probs, action, predictors, mle_hmm, state_colors, state_cmap)
         plt.title("MLE HMM states")
         plt.tight_layout()
         save_path = figure_path / '{}_trial_mle_predicted_states.png'.format(sess_id)
         fig.savefig(save_path, format='png', dpi=300)
 
         f, ax = plot_postprob_obs(posterior_probs=posterior_probs,observations=action, inputs=predictors,
-                                  hmm_fit=mle_hmm, colors=colors, cmap=cmap)
+                                  hmm_fit=mle_hmm, colors=state_colors, cmap=state_cmap)
         save_path = figure_path / '{}_trial_mle_utilplotSummary.png'.format(sess_id)
         f.savefig(save_path, format='png', dpi=300)
 
 
         f, ax = plot_labeled_observations(states1=block_strategy, posterior_probs2=posterior_probs,observations=action, inputs=predictors,
-                                  hmm_fit=mle_hmm, colors=colors, cmap=cmap)
+                                  hmm_fit=mle_hmm, colors=state_colors, cmap=state_cmap)
 
         # f, ax = plt.subplots()
         # plt.plot(action)
@@ -555,7 +557,7 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
             inferred_durations_stacked.append(inferred_durations[inferred_state_list == s])
 
         fig = plt.figure(figsize=(8, 4))
-        plt.hist(inferred_durations_stacked, label=['state ' + str(s) for s in range(num_states)], color=colors[:num_states])
+        plt.hist(inferred_durations_stacked, label=['state ' + str(s) for s in range(num_states)], color=state_colors)
         plt.xlabel('Duration')
         plt.ylabel('Frequency')
         plt.legend()
@@ -579,8 +581,8 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     ix_valid = prepared["valid_mask"]
     df = trial_df[ix_valid]
     n_trials = df.shape[0]
-    cmap = gradient_cmap(colors)
-    # cmap = plt.cm.Set1
+    state_colors = get_state_colors(num_states)
+    state_cmap = build_state_colormap(state_colors)
 
     correct = df['correct'].to_numpy().reshape(-1,1).astype(int)
     block_strategy = df['inherited_block_strategy'].to_numpy()
@@ -661,7 +663,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     if plot:
         f, ax = plt.subplots()
         for k in range(num_states):
-            plt.plot(range(input_dim), interpreted_weights[k][0], color=colors[k],
+            plt.plot(range(input_dim), interpreted_weights[k][0], color=state_colors[k],
                      lw=1.5, linestyle='--')#, label='state {}'.format(k),)
 
         plt.yticks(fontsize=10)
@@ -695,13 +697,13 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         # sess_id = 0  # session id; can choose any index between 0 and num_sess-1
         for k in range(num_states):
             plt.plot(posterior_probs[:,k], label="State " + str(k + 1), lw=2,
-                     color=colors[k])
+                     color=state_colors[k])
         plt.ylim((-0.01, 1.01))
         plt.yticks([0, 0.5, 1], fontsize=10)
         plt.xlabel("Trial", fontsize=15)
         plt.ylabel("p(Strategy)", fontsize=15)
         plt.xlim((0, n_trials))
-        # fig, ax = utilplot.plot_postprob_obs(posterior_probs, action, predictors, mle_hmm, colors, cmap)
+        # fig, ax = utilplot.plot_postprob_obs(posterior_probs, action, predictors, mle_hmm, state_colors, state_cmap)
         # plt.title("MAP HMM states")
         plt.title("HMM behavior probabilities")
         plt.tight_layout()
@@ -709,59 +711,28 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         fig.savefig(save_path, format='png', dpi=300)
 
         f, ax = plot_postprob_obs(posterior_probs=posterior_probs,observations=action, inputs=predictors,
-                                  hmm_fit=map_hmm, colors=colors, cmap=cmap)
+                                  hmm_fit=map_hmm, colors=state_colors, cmap=state_cmap)
         save_path = figure_path / '{}_trial_map_utilplotSummary.png'.format(sess_id)
         f.savefig(save_path, format='png', dpi=300)
 
 
         f, ax = plot_labeled_observations(states1=block_strategy, posterior_probs2=posterior_probs,observations=action, inputs=predictors,
-                                  hmm_fit=map_hmm, colors=colors, cmap=cmap)
+                                  hmm_fit=map_hmm, colors=state_colors, cmap=state_cmap)
 
         ############################################
         if block_dict is not None:
             f, ax = plt.subplots(2,1)
 
-            block_weights = np.squeeze(block_dict['weight_dict']['weights'])
-            if block_weights.ndim > 1:
-                prev_reward_weight = np.squeeze(block_weights)[:, 0]
-                present_colors = np.arange(len(prev_reward_weight), dtype=object)
-            else:
-                prev_reward_weight = block_weights[0]
-                present_colors = np.arange(1, dtype=object)
-
-            ix_inf = prev_reward_weight < .5
-            ix_rl = prev_reward_weight >= .5
-            n_inf = np.sum(ix_inf)
-            n_rl = np.sum(ix_rl)
-            # colors_inf = inference_cmap(np.linspace(0, 1, n_inf))
-            # colors_rl = rl_cmap(np.linspace(0, 1, n_rl))
-            # present_colors = np.arange(len(prev_reward_weight), dtype=object)
-            # if prev_reward_weight.shape[0] > 1:
-            if block_weights.ndim > 1:
-                present_colors[ix_inf] = inf_colors[:n_inf]
-                present_colors[ix_rl] = rl_colors[:n_rl]
-            else:
-                present_colors = rl_colors if ix_rl else inf_colors
-
-            color_palette = sns.xkcd_palette(present_colors)
-            present_cmap = gradient_cmap(color_palette)
+            block_present_colors, block_present_cmap = build_block_comparison_colors(block_dict['weight_dict'])
             block_posterior_probs = block_dict['posterior_probs']
-            block_obs_dim = 1
             lim = 2 * abs(observations).max()
-            # state_detected = posterior_probs
             ind_state = np.argmax(block_posterior_probs, axis=1)
-            # indnot = np.all(posterior_probs < 0.8, axis=1)
             indnot = np.all(block_posterior_probs < 0.55, axis=1)
             ind_state[indnot] = -1
             time_bins = len(predictors)
-            # cmap.set_under('w')
 
-            set1_cmap = plt.cm.Set1
-            set1_cmap.set_under('w')
-
-            # for d in range(obs_dim):
-            # ax[0].imshow(ind_state[None, :], aspect="auto", cmap=set1_cmap, vmin=0, vmax=len(colors) - 1,
-            ax[0].imshow(ind_state[None, :], aspect="auto", cmap=cmap, vmin=0, vmax=len(colors) - 1,
+            ax[0].imshow(ind_state[None, :], aspect="auto", cmap=block_present_cmap,
+                      vmin=0, vmax=len(block_present_colors) - 1,
                       extent=(0, time_bins, -lim * obs_dim, lim), alpha=0.5)
             ax[0].plot(observations[:, 0], '-k', label='obs')
             ax[0].set_ylim(-0.2, 1.2)
@@ -770,15 +741,11 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
             ax[0].set_title('Trials labeled by block strategy')
 
             ind_state = np.argmax(posterior_probs, axis=1)
-            # indnot = np.all(posterior_probs < 0.8, axis=1)
             indnot = np.all(posterior_probs < 0.55, axis=1)
             ind_state[indnot] = -1
-            # cmap.set_under('w')
-            # tab10.set_under('w')
-            set1_cmap = plt.cm.Set1
-            set1_cmap.set_under('w')
 
-            ax[1].imshow(ind_state[None, :], aspect="auto", cmap=cmap, vmin=0, vmax=len(colors) - 1,
+            ax[1].imshow(ind_state[None, :], aspect="auto", cmap=state_cmap,
+                      vmin=0, vmax=len(state_colors) - 1,
                       extent=(0, time_bins, -lim * obs_dim, lim), alpha=0.5)
             ax[1].plot(observations[:, 0], '-k', label='obs')
             ax[1].set_ylim(-0.2, 1.2)
@@ -820,7 +787,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
             inferred_durations_stacked.append(inferred_durations[inferred_state_list == s])
 
         fig = plt.figure(figsize=(8, 4))
-        plt.hist(inferred_durations_stacked, label=['state ' + str(s) for s in range(num_states)], color=colors[:num_states])
+        plt.hist(inferred_durations_stacked, label=['state ' + str(s) for s in range(num_states)], color=state_colors)
         plt.xlabel('Duration')
         plt.ylabel('Frequency')
         plt.legend()
@@ -942,8 +909,35 @@ def build_input_driven_glm_hmm(
     raise ValueError(f"Algorithm must be 'MLE' or 'MAP', got {algorithm}")
 
 
-def calculate_log_likelihood(observations: np.ndarray, inputs: np.ndarray, num_states: int,
-                 prior_sigma=1, prior_alpha=1, algorithm='MLE', n_iter: int=1000, tol: float=10**-4,):
+def fit_glm_hmm_and_score_log_likelihood(observations: np.ndarray, inputs: np.ndarray, num_states: int,
+                                         prior_sigma=1, prior_alpha=1, algorithm='MLE',
+                                         n_iter: int = 1000, tol: float = 10**-4):
+    """Fit one GLM-HMM restart and return its training log likelihood.
+
+    Parameters
+    ----------
+    observations : np.ndarray
+        Binary action observations with shape `(n_trials, 1)`.
+    inputs : np.ndarray
+        Predictor matrix with shape `(n_trials, n_predictors)`.
+    num_states : int
+        Number of hidden GLM-HMM states.
+    prior_sigma : float, default=1
+        Observation prior scale used for MAP fits.
+    prior_alpha : float, default=1
+        Sticky-transition concentration used for MAP fits.
+    algorithm : str, default='MLE'
+        Fitting mode, either 'MLE' or 'MAP'.
+    n_iter : int, default=1000
+        Maximum EM iterations.
+    tol : float, default=1e-4
+        EM convergence tolerance.
+
+    Returns
+    -------
+    float
+        Fitted model log likelihood on `observations`, in log-probability units.
+    """
     assert algorithm in ['MAP', 'MLE'], "Algorithm must be MAP or MLE"
 
     obs_dim, input_dim = observations.shape[1], inputs.shape[1]
@@ -990,9 +984,8 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
     if algorithm.upper() != 'MLE':
         raise ValueError("GLM-HMM information criteria should only be run on MLE models.")
 
-    obs_dim = observations.shape[1] # make sure observations are T x Dim??
     n_timesteps = observations.shape[0]
-    input_dim = inputs.shape[1] # make sure inputs are T x Dim??
+    input_dim = inputs.shape[1]
     n_states = states.size
     num_categories = 2
 
@@ -1003,13 +996,15 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
 
         K = count_glm_hmm_parameters(num_states=num_states, input_dim=input_dim, num_categories=num_categories)
         delayed_calls = [
-            delayed(calculate_log_likelihood)(
+            delayed(fit_glm_hmm_and_score_log_likelihood)(
                 observations,
                 inputs,
                 num_states,
                 prior_sigma,
                 prior_alpha,
                 'MLE',
+                n_iter=1000,
+                tol=1e-4,
             )
             for iRun in range(nRunEM)
         ]
@@ -1022,7 +1017,7 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
     return AIC, BIC
 
 
-def plot_information_criteria(aic, bic, states, session: Session):
+def plot_information_criteria(aic, bic, states, figure_path: Path, sess_id_full: str):
     """Plot GLM-HMM AIC/BIC scores by state count.
 
     Parameters
@@ -1033,13 +1028,15 @@ def plot_information_criteria(aic, bic, states, session: Session):
         BIC values with shape `(n_states, n_restarts)`.
     states : np.ndarray
         Candidate state counts with shape `(n_states,)`.
-    session : Session
-        Session metadata with `figure_path` and `sess_id_full`.
+    figure_path : Path
+        Directory where the plot is saved.
+    sess_id_full : str
+        Full session identifier used in the saved figure filename.
 
     Returns
     -------
     None
-        Saves an AIC/BIC plot to `session.figure_path`.
+        Saves an AIC/BIC plot to `figure_path`.
     """
     f, ax = plt.subplots(facecolor='w', edgecolor='k')
 
@@ -1066,7 +1063,7 @@ def plot_information_criteria(aic, bic, states, session: Session):
     ax.spines['right'].set_visible(False)
     plt.tight_layout()
 
-    save_path = session.figure_path / '{}_trial_HMM_AIC_BIC.png'.format(session.sess_id_full)
+    save_path = figure_path / '{}_trial_HMM_AIC_BIC.png'.format(sess_id_full)
     plt.tight_layout()
     plt.gcf().savefig(save_path, format='png', dpi=300)
     print(f"Saved AIC/BIC plot to {save_path}")
@@ -1229,8 +1226,30 @@ def calculate_blocked_holdout_scores(
     return cv_ll
 
 
-def plot_cross_validation_scores(cv_log_likelihoods: np.ndarray, states: npt.NDArray[np.int64], session: Session):
-    """Plot blocked within-session held-out log likelihood by number of states."""
+def plot_cross_validation_scores(
+    cv_log_likelihoods: np.ndarray,
+    states: npt.NDArray[np.int64],
+    figure_path: Path,
+    sess_id_full: str,
+):
+    """Plot blocked within-session held-out log likelihood by state count.
+
+    Parameters
+    ----------
+    cv_log_likelihoods : np.ndarray
+        Held-out log likelihoods with shape `(n_states, n_restarts, n_folds)`.
+    states : np.ndarray
+        Candidate state counts with shape `(n_states,)`.
+    figure_path : Path
+        Directory where the plot is saved.
+    sess_id_full : str
+        Full session identifier used in the saved figure filename.
+
+    Returns
+    -------
+    dict
+        Dictionary containing `CV_log_likelihood` and `states`.
+    """
     mean_ll = np.mean(cv_log_likelihoods, axis=(1, 2))
     sem_ll = np.std(cv_log_likelihoods, axis=(1, 2)) / np.sqrt(
         cv_log_likelihoods.shape[1] * cv_log_likelihoods.shape[2]
@@ -1249,7 +1268,7 @@ def plot_cross_validation_scores(cv_log_likelihoods: np.ndarray, states: npt.NDA
     ax.spines['right'].set_visible(False)
     plt.tight_layout()
 
-    save_path = session.figure_path / f'{session.sess_id_full}_trial_HMM_blocked_holdout_loglikelihood.png'
+    save_path = figure_path / f'{sess_id_full}_trial_HMM_blocked_holdout_loglikelihood.png'
     plt.gcf().savefig(save_path, format='png', dpi=300)
     plt.show()
 
@@ -1282,7 +1301,12 @@ def run_cross_validation(trial_df: pd.DataFrame, session: Session, algorithm='ML
         prior_alpha=prior_alpha,
         prior_sigma=prior_sigma,
     )
-    return plot_cross_validation_scores(cv_ll, states, session)
+    return plot_cross_validation_scores(
+        cv_ll,
+        states,
+        figure_path=session.figure_path,
+        sess_id_full=session.sess_id_full,
+    )
 
 
 def run_information_criteria(trial_df: pd.DataFrame, session: Session, algorithm='MLE',
@@ -1332,7 +1356,13 @@ def run_information_criteria(trial_df: pd.DataFrame, session: Session, algorithm
     AIC, BIC = calculate_information_criteria(observations=action, inputs=predictors, states=states, algorithm='MLE',
                                               prior_alpha=prior_alpha, prior_sigma=prior_sigma,
                                               nRunEM=n_runs, n_jobs=n_threads)
-    plot_information_criteria(AIC, BIC, states, session)
+    plot_information_criteria(
+        AIC,
+        BIC,
+        states,
+        figure_path=session.figure_path,
+        sess_id_full=session.sess_id_full,
+    )
     return {'AIC': AIC, 'BIC': BIC}
 
 

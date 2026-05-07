@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Protocol
 from joblib import Parallel, delayed
 import ssm # note this should be the forked ssm repo
-from ssm.plots import gradient_cmap, white_to_color_cmap
+from ssm.plots import gradient_cmap
 import src.state_space_modeling.utilplot as utilplot
 from src.behavior_analysis.project_utils import is_present_value
+from src.behavior_analysis.plotting_utils import build_presentation_colors
 
 
 color_names = [
@@ -30,13 +31,6 @@ colors = sns.xkcd_palette(color_names)
 cmap = gradient_cmap(colors)
 
 # np.random.seed(0)
-
-# rl_cmap = plt.cm.autumn
-# inference_cmap = plt.cm.winter
-
-rl_colors = ["red", "amber", "orange"]
-inf_colors = ["windows blue", "dusty purple", "faded green"]
-
 
 class Session(Protocol):
     multi_session_save_path: Path
@@ -162,80 +156,6 @@ def normalize_lm_observation_parameters(
         normalized_mus = normalized_mus[:, np.newaxis]
 
     return normalized_weights, normalized_mus
-
-
-def sample_colormap(cmap, n_colors: int, low: float = 0.15, high: float = 0.85) -> list:
-    """Sample a readable range from a Matplotlib colormap.
-
-    Parameters
-    ----------
-    cmap : matplotlib.colors.Colormap
-        Colormap used to generate category colors.
-    n_colors : int
-        Number of colors to sample.
-    low : float, default=0.15
-        Lower colormap coordinate, unitless and in `[0, 1]`.
-    high : float, default=0.85
-        Upper colormap coordinate, unitless and in `[0, 1]`.
-
-    Returns
-    -------
-    list
-        RGBA color tuples with shape `(n_colors,)`.
-    """
-    if n_colors == 0:
-        return []
-    if n_colors == 1:
-        return [cmap((low + high) / 2)]
-    return list(cmap(np.linspace(low, high, n_colors)))
-
-
-def build_presentation_colors(
-    primary_predictor_weights: np.ndarray,
-) -> tuple[list, object]:
-    """Build state colors and a plotting colormap for LM-HMM presentation figures.
-
-    Parameters
-    ----------
-    primary_predictor_weights : np.ndarray
-        One scalar slope per hidden state, shape `(num_states,)`. Positive
-        slopes are treated as Q-learning-like and smaller slopes as
-        inference-like for presentation coloring.
-
-    Returns
-    -------
-    tuple[list, object]
-        - present_colors: list-like palette with one entry per hidden state
-        - present_cmap: Matplotlib-compatible colormap. For one-state models a
-          single-color-safe map is created with `white_to_color_cmap` rather
-          than `gradient_cmap`, which requires bounds at both 0 and 1.
-    """
-    state_weights = np.asarray(primary_predictor_weights, dtype=float).reshape(-1)
-    if state_weights.size == 0:
-        raise ValueError("primary_predictor_weights must contain at least one state.")
-
-    present_colors = np.empty(state_weights.size, dtype=object)
-    ix_inf = state_weights < 0.5
-    ix_rl = state_weights >= 0.5
-
-    for state_idx, color in zip(
-        np.flatnonzero(ix_inf),
-        sample_colormap(plt.cm.winter, int(np.sum(ix_inf))),
-    ):
-        present_colors[state_idx] = color
-    for state_idx, color in zip(
-        np.flatnonzero(ix_rl),
-        sample_colormap(plt.cm.autumn, int(np.sum(ix_rl))),
-    ):
-        present_colors[state_idx] = color
-    present_colors = list(present_colors)
-
-    if len(present_colors) == 1:
-        present_cmap = white_to_color_cmap(present_colors[0])
-    else:
-        present_cmap = gradient_cmap(present_colors)
-
-    return present_colors, present_cmap
 
 
 def split_blocked_holdout_sequences(
