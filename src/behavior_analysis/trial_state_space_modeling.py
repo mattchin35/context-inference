@@ -20,7 +20,8 @@ from src.behavior_analysis.plotting_utils import (
 )
 from src.behavior_analysis import state_space_plotting
 
-np.random.seed(0)
+np.random.seed(0)  # make sure this isn't needed and can be removed - put reproducibility settings in the functions
+# or their calls to ssm?
 
 
 TRIAL_GLM_PREDICTOR_LABELS = {
@@ -323,20 +324,11 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     ix_valid = prepared["valid_mask"]
     df = trial_df[ix_valid]
 
-    correct = df['correct'].to_numpy().reshape(-1,1).astype(int)
     block_strategy = df['inherited_block_strategy'].to_numpy()
     block_strategy[block_strategy != 'None'] = block_strategy[block_strategy != 'None'].astype(int)
     block_strategy[block_strategy == 'None'] = np.amax(block_strategy[block_strategy != 'None']) + 1
     block_strategy = block_strategy.reshape(-1,1).astype(int) #+ 1
-    block_bias = df['inherited_block_bias'].to_numpy()
-    block_bias[block_bias != 'True'] = False
-    block_bias[block_bias == 'True'] = True
-    block_bias = block_bias.reshape(-1, 1).astype(int)
 
-    # FQL_value = df['FQlearning_rel_value'].to_numpy().reshape(-1, 1).astype(float)
-    # HMM_value = df['HMM_rel_value'].to_numpy().reshape(-1, 1).astype(float)
-    # FQL_pLeft = df['FQlearning_prob_left'].to_numpy().reshape(-1, 1).astype(float)
-    # HMM_pLeft= df['HMM_prob_left'].to_numpy().reshape(-1, 1).astype(float)
     predictors = prepared["inputs"]
     pred_labels = prepared["predictor_labels"]
     action = prepared["observations"]
@@ -363,15 +355,11 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     fit_log_likelihood = mle_hmm.fit(action, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
     model_dict['mle']['fit_log_likelihood'] = fit_log_likelihood
 
-    # Plot the log probabilities of the true and fit models. Fit model final LL should be greater
-    # than or equal to true LL.
     if plot:
         fig = plt.figure(figsize=(4, 3), dpi=80, facecolor='w', edgecolor='k')
         plt.plot(fit_log_likelihood, label="EM")
-        # plt.plot([0, len(fit_ll)], (true_ll) * np.ones(2), ':k', label="True")
         plt.legend(loc="lower right")
         plt.xlabel("EM Iteration")
-        # plt.xlim(0, len(fit_ll))
         plt.ylabel("Log Probability")
         plt.title("MLE EM fit of observed data")
         plt.tight_layout()
@@ -397,12 +385,6 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
 
     model_dict['mle']['weight_dict'] = weight_dict
 
-    # weight_dict = {}
-    # weight_dict[0] = {}
-    # weight_dict[0]['weights'] = recovered_weights
-    # # weight_dict[0]['mus'] = recovered_mus
-    # weight_dict[0]['label'] = 'mle'
-    # model_dict['weight_dict'] = weight_dict
     if plot:
         f, ax = plt.subplots()
         for k in range(num_states):
@@ -412,7 +394,6 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         plt.yticks(fontsize=10)
         plt.ylabel("GLM weight", fontsize=15)
         plt.xlabel("covariate", fontsize=15)
-        # plt.xticks(np.arange(len(pred_labels)), pred_labels, fontsize=12, rotation=45)
         plt.xticks(np.arange(len(pred_labels)), [lab.replace('_', ' ') for lab in pred_labels], fontsize=12, rotation=45)
         plt.axhline(y=0, color="k", alpha=0.5, ls="--")
         plt.title("Model weights (interpreted left-choice coefficients)", fontsize=15)
@@ -420,11 +401,9 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         save_path = figure_path / '{}_trial_mle_weights.png'.format(sess_id_tag)
         plt.gcf().savefig(save_path, format='png', dpi=300)
 
-    ### Get expected states ###
     posterior_probs = mle_hmm.expected_states(data=action, input=predictors)[0]
     if plot:
         fig = plt.figure(figsize=(5, 2.5), dpi=80, facecolor='w', edgecolor='k')
-        # sess_id = 0  # session id; can choose any index between 0 and num_sess-1
         for k in range(num_states):
             plt.plot(posterior_probs[:,k], label="State " + str(k + 1), lw=2,
                      color=state_colors[k])
@@ -457,13 +436,6 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             colors=state_colors,
             cmap=state_cmap,
         )
-
-        # f, ax = plt.subplots()
-        # plt.plot(action)
-        # plt.xlabel("trial #", fontsize=15)
-        # plt.ylabel("action", fontsize=15)
-        # plt.title("Mouse actions", fontsize=15)
-        # plt.tight_layout()
 
     inferred_state_list, inferred_durations = ssm.util.rle(most_likely_states)
     model_dict['mle']['posterior_probs'] = posterior_probs
@@ -538,19 +510,10 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     # block_strategy[block_strategy != 'None'] = block_strategy[block_strategy != 'None'].astype(int)
     # block_strategy[block_strategy == 'None'] = np.amax(block_strategy[block_strategy != 'None']) + 1
     block_strategy = block_strategy.reshape(-1,1).astype(int) #+ 1
-    block_bias = df['inherited_block_bias'].to_numpy()
-    block_bias[block_bias != 'True'] = False
-    block_bias[block_bias == 'True'] = True
-    block_bias = block_bias.reshape(-1, 1).astype(int)
 
-    # FQL_value = df['FQlearning_rel_value'].to_numpy().reshape(-1, 1).astype(float)
-    # HMM_value = df['HMM_rel_value'].to_numpy().reshape(-1, 1).astype(float)
-    # FQL_pLeft = df['FQlearning_prob_left'].to_numpy().reshape(-1, 1).astype(float)
-    # HMM_pLeft= df['HMM_prob_left'].to_numpy().reshape(-1, 1).astype(float)
     predictors = prepared["inputs"]
     pred_labels = prepared["predictor_labels"]
     action = prepared["observations"]
-    # observations = np.concatenate([action, block_strategy], axis=1)
     observations = action
 
     obs_dim = action.shape[1]
@@ -574,15 +537,11 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     fit_log_likelihood = map_hmm.fit(action, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
     model_dict['map']['fit_log_likelihood'] = fit_log_likelihood
 
-    # Plot the log probabilities of the true and fit models. Fit model final LL should be greater
-    # than or equal to true LL.
     if plot:
         fig = plt.figure(figsize=(4, 3), dpi=80, facecolor='w', edgecolor='k')
         plt.plot(fit_log_likelihood, label="EM")
-        # plt.plot([0, len(fit_ll)], (true_ll) * np.ones(2), ':k', label="True")
         plt.legend(loc="lower right")
         plt.xlabel("EM Iteration")
-        # plt.xlim(0, len(fit_ll))
         plt.ylabel("Log Probability")
         plt.title("MAP EM fit of observed data")
         plt.tight_layout()
@@ -607,12 +566,6 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     )
     model_dict['map']['weight_dict'] = weight_dict
 
-    # weight_dict = {}
-    # weight_dict[0] = {}
-    # weight_dict[0]['weights'] = recovered_weights
-    # # weight_dict[0]['mus'] = recovered_mus
-    # weight_dict[0]['label'] = 'mle'
-    # model_dict['weight_dict'] = weight_dict
     if plot:
         f, ax = plt.subplots()
         for k in range(num_states):
@@ -632,7 +585,6 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         save_path = figure_path / '{}_trial_map_weights.png'.format(sess_id_tag)
         plt.gcf().savefig(save_path, format='png', dpi=300)
 
-    ### Get expected states ###
     posterior_probs = map_hmm.expected_states(data=action, input=predictors)[0]
     if plot:
         fig = plt.figure(figsize=(5, 2.5), dpi=80, facecolor='w', edgecolor='k')
@@ -672,54 +624,43 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             cmap=state_cmap,
         )
 
-        ############################################
-        if block_dict is not None:
-            f, ax = plt.subplots(2,1)
+    if plot and block_dict is not None:
+        f, ax = plt.subplots(2,1)
 
-            block_present_colors, block_present_cmap = build_block_comparison_colors(block_dict['weight_dict'])
-            block_posterior_probs = block_dict['posterior_probs']
-            lim = 2 * abs(observations).max()
-            ind_state = np.argmax(block_posterior_probs, axis=1)
-            indnot = np.all(block_posterior_probs < 0.55, axis=1)
-            ind_state[indnot] = -1
-            time_bins = len(predictors)
+        block_present_colors, block_present_cmap = build_block_comparison_colors(block_dict['weight_dict'])
+        block_posterior_probs = block_dict['posterior_probs']
+        lim = 2 * abs(observations).max()
+        ind_state = np.argmax(block_posterior_probs, axis=1)
+        indnot = np.all(block_posterior_probs < 0.55, axis=1)
+        ind_state[indnot] = -1
+        time_bins = len(predictors)
 
-            ax[0].imshow(ind_state[None, :], aspect="auto", cmap=block_present_cmap,
-                      vmin=0, vmax=len(block_present_colors) - 1,
-                      extent=(0, time_bins, -lim * obs_dim, lim), alpha=0.5)
-            ax[0].plot(observations[:, 0], '-k', label='obs')
-            ax[0].set_ylim(-0.2, 1.2)
-            ax[0].set_yticks([0, 1])
-            ax[0].set_yticklabels(['Right', 'Left'], fontsize=12)
-            ax[0].set_title('Trials labeled by block strategy')
+        ax[0].imshow(ind_state[None, :], aspect="auto", cmap=block_present_cmap,
+                  vmin=0, vmax=len(block_present_colors) - 1,
+                  extent=(0, time_bins, -lim * obs_dim, lim), alpha=0.5)
+        ax[0].plot(observations[:, 0], '-k', label='obs')
+        ax[0].set_ylim(-0.2, 1.2)
+        ax[0].set_yticks([0, 1])
+        ax[0].set_yticklabels(['Right', 'Left'], fontsize=12)
+        ax[0].set_title('Trials labeled by block strategy')
 
-            ind_state = np.argmax(posterior_probs, axis=1)
-            indnot = np.all(posterior_probs < 0.55, axis=1)
-            ind_state[indnot] = -1
+        ind_state = np.argmax(posterior_probs, axis=1)
+        indnot = np.all(posterior_probs < 0.55, axis=1)
+        ind_state[indnot] = -1
 
-            ax[1].imshow(ind_state[None, :], aspect="auto", cmap=state_cmap,
-                      vmin=0, vmax=len(state_colors) - 1,
-                      extent=(0, time_bins, -lim * obs_dim, lim), alpha=0.5)
-            ax[1].plot(observations[:, 0], '-k', label='obs')
-            ax[1].set_ylim(-0.2, 1.2)
-            ax[1].set_yticks([0, 1])
-            ax[1].set_yticklabels(['Right', 'Left'], fontsize=12)
-            ax[1].set_title('Trials labeled by trial strategy')
-            plt.tight_layout()
+        ax[1].imshow(ind_state[None, :], aspect="auto", cmap=state_cmap,
+                  vmin=0, vmax=len(state_colors) - 1,
+                  extent=(0, time_bins, -lim * obs_dim, lim), alpha=0.5)
+        ax[1].plot(observations[:, 0], '-k', label='obs')
+        ax[1].set_ylim(-0.2, 1.2)
+        ax[1].set_yticks([0, 1])
+        ax[1].set_yticklabels(['Right', 'Left'], fontsize=12)
+        ax[1].set_title('Trials labeled by trial strategy')
+        plt.tight_layout()
 
-            save_path = figure_path / '{}_trialMapStateComparison.png'.format(sess_id_tag)
-            f.savefig(save_path, format='png', dpi=300)
-            plt.show()
-
-        ######################
-
-        # f, ax = plt.subplots()
-        # plt.plot(action)
-        # plt.xlabel("trial #", fontsize=15)
-        # plt.ylabel("action", fontsize=15)
-        # plt.title("Mouse actions", fontsize=15)
-        # plt.tight_layout()
-
+        save_path = figure_path / '{}_trialMapStateComparison.png'.format(sess_id_tag)
+        f.savefig(save_path, format='png', dpi=300)
+        # plt.show()
 
     inferred_state_list, inferred_durations = ssm.util.rle(most_likely_states)
     model_dict['map']['posterior_probs'] = posterior_probs
@@ -1027,7 +968,7 @@ def plot_information_criteria(aic, bic, states, figure_path: Path, sess_id_full:
     plt.tight_layout()
     plt.gcf().savefig(save_path, format='png', dpi=300)
     print(f"Saved AIC/BIC plot to {save_path}")
-    plt.show()
+    # plt.show()
 
 
 def build_blocked_holdout_indices(n_timesteps: int, n_folds: int = 5) -> list[np.ndarray]:
@@ -1230,7 +1171,7 @@ def plot_cross_validation_scores(
 
     save_path = figure_path / f'{sess_id_full}_trial_HMM_blocked_holdout_loglikelihood.png'
     plt.gcf().savefig(save_path, format='png', dpi=300)
-    plt.show()
+    # plt.show()
 
     return {'CV_log_likelihood': cv_log_likelihoods, 'states': states}
 

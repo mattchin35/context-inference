@@ -858,13 +858,21 @@ def main_mouse():
     block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=2,
                                                                     prior_alpha=1, prior_sigma=1)
 
-    # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
-    # with open(block_model_dict_path, 'rb') as file:
-    #     block_model_dict = pkl.load(file)
+    block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
+    with open(block_model_dict_path, 'rb') as file:
+        block_model_dict = pkl.load(file)
 
     ### trial state space modeling ###
-    # trial_model_selection = tssm.run_information_criteria(augmented_trial_df, session=sess, algorithm='MLE', prior_alpha=1, prior_sigma=1)
-    # augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=2, prior_alpha=1, prior_sigma=1)
+    TRIAL_GLM_PREDICTOR_LABELS = {
+        "FQlearning_rel_value": "FQlearning",
+        # "HMM_rel_value_logodds": "HMM",
+        "HMM_rel_value_logodds_decay": "HMM_decay",
+        "relative_doubt_index": "doubt",
+        "perseveration_regressor": "perseveration",
+        "time_to_choice": "time_to_choice",
+    }
+    trial_model_selection = tssm.run_information_criteria(augmented_trial_df, session=sess, algorithm='MLE', prior_alpha=1, prior_sigma=1)
+    augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=2, prior_alpha=1, prior_sigma=1)
 
 
 def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
