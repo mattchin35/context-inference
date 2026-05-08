@@ -1,12 +1,83 @@
 """Project-wide small helpers shared by analysis modules."""
 
 from collections.abc import Iterable
+from contextlib import contextmanager
 
+import numpy as np
 import pandas as pd
+
+try:
+    import autograd.numpy.random as autograd_random
+except ImportError:  # pragma: no cover - autograd is expected in this project.
+    autograd_random = None
 
 
 MISSING_VALUE = "None"
 MISSING_STRINGS = {MISSING_VALUE, "", "nan", "NaN"}
+
+
+@contextmanager
+def temporary_numpy_seed(seed: int | None):
+    """Temporarily seed NumPy-style global random generators.
+
+    Parameters
+    ----------
+    seed : int or None
+        Integer seed used for NumPy and autograd NumPy random draws. If None,
+        no RNG state is changed.
+
+    Yields
+    ------
+    None
+        Context block in which stochastic library initialization can run with
+        deterministic global RNG state.
+    """
+    if seed is None:
+        yield
+        return
+
+    numpy_state = np.random.get_state()
+    autograd_state = None
+    if autograd_random is not None and hasattr(autograd_random, "get_state"):
+        autograd_state = autograd_random.get_state()
+
+    np.random.seed(seed)
+    if autograd_random is not None and hasattr(autograd_random, "seed"):
+        autograd_random.seed(seed)
+
+    try:
+        yield
+    finally:
+        np.random.set_state(numpy_state)
+        if autograd_state is not None and hasattr(autograd_random, "set_state"):
+            autograd_random.set_state(autograd_state)
+
+
+def spawn_child_seeds(random_seed: int | None, n_children: int) -> list[int | None]:
+    """Derive deterministic child seeds from one optional base seed.
+
+    Parameters
+    ----------
+    random_seed : int or None
+        Base seed for deterministic child-seed generation. If None, stochastic
+        behavior is preserved by returning None for every child.
+    n_children : int
+        Number of child seeds to create.
+
+    Returns
+    -------
+    list[int or None]
+        One-dimensional list with shape `(n_children,)`. Integer seeds are
+        deterministic and distinct for a fixed `random_seed`.
+    """
+    if n_children < 0:
+        raise ValueError(f"n_children must be non-negative, got {n_children}")
+    if random_seed is None:
+        return [None] * n_children
+
+    seed_sequence = np.random.SeedSequence(random_seed)
+    child_sequences = seed_sequence.spawn(n_children)
+    return [int(child.generate_state(1, dtype=np.uint32)[0]) for child in child_sequences]
 
 
 def _as_series(values) -> pd.Series:

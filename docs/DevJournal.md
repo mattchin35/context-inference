@@ -81,3 +81,33 @@ contracts before doing broader readability refactors.
   directory pickle.
 - Added tests for block and trial model save ownership, robust missing/flag
   handling, valid-mask behavior, and state-space preparation helpers.
+
+# 2026/05/08
+
+Continued cleanup of the block and trial state-space modeling workflow, focused
+on reproducibility, clearer user-facing settings, and fixing remaining hidden
+trial GLM-HMM data-contract issues.
+
+- Added explicit random-seed handling for block LM-HMM and trial GLM-HMM
+  workflows. Seeds are now set from `main.py`, split into deterministic child
+  seeds for MLE/MAP fits and IC/CV restarts, and stored in model-selection or
+  model-output dictionaries.
+- Removed the import-time `np.random.seed(0)` from
+  `trial_state_space_modeling.py`. HMM construction and fitting are now wrapped
+  by a temporary seed helper because the local `ssm` fork draws random
+  transition and observation parameters during `ssm.HMM(...)` construction.
+- Made trial GLM-HMM predictor selection explicit in `main.py` via
+  `trial_glm_predictor_columns`. Added `time_to_choice` as a valid selectable
+  predictor while keeping it out of the module default predictor set.
+- Added `make_valid_trial_glm_hmm_mask()` so trial GLM-HMM preparation excludes
+  rows with missing `action`, selected predictors, manual rewards, missing
+  previous action, or missing inherited block strategy when required. Present
+  nonnumeric predictor values still fail loudly during numeric casting.
+- Made `mle_trial_states()` explicitly require `inherited_block_strategy`,
+  matching the current block/trial comparison diagnostics and replacing a hidden
+  `KeyError` with the existing clean missing-column `ValueError`.
+- Saved the MLE and MAP block/trial state-comparison plots with explicit
+  filenames instead of creating figures without writing them.
+- Added focused pytest coverage for seed helpers, trial predictor selection,
+  trial GLM-HMM valid-mask behavior, inherited-strategy requirements, and saved
+  comparison plots. The full behavior-analysis suite passed after these changes.

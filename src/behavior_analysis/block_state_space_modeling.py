@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Protocol
 from joblib import Parallel, delayed
 import ssm # note this should be the forked ssm repo
-from src.behavior_analysis.project_utils import is_present_value
+from src.behavior_analysis.project_utils import (
+    is_present_value,
+    spawn_child_seeds,
+    temporary_numpy_seed,
+)
 from src.behavior_analysis.plotting_utils import build_presentation_colors, build_state_colormap, get_state_colors
 from src.behavior_analysis import state_space_plotting
 
@@ -265,7 +269,7 @@ def split_blocked_holdout_sequences(
 
 
 def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool=False, model_dict=None,
-                     num_states=2):
+                     num_states=2, random_seed: int | None = None):
     """Fit MLE block LM-HMM states and assign them back to the block table.
 
     Parameters
@@ -283,6 +287,9 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         Existing model dictionary to update. If None, a new dictionary is used.
     num_states : int, default=2
         Number of hidden LM-HMM states.
+    random_seed : int or None, default=None
+        Seed used for stochastic HMM construction and EM initialization. None
+        preserves the current random behavior.
 
     Returns
     -------
@@ -302,16 +309,18 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     if model_dict is None:
         model_dict = {}
     model_dict['mle'] = {}
+    model_dict['mle']['random_seed'] = random_seed
     weight_dict = {}
 
-    mle_hmm = build_input_driven_hmm(
-        num_states=num_states,
-        obs_dim=obs_dim,
-        input_dim=input_dim,
-        algorithm='MLE',
-    )
-    N_iters = 10000  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
-    fit_log_likelihood = mle_hmm.fit(trials_to_correct, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
+    with temporary_numpy_seed(random_seed):
+        mle_hmm = build_input_driven_hmm(
+            num_states=num_states,
+            obs_dim=obs_dim,
+            input_dim=input_dim,
+            algorithm='MLE',
+        )
+        N_iters = 10000  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
+        fit_log_likelihood = mle_hmm.fit(trials_to_correct, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
     model_dict['mle']['fit_log_likelihood'] = fit_log_likelihood
     if plot:
         fig = plt.figure(figsize=(4, 3), dpi=80, facecolor='w', edgecolor='k')
@@ -380,7 +389,8 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
 
 
 def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool = False,
-                     num_states=2, prior_sigma=1, prior_alpha=1, model_dict=None):
+                     num_states=2, prior_sigma=1, prior_alpha=1, model_dict=None,
+                     random_seed: int | None = None):
     """Fit MAP block LM-HMM states and assign them back to the block table.
 
     Parameters
@@ -402,6 +412,9 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         Sticky-transition concentration passed to the MAP HMM.
     model_dict : dict or None, default=None
         Existing model dictionary to update. If None, a new dictionary is used.
+    random_seed : int or None, default=None
+        Seed used for stochastic HMM construction and EM initialization. None
+        preserves the current random behavior.
 
     Returns
     -------
@@ -421,22 +434,24 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         model_dict = {}
 
     model_dict['map'] = {}
+    model_dict['map']['random_seed'] = random_seed
     weight_dict = {}
 
-    map_hmm = build_input_driven_hmm(
-        num_states=num_states,
-        obs_dim=obs_dim,
-        input_dim=input_dim,
-        algorithm='MAP',
-        prior_alpha=prior_alpha,
-        prior_sigma=prior_sigma,
-    )
+    with temporary_numpy_seed(random_seed):
+        map_hmm = build_input_driven_hmm(
+            num_states=num_states,
+            obs_dim=obs_dim,
+            input_dim=input_dim,
+            algorithm='MAP',
+            prior_alpha=prior_alpha,
+            prior_sigma=prior_sigma,
+        )
 
-    # maximum number of EM iterations.
-    # was 10k before, should probably stop by 1k. If it doesn't work by then it may not be realistic/result in overfitting
-    N_iters = 1000
+        # maximum number of EM iterations.
+        # was 10k before, should probably stop by 1k. If it doesn't work by then it may not be realistic/result in overfitting
+        N_iters = 1000
 
-    fit_log_likelihood = map_hmm.fit(trials_to_correct, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
+        fit_log_likelihood = map_hmm.fit(trials_to_correct, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
     model_dict['map']['fit_log_likelihood'] = fit_log_likelihood
 
     if plot:
@@ -542,7 +557,8 @@ def save_block_model_dict(model_dict: dict, processed_data_path: Path, sess_id_f
 
 
 def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.DataFrame, session: Session, num_states: int=2,
-                       prior_alpha=1, prior_sigma=1):
+                       prior_alpha=1, prior_sigma=1, random_seed: int | None = None):
+    mle_seed, map_seed = spawn_child_seeds(random_seed, 2)
 
     mle_model_dict, block_performance = mle_block_states(
         block_performance,
@@ -550,6 +566,7 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         sess_id_tag=session.sess_id_full,
         plot=True,
         num_states=num_states,
+        random_seed=mle_seed,
     )
     map_model_dict, block_performance = map_block_states(
         block_performance,
@@ -560,6 +577,7 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         num_states=num_states,
         prior_alpha=prior_alpha,
         prior_sigma=prior_sigma,
+        random_seed=map_seed,
     )
     save_block_model_dict(
         map_model_dict,
@@ -612,7 +630,8 @@ def build_input_driven_hmm(num_states: int, obs_dim: int, input_dim: int,
 
 def fit_lm_hmm_and_score_log_likelihood(observations: np.ndarray, inputs: np.ndarray, num_states: int,
                                          algorithm: str = 'MLE', n_iter: int = 1000, tol: float = 10**-4,
-                                         prior_alpha=1, prior_sigma=1):
+                                         prior_alpha=1, prior_sigma=1,
+                                         random_seed: int | None = None):
     """Fit one LM-HMM restart and return its training log likelihood.
 
     Parameters
@@ -633,6 +652,9 @@ def fit_lm_hmm_and_score_log_likelihood(observations: np.ndarray, inputs: np.nda
         Sticky-transition prior concentration for MAP fits.
     prior_sigma : float, default=1
         Observation prior scale for MAP fits.
+    random_seed : int or None, default=None
+        Seed used for stochastic HMM construction and EM initialization. None
+        preserves the current random behavior.
 
     Returns
     -------
@@ -640,9 +662,10 @@ def fit_lm_hmm_and_score_log_likelihood(observations: np.ndarray, inputs: np.nda
         Fitted model log likelihood on `observations`, in log-probability units.
     """
     obs_dim, input_dim = observations.shape[1], inputs.shape[1]
-    hmm = build_input_driven_hmm(num_states=num_states, obs_dim=obs_dim, input_dim=input_dim,
-                                 algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma)
-    hmm.fit(observations, inputs=inputs, method="em", num_iters=n_iter, tolerance=tol)
+    with temporary_numpy_seed(random_seed):
+        hmm = build_input_driven_hmm(num_states=num_states, obs_dim=obs_dim, input_dim=input_dim,
+                                     algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma)
+        hmm.fit(observations, inputs=inputs, method="em", num_iters=n_iter, tolerance=tol)
     out = hmm.log_likelihood(observations, inputs=inputs)
     return out
 
@@ -678,6 +701,7 @@ def single_blocked_holdout_func(
     tol: float = 1e-4,
     prior_alpha: float = 1,
     prior_sigma: float = 1,
+    random_seed: int | None = None,
 ):
     """Score one LM-HMM state count on blocked within-session held-out splits.
 
@@ -704,6 +728,9 @@ def single_blocked_holdout_func(
         Sticky-transition concentration for MAP fits.
     prior_sigma : float, default=1
         Observation prior scale for MAP fits.
+    random_seed : int or None, default=None
+        Base seed used to derive one deterministic seed per held-out fold. None
+        preserves the current random behavior.
 
     Returns
     -------
@@ -713,22 +740,24 @@ def single_blocked_holdout_func(
     """
     fold_log_likelihoods = np.zeros(len(test_indices_list))
     obs_dim, input_dim = observations.shape[1], inputs.shape[1]
+    fold_random_seeds = spawn_child_seeds(random_seed, len(test_indices_list))
 
-    for i_fold, test_idx in enumerate(test_indices_list):
+    for i_fold, (test_idx, fold_random_seed) in enumerate(zip(test_indices_list, fold_random_seeds)):
         train_observations, train_inputs, test_observations, test_inputs = split_blocked_holdout_sequences(
             observations=observations,
             inputs=inputs,
             test_indices=test_idx,
         )
-        hmm = build_input_driven_hmm(
-            num_states=num_states,
-            obs_dim=obs_dim,
-            input_dim=input_dim,
-            algorithm=algorithm,
-            prior_alpha=prior_alpha,
-            prior_sigma=prior_sigma,
-        )
-        hmm.fit(train_observations, inputs=train_inputs, method="em", num_iters=n_iter, tolerance=tol)
+        with temporary_numpy_seed(fold_random_seed):
+            hmm = build_input_driven_hmm(
+                num_states=num_states,
+                obs_dim=obs_dim,
+                input_dim=input_dim,
+                algorithm=algorithm,
+                prior_alpha=prior_alpha,
+                prior_sigma=prior_sigma,
+            )
+            hmm.fit(train_observations, inputs=train_inputs, method="em", num_iters=n_iter, tolerance=tol)
         fold_log_likelihoods[i_fold] = (
             hmm.log_likelihood(test_observations, inputs=test_inputs) / len(test_observations)
         )
@@ -738,7 +767,9 @@ def single_blocked_holdout_func(
 
 def calculate_blocked_holdout_scores(observations: np.ndarray, inputs: np.ndarray, states: np.ndarray,
                                      nRunEM: int = 5, n_folds: int = 5, n_jobs: int = 4,
-                                     algorithm: str = 'MLE', prior_alpha: float = 1, prior_sigma: float = 1):
+                                     algorithm: str = 'MLE', prior_alpha: float = 1, prior_sigma: float = 1,
+                                     random_seed: int | None = None,
+                                     restart_random_seeds: list[int | None] | None = None):
     """Compute blocked within-session held-out log-likelihoods across state counts.
 
     Parameters
@@ -762,6 +793,10 @@ def calculate_blocked_holdout_scores(observations: np.ndarray, inputs: np.ndarra
         Sticky-transition concentration for MAP fits.
     prior_sigma : float, default=1
         Observation prior scale for MAP fits.
+    random_seed : int or None, default=None
+        Base seed used when `restart_random_seeds` is not provided.
+    restart_random_seeds : list[int or None] or None, default=None
+        Flat list with one seed per `(state, restart)` combination.
 
     Returns
     -------
@@ -772,6 +807,13 @@ def calculate_blocked_holdout_scores(observations: np.ndarray, inputs: np.ndarra
     n_states = states.size
     test_indices_list = build_blocked_holdout_indices(observations.shape[0], n_folds=n_folds)
     cv_ll = np.zeros((n_states, nRunEM, n_folds))
+    if restart_random_seeds is None:
+        restart_random_seeds = spawn_child_seeds(random_seed, n_states * nRunEM)
+    if len(restart_random_seeds) != n_states * nRunEM:
+        raise ValueError(
+            f"Expected {n_states * nRunEM} restart seeds, got {len(restart_random_seeds)}"
+        )
+    restart_seed_grid = np.asarray(restart_random_seeds, dtype=object).reshape(n_states, nRunEM)
 
     for iS, num_states in enumerate(states):
         print(f"evaluating blocked holdout for {num_states} state(s)")
@@ -783,9 +825,10 @@ def calculate_blocked_holdout_scores(observations: np.ndarray, inputs: np.ndarra
                 n_iter=1000,
                 tol=1e-4,
                 prior_alpha=prior_alpha,
-                prior_sigma=prior_sigma
+                prior_sigma=prior_sigma,
+                random_seed=restart_seed_grid[iS, iRun],
             )
-            for _ in range(nRunEM)
+            for iRun in range(nRunEM)
         ]
         run_results = Parallel(n_jobs=n_jobs)(delayed_calls)
         cv_ll[iS] = np.asarray(run_results)
@@ -843,7 +886,8 @@ def plot_cross_validation_scores(
 def run_cross_validation(block_performance: pd.DataFrame, session: Session, algorithm: str = 'MLE',
                          prior_alpha: float = 1, prior_sigma: float = 1,
                          min_states: int = 1, max_states: int = 5,
-                         n_threads: int = 4, n_runs: int = 5, n_folds: int = 5):
+                         n_threads: int = 4, n_runs: int = 5, n_folds: int = 5,
+                         random_seed: int | None = None):
     """Run blocked within-session held-out scoring over hidden-state count.
 
     This is the secondary LM-HMM model-selection path. The primary selector is
@@ -854,21 +898,31 @@ def run_cross_validation(block_performance: pd.DataFrame, session: Session, algo
     predictors = prepared["inputs"]
 
     states = np.arange(min_states, max_states + 1)
+    restart_random_seeds = spawn_child_seeds(random_seed, states.size * n_runs)
     cv_ll = calculate_blocked_holdout_scores(observations=trials_to_correct, inputs=predictors, states=states,
                                              nRunEM=n_runs, n_folds=n_folds, n_jobs=n_threads,
-                                             algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma)
-    return plot_cross_validation_scores(
+                                             algorithm=algorithm, prior_alpha=prior_alpha, prior_sigma=prior_sigma,
+                                             random_seed=random_seed,
+                                             restart_random_seeds=restart_random_seeds)
+    model_selection = plot_cross_validation_scores(
         cv_ll,
         states,
         figure_path=session.figure_path,
         sess_id_full=session.sess_id_full,
     )
+    model_selection["random_seed"] = random_seed
+    model_selection["restart_random_seeds"] = np.asarray(
+        restart_random_seeds,
+        dtype=object,
+    ).reshape(states.size, n_runs)
+    return model_selection
 
 
 def run_information_criteria(block_performance: pd.DataFrame, session: Session, algorithm: str = 'MLE',
                              prior_alpha: float = 1, prior_sigma: float = 1,
                              min_states: int = 1, max_states: int = 5,
-                             n_threads: int = 4, n_runs: int = 10):
+                             n_threads: int = 4, n_runs: int = 10,
+                             random_seed: int | None = None):
     """Run LM-HMM AIC/BIC model selection for one session.
 
     Parameters
@@ -891,6 +945,9 @@ def run_information_criteria(block_performance: pd.DataFrame, session: Session, 
         Parallel jobs used across EM restarts.
     n_runs : int, default=10
         Number of EM restarts per state count.
+    random_seed : int or None, default=None
+        Base seed used to derive one deterministic seed per EM restart. None
+        preserves the current random behavior.
 
     Returns
     -------
@@ -906,9 +963,12 @@ def run_information_criteria(block_performance: pd.DataFrame, session: Session, 
     predictors = prepared["inputs"]
 
     states = np.arange(min_states,max_states+1)
+    restart_random_seeds = spawn_child_seeds(random_seed, states.size * n_runs)
     AIC, BIC = calculate_information_criteria(observations=trials_to_correct, inputs=predictors, states=states,
                                               nRunEM=n_runs, n_jobs=n_threads, algorithm=algorithm,
-                                              prior_alpha=prior_alpha, prior_sigma=prior_sigma)
+                                              prior_alpha=prior_alpha, prior_sigma=prior_sigma,
+                                              random_seed=random_seed,
+                                              restart_random_seeds=restart_random_seeds)
 
     plot_information_criteria(
         AIC,
@@ -917,7 +977,12 @@ def run_information_criteria(block_performance: pd.DataFrame, session: Session, 
         figure_path=session.figure_path,
         sess_id_full=session.sess_id_full,
     )
-    return {'AIC': AIC, 'BIC': BIC}
+    return {
+        'AIC': AIC,
+        'BIC': BIC,
+        'random_seed': random_seed,
+        'restart_random_seeds': np.asarray(restart_random_seeds, dtype=object).reshape(states.size, n_runs),
+    }
 
 
 def count_lm_hmm_parameters(num_states: int, obs_dim: int, input_dim: int) -> int:
@@ -943,7 +1008,9 @@ def count_lm_hmm_parameters(num_states: int, obs_dim: int, input_dim: int) -> in
 
 
 def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray, states: np.ndarray, nRunEM: int, n_jobs: int,
-                                   algorithm: str = 'MLE', prior_alpha: float = 1, prior_sigma: float = 1):
+                                   algorithm: str = 'MLE', prior_alpha: float = 1, prior_sigma: float = 1,
+                                   random_seed: int | None = None,
+                                   restart_random_seeds: list[int | None] | None = None):
     if algorithm.upper() != 'MLE':
         raise ValueError("LM-HMM information criteria should only be run on MLE models.")
 
@@ -954,6 +1021,14 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
 
     AIC = np.zeros((n_states, nRunEM))
     BIC = np.zeros((n_states, nRunEM))
+    if restart_random_seeds is None:
+        restart_random_seeds = spawn_child_seeds(random_seed, n_states * nRunEM)
+    if len(restart_random_seeds) != n_states * nRunEM:
+        raise ValueError(
+            f"Expected {n_states * nRunEM} restart seeds, got {len(restart_random_seeds)}"
+        )
+    restart_seed_grid = np.asarray(restart_random_seeds, dtype=object).reshape(n_states, nRunEM)
+
     for iS, num_states in enumerate(states):#range(2, n + 1)):
         print("running {} state(s)".format(num_states))
 
@@ -965,7 +1040,8 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
                 n_iter=1000,
                 tol=1e-4,
                 prior_alpha=prior_alpha,
-                prior_sigma=prior_sigma
+                prior_sigma=prior_sigma,
+                random_seed=restart_seed_grid[iS, iRun],
             )
             for iRun in range(nRunEM)
         ]

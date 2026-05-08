@@ -700,8 +700,11 @@ def main_simulation():
         sess_id_full=sess.sess_id_full,
     )
 
+    block_hmm_random_seed = 1001
+
     block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
-                                                    prior_alpha=1, prior_sigma=1)
+                                                    prior_alpha=1, prior_sigma=1,
+                                                    random_seed=block_hmm_random_seed)
     # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
     #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2)
 
@@ -848,31 +851,52 @@ def main_mouse():
         sess_id_full=sess_id_full,
     )
 
+    block_hmm_random_seed = 1001
+    trial_hmm_random_seed = 2001
+    trial_glm_predictor_columns = (
+        "FQlearning_rel_value",
+        "HMM_rel_value_logodds_decay",
+        "relative_doubt_index",
+        "perseveration_regressor",
+        "time_to_choice"
+    )
+
     block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
-                                                    prior_alpha=1, prior_sigma=1)
+                                                    prior_alpha=1, prior_sigma=1,
+                                                    random_seed=block_hmm_random_seed)
 
     # prefer use of the information criteria for model selection, but here is how you'd use CV
     # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
-    #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2)
+    #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2,
+    #                                                random_seed=block_hmm_random_seed)
 
     block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=2,
-                                                                    prior_alpha=1, prior_sigma=1)
+                                                                    prior_alpha=1, prior_sigma=1,
+                                                                    random_seed=block_hmm_random_seed)
 
-    block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
-    with open(block_model_dict_path, 'rb') as file:
-        block_model_dict = pkl.load(file)
+    # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
+    # with open(block_model_dict_path, 'rb') as file:
+    #     block_model_dict = pkl.load(file)
 
     ### trial state space modeling ###
-    TRIAL_GLM_PREDICTOR_LABELS = {
-        "FQlearning_rel_value": "FQlearning",
-        # "HMM_rel_value_logodds": "HMM",
-        "HMM_rel_value_logodds_decay": "HMM_decay",
-        "relative_doubt_index": "doubt",
-        "perseveration_regressor": "perseveration",
-        "time_to_choice": "time_to_choice",
-    }
-    trial_model_selection = tssm.run_information_criteria(augmented_trial_df, session=sess, algorithm='MLE', prior_alpha=1, prior_sigma=1)
-    augmented_trial_df = tssm.run_trial_modeling(augmented_trial_df, session=sess, num_states=2, prior_alpha=1, prior_sigma=1)
+    trial_model_selection = tssm.run_information_criteria(
+        augmented_trial_df,
+        session=sess,
+        algorithm='MLE',
+        prior_alpha=1,
+        prior_sigma=1,
+        predictor_columns=trial_glm_predictor_columns,
+        random_seed=trial_hmm_random_seed,
+    )
+    augmented_trial_df = tssm.run_trial_modeling(
+        augmented_trial_df,
+        session=sess,
+        num_states=2,
+        prior_alpha=1,
+        prior_sigma=1,
+        predictor_columns=trial_glm_predictor_columns,
+        random_seed=trial_hmm_random_seed,
+    )
 
 
 def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):

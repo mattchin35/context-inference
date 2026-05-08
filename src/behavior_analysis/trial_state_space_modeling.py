@@ -12,16 +12,18 @@ from pathlib import Path
 import ssm
 from joblib import Parallel, delayed
 from typing import Protocol
-from src.behavior_analysis.project_utils import is_present_value, is_zero_flag
+from src.behavior_analysis.project_utils import (
+    is_present_value,
+    is_zero_flag,
+    spawn_child_seeds,
+    temporary_numpy_seed,
+)
 from src.behavior_analysis.plotting_utils import (
     build_presentation_colors,
     build_state_colormap,
     get_state_colors,
 )
 from src.behavior_analysis import state_space_plotting
-
-np.random.seed(0)  # make sure this isn't needed and can be removed - put reproducibility settings in the functions
-# or their calls to ssm?
 
 
 TRIAL_GLM_PREDICTOR_LABELS = {
@@ -30,8 +32,14 @@ TRIAL_GLM_PREDICTOR_LABELS = {
     "HMM_rel_value_logodds_decay": "HMM_decay",
     "relative_doubt_index": "doubt",
     "perseveration_regressor": "perseveration",
+    "time_to_choice": "time_to_choice",
 }
-DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS = tuple(TRIAL_GLM_PREDICTOR_LABELS.keys())
+DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS = (
+    "FQlearning_rel_value",
+    "HMM_rel_value_logodds_decay",
+    "relative_doubt_index",
+    "perseveration_regressor",
+)
 
 # Binary GLM note for this project:
 # - task actions are coded 0=right, 1=left
@@ -57,6 +65,43 @@ class Session(Protocol):
     timestamp: str
     session_info_fname: str
     session_info: dict
+
+
+def make_valid_trial_glm_hmm_mask(
+    trial_df: pd.DataFrame,
+    predictor_columns: tuple[str, ...],
+    require_inherited_strategy: bool = False,
+) -> pd.Series:
+    """Return trial rows that can be cast into GLM-HMM arrays.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required
+        columns are `prev_action`, `give_reward`, `action`, and each selected
+        predictor column. If `require_inherited_strategy=True`,
+        `inherited_block_strategy` is also required.
+    predictor_columns : tuple[str, ...]
+        Non-bias predictor columns that will be converted to the GLM-HMM input
+        matrix.
+    require_inherited_strategy : bool, default=False
+        Whether rows must have a present inherited block strategy.
+
+    Returns
+    -------
+    pd.Series
+        Boolean mask with shape `(n_trials,)`, aligned to `trial_df.index`.
+    """
+    valid_mask = (
+        is_present_value(trial_df["prev_action"])
+        & is_zero_flag(trial_df["give_reward"])
+        & is_present_value(trial_df["action"])
+    )
+    for predictor_name in predictor_columns:
+        valid_mask = valid_mask & is_present_value(trial_df[predictor_name])
+    if require_inherited_strategy:
+        valid_mask = valid_mask & is_present_value(trial_df["inherited_block_strategy"])
+    return valid_mask
 
 
 def prepare_trial_glm_hmm_data(
@@ -117,9 +162,11 @@ def prepare_trial_glm_hmm_data(
         unknown_summary = ", ".join(unknown_predictors)
         raise ValueError(f"Unknown GLM-HMM predictor columns requested: {unknown_summary}")
 
-    valid_mask = is_present_value(trial_df["prev_action"]) & is_zero_flag(trial_df["give_reward"])
-    if require_inherited_strategy:
-        valid_mask = valid_mask & is_present_value(trial_df["inherited_block_strategy"])
+    valid_mask = make_valid_trial_glm_hmm_mask(
+        trial_df,
+        predictor_columns=predictor_columns,
+        require_inherited_strategy=require_inherited_strategy,
+    )
     df = trial_df[valid_mask]
 
     observations = df["action"].to_numpy().reshape(-1, 1).astype(int)
@@ -294,14 +341,16 @@ def split_blocked_holdout_sequences(
 
 def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool=False, model_dict=None,
                      num_states=2,
-                     predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS):
+                     predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS,
+                     random_seed: int | None = None):
     """Fit MLE trial GLM-HMM states and assign them back to the trial table.
 
     Parameters
     ----------
     trial_df : pd.DataFrame
         Trialwise dataframe with shape `(n_trials, n_columns)`. Required
-        columns are defined by `prepare_trial_glm_hmm_data`.
+        columns are defined by `prepare_trial_glm_hmm_data`; the current MLE
+        diagnostics also require `inherited_block_strategy`.
     figure_path : Path
         Directory where diagnostic figures are saved when `plot=True`.
     sess_id_tag : str
@@ -314,13 +363,20 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         Number of hidden GLM-HMM states.
     predictor_columns : tuple[str, ...], default=DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS
         Non-bias GLM predictor columns used in the input matrix.
+    random_seed : int or None, default=None
+        Seed used for stochastic HMM construction and EM initialization. None
+        preserves the current random behavior.
 
     Returns
     -------
     tuple[dict, pd.DataFrame]
         Updated model dictionary and `trial_df` with inferred state columns.
     """
-    prepared = prepare_trial_glm_hmm_data(trial_df, predictor_columns=predictor_columns)
+    prepared = prepare_trial_glm_hmm_data(
+        trial_df,
+        require_inherited_strategy=True,
+        predictor_columns=predictor_columns,
+    )
     ix_valid = prepared["valid_mask"]
     df = trial_df[ix_valid]
 
@@ -343,16 +399,18 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     if model_dict is None:
         model_dict = {}
     model_dict['mle'] = {}
+    model_dict['mle']['random_seed'] = random_seed
     weight_dict = {}
 
-    mle_hmm = build_input_driven_glm_hmm(
-        num_states=num_states,
-        obs_dim=obs_dim,
-        input_dim=input_dim,
-        algorithm='MLE',
-    )
-    N_iters = 10000  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
-    fit_log_likelihood = mle_hmm.fit(action, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
+    with temporary_numpy_seed(random_seed):
+        mle_hmm = build_input_driven_glm_hmm(
+            num_states=num_states,
+            obs_dim=obs_dim,
+            input_dim=input_dim,
+            algorithm='MLE',
+        )
+        N_iters = 10000  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
+        fit_log_likelihood = mle_hmm.fit(action, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
     model_dict['mle']['fit_log_likelihood'] = fit_log_likelihood
 
     if plot:
@@ -436,6 +494,8 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             colors=state_colors,
             cmap=state_cmap,
         )
+        save_path = figure_path / f'{sess_id_tag}_trial_mle_block_state_comparison.png'
+        f.savefig(save_path, format='png', dpi=300)
 
     inferred_state_list, inferred_durations = ssm.util.rle(most_likely_states)
     model_dict['mle']['posterior_probs'] = posterior_probs
@@ -462,7 +522,8 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
 
 def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool=False,
                      num_states=1, prior_sigma=1, prior_alpha=2, model_dict=None, block_dict=None,
-                     predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS):
+                     predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS,
+                     random_seed: int | None = None):
     """Fit MAP trial GLM-HMM states and assign them back to the trial table.
 
     Parameters
@@ -488,6 +549,9 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         Optional block-model dictionary used for block/trial comparison plots.
     predictor_columns : tuple[str, ...], default=DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS
         Non-bias GLM predictor columns used in the input matrix.
+    random_seed : int or None, default=None
+        Seed used for stochastic HMM construction and EM initialization. None
+        preserves the current random behavior.
 
     Returns
     -------
@@ -505,10 +569,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     state_colors = get_state_colors(num_states)
     state_cmap = build_state_colormap(state_colors)
 
-    correct = df['correct'].to_numpy().reshape(-1,1).astype(int)
     block_strategy = df['inherited_block_strategy'].to_numpy()
-    # block_strategy[block_strategy != 'None'] = block_strategy[block_strategy != 'None'].astype(int)
-    # block_strategy[block_strategy == 'None'] = np.amax(block_strategy[block_strategy != 'None']) + 1
     block_strategy = block_strategy.reshape(-1,1).astype(int) #+ 1
 
     predictors = prepared["inputs"]
@@ -523,18 +584,20 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         model_dict = {}
 
     model_dict['map'] = {}
+    model_dict['map']['random_seed'] = random_seed
     weight_dict = {}
 
-    map_hmm = build_input_driven_glm_hmm(
-        num_states=num_states,
-        obs_dim=obs_dim,
-        input_dim=input_dim,
-        algorithm='MAP',
-        prior_alpha=prior_alpha,
-        prior_sigma=prior_sigma,
-    )
-    N_iters = 10000  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
-    fit_log_likelihood = map_hmm.fit(action, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
+    with temporary_numpy_seed(random_seed):
+        map_hmm = build_input_driven_glm_hmm(
+            num_states=num_states,
+            obs_dim=obs_dim,
+            input_dim=input_dim,
+            algorithm='MAP',
+            prior_alpha=prior_alpha,
+            prior_sigma=prior_sigma,
+        )
+        N_iters = 10000  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
+        fit_log_likelihood = map_hmm.fit(action, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
     model_dict['map']['fit_log_likelihood'] = fit_log_likelihood
 
     if plot:
@@ -623,6 +686,8 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             colors=state_colors,
             cmap=state_cmap,
         )
+        save_path = figure_path / f'{sess_id_tag}_trial_map_block_state_comparison.png'
+        f.savefig(save_path, format='png', dpi=300)
 
     if plot and block_dict is not None:
         f, ax = plt.subplots(2,1)
@@ -719,11 +784,13 @@ def save_trial_model_dict(model_dict: dict, session: Session) -> Path:
 
 def run_trial_modeling(trial_df: pd.DataFrame, session: Session, num_states: int=2,
                        prior_alpha=1, prior_sigma=1,
-                       predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS) -> pd.DataFrame:
+                       predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS,
+                       random_seed: int | None = None) -> pd.DataFrame:
     block_dict_fname = session.processed_data_path / (session.sess_id_full + '_block_statedict.pkl')
     with open(block_dict_fname, 'rb') as file:
         block_dict = pkl.load(file)
 
+    mle_seed, map_seed = spawn_child_seeds(random_seed, 2)
     mle_model_dict, _ = mle_trial_states(
         trial_df,
         figure_path=session.figure_path,
@@ -731,6 +798,7 @@ def run_trial_modeling(trial_df: pd.DataFrame, session: Session, num_states: int
         plot=True,
         num_states=num_states,
         predictor_columns=predictor_columns,
+        random_seed=mle_seed,
     )
     map_model_dict, augmented_trial_df = map_trial_states(
         trial_df,
@@ -743,6 +811,7 @@ def run_trial_modeling(trial_df: pd.DataFrame, session: Session, num_states: int
         prior_sigma=prior_sigma,
         block_dict=block_dict['map'],
         predictor_columns=predictor_columns,
+        random_seed=map_seed,
     )
     save_trial_model_dict(map_model_dict, session)
 
@@ -812,7 +881,8 @@ def build_input_driven_glm_hmm(
 
 def fit_glm_hmm_and_score_log_likelihood(observations: np.ndarray, inputs: np.ndarray, num_states: int,
                                          prior_sigma=1, prior_alpha=1, algorithm='MLE',
-                                         n_iter: int = 1000, tol: float = 10**-4):
+                                         n_iter: int = 1000, tol: float = 10**-4,
+                                         random_seed: int | None = None):
     """Fit one GLM-HMM restart and return its training log likelihood.
 
     Parameters
@@ -833,6 +903,9 @@ def fit_glm_hmm_and_score_log_likelihood(observations: np.ndarray, inputs: np.nd
         Maximum EM iterations.
     tol : float, default=1e-4
         EM convergence tolerance.
+    random_seed : int or None, default=None
+        Seed used for stochastic HMM construction and EM initialization. None
+        preserves the current random behavior.
 
     Returns
     -------
@@ -842,16 +915,17 @@ def fit_glm_hmm_and_score_log_likelihood(observations: np.ndarray, inputs: np.nd
     assert algorithm in ['MAP', 'MLE'], "Algorithm must be MAP or MLE"
 
     obs_dim, input_dim = observations.shape[1], inputs.shape[1]
-    hmm = build_input_driven_glm_hmm(
-        num_states=num_states,
-        obs_dim=obs_dim,
-        input_dim=input_dim,
-        algorithm=algorithm,
-        prior_alpha=prior_alpha,
-        prior_sigma=prior_sigma,
-    )
+    with temporary_numpy_seed(random_seed):
+        hmm = build_input_driven_glm_hmm(
+            num_states=num_states,
+            obs_dim=obs_dim,
+            input_dim=input_dim,
+            algorithm=algorithm,
+            prior_alpha=prior_alpha,
+            prior_sigma=prior_sigma,
+        )
 
-    hmm_lls = hmm.fit(observations, inputs=inputs, method="em", num_iters=n_iter, tolerance=tol)
+        hmm.fit(observations, inputs=inputs, method="em", num_iters=n_iter, tolerance=tol)
     return hmm.log_likelihood(observations, inputs=inputs)
 
 
@@ -881,7 +955,9 @@ def count_glm_hmm_parameters(num_states: int, input_dim: int, num_categories: in
 
 
 def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray, states: npt.NDArray[np.int64],
-                                   nRunEM: int, n_jobs: int, algorithm='MLE', prior_alpha=1, prior_sigma=1, ):
+                                   nRunEM: int, n_jobs: int, algorithm='MLE', prior_alpha=1, prior_sigma=1,
+                                   random_seed: int | None = None,
+                                   restart_random_seeds: list[int | None] | None = None):
     if algorithm.upper() != 'MLE':
         raise ValueError("GLM-HMM information criteria should only be run on MLE models.")
 
@@ -892,6 +968,14 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
 
     AIC = np.zeros((n_states, nRunEM))
     BIC = np.zeros((n_states, nRunEM))
+    if restart_random_seeds is None:
+        restart_random_seeds = spawn_child_seeds(random_seed, n_states * nRunEM)
+    if len(restart_random_seeds) != n_states * nRunEM:
+        raise ValueError(
+            f"Expected {n_states * nRunEM} restart seeds, got {len(restart_random_seeds)}"
+        )
+    restart_seed_grid = np.asarray(restart_random_seeds, dtype=object).reshape(n_states, nRunEM)
+
     for iS, num_states in enumerate(states): #range(2, n + 1)):
         print("running {} state(s)".format(num_states))
 
@@ -906,6 +990,7 @@ def calculate_information_criteria(observations: np.ndarray, inputs: np.ndarray,
                 'MLE',
                 n_iter=1000,
                 tol=1e-4,
+                random_seed=restart_seed_grid[iS, iRun],
             )
             for iRun in range(nRunEM)
         ]
@@ -1002,6 +1087,7 @@ def single_blocked_holdout_func(
     tol: float = 1e-4,
     prior_alpha: float = 1,
     prior_sigma: float = 1,
+    random_seed: int | None = None,
 ):
     """Score one GLM-HMM state count on blocked within-session held-out splits.
 
@@ -1028,6 +1114,9 @@ def single_blocked_holdout_func(
         Sticky-transition concentration for MAP fits.
     prior_sigma : float, default=1
         Observation prior scale for MAP fits.
+    random_seed : int or None, default=None
+        Base seed used to derive one deterministic seed per held-out fold. None
+        preserves the current random behavior.
 
     Returns
     -------
@@ -1037,22 +1126,24 @@ def single_blocked_holdout_func(
     """
     fold_log_likelihoods = np.zeros(len(test_indices_list))
     obs_dim, input_dim = observations.shape[1], inputs.shape[1]
+    fold_random_seeds = spawn_child_seeds(random_seed, len(test_indices_list))
 
-    for i_fold, test_idx in enumerate(test_indices_list):
+    for i_fold, (test_idx, fold_random_seed) in enumerate(zip(test_indices_list, fold_random_seeds)):
         train_observations, train_inputs, test_observations, test_inputs = split_blocked_holdout_sequences(
             observations=observations,
             inputs=inputs,
             test_indices=test_idx,
         )
-        hmm = build_input_driven_glm_hmm(
-            num_states=num_states,
-            obs_dim=obs_dim,
-            input_dim=input_dim,
-            algorithm=algorithm,
-            prior_alpha=prior_alpha,
-            prior_sigma=prior_sigma,
-        )
-        hmm.fit(train_observations, inputs=train_inputs, method="em", num_iters=n_iter, tolerance=tol)
+        with temporary_numpy_seed(fold_random_seed):
+            hmm = build_input_driven_glm_hmm(
+                num_states=num_states,
+                obs_dim=obs_dim,
+                input_dim=input_dim,
+                algorithm=algorithm,
+                prior_alpha=prior_alpha,
+                prior_sigma=prior_sigma,
+            )
+            hmm.fit(train_observations, inputs=train_inputs, method="em", num_iters=n_iter, tolerance=tol)
         fold_log_likelihoods[i_fold] = (
             hmm.log_likelihood(test_observations, inputs=test_inputs) / len(test_observations)
         )
@@ -1070,6 +1161,8 @@ def calculate_blocked_holdout_scores(
     algorithm: str = 'MLE',
     prior_alpha: float = 1,
     prior_sigma: float = 1,
+    random_seed: int | None = None,
+    restart_random_seeds: list[int | None] | None = None,
 ):
     """Compute blocked within-session held-out log-likelihoods across state counts.
 
@@ -1094,6 +1187,10 @@ def calculate_blocked_holdout_scores(
         Sticky-transition concentration for MAP fits.
     prior_sigma : float, default=1
         Observation prior scale for MAP fits.
+    random_seed : int or None, default=None
+        Base seed used when `restart_random_seeds` is not provided.
+    restart_random_seeds : list[int or None] or None, default=None
+        Flat list with one seed per `(state, restart)` combination.
 
     Returns
     -------
@@ -1104,6 +1201,13 @@ def calculate_blocked_holdout_scores(
     n_states = states.size
     test_indices_list = build_blocked_holdout_indices(observations.shape[0], n_folds=n_folds)
     cv_ll = np.zeros((n_states, nRunEM, n_folds))
+    if restart_random_seeds is None:
+        restart_random_seeds = spawn_child_seeds(random_seed, n_states * nRunEM)
+    if len(restart_random_seeds) != n_states * nRunEM:
+        raise ValueError(
+            f"Expected {n_states * nRunEM} restart seeds, got {len(restart_random_seeds)}"
+        )
+    restart_seed_grid = np.asarray(restart_random_seeds, dtype=object).reshape(n_states, nRunEM)
 
     for iS, num_states in enumerate(states):
         print(f"evaluating blocked holdout for {num_states} state(s)")
@@ -1118,8 +1222,9 @@ def calculate_blocked_holdout_scores(
                 tol=1e-4,
                 prior_alpha=prior_alpha,
                 prior_sigma=prior_sigma,
+                random_seed=restart_seed_grid[iS, iRun],
             )
-            for _ in range(nRunEM)
+            for iRun in range(nRunEM)
         ]
         run_results = Parallel(n_jobs=n_jobs)(delayed_calls)
         cv_ll[iS] = np.asarray(run_results)
@@ -1180,7 +1285,8 @@ def run_cross_validation(trial_df: pd.DataFrame, session: Session, algorithm='ML
                          prior_alpha=1, prior_sigma=1,
                          min_states: int = 1, max_states: int = 5,
                          n_threads: int = 4, n_runs: int = 5, n_folds: int = 5,
-                         predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS):
+                         predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS,
+                         random_seed: int | None = None):
     """Run blocked within-session held-out scoring over hidden-state count.
 
     This is the secondary GLM-HMM model-selection path. The primary selector is
@@ -1191,6 +1297,7 @@ def run_cross_validation(trial_df: pd.DataFrame, session: Session, algorithm='ML
     predictors = prepared["inputs"]
 
     states = np.arange(min_states, max_states + 1)
+    restart_random_seeds = spawn_child_seeds(random_seed, states.size * n_runs)
     cv_ll = calculate_blocked_holdout_scores(
         observations=observations,
         inputs=predictors,
@@ -1201,20 +1308,29 @@ def run_cross_validation(trial_df: pd.DataFrame, session: Session, algorithm='ML
         algorithm=algorithm,
         prior_alpha=prior_alpha,
         prior_sigma=prior_sigma,
+        random_seed=random_seed,
+        restart_random_seeds=restart_random_seeds,
     )
-    return plot_cross_validation_scores(
+    model_selection = plot_cross_validation_scores(
         cv_ll,
         states,
         figure_path=session.figure_path,
         sess_id_full=session.sess_id_full,
     )
+    model_selection["random_seed"] = random_seed
+    model_selection["restart_random_seeds"] = np.asarray(
+        restart_random_seeds,
+        dtype=object,
+    ).reshape(states.size, n_runs)
+    return model_selection
 
 
 def run_information_criteria(trial_df: pd.DataFrame, session: Session, algorithm='MLE',
                              prior_alpha=1, prior_sigma=1,
                              predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS,
                              min_states: int = 1, max_states: int = 5,
-                             n_threads: int = 4, n_runs: int = 10):
+                             n_threads: int = 4, n_runs: int = 10,
+                             random_seed: int | None = None):
     """Run GLM-HMM AIC/BIC model selection for one session.
 
     Parameters
@@ -1239,6 +1355,9 @@ def run_information_criteria(trial_df: pd.DataFrame, session: Session, algorithm
         Parallel jobs used across EM restarts.
     n_runs : int, default=10
         Number of EM restarts per state count.
+    random_seed : int or None, default=None
+        Base seed used to derive one deterministic seed per EM restart. None
+        preserves the current random behavior.
 
     Returns
     -------
@@ -1254,9 +1373,12 @@ def run_information_criteria(trial_df: pd.DataFrame, session: Session, algorithm
     predictors = prepared["inputs"]
 
     states = np.arange(min_states,max_states+1)
+    restart_random_seeds = spawn_child_seeds(random_seed, states.size * n_runs)
     AIC, BIC = calculate_information_criteria(observations=action, inputs=predictors, states=states, algorithm='MLE',
                                               prior_alpha=prior_alpha, prior_sigma=prior_sigma,
-                                              nRunEM=n_runs, n_jobs=n_threads)
+                                              nRunEM=n_runs, n_jobs=n_threads,
+                                              random_seed=random_seed,
+                                              restart_random_seeds=restart_random_seeds)
     plot_information_criteria(
         AIC,
         BIC,
@@ -1264,7 +1386,12 @@ def run_information_criteria(trial_df: pd.DataFrame, session: Session, algorithm
         figure_path=session.figure_path,
         sess_id_full=session.sess_id_full,
     )
-    return {'AIC': AIC, 'BIC': BIC}
+    return {
+        'AIC': AIC,
+        'BIC': BIC,
+        'random_seed': random_seed,
+        'restart_random_seeds': np.asarray(restart_random_seeds, dtype=object).reshape(states.size, n_runs),
+    }
 
 
 def main():
