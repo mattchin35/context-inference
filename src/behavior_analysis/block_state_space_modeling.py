@@ -5,7 +5,6 @@ Blockwise LM-HMM using the code from Cazettes et al 2023 made by Lucca Mazzucato
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 import pickle as pkl
 import re
 from pathlib import Path
@@ -13,24 +12,10 @@ from pathlib import Path
 from typing import Protocol
 from joblib import Parallel, delayed
 import ssm # note this should be the forked ssm repo
-from ssm.plots import gradient_cmap
-import src.state_space_modeling.utilplot as utilplot
 from src.behavior_analysis.project_utils import is_present_value
-from src.behavior_analysis.plotting_utils import build_presentation_colors
+from src.behavior_analysis.plotting_utils import build_presentation_colors, build_state_colormap, get_state_colors
+from src.behavior_analysis import state_space_plotting
 
-
-color_names = [
-    "windows blue",
-    "red",
-    "amber",
-    "faded green",
-    "dusty purple",
-    "orange"
-    ]
-colors = sns.xkcd_palette(color_names)
-cmap = gradient_cmap(colors)
-
-# np.random.seed(0)
 
 class Session(Protocol):
     multi_session_save_path: Path
@@ -158,6 +143,109 @@ def normalize_lm_observation_parameters(
     return normalized_weights, normalized_mus
 
 
+def assign_inferred_states_to_blocks(
+    block_df: pd.DataFrame,
+    valid_mask: np.ndarray,
+    most_likely_states: np.ndarray,
+    column_name: str = "inferred_strategy",
+) -> pd.DataFrame:
+    """Assign inferred HMM states to valid block rows.
+
+    Parameters
+    ----------
+    block_df : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`.
+    valid_mask : np.ndarray
+        Boolean mask with shape `(n_blocks,)`, selecting rows used for HMM
+        fitting.
+    most_likely_states : np.ndarray
+        Inferred state ids with shape `(n_valid_blocks,)`.
+    column_name : str, default="inferred_strategy"
+        Destination column for the assigned states.
+
+    Returns
+    -------
+    pd.DataFrame
+        `block_df` with `column_name` assigned. Invalid rows are set to string
+        `"None"` for CSV compatibility.
+    """
+    inferred_states = np.zeros(block_df.shape[0], dtype='object')
+    inferred_states[valid_mask] = most_likely_states
+    inferred_states[~valid_mask] = 'None'
+    block_df[column_name] = inferred_states
+    return block_df
+
+
+def stack_state_durations(
+    inferred_state_list: np.ndarray,
+    inferred_durations: np.ndarray,
+    num_states: int,
+) -> list[np.ndarray]:
+    """Group run-length encoded state durations by state index.
+
+    Parameters
+    ----------
+    inferred_state_list : np.ndarray
+        State ids returned by `ssm.util.rle`, shape `(n_runs,)`.
+    inferred_durations : np.ndarray
+        Run durations returned by `ssm.util.rle`, shape `(n_runs,)`.
+    num_states : int
+        Number of hidden states in the fitted model.
+
+    Returns
+    -------
+    list[np.ndarray]
+        One duration array per state, length `num_states`.
+    """
+    return [
+        inferred_durations[inferred_state_list == state_idx]
+        for state_idx in range(num_states)
+    ]
+
+
+def plot_state_duration_histogram(
+    inferred_state_list: np.ndarray,
+    inferred_durations: np.ndarray,
+    num_states: int,
+    state_colors: list[str],
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot a state-duration histogram from run-length encoded states.
+
+    Parameters
+    ----------
+    inferred_state_list : np.ndarray
+        State ids returned by `ssm.util.rle`, shape `(n_runs,)`.
+    inferred_durations : np.ndarray
+        Run durations returned by `ssm.util.rle`, shape `(n_runs,)`.
+    num_states : int
+        Number of hidden states in the fitted model.
+    state_colors : list[str]
+        One plotting color per state, length `num_states`.
+
+    Returns
+    -------
+    tuple[plt.Figure, plt.Axes]
+        Matplotlib figure and axes containing the duration histogram.
+    """
+    inferred_durations_stacked = stack_state_durations(
+        inferred_state_list,
+        inferred_durations,
+        num_states,
+    )
+
+    fig = plt.figure(figsize=(8, 4))
+    plt.hist(
+        inferred_durations_stacked,
+        label=['state ' + str(state_idx) for state_idx in range(num_states)],
+        color=state_colors,
+    )
+    plt.xlabel('Duration')
+    plt.ylabel('Frequency')
+    plt.legend()
+    plt.title('Histogram of Inferred State Durations')
+    return fig, plt.gca()
+
+
 def split_blocked_holdout_sequences(
     observations: np.ndarray,
     inputs: np.ndarray,
@@ -204,73 +292,97 @@ def split_blocked_holdout_sequences(
     )
 
 
-def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, plot: bool=False, model_dict=None,
+def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool=False, model_dict=None,
                      num_states=2):
-    """Maximum likelihood estimation of block strategies/states."""
+    """Fit MLE block LM-HMM states and assign them back to the block table.
+
+    Parameters
+    ----------
+    block_df : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`. Required
+        columns are defined by `prepare_block_lm_hmm_data`.
+    figure_path : Path
+        Directory where diagnostic figures are saved when `plot=True`.
+    sess_id_tag : str
+        Caller-provided session identifier tag used in saved figure filenames.
+    plot : bool, default=False
+        Whether to save diagnostic fit and state-summary figures.
+    model_dict : dict or None, default=None
+        Existing model dictionary to update. If None, a new dictionary is used.
+    num_states : int, default=2
+        Number of hidden LM-HMM states.
+
+    Returns
+    -------
+    tuple[dict, pd.DataFrame]
+        Updated model dictionary and `block_df` with inferred state columns.
+    """
     prepared = prepare_block_lm_hmm_data(block_df)
     ix_valid = prepared["valid_mask"]
     trials_to_correct = prepared["observations"]
     predictors = prepared["inputs"]
 
-    # num states - start with 2, Inf/RL, then do 3 (inf/rl/biased). Would like Inf(maybe lo and hi thresh)/RL/biased/disengaged/confused. I think this is
-    # what cross-validation is gonna be for. less is better!
-    # num_states = 2
-    obs_dim = 1
+    obs_dim = trials_to_correct.shape[1]
     input_dim = predictors.shape[1]
+    state_colors = get_state_colors(num_states)
+    state_cmap = build_state_colormap(state_colors)
 
     if model_dict is None:
         model_dict = {}
     model_dict['mle'] = {}
     weight_dict = {}
 
-    mle_hmm = ssm.HMM(num_states, obs_dim, M=input_dim, observations="input_driven_obs_gaussian", transitions="standard")
+    mle_hmm = build_input_driven_hmm(
+        num_states=num_states,
+        obs_dim=obs_dim,
+        input_dim=input_dim,
+        algorithm='MLE',
+    )
     N_iters = 10000  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
-    # fit_ll = mle_hmm.fit(obs, inputs=inpt, method="em", num_iters=N_iters, tolerance=10**-6)
-    # fit_log_likelihood = mle_hmm.fit(trials_to_correct, inputs=prev_rewards, method="em", num_iters=N_iters, tolerance=10 ** -6)
     fit_log_likelihood = mle_hmm.fit(trials_to_correct, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
     model_dict['mle']['fit_log_likelihood'] = fit_log_likelihood
-
-    # Plot the log probabilities of the true and fit models. Fit model final LL should be greater
-    # than or equal to true LL.
     if plot:
         fig = plt.figure(figsize=(4, 3), dpi=80, facecolor='w', edgecolor='k')
         plt.plot(fit_log_likelihood, label="EM")
-        # plt.plot([0, len(fit_ll)], (true_ll) * np.ones(2), ':k', label="True")
         plt.legend(loc="lower right")
         plt.xlabel("EM Iteration")
-        # plt.xlim(0, len(fit_ll))
         plt.ylabel("Log Probability")
         plt.title("MLE EM fit of observed data")
-        save_path = figure_path / '{}_mle_convergence.png'.format(sess_id)
+        save_path = figure_path / '{}_mle_convergence.png'.format(sess_id_tag)
         fig.savefig(save_path, format='png', dpi=300)
 
-    # mle_hmm.permute(find_permutation(true_states, most_likely_states))
-    # most_likely_states = mle_hmm.most_likely_states(trials_to_correct, input=prev_rewards)
     most_likely_states = mle_hmm.most_likely_states(trials_to_correct, input=predictors)
     recovered_weights = mle_hmm.observations.Wks
     recovered_mus = mle_hmm.observations.mus
+    normalized_weights, normalized_mus = normalize_lm_observation_parameters(
+        recovered_weights=recovered_weights,
+        recovered_mus=recovered_mus,
+    )
 
-    # revisit this after fitting MAP
-    weight_dict['weights'] = recovered_weights
-    weight_dict['mus'] = recovered_mus
+    weight_dict['weights'] = normalized_weights
+    weight_dict['mus'] = normalized_mus
     weight_dict['label'] = 'mle'
 
     model_dict['mle']['weight_dict'] = weight_dict
     if plot:
         mle_transition_mat = np.exp(mle_hmm.transitions.log_Ps)
-        utilplot.plot_trans_matrix(mle_transition_mat)
-        plt.title("MLE transition matrix", fontsize=15)
-        save_path = figure_path / '{}_mle_transition_mat.png'.format(sess_id)
-        plt.gcf().savefig(save_path, format='png', dpi=300)
+        fig, ax = state_space_plotting.plot_transition_matrix(mle_transition_mat)
+        ax.set_title("MLE transition matrix", fontsize=15)
+        save_path = figure_path / '{}_mle_transition_mat.png'.format(sess_id_tag)
+        fig.savefig(save_path, format='png', dpi=300)
 
-    ### Get expected states ###
-    # posterior_probs = mle_hmm.expected_states(data=trials_to_correct, input=prev_rewards)[0]
     posterior_probs = mle_hmm.expected_states(data=trials_to_correct, input=predictors)[0]
     if plot:
-        # fig, ax = utilplot.plot_postprob_obs(posterior_probs, trials_to_correct, prev_rewards, mle_hmm, colors, cmap)
-        fig, ax = utilplot.plot_postprob_obs(posterior_probs, trials_to_correct, predictors, mle_hmm, colors, cmap)
-        plt.title("MLE HMM states")
-        save_path = figure_path / '{}_mle_predicted_states.png'.format(sess_id)
+        fig, ax = state_space_plotting.plot_block_lm_hmm_state_summary(
+            posterior_probs,
+            trials_to_correct,
+            predictors,
+            mle_hmm,
+            state_colors,
+            state_cmap,
+        )
+        ax[0].set_title("MLE HMM states")
+        save_path = figure_path / '{}_mle_predicted_states.png'.format(sess_id_tag)
         fig.savefig(save_path, format='png', dpi=300)
 
     inferred_state_list, inferred_durations = ssm.util.rle(most_likely_states)
@@ -280,30 +392,22 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     model_dict['mle']['hmm_z'] = most_likely_states
     model_dict['mle']['hmm'] = mle_hmm
 
-    inferred_states = np.zeros(block_df.shape[0], dtype='object')
-    inferred_states[ix_valid] = most_likely_states
-    inferred_states[~ix_valid] = 'None'
-    block_df['inferred_strategy'] = inferred_states
+    block_df = assign_inferred_states_to_blocks(block_df, ix_valid, most_likely_states)
 
     if plot:
-        ## Rearrange the lists of durations to be a nested list where
-        ## the nth inner list is a list of durations for state n
-        inferred_durations_stacked = []
-        for s in range(num_states):
-            inferred_durations_stacked.append(inferred_durations[inferred_state_list == s])
-
-        fig = plt.figure(figsize=(8, 4))
-        plt.hist(inferred_durations_stacked, label=['state ' + str(s) for s in range(num_states)], color=colors[:num_states])
-        plt.xlabel('Duration')
-        plt.ylabel('Frequency')
-        plt.legend()
-        plt.title('Histogram of Inferred State Durations')
-        # plt.show()
+        fig, ax = plot_state_duration_histogram(
+            inferred_state_list=inferred_state_list,
+            inferred_durations=inferred_durations,
+            num_states=num_states,
+            state_colors=state_colors,
+        )
+        save_path = figure_path / f'{sess_id_tag}_mle_state_durations.png'
+        fig.savefig(save_path, format='png', dpi=300)
 
     return model_dict, block_df
 
 
-def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_full: str, plot: bool = False,
+def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool = False,
                      num_states=2, prior_sigma=1, prior_alpha=1, model_dict=None):
     """Fit MAP block LM-HMM states and assign them back to the block table.
 
@@ -314,8 +418,8 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_full: st
         columns are defined by `prepare_block_lm_hmm_data`.
     figure_path : Path
         Directory where diagnostic figures are saved when `plot=True`.
-    sess_id_full : str
-        Full session identifier used in saved figure filenames.
+    sess_id_tag : str
+        Caller-provided session identifier tag used in saved figure filenames.
     plot : bool, default=False
         Whether to save diagnostic fit and state-summary figures.
     num_states : int, default=2
@@ -338,8 +442,7 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_full: st
     predictors = prepared["inputs"]
     pred_labels = prepared["predictor_labels"]
 
-    obs_dim = 1
-    # input_dim = 1
+    obs_dim = trials_to_correct.shape[1]
     input_dim = predictors.shape[1]
 
     if model_dict is None:
@@ -348,32 +451,30 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_full: st
     model_dict['map'] = {}
     weight_dict = {}
 
-    map_hmm = ssm.HMM(num_states, obs_dim, M=input_dim,
-                      observations="input_driven_obs_gaussian",
-                      observation_kwargs=dict(prior_sigma=prior_sigma),
-                      transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
+    map_hmm = build_input_driven_hmm(
+        num_states=num_states,
+        obs_dim=obs_dim,
+        input_dim=input_dim,
+        algorithm='MAP',
+        prior_alpha=prior_alpha,
+        prior_sigma=prior_sigma,
+    )
 
-    # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
-    # was 10k before, should probably stop by 1k - if it doesn't work by then it's not realistic. Convergence ability is relevant, if it's too
-    # hard it may not be realistic/result in overfitting
+    # maximum number of EM iterations.
+    # was 10k before, should probably stop by 1k. If it doesn't work by then it may not be realistic/result in overfitting
     N_iters = 1000
 
-    # fit_ll = map_hmm.fit(obs, inputs=inpt, method="em", num_iters=N_iters, tolerance=10**-6)
     fit_log_likelihood = map_hmm.fit(trials_to_correct, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
     model_dict['map']['fit_log_likelihood'] = fit_log_likelihood
 
-    # Plot the log probabilities of the true and fit models. Fit model final LL should be greater
-    # than or equal to true LL.
     if plot:
         fig = plt.figure(figsize=(4, 3), dpi=80, facecolor='w', edgecolor='k')
         plt.plot(fit_log_likelihood, label="EM")
-        # plt.plot([0, len(fit_ll)], (true_ll) * np.ones(2), ':k', label="True")
         plt.legend(loc="lower right")
         plt.xlabel("EM Iteration")
-        # plt.xlim(0, len(fit_ll))
         plt.ylabel("Log Probability")
         plt.title("MAP EM fit of observed data")
-        save_path = figure_path / '{}_map_convergence.png'.format(sess_id_full)
+        save_path = figure_path / '{}_map_convergence.png'.format(sess_id_tag)
         fig.savefig(save_path, format='png', dpi=300)
 
     most_likely_states = map_hmm.most_likely_states(trials_to_correct, input=predictors)
@@ -384,44 +485,35 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_full: st
         recovered_mus=recovered_mus,
     )
 
-    # weight_dict = {}
     weight_dict['weights'] = normalized_weights
     weight_dict['mus'] = normalized_mus
     weight_dict['label'] = 'map'
     weight_dict['weight_labels'] = pred_labels
     model_dict['map']['weight_dict'] = weight_dict
     if plot:
-        # utilplot.plot_weights_comparison(weight_dict['map'])
-        # plt.title("recovered weights")
-        # save_path = figure_path / '{}_map_weights.png'.format(sess_id)
-        # plt.gcf().savefig(save_path, format='png', dpi=300)
-
         map_transition_mat = np.exp(map_hmm.transitions.log_Ps)
-        utilplot.plot_trans_matrix(map_transition_mat)
-        plt.title("MAP transition matrix", fontsize=15)
-        save_path = figure_path / '{}_map_transition_mat.png'.format(sess_id_full)
-        plt.gcf().savefig(save_path, format='png', dpi=300)
-
-        # plt.subplot(1, 2, 2)
-        # plt.title("MAP transition matrix", fontsize=15)
-        # utilplot.plot_trans_matrix(map_transition_mat)
-        # f, ax = utilplot.plt.subplots_adjust(0, 0, 1, 1)
+        fig, ax = state_space_plotting.plot_transition_matrix(map_transition_mat)
+        ax.set_title("MAP transition matrix", fontsize=15)
+        save_path = figure_path / '{}_map_transition_mat.png'.format(sess_id_tag)
+        fig.savefig(save_path, format='png', dpi=300)
 
     state_weights = normalized_weights[:, 0, :]
     primary_predictor_weights = state_weights[:, 0]
     present_colors, present_cmap = build_presentation_colors(primary_predictor_weights)
 
-    ### Get expected states
     posterior_probs = map_hmm.expected_states(data=trials_to_correct, input=predictors)[0]
     if plot:
-        # fig, ax = utilplot.plot_postprob_obs(posterior_probs, trials_to_correct, predictors, map_hmm, colors, cmap)
-        fig, ax = utilplot.plot_postprob_obs_for_presentation(posterior_probs, trials_to_correct, predictors, map_hmm,
-                                                              present_colors, present_cmap, predictor_labels=pred_labels)
-        # fig, ax = utilplot.plot_postprob_obs_for_presentation(posterior_probs, trials_to_correct, predictors, map_hmm,
-        #                                                       colors, cmap, predictor_labels=pred_labels)
-        # plt.title("MAP HMM states")
-        plt.title("HMM states")
-        save_path = figure_path / '{}_map_predicted_states.png'.format(sess_id_full)
+        fig, ax = state_space_plotting.plot_block_lm_hmm_presentation_summary(
+            posterior_probs,
+            trials_to_correct,
+            predictors,
+            map_hmm,
+            present_colors,
+            present_cmap,
+            predictor_labels=pred_labels,
+        )
+        ax[0].set_title("MAP HMM states")
+        save_path = figure_path / '{}_map_predicted_states.png'.format(sess_id_tag)
         fig.savefig(save_path, format='png', dpi=300)
 
     inferred_state_list, inferred_durations = ssm.util.rle(most_likely_states)
@@ -431,24 +523,17 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_full: st
     model_dict['map']['hmm_z'] = most_likely_states
     model_dict['map']['hmm'] = map_hmm
 
-    inferred_states = np.zeros(block_df.shape[0], dtype='object')
-    inferred_states[ix_valid] = most_likely_states
-    inferred_states[~ix_valid] = 'None'
-    block_df['inferred_strategy'] = inferred_states
+    block_df = assign_inferred_states_to_blocks(block_df, ix_valid, most_likely_states)
+    inferred_states = block_df['inferred_strategy'].to_numpy()
     if plot:
-        ## Rearrange the lists of durations to be a nested list where
-        ## the nth inner list is a list of durations for state n
-        inferred_durations_stacked = []
-        for s in range(num_states):
-            inferred_durations_stacked.append(inferred_durations[inferred_state_list == s])
-
-        fig = plt.figure(figsize=(8, 4))
-        plt.hist(inferred_durations_stacked, label=['state ' + str(s) for s in range(num_states)], color=colors[:num_states])
-        plt.xlabel('Duration')
-        plt.ylabel('Frequency')
-        plt.legend()
-        plt.title('Histogram of Inferred State Durations')
-        # plt.show()
+        fig, ax = plot_state_duration_histogram(
+            inferred_state_list=inferred_state_list,
+            inferred_durations=inferred_durations,
+            num_states=num_states,
+            state_colors=present_colors,
+        )
+        save_path = figure_path / f'{sess_id_tag}_map_state_durations.png'
+        fig.savefig(save_path, format='png', dpi=300)
 
     if num_states > 1:
         if np.sum(~ix_valid) > 0:
@@ -491,12 +576,17 @@ def save_block_model_dict(model_dict: dict, processed_data_path: Path, sess_id_f
 def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.DataFrame, session: Session, num_states: int=2,
                        prior_alpha=1, prior_sigma=1):
 
-    mle_model_dict, block_performance = mle_block_states(block_performance, session.figure_path, session.sess_id_abbreviated,
-                                                         plot=True, num_states=num_states)
+    mle_model_dict, block_performance = mle_block_states(
+        block_performance,
+        figure_path=session.figure_path,
+        sess_id_tag=session.sess_id_full,
+        plot=True,
+        num_states=num_states,
+    )
     map_model_dict, block_performance = map_block_states(
         block_performance,
         figure_path=session.figure_path,
-        sess_id_full=session.sess_id_full,
+        sess_id_tag=session.sess_id_full,
         plot=True,
         model_dict=mle_model_dict,
         num_states=num_states,
@@ -522,11 +612,18 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
     primary_predictor_weights = normalized_weights[:, 0, 0]
     present_colors, present_cmap = build_presentation_colors(primary_predictor_weights)
 
-    # utilplot.plot_weights_comparison([map_model_dict['mle']['weight_dict'],map_model_dict['map']['weight_dict']])
-    utilplot.plot_weights_presentation(map_model_dict['map']['weight_dict'], present_colors, session=session)
-    # plt.title("recovered weights")
-    # save_path = session.figure_path / '{}_hmm_weights.png'.format(session.sess_id_full)
-    # plt.gcf().savefig(save_path, format='png', dpi=300)
+    fig, ax = state_space_plotting.plot_block_lm_hmm_weight_comparison(
+        [map_model_dict['mle']['weight_dict'], map_model_dict['map']['weight_dict']],
+    )
+    save_path = session.figure_path / f'{session.sess_id_full}_hmm_weight_comparison.png'
+    fig.savefig(save_path, format='png', dpi=300)
+
+    fig, ax = state_space_plotting.plot_block_lm_hmm_weights(
+        map_model_dict['map']['weight_dict'],
+        present_colors,
+    )
+    save_path = session.figure_path / f'{session.sess_id_full}_hmm_weights.png'
+    fig.savefig(save_path, format='png', dpi=300)
     return block_performance, augmented_trial_df
 
 
@@ -979,7 +1076,6 @@ def main():
         print(f"Mouse id: {mouse}")  # abc123
         print(f"Date: {date}")  # YYYY-MM-DD
         print(f"Time: {timestamp}")  # HHMMSS
-        sess_id_abbreviated = mouse + '_' + date
     else:
         print("Double-check the session name!")
         return
@@ -989,7 +1085,12 @@ def main():
     block_performance = pd.read_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), sep=',',
                                     na_filter=False)
 
-    mle_model_dict, block_performance = mle_block_states(block_performance, figure_path, sess_id_abbreviated, plot=True)
+    mle_model_dict, block_performance = mle_block_states(
+        block_performance,
+        figure_path=figure_path,
+        sess_id_tag=sess_id_full,
+        plot=True,
+    )
 
     block_performance = hardcode_block_strategy(block_performance)
     block_performance.to_csv(processed_data_path / (sess_id_full + '_block_performance.csv'), index=False)

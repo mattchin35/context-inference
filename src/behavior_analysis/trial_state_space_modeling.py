@@ -10,7 +10,6 @@ import pickle as pkl
 import re
 from pathlib import Path
 import ssm
-import src.state_space_modeling.utilplot as utilplot
 from joblib import Parallel, delayed
 from typing import Protocol
 from src.behavior_analysis.project_utils import is_present_value, is_zero_flag
@@ -19,6 +18,7 @@ from src.behavior_analysis.plotting_utils import (
     build_state_colormap,
     get_state_colors,
 )
+from src.behavior_analysis import state_space_plotting
 
 np.random.seed(0)
 
@@ -493,17 +493,6 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         save_path = figure_path / '{}_trial_mle_weights.png'.format(sess_id)
         plt.gcf().savefig(save_path, format='png', dpi=300)
 
-    #     utilplot.plot_weights_comparison(weight_dict)
-    #     plt.title("recovered weights")
-    #     save_path = figure_path / '{}_trial_mle_weights.png'.format(sess_id)
-    #     plt.gcf().savefig(save_path, format='png', dpi=300)
-    #
-    #     mle_transition_mat = np.exp(mle_hmm.transitions.log_Ps)
-    #     utilplot.plot_trans_matrix(mle_transition_mat)
-    #     plt.title("MLE transition matrix", fontsize=15)
-    #     save_path = figure_path / '{}_trial_mle_transition_mat.png'.format(sess_id)
-    #     plt.gcf().savefig(save_path, format='png', dpi=300)
-
     ### Get expected states ###
     posterior_probs = mle_hmm.expected_states(data=action, input=predictors)[0]
     if plot:
@@ -516,7 +505,6 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         plt.yticks([0, 0.5, 1], fontsize=10)
         plt.xlabel("trial #", fontsize=15)
         plt.ylabel("p(state)", fontsize=15)
-        # fig, ax = utilplot.plot_postprob_obs(posterior_probs, action, predictors, mle_hmm, state_colors, state_cmap)
         plt.title("MLE HMM states")
         plt.tight_layout()
         save_path = figure_path / '{}_trial_mle_predicted_states.png'.format(sess_id)
@@ -524,7 +512,7 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
 
         f, ax = plot_postprob_obs(posterior_probs=posterior_probs,observations=action, inputs=predictors,
                                   hmm_fit=mle_hmm, colors=state_colors, cmap=state_cmap)
-        save_path = figure_path / '{}_trial_mle_utilplotSummary.png'.format(sess_id)
+        save_path = figure_path / '{}_trial_mle_state_summary.png'.format(sess_id)
         f.savefig(save_path, format='png', dpi=300)
 
 
@@ -679,17 +667,6 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         save_path = figure_path / '{}_trial_map_weights.png'.format(sess_id)
         plt.gcf().savefig(save_path, format='png', dpi=300)
 
-    #     utilplot.plot_weights_comparison(weight_dict)
-    #     plt.title("recovered weights")
-    #     save_path = figure_path / '{}_trial_mle_weights.png'.format(sess_id)
-    #     plt.gcf().savefig(save_path, format='png', dpi=300)
-    #
-    #     mle_transition_mat = np.exp(mle_hmm.transitions.log_Ps)
-    #     utilplot.plot_trans_matrix(mle_transition_mat)
-    #     plt.title("MLE transition matrix", fontsize=15)
-    #     save_path = figure_path / '{}_trial_mle_transition_mat.png'.format(sess_id)
-    #     plt.gcf().savefig(save_path, format='png', dpi=300)
-
     ### Get expected states ###
     posterior_probs = map_hmm.expected_states(data=action, input=predictors)[0]
     if plot:
@@ -703,7 +680,6 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         plt.xlabel("Trial", fontsize=15)
         plt.ylabel("p(Strategy)", fontsize=15)
         plt.xlim((0, n_trials))
-        # fig, ax = utilplot.plot_postprob_obs(posterior_probs, action, predictors, mle_hmm, state_colors, state_cmap)
         # plt.title("MAP HMM states")
         plt.title("HMM behavior probabilities")
         plt.tight_layout()
@@ -712,7 +688,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
 
         f, ax = plot_postprob_obs(posterior_probs=posterior_probs,observations=action, inputs=predictors,
                                   hmm_fit=map_hmm, colors=state_colors, cmap=state_cmap)
-        save_path = figure_path / '{}_trial_map_utilplotSummary.png'.format(sess_id)
+        save_path = figure_path / '{}_trial_map_state_summary.png'.format(sess_id)
         f.savefig(save_path, format='png', dpi=300)
 
 
@@ -850,8 +826,11 @@ def run_trial_modeling(trial_df: pd.DataFrame, session: Session, num_states: int
 
     augmented_trial_df.to_csv(session.processed_data_path / (session.sess_id_full + '_augmented_trials.csv'), index=False)
 
-    # utilplot.plot_weights_comparison_glim([map_model_dict['mle']['weight_dict'], map_model_dict['map']['weight_dict']], session)#, obs_dim=1)
-    utilplot.plot_weights_comparison_glim([map_model_dict['map']['weight_dict']], session)#, obs_dim=1)
+    fig, ax = state_space_plotting.plot_trial_glm_hmm_weights(
+        [map_model_dict['map']['weight_dict']],
+    )
+    save_path = session.figure_path / f"{session.sess_id_full}_trial_hmm_weights.png"
+    fig.savefig(save_path, format='png', dpi=300)
     return augmented_trial_df
 
 

@@ -848,14 +848,15 @@ def main_mouse():
         sess_id_full=sess_id_full,
     )
 
-    # block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
-    #                                                 prior_alpha=1, prior_sigma=1)
+    block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
+                                                    prior_alpha=1, prior_sigma=1)
 
+    # prefer use of the information criteria for model selection, but here is how you'd use CV
     # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
     #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2)
 
-    # block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=2,
-    #                                                                 prior_alpha=1, prior_sigma=1)
+    block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=2,
+                                                                    prior_alpha=1, prior_sigma=1)
 
     # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
     # with open(block_model_dict_path, 'rb') as file:
