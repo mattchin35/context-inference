@@ -58,138 +58,6 @@ class Session(Protocol):
     session_info: dict
 
 
-def plot_postprob_obs(posterior_probs: np.ndarray, observations: np.ndarray, inputs: np.ndarray,
-                      hmm_fit, colors, cmap, session_lengths: np.ndarray=None) -> tuple[plt.Figure, plt.Axes]:
-
-    fig, (a0, a1, a2) = plt.subplots(3, 1, gridspec_kw={'height_ratios': [1, 1, 3]})
-
-    # Plot the data and the smoothed data
-    time_bins = len(inputs)
-    obs_dim = len(observations[0])
-    num_states = hmm_fit.transitions.log_Ps.shape[0]
-    input_dim = len(inputs[0])
-    for k in range(num_states):
-        a0.plot(posterior_probs[:, k], label="State " + str(k + 1), lw=2, color=colors[k])
-
-    a0.set_ylim((-0.05, 1.05))
-    a0.set_yticks([0, 1], labels=[0, 1], fontsize=15)
-    a0.set_ylabel("p(state)", fontsize=15)
-    a0.set_xlim(0, time_bins-1)
-    a0.set_xticks([])
-
-    lim_input = 1.1 * abs(inputs).max()
-    for d in range(input_dim):
-        # a1.plot(inputs[:, d] - lim_input * d, '-c', label='inpt dim ' + str(d))
-        a1.plot(inputs[:, d] - lim_input * d, label='inpt dim ' + str(d))
-    # a1.plot(observations[:, d], label='obs' * (d == 0))
-
-    a1.set_xticks([])
-    a1.set_xlim(0, time_bins)
-    a1.set_yticks(-np.arange(input_dim) * lim_input, ["$x_{{ {} }}$".format(n + 1) for n in range(input_dim)])
-    a1.set_title('Input')
-    a1.legend(fancybox=False, fontsize=10)
-
-    lim = 2 * abs(observations).max()
-    # state_detected = posterior_probs
-    ind_state = np.argmax(posterior_probs, axis=1)
-    indnot = np.all(posterior_probs < 0.8, axis=1)
-    ind_state[indnot] = -1
-    cmap.set_under('w')
-
-    # Ey = hmm_fit.observations.mus[ind_state]
-    # EW = hmm_fit.observations.Wks[ind_state]
-    Ey = hmm_fit.observations.Wk[:,:,-1][ind_state]   # refactor code later to identify the last input as 1s for bias and last weights as the means
-    EW = hmm_fit.observations.Wk[:,:,:-1][ind_state]
-    for d in range(obs_dim):
-        a2.imshow(ind_state[None, :], aspect="auto", cmap=cmap, vmin=0, vmax=len(colors) - 1,
-                  extent=(0, time_bins, -lim * obs_dim, lim), alpha=0.5)
-        a2.plot(observations[:, d] - lim * d, '-k', label='obs' * (d == 0))
-        a2.plot(Ey[:, d] - lim * d, ':k', label='bias' * (d == 0))  # means
-        a2.plot(EW[:, d] - lim * d, '--k', label='weight' * (d == 0))  # slopes
-    a2.set_xlim(0, time_bins-1)
-    # a2.set_yticks(-np.arange(obs_dim) * lim, ["$y_{{ {} }}$".format(n + 1) for n in range(obs_dim)])
-    a2.set_yticks([])
-    a2.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    a2.set_xlabel("Context changes")
-    a2.set_ylim(0-.05, abs(observations).max()+.05)
-    # a2.set_ylabel("inputs, obs")
-
-    if session_lengths is not None:
-        splits = np.cumsum(session_lengths)
-        for i in range(splits.shape[0] - 1):
-            a0.axvline(x=splits[i], color='k', linestyle='--')
-            a1.axvline(x=splits[i], color='k', linestyle='--')
-            a2.axvline(x=splits[i], color='k', linestyle='--')
-
-    fig.tight_layout()
-    return fig, (a0, a1, a2)
-
-
-def plot_labeled_observations(states1: np.ndarray, posterior_probs2: np.ndarray, observations: np.ndarray, inputs: np.ndarray,
-                      hmm_fit, colors, cmap, session_lengths: np.ndarray=None) -> tuple[plt.Figure, plt.Axes]:
-    fig, (a0, a1, a2) = plt.subplots(3, 1)#, gridspec_kw={'height_ratios': [1, 1, 1]})
-    lim = 2 * abs(observations).max()
-    obs_dim = len(observations[0])
-    time_bins = len(inputs)
-    cmap.set_under('w')
-
-    for d in range(obs_dim):
-        a0.imshow(states1[None,:], aspect="auto", cmap=cmap, vmin=0, vmax=len(colors) - 1,
-                  extent=(0, time_bins, -lim * obs_dim, lim), alpha=0.5)
-        a0.plot(observations[:, d] - lim * d, '-k', label='obs' * (d == 0))
-    a0.set_xlim(0, time_bins - 1)
-    # a1.set_yticks(-np.arange(obs_dim) * lim, ["$y_{{ {} }}$".format(n + 1) for n in range(obs_dim)])
-    a0.set_yticks([])
-    a0.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    a0.set_xlabel("Block context changes")
-    a0.set_ylim(0-.05, abs(observations).max()+.05)
-    # a0.set_ylabel("inputs, obs")
-
-    #############################################
-
-    # state_detected = posterior_probs
-    ind_state = np.argmax(posterior_probs2, axis=1)
-    indnot = np.all(posterior_probs2 < 0.8, axis=1)
-    ind_state[indnot] = -1
-    cmap.set_under('w')
-
-    Ey = hmm_fit.observations.Wk[:,:,-1][ind_state]   # refactor code later to identify the last input as 1s for bias and last weights as the means
-    EW = hmm_fit.observations.Wk[:,:,:-1][ind_state]
-    # EW = hmm_fit.o9[:,:,:-1][ind_state]
-    for d in range(obs_dim):
-        a1.imshow(ind_state[None, :], aspect="auto", cmap=cmap, vmin=0, vmax=len(colors) - 1,
-                  extent=(0, time_bins, -lim * obs_dim, lim), alpha=0.5)
-        a1.plot(observations[:, d] - lim * d, '-k', label='obs' * (d == 0))
-        # a1.plot(Ey[:, d] - lim * d, ':k', label='bias' * (d == 0))  # means
-        # a1.plot(EW[:, d] - lim * d, '--k', label='weight' * (d == 0))  # slopes
-    a1.set_xlim(0, time_bins-1)
-    # a1.set_yticks(-np.arange(obs_dim) * lim, ["$y_{{ {} }}$".format(n + 1) for n in range(obs_dim)])
-    a1.set_yticks([])
-    # a1.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    a1.set_xlabel("Trial context changes")
-    a1.set_ylim(0-.05, abs(observations).max()+.05)
-    # a1.set_ylabel("inputs, obs")
-
-    if session_lengths is not None:
-        splits = np.cumsum(session_lengths)
-        for i in range(splits.shape[0] - 1):
-            a0.axvline(x=splits[i], color='k', linestyle='--')
-            a1.axvline(x=splits[i], color='k', linestyle='--')
-
-    num_states = hmm_fit.transitions.log_Ps.shape[0]
-    for k in range(num_states):
-        a2.plot(posterior_probs2[:, k], label="State " + str(k + 1), lw=2, color=colors[k])
-
-    a2.set_ylim((-0.05, 1.05))
-    a2.set_yticks([0, 1], labels=[0, 1], fontsize=15)
-    a2.set_ylabel("p(state)", fontsize=15)
-    a2.set_xlim(0, time_bins - 1)
-    a2.set_xticks([])
-
-    fig.tight_layout()
-    return fig, (a0, a1, a2)
-
-
 def prepare_trial_glm_hmm_data(
     trial_df: pd.DataFrame,
     require_inherited_strategy: bool = False,
@@ -343,6 +211,39 @@ def build_block_comparison_colors(block_weight_dict: dict) -> tuple[list, object
     return build_presentation_colors(primary_predictor_weights)
 
 
+def assign_inferred_states_to_trials(
+    trial_df: pd.DataFrame,
+    valid_mask: np.ndarray,
+    most_likely_states: np.ndarray,
+    column_name: str = "inferred_strategy",
+) -> pd.DataFrame:
+    """Assign inferred GLM-HMM states to valid trial rows.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`.
+    valid_mask : np.ndarray
+        Boolean mask with shape `(n_trials,)`, selecting rows used for HMM
+        fitting.
+    most_likely_states : np.ndarray
+        Inferred state ids with shape `(n_valid_trials,)`.
+    column_name : str, default="inferred_strategy"
+        Destination column for the assigned states.
+
+    Returns
+    -------
+    pd.DataFrame
+        `trial_df` with `column_name` assigned. Invalid rows are set to string
+        `"None"` for CSV compatibility.
+    """
+    inferred_states = np.zeros(trial_df.shape[0], dtype='object')
+    inferred_states[valid_mask] = most_likely_states
+    inferred_states[~valid_mask] = 'None'
+    trial_df[column_name] = inferred_states
+    return trial_df
+
+
 def split_blocked_holdout_sequences(
     observations: np.ndarray,
     inputs: np.ndarray,
@@ -390,10 +291,34 @@ def split_blocked_holdout_sequences(
     )
 
 
-def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, plot: bool=False, model_dict=None,
+def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool=False, model_dict=None,
                      num_states=2,
                      predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS):
-    """Maximum likelihood estimation of block strategies/states."""
+    """Fit MLE trial GLM-HMM states and assign them back to the trial table.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required
+        columns are defined by `prepare_trial_glm_hmm_data`.
+    figure_path : Path
+        Directory where diagnostic figures are saved when `plot=True`.
+    sess_id_tag : str
+        Caller-provided session identifier tag used in saved figure filenames.
+    plot : bool, default=False
+        Whether to save diagnostic fit and state-summary figures.
+    model_dict : dict or None, default=None
+        Existing model dictionary to update. If None, a new dictionary is used.
+    num_states : int, default=2
+        Number of hidden GLM-HMM states.
+    predictor_columns : tuple[str, ...], default=DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS
+        Non-bias GLM predictor columns used in the input matrix.
+
+    Returns
+    -------
+    tuple[dict, pd.DataFrame]
+        Updated model dictionary and `trial_df` with inferred state columns.
+    """
     prepared = prepare_trial_glm_hmm_data(trial_df, predictor_columns=predictor_columns)
     ix_valid = prepared["valid_mask"]
     df = trial_df[ix_valid]
@@ -418,9 +343,8 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
 
     # num states - start with 2, Inf/RL, then do 3 (inf/rl/biased). Would like Inf(maybe lo and hi thresh)/RL/biased/disengaged/confused. I think this is
     # what cross-validation is gonna be for. less is better!
-    obs_dim = 1
+    obs_dim = action.shape[1]
     input_dim = predictors.shape[1]
-    num_categories = 2
     state_colors = get_state_colors(num_states)
     state_cmap = build_state_colormap(state_colors)
 
@@ -429,9 +353,12 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     model_dict['mle'] = {}
     weight_dict = {}
 
-    mle_hmm = ssm.HMM(num_states, obs_dim, M=input_dim, observations="input_driven_obs",
-                      observation_kwargs=dict(C=num_categories), transitions="standard")
-    # mle_hmm = ssm.HMM(num_states, obs_dim, M=input_dim, observations="input_driven_obs", transitions="standard")
+    mle_hmm = build_input_driven_glm_hmm(
+        num_states=num_states,
+        obs_dim=obs_dim,
+        input_dim=input_dim,
+        algorithm='MLE',
+    )
     N_iters = 10000  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
     fit_log_likelihood = mle_hmm.fit(action, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
     model_dict['mle']['fit_log_likelihood'] = fit_log_likelihood
@@ -448,7 +375,7 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         plt.ylabel("Log Probability")
         plt.title("MLE EM fit of observed data")
         plt.tight_layout()
-        save_path = figure_path / '{}_trial_mle_convergence.png'.format(sess_id)
+        save_path = figure_path / '{}_trial_mle_convergence.png'.format(sess_id_tag)
         fig.savefig(save_path, format='png', dpi=300)
 
     most_likely_states = mle_hmm.most_likely_states(action, input=predictors)
@@ -490,7 +417,7 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         plt.axhline(y=0, color="k", alpha=0.5, ls="--")
         plt.title("Model weights (interpreted left-choice coefficients)", fontsize=15)
         plt.tight_layout()
-        save_path = figure_path / '{}_trial_mle_weights.png'.format(sess_id)
+        save_path = figure_path / '{}_trial_mle_weights.png'.format(sess_id_tag)
         plt.gcf().savefig(save_path, format='png', dpi=300)
 
     ### Get expected states ###
@@ -507,17 +434,29 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         plt.ylabel("p(state)", fontsize=15)
         plt.title("MLE HMM states")
         plt.tight_layout()
-        save_path = figure_path / '{}_trial_mle_predicted_states.png'.format(sess_id)
+        save_path = figure_path / '{}_trial_mle_predicted_states.png'.format(sess_id_tag)
         fig.savefig(save_path, format='png', dpi=300)
 
-        f, ax = plot_postprob_obs(posterior_probs=posterior_probs,observations=action, inputs=predictors,
-                                  hmm_fit=mle_hmm, colors=state_colors, cmap=state_cmap)
-        save_path = figure_path / '{}_trial_mle_state_summary.png'.format(sess_id)
+        f, ax = state_space_plotting.plot_trial_glm_hmm_state_summary(
+            posterior_probs=posterior_probs,
+            observations=action,
+            inputs=predictors,
+            hmm_fit=mle_hmm,
+            colors=state_colors,
+            cmap=state_cmap,
+        )
+        save_path = figure_path / '{}_trial_mle_state_summary.png'.format(sess_id_tag)
         f.savefig(save_path, format='png', dpi=300)
 
-
-        f, ax = plot_labeled_observations(states1=block_strategy, posterior_probs2=posterior_probs,observations=action, inputs=predictors,
-                                  hmm_fit=mle_hmm, colors=state_colors, cmap=state_cmap)
+        f, ax = state_space_plotting.plot_trial_glm_hmm_block_state_comparison(
+            block_states=block_strategy,
+            trial_posterior_probs=posterior_probs,
+            observations=action,
+            inputs=predictors,
+            hmm_fit=mle_hmm,
+            colors=state_colors,
+            cmap=state_cmap,
+        )
 
         # f, ax = plt.subplots()
         # plt.plot(action)
@@ -532,35 +471,57 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     model_dict['mle']['inferred_durations'] = inferred_durations
     model_dict['mle']['hmm_z'] = most_likely_states
 
-    inferred_states = np.zeros(trial_df.shape[0], dtype='object')
-    inferred_states[ix_valid] = most_likely_states
-    inferred_states[~ix_valid] = 'None'
-    trial_df['inferred_strategy'] = inferred_states
+    trial_df = assign_inferred_states_to_trials(trial_df, ix_valid, most_likely_states)
 
     if plot:
-        ## Rearrange the lists of durations to be a nested list where
-        ## the nth inner list is a list of durations for state n
-        inferred_durations_stacked = []
-        for s in range(num_states):
-            inferred_durations_stacked.append(inferred_durations[inferred_state_list == s])
-
-        fig = plt.figure(figsize=(8, 4))
-        plt.hist(inferred_durations_stacked, label=['state ' + str(s) for s in range(num_states)], color=state_colors)
-        plt.xlabel('Duration')
-        plt.ylabel('Frequency')
-        plt.legend()
-        plt.title('Histogram of Inferred State Durations')
-        # plt.show()
+        fig, ax = state_space_plotting.plot_state_duration_histogram(
+            inferred_state_list=inferred_state_list,
+            inferred_durations=inferred_durations,
+            num_states=num_states,
+            state_colors=state_colors,
+        )
+        save_path = figure_path / f'{sess_id_tag}_trial_mle_state_durations.png'
+        fig.savefig(save_path, format='png', dpi=300)
 
 
     plt.close('all')
     return model_dict, trial_df
 
 
-def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, plot: bool=False,
+def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool=False,
                      num_states=1, prior_sigma=1, prior_alpha=2, model_dict=None, block_dict=None,
                      predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS):
-    """Maximum likelihood estimation of block strategies/states."""
+    """Fit MAP trial GLM-HMM states and assign them back to the trial table.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required
+        columns are defined by `prepare_trial_glm_hmm_data`.
+    figure_path : Path
+        Directory where diagnostic figures are saved when `plot=True`.
+    sess_id_tag : str
+        Caller-provided session identifier tag used in saved figure filenames.
+    plot : bool, default=False
+        Whether to save diagnostic fit and state-summary figures.
+    num_states : int, default=1
+        Number of hidden GLM-HMM states.
+    prior_sigma : float, default=1
+        Observation prior scale passed to the MAP HMM.
+    prior_alpha : float, default=2
+        Sticky-transition concentration passed to the MAP HMM.
+    model_dict : dict or None, default=None
+        Existing model dictionary to update. If None, a new dictionary is used.
+    block_dict : dict or None, default=None
+        Optional block-model dictionary used for block/trial comparison plots.
+    predictor_columns : tuple[str, ...], default=DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS
+        Non-bias GLM predictor columns used in the input matrix.
+
+    Returns
+    -------
+    tuple[dict, pd.DataFrame]
+        Updated model dictionary and `trial_df` with inferred state columns.
+    """
     prepared = prepare_trial_glm_hmm_data(
         trial_df,
         require_inherited_strategy=True,
@@ -592,8 +553,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     # observations = np.concatenate([action, block_strategy], axis=1)
     observations = action
 
-    obs_dim = 1
-    num_categories = 2
+    obs_dim = action.shape[1]
     input_dim = predictors.shape[1]
 
     if model_dict is None:
@@ -602,9 +562,14 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     model_dict['map'] = {}
     weight_dict = {}
 
-    map_hmm = ssm.HMM(num_states, obs_dim, input_dim, observations="input_driven_obs",
-                        observation_kwargs=dict(C=num_categories, prior_sigma=prior_sigma),
-                        transitions="sticky", transition_kwargs=dict(alpha=prior_alpha, kappa=0))
+    map_hmm = build_input_driven_glm_hmm(
+        num_states=num_states,
+        obs_dim=obs_dim,
+        input_dim=input_dim,
+        algorithm='MAP',
+        prior_alpha=prior_alpha,
+        prior_sigma=prior_sigma,
+    )
     N_iters = 10000  # maximum number of EM iterations. Fitting with stop earlier if increase in LL is below tolerance specified by tolerance parameter
     fit_log_likelihood = map_hmm.fit(action, inputs=predictors, method="em", num_iters=N_iters, tolerance=10 ** -6)
     model_dict['map']['fit_log_likelihood'] = fit_log_likelihood
@@ -621,7 +586,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         plt.ylabel("Log Probability")
         plt.title("MAP EM fit of observed data")
         plt.tight_layout()
-        save_path = figure_path / '{}_trial_map_convergence.png'.format(sess_id)
+        save_path = figure_path / '{}_trial_map_convergence.png'.format(sess_id_tag)
         fig.savefig(save_path, format='png', dpi=300)
 
     most_likely_states = map_hmm.most_likely_states(action, input=predictors)
@@ -664,7 +629,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         plt.title("Model weights (interpreted left-choice coefficients)", fontsize=15)
 
         plt.tight_layout()
-        save_path = figure_path / '{}_trial_map_weights.png'.format(sess_id)
+        save_path = figure_path / '{}_trial_map_weights.png'.format(sess_id_tag)
         plt.gcf().savefig(save_path, format='png', dpi=300)
 
     ### Get expected states ###
@@ -683,17 +648,29 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
         # plt.title("MAP HMM states")
         plt.title("HMM behavior probabilities")
         plt.tight_layout()
-        save_path = figure_path / '{}_trial_map_predicted_states.png'.format(sess_id)
+        save_path = figure_path / '{}_trial_map_predicted_states.png'.format(sess_id_tag)
         fig.savefig(save_path, format='png', dpi=300)
 
-        f, ax = plot_postprob_obs(posterior_probs=posterior_probs,observations=action, inputs=predictors,
-                                  hmm_fit=map_hmm, colors=state_colors, cmap=state_cmap)
-        save_path = figure_path / '{}_trial_map_state_summary.png'.format(sess_id)
+        f, ax = state_space_plotting.plot_trial_glm_hmm_state_summary(
+            posterior_probs=posterior_probs,
+            observations=action,
+            inputs=predictors,
+            hmm_fit=map_hmm,
+            colors=state_colors,
+            cmap=state_cmap,
+        )
+        save_path = figure_path / '{}_trial_map_state_summary.png'.format(sess_id_tag)
         f.savefig(save_path, format='png', dpi=300)
 
-
-        f, ax = plot_labeled_observations(states1=block_strategy, posterior_probs2=posterior_probs,observations=action, inputs=predictors,
-                                  hmm_fit=map_hmm, colors=state_colors, cmap=state_cmap)
+        f, ax = state_space_plotting.plot_trial_glm_hmm_block_state_comparison(
+            block_states=block_strategy,
+            trial_posterior_probs=posterior_probs,
+            observations=action,
+            inputs=predictors,
+            hmm_fit=map_hmm,
+            colors=state_colors,
+            cmap=state_cmap,
+        )
 
         ############################################
         if block_dict is not None:
@@ -730,7 +707,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
             ax[1].set_title('Trials labeled by trial strategy')
             plt.tight_layout()
 
-            save_path = figure_path / '{}_trialMapStateComparison.png'.format(sess_id)
+            save_path = figure_path / '{}_trialMapStateComparison.png'.format(sess_id_tag)
             f.savefig(save_path, format='png', dpi=300)
             plt.show()
 
@@ -750,25 +727,17 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id: str, pl
     model_dict['map']['inferred_durations'] = inferred_durations
     model_dict['map']['hmm_z'] = most_likely_states
 
-    inferred_states = np.zeros(trial_df.shape[0], dtype='object')
-    inferred_states[ix_valid] = most_likely_states
-    inferred_states[~ix_valid] = 'None'
-    trial_df['inferred_strategy'] = inferred_states
+    trial_df = assign_inferred_states_to_trials(trial_df, ix_valid, most_likely_states)
 
     if plot:
-        ## Rearrange the lists of durations to be a nested list where
-        ## the nth inner list is a list of durations for state n
-        inferred_durations_stacked = []
-        for s in range(num_states):
-            inferred_durations_stacked.append(inferred_durations[inferred_state_list == s])
-
-        fig = plt.figure(figsize=(8, 4))
-        plt.hist(inferred_durations_stacked, label=['state ' + str(s) for s in range(num_states)], color=state_colors)
-        plt.xlabel('Duration')
-        plt.ylabel('Frequency')
-        plt.legend()
-        plt.title('Histogram of Inferred State Durations')
-        # plt.show()
+        fig, ax = state_space_plotting.plot_state_duration_histogram(
+            inferred_state_list=inferred_state_list,
+            inferred_durations=inferred_durations,
+            num_states=num_states,
+            state_colors=state_colors,
+        )
+        save_path = figure_path / f'{sess_id_tag}_trial_map_state_durations.png'
+        fig.savefig(save_path, format='png', dpi=300)
 
     # if num_states > 1:
     #     if np.sum(~ix_valid) > 0:
@@ -814,14 +783,26 @@ def run_trial_modeling(trial_df: pd.DataFrame, session: Session, num_states: int
     with open(block_dict_fname, 'rb') as file:
         block_dict = pkl.load(file)
 
-    mle_model_dict, _ = mle_trial_states(trial_df, session.figure_path, session.sess_id_abbreviated,
-                                                         plot=True, num_states=num_states,
-                                                         predictor_columns=predictor_columns)
-    map_model_dict, augmented_trial_df = map_trial_states(trial_df, session.figure_path, session.sess_id_abbreviated,
-                                                         plot=True, model_dict=mle_model_dict, num_states=num_states,
-                                                          prior_alpha=prior_alpha, prior_sigma=prior_sigma,
-                                                          block_dict=block_dict['map'],
-                                                          predictor_columns=predictor_columns)
+    mle_model_dict, _ = mle_trial_states(
+        trial_df,
+        figure_path=session.figure_path,
+        sess_id_tag=session.sess_id_full,
+        plot=True,
+        num_states=num_states,
+        predictor_columns=predictor_columns,
+    )
+    map_model_dict, augmented_trial_df = map_trial_states(
+        trial_df,
+        figure_path=session.figure_path,
+        sess_id_tag=session.sess_id_full,
+        plot=True,
+        model_dict=mle_model_dict,
+        num_states=num_states,
+        prior_alpha=prior_alpha,
+        prior_sigma=prior_sigma,
+        block_dict=block_dict['map'],
+        predictor_columns=predictor_columns,
+    )
     save_trial_model_dict(map_model_dict, session)
 
     augmented_trial_df.to_csv(session.processed_data_path / (session.sess_id_full + '_augmented_trials.csv'), index=False)
@@ -1360,7 +1341,6 @@ def main():
         print(f"Mouse id: {mouse}")  # abc123
         print(f"Date: {date}")  # YYYY-MM-DD
         print(f"Time: {timestamp}")  # HHMMSS
-        sess_id_abbreviated = mouse + '_' + date
     else:
         print("Double-check the session name!")
         return
@@ -1371,8 +1351,13 @@ def main():
 
     augmented_trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), sep=',',
                                      na_filter=False)
-    # model_dict, augmented_trial_df = mle_trial_states(augmented_trial_df, figure_path, sess_id_abbreviated, plot=True)
-    model_dict, augmented_trial_df = map_trial_states(augmented_trial_df, figure_path, sess_id_abbreviated, plot=True)
+    # model_dict, augmented_trial_df = mle_trial_states(augmented_trial_df, figure_path, sess_id_tag=sess_id_full, plot=True)
+    model_dict, augmented_trial_df = map_trial_states(
+        augmented_trial_df,
+        figure_path=figure_path,
+        sess_id_tag=sess_id_full,
+        plot=True,
+    )
     augmented_trial_df.to_csv(processed_data_path / (sess_id_full + '_augmented_trials.csv'), index=False)
 
 

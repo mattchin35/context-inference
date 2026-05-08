@@ -69,6 +69,76 @@ def _get_state_colors(num_states: int) -> list:
     return [colormap(idx / (num_states - 1)) for idx in range(num_states)]
 
 
+def stack_state_durations(
+    inferred_state_list: np.ndarray,
+    inferred_durations: np.ndarray,
+    num_states: int,
+) -> list[np.ndarray]:
+    """Group run-length encoded state durations by state index.
+
+    Parameters
+    ----------
+    inferred_state_list : np.ndarray
+        State ids returned by `ssm.util.rle`, shape `(n_runs,)`.
+    inferred_durations : np.ndarray
+        Run durations returned by `ssm.util.rle`, shape `(n_runs,)`.
+    num_states : int
+        Number of hidden states in the fitted model.
+
+    Returns
+    -------
+    list[np.ndarray]
+        One duration array per state, length `num_states`.
+    """
+    return [
+        inferred_durations[inferred_state_list == state_idx]
+        for state_idx in range(num_states)
+    ]
+
+
+def plot_state_duration_histogram(
+    inferred_state_list: np.ndarray,
+    inferred_durations: np.ndarray,
+    num_states: int,
+    state_colors: list,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot a state-duration histogram from run-length encoded states.
+
+    Parameters
+    ----------
+    inferred_state_list : np.ndarray
+        State ids returned by `ssm.util.rle`, shape `(n_runs,)`.
+    inferred_durations : np.ndarray
+        Run durations returned by `ssm.util.rle`, shape `(n_runs,)`.
+    num_states : int
+        Number of hidden states in the fitted model.
+    state_colors : list
+        One plotting color per state, length `num_states`.
+
+    Returns
+    -------
+    tuple[plt.Figure, plt.Axes]
+        Matplotlib figure and axes containing the duration histogram.
+    """
+    inferred_durations_stacked = stack_state_durations(
+        inferred_state_list,
+        inferred_durations,
+        num_states,
+    )
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.hist(
+        inferred_durations_stacked,
+        label=['state ' + str(state_idx) for state_idx in range(num_states)],
+        color=state_colors,
+    )
+    ax.set_xlabel('Duration')
+    ax.set_ylabel('Frequency')
+    ax.legend()
+    ax.set_title('Histogram of Inferred State Durations')
+    return fig, ax
+
+
 def plot_transition_matrix(gen_trans_mat: np.ndarray) -> tuple[plt.Figure, plt.Axes]:
     """Plot a state transition matrix without saving it.
 
@@ -498,3 +568,219 @@ def plot_trial_glm_hmm_weights(
     ax.set_title("Model weights", fontsize=15)
     fig.tight_layout()
     return fig, ax
+
+
+def plot_trial_glm_hmm_state_summary(
+    posterior_probs: np.ndarray,
+    observations: np.ndarray,
+    inputs: np.ndarray,
+    hmm_fit,
+    colors: list,
+    cmap,
+    session_lengths: np.ndarray | None = None,
+) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes, plt.Axes]]:
+    """Plot trial GLM-HMM posterior probabilities, inputs, and observations.
+
+    Parameters
+    ----------
+    posterior_probs : np.ndarray
+        Posterior state probabilities with shape `(n_trials, num_states)`.
+    observations : np.ndarray
+        Trial observations with shape `(n_trials, obs_dim)`.
+    inputs : np.ndarray
+        GLM-HMM inputs with shape `(n_trials, input_dim)`.
+    hmm_fit
+        Fitted trial GLM-HMM with `transitions.log_Ps` and `observations.Wk`.
+        `Wk[:, :, -1]` is interpreted as the bias and preceding columns are
+        interpreted as non-bias GLM weights.
+    colors : list
+        One plotting color per state.
+    cmap
+        Matplotlib colormap aligned to `colors`.
+    session_lengths : np.ndarray or None, default=None
+        Optional sequence lengths for drawing session-boundary lines.
+
+    Returns
+    -------
+    tuple[plt.Figure, tuple[plt.Axes, plt.Axes, plt.Axes]]
+        Figure and axes for posterior probabilities, inputs, and observations.
+    """
+    fig, (prob_ax, input_ax, obs_ax) = plt.subplots(
+        3,
+        1,
+        gridspec_kw={'height_ratios': [1, 1, 3]},
+    )
+
+    time_bins = len(inputs)
+    obs_dim = len(observations[0])
+    num_states = hmm_fit.transitions.log_Ps.shape[0]
+    input_dim = len(inputs[0])
+    for state_idx in range(num_states):
+        prob_ax.plot(
+            posterior_probs[:, state_idx],
+            label="State " + str(state_idx + 1),
+            lw=2,
+            color=colors[state_idx],
+        )
+
+    prob_ax.set_ylim((-0.05, 1.05))
+    prob_ax.set_yticks([0, 1], labels=[0, 1], fontsize=15)
+    prob_ax.set_ylabel("p(state)", fontsize=15)
+    prob_ax.set_xlim(0, time_bins - 1)
+    prob_ax.set_xticks([])
+
+    lim_input = 1.1 * abs(inputs).max()
+    for input_idx in range(input_dim):
+        input_ax.plot(inputs[:, input_idx] - lim_input * input_idx, label='inpt dim ' + str(input_idx))
+
+    input_ax.set_xticks([])
+    input_ax.set_xlim(0, time_bins)
+    input_ax.set_yticks(
+        -np.arange(input_dim) * lim_input,
+        ["$x_{{ {} }}$".format(idx + 1) for idx in range(input_dim)],
+    )
+    input_ax.set_title('Input')
+    input_ax.legend(fancybox=False, fontsize=10)
+
+    lim = 2 * abs(observations).max()
+    ind_state = np.argmax(posterior_probs, axis=1)
+    ind_state[np.all(posterior_probs < 0.8, axis=1)] = -1
+    cmap.set_under('w')
+
+    biases = hmm_fit.observations.Wk[:, :, -1][ind_state]
+    weights = hmm_fit.observations.Wk[:, :, :-1][ind_state]
+    for obs_idx in range(obs_dim):
+        obs_ax.imshow(
+            ind_state[None, :],
+            aspect="auto",
+            cmap=cmap,
+            vmin=0,
+            vmax=len(colors) - 1,
+            extent=(0, time_bins, -lim * obs_dim, lim),
+            alpha=0.5,
+        )
+        obs_ax.plot(observations[:, obs_idx] - lim * obs_idx, '-k', label='obs' * (obs_idx == 0))
+        obs_ax.plot(biases[:, obs_idx] - lim * obs_idx, ':k', label='bias' * (obs_idx == 0))
+        obs_ax.plot(weights[:, obs_idx] - lim * obs_idx, '--k', label='weight' * (obs_idx == 0))
+    obs_ax.set_xlim(0, time_bins - 1)
+    obs_ax.set_yticks([])
+    obs_ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    obs_ax.set_xlabel("Context changes")
+    obs_ax.set_ylim(0 - .05, abs(observations).max() + .05)
+
+    if session_lengths is not None:
+        splits = np.cumsum(session_lengths)
+        for split_idx in range(splits.shape[0] - 1):
+            prob_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+            input_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+            obs_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+
+    fig.tight_layout()
+    return fig, (prob_ax, input_ax, obs_ax)
+
+
+def plot_trial_glm_hmm_block_state_comparison(
+    block_states: np.ndarray,
+    trial_posterior_probs: np.ndarray,
+    observations: np.ndarray,
+    inputs: np.ndarray,
+    hmm_fit,
+    colors: list,
+    cmap,
+    session_lengths: np.ndarray | None = None,
+) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes, plt.Axes]]:
+    """Plot inherited block states beside trial GLM-HMM inferred states.
+
+    Parameters
+    ----------
+    block_states : np.ndarray
+        Inherited block state ids with shape `(n_trials, 1)` or `(n_trials,)`.
+    trial_posterior_probs : np.ndarray
+        Trial GLM-HMM posterior probabilities with shape
+        `(n_trials, num_states)`.
+    observations : np.ndarray
+        Trial observations with shape `(n_trials, obs_dim)`.
+    inputs : np.ndarray
+        GLM-HMM inputs with shape `(n_trials, input_dim)`.
+    hmm_fit
+        Fitted trial GLM-HMM with `transitions.log_Ps`.
+    colors : list
+        One plotting color per state.
+    cmap
+        Matplotlib colormap aligned to `colors`.
+    session_lengths : np.ndarray or None, default=None
+        Optional sequence lengths for drawing session-boundary lines.
+
+    Returns
+    -------
+    tuple[plt.Figure, tuple[plt.Axes, plt.Axes, plt.Axes]]
+        Figure and axes for block labels, trial labels, and posterior
+        probabilities.
+    """
+    fig, (block_ax, trial_ax, prob_ax) = plt.subplots(3, 1)
+    lim = 2 * abs(observations).max()
+    obs_dim = len(observations[0])
+    time_bins = len(inputs)
+    cmap.set_under('w')
+
+    block_states = np.asarray(block_states).reshape(1, -1)
+    for obs_idx in range(obs_dim):
+        block_ax.imshow(
+            block_states,
+            aspect="auto",
+            cmap=cmap,
+            vmin=0,
+            vmax=len(colors) - 1,
+            extent=(0, time_bins, -lim * obs_dim, lim),
+            alpha=0.5,
+        )
+        block_ax.plot(observations[:, obs_idx] - lim * obs_idx, '-k', label='obs' * (obs_idx == 0))
+    block_ax.set_xlim(0, time_bins - 1)
+    block_ax.set_yticks([])
+    block_ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    block_ax.set_xlabel("Block context changes")
+    block_ax.set_ylim(0 - .05, abs(observations).max() + .05)
+
+    ind_state = np.argmax(trial_posterior_probs, axis=1)
+    ind_state[np.all(trial_posterior_probs < 0.8, axis=1)] = -1
+    cmap.set_under('w')
+
+    for obs_idx in range(obs_dim):
+        trial_ax.imshow(
+            ind_state[None, :],
+            aspect="auto",
+            cmap=cmap,
+            vmin=0,
+            vmax=len(colors) - 1,
+            extent=(0, time_bins, -lim * obs_dim, lim),
+            alpha=0.5,
+        )
+        trial_ax.plot(observations[:, obs_idx] - lim * obs_idx, '-k', label='obs' * (obs_idx == 0))
+    trial_ax.set_xlim(0, time_bins - 1)
+    trial_ax.set_yticks([])
+    trial_ax.set_xlabel("Trial context changes")
+    trial_ax.set_ylim(0 - .05, abs(observations).max() + .05)
+
+    if session_lengths is not None:
+        splits = np.cumsum(session_lengths)
+        for split_idx in range(splits.shape[0] - 1):
+            block_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+            trial_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+
+    num_states = hmm_fit.transitions.log_Ps.shape[0]
+    for state_idx in range(num_states):
+        prob_ax.plot(
+            trial_posterior_probs[:, state_idx],
+            label="State " + str(state_idx + 1),
+            lw=2,
+            color=colors[state_idx],
+        )
+
+    prob_ax.set_ylim((-0.05, 1.05))
+    prob_ax.set_yticks([0, 1], labels=[0, 1], fontsize=15)
+    prob_ax.set_ylabel("p(state)", fontsize=15)
+    prob_ax.set_xlim(0, time_bins - 1)
+    prob_ax.set_xticks([])
+
+    fig.tight_layout()
+    return fig, (block_ax, trial_ax, prob_ax)

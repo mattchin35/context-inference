@@ -176,74 +176,46 @@ def assign_inferred_states_to_blocks(
     return block_df
 
 
-def stack_state_durations(
-    inferred_state_list: np.ndarray,
-    inferred_durations: np.ndarray,
-    num_states: int,
-) -> list[np.ndarray]:
-    """Group run-length encoded state durations by state index.
+def add_cur_strategy_slope(
+    block_df: pd.DataFrame,
+    valid_mask: np.ndarray,
+    inferred_states: np.ndarray,
+    primary_predictor_weights: np.ndarray,
+) -> pd.DataFrame:
+    """Assign the current inferred strategy slope to each block.
 
     Parameters
     ----------
-    inferred_state_list : np.ndarray
-        State ids returned by `ssm.util.rle`, shape `(n_runs,)`.
-    inferred_durations : np.ndarray
-        Run durations returned by `ssm.util.rle`, shape `(n_runs,)`.
-    num_states : int
-        Number of hidden states in the fitted model.
+    block_df : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`.
+    valid_mask : np.ndarray
+        Boolean mask with shape `(n_blocks,)`, selecting rows used for HMM
+        fitting.
+    inferred_states : np.ndarray
+        Inferred state ids aligned to `block_df`, shape `(n_blocks,)`. Invalid
+        rows may contain string `"None"`.
+    primary_predictor_weights : np.ndarray
+        State-specific primary predictor weights with shape `(num_states,)`.
 
     Returns
     -------
-    list[np.ndarray]
-        One duration array per state, length `num_states`.
+    pd.DataFrame
+        `block_df` with `cur_strategy_slope` assigned. For multi-state models,
+        invalid rows receive string `"None"` for CSV compatibility. For
+        one-state models, every row receives the single state slope, matching
+        historical behavior.
     """
-    return [
-        inferred_durations[inferred_state_list == state_idx]
-        for state_idx in range(num_states)
-    ]
+    if primary_predictor_weights.size == 1:
+        block_df['cur_strategy_slope'] = (
+            np.ones(block_df.shape[0]) * primary_predictor_weights[0]
+        )
+        return block_df
 
-
-def plot_state_duration_histogram(
-    inferred_state_list: np.ndarray,
-    inferred_durations: np.ndarray,
-    num_states: int,
-    state_colors: list[str],
-) -> tuple[plt.Figure, plt.Axes]:
-    """Plot a state-duration histogram from run-length encoded states.
-
-    Parameters
-    ----------
-    inferred_state_list : np.ndarray
-        State ids returned by `ssm.util.rle`, shape `(n_runs,)`.
-    inferred_durations : np.ndarray
-        Run durations returned by `ssm.util.rle`, shape `(n_runs,)`.
-    num_states : int
-        Number of hidden states in the fitted model.
-    state_colors : list[str]
-        One plotting color per state, length `num_states`.
-
-    Returns
-    -------
-    tuple[plt.Figure, plt.Axes]
-        Matplotlib figure and axes containing the duration histogram.
-    """
-    inferred_durations_stacked = stack_state_durations(
-        inferred_state_list,
-        inferred_durations,
-        num_states,
-    )
-
-    fig = plt.figure(figsize=(8, 4))
-    plt.hist(
-        inferred_durations_stacked,
-        label=['state ' + str(state_idx) for state_idx in range(num_states)],
-        color=state_colors,
-    )
-    plt.xlabel('Duration')
-    plt.ylabel('Frequency')
-    plt.legend()
-    plt.title('Histogram of Inferred State Durations')
-    return fig, plt.gca()
+    cur_strategy_slope = np.zeros(block_df.shape[0], dtype='object')
+    cur_strategy_slope[valid_mask] = primary_predictor_weights[inferred_states[valid_mask].astype(int)]
+    cur_strategy_slope[~valid_mask] = 'None'
+    block_df['cur_strategy_slope'] = cur_strategy_slope
+    return block_df
 
 
 def split_blocked_holdout_sequences(
@@ -395,7 +367,7 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     block_df = assign_inferred_states_to_blocks(block_df, ix_valid, most_likely_states)
 
     if plot:
-        fig, ax = plot_state_duration_histogram(
+        fig, ax = state_space_plotting.plot_state_duration_histogram(
             inferred_state_list=inferred_state_list,
             inferred_durations=inferred_durations,
             num_states=num_states,
@@ -526,7 +498,7 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     block_df = assign_inferred_states_to_blocks(block_df, ix_valid, most_likely_states)
     inferred_states = block_df['inferred_strategy'].to_numpy()
     if plot:
-        fig, ax = plot_state_duration_histogram(
+        fig, ax = state_space_plotting.plot_state_duration_histogram(
             inferred_state_list=inferred_state_list,
             inferred_durations=inferred_durations,
             num_states=num_states,
@@ -535,16 +507,12 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         save_path = figure_path / f'{sess_id_tag}_map_state_durations.png'
         fig.savefig(save_path, format='png', dpi=300)
 
-    if num_states > 1:
-        if np.sum(~ix_valid) > 0:
-            cur_strategy_slope = np.zeros(block_df.shape[0], dtype='object')
-            cur_strategy_slope[ix_valid] = primary_predictor_weights[inferred_states[ix_valid].astype(int)]
-            cur_strategy_slope[~ix_valid] = 'None'
-            block_df['cur_strategy_slope'] = cur_strategy_slope
-        else:
-            block_df['cur_strategy_slope'] = primary_predictor_weights[inferred_states.astype(int)]
-    else:
-        block_df['cur_strategy_slope'] = np.ones(block_df.shape[0]) * primary_predictor_weights[0]
+    block_df = add_cur_strategy_slope(
+        block_df,
+        valid_mask=ix_valid,
+        inferred_states=inferred_states,
+        primary_predictor_weights=primary_predictor_weights,
+    )
 
     return model_dict, block_df
 
