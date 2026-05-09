@@ -258,8 +258,8 @@ def test_plot_mouse_learning_curve_uses_all_available_summary_dates(tmp_path, mo
     }
 
 
-def test_run_multisession_analysis_calls_block_then_trial_modeling(tmp_path, monkeypatch):
-    """Multisession orchestration should model blocks before trial states."""
+def test_run_multisession_analysis_runs_model_selection_before_modeling(tmp_path, monkeypatch):
+    """Multisession orchestration should mirror the full `main_mouse` HMM flow."""
     main_module = load_main_module()
     synthetic_session = SimpleNamespace(
         sess_id_full="CT014_multisession",
@@ -273,19 +273,82 @@ def test_run_multisession_analysis_calls_block_then_trial_modeling(tmp_path, mon
         trial_session_lengths=np.array([2]),
     )
     calls = []
+    trial_predictor_columns = (
+        "FQlearning_rel_value",
+        "HMM_rel_value_logodds_decay",
+        "relative_doubt_index",
+        "perseveration_regressor",
+        "time_to_choice",
+    )
 
-    def fake_run_block_modeling(block_performance, augmented_trial_df, session, num_states, prior_alpha, prior_sigma):
-        calls.append(("block", session.sess_id_full, num_states, prior_alpha, prior_sigma))
+    def fake_block_information_criteria(block_performance, session, algorithm, prior_alpha, prior_sigma, random_seed):
+        calls.append(("block_ic", session.sess_id_full, algorithm, prior_alpha, prior_sigma, random_seed))
+        return {"block_ic": True}
+
+    def fake_trial_information_criteria(
+        trial_df,
+        session,
+        algorithm,
+        prior_alpha,
+        prior_sigma,
+        predictor_columns,
+        random_seed,
+    ):
+        calls.append(
+            (
+                "trial_ic",
+                session.sess_id_full,
+                algorithm,
+                prior_alpha,
+                prior_sigma,
+                predictor_columns,
+                random_seed,
+                "inherited_block_strategy" in trial_df.columns,
+            )
+        )
+        return {"trial_ic": True}
+
+    def fake_run_block_modeling(
+        block_performance,
+        augmented_trial_df,
+        session,
+        num_states,
+        prior_alpha,
+        prior_sigma,
+        random_seed,
+    ):
+        calls.append(("block", session.sess_id_full, num_states, prior_alpha, prior_sigma, random_seed))
         return (
             block_performance.assign(inferred_strategy=[0, 1]),
             augmented_trial_df.assign(inherited_block_strategy=[0, 1], inherited_block_bias=["False", "False"]),
         )
 
-    def fake_run_trial_modeling(trial_df, session, num_states, prior_alpha, prior_sigma):
-        calls.append(("trial", session.sess_id_full, num_states, prior_alpha, prior_sigma))
+    def fake_run_trial_modeling(
+        trial_df,
+        session,
+        num_states,
+        prior_alpha,
+        prior_sigma,
+        predictor_columns,
+        random_seed,
+    ):
+        calls.append(
+            (
+                "trial",
+                session.sess_id_full,
+                num_states,
+                prior_alpha,
+                prior_sigma,
+                predictor_columns,
+                random_seed,
+                "inherited_block_strategy" in trial_df.columns,
+            )
+        )
         return trial_df.assign(inferred_strategy=[1, 0])
 
+    monkeypatch.setattr(main_module.bssm, "run_information_criteria", fake_block_information_criteria, raising=False)
     monkeypatch.setattr(main_module.bssm, "run_block_modeling", fake_run_block_modeling, raising=False)
+    monkeypatch.setattr(main_module.tssm, "run_information_criteria", fake_trial_information_criteria, raising=False)
     monkeypatch.setattr(main_module.tssm, "run_trial_modeling", fake_run_trial_modeling, raising=False)
     monkeypatch.setattr(
         main_module,
@@ -294,18 +357,25 @@ def test_run_multisession_analysis_calls_block_then_trial_modeling(tmp_path, mon
         raising=False,
     )
 
-    modeled_block_df, modeled_trial_df = main_module.run_multisession_analysis(
+    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_multisession_analysis(
         concatenated=concatenated,
         session=synthetic_session,
         block_num_states=2,
         trial_num_states=3,
         prior_alpha=4,
         prior_sigma=5,
+        block_random_seed=1001,
+        trial_random_seed=2001,
+        trial_predictor_columns=trial_predictor_columns,
     )
 
     assert calls == [
-        ("block", "CT014_multisession", 2, 4, 5),
-        ("trial", "CT014_multisession", 3, 4, 5),
+        ("block_ic", "CT014_multisession", "MLE", 4, 5, 1001),
+        ("block", "CT014_multisession", 2, 4, 5, 1001),
+        ("trial_ic", "CT014_multisession", "MLE", 4, 5, trial_predictor_columns, 2001, True),
+        ("trial", "CT014_multisession", 3, 4, 5, trial_predictor_columns, 2001, True),
     ]
+    assert block_selection == {"block_ic": True}
+    assert trial_selection == {"trial_ic": True}
     assert modeled_block_df["inferred_strategy"].tolist() == [0, 1]
     assert modeled_trial_df["inferred_strategy"].tolist() == [1, 0]
