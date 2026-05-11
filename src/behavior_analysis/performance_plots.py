@@ -125,6 +125,12 @@ def plot_trials_to_correct_summary(block_performance: pd.DataFrame, plot_path: P
 
 def scatter_trials_to_correct(block_performance: pd.DataFrame, slope: float, intercept: float, plot_path: Path,
                               figure_id: str, title=None):
+    try:
+        slope = float(slope)
+        intercept = float(intercept)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("scatter_trials_to_correct slope and intercept must be numeric.") from exc
+
     f1, ax1 = plt.subplots()
     x = np.arange(len(block_performance))
     ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')

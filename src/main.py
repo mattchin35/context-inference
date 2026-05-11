@@ -453,11 +453,21 @@ def concatenate_saved_sessions(
         if "cur_block" not in trial_df.columns:
             raise ValueError(f"{session.sess_id_full} augmented_trial_df is missing 'cur_block'.")
 
+        raw_trial_block_ids = pd.Series(
+            sorted(pd.to_numeric(trial_df["cur_block"], errors="raise").astype(int).unique())
+        )
+        if raw_trial_block_ids.shape[0] != block_df.shape[0]:
+            raise ValueError(
+                f"{session.sess_id_full} has {raw_trial_block_ids.shape[0]} trial blocks but "
+                f"{block_df.shape[0]} block rows; cannot align raw trial block ids to block_performance."
+            )
+
         block_df["source_session_id"] = session.sess_id_full
         block_df["source_date"] = session.date
         block_df["source_session_index"] = session_index
-        block_df["source_block_ix"] = block_df["block_ix"]
-        block_df["block_ix"] = _offset_numeric_column(block_df["block_ix"], block_offset, "block_ix")
+        block_df["source_block_ix"] = raw_trial_block_ids.to_numpy()
+        block_df["source_block_row"] = block_df["block_ix"]
+        block_df["block_ix"] = np.arange(block_df.shape[0], dtype=int) + block_offset
         block_id_map = dict(zip(block_df["source_block_ix"], block_df["block_ix"]))
 
         trial_df["source_session_id"] = session.sess_id_full
@@ -488,47 +498,65 @@ def concatenate_saved_sessions(
     )
 
 
-def plot_mouse_learning_curve(
+def prepare_learning_curve_data(
     mouse: str,
     multi_session_save_path: Path,
-) -> pd.DataFrame:
-    """Plot the learning curve from all dates in a mouse summary CSV.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load numeric mouse learning-curve arrays from the summary CSV.
 
     Parameters
     ----------
     mouse : str
         Mouse identifier used in `{mouse}_overall_performance.csv`.
     multi_session_save_path : Path
-        Directory containing the mouse-level cross-session summary CSV and
-        receiving the learning-curve figure.
+        Directory containing the mouse-level cross-session summary CSV.
 
     Returns
     -------
-    pd.DataFrame
-        Multisession summary table sorted by `date`, shape
-        `(n_sessions, n_summary_columns)`.
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        - regression coefficients, shape `(n_valid_sessions,)`, numeric slope
+          values for `DEFAULT_LEARNING_REGRESSOR`
+        - block counts, shape `(n_valid_sessions,)`, numeric session block
+          counts
+        - dates, shape `(n_valid_sessions,)`, date labels sorted ascending
+
+        Rows with nonnumeric slope values such as the string `"None"` are
+        dropped before plotting.
     """
     multisession_summary_path = multi_session_save_path / f"{mouse}_overall_performance.csv"
     multisession_df = pd.read_csv(multisession_summary_path, sep=",", na_filter=False)
-    multisession_df = multisession_df[~multisession_df["date"].isna()].copy()
     multisession_df.sort_values(by="date", inplace=True)
     multisession_df.reset_index(drop=True, inplace=True)
 
-    block_count_col = performance_plots.get_session_block_count_column(multisession_df)
+    if hasattr(performance_plots, "get_session_block_count_column"):
+        block_count_col = performance_plots.get_session_block_count_column(multisession_df)
+    elif "n_blocks" in multisession_df.columns:
+        block_count_col = "n_blocks"
+    elif "n_switches" in multisession_df.columns:
+        block_count_col = "n_switches"
+    else:
+        raise ValueError("multisession summary must contain 'n_blocks' or legacy 'n_switches'.")
     learning_regressor = getattr(
         performance_plots,
         "DEFAULT_LEARNING_REGRESSOR",
         "prev_consecutive_rewards",
     )
     learning_column = f"{learning_regressor}_slope"
-    performance_plots.plot_learning_curve(
+    multisession_df[learning_column] = pd.to_numeric(
         multisession_df[learning_column],
-        multisession_df[block_count_col],
-        figure_id=mouse,
-        plot_path=multi_session_save_path,
-        dates=multisession_df["date"].values,
+        errors="coerce",
     )
-    return multisession_df
+    multisession_df[block_count_col] = pd.to_numeric(
+        multisession_df[block_count_col],
+        errors="coerce",
+    )
+    valid_learning_rows = multisession_df[learning_column].notna()
+    plot_df = multisession_df[valid_learning_rows].copy()
+    return (
+        plot_df[learning_column].to_numpy(dtype=float),
+        plot_df[block_count_col].to_numpy(),
+        plot_df["date"].to_numpy(),
+    )
 
 
 def build_multisession_session(
@@ -659,14 +687,15 @@ def run_multisession_analysis(
     if trial_predictor_columns is None:
         trial_predictor_columns = tssm.DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS
 
-    block_model_selection = bssm.run_information_criteria(
-        concatenated.block_performance,
-        session=session,
-        algorithm='MLE',
-        prior_alpha=prior_alpha,
-        prior_sigma=prior_sigma,
-        random_seed=block_random_seed,
-    )
+    # block_model_selection = bssm.run_information_criteria(
+    #     concatenated.block_performance,
+    #     session=session,
+    #     algorithm='MLE',
+    #     max_states=10,
+    #     prior_alpha=prior_alpha,
+    #     prior_sigma=prior_sigma,
+    #     random_seed=block_random_seed,
+    # )
     modeled_block_df, modeled_trial_df = bssm.run_block_modeling(
         concatenated.block_performance,
         concatenated.augmented_trial_df,
@@ -676,25 +705,26 @@ def run_multisession_analysis(
         prior_sigma=prior_sigma,
         random_seed=block_random_seed,
     )
-    trial_model_selection = tssm.run_information_criteria(
-        modeled_trial_df,
-        session=session,
-        algorithm='MLE',
-        prior_alpha=prior_alpha,
-        prior_sigma=prior_sigma,
-        predictor_columns=trial_predictor_columns,
-        random_seed=trial_random_seed,
-    )
-    modeled_trial_df = tssm.run_trial_modeling(
-        modeled_trial_df,
-        session=session,
-        num_states=trial_num_states,
-        prior_alpha=prior_alpha,
-        prior_sigma=prior_sigma,
-        predictor_columns=trial_predictor_columns,
-        random_seed=trial_random_seed,
-    )
-    return block_model_selection, trial_model_selection, modeled_block_df, modeled_trial_df
+    # trial_model_selection = tssm.run_information_criteria(
+    #     modeled_trial_df,
+    #     session=session,
+    #     algorithm='MLE',
+    #     prior_alpha=prior_alpha,
+    #     prior_sigma=prior_sigma,
+    #     predictor_columns=trial_predictor_columns,
+    #     random_seed=trial_random_seed,
+    # )
+    # modeled_trial_df = tssm.run_trial_modeling(
+    #     modeled_trial_df,
+    #     session=session,
+    #     num_states=trial_num_states,
+    #     prior_alpha=prior_alpha,
+    #     prior_sigma=prior_sigma,
+    #     predictor_columns=trial_predictor_columns,
+    #     random_seed=trial_random_seed,
+    # )
+    # return block_model_selection, trial_model_selection, modeled_block_df, modeled_trial_df
+    return
 
 
 def plot_session(event_df: pd.DataFrame, session_info: dict, figure_path: Path, sess_id_full: str):
@@ -774,7 +804,17 @@ def main_multisession():
         "time_to_choice"
     )
 
-    plot_mouse_learning_curve(mouse=mouse, multi_session_save_path=multi_session_save_path)
+    learning_coefficients, learning_block_counts, learning_dates = prepare_learning_curve_data(
+        mouse=mouse,
+        multi_session_save_path=multi_session_save_path,
+    )
+    performance_plots.plot_learning_curve(
+        learning_coefficients,
+        learning_block_counts,
+        figure_id=mouse,
+        plot_path=multi_session_save_path,
+        dates=learning_dates,
+    )
 
     sessions = [
         find_saved_session_by_date(
@@ -795,7 +835,7 @@ def main_multisession():
     run_multisession_analysis(
         concatenated=concatenated,
         session=multisession,
-        block_num_states=2,
+        block_num_states=6,
         trial_num_states=2,
         prior_alpha=1,
         prior_sigma=1,
@@ -810,15 +850,18 @@ def main_mouse():
 
     ### USER FLAGS - CHOOSE THESE FOR EACH RUN ###
     preprocess_raw_session = False
-    run_session_analysis = True
+    run_session_analysis = False
 
     ### HARDCODED DATA PATHS - CHOOSE THESE FOR EACH RUN ###
     multi_session_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
     # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251221_latentInference')
     # sess_id_full = 'CT014_2025-12-21_165755'
-    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251204')
-    sess_id_full = 'CT014_2025-12-04_123418'
-
+    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251220_latentInference')
+    sess_id_full = 'CT014_2025-12-20_161014'
+    # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251204')
+    # sess_id_full = 'CT014_2025-12-04_123418'
+    # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251202')
+    # sess_id_full = 'CT014_2025-12-02_151940'
 
     ### everything below this should be edited so it doesn't have to be commented in or out or have hardcodes changed ###
     raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
@@ -911,14 +954,15 @@ def main_mouse():
         "time_to_choice"
     )
 
-    block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
-                                                    prior_alpha=1, prior_sigma=1,
-                                                    random_seed=block_hmm_random_seed)
-
     # prefer use of the information criteria for model selection, but here is how you'd use CV
     # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
     #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2,
     #                                                random_seed=block_hmm_random_seed)
+
+    # IC
+    # block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
+    #                                                 prior_alpha=1, prior_sigma=1, max_states=5,
+    #                                                 random_seed=block_hmm_random_seed)
 
     block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess, num_states=2,
                                                                     prior_alpha=1, prior_sigma=1,
@@ -929,24 +973,24 @@ def main_mouse():
     #     block_model_dict = pkl.load(file)
 
     ### trial state space modeling ###
-    trial_model_selection = tssm.run_information_criteria(
-        augmented_trial_df,
-        session=sess,
-        algorithm='MLE',
-        prior_alpha=1,
-        prior_sigma=1,
-        predictor_columns=trial_glm_predictor_columns,
-        random_seed=trial_hmm_random_seed,
-    )
-    augmented_trial_df = tssm.run_trial_modeling(
-        augmented_trial_df,
-        session=sess,
-        num_states=2,
-        prior_alpha=1,
-        prior_sigma=1,
-        predictor_columns=trial_glm_predictor_columns,
-        random_seed=trial_hmm_random_seed,
-    )
+    # trial_model_selection = tssm.run_information_criteria(
+    #     augmented_trial_df,
+    #     session=sess,
+    #     algorithm='MLE',
+    #     prior_alpha=1,
+    #     prior_sigma=1,
+    #     predictor_columns=trial_glm_predictor_columns,
+    #     random_seed=trial_hmm_random_seed,
+    # )
+    # augmented_trial_df = tssm.run_trial_modeling(
+    #     augmented_trial_df,
+    #     session=sess,
+    #     num_states=2,
+    #     prior_alpha=1,
+    #     prior_sigma=1,
+    #     predictor_columns=trial_glm_predictor_columns,
+    #     random_seed=trial_hmm_random_seed,
+    # )
 
 
 def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
@@ -965,5 +1009,6 @@ def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
 
 
 if __name__ == '__main__':
-    main_mouse()
+    # main_mouse()
+    main_multisession()
     # main_simulation()

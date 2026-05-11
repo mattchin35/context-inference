@@ -208,27 +208,96 @@ def test_concatenate_saved_sessions_offsets_block_and_trial_block_ids(tmp_path):
     ]
 
 
-def test_plot_mouse_learning_curve_uses_all_available_summary_dates(tmp_path, monkeypatch):
-    """Learning curves should use every date in the overall CSV, not the model dates."""
+def test_concatenate_saved_sessions_uses_raw_trial_block_ids_as_source_blocks(tmp_path):
+    """Saved block rows may be renumbered while trial rows keep raw block ids."""
+    main_module = load_main_module()
+    session = SimpleNamespace(sess_id_full="CT014_2025-12-23_163505", date="2025-12-23")
+    saved = main_module.SavedSessionAnalysis(
+        session=session,
+        block_performance=pd.DataFrame({"block_ix": [0, 1, 2], "value": [10, 11, 12]}),
+        augmented_trial_df=pd.DataFrame(
+            {
+                "cur_trial": [0, 1, 2, 3, 4],
+                "cur_block": [4, 5, 5, 6, 6],
+                "action": [1, 0, 1, 0, 1],
+            }
+        ),
+    )
+
+    concatenated = main_module.concatenate_saved_sessions([saved])
+
+    assert concatenated.block_performance["source_block_ix"].tolist() == [4, 5, 6]
+    assert concatenated.block_performance["block_ix"].tolist() == [0, 1, 2]
+    assert concatenated.augmented_trial_df["source_cur_block"].tolist() == [4, 5, 5, 6, 6]
+    assert concatenated.augmented_trial_df["cur_block"].tolist() == [0, 1, 1, 2, 2]
+
+
+def test_concatenate_saved_sessions_rejects_block_count_mismatch(tmp_path):
+    """Raw trial block count must match saved block rows before renumbering."""
+    main_module = load_main_module()
+    session = SimpleNamespace(sess_id_full="CT014_2025-12-23_163505", date="2025-12-23")
+    saved = main_module.SavedSessionAnalysis(
+        session=session,
+        block_performance=pd.DataFrame({"block_ix": [0, 1], "value": [10, 11]}),
+        augmented_trial_df=pd.DataFrame(
+            {
+                "cur_trial": [0, 1, 2],
+                "cur_block": [4, 5, 6],
+                "action": [1, 0, 1],
+            }
+        ),
+    )
+
+    with pytest.raises(ValueError, match="3 trial blocks but 2 block rows"):
+        main_module.concatenate_saved_sessions([saved])
+
+
+def test_prepare_learning_curve_data_drops_none_slopes_and_returns_numeric_arrays(tmp_path):
+    """Learning-curve preparation should drop unavailable slopes before plotting."""
     main_module = load_main_module()
     cross_session_path = tmp_path / "cross_session_analysis"
     cross_session_path.mkdir()
     multisession_df = pd.DataFrame(
         {
-            "date": ["2025-12-16", "2025-12-05", "2025-12-23"],
-            "prev_consecutive_rewards_slope": [0.2, 0.1, 0.3],
-            "n_blocks": [5, 4, 6],
+            "date": ["2025-12-16", "2025-12-05", "2025-12-23", "2025-12-08"],
+            "prev_consecutive_rewards_slope": ["None", "0.1", "0.3", "0.2"],
+            "n_blocks": ["None", "4", "6", "5"],
         }
     )
     multisession_df.to_csv(cross_session_path / "CT014_overall_performance.csv", index=False)
-    captured = {}
 
-    def fake_plot_learning_curve(coefficients, switches_per_session, figure_id, plot_path, dates=None):
-        captured["coefficients"] = list(coefficients)
-        captured["switches_per_session"] = list(switches_per_session)
+    coefficients, block_counts, dates = main_module.prepare_learning_curve_data(
+        mouse="CT014",
+        multi_session_save_path=cross_session_path,
+    )
+
+    assert coefficients.tolist() == [0.1, 0.2, 0.3]
+    assert block_counts.tolist() == [4, 5, 6]
+    assert dates.tolist() == ["2025-12-05", "2025-12-08", "2025-12-23"]
+    assert coefficients.dtype.kind == "f"
+    assert block_counts.dtype.kind in {"f", "i"}
+
+
+def test_main_multisession_calls_plot_learning_curve_with_cleaned_data(tmp_path, monkeypatch):
+    """main_multisession should call the existing plotter with numeric data."""
+    main_module = load_main_module()
+    captured = {}
+    coefficients = np.array([0.1, 0.3], dtype=float)
+    block_counts = np.array([4, 6], dtype=int)
+    dates = np.array(["2025-12-05", "2025-12-23"], dtype=object)
+
+    monkeypatch.setattr(
+        main_module,
+        "prepare_learning_curve_data",
+        lambda mouse, multi_session_save_path: (coefficients, block_counts, dates),
+    )
+
+    def fake_plot_learning_curve(plot_coefficients, switches_per_session, figure_id, plot_path, dates=None):
+        captured["coefficients"] = plot_coefficients
+        captured["switches_per_session"] = switches_per_session
         captured["figure_id"] = figure_id
         captured["plot_path"] = plot_path
-        captured["dates"] = list(dates)
+        captured["dates"] = dates
 
     monkeypatch.setattr(
         main_module.performance_plots,
@@ -237,25 +306,37 @@ def test_plot_mouse_learning_curve_uses_all_available_summary_dates(tmp_path, mo
         raising=False,
     )
     monkeypatch.setattr(
-        main_module.performance_plots,
-        "get_session_block_count_column",
-        lambda df: "n_blocks",
-        raising=False,
+        main_module,
+        "find_saved_session_by_date",
+        lambda mouse, date, session_data_root, multi_session_save_path: SimpleNamespace(
+            sess_id_full=f"{mouse}_{date}_000000",
+            date=date,
+            processed_data_path=tmp_path,
+        ),
     )
-
-    plotted_df = main_module.plot_mouse_learning_curve(
-        mouse="CT014",
-        multi_session_save_path=cross_session_path,
+    monkeypatch.setattr(
+        main_module,
+        "load_saved_session_analysis",
+        lambda session: SimpleNamespace(session=session),
     )
+    monkeypatch.setattr(
+        main_module,
+        "concatenate_saved_sessions",
+        lambda saved_sessions: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "build_multisession_session",
+        lambda mouse, multi_session_save_path, sess_id_full: SimpleNamespace(sess_id_full=sess_id_full),
+    )
+    monkeypatch.setattr(main_module, "run_multisession_analysis", lambda **kwargs: None)
 
-    assert plotted_df["date"].tolist() == ["2025-12-05", "2025-12-16", "2025-12-23"]
-    assert captured == {
-        "coefficients": [0.1, 0.2, 0.3],
-        "switches_per_session": [4, 5, 6],
-        "figure_id": "CT014",
-        "plot_path": cross_session_path,
-        "dates": ["2025-12-05", "2025-12-16", "2025-12-23"],
-    }
+    main_module.main_multisession()
+
+    np.testing.assert_array_equal(captured["coefficients"], coefficients)
+    np.testing.assert_array_equal(captured["switches_per_session"], block_counts)
+    np.testing.assert_array_equal(captured["dates"], dates)
+    assert captured["figure_id"] == "CT014"
 
 
 def test_run_multisession_analysis_runs_model_selection_before_modeling(tmp_path, monkeypatch):
