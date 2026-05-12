@@ -278,6 +278,82 @@ def test_prepare_learning_curve_data_drops_none_slopes_and_returns_numeric_array
     assert block_counts.dtype.kind in {"f", "i"}
 
 
+def test_load_saved_multisession_augmented_trials_validates_required_columns(tmp_path):
+    """Saved multisession trial input should load only when HMM columns exist.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary processed-data directory containing the saved trial CSV.
+
+    Returns
+    -------
+    None
+        Asserts that a saved trial table with required GLM-HMM and inherited
+        block columns is loaded unchanged.
+    """
+    main_module = load_main_module()
+    session = SimpleNamespace(
+        processed_data_path=tmp_path,
+        sess_id_full="CT014_multisession",
+    )
+    trial_df = pd.DataFrame(
+        {
+            "prev_action": [0, 1],
+            "give_reward": [0, 0],
+            "action": [1, 0],
+            "FQlearning_rel_value": [0.1, -0.2],
+            "inherited_block_strategy": [0, 1],
+            "inherited_block_bias": ["False", "True"],
+        }
+    )
+    trial_df.to_csv(tmp_path / "CT014_multisession_augmented_trials.csv", index=False)
+
+    loaded = main_module.load_saved_multisession_augmented_trials(
+        session=session,
+        predictor_columns=("FQlearning_rel_value",),
+    )
+
+    assert loaded.shape == trial_df.shape
+    assert loaded["inherited_block_strategy"].tolist() == [0, 1]
+    assert loaded["inherited_block_bias"].tolist() == [False, True]
+
+
+def test_load_saved_multisession_augmented_trials_errors_when_inherited_columns_missing(tmp_path):
+    """Saved multisession trial input should require inherited block columns.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary processed-data directory containing the incomplete trial CSV.
+
+    Returns
+    -------
+    None
+        Asserts that missing inherited block columns raise a clear ValueError.
+    """
+    main_module = load_main_module()
+    session = SimpleNamespace(
+        processed_data_path=tmp_path,
+        sess_id_full="CT014_multisession",
+    )
+    trial_df = pd.DataFrame(
+        {
+            "prev_action": [0],
+            "give_reward": [0],
+            "action": [1],
+            "FQlearning_rel_value": [0.1],
+        }
+    )
+    trial_df.to_csv(tmp_path / "CT014_multisession_augmented_trials.csv", index=False)
+
+    with pytest.raises(ValueError, match="inherited_block_strategy"):
+        main_module.load_saved_multisession_augmented_trials(
+            session=session,
+            predictor_columns=("FQlearning_rel_value",),
+        )
+
+
 def test_main_multisession_calls_plot_learning_curve_with_cleaned_data(tmp_path, monkeypatch):
     """main_multisession should call the existing plotter with numeric data."""
     main_module = load_main_module()
@@ -339,6 +415,191 @@ def test_main_multisession_calls_plot_learning_curve_with_cleaned_data(tmp_path,
     assert captured["figure_id"] == "CT014"
 
 
+def test_run_multisession_analysis_uses_saved_augmented_trials_when_requested(tmp_path, monkeypatch):
+    """Saved-trial mode should skip block modeling and use the saved trial CSV.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary processed-data and figure directory.
+    monkeypatch : pytest.MonkeyPatch
+        Replaces HMM functions with lightweight captures.
+
+    Returns
+    -------
+    None
+        Asserts that block modeling and pre-modeling save are skipped, while
+        trial modeling receives the saved block-inherited trial table.
+    """
+    main_module = load_main_module()
+    synthetic_session = SimpleNamespace(
+        sess_id_full="CT014_multisession",
+        processed_data_path=tmp_path,
+        figure_path=tmp_path,
+    )
+    concatenated = SimpleNamespace(
+        block_performance=pd.DataFrame({"block_ix": [0]}),
+        augmented_trial_df=pd.DataFrame({"action": [0]}),
+    )
+    saved_trial_df = pd.DataFrame(
+        {
+            "prev_action": [0, 1],
+            "give_reward": [0, 0],
+            "action": [1, 0],
+            "FQlearning_rel_value": [0.1, -0.2],
+            "inherited_block_strategy": [0, 1],
+            "inherited_block_bias": ["False", "True"],
+        }
+    )
+    saved_trial_df.to_csv(tmp_path / "CT014_multisession_augmented_trials.csv", index=False)
+    captured = {}
+
+    monkeypatch.setattr(
+        main_module,
+        "save_concatenated_multisession_inputs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("saved input should not be overwritten")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.bssm,
+        "run_block_modeling",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("block modeling should be skipped")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.tssm,
+        "run_information_criteria",
+        lambda trial_df, **_kwargs: {"trial_ic": "saved"},
+        raising=False,
+    )
+
+    def fake_run_trial_modeling(
+        trial_df,
+        session,
+        num_states,
+        prior_alpha,
+        prior_sigma,
+        predictor_columns,
+        random_seed,
+        state_plot_line_width=None,
+        state_plot_figsize=None,
+    ):
+        captured["trial_df"] = trial_df.copy()
+        captured["num_states"] = num_states
+        captured["predictor_columns"] = predictor_columns
+        return trial_df.assign(inferred_strategy=[1, 0])
+
+    monkeypatch.setattr(main_module.tssm, "run_trial_modeling", fake_run_trial_modeling, raising=False)
+
+    main_module.run_multisession_analysis(
+        concatenated=concatenated,
+        session=synthetic_session,
+        trial_num_states=3,
+        prior_alpha=4,
+        prior_sigma=5,
+        trial_random_seed=2001,
+        trial_predictor_columns=("FQlearning_rel_value",),
+        trial_input_source="saved_augmented_trials",
+    )
+
+    assert captured["num_states"] == 3
+    assert captured["predictor_columns"] == ("FQlearning_rel_value",)
+    assert captured["trial_df"]["inherited_block_strategy"].tolist() == [0, 1]
+
+
+def test_run_multisession_analysis_rejects_unknown_trial_input_source(tmp_path):
+    """Multisession trial input source should fail fast on unsupported values."""
+    main_module = load_main_module()
+    synthetic_session = SimpleNamespace(
+        sess_id_full="CT014_multisession",
+        processed_data_path=tmp_path,
+        figure_path=tmp_path,
+    )
+    concatenated = SimpleNamespace(
+        block_performance=pd.DataFrame({"block_ix": [0]}),
+        augmented_trial_df=pd.DataFrame({"action": [0]}),
+    )
+
+    with pytest.raises(ValueError, match="trial_input_source"):
+        main_module.run_multisession_analysis(
+            concatenated=concatenated,
+            session=synthetic_session,
+            trial_predictor_columns=("FQlearning_rel_value",),
+            trial_input_source="saved_trials",
+        )
+
+
+def test_run_multisession_analysis_forwards_trial_plot_settings(tmp_path, monkeypatch):
+    """Multisession analysis should forward trial-state plotting settings.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary processed-data and figure directory.
+    monkeypatch : pytest.MonkeyPatch
+        Replaces HMM functions with lightweight captures.
+
+    Returns
+    -------
+    None
+        Asserts that multisession-specific trial plotting settings reach
+        `trial_state_space_modeling.run_trial_modeling`.
+    """
+    main_module = load_main_module()
+    synthetic_session = SimpleNamespace(
+        sess_id_full="CT014_multisession",
+        processed_data_path=tmp_path,
+        figure_path=tmp_path,
+    )
+    concatenated = SimpleNamespace(
+        block_performance=pd.DataFrame({"block_ix": [0]}),
+        augmented_trial_df=pd.DataFrame({"action": [0]}),
+    )
+    saved_trial_df = pd.DataFrame(
+        {
+            "prev_action": [0, 1],
+            "give_reward": [0, 0],
+            "action": [1, 0],
+            "FQlearning_rel_value": [0.1, -0.2],
+            "inherited_block_strategy": [0, 1],
+            "inherited_block_bias": ["False", "True"],
+        }
+    )
+    saved_trial_df.to_csv(tmp_path / "CT014_multisession_augmented_trials.csv", index=False)
+    captured = {}
+
+    def fake_run_trial_modeling(
+        trial_df,
+        session,
+        num_states,
+        prior_alpha,
+        prior_sigma,
+        predictor_columns,
+        random_seed,
+        state_plot_line_width=None,
+        state_plot_figsize=None,
+    ):
+        captured["state_plot_line_width"] = state_plot_line_width
+        captured["state_plot_figsize"] = state_plot_figsize
+        return trial_df
+
+    monkeypatch.setattr(main_module.tssm, "run_trial_modeling", fake_run_trial_modeling, raising=False)
+
+    main_module.run_multisession_analysis(
+        concatenated=concatenated,
+        session=synthetic_session,
+        trial_predictor_columns=("FQlearning_rel_value",),
+        trial_input_source="saved_augmented_trials",
+        trial_state_plot_line_width=0.4,
+        trial_state_plot_figsize=(12, 4),
+    )
+
+    assert captured == {
+        "state_plot_line_width": 0.4,
+        "state_plot_figsize": (12, 4),
+    }
+
+
 def test_run_multisession_analysis_runs_model_selection_before_modeling(tmp_path, monkeypatch):
     """Multisession orchestration should mirror the full `main_mouse` HMM flow."""
     main_module = load_main_module()
@@ -397,6 +658,7 @@ def test_run_multisession_analysis_runs_model_selection_before_modeling(tmp_path
         prior_alpha,
         prior_sigma,
         random_seed,
+        predicted_state_line_width=None,
     ):
         calls.append(("block", session.sess_id_full, num_states, prior_alpha, prior_sigma, random_seed))
         return (
@@ -412,6 +674,8 @@ def test_run_multisession_analysis_runs_model_selection_before_modeling(tmp_path
         prior_sigma,
         predictor_columns,
         random_seed,
+        state_plot_line_width=None,
+        state_plot_figsize=None,
     ):
         calls.append(
             (

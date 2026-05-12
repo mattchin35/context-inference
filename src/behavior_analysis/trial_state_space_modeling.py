@@ -339,10 +339,54 @@ def split_blocked_holdout_sequences(
     )
 
 
+def get_session_boundary_markers(
+    trial_df: pd.DataFrame,
+    valid_mask: np.ndarray,
+    session_column: str = "source_date",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return session-boundary positions and labels for filtered trial plots.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Multisession
+        tables may include `session_column`, typically `source_date`.
+    valid_mask : np.ndarray
+        Boolean mask with shape `(n_trials,)` selecting rows included in the
+        plotted GLM-HMM posterior arrays.
+    session_column : str, default="source_date"
+        Column containing session labels. Boundaries are labeled with the
+        session value that starts after the boundary.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        - boundary positions in filtered GLM-HMM trial coordinates, shape
+          `(n_boundaries,)`
+        - boundary labels, shape `(n_boundaries,)`
+    """
+    if session_column not in trial_df.columns:
+        return np.array([], dtype=int), np.array([], dtype=object)
+
+    valid_mask = np.asarray(valid_mask, dtype=bool)
+    if valid_mask.shape[0] != trial_df.shape[0]:
+        raise ValueError("valid_mask must have one entry per trial_df row.")
+
+    valid_session_labels = trial_df.loc[valid_mask, session_column].to_numpy(dtype=object)
+    if valid_session_labels.size <= 1:
+        return np.array([], dtype=int), np.array([], dtype=object)
+
+    boundary_positions = np.flatnonzero(valid_session_labels[1:] != valid_session_labels[:-1]) + 1
+    boundary_labels = valid_session_labels[boundary_positions]
+    return boundary_positions.astype(int), boundary_labels
+
+
 def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool=False, model_dict=None,
                      num_states=2,
                      predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS,
-                     random_seed: int | None = None):
+                     random_seed: int | None = None,
+                     state_plot_line_width: float | None = None,
+                     state_plot_figsize: tuple[float, float] | None = None):
     """Fit MLE trial GLM-HMM states and assign them back to the trial table.
 
     Parameters
@@ -366,6 +410,12 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     random_seed : int or None, default=None
         Seed used for stochastic HMM construction and EM initialization. None
         preserves the current random behavior.
+    state_plot_line_width : float or None, default=None
+        Optional linewidth for trial state-summary traces. None preserves the
+        existing plotting defaults.
+    state_plot_figsize : tuple[float, float] or None, default=None
+        Optional matplotlib figure size in inches for trial state-summary
+        figures. None preserves the existing plotting defaults.
 
     Returns
     -------
@@ -379,6 +429,10 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     )
     ix_valid = prepared["valid_mask"]
     df = trial_df[ix_valid]
+    session_boundary_positions, session_boundary_labels = get_session_boundary_markers(
+        trial_df,
+        valid_mask=ix_valid,
+    )
 
     block_strategy = df['inherited_block_strategy'].to_numpy()
     block_strategy[block_strategy != 'None'] = block_strategy[block_strategy != 'None'].astype(int)
@@ -461,15 +515,22 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
 
     posterior_probs = mle_hmm.expected_states(data=action, input=predictors)[0]
     if plot:
-        fig = plt.figure(figsize=(5, 2.5), dpi=80, facecolor='w', edgecolor='k')
+        posterior_figsize = (5, 2.5) if state_plot_figsize is None else state_plot_figsize
+        posterior_line_width = 2 if state_plot_line_width is None else state_plot_line_width
+        fig = plt.figure(figsize=posterior_figsize, dpi=80, facecolor='w', edgecolor='k')
         for k in range(num_states):
-            plt.plot(posterior_probs[:,k], label="State " + str(k + 1), lw=2,
+            plt.plot(posterior_probs[:,k], label="State " + str(k + 1), lw=posterior_line_width,
                      color=state_colors[k])
         plt.ylim((-0.01, 1.01))
         plt.yticks([0, 0.5, 1], fontsize=10)
         plt.xlabel("trial #", fontsize=15)
         plt.ylabel("p(state)", fontsize=15)
         plt.title("MLE HMM states")
+        state_space_plotting.add_session_boundary_markers(
+            axes=plt.gca(),
+            boundary_positions=session_boundary_positions,
+            boundary_labels=session_boundary_labels,
+        )
         plt.tight_layout()
         save_path = figure_path / '{}_trial_mle_predicted_states.png'.format(sess_id_tag)
         fig.savefig(save_path, format='png', dpi=300)
@@ -481,6 +542,10 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             hmm_fit=mle_hmm,
             colors=state_colors,
             cmap=state_cmap,
+            line_width=state_plot_line_width,
+            figsize=state_plot_figsize,
+            session_boundary_positions=session_boundary_positions,
+            session_boundary_labels=session_boundary_labels,
         )
         save_path = figure_path / '{}_trial_mle_state_summary.png'.format(sess_id_tag)
         f.savefig(save_path, format='png', dpi=300)
@@ -493,6 +558,10 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             hmm_fit=mle_hmm,
             colors=state_colors,
             cmap=state_cmap,
+            line_width=state_plot_line_width,
+            figsize=state_plot_figsize,
+            session_boundary_positions=session_boundary_positions,
+            session_boundary_labels=session_boundary_labels,
         )
         save_path = figure_path / f'{sess_id_tag}_trial_mle_block_state_comparison.png'
         f.savefig(save_path, format='png', dpi=300)
@@ -523,7 +592,9 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
 def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool=False,
                      num_states=1, prior_sigma=1, prior_alpha=2, model_dict=None, block_dict=None,
                      predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS,
-                     random_seed: int | None = None):
+                     random_seed: int | None = None,
+                     state_plot_line_width: float | None = None,
+                     state_plot_figsize: tuple[float, float] | None = None):
     """Fit MAP trial GLM-HMM states and assign them back to the trial table.
 
     Parameters
@@ -552,6 +623,12 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     random_seed : int or None, default=None
         Seed used for stochastic HMM construction and EM initialization. None
         preserves the current random behavior.
+    state_plot_line_width : float or None, default=None
+        Optional linewidth for trial state-summary traces. None preserves the
+        existing plotting defaults.
+    state_plot_figsize : tuple[float, float] or None, default=None
+        Optional matplotlib figure size in inches for trial state-summary
+        figures. None preserves the existing plotting defaults.
 
     Returns
     -------
@@ -568,6 +645,10 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     n_trials = df.shape[0]
     state_colors = get_state_colors(num_states)
     state_cmap = build_state_colormap(state_colors)
+    session_boundary_positions, session_boundary_labels = get_session_boundary_markers(
+        trial_df,
+        valid_mask=ix_valid,
+    )
 
     block_strategy = df['inherited_block_strategy'].to_numpy()
     block_strategy = block_strategy.reshape(-1,1).astype(int) #+ 1
@@ -650,10 +731,12 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
 
     posterior_probs = map_hmm.expected_states(data=action, input=predictors)[0]
     if plot:
-        fig = plt.figure(figsize=(5, 2.5), dpi=80, facecolor='w', edgecolor='k')
+        posterior_figsize = (5, 2.5) if state_plot_figsize is None else state_plot_figsize
+        posterior_line_width = 2 if state_plot_line_width is None else state_plot_line_width
+        fig = plt.figure(figsize=posterior_figsize, dpi=80, facecolor='w', edgecolor='k')
         # sess_id = 0  # session id; can choose any index between 0 and num_sess-1
         for k in range(num_states):
-            plt.plot(posterior_probs[:,k], label="State " + str(k + 1), lw=2,
+            plt.plot(posterior_probs[:,k], label="State " + str(k + 1), lw=posterior_line_width,
                      color=state_colors[k])
         plt.ylim((-0.01, 1.01))
         plt.yticks([0, 0.5, 1], fontsize=10)
@@ -662,6 +745,11 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         plt.xlim((0, n_trials))
         # plt.title("MAP HMM states")
         plt.title("HMM behavior probabilities")
+        state_space_plotting.add_session_boundary_markers(
+            axes=plt.gca(),
+            boundary_positions=session_boundary_positions,
+            boundary_labels=session_boundary_labels,
+        )
         plt.tight_layout()
         save_path = figure_path / '{}_trial_map_predicted_states.png'.format(sess_id_tag)
         fig.savefig(save_path, format='png', dpi=300)
@@ -673,6 +761,10 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             hmm_fit=map_hmm,
             colors=state_colors,
             cmap=state_cmap,
+            line_width=state_plot_line_width,
+            figsize=state_plot_figsize,
+            session_boundary_positions=session_boundary_positions,
+            session_boundary_labels=session_boundary_labels,
         )
         save_path = figure_path / '{}_trial_map_state_summary.png'.format(sess_id_tag)
         f.savefig(save_path, format='png', dpi=300)
@@ -685,12 +777,18 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             hmm_fit=map_hmm,
             colors=state_colors,
             cmap=state_cmap,
+            line_width=state_plot_line_width,
+            figsize=state_plot_figsize,
+            session_boundary_positions=session_boundary_positions,
+            session_boundary_labels=session_boundary_labels,
         )
         save_path = figure_path / f'{sess_id_tag}_trial_map_block_state_comparison.png'
         f.savefig(save_path, format='png', dpi=300)
 
     if plot and block_dict is not None:
-        f, ax = plt.subplots(2,1)
+        figure_kwargs = {} if state_plot_figsize is None else {"figsize": state_plot_figsize}
+        trace_line_width_kwargs = {} if state_plot_line_width is None else {"linewidth": state_plot_line_width}
+        f, ax = plt.subplots(2,1, **figure_kwargs)
 
         block_present_colors, block_present_cmap = build_block_comparison_colors(block_dict['weight_dict'])
         block_posterior_probs = block_dict['posterior_probs']
@@ -703,7 +801,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         ax[0].imshow(ind_state[None, :], aspect="auto", cmap=block_present_cmap,
                   vmin=0, vmax=len(block_present_colors) - 1,
                   extent=(0, time_bins, -lim * obs_dim, lim), alpha=0.5)
-        ax[0].plot(observations[:, 0], '-k', label='obs')
+        ax[0].plot(observations[:, 0], '-k', label='obs', **trace_line_width_kwargs)
         ax[0].set_ylim(-0.2, 1.2)
         ax[0].set_yticks([0, 1])
         ax[0].set_yticklabels(['Right', 'Left'], fontsize=12)
@@ -716,11 +814,16 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         ax[1].imshow(ind_state[None, :], aspect="auto", cmap=state_cmap,
                   vmin=0, vmax=len(state_colors) - 1,
                   extent=(0, time_bins, -lim * obs_dim, lim), alpha=0.5)
-        ax[1].plot(observations[:, 0], '-k', label='obs')
+        ax[1].plot(observations[:, 0], '-k', label='obs', **trace_line_width_kwargs)
         ax[1].set_ylim(-0.2, 1.2)
         ax[1].set_yticks([0, 1])
         ax[1].set_yticklabels(['Right', 'Left'], fontsize=12)
         ax[1].set_title('Trials labeled by trial strategy')
+        state_space_plotting.add_session_boundary_markers(
+            axes=ax,
+            boundary_positions=session_boundary_positions,
+            boundary_labels=session_boundary_labels,
+        )
         plt.tight_layout()
 
         save_path = figure_path / '{}_trialMapStateComparison.png'.format(sess_id_tag)
@@ -785,7 +888,42 @@ def save_trial_model_dict(model_dict: dict, session: Session) -> Path:
 def run_trial_modeling(trial_df: pd.DataFrame, session: Session, num_states: int=2,
                        prior_alpha=1, prior_sigma=1,
                        predictor_columns: tuple[str, ...] = DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS,
-                       random_seed: int | None = None) -> pd.DataFrame:
+                       random_seed: int | None = None,
+                       state_plot_line_width: float | None = None,
+                       state_plot_figsize: tuple[float, float] | None = None) -> pd.DataFrame:
+    """Run MLE and MAP trial GLM-HMM modeling and save trial-level outputs.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required
+        columns are defined by `prepare_trial_glm_hmm_data`.
+    session : Session
+        Session metadata with `processed_data_path`, `figure_path`, and
+        `sess_id_full` attributes controlling output locations and filenames.
+    num_states : int, default=2
+        Number of hidden GLM-HMM states.
+    prior_alpha : float, default=1
+        Sticky-transition concentration passed to MAP fitting.
+    prior_sigma : float, default=1
+        Observation prior scale passed to MAP fitting.
+    predictor_columns : tuple[str, ...], default=DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS
+        Non-bias GLM predictor columns used in the input matrix.
+    random_seed : int or None, default=None
+        Base seed split into MLE and MAP child seeds. None preserves current
+        stochastic behavior.
+    state_plot_line_width : float or None, default=None
+        Optional linewidth for trial state-summary traces. None preserves the
+        existing plotting defaults.
+    state_plot_figsize : tuple[float, float] or None, default=None
+        Optional matplotlib figure size in inches for trial state-summary
+        figures. None preserves the existing plotting defaults.
+
+    Returns
+    -------
+    pd.DataFrame
+        Updated trial table with inferred trial-state labels.
+    """
     block_dict_fname = session.processed_data_path / (session.sess_id_full + '_block_statedict.pkl')
     with open(block_dict_fname, 'rb') as file:
         block_dict = pkl.load(file)
@@ -799,6 +937,8 @@ def run_trial_modeling(trial_df: pd.DataFrame, session: Session, num_states: int
         num_states=num_states,
         predictor_columns=predictor_columns,
         random_seed=mle_seed,
+        state_plot_line_width=state_plot_line_width,
+        state_plot_figsize=state_plot_figsize,
     )
     map_model_dict, augmented_trial_df = map_trial_states(
         trial_df,
@@ -812,6 +952,8 @@ def run_trial_modeling(trial_df: pd.DataFrame, session: Session, num_states: int
         block_dict=block_dict['map'],
         predictor_columns=predictor_columns,
         random_seed=map_seed,
+        state_plot_line_width=state_plot_line_width,
+        state_plot_figsize=state_plot_figsize,
     )
     save_trial_model_dict(map_model_dict, session)
 

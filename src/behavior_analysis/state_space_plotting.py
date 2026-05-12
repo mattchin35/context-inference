@@ -69,6 +69,61 @@ def _get_state_colors(num_states: int) -> list:
     return [colormap(idx / (num_states - 1)) for idx in range(num_states)]
 
 
+def add_session_boundary_markers(
+    axes,
+    boundary_positions: np.ndarray,
+    boundary_labels: list[str] | np.ndarray,
+) -> None:
+    """Draw labeled session-boundary markers on one or more axes.
+
+    Parameters
+    ----------
+    axes
+        Matplotlib axis, or iterable/array of axes. Vertical lines are drawn on
+        every axis; labels are drawn only on the first axis.
+    boundary_positions : np.ndarray
+        X-axis positions for session boundaries, shape `(n_boundaries,)`, in
+        the same data coordinates as the plotted HMM arrays.
+    boundary_labels : list[str] or np.ndarray
+        Label for each boundary, shape `(n_boundaries,)`. Each label should
+        identify the session that starts after the boundary.
+
+    Returns
+    -------
+    None
+        Mutates the supplied axes by adding dashed vertical lines and top-axis
+        labels.
+    """
+    positions = np.asarray(boundary_positions)
+    if boundary_labels is None:
+        if positions.size == 0:
+            return
+        raise ValueError("boundary_labels must be provided for every boundary position.")
+    labels = np.asarray(boundary_labels, dtype=object)
+    if positions.size != labels.size:
+        raise ValueError("boundary_positions and boundary_labels must have the same length.")
+    if positions.size == 0:
+        return
+
+    axes_array = np.ravel(np.atleast_1d(axes))
+    top_axis = axes_array[0]
+    for axis in axes_array:
+        for boundary_position in positions:
+            axis.axvline(x=boundary_position, color="k", linestyle="--", linewidth=1, alpha=0.6)
+
+    for boundary_position, boundary_label in zip(positions, labels):
+        top_axis.text(
+            boundary_position,
+            0.98,
+            str(boundary_label),
+            rotation=90,
+            va="top",
+            ha="right",
+            fontsize=8,
+            transform=top_axis.get_xaxis_transform(),
+        )
+
+
 def stack_state_durations(
     inferred_state_list: np.ndarray,
     inferred_durations: np.ndarray,
@@ -183,6 +238,9 @@ def plot_block_lm_hmm_state_summary(
     colors: list,
     cmap,
     session_lengths: np.ndarray | None = None,
+    session_boundary_positions: np.ndarray | None = None,
+    session_boundary_labels: list[str] | np.ndarray | None = None,
+    line_width: float | None = None,
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
     """Plot block LM-HMM posterior probabilities and observations.
 
@@ -203,6 +261,13 @@ def plot_block_lm_hmm_state_summary(
         Matplotlib colormap aligned to `colors`.
     session_lengths : np.ndarray or None, default=None
         Optional sequence lengths for drawing session-boundary lines.
+    session_boundary_positions : np.ndarray or None, default=None
+        Optional labeled session-boundary x positions, shape `(n_boundaries,)`.
+    session_boundary_labels : list[str] or np.ndarray or None, default=None
+        Labels for `session_boundary_positions`, shape `(n_boundaries,)`.
+    line_width : float or None, default=None
+        Optional linewidth for posterior, observation, bias, and weight traces.
+        None preserves the existing single-session plotting defaults.
 
     Returns
     -------
@@ -214,11 +279,13 @@ def plot_block_lm_hmm_state_summary(
     time_bins = len(inputs)
     obs_dim = len(observations[0])
     num_states = hmm_fit.transitions.log_Ps.shape[0]
+    posterior_line_width = 2 if line_width is None else line_width
+    trace_line_width_kwargs = {} if line_width is None else {"linewidth": line_width}
     for state_idx in range(num_states):
         prob_ax.plot(
             posterior_probs[:, state_idx],
             label="State " + str(state_idx + 1),
-            lw=2,
+            lw=posterior_line_width,
             color=colors[state_idx],
         )
 
@@ -245,9 +312,24 @@ def plot_block_lm_hmm_state_summary(
             extent=(0, time_bins, -lim * obs_dim, lim),
             alpha=0.5,
         )
-        obs_ax.plot(observations[:, obs_idx] - lim * obs_idx, '-k', label='obs' * (obs_idx == 0))
-        obs_ax.plot(biases[:, obs_idx] - lim * obs_idx, ':k', label='bias' * (obs_idx == 0))
-        obs_ax.plot(weights[:, obs_idx, 0] - lim * obs_idx, '--k', label='weight' * (obs_idx == 0))
+        obs_ax.plot(
+            observations[:, obs_idx] - lim * obs_idx,
+            '-k',
+            label='obs' * (obs_idx == 0),
+            **trace_line_width_kwargs,
+        )
+        obs_ax.plot(
+            biases[:, obs_idx] - lim * obs_idx,
+            ':k',
+            label='bias' * (obs_idx == 0),
+            **trace_line_width_kwargs,
+        )
+        obs_ax.plot(
+            weights[:, obs_idx, 0] - lim * obs_idx,
+            '--k',
+            label='weight' * (obs_idx == 0),
+            **trace_line_width_kwargs,
+        )
 
     obs_ax.set_xlim(0, time_bins - 1)
     obs_ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), frameon=False, prop={'size': 10})
@@ -260,6 +342,13 @@ def plot_block_lm_hmm_state_summary(
         for split_idx in range(splits.shape[0] - 1):
             prob_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
             obs_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+
+    if session_boundary_positions is not None:
+        add_session_boundary_markers(
+            axes=(prob_ax, obs_ax),
+            boundary_positions=session_boundary_positions,
+            boundary_labels=session_boundary_labels,
+        )
 
     fig.tight_layout()
     return fig, (prob_ax, obs_ax)
@@ -274,6 +363,9 @@ def plot_block_lm_hmm_presentation_summary(
     cmap,
     session_lengths: np.ndarray | None = None,
     predictor_labels: list[str] | None = None,
+    session_boundary_positions: np.ndarray | None = None,
+    session_boundary_labels: list[str] | np.ndarray | None = None,
+    line_width: float | None = None,
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
     """Plot presentation-style block LM-HMM state probabilities and weights.
 
@@ -296,6 +388,13 @@ def plot_block_lm_hmm_presentation_summary(
         Optional sequence lengths for drawing session-boundary lines.
     predictor_labels : list[str] or None, default=None
         Labels for the input dimensions.
+    session_boundary_positions : np.ndarray or None, default=None
+        Optional labeled session-boundary x positions, shape `(n_boundaries,)`.
+    session_boundary_labels : list[str] or np.ndarray or None, default=None
+        Labels for `session_boundary_positions`, shape `(n_boundaries,)`.
+    line_width : float or None, default=None
+        Optional linewidth for posterior, observation, bias, and weight traces.
+        None preserves the existing single-session plotting defaults.
 
     Returns
     -------
@@ -311,11 +410,13 @@ def plot_block_lm_hmm_presentation_summary(
     if predictor_labels is None:
         predictor_labels = [f"input-{idx}" for idx in range(input_dim)]
 
+    posterior_line_width = 2 if line_width is None else line_width
+    trace_line_width_kwargs = {} if line_width is None else {"linewidth": line_width}
     for state_idx in range(num_states):
         prob_ax.plot(
             posterior_probs[:, state_idx],
             label="State " + str(state_idx + 1),
-            lw=2,
+            lw=posterior_line_width,
             color=colors[state_idx],
         )
 
@@ -342,14 +443,25 @@ def plot_block_lm_hmm_presentation_summary(
             extent=(0, time_bins, -lim * obs_dim, lim),
             alpha=0.5,
         )
-        obs_ax.plot(observations[:, 0] - lim * obs_idx, '-k', label='obs')
-        obs_ax.plot(biases[:, 0] - lim, ':k', label='bias')
+        obs_ax.plot(
+            observations[:, 0] - lim * obs_idx,
+            '-k',
+            label='obs',
+            **trace_line_width_kwargs,
+        )
+        obs_ax.plot(
+            biases[:, 0] - lim,
+            ':k',
+            label='bias',
+            **trace_line_width_kwargs,
+        )
 
     for input_idx in range(input_dim):
         obs_ax.plot(
             weights[:, 0, input_idx] - lim * input_idx,
             '--k',
             label=predictor_labels[input_idx],
+            **trace_line_width_kwargs,
         )
 
     obs_ax.set_xlim(0, time_bins - 1)
@@ -373,6 +485,13 @@ def plot_block_lm_hmm_presentation_summary(
         for split_idx in range(splits.shape[0] - 1):
             prob_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
             obs_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+
+    if session_boundary_positions is not None:
+        add_session_boundary_markers(
+            axes=(prob_ax, obs_ax),
+            boundary_positions=session_boundary_positions,
+            boundary_labels=session_boundary_labels,
+        )
 
     fig.tight_layout()
     return fig, (prob_ax, obs_ax)
@@ -578,6 +697,10 @@ def plot_trial_glm_hmm_state_summary(
     colors: list,
     cmap,
     session_lengths: np.ndarray | None = None,
+    line_width: float | None = None,
+    figsize: tuple[float, float] | None = None,
+    session_boundary_positions: np.ndarray | None = None,
+    session_boundary_labels: list[str] | np.ndarray | None = None,
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes, plt.Axes]]:
     """Plot trial GLM-HMM posterior probabilities, inputs, and observations.
 
@@ -599,27 +722,41 @@ def plot_trial_glm_hmm_state_summary(
         Matplotlib colormap aligned to `colors`.
     session_lengths : np.ndarray or None, default=None
         Optional sequence lengths for drawing session-boundary lines.
+    line_width : float or None, default=None
+        Optional linewidth for posterior, input, observation, bias, and weight
+        traces. None preserves the existing plotting defaults.
+    figsize : tuple[float, float] or None, default=None
+        Optional matplotlib figure size in inches. None preserves the existing
+        plotting default.
+    session_boundary_positions : np.ndarray or None, default=None
+        Optional labeled session-boundary x positions, shape `(n_boundaries,)`.
+    session_boundary_labels : list[str] or np.ndarray or None, default=None
+        Labels for `session_boundary_positions`, shape `(n_boundaries,)`.
 
     Returns
     -------
     tuple[plt.Figure, tuple[plt.Axes, plt.Axes, plt.Axes]]
         Figure and axes for posterior probabilities, inputs, and observations.
     """
+    figure_kwargs = {} if figsize is None else {"figsize": figsize}
     fig, (prob_ax, input_ax, obs_ax) = plt.subplots(
         3,
         1,
         gridspec_kw={'height_ratios': [1, 1, 3]},
+        **figure_kwargs,
     )
 
     time_bins = len(inputs)
     obs_dim = len(observations[0])
     num_states = hmm_fit.transitions.log_Ps.shape[0]
     input_dim = len(inputs[0])
+    posterior_line_width = 2 if line_width is None else line_width
+    trace_line_width_kwargs = {} if line_width is None else {"linewidth": line_width}
     for state_idx in range(num_states):
         prob_ax.plot(
             posterior_probs[:, state_idx],
             label="State " + str(state_idx + 1),
-            lw=2,
+            lw=posterior_line_width,
             color=colors[state_idx],
         )
 
@@ -631,7 +768,11 @@ def plot_trial_glm_hmm_state_summary(
 
     lim_input = 1.1 * abs(inputs).max()
     for input_idx in range(input_dim):
-        input_ax.plot(inputs[:, input_idx] - lim_input * input_idx, label='inpt dim ' + str(input_idx))
+        input_ax.plot(
+            inputs[:, input_idx] - lim_input * input_idx,
+            label='inpt dim ' + str(input_idx),
+            **trace_line_width_kwargs,
+        )
 
     input_ax.set_xticks([])
     input_ax.set_xlim(0, time_bins)
@@ -659,9 +800,24 @@ def plot_trial_glm_hmm_state_summary(
             extent=(0, time_bins, -lim * obs_dim, lim),
             alpha=0.5,
         )
-        obs_ax.plot(observations[:, obs_idx] - lim * obs_idx, '-k', label='obs' * (obs_idx == 0))
-        obs_ax.plot(biases[:, obs_idx] - lim * obs_idx, ':k', label='bias' * (obs_idx == 0))
-        obs_ax.plot(weights[:, obs_idx] - lim * obs_idx, '--k', label='weight' * (obs_idx == 0))
+        obs_ax.plot(
+            observations[:, obs_idx] - lim * obs_idx,
+            '-k',
+            label='obs' * (obs_idx == 0),
+            **trace_line_width_kwargs,
+        )
+        obs_ax.plot(
+            biases[:, obs_idx] - lim * obs_idx,
+            ':k',
+            label='bias' * (obs_idx == 0),
+            **trace_line_width_kwargs,
+        )
+        obs_ax.plot(
+            weights[:, obs_idx] - lim * obs_idx,
+            '--k',
+            label='weight' * (obs_idx == 0),
+            **trace_line_width_kwargs,
+        )
     obs_ax.set_xlim(0, time_bins - 1)
     obs_ax.set_yticks([])
     obs_ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
@@ -674,6 +830,13 @@ def plot_trial_glm_hmm_state_summary(
             prob_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
             input_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
             obs_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+
+    if session_boundary_positions is not None:
+        add_session_boundary_markers(
+            axes=(prob_ax, input_ax, obs_ax),
+            boundary_positions=session_boundary_positions,
+            boundary_labels=session_boundary_labels,
+        )
 
     fig.tight_layout()
     return fig, (prob_ax, input_ax, obs_ax)
@@ -688,6 +851,10 @@ def plot_trial_glm_hmm_block_state_comparison(
     colors: list,
     cmap,
     session_lengths: np.ndarray | None = None,
+    line_width: float | None = None,
+    figsize: tuple[float, float] | None = None,
+    session_boundary_positions: np.ndarray | None = None,
+    session_boundary_labels: list[str] | np.ndarray | None = None,
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes, plt.Axes]]:
     """Plot inherited block states beside trial GLM-HMM inferred states.
 
@@ -710,6 +877,16 @@ def plot_trial_glm_hmm_block_state_comparison(
         Matplotlib colormap aligned to `colors`.
     session_lengths : np.ndarray or None, default=None
         Optional sequence lengths for drawing session-boundary lines.
+    line_width : float or None, default=None
+        Optional linewidth for posterior and observation traces. None preserves
+        the existing plotting defaults.
+    figsize : tuple[float, float] or None, default=None
+        Optional matplotlib figure size in inches. None preserves the existing
+        plotting default.
+    session_boundary_positions : np.ndarray or None, default=None
+        Optional labeled session-boundary x positions, shape `(n_boundaries,)`.
+    session_boundary_labels : list[str] or np.ndarray or None, default=None
+        Labels for `session_boundary_positions`, shape `(n_boundaries,)`.
 
     Returns
     -------
@@ -717,11 +894,14 @@ def plot_trial_glm_hmm_block_state_comparison(
         Figure and axes for block labels, trial labels, and posterior
         probabilities.
     """
-    fig, (block_ax, trial_ax, prob_ax) = plt.subplots(3, 1)
+    figure_kwargs = {} if figsize is None else {"figsize": figsize}
+    fig, (block_ax, trial_ax, prob_ax) = plt.subplots(3, 1, **figure_kwargs)
     lim = 2 * abs(observations).max()
     obs_dim = len(observations[0])
     time_bins = len(inputs)
     cmap.set_under('w')
+    posterior_line_width = 2 if line_width is None else line_width
+    trace_line_width_kwargs = {} if line_width is None else {"linewidth": line_width}
 
     block_states = np.asarray(block_states).reshape(1, -1)
     for obs_idx in range(obs_dim):
@@ -734,7 +914,12 @@ def plot_trial_glm_hmm_block_state_comparison(
             extent=(0, time_bins, -lim * obs_dim, lim),
             alpha=0.5,
         )
-        block_ax.plot(observations[:, obs_idx] - lim * obs_idx, '-k', label='obs' * (obs_idx == 0))
+        block_ax.plot(
+            observations[:, obs_idx] - lim * obs_idx,
+            '-k',
+            label='obs' * (obs_idx == 0),
+            **trace_line_width_kwargs,
+        )
     block_ax.set_xlim(0, time_bins - 1)
     block_ax.set_yticks([])
     block_ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
@@ -755,7 +940,12 @@ def plot_trial_glm_hmm_block_state_comparison(
             extent=(0, time_bins, -lim * obs_dim, lim),
             alpha=0.5,
         )
-        trial_ax.plot(observations[:, obs_idx] - lim * obs_idx, '-k', label='obs' * (obs_idx == 0))
+        trial_ax.plot(
+            observations[:, obs_idx] - lim * obs_idx,
+            '-k',
+            label='obs' * (obs_idx == 0),
+            **trace_line_width_kwargs,
+        )
     trial_ax.set_xlim(0, time_bins - 1)
     trial_ax.set_yticks([])
     trial_ax.set_xlabel("Trial context changes")
@@ -772,7 +962,7 @@ def plot_trial_glm_hmm_block_state_comparison(
         prob_ax.plot(
             trial_posterior_probs[:, state_idx],
             label="State " + str(state_idx + 1),
-            lw=2,
+            lw=posterior_line_width,
             color=colors[state_idx],
         )
 
@@ -781,6 +971,13 @@ def plot_trial_glm_hmm_block_state_comparison(
     prob_ax.set_ylabel("p(state)", fontsize=15)
     prob_ax.set_xlim(0, time_bins - 1)
     prob_ax.set_xticks([])
+
+    if session_boundary_positions is not None:
+        add_session_boundary_markers(
+            axes=(block_ax, trial_ax, prob_ax),
+            boundary_positions=session_boundary_positions,
+            boundary_labels=session_boundary_labels,
+        )
 
     fig.tight_layout()
     return fig, (block_ax, trial_ax, prob_ax)

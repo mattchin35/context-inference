@@ -268,8 +268,51 @@ def split_blocked_holdout_sequences(
     )
 
 
+def get_session_boundary_markers(
+    block_df: pd.DataFrame,
+    valid_mask: np.ndarray,
+    session_column: str = "source_date",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return session-boundary positions and labels for filtered block plots.
+
+    Parameters
+    ----------
+    block_df : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`. Multisession
+        tables may include `session_column`, typically `source_date`.
+    valid_mask : np.ndarray
+        Boolean mask with shape `(n_blocks,)` selecting rows included in the
+        plotted HMM posterior arrays.
+    session_column : str, default="source_date"
+        Column containing session labels. Boundaries are labeled with the
+        session value that starts after the boundary.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        - boundary positions in filtered HMM row coordinates, shape
+          `(n_boundaries,)`
+        - boundary labels, shape `(n_boundaries,)`
+    """
+    if session_column not in block_df.columns:
+        return np.array([], dtype=int), np.array([], dtype=object)
+
+    valid_mask = np.asarray(valid_mask, dtype=bool)
+    if valid_mask.shape[0] != block_df.shape[0]:
+        raise ValueError("valid_mask must have one entry per block_df row.")
+
+    valid_session_labels = block_df.loc[valid_mask, session_column].to_numpy(dtype=object)
+    if valid_session_labels.size <= 1:
+        return np.array([], dtype=int), np.array([], dtype=object)
+
+    boundary_positions = np.flatnonzero(valid_session_labels[1:] != valid_session_labels[:-1]) + 1
+    boundary_labels = valid_session_labels[boundary_positions]
+    return boundary_positions.astype(int), boundary_labels
+
+
 def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool=False, model_dict=None,
-                     num_states=2, random_seed: int | None = None):
+                     num_states=2, random_seed: int | None = None,
+                     predicted_state_line_width: float | None = None):
     """Fit MLE block LM-HMM states and assign them back to the block table.
 
     Parameters
@@ -290,6 +333,9 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     random_seed : int or None, default=None
         Seed used for stochastic HMM construction and EM initialization. None
         preserves the current random behavior.
+    predicted_state_line_width : float or None, default=None
+        Optional linewidth for predicted-state summary traces. None preserves
+        the existing plotting defaults.
 
     Returns
     -------
@@ -300,6 +346,10 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     ix_valid = prepared["valid_mask"]
     trials_to_correct = prepared["observations"]
     predictors = prepared["inputs"]
+    session_boundary_positions, session_boundary_labels = get_session_boundary_markers(
+        block_df,
+        valid_mask=ix_valid,
+    )
 
     obs_dim = trials_to_correct.shape[1]
     input_dim = predictors.shape[1]
@@ -361,6 +411,9 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             mle_hmm,
             state_colors,
             state_cmap,
+            session_boundary_positions=session_boundary_positions,
+            session_boundary_labels=session_boundary_labels,
+            line_width=predicted_state_line_width,
         )
         ax[0].set_title("MLE HMM states")
         save_path = figure_path / '{}_mle_predicted_states.png'.format(sess_id_tag)
@@ -390,7 +443,8 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
 
 def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool = False,
                      num_states=2, prior_sigma=1, prior_alpha=1, model_dict=None,
-                     random_seed: int | None = None):
+                     random_seed: int | None = None,
+                     predicted_state_line_width: float | None = None):
     """Fit MAP block LM-HMM states and assign them back to the block table.
 
     Parameters
@@ -415,6 +469,9 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     random_seed : int or None, default=None
         Seed used for stochastic HMM construction and EM initialization. None
         preserves the current random behavior.
+    predicted_state_line_width : float or None, default=None
+        Optional linewidth for predicted-state summary traces. None preserves
+        the existing plotting defaults.
 
     Returns
     -------
@@ -426,6 +483,10 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     trials_to_correct = prepared["observations"]
     predictors = prepared["inputs"]
     pred_labels = prepared["predictor_labels"]
+    session_boundary_positions, session_boundary_labels = get_session_boundary_markers(
+        block_df,
+        valid_mask=ix_valid,
+    )
 
     obs_dim = trials_to_correct.shape[1]
     input_dim = predictors.shape[1]
@@ -498,6 +559,9 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             present_colors,
             present_cmap,
             predictor_labels=pred_labels,
+            session_boundary_positions=session_boundary_positions,
+            session_boundary_labels=session_boundary_labels,
+            line_width=predicted_state_line_width,
         )
         ax[0].set_title("MAP HMM states")
         save_path = figure_path / '{}_map_predicted_states.png'.format(sess_id_tag)
@@ -557,7 +621,40 @@ def save_block_model_dict(model_dict: dict, processed_data_path: Path, sess_id_f
 
 
 def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.DataFrame, session: Session, num_states: int=2,
-                       prior_alpha=1, prior_sigma=1, random_seed: int | None = None):
+                       prior_alpha=1, prior_sigma=1, random_seed: int | None = None,
+                       predicted_state_line_width: float | None = None):
+    """Run MLE and MAP block LM-HMM modeling and save block-level outputs.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`. Required
+        columns are defined by `prepare_block_lm_hmm_data`.
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Must contain
+        block identifiers used by `trials_inherit_strategy`.
+    session : Session
+        Session metadata with `figure_path`, `processed_data_path`, and
+        `sess_id_full` attributes controlling output locations and filenames.
+    num_states : int, default=2
+        Number of hidden LM-HMM states.
+    prior_alpha : float, default=1
+        Sticky-transition concentration passed to MAP fitting.
+    prior_sigma : float, default=1
+        Observation prior scale passed to MAP fitting.
+    random_seed : int or None, default=None
+        Base seed split into MLE and MAP child seeds. None preserves current
+        stochastic behavior.
+    predicted_state_line_width : float or None, default=None
+        Optional linewidth for predicted-state summary traces. None preserves
+        the existing single-session plotting defaults.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame]
+        Updated block and trial tables. The trial table inherits fitted block
+        strategy labels.
+    """
     mle_seed, map_seed = spawn_child_seeds(random_seed, 2)
 
     mle_model_dict, block_performance = mle_block_states(
@@ -567,6 +664,7 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         plot=True,
         num_states=num_states,
         random_seed=mle_seed,
+        predicted_state_line_width=predicted_state_line_width,
     )
     map_model_dict, block_performance = map_block_states(
         block_performance,
@@ -578,6 +676,7 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         prior_alpha=prior_alpha,
         prior_sigma=prior_sigma,
         random_seed=map_seed,
+        predicted_state_line_width=predicted_state_line_width,
     )
     save_block_model_dict(
         map_model_dict,
