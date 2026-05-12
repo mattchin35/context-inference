@@ -530,8 +530,11 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             axes=plt.gca(),
             boundary_positions=session_boundary_positions,
             boundary_labels=session_boundary_labels,
+            label_location="bottom",
         )
         plt.tight_layout()
+        if session_boundary_positions.size > 0:
+            fig.subplots_adjust(bottom=0.28)
         save_path = figure_path / '{}_trial_mle_predicted_states.png'.format(sess_id_tag)
         fig.savefig(save_path, format='png', dpi=300)
 
@@ -749,8 +752,11 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             axes=plt.gca(),
             boundary_positions=session_boundary_positions,
             boundary_labels=session_boundary_labels,
+            label_location="bottom",
         )
         plt.tight_layout()
+        if session_boundary_positions.size > 0:
+            fig.subplots_adjust(bottom=0.28)
         save_path = figure_path / '{}_trial_map_predicted_states.png'.format(sess_id_tag)
         fig.savefig(save_path, format='png', dpi=300)
 
@@ -823,8 +829,11 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             axes=ax,
             boundary_positions=session_boundary_positions,
             boundary_labels=session_boundary_labels,
+            label_location="bottom",
         )
         plt.tight_layout()
+        if session_boundary_positions.size > 0:
+            f.subplots_adjust(bottom=0.28)
 
         save_path = figure_path / '{}_trialMapStateComparison.png'.format(sess_id_tag)
         f.savefig(save_path, format='png', dpi=300)

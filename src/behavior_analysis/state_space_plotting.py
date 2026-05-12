@@ -73,6 +73,8 @@ def add_session_boundary_markers(
     axes,
     boundary_positions: np.ndarray,
     boundary_labels: list[str] | np.ndarray,
+    label_location: str = "top",
+    label_y: float | None = None,
 ) -> None:
     """Draw labeled session-boundary markers on one or more axes.
 
@@ -87,13 +89,21 @@ def add_session_boundary_markers(
     boundary_labels : list[str] or np.ndarray
         Label for each boundary, shape `(n_boundaries,)`. Each label should
         identify the session that starts after the boundary.
+    label_location : {"top", "bottom"}, default="top"
+        Axis that receives the boundary labels. `"top"` preserves the original
+        behavior; `"bottom"` places labels below the last axis.
+    label_y : float or None, default=None
+        Label y position in axis coordinates. If None, uses `0.98` for top
+        labels and `-0.18` for bottom labels.
 
     Returns
     -------
     None
-        Mutates the supplied axes by adding dashed vertical lines and top-axis
-        labels.
+        Mutates the supplied axes by adding dashed vertical lines and labels.
     """
+    if label_location not in {"top", "bottom"}:
+        raise ValueError("label_location must be 'top' or 'bottom'.")
+
     positions = np.asarray(boundary_positions)
     if boundary_labels is None:
         if positions.size == 0:
@@ -106,21 +116,25 @@ def add_session_boundary_markers(
         return
 
     axes_array = np.ravel(np.atleast_1d(axes))
-    top_axis = axes_array[0]
     for axis in axes_array:
         for boundary_position in positions:
             axis.axvline(x=boundary_position, color="k", linestyle="--", linewidth=1, alpha=0.6)
 
+    label_axis = axes_array[0] if label_location == "top" else axes_array[-1]
+    if label_y is None:
+        label_y = 0.98 if label_location == "top" else -0.18
+    label_clip_on = label_location == "top"
     for boundary_position, boundary_label in zip(positions, labels):
-        top_axis.text(
+        label_axis.text(
             boundary_position,
-            0.98,
+            label_y,
             str(boundary_label),
             rotation=90,
             va="top",
             ha="right",
             fontsize=8,
-            transform=top_axis.get_xaxis_transform(),
+            transform=label_axis.get_xaxis_transform(),
+            clip_on=label_clip_on,
         )
 
 
@@ -836,9 +850,12 @@ def plot_trial_glm_hmm_state_summary(
             axes=(prob_ax, input_ax, obs_ax),
             boundary_positions=session_boundary_positions,
             boundary_labels=session_boundary_labels,
+            label_location="bottom",
         )
 
     fig.tight_layout()
+    if session_boundary_positions is not None and np.asarray(session_boundary_positions).size > 0:
+        fig.subplots_adjust(bottom=0.28)
     return fig, (prob_ax, input_ax, obs_ax)
 
 
@@ -977,7 +994,10 @@ def plot_trial_glm_hmm_block_state_comparison(
             axes=(block_ax, trial_ax, prob_ax),
             boundary_positions=session_boundary_positions,
             boundary_labels=session_boundary_labels,
+            label_location="bottom",
         )
 
     fig.tight_layout()
+    if session_boundary_positions is not None and np.asarray(session_boundary_positions).size > 0:
+        fig.subplots_adjust(bottom=0.28)
     return fig, (block_ax, trial_ax, prob_ax)

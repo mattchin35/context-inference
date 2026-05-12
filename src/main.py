@@ -897,7 +897,7 @@ def main_multisession():
     trial_hmm_random_seed = 2001
     block_predicted_state_line_width = 0.8
     trial_state_plot_line_width = 0.5
-    trial_state_plot_figsize = (18, 3)
+    trial_state_plot_figsize = (18, 6)
     trial_input_source = "saved_augmented_trials"  # either from_block_modeling or saved_augmented_trials
     trial_glm_predictor_columns = (
         "FQlearning_rel_value",
