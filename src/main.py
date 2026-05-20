@@ -961,8 +961,8 @@ def main_mouse():
 
     ### HARDCODED DATA PATHS - CHOOSE THESE FOR EACH RUN ###
     multi_session_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
-    # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251221_latentInference')
-    # sess_id_full = 'CT014_2025-12-21_165755'
+    # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251211_latentInference')
+    # sess_id_full = 'CT014_2025-12-11_134311'
     # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251209_latentInference')
     # sess_id_full = 'CT014_2025-12-09_141154'
     session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251204')
@@ -1077,9 +1077,9 @@ def main_mouse():
     #                                                                 random_seed=block_hmm_random_seed)
 
     # load a saved block model instead of running it
-    # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
-    # with open(block_model_dict_path, 'rb') as file:
-    #     block_model_dict = pkl.load(file)
+    block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
+    with open(block_model_dict_path, 'rb') as file:
+        block_model_dict = pkl.load(file)
 
     ### trial state space modeling ###
     # trial_model_selection = tssm.run_information_criteria(
@@ -1094,7 +1094,7 @@ def main_mouse():
     augmented_trial_df = tssm.run_trial_modeling(
         augmented_trial_df,
         session=sess,
-        num_states=2,
+        num_states=3,
         prior_alpha=1,
         prior_sigma=1,
         predictor_columns=trial_glm_predictor_columns,
@@ -1118,6 +1118,7 @@ def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
 
 
 if __name__ == '__main__':
-    # main_mouse()
-    main_multisession()
+    main_mouse()
+    # main_multisession()
     # main_simulation()
+

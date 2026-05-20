@@ -185,6 +185,55 @@ def prepare_trial_glm_hmm_data(
     }
 
 
+def make_inherited_block_strategy_array(strategy_values) -> np.ndarray:
+    """Convert inherited block strategy labels into integer plot labels.
+
+    Parameters
+    ----------
+    strategy_values : array-like or pd.Series
+        One-dimensional strategy labels with shape `(n_trials,)`. Present
+        values must be integer-valued strategy IDs encoded as numbers, integer
+        strings, or CSV round-tripped float strings such as `"0.0"`. Missing
+        values may use the project's standard missing-value sentinels.
+
+    Returns
+    -------
+    np.ndarray
+        Integer strategy labels with shape `(n_trials, 1)`. Missing values are
+        assigned to one additional category after the maximum present strategy
+        ID, or 0 if all values are missing.
+
+    Raises
+    ------
+    ValueError
+        If any present strategy label is nonnumeric or not integer-valued.
+    """
+    if isinstance(strategy_values, pd.Series):
+        value_series = strategy_values.copy()
+    else:
+        value_series = pd.Series(strategy_values)
+
+    present_mask = is_present_value(value_series).to_numpy()
+    strategy_array = np.empty(value_series.shape[0], dtype=int)
+
+    if np.any(present_mask):
+        try:
+            numeric_values = pd.to_numeric(value_series[present_mask], errors="raise").to_numpy(dtype=float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("inherited_block_strategy must contain numeric strategy labels.") from exc
+
+        rounded_values = np.round(numeric_values)
+        if not np.all(np.isfinite(numeric_values)) or not np.all(np.isclose(numeric_values, rounded_values)):
+            raise ValueError("inherited_block_strategy must contain integer-valued strategy labels.")
+        strategy_array[present_mask] = rounded_values.astype(int)
+
+    if np.any(~present_mask):
+        missing_strategy = int(strategy_array[present_mask].max() + 1) if np.any(present_mask) else 0
+        strategy_array[~present_mask] = missing_strategy
+
+    return strategy_array.reshape(-1, 1)
+
+
 def normalize_binary_glm_weights(raw_weights: np.ndarray) -> np.ndarray:
     """Normalize binary GLM-HMM weights to shape (num_states, 1, num_predictors).
 
@@ -434,10 +483,7 @@ def mle_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         valid_mask=ix_valid,
     )
 
-    block_strategy = df['inherited_block_strategy'].to_numpy()
-    block_strategy[block_strategy != 'None'] = block_strategy[block_strategy != 'None'].astype(int)
-    block_strategy[block_strategy == 'None'] = np.amax(block_strategy[block_strategy != 'None']) + 1
-    block_strategy = block_strategy.reshape(-1,1).astype(int) #+ 1
+    block_strategy = make_inherited_block_strategy_array(df["inherited_block_strategy"])
 
     predictors = prepared["inputs"]
     pred_labels = prepared["predictor_labels"]
@@ -653,8 +699,7 @@ def map_trial_states(trial_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         valid_mask=ix_valid,
     )
 
-    block_strategy = df['inherited_block_strategy'].to_numpy()
-    block_strategy = block_strategy.reshape(-1,1).astype(int) #+ 1
+    block_strategy = make_inherited_block_strategy_array(df["inherited_block_strategy"])
 
     predictors = prepared["inputs"]
     pred_labels = prepared["predictor_labels"]
