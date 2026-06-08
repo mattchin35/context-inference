@@ -10,6 +10,13 @@ import pandas as pd
 DEFAULT_MOUSE_ROOT = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014")
 DEFAULT_OUTPUT_DIR = DEFAULT_MOUSE_ROOT / "cross_session_analysis"
 DEFAULT_DECODER_RUN_INDEX = 0
+REGION_NAME = "V1"
+DATE_SELECTION_START = "2025-12-16" #None
+DATE_SELECTION_END = "2025-12-23" #None
+DATE_SELECTION_INCLUDE = None
+DATE_SELECTION_LABEL = "12-16 to 12-23"
+DATE_SELECTION_FILENAME_TAG = "2025-12-16_to_2025-12-23"
+SUPPORTED_ANALYSIS_REGIONS = {"HPC", "V1", "PFC"}
 # Shared horizontal limits for all paired before/after plots. Change this tuple to
 # tune the left/right whitespace without hunting through individual plot functions.
 BEFORE_AFTER_XLIM = (-0.2, 1.2)
@@ -22,7 +29,107 @@ BASE_CONDITIONS = [
 ]
 
 
-def find_session_analysis_csvs(mouse_root: Path | str) -> pd.DataFrame:
+def normalize_region_name_for_filename(region_name: str) -> str:
+    """
+    Normalize a brain-region label for analysis filenames.
+
+    Parameters
+    ----------
+    region_name : str
+        Brain-region label. Supported values are ``"HPC"``, ``"V1"``, and
+        ``"PFC"``, case-insensitive.
+
+    Returns
+    -------
+    str
+        Canonical region label for filenames.
+    """
+
+    normalized_region = str(region_name).strip().upper()
+    if normalized_region not in SUPPORTED_ANALYSIS_REGIONS:
+        raise ValueError(
+            f"Unsupported region {region_name!r}. Expected one of {sorted(SUPPORTED_ANALYSIS_REGIONS)}."
+        )
+    return normalized_region
+
+
+def make_region_analysis_filename(region_name: str | None, base_filename: str) -> str:
+    """
+    Prefix an analysis filename with a region tag when one is supplied.
+
+    Parameters
+    ----------
+    region_name : str | None
+        Optional brain-region label. ``None`` preserves legacy filenames.
+    base_filename : str
+        Base analysis filename including extension.
+
+    Returns
+    -------
+    str
+        Legacy filename or region-prefixed filename.
+    """
+
+    if region_name is None:
+        return base_filename
+    return f"{normalize_region_name_for_filename(region_name)}_{base_filename}"
+
+
+def make_analysis_filename_tag(region_name: str | None, date_filename_tag: str | None) -> str | None:
+    """
+    Combine region and date selectors into one plot filename tag.
+
+    Parameters
+    ----------
+    region_name : str | None
+        Optional brain-region label.
+    date_filename_tag : str | None
+        Optional date-selection filename tag.
+
+    Returns
+    -------
+    str | None
+        Combined filename tag, or ``None`` when no tag components are supplied.
+    """
+
+    tag_parts: list[str] = []
+    if region_name is not None:
+        tag_parts.append(normalize_region_name_for_filename(region_name))
+    if date_filename_tag is not None:
+        tag_parts.append(str(date_filename_tag))
+    if not tag_parts:
+        return None
+    return "_".join(tag_parts)
+
+
+def make_analysis_title_suffix(region_name: str | None, date_label: str | None) -> str | None:
+    """
+    Combine region and date selectors into one plot-title suffix.
+
+    Parameters
+    ----------
+    region_name : str | None
+        Optional brain-region label.
+    date_label : str | None
+        Optional human-readable date-selection label.
+
+    Returns
+    -------
+    str | None
+        Combined title suffix, or ``None`` when no components are supplied.
+    """
+
+    suffix_parts: list[str] = []
+    if region_name is not None:
+        suffix_parts.append(normalize_region_name_for_filename(region_name))
+    if date_label is not None:
+        suffix_parts.append(str(date_label))
+    if not suffix_parts:
+        return None
+    return ", ".join(suffix_parts)
+
+
+def find_session_analysis_csvs(mouse_root: Path | str, region_name: str | None = None) -> pd.DataFrame:
     """
     Find per-session analysis CSVs under a mouse data directory.
 
@@ -32,6 +139,9 @@ def find_session_analysis_csvs(mouse_root: Path | str) -> pd.DataFrame:
         Root directory containing one or more session folders. Each session must have a
         ``processed`` directory with ``state_decodability_analysis.csv`` and
         ``correct_rewarded_decoding_performance.csv``.
+    region_name : str | None, optional
+        Optional region label. If supplied, discovers region-prefixed files such
+        as ``HPC_state_decodability_analysis.csv``.
 
     Returns
     -------
@@ -42,11 +152,16 @@ def find_session_analysis_csvs(mouse_root: Path | str) -> pd.DataFrame:
     """
 
     mouse_root = Path(mouse_root)
-    decodability_paths = sorted(mouse_root.rglob("state_decodability_analysis.csv"))
+    decodability_filename = make_region_analysis_filename(region_name, "state_decodability_analysis.csv")
+    decoder_performance_filename = make_region_analysis_filename(
+        region_name,
+        "correct_rewarded_decoding_performance.csv",
+    )
+    decodability_paths = sorted(mouse_root.rglob(decodability_filename))
     session_rows: list[dict[str, Path]] = []
     for decodability_path in decodability_paths:
         processed_dir = decodability_path.parent
-        decoder_performance_path = processed_dir / "correct_rewarded_decoding_performance.csv"
+        decoder_performance_path = processed_dir / decoder_performance_filename
         if not decoder_performance_path.exists():
             continue
         session_rows.append(
@@ -202,6 +317,7 @@ def save_cross_session_tables(
     output_dir: Path | str,
     decodability_df: pd.DataFrame,
     decoder_df: pd.DataFrame,
+    region_name: str | None = None,
 ) -> tuple[Path, Path]:
     """
     Save the cross-session decodability and decoder-performance CSVs.
@@ -214,6 +330,9 @@ def save_cross_session_tables(
         Cross-session state decodability table with one row per session and trial condition.
     decoder_df : pd.DataFrame
         Cross-session decoder-performance table with one row per session and trial condition.
+    region_name : str | None, optional
+        Optional region label used to namespace saved cross-session CSVs. ``None``
+        preserves legacy filenames.
 
     Returns
     -------
@@ -223,11 +342,281 @@ def save_cross_session_tables(
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    decodability_path = output_dir / "state_decodability_analysis_cross_session.csv"
-    decoder_path = output_dir / "correct_rewarded_state_decoding_performance_cross_session.csv"
+    decodability_path = output_dir / make_region_analysis_filename(
+        region_name,
+        "state_decodability_analysis_cross_session.csv",
+    )
+    decoder_path = output_dir / make_region_analysis_filename(
+        region_name,
+        "correct_rewarded_state_decoding_performance_cross_session.csv",
+    )
     decodability_df.to_csv(decodability_path, index=False)
     decoder_df.to_csv(decoder_path, index=False)
     return decodability_path, decoder_path
+
+
+def _parse_date_series(date_values: pd.Series, table_name: str) -> pd.Series:
+    """
+    Parse one table's date column using the project date convention.
+
+    Parameters
+    ----------
+    date_values : pd.Series
+        One-dimensional date values with shape ``(n_rows,)``. Dates are expected
+        in ``YYYY-MM-DD`` format.
+    table_name : str
+        Human-readable table name used in error messages.
+
+    Returns
+    -------
+    pd.Series
+        Datetime values with shape ``(n_rows,)`` aligned to ``date_values``.
+    """
+
+    try:
+        return pd.to_datetime(date_values, format="%Y-%m-%d", errors="raise")
+    except ValueError as error:
+        raise ValueError(f"{table_name} contains dates that are not in YYYY-MM-DD format.") from error
+
+
+def _parse_optional_date(date_value: str | None, field_name: str) -> pd.Timestamp | None:
+    """
+    Parse an optional date-selection boundary.
+
+    Parameters
+    ----------
+    date_value : str | None
+        Date string in ``YYYY-MM-DD`` format, or ``None``.
+    field_name : str
+        Human-readable field name used in error messages.
+
+    Returns
+    -------
+    pd.Timestamp | None
+        Parsed date boundary, or ``None`` when no boundary was supplied.
+    """
+
+    if date_value is None:
+        return None
+    try:
+        return pd.to_datetime(date_value, format="%Y-%m-%d", errors="raise")
+    except ValueError as error:
+        raise ValueError(f"{field_name} must be in YYYY-MM-DD format.") from error
+
+
+def _normalize_include_dates(include_dates: list[str] | tuple[str, ...] | None) -> list[str] | None:
+    """
+    Normalize an optional explicit date list while preserving user order.
+
+    Parameters
+    ----------
+    include_dates : list[str] | tuple[str, ...] | None
+        Dates to include, each in ``YYYY-MM-DD`` format.
+
+    Returns
+    -------
+    list[str] | None
+        Unique date strings in supplied order, or ``None`` if no explicit list
+        was supplied.
+    """
+
+    if include_dates is None:
+        return None
+    normalized_dates = list(dict.fromkeys(str(date_value) for date_value in include_dates))
+    for date_value in normalized_dates:
+        _parse_optional_date(date_value, "include_dates")
+    return normalized_dates
+
+
+def filter_table_by_date_selection(
+    table_df: pd.DataFrame,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_dates: list[str] | tuple[str, ...] | None = None,
+    table_name: str = "table",
+) -> pd.DataFrame:
+    """
+    Filter one cross-session table by date.
+
+    Parameters
+    ----------
+    table_df : pd.DataFrame
+        Cross-session table with shape ``(n_rows, n_columns)`` and a ``date``
+        column using ``YYYY-MM-DD`` strings.
+    start_date : str | None, optional
+        Inclusive lower date boundary in ``YYYY-MM-DD`` format.
+    end_date : str | None, optional
+        Inclusive upper date boundary in ``YYYY-MM-DD`` format.
+    include_dates : list[str] | tuple[str, ...] | None, optional
+        Explicit dates to include. When combined with boundaries, rows must pass
+        both selectors.
+    table_name : str, optional
+        Human-readable table name used in error messages.
+
+    Returns
+    -------
+    pd.DataFrame
+        Filtered copy of ``table_df`` with the original columns and row order.
+    """
+
+    if "date" not in table_df.columns:
+        raise ValueError(f"{table_name} is missing required 'date' column.")
+
+    parsed_dates = _parse_date_series(table_df["date"], table_name=table_name)
+    start_timestamp = _parse_optional_date(start_date, "start_date")
+    end_timestamp = _parse_optional_date(end_date, "end_date")
+    if start_timestamp is not None and end_timestamp is not None and start_timestamp > end_timestamp:
+        raise ValueError("start_date must be earlier than or equal to end_date.")
+
+    selection_mask = pd.Series(True, index=table_df.index)
+    if start_timestamp is not None:
+        selection_mask = selection_mask & (parsed_dates >= start_timestamp)
+    if end_timestamp is not None:
+        selection_mask = selection_mask & (parsed_dates <= end_timestamp)
+
+    normalized_include_dates = _normalize_include_dates(include_dates)
+    if normalized_include_dates is not None:
+        selection_mask = selection_mask & table_df["date"].astype(str).isin(normalized_include_dates)
+
+    filtered = table_df.loc[selection_mask].copy()
+    if filtered.empty:
+        raise ValueError(f"Date selection left no rows in {table_name}.")
+    return filtered
+
+
+def select_cross_session_date_range(
+    decodability_df: pd.DataFrame,
+    decoder_df: pd.DataFrame,
+    decoder_all_runs_df: pd.DataFrame,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_dates: list[str] | tuple[str, ...] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Apply one date selection to all cross-session plotting tables.
+
+    Parameters
+    ----------
+    decodability_df : pd.DataFrame
+        Cross-session decodability table with one row per session and condition.
+    decoder_df : pd.DataFrame
+        Cross-session decoder table for the selected decoder run.
+    decoder_all_runs_df : pd.DataFrame
+        Cross-session decoder table containing all decoder runs.
+    start_date : str | None, optional
+        Inclusive lower date boundary in ``YYYY-MM-DD`` format.
+    end_date : str | None, optional
+        Inclusive upper date boundary in ``YYYY-MM-DD`` format.
+    include_dates : list[str] | tuple[str, ...] | None, optional
+        Explicit dates to include. Requested dates must be present in the loaded
+        decodability table.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]
+        ``(filtered_decodability_df, filtered_decoder_df,
+        filtered_decoder_all_runs_df, selected_dates_df)``. The summary table has
+        one row per selected date and assumes one session per date.
+    """
+
+    normalized_include_dates = _normalize_include_dates(include_dates)
+    if normalized_include_dates is not None:
+        available_dates = set(decodability_df["date"].astype(str)) if "date" in decodability_df.columns else set()
+        missing_dates = [date_value for date_value in normalized_include_dates if date_value not in available_dates]
+        if missing_dates:
+            raise ValueError(f"Requested dates are not available: {missing_dates}")
+
+    filtered_decodability = filter_table_by_date_selection(
+        decodability_df,
+        start_date=start_date,
+        end_date=end_date,
+        include_dates=normalized_include_dates,
+        table_name="decodability_df",
+    )
+    filtered_decoder = filter_table_by_date_selection(
+        decoder_df,
+        start_date=start_date,
+        end_date=end_date,
+        include_dates=normalized_include_dates,
+        table_name="decoder_df",
+    )
+    filtered_decoder_all_runs = filter_table_by_date_selection(
+        decoder_all_runs_df,
+        start_date=start_date,
+        end_date=end_date,
+        include_dates=normalized_include_dates,
+        table_name="decoder_all_runs_df",
+    )
+
+    summary_rows: list[dict[str, object]] = []
+    selected_dates = sorted(filtered_decodability["date"].astype(str).unique().tolist())
+    for date_value in selected_dates:
+        date_decodability = filtered_decodability.loc[filtered_decodability["date"].astype(str) == date_value]
+        date_decoder = filtered_decoder.loc[filtered_decoder["date"].astype(str) == date_value]
+        date_decoder_all_runs = filtered_decoder_all_runs.loc[
+            filtered_decoder_all_runs["date"].astype(str) == date_value
+        ]
+        sessions = sorted(date_decodability["session"].astype(str).unique().tolist())
+        if len(sessions) != 1:
+            raise ValueError(f"Date {date_value} maps to multiple sessions: {sessions}")
+        summary_rows.append(
+            {
+                "date": date_value,
+                "session": sessions[0],
+                "n_decodability_rows": int(date_decodability.shape[0]),
+                "n_decoder_rows": int(date_decoder.shape[0]),
+                "n_decoder_all_run_rows": int(date_decoder_all_runs.shape[0]),
+            }
+        )
+
+    selected_dates_df = pd.DataFrame(summary_rows)
+    return filtered_decodability, filtered_decoder, filtered_decoder_all_runs, selected_dates_df
+
+
+def append_plot_title_suffix(axis: plt.Axes, title_suffix: str | None) -> None:
+    """
+    Append a date-selection label to an existing plot title.
+
+    Parameters
+    ----------
+    axis : plt.Axes
+        Matplotlib axis whose title should be updated.
+    title_suffix : str | None
+        Optional text appended on a new title line.
+
+    Returns
+    -------
+    None
+        The axis title is modified in place when ``title_suffix`` is supplied.
+    """
+
+    if title_suffix is None:
+        return
+    axis.set_title(f"{axis.get_title()}\n{title_suffix}")
+
+
+def make_output_filename(base_name: str, filename_tag: str | None) -> str:
+    """
+    Build a PNG filename with an optional date-selection tag.
+
+    Parameters
+    ----------
+    base_name : str
+        Filename stem without extension.
+    filename_tag : str | None
+        Optional suffix appended before ``.png``.
+
+    Returns
+    -------
+    str
+        PNG filename.
+    """
+
+    if filename_tag is None:
+        return f"{base_name}.png"
+    return f"{base_name}_{filename_tag}.png"
 
 
 def _format_condition_label(trial_condition: str) -> str:
@@ -634,7 +1023,7 @@ def main() -> None:
     CV score, CV p-value, and decoder accuracy using ``DEFAULT_DECODER_RUN_INDEX``.
     """
 
-    session_csvs = find_session_analysis_csvs(DEFAULT_MOUSE_ROOT)
+    session_csvs = find_session_analysis_csvs(DEFAULT_MOUSE_ROOT, region_name=REGION_NAME)
     if session_csvs.empty:
         raise FileNotFoundError(f"No per-session analysis CSVs found under {DEFAULT_MOUSE_ROOT}")
 
@@ -649,70 +1038,107 @@ def main() -> None:
         session_csvs["decoder_performance_csv_path"].tolist(),
         decoder_run_index=None,
     )
+    decodability_df, decoder_df, decoder_all_runs_df, selected_dates_df = select_cross_session_date_range(
+        decodability_df,
+        decoder_df,
+        decoder_all_runs_df,
+        start_date=DATE_SELECTION_START,
+        end_date=DATE_SELECTION_END,
+        include_dates=DATE_SELECTION_INCLUDE,
+    )
     decodability_csv_path, decoder_csv_path = save_cross_session_tables(
         DEFAULT_OUTPUT_DIR,
         decodability_df,
         decoder_df,
+        region_name=REGION_NAME,
     )
+    selected_dates_csv_path = DEFAULT_OUTPUT_DIR / make_region_analysis_filename(
+        REGION_NAME,
+        "selected_cross_session_dates.csv",
+    )
+    selected_dates_df.to_csv(selected_dates_csv_path, index=False)
+    plot_filename_tag = make_analysis_filename_tag(REGION_NAME, DATE_SELECTION_FILENAME_TAG)
+    plot_title_suffix = make_analysis_title_suffix(REGION_NAME, DATE_SELECTION_LABEL)
 
     for trial_condition in BASE_CONDITIONS:
-        score_figure, _ = plot_cross_session_decodability_scores(
+        score_figure, score_axis = plot_cross_session_decodability_scores(
             decodability_df,
             trial_condition=trial_condition,
             show=False,
         )
+        append_plot_title_suffix(score_axis, plot_title_suffix)
         score_figure.savefig(
-            DEFAULT_OUTPUT_DIR / f"cv_decoder_summary_{trial_condition}.png",
+            DEFAULT_OUTPUT_DIR / make_output_filename(
+                f"cv_decoder_summary_{trial_condition}",
+                plot_filename_tag,
+            ),
             dpi=300,
         )
         plt.close(score_figure)
 
-        pvalue_figure, _ = plot_cross_session_decodability_pvalues(
+        pvalue_figure, pvalue_axis = plot_cross_session_decodability_pvalues(
             decodability_df,
             trial_condition=trial_condition,
             show=False,
         )
+        append_plot_title_suffix(pvalue_axis, plot_title_suffix)
         pvalue_figure.savefig(
-            DEFAULT_OUTPUT_DIR / f"cv_decoder_pvalue_{trial_condition}.png",
+            DEFAULT_OUTPUT_DIR / make_output_filename(
+                f"cv_decoder_pvalue_{trial_condition}",
+                plot_filename_tag,
+            ),
             dpi=300,
         )
         plt.close(pvalue_figure)
 
-        decoder_figure, _ = plot_cross_session_decoder_accuracy(
+        decoder_figure, decoder_axis = plot_cross_session_decoder_accuracy(
             decoder_df,
             trial_condition=trial_condition,
             show=False,
         )
+        append_plot_title_suffix(decoder_axis, plot_title_suffix)
         decoder_figure.savefig(
-            DEFAULT_OUTPUT_DIR / f"shuffle_decoder_summary_{trial_condition}.png",
+            DEFAULT_OUTPUT_DIR / make_output_filename(
+                f"shuffle_decoder_summary_{trial_condition}",
+                plot_filename_tag,
+            ),
             dpi=300,
         )
         plt.close(decoder_figure)
 
-        decoder_superplot_figure, _ = plot_cross_session_decoder_superplot(
+        decoder_superplot_figure, decoder_superplot_axis = plot_cross_session_decoder_superplot(
             decoder_all_runs_df,
             trial_condition=trial_condition,
             show=False,
         )
+        append_plot_title_suffix(decoder_superplot_axis, plot_title_suffix)
         decoder_superplot_figure.savefig(
-            DEFAULT_OUTPUT_DIR / f"shuffle_decoder_superplot_{trial_condition}.png",
+            DEFAULT_OUTPUT_DIR / make_output_filename(
+                f"shuffle_decoder_superplot_{trial_condition}",
+                plot_filename_tag,
+            ),
             dpi=300,
         )
         plt.close(decoder_superplot_figure)
 
-        decoder_session_mean_figure, _ = plot_cross_session_decoder_session_means(
+        decoder_session_mean_figure, decoder_session_mean_axis = plot_cross_session_decoder_session_means(
             decoder_all_runs_df,
             trial_condition=trial_condition,
             show=False,
         )
+        append_plot_title_suffix(decoder_session_mean_axis, plot_title_suffix)
         decoder_session_mean_figure.savefig(
-            DEFAULT_OUTPUT_DIR / f"shuffle_decoder_session_mean_{trial_condition}.png",
+            DEFAULT_OUTPUT_DIR / make_output_filename(
+                f"shuffle_decoder_session_mean_{trial_condition}",
+                plot_filename_tag,
+            ),
             dpi=300,
         )
         plt.close(decoder_session_mean_figure)
 
     print(f"Saved cross-session decodability CSV: {decodability_csv_path}")
     print(f"Saved cross-session decoder CSV: {decoder_csv_path}")
+    print(f"Saved selected cross-session dates CSV: {selected_dates_csv_path}")
 
 
 if __name__ == "__main__":

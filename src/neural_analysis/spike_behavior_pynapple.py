@@ -15,8 +15,58 @@ import pynapple as nap
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import permutation_test_score, train_test_split
+from src.behavior_analysis.project_utils import (
+    EXPERIMENTER_REWARD_GIVEN_COLUMN,
+    normalize_experimenter_reward_column,
+)
 
-import src.external_tools.get_brain_channels as get_brain_channels
+
+SUPPORTED_ANALYSIS_REGIONS = {"HPC", "V1", "PFC"}
+
+
+def normalize_region_name_for_filename(region_name: str) -> str:
+    """
+    Normalize a brain-region label for analysis filenames.
+
+    Parameters
+    ----------
+    region_name : str
+        Brain-region label. Supported values are ``"HPC"``, ``"V1"``, and
+        ``"PFC"``, case-insensitive.
+
+    Returns
+    -------
+    str
+        Canonical region label for filenames.
+    """
+
+    normalized_region = str(region_name).strip().upper()
+    if normalized_region not in SUPPORTED_ANALYSIS_REGIONS:
+        raise ValueError(
+            f"Unsupported region {region_name!r}. Expected one of {sorted(SUPPORTED_ANALYSIS_REGIONS)}."
+        )
+    return normalized_region
+
+
+def make_region_analysis_filename(region_name: str, base_filename: str) -> str:
+    """
+    Prefix an analysis filename with a canonical brain-region label.
+
+    Parameters
+    ----------
+    region_name : str
+        Brain-region label used to namespace per-session outputs.
+    base_filename : str
+        Base analysis filename including extension.
+
+    Returns
+    -------
+    str
+        Region-prefixed filename, e.g. ``"HPC_state_decodability_analysis.csv"``.
+    """
+
+    return f"{normalize_region_name_for_filename(region_name)}_{base_filename}"
+
 
 @dataclass
 class Session:
@@ -498,7 +548,7 @@ def normalize_region_channels(region_channels: np.ndarray | list[int]) -> np.nda
     return normalized_channels
 
 
-def select_units_by_channels(cluster_info: pd.DataFrame, region_channels: np.ndarray | list[int]) -> np.ndarray:
+def select_units_by_channels(cluster_info: pd.DataFrame, region_channels: np.ndarray | list[int], default_group='mua') -> np.ndarray:
     """
     Select cluster ids assigned to a user-provided set of channels.
 
@@ -527,6 +577,8 @@ def select_units_by_channels(cluster_info: pd.DataFrame, region_channels: np.nda
 
     normalized_channels = normalize_region_channels(region_channels)
     normalized_groups = cluster_info["group"].astype(str).str.strip().str.lower()
+    nan_mask = normalized_groups == 'nan'
+    normalized_groups[nan_mask] = default_group
     selected_mask = cluster_info["ch"].isin(normalized_channels) & normalized_groups.isin({"good", "mua"})
     return cluster_info.loc[selected_mask, "cluster_id"].to_numpy(dtype=int)
 
@@ -846,10 +898,12 @@ def make_trial_type_masks(trial_df: pd.DataFrame) -> dict[str, pd.Series]:
     Parameters
     ----------
     trial_df : pd.DataFrame
-        Trial table with one row per trial. Required columns are ``give_reward``, ``correct``,
-        ``reward``, and ``action``. ``give_reward`` is an experimenter-override flag where
-        nonzero values mark trials invalid for neural analysis. ``correct`` and ``reward``
-        are scalar trial outcomes with no unit conversion. ``action`` is a scalar choice label.
+        Trial table with one row per trial. Required columns are
+        ``experimenter_reward_given``, ``correct``, ``reward``, and ``action``.
+        Legacy ``give_reward`` columns are accepted and normalized at this
+        boundary. Nonzero experimenter-reward values mark trials invalid for
+        neural analysis. ``correct`` and ``reward`` are scalar trial outcomes
+        with no unit conversion. ``action`` is a scalar choice label.
 
     Returns
     -------
@@ -868,19 +922,20 @@ def make_trial_type_masks(trial_df: pd.DataFrame) -> dict[str, pd.Series]:
         ``incorrect_stay``.
     """
 
-    required_columns = {"give_reward", "correct", "reward", "action"}
+    trial_df = normalize_experimenter_reward_column(trial_df)
+    required_columns = {EXPERIMENTER_REWARD_GIVEN_COLUMN, "correct", "reward", "action"}
     missing_columns = required_columns - set(trial_df.columns)
     if missing_columns:
         raise ValueError(f"trial_df is missing required columns: {sorted(missing_columns)}")
 
-    valid = trial_df["give_reward"].eq(0)
+    valid = trial_df[EXPERIMENTER_REWARD_GIVEN_COLUMN].eq(0)
     correct_rewarded = valid & trial_df["correct"].eq(1) & trial_df["reward"].eq(1)
     incorrect = valid & trial_df["correct"].eq(0) & trial_df["action"].notna()
     omission = valid & trial_df["correct"].eq(1) & trial_df["reward"].eq(0)
 
     current_unrewarded = valid & trial_df["reward"].eq(0)
     current_action_valid = trial_df["action"].notna()
-    next_valid = trial_df["give_reward"].shift(-1).eq(0).fillna(False)
+    next_valid = trial_df[EXPERIMENTER_REWARD_GIVEN_COLUMN].shift(-1).eq(0).fillna(False)
     next_action = trial_df["action"].shift(-1)
     next_action_valid = next_action.notna()
     comparable_next_trial = current_unrewarded & current_action_valid & next_valid & next_action_valid
@@ -1833,9 +1888,10 @@ def build_state_decodability_session_table(
 def save_state_decodability_session_csv(
     output_dir: Path | str,
     state_decodability_table: pd.DataFrame,
+    region_name: str,
 ) -> Path:
     """
-    Save the per-session state decodeability table to ``state_decodability_analysis.csv``.
+    Save the per-session state decodeability table to a region-specific CSV.
 
     Parameters
     ----------
@@ -1843,6 +1899,8 @@ def save_state_decodability_session_csv(
         Directory where the CSV should be written.
     state_decodability_table : pd.DataFrame
         Wide per-session state decodeability table with one row per condition.
+    region_name : str
+        Brain-region label used to namespace the saved CSV filename.
 
     Returns
     -------
@@ -1852,7 +1910,7 @@ def save_state_decodability_session_csv(
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    csv_path = output_path / "state_decodability_analysis.csv"
+    csv_path = output_path / make_region_analysis_filename(region_name, "state_decodability_analysis.csv")
     state_decodability_table.to_csv(csv_path, index=False)
     return csv_path
 
@@ -1959,9 +2017,10 @@ def build_correct_rewarded_decoding_performance_session_table(
 def save_correct_rewarded_decoding_performance_session_csv(
     output_dir: Path | str,
     decoding_performance_table: pd.DataFrame,
+    region_name: str,
 ) -> Path:
     """
-    Save the repeated decoder-performance table to ``correct_rewarded_decoding_performance.csv``.
+    Save the repeated decoder-performance table to a region-specific CSV.
 
     Parameters
     ----------
@@ -1969,6 +2028,8 @@ def save_correct_rewarded_decoding_performance_session_csv(
         Directory where the CSV should be written.
     decoding_performance_table : pd.DataFrame
         Wide per-session decoder-performance table with one row per decoder run.
+    region_name : str
+        Brain-region label used to namespace the saved CSV filename.
 
     Returns
     -------
@@ -1978,7 +2039,7 @@ def save_correct_rewarded_decoding_performance_session_csv(
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    csv_path = output_path / "correct_rewarded_decoding_performance.csv"
+    csv_path = output_path / make_region_analysis_filename(region_name, "correct_rewarded_decoding_performance.csv")
     decoding_performance_table.to_csv(csv_path, index=False)
     return csv_path
 
@@ -1989,15 +2050,14 @@ def main() -> None:
 
     The script loads processed behavior tables, loads aligned spike times plus sorter cluster
     metadata for the current example HPC probe, builds a Pynapple spike group, bins
-    region-selected spikes by trial, and
-    prints a short summary. Times are handled in seconds throughout.
+    region-selected spikes by trial, and prints a short summary. Times are handled in seconds throughout.
     """
 
     multi_session_save_path = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis")
-    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251216_latentInference")
-    sess_id_full = "CT014_2025-12-16_153200"
-    pfc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/Kilosort2.5.2_2026-03-18_115111"
-    hpc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/Kilosort2.5.2_2026-04-01_201033"
+    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251223_latentInference")
+    sess_id_full = "CT014_2025-12-23_163505"
+    pfc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/Kilosort2.5.2_2026-03-19_180103/sorting_mchin_20260330"
+    hpc_spike_path = session_data_home / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/Kilosort2.5.2_2026-03-19_183540/sorting_mchin_20260331"
 
     raw_behavior_folder = session_data_home / "rpi" / sess_id_full
     processed_data_path = session_data_home / "processed"
@@ -2012,12 +2072,11 @@ def main() -> None:
     if not hpc_spike_path.exists():
         raise FileNotFoundError(f"HPC sorter output not found at {hpc_spike_path}")
     assert probe_json_path.exists(), f"Probe JSON file not found at {probe_json_path}"
-    assert aligned_pfc_spike_path.exists(), f"Aligned PFC spike file not found at {aligned_hpc_spike_path}"
+    assert aligned_pfc_spike_path.exists(), f"Aligned PFC spike file not found at {aligned_pfc_spike_path}"
     assert aligned_hpc_spike_path.exists(), f"Aligned HPC spike file not found at {aligned_hpc_spike_path}"
 
-    decode_target = "state_int"  # state_int or action
+    decode_target = "action"  # state_int or action
     n_decoder_runs = 5
-    region_name = "HPC"
     # print(", ".join(map(str, "your_array")))
     hpc_channels_shank0 = np.array([
         4, 3, 2, 1, 192, 191, 190, 189, 188, 187, 186, 185, 184, 183, 182, 181,
@@ -2041,7 +2100,6 @@ def main() -> None:
     ])
     hpc_channels = np.concatenate([hpc_channels_shank0, hpc_channels_shank3])
 
-    # region_name = "V1"
     v1_channels_shank0 = np.array([
         138, 137, 136, 135, 134, 133, 132, 131, 130, 129, 128, 127, 126, 125,
         124, 123, 122, 121, 120, 119, 118, 117, 116, 115, 114, 113, 112, 111,
@@ -2060,7 +2118,24 @@ def main() -> None:
     ])
     v1_channels = np.concatenate([v1_channels_shank0, v1_channels_shank3])
 
-    region_channels = normalize_region_channels(hpc_channels)
+    _pfc_channels = ("55  54  53  52  51  50  49  48 383 382 381 380 379 378 377 376 375 374 "
+                    "373 372 371 370 369 368 367 366 365 364 363 362 361 360 359 358 357 356 "
+                    "355 354 353 352 351 350 349 348 347 346 345 344 343 342 341 340 339 338 "
+                    "337 336 287 286 285 284 283 282 281 280 279 278 277 276 275 274 273 272 "
+                    "271 270 269 268 267 266 265 264 263 262 261 260 259 258 257 256 255 254 "
+                    "253 252 251 250 249 248 247 246 245 244 243 242 241 240 335 334 333 332 "
+                    "331 330 329 328 327 326 325 324 323 322 321 320 319 318 317 316 315 314 "
+                    "313 312 311 310 309 308 307 306 305 304 303 302 301 300 299 298 297 296 "
+                    "295 294 293 292 291 290 289 288 239 238 237 236 235 234 233 232 231 230 "
+                    "229 228 227 226 225 224 223 222 221 220 219 218 217 216 215 214 213 212 "
+                    "211 210 209 208 207 206 205 204 203 202 201 200 199 198 197 196 195 194 "
+                    "193 192 143 142 141 140 139 138 137 136 135 134 133 132 131 130 129 128 "
+                    "127 126 125 124 123 122 121 120 119 118 117 116 115 114 113 112 111 110 "
+                    "109 108 107 106 105 104 103 102 101 100  99  98  97  96  47  46  45  44 "
+                    "43  42  41  40  39  38  37  36  35  34  33  32  31  30  29  28  27  26 "
+                    "25  24  23  22  21  20  19  18  17  16  15  14  13  12  11  10 9  8 "
+                    "7   6   5   4   3   2   1   0")
+    pfc_channels = np.sort(np.array(list(map(int, [val for val in _pfc_channels.split(" ") if val != '']))))
 
     mouse, date, timestamp = parse_session_id(sess_id_full)
     session_info_path = raw_behavior_folder / f"{sess_id_full}_session_info.pkl"
@@ -2077,15 +2152,36 @@ def main() -> None:
         date=date,
         timestamp=timestamp,
         session_info_path=session_info_path,
-        session_info=load_session_info(session_info_path) if session_info_path.exists() else None,
+        session_info=load_session_info(session_info_path)
+        if session_info_path.exists()
+        else None,
         pfc_spike_path=pfc_spike_path,
         hpc_spike_path=hpc_spike_path,
     )
 
+    region_name = "PFC"
+    if region_name in SUPPORTED_ANALYSIS_REGIONS:
+        if region_name == "HPC":
+            region_channels = normalize_region_channels(hpc_channels)
+            sorter_output_path = session.hpc_spike_path
+            spike_path = aligned_hpc_spike_path
+        elif region_name == "V1":
+            region_channels = normalize_region_channels(v1_channels)
+            sorter_output_path = session.hpc_spike_path
+            spike_path = aligned_hpc_spike_path
+        elif region_name == "PFC":
+            region_channels = normalize_region_channels(pfc_channels)
+            sorter_output_path = session.pfc_spike_path
+            spike_path = aligned_pfc_spike_path
+    else:
+        exit("Region not supported")
+
     event_df, trial_df = load_session_tables(session)
     lick_times = build_lick_time_dict(event_df)
-    aligned_spike_times = load_aligned_spikes(aligned_hpc_spike_path)
-    spike_clusters, cluster_info = load_sorter_metadata(sorter_output_path=session.hpc_spike_path)
+    aligned_spike_times = load_aligned_spikes(spike_path)
+    spike_clusters, cluster_info = load_sorter_metadata(
+        sorter_output_path=sorter_output_path,
+    )
     validate_aligned_spike_inputs(
         aligned_spike_times=aligned_spike_times,
         spike_clusters=spike_clusters,
@@ -2166,6 +2262,7 @@ def main() -> None:
         repeated_decoding_csv_path = save_correct_rewarded_decoding_performance_session_csv(
             output_dir=session.processed_data_path,
             decoding_performance_table=repeated_decoding_table,
+            region_name=region_name,
         )
     state_decodability_csv_path: Path | None = processed_data_path
     if decode_target == "state_int":
@@ -2177,6 +2274,7 @@ def main() -> None:
         state_decodability_csv_path = save_state_decodability_session_csv(
             output_dir=session.processed_data_path,
             state_decodability_table=state_decodability_table,
+            region_name=region_name,
         )
 
     first_trial_end = resolve_trial_end(trial_df.iloc[0])

@@ -14,6 +14,9 @@ except ImportError:  # pragma: no cover - autograd is expected in this project.
 
 MISSING_VALUE = "None"
 MISSING_STRINGS = {MISSING_VALUE, "", "nan", "NaN"}
+LEGACY_GIVE_REWARD_COLUMN = "give_reward"
+EXPERIMENTER_REWARD_GIVEN_COLUMN = "experimenter_reward_given"
+NO_CHOICE_ACTION_LABELS = {"none", "no_choice", ""}
 
 
 @contextmanager
@@ -152,3 +155,107 @@ def is_zero_flag(values) -> pd.Series:
     zero_mask = pd.Series(False, index=value_series.index)
     zero_mask.loc[numeric_values.index] = numeric_values.eq(0)
     return zero_mask
+
+
+def make_no_choice_action_mask(actions) -> pd.Series:
+    """Return actions that explicitly mark no animal choice.
+
+    Parameters
+    ----------
+    actions : scalar, sequence, or pd.Series
+        Trial action labels. Sequence and Series inputs have shape
+        `(n_trials,)`; scalar inputs are treated as shape `(1,)`.
+
+    Returns
+    -------
+    pd.Series
+        Boolean Series with shape `(n_trials,)`. True marks old or new
+        no-choice sentinels, including real missing values, string `"None"`,
+        and string `"no_choice"`.
+    """
+    action_series = _as_series(actions)
+    text_actions = action_series.astype(str).str.strip().str.lower()
+    return action_series.isna() | text_actions.isin(NO_CHOICE_ACTION_LABELS)
+
+
+def normalize_experimenter_reward_column(trial_df: pd.DataFrame) -> pd.DataFrame:
+    """Return a trial table using the explicit experimenter-reward flag name.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. It may contain
+        old `give_reward`, new `experimenter_reward_given`, both, or neither.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `trial_df` with at most one experimenter-reward flag column. Old
+        `give_reward` is renamed to `experimenter_reward_given`; matching
+        duplicate aliases keep only the new name.
+    """
+    has_legacy = LEGACY_GIVE_REWARD_COLUMN in trial_df.columns
+    has_new = EXPERIMENTER_REWARD_GIVEN_COLUMN in trial_df.columns
+
+    if not has_legacy and not has_new:
+        return trial_df.copy()
+
+    normalized = trial_df.copy()
+    if has_legacy and not has_new:
+        return normalized.rename(
+            columns={LEGACY_GIVE_REWARD_COLUMN: EXPERIMENTER_REWARD_GIVEN_COLUMN}
+        )
+
+    if has_legacy and has_new:
+        legacy_flags = _canonical_experimenter_reward_flags(normalized[LEGACY_GIVE_REWARD_COLUMN])
+        new_flags = _canonical_experimenter_reward_flags(normalized[EXPERIMENTER_REWARD_GIVEN_COLUMN])
+        if not legacy_flags.equals(new_flags):
+            raise ValueError(
+                "Trial dataframe has conflicting 'give_reward' and "
+                "'experimenter_reward_given' columns."
+            )
+        normalized = normalized.drop(columns=[LEGACY_GIVE_REWARD_COLUMN])
+
+    return normalized
+
+
+def get_experimenter_reward_flags(
+    trial_df: pd.DataFrame,
+    default_zero: bool = True,
+) -> np.ndarray:
+    """Return experimenter-reward flags from a normalized or legacy trial table.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`.
+    default_zero : bool, default=True
+        If True, missing experimenter-reward columns are treated as all-zero,
+        which supports simulated runs with no manual rewards.
+
+    Returns
+    -------
+    np.ndarray
+        One-dimensional array with shape `(n_trials,)`.
+    """
+    normalized = normalize_experimenter_reward_column(trial_df)
+    if EXPERIMENTER_REWARD_GIVEN_COLUMN not in normalized.columns:
+        if default_zero:
+            return np.zeros(normalized.shape[0], dtype=int)
+        raise ValueError(
+            "trial_df must contain 'experimenter_reward_given' or legacy 'give_reward'."
+        )
+    return np.copy(normalized[EXPERIMENTER_REWARD_GIVEN_COLUMN].to_numpy())
+
+
+def _canonical_experimenter_reward_flags(values: pd.Series) -> pd.Series:
+    """Normalize reward-flag aliases to comparable string values."""
+    value_series = _as_series(values)
+    canonical = pd.Series("missing", index=value_series.index, dtype=object)
+    present_mask = is_present_value(value_series)
+    present_values = value_series.loc[present_mask]
+
+    zero_mask = is_zero_flag(present_values)
+    canonical.loc[present_values.index[zero_mask.to_numpy()]] = "0"
+    canonical.loc[present_values.index[~zero_mask.to_numpy()]] = "1"
+    return canonical

@@ -4,8 +4,16 @@ import numpy as np
 import re
 import warnings
 from collections import defaultdict
+from src.behavior_analysis import general_behavior_assessment
+from src.behavior_analysis import ideal_observer
 import src.behavior_analysis.decision_variable_counters as counters
-from src.behavior_analysis.project_utils import is_present_value
+from src.behavior_analysis.project_utils import (
+    get_experimenter_reward_flags,
+    is_present_value,
+    is_zero_flag,
+    make_no_choice_action_mask,
+    normalize_experimenter_reward_column,
+)
 from formulaic import model_matrix
 import statsmodels.api as sm
 from dataclasses import dataclass
@@ -45,6 +53,8 @@ class DecisionVariableState:
     right_value_cf: int = 0
     left_omissions_cf: int = 0
     right_omissions_cf: int = 0
+    left_monotonic_cf_value: int = 0
+    right_monotonic_cf_value: int = 0
 
 
 def _get_normalized_state_labels(trial_df: pd.DataFrame) -> np.ndarray:
@@ -100,13 +110,13 @@ def _get_uncued_block_mask(trial_df: pd.DataFrame) -> np.ndarray:
     )
 
 
-def _get_give_reward_array(trial_df: pd.DataFrame) -> np.ndarray:
-    """Return experimenter-given reward flags, defaulting missing values to zero.
+def _get_experimenter_reward_given_array(trial_df: pd.DataFrame) -> np.ndarray:
+    """Return experimenter-reward flags, defaulting missing values to zero.
 
     Parameters
     ----------
     trial_df : pd.DataFrame
-        Trial table that may or may not contain a `give_reward` column.
+        Trial table that may or may not contain an experimenter-reward column.
 
     Returns
     -------
@@ -114,18 +124,20 @@ def _get_give_reward_array(trial_df: pd.DataFrame) -> np.ndarray:
         Array of shape `(n_trials,)`. Missing columns are treated as zeros,
         which is the correct behavior for simulated runs.
     """
-    if "give_reward" not in trial_df.columns:
-        return np.zeros(trial_df.shape[0], dtype=int)
-    return np.copy(trial_df["give_reward"].to_numpy())
+    return get_experimenter_reward_flags(trial_df, default_zero=True)
 
 
 def _get_choice_latency(trial_df: pd.DataFrame) -> np.ndarray:
     """Return trialwise choice latencies or NaN when timing columns are absent."""
     if {"choice_time", "start_time"}.issubset(trial_df.columns):
-        return (
-            trial_df["choice_time"].to_numpy(dtype=float)
-            - trial_df["start_time"].to_numpy(dtype=float)
-        )
+        choice_latency = np.full(trial_df.shape[0], np.nan, dtype=float)
+        present_choice_time = is_present_value(trial_df["choice_time"])
+        if present_choice_time.any():
+            choice_latency[present_choice_time.to_numpy()] = (
+                trial_df.loc[present_choice_time, "choice_time"].astype(float).to_numpy()
+                - trial_df.loc[present_choice_time, "start_time"].astype(float).to_numpy()
+            )
+        return choice_latency
     return np.full(trial_df.shape[0], np.nan, dtype=float)
 
 
@@ -167,10 +179,11 @@ def percent_correct(augmented_trial_df: pd.DataFrame) -> dict:
     assert 'block_type' in augmented_trial_df.keys(), "'block_type' key was not found in dataframe."
     assert 'correct' in augmented_trial_df.keys(), "'correct' key was not found in dataframe."
 
-    left_cued_ix = augmented_trial_df['block_type'] == 'left_cued'
-    left_uncued_ix = augmented_trial_df['block_type'] == 'left_uncued'
-    right_cued_ix = augmented_trial_df['block_type'] == 'right_cued'
-    right_uncued_ix = augmented_trial_df['block_type'] == 'right_uncued'
+    behavioral_choice_ix = make_behavioral_choice_mask(augmented_trial_df)
+    left_cued_ix = (augmented_trial_df['block_type'] == 'left_cued') & behavioral_choice_ix
+    left_uncued_ix = (augmented_trial_df['block_type'] == 'left_uncued') & behavioral_choice_ix
+    right_cued_ix = (augmented_trial_df['block_type'] == 'right_cued') & behavioral_choice_ix
+    right_uncued_ix = (augmented_trial_df['block_type'] == 'right_uncued') & behavioral_choice_ix
 
     if left_cued_ix.sum():
         left_cued_correct = np.sum(augmented_trial_df.loc[left_cued_ix, 'correct']) / np.sum(left_cued_ix)
@@ -192,10 +205,49 @@ def percent_correct(augmented_trial_df: pd.DataFrame) -> dict:
     else:
         right_uncued_correct = 'None'
 
-    overall = np.sum(augmented_trial_df['correct']) / augmented_trial_df.shape[0]
+    if behavioral_choice_ix.sum():
+        overall = np.sum(augmented_trial_df.loc[behavioral_choice_ix, 'correct']) / np.sum(behavioral_choice_ix)
+    else:
+        overall = 'None'
     return dict(left_cued_correct=left_cued_correct, left_uncued_correct=left_uncued_correct,
                 right_cued_correct=right_cued_correct, right_uncued_correct=right_uncued_correct,
                 overall_correct=overall)
+
+
+def make_behavioral_choice_mask(trial_df: pd.DataFrame) -> np.ndarray:
+    """Return rows with an animal left/right choice, excluding manual rewards."""
+    experimenter_reward_given = _get_experimenter_reward_given_array(trial_df)
+    return (
+        is_zero_flag(experimenter_reward_given).to_numpy()
+        & ~make_no_choice_action_mask(trial_df["action"]).to_numpy()
+    )
+
+
+def mean_or_nan(values: np.ndarray) -> float:
+    """Return the mean of present numeric values, or NaN when none are present."""
+    values = np.asarray(values, dtype=float)
+    present_values = values[~np.isnan(values)]
+    if present_values.size == 0:
+        return np.nan
+    return float(np.mean(present_values))
+
+
+def median_or_nan(values: np.ndarray) -> float:
+    """Return the median of present numeric values, or NaN when none exist."""
+    values = np.asarray(values, dtype=float)
+    present_values = values[~np.isnan(values)]
+    if present_values.size == 0:
+        return np.nan
+    return float(np.median(present_values))
+
+
+def std_or_nan(values: np.ndarray) -> float:
+    """Return the standard deviation of present numeric values, or NaN when none exist."""
+    values = np.asarray(values, dtype=float)
+    present_values = values[~np.isnan(values)]
+    if present_values.size == 0:
+        return np.nan
+    return float(np.std(present_values))
 
 
 def add_numeric_trials_to_correct(block_performance: pd.DataFrame) -> pd.DataFrame:
@@ -359,19 +411,24 @@ def summarize_trials_to_correct(block_performance: pd.DataFrame) -> dict:
 
 
 def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
-    # handle any give_reward trials
+    """Count left-right action switches while ignoring no-choice rows."""
     actions = np.copy(trial_df['action'].values)
-    give_reward = _get_give_reward_array(trial_df)
-    for i, (a, g) in enumerate(zip(actions, give_reward)):
-        if g in [1, '1']:
-            try:
-                if i == 0:  # I'll need a better handling of index 0 in the future
-                    actions[i] = actions[i + 1]
-                    continue
+    experimenter_reward_given = _get_experimenter_reward_given_array(trial_df)
+    skip_mask = (
+        ~is_zero_flag(experimenter_reward_given).to_numpy()
+        | make_no_choice_action_mask(actions).to_numpy()
+    )
+    valid_indices = np.flatnonzero(~skip_mask)
+    if valid_indices.size == 0:
+        return 0, 0
 
-                actions[i] = actions[i - 1]
-            except IndexError:
-                actions[i] = actions[i + 1]
+    for i in np.flatnonzero(skip_mask):
+        previous_valid = valid_indices[valid_indices < i]
+        next_valid = valid_indices[valid_indices > i]
+        if previous_valid.size:
+            actions[i] = actions[previous_valid[-1]]
+        elif next_valid.size:
+            actions[i] = actions[next_valid[0]]
 
     actions = actions.astype(int)
     n_switches = np.sum(np.abs(np.diff(actions)))
@@ -383,6 +440,7 @@ def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
 
 
 def make_augmented_trial_df(trial_df: pd.DataFrame) -> pd.DataFrame:
+    trial_df = normalize_experimenter_reward_column(trial_df)
     augmented_trial_df = trial_df.copy(deep=True)
     block_types = get_block_types(trial_df)
     augmented_trial_df['block_type'] = block_types
@@ -441,7 +499,9 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
 
         performance = percent_correct(cur_block_df)
         n_switches, normalized_switches = get_block_switches(cur_block_df)
-        correct_ix = np.nonzero(cur_block_df['correct'])[0]
+        behavioral_choice_ix = make_behavioral_choice_mask(cur_block_df)
+        behavioral_block_df = cur_block_df[behavioral_choice_ix]
+        correct_ix = np.nonzero(behavioral_block_df['correct'])[0]
         if correct_ix.size:
             trials_to_correct = correct_ix[0]
         else:
@@ -456,12 +516,12 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
                            n_switches=n_switches,
                            normalized_switches=normalized_switches,
                            confusion_flag=n_switches > 3,
-                           n_correct=np.sum(cur_block_df['correct']),
+                           n_correct=np.sum(behavioral_block_df['correct']),
                            percent_correct=performance['overall_correct'],
-                           n_rewarded=np.sum(cur_block_df['reward']),
-                           mean_choice_time=np.mean(choice_latency[cur_block_ix.to_numpy()]),
-                           median_choice_time=np.median(choice_latency[cur_block_ix.to_numpy()]),
-                           std_choice_time=np.std(choice_latency[cur_block_ix.to_numpy()]),
+                           n_rewarded=np.sum(behavioral_block_df['reward']),
+                           mean_choice_time=mean_or_nan(choice_latency[cur_block_ix.to_numpy()]),
+                           median_choice_time=median_or_nan(choice_latency[cur_block_ix.to_numpy()]),
+                           std_choice_time=std_or_nan(choice_latency[cur_block_ix.to_numpy()]),
                            session_ID=session_id)
 
         block_performance.append(performance)
@@ -475,6 +535,8 @@ def summarize_session_performance(
     augmented_trial_df: pd.DataFrame,
     block_performance: pd.DataFrame,
     date: str,
+    ideal_observer_n_replays: int = 100,
+    ideal_observer_seed: int | None = 12345,
 ) -> pd.DataFrame:
     """Summarize whole-session performance from trial and block tables.
 
@@ -488,6 +550,10 @@ def summarize_session_performance(
         including `trials_to_correct` and `block_type`.
     date : str
         Session date copied into the `date` output column.
+    ideal_observer_n_replays : int, default=100
+        Number of fixed-state ideal-observer replay samples to run.
+    ideal_observer_seed : int or None, default=12345
+        Seed for fixed-state ideal-observer replay sampling.
 
     Returns
     -------
@@ -496,11 +562,27 @@ def summarize_session_performance(
     """
     session_performance = percent_correct(augmented_trial_df)
     session_performance = session_performance | summarize_trials_to_correct(block_performance)
+    session_performance = session_performance | general_behavior_assessment.summarize_oracle_behavior(
+        augmented_trial_df
+    )
+    session_performance = session_performance | ideal_observer.summarize_ideal_observer_behavior(
+        augmented_trial_df,
+        params=ideal_observer.IdealObserverParams(
+            n_fixed_replays=ideal_observer_n_replays,
+            random_seed=ideal_observer_seed,
+        ),
+    )
     session_performance['date'] = date
     return pd.DataFrame(session_performance, index=[0])
 
 
-def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
+def analyze_session(
+    trial_df: pd.DataFrame,
+    mouse: str,
+    date: str,
+    ideal_observer_n_replays: int = 100,
+    ideal_observer_seed: int | None = 12345,
+) -> tuple:
     """Build trial, block, and session performance summaries.
 
     Parameters
@@ -514,6 +596,10 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     date : str
         Session date copied into the session summary and block-level
         `session_ID`.
+    ideal_observer_n_replays : int, default=100
+        Number of fixed-state ideal-observer replay samples to run.
+    ideal_observer_seed : int or None, default=12345
+        Seed for fixed-state ideal-observer replay sampling.
 
     Returns
     -------
@@ -526,7 +612,13 @@ def analyze_session(trial_df: pd.DataFrame, mouse: str, date: str) -> tuple:
     session_id = mouse + '_' + date
     augmented_trial_df = make_augmented_trial_df(trial_df)
     block_performance = summarize_block_performance(augmented_trial_df, session_id=session_id)
-    session_performance = summarize_session_performance(augmented_trial_df, block_performance, date=date)
+    session_performance = summarize_session_performance(
+        augmented_trial_df,
+        block_performance,
+        date=date,
+        ideal_observer_n_replays=ideal_observer_n_replays,
+        ideal_observer_seed=ideal_observer_seed,
+    )
 
     return session_performance, block_performance, augmented_trial_df
 
@@ -566,24 +658,70 @@ def append_decision_variables(
     decision_variable_dict['left_cf_omissions'].append(state.left_omissions_cf)
     decision_variable_dict['right_cf_omissions'].append(state.right_omissions_cf)
     decision_variable_dict['relative_cf_omissions'].append(state.left_omissions_cf - state.right_omissions_cf)
+    decision_variable_dict['left_monotonic_cf_value'].append(state.left_monotonic_cf_value)
+    decision_variable_dict['right_monotonic_cf_value'].append(state.right_monotonic_cf_value)
+    decision_variable_dict['relative_monotonic_cf_value'].append(
+        state.left_monotonic_cf_value - state.right_monotonic_cf_value
+    )
 
 
-def should_skip_decision_variable_update(give_reward: int | str, action: int | str) -> bool:
+def should_skip_decision_variable_update(experimenter_reward_given: int | str, action: int | str) -> bool:
     """Return whether a trial should leave decision-variable state unchanged.
 
     Parameters
     ----------
-    give_reward : int or str
+    experimenter_reward_given : int or str
         Experimenter-reward flag for one trial.
     action : int or str
-        Animal action for one trial; `"None"` marks no animal choice.
+        Animal action for one trial; `"None"` or `"no_choice"` marks no animal
+        choice.
 
     Returns
     -------
     bool
         True when the trial should not update history counters.
     """
-    return give_reward in [1, '1'] or action == 'None'
+    return (
+        not bool(is_zero_flag([experimenter_reward_given]).iloc[0])
+        or bool(make_no_choice_action_mask([action]).iloc[0])
+    )
+
+
+def parse_decision_variable_update_values(action, reward) -> tuple[int, int]:
+    """Parse one non-skipped trial outcome for decision-variable counters.
+
+    Parameters
+    ----------
+    action : int, float, or str
+        Valid animal choice after no-choice rows have been skipped. Values use
+        task coding: `0` for right and `1` for left.
+    reward : int, float, or str
+        Trial reward magnitude. Positive values are treated as rewarded
+        (`1`); zero or negative values are treated as unrewarded (`0`).
+
+    Returns
+    -------
+    tuple[int, int]
+        `(action_int, reward_int)`, where `action_int` is `0` or `1`, and
+        `reward_int` is binary reward status in `{0, 1}`.
+    """
+    try:
+        action_int = int(float(action))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"action must be 0 or 1 after skip filtering, got {action!r}."
+        ) from exc
+    if action_int not in (0, 1):
+        raise ValueError(
+            f"action must be 0 or 1 after skip filtering, got {action!r}."
+        )
+
+    try:
+        reward_int = int(float(reward) > 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"reward must be numeric, got {reward!r}.") from exc
+
+    return action_int, reward_int
 
 
 def increment_reward_history_decision_vars(
@@ -699,6 +837,41 @@ def increment_counterfactual_decision_vars(
     return state
 
 
+def increment_monotonic_counterfactual_decision_vars(
+    state: DecisionVariableState,
+    action: int,
+    reward: int,
+) -> DecisionVariableState:
+    """Update monotonic counterfactual reward counters.
+
+    Parameters
+    ----------
+    state : DecisionVariableState
+        Mutable decision-variable state before the current trial update.
+    action : int
+        Current trial action, encoded as 0 for right or 1 for left.
+    reward : int
+        Current trial reward, encoded as 0 or 1. Rewarded trials increment the
+        chosen side and reset the unchosen side. Omission trials leave both
+        monotonic counters unchanged.
+
+    Returns
+    -------
+    DecisionVariableState
+        The same state object after monotonic counterfactual updates.
+    """
+    state.left_monotonic_cf_value, state.right_monotonic_cf_value = counters.sided_value_counter(
+        state.left_monotonic_cf_value,
+        state.right_monotonic_cf_value,
+        action,
+        reward,
+        zero_min=True,
+        counterfactual=True,
+        monotonic=True,
+    )
+    return state
+
+
 def update_decision_variable_state(
     state: DecisionVariableState,
     action: int,
@@ -723,6 +896,7 @@ def update_decision_variable_state(
     state = increment_reward_history_decision_vars(state, reward)
     state = increment_choice_value_decision_vars(state, action, reward)
     state = increment_counterfactual_decision_vars(state, action, reward)
+    state = increment_monotonic_counterfactual_decision_vars(state, action, reward)
     return state
 
 
@@ -733,7 +907,7 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
     ----------
     trial_df : pd.DataFrame
         Trial dataframe with shape `(n_trials, n_columns)`, including `action`,
-        `reward`, and optionally `give_reward`.
+        `reward`, and optionally `experimenter_reward_given`.
 
     Returns
     -------
@@ -743,19 +917,24 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
     """
     state = DecisionVariableState()
     decision_variable_dict = defaultdict(list)
-    give_reward_flags = _get_give_reward_array(trial_df)
+    trial_df = normalize_experimenter_reward_column(trial_df)
+    experimenter_reward_flags = _get_experimenter_reward_given_array(trial_df)
 
     for i in range(trial_df.shape[0]):
         append_decision_variables(decision_variable_dict, state)
 
         action = trial_df.loc[i, 'action']
-        if should_skip_decision_variable_update(give_reward_flags[i], action):
+        if should_skip_decision_variable_update(experimenter_reward_flags[i], action):
             continue
 
+        action, reward = parse_decision_variable_update_values(
+            action=action,
+            reward=trial_df.loc[i, 'reward'],
+        )
         state = update_decision_variable_state(
             state,
             action=action,
-            reward=trial_df.loc[i, 'reward'],
+            reward=reward,
         )
 
     return pd.DataFrame(decision_variable_dict)
@@ -1042,6 +1221,7 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
     block_performance_path = session_save_path / (sess_id + '_block_performance.csv')
     augmented_trial_path = session_save_path / (sess_id + '_augmented_trials.csv')
 
+    augmented_trial_df = normalize_experimenter_reward_column(augmented_trial_df)
     block_performance.to_csv(block_performance_path, index=False, na_rep='None')
     augmented_trial_df.to_csv(augmented_trial_path, index=False, na_rep='None')
     assert_saved_csv(block_performance_path)
@@ -1050,7 +1230,9 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
     if multisession_save_path is None:
         return session_performance
 
-    assert multisession_save_path.exists(), "between-session data save path does not exist"
+    if not multisession_save_path.exists():#, "between-session data save path does not exist"
+        multisession_save_path.mkdir(parents=True, exist_ok=False)
+
     multisession_summary_path = multisession_save_path / (mouse + '_overall_performance.csv')
     if multisession_summary_path.exists():
         multisession_df = pd.read_csv(multisession_summary_path, na_filter=False)
@@ -1077,11 +1259,17 @@ def load_analysis(sess_id_full: str, session_data_folder: Path, multisession_dat
 
     block_performance = pd.read_csv(session_data_folder / (sess_id_full + '_block_performance.csv'), sep=',', na_filter=False)
     augmented_trial_df = pd.read_csv(session_data_folder / (sess_id_full + '_augmented_trials.csv'), sep=',', na_filter=False)
+    augmented_trial_df = normalize_experimenter_reward_column(augmented_trial_df)
     multisession_df = pd.read_csv(multisession_data_folder / (mouse + '_overall_performance.csv'), sep=',', na_filter=False)
     return multisession_df, block_performance, augmented_trial_df
 
 
-def run_analysis(trial_df: pd.DataFrame, session: Session):
+def run_analysis(
+    trial_df: pd.DataFrame,
+    session: Session,
+    ideal_observer_n_replays: int = 100,
+    ideal_observer_seed: int | None = 12345,
+):
     """Run single-session analysis with optional multisession persistence.
 
     Parameters
@@ -1094,6 +1282,10 @@ def run_analysis(trial_df: pd.DataFrame, session: Session):
         `sess_id_full`, `processed_data_path`, and `multi_session_save_path`.
         If `multi_session_save_path` is None, only within-session CSV outputs
         are saved.
+    ideal_observer_n_replays : int, default=100
+        Number of fixed-state ideal-observer replay samples to run.
+    ideal_observer_seed : int or None, default=12345
+        Seed for fixed-state ideal-observer replay sampling.
 
     Returns
     -------
@@ -1102,7 +1294,13 @@ def run_analysis(trial_df: pd.DataFrame, session: Session):
         multisession saving is disabled, the third dataframe is the one-row
         session summary instead of a loaded cross-session table.
     """
-    session_performance, block_performance, augmented_trial_df = analyze_session(trial_df, mouse=session.mouse, date=session.date)
+    session_performance, block_performance, augmented_trial_df = analyze_session(
+        trial_df,
+        mouse=session.mouse,
+        date=session.date,
+        ideal_observer_n_replays=ideal_observer_n_replays,
+        ideal_observer_seed=ideal_observer_seed,
+    )
     session_performance = add_regression_stats_to_session_performance(
         session_performance=session_performance,
         trials_to_correct=block_performance["trials_to_correct"],

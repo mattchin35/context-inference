@@ -59,6 +59,61 @@ def generate_session_raster(event_df: pd.DataFrame, session_info: dict,
     plt.close('all')
 
 
+def _max_event_time(event_array: Iterable[np.ndarray], timespan: tuple | np.ndarray) -> float:
+    """Return max plotted event time while ignoring empty event arrays.
+
+    Parameters
+    ----------
+    event_array : Iterable[np.ndarray]
+        One-dimensional event-time arrays grouped by raster row. Each row stores
+        event times in seconds and may be empty.
+    timespan : tuple or np.ndarray
+        Two-element plot window in seconds.
+
+    Returns
+    -------
+    float
+        Maximum event time in seconds, or `timespan[1]` when all event rows are
+        empty.
+    """
+    maxima = [float(np.amax(events)) for events in event_array if np.asarray(events).size > 0]
+    maxima.append(float(timespan[1]))
+    return float(np.amax(maxima))
+
+
+def _state_events_from_colorblock_array(
+    event_array: list[np.ndarray],
+    use_dark_period: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return sorted block-state labels and entry times for color spans.
+
+    Parameters
+    ----------
+    event_array : list[np.ndarray]
+        Raw event arrays from `collect_events.generate_event_array`. Expected
+        row order is left-patch entries, right-patch entries, and optionally
+        dark-period entries.
+    use_dark_period : bool
+        Whether the third row contains dark-period entries.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        State labels and entry times sorted by time. Times are in seconds.
+    """
+    state_arrays = event_array[2:]
+    states = ['left active'] * len(state_arrays[0]) + ['right active'] * len(state_arrays[1])
+    if use_dark_period:
+        states += ['dark period'] * len(state_arrays[2])
+
+    state_times = np.concatenate(state_arrays)
+    if state_times.size == 0:
+        raise ValueError("colorblock_raster requires at least one state-entry event.")
+
+    state_sort_ix = np.argsort(state_times)
+    return np.array(states)[state_sort_ix], state_times[state_sort_ix]
+
+
 def colorblock_raster(event_df: pd.DataFrame, fig_name: str, plot_path: str, session_info: dict,
                       timespan: tuple = (0, np.inf), fig_format: str = 'png', plot_choices=False):
     """
@@ -82,14 +137,14 @@ def colorblock_raster(event_df: pd.DataFrame, fig_name: str, plot_path: str, ses
                       'wrong_choice_left_patch', 'enter_left_patch', 'enter_right_patch']
         if session_info['use_dark_period']:
             event_list += ['enter_dark_period']
-        event_array = collect_events.generate_event_array(cleaned_df, event_list, timespan)
+        raw_event_array = collect_events.generate_event_array(cleaned_df, event_list, timespan)
 
-        left_choice = np.concatenate([event_array[0], event_array[1]])
-        right_choice = np.concatenate([event_array[2], event_array[3]])
-        event_array = [left_choice, right_choice, event_array[4], event_array[5]]
+        left_choice = np.concatenate([raw_event_array[0], raw_event_array[1]])
+        right_choice = np.concatenate([raw_event_array[2], raw_event_array[3]])
+        event_array = [left_choice, right_choice, raw_event_array[4], raw_event_array[5]]
         event_labels = ['Left\nchoice', 'Right\nchoice', 'enter left patch', 'enter right patch']
         if session_info['use_dark_period']:
-            event_array += [event_array[6]]
+            event_array += [raw_event_array[6]]
             event_labels += ['enter dark period']
         linewidths = 0.3
 
@@ -97,22 +152,18 @@ def colorblock_raster(event_df: pd.DataFrame, fig_name: str, plot_path: str, ses
         event_list = ['left_entry', 'right_entry', 'enter_left_patch', 'enter_right_patch']
         event_labels = ['Left\nlick', 'Right\nlick', 'enter left patch', 'enter right patch']
         if session_info['use_dark_period']:
-            event_list += ['enter dark period']
+            event_list += ['enter_dark_period']
             event_labels += ['enter dark period']
 
         event_array = collect_events.generate_event_array(cleaned_df, event_list, timespan)
         linewidths = 0.2
 
-    end_time = np.amax([np.amax([np.amax(e) for e in event_array]), timespan[1]])
+    end_time = _max_event_time(event_array, timespan)
 
-    states = ['left active'] * len(event_array[2]) + ['right active'] * len(event_array[3])
-    if session_info['use_dark_period']:
-        states + ['dark period'] * len(event_array[4])
-
-    state_times = np.concatenate(event_array[2:])
-    state_sort_ix = np.argsort(state_times)
-    states = np.array(states)[state_sort_ix]
-    state_times = state_times[state_sort_ix]
+    states, state_times = _state_events_from_colorblock_array(
+        event_array,
+        use_dark_period=session_info['use_dark_period'],
+    )
     unique_states = np.unique(states).tolist()
 
     # stimulus plotting

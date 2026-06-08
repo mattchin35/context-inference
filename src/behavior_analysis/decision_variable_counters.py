@@ -97,19 +97,19 @@ def value_counter(count: int, reward: int):
     return count
 
 
-def sided_value_counter(left_count: int, right_count: int, action: int, reward: int, zero_min=False, counterfactual=False) -> tuple[int, int]:
+def sided_value_counter(left_count: int, right_count: int, action: int, reward: int, zero_min=False, counterfactual=False, monotonic=False) -> tuple[int, int]:
     """
     This counter resets the value of the unchosen action on rewarded trials to 0.
     """
     if action == side_dict['right']:
-        if reward == 0:
+        if reward == 0 and not monotonic:
             right_count -= 1
         elif reward == 1:
             right_count = np.amax([right_count, 0]) + 1
             left_count *= (0 if counterfactual else 1)
 
     elif action == side_dict['left']:
-        if reward == 0:
+        if reward == 0 and not monotonic:
             left_count -= 1
         elif reward == 1:
             left_count = np.amax([left_count, 0]) + 1

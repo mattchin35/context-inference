@@ -2,9 +2,12 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass, asdict
 from pathlib import Path
-import re
-import pickle as pkl
 import src.behavior_analysis.trial_features as trial_features
+from src.behavior_analysis.project_utils import (
+    EXPERIMENTER_REWARD_GIVEN_COLUMN,
+    get_experimenter_reward_flags,
+    normalize_experimenter_reward_column,
+)
 import json
 from typing import Optional
 
@@ -31,6 +34,7 @@ class TaskParams:
     FQL_reward_update_rate_fast_learn: float = .5
     QL_learning_rate: float = .3  # for standard Q-learning agent
     omission_lam: float = 0.5
+    hazard_lam: float = 0.5
     perseveration_decay: float = 0.25
 
 
@@ -74,6 +78,7 @@ def save_trial_features(augmented_trial_df: pd.DataFrame, params: TaskParams, pr
         Writes `{sess_id_full}_augmented_trials.csv` and
         `trial_feature_params.json`.
     """
+    augmented_trial_df = normalize_experimenter_reward_column(augmented_trial_df)
     augmented_trial_df_path = processed_data_path / (sess_id_full + '_augmented_trials.csv')
     augmented_trial_df.to_csv(augmented_trial_df_path, index=False, na_rep='None')
 
@@ -144,22 +149,47 @@ def validate_trial_feature_inputs(augmented_trial_df: pd.DataFrame) -> None:
 def collect_trial_index_features(
     augmented_trial_df: pd.DataFrame,
     omission_lam: float = 0.5,
+    hazard_lam: float = 0.5,
     perseveration_decay: float = 0.25,
 ) -> pd.DataFrame:
-    """
-    Add trial index/regressor features derived from omissions and choices.
+    """Add trial index/regressor features derived from trial-history counters.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required
+        columns include side-specific omission counters, `consecutive_omissions`,
+        `relative_monotonic_cf_value`, `action`, and optional
+        `experimenter_reward_given`.
+    omission_lam : float, default=0.5
+        Positive saturation parameter for omission-derived regressors.
+    hazard_lam : float, default=0.5
+        Positive saturation parameter for `relative_hazard_index`.
+    perseveration_decay : float, default=0.25
+        Exponential decay parameter for the perseveration regressor.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `augmented_trial_df` with omission, hazard, and perseveration
+        regressor columns added. Regressors use left-positive sign convention.
     """
     right_omissions = _get_column_or_raise(augmented_trial_df, ("right_omissions",)).to_numpy()
     left_omissions = _get_column_or_raise(augmented_trial_df, ("left_omissions",)).to_numpy()
     right_omissions_counterfactual = _get_column_or_raise(augmented_trial_df, ("right_cf_omissions",)).to_numpy()
     left_omissions_counterfactual = _get_column_or_raise(augmented_trial_df, ("left_cf_omissions",)).to_numpy()
     loss_streak = _get_column_or_raise(augmented_trial_df, ("consecutive_omissions",)).to_numpy()
+    relative_monotonic_cf_value = _get_column_or_raise(
+        augmented_trial_df,
+        ("relative_monotonic_cf_value",),
+    ).to_numpy()
     actions = _get_column_or_raise(augmented_trial_df, ("action",)).to_numpy()
 
+    augmented_trial_df = normalize_experimenter_reward_column(augmented_trial_df)
     n_trials = augmented_trial_df.shape[0]
-    give_reward = augmented_trial_df["give_reward"].to_numpy() if "give_reward" in augmented_trial_df.columns else np.zeros(n_trials)
+    experimenter_reward_given = get_experimenter_reward_flags(augmented_trial_df)
 
-    skip_mask = trial_features.make_skip_trial_mask(give_reward=give_reward, actions=actions)
+    skip_mask = trial_features.make_skip_trial_mask(experimenter_reward_given=experimenter_reward_given, actions=actions)
     if skip_mask is None:
         skip_mask = np.zeros(n_trials, dtype=bool)
     valid_mask = ~skip_mask
@@ -167,6 +197,7 @@ def collect_trial_index_features(
     relative_omissions_index = np.full(n_trials, None, dtype=object)
     signed_omission_regressor = np.full(n_trials, None, dtype=object)
     relative_doubt_index = np.full(n_trials, None, dtype=object)
+    relative_hazard_index = np.full(n_trials, None, dtype=object)
     perseveration_regressor = np.full(n_trials, None, dtype=object)
 
     rel_omission_valid = trial_features.relative_omissions_index(
@@ -183,6 +214,10 @@ def collect_trial_index_features(
         L_omissions=left_omissions_counterfactual[valid_mask],
         lam=omission_lam,
     )
+    rel_hazard_valid = trial_features.relative_hazard_index(
+        relative_monotonic_cf_value=relative_monotonic_cf_value[valid_mask],
+        lam=hazard_lam,
+    )
     perseveration_valid = trial_features.perseveration_regressor(
         choices=actions[valid_mask],
         decay=perseveration_decay,
@@ -191,12 +226,14 @@ def collect_trial_index_features(
     relative_omissions_index[valid_mask] = rel_omission_valid
     signed_omission_regressor[valid_mask] = signed_omission_valid
     relative_doubt_index[valid_mask] = rel_doubt_valid
+    relative_hazard_index[valid_mask] = rel_hazard_valid
     perseveration_regressor[valid_mask] = perseveration_valid
 
     augmented_trial_df = augmented_trial_df.copy()
     augmented_trial_df["relative_omissions_index"] = relative_omissions_index
     augmented_trial_df["signed_omission_regressor"] = signed_omission_regressor
     augmented_trial_df["relative_doubt_index"] = relative_doubt_index
+    augmented_trial_df["relative_hazard_index"] = relative_hazard_index
     augmented_trial_df["perseveration_regressor"] = perseveration_regressor
     return augmented_trial_df
 
@@ -211,7 +248,7 @@ def collect_model_value_features(
     ----------
     augmented_trial_df : pd.DataFrame
         Trialwise dataframe with shape `(n_trials, n_columns)`, including
-        `action`, `reward`, and optionally `give_reward`.
+        `action`, `reward`, and optionally `experimenter_reward_given`.
     params : TaskParams
         Parameters used by Q-learning and HMM feature functions.
 
@@ -220,17 +257,22 @@ def collect_model_value_features(
     pd.DataFrame
         Copy of `augmented_trial_df` with model-value feature columns added.
     """
+    augmented_trial_df = normalize_experimenter_reward_column(augmented_trial_df)
     validate_trial_feature_inputs(augmented_trial_df)
     actions = augmented_trial_df['action'].values
     rewards = augmented_trial_df['reward'].values
-    give_reward = augmented_trial_df['give_reward'].values if 'give_reward' in augmented_trial_df.columns else None
+    experimenter_reward_given = (
+        augmented_trial_df[EXPERIMENTER_REWARD_GIVEN_COLUMN].values
+        if EXPERIMENTER_REWARD_GIVEN_COLUMN in augmented_trial_df.columns
+        else None
+    )
 
     ql_rel_value = trial_features.qlearning_relative_value(
         actions=actions,
         rewards=rewards,
         learning_rate=params.QL_learning_rate,
         n_actions=params.n_actions,
-        give_reward=give_reward,
+        experimenter_reward_given=experimenter_reward_given,
     )
     # Standard forgetting-Q: decay=.7 and default reward update rate (1 - decay).
     fql_rel_value = trial_features.forgetting_qlearning_relative_value(
@@ -238,7 +280,7 @@ def collect_model_value_features(
         rewards=rewards,
         decay=params.FQL_decay,
         n_actions=params.n_actions,
-        give_reward=give_reward,
+        experimenter_reward_given=experimenter_reward_given,
     )
     # Fast-learn forgetting-Q: same decay but explicit reward update rate.
     fql_rel_value_fast_learn = trial_features.forgetting_qlearning_relative_value(
@@ -247,7 +289,7 @@ def collect_model_value_features(
         decay=params.FQL_decay,
         reward_update_rate=params.FQL_reward_update_rate_fast_learn,
         n_actions=params.n_actions,
-        give_reward=give_reward,
+        experimenter_reward_given=experimenter_reward_given,
     )
     hmm_rel_value_logodds = trial_features.hmm_relative_value(
         actions=actions,
@@ -259,7 +301,7 @@ def collect_model_value_features(
         incorrect_reward_size=params.incorrect_reward_size,
         value_mode='bayesian_log_odds',
         tanh_scale=params.tanh_scale,
-        give_reward=give_reward,
+        experimenter_reward_given=experimenter_reward_given,
     )
     hmm_rel_value_logodds_decay = trial_features.hmm_relative_value_reward_decay(
         actions=actions,
@@ -272,7 +314,7 @@ def collect_model_value_features(
         lambda_decay=params.hmm_reward_decay_lambda,
         value_mode='bayesian_log_odds',
         tanh_scale=params.tanh_scale,
-        give_reward=give_reward,
+        experimenter_reward_given=experimenter_reward_given,
     )
 
     augmented_trial_df = augmented_trial_df.copy()
@@ -289,6 +331,7 @@ def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[Ta
     Add model-derived relative value features to an existing augmented trial dataframe.
     This function is intended for import/use from other files.
     """
+    augmented_trial_df = normalize_experimenter_reward_column(augmented_trial_df)
     if params is None:
         params = TaskParams()
 
@@ -296,6 +339,7 @@ def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[Ta
     augmented_trial_df = collect_trial_index_features(
         augmented_trial_df,
         omission_lam=params.omission_lam,
+        hazard_lam=params.hazard_lam,
         perseveration_decay=params.perseveration_decay,
     )
     return augmented_trial_df, params

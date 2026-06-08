@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.special import expit, logit
 from enum import IntEnum
+from src.behavior_analysis.project_utils import NO_CHOICE_ACTION_LABELS
 
 N_ACTIONS = 2
 eps = np.finfo(float).eps
@@ -15,11 +16,10 @@ SIGNED_RIGHT = -1.0
 SIGNED_LEFT = 1.0
 RIGHT_CHOICE_LABELS = {"right"}
 LEFT_CHOICE_LABELS = {"left"}
-NO_CHOICE_ACTION_LABELS = {"none", "no_choice", ""}
 
 
 def qlearning_relative_value(
-    actions, rewards, learning_rate=0.1, n_actions=N_ACTIONS, give_reward=None
+    actions, rewards, learning_rate=0.1, n_actions=N_ACTIONS, experimenter_reward_given=None
 ):
     """
     Minimal Q-learning relative value feature.
@@ -30,7 +30,7 @@ def qlearning_relative_value(
     _validate_lengths(actions, rewards)
     _validate_two_action_task(n_actions)
 
-    skip_trials = make_skip_trial_mask(give_reward=give_reward, actions=actions)
+    skip_trials = make_skip_trial_mask(experimenter_reward_given=experimenter_reward_given, actions=actions)
 
     Q = np.zeros(n_actions)
     if skip_trials is None:
@@ -60,7 +60,7 @@ def forgetting_qlearning_relative_value(
     tanh_relative_value=False,
     tanh_scale=1.0,
     n_actions=N_ACTIONS,
-    give_reward=None,
+    experimenter_reward_given=None,
 ):
     """
     Minimal forgetting Q-learning relative value feature.
@@ -99,7 +99,7 @@ def forgetting_qlearning_relative_value(
         if tanh_scale <= 0:
             raise ValueError("tanh_scale must be > 0 when tanh_relative_value is True.")
 
-    skip_trials = make_skip_trial_mask(give_reward=give_reward, actions=actions)
+    skip_trials = make_skip_trial_mask(experimenter_reward_given=experimenter_reward_given, actions=actions)
 
     Q = np.zeros(n_actions)
     if skip_trials is None:
@@ -138,7 +138,7 @@ def hmm_relative_value(
     incorrect_reward_size=0.0,
     value_mode="expected_reward",
     tanh_scale=1,
-    give_reward=None,
+    experimenter_reward_given=None,
 ):
     """
     Minimal HMM relative value feature.
@@ -156,7 +156,7 @@ def hmm_relative_value(
     if value_mode not in ("expected_reward", "bayesian_log_odds"):
         raise ValueError("value_mode must be 'expected_reward' or 'bayesian_log_odds'.")
 
-    skip_trials = make_skip_trial_mask(give_reward=give_reward, actions=actions)
+    skip_trials = make_skip_trial_mask(experimenter_reward_given=experimenter_reward_given, actions=actions)
 
     prior = np.ones(2) / 2
     if skip_trials is None:
@@ -232,7 +232,7 @@ def hmm_relative_value_reward_decay(
     lambda_decay=0.2,
     value_mode="bayesian_log_odds",
     tanh_scale=1.0,
-    give_reward=None,
+    experimenter_reward_given=None,
 ):
     """
     HMM relative value variant with asymmetric outcome updates:
@@ -264,7 +264,7 @@ def hmm_relative_value_reward_decay(
     if tanh_scale <= 0:
         raise ValueError("tanh_scale must be > 0.")
 
-    skip_trials = make_skip_trial_mask(give_reward=give_reward, actions=actions)
+    skip_trials = make_skip_trial_mask(experimenter_reward_given=experimenter_reward_given, actions=actions)
 
     # Belief vector order: [p_right, p_left]
     prior = np.ones(2) / 2
@@ -412,12 +412,12 @@ def _validate_two_action_task(n_actions):
         )
 
 
-def make_skip_trial_mask(give_reward, actions):
+def make_skip_trial_mask(experimenter_reward_given, actions):
     """Return rows to skip for manual-reward or no-choice trials.
 
     Parameters
     ----------
-    give_reward : array-like or None
+    experimenter_reward_given : array-like or None
         Experimenter-reward flags with shape `(n_trials,)`, or None when the
         column is absent.
     actions : array-like
@@ -432,21 +432,21 @@ def make_skip_trial_mask(give_reward, actions):
     actions = np.asarray(actions)
     no_choice_mask = np.array([_is_no_choice_action(action) for action in actions], dtype=bool)
 
-    if give_reward is None:
+    if experimenter_reward_given is None:
         return no_choice_mask if no_choice_mask.any() else None
 
-    give_reward = np.asarray(give_reward)
-    if give_reward.shape[0] != actions.shape[0]:
+    experimenter_reward_given = np.asarray(experimenter_reward_given)
+    if experimenter_reward_given.shape[0] != actions.shape[0]:
         raise ValueError(
-            "give_reward must have the same length as actions and rewards."
+            "experimenter_reward_given must have the same length as actions and rewards."
         )
 
-    skip_mask = np.array([_should_skip_give_reward(flag) for flag in give_reward], dtype=bool)
+    skip_mask = np.array([_should_skip_experimenter_reward_given(flag) for flag in experimenter_reward_given], dtype=bool)
     skip_mask = skip_mask | no_choice_mask
     return skip_mask if skip_mask.any() else None
 
 
-def _should_skip_give_reward(flag):
+def _should_skip_experimenter_reward_given(flag):
     if flag is None:
         return False
 
@@ -640,6 +640,34 @@ def relative_doubt_index(R_omissions, L_omissions, lam):
     return H_L - H_R
 
 
+def relative_hazard_index(relative_monotonic_cf_value, lam):
+    """Return a saturated monotonic reward-history regressor.
+
+    Parameters
+    ----------
+    relative_monotonic_cf_value : float or array-like
+        Left-minus-right monotonic counterfactual reward value with shape `()`
+        or `(n_trials,)`. Units are rewarded trials accumulated on the current
+        rewarded side up to the previous valid choice.
+    lam : float
+        Positive saturation scale. Larger values saturate the regressor faster.
+
+    Returns
+    -------
+    float or np.ndarray
+        `tanh(lam * relative_monotonic_cf_value)`, with the same scalar/array
+        shape convention as the input. Values are bounded in `[-1, 1]`.
+    """
+    try:
+        lam = float(lam)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("lam must be a positive float.") from exc
+    if lam <= 0:
+        raise ValueError("lam must be > 0.")
+
+    return np.tanh(lam * np.asarray(relative_monotonic_cf_value, dtype=float))
+
+
 def perseveration_regressor(choices, decay=0.25):
     """
     Compute exponentially weighted perseveration regressor.
@@ -776,4 +804,3 @@ def _choice_token_to_signed_left_positive(token):
         return SIGNED_LEFT
 
     raise ValueError("choice values must be left/right, 0/1, or -1/+1.")
-

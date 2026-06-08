@@ -7,6 +7,12 @@ from typing import Optional
 from pathlib import Path
 import pickle as pkl
 from src.behavior_analysis import collect_events
+from src.behavior_analysis.project_utils import (
+    EXPERIMENTER_REWARD_GIVEN_COLUMN,
+    is_present_value,
+    is_zero_flag,
+    make_no_choice_action_mask,
+)
 from collections import OrderedDict
 
 
@@ -90,7 +96,7 @@ def _new_trial_dict(state: TrialParserState, start_time: float, missing_value: s
         action=missing_value,
         correct=missing_value,
         reward=missing_value,
-        give_reward=missing_value,
+        experimenter_reward_given=missing_value,
         active_stimulus=state.current_stimulus,
         block_stimulus=state.block_stimulus,
         start_time=start_time,
@@ -147,15 +153,24 @@ def _handle_context_event(event: str, current_time: float, state: TrialParserSta
         raise NameError('Unrecognized context event: {}'.format(event))
 
 
-def _handle_choice_event(event: str, reward_note: str, current_time: float, state: TrialParserState) -> None:
+def _handle_choice_event(
+    event: str,
+    reward_note: str,
+    current_time: float,
+    state: TrialParserState,
+    missing_value: str,
+) -> None:
     """Update the active trial from a choice or experimenter-reward event."""
     trial = _require_active_trial(state, event)
-    action, correct, reward, give_reward = choice_event_summary(event, reward_note)
-    trial['choice_time'] = current_time
+    action, correct, reward, experimenter_reward_given = choice_event_summary(event, reward_note)
+    if experimenter_reward_given in [1, "1"]:
+        trial['choice_time'] = missing_value
+    else:
+        trial['choice_time'] = current_time
     trial['action'] = action
     trial['correct'] = correct
     trial['reward'] = reward
-    trial['give_reward'] = give_reward
+    trial[EXPERIMENTER_REWARD_GIVEN_COLUMN] = experimenter_reward_given
 
 
 def _handle_reward_event(event: str, current_time: float, state: TrialParserState) -> None:
@@ -258,30 +273,30 @@ def choice_event_summary(event: str, reward_note: str) -> tuple[int, int, int, i
     if event == 'wrong_choice_right_patch':
         action = int(ChoiceSide.LEFT)
         correct = 0
-        give_reward = 0
+        experimenter_reward_given = 0
     elif event == 'correct_choice_left_patch':
         action = int(ChoiceSide.LEFT)
         correct = 1
-        give_reward = 0
+        experimenter_reward_given = 0
 
     # RIGHT CHOICES
     elif event == 'wrong_choice_left_patch':
         action = int(ChoiceSide.RIGHT)
         correct = 0
-        give_reward = 0
+        experimenter_reward_given = 0
     elif event == 'correct_choice_right_patch':
         action = int(ChoiceSide.RIGHT)
         correct = 1
-        give_reward = 0
+        experimenter_reward_given = 0
 
     elif event == 'giving_reward_left_patch':
-        action = int(ChoiceSide.LEFT)
+        action = NO_CHOICE_ACTION
         correct = 0
-        give_reward = 1
+        experimenter_reward_given = 1
     elif event == 'giving_reward_right_patch':
-        action = int(ChoiceSide.RIGHT)
+        action = NO_CHOICE_ACTION
         correct = 0
-        give_reward = 1
+        experimenter_reward_given = 1
 
     else:
         raise NameError('Unrecognized choice event: {}'.format(event))
@@ -293,7 +308,7 @@ def choice_event_summary(event: str, reward_note: str) -> tuple[int, int, int, i
     else:
         raise NameError('Unrecognized reward outcome note: {}'.format(reward_note))
 
-    return action, correct, reward, give_reward
+    return action, correct, reward, experimenter_reward_given
 
 
 def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: list, reward_events: list,
@@ -312,7 +327,7 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
         # Stimulus events are checked before context events because
         # collect_events.get_context_events also returns stimulus_* names.
         if event in choice_events:
-            _handle_choice_event(event, raw_data['Note'].values[i], current_time, parser_state)
+            _handle_choice_event(event, raw_data['Note'].values[i], current_time, parser_state, missing_value)
         elif event in reward_events:
             _handle_reward_event(event, current_time, parser_state)
         elif event in stimulus_events:
@@ -379,7 +394,24 @@ def make_trial_df(cleaned_data: pd.DataFrame, session_id: str, save_name: str, o
     )
     st_time = trial_df['start_time'].values[0]
     trial_df['trial_time_since_start'] = trial_df['start_time'] - st_time
-    trial_df['choice_time_since_start'] = trial_df['choice_time'] - st_time
+    present_choice_time = is_present_value(trial_df['choice_time'])
+    behavioral_choice = (
+        is_zero_flag(trial_df[EXPERIMENTER_REWARD_GIVEN_COLUMN])
+        & ~make_no_choice_action_mask(trial_df['action'])
+    )
+    missing_behavioral_choice_time = behavioral_choice & ~present_choice_time
+    if missing_behavioral_choice_time.any():
+        bad_rows = trial_df.index[missing_behavioral_choice_time].tolist()
+        raise ValueError(
+            "Choice trials must have numeric choice_time before saving. "
+            f"Rows with missing choice_time: {bad_rows}"
+        )
+
+    choice_time_since_start = np.full(trial_df.shape[0], missing_value, dtype=object)
+    choice_time_since_start[present_choice_time.to_numpy()] = (
+        trial_df.loc[present_choice_time, 'choice_time'].astype(float) - st_time
+    )
+    trial_df['choice_time_since_start'] = choice_time_since_start
 
     n_trials = len(trial_df['state'])
     trial_df['p_active_rew'] = np.ones(n_trials) * p_active_rew

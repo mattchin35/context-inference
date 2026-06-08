@@ -7,13 +7,10 @@ ready to go, and to prepare the core of my analysis methods for a simple publica
 I want to do the fancier analyses, but this content will be the core of my learning as a neurophysiologist.
 
 # Current goals
-- Code needs to be refactored and read over to make sure that I understand and trust it (much of it was Codex generated).
-- Single-session behavior runs should go through the full pipeline.
-- Multisession analyses should combine a set of blocks or trials together to analyze the presence of behavior modes
-across sessions.
-- HPC analyses should be done by training phase (late training, mid-training, early training) to look for consistent patterns.
-- PFC and V1 analyses should repeat HPC analyses.
+- I need to read and refactor decoding code for refactoring and learning pynapple (much of it was Codex generated).
 - HPC and PFC single units can be analyzed for representation of context and choice variables.
+  - This will start with simple heatmaps of firing rates or overall firing sums. Sort by correct-rewarded trial responses, then plot same sorting for other conditions.
+  - Start with overall firing sums in the +/- .5s interval, then move to 100ms intervals, then move to finer intervals if it seems useful (50 or 20 ms)
 - HPC units can be used to predict PFC units.
 - HPC spike-phase-locking to HPC theta
 - PFC spike-phase-locking to HPC theta
@@ -22,21 +19,41 @@ across sessions.
 Anything for single-unit analyses can work with "good" units as a first pass, but the code should be 
 designed to be easily applied to any unit desired.
 
+
+## General behavior assessment
+I need to improve the overall assessment of mouse behavior, beyond the HMM strategies and reward history-trials to switch correlation.
+1. Oracle choices - the correct choice on each trial should be marked and the mouse's % correct should be plotted over subsequent sessions. 
+I think some code already exists for session % correct that can be expanded on. 
+2. Oracle reward-collection. Using the correct choice on each trial, calculate the expected reward for a session using the active reward probability.
+Compare the mouse's actual reward collection to the expected reward collection, and plot that over subsequent sessions.
+3. Ideal observer choices - using the reward history and a task-appropriate strategy, calculate the ideal observer's choice on each trial.
+Compare the mouse's actual choices to the ideal observer's choices, and plot that over subsequent sessions.
+4. Ideal observer reward-collection (i.e. "regret") - using the ideal observer's choices, calculate the expected reward for a session using the active reward probability.
+Compare the mouse's actual reward collection to the ideal observer's expected reward collection, and plot that over subsequent sessions.
+
+For the ideal observer, I will use greedy version of the HMM-doubt model, which biases to reward rather than accumulating evidence, and 
+accumulates doubt/evidence to switch as a heuristic to change sides (it also allows me to change the observer's trials-to-switch).
+
+
 ## Single-session behavior analysis
-Debug code to do a full analysis of a single session. Refactor code used for readability, to remove dead code, 
-and to make sure Codex-generated code is trustworthy. I'll probably want to double-check on any 'None' vs np.nan 
-usage, in code and in saved csvs.
+Sufficently done for now
 
 ## Multi-session behavior analysis
-Given a set of sessions, I should be able to plot the learning curve, combine block data for LM-HMM analysis, 
-and combine trial data for GLM-HMM analysis. In the future this can be expanded to infinite HMM use. After creation,
-refactor/redesign/read code for readability and trustworthiness.
+Sufficiently done for now, but a codebase-wide refactor remains to be done for some naming conventions. 
+In the future this can be expanded to infinite HMM use. 
 
 ## Regional basic analyses
 1. Replicate HPC analyses for V1 units, compare to HPC.
 2. Replicate HPC analyses for PFC units, compare to HPC.
 
-Read and refactor code for readability and trustworthiness, and also to learn to use pynapple.
+These have been done, but I haven't read/refactored or learned pynapple from it yet.
+
+## Raw data plots
+1. PSTH of licks and spikes. Licks should have L/R separated, trial conditions should be separated, but if I could have all the conditions and licks on the same plot that would be excellent.
+2. Heatmaps of unit firing rates separated by trial condition, sorted by correct-rewarded trial responses. Look for 
+populations that respond to context, choice, or reward variables.
+3. Plot the same heatmaps for finer time intervals (100ms, 50ms, etc) to look for more specific temporal dynamics of those responses.
+4. Examine HPC/V1/PFC differences in those responses.
 
 ## Single-unit prediction analyses
 1. Use HPC units to predict PFC units. Start by using simple GLMs and poisson GLIMs.

@@ -312,7 +312,8 @@ def get_session_boundary_markers(
 
 def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool=False, model_dict=None,
                      num_states=2, random_seed: int | None = None,
-                     predicted_state_line_width: float | None = None):
+                     predicted_state_line_width: float | None = None,
+                     state_plot_figsize: tuple[float, float] | None = None):
     """Fit MLE block LM-HMM states and assign them back to the block table.
 
     Parameters
@@ -336,6 +337,9 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     predicted_state_line_width : float or None, default=None
         Optional linewidth for predicted-state summary traces. None preserves
         the existing plotting defaults.
+    state_plot_figsize : tuple[float, float] or None, default=None
+        Optional matplotlib figure size in inches for predicted-state summary
+        traces. None preserves the existing plotting defaults.
 
     Returns
     -------
@@ -414,6 +418,7 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             session_boundary_positions=session_boundary_positions,
             session_boundary_labels=session_boundary_labels,
             line_width=predicted_state_line_width,
+            figsize=state_plot_figsize,
         )
         ax[0].set_title("MLE HMM states")
         save_path = figure_path / '{}_mle_predicted_states.png'.format(sess_id_tag)
@@ -444,7 +449,8 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
 def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool = False,
                      num_states=2, prior_sigma=1, prior_alpha=1, model_dict=None,
                      random_seed: int | None = None,
-                     predicted_state_line_width: float | None = None):
+                     predicted_state_line_width: float | None = None,
+                     state_plot_figsize: tuple[float, float] | None = None):
     """Fit MAP block LM-HMM states and assign them back to the block table.
 
     Parameters
@@ -472,6 +478,9 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     predicted_state_line_width : float or None, default=None
         Optional linewidth for predicted-state summary traces. None preserves
         the existing plotting defaults.
+    state_plot_figsize : tuple[float, float] or None, default=None
+        Optional matplotlib figure size in inches for predicted-state summary
+        traces. None preserves the existing plotting defaults.
 
     Returns
     -------
@@ -562,6 +571,7 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             session_boundary_positions=session_boundary_positions,
             session_boundary_labels=session_boundary_labels,
             line_width=predicted_state_line_width,
+            figsize=state_plot_figsize,
         )
         ax[0].set_title("MAP HMM states")
         save_path = figure_path / '{}_map_predicted_states.png'.format(sess_id_tag)
@@ -622,7 +632,8 @@ def save_block_model_dict(model_dict: dict, processed_data_path: Path, sess_id_f
 
 def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.DataFrame, session: Session, num_states: int=2,
                        prior_alpha=1, prior_sigma=1, random_seed: int | None = None,
-                       predicted_state_line_width: float | None = None):
+                       predicted_state_line_width: float | None = None,
+                       state_plot_figsize: tuple[float, float] | None = None):
     """Run MLE and MAP block LM-HMM modeling and save block-level outputs.
 
     Parameters
@@ -648,6 +659,9 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
     predicted_state_line_width : float or None, default=None
         Optional linewidth for predicted-state summary traces. None preserves
         the existing single-session plotting defaults.
+    state_plot_figsize : tuple[float, float] or None, default=None
+        Optional matplotlib figure size in inches for predicted-state summary
+        traces. None preserves the existing single-session plotting defaults.
 
     Returns
     -------
@@ -665,6 +679,7 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         num_states=num_states,
         random_seed=mle_seed,
         predicted_state_line_width=predicted_state_line_width,
+        state_plot_figsize=state_plot_figsize,
     )
     map_model_dict, block_performance = map_block_states(
         block_performance,
@@ -677,6 +692,7 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         prior_sigma=prior_sigma,
         random_seed=map_seed,
         predicted_state_line_width=predicted_state_line_width,
+        state_plot_figsize=state_plot_figsize,
     )
     save_block_model_dict(
         map_model_dict,

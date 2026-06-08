@@ -98,7 +98,7 @@ def plot_experiment(states: np.ndarray, actions: np.ndarray, rewards: np.ndarray
     """
     Plot a session's choices alongside the relative value and/or probability of a left choice.
     Provide the values/probabilities to plot as dicts with value, p_left, model_label (like HMM or RFLR), and color.
-    Values and pLeft should match the length of the dataframe trials. How should I handle skip/give_reward trials?
+    Values and pLeft should match the length of the dataframe trials.
     """
 
     trial_ix = np.arange(actions.size)
@@ -618,4 +618,3 @@ def main():
 if __name__ == '__main__':
     main()
     # rnn_main()
-

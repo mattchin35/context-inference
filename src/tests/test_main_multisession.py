@@ -278,6 +278,72 @@ def test_prepare_learning_curve_data_drops_none_slopes_and_returns_numeric_array
     assert block_counts.dtype.kind in {"f", "i"}
 
 
+def test_prepare_session_trials_to_correct_summary_computes_median_and_quartiles():
+    """Session TTC summaries should pool block types and report Q1/median/Q3."""
+    main_module = load_main_module()
+    first_session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    second_session = SimpleNamespace(sess_id_full="CT014_2025-12-16_153200", date="2025-12-16")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=first_session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_type": ["right_cued", "left_uncued", "right_uncued", "left_cued"],
+                    "trials_to_correct": [1, 3, 5, 7],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        ),
+        main_module.SavedSessionAnalysis(
+            session=second_session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_type": ["right_cued", "left_uncued", "right_uncued"],
+                    "trials_to_correct": [2, "None", 10],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        ),
+    ]
+
+    summary_df = main_module.prepare_session_trials_to_correct_summary(saved_sessions)
+
+    assert summary_df["date"].tolist() == ["2025-12-05", "2025-12-16"]
+    assert summary_df["session_id"].tolist() == [
+        "CT014_2025-12-05_165240",
+        "CT014_2025-12-16_153200",
+    ]
+    assert summary_df["n_valid_blocks"].tolist() == [4, 2]
+    assert summary_df["trials_to_correct_q1"].tolist() == [2.5, 4.0]
+    assert summary_df["trials_to_correct_median"].tolist() == [4.0, 6.0]
+    assert summary_df["trials_to_correct_q3"].tolist() == [5.5, 8.0]
+
+
+def test_prepare_session_trials_to_correct_summary_skips_invalid_sessions_with_warning():
+    """Sessions without numeric TTC values should be omitted with a user warning."""
+    main_module = load_main_module()
+    valid_session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    invalid_session = SimpleNamespace(sess_id_full="CT014_2025-12-16_153200", date="2025-12-16")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=valid_session,
+            block_performance=pd.DataFrame({"trials_to_correct": [1, 3]}),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        ),
+        main_module.SavedSessionAnalysis(
+            session=invalid_session,
+            block_performance=pd.DataFrame({"trials_to_correct": ["None", np.nan]}),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        ),
+    ]
+
+    with pytest.warns(UserWarning, match="CT014_2025-12-16_153200"):
+        summary_df = main_module.prepare_session_trials_to_correct_summary(saved_sessions)
+
+    assert summary_df["session_id"].tolist() == ["CT014_2025-12-05_165240"]
+    assert summary_df["n_valid_blocks"].tolist() == [2]
+
+
 def test_load_saved_multisession_augmented_trials_validates_required_columns(tmp_path):
     """Saved multisession trial input should load only when HMM columns exist.
 
@@ -290,7 +356,7 @@ def test_load_saved_multisession_augmented_trials_validates_required_columns(tmp
     -------
     None
         Asserts that a saved trial table with required GLM-HMM and inherited
-        block columns is loaded unchanged.
+        block columns is loaded with legacy reward flags normalized.
     """
     main_module = load_main_module()
     session = SimpleNamespace(
@@ -314,7 +380,8 @@ def test_load_saved_multisession_augmented_trials_validates_required_columns(tmp
         predictor_columns=("FQlearning_rel_value",),
     )
 
-    assert loaded.shape == trial_df.shape
+    assert "experimenter_reward_given" in loaded.columns
+    assert "give_reward" not in loaded.columns
     assert loaded["inherited_block_strategy"].tolist() == [0, 1]
     assert loaded["inherited_block_bias"].tolist() == [False, True]
 
@@ -354,13 +421,31 @@ def test_load_saved_multisession_augmented_trials_errors_when_inherited_columns_
         )
 
 
-def test_main_multisession_calls_plot_learning_curve_with_cleaned_data(tmp_path, monkeypatch):
-    """main_multisession should call the existing plotter with numeric data."""
+def test_main_multisession_calls_summary_plotters_with_cleaned_data(tmp_path, monkeypatch):
+    """main_multisession should call mouse-level plotters with cleaned data."""
     main_module = load_main_module()
     captured = {}
     coefficients = np.array([0.1, 0.3], dtype=float)
     block_counts = np.array([4, 6], dtype=int)
     dates = np.array(["2025-12-05", "2025-12-23"], dtype=object)
+    trials_to_correct_summary = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-23"],
+            "session_id": ["CT017_2025-12-05_000000", "CT017_2025-12-23_000000"],
+            "n_valid_blocks": [4, 6],
+            "trials_to_correct_q1": [1.5, 2.0],
+            "trials_to_correct_median": [3.0, 4.0],
+            "trials_to_correct_q3": [4.5, 6.0],
+        }
+    )
+    oracle_summary = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-23"],
+            "oracle_choice_accuracy": [0.6, 0.7],
+            "oracle_reward_fraction": [0.8, 0.9],
+            "oracle_reward_difference": [-2.0, -1.0],
+        }
+    )
 
     monkeypatch.setattr(
         main_module,
@@ -379,6 +464,56 @@ def test_main_multisession_calls_plot_learning_curve_with_cleaned_data(tmp_path,
         main_module.performance_plots,
         "plot_learning_curve",
         fake_plot_learning_curve,
+        raising=False,
+    )
+
+    monkeypatch.setattr(
+        main_module,
+        "prepare_session_trials_to_correct_summary",
+        lambda saved_sessions: trials_to_correct_summary,
+        raising=False,
+    )
+
+    def fake_plot_trials_to_correct_session_summary(summary_df, plot_path, figure_id):
+        captured["trials_to_correct_summary"] = summary_df
+        captured["trials_to_correct_plot_path"] = plot_path
+        captured["trials_to_correct_figure_id"] = figure_id
+
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_trials_to_correct_session_summary",
+        fake_plot_trials_to_correct_session_summary,
+        raising=False,
+    )
+
+    monkeypatch.setattr(
+        main_module,
+        "load_overall_performance_summary",
+        lambda mouse, multi_session_save_path: oracle_summary,
+        raising=False,
+    )
+
+    def fake_plot_multisession_oracle_behavior(overall_df, plot_path, figure_id):
+        captured["oracle_summary"] = overall_df
+        captured["oracle_plot_path"] = plot_path
+        captured["oracle_figure_id"] = figure_id
+
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_multisession_oracle_behavior",
+        fake_plot_multisession_oracle_behavior,
+        raising=False,
+    )
+
+    def fake_plot_multisession_ideal_observer_behavior(overall_df, plot_path, figure_id):
+        captured["ideal_observer_summary"] = overall_df
+        captured["ideal_observer_plot_path"] = plot_path
+        captured["ideal_observer_figure_id"] = figure_id
+
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_multisession_ideal_observer_behavior",
+        fake_plot_multisession_ideal_observer_behavior,
         raising=False,
     )
     monkeypatch.setattr(
@@ -412,7 +547,16 @@ def test_main_multisession_calls_plot_learning_curve_with_cleaned_data(tmp_path,
     np.testing.assert_array_equal(captured["coefficients"], coefficients)
     np.testing.assert_array_equal(captured["switches_per_session"], block_counts)
     np.testing.assert_array_equal(captured["dates"], dates)
-    assert captured["figure_id"] == "CT014"
+    assert captured["figure_id"] == "CT017"
+    pd.testing.assert_frame_equal(
+        captured["trials_to_correct_summary"],
+        trials_to_correct_summary,
+    )
+    assert captured["trials_to_correct_figure_id"] == "CT017"
+    pd.testing.assert_frame_equal(captured["oracle_summary"], oracle_summary)
+    assert captured["oracle_figure_id"] == "CT017"
+    pd.testing.assert_frame_equal(captured["ideal_observer_summary"], oracle_summary)
+    assert captured["ideal_observer_figure_id"] == "CT017"
 
 
 def test_run_multisession_analysis_uses_saved_augmented_trials_when_requested(tmp_path, monkeypatch):
@@ -504,6 +648,8 @@ def test_run_multisession_analysis_uses_saved_augmented_trials_when_requested(tm
 
     assert captured["num_states"] == 3
     assert captured["predictor_columns"] == ("FQlearning_rel_value",)
+    assert "experimenter_reward_given" in captured["trial_df"].columns
+    assert "give_reward" not in captured["trial_df"].columns
     assert captured["trial_df"]["inherited_block_strategy"].tolist() == [0, 1]
 
 
@@ -600,6 +746,58 @@ def test_run_multisession_analysis_forwards_trial_plot_settings(tmp_path, monkey
     }
 
 
+def test_run_multisession_analysis_forwards_block_plot_settings(tmp_path, monkeypatch):
+    """Multisession analysis should forward block-state plotting settings."""
+    main_module = load_main_module()
+    synthetic_session = SimpleNamespace(
+        sess_id_full="CT014_multisession",
+        processed_data_path=tmp_path,
+        figure_path=tmp_path,
+    )
+    concatenated = SimpleNamespace(
+        block_performance=pd.DataFrame({"block_ix": [0, 1]}),
+        augmented_trial_df=pd.DataFrame({"cur_block": [0, 1], "action": [1, 0]}),
+        block_session_lengths=np.array([2]),
+        trial_session_lengths=np.array([2]),
+    )
+    captured = {}
+
+    def fake_run_block_modeling(
+        block_performance,
+        augmented_trial_df,
+        session,
+        num_states,
+        prior_alpha,
+        prior_sigma,
+        random_seed,
+        predicted_state_line_width=None,
+        state_plot_figsize=None,
+    ):
+        captured["predicted_state_line_width"] = predicted_state_line_width
+        captured["state_plot_figsize"] = state_plot_figsize
+        return (
+            block_performance.assign(inferred_strategy=[0, 1]),
+            augmented_trial_df.assign(inherited_block_strategy=[0, 1], inherited_block_bias=["False", "False"]),
+        )
+
+    monkeypatch.setattr(main_module.bssm, "run_block_modeling", fake_run_block_modeling, raising=False)
+    monkeypatch.setattr(main_module.tssm, "run_trial_modeling", lambda trial_df, **_kwargs: trial_df, raising=False)
+    monkeypatch.setattr(main_module, "save_concatenated_multisession_inputs", lambda *_args, **_kwargs: None)
+
+    main_module.run_multisession_analysis(
+        concatenated=concatenated,
+        session=synthetic_session,
+        trial_predictor_columns=("FQlearning_rel_value",),
+        block_predicted_state_line_width=0.4,
+        block_state_plot_figsize=(18, 6),
+    )
+
+    assert captured == {
+        "predicted_state_line_width": 0.4,
+        "state_plot_figsize": (18, 6),
+    }
+
+
 def test_run_multisession_analysis_runs_model_selection_before_modeling(tmp_path, monkeypatch):
     """Multisession orchestration should mirror the full `main_mouse` HMM flow."""
     main_module = load_main_module()
@@ -659,6 +857,7 @@ def test_run_multisession_analysis_runs_model_selection_before_modeling(tmp_path
         prior_sigma,
         random_seed,
         predicted_state_line_width=None,
+        state_plot_figsize=None,
     ):
         calls.append(("block", session.sess_id_full, num_states, prior_alpha, prior_sigma, random_seed))
         return (

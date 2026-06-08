@@ -1,12 +1,17 @@
 import json
 import numpy as np
 import re
+import warnings
 from behavior_analysis import performance_plots
 from behavior_analysis import raster_plots, session_analysis, simulate_priors
 from mouse_behavior_preprocessing import process_behavior_log
 from behavior_analysis import block_state_space_modeling as bssm
 from behavior_analysis import trial_state_space_modeling as tssm
 from behavior_analysis import gather_trial_features as gtf
+from src.behavior_analysis.project_utils import (
+    EXPERIMENTER_REWARD_GIVEN_COLUMN,
+    normalize_experimenter_reward_column,
+)
 import src.state_space_modeling.utilplot as utilplot
 import pickle as pkl
 from pathlib import Path
@@ -192,6 +197,7 @@ def preprocess_session_log(
                                                  output_path=processed_data_path,
                                                  session_info=session_info,
                                                   min_time=min_time, max_time=max_time)
+    trial_df = normalize_experimenter_reward_column(trial_df)
     water = process_behavior_log.calculate_water_delivery(event_df, session_info)
     return trial_df, event_df, water
 
@@ -244,6 +250,7 @@ def load_or_preprocess_session(
 
     event_df = pd.read_csv(processed_data_path / (sess_id_full + '_events.csv'), sep=',', na_filter=False)
     trial_df = pd.read_csv(processed_data_path / (sess_id_full + '_trials.csv'), sep=',', na_filter=False)
+    trial_df = normalize_experimenter_reward_column(trial_df)
     return trial_df, event_df, None
 
 
@@ -251,6 +258,8 @@ def load_or_run_session_analysis(
     trial_df: pd.DataFrame,
     session: Session,
     run_session_analysis: bool = False,
+    ideal_observer_n_replays: int = 100,
+    ideal_observer_seed: int | None = 12345,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Run session analysis or load existing analysis outputs.
 
@@ -265,6 +274,12 @@ def load_or_run_session_analysis(
     run_session_analysis : bool, default=False
         If True, recompute and save session-analysis outputs. If False, load
         existing saved analysis outputs.
+    ideal_observer_n_replays : int, default=100
+        Number of fixed-state ideal-observer replay samples used when
+        `run_session_analysis` is True.
+    ideal_observer_seed : int or None, default=12345
+        Seed used for fixed-state ideal-observer replay sampling when
+        `run_session_analysis` is True.
 
     Returns
     -------
@@ -274,7 +289,12 @@ def load_or_run_session_analysis(
         `(multisession_df, block_performance, augmented_trial_df)`.
     """
     if run_session_analysis:
-        return session_analysis.run_analysis(trial_df, session=session)
+        return session_analysis.run_analysis(
+            trial_df,
+            session=session,
+            ideal_observer_n_replays=ideal_observer_n_replays,
+            ideal_observer_seed=ideal_observer_seed,
+        )
 
     multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(
         session.sess_id_full,
@@ -559,6 +579,102 @@ def prepare_learning_curve_data(
     )
 
 
+def load_overall_performance_summary(
+    mouse: str,
+    multi_session_save_path: Path,
+) -> pd.DataFrame:
+    """Load the mouse-level overall-performance summary CSV.
+
+    Parameters
+    ----------
+    mouse : str
+        Mouse identifier used in `{mouse}_overall_performance.csv`.
+    multi_session_save_path : pathlib.Path
+        Directory containing the mouse-level cross-session summary CSV.
+
+    Returns
+    -------
+    pd.DataFrame
+        Overall-performance dataframe with shape `(n_sessions, n_columns)`,
+        sorted by `date`. Literal `"None"` sentinels are preserved so plotting
+        helpers can decide which metrics are valid.
+    """
+    multisession_summary_path = multi_session_save_path / f"{mouse}_overall_performance.csv"
+    overall_df = pd.read_csv(multisession_summary_path, sep=",", na_filter=False)
+    overall_df.sort_values(by="date", inplace=True)
+    overall_df.reset_index(drop=True, inplace=True)
+    return overall_df
+
+
+def prepare_session_trials_to_correct_summary(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+) -> pd.DataFrame:
+    """Summarize block trials-to-correct distributions for each session.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order. Each `block_performance`
+        table has shape `(n_blocks, n_block_columns)` and must contain
+        `trials_to_correct`, where values are counts in trials from a block
+        transition to correct responding. Literal `"None"` and other
+        nonnumeric values are treated as missing.
+
+    Returns
+    -------
+    pd.DataFrame
+        Session summary table with shape `(n_valid_sessions, 6)`. Columns are
+        `date`, `session_id`, `n_valid_blocks`, `trials_to_correct_q1`,
+        `trials_to_correct_median`, and `trials_to_correct_q3`. Quartiles and
+        medians are in trials. Sessions with no numeric values are skipped
+        after emitting a `UserWarning`.
+    """
+    columns = [
+        "date",
+        "session_id",
+        "n_valid_blocks",
+        "trials_to_correct_q1",
+        "trials_to_correct_median",
+        "trials_to_correct_q3",
+    ]
+    rows = []
+
+    for saved_session in saved_sessions:
+        session = saved_session.session
+        block_performance = saved_session.block_performance
+        if "trials_to_correct" not in block_performance.columns:
+            raise ValueError(
+                f"{session.sess_id_full} block_performance is missing 'trials_to_correct'."
+            )
+
+        trials_to_correct = pd.to_numeric(
+            block_performance["trials_to_correct"],
+            errors="coerce",
+        ).dropna()
+        if trials_to_correct.empty:
+            warnings.warn(
+                f"Skipping {session.sess_id_full} in trials-to-correct session summary "
+                "because it has no valid numeric trials_to_correct values.",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
+
+        quartiles = trials_to_correct.quantile([0.25, 0.5, 0.75])
+        rows.append(
+            {
+                "date": session.date,
+                "session_id": session.sess_id_full,
+                "n_valid_blocks": int(trials_to_correct.shape[0]),
+                "trials_to_correct_q1": float(quartiles.loc[0.25]),
+                "trials_to_correct_median": float(quartiles.loc[0.5]),
+                "trials_to_correct_q3": float(quartiles.loc[0.75]),
+            }
+        )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
 def build_multisession_session(
     mouse: str,
     multi_session_save_path: Path,
@@ -670,9 +786,10 @@ def load_saved_multisession_augmented_trials(
         raise FileNotFoundError(f"Saved multisession trial table not found: {trial_path}")
 
     trial_df = pd.read_csv(trial_path, sep=",", na_filter=False)
+    trial_df = normalize_experimenter_reward_column(trial_df)
     required_columns = {
         "prev_action",
-        "give_reward",
+        EXPERIMENTER_REWARD_GIVEN_COLUMN,
         "action",
         *predictor_columns,
     }
@@ -705,6 +822,7 @@ def run_multisession_analysis(
     trial_random_seed: int | None = None,
     trial_predictor_columns: tuple[str, ...] | None = None,
     block_predicted_state_line_width: float | None = None,
+    block_state_plot_figsize: tuple[float, float] | None = None,
     trial_input_source: str = "from_block_modeling",
     trial_state_plot_line_width: float | None = None,
     trial_state_plot_figsize: tuple[float, float] | None = None,
@@ -741,6 +859,9 @@ def run_multisession_analysis(
     block_predicted_state_line_width : float or None, default=None
         Optional linewidth for block predicted-state summary traces. None
         preserves the existing plotting defaults.
+    block_state_plot_figsize : tuple[float, float] or None, default=None
+        Optional matplotlib figure size in inches for block predicted-state
+        summary traces. None preserves the existing plotting defaults.
     trial_input_source : str, default="from_block_modeling"
         Source of the trial table passed to trial GLM-HMM workflows:
         `"from_block_modeling"` runs block modeling first, while
@@ -776,14 +897,14 @@ def run_multisession_analysis(
     block_model_selection = None
     trial_model_selection = None
     if trial_input_source == "from_block_modeling":
-        block_model_selection = bssm.run_information_criteria(
-            concatenated.block_performance,
-            session=session,
-            algorithm='MLE',
-            prior_alpha=prior_alpha,
-            prior_sigma=prior_sigma,
-            random_seed=block_random_seed,
-        )
+        # block_model_selection = bssm.run_information_criteria(
+        #     concatenated.block_performance,
+        #     session=session,
+        #     algorithm='MLE',
+        #     prior_alpha=prior_alpha,
+        #     prior_sigma=prior_sigma,
+        #     random_seed=block_random_seed,
+        # )
         save_concatenated_multisession_inputs(concatenated, session)
         modeled_block_df, modeled_trial_df = bssm.run_block_modeling(
             concatenated.block_performance,
@@ -794,6 +915,7 @@ def run_multisession_analysis(
             prior_sigma=prior_sigma,
             random_seed=block_random_seed,
             predicted_state_line_width=block_predicted_state_line_width,
+            state_plot_figsize=block_state_plot_figsize,
         )
     else:
         modeled_block_df = concatenated.block_performance
@@ -811,17 +933,17 @@ def run_multisession_analysis(
     #     predictor_columns=trial_predictor_columns,
     #     random_seed=trial_random_seed,
     # )
-    modeled_trial_df = tssm.run_trial_modeling(
-        modeled_trial_df,
-        session=session,
-        num_states=trial_num_states,
-        prior_alpha=prior_alpha,
-        prior_sigma=prior_sigma,
-        predictor_columns=trial_predictor_columns,
-        random_seed=trial_random_seed,
-        state_plot_line_width=trial_state_plot_line_width,
-        state_plot_figsize=trial_state_plot_figsize,
-    )
+    # modeled_trial_df = tssm.run_trial_modeling(
+    #     modeled_trial_df,
+    #     session=session,
+    #     num_states=trial_num_states,
+    #     prior_alpha=prior_alpha,
+    #     prior_sigma=prior_sigma,
+    #     predictor_columns=trial_predictor_columns,
+    #     random_seed=trial_random_seed,
+    #     state_plot_line_width=trial_state_plot_line_width,
+    #     state_plot_figsize=trial_state_plot_figsize,
+    # )
     return block_model_selection, trial_model_selection, modeled_block_df, modeled_trial_df
 
 
@@ -888,17 +1010,23 @@ def main_simulation():
 
 def main_multisession():
     """Analyze selected saved sessions as one continuous multisession table."""
-    mouse = 'CT014'
-    session_data_root = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014')
-    multi_session_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
-    # dates = ['2025-12-05', '2025-12-16', '2025-12-23']
-    dates = ['2025-12-02', '2025-12-04', '2025-12-05', '2025-12-16', '2025-12-17','2025-12-18', '2025-12-20','2025-12-21', '2025-12-23']
+    mouse = 'CT017'
+    session_data_root = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}')
+    multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
+    dates = ['2026-04-16', '2026-04-17', '2026-04-20',
+             '2026-04-21', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28', '2026-04-29', '2026-04-30',
+             '2026-05-01', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-08', '2026-05-09', '2026-05-10',
+             '2026-05-11',
+             '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-17', '2026-05-18',
+             '2026-05-19', '2026-05-20', '2026-05-21', '2026-05-22', '2026-05-23', '2026-05-24',
+             '2026-05-25', '2026-05-26', '2026-05-27', '2026-05-28', '2026-05-29', ]
     block_hmm_random_seed = 1001
     trial_hmm_random_seed = 2001
     block_predicted_state_line_width = 0.8
+    block_state_plot_figsize = (18, 6)
     trial_state_plot_line_width = 0.5
     trial_state_plot_figsize = (18, 6)
-    trial_input_source = "saved_augmented_trials"  # either from_block_modeling or saved_augmented_trials
+    trial_input_source = "from_block_modeling"  # either from_block_modeling or saved_augmented_trials
     trial_glm_predictor_columns = (
         "FQlearning_rel_value",
         "HMM_rel_value_logodds_decay",
@@ -918,6 +1046,20 @@ def main_multisession():
         plot_path=multi_session_save_path,
         dates=learning_dates,
     )
+    overall_performance_df = load_overall_performance_summary(
+        mouse=mouse,
+        multi_session_save_path=multi_session_save_path,
+    )
+    performance_plots.plot_multisession_oracle_behavior(
+        overall_df=overall_performance_df,
+        plot_path=multi_session_save_path,
+        figure_id=mouse,
+    )
+    performance_plots.plot_multisession_ideal_observer_behavior(
+        overall_df=overall_performance_df,
+        plot_path=multi_session_save_path,
+        figure_id=mouse,
+    )
 
     sessions = [
         find_saved_session_by_date(
@@ -929,6 +1071,12 @@ def main_multisession():
         for date in dates
     ]
     saved_sessions = [load_saved_session_analysis(session) for session in sessions]
+    trials_to_correct_summary = prepare_session_trials_to_correct_summary(saved_sessions)
+    performance_plots.plot_trials_to_correct_session_summary(
+        summary_df=trials_to_correct_summary,
+        plot_path=multi_session_save_path,
+        figure_id=mouse,
+    )
     concatenated = concatenate_saved_sessions(saved_sessions)
     multisession = build_multisession_session(
         mouse=mouse,
@@ -938,14 +1086,15 @@ def main_multisession():
     run_multisession_analysis(
         concatenated=concatenated,
         session=multisession,
-        block_num_states=3,
-        trial_num_states=4,
+        block_num_states=4,
+        trial_num_states=3,
         prior_alpha=1,
         prior_sigma=1,
         block_random_seed=block_hmm_random_seed,
         trial_random_seed=trial_hmm_random_seed,
         trial_predictor_columns=trial_glm_predictor_columns,
         block_predicted_state_line_width=block_predicted_state_line_width,
+        block_state_plot_figsize=block_state_plot_figsize,
         trial_input_source=trial_input_source,
         trial_state_plot_line_width=trial_state_plot_line_width,
         trial_state_plot_figsize=trial_state_plot_figsize,
@@ -957,18 +1106,20 @@ def main_mouse():
 
     ### USER FLAGS - CHOOSE THESE FOR EACH RUN ###
     preprocess_raw_session = False
-    run_session_analysis = False
+    run_session_analysis = True
+    ideal_observer_n_replays = 100
+    ideal_observer_seed = 12345
 
     ### HARDCODED DATA PATHS - CHOOSE THESE FOR EACH RUN ###
-    multi_session_save_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/cross_session_analysis')
-    # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251211_latentInference')
-    # sess_id_full = 'CT014_2025-12-11_134311'
-    # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251209_latentInference')
-    # sess_id_full = 'CT014_2025-12-09_141154'
-    session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251204')
-    sess_id_full = 'CT014_2025-12-04_123418'
-    # session_data_home = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251202')
-    # sess_id_full = 'CT014_2025-12-02_151940'
+    mouse = 'CT014'
+    date = '2025-12-16'
+    behavior_timestamp = '153200'
+    date_no_dash = date.replace('-', '')
+
+    multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
+    session_data_home = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/{mouse}_{date_no_dash}_latentInference')
+    sess_id_full = f'{mouse}_{date}_{behavior_timestamp}'
+    sess_id_abbreviated = mouse + '_' + date
 
     ### everything below this should be edited so it doesn't have to be commented in or out or have hardcodes changed ###
     raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
@@ -980,10 +1131,7 @@ def main_mouse():
 
     if match:
         mouse, date, timestamp = match.groups()
-        print(f"Mouse id: {mouse}")  # abc123
-        print(f"Date: {date}")  # YYYY-MM-DD
-        print(f"Time: {timestamp}")  # HHMMSS
-        sess_id_abbreviated = mouse + '_' + date
+        print(f"Found session for mouse id: {mouse}, date: {date}, behavior timestamp: {timestamp}")
     else:
         print("Double-check the session name!")
         return
@@ -1025,6 +1173,8 @@ def main_mouse():
         trial_df=trial_df,
         session=sess,
         run_session_analysis=run_session_analysis,
+        ideal_observer_n_replays=ideal_observer_n_replays,
+        ideal_observer_seed=ideal_observer_seed,
     )
 
     ### plot single session performance ###
@@ -1058,7 +1208,8 @@ def main_mouse():
         "HMM_rel_value_logodds_decay",
         "relative_doubt_index",
         "perseveration_regressor",
-        "time_to_choice"
+        # "relative_cf_value",
+        # "time_to_choice"
     )
 
     # prefer use of the information criteria for model selection, but here is how you'd use CV
@@ -1070,16 +1221,16 @@ def main_mouse():
     # block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
     #                                                 prior_alpha=1, prior_sigma=1, max_states=5,
     #                                                 random_seed=block_hmm_random_seed)
-
+    #
     # block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess,
     #                                                                 num_states=2,
     #                                                                 prior_alpha=1, prior_sigma=1,
     #                                                                 random_seed=block_hmm_random_seed)
 
     # load a saved block model instead of running it
-    block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
-    with open(block_model_dict_path, 'rb') as file:
-        block_model_dict = pkl.load(file)
+    # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
+    # with open(block_model_dict_path, 'rb') as file:
+    #     block_model_dict = pkl.load(file)
 
     ### trial state space modeling ###
     # trial_model_selection = tssm.run_information_criteria(
@@ -1091,15 +1242,15 @@ def main_mouse():
     #     predictor_columns=trial_glm_predictor_columns,
     #     random_seed=trial_hmm_random_seed,
     # )
-    augmented_trial_df = tssm.run_trial_modeling(
-        augmented_trial_df,
-        session=sess,
-        num_states=3,
-        prior_alpha=1,
-        prior_sigma=1,
-        predictor_columns=trial_glm_predictor_columns,
-        random_seed=trial_hmm_random_seed,
-    )
+    # augmented_trial_df = tssm.run_trial_modeling(
+    #     augmented_trial_df,
+    #     session=sess,
+    #     num_states=2,
+    #     prior_alpha=1,
+    #     prior_sigma=1,
+    #     predictor_columns=trial_glm_predictor_columns,
+    #     random_seed=trial_hmm_random_seed,
+    # )
 
 
 def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
@@ -1121,4 +1272,3 @@ if __name__ == '__main__':
     main_mouse()
     # main_multisession()
     # main_simulation()
-

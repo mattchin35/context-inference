@@ -300,7 +300,7 @@ def sort_channels_within_shank(indices, vertical_pos, horizontal_pos, sort_order
 
 
 if __name__ == "__main__":
-    home_folder = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251223_latentInference/ephys/catgt/catgt_run0_g0/run0_g0_imec1/")
+    home_folder = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251223_latentInference/ephys/catgt/catgt_run0_g0/run0_g0_imec0/")
     filepath = home_folder / "probe_json.json"
     output_path = home_folder
 
@@ -314,13 +314,15 @@ if __name__ == "__main__":
 
     print(f"Channels in brain: {len(brain_channels)}\n")
 
-    print("1-indexed shank-wise channel indices:")
+    index_offset = False
+    index_offset = int(index_offset)
+    print(f"{index_offset}-indexed shank-wise channel indices:")
     for shank, site_groups in shank_sites.items():
         print(f"Shank {shank}:")
         print("  In brain:")
-        print(site_groups["in_brain"] + 1)  # console conversion for matlab indexing
+        print(site_groups["in_brain"] + index_offset)  # console conversion for matlab indexing
         print("  Out of brain:")
-        print(site_groups["out_of_brain"] + 1)  # console conversion for matlab indexing
+        print(site_groups["out_of_brain"] + index_offset)  # console conversion for matlab indexing
         print()
 
     save_shank_sites_json(output_path, shank_sites)

@@ -255,6 +255,7 @@ def plot_block_lm_hmm_state_summary(
     session_boundary_positions: np.ndarray | None = None,
     session_boundary_labels: list[str] | np.ndarray | None = None,
     line_width: float | None = None,
+    figsize: tuple[float, float] | None = None,
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
     """Plot block LM-HMM posterior probabilities and observations.
 
@@ -282,13 +283,17 @@ def plot_block_lm_hmm_state_summary(
     line_width : float or None, default=None
         Optional linewidth for posterior, observation, bias, and weight traces.
         None preserves the existing single-session plotting defaults.
+    figsize : tuple[float, float] or None, default=None
+        Optional matplotlib figure size in inches. None preserves the existing
+        plotting default.
 
     Returns
     -------
     tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]
         Figure and axes for posterior probabilities and observations.
     """
-    fig, (prob_ax, obs_ax) = plt.subplots(2, 1)
+    figure_kwargs = {} if figsize is None else {"figsize": figsize}
+    fig, (prob_ax, obs_ax) = plt.subplots(2, 1, **figure_kwargs)
 
     time_bins = len(inputs)
     obs_dim = len(observations[0])
@@ -332,18 +337,18 @@ def plot_block_lm_hmm_state_summary(
             label='obs' * (obs_idx == 0),
             **trace_line_width_kwargs,
         )
-        obs_ax.plot(
-            biases[:, obs_idx] - lim * obs_idx,
-            ':k',
-            label='bias' * (obs_idx == 0),
-            **trace_line_width_kwargs,
-        )
-        obs_ax.plot(
-            weights[:, obs_idx, 0] - lim * obs_idx,
-            '--k',
-            label='weight' * (obs_idx == 0),
-            **trace_line_width_kwargs,
-        )
+    #     obs_ax.plot(
+    #         biases[:, obs_idx] - lim * obs_idx,
+    #         ':k',
+    #         label='bias' * (obs_idx == 0),
+    #         **trace_line_width_kwargs,
+    #     )
+    #     obs_ax.plot(
+    #         weights[:, obs_idx, 0] - lim * obs_idx,
+    #         '--k',
+    #         label='weight' * (obs_idx == 0),
+    #         **trace_line_width_kwargs,
+    #     )
 
     obs_ax.set_xlim(0, time_bins - 1)
     obs_ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), frameon=False, prop={'size': 10})
@@ -380,6 +385,7 @@ def plot_block_lm_hmm_presentation_summary(
     session_boundary_positions: np.ndarray | None = None,
     session_boundary_labels: list[str] | np.ndarray | None = None,
     line_width: float | None = None,
+    figsize: tuple[float, float] | None = None,
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
     """Plot presentation-style block LM-HMM state probabilities and weights.
 
@@ -409,13 +415,17 @@ def plot_block_lm_hmm_presentation_summary(
     line_width : float or None, default=None
         Optional linewidth for posterior, observation, bias, and weight traces.
         None preserves the existing single-session plotting defaults.
+    figsize : tuple[float, float] or None, default=None
+        Optional matplotlib figure size in inches. None preserves the existing
+        plotting default.
 
     Returns
     -------
     tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]
         Figure and axes for posterior probabilities and observations.
     """
-    fig, (prob_ax, obs_ax) = plt.subplots(2, 1)
+    figure_kwargs = {} if figsize is None else {"figsize": figsize}
+    fig, (prob_ax, obs_ax) = plt.subplots(2, 1, **figure_kwargs)
 
     time_bins = len(inputs)
     obs_dim = len(observations[0])
@@ -463,20 +473,20 @@ def plot_block_lm_hmm_presentation_summary(
             label='obs',
             **trace_line_width_kwargs,
         )
-        obs_ax.plot(
-            biases[:, 0] - lim,
-            ':k',
-            label='bias',
-            **trace_line_width_kwargs,
-        )
+    #     obs_ax.plot(
+    #         biases[:, 0] - lim,
+    #         ':k',
+    #         label='bias',
+    #         **trace_line_width_kwargs,
+    #     )
 
-    for input_idx in range(input_dim):
-        obs_ax.plot(
-            weights[:, 0, input_idx] - lim * input_idx,
-            '--k',
-            label=predictor_labels[input_idx],
-            **trace_line_width_kwargs,
-        )
+    # for input_idx in range(input_dim):
+    #     obs_ax.plot(
+    #         weights[:, 0, input_idx] - lim * input_idx,
+    #         '--k',
+    #         label=predictor_labels[input_idx],
+    #         **trace_line_width_kwargs,
+    #     )
 
     obs_ax.set_xlim(0, time_bins - 1)
     legend = obs_ax.legend(

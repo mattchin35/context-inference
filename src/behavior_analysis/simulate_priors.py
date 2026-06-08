@@ -7,6 +7,7 @@ import re
 import pickle as pkl
 import src.behavior_analysis.model_agents as model_agents
 import src.behavior_analysis.session_analysis as session_analysis
+from src.behavior_analysis.project_utils import get_experimenter_reward_flags
 from typing import Protocol, Optional, Union
 import time
 import json
@@ -96,9 +97,13 @@ def collect_agent_performance(trial_df: pd.DataFrame, agent: model_agents.Behavi
     action_dist = []
     rel_value = []
     actions = []
-    for action, reward, give_reward in zip(trial_df['action'], trial_df['reward'], trial_df['give_reward']):
-        # if action == 'None':  # skip any give_reward trials! This will also make output shorter, a 'None' needs to be added to this index...
-        if give_reward == 1:  # skip any give_reward trials! This will also make output shorter, a 'None' needs to be added to this index...
+    experimenter_reward_flags = get_experimenter_reward_flags(trial_df)
+    for action, reward, experimenter_reward_given in zip(
+        trial_df['action'],
+        trial_df['reward'],
+        experimenter_reward_flags,
+    ):
+        if experimenter_reward_given == 1:
             action_dist.append(pd.DataFrame([['None', 'None']], columns=['p_right', 'p_left']))
             rel_value.append('None')
             actions.append('None')
@@ -404,4 +409,3 @@ def grid_search_priors():
 if __name__ == '__main__':
     run_performance_collection()
     # grid_search_priors()
-

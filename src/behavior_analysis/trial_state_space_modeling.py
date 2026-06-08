@@ -13,8 +13,11 @@ import ssm
 from joblib import Parallel, delayed
 from typing import Protocol
 from src.behavior_analysis.project_utils import (
+    EXPERIMENTER_REWARD_GIVEN_COLUMN,
     is_present_value,
     is_zero_flag,
+    make_no_choice_action_mask,
+    normalize_experimenter_reward_column,
     spawn_child_seeds,
     temporary_numpy_seed,
 )
@@ -78,8 +81,8 @@ def make_valid_trial_glm_hmm_mask(
     ----------
     trial_df : pd.DataFrame
         Trialwise dataframe with shape `(n_trials, n_columns)`. Required
-        columns are `prev_action`, `give_reward`, `action`, and each selected
-        predictor column. If `require_inherited_strategy=True`,
+        columns are `prev_action`, `experimenter_reward_given`, `action`, and
+        each selected predictor column. If `require_inherited_strategy=True`,
         `inherited_block_strategy` is also required.
     predictor_columns : tuple[str, ...]
         Non-bias predictor columns that will be converted to the GLM-HMM input
@@ -92,10 +95,12 @@ def make_valid_trial_glm_hmm_mask(
     pd.Series
         Boolean mask with shape `(n_trials,)`, aligned to `trial_df.index`.
     """
+    trial_df = normalize_experimenter_reward_column(trial_df)
     valid_mask = (
         is_present_value(trial_df["prev_action"])
-        & is_zero_flag(trial_df["give_reward"])
+        & is_zero_flag(trial_df[EXPERIMENTER_REWARD_GIVEN_COLUMN])
         & is_present_value(trial_df["action"])
+        & ~make_no_choice_action_mask(trial_df["action"])
     )
     for predictor_name in predictor_columns:
         valid_mask = valid_mask & is_present_value(trial_df[predictor_name])
@@ -115,8 +120,8 @@ def prepare_trial_glm_hmm_data(
     ----------
     trial_df : pd.DataFrame
         Trialwise dataframe where rows correspond to task trials. Required base
-        columns are `prev_action`, `give_reward`, and `action`, plus each
-        selected predictor column in `predictor_columns`. If
+        columns are `prev_action`, `experimenter_reward_given`, and `action`,
+        plus each selected predictor column in `predictor_columns`. If
         `require_inherited_strategy=True`, `inherited_block_strategy` must also be
         present on valid rows. Real NaN values and string missing-value
         sentinels are invalid.
@@ -142,12 +147,13 @@ def prepare_trial_glm_hmm_data(
           valid trials
         - `predictor_labels`: list[str], regressor names in input-column order
     """
+    trial_df = normalize_experimenter_reward_column(trial_df)
     if isinstance(predictor_columns, str):
         predictor_columns = (predictor_columns,)
     if len(predictor_columns) == 0:
         raise ValueError("predictor_columns must include at least one non-bias GLM predictor.")
 
-    required_columns = {"prev_action", "give_reward", "action"}
+    required_columns = {"prev_action", EXPERIMENTER_REWARD_GIVEN_COLUMN, "action"}
     if require_inherited_strategy:
         required_columns.add("inherited_block_strategy")
     required_columns.update(predictor_columns)

@@ -7,7 +7,7 @@ import pandas as pd
 from threading import Thread
 import math
 import numpy as np
-from icecream import ic
+# from icecream import ic
 
 IRIG_BIT = Literal[True,False,'P'] # type for IRIG-H bits
 
@@ -176,7 +176,8 @@ def irig_h_to_datetime(irig_list: List[IRIG_BIT]) -> Optional[dt]:
         return dt.combine(datetime.date(year, 1, 1) + datetime.timedelta(days=(day_of_year - 1)), datetime.time(hours, minutes, seconds, deciseconds))
     except ValueError as e:
         print(f'Invalid IRIG timecode: {e}')
-        ic(seconds, minutes, hours, day_of_year, deciseconds, year)
+        # ic(seconds, minutes, hours, day_of_year, deciseconds, year)
+        print(f"seconds: {seconds}, minutes: {minutes}, hours: {hours}, day_of_year: {day_of_year}, deciseconds: {deciseconds}, year: {year}")
         return None
 
 def irig_h_to_posix(irig_list: List[IRIG_BIT]) -> Optional[float]:
@@ -552,8 +553,8 @@ if __name__ == "__main__":
     irig_list = generate_irig_h_frame(t)
     dt_decode = irig_h_to_datetime(irig_list)
     posix_decode = irig_h_to_posix(irig_list)
-    ic(unix_time, t, dt.fromtimestamp(unix_time))
-    ic(dt_decode, posix_decode)
+    # ic(unix_time, t, dt.fromtimestamp(unix_time))
+    # ic(dt_decode, posix_decode)
     print(irig_list)
     print(generate_irig_h_frame(dt.fromtimestamp(unix_time)))
     # print(irig_list[19:30])
@@ -561,11 +562,11 @@ if __name__ == "__main__":
     irig_bits_mapped = [irig_map[str(bit)] for bit in irig_list]
     print(irig_bits_mapped)
 
-    ic(dt.now(tz=timezone.utc).timetuple().tm_hour)
+    # ic(dt.now(tz=timezone.utc).timetuple().tm_hour)
     # day_of_year_bcd = bcd_encode(dt.now().timetuple().tm_yday, DAY_OF_YEAR_WEIGHTS)
     # ic(day_of_year_bcd)
     hour_bcd = bcd_encode(t.timetuple().tm_hour, HOURS_WEIGHTS)
-    ic(hour_bcd)
+    # ic(hour_bcd)
 
     irig_list=[2, 0, 1, 0, 0, 0, 0, 1, 0, 2, 1, 0, 1, 0, 0, 0, 0, 1, 0, 2, 1, 1, 1, 0, 0, 1, 0, 0, 0, 2, 1, 0, 1, 0, 0, 1, 0, 0, 1, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 1, 0, 1, 0, 0, 0, 1, 0, 0, 2]
     dt_decode = irig_h_to_datetime(irig_list)

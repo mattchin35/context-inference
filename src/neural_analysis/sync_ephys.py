@@ -490,15 +490,15 @@ def main_ni_only(
 
 
 def main_workflow() -> None:
-    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251205_latentInference")
-    sess_id_full: str = "CT014_2025-12-05_165240"
+    session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251211_latentInference")
+    sess_id_full: str = "CT014_2025-12-11_134311"
     output_root = session_data_home / "ephys" / "aligned"
-    sorting0_output_name = 'Kilosort2.5.2_2026-03-19_165539'
-    sorting1_output_name = 'Kilosort2.5.2_2026-03-19_173016'
+    sorting0_output_name = 'Kilosort2.5.2_2026-04-27_142633'
+    sorting1_output_name = 'Kilosort2.5.2_2026-04-27_145457'
     ni_event_lines = (2, 3)
     # Temporary workaround: set this to a nonzero value to shift all decoded
     # IMEC and NI timestamps by a constant number of hours.
-    utc_offset_hours = 0
+    utc_offset_hours = 1
 
     raw_ephys_folder = session_data_home / "ephys" / "raw" / "run0_g0"
     catgt_ephys_folder = session_data_home / "ephys" / "catgt" / "catgt_run0_g0"
@@ -559,5 +559,5 @@ def main_workflow() -> None:
 
 
 if __name__ == "__main__":
-    # main_workflow()
-    main_ni_only()
+    main_workflow()
+    #main_ni_only()
