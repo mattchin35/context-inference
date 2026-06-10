@@ -78,3 +78,24 @@ def test_plot_run_dataframe_accepts_dark_theme():
 def test_plot_run_dataframe_rejects_unknown_theme():
     with pytest.raises(ValueError, match="theme"):
         plot_run_dataframe(make_run_df(), theme="sepia")
+
+
+def test_plot_run_dataframe_can_hide_legend_and_use_coarse_xticks():
+    run_df = pd.DataFrame(
+        {
+            "state": ["left"] * 60 + ["right"] * 60,
+            "action": [1] * 60 + [0] * 60,
+            "reward": [0] * 120,
+            "agent_relative_value": [0.1] * 60 + [-0.1] * 60,
+        }
+    )
+
+    _, ax = plot_run_dataframe(
+        run_df,
+        value_columns=["agent_relative_value"],
+        show_legend=False,
+        xtick_interval=50,
+    )
+
+    assert ax.get_legend() is None
+    assert ax.get_xticks().tolist() == [0, 50, 100]

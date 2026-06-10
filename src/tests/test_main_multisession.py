@@ -22,6 +22,7 @@ def load_main_module():
     behavior_analysis_pkg.raster_plots = ModuleType("behavior_analysis.raster_plots")
     behavior_analysis_pkg.session_analysis = ModuleType("behavior_analysis.session_analysis")
     behavior_analysis_pkg.simulate_priors = ModuleType("behavior_analysis.simulate_priors")
+    behavior_analysis_pkg.plot_model_values = ModuleType("behavior_analysis.plot_model_values")
     behavior_analysis_pkg.block_state_space_modeling = ModuleType(
         "behavior_analysis.block_state_space_modeling"
     )
@@ -36,6 +37,7 @@ def load_main_module():
     sys.modules["behavior_analysis.raster_plots"] = behavior_analysis_pkg.raster_plots
     sys.modules["behavior_analysis.session_analysis"] = behavior_analysis_pkg.session_analysis
     sys.modules["behavior_analysis.simulate_priors"] = behavior_analysis_pkg.simulate_priors
+    sys.modules["behavior_analysis.plot_model_values"] = behavior_analysis_pkg.plot_model_values
     sys.modules[
         "behavior_analysis.block_state_space_modeling"
     ] = behavior_analysis_pkg.block_state_space_modeling

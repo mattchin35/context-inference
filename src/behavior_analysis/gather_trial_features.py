@@ -10,6 +10,7 @@ from src.behavior_analysis.project_utils import (
 )
 import json
 from typing import Optional
+from src.behavior_analysis import residualization
 
 
 @dataclass
@@ -326,6 +327,66 @@ def collect_model_value_features(
     return augmented_trial_df
 
 
+def collect_residualized_trial_features(augmented_trial_df: pd.DataFrame) -> pd.DataFrame:
+    """Add residualized value predictors to an augmented trial table.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required
+        columns are `FQlearning_rel_value`, `HMM_rel_value_logodds_decay`,
+        and `relative_hazard_index`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `augmented_trial_df` with `HMM_decay_res` and
+        `rel_hazard_res` columns added. Rows with missing/non-numeric source
+        values are kept and receive `None` in residualized columns.
+    """
+    required_columns = [
+        "FQlearning_rel_value",
+        "HMM_rel_value_logodds_decay",
+        "relative_hazard_index",
+    ]
+    missing_columns = [column for column in required_columns if column not in augmented_trial_df.columns]
+    if missing_columns:
+        raise ValueError(f"augmented_trial_df is missing required residualization columns: {missing_columns}")
+
+    numeric_features = augmented_trial_df[required_columns].apply(pd.to_numeric, errors="coerce")
+    n_trials = augmented_trial_df.shape[0]
+    hmm_decay_res = np.full(n_trials, None, dtype=object)
+    rel_hazard_res = np.full(n_trials, None, dtype=object)
+
+    # Residualize overlapping value representations so trial GLMs can compare
+    # HMM-unique and hazard-unique components without replacing the raw predictors.
+    valid_hmm_rows = numeric_features[["FQlearning_rel_value", "HMM_rel_value_logodds_decay"]].notna().all(axis=1)
+    if valid_hmm_rows.any():
+        hmm_decay_res[valid_hmm_rows.to_numpy()] = residualization.residualize_values(
+            target_values=numeric_features.loc[valid_hmm_rows, "HMM_rel_value_logodds_decay"],
+            control_regressors=numeric_features.loc[valid_hmm_rows, ["FQlearning_rel_value"]],
+        )
+
+    residualized_feature_frame = numeric_features.copy()
+    residualized_feature_frame["HMM_decay_res"] = pd.to_numeric(hmm_decay_res, errors="coerce")
+    valid_hazard_rows = residualized_feature_frame[
+        ["FQlearning_rel_value", "HMM_decay_res", "relative_hazard_index"]
+    ].notna().all(axis=1)
+    if valid_hazard_rows.any():
+        rel_hazard_res[valid_hazard_rows.to_numpy()] = residualization.residualize_values(
+            target_values=residualized_feature_frame.loc[valid_hazard_rows, "relative_hazard_index"],
+            control_regressors=residualized_feature_frame.loc[
+                valid_hazard_rows,
+                ["FQlearning_rel_value", "HMM_decay_res"],
+            ],
+        )
+
+    augmented_trial_df = augmented_trial_df.copy()
+    augmented_trial_df["HMM_decay_res"] = hmm_decay_res
+    augmented_trial_df["rel_hazard_res"] = rel_hazard_res
+    return augmented_trial_df
+
+
 def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[TaskParams] = None) -> tuple[pd.DataFrame, TaskParams]:
     """
     Add model-derived relative value features to an existing augmented trial dataframe.
@@ -342,6 +403,7 @@ def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[Ta
         hazard_lam=params.hazard_lam,
         perseveration_decay=params.perseveration_decay,
     )
+    augmented_trial_df = collect_residualized_trial_features(augmented_trial_df)
     return augmented_trial_df, params
 
 

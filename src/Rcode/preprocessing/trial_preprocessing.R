@@ -140,7 +140,9 @@ cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
   df <- convertNoneToNA(df, c("HMM_rel_value_logodds", "HMM_rel_value_logodds_decay",
                               "Qlearning_prob_left_approx", "FQlearning_prob_left_approx",
                               "HMM_prob_left_logodds_approx", "HMM_prob_left_logodds_decay_approx",
-                              "relative_omissions_index", "relative_doubt_index"))
+                              "relative_omissions_index", "relative_doubt_index", "relative_hazard_index",
+                              # "HMM_rel_value_logodds_decay",
+                              "HMM_decay_res", "rel_hazard_res",))
   df <- convertNoneToNA(df, c("prev_action", "prev_reward"))
   df <- removeNARows(df, "action")
   df <- convertNoneToNA(df, c("inferred_strategy"))

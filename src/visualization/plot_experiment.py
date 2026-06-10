@@ -6,7 +6,6 @@ import controller
 from typing import List, Optional
 from pathlib import Path
 import pickle as pkl
-import demo_tasks
 
 plt.style.use('dark_background')
 

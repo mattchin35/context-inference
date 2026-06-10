@@ -164,14 +164,16 @@ def scatter_trials_to_correct(block_performance: pd.DataFrame, slope: float, int
     block_type = block_performance['block_type'].to_numpy()
     trials_to_correct = block_performance['trials_to_correct'].astype(int).to_numpy()
     prev_consecutive_rewards = block_performance['prev_consecutive_rewards'].astype(int).to_numpy()
+    
+    # use this block for separate colors 
+    for b in block_types:
+        ix = np.where(block_type == b)[0]
+        if len(ix) > 0:
+            ax1.plot(prev_consecutive_rewards[ix], trials_to_correct[ix],
+                     'o', color=color_dict[b], label=b.replace('_', ' '))
 
-    # for b in block_types:
-    #     ix = np.where(block_type == b)[0]
-    #     if len(ix) > 0:
-    #         ax1.plot(prev_consecutive_rewards[ix], trials_to_correct[ix],
-    #                  'o', color=color_dict[b], label=b.replace('_', ' '))
-
-    ax1.plot(prev_consecutive_rewards, trials_to_correct, 'o')
+    # use this block for one color
+    # ax1.plot(prev_consecutive_rewards, trials_to_correct, 'o')
 
     x = np.array([0, np.amax(prev_consecutive_rewards)])
     ax1.plot(x, slope*x + intercept, 'k--')

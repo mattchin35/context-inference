@@ -8,6 +8,9 @@ import pickle as pkl
 import re
 import json
 
+from src.behavior_analysis import ideal_observer
+from src.visualization.agent_run_plot import plot_run_dataframe
+
 plt.style.use('dark_background')
 
 """
@@ -604,6 +607,75 @@ def plot_user_defined_trial_columns(
     plt.savefig(figure_path / '{}.{}'.format(output_name, figure_format), format=figure_format, dpi=300)
     plt.close()
     print('saved figure as {}'.format(output_name))
+
+
+def plot_mouse_history_ideal_observer_values(
+    trial_df: pd.DataFrame,
+    figure_path: Path,
+    sess_id_full: str,
+    params: ideal_observer.IdealObserverParams | None = None,
+    theme: str = "light",
+    value_columns: list[str] | None = None,
+    show_action_probability: bool = False,
+    show_legend: bool = False,
+    xtick_interval: int | None = 50,
+) -> tuple[pd.DataFrame, Path]:
+    """Plot observer values computed from the mouse's actual trial history.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_columns)`. Required columns are
+        those accepted by
+        `ideal_observer.compute_mouse_history_observer_run`: `state`,
+        `action`, `reward`, `p_active_rew`, and `p_switch`. Choice convention
+        is `0` right and `1` left; rewards are in task reward units.
+    figure_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    sess_id_full : str
+        Full session identifier used in the plot title and filename.
+    params : ideal_observer.IdealObserverParams or None
+        Observer parameters. Defaults match session-level ideal-observer
+        summaries.
+    theme : str, default="light"
+        Plot theme forwarded to `plot_run_dataframe`.
+    value_columns : list[str] or None
+        Observer value columns to plot. Defaults to `agent_relative_value`
+        only, while allowing HMM and doubt components to be requested manually.
+    show_action_probability : bool, default=False
+        If True, include pre-update P(left) scaled to the action axis.
+    show_legend : bool, default=False
+        If True, draw a legend.
+    xtick_interval : int or None, default=50
+        Tick interval in trials. If None, use context-change ticks.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pathlib.Path]
+        The observer run dataframe with shape `(n_valid_trials, n_columns)` and
+        the saved PNG path.
+    """
+    observer_run_df = ideal_observer.compute_mouse_history_observer_run(
+        trial_df,
+        params=params,
+    )
+    if value_columns is None:
+        value_columns = ["agent_relative_value"]
+    save_path = figure_path / f"{sess_id_full}_mouse_history_ideal_observer_values.png"
+    fig, _ = plot_run_dataframe(
+        observer_run_df,
+        title=f"{sess_id_full} mouse-history ideal observer",
+        value_columns=value_columns,
+        show_action_probability=show_action_probability,
+        show_legend=show_legend,
+        xtick_interval=xtick_interval,
+        save_path=save_path,
+        show=False,
+        theme=theme,
+    )
+    plt.close(fig)
+    print("saved figure as {}".format(save_path))
+    return observer_run_df, save_path
 
 
 def main():

@@ -35,7 +35,10 @@ TRIAL_GLM_PREDICTOR_LABELS = {
     "HMM_rel_value_logodds_decay": "HMM_decay",
     "relative_doubt_index": "doubt",
     "perseveration_regressor": "perseveration",
+    "HMM_decay_res": "HMM_decay_res",
+    "rel_hazard_res": "rel_hazard_res",
     "time_to_choice": "time_to_choice",
+    "relative_hazard_index": "hazard",
 }
 DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS = (
     "FQlearning_rel_value",

@@ -634,6 +634,7 @@ def plot_block_lm_hmm_weights(
 
     fig.tight_layout()
     fig.suptitle("Model weights")
+    # fig.suptitle("Model weights")
     return fig, axes_array
 
 

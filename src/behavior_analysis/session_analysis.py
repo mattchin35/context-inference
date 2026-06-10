@@ -173,6 +173,56 @@ def get_block_types(trial_df: pd.DataFrame) -> np.array:
     return block_types
 
 
+def get_numeric_correct_values(
+    trial_df: pd.DataFrame,
+    valid_mask: np.ndarray | pd.Series | None = None,
+) -> np.ndarray:
+    """Return numeric correctness values, validating rows used for summaries.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_columns)`. Required column is
+        `correct`, with values encoded as numeric 0/1, booleans, or string
+        equivalents such as `"0"`, `"1"`, `"True"`, and `"False"`.
+    valid_mask : np.ndarray, pd.Series, or None
+        Boolean mask with shape `(n_trials,)`. Rows marked True must contain a
+        valid correctness value. If None, all rows are validated.
+
+    Returns
+    -------
+    np.ndarray
+        Float array with shape `(n_trials,)`; correct choices are 1.0 and
+        incorrect choices are 0.0. Rows outside `valid_mask` may contain NaN if
+        their source value was missing.
+    """
+    if "correct" not in trial_df.columns:
+        raise ValueError("trial_df must contain a 'correct' column.")
+
+    if valid_mask is None:
+        valid_mask_array = np.ones(trial_df.shape[0], dtype=bool)
+    else:
+        valid_mask_array = np.asarray(valid_mask, dtype=bool)
+        if valid_mask_array.shape[0] != trial_df.shape[0]:
+            raise ValueError(
+                "valid_mask must have one entry per trial: "
+                f"got {valid_mask_array.shape[0]} for {trial_df.shape[0]} trials."
+            )
+
+    correct_values = trial_df["correct"].copy()
+    text_values = correct_values.astype(str).str.strip().str.lower()
+    normalized_values = correct_values.mask(text_values == "true", 1)
+    normalized_values = normalized_values.mask(text_values == "false", 0)
+    numeric_values = pd.to_numeric(normalized_values, errors="coerce")
+
+    invalid_mask = valid_mask_array & numeric_values.isna().to_numpy()
+    if invalid_mask.any():
+        invalid_values = sorted(correct_values.loc[invalid_mask].astype(str).unique())
+        raise ValueError(f"correct values must be numeric 0/1 for behavioral choices, got: {invalid_values}")
+
+    return numeric_values.to_numpy(dtype=float)
+
+
 def percent_correct(augmented_trial_df: pd.DataFrame) -> dict:
     """Calculate the percentage of correct choices made by the agent. Calculate for
     left uncued, right uncued, left cued, and right cued."""
@@ -180,33 +230,34 @@ def percent_correct(augmented_trial_df: pd.DataFrame) -> dict:
     assert 'correct' in augmented_trial_df.keys(), "'correct' key was not found in dataframe."
 
     behavioral_choice_ix = make_behavioral_choice_mask(augmented_trial_df)
+    correct_values = get_numeric_correct_values(augmented_trial_df, behavioral_choice_ix)
     left_cued_ix = (augmented_trial_df['block_type'] == 'left_cued') & behavioral_choice_ix
     left_uncued_ix = (augmented_trial_df['block_type'] == 'left_uncued') & behavioral_choice_ix
     right_cued_ix = (augmented_trial_df['block_type'] == 'right_cued') & behavioral_choice_ix
     right_uncued_ix = (augmented_trial_df['block_type'] == 'right_uncued') & behavioral_choice_ix
 
     if left_cued_ix.sum():
-        left_cued_correct = np.sum(augmented_trial_df.loc[left_cued_ix, 'correct']) / np.sum(left_cued_ix)
+        left_cued_correct = np.sum(correct_values[np.asarray(left_cued_ix)]) / np.sum(left_cued_ix)
     else:
         left_cued_correct = 'None'
 
     if left_uncued_ix.sum():
-        left_uncued_correct = np.sum(augmented_trial_df.loc[left_uncued_ix, 'correct']) / np.sum(left_uncued_ix)
+        left_uncued_correct = np.sum(correct_values[np.asarray(left_uncued_ix)]) / np.sum(left_uncued_ix)
     else:
         left_uncued_correct = 'None'
 
     if right_cued_ix.sum():
-        right_cued_correct = np.sum(augmented_trial_df.loc[right_cued_ix, 'correct']) / np.sum(right_cued_ix)
+        right_cued_correct = np.sum(correct_values[np.asarray(right_cued_ix)]) / np.sum(right_cued_ix)
     else:
         right_cued_correct = 'None'
 
     if right_uncued_ix.sum():
-        right_uncued_correct = np.sum(augmented_trial_df.loc[right_uncued_ix, 'correct']) / np.sum(right_uncued_ix)
+        right_uncued_correct = np.sum(correct_values[np.asarray(right_uncued_ix)]) / np.sum(right_uncued_ix)
     else:
         right_uncued_correct = 'None'
 
     if behavioral_choice_ix.sum():
-        overall = np.sum(augmented_trial_df.loc[behavioral_choice_ix, 'correct']) / np.sum(behavioral_choice_ix)
+        overall = np.sum(correct_values[np.asarray(behavioral_choice_ix)]) / np.sum(behavioral_choice_ix)
     else:
         overall = 'None'
     return dict(left_cued_correct=left_cued_correct, left_uncued_correct=left_uncued_correct,
@@ -501,7 +552,9 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
         n_switches, normalized_switches = get_block_switches(cur_block_df)
         behavioral_choice_ix = make_behavioral_choice_mask(cur_block_df)
         behavioral_block_df = cur_block_df[behavioral_choice_ix]
-        correct_ix = np.nonzero(behavioral_block_df['correct'])[0]
+        correct_values = get_numeric_correct_values(cur_block_df, behavioral_choice_ix)
+        behavioral_correct_values = correct_values[np.asarray(behavioral_choice_ix)]
+        correct_ix = np.nonzero(behavioral_correct_values)[0]
         if correct_ix.size:
             trials_to_correct = correct_ix[0]
         else:
@@ -516,7 +569,7 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
                            n_switches=n_switches,
                            normalized_switches=normalized_switches,
                            confusion_flag=n_switches > 3,
-                           n_correct=np.sum(behavioral_block_df['correct']),
+                           n_correct=int(np.sum(behavioral_correct_values)),
                            percent_correct=performance['overall_correct'],
                            n_rewarded=np.sum(behavioral_block_df['reward']),
                            mean_choice_time=mean_or_nan(choice_latency[cur_block_ix.to_numpy()]),
@@ -563,6 +616,9 @@ def summarize_session_performance(
     session_performance = percent_correct(augmented_trial_df)
     session_performance = session_performance | summarize_trials_to_correct(block_performance)
     session_performance = session_performance | general_behavior_assessment.summarize_oracle_behavior(
+        augmented_trial_df
+    )
+    session_performance = session_performance | general_behavior_assessment.summarize_rewarded_choice_switching(
         augmented_trial_df
     )
     session_performance = session_performance | ideal_observer.summarize_ideal_observer_behavior(
