@@ -111,3 +111,28 @@ trial GLM-HMM data-contract issues.
 - Added focused pytest coverage for seed helpers, trial predictor selection,
   trial GLM-HMM valid-mask behavior, inherited-strategy requirements, and saved
   comparison plots. The full behavior-analysis suite passed after these changes.
+
+# 2026/06/13
+
+Added the first pass of a local Streamlit unit raster/PSTH browser for neural
+session inspection. The goal is to browse one selected unit and trial subset at
+a time instead of generating an unmanageable number of static spike plots.
+
+- Added `src/neural_analysis/psth_webapp.py` as the user-facing Streamlit entry
+  point. It loads one session at a time, lets the user edit session/sorter/aligned
+  spike paths, select CT014 channel presets or custom channels, filter units by
+  quality label, select a cluster id, and choose condition/action/alignment/page
+  settings.
+- Added `unit_spike_loading.py` for testable loading support, channel-list
+  parsing, CT014 channel presets, cluster metadata filtering, and single-unit
+  spike extraction from a Pynapple `TsGroup`.
+- Added `unit_spike_plotting.py` for testable Matplotlib raster/PSTH plotting.
+  Rasters show the current page of chronologically ordered trials, while PSTHs
+  use all filtered trials and are normalized to firing rate in Hz.
+- Added plot saving to the session `figures/unit_spike_viewer/` folder with
+  filenames that encode session, region, unit, condition, action, alignment, and
+  raster page.
+- Added `streamlit` to the project dependencies and focused pytest coverage for
+  the new loading and plotting helpers. Updated cross-session plotting tests so
+  they monkeypatch script-level region/date controls instead of depending on
+  editable analysis defaults.

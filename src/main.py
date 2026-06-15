@@ -1259,12 +1259,12 @@ def main_mouse():
     # block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
     #                                                 prior_alpha=1, prior_sigma=1, max_states=5,
     #                                                 random_seed=block_hmm_random_seed)
-    #
+
     block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess,
                                                                     num_states=3,
                                                                     prior_alpha=1, prior_sigma=1,
                                                                     random_seed=block_hmm_random_seed)
-
+    
     # load a saved block model instead of running it
     # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
     # with open(block_model_dict_path, 'rb') as file:

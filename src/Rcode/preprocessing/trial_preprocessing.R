@@ -99,50 +99,19 @@ add_trial_column_compatibility <- function(df) {
       "consecutive_omissions_memory" %in% names(compatible_df)) {
     compatible_df[["consecutive_failures_memory"]] <- compatible_df[["consecutive_omissions_memory"]]
   }
-  
-  if (!"Qlearning_prob_left_approx" %in% names(compatible_df) &&
-      "Qlearning_rel_value" %in% names(compatible_df)) {
-    compatible_df[["Qlearning_prob_left_approx"]] <- signed_value_to_linear_probability(
-      compatible_df[["Qlearning_rel_value"]]
-    )
-  }
-  
-  if (!"FQlearning_prob_left_approx" %in% names(compatible_df) &&
-      "FQlearning_rel_value" %in% names(compatible_df)) {
-    compatible_df[["FQlearning_prob_left_approx"]] <- signed_value_to_linear_probability(
-      compatible_df[["FQlearning_rel_value"]]
-    )
-  }
-  
-  if (!"HMM_prob_left_logodds_approx" %in% names(compatible_df) &&
-      "HMM_rel_value_logodds" %in% names(compatible_df)) {
-    compatible_df[["HMM_prob_left_logodds_approx"]] <- signed_belief_to_probability(
-      compatible_df[["HMM_rel_value_logodds"]]
-    )
-  }
-  
-  if (!"HMM_prob_left_logodds_decay_approx" %in% names(compatible_df) &&
-      "HMM_rel_value_logodds_decay" %in% names(compatible_df)) {
-    compatible_df[["HMM_prob_left_logodds_decay_approx"]] <- signed_belief_to_probability(
-      compatible_df[["HMM_rel_value_logodds_decay"]]
-    )
-  }
-  
+
   compatible_df
 }
 
 cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
   df <- convertNoneToNA(df, c("action", "active_stimulus", "block_stimulus", "reward_time"))
-  df <- convertNoneToNA(df, c("Qlearning_prob_left", "Qlearning_rel_value", "Qlearning_greedy_action",
-                              "FQlearning_prob_left", "FQlearning_rel_value", "FQlearning_greedy_action"))
-  df <- convertNoneToNA(df, c("RFLR_prob_left", "RFLR_rel_value", "RFLR_greedy_action",
-                              "HMM_prob_left", "HMM_rel_value", "HMM_greedy_action"))
+  df <- convertNoneToNA(df, c("Qlearning_rel_value", "Qlearning_greedy_action",
+                              "FQlearning_rel_value", "FQlearning_greedy_action"))
+  df <- convertNoneToNA(df, c("RFLR_rel_value", "RFLR_greedy_action",
+                              "HMM_rel_value", "HMM_greedy_action"))
   df <- convertNoneToNA(df, c("HMM_rel_value_logodds", "HMM_rel_value_logodds_decay",
-                              "Qlearning_prob_left_approx", "FQlearning_prob_left_approx",
-                              "HMM_prob_left_logodds_approx", "HMM_prob_left_logodds_decay_approx",
                               "relative_omissions_index", "relative_doubt_index", "relative_hazard_index",
-                              # "HMM_rel_value_logodds_decay",
-                              "HMM_decay_res", "rel_hazard_res",))
+                              "HMM_decay_res", "rel_hazard_res"))
   df <- convertNoneToNA(df, c("prev_action", "prev_reward"))
   df <- removeNARows(df, "action")
   df <- convertNoneToNA(df, c("inferred_strategy"))
@@ -155,11 +124,8 @@ cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
   
   if (include_model_regressors) {
     numeric_cols <- intersect(
-      c("HMM_rel_value", "HMM_prob_left", "RFLR_rel_value", "RFLR_prob_left",
-        "Qlearning_rel_value", "Qlearning_prob_left", "FQlearning_rel_value",
-        "FQlearning_prob_left", "HMM_rel_value_logodds", "HMM_rel_value_logodds_decay",
-        "Qlearning_prob_left_approx", "FQlearning_prob_left_approx",
-        "HMM_prob_left_logodds_approx", "HMM_prob_left_logodds_decay_approx",
+      c("Qlearning_rel_value", "FQlearning_rel_value",
+        "HMM_rel_value_logodds", "HMM_rel_value_logodds_decay",
         "relative_omissions_index", "relative_doubt_index"),
       names(df)
     )
