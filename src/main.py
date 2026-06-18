@@ -1139,6 +1139,11 @@ def main_multisession():
         )
         for date in dates
     ]
+    bssm.collect_block_hmm_state_features_for_sessions(
+        sessions=sessions,
+        output_path=multi_session_save_path,
+        mouse=mouse,
+    )
     saved_sessions = [load_saved_session_analysis(session) for session in sessions]
     trials_to_correct_summary = prepare_session_trials_to_correct_summary(saved_sessions)
     performance_plots.plot_trials_to_correct_session_summary(

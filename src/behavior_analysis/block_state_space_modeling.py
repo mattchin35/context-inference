@@ -312,6 +312,7 @@ def get_session_boundary_markers(
 
 def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool=False, model_dict=None,
                      num_states=2, random_seed: int | None = None,
+                     predictor_columns: tuple[str, ...] = ("prev_n_rewarded",),
                      predicted_state_line_width: float | None = None,
                      state_plot_figsize: tuple[float, float] | None = None):
     """Fit MLE block LM-HMM states and assign them back to the block table.
@@ -334,6 +335,9 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     random_seed : int or None, default=None
         Seed used for stochastic HMM construction and EM initialization. None
         preserves the current random behavior.
+    predictor_columns : tuple[str, ...], default=("prev_n_rewarded",)
+        Block-level predictor columns passed to `prepare_block_lm_hmm_data`.
+        Input matrix columns follow this order.
     predicted_state_line_width : float or None, default=None
         Optional linewidth for predicted-state summary traces. None preserves
         the existing plotting defaults.
@@ -346,10 +350,11 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     tuple[dict, pd.DataFrame]
         Updated model dictionary and `block_df` with inferred state columns.
     """
-    prepared = prepare_block_lm_hmm_data(block_df)
+    prepared = prepare_block_lm_hmm_data(block_df, predictor_columns=predictor_columns)
     ix_valid = prepared["valid_mask"]
     trials_to_correct = prepared["observations"]
     predictors = prepared["inputs"]
+    pred_labels = prepared["predictor_labels"]
     session_boundary_positions, session_boundary_labels = get_session_boundary_markers(
         block_df,
         valid_mask=ix_valid,
@@ -397,6 +402,7 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     weight_dict['weights'] = normalized_weights
     weight_dict['mus'] = normalized_mus
     weight_dict['label'] = 'mle'
+    weight_dict['weight_labels'] = pred_labels
 
     model_dict['mle']['weight_dict'] = weight_dict
     if plot:
@@ -449,6 +455,7 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
 def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str, plot: bool = False,
                      num_states=2, prior_sigma=1, prior_alpha=1, model_dict=None,
                      random_seed: int | None = None,
+                     predictor_columns: tuple[str, ...] = ("prev_n_rewarded",),
                      predicted_state_line_width: float | None = None,
                      state_plot_figsize: tuple[float, float] | None = None):
     """Fit MAP block LM-HMM states and assign them back to the block table.
@@ -475,6 +482,9 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     random_seed : int or None, default=None
         Seed used for stochastic HMM construction and EM initialization. None
         preserves the current random behavior.
+    predictor_columns : tuple[str, ...], default=("prev_n_rewarded",)
+        Block-level predictor columns passed to `prepare_block_lm_hmm_data`.
+        Input matrix columns follow this order.
     predicted_state_line_width : float or None, default=None
         Optional linewidth for predicted-state summary traces. None preserves
         the existing plotting defaults.
@@ -487,7 +497,7 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     tuple[dict, pd.DataFrame]
         Updated model dictionary and `block_df` with inferred state columns.
     """
-    prepared = prepare_block_lm_hmm_data(block_df)
+    prepared = prepare_block_lm_hmm_data(block_df, predictor_columns=predictor_columns)
     ix_valid = prepared["valid_mask"]
     trials_to_correct = prepared["observations"]
     predictors = prepared["inputs"]
@@ -630,8 +640,309 @@ def save_block_model_dict(model_dict: dict, processed_data_path: Path, sess_id_f
     return save_path
 
 
+def load_block_model_dict(processed_data_path: Path, sess_id_full: str) -> dict:
+    """Load a saved fitted block LM-HMM model dictionary.
+
+    Parameters
+    ----------
+    processed_data_path : Path
+        Session processed-data directory containing
+        `{sess_id_full}_block_statedict.pkl`.
+    sess_id_full : str
+        Full session identifier used in the saved filename.
+
+    Returns
+    -------
+    dict
+        Fitted block-model dictionary loaded from pickle.
+    """
+    model_path = processed_data_path / f"{sess_id_full}_block_statedict.pkl"
+    with open(model_path, "rb") as file:
+        return pkl.load(file)
+
+
+def _parse_mouse_date_from_session_id(session_id: str) -> tuple[str, str]:
+    """Parse mouse and date fields from a full session identifier.
+
+    Parameters
+    ----------
+    session_id : str
+        Full session identifier formatted as `mouse_YYYY-MM-DD_HHMMSS`.
+
+    Returns
+    -------
+    tuple[str, str]
+        `(mouse, date)` parsed from `session_id`. If parsing fails, both
+        fields are returned as `"None"` so summary export can still proceed.
+    """
+    match = re.search(r"(.+?)_(\d{4}-\d{2}-\d{2})_(\d{6})", session_id)
+    if match is None:
+        return "None", "None"
+    mouse, date, _timestamp = match.groups()
+    return mouse, date
+
+
+def _state_feature_columns(predictor_names: list[str]) -> list[str]:
+    """Return the canonical block-HMM state-feature column order.
+
+    Parameters
+    ----------
+    predictor_names : list[str]
+        Predictor column names with shape `(n_predictors,)`, in LM input order.
+
+    Returns
+    -------
+    list[str]
+        Column names for the state-feature CSV.
+    """
+    return [
+        "session_id",
+        "mouse",
+        "date",
+        "fit_type",
+        "raw_state",
+        "state_uid",
+        "state_block_count",
+        "state_block_fraction",
+        "bias",
+        *[f"{predictor_name}_weight" for predictor_name in predictor_names],
+        "predictor_names",
+        "num_states",
+        "n_valid_blocks",
+        "random_seed",
+    ]
+
+
+def summarize_lm_hmm_state_features(
+    model_dict: dict,
+    session_id: str,
+    mouse: str | None = None,
+    date: str | None = None,
+) -> pd.DataFrame:
+    """Summarize fitted block LM-HMM state parameters and occupancies.
+
+    Parameters
+    ----------
+    model_dict : dict
+        Fitted model dictionary from `run_block_modeling`. Each summarized
+        fit entry must contain `hmm_z` with shape `(n_valid_blocks,)` and a
+        `weight_dict` containing `weights` with shape
+        `(n_states, 1, n_predictors)`, `mus` with shape `(n_states, 1)`, and
+        `weight_labels` with shape `(n_predictors,)`.
+    session_id : str
+        Full session identifier copied into `session_id` and used to build
+        unique state identifiers.
+    mouse : str or None, default=None
+        Mouse identifier. If omitted, parsed from `session_id` when possible.
+    date : str or None, default=None
+        Session date formatted as `YYYY-MM-DD`. If omitted, parsed from
+        `session_id` when possible.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per `(fit_type, raw_state)`. Counts are in valid fitted blocks;
+        `state_block_fraction` is unitless.
+    """
+    parsed_mouse, parsed_date = _parse_mouse_date_from_session_id(session_id)
+    if mouse is None:
+        mouse = parsed_mouse
+    if date is None:
+        date = parsed_date
+
+    all_predictor_names: list[str] = []
+    rows = []
+    for fit_type in ("mle", "map"):
+        if fit_type not in model_dict:
+            continue
+        fit_dict = model_dict[fit_type]
+        if "hmm_z" not in fit_dict or "weight_dict" not in fit_dict:
+            continue
+
+        weight_dict = fit_dict["weight_dict"]
+        normalized_weights, normalized_mus = normalize_lm_observation_parameters(
+            recovered_weights=weight_dict["weights"],
+            recovered_mus=weight_dict["mus"],
+        )
+        if normalized_weights.shape[1] != 1 or normalized_mus.shape[1] != 1:
+            raise ValueError(
+                "Block LM-HMM state feature export expects one observation dimension."
+            )
+
+        predictor_names = list(
+            weight_dict.get(
+                "weight_labels",
+                [f"predictor_{ix}" for ix in range(normalized_weights.shape[2])],
+            )
+        )
+        if len(predictor_names) != normalized_weights.shape[2]:
+            raise ValueError(
+                f"{fit_type} has {normalized_weights.shape[2]} predictor weights but "
+                f"{len(predictor_names)} predictor labels."
+            )
+        for predictor_name in predictor_names:
+            if predictor_name not in all_predictor_names:
+                all_predictor_names.append(predictor_name)
+
+        hmm_z = np.asarray(fit_dict["hmm_z"], dtype=int)
+        n_valid_blocks = int(hmm_z.size)
+        num_states = int(normalized_weights.shape[0])
+        state_counts = np.bincount(hmm_z, minlength=num_states)
+        predictor_summary = ",".join(predictor_names)
+        for raw_state in range(num_states):
+            state_count = int(state_counts[raw_state])
+            row = {
+                "session_id": session_id,
+                "mouse": mouse,
+                "date": date,
+                "fit_type": fit_type,
+                "raw_state": raw_state,
+                "state_uid": f"{session_id}__{fit_type}__state-{raw_state}",
+                "state_block_count": state_count,
+                "state_block_fraction": (
+                    state_count / n_valid_blocks if n_valid_blocks > 0 else np.nan
+                ),
+                "bias": float(normalized_mus[raw_state, 0]),
+                "predictor_names": predictor_summary,
+                "num_states": num_states,
+                "n_valid_blocks": n_valid_blocks,
+                "random_seed": fit_dict.get("random_seed", "None"),
+            }
+            for predictor_index, predictor_name in enumerate(predictor_names):
+                row[f"{predictor_name}_weight"] = float(
+                    normalized_weights[raw_state, 0, predictor_index]
+                )
+            rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=_state_feature_columns([]))
+
+    columns = _state_feature_columns(all_predictor_names)
+    summary_df = pd.DataFrame(rows)
+    for column_name in columns:
+        if column_name not in summary_df.columns:
+            summary_df[column_name] = np.nan
+    return summary_df.loc[:, columns]
+
+
+def save_block_hmm_state_features(
+    model_dict: dict,
+    processed_data_path: Path,
+    sess_id_full: str,
+    mouse: str | None = None,
+    date: str | None = None,
+) -> pd.DataFrame:
+    """Save per-state LM-HMM parameters and block counts for one session.
+
+    Parameters
+    ----------
+    model_dict : dict
+        Fitted block LM-HMM model dictionary.
+    processed_data_path : Path
+        Session processed-data directory where the CSV is saved.
+    sess_id_full : str
+        Full session identifier used in the CSV filename.
+    mouse : str or None, default=None
+        Mouse identifier written to the CSV. If omitted, parsed from
+        `sess_id_full` when possible.
+    date : str or None, default=None
+        Session date written to the CSV. If omitted, parsed from
+        `sess_id_full` when possible.
+
+    Returns
+    -------
+    pd.DataFrame
+        State-feature summary table that was saved to CSV.
+    """
+    processed_data_path.mkdir(parents=True, exist_ok=True)
+    summary_df = summarize_lm_hmm_state_features(
+        model_dict,
+        session_id=sess_id_full,
+        mouse=mouse,
+        date=date,
+    )
+    summary_path = processed_data_path / f"{sess_id_full}_block_hmm_state_features.csv"
+    summary_df.to_csv(summary_path, index=False, na_rep="None")
+    return summary_df
+
+
+def save_block_hmm_state_features_from_saved_model(session: Session) -> pd.DataFrame:
+    """Regenerate one session's block-HMM state-feature CSV from its pickle.
+
+    Parameters
+    ----------
+    session : Session
+        Session metadata with `processed_data_path` and `sess_id_full`.
+        Optional `mouse` and `date` attributes are copied into the output.
+
+    Returns
+    -------
+    pd.DataFrame
+        Saved per-state feature summary table.
+    """
+    model_dict = load_block_model_dict(
+        processed_data_path=session.processed_data_path,
+        sess_id_full=session.sess_id_full,
+    )
+    return save_block_hmm_state_features(
+        model_dict=model_dict,
+        processed_data_path=session.processed_data_path,
+        sess_id_full=session.sess_id_full,
+        mouse=getattr(session, "mouse", None),
+        date=getattr(session, "date", None),
+    )
+
+
+def collect_block_hmm_state_features_for_sessions(
+    sessions: list[Session],
+    output_path: Path,
+    mouse: str,
+) -> pd.DataFrame:
+    """Collect per-session block-HMM state features into a mouse-level CSV.
+
+    Parameters
+    ----------
+    sessions : list[Session]
+        Session metadata objects in desired output order. Each session must
+        have `sess_id_full` and `processed_data_path`; missing per-session CSVs
+        are regenerated from `{sess_id_full}_block_statedict.pkl`.
+    output_path : Path
+        Mouse-level cross-session output directory.
+    mouse : str
+        Mouse identifier used in the combined CSV filename.
+
+    Returns
+    -------
+    pd.DataFrame
+        Concatenated state-feature table. Rows are per session, fit type, and
+        raw HMM state.
+    """
+    output_path.mkdir(parents=True, exist_ok=True)
+    session_feature_dfs = []
+    for session in sessions:
+        feature_path = (
+            session.processed_data_path
+            / f"{session.sess_id_full}_block_hmm_state_features.csv"
+        )
+        if feature_path.exists():
+            session_feature_df = pd.read_csv(feature_path, na_filter=False)
+        else:
+            session_feature_df = save_block_hmm_state_features_from_saved_model(session)
+        session_feature_dfs.append(session_feature_df)
+
+    if session_feature_dfs:
+        combined_df = pd.concat(session_feature_dfs, axis=0, ignore_index=True)
+    else:
+        combined_df = pd.DataFrame(columns=_state_feature_columns([]))
+
+    output_csv = output_path / f"{mouse}_block_hmm_state_features.csv"
+    combined_df.to_csv(output_csv, index=False, na_rep="None")
+    return combined_df
+
+
 def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.DataFrame, session: Session, num_states: int=2,
                        prior_alpha=1, prior_sigma=1, random_seed: int | None = None,
+                       predictor_columns: tuple[str, ...] = ("prev_n_rewarded",),
                        predicted_state_line_width: float | None = None,
                        state_plot_figsize: tuple[float, float] | None = None):
     """Run MLE and MAP block LM-HMM modeling and save block-level outputs.
@@ -656,6 +967,9 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
     random_seed : int or None, default=None
         Base seed split into MLE and MAP child seeds. None preserves current
         stochastic behavior.
+    predictor_columns : tuple[str, ...], default=("prev_n_rewarded",)
+        Block-level predictor columns used as LM-HMM inputs. Columns are
+        passed through to MLE and MAP fits in this order.
     predicted_state_line_width : float or None, default=None
         Optional linewidth for predicted-state summary traces. None preserves
         the existing single-session plotting defaults.
@@ -678,6 +992,7 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         plot=True,
         num_states=num_states,
         random_seed=mle_seed,
+        predictor_columns=predictor_columns,
         predicted_state_line_width=predicted_state_line_width,
         state_plot_figsize=state_plot_figsize,
     )
@@ -691,6 +1006,7 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         prior_alpha=prior_alpha,
         prior_sigma=prior_sigma,
         random_seed=map_seed,
+        predictor_columns=predictor_columns,
         predicted_state_line_width=predicted_state_line_width,
         state_plot_figsize=state_plot_figsize,
     )
@@ -698,6 +1014,13 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         map_model_dict,
         processed_data_path=session.processed_data_path,
         sess_id_full=session.sess_id_full,
+    )
+    save_block_hmm_state_features(
+        map_model_dict,
+        processed_data_path=session.processed_data_path,
+        sess_id_full=session.sess_id_full,
+        mouse=getattr(session, "mouse", None),
+        date=getattr(session, "date", None),
     )
 
     block_performance = hardcode_block_strategy(block_performance)  # These are kept for inspection, they are NOT used in modeling or passed down to trials
