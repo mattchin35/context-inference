@@ -6,6 +6,7 @@ import warnings
 from collections import defaultdict
 from src.behavior_analysis import general_behavior_assessment
 from src.behavior_analysis import ideal_observer
+from src.behavior_analysis import switch_persistence
 import src.behavior_analysis.decision_variable_counters as counters
 from src.behavior_analysis.project_utils import (
     get_experimenter_reward_flags,
@@ -1365,6 +1366,10 @@ def run_analysis(
         n_blocks=block_performance.shape[0],
     )
     block_performance = add_block_bias_columns(block_performance)
+    block_performance = switch_persistence.add_previous_block_omission_metrics(
+        block_performance=block_performance,
+        augmented_trial_df=augmented_trial_df,
+    )
 
     print(
         "prev_consecutive_rewards slope: {}, intercept: {}, r_value: {}, p_value: {}".format(
@@ -1390,6 +1395,12 @@ def run_analysis(
         sess_id=session.sess_id_full,
         session_save_path=session.processed_data_path,
         multisession_save_path=getattr(session, "multi_session_save_path", None),
+    )
+    switch_persistence.save_switch_persistence_outputs(
+        block_performance=block_performance,
+        augmented_trial_df=augmented_trial_df,
+        processed_data_path=session.processed_data_path,
+        sess_id_full=session.sess_id_full,
     )
     return augmented_trial_df, block_performance, multisession_df
 

@@ -69,6 +69,99 @@ def get_session_block_count_column(multisession_df: pd.DataFrame) -> str:
     raise ValueError("multisession_df must contain 'n_blocks' or legacy 'n_switches'.")
 
 
+def plot_switch_persistence_summary(
+    summary_df: pd.DataFrame,
+    plot_path: Path,
+    figure_id: str,
+) -> Path:
+    """Plot post-switch persistence probability for one session.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Switch-persistence summary table with shape `(n_rows, n_columns)`.
+        Required columns are `switch_group`, `choice_trial_after_switch`,
+        `proportion_stay`, and `n_blocks`. `proportion_stay` is unitless and
+        `n_blocks` is the number of switched blocks contributing at each
+        choice index.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    figure_id : str
+        Session identifier used in the output filename and title.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path.
+    """
+    required_columns = {
+        "switch_group",
+        "choice_trial_after_switch",
+        "proportion_stay",
+        "n_blocks",
+    }
+    missing_columns = sorted(required_columns.difference(summary_df.columns))
+    if missing_columns:
+        raise ValueError(f"summary_df is missing required columns: {missing_columns}")
+
+    plot_path.mkdir(parents=True, exist_ok=True)
+    plot_df = summary_df.copy()
+    plot_df["choice_trial_after_switch"] = pd.to_numeric(
+        plot_df["choice_trial_after_switch"],
+        errors="raise",
+    )
+    plot_df["proportion_stay"] = pd.to_numeric(
+        plot_df["proportion_stay"],
+        errors="raise",
+    )
+    plot_df["n_blocks"] = pd.to_numeric(plot_df["n_blocks"], errors="raise").astype(int)
+
+    group_styles = {
+        "L_to_R": {"color": all_colors[0], "label": "L->R", "zorder": 2},
+        "R_to_L": {"color": all_colors[2], "label": "R->L", "zorder": 2},
+        "combined": {"color": "black", "label": "combined", "zorder": 3},
+    }
+    f, ax = plt.subplots(figsize=(7, 5))
+    for group_name in ("L_to_R", "R_to_L", "combined"):
+        group_df = plot_df[plot_df["switch_group"] == group_name].sort_values(
+            "choice_trial_after_switch"
+        )
+        if group_df.empty:
+            continue
+        style = group_styles[group_name]
+        ax.plot(
+            group_df["choice_trial_after_switch"].to_numpy(),
+            group_df["proportion_stay"].to_numpy(dtype=float),
+            marker="o",
+            linewidth=2,
+            color=style["color"],
+            label=style["label"],
+            zorder=style["zorder"],
+        )
+        for _, row in group_df.iterrows():
+            ax.annotate(
+                f"n={int(row['n_blocks'])}",
+                xy=(row["choice_trial_after_switch"], row["proportion_stay"]),
+                xytext=(0, 7),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                color=style["color"],
+            )
+
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_xlabel("Valid choice trial after context switch")
+    ax.set_ylabel("Proportion stay with previous side")
+    ax.set_title(f"{figure_id} Switch Persistence")
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fancybox=False)
+    save_path = plot_path / f"{figure_id}_switch_persistence.png"
+    save_performance_figure(f, save_path)
+    return save_path
+
+
 def plot_session_correct(block_performance: pd.DataFrame, plot_path: Path, sess_ID: str):
     """For a single session, plot the blockwise percentage of correct choices made by the agent."""
     block_types = ['right_cued', 'left_cued', 'right_uncued', 'left_uncued', 'dark period']

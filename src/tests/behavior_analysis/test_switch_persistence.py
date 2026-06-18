@@ -65,7 +65,7 @@ def test_compute_switch_persistence_l_to_r_stops_after_first_switch():
     )
 
     detail = switch_persistence.compute_switch_persistence_trials(
-        block_performance,
+        block_performance.iloc[:3],
         augmented_trial_df,
     )
     block_detail = detail[detail["block_ix"] == 1]

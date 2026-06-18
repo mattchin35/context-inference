@@ -8,6 +8,7 @@ from mouse_behavior_preprocessing import process_behavior_log
 from behavior_analysis import block_state_space_modeling as bssm
 from behavior_analysis import trial_state_space_modeling as tssm
 from behavior_analysis import gather_trial_features as gtf
+from src.behavior_analysis import switch_persistence
 from src.behavior_analysis.project_utils import (
     EXPERIMENTER_REWARD_GIVEN_COLUMN,
     normalize_experimenter_reward_column,
@@ -330,6 +331,46 @@ def plot_mouse_history_ideal_observer_for_session(
         figure_path=session.figure_path,
         sess_id_full=session.sess_id_full,
     )
+
+
+def save_and_plot_switch_persistence_for_session(
+    block_performance: pd.DataFrame,
+    augmented_trial_df: pd.DataFrame,
+    session: Session,
+) -> tuple[pd.DataFrame, pd.DataFrame, Path]:
+    """Save and plot post-context-switch persistence for one session.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`, including
+        `block_ix` and previous-block metrics when available.
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`, including
+        `cur_block`, `state`, and `action`.
+    session : Session
+        Session metadata with `processed_data_path`, `figure_path`, and
+        `sess_id_full` attributes.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame, pathlib.Path]
+        `(detail_df, summary_df, plot_path)`. The detail table has one row per
+        post-switch trial, and the summary table has one row per switch group
+        and valid post-switch choice index.
+    """
+    detail_df, summary_df = switch_persistence.save_switch_persistence_outputs(
+        block_performance=block_performance,
+        augmented_trial_df=augmented_trial_df,
+        processed_data_path=session.processed_data_path,
+        sess_id_full=session.sess_id_full,
+    )
+    plot_path = performance_plots.plot_switch_persistence_summary(
+        summary_df=summary_df,
+        plot_path=session.figure_path,
+        figure_id=session.sess_id_full,
+    )
+    return detail_df, summary_df, plot_path
 
 
 def find_saved_session_by_date(
@@ -1213,6 +1254,11 @@ def main_mouse():
     performance_plots.plot_session_correct(block_performance, sess.figure_path, sess_id_full)
     performance_plots.plot_session_trials_to_correct(block_performance, sess.figure_path, sess_id_full)
     performance_plots.plot_session_nswitches(block_performance, sess.figure_path, sess_id_full)
+    save_and_plot_switch_persistence_for_session(
+        block_performance=block_performance,
+        augmented_trial_df=augmented_trial_df,
+        session=sess,
+    )
 
     slope = multisession_df.loc[
         multisession_df['date'] == date,
