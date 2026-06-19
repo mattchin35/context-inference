@@ -6,6 +6,7 @@ import src.behavior_analysis.trial_features as trial_features
 from src.behavior_analysis.project_utils import (
     EXPERIMENTER_REWARD_GIVEN_COLUMN,
     get_experimenter_reward_flags,
+    make_no_choice_action_mask,
     normalize_experimenter_reward_column,
 )
 import json
@@ -37,6 +38,16 @@ class TaskParams:
     omission_lam: float = 0.5
     hazard_lam: float = 0.5
     perseveration_decay: float = 0.25
+
+
+LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE = (
+    "FQlearning_rel_value",
+    "HMM_rel_value_logodds_decay",
+    "relative_doubt_index",
+    "relative_hazard_index",
+    "perseveration_regressor",
+    "observer_value",
+)
 
 
 def assert_saved_file(path: Path) -> None:
@@ -91,6 +102,162 @@ def save_trial_features(augmented_trial_df: pd.DataFrame, params: TaskParams, pr
     assert_saved_file(json_fname)
 
 
+def add_observer_value_feature(augmented_trial_df: pd.DataFrame) -> pd.DataFrame:
+    """Add a left-positive observer value combining HMM belief and doubt.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required
+        columns are `HMM_rel_value_logodds_decay` and `relative_doubt_index`.
+        Both are unitless left-minus-right regressors.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `augmented_trial_df` with `observer_value` added. Values are
+        unitless and use the same left-positive sign convention:
+        `HMM_rel_value_logodds_decay - relative_doubt_index`. Rows with
+        missing/non-numeric source values receive None.
+    """
+    required_columns = ["HMM_rel_value_logodds_decay", "relative_doubt_index"]
+    missing_columns = [column for column in required_columns if column not in augmented_trial_df.columns]
+    if missing_columns:
+        raise ValueError(f"augmented_trial_df is missing required observer columns: {missing_columns}")
+
+    source_values = augmented_trial_df[required_columns].apply(pd.to_numeric, errors="coerce")
+    observer_value = np.full(augmented_trial_df.shape[0], None, dtype=object)
+    valid_rows = source_values.notna().all(axis=1)
+    observer_value[valid_rows.to_numpy()] = (
+        source_values.loc[valid_rows, "HMM_rel_value_logodds_decay"]
+        - source_values.loc[valid_rows, "relative_doubt_index"]
+    ).to_numpy(dtype=float)
+
+    output_df = augmented_trial_df.copy()
+    output_df["observer_value"] = observer_value
+    return output_df
+
+
+def _previous_action_side_sign(prev_action) -> float | None:
+    """Return the sign that maps left-positive values to previous-action side.
+
+    Parameters
+    ----------
+    prev_action : int, float, or str
+        Previous trial action. Task coding is `0=right`, `1=left`; no-choice
+        sentinels such as `"None"` and `"no_choice"` return None.
+
+    Returns
+    -------
+    float or None
+        `1.0` for previous-left, `-1.0` for previous-right, and None when no
+        previous side is available.
+    """
+    if bool(make_no_choice_action_mask([prev_action]).iloc[0]):
+        return None
+
+    if isinstance(prev_action, str):
+        normalized = prev_action.strip().lower()
+        if normalized == "left":
+            return 1.0
+        if normalized == "right":
+            return -1.0
+
+    try:
+        action_int = int(float(prev_action))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"prev_action must be 0/1, left/right, or no-choice; got {prev_action!r}.") from exc
+
+    if action_int == 1:
+        return 1.0
+    if action_int == 0:
+        return -1.0
+    raise ValueError(f"prev_action must be 0 or 1 for side choices; got {prev_action!r}.")
+
+
+def make_prev_action_side_equivalent_trial_values(
+    augmented_trial_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build a leave-stay oriented table using previous action as reference.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required
+        columns are `action`, `prev_action`, and the left/right value columns
+        listed in `LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Side-equivalent table with shape `(n_trials, n_output_columns)`.
+        For each value column, left-positive values are unchanged when
+        `prev_action` is left and sign-flipped when `prev_action` is right.
+        Rows without a previous side receive `"None"`.
+    """
+    required_columns = [
+        "action",
+        "prev_action",
+        *LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE,
+    ]
+    missing_columns = [column for column in required_columns if column not in augmented_trial_df.columns]
+    if missing_columns:
+        raise ValueError(f"augmented_trial_df is missing required leave-stay columns: {missing_columns}")
+
+    output_columns = [
+        column for column in ("cur_trial", "cur_block") if column in augmented_trial_df.columns
+    ]
+    output_columns.extend(["action", "prev_action"])
+    output_df = augmented_trial_df.loc[:, output_columns].copy()
+
+    side_signs = np.array(
+        [_previous_action_side_sign(prev_action) for prev_action in augmented_trial_df["prev_action"]],
+        dtype=object,
+    )
+    has_reference_side = np.array([sign is not None for sign in side_signs], dtype=bool)
+    numeric_signs = np.zeros(augmented_trial_df.shape[0], dtype=float)
+    numeric_signs[has_reference_side] = np.asarray(side_signs[has_reference_side], dtype=float)
+
+    for column_name in LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE:
+        source_values = pd.to_numeric(augmented_trial_df[column_name], errors="coerce")
+        valid_rows = has_reference_side & source_values.notna().to_numpy()
+        side_values = np.full(augmented_trial_df.shape[0], "None", dtype=object)
+        side_values[valid_rows] = source_values.to_numpy(dtype=float)[valid_rows] * numeric_signs[valid_rows]
+        output_df[f"{column_name}_prev_action_side"] = side_values
+
+    return output_df
+
+
+def save_leave_stay_trial_values(
+    augmented_trial_df: pd.DataFrame,
+    processed_data_path: Path,
+    sess_id_full: str,
+) -> pd.DataFrame:
+    """Save previous-action side-equivalent trial values to CSV.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`, including
+        `prev_action` and the side-equivalent source value columns.
+    processed_data_path : Path
+        Session processed-data directory.
+    sess_id_full : str
+        Full session identifier used in the output filename.
+
+    Returns
+    -------
+    pd.DataFrame
+        Saved side-equivalent table, reloaded with `na_filter=False` so the
+        returned dataframe matches CSV-loaded downstream behavior.
+    """
+    side_equivalent_df = make_prev_action_side_equivalent_trial_values(augmented_trial_df)
+    save_path = processed_data_path / f"{sess_id_full}_leave_stay_trial_values.csv"
+    side_equivalent_df.to_csv(save_path, index=False, na_rep="None")
+    assert_saved_file(save_path)
+    return pd.read_csv(save_path, na_filter=False)
+
+
 def collect_and_save_trial_features(
     augmented_trial_df: pd.DataFrame,
     processed_data_path: Path,
@@ -120,6 +287,8 @@ def collect_and_save_trial_features(
     """
     augmented_trial_df, params = collect_trial_features(augmented_trial_df, params=params)
     save_trial_features(augmented_trial_df, params, processed_data_path, sess_id_full)
+    if "prev_action" in augmented_trial_df.columns:
+        save_leave_stay_trial_values(augmented_trial_df, processed_data_path, sess_id_full)
     return augmented_trial_df, params
 
 
@@ -403,6 +572,7 @@ def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[Ta
         hazard_lam=params.hazard_lam,
         perseveration_decay=params.perseveration_decay,
     )
+    augmented_trial_df = add_observer_value_feature(augmented_trial_df)
     augmented_trial_df = collect_residualized_trial_features(augmented_trial_df)
     return augmented_trial_df, params
 
