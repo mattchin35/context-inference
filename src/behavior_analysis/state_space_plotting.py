@@ -250,6 +250,8 @@ def add_secondary_block_trace(
     secondary_trace_label: str,
     expected_length: int,
     line_width: float | None = None,
+    secondary_axis_label_size: float = 10,
+    secondary_tick_label_size: float = 8,
 ) -> plt.Axes:
     """Overlay a blockwise secondary trace on a fixed right y-axis.
 
@@ -269,6 +271,10 @@ def add_secondary_block_trace(
     line_width : float or None, default=None
         Optional linewidth for the secondary trace. None preserves the
         Matplotlib default used by the existing observation trace.
+    secondary_axis_label_size : float, default=10
+        Font size for the right-side secondary y-axis label, in points.
+    secondary_tick_label_size : float, default=8
+        Font size for the right-side secondary y-axis tick labels, in points.
 
     Returns
     -------
@@ -296,7 +302,8 @@ def add_secondary_block_trace(
     )
     trace_axis.set_ylim(-1, 1)
     trace_axis.set_yticks([-1, 0, 1])
-    trace_axis.set_ylabel(secondary_trace_label)
+    trace_axis.tick_params(axis="y", labelsize=secondary_tick_label_size)
+    trace_axis.set_ylabel(secondary_trace_label, fontsize=secondary_axis_label_size)
     return trace_axis
 
 
@@ -314,6 +321,8 @@ def plot_block_lm_hmm_state_summary(
     figsize: tuple[float, float] | None = None,
     secondary_trace: np.ndarray | None = None,
     secondary_trace_label: str = "bias_rl",
+    secondary_axis_label_size: float = 10,
+    secondary_tick_label_size: float = 8,
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
     """Plot block LM-HMM posterior probabilities and observations.
 
@@ -349,6 +358,10 @@ def plot_block_lm_hmm_state_summary(
         aligned to `observations`, plotted on a fixed `[-1, 1]` right y-axis.
     secondary_trace_label : str, default="bias_rl"
         Axis label and line label for `secondary_trace`.
+    secondary_axis_label_size : float, default=10
+        Font size for the optional right-side secondary y-axis label.
+    secondary_tick_label_size : float, default=8
+        Font size for the optional right-side secondary y-axis tick labels.
 
     Returns
     -------
@@ -425,6 +438,8 @@ def plot_block_lm_hmm_state_summary(
             secondary_trace_label=secondary_trace_label,
             expected_length=time_bins,
             line_width=line_width,
+            secondary_axis_label_size=secondary_axis_label_size,
+            secondary_tick_label_size=secondary_tick_label_size,
         )
 
     if session_lengths is not None:
@@ -459,6 +474,8 @@ def plot_block_lm_hmm_presentation_summary(
     figsize: tuple[float, float] | None = None,
     secondary_trace: np.ndarray | None = None,
     secondary_trace_label: str = "bias_rl",
+    secondary_axis_label_size: float = 10,
+    secondary_tick_label_size: float = 8,
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
     """Plot presentation-style block LM-HMM state probabilities and weights.
 
@@ -496,6 +513,10 @@ def plot_block_lm_hmm_presentation_summary(
         aligned to `observations`, plotted on a fixed `[-1, 1]` right y-axis.
     secondary_trace_label : str, default="bias_rl"
         Axis label and line label for `secondary_trace`.
+    secondary_axis_label_size : float, default=10
+        Font size for the optional right-side secondary y-axis label.
+    secondary_tick_label_size : float, default=8
+        Font size for the optional right-side secondary y-axis tick labels.
 
     Returns
     -------
@@ -588,6 +609,8 @@ def plot_block_lm_hmm_presentation_summary(
             secondary_trace_label=secondary_trace_label,
             expected_length=time_bins,
             line_width=line_width,
+            secondary_axis_label_size=secondary_axis_label_size,
+            secondary_tick_label_size=secondary_tick_label_size,
         )
 
     if session_lengths is not None:

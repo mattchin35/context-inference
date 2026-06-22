@@ -637,6 +637,8 @@ def test_plot_block_lm_hmm_state_summary_adds_bias_rl_twin_axis():
         cmap=plt.cm.Set1.copy(),
         secondary_trace=np.array([0.5, -0.25, 0.0]),
         secondary_trace_label="bias_rl",
+        secondary_axis_label_size=9,
+        secondary_tick_label_size=7,
     )
 
     assert len(axes) == 2
@@ -645,6 +647,8 @@ def test_plot_block_lm_hmm_state_summary_adds_bias_rl_twin_axis():
     assert bias_ax.get_ylabel() == "bias_rl"
     assert bias_ax.get_ylim() == (-1.0, 1.0)
     assert bias_ax.lines[0].get_linestyle() == "--"
+    assert bias_ax.yaxis.label.get_size() == 9
+    assert {label.get_size() for label in bias_ax.get_yticklabels()} == {7}
     np.testing.assert_allclose(bias_ax.lines[0].get_ydata(), np.array([0.5, -0.25, 0.0]))
     plt.close(fig)
 
