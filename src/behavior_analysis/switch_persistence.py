@@ -124,6 +124,57 @@ def get_block_context_sides(augmented_trial_df: pd.DataFrame) -> dict[int, str]:
     return block_sides
 
 
+def build_block_trial_id_map(
+    block_performance: pd.DataFrame,
+    augmented_trial_df: pd.DataFrame,
+) -> dict[int, int]:
+    """Map block-summary ids to raw trial block ids.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`. Required
+        column is `block_ix`, a unitless block identifier. In current
+        session-level summaries this may be a contiguous row id rather than
+        the original trial block id.
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required
+        column is `cur_block`, a unitless raw trial block identifier in
+        session order.
+
+    Returns
+    -------
+    dict[int, int]
+        Mapping from `block_performance.block_ix` to
+        `augmented_trial_df.cur_block`. Direct id matches are preserved;
+        otherwise rows are aligned by block order when both tables have the
+        same number of blocks. If neither rule applies, ids are returned as
+        direct candidates so callers can decide whether missing trial blocks
+        are acceptable for their use case.
+    """
+    if "block_ix" not in block_performance.columns:
+        raise ValueError("block_performance must contain a 'block_ix' column.")
+    if "cur_block" not in augmented_trial_df.columns:
+        raise ValueError("augmented_trial_df must contain a 'cur_block' column.")
+
+    block_ids = pd.to_numeric(block_performance["block_ix"], errors="raise").astype(int).tolist()
+    trial_block_ids = (
+        pd.to_numeric(augmented_trial_df["cur_block"], errors="raise")
+        .astype(int)
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )
+    trial_block_id_set = set(trial_block_ids)
+    if set(block_ids).issubset(trial_block_id_set):
+        return {block_id: block_id for block_id in block_ids}
+
+    if len(block_ids) == len(trial_block_ids):
+        return dict(zip(block_ids, trial_block_ids))
+
+    return {block_id: block_id for block_id in block_ids}
+
+
 def make_valid_choice_mask(trial_df: pd.DataFrame) -> pd.Series:
     """Return rows with an animal side choice and no experimenter reward.
 
@@ -251,8 +302,9 @@ def add_previous_block_omission_metrics(
     ----------
     block_performance : pd.DataFrame
         Blockwise dataframe with shape `(n_blocks, n_columns)`. Required
-        column is `block_ix`, using the same integer block ids as
-        `augmented_trial_df.cur_block`.
+        column is `block_ix`, a unitless block identifier. When this does not
+        directly match `augmented_trial_df.cur_block`, rows are aligned by
+        block order if both tables contain the same number of blocks.
     augmented_trial_df : pd.DataFrame
         Trialwise dataframe with shape `(n_trials, n_columns)`. Required
         columns are `cur_block`, `action`, `correct`, and `reward`; optional
@@ -271,6 +323,8 @@ def add_previous_block_omission_metrics(
         raise ValueError("augmented_trial_df must contain a 'cur_block' column.")
 
     trial_df = normalize_experimenter_reward_column(augmented_trial_df)
+    block_trial_id_map = build_block_trial_id_map(block_performance, trial_df)
+    trial_block_ids = pd.to_numeric(trial_df["cur_block"], errors="raise").astype(int)
     omission_mask = get_correct_choice_omission_mask(trial_df)
     enriched = block_performance.copy()
     prev_n_omissions = []
@@ -282,7 +336,8 @@ def add_previous_block_omission_metrics(
             prev_n_omissions.append(0)
             prev_consecutive_omissions.append(0)
         else:
-            previous_block_df = trial_df[trial_df["cur_block"].astype(int) == previous_block_id]
+            previous_trial_block_id = block_trial_id_map[previous_block_id]
+            previous_block_df = trial_df[trial_block_ids == previous_trial_block_id]
             previous_omissions = omission_mask.loc[previous_block_df.index]
             prev_n_omissions.append(int(previous_omissions.sum()))
             prev_consecutive_omissions.append(
@@ -359,6 +414,12 @@ def build_switch_persistence_rows_for_block(
         One dictionary per trial row in `block_df`. Rows preserve no-choice and
         post-switch trials for diagnostics.
     """
+    if block_df.empty:
+        raise ValueError(f"No trial rows found for block_ix {block_row['block_ix']}.")
+
+    trial_cur_block = int(
+        pd.to_numeric(block_df["cur_block"], errors="raise").astype(int).iloc[0]
+    )
     choice_sides = [parse_choice_side(action) for action in block_df["action"]]
     first_switch_position = next(
         (position for position, side in enumerate(choice_sides) if side == current_side),
@@ -394,6 +455,7 @@ def build_switch_persistence_rows_for_block(
         include_trial = include_block and choice_status in {"stay", "switch"}
         row = {
             "block_ix": int(block_row["block_ix"]),
+            "trial_cur_block": trial_cur_block,
             "raw_trial_index": int(trial_index),
             "trial_index_after_block_switch": position + 1,
             "choice_trial_after_switch": valid_choice_counter if side is not None else "None",
@@ -448,6 +510,8 @@ def compute_switch_persistence_trials(
 
     enriched_blocks = add_previous_block_omission_metrics(block_performance, augmented_trial_df)
     trial_df = normalize_experimenter_reward_column(augmented_trial_df)
+    block_trial_id_map = build_block_trial_id_map(enriched_blocks, trial_df)
+    trial_block_ids = pd.to_numeric(trial_df["cur_block"], errors="raise").astype(int)
     block_sides = get_block_context_sides(trial_df)
     rows = []
     previous_block_id = None
@@ -455,16 +519,24 @@ def compute_switch_persistence_trials(
 
     for _, block_row in enriched_blocks.iterrows():
         block_id = int(block_row["block_ix"])
-        if block_id not in block_sides:
-            raise ValueError(f"block_performance block_ix {block_id} is missing from trial cur_block.")
-        current_side = block_sides[block_id]
+        trial_block_id = block_trial_id_map[block_id]
+        if trial_block_id not in block_sides:
+            missing_direct_ids = sorted(
+                set(enriched_blocks["block_ix"].astype(int)).difference(block_sides)
+            )
+            raise ValueError(
+                "Cannot align block_performance block_ix to augmented_trial_df cur_block: "
+                f"block_ix={block_id}, trial_cur_block={trial_block_id}, "
+                f"missing_direct_block_ix={missing_direct_ids}."
+            )
+        current_side = block_sides[trial_block_id]
         if previous_block_id is None:
             previous_block_id = block_id
             previous_side = current_side
             continue
 
         if current_side != previous_side:
-            block_df = trial_df[trial_df["cur_block"].astype(int) == block_id]
+            block_df = trial_df[trial_block_ids == trial_block_id]
             rows.extend(
                 build_switch_persistence_rows_for_block(
                     block_row=block_row,
