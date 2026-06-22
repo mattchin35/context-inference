@@ -1170,8 +1170,9 @@ def add_block_bias_columns(block_performance: pd.DataFrame) -> pd.DataFrame:
     -------
     pd.DataFrame
         Copy of `block_performance` with `bias_rl`, `bias_inf`,
-        `bias_rl_flag`, `bias_inf_flag`, and `bias_full_flag` columns.
-        Invalid block rows receive the string sentinel `"None"`.
+        `min_value_bias`, `bias_rl_flag`, `bias_inf_flag`, and
+        `bias_full_flag` columns. Invalid block rows receive the string
+        sentinel `"None"`.
     """
     block_performance = block_performance.copy()
     valid_rows = _get_valid_trials_to_correct_mask(
@@ -1197,6 +1198,10 @@ def add_block_bias_columns(block_performance: pd.DataFrame) -> pd.DataFrame:
     bias_inf = base_array.copy()
     bias_inf[valid_rows] = bias_inf_values.to_numpy()
 
+    min_value_bias_values = pd.concat([bias_rl_values, bias_inf_values], axis=1).min(axis=1)
+    min_value_bias = base_array.copy()
+    min_value_bias[valid_rows] = min_value_bias_values.to_numpy()
+
     bias_thresh = .2
     bias_rl_flag_values = bias_rl_values > bias_thresh
     bias_inf_flag_values = bias_inf_values > bias_thresh
@@ -1211,6 +1216,7 @@ def add_block_bias_columns(block_performance: pd.DataFrame) -> pd.DataFrame:
 
     block_performance["bias_rl"] = bias_rl
     block_performance["bias_inf"] = bias_inf
+    block_performance["min_value_bias"] = min_value_bias
     block_performance["bias_rl_flag"] = bias_rl_flag
     block_performance["bias_inf_flag"] = bias_inf_flag
     block_performance["bias_full_flag"] = bias_full_flag
