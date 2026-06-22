@@ -173,9 +173,36 @@ def get_correct_choice_omission_mask(trial_df: pd.DataFrame) -> pd.Series:
         raise ValueError(f"trial_df is missing required columns: {missing_columns}")
 
     valid_choice = make_valid_choice_mask(trial_df)
-    correct = pd.to_numeric(trial_df["correct"], errors="raise").astype(float) > 0
-    rewarded = pd.to_numeric(trial_df["reward"], errors="raise").astype(float) > 0
-    return valid_choice & correct & ~rewarded
+    omission_mask = pd.Series(False, index=trial_df.index)
+    if not bool(valid_choice.any()):
+        return omission_mask
+
+    valid_correct = pd.to_numeric(
+        trial_df.loc[valid_choice, "correct"],
+        errors="coerce",
+    )
+    invalid_correct = trial_df.loc[valid_choice, "correct"].loc[valid_correct.isna()]
+    if not invalid_correct.empty:
+        invalid_summary = sorted(invalid_correct.astype(str).unique())
+        raise ValueError(
+            f"correct values must be numeric for valid animal choices, got: {invalid_summary}"
+        )
+
+    valid_reward = pd.to_numeric(
+        trial_df.loc[valid_choice, "reward"],
+        errors="coerce",
+    )
+    invalid_reward = trial_df.loc[valid_choice, "reward"].loc[valid_reward.isna()]
+    if not invalid_reward.empty:
+        invalid_summary = sorted(invalid_reward.astype(str).unique())
+        raise ValueError(
+            f"reward values must be numeric for valid animal choices, got: {invalid_summary}"
+        )
+
+    omission_mask.loc[valid_choice] = (
+        valid_correct.astype(float).gt(0) & ~valid_reward.astype(float).gt(0)
+    )
+    return omission_mask
 
 
 def count_terminal_correct_choice_omissions(block_df: pd.DataFrame) -> int:
@@ -195,17 +222,20 @@ def count_terminal_correct_choice_omissions(block_df: pd.DataFrame) -> int:
         Number of consecutive correct-but-unrewarded choices at the end of the
         block's correct-choice sequence, in trials.
     """
+    omission_mask = get_correct_choice_omission_mask(block_df)
     valid_choice = make_valid_choice_mask(block_df)
-    correct = pd.to_numeric(block_df["correct"], errors="raise").astype(float) > 0
-    rewarded = pd.to_numeric(block_df["reward"], errors="raise").astype(float) > 0
-    correct_choice_df = block_df.loc[valid_choice & correct]
+    valid_correct = pd.to_numeric(
+        block_df.loc[valid_choice, "correct"],
+        errors="coerce",
+    ).astype(float).gt(0)
+    correct_choice_df = block_df.loc[valid_choice].loc[valid_correct]
     if correct_choice_df.empty:
         return 0
 
-    correct_choice_rewarded = rewarded.loc[correct_choice_df.index].to_numpy(dtype=bool)
+    correct_choice_omitted = omission_mask.loc[correct_choice_df.index].to_numpy(dtype=bool)
     terminal_count = 0
-    for was_rewarded in correct_choice_rewarded[::-1]:
-        if was_rewarded:
+    for was_omitted in correct_choice_omitted[::-1]:
+        if not was_omitted:
             break
         terminal_count += 1
     return terminal_count
