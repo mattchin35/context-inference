@@ -116,6 +116,83 @@ def test_previous_block_omission_metrics_reject_none_correct_on_valid_choice_row
         )
 
 
+def test_previous_block_omission_metrics_align_noncontiguous_trial_blocks():
+    """Contiguous block rows should align to skipped raw trial block ids by order."""
+    block_performance = pd.DataFrame({"block_ix": [0, 1, 2]})
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [0, 0, 2, 2, 5],
+            "state": [0, 0, 1, 1, 0],
+            "action": [0, 0, 1, 1, 0],
+            "correct": [1, 1, 1, 1, 1],
+            "reward": [1, 0, 0, 0, 1],
+            "experimenter_reward_given": [0, 0, 0, 0, 0],
+        }
+    )
+
+    enriched = switch_persistence.add_previous_block_omission_metrics(
+        block_performance,
+        augmented_trial_df,
+    )
+
+    assert enriched["prev_n_omissions"].tolist() == [0, 1, 2]
+    assert enriched["prev_consecutive_omissions"].tolist() == [0, 1, 2]
+
+
+def test_compute_switch_persistence_aligns_noncontiguous_trial_blocks():
+    """Switch persistence should use raw cur_block ids even when block_ix is recoded."""
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2],
+            "prev_consecutive_rewards": [0, 2, 1],
+            "prev_n_correct": [0, 2, 2],
+            "prev_n_rewarded": [0, 1, 2],
+        }
+    )
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_trial": list(range(7)),
+            "cur_block": [0, 0, 2, 2, 2, 5, 5],
+            "state": [1, 1, 0, 0, 0, 1, 1],
+            "action": [1, 1, 1, 0, 0, 0, 1],
+            "correct": [1, 1, 0, 1, 1, 0, 1],
+            "reward": [1, 1, 0, 1, 1, 0, 1],
+            "experimenter_reward_given": [0, 0, 0, 0, 0, 0, 0],
+        }
+    )
+
+    detail = switch_persistence.compute_switch_persistence_trials(
+        block_performance,
+        augmented_trial_df,
+    )
+    block_detail = detail[detail["block_ix"] == 1]
+
+    assert block_detail["trial_cur_block"].tolist() == [2, 2, 2]
+    assert block_detail["switch_direction"].tolist() == ["L_to_R"] * 3
+    assert block_detail["choice_status"].tolist() == ["stay", "switch", "post_switch"]
+
+
+def test_compute_switch_persistence_raises_when_block_ids_cannot_align():
+    """A mismatch in block counts should fail with a block-alignment error."""
+    block_performance = pd.DataFrame({"block_ix": [0, 1, 2]})
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [0, 0, 2, 2],
+            "state": [1, 1, 0, 0],
+            "action": [1, 1, 0, 0],
+            "correct": [1, 1, 1, 1],
+            "reward": [1, 1, 1, 1],
+            "experimenter_reward_given": [0, 0, 0, 0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Cannot align block_performance block_ix"):
+        switch_persistence.compute_switch_persistence_trials(
+            block_performance,
+            augmented_trial_df,
+        )
+
+
 def test_compute_switch_persistence_l_to_r_stops_after_first_switch():
     """An L-to-R block should contribute stays until the first right choice."""
     block_performance = make_block_performance()
