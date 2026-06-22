@@ -5,9 +5,10 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import streamlit as st
 
-from src.neural_analysis import unit_spike_loading, unit_spike_plotting
+from src.neural_analysis import lfp_loading, spike_behavior_pynapple, unit_spike_loading, unit_spike_plotting
 
 
 CONDITION_OPTIONS = [
@@ -22,18 +23,42 @@ ACTION_OPTIONS = {
     "all": "all",
     "right (0)": 0,
     "left (1)": 1,
+    "compare left vs right": "compare_lr",
 }
 ALIGNMENT_OPTIONS = ["choice_time", "start_time"]
 PAGE_SIZE_OPTIONS = [25, 50, 100]
 PSTH_BIN_OPTIONS = [0.05, 0.1]
+PLOT_VIEW_OPTIONS = ["Unit raster/PSTH", "Trial spikes/licks/choices"]
+UNIT_PLOT_TYPE_OPTIONS = [
+    "PSTH",
+    "Binned rate: trials + mean",
+    "Binned rate: mean +/- SD",
+]
+COMPARE_LEFT_RIGHT_ACTION = "compare_lr"
+POPULATION_PSTH_UNIT_SCOPE_OPTIONS = ["Visible page units", "All selected units"]
+LFP_DROPDOWN_LABEL_HPC_V1 = "HPC/V1 LFP"
+LFP_DROPDOWN_LABEL_PFC = "PFC LFP"
+DEFAULT_BROWSER_ROOT = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014")
+RASTER_LAYOUT_OPTIONS = {
+    "Compact": {"row_spacing": 1.0, "figure_size": (12.0, 7.0)},
+    "Separated": {"row_spacing": 1.5, "figure_size": (12.0, 10.0)},
+    "Wide": {"row_spacing": 2.0, "figure_size": (12.0, 13.0)},
+}
+EVENT_MARKER_STYLES = {
+    "start_time": {"label": "trial start", "color": "black"},
+    "choice_time": {"label": "choice", "color": "tab:purple"},
+    "led_on_time": {"label": "LED", "color": "tab:green"},
+}
 
 
 @st.cache_resource(show_spinner="Loading session data...")
 def load_viewer_data_cached(
     session_data_home: str,
     sess_id_full: str,
-    sorter_output_path: str,
-    aligned_spike_path: str,
+    active_probe_label: str,
+    sorter_output_path: str | None,
+    aligned_spike_path: str | None,
+    lfp_path: str | None,
 ):
     """
     Load one session for Streamlit with cache persistence until app restart.
@@ -44,22 +69,127 @@ def load_viewer_data_cached(
         Root directory for one session.
     sess_id_full : str
         Session id formatted as ``mouse_YYYY-MM-DD_hhmmss``.
-    sorter_output_path : str
-        Sorter output directory path.
-    aligned_spike_path : str
-        Aligned spike ``.npz`` path.
+    active_probe_label : str
+        Active probe label, such as ``"HPC/V1"`` or ``"PFC"``.
+    sorter_output_path : str | None
+        Active probe sorter output directory path.
+    aligned_spike_path : str | None
+        Active probe aligned spike ``.npz`` path.
+    lfp_path : str | None
+        Active probe LFP ``.lf.bin`` path. Not required for spike-only plots.
 
     Returns
     -------
     dict
-        Loaded viewer data from ``unit_spike_loading.load_viewer_data``.
+        Loaded viewer data from ``unit_spike_loading.load_viewer_data_for_probe``.
     """
 
-    return unit_spike_loading.load_viewer_data(
+    probe_paths = unit_spike_loading.ProbeDataPaths(
+        label=active_probe_label,
+        sorter_output_path=sorter_output_path,
+        aligned_spike_path=aligned_spike_path,
+        lfp_path=lfp_path,
+    )
+    return unit_spike_loading.load_viewer_data_for_probe(
         session_data_home=Path(session_data_home),
         sess_id_full=sess_id_full,
-        sorter_output_path=Path(sorter_output_path),
-        aligned_spike_path=Path(aligned_spike_path),
+        probe_paths=probe_paths,
+    )
+
+
+@st.cache_resource(show_spinner="Decoding LFP sync...")
+def decode_lfp_sync_cached(
+    lfp_path: str,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+):
+    """
+    Decode and cache LFP IRIG sync for one file/settings combination.
+
+    Parameters
+    ----------
+    lfp_path : str
+        SpikeGLX ``.lf.bin`` file path.
+    digital_word : int
+        Digital word index.
+    irig_line : int
+        IRIG-H digital line. Current IMEC default is line 6.
+    bit_period_s : float
+        IRIG-H bit period in seconds.
+    utc_offset_hours : float
+        Constant UTC offset in hours.
+
+    Returns
+    -------
+    tuple
+        ``(lfp_irig_df, sample_rate_hz)`` from ``lfp_loading.decode_lfp_sync``.
+    """
+
+    return lfp_loading.decode_lfp_sync(
+        lfp_path=Path(lfp_path),
+        digital_word=int(digital_word),
+        irig_line=int(irig_line),
+        bit_period_s=float(bit_period_s),
+        utc_offset_hours=float(utc_offset_hours),
+    )
+
+
+@st.cache_data(show_spinner="Loading LFP trace...")
+def load_trial_lfp_trace_cached(
+    lfp_path: str,
+    saved_channel_index: int,
+    alignment_time_s: float,
+    window_start_s: float,
+    window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+):
+    """
+    Load and cache one trial-aligned LFP channel window.
+
+    Parameters
+    ----------
+    lfp_path : str
+        SpikeGLX ``.lf.bin`` file path.
+    saved_channel_index : int
+        Zero-based saved channel index into the binary rows.
+    alignment_time_s : float
+        Absolute trial alignment time in seconds.
+    window_start_s, window_end_s : float
+        Relative window bounds in seconds.
+    digital_word : int
+        Digital word index for sync decoding.
+    irig_line : int
+        IRIG-H digital line.
+    bit_period_s : float
+        IRIG-H bit period in seconds.
+    utc_offset_hours : float
+        Constant UTC offset in hours.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        ``(relative_time_s, lfp_uv)`` for plotting.
+    """
+
+    lfp_irig_df, sample_rate_hz = decode_lfp_sync_cached(
+        lfp_path=lfp_path,
+        digital_word=int(digital_word),
+        irig_line=int(irig_line),
+        bit_period_s=float(bit_period_s),
+        utc_offset_hours=float(utc_offset_hours),
+    )
+    return lfp_loading.load_trial_lfp_trace(
+        lfp_path=Path(lfp_path),
+        saved_channel_index=int(saved_channel_index),
+        alignment_time_s=float(alignment_time_s),
+        window=(float(window_start_s), float(window_end_s)),
+        lfp_irig_df=lfp_irig_df,
+        sample_rate_hz=float(sample_rate_hz),
     )
 
 
@@ -68,6 +198,191 @@ def _build_channel_text(region_name: str) -> str:
 
     presets = unit_spike_loading.get_ct014_region_channel_presets()
     return unit_spike_loading.format_channel_list(presets.get(region_name, np.array([], dtype=int)))
+
+
+def build_lfp_dropdown_options(hpc_v1_lfp_path: str, pfc_lfp_path: str) -> dict[str, str]:
+    """
+    Build explicit LFP-file choices from the two probe path inputs.
+
+    Parameters
+    ----------
+    hpc_v1_lfp_path : str
+        User-entered HPC/V1 LFP ``.lf.bin`` path. Empty strings are preserved
+        so the UI can warn without changing the user's input.
+    pfc_lfp_path : str
+        User-entered PFC LFP ``.lf.bin`` path. Empty strings are preserved so
+        the UI can warn without changing the user's input.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping from dropdown label to the exact path string entered by the
+        user. No directory discovery is performed.
+    """
+
+    return {
+        LFP_DROPDOWN_LABEL_HPC_V1: str(hpc_v1_lfp_path),
+        LFP_DROPDOWN_LABEL_PFC: str(pfc_lfp_path),
+    }
+
+
+def format_metadata_row_for_display(metadata_row: pd.Series) -> pd.DataFrame:
+    """
+    Convert one mixed-type metadata row into a Streamlit display dataframe.
+
+    Parameters
+    ----------
+    metadata_row : pd.Series
+        One unit's metadata values indexed by metadata field name. Values may
+        mix numeric entries and manual labels such as ``"mua"``.
+
+    Returns
+    -------
+    pd.DataFrame
+        One-column dataframe with the same index as ``metadata_row`` and a
+        string-valued ``"value"`` column. This avoids PyArrow numeric coercion
+        errors when Streamlit renders mixed-type metadata.
+    """
+
+    display_values = []
+    for value in metadata_row.to_list():
+        if value is None:
+            display_values.append("")
+            continue
+        try:
+            missing_value = pd.isna(value)
+        except (TypeError, ValueError):
+            missing_value = False
+        if isinstance(missing_value, (bool, np.bool_)) and missing_value:
+            display_values.append("")
+            continue
+        if isinstance(value, np.generic):
+            value = value.item()
+        display_values.append(str(value))
+    return pd.DataFrame({"value": display_values}, index=metadata_row.index)
+
+
+def _spikeglx_meta_path(binary_path: Path) -> Path:
+    """
+    Return the SpikeGLX metadata path expected by the local readSGLX helper.
+
+    Parameters
+    ----------
+    binary_path : Path
+        SpikeGLX binary path, typically ending in ``.lf.bin``.
+
+    Returns
+    -------
+    Path
+        Sibling metadata path with ``binary_path.stem + ".meta"`` naming.
+    """
+
+    return binary_path.parent / f"{binary_path.stem}.meta"
+
+
+def _initialize_path_input_state() -> None:
+    """Initialize editable path text boxes once per Streamlit session."""
+
+    path_defaults = {
+        "session_data_home_input": str(unit_spike_loading.DEFAULT_SESSION_DATA_HOME),
+        "hpc_v1_sorter_output_path_input": str(unit_spike_loading.DEFAULT_HPC_SORTER_OUTPUT_PATH),
+        "hpc_v1_aligned_spike_path_input": str(unit_spike_loading.DEFAULT_HPC_V1_ALIGNED_SPIKE_PATH),
+        "hpc_v1_lfp_path_input": str(unit_spike_loading.DEFAULT_HPC_V1_LFP_PATH),
+        "pfc_sorter_output_path_input": str(unit_spike_loading.DEFAULT_PFC_SORTER_OUTPUT_PATH),
+        "pfc_aligned_spike_path_input": str(unit_spike_loading.DEFAULT_PFC_ALIGNED_SPIKE_PATH),
+        "pfc_lfp_path_input": str(unit_spike_loading.DEFAULT_PFC_LFP_PATH),
+        "path_browser_current_dir": str(DEFAULT_BROWSER_ROOT),
+    }
+    for state_key, default_value in path_defaults.items():
+        if state_key not in st.session_state:
+            st.session_state[state_key] = default_value
+
+
+def _render_path_browser() -> None:
+    """
+    Render an optional server-side filesystem browser for path text inputs.
+
+    Parameters
+    ----------
+    None
+        Uses and mutates Streamlit session state keys for path inputs.
+
+    Returns
+    -------
+    None
+        Browser selections update existing text-input state.
+    """
+
+    with st.sidebar.expander("Browse paths"):
+        path_targets = {
+            "Session data home": {"key": "session_data_home_input", "kind": "directory"},
+            "HPC/V1 sorter output": {"key": "hpc_v1_sorter_output_path_input", "kind": "directory"},
+            "HPC/V1 aligned spikes": {"key": "hpc_v1_aligned_spike_path_input", "kind": "file"},
+            "HPC/V1 LFP": {"key": "hpc_v1_lfp_path_input", "kind": "file"},
+            "PFC sorter output": {"key": "pfc_sorter_output_path_input", "kind": "directory"},
+            "PFC aligned spikes": {"key": "pfc_aligned_spike_path_input", "kind": "file"},
+            "PFC LFP": {"key": "pfc_lfp_path_input", "kind": "file"},
+        }
+        current_dir = Path(st.session_state["path_browser_current_dir"]).expanduser()
+        if not current_dir.exists() or not current_dir.is_dir():
+            st.warning(f"Browser path is invalid; resetting to {DEFAULT_BROWSER_ROOT}")
+            current_dir = DEFAULT_BROWSER_ROOT
+            st.session_state["path_browser_current_dir"] = str(current_dir)
+
+        st.caption(f"Current directory: {current_dir}")
+        browser_root = st.text_input(
+            "Browser root/current directory",
+            key="path_browser_current_dir",
+        )
+        current_dir = Path(browser_root).expanduser()
+
+        try:
+            entries = unit_spike_loading.list_path_browser_entries(
+                current_dir,
+                file_suffix=None,
+            )
+        except (FileNotFoundError, NotADirectoryError, PermissionError) as error:
+            st.warning(str(error))
+            return
+
+        selected_target_label = st.selectbox(
+            "Set path field",
+            options=list(path_targets.keys()),
+            key="path_browser_target_select",
+        )
+        selected_target = path_targets[selected_target_label]
+
+        if st.button("Up", key="path_browser_up"):
+            st.session_state["path_browser_current_dir"] = str(current_dir.parent)
+            st.rerun()
+
+        directory_options = [path.name for path in entries["directories"]]
+        selected_directory_name = st.selectbox(
+            "Subdirectories",
+            options=directory_options,
+            index=0 if directory_options else None,
+            placeholder="No subdirectories",
+            key="path_browser_directory_select",
+        )
+        if st.button("Open directory", key="path_browser_open_directory") and selected_directory_name:
+            st.session_state["path_browser_current_dir"] = str(current_dir / selected_directory_name)
+            st.rerun()
+
+        if selected_target["kind"] == "directory" and st.button("Use current directory", key="path_browser_use_dir"):
+            st.session_state[selected_target["key"]] = str(current_dir)
+            st.rerun()
+
+        file_options = [path.name for path in entries["files"]]
+        selected_file_name = st.selectbox(
+            "Files",
+            options=file_options,
+            index=0 if file_options else None,
+            placeholder="No files",
+            key="path_browser_file_select",
+        )
+        if selected_target["kind"] == "file" and st.button("Use selected file", key="path_browser_use_file") and selected_file_name:
+            st.session_state[selected_target["key"]] = str(current_dir / selected_file_name)
+            st.rerun()
 
 
 def _select_unit_metadata(cluster_info, region_channels):
@@ -114,48 +429,68 @@ def main() -> None:
     st.set_page_config(page_title="Unit PSTH Viewer", layout="wide")
     st.title("Unit Raster and PSTH Viewer")
 
-    if st.sidebar.button("Clear cached session data"):
+    if st.sidebar.button("Clear cached data"):
         st.cache_resource.clear()
         st.cache_data.clear()
         st.rerun()
 
+    _initialize_path_input_state()
     st.sidebar.header("Session")
     session_data_home = st.sidebar.text_input(
         "Session data home",
-        value=str(unit_spike_loading.DEFAULT_SESSION_DATA_HOME),
+        key="session_data_home_input",
     )
     sess_id_full = st.sidebar.text_input(
         "Session id",
         value=unit_spike_loading.DEFAULT_SESSION_ID,
     )
-    sorter_output_path = st.sidebar.text_input(
-        "Sorter output path",
-        value=str(unit_spike_loading.DEFAULT_HPC_SORTER_OUTPUT_PATH),
-    )
-    aligned_spike_path = st.sidebar.text_input(
-        "Aligned spike path",
-        value=str(unit_spike_loading.DEFAULT_ALIGNED_SPIKE_PATH),
-    )
 
-    try:
-        viewer_data = load_viewer_data_cached(
-            session_data_home=session_data_home,
-            sess_id_full=sess_id_full,
-            sorter_output_path=sorter_output_path,
-            aligned_spike_path=aligned_spike_path,
-        )
-    except Exception as error:  # noqa: BLE001 - Streamlit should display load failures without a traceback wall.
-        st.error(f"Could not load session data: {error}")
-        st.stop()
-
-    session = viewer_data["session"]
-    trial_df = viewer_data["trial_df"]
-    cluster_info = viewer_data["cluster_info"]
-    spike_group = viewer_data["spike_group"]
+    st.sidebar.header("Probe Paths")
+    hpc_v1_sorter_output_path = st.sidebar.text_input(
+        "HPC/V1 sorter output path",
+        key="hpc_v1_sorter_output_path_input",
+    )
+    hpc_v1_aligned_spike_path = st.sidebar.text_input(
+        "HPC/V1 aligned spike path",
+        key="hpc_v1_aligned_spike_path_input",
+    )
+    hpc_v1_lfp_path = st.sidebar.text_input(
+        "HPC/V1 LFP path",
+        key="hpc_v1_lfp_path_input",
+    )
+    pfc_sorter_output_path = st.sidebar.text_input(
+        "PFC sorter output path",
+        key="pfc_sorter_output_path_input",
+    )
+    pfc_aligned_spike_path = st.sidebar.text_input(
+        "PFC aligned spike path",
+        key="pfc_aligned_spike_path_input",
+    )
+    pfc_lfp_path = st.sidebar.text_input(
+        "PFC LFP path",
+        key="pfc_lfp_path_input",
+    )
+    _render_path_browser()
 
     st.sidebar.header("Region and Units")
     preset_options = list(unit_spike_loading.get_ct014_region_channel_presets().keys())
     region_name = st.sidebar.selectbox("Region preset", options=preset_options, index=0)
+    custom_probe_label = None
+    if region_name == "Custom":
+        custom_probe_label = st.sidebar.selectbox(
+            "Custom probe source",
+            options=list(unit_spike_loading.SUPPORTED_PROBE_LABELS),
+        )
+    try:
+        active_probe_label = unit_spike_loading.get_probe_label_for_region(
+            region_name,
+            custom_probe_label=custom_probe_label,
+        )
+    except ValueError as error:
+        st.error(str(error))
+        st.stop()
+    st.sidebar.caption(f"Active probe: {active_probe_label}")
+
     channel_text = st.sidebar.text_area(
         "Region channels",
         value=_build_channel_text(region_name),
@@ -172,21 +507,52 @@ def main() -> None:
         st.warning("No region channels are selected.")
         st.stop()
 
+    if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1:
+        active_sorter_output_path = hpc_v1_sorter_output_path
+        active_aligned_spike_path = hpc_v1_aligned_spike_path
+        active_lfp_path = hpc_v1_lfp_path
+    else:
+        active_sorter_output_path = pfc_sorter_output_path
+        active_aligned_spike_path = pfc_aligned_spike_path
+        active_lfp_path = pfc_lfp_path
+
+    try:
+        viewer_data = load_viewer_data_cached(
+            session_data_home=session_data_home,
+            sess_id_full=sess_id_full,
+            active_probe_label=active_probe_label,
+            sorter_output_path=active_sorter_output_path,
+            aligned_spike_path=active_aligned_spike_path,
+            lfp_path=active_lfp_path,
+        )
+    except Exception as error:  # noqa: BLE001 - Streamlit should display load failures without a traceback wall.
+        st.error(f"Could not load {active_probe_label} spike data: {error}")
+        st.stop()
+
+    session = viewer_data["session"]
+    event_df = viewer_data["event_df"]
+    trial_df = viewer_data["trial_df"]
+    cluster_info = viewer_data["cluster_info"]
+    spike_group = viewer_data["spike_group"]
+
     selected_unit_metadata = _select_unit_metadata(cluster_info, region_channels)
     if selected_unit_metadata.empty:
         st.warning("No units match the selected channels and quality filters.")
         st.stop()
 
     unit_ids = selected_unit_metadata["cluster_id"].to_numpy(dtype=int)
-    unit_id = st.sidebar.selectbox("Cluster id", options=unit_ids.tolist())
-    selected_unit_row = selected_unit_metadata.loc[selected_unit_metadata["cluster_id"] == unit_id].iloc[0]
+    plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
 
     st.sidebar.header("Trials")
     condition = st.sidebar.selectbox("Condition", options=CONDITION_OPTIONS)
     action_label = st.sidebar.selectbox("Action", options=list(ACTION_OPTIONS.keys()))
     alignment_event = st.sidebar.selectbox("Alignment event", options=ALIGNMENT_OPTIONS)
-    page_size = st.sidebar.selectbox("Raster page size", options=PAGE_SIZE_OPTIONS, index=1)
-    bin_size = st.sidebar.selectbox("PSTH bin size (s)", options=PSTH_BIN_OPTIONS, index=1)
+    raster_layout_label = st.sidebar.selectbox(
+        "Raster row spacing",
+        options=list(RASTER_LAYOUT_OPTIONS.keys()),
+        index=1,
+    )
+    raster_layout = RASTER_LAYOUT_OPTIONS[raster_layout_label]
     window_start = st.sidebar.number_input("Window start (s)", value=-2.0, step=0.1)
     window_end = st.sidebar.number_input("Window end (s)", value=2.0, step=0.1)
     if float(window_start) >= float(window_end):
@@ -194,69 +560,342 @@ def main() -> None:
         st.stop()
     window = (float(window_start), float(window_end))
 
+    selected_action = ACTION_OPTIONS[action_label]
+    compare_left_right = selected_action == COMPARE_LEFT_RIGHT_ACTION
     selected_trial_indices = unit_spike_plotting.filter_trials_for_unit_plot(
         trial_df,
         condition=condition,
-        action=ACTION_OPTIONS[action_label],
+        action="all" if compare_left_right else selected_action,
     )
     if selected_trial_indices.size == 0:
         st.warning("No trials match the selected filters.")
         st.stop()
 
-    n_pages = max(1, math.ceil(selected_trial_indices.size / int(page_size)))
-    page_index = st.sidebar.number_input(
-        "Raster page",
-        min_value=0,
-        max_value=n_pages - 1,
-        value=0,
-        step=1,
-    )
-    raster_trial_indices = unit_spike_plotting.paginate_trial_indices(
-        selected_trial_indices,
-        page_index=int(page_index),
-        page_size=int(page_size),
-    )
-
-    unit_spike_times = unit_spike_loading.get_unit_spike_times(spike_group, unit_id=int(unit_id))
-    title_suffix = (
-        f"{region_name}; {condition}; {action_label}; "
-        f"page {int(page_index) + 1}/{n_pages}; PSTH n={selected_trial_indices.size}"
-    )
-    figure, axes = unit_spike_plotting.plot_unit_raster_and_psth(
-        unit_spike_times=unit_spike_times,
-        trial_df=trial_df,
-        raster_trial_indices=raster_trial_indices,
-        psth_trial_indices=selected_trial_indices,
-        alignment_event=alignment_event,
-        window=window,
-        bin_size=float(bin_size),
-        unit_id=int(unit_id),
-        title_suffix=title_suffix,
-    )
-
-    metadata_column, plot_column = st.columns([1, 3])
-    with metadata_column:
-        st.subheader("Unit Metadata")
-        st.dataframe(selected_unit_row.to_frame(name="value"), use_container_width=True)
-        st.write(f"Filtered units: {selected_unit_metadata.shape[0]}")
-        st.write(f"Filtered trials: {selected_trial_indices.size}")
-        st.write(f"Raster trials on page: {raster_trial_indices.size}")
-    with plot_column:
-        st.pyplot(figure)
-
-    if st.button("Save current plot"):
-        save_path = unit_spike_plotting.save_unit_plot_figure(
-            figure=figure,
-            figure_path=session.figure_path,
-            session_id=session.sess_id_full,
-            unit_id=int(unit_id),
-            region_name=region_name,
-            condition=condition,
-            action_label=action_label,
-            alignment_event=alignment_event,
-            page_index=int(page_index),
+    if plot_view == "Unit raster/PSTH":
+        unit_id = st.sidebar.selectbox("Cluster id", options=unit_ids.tolist())
+        selected_unit_row = selected_unit_metadata.loc[selected_unit_metadata["cluster_id"] == unit_id].iloc[0]
+        unit_plot_type = st.sidebar.selectbox("Unit plot type", options=UNIT_PLOT_TYPE_OPTIONS)
+        unit_spike_times = unit_spike_loading.get_unit_spike_times(spike_group, unit_id=int(unit_id))
+        title_suffix = (
+            f"{region_name}; {active_probe_label}; {condition}; {action_label}; "
+            f"n={selected_trial_indices.size}"
         )
-        st.success(f"Saved plot to {save_path}")
+        page_size = st.sidebar.selectbox("Raster trial page size", options=PAGE_SIZE_OPTIONS, index=1)
+        event_marker_columns: list[str] = []
+        if alignment_event == "start_time":
+            if st.sidebar.checkbox("Show choice markers", value=True):
+                event_marker_columns.append("choice_time")
+        elif st.sidebar.checkbox("Show trial start markers", value=True):
+            event_marker_columns.append("start_time")
+        if st.sidebar.checkbox("Show LED markers", value=True):
+            event_marker_columns.append("led_on_time")
+
+        plot_type_token = "raster-psth"
+        summary_plot_type = "psth"
+        binned_rate_bin_size = 0.1
+        if unit_plot_type == "PSTH":
+            bin_size = st.sidebar.selectbox("PSTH bin size (s)", options=PSTH_BIN_OPTIONS, index=1)
+        else:
+            bin_size = 0.1
+            firing_rate_bin_size = st.sidebar.number_input(
+                "Firing rate bin size (s)",
+                min_value=0.001,
+                value=0.1,
+                step=0.01,
+                format="%.3f",
+            )
+            binned_rate_bin_size = float(firing_rate_bin_size)
+            if unit_plot_type == "Binned rate: trials + mean":
+                plot_type_token = "binned-rate-trials-mean"
+                summary_plot_type = "binned-rate-trials-mean"
+            else:
+                plot_type_token = "binned-rate-mean-sd"
+                summary_plot_type = "binned-rate-mean-sd"
+
+        comparison_counts = None
+        if compare_left_right:
+            (
+                left_summary_trial_indices,
+                right_summary_trial_indices,
+            ) = unit_spike_plotting.split_trial_indices_by_action(
+                trial_df=trial_df,
+                trial_indices=selected_trial_indices,
+            )
+            if left_summary_trial_indices.size == 0 and right_summary_trial_indices.size == 0:
+                st.warning("No left or right choice trials match the selected condition.")
+                st.stop()
+            left_pages = (
+                math.ceil(left_summary_trial_indices.size / int(page_size))
+                if left_summary_trial_indices.size
+                else 0
+            )
+            right_pages = (
+                math.ceil(right_summary_trial_indices.size / int(page_size))
+                if right_summary_trial_indices.size
+                else 0
+            )
+            n_pages = max(1, left_pages, right_pages)
+            page_index = int(
+                st.sidebar.number_input(
+                    "Raster trial page",
+                    min_value=0,
+                    max_value=n_pages - 1,
+                    value=0,
+                    step=1,
+                )
+            )
+            left_raster_trial_indices = unit_spike_plotting.paginate_trial_indices(
+                left_summary_trial_indices,
+                page_index=int(page_index),
+                page_size=int(page_size),
+            )
+            right_raster_trial_indices = unit_spike_plotting.paginate_trial_indices(
+                right_summary_trial_indices,
+                page_index=int(page_index),
+                page_size=int(page_size),
+            )
+            comparison_counts = {
+                "left_summary": left_summary_trial_indices.size,
+                "right_summary": right_summary_trial_indices.size,
+                "left_raster": left_raster_trial_indices.size,
+                "right_raster": right_raster_trial_indices.size,
+            }
+            plot_type_token = f"choice-comparison-{summary_plot_type}"
+            comparison_figure_size = (
+                max(float(raster_layout["figure_size"][0]) * 1.45, 14.0),
+                float(raster_layout["figure_size"][1]),
+            )
+            figure, axes = unit_spike_plotting.plot_unit_left_right_choice_comparison(
+                unit_spike_times=unit_spike_times,
+                trial_df=trial_df,
+                left_raster_trial_indices=left_raster_trial_indices,
+                right_raster_trial_indices=right_raster_trial_indices,
+                left_summary_trial_indices=left_summary_trial_indices,
+                right_summary_trial_indices=right_summary_trial_indices,
+                alignment_event=alignment_event,
+                window=window,
+                bin_size=float(bin_size),
+                unit_id=int(unit_id),
+                summary_plot_type=summary_plot_type,
+                binned_rate_bin_size=float(binned_rate_bin_size),
+                title_suffix=f"{title_suffix}; page {int(page_index) + 1}/{n_pages}",
+                event_marker_columns=tuple(event_marker_columns),
+                event_marker_styles=EVENT_MARKER_STYLES,
+                raster_row_spacing=raster_layout["row_spacing"],
+                figure_size=comparison_figure_size,
+            )
+        else:
+            n_pages = max(1, math.ceil(selected_trial_indices.size / int(page_size)))
+            page_index = int(
+                st.sidebar.number_input(
+                    "Raster trial page",
+                    min_value=0,
+                    max_value=n_pages - 1,
+                    value=0,
+                    step=1,
+                )
+            )
+            raster_trial_indices = unit_spike_plotting.paginate_trial_indices(
+                selected_trial_indices,
+                page_index=int(page_index),
+                page_size=int(page_size),
+            )
+            raster_title_suffix = (
+                f"{title_suffix}; page {int(page_index) + 1}/{n_pages}; "
+                f"summary n={selected_trial_indices.size}"
+            )
+            figure, axes = unit_spike_plotting.plot_unit_raster_and_psth(
+                unit_spike_times=unit_spike_times,
+                trial_df=trial_df,
+                raster_trial_indices=raster_trial_indices,
+                psth_trial_indices=selected_trial_indices,
+                alignment_event=alignment_event,
+                window=window,
+                bin_size=float(bin_size),
+                unit_id=int(unit_id),
+                title_suffix=raster_title_suffix,
+                event_marker_columns=tuple(event_marker_columns),
+                event_marker_styles=EVENT_MARKER_STYLES,
+                raster_row_spacing=raster_layout["row_spacing"],
+                figure_size=raster_layout["figure_size"],
+                summary_plot_type=summary_plot_type,
+                binned_rate_bin_size=float(binned_rate_bin_size),
+            )
+            comparison_counts = {
+                "raster": raster_trial_indices.size,
+            }
+
+        metadata_column, plot_column = st.columns([1, 3])
+        with metadata_column:
+            st.subheader("Unit Metadata")
+            st.dataframe(format_metadata_row_for_display(selected_unit_row), use_container_width=True)
+            st.write(f"Active probe: {active_probe_label}")
+            st.write(f"Unit plot type: {unit_plot_type}")
+            st.write(f"Filtered units: {selected_unit_metadata.shape[0]}")
+            st.write(f"Filtered trials: {selected_trial_indices.size}")
+            if compare_left_right and comparison_counts is not None:
+                st.write(f"Left summary trials: {comparison_counts['left_summary']}")
+                st.write(f"Right summary trials: {comparison_counts['right_summary']}")
+                st.write(f"Left raster trials on page: {comparison_counts['left_raster']}")
+                st.write(f"Right raster trials on page: {comparison_counts['right_raster']}")
+            elif comparison_counts is not None:
+                st.write(f"Raster trials on page: {comparison_counts['raster']}")
+        with plot_column:
+            st.pyplot(figure)
+
+        if st.button("Save current plot"):
+            save_path = unit_spike_plotting.save_unit_plot_figure(
+                figure=figure,
+                figure_path=session.figure_path,
+                session_id=session.sess_id_full,
+                unit_id=int(unit_id),
+                region_name=region_name,
+                condition=condition,
+                action_label=action_label,
+                alignment_event=alignment_event,
+                page_index=int(page_index),
+                plot_type=plot_type_token,
+            )
+            st.success(f"Saved plot to {save_path}")
+
+    else:
+        trial_position = st.sidebar.number_input(
+            "Trial position",
+            min_value=0,
+            max_value=int(selected_trial_indices.size - 1),
+            value=0,
+            step=1,
+        )
+        trial_index = int(selected_trial_indices[int(trial_position)])
+        unit_page_size = st.sidebar.selectbox("Units per page", options=PAGE_SIZE_OPTIONS, index=0)
+        n_unit_pages = max(1, math.ceil(unit_ids.size / int(unit_page_size)))
+        unit_page_index = st.sidebar.number_input(
+            "Unit page",
+            min_value=0,
+            max_value=n_unit_pages - 1,
+            value=0,
+            step=1,
+        )
+        page_unit_ids = unit_spike_plotting.paginate_unit_ids(
+            unit_ids,
+            page_index=int(unit_page_index),
+            page_size=int(unit_page_size),
+        )
+        population_psth_unit_scope = st.sidebar.selectbox(
+            "Population PSTH units",
+            options=POPULATION_PSTH_UNIT_SCOPE_OPTIONS,
+        )
+        population_psth_bin_size = st.sidebar.selectbox(
+            "Population PSTH bin size (s)",
+            options=PSTH_BIN_OPTIONS,
+            index=0,
+        )
+        psth_unit_ids = page_unit_ids if population_psth_unit_scope == "Visible page units" else unit_ids
+        show_lfp_trace = st.sidebar.checkbox("Show LFP trace", value=False)
+        lfp_time_s = None
+        lfp_uv = None
+        lfp_label = None
+        if show_lfp_trace:
+            lfp_digital_word = 0
+            lfp_irig_line = 6
+            lfp_bit_period_s = 1.0
+            lfp_utc_offset_hours = 0.0
+            st.sidebar.caption(f"LFP sync digital line: {lfp_irig_line}")
+            lfp_dropdown_options = build_lfp_dropdown_options(
+                hpc_v1_lfp_path=hpc_v1_lfp_path,
+                pfc_lfp_path=pfc_lfp_path,
+            )
+            default_lfp_label = (
+                LFP_DROPDOWN_LABEL_HPC_V1
+                if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1
+                else LFP_DROPDOWN_LABEL_PFC
+            )
+            selected_lfp_label = st.sidebar.selectbox(
+                "Active LFP file",
+                options=list(lfp_dropdown_options.keys()),
+                index=list(lfp_dropdown_options.keys()).index(default_lfp_label),
+            )
+            selected_lfp_path = lfp_dropdown_options[selected_lfp_label]
+            st.sidebar.caption(selected_lfp_path or "No LFP path entered for this selection.")
+            lfp_saved_channel_index = st.sidebar.number_input(
+                "LFP saved channel index",
+                min_value=0,
+                value=0,
+                step=1,
+            )
+            if str(selected_lfp_path).strip() == "":
+                st.warning("LFP trace requested, but no active LFP path is set.")
+            else:
+                lfp_meta_path = _spikeglx_meta_path(Path(selected_lfp_path))
+                if not lfp_meta_path.exists():
+                    st.warning(f"Expected LFP metadata file was not found: {lfp_meta_path}")
+                try:
+                    alignment_time_s = unit_spike_plotting.get_trial_alignment_time(
+                        trial_df=trial_df,
+                        trial_index=trial_index,
+                        alignment_event=alignment_event,
+                    )
+                    lfp_time_s, lfp_uv = load_trial_lfp_trace_cached(
+                        lfp_path=str(selected_lfp_path),
+                        saved_channel_index=int(lfp_saved_channel_index),
+                        alignment_time_s=float(alignment_time_s),
+                        window_start_s=float(window[0]),
+                        window_end_s=float(window[1]),
+                        digital_word=lfp_digital_word,
+                        irig_line=lfp_irig_line,
+                        bit_period_s=lfp_bit_period_s,
+                        utc_offset_hours=lfp_utc_offset_hours,
+                    )
+                    lfp_label = f"{selected_lfp_label}, saved channel {int(lfp_saved_channel_index)}"
+                except Exception as error:  # noqa: BLE001 - Optional LFP should not block raster plotting.
+                    st.warning(f"Could not load LFP trace; plotting rasters without LFP. {error}")
+        try:
+            lick_times = spike_behavior_pynapple.build_lick_time_dict(event_df)
+            figure, axes = unit_spike_plotting.plot_trial_behavior_and_spike_raster(
+                trial_df=trial_df,
+                trial_index=trial_index,
+                lick_times=lick_times,
+                spike_group=spike_group,
+                raster_unit_ids=page_unit_ids,
+                psth_unit_ids=psth_unit_ids,
+                alignment_event=alignment_event,
+                window=window,
+                psth_bin_size=float(population_psth_bin_size),
+                lfp_time_s=lfp_time_s,
+                lfp_uv=lfp_uv,
+                lfp_label=lfp_label,
+                figure_size=raster_layout["figure_size"],
+                spike_row_spacing=raster_layout["row_spacing"],
+            )
+        except Exception as error:  # noqa: BLE001 - Streamlit should show plot failures cleanly.
+            st.error(f"Could not build trial behavior/spike raster: {error}")
+            st.stop()
+
+        metadata_column, plot_column = st.columns([1, 3])
+        with metadata_column:
+            st.subheader("Trial and Unit Page")
+            st.write(f"Active probe: {active_probe_label}")
+            st.write(f"Filtered units: {selected_unit_metadata.shape[0]}")
+            st.write(f"Filtered trials: {selected_trial_indices.size}")
+            st.write(f"Trial index: {trial_index}")
+            st.write(f"Unit page: {int(unit_page_index) + 1}/{n_unit_pages}")
+            st.write(f"Units on page: {page_unit_ids.size}")
+            st.write(f"Population PSTH units: {population_psth_unit_scope}")
+            st.write(f"Population PSTH unit count: {psth_unit_ids.size}")
+            if lfp_label is not None:
+                st.write(lfp_label)
+        with plot_column:
+            st.pyplot(figure)
+
+        if st.button("Save current plot"):
+            output_dir = Path(session.figure_path) / "unit_spike_viewer"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            save_path = output_dir / (
+                f"{session.sess_id_full}_{region_name}_trial{trial_index}_"
+                f"{alignment_event}_unitpage{int(unit_page_index)}.png"
+            )
+            figure.savefig(save_path, format="png", dpi=300)
+            st.success(f"Saved plot to {save_path}")
 
     plt.close(figure)
 

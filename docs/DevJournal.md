@@ -136,3 +136,41 @@ a time instead of generating an unmanageable number of static spike plots.
   the new loading and plotting helpers. Updated cross-session plotting tests so
   they monkeypatch script-level region/date controls instead of depending on
   editable analysis defaults.
+
+# 2026/06/17
+
+Expanded the local Streamlit spike viewer so it can inspect richer single-trial
+and single-unit neural activity without requiring large batches of static plots.
+The main goal was to keep the app useful for partially processed sessions while
+making probe, LFP, and plot-type choices explicit in the UI.
+
+- Added probe-aware path handling in `psth_webapp.py`, with separate HPC/V1 and
+  PFC sorter, aligned-spike, and LFP path inputs. Region selection routes spike
+  loading through the appropriate probe, while optional LFP plotting can choose
+  directly between the user-entered HPC/V1 and PFC LFP files.
+- Added optional single-trial LFP plotting above the combined
+  spikes/licks/choices raster. LFP loading is lazy behind a toggle, uses the
+  selected saved channel, decodes IRIG sync from digital line 6, applies
+  SpikeGLX gain correction, and falls back to raster-only plotting if the LFP
+  file or metadata is unavailable.
+- Added `lfp_loading.py` for testable LFP metadata loading, sync decoding,
+  behavior-time-to-sample mapping, saved-channel extraction, and microvolt
+  conversion. The loader documents saved-channel indexing, sample units, time
+  units, and output array shapes.
+- Extended the single-trial view with a combined behavior/spike raster and
+  population PSTH, including both visible-page and all-selected-unit PSTH
+  options. Left/right licks are plotted on separate rows, left/right choices are
+  drawn on the matching lick rows, and LED onset spans the behavior rows.
+- Added alternative single-unit binned firing-rate views using full 100 ms bins
+  by default: one view overlays faded per-trial rate traces with the mean, and
+  the other plots mean firing rate with a mean +/- standard-deviation band.
+  These views reuse the same unit, trial-filter, alignment, and time-window
+  controls as the raster/PSTH view and use all filtered trials rather than the
+  current raster page.
+- Fixed the Streamlit metadata display path so mixed numeric/string unit
+  metadata, including manual quality labels such as `mua`, are converted to
+  display-safe strings before rendering through `st.dataframe`.
+- Added focused pytest coverage for LFP loading helpers, probe/path selection,
+  metadata display formatting, single-trial combined plotting, binned
+  firing-rate computation and plotting, and plot filenames for alternative
+  single-unit views.

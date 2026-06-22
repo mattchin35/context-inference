@@ -1189,8 +1189,8 @@ def main_mouse():
     # date = '2025-12-16'
     # behavior_timestamp = '153200'
     mouse = "CT016"
-    date = "2026-05-11"
-    behavior_timestamp = 124709
+    date = "2026-04-27"
+    behavior_timestamp = "121417"
     task_tag = 'latent_inference'
     date_no_dash = date.replace('-', '')
 
@@ -1331,30 +1331,30 @@ def main_mouse():
     #     predictor_columns=trial_glm_predictor_columns,
     #     random_seed=trial_hmm_random_seed,
     # )
-    augmented_trial_df = tssm.run_trial_modeling(
-        augmented_trial_df,
-        session=sess,
-        num_states=3,
-        prior_alpha=1,
-        prior_sigma=1,
-        predictor_columns=trial_glm_predictor_columns,
-        random_seed=trial_hmm_random_seed,
-    )
+    # augmented_trial_df = tssm.run_trial_modeling(
+    #     augmented_trial_df,
+    #     session=sess,
+    #     num_states=3,
+    #     prior_alpha=1,
+    #     prior_sigma=1,
+    #     predictor_columns=trial_glm_predictor_columns,
+    #     random_seed=trial_hmm_random_seed,
+    # )
 
 
-def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
-    ix_valid = bssm.make_valid_block_history_mask(block_df)
-    df = block_df[ix_valid]
-
-    consecutive_rewards = df['prev_consecutive_rewards'].to_numpy().reshape(-1, 1).astype(int)
-    prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
-    # prev_correct = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
-    trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
-    bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
-    predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
-    pred_labels = ['previous rewards', 'block bias flag']
-
-    utilplot.plot_postprob_obs_for_presentation(block_model_dict['map']['posterior_probs'], trials_to_correct, predictors, map_hmm, colors, cmap, predictor_labels = pred_labels)
+# def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
+#     ix_valid = bssm.make_valid_block_history_mask(block_df)
+#     df = block_df[ix_valid]
+#
+#     consecutive_rewards = df['prev_consecutive_rewards'].to_numpy().reshape(-1, 1).astype(int)
+#     prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
+#     # prev_correct = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
+#     trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
+#     bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
+#     predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
+#     pred_labels = ['previous rewards', 'block bias flag']
+#
+#     utilplot.plot_postprob_obs_for_presentation(block_model_dict['map']['posterior_probs'], trials_to_correct, predictors, map_hmm, colors, cmap, predictor_labels = pred_labels)
 
 
 if __name__ == '__main__':
