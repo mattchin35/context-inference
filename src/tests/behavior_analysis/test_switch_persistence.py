@@ -49,6 +49,73 @@ def test_add_previous_block_omission_metrics_counts_correct_unrewarded_only():
     assert enriched["prev_consecutive_omissions"].tolist() == [0, 1, 2, 0]
 
 
+def test_previous_block_omission_metrics_ignore_none_correct_on_no_choice_rows():
+    """No-choice rows with string missing correctness should not crash omission counts."""
+    block_performance = make_block_performance().iloc[:2]
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [0, 0, 0, 1],
+            "state": [0, 0, 0, 1],
+            "action": [0, "no_choice", 0, 1],
+            "correct": [1, "None", 1, 1],
+            "reward": [1, 0, 0, 1],
+            "experimenter_reward_given": [0, 0, 0, 0],
+        }
+    )
+
+    enriched = switch_persistence.add_previous_block_omission_metrics(
+        block_performance,
+        augmented_trial_df,
+    )
+
+    assert enriched["prev_n_omissions"].tolist() == [0, 1]
+    assert enriched["prev_consecutive_omissions"].tolist() == [0, 1]
+
+
+def test_previous_block_omission_metrics_ignore_none_correct_on_manual_reward_rows():
+    """Manual reward rows with missing correctness should not enter omission counts."""
+    block_performance = make_block_performance().iloc[:2]
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [0, 0, 0, 1],
+            "state": [0, 0, 0, 1],
+            "action": [0, 1, 0, 1],
+            "correct": [1, "None", 1, 1],
+            "reward": [1, 1, 0, 1],
+            "experimenter_reward_given": [0, 1, 0, 0],
+        }
+    )
+
+    enriched = switch_persistence.add_previous_block_omission_metrics(
+        block_performance,
+        augmented_trial_df,
+    )
+
+    assert enriched["prev_n_omissions"].tolist() == [0, 1]
+    assert enriched["prev_consecutive_omissions"].tolist() == [0, 1]
+
+
+def test_previous_block_omission_metrics_reject_none_correct_on_valid_choice_rows():
+    """Malformed correctness on animal-choice rows should still fail clearly."""
+    block_performance = make_block_performance().iloc[:2]
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [0, 0, 1],
+            "state": [0, 0, 1],
+            "action": [0, 1, 1],
+            "correct": [1, "None", 1],
+            "reward": [1, 0, 1],
+            "experimenter_reward_given": [0, 0, 0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="correct values must be numeric"):
+        switch_persistence.add_previous_block_omission_metrics(
+            block_performance,
+            augmented_trial_df,
+        )
+
+
 def test_compute_switch_persistence_l_to_r_stops_after_first_switch():
     """An L-to-R block should contribute stays until the first right choice."""
     block_performance = make_block_performance()
