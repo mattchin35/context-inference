@@ -392,7 +392,7 @@ def test_mle_block_states_derives_observation_dimension_from_prepared_data(monke
         def expected_states(self, data=None, input=None):
             return (np.array([[0.8, 0.2], [0.3, 0.7]]),)
 
-    def fake_prepare(_block_df):
+    def fake_prepare(_block_df, **_kwargs):
         return {
             "observations": np.array([[3, 4], [5, 6]]),
             "inputs": np.array([[1], [2]]),
@@ -535,7 +535,7 @@ def test_map_block_states_derives_observation_dimension_from_prepared_data(monke
         def expected_states(self, data=None, input=None):
             return (np.array([[0.8, 0.2], [0.3, 0.7]]),)
 
-    def fake_prepare(_block_df):
+    def fake_prepare(_block_df, **_kwargs):
         return {
             "observations": np.array([[3, 4], [5, 6]]),
             "inputs": np.array([[1], [2]]),

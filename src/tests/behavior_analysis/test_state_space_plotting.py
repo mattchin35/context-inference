@@ -610,7 +610,7 @@ def test_plot_block_lm_hmm_state_summary_uses_custom_figsize_and_line_width():
     lower_panel_lines = obs_ax.lines
     np.testing.assert_allclose(fig.get_size_inches(), np.array([12, 4]))
     assert [line.get_linewidth() for line in posterior_lines] == [0.4, 0.4]
-    assert [line.get_linewidth() for line in lower_panel_lines] == [0.4, 0.4, 0.4]
+    assert [line.get_linewidth() for line in lower_panel_lines] == [0.4]
     assert len(fig.axes) == 2
     plt.close(fig)
 
@@ -692,7 +692,7 @@ def test_plot_block_lm_hmm_presentation_summary_uses_custom_figsize_and_line_wid
     lower_panel_lines = obs_ax.lines
     np.testing.assert_allclose(fig.get_size_inches(), np.array([12, 4]))
     assert [line.get_linewidth() for line in posterior_lines] == [0.4, 0.4]
-    assert [line.get_linewidth() for line in lower_panel_lines] == [0.4, 0.4, 0.4]
+    assert [line.get_linewidth() for line in lower_panel_lines] == [0.4]
     assert len(fig.axes) == 2
     plt.close(fig)
 

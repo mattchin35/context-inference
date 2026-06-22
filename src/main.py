@@ -892,6 +892,8 @@ def run_multisession_analysis(
     trial_predictor_columns: tuple[str, ...] | None = None,
     block_predicted_state_line_width: float | None = None,
     block_state_plot_figsize: tuple[float, float] | None = None,
+    block_plot_bias_rl: bool = False,
+    block_bias_rl_column: str = "bias_rl",
     trial_input_source: str = "from_block_modeling",
     trial_state_plot_line_width: float | None = None,
     trial_state_plot_figsize: tuple[float, float] | None = None,
@@ -931,6 +933,11 @@ def run_multisession_analysis(
     block_state_plot_figsize : tuple[float, float] or None, default=None
         Optional matplotlib figure size in inches for block predicted-state
         summary traces. None preserves the existing plotting defaults.
+    block_plot_bias_rl : bool, default=False
+        Whether block predicted-state plots overlay `block_bias_rl_column` on a
+        fixed `[-1, 1]` right y-axis.
+    block_bias_rl_column : str, default="bias_rl"
+        Blockwise column overlaid when `block_plot_bias_rl=True`.
     trial_input_source : str, default="from_block_modeling"
         Source of the trial table passed to trial GLM-HMM workflows:
         `"from_block_modeling"` runs block modeling first, while
@@ -985,6 +992,8 @@ def run_multisession_analysis(
             random_seed=block_random_seed,
             predicted_state_line_width=block_predicted_state_line_width,
             state_plot_figsize=block_state_plot_figsize,
+            plot_bias_rl=block_plot_bias_rl,
+            bias_rl_column=block_bias_rl_column,
         )
     else:
         modeled_block_df = concatenated.block_performance
@@ -1093,6 +1102,8 @@ def main_multisession():
     trial_hmm_random_seed = 2001
     block_predicted_state_line_width = 0.8
     block_state_plot_figsize = (18, 6)
+    block_plot_bias_rl = False
+    block_bias_rl_column = "bias_rl"
     trial_state_plot_line_width = 0.5
     trial_state_plot_figsize = (18, 6)
     trial_input_source = "from_block_modeling"  # either from_block_modeling or saved_augmented_trials
@@ -1169,6 +1180,8 @@ def main_multisession():
         trial_predictor_columns=trial_glm_predictor_columns,
         block_predicted_state_line_width=block_predicted_state_line_width,
         block_state_plot_figsize=block_state_plot_figsize,
+        block_plot_bias_rl=block_plot_bias_rl,
+        block_bias_rl_column=block_bias_rl_column,
         trial_input_source=trial_input_source,
         trial_state_plot_line_width=trial_state_plot_line_width,
         trial_state_plot_figsize=trial_state_plot_figsize,
@@ -1290,6 +1303,8 @@ def main_mouse():
 
     block_hmm_random_seed = 1001
     trial_hmm_random_seed = 2001
+    block_plot_bias_rl = False
+    block_bias_rl_column = "bias_rl"
     trial_glm_predictor_columns = (
         "FQlearning_rel_value",
         # "HMM_rel_value_logodds_decay",
@@ -1314,7 +1329,9 @@ def main_mouse():
     block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess,
                                                                     num_states=3,
                                                                     prior_alpha=1, prior_sigma=1,
-                                                                    random_seed=block_hmm_random_seed)
+                                                                    random_seed=block_hmm_random_seed,
+                                                                    plot_bias_rl=block_plot_bias_rl,
+                                                                    bias_rl_column=block_bias_rl_column)
     
     # load a saved block model instead of running it
     # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')

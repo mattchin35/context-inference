@@ -222,6 +222,48 @@ def add_cur_strategy_slope(
     return block_df
 
 
+def get_valid_block_trace(
+    block_df: pd.DataFrame,
+    valid_mask: np.ndarray,
+    column_name: str,
+) -> np.ndarray:
+    """Return a numeric block trace aligned to HMM-valid block rows.
+
+    Parameters
+    ----------
+    block_df : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`.
+    valid_mask : np.ndarray
+        Boolean mask with shape `(n_blocks,)`, selecting rows used in the
+        block LM-HMM fit and corresponding state-summary plots.
+    column_name : str
+        Name of the blockwise column to extract. Values on valid rows must be
+        numeric and unitless.
+
+    Returns
+    -------
+    np.ndarray
+        One-dimensional numeric array with shape `(n_valid_blocks,)`, aligned
+        to the HMM observation rows.
+    """
+    if column_name not in block_df.columns:
+        raise ValueError(f"block_df is missing required overlay column '{column_name}'.")
+
+    valid_mask = np.asarray(valid_mask, dtype=bool)
+    if valid_mask.shape[0] != block_df.shape[0]:
+        raise ValueError("valid_mask must have one entry per block_df row.")
+
+    valid_values = pd.to_numeric(block_df.loc[valid_mask, column_name], errors="coerce")
+    invalid_values = block_df.loc[valid_mask, column_name].loc[valid_values.isna()]
+    if not invalid_values.empty:
+        invalid_summary = sorted(invalid_values.astype(str).unique())
+        raise ValueError(
+            f"{column_name} values must be numeric on HMM-valid block rows, "
+            f"got: {invalid_summary}"
+        )
+    return valid_values.to_numpy(dtype=float)
+
+
 def split_blocked_holdout_sequences(
     observations: np.ndarray,
     inputs: np.ndarray,
@@ -314,7 +356,9 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
                      num_states=2, random_seed: int | None = None,
                      predictor_columns: tuple[str, ...] = ("prev_n_rewarded",),
                      predicted_state_line_width: float | None = None,
-                     state_plot_figsize: tuple[float, float] | None = None):
+                     state_plot_figsize: tuple[float, float] | None = None,
+                     plot_bias_rl: bool = False,
+                     bias_rl_column: str = "bias_rl"):
     """Fit MLE block LM-HMM states and assign them back to the block table.
 
     Parameters
@@ -344,6 +388,11 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     state_plot_figsize : tuple[float, float] or None, default=None
         Optional matplotlib figure size in inches for predicted-state summary
         traces. None preserves the existing plotting defaults.
+    plot_bias_rl : bool, default=False
+        Whether to overlay `bias_rl_column` on the trials-to-switch subplot
+        using a fixed `[-1, 1]` right y-axis.
+    bias_rl_column : str, default="bias_rl"
+        Blockwise column to overlay when `plot_bias_rl=True`.
 
     Returns
     -------
@@ -355,6 +404,11 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     trials_to_correct = prepared["observations"]
     predictors = prepared["inputs"]
     pred_labels = prepared["predictor_labels"]
+    bias_rl_trace = (
+        get_valid_block_trace(block_df, ix_valid, bias_rl_column)
+        if plot_bias_rl
+        else None
+    )
     session_boundary_positions, session_boundary_labels = get_session_boundary_markers(
         block_df,
         valid_mask=ix_valid,
@@ -425,6 +479,8 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             session_boundary_labels=session_boundary_labels,
             line_width=predicted_state_line_width,
             figsize=state_plot_figsize,
+            secondary_trace=bias_rl_trace,
+            secondary_trace_label=bias_rl_column,
         )
         ax[0].set_title("MLE HMM states")
         save_path = figure_path / '{}_mle_predicted_states.png'.format(sess_id_tag)
@@ -457,7 +513,9 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
                      random_seed: int | None = None,
                      predictor_columns: tuple[str, ...] = ("prev_n_rewarded",),
                      predicted_state_line_width: float | None = None,
-                     state_plot_figsize: tuple[float, float] | None = None):
+                     state_plot_figsize: tuple[float, float] | None = None,
+                     plot_bias_rl: bool = False,
+                     bias_rl_column: str = "bias_rl"):
     """Fit MAP block LM-HMM states and assign them back to the block table.
 
     Parameters
@@ -491,6 +549,11 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     state_plot_figsize : tuple[float, float] or None, default=None
         Optional matplotlib figure size in inches for predicted-state summary
         traces. None preserves the existing plotting defaults.
+    plot_bias_rl : bool, default=False
+        Whether to overlay `bias_rl_column` on the trials-to-switch subplot
+        using a fixed `[-1, 1]` right y-axis.
+    bias_rl_column : str, default="bias_rl"
+        Blockwise column to overlay when `plot_bias_rl=True`.
 
     Returns
     -------
@@ -502,6 +565,11 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     trials_to_correct = prepared["observations"]
     predictors = prepared["inputs"]
     pred_labels = prepared["predictor_labels"]
+    bias_rl_trace = (
+        get_valid_block_trace(block_df, ix_valid, bias_rl_column)
+        if plot_bias_rl
+        else None
+    )
     session_boundary_positions, session_boundary_labels = get_session_boundary_markers(
         block_df,
         valid_mask=ix_valid,
@@ -582,6 +650,8 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             session_boundary_labels=session_boundary_labels,
             line_width=predicted_state_line_width,
             figsize=state_plot_figsize,
+            secondary_trace=bias_rl_trace,
+            secondary_trace_label=bias_rl_column,
         )
         ax[0].set_title("MAP HMM states")
         save_path = figure_path / '{}_map_predicted_states.png'.format(sess_id_tag)
@@ -944,7 +1014,9 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
                        prior_alpha=1, prior_sigma=1, random_seed: int | None = None,
                        predictor_columns: tuple[str, ...] = ("prev_n_rewarded",),
                        predicted_state_line_width: float | None = None,
-                       state_plot_figsize: tuple[float, float] | None = None):
+                       state_plot_figsize: tuple[float, float] | None = None,
+                       plot_bias_rl: bool = False,
+                       bias_rl_column: str = "bias_rl"):
     """Run MLE and MAP block LM-HMM modeling and save block-level outputs.
 
     Parameters
@@ -976,6 +1048,11 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
     state_plot_figsize : tuple[float, float] or None, default=None
         Optional matplotlib figure size in inches for predicted-state summary
         traces. None preserves the existing single-session plotting defaults.
+    plot_bias_rl : bool, default=False
+        Whether to overlay `bias_rl_column` on MLE and MAP predicted-state
+        plots using a fixed `[-1, 1]` right y-axis.
+    bias_rl_column : str, default="bias_rl"
+        Blockwise column to overlay when `plot_bias_rl=True`.
 
     Returns
     -------
@@ -995,6 +1072,8 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         predictor_columns=predictor_columns,
         predicted_state_line_width=predicted_state_line_width,
         state_plot_figsize=state_plot_figsize,
+        plot_bias_rl=plot_bias_rl,
+        bias_rl_column=bias_rl_column,
     )
     map_model_dict, block_performance = map_block_states(
         block_performance,
@@ -1009,6 +1088,8 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         predictor_columns=predictor_columns,
         predicted_state_line_width=predicted_state_line_width,
         state_plot_figsize=state_plot_figsize,
+        plot_bias_rl=plot_bias_rl,
+        bias_rl_column=bias_rl_column,
     )
     save_block_model_dict(
         map_model_dict,

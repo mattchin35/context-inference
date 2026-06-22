@@ -244,6 +244,62 @@ def plot_transition_matrix(gen_trans_mat: np.ndarray) -> tuple[plt.Figure, plt.A
     return fig, ax
 
 
+def add_secondary_block_trace(
+    obs_ax: plt.Axes,
+    secondary_trace: np.ndarray,
+    secondary_trace_label: str,
+    expected_length: int,
+    line_width: float | None = None,
+) -> plt.Axes:
+    """Overlay a blockwise secondary trace on a fixed right y-axis.
+
+    Parameters
+    ----------
+    obs_ax : matplotlib.axes.Axes
+        Existing lower block-state subplot whose x-axis indexes fitted HMM
+        block rows.
+    secondary_trace : np.ndarray
+        One-dimensional numeric trace with shape `(n_blocks,)`, aligned to the
+        plotted HMM observations. Values are unitless and expected to live on
+        a `[-1, 1]` scale.
+    secondary_trace_label : str
+        Axis label and line label for the secondary trace.
+    expected_length : int
+        Required trace length, in plotted HMM block rows.
+    line_width : float or None, default=None
+        Optional linewidth for the secondary trace. None preserves the
+        Matplotlib default used by the existing observation trace.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        Right-side twin axis containing the dashed secondary trace.
+    """
+    trace_values = np.asarray(secondary_trace, dtype=float)
+    if trace_values.ndim != 1:
+        raise ValueError("secondary_trace must be one-dimensional.")
+    if trace_values.size != expected_length:
+        raise ValueError(
+            "secondary_trace must have one value per plotted block: "
+            f"got {trace_values.size}, expected {expected_length}."
+        )
+
+    line_kwargs = {} if line_width is None else {"linewidth": line_width}
+    trace_axis = obs_ax.twinx()
+    trace_axis.plot(
+        np.arange(trace_values.size),
+        trace_values,
+        "--",
+        color="0.25",
+        label=secondary_trace_label,
+        **line_kwargs,
+    )
+    trace_axis.set_ylim(-1, 1)
+    trace_axis.set_yticks([-1, 0, 1])
+    trace_axis.set_ylabel(secondary_trace_label)
+    return trace_axis
+
+
 def plot_block_lm_hmm_state_summary(
     posterior_probs: np.ndarray,
     observations: np.ndarray,
@@ -256,6 +312,8 @@ def plot_block_lm_hmm_state_summary(
     session_boundary_labels: list[str] | np.ndarray | None = None,
     line_width: float | None = None,
     figsize: tuple[float, float] | None = None,
+    secondary_trace: np.ndarray | None = None,
+    secondary_trace_label: str = "bias_rl",
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
     """Plot block LM-HMM posterior probabilities and observations.
 
@@ -286,6 +344,11 @@ def plot_block_lm_hmm_state_summary(
     figsize : tuple[float, float] or None, default=None
         Optional matplotlib figure size in inches. None preserves the existing
         plotting default.
+    secondary_trace : np.ndarray or None, default=None
+        Optional one-dimensional blockwise trace with shape `(n_blocks,)`,
+        aligned to `observations`, plotted on a fixed `[-1, 1]` right y-axis.
+    secondary_trace_label : str, default="bias_rl"
+        Axis label and line label for `secondary_trace`.
 
     Returns
     -------
@@ -355,6 +418,14 @@ def plot_block_lm_hmm_state_summary(
     obs_ax.set_xlabel("Context changes")
     obs_ax.set_ylim(0, abs(observations).max())
     obs_ax.set_yticks([0, abs(observations).max()])
+    if secondary_trace is not None:
+        add_secondary_block_trace(
+            obs_ax=obs_ax,
+            secondary_trace=secondary_trace,
+            secondary_trace_label=secondary_trace_label,
+            expected_length=time_bins,
+            line_width=line_width,
+        )
 
     if session_lengths is not None:
         splits = np.cumsum(session_lengths)
@@ -386,6 +457,8 @@ def plot_block_lm_hmm_presentation_summary(
     session_boundary_labels: list[str] | np.ndarray | None = None,
     line_width: float | None = None,
     figsize: tuple[float, float] | None = None,
+    secondary_trace: np.ndarray | None = None,
+    secondary_trace_label: str = "bias_rl",
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
     """Plot presentation-style block LM-HMM state probabilities and weights.
 
@@ -418,6 +491,11 @@ def plot_block_lm_hmm_presentation_summary(
     figsize : tuple[float, float] or None, default=None
         Optional matplotlib figure size in inches. None preserves the existing
         plotting default.
+    secondary_trace : np.ndarray or None, default=None
+        Optional one-dimensional blockwise trace with shape `(n_blocks,)`,
+        aligned to `observations`, plotted on a fixed `[-1, 1]` right y-axis.
+    secondary_trace_label : str, default="bias_rl"
+        Axis label and line label for `secondary_trace`.
 
     Returns
     -------
@@ -503,6 +581,14 @@ def plot_block_lm_hmm_presentation_summary(
     obs_ax.set_yticks([0, abs(observations).max()])
     obs_ax.tick_params(axis='y', labelsize=12)
     obs_ax.set_ylabel("Trials to switch", fontsize=16)
+    if secondary_trace is not None:
+        add_secondary_block_trace(
+            obs_ax=obs_ax,
+            secondary_trace=secondary_trace,
+            secondary_trace_label=secondary_trace_label,
+            expected_length=time_bins,
+            line_width=line_width,
+        )
 
     if session_lengths is not None:
         splits = np.cumsum(session_lengths)
