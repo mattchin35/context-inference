@@ -105,17 +105,17 @@ add_trial_column_compatibility <- function(df) {
 
 cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
   df <- convertNoneToNA(df, c("action", "active_stimulus", "block_stimulus", "reward_time"))
-  df <- convertNoneToNA(df, c("Qlearning_rel_value", "Qlearning_greedy_action",
-                              "FQlearning_rel_value", "FQlearning_greedy_action"))
-  df <- convertNoneToNA(df, c("RFLR_rel_value", "RFLR_greedy_action",
-                              "HMM_rel_value", "HMM_greedy_action"))
+  df <- convertNoneToNA(df, c("Qlearning_rel_value", "FQlearning_rel_value")#, "HMM_rel_value_logodds_decay")
+                              #"Qlearning_greedy_action", "FQlearning_greedy_action"))
+#   df <- convertNoneToNA(df, c("RFLR_rel_value", "RFLR_greedy_action",
+#                               "HMM_rel_value", "HMM_greedy_action"))
   df <- convertNoneToNA(df, c("HMM_rel_value_logodds", "HMM_rel_value_logodds_decay",
                               "relative_omissions_index", "relative_doubt_index", "relative_hazard_index",
                               "HMM_decay_res", "rel_hazard_res"))
   df <- convertNoneToNA(df, c("prev_action", "prev_reward"))
   df <- removeNARows(df, "action")
-  df <- convertNoneToNA(df, c("inferred_strategy"))
-  df <- removeNARows(df, "inferred_strategy")
+  #df <- convertNoneToNA(df, c("inferred_strategy"))
+  #df <- removeNARows(df, "inferred_strategy")
   df <- add_trial_column_compatibility(df)
   
   df["reward_time"] <- as.numeric(unlist(df["reward_time"]))
@@ -136,16 +136,17 @@ cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
     df <- df %>%
       dplyr::mutate(across(dplyr::all_of(intersect(
         c("state", "state_int", "action", "correct", "session_ID", "block_type", "prev_action",
-          "prev_reward", "Qlearning_greedy_action", "FQlearning_greedy_action",
-          "RFLR_greedy_action", "HMM_greedy_action", "inherited_strategy",
-          "inherited_bias_flag", "inferred_strategy"),
+          "prev_reward",# "Qlearning_greedy_action", "FQlearning_greedy_action",
+          #"RFLR_greedy_action", "HMM_greedy_action", "inherited_strategy",
+          #"inherited_bias_flag", "inferred_strategy"),
+          ),
         names(df)
       )), as.factor))
   } else {
     df <- df %>%
       dplyr::mutate(across(dplyr::all_of(intersect(
         c("state", "state_int", "action", "correct", "session_ID", "block_type", "prev_action",
-          "prev_reward", "inherited_strategy", "inherited_bias_flag", "inferred_strategy"),
+          "prev_reward"),# "inherited_strategy", "inherited_bias_flag", "inferred_strategy"),
         names(df)
       )), as.factor))
   }

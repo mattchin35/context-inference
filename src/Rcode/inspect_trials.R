@@ -53,7 +53,11 @@ source(source_utils_path, local = TRUE)
 source_rcode("preprocessing/block_preprocessing.R")
 source_rcode("preprocessing/trial_preprocessing.R")
 
-trial_df <- read.csv("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT016/CT016_20260511_latent_inference/processed/CT016_2026-05-11_124709_augmented_trials.csv",
+###############################################################################
+# Actual processing and analysis of trial data
+###############################################################################
+
+trial_df <- read.csv("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT016/CT016_20260529_latent_inference/processed/CT016_2026-05-29_132812_augmented_trials.csv",
                      header = TRUE)#,
 trial_df <- cleanup_trial_dataframe(trial_df, include_model_regressors = TRUE)
 clean_df <- curate_trial_analysis_dataframe(trial_df)
@@ -61,3 +65,7 @@ clean_df <- curate_trial_analysis_dataframe(trial_df)
 
 flexplot(FQlearning_rel_value ~ HMM_rel_value_logodds_decay + relative_hazard_index, data=clean_df)
 flexplot(FQlearning_rel_value ~ HMM_decay_res + rel_hazard_res, data=clean_df)
+
+
+
+

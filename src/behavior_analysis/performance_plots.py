@@ -69,6 +69,173 @@ def get_session_block_count_column(multisession_df: pd.DataFrame) -> str:
     raise ValueError("multisession_df must contain 'n_blocks' or legacy 'n_switches'.")
 
 
+def plot_block_hmm_state_feature_scatter(
+    state_features_df: pd.DataFrame,
+    plot_path: Path,
+    figure_id: str,
+    fit_type: str = "map",
+    x_column: str = "bias",
+    y_column: str = "prev_n_rewarded_weight",
+    size_column: str = "state_block_count",
+    marker_mode: str | None = None,
+    use_block_count_marker_size: bool | None = True,
+    fixed_marker_size: float = 60.0,
+    fixed_marker_alpha: float = 0.75,
+    min_marker_size: float = 30.0,
+    max_marker_size: float = 250.0,
+    min_marker_alpha: float = 0.25,
+    max_marker_alpha: float = 0.9,
+) -> Path:
+    """Plot block-HMM state features across sessions for one fit type.
+
+    Parameters
+    ----------
+    state_features_df : pd.DataFrame
+        State-level summary table with shape `(n_states, n_columns)`.
+        Required columns are `fit_type`, `x_column`, `y_column`, and
+        `size_column`. Each row describes one HMM state from one session and
+        fit type.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    figure_id : str
+        Mouse or dataset identifier used in the plot title and filename.
+    fit_type : str, default="map"
+        Fit label to plot from the `fit_type` column, usually `"map"` or
+        `"mle"`.
+    x_column : str, default="bias"
+        Numeric state-feature column plotted on the x-axis.
+    y_column : str, default="prev_n_rewarded_weight"
+        Numeric state-feature column plotted on the y-axis.
+    size_column : str, default="state_block_count"
+        Numeric column controlling marker area. Units are blocks.
+    marker_mode : str or None, default=None
+        Marker visual encoding mode. Valid values are `"default"`,
+        `"markersize"`, and `"alpha"`. If None, the legacy
+        `use_block_count_marker_size` argument selects `"markersize"` or
+        `"default"`.
+    use_block_count_marker_size : bool or None, default=True
+        Legacy marker-size toggle. Used only when `marker_mode` is None.
+    fixed_marker_size : float, default=60.0
+        Marker area in points squared for `"default"` and `"alpha"` modes.
+    fixed_marker_alpha : float, default=0.75
+        Marker opacity for `"default"` and `"markersize"` modes.
+    min_marker_size : float, default=30.0
+        Minimum marker area in points squared for `"markersize"` mode.
+    max_marker_size : float, default=250.0
+        Maximum marker area in points squared for `"markersize"` mode.
+    min_marker_alpha : float, default=0.25
+        Minimum marker opacity for `"alpha"` mode.
+    max_marker_alpha : float, default=0.9
+        Maximum marker opacity for `"alpha"` mode.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path.
+    """
+    if marker_mode is None:
+        marker_mode = "markersize" if use_block_count_marker_size else "default"
+    valid_marker_modes = {"default", "markersize", "alpha"}
+    if marker_mode not in valid_marker_modes:
+        valid_summary = ", ".join(sorted(valid_marker_modes))
+        raise ValueError(
+            f"marker_mode must be one of: {valid_summary}. "
+            f"Received {marker_mode!r}."
+        )
+
+    required_columns = {"fit_type", x_column, y_column, size_column}
+    missing_columns = sorted(required_columns.difference(state_features_df.columns))
+    if missing_columns:
+        raise ValueError(
+            "state_features_df is missing required columns for block HMM "
+            f"state-feature plotting: {missing_columns}"
+        )
+
+    plot_path.mkdir(parents=True, exist_ok=True)
+    save_path = plot_path / f"{figure_id}_{fit_type}-block-hmm-state-feature-scatter.png"
+
+    plot_df = state_features_df[state_features_df["fit_type"] == fit_type].copy()
+    for column in [x_column, y_column, size_column]:
+        plot_df[column] = pd.to_numeric(plot_df[column], errors="coerce")
+    plot_df = plot_df.dropna(subset=[x_column, y_column, size_column])
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    if plot_df.empty:
+        ax.text(
+            0.5,
+            0.5,
+            f"No valid {fit_type.upper()} state-feature rows",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+    else:
+        block_counts = plot_df[size_column].to_numpy(dtype=float)
+        count_min = float(np.min(block_counts))
+        count_max = float(np.max(block_counts))
+        if marker_mode == "markersize" and count_max > count_min:
+            marker_sizes = min_marker_size + (
+                (block_counts - count_min)
+                / (count_max - count_min)
+                * (max_marker_size - min_marker_size)
+            )
+        elif marker_mode == "markersize":
+            marker_sizes = np.full(block_counts.shape, (min_marker_size + max_marker_size) / 2)
+        else:
+            marker_sizes = fixed_marker_size
+
+        marker_colors = np.zeros((plot_df.shape[0], 4), dtype=float)
+        marker_colors[:, 3] = fixed_marker_alpha
+        if marker_mode == "alpha" and count_max > count_min:
+            marker_colors[:, 3] = min_marker_alpha + (
+                (block_counts - count_min)
+                / (count_max - count_min)
+                * (max_marker_alpha - min_marker_alpha)
+            )
+        elif marker_mode == "alpha":
+            marker_colors[:, 3] = (min_marker_alpha + max_marker_alpha) / 2
+
+        scatter = ax.scatter(
+            plot_df[x_column].to_numpy(dtype=float),
+            plot_df[y_column].to_numpy(dtype=float),
+            s=marker_sizes,
+            c=marker_colors,
+            edgecolors="white",
+            linewidths=0.5,
+        )
+        if marker_mode == "markersize":
+            legend_handles, legend_labels = scatter.legend_elements(
+                prop="sizes",
+                num=3,
+                func=lambda size: count_min
+                + (
+                    (size - min_marker_size)
+                    / (max_marker_size - min_marker_size)
+                    * (count_max - count_min)
+                )
+                if count_max > count_min
+                else count_min,
+            )
+            if legend_handles:
+                ax.legend(
+                    legend_handles,
+                    legend_labels,
+                    title="Blocks",
+                    frameon=False,
+                    loc="best",
+                )
+
+    ax.axhline(0, color="0.8", linewidth=0.8, zorder=0)
+    ax.axvline(0, color="0.8", linewidth=0.8, zorder=0)
+    ax.set_xlabel(x_column)
+    ax.set_ylabel(y_column)
+    ax.set_title(f"{figure_id} {fit_type.upper()} Block HMM State Features")
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+    save_performance_figure(fig, save_path)
+    return save_path
+
+
 def plot_switch_persistence_summary(
     summary_df: pd.DataFrame,
     plot_path: Path,

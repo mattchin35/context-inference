@@ -38,6 +38,12 @@ COMPARE_LEFT_RIGHT_ACTION = "compare_lr"
 POPULATION_PSTH_UNIT_SCOPE_OPTIONS = ["Visible page units", "All selected units"]
 LFP_DROPDOWN_LABEL_HPC_V1 = "HPC/V1 LFP"
 LFP_DROPDOWN_LABEL_PFC = "PFC LFP"
+LFP_FILTER_BANDS = {
+    "Default": None,
+    "Theta (5-10 Hz)": (5.0, 10.0),
+    "Gamma (50-70 Hz)": (50.0, 70.0),
+}
+LFP_FILTER_PADDING_S = 1.0
 DEFAULT_BROWSER_ROOT = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014")
 RASTER_LAYOUT_OPTIONS = {
     "Compact": {"row_spacing": 1.0, "figure_size": (12.0, 7.0)},
@@ -147,6 +153,9 @@ def load_trial_lfp_trace_cached(
     irig_line: int,
     bit_period_s: float,
     utc_offset_hours: float,
+    filter_low_hz: float | None,
+    filter_high_hz: float | None,
+    filter_padding_s: float,
 ):
     """
     Load and cache one trial-aligned LFP channel window.
@@ -169,6 +178,12 @@ def load_trial_lfp_trace_cached(
         IRIG-H bit period in seconds.
     utc_offset_hours : float
         Constant UTC offset in hours.
+    filter_low_hz, filter_high_hz : float | None
+        Optional bandpass cutoff frequencies in Hz. Both values must be
+        provided to filter; ``None`` for either value keeps the trace
+        unfiltered.
+    filter_padding_s : float
+        Seconds added to both sides of the requested window before filtering.
 
     Returns
     -------
@@ -190,6 +205,12 @@ def load_trial_lfp_trace_cached(
         window=(float(window_start_s), float(window_end_s)),
         lfp_irig_df=lfp_irig_df,
         sample_rate_hz=float(sample_rate_hz),
+        frequency_band_hz=(
+            (float(filter_low_hz), float(filter_high_hz))
+            if filter_low_hz is not None and filter_high_hz is not None
+            else None
+        ),
+        filter_padding_s=float(filter_padding_s),
     )
 
 
@@ -224,6 +245,111 @@ def build_lfp_dropdown_options(hpc_v1_lfp_path: str, pfc_lfp_path: str) -> dict[
         LFP_DROPDOWN_LABEL_HPC_V1: str(hpc_v1_lfp_path),
         LFP_DROPDOWN_LABEL_PFC: str(pfc_lfp_path),
     }
+
+
+def resolve_lfp_filter_band(filter_label: str) -> tuple[float, float] | None:
+    """
+    Convert one LFP filter display label into cutoff frequencies.
+
+    Parameters
+    ----------
+    filter_label : str
+        Display label from ``LFP_FILTER_BANDS``.
+
+    Returns
+    -------
+    tuple[float, float] | None
+        Bandpass cutoffs in Hz as ``(low_hz, high_hz)``. ``None`` means the
+        gain-corrected LFP trace should be shown unfiltered.
+    """
+
+    if filter_label not in LFP_FILTER_BANDS:
+        raise ValueError(f"Unknown LFP filter label: {filter_label}")
+    frequency_band_hz = LFP_FILTER_BANDS[filter_label]
+    if frequency_band_hz is None:
+        return None
+    return (float(frequency_band_hz[0]), float(frequency_band_hz[1]))
+
+
+def build_trial_view_plot_save_path(
+    figure_path: Path | str,
+    session_id: str,
+    region_name: str,
+    trial_index: int,
+    condition: str,
+    action_label: str,
+    alignment_event: str,
+    window: tuple[float, float],
+    unit_page_index: int,
+    population_psth_unit_scope: str,
+    population_psth_bin_size: float,
+    lfp_label: str | None = None,
+    lfp_utc_offset_hours: float | None = None,
+) -> Path:
+    """
+    Build a setting-specific PNG path for one trial-view webapp plot.
+
+    Parameters
+    ----------
+    figure_path : Path | str
+        Session figure directory. The returned path is inside its
+        ``unit_spike_viewer`` subdirectory.
+    session_id : str
+        Full session identifier.
+    region_name : str
+        Active region label.
+    trial_index : int
+        Trial row index shown in the plot.
+    condition : str
+        Active trial-condition filter.
+    action_label : str
+        Active action filter label.
+    alignment_event : str
+        Event column used as time zero.
+    window : tuple[float, float]
+        Relative plot window in seconds as ``(start_s, end_s)``.
+    unit_page_index : int
+        Zero-based unit page index.
+    population_psth_unit_scope : str
+        Population PSTH unit-scope setting.
+    population_psth_bin_size : float
+        Population PSTH bin size in seconds.
+    lfp_label : str | None, optional
+        LFP trace label, including selected LFP source, saved channel, and
+        filter band when applicable. ``None`` means no LFP trace was plotted.
+    lfp_utc_offset_hours : float | None, optional
+        LFP UTC offset in hours when an LFP trace was plotted.
+
+    Returns
+    -------
+    Path
+        Output PNG path. Parent directories are not created by this helper.
+    """
+
+    if len(window) != 2 or float(window[0]) >= float(window[1]):
+        raise ValueError("window must be a two-value tuple with start < end.")
+    filename_parts = [
+        session_id,
+        region_name,
+        f"trial{int(trial_index)}",
+        condition,
+        action_label,
+        alignment_event,
+        f"window{float(window[0])}-to-{float(window[1])}s",
+        f"unitpage{int(unit_page_index)}",
+        population_psth_unit_scope,
+        f"popbin{float(population_psth_bin_size)}s",
+    ]
+    if lfp_label is not None:
+        filename_parts.append(lfp_label)
+        if lfp_utc_offset_hours is not None:
+            filename_parts.append(f"lfputc{float(lfp_utc_offset_hours):g}h")
+
+    filename = "_".join(
+        unit_spike_plotting._sanitize_filename_part(filename_part)
+        for filename_part in filename_parts
+    ) + ".png"
+    return Path(figure_path) / "unit_spike_viewer" / filename
 
 
 def format_metadata_row_for_display(metadata_row: pd.Series) -> pd.DataFrame:
@@ -795,12 +921,29 @@ def main() -> None:
         lfp_time_s = None
         lfp_uv = None
         lfp_label = None
+        lfp_utc_offset_hours = None
         if show_lfp_trace:
             lfp_digital_word = 0
             lfp_irig_line = 6
             lfp_bit_period_s = 1.0
-            lfp_utc_offset_hours = 0.0
+            lfp_utc_offset_hours = st.sidebar.number_input(
+                "LFP UTC offset (hours)",
+                value=0,
+                step=1,
+                format="%d",
+                help=(
+                    "Whole-hour offset added to decoded LFP IRIG timestamps before mapping "
+                    "trial times to LFP samples. Use -1 if decoded LFP times are one hour too late."
+                ),
+            )
             st.sidebar.caption(f"LFP sync digital line: {lfp_irig_line}")
+            st.sidebar.caption(f"LFP UTC offset: {int(lfp_utc_offset_hours)} h")
+            lfp_filter_label = st.sidebar.selectbox(
+                "LFP filter band",
+                options=list(LFP_FILTER_BANDS.keys()),
+                index=0,
+            )
+            lfp_filter_band = resolve_lfp_filter_band(lfp_filter_label)
             lfp_dropdown_options = build_lfp_dropdown_options(
                 hpc_v1_lfp_path=hpc_v1_lfp_path,
                 pfc_lfp_path=pfc_lfp_path,
@@ -845,8 +988,13 @@ def main() -> None:
                         irig_line=lfp_irig_line,
                         bit_period_s=lfp_bit_period_s,
                         utc_offset_hours=lfp_utc_offset_hours,
+                        filter_low_hz=lfp_filter_band[0] if lfp_filter_band is not None else None,
+                        filter_high_hz=lfp_filter_band[1] if lfp_filter_band is not None else None,
+                        filter_padding_s=LFP_FILTER_PADDING_S,
                     )
                     lfp_label = f"{selected_lfp_label}, saved channel {int(lfp_saved_channel_index)}"
+                    if lfp_filter_band is not None:
+                        lfp_label = f"{lfp_label}, {lfp_filter_label}"
                 except Exception as error:  # noqa: BLE001 - Optional LFP should not block raster plotting.
                     st.warning(f"Could not load LFP trace; plotting rasters without LFP. {error}")
         try:
@@ -888,12 +1036,22 @@ def main() -> None:
             st.pyplot(figure)
 
         if st.button("Save current plot"):
-            output_dir = Path(session.figure_path) / "unit_spike_viewer"
-            output_dir.mkdir(parents=True, exist_ok=True)
-            save_path = output_dir / (
-                f"{session.sess_id_full}_{region_name}_trial{trial_index}_"
-                f"{alignment_event}_unitpage{int(unit_page_index)}.png"
+            save_path = build_trial_view_plot_save_path(
+                figure_path=session.figure_path,
+                session_id=session.sess_id_full,
+                region_name=region_name,
+                trial_index=trial_index,
+                condition=condition,
+                action_label=action_label,
+                alignment_event=alignment_event,
+                window=window,
+                unit_page_index=int(unit_page_index),
+                population_psth_unit_scope=population_psth_unit_scope,
+                population_psth_bin_size=float(population_psth_bin_size),
+                lfp_label=lfp_label,
+                lfp_utc_offset_hours=lfp_utc_offset_hours,
             )
+            save_path.parent.mkdir(parents=True, exist_ok=True)
             figure.savefig(save_path, format="png", dpi=300)
             st.success(f"Saved plot to {save_path}")
 

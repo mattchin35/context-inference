@@ -1091,19 +1091,20 @@ def main_multisession():
     mouse = 'CT016'
     session_data_root = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}')
     multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
-    dates = ['2026-04-16', '2026-04-17', '2026-04-20',
-             '2026-04-21', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28', '2026-04-29', '2026-04-30',
+    dates = ['2026-04-17', '2026-04-20',
+             '2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
              '2026-05-01', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-08', '2026-05-09', '2026-05-10',
-             '2026-05-11',
-             '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-17', '2026-05-18',
-             '2026-05-19', '2026-05-20', '2026-05-21', '2026-05-22', '2026-05-23', '2026-05-24',
-             '2026-05-25', '2026-05-26', '2026-05-27', '2026-05-28', '2026-05-29', ]
+             '2026-05-11',]
+             # '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-17', '2026-05-18',
+             # '2026-05-19', '2026-05-20', '2026-05-21', '2026-05-22', '2026-05-23', '2026-05-24',
+             # '2026-05-25', '2026-05-26', '2026-05-27', '2026-05-28', '2026-05-29', ]
     block_hmm_random_seed = 1001
     trial_hmm_random_seed = 2001
     block_predicted_state_line_width = 0.8
     block_state_plot_figsize = (18, 6)
     block_plot_bias_rl = False
     block_bias_rl_column = "bias_rl"
+    block_hmm_state_marker_mode = "alpha"  # default, markersize, or alpha
     trial_state_plot_line_width = 0.5
     trial_state_plot_figsize = (18, 6)
     trial_input_source = "from_block_modeling"  # either from_block_modeling or saved_augmented_trials
@@ -1150,10 +1151,20 @@ def main_multisession():
         )
         for date in dates
     ]
-    bssm.collect_block_hmm_state_features_for_sessions(
+    block_hmm_state_features = bssm.collect_block_hmm_state_features_for_sessions(
         sessions=sessions,
         output_path=multi_session_save_path,
         mouse=mouse,
+    )
+    performance_plots.plot_block_hmm_state_feature_scatter(
+        state_features_df=block_hmm_state_features,
+        plot_path=multi_session_save_path,
+        figure_id=mouse,
+        fit_type="map",
+        x_column="bias",
+        y_column="prev_n_rewarded_weight",
+        size_column="state_block_count",
+        marker_mode=block_hmm_state_marker_mode,
     )
     saved_sessions = [load_saved_session_analysis(session) for session in sessions]
     trials_to_correct_summary = prepare_session_trials_to_correct_summary(saved_sessions)
@@ -1171,7 +1182,7 @@ def main_multisession():
     run_multisession_analysis(
         concatenated=concatenated,
         session=multisession,
-        block_num_states=3,
+        block_num_states=2,
         trial_num_states=3,
         prior_alpha=1,
         prior_sigma=1,
@@ -1202,8 +1213,8 @@ def main_mouse():
     # date = '2025-12-16'
     # behavior_timestamp = '153200'
     mouse = "CT016"
-    date = "2026-04-27"
-    behavior_timestamp = "121417"
+    date = "2026-05-12"
+    behavior_timestamp = "122638"
     task_tag = 'latent_inference'
     date_no_dash = date.replace('-', '')
 
@@ -1303,8 +1314,8 @@ def main_mouse():
 
     block_hmm_random_seed = 1001
     trial_hmm_random_seed = 2001
-    block_plot_bias_rl = False
-    block_bias_rl_column = "bias_rl"
+    block_plot_bias_rl = True
+    block_bias_rl_column = "min_value_bias"
     trial_glm_predictor_columns = (
         "FQlearning_rel_value",
         # "HMM_rel_value_logodds_decay",
@@ -1327,7 +1338,7 @@ def main_mouse():
     #                                                 random_seed=block_hmm_random_seed)
 
     block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess,
-                                                                    num_states=3,
+                                                                    num_states=2,
                                                                     prior_alpha=1, prior_sigma=1,
                                                                     random_seed=block_hmm_random_seed,
                                                                     plot_bias_rl=block_plot_bias_rl,

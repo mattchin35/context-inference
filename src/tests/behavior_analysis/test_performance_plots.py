@@ -555,7 +555,7 @@ def test_plot_block_hmm_state_feature_scatter_can_use_alpha_marker_mode(
 
     marker_colors = np.asarray(scatter_calls[0]["c"])
     assert scatter_calls[0]["s"] == 70.0
-    assert marker_colors[:, 3].tolist() == [0.2, 0.55, 0.9]
+    assert marker_colors[:, 3].tolist() == pytest.approx([0.2, 0.55, 0.9])
 
 
 def test_plot_block_hmm_state_feature_scatter_rejects_invalid_marker_mode(
