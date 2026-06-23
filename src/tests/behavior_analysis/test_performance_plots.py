@@ -459,10 +459,11 @@ def test_plot_block_hmm_state_feature_scatter_can_use_fixed_marker_size(
         }
     )
     scatter_calls = []
+    original_scatter = Axes.scatter
 
     def capture_scatter(self, x, y, *args, **kwargs):
         scatter_calls.append(kwargs)
-        return Axes.scatter(self, x, y, *args, **kwargs)
+        return original_scatter(self, x, y, *args, **kwargs)
 
     monkeypatch.setattr(Axes, "scatter", capture_scatter)
 
@@ -475,3 +476,106 @@ def test_plot_block_hmm_state_feature_scatter_can_use_fixed_marker_size(
     )
 
     assert scatter_calls[0]["s"] == 70.0
+
+
+def test_plot_block_hmm_state_feature_scatter_can_use_default_marker_mode(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Default marker mode should use fixed size and fixed alpha for all states."""
+    from matplotlib.axes import Axes
+
+    performance_plots = _import_performance_plots()
+    state_features = pd.DataFrame(
+        {
+            "fit_type": ["map", "map"],
+            "bias": [-0.5, 0.25],
+            "prev_n_rewarded_weight": [1.0, -0.25],
+            "state_block_count": [4, 20],
+        }
+    )
+    scatter_calls = []
+    original_scatter = Axes.scatter
+
+    def capture_scatter(self, x, y, *args, **kwargs):
+        scatter_calls.append(kwargs)
+        return original_scatter(self, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "scatter", capture_scatter)
+
+    performance_plots.plot_block_hmm_state_feature_scatter(
+        state_features_df=state_features,
+        plot_path=tmp_path,
+        figure_id="CT999",
+        marker_mode="default",
+        fixed_marker_size=70.0,
+        fixed_marker_alpha=0.6,
+    )
+
+    marker_colors = np.asarray(scatter_calls[0]["c"])
+    assert scatter_calls[0]["s"] == 70.0
+    assert marker_colors.shape == (2, 4)
+    assert marker_colors[:, 3].tolist() == [0.6, 0.6]
+
+
+def test_plot_block_hmm_state_feature_scatter_can_use_alpha_marker_mode(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Alpha marker mode should make higher-count states more opaque."""
+    from matplotlib.axes import Axes
+
+    performance_plots = _import_performance_plots()
+    state_features = pd.DataFrame(
+        {
+            "fit_type": ["map", "map", "map"],
+            "bias": [-0.5, 0.25, 0.6],
+            "prev_n_rewarded_weight": [1.0, -0.25, 0.1],
+            "state_block_count": [4, 12, 20],
+        }
+    )
+    scatter_calls = []
+    original_scatter = Axes.scatter
+
+    def capture_scatter(self, x, y, *args, **kwargs):
+        scatter_calls.append(kwargs)
+        return original_scatter(self, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "scatter", capture_scatter)
+
+    performance_plots.plot_block_hmm_state_feature_scatter(
+        state_features_df=state_features,
+        plot_path=tmp_path,
+        figure_id="CT999",
+        marker_mode="alpha",
+        fixed_marker_size=70.0,
+        min_marker_alpha=0.2,
+        max_marker_alpha=0.9,
+    )
+
+    marker_colors = np.asarray(scatter_calls[0]["c"])
+    assert scatter_calls[0]["s"] == 70.0
+    assert marker_colors[:, 3].tolist() == [0.2, 0.55, 0.9]
+
+
+def test_plot_block_hmm_state_feature_scatter_rejects_invalid_marker_mode(
+    tmp_path: Path,
+):
+    """Unknown marker modes should fail before plotting."""
+    performance_plots = _import_performance_plots()
+    state_features = pd.DataFrame(
+        {
+            "fit_type": ["map"],
+            "bias": [0.25],
+            "prev_n_rewarded_weight": [-0.25],
+            "state_block_count": [20],
+        }
+    )
+
+    with pytest.raises(ValueError, match="marker_mode"):
+        performance_plots.plot_block_hmm_state_feature_scatter(
+            state_features_df=state_features,
+            plot_path=tmp_path,
+            figure_id="CT999",
+            marker_mode="bad_mode",
+        )
