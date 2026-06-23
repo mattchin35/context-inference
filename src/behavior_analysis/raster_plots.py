@@ -191,7 +191,11 @@ def colorblock_raster(event_df: pd.DataFrame, fig_name: str, plot_path: str, ses
         plt.axvspan(stim_st[i], stim_end[i], color='k', alpha=.2)
 
     # Add legend
-    patches = [mpatches.Patch(color=color_dict[k], label=k) for k in color_dict.keys()]
+    patches = [
+        mpatches.Patch(color=color_dict[state], label=state)
+        for state in color_dict
+        if state in unique_states
+    ]
     plt.legend(handles=patches, fontsize=20, fancybox=False)
     plt.ylim(-.4, 1.4)
     plt.xlabel("Time (seconds)", fontsize=40)
