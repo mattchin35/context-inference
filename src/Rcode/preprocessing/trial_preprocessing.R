@@ -103,54 +103,136 @@ add_trial_column_compatibility <- function(df) {
   compatible_df
 }
 
+# Return the subset of requested columns that are present in a dataframe.
+#
+# Args:
+#   df: data.frame with shape (n_trials, n_columns). Trialwise table.
+#   columns: character vector. Candidate column names.
+#
+# Returns:
+#   character vector. Names from `columns` that exist in `df`, preserving input
+#   order.
+existing_columns <- function(df, columns) {
+  columns[columns %in% names(df)]
+}
+
+# Convert project missing-value sentinels to NA in columns that exist.
+#
+# Args:
+#   df: data.frame with shape (n_trials, n_columns). Trialwise table.
+#   columns: character vector. Candidate column names to clean.
+#
+# Returns:
+#   data.frame with the same shape as `df`. Existing requested columns have
+#   string missing-value sentinels replaced by NA.
+convert_existing_none_to_na <- function(df, columns) {
+  convertNoneToNA(df, existing_columns(df, columns))
+}
+
+# Coerce existing columns to numeric without changing row order.
+#
+# Args:
+#   df: data.frame with shape (n_trials, n_columns). Trialwise table.
+#   columns: character vector. Candidate numeric column names. Units are the
+#     source feature units documented by the augmented trial CSV generator.
+#
+# Returns:
+#   data.frame with the same shape as `df`. Existing requested columns are
+#   numeric vectors; absent columns are ignored.
+coerce_existing_numeric_columns <- function(df, columns) {
+  for (col in existing_columns(df, columns)) {
+    df[[col]] <- suppressWarnings(as.numeric(unlist(df[[col]])))
+  }
+  df
+}
+
+# Coerce existing columns to factors without changing row order.
+#
+# Args:
+#   df: data.frame with shape (n_trials, n_columns). Trialwise table.
+#   columns: character vector. Candidate categorical column names.
+#
+# Returns:
+#   data.frame with the same shape as `df`. Existing requested columns are
+#   factors; absent columns are ignored.
+factor_existing_columns <- function(df, columns) {
+  for (col in existing_columns(df, columns)) {
+    df[[col]] <- as.factor(df[[col]])
+  }
+  df
+}
+
+# Clean an augmented trial dataframe for R visualization/modeling.
+#
+# Args:
+#   df: data.frame with shape (n_trials, n_columns). Rows are behavioral trials.
+#     Expected new-schema core columns include `action`, `prev_action`, and
+#     `prev_reward`. Optional numeric predictors may include model values,
+#     hazard/doubt regressors, residualized regressors, and observer values.
+#     Actions are coded 0=right and 1=left. Model/regressor columns are
+#     unitless left-minus-right scalar values unless otherwise documented by
+#     the Python feature generator.
+#   include_model_regressors: logical scalar. If TRUE, coerce optional model and
+#     engineered regressor columns to numeric when they exist.
+#
+# Returns:
+#   data.frame with shape (n_valid_trials, n_columns + n_compatibility_columns).
+#   Rows missing `action`, `prev_action`, or `prev_reward` are dropped. Existing
+#   numeric predictors are numeric; existing categorical columns are factors.
 cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
-  df <- convertNoneToNA(df, c("action", "active_stimulus", "block_stimulus", "reward_time"))
-  df <- convertNoneToNA(df, c("Qlearning_rel_value", "FQlearning_rel_value")#, "HMM_rel_value_logodds_decay")
-                              #"Qlearning_greedy_action", "FQlearning_greedy_action"))
-#   df <- convertNoneToNA(df, c("RFLR_rel_value", "RFLR_greedy_action",
-#                               "HMM_rel_value", "HMM_greedy_action"))
-  df <- convertNoneToNA(df, c("HMM_rel_value_logodds", "HMM_rel_value_logodds_decay",
-                              "relative_omissions_index", "relative_doubt_index", "relative_hazard_index",
-                              "HMM_decay_res", "rel_hazard_res"))
-  df <- convertNoneToNA(df, c("prev_action", "prev_reward"))
-  df <- removeNARows(df, "action")
-  #df <- convertNoneToNA(df, c("inferred_strategy"))
-  #df <- removeNARows(df, "inferred_strategy")
-  df <- add_trial_column_compatibility(df)
+  required_non_missing_columns <- c("action", "prev_action", "prev_reward")
+  base_numeric_columns <- c(
+    "reward_time", "start_time", "choice_time", "led_on_time", "led_off_time",
+    "trial_time_since_start", "choice_time_since_start", "time_to_choice",
+    "p_active_rew", "p_inactive_rew", "p_switch"
+  )
+  model_numeric_columns <- c(
+    "Qlearning_rel_value",
+    "FQlearning_rel_value",
+    "FQlearning_rel_value_fast_learn",
+    "HMM_rel_value_logodds",
+    "HMM_rel_value_logodds_decay",
+    "relative_omissions_index",
+    "signed_omission_regressor",
+    "relative_doubt_index",
+    "relative_hazard_index",
+    "perseveration_regressor",
+    "observer_value",
+    "HMM_decay_res",
+    "rel_hazard_res"
+  )
+  factor_columns <- c(
+    "state", "state_int", "action", "correct", "reward", "session_ID",
+    "block_type", "prev_action", "prev_reward", "inherited_block_strategy",
+    "inherited_block_bias"
+  )
+  sentinel_columns <- unique(c(
+    required_non_missing_columns,
+    "active_stimulus", "block_stimulus",
+    base_numeric_columns,
+    model_numeric_columns,
+    factor_columns
+  ))
   
-  df["reward_time"] <- as.numeric(unlist(df["reward_time"]))
-  df["prev_action"] <- as.numeric(unlist(df["prev_action"]))
-  df["prev_reward"] <- as.numeric(unlist(df["prev_reward"]))
-  
-  if (include_model_regressors) {
-    numeric_cols <- intersect(
-      c("Qlearning_rel_value", "FQlearning_rel_value",
-        "HMM_rel_value_logodds", "HMM_rel_value_logodds_decay",
-        "relative_omissions_index", "relative_doubt_index"),
-      names(df)
+  missing_required_columns <- setdiff(required_non_missing_columns, names(df))
+  if (length(missing_required_columns) > 0) {
+    stop(
+      "Trial dataframe is missing required cleanup columns: ",
+      paste(missing_required_columns, collapse = ", ")
     )
-    for (col in numeric_cols) {
-      df[col] <- as.numeric(unlist(df[col]))
-    }
-    
-    df <- df %>%
-      dplyr::mutate(across(dplyr::all_of(intersect(
-        c("state", "state_int", "action", "correct", "session_ID", "block_type", "prev_action",
-          "prev_reward",# "Qlearning_greedy_action", "FQlearning_greedy_action",
-          #"RFLR_greedy_action", "HMM_greedy_action", "inherited_strategy",
-          #"inherited_bias_flag", "inferred_strategy"),
-          ),
-        names(df)
-      )), as.factor))
-  } else {
-    df <- df %>%
-      dplyr::mutate(across(dplyr::all_of(intersect(
-        c("state", "state_int", "action", "correct", "session_ID", "block_type", "prev_action",
-          "prev_reward"),# "inherited_strategy", "inherited_bias_flag", "inferred_strategy"),
-        names(df)
-      )), as.factor))
   }
   
+  df <- convert_existing_none_to_na(df, sentinel_columns)
+  df <- removeNARows(df, required_non_missing_columns)
+  df <- add_trial_column_compatibility(df)
+  
+  df <- coerce_existing_numeric_columns(df, base_numeric_columns)
+  
+  if (include_model_regressors) {
+    df <- coerce_existing_numeric_columns(df, model_numeric_columns)
+  }
+  
+  df <- factor_existing_columns(df, factor_columns)
   return(df)
 }
 
