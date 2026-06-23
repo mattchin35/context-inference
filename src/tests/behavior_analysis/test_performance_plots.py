@@ -1,5 +1,6 @@
 import importlib
 import sys
+from types import ModuleType
 from pathlib import Path
 
 import matplotlib
@@ -8,13 +9,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import src.behavior_analysis.session_analysis as session_analysis
-
 matplotlib.use("Agg")
+session_analysis = ModuleType("src.behavior_analysis.session_analysis")
 
 
 def _import_performance_plots():
     """Import the plotting module after providing its legacy dependency alias."""
+    sys.modules["src.behavior_analysis.session_analysis"] = session_analysis
     sys.modules["session_analysis"] = session_analysis
     return importlib.import_module("src.behavior_analysis.performance_plots")
 
@@ -131,8 +132,8 @@ def test_plot_session_trials_to_correct_skips_missing_values_with_gaps(monkeypat
         sess_ID="session_a",
     )
 
-    right_cued_call = next(call for call in plot_calls if call["label"] == "right_cued")
-    left_uncued_call = next(call for call in plot_calls if call["label"] == "left_uncued")
+    right_cued_call = next(call for call in plot_calls if call["label"] == "right cued")
+    left_uncued_call = next(call for call in plot_calls if call["label"] == "left uncued")
 
     assert right_cued_call["x"] == [0, 2, 4]
     assert right_cued_call["y"] == [1, 3, 4]
@@ -163,7 +164,7 @@ def test_plot_session_trials_to_correct_supports_all_missing_encodings(monkeypat
         sess_ID="session_b",
     )
 
-    assert [call["label"] for call in plot_calls] == ["right_cued"]
+    assert [call["label"] for call in plot_calls] == ["right cued"]
     assert plot_calls[0]["x"] == [0, 4]
     assert plot_calls[0]["y"] == [1, 5]
 
@@ -190,8 +191,8 @@ def test_plot_session_trials_to_correct_uses_block_specific_y_values(monkeypatch
         sess_ID="session_c",
     )
 
-    right_cued_call = next(call for call in plot_calls if call["label"] == "right_cued")
-    left_uncued_call = next(call for call in plot_calls if call["label"] == "left_uncued")
+    right_cued_call = next(call for call in plot_calls if call["label"] == "right cued")
+    left_uncued_call = next(call for call in plot_calls if call["label"] == "left uncued")
 
     assert right_cued_call["x"] == [0, 2]
     assert right_cued_call["y"] == [1, 7]
@@ -216,7 +217,7 @@ def test_plot_session_trials_to_correct_skips_block_types_without_valid_points(m
         sess_ID="session_d",
     )
 
-    assert [call["label"] for call in plot_calls] == ["right_uncued"]
+    assert [call["label"] for call in plot_calls] == ["right uncued"]
     assert plot_calls[0]["x"] == [2]
     assert plot_calls[0]["y"] == [6]
 
@@ -439,3 +440,38 @@ def test_plot_block_hmm_state_feature_scatter_drops_invalid_rows(tmp_path: Path)
     )
 
     assert save_path.exists()
+
+
+def test_plot_block_hmm_state_feature_scatter_can_use_fixed_marker_size(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Marker area should be fixed when block-count marker sizing is disabled."""
+    from matplotlib.axes import Axes
+
+    performance_plots = _import_performance_plots()
+    state_features = pd.DataFrame(
+        {
+            "fit_type": ["map", "map"],
+            "bias": [-0.5, 0.25],
+            "prev_n_rewarded_weight": [1.0, -0.25],
+            "state_block_count": [4, 20],
+        }
+    )
+    scatter_calls = []
+
+    def capture_scatter(self, x, y, *args, **kwargs):
+        scatter_calls.append(kwargs)
+        return Axes.scatter(self, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "scatter", capture_scatter)
+
+    performance_plots.plot_block_hmm_state_feature_scatter(
+        state_features_df=state_features,
+        plot_path=tmp_path,
+        figure_id="CT999",
+        use_block_count_marker_size=False,
+        fixed_marker_size=70.0,
+    )
+
+    assert scatter_calls[0]["s"] == 70.0
