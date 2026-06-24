@@ -40,6 +40,27 @@ def _capture_plot_calls(monkeypatch):
     return plot_calls
 
 
+def _capture_detailed_plot_calls(monkeypatch):
+    """Record Axes.plot calls including positional style arguments."""
+    from matplotlib.axes import Axes
+
+    plot_calls = []
+
+    def fake_plot(self, x, y, *args, **kwargs):
+        plot_calls.append(
+            {
+                "x": np.asarray(x, dtype=float),
+                "y": np.asarray(y, dtype=float),
+                "args": args,
+                "kwargs": kwargs,
+            }
+        )
+        return []
+
+    monkeypatch.setattr(Axes, "plot", fake_plot)
+    return plot_calls
+
+
 def _capture_fill_between_calls(monkeypatch):
     """Record every Axes.fill_between call as simple x/y-bound triples."""
     from matplotlib.axes import Axes
@@ -397,6 +418,60 @@ def test_scatter_trials_to_correct_rejects_missing_regression_stats(tmp_path: Pa
             plot_path=tmp_path,
             figure_id="unit_session",
         )
+
+
+def test_scatter_trials_to_correct_applies_small_reproducible_jitter_to_points(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Trials-to-correct scatter points should move reproducibly near their integer values."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+
+    performance_plots.scatter_trials_to_correct(
+        block_performance=_make_scatter_block_performance(),
+        slope=0.5,
+        intercept=1.0,
+        plot_path=tmp_path,
+        figure_id="unit_session",
+        point_jitter=0.1,
+        jitter_seed=123,
+    )
+
+    point_calls = [call for call in plot_calls if call["args"] == ("o",)]
+    plotted_x = np.concatenate([call["x"] for call in point_calls])
+    plotted_y = np.concatenate([call["y"] for call in point_calls])
+    original_x = np.array([1.0, 3.0])
+    original_y = np.array([2.0, 4.0])
+
+    assert not np.array_equal(plotted_x, original_x)
+    assert not np.array_equal(plotted_y, original_y)
+    assert np.all(np.abs(plotted_x - original_x) <= 0.1)
+    assert np.all(np.abs(plotted_y - original_y) <= 0.1)
+
+
+def test_scatter_trials_to_correct_keeps_regression_line_unjittered(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """The fitted regression line should use true integer x-values, not jittered points."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+
+    performance_plots.scatter_trials_to_correct(
+        block_performance=_make_scatter_block_performance(),
+        slope=0.5,
+        intercept=1.0,
+        plot_path=tmp_path,
+        figure_id="unit_session",
+        point_jitter=0.1,
+        jitter_seed=123,
+    )
+
+    regression_call = next(call for call in plot_calls if call["args"] == ("k--",))
+
+    np.testing.assert_array_equal(regression_call["x"], np.array([0.0, 3.0]))
+    np.testing.assert_array_equal(regression_call["y"], np.array([1.0, 2.5]))
 
 
 def test_plot_block_hmm_state_feature_scatter_saves_map_fit(tmp_path: Path):
