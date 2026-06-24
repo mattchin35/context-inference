@@ -408,8 +408,85 @@ def plot_trials_to_correct_summary(block_performance: pd.DataFrame, plot_path: P
     save_performance_figure(f, save_path)
 
 
+def _jitter_integer_scatter_points(
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    jitter_width: float,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return display-only jittered coordinates for integer scatter data.
+
+    Parameters
+    ----------
+    x_values : np.ndarray
+        Original x-axis values, shape `(n_points,)`, in plot-axis units.
+        Values are expected to be integer counts.
+    y_values : np.ndarray
+        Original y-axis values, shape `(n_points,)`, in plot-axis units.
+        Values are expected to be integer trial counts.
+    jitter_width : float
+        Maximum absolute jitter applied independently to each axis, in
+        plot-axis units. Use `0.0` to return exact coordinates.
+    seed : int
+        Seed for deterministic jitter generation.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        Jittered x and y display coordinates, each with shape `(n_points,)`,
+        in the same plot-axis units as the inputs. The input arrays are not
+        modified.
+    """
+    if jitter_width < 0:
+        raise ValueError("jitter_width must be non-negative.")
+
+    x_values = np.asarray(x_values, dtype=float)
+    y_values = np.asarray(y_values, dtype=float)
+
+    if jitter_width == 0 or x_values.size == 0:
+        return x_values.copy(), y_values.copy()
+
+    rng = np.random.default_rng(seed)
+    x_jitter = rng.uniform(-jitter_width, jitter_width, size=x_values.shape)
+    y_jitter = rng.uniform(-jitter_width, jitter_width, size=y_values.shape)
+    return x_values + x_jitter, y_values + y_jitter
+
+
 def scatter_trials_to_correct(block_performance: pd.DataFrame, slope: float, intercept: float, plot_path: Path,
-                              figure_id: str, title=None):
+                              figure_id: str, title=None, point_jitter: float = 0.08,
+                              jitter_seed: int = 0):
+    """Plot block trials-to-correct against prior consecutive rewards.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise performance table, shape `(n_blocks, n_columns)`. Required
+        columns are `block_type`, `trials_to_correct`, `prev_n_correct`, and
+        `prev_consecutive_rewards`. Count columns are interpreted as integer
+        block/trial counts.
+    slope : float
+        Regression slope in trials-to-correct per prior consecutive reward.
+    intercept : float
+        Regression intercept in trials-to-correct units.
+    plot_path : Path
+        Directory where the PNG figure is saved.
+    figure_id : str
+        Figure identifier used in the output filename.
+    title : str or None, default=None
+        Optional display title prefix. If None, `figure_id` is used.
+    point_jitter : float, default=0.08
+        Maximum absolute display-only jitter for scatter markers on both axes,
+        in plot-axis units. Original data and the regression line remain
+        unjittered.
+    jitter_seed : int, default=0
+        Seed for deterministic marker jitter.
+
+    Returns
+    -------
+    None
+        Saves `{figure_id}_scatter_trials-to-correct.png` and closes the
+        figure.
+    """
     try:
         slope = float(slope)
         intercept = float(intercept)
@@ -417,19 +494,24 @@ def scatter_trials_to_correct(block_performance: pd.DataFrame, slope: float, int
         raise ValueError("scatter_trials_to_correct slope and intercept must be numeric.") from exc
 
     f1, ax1 = plt.subplots(figsize=(7, 5))
-    x = np.arange(len(block_performance))
     ix_valid = (block_performance['trials_to_correct'] != 'None') & (block_performance['prev_n_correct'] != 'None')
     block_performance = block_performance[ix_valid]
 
     block_type = block_performance['block_type'].to_numpy()
     trials_to_correct = block_performance['trials_to_correct'].astype(int).to_numpy()
     prev_consecutive_rewards = block_performance['prev_consecutive_rewards'].astype(int).to_numpy()
+    jittered_rewards, jittered_trials_to_correct = _jitter_integer_scatter_points(
+        prev_consecutive_rewards,
+        trials_to_correct,
+        jitter_width=point_jitter,
+        seed=jitter_seed,
+    )
     
     # use this block for separate colors 
     for b in block_types:
         ix = np.where(block_type == b)[0]
         if len(ix) > 0:
-            ax1.plot(prev_consecutive_rewards[ix], trials_to_correct[ix],
+            ax1.plot(jittered_rewards[ix], jittered_trials_to_correct[ix],
                      'o', color=color_dict[b], label=b.replace('_', ' '))
 
     # use this block for one color
