@@ -56,6 +56,16 @@ LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE = (
     "rel_hazard_res",
 )
 
+TRIAL_TYPE_FLAG_COLUMNS = (
+    "prev_correct",
+    "block_entry_trial",
+    "switch_trial",
+    "stay_trial",
+    "first_switch_in_block",
+    "explore_trial",
+    "block_entry_explore_trial",
+)
+
 def assert_saved_file(path: Path) -> None:
     """Verify that a save produced a non-empty file.
 
@@ -249,6 +259,135 @@ def make_leave_stay_action(raw_actions, prev_actions) -> np.ndarray:
     return leave_stay_actions
 
 
+def _previous_values(values: pd.Series, groups: pd.Series | None = None) -> pd.Series:
+    """Shift values by one row, optionally within session groups.
+
+    Parameters
+    ----------
+    values : pd.Series
+        One-dimensional values with shape `(n_trials,)`.
+    groups : pd.Series or None, default=None
+        Optional group labels with shape `(n_trials,)`. When provided, previous
+        values do not cross group boundaries.
+
+    Returns
+    -------
+    pd.Series
+        Values shifted by one row, aligned to `values.index`.
+    """
+    if groups is None:
+        return values.shift(1)
+    return values.groupby(groups, sort=False).shift(1)
+
+
+def _numeric_equals_one(values: pd.Series) -> pd.Series:
+    """Return values that are numerically equal to one.
+
+    Parameters
+    ----------
+    values : pd.Series
+        One-dimensional values with shape `(n_trials,)`.
+
+    Returns
+    -------
+    pd.Series
+        Boolean values with shape `(n_trials,)`; missing or nonnumeric entries
+        are False.
+    """
+    return pd.to_numeric(values, errors="coerce").eq(1).fillna(False)
+
+
+def add_trial_type_flags(augmented_trial_df: pd.DataFrame) -> pd.DataFrame:
+    """Add trial-type flags for selecting behaviorally interesting trials.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required column
+        is `action`; optional columns `cur_block`, `prev_action`, `prev_reward`,
+        `correct`, `reward`, `session_ID`, and experimenter-reward flags are
+        used when present. Actions use the task convention `0=right`, `1=left`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `augmented_trial_df` with boolean trial-type flags:
+        `prev_correct`, `block_entry_trial`, `switch_trial`, `stay_trial`,
+        `first_switch_in_block`, `explore_trial`, and
+        `block_entry_explore_trial`.
+    """
+    if "action" not in augmented_trial_df.columns:
+        raise ValueError("augmented_trial_df must contain 'action' to add trial-type flags.")
+
+    output_df = normalize_experimenter_reward_column(augmented_trial_df)
+    output_df = output_df.copy()
+
+    current_sides = pd.Series(
+        [_choice_side_or_none(action) for action in output_df["action"]],
+        index=output_df.index,
+        dtype=object,
+    )
+    experimenter_reward_flags = get_experimenter_reward_flags(output_df)
+    valid_choice = current_sides.notna() & pd.Series(experimenter_reward_flags, index=output_df.index).eq(0)
+
+    if "prev_action" in output_df.columns:
+        previous_sides = pd.Series(
+            [_choice_side_or_none(action) for action in output_df["prev_action"]],
+            index=output_df.index,
+            dtype=object,
+        )
+    else:
+        previous_sides = pd.Series([None] * output_df.shape[0], index=output_df.index, dtype=object)
+
+    has_previous_side = previous_sides.notna()
+    switch_trial = valid_choice & has_previous_side & current_sides.ne(previous_sides)
+    stay_trial = valid_choice & has_previous_side & current_sides.eq(previous_sides)
+
+    block_entry_trial = pd.Series(False, index=output_df.index)
+    first_switch_in_block = pd.Series(False, index=output_df.index)
+    if "cur_block" in output_df.columns:
+        first_valid_indices = output_df.loc[valid_choice].groupby("cur_block", sort=False).head(1).index
+        block_entry_trial.loc[first_valid_indices] = True
+
+        first_switch_indices = output_df.loc[switch_trial].groupby("cur_block", sort=False).head(1).index
+        first_switch_in_block.loc[first_switch_indices] = True
+
+    session_groups = output_df["session_ID"] if "session_ID" in output_df.columns else None
+    if "correct" in output_df.columns:
+        correct_trial = _numeric_equals_one(output_df["correct"])
+        prev_correct = (
+            _previous_values(correct_trial, session_groups).fillna(False).astype(bool)
+            & _previous_values(valid_choice, session_groups).fillna(False).astype(bool)
+        )
+    else:
+        prev_correct = pd.Series(False, index=output_df.index)
+
+    if "prev_reward" in output_df.columns:
+        prev_rewarded = _numeric_equals_one(output_df["prev_reward"])
+    elif "reward" in output_df.columns:
+        prev_rewarded = (
+            _previous_values(_numeric_equals_one(output_df["reward"]), session_groups)
+            .fillna(False)
+            .astype(bool)
+            & _previous_values(valid_choice, session_groups).fillna(False).astype(bool)
+        )
+    else:
+        prev_rewarded = pd.Series(False, index=output_df.index)
+
+    explore_trial = switch_trial & prev_correct & prev_rewarded
+
+    output_df["prev_correct"] = prev_correct.astype(bool).to_numpy()
+    output_df["block_entry_trial"] = block_entry_trial.astype(bool).to_numpy()
+    output_df["switch_trial"] = switch_trial.astype(bool).to_numpy()
+    output_df["stay_trial"] = stay_trial.astype(bool).to_numpy()
+    output_df["first_switch_in_block"] = first_switch_in_block.astype(bool).to_numpy()
+    output_df["explore_trial"] = explore_trial.astype(bool).to_numpy()
+    output_df["block_entry_explore_trial"] = (
+        first_switch_in_block & explore_trial
+    ).astype(bool).to_numpy()
+    return output_df
+
+
 def make_prev_action_side_equivalent_trial_values(
     augmented_trial_df: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -303,6 +442,9 @@ def make_prev_action_side_equivalent_trial_values(
         "inherited_block_strategy",
         "inherited_block_bias",
     ):
+        if column_name in augmented_trial_df.columns:
+            output_df[column_name] = augmented_trial_df[column_name]
+    for column_name in TRIAL_TYPE_FLAG_COLUMNS:
         if column_name in augmented_trial_df.columns:
             output_df[column_name] = augmented_trial_df[column_name]
 
@@ -672,6 +814,7 @@ def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[Ta
     )
     augmented_trial_df = add_observer_value_feature(augmented_trial_df)
     augmented_trial_df = collect_residualized_trial_features(augmented_trial_df)
+    augmented_trial_df = add_trial_type_flags(augmented_trial_df)
     return augmented_trial_df, params
 
 

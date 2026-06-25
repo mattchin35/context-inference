@@ -123,7 +123,7 @@ def test_add_trial_type_flags_marks_switch_stay_block_entry_and_explore_trials()
     flagged_df = gtf.add_trial_type_flags(make_trial_type_flag_df())
 
     expected = {
-        "prev_correct": [False, True, True, False, False, True, True, True],
+        "prev_correct": [False, True, True, False, False, True, True, False],
         "block_entry_trial": [True, False, False, False, True, False, False, True],
         "switch_trial": [False, False, True, False, False, True, False, False],
         "stay_trial": [False, True, False, False, True, False, False, True],

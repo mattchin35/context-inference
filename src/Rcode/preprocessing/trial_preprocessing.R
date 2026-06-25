@@ -162,6 +162,32 @@ factor_existing_columns <- function(df, columns) {
   df
 }
 
+# Coerce existing flag columns to logical values.
+#
+# Args:
+#   df: data.frame with shape (n_trials, n_columns). Trialwise table.
+#   columns: character vector. Candidate logical flag column names. Accepted
+#     true values are TRUE, "true", "t", "1", and "yes"; accepted false values
+#     are FALSE, "false", "f", "0", and "no". Missing values remain NA.
+#
+# Returns:
+#   data.frame with the same shape as `df`. Existing requested columns are
+#   logical vectors; absent columns are ignored.
+coerce_existing_logical_columns <- function(df, columns) {
+  for (col in existing_columns(df, columns)) {
+    if (is.logical(df[[col]])) {
+      next
+    }
+    
+    text_values <- tolower(trimws(as.character(df[[col]])))
+    logical_values <- rep(NA, length(text_values))
+    logical_values[text_values %in% c("true", "t", "1", "yes")] <- TRUE
+    logical_values[text_values %in% c("false", "f", "0", "no")] <- FALSE
+    df[[col]] <- as.logical(logical_values)
+  }
+  df
+}
+
 # Clean an augmented trial dataframe for R visualization/modeling.
 #
 # Args:
@@ -206,12 +232,22 @@ cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
     "block_type", "prev_action", "prev_reward", "inherited_block_strategy",
     "inherited_block_bias"
   )
+  trial_type_flag_columns <- c(
+    "prev_correct",
+    "block_entry_trial",
+    "switch_trial",
+    "stay_trial",
+    "first_switch_in_block",
+    "explore_trial",
+    "block_entry_explore_trial"
+  )
   sentinel_columns <- unique(c(
     required_non_missing_columns,
     "active_stimulus", "block_stimulus",
     base_numeric_columns,
     model_numeric_columns,
-    factor_columns
+    factor_columns,
+    trial_type_flag_columns
   ))
   
   missing_required_columns <- setdiff(required_non_missing_columns, names(df))
@@ -232,6 +268,7 @@ cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
     df <- coerce_existing_numeric_columns(df, model_numeric_columns)
   }
   
+  df <- coerce_existing_logical_columns(df, trial_type_flag_columns)
   df <- factor_existing_columns(df, factor_columns)
   return(df)
 }
@@ -280,11 +317,21 @@ cleanup_leave_stay_trial_dataframe <- function(df, include_model_regressors = FA
     "experimenter_reward_given", "session_ID", "block_type", "prev_action",
     "prev_reward", "inherited_block_strategy", "inherited_block_bias"
   )
+  trial_type_flag_columns <- c(
+    "prev_correct",
+    "block_entry_trial",
+    "switch_trial",
+    "stay_trial",
+    "first_switch_in_block",
+    "explore_trial",
+    "block_entry_explore_trial"
+  )
   sentinel_columns <- unique(c(
     required_non_missing_columns,
     base_numeric_columns,
     side_equivalent_numeric_columns,
-    factor_columns
+    factor_columns,
+    trial_type_flag_columns
   ))
   
   missing_required_columns <- setdiff(required_non_missing_columns, names(df))
@@ -303,6 +350,7 @@ cleanup_leave_stay_trial_dataframe <- function(df, include_model_regressors = FA
     df <- coerce_existing_numeric_columns(df, side_equivalent_numeric_columns)
   }
   
+  df <- coerce_existing_logical_columns(df, trial_type_flag_columns)
   df <- factor_existing_columns(df, factor_columns)
   return(df)
 }
