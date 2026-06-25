@@ -59,20 +59,39 @@ def make_feature_df() -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        Trialwise dataframe with shape `(4, 9)`. Value columns use the
+        Trialwise dataframe with shape `(5, n_columns)`. Value columns use the
         left-positive convention used by existing trial features.
     """
     return pd.DataFrame(
         {
-            "cur_trial": [0, 1, 2, 3],
-            "cur_block": [0, 0, 1, 1],
-            "action": [1, 1, 0, 0],
-            "prev_action": ["None", 1, 0, "no_choice"],
-            "FQlearning_rel_value": [0.2, 0.4, -0.6, 0.8],
-            "HMM_rel_value_logodds_decay": [0.5, 0.7, -0.9, 0.1],
-            "relative_doubt_index": [0.1, -0.2, 0.3, -0.4],
-            "relative_hazard_index": [0.25, -0.5, 0.75, -1.0],
-            "perseveration_regressor": [0.0, 0.2, -0.4, 0.6],
+            "state": [0, 0, 1, 1, 0],
+            "state_int": [0, 0, 1, 1, 0],
+            "cur_trial": [0, 1, 2, 3, 4],
+            "cur_trial_in_block": [0, 1, 0, 1, 2],
+            "cur_block": [0, 0, 1, 1, 1],
+            "action": [1, 1, 1, 0, 0],
+            "correct": [1, 1, 0, 1, 0],
+            "reward": [0, 1, 0, 1, 0],
+            "experimenter_reward_given": [0, 0, 0, 0, 0],
+            "session_ID": ["sess", "sess", "sess", "sess", "sess"],
+            "block_type": ["A", "A", "B", "B", "B"],
+            "time_to_choice": [0.5, 0.6, 0.7, 0.8, 0.9],
+            "prev_action": ["None", 1, 0, 0, "no_choice"],
+            "prev_reward": ["None", 1, 0, 1, 0],
+            "inherited_block_strategy": ["None", 1, 1, 2, 2],
+            "inherited_block_bias": ["None", "False", "False", "True", "True"],
+            "Qlearning_rel_value": [0.1, 0.2, -0.3, 0.4, 0.5],
+            "FQlearning_rel_value": [0.2, 0.4, -0.6, 0.8, 1.0],
+            "FQlearning_rel_value_fast_learn": [0.3, 0.5, -0.7, 0.9, 1.1],
+            "HMM_rel_value_logodds": [0.4, 0.6, -0.8, 1.0, 1.2],
+            "HMM_rel_value_logodds_decay": [0.5, 0.7, -0.9, 0.1, 1.3],
+            "relative_omissions_index": [0.05, 0.15, -0.25, 0.35, 0.45],
+            "signed_omission_regressor": [0.06, 0.16, -0.26, 0.36, 0.46],
+            "relative_doubt_index": [0.1, -0.2, 0.3, -0.4, 0.5],
+            "relative_hazard_index": [0.25, -0.5, 0.75, -1.0, 1.25],
+            "perseveration_regressor": [0.0, 0.2, -0.4, 0.6, 0.8],
+            "HMM_decay_res": [0.11, 0.21, -0.31, 0.41, 0.51],
+            "rel_hazard_res": [0.12, 0.22, -0.32, 0.42, 0.52],
         }
     )
 
@@ -82,7 +101,7 @@ def test_add_observer_value_feature_subtracts_relative_doubt():
     feature_df = gtf.add_observer_value_feature(make_feature_df())
 
     assert "observer_value" in feature_df.columns
-    assert feature_df["observer_value"].tolist() == pytest.approx([0.4, 0.9, -1.2, 0.5])
+    assert feature_df["observer_value"].tolist() == pytest.approx([0.4, 0.9, -1.2, 0.5, 0.8])
 
 
 def test_add_observer_value_feature_requires_source_columns():
@@ -102,11 +121,23 @@ def test_make_prev_action_side_equivalent_trial_values_flips_right_reference_sid
     assert side_df.loc[0, "observer_value_prev_action_side"] == "None"
     assert side_df.loc[1, "observer_value_prev_action_side"] == pytest.approx(0.9)
     assert side_df.loc[2, "observer_value_prev_action_side"] == pytest.approx(1.2)
-    assert side_df.loc[3, "observer_value_prev_action_side"] == "None"
+    assert side_df.loc[3, "observer_value_prev_action_side"] == pytest.approx(-0.5)
+    assert side_df.loc[4, "observer_value_prev_action_side"] == "None"
     assert side_df.loc[1, "FQlearning_rel_value_prev_action_side"] == pytest.approx(0.4)
     assert side_df.loc[2, "FQlearning_rel_value_prev_action_side"] == pytest.approx(0.6)
     assert side_df.loc[1, "relative_doubt_index_prev_action_side"] == pytest.approx(-0.2)
     assert side_df.loc[2, "relative_doubt_index_prev_action_side"] == pytest.approx(-0.3)
+
+
+def test_make_prev_action_side_equivalent_trial_values_recodes_action_to_stay_leave():
+    """Leave-stay action should preserve raw side choices separately."""
+    feature_df = gtf.add_observer_value_feature(make_feature_df())
+
+    side_df = gtf.make_prev_action_side_equivalent_trial_values(feature_df)
+
+    assert side_df["raw_action"].tolist() == [1, 1, 1, 0, 0]
+    assert side_df["action"].tolist() == ["None", 1, 0, 1, "None"]
+    assert side_df["prev_reward"].tolist() == ["None", 1, 0, 1, 0]
 
 
 def test_make_prev_action_side_equivalent_trial_values_contains_requested_columns():
@@ -116,17 +147,50 @@ def test_make_prev_action_side_equivalent_trial_values_contains_requested_column
     side_df = gtf.make_prev_action_side_equivalent_trial_values(feature_df)
 
     assert side_df.columns.tolist() == [
+        "state",
+        "state_int",
         "cur_trial",
+        "cur_trial_in_block",
         "cur_block",
+        "raw_action",
         "action",
+        "correct",
+        "reward",
+        "experimenter_reward_given",
+        "session_ID",
+        "block_type",
+        "time_to_choice",
         "prev_action",
+        "prev_reward",
+        "inherited_block_strategy",
+        "inherited_block_bias",
+        "Qlearning_rel_value_prev_action_side",
         "FQlearning_rel_value_prev_action_side",
+        "FQlearning_rel_value_fast_learn_prev_action_side",
+        "HMM_rel_value_logodds_prev_action_side",
         "HMM_rel_value_logodds_decay_prev_action_side",
+        "relative_omissions_index_prev_action_side",
+        "signed_omission_regressor_prev_action_side",
         "relative_doubt_index_prev_action_side",
         "relative_hazard_index_prev_action_side",
         "perseveration_regressor_prev_action_side",
         "observer_value_prev_action_side",
+        "HMM_decay_res_prev_action_side",
+        "rel_hazard_res_prev_action_side",
     ]
+
+
+def test_make_prev_action_side_equivalent_trial_values_omits_missing_optional_predictors():
+    """Leave-stay writer should tolerate optional side predictors being absent."""
+    feature_df = gtf.add_observer_value_feature(
+        make_feature_df().drop(columns=["HMM_decay_res", "rel_hazard_res"])
+    )
+
+    side_df = gtf.make_prev_action_side_equivalent_trial_values(feature_df)
+
+    assert "HMM_decay_res_prev_action_side" not in side_df.columns
+    assert "rel_hazard_res_prev_action_side" not in side_df.columns
+    assert "FQlearning_rel_value_prev_action_side" in side_df.columns
 
 
 def test_save_leave_stay_trial_values_writes_csv(tmp_path):
@@ -174,3 +238,5 @@ def test_collect_and_save_trial_features_writes_leave_stay_csv(tmp_path):
     assert leave_stay_path.exists()
     saved_leave_stay = pd.read_csv(leave_stay_path, na_filter=False)
     assert "observer_value_prev_action_side" in saved_leave_stay.columns
+    assert "raw_action" in saved_leave_stay.columns
+    assert "prev_reward" in saved_leave_stay.columns
