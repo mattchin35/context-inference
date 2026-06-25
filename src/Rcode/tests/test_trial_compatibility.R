@@ -50,6 +50,13 @@ new_schema_trial_df <- data.frame(
   rel_hazard_res = c("0.11", "0.12", "0.13", "0.14"),
   inherited_block_strategy = c("1", "1", "2", "2"),
   inherited_block_bias = c("False", "False", "True", "True"),
+  prev_correct = c("FALSE", "TRUE", "TRUE", "FALSE"),
+  block_entry_trial = c("TRUE", "FALSE", "TRUE", "FALSE"),
+  switch_trial = c("FALSE", "TRUE", "FALSE", "FALSE"),
+  stay_trial = c("FALSE", "FALSE", "TRUE", "FALSE"),
+  first_switch_in_block = c("FALSE", "TRUE", "FALSE", "FALSE"),
+  explore_trial = c("FALSE", "FALSE", "FALSE", "FALSE"),
+  block_entry_explore_trial = c("FALSE", "FALSE", "FALSE", "FALSE"),
   stringsAsFactors = FALSE
 )
 
@@ -105,6 +112,21 @@ factor_columns <- c(
 for (column_name in factor_columns) {
   stopifnot(is.factor(cleaned_df[[column_name]]))
 }
+
+flag_columns <- c(
+  "prev_correct",
+  "block_entry_trial",
+  "switch_trial",
+  "stay_trial",
+  "first_switch_in_block",
+  "explore_trial",
+  "block_entry_explore_trial"
+)
+for (column_name in flag_columns) {
+  stopifnot(is.logical(cleaned_df[[column_name]]))
+}
+stopifnot(identical(cleaned_df$switch_trial, TRUE))
+stopifnot(identical(cleaned_df$block_entry_trial, FALSE))
 
 removed_columns <- c(
   "Qlearning_prob_left",

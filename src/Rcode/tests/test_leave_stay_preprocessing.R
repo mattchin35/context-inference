@@ -52,6 +52,13 @@ leave_stay_df <- data.frame(
   observer_value_prev_action_side = c("None", "0.9", "1.2", "-0.5"),
   HMM_decay_res_prev_action_side = c("None", "0.21", "0.31", "-0.41"),
   rel_hazard_res_prev_action_side = c("None", "0.22", "0.32", "-0.42"),
+  prev_correct = c("FALSE", "TRUE", "TRUE", "FALSE"),
+  block_entry_trial = c("TRUE", "FALSE", "TRUE", "FALSE"),
+  switch_trial = c("FALSE", "TRUE", "FALSE", "FALSE"),
+  stay_trial = c("FALSE", "FALSE", "TRUE", "TRUE"),
+  first_switch_in_block = c("FALSE", "TRUE", "FALSE", "FALSE"),
+  explore_trial = c("FALSE", "TRUE", "FALSE", "FALSE"),
+  block_entry_explore_trial = c("FALSE", "TRUE", "FALSE", "FALSE"),
   stringsAsFactors = FALSE
 )
 
@@ -107,6 +114,21 @@ factor_columns <- c(
 for (column_name in factor_columns) {
   stopifnot(is.factor(cleaned_df[[column_name]]))
 }
+
+flag_columns <- c(
+  "prev_correct",
+  "block_entry_trial",
+  "switch_trial",
+  "stay_trial",
+  "first_switch_in_block",
+  "explore_trial",
+  "block_entry_explore_trial"
+)
+for (column_name in flag_columns) {
+  stopifnot(is.logical(cleaned_df[[column_name]]))
+}
+stopifnot(identical(cleaned_df$switch_trial, c(TRUE, FALSE, FALSE)))
+stopifnot(identical(cleaned_df$explore_trial, c(TRUE, FALSE, FALSE)))
 
 minimal_leave_stay_df <- leave_stay_df[, setdiff(
   names(leave_stay_df),

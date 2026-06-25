@@ -96,6 +96,65 @@ def make_feature_df() -> pd.DataFrame:
     )
 
 
+def make_trial_type_flag_df() -> pd.DataFrame:
+    """Build trial rows with block, switch, stay, and explore cases.
+
+    Returns
+    -------
+    pd.DataFrame
+        Trialwise dataframe with shape `(8, n_columns)`. Actions use the task
+        convention `0=right`, `1=left`; `cur_block` is a unitless block id.
+    """
+    return pd.DataFrame(
+        {
+            "cur_block": [0, 0, 0, 1, 1, 1, 2, 2],
+            "action": [1, 1, 0, "no_choice", 0, 1, 0, 0],
+            "prev_action": ["None", 1, 1, 0, 0, 0, 1, 0],
+            "correct": [1, 1, 0, 0, 1, 1, 1, 1],
+            "reward": [1, 1, 0, 0, 1, 1, 0, 1],
+            "prev_reward": ["None", 1, 1, 0, 0, 1, 1, 0],
+            "experimenter_reward_given": [0, 0, 0, 0, 0, 0, 1, 0],
+        }
+    )
+
+
+def test_add_trial_type_flags_marks_switch_stay_block_entry_and_explore_trials():
+    """Trial-type flags should mark primitive and intersection categories."""
+    flagged_df = gtf.add_trial_type_flags(make_trial_type_flag_df())
+
+    expected = {
+        "prev_correct": [False, True, True, False, False, True, True, True],
+        "block_entry_trial": [True, False, False, False, True, False, False, True],
+        "switch_trial": [False, False, True, False, False, True, False, False],
+        "stay_trial": [False, True, False, False, True, False, False, True],
+        "first_switch_in_block": [False, False, True, False, False, True, False, False],
+        "explore_trial": [False, False, True, False, False, True, False, False],
+        "block_entry_explore_trial": [False, False, True, False, False, True, False, False],
+    }
+    for column_name, expected_values in expected.items():
+        assert flagged_df[column_name].tolist() == expected_values
+
+
+def test_leave_stay_writer_copies_trial_type_flags_unchanged():
+    """Leave-stay CSV generation should preserve augmented-trial flags."""
+    feature_df = gtf.add_observer_value_feature(make_feature_df())
+    feature_df = gtf.add_trial_type_flags(feature_df)
+
+    side_df = gtf.make_prev_action_side_equivalent_trial_values(feature_df)
+
+    flag_columns = [
+        "prev_correct",
+        "block_entry_trial",
+        "switch_trial",
+        "stay_trial",
+        "first_switch_in_block",
+        "explore_trial",
+        "block_entry_explore_trial",
+    ]
+    for column_name in flag_columns:
+        assert side_df[column_name].tolist() == feature_df[column_name].tolist()
+
+
 def test_add_observer_value_feature_subtracts_relative_doubt():
     """Observer value should be HMM decay minus relative doubt."""
     feature_df = gtf.add_observer_value_feature(make_feature_df())
@@ -234,6 +293,7 @@ def test_collect_and_save_trial_features_writes_leave_stay_csv(tmp_path):
     )
 
     assert "observer_value" in feature_df.columns
+    assert "switch_trial" in feature_df.columns
     assert (tmp_path / "unit_session_augmented_trials.csv").exists()
     leave_stay_path = tmp_path / "unit_session_leave_stay_trial_values.csv"
     assert leave_stay_path.exists()
