@@ -236,6 +236,77 @@ cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
   return(df)
 }
 
+# Clean a leave-stay trial dataframe for R visualization/modeling.
+#
+# Args:
+#   df: data.frame with shape (n_trials, n_columns). Rows are behavioral trials
+#     loaded from `*_leave_stay_trial_values.csv`. Required columns are
+#     `action`, `prev_action`, and `prev_reward`. Here, `action` is a stay/leave
+#     outcome coded 1=stay and 0=leave/switch; `raw_action` preserves the
+#     original left/right side choice when present. Predictors ending in
+#     `_prev_action_side` use the previous-action convention: positive values
+#     favor staying with the previous action and negative values favor switching
+#     away from it.
+#   include_model_regressors: logical scalar. If TRUE, coerce optional
+#     side-equivalent model and engineered regressor columns to numeric when
+#     they exist.
+#
+# Returns:
+#   data.frame with shape (n_valid_trials, n_columns). Rows missing `action`,
+#   `prev_action`, or `prev_reward` are dropped. Existing side-equivalent
+#   predictors are numeric; existing categorical columns are factors.
+cleanup_leave_stay_trial_dataframe <- function(df, include_model_regressors = FALSE) {
+  required_non_missing_columns <- c("action", "prev_action", "prev_reward")
+  base_numeric_columns <- c(
+    "cur_trial", "cur_trial_in_block", "cur_block", "time_to_choice"
+  )
+  side_equivalent_numeric_columns <- c(
+    "Qlearning_rel_value_prev_action_side",
+    "FQlearning_rel_value_prev_action_side",
+    "FQlearning_rel_value_fast_learn_prev_action_side",
+    "HMM_rel_value_logodds_prev_action_side",
+    "HMM_rel_value_logodds_decay_prev_action_side",
+    "relative_omissions_index_prev_action_side",
+    "signed_omission_regressor_prev_action_side",
+    "relative_doubt_index_prev_action_side",
+    "relative_hazard_index_prev_action_side",
+    "perseveration_regressor_prev_action_side",
+    "observer_value_prev_action_side",
+    "HMM_decay_res_prev_action_side",
+    "rel_hazard_res_prev_action_side"
+  )
+  factor_columns <- c(
+    "state", "state_int", "raw_action", "action", "correct", "reward",
+    "experimenter_reward_given", "session_ID", "block_type", "prev_action",
+    "prev_reward", "inherited_block_strategy", "inherited_block_bias"
+  )
+  sentinel_columns <- unique(c(
+    required_non_missing_columns,
+    base_numeric_columns,
+    side_equivalent_numeric_columns,
+    factor_columns
+  ))
+  
+  missing_required_columns <- setdiff(required_non_missing_columns, names(df))
+  if (length(missing_required_columns) > 0) {
+    stop(
+      "Leave-stay dataframe is missing required cleanup columns: ",
+      paste(missing_required_columns, collapse = ", ")
+    )
+  }
+  
+  df <- convert_existing_none_to_na(df, sentinel_columns)
+  df <- removeNARows(df, required_non_missing_columns)
+  df <- coerce_existing_numeric_columns(df, base_numeric_columns)
+  
+  if (include_model_regressors) {
+    df <- coerce_existing_numeric_columns(df, side_equivalent_numeric_columns)
+  }
+  
+  df <- factor_existing_columns(df, factor_columns)
+  return(df)
+}
+
 curate_trial_analysis_dataframe <- function(df,
                                             drop_columns = c("state", "state_int", "block_type",
                                                              "active_stimulus", "block_stimulus", "reward_time",
@@ -262,4 +333,31 @@ preprocess_trial_dataframe <- function(df, include_model_regressors = FALSE, dro
   }
   
   return(list(trial_df = cleaned_df, clean_df = curated_df))
+}
+
+# Preprocess a leave-stay dataframe and return both cleaned and curated tables.
+#
+# Args:
+#   df: data.frame with shape (n_trials, n_columns). Leave-stay trial table
+#     loaded from `*_leave_stay_trial_values.csv`.
+#   include_model_regressors: logical scalar. If TRUE, side-equivalent model
+#     regressors are coerced to numeric when present.
+#   drop_columns: character vector or NULL. Columns to remove from the curated
+#     output. If NULL, the standard trial curation drop list is used.
+#
+# Returns:
+#   named list with:
+#     - leave_stay_df: cleaned data.frame with shape
+#       (n_valid_trials, n_columns)
+#     - clean_df: curated data.frame with selected metadata columns dropped
+preprocess_leave_stay_trial_dataframe <- function(df, include_model_regressors = FALSE, drop_columns = NULL) {
+  cleaned_df <- cleanup_leave_stay_trial_dataframe(df, include_model_regressors = include_model_regressors)
+  
+  if (is.null(drop_columns)) {
+    curated_df <- curate_trial_analysis_dataframe(cleaned_df)
+  } else {
+    curated_df <- curate_trial_analysis_dataframe(cleaned_df, drop_columns = drop_columns)
+  }
+  
+  return(list(leave_stay_df = cleaned_df, clean_df = curated_df))
 }

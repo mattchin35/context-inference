@@ -215,6 +215,7 @@ def test_collect_and_save_trial_features_writes_leave_stay_csv(tmp_path):
         {
             "action": [0, 1, 0, 1],
             "prev_action": ["None", 0, 1, 0],
+            "prev_reward": ["None", 1, 0, 0],
             "reward": [1, 0, 0, 1],
             "experimenter_reward_given": [0, 0, 0, 0],
             "right_omissions": [0, 1, 2, 0],

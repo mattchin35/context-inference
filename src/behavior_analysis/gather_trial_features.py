@@ -41,14 +41,20 @@ class TaskParams:
 
 
 LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE = (
+    "Qlearning_rel_value",
     "FQlearning_rel_value",
+    "FQlearning_rel_value_fast_learn",
+    "HMM_rel_value_logodds",
     "HMM_rel_value_logodds_decay",
+    "relative_omissions_index",
+    "signed_omission_regressor",
     "relative_doubt_index",
     "relative_hazard_index",
     "perseveration_regressor",
     "observer_value",
+    "HMM_decay_res",
+    "rel_hazard_res",
 )
-
 
 def assert_saved_file(path: Path) -> None:
     """Verify that a save produced a non-empty file.
@@ -175,6 +181,74 @@ def _previous_action_side_sign(prev_action) -> float | None:
     raise ValueError(f"prev_action must be 0 or 1 for side choices; got {prev_action!r}.")
 
 
+def _choice_side_or_none(action) -> int | None:
+    """Return a binary side choice from a raw action value.
+
+    Parameters
+    ----------
+    action : int, float, or str
+        Raw side action. Task coding is `0=right`, `1=left`; no-choice
+        sentinels such as `"None"` and `"no_choice"` return None.
+
+    Returns
+    -------
+    int or None
+        `1` for left, `0` for right, and None when no side choice is available.
+    """
+    if bool(make_no_choice_action_mask([action]).iloc[0]):
+        return None
+
+    if isinstance(action, str):
+        normalized = action.strip().lower()
+        if normalized == "left":
+            return 1
+        if normalized == "right":
+            return 0
+
+    try:
+        action_int = int(float(action))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"action must be 0/1, left/right, or no-choice; got {action!r}.") from exc
+
+    if action_int in (0, 1):
+        return action_int
+    raise ValueError(f"action must be 0 or 1 for side choices; got {action!r}.")
+
+
+def make_leave_stay_action(raw_actions, prev_actions) -> np.ndarray:
+    """Convert raw side choices into stay/leave outcomes.
+
+    Parameters
+    ----------
+    raw_actions : array-like
+        Current trial raw choices with shape `(n_trials,)`, coded as
+        `0=right`, `1=left`, or a recognized no-choice sentinel.
+    prev_actions : array-like
+        Previous trial raw choices with shape `(n_trials,)`, using the same
+        side convention as `raw_actions`.
+
+    Returns
+    -------
+    np.ndarray
+        Object array with shape `(n_trials,)`. Values are `1` for staying with
+        the previous action, `0` for switching away from it, and `"None"` when
+        either side choice is missing.
+    """
+    raw_action_array = np.asarray(raw_actions, dtype=object)
+    prev_action_array = np.asarray(prev_actions, dtype=object)
+    if raw_action_array.shape[0] != prev_action_array.shape[0]:
+        raise ValueError("raw_actions and prev_actions must have the same length.")
+
+    leave_stay_actions = np.full(raw_action_array.shape[0], "None", dtype=object)
+    for trial_index, (raw_action, prev_action) in enumerate(zip(raw_action_array, prev_action_array)):
+        raw_side = _choice_side_or_none(raw_action)
+        prev_side = _choice_side_or_none(prev_action)
+        if raw_side is None or prev_side is None:
+            continue
+        leave_stay_actions[trial_index] = int(raw_side == prev_side)
+    return leave_stay_actions
+
+
 def make_prev_action_side_equivalent_trial_values(
     augmented_trial_df: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -184,13 +258,17 @@ def make_prev_action_side_equivalent_trial_values(
     ----------
     augmented_trial_df : pd.DataFrame
         Trialwise dataframe with shape `(n_trials, n_columns)`. Required
-        columns are `action`, `prev_action`, and the left/right value columns
-        listed in `LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE`.
+        columns are `action`, `prev_action`, and `prev_reward`. Optional
+        left/right value columns listed in
+        `LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE` are transformed when
+        present.
 
     Returns
     -------
     pd.DataFrame
         Side-equivalent table with shape `(n_trials, n_output_columns)`.
+        `raw_action` preserves the original left/right choice, while `action`
+        is recoded to `1=stay` and `0=leave/switch` relative to `prev_action`.
         For each value column, left-positive values are unchanged when
         `prev_action` is left and sign-flipped when `prev_action` is right.
         Rows without a previous side receive `"None"`.
@@ -198,17 +276,35 @@ def make_prev_action_side_equivalent_trial_values(
     required_columns = [
         "action",
         "prev_action",
-        *LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE,
+        "prev_reward",
     ]
     missing_columns = [column for column in required_columns if column not in augmented_trial_df.columns]
     if missing_columns:
         raise ValueError(f"augmented_trial_df is missing required leave-stay columns: {missing_columns}")
 
-    output_columns = [
-        column for column in ("cur_trial", "cur_block") if column in augmented_trial_df.columns
-    ]
-    output_columns.extend(["action", "prev_action"])
-    output_df = augmented_trial_df.loc[:, output_columns].copy()
+    output_df = pd.DataFrame(index=augmented_trial_df.index)
+    for column_name in ("state", "state_int", "cur_trial", "cur_trial_in_block", "cur_block"):
+        if column_name in augmented_trial_df.columns:
+            output_df[column_name] = augmented_trial_df[column_name]
+    output_df["raw_action"] = augmented_trial_df["action"]
+    output_df["action"] = make_leave_stay_action(
+        raw_actions=augmented_trial_df["action"],
+        prev_actions=augmented_trial_df["prev_action"],
+    )
+    for column_name in (
+        "correct",
+        "reward",
+        EXPERIMENTER_REWARD_GIVEN_COLUMN,
+        "session_ID",
+        "block_type",
+        "time_to_choice",
+        "prev_action",
+        "prev_reward",
+        "inherited_block_strategy",
+        "inherited_block_bias",
+    ):
+        if column_name in augmented_trial_df.columns:
+            output_df[column_name] = augmented_trial_df[column_name]
 
     side_signs = np.array(
         [_previous_action_side_sign(prev_action) for prev_action in augmented_trial_df["prev_action"]],
@@ -219,6 +315,8 @@ def make_prev_action_side_equivalent_trial_values(
     numeric_signs[has_reference_side] = np.asarray(side_signs[has_reference_side], dtype=float)
 
     for column_name in LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE:
+        if column_name not in augmented_trial_df.columns:
+            continue
         source_values = pd.to_numeric(augmented_trial_df[column_name], errors="coerce")
         valid_rows = has_reference_side & source_values.notna().to_numpy()
         side_values = np.full(augmented_trial_df.shape[0], "None", dtype=object)
