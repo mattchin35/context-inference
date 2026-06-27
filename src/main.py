@@ -290,17 +290,26 @@ def load_or_run_session_analysis(
         `(multisession_df, block_performance, augmented_trial_df)`.
     """
     if run_session_analysis:
-        return session_analysis.run_analysis(
+        augmented_trial_df, block_performance, multisession_df = session_analysis.run_analysis(
             trial_df,
             session=session,
             ideal_observer_n_replays=ideal_observer_n_replays,
             ideal_observer_seed=ideal_observer_seed,
         )
+        block_performance = add_block_explore_counts_from_trials(
+            block_performance,
+            augmented_trial_df,
+        )
+        return augmented_trial_df, block_performance, multisession_df
 
     multisession_df, block_performance, augmented_trial_df = session_analysis.load_analysis(
         session.sess_id_full,
         session_data_folder=session.processed_data_path,
         multisession_data_folder=session.multi_session_save_path,
+    )
+    block_performance = add_block_explore_counts_from_trials(
+        block_performance,
+        augmented_trial_df,
     )
     return augmented_trial_df, block_performance, multisession_df
 
@@ -471,6 +480,10 @@ def load_saved_session_analysis(session: Session) -> SavedSessionAnalysis:
     augmented_trial_path = session.processed_data_path / f"{session.sess_id_full}_augmented_trials.csv"
     block_performance = pd.read_csv(block_path, sep=",", na_filter=False)
     augmented_trial_df = pd.read_csv(augmented_trial_path, sep=",", na_filter=False)
+    block_performance = add_block_explore_counts_from_trials(
+        block_performance,
+        augmented_trial_df,
+    )
     return SavedSessionAnalysis(
         session=session,
         block_performance=block_performance,
@@ -590,6 +603,7 @@ def concatenate_saved_sessions(
 def prepare_learning_curve_data(
     mouse: str,
     multi_session_save_path: Path,
+    learning_regressor: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load numeric mouse learning-curve arrays from the summary CSV.
 
@@ -599,12 +613,16 @@ def prepare_learning_curve_data(
         Mouse identifier used in `{mouse}_overall_performance.csv`.
     multi_session_save_path : Path
         Directory containing the mouse-level cross-session summary CSV.
+    learning_regressor : str or None, default=None
+        Regression predictor prefix to plot. The function reads
+        `{learning_regressor}_slope` from the summary CSV. If None, uses
+        `performance_plots.DEFAULT_LEARNING_REGRESSOR`.
 
     Returns
     -------
     tuple[np.ndarray, np.ndarray, np.ndarray]
         - regression coefficients, shape `(n_valid_sessions,)`, numeric slope
-          values for `DEFAULT_LEARNING_REGRESSOR`
+          values for the requested learning regressor
         - block counts, shape `(n_valid_sessions,)`, numeric session block
           counts
         - dates, shape `(n_valid_sessions,)`, date labels sorted ascending
@@ -625,12 +643,19 @@ def prepare_learning_curve_data(
         block_count_col = "n_switches"
     else:
         raise ValueError("multisession summary must contain 'n_blocks' or legacy 'n_switches'.")
-    learning_regressor = getattr(
-        performance_plots,
-        "DEFAULT_LEARNING_REGRESSOR",
-        "prev_consecutive_rewards",
-    )
+    if learning_regressor is None:
+        learning_regressor = getattr(
+            performance_plots,
+            "DEFAULT_LEARNING_REGRESSOR",
+            "prev_consecutive_rewards",
+        )
     learning_column = f"{learning_regressor}_slope"
+    if learning_column not in multisession_df.columns:
+        raise ValueError(
+            f"overall performance summary is missing '{learning_column}'. "
+            "Rerun session analyses to calculate this learning regressor."
+        )
+
     multisession_df[learning_column] = pd.to_numeric(
         multisession_df[learning_column],
         errors="coerce",
@@ -740,6 +765,656 @@ def prepare_session_trials_to_correct_summary(
                 "trials_to_correct_q3": float(quartiles.loc[0.75]),
             }
         )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _get_rewarded_side_for_block_type(block_type: str) -> str | None:
+    """Return the rewarded side represented by one block type.
+
+    Parameters
+    ----------
+    block_type : str
+        Block label from `block_performance`, such as `"left_cued"`,
+        `"right_uncued"`, or `"dark period"`.
+
+    Returns
+    -------
+    str or None
+        `"left"` for left rewarded blocks, `"right"` for right rewarded
+        blocks, and None for non-side blocks such as dark periods.
+    """
+    if str(block_type).startswith("left_"):
+        return "left"
+    if str(block_type).startswith("right_"):
+        return "right"
+    return None
+
+
+def _count_explore_flags(explore_values: pd.Series) -> int:
+    """Count truthy explore-trial flags in one trial vector.
+
+    Parameters
+    ----------
+    explore_values : pd.Series
+        Explore flags with shape `(n_trials,)`. Values may be booleans,
+        numeric 0/1, or CSV-loaded strings such as `"true"` and `"1"`.
+
+    Returns
+    -------
+    int
+        Number of truthy explore flags, in trials.
+    """
+    text_values = explore_values.astype(str).str.strip().str.lower()
+    true_text_mask = text_values.isin(["true", "1", "1.0"])
+    numeric_values = pd.to_numeric(explore_values, errors="coerce")
+    positive_numeric_mask = numeric_values.fillna(0) > 0
+    return int((true_text_mask | positive_numeric_mask).sum())
+
+
+def add_block_explore_counts_from_trials(
+    block_performance: pd.DataFrame,
+    augmented_trial_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Return block performance with `n_explore_trials` filled when possible.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Block table with shape `(n_blocks, n_block_columns)`. Existing
+        `n_explore_trials` values are preserved. If the column is absent, rows
+        are aligned to sorted unique `cur_block` values from `augmented_trial_df`
+        by row order, matching `session_analysis.summarize_block_performance`.
+    augmented_trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_trial_columns)`. Required column
+        is `cur_block`. Optional `explore_trial` is used to derive counts;
+        missing `explore_trial` is treated as zero explore trials for backward
+        compatibility with older saved analyses.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `block_performance` with an `n_explore_trials` column. Counts
+        are integers in trials.
+    """
+    output_df = block_performance.copy()
+    if "n_explore_trials" in output_df.columns:
+        return output_df
+
+    if "cur_block" not in augmented_trial_df.columns:
+        raise ValueError(
+            "Cannot derive n_explore_trials because augmented_trial_df is missing "
+            "columns: ['cur_block']"
+        )
+
+    raw_block_ids = np.unique(augmented_trial_df["cur_block"])
+    if raw_block_ids.shape[0] != output_df.shape[0]:
+        raise ValueError(
+            "Cannot derive n_explore_trials because trial cur_block values do not "
+            "align one-to-one with block_performance rows."
+        )
+
+    if "explore_trial" not in augmented_trial_df.columns:
+        output_df["n_explore_trials"] = 0
+        return output_df
+
+    explore_counts = []
+    for raw_block_id in raw_block_ids:
+        block_trials = augmented_trial_df[augmented_trial_df["cur_block"] == raw_block_id]
+        explore_counts.append(_count_explore_flags(block_trials["explore_trial"]))
+
+    output_df["n_explore_trials"] = explore_counts
+    return output_df
+
+
+def prepare_side_trials_to_correct_block_points(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+) -> pd.DataFrame:
+    """Build raw side-specific block points for cross-session quality plots.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order. Each `block_performance`
+        table has shape `(n_blocks, n_block_columns)` and must contain
+        `block_type` and `trials_to_correct`. `block_ix` is preserved when
+        available and otherwise replaced by the row index.
+
+    Returns
+    -------
+    pd.DataFrame
+        Raw side-block table with shape `(n_side_blocks, 7)`. Columns are
+        `date`, `session_id`, `rewarded_side`, `block_ix`, `block_type`,
+        `trials_to_correct_numeric`, and `no_correct_choice`. Trial counts are
+        in trials; `no_correct_choice` is True when `trials_to_correct` cannot
+        be interpreted numerically for a left/right block.
+    """
+    columns = [
+        "date",
+        "session_id",
+        "rewarded_side",
+        "block_ix",
+        "block_type",
+        "trials_to_correct_numeric",
+        "no_correct_choice",
+    ]
+    rows = []
+
+    for saved_session in saved_sessions:
+        session = saved_session.session
+        block_performance = saved_session.block_performance
+        required_columns = {"block_type", "trials_to_correct"}
+        missing_columns = sorted(required_columns.difference(block_performance.columns))
+        if missing_columns:
+            raise ValueError(
+                f"{session.sess_id_full} block_performance is missing columns: {missing_columns}"
+            )
+
+        if "block_ix" in block_performance.columns:
+            block_ids = block_performance["block_ix"].tolist()
+        else:
+            block_ids = block_performance.index.tolist()
+
+        trials_to_correct_numeric = pd.to_numeric(
+            block_performance["trials_to_correct"],
+            errors="coerce",
+        )
+        for row_position, (_row_index, row) in enumerate(block_performance.iterrows()):
+            rewarded_side = _get_rewarded_side_for_block_type(row["block_type"])
+            if rewarded_side is None:
+                continue
+
+            numeric_value = trials_to_correct_numeric.iloc[row_position]
+            rows.append(
+                {
+                    "date": session.date,
+                    "session_id": session.sess_id_full,
+                    "rewarded_side": rewarded_side,
+                    "block_ix": block_ids[row_position],
+                    "block_type": row["block_type"],
+                    "trials_to_correct_numeric": float(numeric_value)
+                    if not pd.isna(numeric_value)
+                    else np.nan,
+                    "no_correct_choice": bool(pd.isna(numeric_value)),
+                }
+            )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def prepare_side_trials_to_correct_summary(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+) -> pd.DataFrame:
+    """Summarize completion and trials-to-correct distributions by rewarded side.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order. Left cued/uncued blocks are
+        pooled as `"left"` and right cued/uncued blocks are pooled as
+        `"right"`. Non-side blocks such as dark periods are excluded.
+
+    Returns
+    -------
+    pd.DataFrame
+        Side-specific session summary with one row per session and rewarded
+        side present in the data. Columns include block counts,
+        `completion_fraction`, and `trials_to_correct_q1`,
+        `trials_to_correct_median`, and `trials_to_correct_q3`. Trial-count
+        summaries are in trials and are NaN when a side has no numeric
+        trials-to-correct values.
+    """
+    columns = [
+        "date",
+        "session_id",
+        "rewarded_side",
+        "n_blocks",
+        "n_valid_blocks",
+        "n_no_correct_blocks",
+        "completion_fraction",
+        "trials_to_correct_q1",
+        "trials_to_correct_median",
+        "trials_to_correct_q3",
+    ]
+    block_points = prepare_side_trials_to_correct_block_points(saved_sessions)
+    rows = []
+
+    for saved_session in saved_sessions:
+        session = saved_session.session
+        session_points = block_points[block_points["session_id"] == session.sess_id_full]
+        for rewarded_side in ("left", "right"):
+            side_points = session_points[session_points["rewarded_side"] == rewarded_side]
+            if side_points.empty:
+                continue
+
+            numeric_trials = side_points["trials_to_correct_numeric"].dropna()
+            if numeric_trials.empty:
+                q1 = median = q3 = np.nan
+            else:
+                quartiles = numeric_trials.quantile([0.25, 0.5, 0.75])
+                q1 = float(quartiles.loc[0.25])
+                median = float(quartiles.loc[0.5])
+                q3 = float(quartiles.loc[0.75])
+
+            n_blocks = int(side_points.shape[0])
+            n_valid_blocks = int(numeric_trials.shape[0])
+            rows.append(
+                {
+                    "date": session.date,
+                    "session_id": session.sess_id_full,
+                    "rewarded_side": rewarded_side,
+                    "n_blocks": n_blocks,
+                    "n_valid_blocks": n_valid_blocks,
+                    "n_no_correct_blocks": int(side_points["no_correct_choice"].sum()),
+                    "completion_fraction": n_valid_blocks / n_blocks,
+                    "trials_to_correct_q1": q1,
+                    "trials_to_correct_median": median,
+                    "trials_to_correct_q3": q3,
+                }
+            )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def prepare_block_switch_block_points(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+) -> pd.DataFrame:
+    """Build raw block-switch points for cross-session quality plots.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order. Each `block_performance`
+        table has shape `(n_blocks, n_block_columns)` and must contain
+        `block_type` and `n_switches`. `n_switches` is the raw count of
+        within-block adjacent choice transitions where the action changed.
+
+    Returns
+    -------
+    pd.DataFrame
+        Raw switch table with shape `(n_points, 6)`. Columns are `date`,
+        `session_id`, `switch_group`, `block_ix`, `block_type`, and
+        `n_switches`. Each valid block contributes one `"overall"` row; left
+        and right blocks also contribute one side-specific row.
+    """
+    columns = [
+        "date",
+        "session_id",
+        "switch_group",
+        "block_ix",
+        "block_type",
+        "n_switches",
+    ]
+    rows = []
+
+    for saved_session in saved_sessions:
+        session = saved_session.session
+        block_performance = saved_session.block_performance
+        required_columns = {"block_type", "n_switches"}
+        missing_columns = sorted(required_columns.difference(block_performance.columns))
+        if missing_columns:
+            raise ValueError(
+                f"{session.sess_id_full} block_performance is missing columns: {missing_columns}"
+            )
+
+        if "block_ix" in block_performance.columns:
+            block_ids = block_performance["block_ix"].tolist()
+        else:
+            block_ids = block_performance.index.tolist()
+
+        n_switches = pd.to_numeric(block_performance["n_switches"], errors="coerce")
+        for row_position, (_row_index, row) in enumerate(block_performance.iterrows()):
+            n_switch_value = n_switches.iloc[row_position]
+            if pd.isna(n_switch_value):
+                continue
+
+            base_row = {
+                "date": session.date,
+                "session_id": session.sess_id_full,
+                "block_ix": block_ids[row_position],
+                "block_type": row["block_type"],
+                "n_switches": float(n_switch_value),
+            }
+            rows.append(base_row | {"switch_group": "overall"})
+
+            rewarded_side = _get_rewarded_side_for_block_type(row["block_type"])
+            if rewarded_side is not None:
+                rows.append(base_row | {"switch_group": rewarded_side})
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def prepare_block_switch_summary(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+) -> pd.DataFrame:
+    """Summarize raw block-switch distributions by session and switch group.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order. Non-side blocks contribute to
+        the `"overall"` distribution only; left/right blocks contribute to both
+        `"overall"` and their side-specific distribution.
+
+    Returns
+    -------
+    pd.DataFrame
+        Switch summary table with one row per session/group present in the
+        data. Columns include `date`, `session_id`, `switch_group`, `n_blocks`,
+        `n_switches_q1`, `n_switches_median`, and `n_switches_q3`. Switch
+        counts are raw within-block choice-switch counts.
+    """
+    columns = [
+        "date",
+        "session_id",
+        "switch_group",
+        "n_blocks",
+        "n_switches_q1",
+        "n_switches_median",
+        "n_switches_q3",
+    ]
+    block_points = prepare_block_switch_block_points(saved_sessions)
+    rows = []
+
+    for saved_session in saved_sessions:
+        session = saved_session.session
+        session_points = block_points[block_points["session_id"] == session.sess_id_full]
+        for switch_group in ("overall", "left", "right"):
+            group_points = session_points[session_points["switch_group"] == switch_group]
+            if group_points.empty:
+                continue
+
+            switch_values = group_points["n_switches"].dropna()
+            quartiles = switch_values.quantile([0.25, 0.5, 0.75])
+            rows.append(
+                {
+                    "date": session.date,
+                    "session_id": session.sess_id_full,
+                    "switch_group": switch_group,
+                    "n_blocks": int(switch_values.shape[0]),
+                    "n_switches_q1": float(quartiles.loc[0.25]),
+                    "n_switches_median": float(quartiles.loc[0.5]),
+                    "n_switches_q3": float(quartiles.loc[0.75]),
+                }
+            )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def prepare_block_explore_block_points(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+) -> pd.DataFrame:
+    """Build raw block explore-trial points for cross-session quality plots.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order. Each `block_performance`
+        table has shape `(n_blocks, n_block_columns)` and must contain
+        `block_type` and `n_explore_trials`. `n_explore_trials` is the number
+        of rewarded-switch explore trials in that block.
+
+    Returns
+    -------
+    pd.DataFrame
+        Raw explore table with shape `(n_points, 6)`. Columns are `date`,
+        `session_id`, `explore_group`, `block_ix`, `block_type`, and
+        `n_explore_trials`. Each valid block contributes one `"overall"` row;
+        left and right blocks also contribute one side-specific row.
+    """
+    columns = [
+        "date",
+        "session_id",
+        "explore_group",
+        "block_ix",
+        "block_type",
+        "n_explore_trials",
+    ]
+    rows = []
+
+    for saved_session in saved_sessions:
+        session = saved_session.session
+        block_performance = add_block_explore_counts_from_trials(
+            saved_session.block_performance,
+            saved_session.augmented_trial_df,
+        )
+        required_columns = {"block_type", "n_explore_trials"}
+        missing_columns = sorted(required_columns.difference(block_performance.columns))
+        if missing_columns:
+            raise ValueError(
+                f"{session.sess_id_full} block_performance is missing columns: {missing_columns}"
+            )
+
+        if "block_ix" in block_performance.columns:
+            block_ids = block_performance["block_ix"].tolist()
+        else:
+            block_ids = block_performance.index.tolist()
+
+        n_explore_trials = pd.to_numeric(block_performance["n_explore_trials"], errors="coerce")
+        for row_position, (_row_index, row) in enumerate(block_performance.iterrows()):
+            rewarded_side = _get_rewarded_side_for_block_type(row["block_type"])
+            if rewarded_side is None:
+                continue
+
+            n_explore_value = n_explore_trials.iloc[row_position]
+            if pd.isna(n_explore_value):
+                continue
+
+            base_row = {
+                "date": session.date,
+                "session_id": session.sess_id_full,
+                "block_ix": block_ids[row_position],
+                "block_type": row["block_type"],
+                "n_explore_trials": float(n_explore_value),
+            }
+            rows.append(base_row | {"explore_group": "overall"})
+            rows.append(base_row | {"explore_group": rewarded_side})
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def prepare_block_explore_summary(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+) -> pd.DataFrame:
+    """Summarize raw block explore-trial distributions by session and group.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order. Non-side blocks contribute to
+        the `"overall"` distribution only; left/right blocks contribute to both
+        `"overall"` and their side-specific distribution.
+
+    Returns
+    -------
+    pd.DataFrame
+        Explore summary table with one row per session/group present in the
+        data. Columns include `date`, `session_id`, `explore_group`,
+        `n_blocks`, `n_explore_trials_q1`, `n_explore_trials_median`, and
+        `n_explore_trials_q3`. Counts are raw explore trials per block.
+    """
+    columns = [
+        "date",
+        "session_id",
+        "explore_group",
+        "n_blocks",
+        "n_explore_trials_q1",
+        "n_explore_trials_median",
+        "n_explore_trials_q3",
+    ]
+    block_points = prepare_block_explore_block_points(saved_sessions)
+    rows = []
+
+    for saved_session in saved_sessions:
+        session = saved_session.session
+        session_points = block_points[block_points["session_id"] == session.sess_id_full]
+        for explore_group in ("overall", "left", "right"):
+            group_points = session_points[session_points["explore_group"] == explore_group]
+            if group_points.empty:
+                continue
+
+            explore_values = group_points["n_explore_trials"].dropna()
+            quartiles = explore_values.quantile([0.25, 0.5, 0.75])
+            rows.append(
+                {
+                    "date": session.date,
+                    "session_id": session.sess_id_full,
+                    "explore_group": explore_group,
+                    "n_blocks": int(explore_values.shape[0]),
+                    "n_explore_trials_q1": float(quartiles.loc[0.25]),
+                    "n_explore_trials_median": float(quartiles.loc[0.5]),
+                    "n_explore_trials_q3": float(quartiles.loc[0.75]),
+                }
+            )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def prepare_correct_after_first_block_points(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+) -> pd.DataFrame:
+    """Build raw post-first-correct accuracy points for cross-session plots.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order. Each `block_performance`
+        table has shape `(n_blocks, n_block_columns)` and must contain
+        `block_type` and `percent_correct_after_first_correct`. Values are
+        fractions from 0 to 1 for side blocks with a correct choice; missing
+        sentinels mark side blocks with no correct choice. Non-side blocks
+        such as dark periods are excluded.
+
+    Returns
+    -------
+    pd.DataFrame
+        Raw side-block table with shape `(n_points, 8)`. Columns are `date`,
+        `session_id`, `correct_after_first_group`, `rewarded_side`,
+        `block_ix`, `block_type`, `percent_correct_after_first_numeric`, and
+        `no_correct_choice`. Each side block contributes one `"overall"` row
+        and one side-specific row.
+    """
+    columns = [
+        "date",
+        "session_id",
+        "correct_after_first_group",
+        "rewarded_side",
+        "block_ix",
+        "block_type",
+        "percent_correct_after_first_numeric",
+        "no_correct_choice",
+    ]
+    rows = []
+
+    for saved_session in saved_sessions:
+        session = saved_session.session
+        block_performance = saved_session.block_performance
+        required_columns = {"block_type", "percent_correct_after_first_correct"}
+        missing_columns = sorted(required_columns.difference(block_performance.columns))
+        if missing_columns:
+            raise ValueError(
+                f"{session.sess_id_full} block_performance is missing columns: {missing_columns}"
+            )
+
+        if "block_ix" in block_performance.columns:
+            block_ids = block_performance["block_ix"].tolist()
+        else:
+            block_ids = block_performance.index.tolist()
+
+        percent_correct = pd.to_numeric(
+            block_performance["percent_correct_after_first_correct"],
+            errors="coerce",
+        )
+        for row_position, (_row_index, row) in enumerate(block_performance.iterrows()):
+            rewarded_side = _get_rewarded_side_for_block_type(row["block_type"])
+            if rewarded_side is None:
+                continue
+
+            numeric_value = percent_correct.iloc[row_position]
+            base_row = {
+                "date": session.date,
+                "session_id": session.sess_id_full,
+                "rewarded_side": rewarded_side,
+                "block_ix": block_ids[row_position],
+                "block_type": row["block_type"],
+                "percent_correct_after_first_numeric": float(numeric_value)
+                if not pd.isna(numeric_value)
+                else np.nan,
+                "no_correct_choice": bool(pd.isna(numeric_value)),
+            }
+            rows.append(base_row | {"correct_after_first_group": "overall"})
+            rows.append(base_row | {"correct_after_first_group": rewarded_side})
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def prepare_correct_after_first_summary(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+) -> pd.DataFrame:
+    """Summarize post-first-correct accuracy by session and side group.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order. Left and right task blocks
+        are included in the `"overall"` distribution and their side-specific
+        distribution. Dark periods and other non-side blocks are excluded.
+
+    Returns
+    -------
+    pd.DataFrame
+        Summary table with one row per session/group present in the data.
+        Columns include block counts, no-correct block counts, and
+        `percent_correct_after_first_q1`, `percent_correct_after_first_median`,
+        and `percent_correct_after_first_q3`. Percent-correct values are
+        fractions from 0 to 1 and are NaN when a group has no valid blocks.
+    """
+    columns = [
+        "date",
+        "session_id",
+        "correct_after_first_group",
+        "n_blocks",
+        "n_valid_blocks",
+        "n_no_correct_blocks",
+        "percent_correct_after_first_q1",
+        "percent_correct_after_first_median",
+        "percent_correct_after_first_q3",
+    ]
+    block_points = prepare_correct_after_first_block_points(saved_sessions)
+    rows = []
+
+    for saved_session in saved_sessions:
+        session = saved_session.session
+        session_points = block_points[block_points["session_id"] == session.sess_id_full]
+        for correct_after_first_group in ("overall", "left", "right"):
+            group_points = session_points[
+                session_points["correct_after_first_group"] == correct_after_first_group
+            ]
+            if group_points.empty:
+                continue
+
+            numeric_percent = group_points["percent_correct_after_first_numeric"].dropna()
+            if numeric_percent.empty:
+                q1 = median = q3 = np.nan
+            else:
+                quartiles = numeric_percent.quantile([0.25, 0.5, 0.75])
+                q1 = float(quartiles.loc[0.25])
+                median = float(quartiles.loc[0.5])
+                q3 = float(quartiles.loc[0.75])
+
+            rows.append(
+                {
+                    "date": session.date,
+                    "session_id": session.sess_id_full,
+                    "correct_after_first_group": correct_after_first_group,
+                    "n_blocks": int(group_points.shape[0]),
+                    "n_valid_blocks": int(numeric_percent.shape[0]),
+                    "n_no_correct_blocks": int(group_points["no_correct_choice"].sum()),
+                    "percent_correct_after_first_q1": q1,
+                    "percent_correct_after_first_median": median,
+                    "percent_correct_after_first_q3": q3,
+                }
+            )
 
     return pd.DataFrame(rows, columns=columns)
 
@@ -892,8 +1567,10 @@ def run_multisession_analysis(
     trial_predictor_columns: tuple[str, ...] | None = None,
     block_predicted_state_line_width: float | None = None,
     block_state_plot_figsize: tuple[float, float] | None = None,
-    block_plot_bias_rl: bool = False,
-    block_bias_rl_column: str = "bias_rl",
+    block_secondary_trace: str = "none",
+    plot_sliding_regression: bool = False,
+    sliding_regression_window_size: int = 10,
+    sliding_regression_step_size: int = 5,
     trial_input_source: str = "from_block_modeling",
     trial_state_plot_line_width: float | None = None,
     trial_state_plot_figsize: tuple[float, float] | None = None,
@@ -933,11 +1610,17 @@ def run_multisession_analysis(
     block_state_plot_figsize : tuple[float, float] or None, default=None
         Optional matplotlib figure size in inches for block predicted-state
         summary traces. None preserves the existing plotting defaults.
-    block_plot_bias_rl : bool, default=False
-        Whether block predicted-state plots overlay `block_bias_rl_column` on a
-        fixed `[-1, 1]` right y-axis.
-    block_bias_rl_column : str, default="bias_rl"
-        Blockwise column overlaid when `block_plot_bias_rl=True`.
+    block_secondary_trace : str, default="none"
+        Optional right-axis trace for block predicted-state plots. Supported
+        values are `"none"`, `"min_value_bias"`, `"bias_rl"`, and
+        `"prev_n_rewarded"`.
+    plot_sliding_regression : bool, default=False
+        Whether block predicted-state plots include a third subplot with
+        10-block sliding regressions of trials-to-correct on `prev_n_rewarded`.
+    sliding_regression_window_size : int, default=10
+        Number of valid blocks in each sliding-regression window.
+    sliding_regression_step_size : int, default=5
+        Number of valid blocks between successive sliding-regression windows.
     trial_input_source : str, default="from_block_modeling"
         Source of the trial table passed to trial GLM-HMM workflows:
         `"from_block_modeling"` runs block modeling first, while
@@ -992,8 +1675,10 @@ def run_multisession_analysis(
             random_seed=block_random_seed,
             predicted_state_line_width=block_predicted_state_line_width,
             state_plot_figsize=block_state_plot_figsize,
-            plot_bias_rl=block_plot_bias_rl,
-            bias_rl_column=block_bias_rl_column,
+            block_secondary_trace=block_secondary_trace,
+            plot_sliding_regression=plot_sliding_regression,
+            sliding_regression_window_size=sliding_regression_window_size,
+            sliding_regression_step_size=sliding_regression_step_size,
         )
     else:
         modeled_block_df = concatenated.block_performance
@@ -1088,23 +1773,34 @@ def main_simulation():
 
 def main_multisession():
     """Analyze selected saved sessions as one continuous multisession table."""
-    mouse = 'CT016'
+    mouse = 'CT023'
     session_data_root = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}')
     multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
-    dates = ['2026-04-17', '2026-04-20',
-             '2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
-             '2026-05-01', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-08', '2026-05-09', '2026-05-10',
-             '2026-05-11',]
-             # '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-17', '2026-05-18',
-             # '2026-05-19', '2026-05-20', '2026-05-21', '2026-05-22', '2026-05-23', '2026-05-24',
-             # '2026-05-25', '2026-05-26', '2026-05-27', '2026-05-28', '2026-05-29', ]
+    dates = [#'2026-04-17', '2026-04-20',
+             # '#2026-04-21', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
+             # '2026-05-01', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-08', '2026-05-09', '2026-05-10',
+             # '2026-05-11', '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-17',
+            # '2026-05-18', '
+        '2026-05-19', '2026-05-20',
+        '2026-05-21', '2026-05-22', '2026-05-24', '2026-05-25',
+        '2026-05-26', '2026-05-27', '2026-05-28', '2026-05-29',
+        '2026-05-31', '2026-06-01',
+        '2026-06-02',
+        '2026-06-03', '2026-06-04', '2026-06-05',
+        '2026-06-07', '2026-06-08', '2026-06-09',
+        '2026-06-10', '2026-06-11'
+    ]
     block_hmm_random_seed = 1001
     trial_hmm_random_seed = 2001
     block_predicted_state_line_width = 0.8
     block_state_plot_figsize = (18, 6)
-    block_plot_bias_rl = False
-    block_bias_rl_column = "bias_rl"
+    block_secondary_trace = "none"
+    plot_sliding_regression = True
+    sliding_regression_window_size = 10
+    sliding_regression_step_size = 5
     block_hmm_state_marker_mode = "alpha"  # default, markersize, or alpha
+    learning_regressor = "prev_n_rewarded"
+    trials_to_correct_display_cap = 25
     trial_state_plot_line_width = 0.5
     trial_state_plot_figsize = (18, 6)
     trial_input_source = "from_block_modeling"  # either from_block_modeling or saved_augmented_trials
@@ -1119,6 +1815,7 @@ def main_multisession():
     learning_coefficients, learning_block_counts, learning_dates = prepare_learning_curve_data(
         mouse=mouse,
         multi_session_save_path=multi_session_save_path,
+        learning_regressor=learning_regressor,
     )
     performance_plots.plot_learning_curve(
         learning_coefficients,
@@ -1173,16 +1870,89 @@ def main_multisession():
         plot_path=multi_session_save_path,
         figure_id=mouse,
     )
+    side_trials_to_correct_summary = prepare_side_trials_to_correct_summary(saved_sessions)
+    side_trials_to_correct_block_points = prepare_side_trials_to_correct_block_points(saved_sessions)
+    side_trials_to_correct_summary.to_csv(
+        multi_session_save_path / f"{mouse}_side_trials_to_correct_summary.csv",
+        index=False,
+        na_rep="None",
+    )
+    side_trials_to_correct_block_points.to_csv(
+        multi_session_save_path / f"{mouse}_side_trials_to_correct_block_points.csv",
+        index=False,
+        na_rep="None",
+    )
+    performance_plots.plot_side_trials_to_correct_quality(
+        summary_df=side_trials_to_correct_summary,
+        block_points_df=side_trials_to_correct_block_points,
+        plot_path=multi_session_save_path,
+        figure_id=mouse,
+        trial_display_cap=trials_to_correct_display_cap,
+    )
+    correct_after_first_summary = prepare_correct_after_first_summary(saved_sessions)
+    correct_after_first_block_points = prepare_correct_after_first_block_points(saved_sessions)
+    correct_after_first_summary.to_csv(
+        multi_session_save_path / f"{mouse}_correct_after_first_summary.csv",
+        index=False,
+        na_rep="None",
+    )
+    correct_after_first_block_points.to_csv(
+        multi_session_save_path / f"{mouse}_correct_after_first_block_points.csv",
+        index=False,
+        na_rep="None",
+    )
+    performance_plots.plot_multisession_correct_after_first_quality(
+        summary_df=correct_after_first_summary,
+        block_points_df=correct_after_first_block_points,
+        plot_path=multi_session_save_path,
+        figure_id=mouse,
+    )
+    block_switch_summary = prepare_block_switch_summary(saved_sessions)
+    block_switch_block_points = prepare_block_switch_block_points(saved_sessions)
+    block_switch_summary.to_csv(
+        multi_session_save_path / f"{mouse}_block_switch_summary.csv",
+        index=False,
+        na_rep="None",
+    )
+    block_switch_block_points.to_csv(
+        multi_session_save_path / f"{mouse}_block_switch_block_points.csv",
+        index=False,
+        na_rep="None",
+    )
+    performance_plots.plot_multisession_block_switches_quality(
+        summary_df=block_switch_summary,
+        block_points_df=block_switch_block_points,
+        plot_path=multi_session_save_path,
+        figure_id=mouse,
+    )
+    block_explore_summary = prepare_block_explore_summary(saved_sessions)
+    block_explore_block_points = prepare_block_explore_block_points(saved_sessions)
+    block_explore_summary.to_csv(
+        multi_session_save_path / f"{mouse}_block_explore_summary.csv",
+        index=False,
+        na_rep="None",
+    )
+    block_explore_block_points.to_csv(
+        multi_session_save_path / f"{mouse}_block_explore_block_points.csv",
+        index=False,
+        na_rep="None",
+    )
+    performance_plots.plot_multisession_block_explore_quality(
+        summary_df=block_explore_summary,
+        block_points_df=block_explore_block_points,
+        plot_path=multi_session_save_path,
+        figure_id=mouse,
+    )
     concatenated = concatenate_saved_sessions(saved_sessions)
     multisession = build_multisession_session(
         mouse=mouse,
         multi_session_save_path=multi_session_save_path,
         sess_id_full=f'{mouse}_multisession',
     )
-    run_multisession_analysis(
+    _block_selection, _trial_selection, modeled_block_df, _modeled_trial_df = run_multisession_analysis(
         concatenated=concatenated,
         session=multisession,
-        block_num_states=2,
+        block_num_states=3,
         trial_num_states=3,
         prior_alpha=1,
         prior_sigma=1,
@@ -1191,11 +1961,30 @@ def main_multisession():
         trial_predictor_columns=trial_glm_predictor_columns,
         block_predicted_state_line_width=block_predicted_state_line_width,
         block_state_plot_figsize=block_state_plot_figsize,
-        block_plot_bias_rl=block_plot_bias_rl,
-        block_bias_rl_column=block_bias_rl_column,
+        block_secondary_trace=block_secondary_trace,
+        plot_sliding_regression=plot_sliding_regression,
+        sliding_regression_window_size=sliding_regression_window_size,
+        sliding_regression_step_size=sliding_regression_step_size,
         trial_input_source=trial_input_source,
         trial_state_plot_line_width=trial_state_plot_line_width,
         trial_state_plot_figsize=trial_state_plot_figsize,
+    )
+    performance_plots.plot_multisession_summary_grid(
+        block_performance=modeled_block_df,
+        side_trials_to_correct_summary=side_trials_to_correct_summary,
+        side_trials_to_correct_block_points=side_trials_to_correct_block_points,
+        correct_after_first_summary=correct_after_first_summary,
+        correct_after_first_block_points=correct_after_first_block_points,
+        block_switch_summary=block_switch_summary,
+        block_switch_block_points=block_switch_block_points,
+        overall_df=overall_performance_df,
+        plot_path=multi_session_save_path,
+        figure_id=mouse,
+        block_model_session_id=multisession.sess_id_full,
+        processed_data_path=multi_session_save_path,
+        sliding_regression_window_size=sliding_regression_window_size,
+        sliding_regression_step_size=sliding_regression_step_size,
+        trial_display_cap=trials_to_correct_display_cap,
     )
 
 
@@ -1203,7 +1992,7 @@ def main_mouse():
     """Analyze a single behavior session from start to finish."""
 
     ### USER FLAGS - CHOOSE THESE FOR EACH RUN ###
-    preprocess_raw_session = False
+    preprocess_raw_session = True
     run_session_analysis = True
     ideal_observer_n_replays = 100
     ideal_observer_seed = 12345
@@ -1212,11 +2001,15 @@ def main_mouse():
     # mouse = 'CT014'
     # date = '2025-12-16'
     # behavior_timestamp = '153200'
+
     mouse = "CT016"
-    date = "2026-05-12"
-    behavior_timestamp = "122638"
+    date = "2026-05-29"
+    behavior_timestamp = "132812"
     task_tag = 'latent_inference'
     date_no_dash = date.replace('-', '')
+
+    block_modeling_states = 2
+    trial_modeling_states = 3
 
     multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
     session_data_home = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/{mouse}_{date_no_dash}_{task_tag}')
@@ -1281,25 +2074,41 @@ def main_mouse():
 
     ### plot single session performance ###
     performance_plots.plot_session_correct(block_performance, sess.figure_path, sess_id_full)
+    performance_plots.plot_session_correct_after_first_correct(block_performance, sess.figure_path, sess_id_full)
+    performance_plots.plot_session_history_ideal_mouse_agreement(block_performance, sess.figure_path, sess_id_full)
     performance_plots.plot_session_trials_to_correct(block_performance, sess.figure_path, sess_id_full)
     performance_plots.plot_session_nswitches(block_performance, sess.figure_path, sess_id_full)
+    performance_plots.plot_session_explore_trials(block_performance, sess.figure_path, sess_id_full)
+    performance_plots.plot_block_bias_quadrants(
+        block_performance,
+        sess.figure_path,
+        sess_id_full,
+        title=sess_id_abbreviated,
+    )
+    performance_plots.plot_session_block_trials_to_correct_summary(
+        block_performance,
+        sess.figure_path,
+        sess_id_full,
+    )
     save_and_plot_switch_persistence_for_session(
         block_performance=block_performance,
         augmented_trial_df=augmented_trial_df,
         session=sess,
     )
 
+    scatter_regressor = "prev_n_rewarded"  # options: "prev_n_rewarded", "prev_consecutive_rewards", "prev_n_correct"
     slope = multisession_df.loc[
         multisession_df['date'] == date,
-        'prev_consecutive_rewards_slope',
+        f'{scatter_regressor}_slope',
     ].values[0]
     intercept = multisession_df.loc[
         multisession_df['date'] == date,
-        'prev_consecutive_rewards_intercept',
+        f'{scatter_regressor}_intercept',
     ].values[0]
     performance_plots.scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
                               plot_path=sess.figure_path, figure_id=sess_id_full,
-                              title=sess_id_abbreviated)
+                              title=sess_id_abbreviated,
+                              regressor_column=scatter_regressor)
 
     ### Gather trial features ###
     augmented_trial_df, task_params = gtf.collect_and_save_trial_features(
@@ -1314,8 +2123,10 @@ def main_mouse():
 
     block_hmm_random_seed = 1001
     trial_hmm_random_seed = 2001
-    block_plot_bias_rl = True
-    block_bias_rl_column = "min_value_bias"
+    block_secondary_trace = "prev_n_rewarded"  # options: "none", "min_value_bias", "prev_n_rewarded"
+    plot_sliding_regression = True
+    sliding_regression_window_size = 10
+    sliding_regression_step_size = 5
     trial_glm_predictor_columns = (
         "FQlearning_rel_value",
         # "HMM_rel_value_logodds_decay",
@@ -1338,11 +2149,29 @@ def main_mouse():
     #                                                 random_seed=block_hmm_random_seed)
 
     block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess,
-                                                                    num_states=2,
+                                                                    num_states=block_modeling_states,
                                                                     prior_alpha=1, prior_sigma=1,
                                                                     random_seed=block_hmm_random_seed,
-                                                                    plot_bias_rl=block_plot_bias_rl,
-                                                                    bias_rl_column=block_bias_rl_column)
+                                                                    block_secondary_trace=block_secondary_trace,
+                                                                    plot_sliding_regression=plot_sliding_regression,
+                                                                    sliding_regression_window_size=sliding_regression_window_size,
+                                                                    sliding_regression_step_size=sliding_regression_step_size)
+
+    performance_plots.plot_single_session_summary_grid(
+        block_performance=block_performance,
+        augmented_trial_df=augmented_trial_df,
+        event_df=event_df,
+        session_info=session_info,
+        plot_path=sess.figure_path,
+        figure_id=sess_id_full,
+        title=sess_id_abbreviated,
+        scatter_slope=slope,
+        scatter_intercept=intercept,
+        scatter_regressor=scatter_regressor,
+        processed_data_path=processed_data_path,
+        sliding_regression_window_size=sliding_regression_window_size,
+        sliding_regression_step_size=sliding_regression_step_size,
+    )
     
     # load a saved block model instead of running it
     # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
@@ -1386,6 +2215,6 @@ def main_mouse():
 
 
 if __name__ == '__main__':
-    main_mouse()
-    # main_multisession()
+    # main_mouse()
+    main_multisession()
     # main_simulation()

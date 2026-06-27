@@ -678,6 +678,130 @@ def plot_mouse_history_ideal_observer_values(
     return observer_run_df, save_path
 
 
+def plot_mouse_history_ideal_observer_value_on_ax(
+    ax: plt.Axes,
+    trial_df: pd.DataFrame,
+    params: ideal_observer.IdealObserverParams | None = None,
+    value_column: str = "agent_relative_value",
+    show_choices: bool = True,
+    show_rewards: bool = True,
+    line_width: float = 1.0,
+    choice_marker_size: float = 5.0,
+    reward_marker_size: float = 12.0,
+    axis_label_size: float = 8,
+    tick_label_size: float = 7,
+) -> pd.DataFrame:
+    """Plot one mouse-history ideal-observer value trace on an existing axis.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axis that receives the value trace.
+    trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_columns)`. Required columns are
+        those accepted by
+        `ideal_observer.compute_mouse_history_observer_run`: `state`,
+        `action`, `reward`, `p_active_rew`, and `p_switch`. Choice convention
+        is `0` right and `1` left; rewards are in task reward units.
+    params : ideal_observer.IdealObserverParams or None, default=None
+        Observer parameters. None uses the observer helper defaults.
+    value_column : str, default="agent_relative_value"
+        Column from the observer run dataframe to plot. Values are plotted on
+        the signed action/value axis where negative favors right and positive
+        favors left.
+    show_choices : bool, default=True
+        Whether to overlay small mouse choice markers. Actions use the signed
+        convention right=-1 and left=+1.
+    show_rewards : bool, default=True
+        Whether to overlay larger rewarded-choice markers. Requires `reward`
+        and `action` columns in the observer run dataframe.
+    line_width : float, default=1.0
+        Width of the observer value line.
+    choice_marker_size : float, default=5.0
+        Marker area in points squared for all valid choices.
+    reward_marker_size : float, default=12.0
+        Marker area in points squared for rewarded choices.
+    axis_label_size : float, default=8
+        Font size for axis labels and the title.
+    tick_label_size : float, default=7
+        Font size for x/y tick labels.
+
+    Returns
+    -------
+    pd.DataFrame
+        Observer run dataframe with shape `(n_valid_trials, n_columns)`.
+    """
+    observer_run_df = ideal_observer.compute_mouse_history_observer_run(
+        trial_df,
+        params=params,
+    )
+    if value_column not in observer_run_df.columns:
+        raise ValueError(f"observer_run_df is missing requested value column: {value_column}")
+
+    plot_df = observer_run_df.copy()
+    plot_df[value_column] = pd.to_numeric(plot_df[value_column], errors="coerce")
+    x = np.arange(plot_df.shape[0])
+    ax.plot(x, plot_df[value_column].to_numpy(dtype=float), color="black", linewidth=line_width)
+    ax.axhline(0, color="gray", linewidth=0.8, alpha=0.6, linestyle="--")
+
+    if show_choices and "action" in plot_df.columns:
+        actions = pd.to_numeric(plot_df["action"], errors="coerce")
+        valid_action_ix = actions.notna().to_numpy()
+        if valid_action_ix.any():
+            signed_actions = actions.to_numpy(dtype=float) * 2 - 1
+            ax.scatter(
+                x[valid_action_ix],
+                signed_actions[valid_action_ix],
+                s=choice_marker_size,
+                c="0.25",
+                alpha=0.55,
+                linewidths=0,
+                label="choices",
+                zorder=3,
+            )
+
+            if show_rewards and "reward" in plot_df.columns:
+                rewards = pd.to_numeric(plot_df["reward"], errors="coerce").fillna(0).to_numpy(dtype=float)
+                rewarded_ix = valid_action_ix & (rewards > 0)
+                if rewarded_ix.any():
+                    ax.scatter(
+                        x[rewarded_ix],
+                        signed_actions[rewarded_ix],
+                        s=reward_marker_size,
+                        facecolors="white",
+                        edgecolors="black",
+                        linewidths=0.5,
+                        label="rewards",
+                        zorder=4,
+                    )
+
+    if "state" in plot_df.columns and plot_df.shape[0] > 0:
+        states = plot_df["state"].to_numpy()
+        change_ix = states[:-1] != states[1:]
+        state_changes = np.arange(1, states.size)[change_ix]
+        bins = np.unique(np.concatenate(([0], state_changes, [states.size - 1])))
+        bin_types = states[bins]
+        unique_bins = []
+        for i in range(bins.size - 1):
+            state = bin_types[i]
+            if state in color_dict:
+                label = state_dict.get(state, str(state))
+                if label not in unique_bins:
+                    ax.axvspan(bins[i], bins[i + 1], color=color_dict[state], alpha=.15, label=label)
+                    unique_bins.append(label)
+                else:
+                    ax.axvspan(bins[i], bins[i + 1], color=color_dict[state], alpha=.15)
+
+    ax.set_ylim(-1.05, 1.05)
+    ax.set_yticks([-1, 0, 1])
+    ax.set_yticklabels(["Right", "0", "Left"])
+    ax.set_xlabel("Trial", fontsize=axis_label_size)
+    ax.set_ylabel(value_column, fontsize=axis_label_size)
+    ax.set_title("Mouse-history observer", fontsize=axis_label_size)
+    ax.tick_params(axis="both", labelsize=tick_label_size)
+    return observer_run_df
+
+
 def main():
     plot_combined_trial_feature_values()
     plot_combined_trial_index_features()

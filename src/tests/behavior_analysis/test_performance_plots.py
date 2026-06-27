@@ -130,6 +130,288 @@ def test_plot_session_correct_skips_missing_percent_correct_values(monkeypatch, 
     assert plot_calls[0]["y"] == [1.0, 0.5]
 
 
+def test_plot_session_correct_after_first_correct_marks_no_correct_blocks(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Post-first-correct plots should keep no-correct blocks visible."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2],
+            "block_type": ["right_cued", "left_cued", "right_uncued"],
+            "percent_correct_after_first_correct": [0.75, "None", 0.5],
+        }
+    )
+
+    performance_plots.plot_session_correct_after_first_correct(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_correct_after_first",
+    )
+
+    numeric_calls = [
+        call
+        for call in plot_calls
+        if call["args"] == ("o",) and "raw blocks" not in str(call["kwargs"].get("label"))
+    ]
+    no_correct_call = next(
+        call
+        for call in plot_calls
+        if call["args"] == ("^",) and "no correct" in str(call["kwargs"].get("label"))
+    )
+    numeric_x = np.concatenate([call["x"] for call in numeric_calls])
+    numeric_y = np.concatenate([call["y"] for call in numeric_calls])
+
+    np.testing.assert_array_equal(numeric_x, np.array([0.0, 2.0]))
+    np.testing.assert_array_equal(numeric_y, np.array([0.75, 0.5]))
+    np.testing.assert_array_equal(no_correct_call["x"], np.array([1.0]))
+    assert no_correct_call["y"][0] > 1.0
+    assert (tmp_path / "session_correct_after_first_block_correct_after_first_correct.png").exists()
+
+
+def test_plot_session_history_ideal_mouse_agreement_marks_missing_blocks(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """History-ideal agreement plots should keep missing blocks visible."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2],
+            "block_type": ["right_cued", "left_cued", "right_uncued"],
+            "block_history_ideal_mouse_agreement": [0.75, "None", 0.5],
+        }
+    )
+
+    performance_plots.plot_session_history_ideal_mouse_agreement(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_history_ideal",
+    )
+
+    numeric_calls = [
+        call
+        for call in plot_calls
+        if call["args"] == ("o",) and "raw blocks" not in str(call["kwargs"].get("label"))
+    ]
+    missing_call = next(
+        call
+        for call in plot_calls
+        if call["args"] == ("^",) and "no valid ideal" in str(call["kwargs"].get("label"))
+    )
+    numeric_x = np.concatenate([call["x"] for call in numeric_calls])
+    numeric_y = np.concatenate([call["y"] for call in numeric_calls])
+
+    np.testing.assert_array_equal(numeric_x, np.array([0.0, 2.0]))
+    np.testing.assert_array_equal(numeric_y, np.array([0.75, 0.5]))
+    np.testing.assert_array_equal(missing_call["x"], np.array([1.0]))
+    assert missing_call["y"][0] > 1.0
+    assert (tmp_path / "session_history_ideal_history_ideal_mouse_agreement.png").exists()
+
+
+def _make_summary_grid_block_df(n_blocks: int = 6) -> pd.DataFrame:
+    """Build a compact block table for summary-grid plotting tests."""
+    block_types_for_rows = ["right_cued", "left_cued", "right_uncued", "left_uncued"] * 3
+    return pd.DataFrame(
+        {
+            "block_ix": np.arange(n_blocks),
+            "block_type": block_types_for_rows[:n_blocks],
+            "trials_to_correct": np.arange(n_blocks) + 1,
+            "prev_n_correct": np.ones(n_blocks, dtype=int),
+            "prev_n_rewarded": np.arange(n_blocks),
+            "n_switches": np.arange(n_blocks) % 3,
+            "percent_correct_after_first_correct": np.linspace(0.2, 0.9, n_blocks),
+            "block_history_ideal_mouse_agreement": np.linspace(0.3, 1.0, n_blocks),
+        }
+    )
+
+
+def test_plot_single_session_summary_grid_saves_without_block_hmm(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    """Summary grid should save with clear placeholders when block HMM output is absent."""
+    performance_plots = _import_performance_plots()
+
+    def fake_raster_axis_plotter(ax, **_kwargs):
+        ax.set_title("raster")
+        return ax
+
+    def fake_observer_axis_plotter(ax, **_kwargs):
+        ax.plot([0, 1], [0.0, 1.0])
+        ax.set_title("observer")
+        return pd.DataFrame({"agent_relative_value": [0.0, 1.0]})
+
+    block_df = _make_summary_grid_block_df()
+
+    save_path = performance_plots.plot_single_session_summary_grid(
+        block_performance=block_df,
+        augmented_trial_df=pd.DataFrame({"action": [0, 1]}),
+        event_df=pd.DataFrame({"Time": [0.0], "Event": ["enter_left_patch"]}),
+        session_info={"use_dark_period": False},
+        plot_path=tmp_path,
+        figure_id="summary_missing_hmm",
+        scatter_slope=1.0,
+        scatter_intercept=0.0,
+        raster_axis_plotter=fake_raster_axis_plotter,
+        observer_axis_plotter=fake_observer_axis_plotter,
+    )
+
+    assert save_path == tmp_path / "summary_missing_hmm_single-session-summary-grid.png"
+    assert save_path.exists()
+    assert "Block HMM outputs not found" in capsys.readouterr().out
+
+
+def test_plot_single_session_summary_grid_uses_block_hmm_panels(tmp_path: Path):
+    """Summary grid should use HMM and sliding-regression panels when model output is supplied."""
+    performance_plots = _import_performance_plots()
+    calls = {"hmm": 0, "sliding": 0}
+
+    class FakeBlockHmmModule:
+        @staticmethod
+        def prepare_block_lm_hmm_data(block_df, predictor_columns=("prev_n_rewarded",)):
+            return {
+                "observations": block_df["trials_to_correct"].to_numpy().reshape(-1, 1),
+                "inputs": block_df["prev_n_rewarded"].to_numpy().reshape(-1, 1),
+                "valid_mask": np.ones(block_df.shape[0], dtype=bool),
+                "predictor_labels": ["prev_n_rewarded"],
+            }
+
+        @staticmethod
+        def normalize_lm_observation_parameters(recovered_weights, recovered_mus):
+            return recovered_weights, recovered_mus
+
+        @staticmethod
+        def build_presentation_colors(primary_predictor_weights):
+            return ["blue", "red"], plt.cm.Set1.copy()
+
+        @staticmethod
+        def compute_sliding_block_regression(
+            block_df,
+            valid_mask=None,
+            predictor_column="prev_n_rewarded",
+            response_column="trials_to_correct",
+            window_size=10,
+            step_size=5,
+        ):
+            return pd.DataFrame(
+                {
+                    "window_center_position": [4.5],
+                    "prev_n_rewarded_weight": [0.25],
+                    "window_intercept": [2.0],
+                }
+            )
+
+    def fake_hmm_plotter(**kwargs):
+        calls["hmm"] += 1
+        kwargs["obs_ax"].set_title("hmm")
+        return kwargs["obs_ax"]
+
+    def fake_sliding_plotter(regression_ax, sliding_regression_df, **_kwargs):
+        calls["sliding"] += 1
+        regression_ax.set_title("sliding")
+        return regression_ax.twinx()
+
+    block_df = _make_summary_grid_block_df(n_blocks=10)
+    block_model_dict = {
+        "map": {
+            "posterior_probs": np.column_stack([np.ones(10), np.zeros(10)]),
+            "hmm": object(),
+            "weight_dict": {
+                "weights": np.array([[[0.5]], [[-0.5]]]),
+                "mus": np.array([[2.0], [4.0]]),
+            },
+        }
+    }
+
+    performance_plots.plot_single_session_summary_grid(
+        block_performance=block_df,
+        augmented_trial_df=pd.DataFrame({"action": [0, 1]}),
+        event_df=pd.DataFrame({"Time": [0.0], "Event": ["enter_left_patch"]}),
+        session_info={"use_dark_period": False},
+        plot_path=tmp_path,
+        figure_id="summary_with_hmm",
+        scatter_slope=1.0,
+        scatter_intercept=0.0,
+        block_model_dict=block_model_dict,
+        block_hmm_module=FakeBlockHmmModule,
+        hmm_observation_plotter=fake_hmm_plotter,
+        sliding_regression_plotter=fake_sliding_plotter,
+        raster_axis_plotter=lambda ax, **_kwargs: ax,
+        observer_axis_plotter=lambda ax, **_kwargs: pd.DataFrame(),
+    )
+
+    assert calls == {"hmm": 1, "sliding": 1}
+
+
+def test_summary_grid_block_metric_uses_colorblock_side_colors(monkeypatch):
+    """Summary grid block panels should use raster side colors and filled circles."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2, 3, 4],
+            "block_type": ["right_cued", "right_uncued", "left_cued", "left_uncued", "dark period"],
+            "n_switches": [1, 2, 3, 4, 0],
+        }
+    )
+    fig, ax = plt.subplots()
+
+    performance_plots._plot_block_metric_on_ax(
+        ax=ax,
+        block_performance=block_performance,
+        value_column="n_switches",
+        y_label="switches",
+        title="switches",
+        use_summary_side_colors=True,
+    )
+
+    point_calls = [call for call in plot_calls if call["args"] and call["args"][0] == "o"]
+    right_calls = [call for call in point_calls if "right" in call["kwargs"]["label"]]
+    left_calls = [call for call in point_calls if "left" in call["kwargs"]["label"]]
+    assert {call["kwargs"]["color"] for call in right_calls} == {"darkred"}
+    assert {call["kwargs"]["color"] for call in left_calls} == {"blue"}
+    assert all(call["kwargs"]["markerfacecolor"] == call["kwargs"]["color"] for call in point_calls)
+    assert len(point_calls) == 5
+    plt.close(fig)
+
+
+def test_summary_grid_regression_scatter_uses_colorblock_side_colors(monkeypatch):
+    """Summary grid regression panel should use side colors with filled circles."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_type": ["right_cued", "right_uncued", "left_cued", "left_uncued"],
+            "trials_to_correct": [1, 2, 3, 4],
+            "prev_n_correct": [1, 1, 1, 1],
+            "prev_n_rewarded": [0, 1, 2, 3],
+        }
+    )
+    fig, ax = plt.subplots()
+
+    performance_plots._plot_trials_to_correct_scatter_on_ax(
+        ax=ax,
+        block_performance=block_performance,
+        slope=1.0,
+        intercept=0.0,
+        use_summary_side_colors=True,
+    )
+
+    point_calls = [call for call in plot_calls if call["args"] and call["args"][0] == "o"]
+    right_calls = [call for call in point_calls if "right" in call["kwargs"]["label"]]
+    left_calls = [call for call in point_calls if "left" in call["kwargs"]["label"]]
+    assert {call["kwargs"]["color"] for call in right_calls} == {"darkred"}
+    assert {call["kwargs"]["color"] for call in left_calls} == {"blue"}
+    assert all(call["kwargs"]["markerfacecolor"] == call["kwargs"]["color"] for call in point_calls)
+    assert len(point_calls) == 4
+    plt.close(fig)
+
+
 def test_plot_session_trials_to_correct_skips_missing_values_with_gaps(monkeypatch, tmp_path: Path):
     """Valid points should keep their original block indices after missing rows are omitted."""
     performance_plots = _import_performance_plots()
@@ -243,6 +525,301 @@ def test_plot_session_trials_to_correct_skips_block_types_without_valid_points(m
     assert plot_calls[0]["y"] == [6]
 
 
+def test_plot_session_block_quality_summary_plots_numeric_blocks_by_block_index(monkeypatch, tmp_path: Path):
+    """The quality timeline should plot numeric TTC values at true block indices."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2],
+            "block_type": ["right_cued", "left_cued", "right_uncued"],
+            "trials_to_correct": [2, 7, "4"],
+        }
+    )
+
+    performance_plots.plot_session_block_quality_summary(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_quality",
+        point_jitter=0,
+    )
+
+    right_cued = next(call for call in plot_calls if call["kwargs"].get("label") == "right cued timeline")
+    left_cued = next(call for call in plot_calls if call["kwargs"].get("label") == "left cued timeline")
+
+    np.testing.assert_array_equal(right_cued["x"], np.array([0.0]))
+    np.testing.assert_array_equal(right_cued["y"], np.array([2.0]))
+    np.testing.assert_array_equal(left_cued["x"], np.array([1.0]))
+    np.testing.assert_array_equal(left_cued["y"], np.array([7.0]))
+    assert (tmp_path / "session_quality_block-trials-to-correct-summary.png").exists()
+
+
+def test_plot_session_block_trials_to_correct_summary_saves_specific_filename(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """The renamed TTC summary should save with a metric-specific filename."""
+    performance_plots = _import_performance_plots()
+    _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1],
+            "block_type": ["right_cued", "left_cued"],
+            "trials_to_correct": [2, 7],
+        }
+    )
+
+    performance_plots.plot_session_block_trials_to_correct_summary(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_ttc",
+        point_jitter=0,
+    )
+
+    assert (tmp_path / "session_ttc_block-trials-to-correct-summary.png").exists()
+
+
+def test_plot_session_block_quality_summary_marks_no_correct_blocks(monkeypatch, tmp_path: Path):
+    """No-correct side blocks should be visible on a top row instead of dropped."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2],
+            "block_type": ["right_cued", "left_uncued", "right_uncued"],
+            "trials_to_correct": [2, "None", 4],
+        }
+    )
+
+    performance_plots.plot_session_block_quality_summary(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_quality",
+        point_jitter=0,
+    )
+
+    no_correct = next(call for call in plot_calls if call["kwargs"].get("label") == "left uncued no correct")
+
+    assert no_correct["args"] == ("^",)
+    np.testing.assert_array_equal(no_correct["x"], np.array([1.0]))
+    np.testing.assert_array_equal(no_correct["y"], np.array([5.0]))
+
+
+def test_plot_session_block_quality_summary_handles_dark_period_blocks(monkeypatch, tmp_path: Path):
+    """Dark periods should be shown on the timeline and excluded from side summaries."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2],
+            "block_type": ["right_cued", "dark period", "left_cued"],
+            "trials_to_correct": [2, "None", 4],
+        }
+    )
+
+    performance_plots.plot_session_block_quality_summary(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_quality",
+        point_jitter=0,
+    )
+
+    dark_call = next(call for call in plot_calls if call["kwargs"].get("label") == "dark period")
+    raw_labels = [call["kwargs"].get("label") for call in plot_calls if "raw blocks" in str(call["kwargs"].get("label"))]
+
+    assert dark_call["args"] == ("s",)
+    np.testing.assert_array_equal(dark_call["x"], np.array([1.0]))
+    np.testing.assert_array_equal(dark_call["y"], np.array([6.0]))
+    assert "dark raw blocks" not in raw_labels
+
+
+def test_plot_session_block_quality_summary_draws_side_medians_and_raw_points(monkeypatch, tmp_path: Path):
+    """Side summaries should show raw side blocks, medians, and Q1-Q3 intervals."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2, 3],
+            "block_type": ["left_cued", "left_uncued", "right_cued", "right_uncued"],
+            "trials_to_correct": [8, 10, 1, 3],
+        }
+    )
+
+    performance_plots.plot_session_block_quality_summary(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_quality",
+        point_jitter=0,
+    )
+
+    left_raw = next(call for call in plot_calls if call["kwargs"].get("label") == "left raw blocks")
+    right_raw = next(call for call in plot_calls if call["kwargs"].get("label") == "right raw blocks")
+    left_median = next(call for call in plot_calls if call["kwargs"].get("label") == "left median")
+    right_median = next(call for call in plot_calls if call["kwargs"].get("label") == "right median")
+    left_iqr = next(call for call in plot_calls if call["kwargs"].get("label") == "left Q1-Q3")
+
+    np.testing.assert_array_equal(left_raw["x"], np.array([0.0, 0.0]))
+    np.testing.assert_array_equal(left_raw["y"], np.array([8.0, 10.0]))
+    np.testing.assert_array_equal(right_raw["x"], np.array([1.0, 1.0]))
+    np.testing.assert_array_equal(right_raw["y"], np.array([1.0, 3.0]))
+    np.testing.assert_array_equal(left_median["y"], np.array([9.0]))
+    np.testing.assert_array_equal(right_median["y"], np.array([2.0]))
+    np.testing.assert_array_equal(left_iqr["x"], np.array([0.0, 0.0]))
+    np.testing.assert_array_equal(left_iqr["y"], np.array([8.5, 9.5]))
+
+
+def test_plot_session_correct_after_first_correct_draws_side_medians_and_raw_points(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Post-first-correct plots should include the reusable side-summary panel."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2, 3],
+            "block_type": ["left_cued", "left_uncued", "right_cued", "right_uncued"],
+            "percent_correct_after_first_correct": [0.8, 1.0, 0.25, 0.75],
+        }
+    )
+
+    performance_plots.plot_session_correct_after_first_correct(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_correct_after_first",
+    )
+
+    left_raw = next(call for call in plot_calls if call["kwargs"].get("label") == "left raw blocks")
+    right_median = next(call for call in plot_calls if call["kwargs"].get("label") == "right median")
+    left_iqr = next(call for call in plot_calls if call["kwargs"].get("label") == "left Q1-Q3")
+
+    np.testing.assert_array_equal(left_raw["y"], np.array([0.8, 1.0]))
+    np.testing.assert_array_equal(right_median["y"], np.array([0.5]))
+    np.testing.assert_allclose(left_iqr["y"], [0.85, 0.95])
+    assert (tmp_path / "session_correct_after_first_block_correct_after_first_correct.png").exists()
+
+
+def test_plot_session_history_ideal_mouse_agreement_draws_side_medians_and_raw_points(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """History-ideal plots should include the reusable side-summary panel."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2, 3],
+            "block_type": ["left_cued", "left_uncued", "right_cued", "right_uncued"],
+            "block_history_ideal_mouse_agreement": [0.8, 1.0, 0.25, 0.75],
+        }
+    )
+
+    performance_plots.plot_session_history_ideal_mouse_agreement(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_history_ideal",
+    )
+
+    left_raw = next(call for call in plot_calls if call["kwargs"].get("label") == "left raw blocks")
+    right_median = next(call for call in plot_calls if call["kwargs"].get("label") == "right median")
+    left_iqr = next(call for call in plot_calls if call["kwargs"].get("label") == "left Q1-Q3")
+
+    np.testing.assert_array_equal(left_raw["y"], np.array([0.8, 1.0]))
+    np.testing.assert_array_equal(right_median["y"], np.array([0.5]))
+    np.testing.assert_allclose(left_iqr["y"], [0.85, 0.95])
+    assert (tmp_path / "session_history_ideal_history_ideal_mouse_agreement.png").exists()
+
+
+def test_plot_session_nswitches_draws_side_medians_and_raw_points(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Block switch-count plots should include the reusable side-summary panel."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2, 3],
+            "block_type": ["left_cued", "left_uncued", "right_cued", "right_uncued"],
+            "n_switches": [8, 10, 1, 3],
+        }
+    )
+
+    performance_plots.plot_session_nswitches(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_switches",
+    )
+
+    left_raw = next(call for call in plot_calls if call["kwargs"].get("label") == "left raw blocks")
+    right_median = next(call for call in plot_calls if call["kwargs"].get("label") == "right median")
+    left_iqr = next(call for call in plot_calls if call["kwargs"].get("label") == "left Q1-Q3")
+
+    np.testing.assert_array_equal(left_raw["y"], np.array([8.0, 10.0]))
+    np.testing.assert_array_equal(right_median["y"], np.array([2.0]))
+    np.testing.assert_array_equal(left_iqr["y"], np.array([8.5, 9.5]))
+    assert (tmp_path / "session_switches_block_nswitches.png").exists()
+
+
+def test_plot_session_explore_trials_draws_side_medians_and_raw_points(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Explore-trial plots should include block timeline and side summaries."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2, 3],
+            "block_type": ["left_cued", "left_uncued", "right_cued", "right_uncued"],
+            "n_explore_trials": [2, 4, 1, 3],
+        }
+    )
+
+    performance_plots.plot_session_explore_trials(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_explore",
+    )
+
+    left_raw = next(call for call in plot_calls if call["kwargs"].get("label") == "left raw blocks")
+    right_median = next(call for call in plot_calls if call["kwargs"].get("label") == "right median")
+    left_iqr = next(call for call in plot_calls if call["kwargs"].get("label") == "left Q1-Q3")
+
+    np.testing.assert_array_equal(left_raw["y"], np.array([2.0, 4.0]))
+    np.testing.assert_array_equal(right_median["y"], np.array([2.0]))
+    np.testing.assert_array_equal(left_iqr["y"], np.array([2.5, 3.5]))
+    assert (tmp_path / "session_explore_block_explore_trials.png").exists()
+
+
+def test_plot_session_block_quality_summary_handles_full_completion_bias(monkeypatch, tmp_path: Path):
+    """A fully complete biased session should still show left/right TTC asymmetry."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2, 3],
+            "block_type": ["left_cued", "right_cued", "left_uncued", "right_uncued"],
+            "trials_to_correct": [9, 1, 11, 2],
+        }
+    )
+
+    performance_plots.plot_session_block_quality_summary(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_quality",
+        point_jitter=0,
+    )
+
+    no_correct_calls = [call for call in plot_calls if "no correct" in str(call["kwargs"].get("label"))]
+    left_median = next(call for call in plot_calls if call["kwargs"].get("label") == "left median")
+    right_median = next(call for call in plot_calls if call["kwargs"].get("label") == "right median")
+
+    assert no_correct_calls == []
+    np.testing.assert_array_equal(left_median["y"], np.array([10.0]))
+    np.testing.assert_array_equal(right_median["y"], np.array([1.5]))
+
+
 def test_plot_trials_to_correct_session_summary_draws_median_and_iqr(monkeypatch, tmp_path: Path):
     """Session summary plots should match learning-curve spacing with an IQR band."""
     performance_plots = _import_performance_plots()
@@ -269,6 +846,596 @@ def test_plot_trials_to_correct_session_summary_draws_median_and_iqr(monkeypatch
     assert fill_between_calls[0]["y1"] == [1.5, 2.0]
     assert fill_between_calls[0]["y2"] == [4.5, 6.0]
     assert (tmp_path / "CT014_trials-to-correct-session-summary.png").exists()
+
+
+def _make_side_trials_to_correct_summary() -> pd.DataFrame:
+    """Build minimal side-specific TTC summary data for plotting tests."""
+    return pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-16", "2025-12-16"],
+            "session_id": [
+                "CT014_2025-12-05_165240",
+                "CT014_2025-12-05_165240",
+                "CT014_2025-12-16_153200",
+                "CT014_2025-12-16_153200",
+            ],
+            "rewarded_side": ["left", "right", "left", "right"],
+            "n_blocks": [2, 2, 2, 2],
+            "n_valid_blocks": [1, 2, 2, 1],
+            "n_no_correct_blocks": [1, 0, 0, 1],
+            "completion_fraction": [0.5, 1.0, 1.0, 0.5],
+            "trials_to_correct_q1": [2.0, 1.0, 4.0, 5.0],
+            "trials_to_correct_median": [3.0, 2.0, 5.0, 5.0],
+            "trials_to_correct_q3": [4.0, 3.0, 6.0, 5.0],
+        }
+    )
+
+
+def _make_side_trials_to_correct_points() -> pd.DataFrame:
+    """Build side-specific raw block TTC points for plotting tests."""
+    return pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-16"],
+            "session_id": [
+                "CT014_2025-12-05_165240",
+                "CT014_2025-12-05_165240",
+                "CT014_2025-12-16_153200",
+            ],
+            "rewarded_side": ["left", "left", "right"],
+            "block_ix": [0, 1, 2],
+            "block_type": ["left_cued", "left_uncued", "right_cued"],
+            "trials_to_correct_numeric": [2.0, np.nan, np.nan],
+            "no_correct_choice": [False, True, True],
+        }
+    )
+
+
+def test_plot_side_trials_to_correct_quality_draws_completion_traces(monkeypatch, tmp_path: Path):
+    """Side quality plots should draw separate left/right completion fractions."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+
+    performance_plots.plot_side_trials_to_correct_quality(
+        summary_df=_make_side_trials_to_correct_summary(),
+        block_points_df=_make_side_trials_to_correct_points(),
+        plot_path=tmp_path,
+        figure_id="CT014",
+        point_jitter=0,
+    )
+
+    left_completion = next(call for call in plot_calls if call["kwargs"].get("label") == "left completion")
+    right_completion = next(call for call in plot_calls if call["kwargs"].get("label") == "right completion")
+
+    np.testing.assert_array_equal(left_completion["x"], np.array([1.0, 2.0]))
+    np.testing.assert_array_equal(left_completion["y"], np.array([0.5, 1.0]))
+    np.testing.assert_array_equal(right_completion["x"], np.array([1.0, 2.0]))
+    np.testing.assert_array_equal(right_completion["y"], np.array([1.0, 0.5]))
+
+
+def test_plot_side_trials_to_correct_quality_draws_median_iqr_and_raw_points(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Side quality plots should show summary spread and raw numeric block points."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    fill_between_calls = _capture_fill_between_calls(monkeypatch)
+
+    performance_plots.plot_side_trials_to_correct_quality(
+        summary_df=_make_side_trials_to_correct_summary(),
+        block_points_df=_make_side_trials_to_correct_points(),
+        plot_path=tmp_path,
+        figure_id="CT014",
+        point_jitter=0,
+    )
+
+    left_iqr = next(call for call in fill_between_calls if call["label"] == "left Q1-Q3")
+    left_median = next(call for call in plot_calls if call["kwargs"].get("label") == "left median")
+    raw_points = next(call for call in plot_calls if call["kwargs"].get("label") == "left raw blocks")
+
+    assert left_iqr["x"] == [1, 2]
+    assert left_iqr["y1"] == [2.0, 4.0]
+    assert left_iqr["y2"] == [4.0, 6.0]
+    np.testing.assert_array_equal(left_median["y"], np.array([3.0, 5.0]))
+    np.testing.assert_array_equal(raw_points["x"], np.array([1.0]))
+    np.testing.assert_array_equal(raw_points["y"], np.array([2.0]))
+
+
+def test_plot_side_trials_to_correct_quality_marks_no_correct_blocks(monkeypatch, tmp_path: Path):
+    """No-correct blocks should be displayed on a top row instead of dropped."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+
+    performance_plots.plot_side_trials_to_correct_quality(
+        summary_df=_make_side_trials_to_correct_summary(),
+        block_points_df=_make_side_trials_to_correct_points(),
+        plot_path=tmp_path,
+        figure_id="CT014",
+        point_jitter=0,
+    )
+
+    left_no_correct = next(call for call in plot_calls if call["kwargs"].get("label") == "left no correct")
+    right_no_correct = next(call for call in plot_calls if call["kwargs"].get("label") == "right no correct")
+
+    assert left_no_correct["args"] == ("^",)
+    np.testing.assert_array_equal(left_no_correct["x"], np.array([1.0]))
+    np.testing.assert_array_equal(left_no_correct["y"], np.array([7.0]))
+    np.testing.assert_array_equal(right_no_correct["x"], np.array([2.0]))
+    np.testing.assert_array_equal(right_no_correct["y"], np.array([7.0]))
+
+
+def test_plot_side_trials_to_correct_quality_caps_large_trial_counts(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Large TTC values should use an overflow row instead of stretching the y-axis."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    fill_between_calls = _capture_fill_between_calls(monkeypatch)
+    summary_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05"],
+            "session_id": ["CT014_2025-12-05_165240"],
+            "rewarded_side": ["left"],
+            "n_blocks": [3],
+            "n_valid_blocks": [3],
+            "n_no_correct_blocks": [0],
+            "completion_fraction": [1.0],
+            "trials_to_correct_q1": [10.0],
+            "trials_to_correct_median": [30.0],
+            "trials_to_correct_q3": [50.0],
+        }
+    )
+    block_points_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05"],
+            "session_id": ["CT014_2025-12-05_165240", "CT014_2025-12-05_165240"],
+            "rewarded_side": ["left", "left"],
+            "block_ix": [0, 1],
+            "block_type": ["left_cued", "left_uncued"],
+            "trials_to_correct_numeric": [10.0, 50.0],
+            "no_correct_choice": [False, False],
+        }
+    )
+
+    performance_plots.plot_side_trials_to_correct_quality(
+        summary_df=summary_df,
+        block_points_df=block_points_df,
+        plot_path=tmp_path,
+        figure_id="CT014",
+        point_jitter=0,
+        trial_display_cap=25,
+    )
+
+    raw_points = next(call for call in plot_calls if call["kwargs"].get("label") == "left raw blocks")
+    median = next(call for call in plot_calls if call["kwargs"].get("label") == "left median")
+    left_iqr = next(call for call in fill_between_calls if call["label"] == "left Q1-Q3")
+
+    np.testing.assert_array_equal(raw_points["y"], np.array([10.0, 26.0]))
+    np.testing.assert_array_equal(median["y"], np.array([26.0]))
+    assert left_iqr["y1"] == [10.0]
+    assert left_iqr["y2"] == [26.0]
+    assert (tmp_path / "CT014_side-trials-to-correct-quality.png").exists()
+
+
+def test_plot_multisession_block_switches_quality_draws_overall_left_right(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Switch quality plots should draw overall, left, and right summary layers."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    fill_between_calls = _capture_fill_between_calls(monkeypatch)
+    summary_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-05"],
+            "switch_group": ["overall", "left", "right"],
+            "n_switches_q1": [1.0, 2.0, 3.0],
+            "n_switches_median": [2.0, 3.0, 4.0],
+            "n_switches_q3": [3.0, 4.0, 5.0],
+        }
+    )
+    block_points_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-05"],
+            "switch_group": ["overall", "left", "right"],
+            "n_switches": [1, 2, 3],
+        }
+    )
+
+    performance_plots.plot_multisession_block_switches_quality(
+        summary_df=summary_df,
+        block_points_df=block_points_df,
+        plot_path=tmp_path,
+        figure_id="CT014",
+        point_jitter=0,
+    )
+
+    median_labels = {
+        call["kwargs"].get("label")
+        for call in plot_calls
+        if call["kwargs"].get("label", "").endswith("median")
+    }
+    raw_labels = {
+        call["kwargs"].get("label")
+        for call in plot_calls
+        if call["kwargs"].get("label", "").endswith("raw blocks")
+    }
+    spread_labels = {call["label"] for call in fill_between_calls}
+
+    assert median_labels == {"overall median", "left median", "right median"}
+    assert raw_labels == {"overall raw blocks", "left raw blocks", "right raw blocks"}
+    assert spread_labels == {"overall Q1-Q3", "left Q1-Q3", "right Q1-Q3"}
+    assert (tmp_path / "CT014_block-switches-quality.png").exists()
+
+
+def test_plot_multisession_block_switches_quality_on_ax_draws_overall_left_right(
+    monkeypatch,
+):
+    """Axis helper should preserve overall, left, and right switch summaries."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    fill_between_calls = _capture_fill_between_calls(monkeypatch)
+    summary_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-05"],
+            "switch_group": ["overall", "left", "right"],
+            "n_switches_q1": [1.0, 2.0, 3.0],
+            "n_switches_median": [2.0, 3.0, 4.0],
+            "n_switches_q3": [3.0, 4.0, 5.0],
+        }
+    )
+    block_points_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-05"],
+            "switch_group": ["overall", "left", "right"],
+            "n_switches": [1, 2, 3],
+        }
+    )
+    fig, ax = plt.subplots()
+
+    performance_plots.plot_multisession_block_switches_quality_on_ax(
+        ax=ax,
+        summary_df=summary_df,
+        block_points_df=block_points_df,
+        figure_id="CT014",
+        point_jitter=0,
+    )
+
+    median_labels = {
+        call["kwargs"].get("label")
+        for call in plot_calls
+        if call["kwargs"].get("label", "").endswith("median")
+    }
+    raw_labels = {
+        call["kwargs"].get("label")
+        for call in plot_calls
+        if call["kwargs"].get("label", "").endswith("raw blocks")
+    }
+    spread_labels = {call["label"] for call in fill_between_calls}
+
+    assert median_labels == {"overall median", "left median", "right median"}
+    assert raw_labels == {"overall raw blocks", "left raw blocks", "right raw blocks"}
+    assert spread_labels == {"overall Q1-Q3", "left Q1-Q3", "right Q1-Q3"}
+    plt.close(fig)
+
+
+def test_plot_multisession_block_explore_quality_draws_overall_left_right(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Explore quality plots should draw overall, left, and right summary layers."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    fill_between_calls = _capture_fill_between_calls(monkeypatch)
+    summary_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-05"],
+            "explore_group": ["overall", "left", "right"],
+            "n_explore_trials_q1": [1.0, 2.0, 3.0],
+            "n_explore_trials_median": [2.0, 3.0, 4.0],
+            "n_explore_trials_q3": [3.0, 4.0, 5.0],
+        }
+    )
+    block_points_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-05"],
+            "explore_group": ["overall", "left", "right"],
+            "n_explore_trials": [1, 2, 3],
+        }
+    )
+
+    performance_plots.plot_multisession_block_explore_quality(
+        summary_df=summary_df,
+        block_points_df=block_points_df,
+        plot_path=tmp_path,
+        figure_id="CT014",
+        point_jitter=0,
+    )
+
+    median_labels = {
+        call["kwargs"].get("label")
+        for call in plot_calls
+        if call["kwargs"].get("label", "").endswith("median")
+    }
+    raw_labels = {
+        call["kwargs"].get("label")
+        for call in plot_calls
+        if call["kwargs"].get("label", "").endswith("raw blocks")
+    }
+    spread_labels = {call["label"] for call in fill_between_calls}
+
+    assert median_labels == {"overall median", "left median", "right median"}
+    assert raw_labels == {"overall raw blocks", "left raw blocks", "right raw blocks"}
+    assert spread_labels == {"overall Q1-Q3", "left Q1-Q3", "right Q1-Q3"}
+    assert (tmp_path / "CT014_block-explore-quality.png").exists()
+
+
+def test_plot_multisession_correct_after_first_quality_draws_groups_and_no_correct(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Post-first-correct quality plots should draw grouped summaries and no-correct markers."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    fill_between_calls = _capture_fill_between_calls(monkeypatch)
+    summary_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-05"],
+            "correct_after_first_group": ["overall", "left", "right"],
+            "percent_correct_after_first_q1": [0.25, 0.5, 0.75],
+            "percent_correct_after_first_median": [0.5, 0.75, 0.9],
+            "percent_correct_after_first_q3": [0.75, 1.0, 1.0],
+        }
+    )
+    block_points_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-05", "2025-12-05"],
+            "correct_after_first_group": ["overall", "left", "right", "left"],
+            "percent_correct_after_first_numeric": [0.5, 0.75, 0.9, np.nan],
+            "no_correct_choice": [False, False, False, True],
+        }
+    )
+
+    performance_plots.plot_multisession_correct_after_first_quality(
+        summary_df=summary_df,
+        block_points_df=block_points_df,
+        plot_path=tmp_path,
+        figure_id="CT014",
+        point_jitter=0,
+    )
+
+    median_labels = {
+        call["kwargs"].get("label")
+        for call in plot_calls
+        if call["kwargs"].get("label", "").endswith("median")
+    }
+    raw_labels = {
+        call["kwargs"].get("label")
+        for call in plot_calls
+        if call["kwargs"].get("label", "").endswith("raw blocks")
+    }
+    no_correct_call = next(call for call in plot_calls if call["kwargs"].get("label") == "left no correct")
+    spread_labels = {call["label"] for call in fill_between_calls}
+
+    assert median_labels == {"overall median", "left median", "right median"}
+    assert raw_labels == {"overall raw blocks", "left raw blocks", "right raw blocks"}
+    assert spread_labels == {"overall Q1-Q3", "left Q1-Q3", "right Q1-Q3"}
+    assert no_correct_call["args"] == ("^",)
+    assert no_correct_call["y"][0] > 1.0
+    assert (tmp_path / "CT014_correct-after-first-quality.png").exists()
+
+
+def test_plot_multisession_summary_grid_saves_with_hmm_placeholders(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    """Multisession summary grid should save even when block HMM output is absent."""
+    performance_plots = _import_performance_plots()
+    helper_calls = []
+
+    def record_helper(name):
+        def _helper(ax, **_kwargs):
+            helper_calls.append(name)
+            ax.set_title(name)
+            return ax
+
+        return _helper
+
+    performance_plots.plot_multisession_summary_grid(
+        block_performance=_make_summary_grid_block_df(n_blocks=4),
+        side_trials_to_correct_summary=_make_side_trials_to_correct_summary(),
+        side_trials_to_correct_block_points=_make_side_trials_to_correct_points(),
+        correct_after_first_summary=pd.DataFrame(
+            {
+                "date": ["2025-12-05"],
+                "correct_after_first_group": ["overall"],
+                "percent_correct_after_first_q1": [0.25],
+                "percent_correct_after_first_median": [0.5],
+                "percent_correct_after_first_q3": [0.75],
+            }
+        ),
+        correct_after_first_block_points=pd.DataFrame(
+            {
+                "date": ["2025-12-05"],
+                "correct_after_first_group": ["overall"],
+                "percent_correct_after_first_numeric": [0.5],
+                "no_correct_choice": [False],
+            }
+        ),
+        block_switch_summary=pd.DataFrame(
+            {
+                "date": ["2025-12-05"],
+                "switch_group": ["overall"],
+                "n_switches_q1": [1.0],
+                "n_switches_median": [2.0],
+                "n_switches_q3": [3.0],
+            }
+        ),
+        block_switch_block_points=pd.DataFrame(
+            {
+                "date": ["2025-12-05"],
+                "switch_group": ["overall"],
+                "n_switches": [2],
+            }
+        ),
+        overall_df=pd.DataFrame(
+            {
+                "date": ["2025-12-05"],
+                "actual_reward_collected": [20.0],
+                "history_ideal_oracle_accuracy": [0.7],
+                "history_ideal_mouse_agreement": [0.6],
+                "history_ideal_reward_fraction": [0.75],
+                "history_ideal_expected_reward": [26.7],
+                "fixed_replay_ideal_reward_q1": [23.0],
+                "fixed_replay_ideal_reward_median": [25.0],
+                "fixed_replay_ideal_reward_q3": [28.0],
+                "fixed_replay_ideal_oracle_accuracy_q1": [0.65],
+                "fixed_replay_ideal_oracle_accuracy_median": [0.7],
+                "fixed_replay_ideal_oracle_accuracy_q3": [0.76],
+            }
+        ),
+        plot_path=tmp_path,
+        figure_id="CT014",
+        ttc_axis_plotter=record_helper("ttc"),
+        correct_after_first_axis_plotter=record_helper("correct_after_first"),
+        block_switch_axis_plotter=record_helper("switches"),
+        ideal_choices_axis_plotter=record_helper("ideal_choices"),
+    )
+
+    assert (tmp_path / "CT014_multisession-summary-grid.png").exists()
+    assert helper_calls == ["ttc", "switches", "correct_after_first", "ideal_choices"]
+    assert "Block HMM outputs not found" in capsys.readouterr().out
+
+
+def test_plot_multisession_summary_grid_uses_hmm_panels(tmp_path: Path):
+    """Multisession summary grid should use HMM and sliding panels when supplied."""
+    performance_plots = _import_performance_plots()
+    calls = {"hmm": 0, "sliding": 0}
+
+    class FakeBlockHmmModule:
+        @staticmethod
+        def prepare_block_lm_hmm_data(block_df, predictor_columns=("prev_n_rewarded",)):
+            return {
+                "observations": block_df["trials_to_correct"].to_numpy().reshape(-1, 1),
+                "inputs": block_df["prev_n_rewarded"].to_numpy().reshape(-1, 1),
+                "valid_mask": np.ones(block_df.shape[0], dtype=bool),
+                "predictor_labels": ["prev_n_rewarded"],
+            }
+
+        @staticmethod
+        def normalize_lm_observation_parameters(recovered_weights, recovered_mus):
+            return recovered_weights, recovered_mus
+
+        @staticmethod
+        def build_presentation_colors(primary_predictor_weights):
+            return ["blue", "red"], plt.cm.Set1.copy()
+
+        @staticmethod
+        def compute_sliding_block_regression(
+            block_df,
+            valid_mask=None,
+            predictor_column="prev_n_rewarded",
+            response_column="trials_to_correct",
+            window_size=10,
+            step_size=5,
+        ):
+            return pd.DataFrame(
+                {
+                    "window_center_position": [4.5],
+                    "prev_n_rewarded_weight": [0.25],
+                    "window_intercept": [2.0],
+                }
+            )
+
+    def fake_hmm_plotter(**kwargs):
+        calls["hmm"] += 1
+        kwargs["obs_ax"].set_title("hmm")
+        return kwargs["obs_ax"]
+
+    def fake_sliding_plotter(regression_ax, sliding_regression_df, **_kwargs):
+        calls["sliding"] += 1
+        regression_ax.set_title("sliding")
+        return regression_ax.twinx()
+
+    block_model_dict = {
+        "map": {
+            "posterior_probs": np.column_stack([np.ones(10), np.zeros(10)]),
+            "hmm": object(),
+            "weight_dict": {
+                "weights": np.array([[[0.5]], [[-0.5]]]),
+                "mus": np.array([[2.0], [4.0]]),
+            },
+        }
+    }
+
+    performance_plots.plot_multisession_summary_grid(
+        block_performance=_make_summary_grid_block_df(n_blocks=10),
+        side_trials_to_correct_summary=_make_side_trials_to_correct_summary(),
+        side_trials_to_correct_block_points=_make_side_trials_to_correct_points(),
+        correct_after_first_summary=pd.DataFrame(
+            {
+                "date": ["2025-12-05"],
+                "correct_after_first_group": ["overall"],
+                "percent_correct_after_first_q1": [0.25],
+                "percent_correct_after_first_median": [0.5],
+                "percent_correct_after_first_q3": [0.75],
+            }
+        ),
+        correct_after_first_block_points=pd.DataFrame(
+            {
+                "date": ["2025-12-05"],
+                "correct_after_first_group": ["overall"],
+                "percent_correct_after_first_numeric": [0.5],
+                "no_correct_choice": [False],
+            }
+        ),
+        block_switch_summary=pd.DataFrame(
+            {
+                "date": ["2025-12-05"],
+                "switch_group": ["overall"],
+                "n_switches_q1": [1.0],
+                "n_switches_median": [2.0],
+                "n_switches_q3": [3.0],
+            }
+        ),
+        block_switch_block_points=pd.DataFrame(
+            {
+                "date": ["2025-12-05"],
+                "switch_group": ["overall"],
+                "n_switches": [2],
+            }
+        ),
+        overall_df=pd.DataFrame(
+            {
+                "date": ["2025-12-05"],
+                "actual_reward_collected": [20.0],
+                "history_ideal_oracle_accuracy": [0.7],
+                "history_ideal_mouse_agreement": [0.6],
+                "history_ideal_reward_fraction": [0.75],
+                "history_ideal_expected_reward": [26.7],
+                "fixed_replay_ideal_reward_q1": [23.0],
+                "fixed_replay_ideal_reward_median": [25.0],
+                "fixed_replay_ideal_reward_q3": [28.0],
+                "fixed_replay_ideal_oracle_accuracy_q1": [0.65],
+                "fixed_replay_ideal_oracle_accuracy_median": [0.7],
+                "fixed_replay_ideal_oracle_accuracy_q3": [0.76],
+            }
+        ),
+        plot_path=tmp_path,
+        figure_id="CT014",
+        block_model_dict=block_model_dict,
+        block_hmm_module=FakeBlockHmmModule,
+        hmm_observation_plotter=fake_hmm_plotter,
+        sliding_regression_plotter=fake_sliding_plotter,
+        ttc_axis_plotter=lambda ax, **_kwargs: ax,
+        correct_after_first_axis_plotter=lambda ax, **_kwargs: ax,
+        block_switch_axis_plotter=lambda ax, **_kwargs: ax,
+        ideal_choices_axis_plotter=lambda ax, **_kwargs: ax,
+    )
+
+    assert calls == {"hmm": 1, "sliding": 1}
 
 
 def test_plot_multisession_oracle_behavior_saves_accuracy_and_reward_figures(tmp_path: Path):
@@ -387,6 +1554,7 @@ def _make_scatter_block_performance() -> pd.DataFrame:
             "trials_to_correct": [2, 4, "None"],
             "prev_n_correct": [1, 2, "None"],
             "prev_consecutive_rewards": [1, 3, 0],
+            "prev_n_rewarded": [2, 4, 0],
         }
     )
 
@@ -403,7 +1571,7 @@ def test_scatter_trials_to_correct_accepts_string_regression_stats(tmp_path: Pat
         figure_id="unit_session",
     )
 
-    assert (tmp_path / "unit_session_scatter_trials-to-correct.png").exists()
+    assert (tmp_path / "unit_session_scatter_trials-to-correct_prev_n_rewarded.png").exists()
 
 
 def test_scatter_trials_to_correct_rejects_missing_regression_stats(tmp_path: Path):
@@ -417,6 +1585,87 @@ def test_scatter_trials_to_correct_rejects_missing_regression_stats(tmp_path: Pa
             intercept="1.0",
             plot_path=tmp_path,
             figure_id="unit_session",
+        )
+
+
+def test_scatter_trials_to_correct_defaults_to_prev_n_rewarded(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """The default scatter predictor should match the saved previous-block reward stats."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+
+    performance_plots.scatter_trials_to_correct(
+        block_performance=_make_scatter_block_performance(),
+        slope=0.5,
+        intercept=1.0,
+        plot_path=tmp_path,
+        figure_id="unit_session",
+        point_jitter=0.0,
+    )
+
+    point_calls = [call for call in plot_calls if call["args"] == ("o",)]
+    plotted_x = np.concatenate([call["x"] for call in point_calls])
+    regression_call = next(call for call in plot_calls if call["args"] == ("k--",))
+
+    np.testing.assert_array_equal(plotted_x, np.array([2.0, 4.0]))
+    np.testing.assert_array_equal(regression_call["x"], np.array([0.0, 4.0]))
+    np.testing.assert_array_equal(regression_call["y"], np.array([1.0, 3.0]))
+
+
+@pytest.mark.parametrize(
+    ("regressor_column", "expected_point_x", "expected_line_x"),
+    [
+        ("prev_consecutive_rewards", np.array([1.0, 3.0]), np.array([0.0, 3.0])),
+        ("prev_n_correct", np.array([1.0, 2.0]), np.array([0.0, 2.0])),
+    ],
+)
+def test_scatter_trials_to_correct_supports_alternate_regressors(
+    monkeypatch,
+    tmp_path: Path,
+    regressor_column: str,
+    expected_point_x: np.ndarray,
+    expected_line_x: np.ndarray,
+):
+    """Requested scatter regressors should drive both marker positions and fit line."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+
+    performance_plots.scatter_trials_to_correct(
+        block_performance=_make_scatter_block_performance(),
+        slope=0.5,
+        intercept=1.0,
+        plot_path=tmp_path,
+        figure_id="unit_session",
+        regressor_column=regressor_column,
+        point_jitter=0.0,
+    )
+
+    point_calls = [call for call in plot_calls if call["args"] == ("o",)]
+    plotted_x = np.concatenate([call["x"] for call in point_calls])
+    regression_call = next(call for call in plot_calls if call["args"] == ("k--",))
+
+    np.testing.assert_array_equal(plotted_x, expected_point_x)
+    np.testing.assert_array_equal(regression_call["x"], expected_line_x)
+    np.testing.assert_array_equal(
+        regression_call["y"],
+        0.5 * expected_line_x + 1.0,
+    )
+
+
+def test_scatter_trials_to_correct_rejects_unknown_regressor(tmp_path: Path):
+    """Unsupported scatter regressors should fail before plotting misleading fits."""
+    performance_plots = _import_performance_plots()
+
+    with pytest.raises(ValueError, match="regressor_column"):
+        performance_plots.scatter_trials_to_correct(
+            block_performance=_make_scatter_block_performance(),
+            slope=0.5,
+            intercept=1.0,
+            plot_path=tmp_path,
+            figure_id="unit_session",
+            regressor_column="prev_bad_metric",
         )
 
 
@@ -441,7 +1690,7 @@ def test_scatter_trials_to_correct_applies_small_reproducible_jitter_to_points(
     point_calls = [call for call in plot_calls if call["args"] == ("o",)]
     plotted_x = np.concatenate([call["x"] for call in point_calls])
     plotted_y = np.concatenate([call["y"] for call in point_calls])
-    original_x = np.array([1.0, 3.0])
+    original_x = np.array([2.0, 4.0])
     original_y = np.array([2.0, 4.0])
 
     assert not np.array_equal(plotted_x, original_x)
@@ -470,8 +1719,117 @@ def test_scatter_trials_to_correct_keeps_regression_line_unjittered(
 
     regression_call = next(call for call in plot_calls if call["args"] == ("k--",))
 
-    np.testing.assert_array_equal(regression_call["x"], np.array([0.0, 3.0]))
-    np.testing.assert_array_equal(regression_call["y"], np.array([1.0, 2.5]))
+    np.testing.assert_array_equal(regression_call["x"], np.array([0.0, 4.0]))
+    np.testing.assert_array_equal(regression_call["y"], np.array([1.0, 3.0]))
+
+
+def test_plot_block_bias_quadrants_normalizes_csv_flag_strings(monkeypatch, tmp_path: Path):
+    """CSV-loaded bias flags should plot as binary quadrant coordinates."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_type": ["right_cued", "left_cued"],
+            "bias_inf_flag": ["False", "True"],
+            "bias_rl_flag": ["True", "False"],
+        }
+    )
+
+    performance_plots.plot_block_bias_quadrants(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        figure_id="unit_session",
+        point_jitter=0,
+    )
+
+    point_calls = [call for call in plot_calls if call["args"] == ("o",)]
+    plotted_by_label = {call["kwargs"]["label"]: (call["x"].tolist(), call["y"].tolist()) for call in point_calls}
+
+    assert plotted_by_label["right cued"] == ([0.0], [1.0])
+    assert plotted_by_label["left cued"] == ([1.0], [0.0])
+
+
+def test_plot_block_bias_quadrants_skips_missing_flags(monkeypatch, tmp_path: Path):
+    """Blocks missing either bias flag should be excluded from quadrant plotting."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_type": ["right_cued", "left_cued", "right_uncued"],
+            "bias_inf_flag": ["False", "None", "True"],
+            "bias_rl_flag": ["False", "True", None],
+        }
+    )
+
+    performance_plots.plot_block_bias_quadrants(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        figure_id="unit_session",
+        point_jitter=0,
+    )
+
+    point_calls = [call for call in plot_calls if call["args"] == ("o",)]
+
+    assert len(point_calls) == 1
+    assert point_calls[0]["kwargs"]["label"] == "right cued"
+    np.testing.assert_array_equal(point_calls[0]["x"], np.array([0.0]))
+    np.testing.assert_array_equal(point_calls[0]["y"], np.array([0.0]))
+
+
+def test_plot_block_bias_quadrants_colors_by_block_type(monkeypatch, tmp_path: Path):
+    """Quadrant points should keep the existing block-type color convention."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_type": ["right_cued", "left_uncued"],
+            "bias_inf_flag": [False, True],
+            "bias_rl_flag": [False, True],
+        }
+    )
+
+    performance_plots.plot_block_bias_quadrants(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        figure_id="unit_session",
+        point_jitter=0,
+    )
+
+    point_calls = [call for call in plot_calls if call["args"] == ("o",)]
+    colors_by_label = {call["kwargs"]["label"]: call["kwargs"]["color"] for call in point_calls}
+
+    assert colors_by_label == {
+        "right cued": performance_plots.color_dict["right_cued"],
+        "left uncued": performance_plots.color_dict["left_uncued"],
+    }
+
+
+def test_plot_block_bias_quadrants_uses_deterministic_jitter(monkeypatch, tmp_path: Path):
+    """Overlapping quadrant points should be reproducibly jittered for visibility."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_type": ["right_cued", "right_cued"],
+            "bias_inf_flag": [True, True],
+            "bias_rl_flag": [False, False],
+        }
+    )
+
+    performance_plots.plot_block_bias_quadrants(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        figure_id="unit_session",
+        point_jitter=0.1,
+        jitter_seed=123,
+    )
+
+    point_call = next(call for call in plot_calls if call["args"] == ("o",))
+
+    assert not np.array_equal(point_call["x"], np.array([1.0, 1.0]))
+    assert not np.array_equal(point_call["y"], np.array([0.0, 0.0]))
+    assert np.all(np.abs(point_call["x"] - np.array([1.0, 1.0])) <= 0.1)
+    assert np.all(np.abs(point_call["y"] - np.array([0.0, 0.0])) <= 0.1)
 
 
 def test_plot_block_hmm_state_feature_scatter_saves_map_fit(tmp_path: Path):

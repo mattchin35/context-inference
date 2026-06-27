@@ -110,6 +110,115 @@ def prepare_block_lm_hmm_data(
     }
 
 
+def compute_sliding_block_regression(
+    block_df: pd.DataFrame,
+    valid_mask: np.ndarray | pd.Series | None = None,
+    predictor_column: str = "prev_n_rewarded",
+    response_column: str = "trials_to_correct",
+    window_size: int = 10,
+    step_size: int = 5,
+) -> pd.DataFrame:
+    """Compute descriptive sliding regressions over valid block rows.
+
+    Parameters
+    ----------
+    block_df : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`. Required
+        columns are `trials_to_correct`, `prev_n_correct`, `predictor_column`,
+        and `response_column`. Rows correspond to task blocks.
+    valid_mask : np.ndarray, pd.Series, or None, default=None
+        Optional boolean mask with shape `(n_blocks,)` selecting the same valid
+        rows used by block LM-HMM fitting. If None, validity is computed with
+        `prepare_block_lm_hmm_data`.
+    predictor_column : str, default="prev_n_rewarded"
+        Previous-block reward count predictor, in rewards.
+    response_column : str, default="trials_to_correct"
+        Block response, in trials to first correct choice after the switch.
+    window_size : int, default=10
+        Number of valid blocks per regression window.
+    step_size : int, default=5
+        Number of valid blocks to advance between windows.
+
+    Returns
+    -------
+    pd.DataFrame
+        Sliding-regression summary with one row per full window. Columns are
+        `window_start_position`, `window_end_position`,
+        `window_center_position`, `window_start_block_ix`,
+        `window_end_block_ix`, `n_blocks`, `{predictor_column}_weight`, and
+        `window_intercept`. Positions are 0-based valid-block plot
+        coordinates; block IDs use `block_ix` when present and the dataframe
+        index otherwise. Slopes have units trials per reward; intercepts have
+        units trials.
+    """
+    if window_size <= 0:
+        raise ValueError("window_size must be positive.")
+    if step_size <= 0:
+        raise ValueError("step_size must be positive.")
+
+    output_columns = [
+        "window_start_position",
+        "window_end_position",
+        "window_center_position",
+        "window_start_block_ix",
+        "window_end_block_ix",
+        "n_blocks",
+        f"{predictor_column}_weight",
+        "window_intercept",
+    ]
+
+    if valid_mask is None:
+        prepared = prepare_block_lm_hmm_data(block_df, predictor_columns=(predictor_column,))
+        valid_mask_array = np.asarray(prepared["valid_mask"], dtype=bool)
+    else:
+        valid_mask_array = np.asarray(valid_mask, dtype=bool)
+        if valid_mask_array.shape[0] != block_df.shape[0]:
+            raise ValueError(
+                "valid_mask must have one entry per block_df row: "
+                f"got {valid_mask_array.shape[0]} for {block_df.shape[0]} rows."
+            )
+
+    valid_df = block_df.loc[valid_mask_array].copy()
+    if valid_df.shape[0] < window_size:
+        return pd.DataFrame(columns=output_columns)
+
+    predictor_values = pd.to_numeric(valid_df[predictor_column], errors="raise").to_numpy(dtype=float)
+    response_values = pd.to_numeric(valid_df[response_column], errors="raise").to_numpy(dtype=float)
+    if "block_ix" in valid_df.columns:
+        block_ids = valid_df["block_ix"].to_numpy()
+    else:
+        block_ids = valid_df.index.to_numpy()
+
+    rows = []
+    for window_start in range(0, valid_df.shape[0] - window_size + 1, step_size):
+        window_end = window_start + window_size
+        x = predictor_values[window_start:window_end]
+        y = response_values[window_start:window_end]
+        x_centered = x - np.mean(x)
+        y_centered = y - np.mean(y)
+        x_variance = np.sum(x_centered ** 2)
+        if x_variance == 0:
+            slope = 0.0
+        else:
+            slope = float(np.sum(x_centered * y_centered) / x_variance)
+        intercept = float(np.mean(y) - slope * np.mean(x))
+
+        rows.append(
+            {
+                "window_start_position": int(window_start),
+                "window_end_position": int(window_end - 1),
+                "window_center_position": float((window_start + window_end - 1) / 2),
+                "window_start_block_ix": block_ids[window_start],
+                "window_end_block_ix": block_ids[window_end - 1],
+                "n_blocks": int(window_size),
+                f"{predictor_column}_weight": slope,
+                "window_intercept": intercept,
+            }
+        )
+
+    return pd.DataFrame(rows, columns=output_columns)
+
+
 def normalize_lm_observation_parameters(
     recovered_weights: np.ndarray,
     recovered_mus: np.ndarray,
@@ -264,6 +373,92 @@ def get_valid_block_trace(
     return valid_values.to_numpy(dtype=float)
 
 
+def _build_count_axis_settings(trace_values: np.ndarray) -> tuple[tuple[float, float], list[float]]:
+    """Build a readable nonnegative count axis for a blockwise trace.
+
+    Parameters
+    ----------
+    trace_values : np.ndarray
+        One-dimensional numeric trace with shape `(n_valid_blocks,)`.
+
+    Returns
+    -------
+    tuple[tuple[float, float], list[float]]
+        `(ylim, yticks)` for a right y-axis. Limits and ticks are in the same
+        count units as `trace_values`.
+    """
+    trace_values = np.asarray(trace_values, dtype=float).reshape(-1)
+    max_value = float(np.nanmax(trace_values)) if trace_values.size else 0.0
+    axis_max = max(1.0, float(np.ceil(max_value)))
+    if axis_max <= 10:
+        ticks = [float(tick) for tick in range(0, int(axis_max) + 1)]
+    else:
+        ticks = [float(tick) for tick in np.linspace(0.0, axis_max, num=5)]
+    return (0.0, axis_max), ticks
+
+
+def resolve_block_secondary_trace(
+    block_df: pd.DataFrame,
+    valid_mask: np.ndarray,
+    block_secondary_trace: str | None,
+) -> dict[str, np.ndarray | str | tuple[float, float] | list[float] | None]:
+    """Resolve the optional right-axis trace for block predicted-state plots.
+
+    Parameters
+    ----------
+    block_df : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`.
+    valid_mask : np.ndarray
+        Boolean mask with shape `(n_blocks,)`, selecting rows plotted in the
+        block LM-HMM state summary.
+    block_secondary_trace : str or None
+        Trace option. Supported values are `"none"`, `"min_value_bias"`,
+        `"bias_rl"` for legacy callers, and `"prev_n_rewarded"`.
+
+    Returns
+    -------
+    dict
+        Plot settings with keys `secondary_trace`, `secondary_trace_label`,
+        `secondary_axis_ylim`, and `secondary_axis_yticks`. Trace values have
+        shape `(n_valid_blocks,)` when present.
+    """
+    if block_secondary_trace is None:
+        block_secondary_trace = "none"
+    normalized_trace = str(block_secondary_trace).strip()
+    empty_settings = {
+        "secondary_trace": None,
+        "secondary_trace_label": None,
+        "secondary_axis_ylim": None,
+        "secondary_axis_yticks": None,
+    }
+    if normalized_trace.lower() == "none":
+        return empty_settings
+
+    fixed_bias_trace_options = {"min_value_bias", "bias_rl"}
+    if normalized_trace in fixed_bias_trace_options:
+        return {
+            "secondary_trace": get_valid_block_trace(block_df, valid_mask, normalized_trace),
+            "secondary_trace_label": normalized_trace,
+            "secondary_axis_ylim": (-1.0, 1.0),
+            "secondary_axis_yticks": [-1.0, 0.0, 1.0],
+        }
+
+    if normalized_trace == "prev_n_rewarded":
+        trace_values = get_valid_block_trace(block_df, valid_mask, normalized_trace)
+        axis_ylim, axis_yticks = _build_count_axis_settings(trace_values)
+        return {
+            "secondary_trace": trace_values,
+            "secondary_trace_label": "Rewards in previous block",
+            "secondary_axis_ylim": axis_ylim,
+            "secondary_axis_yticks": axis_yticks,
+        }
+
+    raise ValueError(
+        "block_secondary_trace must be one of 'none', 'min_value_bias', "
+        "'bias_rl', or 'prev_n_rewarded'."
+    )
+
+
 def split_blocked_holdout_sequences(
     observations: np.ndarray,
     inputs: np.ndarray,
@@ -358,7 +553,11 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
                      predicted_state_line_width: float | None = None,
                      state_plot_figsize: tuple[float, float] | None = None,
                      plot_bias_rl: bool = False,
-                     bias_rl_column: str = "bias_rl"):
+                     bias_rl_column: str = "bias_rl",
+                     block_secondary_trace: str | None = None,
+                     plot_sliding_regression: bool = False,
+                     sliding_regression_window_size: int = 10,
+                     sliding_regression_step_size: int = 5):
     """Fit MLE block LM-HMM states and assign them back to the block table.
 
     Parameters
@@ -393,6 +592,17 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         using a fixed `[-1, 1]` right y-axis.
     bias_rl_column : str, default="bias_rl"
         Blockwise column to overlay when `plot_bias_rl=True`.
+    block_secondary_trace : str or None, default=None
+        Preferred right-axis trace option for predicted-state plots. Supported
+        values are `"none"`, `"min_value_bias"`, `"bias_rl"`, and
+        `"prev_n_rewarded"`. None preserves legacy `plot_bias_rl` behavior.
+    plot_sliding_regression : bool, default=False
+        Whether predicted-state plots include a third subplot with sliding
+        regressions of trials-to-correct on `prev_n_rewarded`.
+    sliding_regression_window_size : int, default=10
+        Number of valid blocks in each sliding-regression window.
+    sliding_regression_step_size : int, default=5
+        Number of valid blocks between successive sliding-regression windows.
 
     Returns
     -------
@@ -404,11 +614,26 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     trials_to_correct = prepared["observations"]
     predictors = prepared["inputs"]
     pred_labels = prepared["predictor_labels"]
-    bias_rl_trace = (
-        get_valid_block_trace(block_df, ix_valid, bias_rl_column)
-        if plot_bias_rl
-        else None
+    effective_secondary_trace = (
+        block_secondary_trace
+        if block_secondary_trace is not None
+        else (bias_rl_column if plot_bias_rl else "none")
     )
+    secondary_trace_settings = resolve_block_secondary_trace(
+        block_df=block_df,
+        valid_mask=ix_valid,
+        block_secondary_trace=effective_secondary_trace,
+    )
+    sliding_regression_df = None
+    if plot_sliding_regression:
+        sliding_regression_df = compute_sliding_block_regression(
+            block_df=block_df,
+            valid_mask=ix_valid,
+            predictor_column="prev_n_rewarded",
+            response_column="trials_to_correct",
+            window_size=sliding_regression_window_size,
+            step_size=sliding_regression_step_size,
+        )
     session_boundary_positions, session_boundary_labels = get_session_boundary_markers(
         block_df,
         valid_mask=ix_valid,
@@ -479,8 +704,11 @@ def mle_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             session_boundary_labels=session_boundary_labels,
             line_width=predicted_state_line_width,
             figsize=state_plot_figsize,
-            secondary_trace=bias_rl_trace,
-            secondary_trace_label=bias_rl_column,
+            secondary_trace=secondary_trace_settings["secondary_trace"],
+            secondary_trace_label=secondary_trace_settings["secondary_trace_label"],
+            secondary_axis_ylim=secondary_trace_settings["secondary_axis_ylim"],
+            secondary_axis_yticks=secondary_trace_settings["secondary_axis_yticks"],
+            sliding_regression_df=sliding_regression_df,
         )
         ax[0].set_title("MLE HMM states")
         save_path = figure_path / '{}_mle_predicted_states.png'.format(sess_id_tag)
@@ -515,7 +743,11 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
                      predicted_state_line_width: float | None = None,
                      state_plot_figsize: tuple[float, float] | None = None,
                      plot_bias_rl: bool = False,
-                     bias_rl_column: str = "bias_rl"):
+                     bias_rl_column: str = "bias_rl",
+                     block_secondary_trace: str | None = None,
+                     plot_sliding_regression: bool = False,
+                     sliding_regression_window_size: int = 10,
+                     sliding_regression_step_size: int = 5):
     """Fit MAP block LM-HMM states and assign them back to the block table.
 
     Parameters
@@ -554,6 +786,17 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
         using a fixed `[-1, 1]` right y-axis.
     bias_rl_column : str, default="bias_rl"
         Blockwise column to overlay when `plot_bias_rl=True`.
+    block_secondary_trace : str or None, default=None
+        Preferred right-axis trace option for predicted-state plots. Supported
+        values are `"none"`, `"min_value_bias"`, `"bias_rl"`, and
+        `"prev_n_rewarded"`. None preserves legacy `plot_bias_rl` behavior.
+    plot_sliding_regression : bool, default=False
+        Whether predicted-state plots include a third subplot with sliding
+        regressions of trials-to-correct on `prev_n_rewarded`.
+    sliding_regression_window_size : int, default=10
+        Number of valid blocks in each sliding-regression window.
+    sliding_regression_step_size : int, default=5
+        Number of valid blocks between successive sliding-regression windows.
 
     Returns
     -------
@@ -565,11 +808,26 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
     trials_to_correct = prepared["observations"]
     predictors = prepared["inputs"]
     pred_labels = prepared["predictor_labels"]
-    bias_rl_trace = (
-        get_valid_block_trace(block_df, ix_valid, bias_rl_column)
-        if plot_bias_rl
-        else None
+    effective_secondary_trace = (
+        block_secondary_trace
+        if block_secondary_trace is not None
+        else (bias_rl_column if plot_bias_rl else "none")
     )
+    secondary_trace_settings = resolve_block_secondary_trace(
+        block_df=block_df,
+        valid_mask=ix_valid,
+        block_secondary_trace=effective_secondary_trace,
+    )
+    sliding_regression_df = None
+    if plot_sliding_regression:
+        sliding_regression_df = compute_sliding_block_regression(
+            block_df=block_df,
+            valid_mask=ix_valid,
+            predictor_column="prev_n_rewarded",
+            response_column="trials_to_correct",
+            window_size=sliding_regression_window_size,
+            step_size=sliding_regression_step_size,
+        )
     session_boundary_positions, session_boundary_labels = get_session_boundary_markers(
         block_df,
         valid_mask=ix_valid,
@@ -650,8 +908,11 @@ def map_block_states(block_df: pd.DataFrame, figure_path: Path, sess_id_tag: str
             session_boundary_labels=session_boundary_labels,
             line_width=predicted_state_line_width,
             figsize=state_plot_figsize,
-            secondary_trace=bias_rl_trace,
-            secondary_trace_label=bias_rl_column,
+            secondary_trace=secondary_trace_settings["secondary_trace"],
+            secondary_trace_label=secondary_trace_settings["secondary_trace_label"],
+            secondary_axis_ylim=secondary_trace_settings["secondary_axis_ylim"],
+            secondary_axis_yticks=secondary_trace_settings["secondary_axis_yticks"],
+            sliding_regression_df=sliding_regression_df,
         )
         ax[0].set_title("MAP HMM states")
         save_path = figure_path / '{}_map_predicted_states.png'.format(sess_id_tag)
@@ -1016,7 +1277,11 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
                        predicted_state_line_width: float | None = None,
                        state_plot_figsize: tuple[float, float] | None = None,
                        plot_bias_rl: bool = False,
-                       bias_rl_column: str = "bias_rl"):
+                       bias_rl_column: str = "bias_rl",
+                       block_secondary_trace: str | None = None,
+                       plot_sliding_regression: bool = False,
+                       sliding_regression_window_size: int = 10,
+                       sliding_regression_step_size: int = 5):
     """Run MLE and MAP block LM-HMM modeling and save block-level outputs.
 
     Parameters
@@ -1053,6 +1318,18 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         plots using a fixed `[-1, 1]` right y-axis.
     bias_rl_column : str, default="bias_rl"
         Blockwise column to overlay when `plot_bias_rl=True`.
+    block_secondary_trace : str or None, default=None
+        Preferred right-axis trace option for MLE and MAP predicted-state
+        plots. Supported values are `"none"`, `"min_value_bias"`, `"bias_rl"`,
+        and `"prev_n_rewarded"`. None preserves legacy `plot_bias_rl`
+        behavior.
+    plot_sliding_regression : bool, default=False
+        Whether MLE and MAP predicted-state plots include a third subplot with
+        sliding regressions of trials-to-correct on `prev_n_rewarded`.
+    sliding_regression_window_size : int, default=10
+        Number of valid blocks in each sliding-regression window.
+    sliding_regression_step_size : int, default=5
+        Number of valid blocks between successive sliding-regression windows.
 
     Returns
     -------
@@ -1074,6 +1351,10 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         state_plot_figsize=state_plot_figsize,
         plot_bias_rl=plot_bias_rl,
         bias_rl_column=bias_rl_column,
+        block_secondary_trace=block_secondary_trace,
+        plot_sliding_regression=plot_sliding_regression,
+        sliding_regression_window_size=sliding_regression_window_size,
+        sliding_regression_step_size=sliding_regression_step_size,
     )
     map_model_dict, block_performance = map_block_states(
         block_performance,
@@ -1090,6 +1371,10 @@ def run_block_modeling(block_performance: pd.DataFrame, augmented_trial_df: pd.D
         state_plot_figsize=state_plot_figsize,
         plot_bias_rl=plot_bias_rl,
         bias_rl_column=bias_rl_column,
+        block_secondary_trace=block_secondary_trace,
+        plot_sliding_regression=plot_sliding_regression,
+        sliding_regression_window_size=sliding_regression_window_size,
+        sliding_regression_step_size=sliding_regression_step_size,
     )
     save_block_model_dict(
         map_model_dict,

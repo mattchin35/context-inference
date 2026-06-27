@@ -26,6 +26,29 @@ def test_colorblock_raster_handles_empty_lick_events(tmp_path):
     assert (tmp_path / "empty_licks.png").exists()
 
 
+def test_plot_colorblock_raster_on_ax_draws_existing_axes():
+    """Colorblock raster helper should draw into a caller-owned axis."""
+    event_df = pd.DataFrame(
+        {
+            "Time": [0.0, 0.5, 1.0, 2.0],
+            "Event": ["enter_right_patch", "left_entry", "right_entry", "enter_left_patch"],
+        }
+    )
+    fig, ax = plt.subplots()
+
+    raster_plots.plot_colorblock_raster_on_ax(
+        ax=ax,
+        event_df=event_df,
+        session_info={"use_dark_period": False},
+    )
+
+    assert ax.get_xlabel() == "Time (seconds)"
+    assert [label.get_text() for label in ax.get_yticklabels()] == ["Left\nlick", "Right\nlick"]
+    assert len(ax.collections) >= 1
+    assert len(ax.patches) >= 1
+    plt.close(fig)
+
+
 def test_colorblock_raster_legend_uses_only_present_states(tmp_path, monkeypatch):
     """Context legend should omit dark period when no dark-period state is plotted."""
     event_df = pd.DataFrame(

@@ -371,6 +371,26 @@ curate_trial_analysis_dataframe <- function(df,
   return(curated_df)
 }
 
+curate_trial_analysis_dataframe_for_random_forest <- function(df,
+                                            drop_columns = c("state", "state_int", "block_type", "cur_block", "cur_trial", "cur_trial_in_block",
+                                                             "experimenter_reward_given", "trial_time_since_start", "choice_time_since_start", "time_to_choice",
+                                                             "active_stimulus", "block_stimulus", "reward_time",
+                                                             "start_time", "choice_time", "led_on_time",
+                                                             "led_off_time", "p_active_rew", "p_inactive_rew",
+                                                             "stay_trial", "switch_trial", "explore_trial", "reward", "correct",
+                                                             "block_entry_trial", "first_switch_in_block", "block_entry_explore_trial",
+                                                             "inherited_block_strategy",
+                                                             "p_switch", "session_ID")) {
+  existing_drop_columns <- intersect(drop_columns, names(df))
+
+  if (length(existing_drop_columns) == 0) {
+    return(df)
+  }
+
+  curated_df <- dplyr::select(df, -dplyr::all_of(existing_drop_columns))
+  return(curated_df)
+}
+
 preprocess_trial_dataframe <- function(df, include_model_regressors = FALSE, drop_columns = NULL) {
   cleaned_df <- cleanup_trial_dataframe(df, include_model_regressors = include_model_regressors)
   

@@ -138,6 +138,93 @@ def test_prepare_block_lm_hmm_data_uses_prev_correct_as_history_gate():
     np.testing.assert_array_equal(prepared["valid_mask"], np.array([True, False, True]))
 
 
+def test_compute_sliding_block_regression_uses_valid_block_rows():
+    """Sliding regression should use the same valid block rows as block HMM prep."""
+    block_df = pd.DataFrame(
+        {
+            "block_ix": np.arange(12),
+            "trials_to_correct": [3, "None", 7, 9, 11, 13, 15, 17, 19, 21, 23, 25],
+            "prev_n_correct": [1, 1, "None", 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            "prev_n_rewarded": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        }
+    )
+
+    regression_df = bssm.compute_sliding_block_regression(
+        block_df,
+        window_size=10,
+        step_size=5,
+    )
+
+    assert regression_df.shape[0] == 1
+    assert regression_df.loc[0, "window_start_position"] == 0
+    assert regression_df.loc[0, "window_end_position"] == 9
+    assert regression_df.loc[0, "window_start_block_ix"] == 0
+    assert regression_df.loc[0, "window_end_block_ix"] == 11
+    assert regression_df.loc[0, "n_blocks"] == 10
+
+
+def test_compute_sliding_block_regression_skips_partial_windows():
+    """Fewer valid blocks than the requested window should produce no rows."""
+    block_df = pd.DataFrame(
+        {
+            "trials_to_correct": np.arange(9) + 1,
+            "prev_n_correct": np.ones(9),
+            "prev_n_rewarded": np.arange(9),
+        }
+    )
+
+    regression_df = bssm.compute_sliding_block_regression(
+        block_df,
+        window_size=10,
+        step_size=5,
+    )
+
+    assert regression_df.empty
+
+
+def test_compute_sliding_block_regression_uses_window_size_and_step():
+    """Window centers should advance over valid block positions by the step size."""
+    block_df = pd.DataFrame(
+        {
+            "block_ix": np.arange(20),
+            "trials_to_correct": np.arange(20) + 1,
+            "prev_n_correct": np.ones(20),
+            "prev_n_rewarded": np.arange(20),
+        }
+    )
+
+    regression_df = bssm.compute_sliding_block_regression(
+        block_df,
+        window_size=10,
+        step_size=5,
+    )
+
+    assert regression_df["window_start_position"].tolist() == [0, 5, 10]
+    assert regression_df["window_end_position"].tolist() == [9, 14, 19]
+    assert regression_df["window_center_position"].tolist() == [4.5, 9.5, 14.5]
+
+
+def test_compute_sliding_block_regression_returns_weight_and_intercept():
+    """Synthetic linear data should recover the descriptive slope and intercept."""
+    rewards = np.arange(10, dtype=float)
+    block_df = pd.DataFrame(
+        {
+            "trials_to_correct": 2 * rewards + 3,
+            "prev_n_correct": np.ones(10),
+            "prev_n_rewarded": rewards,
+        }
+    )
+
+    regression_df = bssm.compute_sliding_block_regression(
+        block_df,
+        window_size=10,
+        step_size=5,
+    )
+
+    assert regression_df.loc[0, "prev_n_rewarded_weight"] == pytest.approx(2.0)
+    assert regression_df.loc[0, "window_intercept"] == pytest.approx(3.0)
+
+
 def test_get_session_boundary_markers_uses_valid_block_rows():
     """Multisession block plot boundaries should align to filtered HMM rows."""
     block_df = pd.DataFrame(
@@ -275,6 +362,85 @@ def test_add_cur_strategy_slope_single_state_fills_all_rows():
     )
 
     assert updated["cur_strategy_slope"].tolist() == [0.5, 0.5, 0.5]
+
+
+def test_resolve_block_secondary_trace_none_returns_empty_settings():
+    """The explicit none option should suppress the right-axis trace."""
+    block_df = pd.DataFrame(
+        {
+            "trials_to_correct": [3, 4],
+            "prev_n_correct": [2, 2],
+            "prev_n_rewarded": [1, 2],
+        }
+    )
+
+    settings = bssm.resolve_block_secondary_trace(
+        block_df=block_df,
+        valid_mask=np.array([True, True]),
+        block_secondary_trace="none",
+    )
+
+    assert settings == {
+        "secondary_trace": None,
+        "secondary_trace_label": None,
+        "secondary_axis_ylim": None,
+        "secondary_axis_yticks": None,
+    }
+
+
+def test_resolve_block_secondary_trace_min_value_bias_uses_fixed_bias_axis():
+    """The min-value-bias option should use valid rows and fixed bias scaling."""
+    block_df = pd.DataFrame(
+        {
+            "trials_to_correct": [3, "None", 5],
+            "prev_n_correct": [2, 2, 1],
+            "prev_n_rewarded": [1, 2, 0],
+            "min_value_bias": [0.5, 0.99, -0.25],
+        }
+    )
+
+    settings = bssm.resolve_block_secondary_trace(
+        block_df=block_df,
+        valid_mask=np.array([True, False, True]),
+        block_secondary_trace="min_value_bias",
+    )
+
+    np.testing.assert_allclose(settings["secondary_trace"], np.array([0.5, -0.25]))
+    assert settings["secondary_trace_label"] == "min_value_bias"
+    assert settings["secondary_axis_ylim"] == (-1.0, 1.0)
+    assert settings["secondary_axis_yticks"] == [-1.0, 0.0, 1.0]
+
+
+def test_resolve_block_secondary_trace_prev_n_rewarded_uses_count_axis():
+    """The previous-rewards option should use a count-style y-axis."""
+    block_df = pd.DataFrame(
+        {
+            "trials_to_correct": [3, "None", 5],
+            "prev_n_correct": [2, 2, 1],
+            "prev_n_rewarded": [1, 4, 3],
+        }
+    )
+
+    settings = bssm.resolve_block_secondary_trace(
+        block_df=block_df,
+        valid_mask=np.array([True, False, True]),
+        block_secondary_trace="prev_n_rewarded",
+    )
+
+    np.testing.assert_allclose(settings["secondary_trace"], np.array([1.0, 3.0]))
+    assert settings["secondary_trace_label"] == "Rewards in previous block"
+    assert settings["secondary_axis_ylim"] == (0.0, 3.0)
+    assert settings["secondary_axis_yticks"] == [0.0, 1.0, 2.0, 3.0]
+
+
+def test_resolve_block_secondary_trace_rejects_unknown_option():
+    """Unknown secondary trace names should fail before plotting."""
+    with pytest.raises(ValueError, match="block_secondary_trace"):
+        bssm.resolve_block_secondary_trace(
+            block_df=make_block_performance_df(),
+            valid_mask=np.array([True, True, False]),
+            block_secondary_trace="bad_trace",
+        )
 
 
 def test_mle_block_states_uses_hmm_builder_and_normalizes_weights(monkeypatch, tmp_path):
@@ -562,15 +728,15 @@ def test_map_block_states_derives_observation_dimension_from_prepared_data(monke
     assert captured["obs_dim"] == 2
 
 
-def test_mle_block_states_passes_valid_bias_rl_trace_to_state_plot(monkeypatch, tmp_path):
-    """MLE state plot overlay should align bias_rl to HMM-valid block rows."""
+def test_mle_block_states_passes_min_value_bias_secondary_trace_to_state_plot(monkeypatch, tmp_path):
+    """MLE state plot overlay should align min_value_bias to HMM-valid block rows."""
     captured = {}
     block_df = pd.DataFrame(
         {
             "trials_to_correct": [3, "None", 5],
             "prev_n_correct": [2, 2, 1],
             "prev_n_rewarded": [1, 2, 0],
-            "bias_rl": [0.5, 0.99, -0.25],
+            "min_value_bias": [0.5, 0.99, -0.25],
         }
     )
 
@@ -597,6 +763,8 @@ def test_mle_block_states_passes_valid_bias_rl_trace_to_state_plot(monkeypatch, 
     def fake_state_plot(*_args, **kwargs):
         captured["secondary_trace"] = kwargs["secondary_trace"]
         captured["secondary_trace_label"] = kwargs["secondary_trace_label"]
+        captured["secondary_axis_ylim"] = kwargs["secondary_axis_ylim"]
+        captured["secondary_axis_yticks"] = kwargs["secondary_axis_yticks"]
         return plt.subplots(2, 1)
 
     monkeypatch.setattr(bssm, "build_input_driven_hmm", lambda **_kwargs: DummyHMM())
@@ -610,22 +778,23 @@ def test_mle_block_states_passes_valid_bias_rl_trace_to_state_plot(monkeypatch, 
         sess_id_tag="unit_session",
         plot=True,
         num_states=2,
-        plot_bias_rl=True,
+        block_secondary_trace="min_value_bias",
     )
 
     np.testing.assert_allclose(captured["secondary_trace"], np.array([0.5, -0.25]))
-    assert captured["secondary_trace_label"] == "bias_rl"
+    assert captured["secondary_trace_label"] == "min_value_bias"
+    assert captured["secondary_axis_ylim"] == (-1.0, 1.0)
+    assert captured["secondary_axis_yticks"] == [-1.0, 0.0, 1.0]
 
 
-def test_map_block_states_passes_valid_bias_rl_trace_to_state_plot(monkeypatch, tmp_path):
-    """MAP state plot overlay should align bias_rl to HMM-valid block rows."""
+def test_map_block_states_passes_prev_n_rewarded_secondary_trace_to_state_plot(monkeypatch, tmp_path):
+    """MAP state plot overlay should align previous rewards to HMM-valid block rows."""
     captured = {}
     block_df = pd.DataFrame(
         {
             "trials_to_correct": [3, "None", 5],
             "prev_n_correct": [2, 2, 1],
-            "prev_n_rewarded": [1, 2, 0],
-            "bias_rl": [0.5, 0.99, -0.25],
+            "prev_n_rewarded": [1, 2, 3],
         }
     )
 
@@ -652,6 +821,8 @@ def test_map_block_states_passes_valid_bias_rl_trace_to_state_plot(monkeypatch, 
     def fake_presentation_plot(*_args, **kwargs):
         captured["secondary_trace"] = kwargs["secondary_trace"]
         captured["secondary_trace_label"] = kwargs["secondary_trace_label"]
+        captured["secondary_axis_ylim"] = kwargs["secondary_axis_ylim"]
+        captured["secondary_axis_yticks"] = kwargs["secondary_axis_yticks"]
         return plt.subplots(2, 1)
 
     monkeypatch.setattr(bssm, "build_input_driven_hmm", lambda **_kwargs: DummyHMM())
@@ -670,15 +841,17 @@ def test_map_block_states_passes_valid_bias_rl_trace_to_state_plot(monkeypatch, 
         plot=True,
         num_states=2,
         model_dict={"mle": {}},
-        plot_bias_rl=True,
+        block_secondary_trace="prev_n_rewarded",
     )
 
-    np.testing.assert_allclose(captured["secondary_trace"], np.array([0.5, -0.25]))
-    assert captured["secondary_trace_label"] == "bias_rl"
+    np.testing.assert_allclose(captured["secondary_trace"], np.array([1.0, 3.0]))
+    assert captured["secondary_trace_label"] == "Rewards in previous block"
+    assert captured["secondary_axis_ylim"] == (0.0, 3.0)
+    assert captured["secondary_axis_yticks"] == [0.0, 1.0, 2.0, 3.0]
 
 
-def test_mle_block_states_rejects_missing_bias_rl_overlay_column(monkeypatch, tmp_path):
-    """Requesting a bias_rl overlay without the column should fail clearly."""
+def test_mle_block_states_rejects_missing_secondary_trace_column(monkeypatch, tmp_path):
+    """Requesting a secondary trace without the column should fail clearly."""
     class DummyTransitions:
         log_Ps = np.zeros((1, 1))
 
@@ -701,14 +874,14 @@ def test_mle_block_states_rejects_missing_bias_rl_overlay_column(monkeypatch, tm
 
     monkeypatch.setattr(bssm, "build_input_driven_hmm", lambda **_kwargs: DummyHMM())
 
-    with pytest.raises(ValueError, match="bias_rl"):
+    with pytest.raises(ValueError, match="min_value_bias"):
         bssm.mle_block_states(
             make_block_performance_df().iloc[:2].copy(),
             figure_path=tmp_path,
             sess_id_tag="unit_session",
             plot=True,
             num_states=1,
-            plot_bias_rl=True,
+            block_secondary_trace="min_value_bias",
         )
 
 
@@ -1146,8 +1319,8 @@ def test_run_block_modeling_forwards_state_plot_figsize(monkeypatch, tmp_path):
     }
 
 
-def test_run_block_modeling_forwards_bias_rl_overlay_option(monkeypatch, tmp_path):
-    """Block modeling should pass bias_rl overlay settings to MLE and MAP plots."""
+def test_run_block_modeling_forwards_secondary_trace_option(monkeypatch, tmp_path):
+    """Block modeling should pass the selected secondary trace to MLE and MAP plots."""
     session = SimpleNamespace(
         processed_data_path=tmp_path,
         figure_path=tmp_path,
@@ -1155,7 +1328,7 @@ def test_run_block_modeling_forwards_bias_rl_overlay_option(monkeypatch, tmp_pat
         sess_id_abbreviated="unit",
     )
     block_performance = make_block_performance_df().iloc[:2].copy()
-    block_performance["bias_rl"] = [0.5, -0.25]
+    block_performance["min_value_bias"] = [0.5, -0.25]
     augmented_trial_df = pd.DataFrame({"block_id": [0, 1], "trial": [0, 1]})
     captured_overlay_options = {}
     model_dict = {
@@ -1177,17 +1350,11 @@ def test_run_block_modeling_forwards_bias_rl_overlay_option(monkeypatch, tmp_pat
     }
 
     def fake_mle_block_states(block_df, figure_path, sess_id_tag, **kwargs):
-        captured_overlay_options["mle"] = (
-            kwargs["plot_bias_rl"],
-            kwargs["bias_rl_column"],
-        )
+        captured_overlay_options["mle"] = kwargs["block_secondary_trace"]
         return {"mle": model_dict["mle"]}, block_df
 
     def fake_map_block_states(block_df, figure_path, sess_id_tag, **kwargs):
-        captured_overlay_options["map"] = (
-            kwargs["plot_bias_rl"],
-            kwargs["bias_rl_column"],
-        )
+        captured_overlay_options["map"] = kwargs["block_secondary_trace"]
         return model_dict, block_df
 
     monkeypatch.setattr(bssm, "mle_block_states", fake_mle_block_states)
@@ -1207,13 +1374,93 @@ def test_run_block_modeling_forwards_bias_rl_overlay_option(monkeypatch, tmp_pat
         block_performance,
         augmented_trial_df,
         session=session,
-        plot_bias_rl=True,
-        bias_rl_column="bias_rl",
+        block_secondary_trace="min_value_bias",
     )
 
     assert captured_overlay_options == {
-        "mle": (True, "bias_rl"),
-        "map": (True, "bias_rl"),
+        "mle": "min_value_bias",
+        "map": "min_value_bias",
+    }
+
+
+def test_run_block_modeling_forwards_sliding_regression_settings(monkeypatch, tmp_path):
+    """Block modeling should pass sliding-regression plot settings to MLE and MAP."""
+    session = SimpleNamespace(
+        processed_data_path=tmp_path,
+        figure_path=tmp_path,
+        sess_id_full="unit_session",
+        sess_id_abbreviated="unit",
+    )
+    block_performance = make_block_performance_df().iloc[:2].copy()
+    augmented_trial_df = pd.DataFrame({"block_id": [0, 1], "trial": [0, 1]})
+    captured_settings = {}
+    model_dict = {
+        "mle": {
+            "weight_dict": {
+                "weights": np.array([[[0.25]], [[-0.5]]]),
+                "mus": np.array([[3.0], [4.0]]),
+                "label": "mle",
+            }
+        },
+        "map": {
+            "weight_dict": {
+                "weights": np.array([[[0.75]], [[-0.25]]]),
+                "mus": np.array([[2.0], [5.0]]),
+                "label": "map",
+                "weight_labels": ["prev_n_rewarded"],
+            }
+        },
+    }
+
+    def fake_mle_block_states(block_df, figure_path, sess_id_tag, **kwargs):
+        captured_settings["mle"] = {
+            "plot_sliding_regression": kwargs["plot_sliding_regression"],
+            "sliding_regression_window_size": kwargs["sliding_regression_window_size"],
+            "sliding_regression_step_size": kwargs["sliding_regression_step_size"],
+        }
+        return {"mle": model_dict["mle"]}, block_df
+
+    def fake_map_block_states(block_df, figure_path, sess_id_tag, **kwargs):
+        captured_settings["map"] = {
+            "plot_sliding_regression": kwargs["plot_sliding_regression"],
+            "sliding_regression_window_size": kwargs["sliding_regression_window_size"],
+            "sliding_regression_step_size": kwargs["sliding_regression_step_size"],
+        }
+        return model_dict, block_df
+
+    monkeypatch.setattr(bssm, "mle_block_states", fake_mle_block_states)
+    monkeypatch.setattr(bssm, "map_block_states", fake_map_block_states)
+    monkeypatch.setattr(
+        bssm,
+        "hardcode_block_strategy",
+        lambda block_df: block_df.assign(hardcoded_strategy=["Inference", "Qlearning"]),
+    )
+    monkeypatch.setattr(
+        bssm,
+        "trials_inherit_strategy",
+        lambda block_df, trial_df: trial_df.assign(inherited_block_strategy=[0, 1]),
+    )
+
+    bssm.run_block_modeling(
+        block_performance,
+        augmented_trial_df,
+        session=session,
+        plot_sliding_regression=True,
+        sliding_regression_window_size=10,
+        sliding_regression_step_size=5,
+    )
+
+    assert captured_settings == {
+        "mle": {
+            "plot_sliding_regression": True,
+            "sliding_regression_window_size": 10,
+            "sliding_regression_step_size": 5,
+        },
+        "map": {
+            "plot_sliding_regression": True,
+            "sliding_regression_window_size": 10,
+            "sliding_regression_step_size": 5,
+        },
     }
 
 

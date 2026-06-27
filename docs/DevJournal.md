@@ -174,3 +174,79 @@ making probe, LFP, and plot-type choices explicit in the UI.
   metadata display formatting, single-trial combined plotting, binned
   firing-rate computation and plotting, and plot filenames for alternative
   single-unit views.
+
+# 2026/06/25
+
+Expanded behavior-analysis diagnostics for multisession and single-session
+block HMM workflows. The goal was to make block-level strategy, bias, and
+session-quality patterns easier to inspect without changing the underlying HMM
+analysis assumptions.
+
+- Extended block predicted-state plotting with configurable right-axis traces.
+  MLE/MAP block HMM plots can now show no secondary trace, `min_value_bias`, or
+  `prev_n_rewarded`, with axis scaling appropriate to the selected trace.
+- Added optional session-boundary support and plot-tuning controls for
+  multisession block/trial HMM plots, including thinner line widths, wider
+  figures, and readable boundary labels placed below the axes.
+- Added `trial_input_source` handling for multisession trial HMM workflows so
+  trial IC/modeling can load a saved augmented trial CSV with inherited block
+  modeling results, instead of requiring block modeling to run first.
+- Added cross-session side-specific trials-to-correct quality summaries. The
+  multisession workflow now saves side-level summary and raw block-point CSVs
+  and plots completion fraction, median trials-to-correct with Q1-Q3 spread,
+  raw block points, and explicit no-correct block markers for left and right
+  rewarded blocks.
+- Added a single-session block quality summary plot. It shows a block timeline
+  with numeric trials-to-correct, no-correct side blocks, and dark periods, plus
+  a left/right side summary with raw points, medians, and Q1-Q3 intervals.
+- Added a block bias quadrant plot that places each block by inference bias
+  flag and RL bias flag, with deterministic jitter and block-type colors.
+- Added optional sliding block-regression diagnostics underneath block HMM
+  predicted-state plots. The diagnostic uses valid block rows, regresses
+  `trials_to_correct` on `prev_n_rewarded` in 10-block windows stepped by 5
+  blocks, and plots `prev_n_rewarded_weight` on the left axis with
+  `window_intercept` on the right axis.
+- Added additive RL status columns to saved block-performance tables without
+  changing the existing `bias_rl` and `bias_inf` columns. For RL status only,
+  blocks with `prev_n_correct == 0` use an effective previous-correct value of
+  1, giving that condition a one-trial grace period. New columns include
+  `rl_effective_prev_n_correct`, `rl_thresh`, `rl_thresh_flag`,
+  `bias_rl_status_value`, and `rl_status`.
+- Added focused pytest coverage for the new plotting, multisession summary,
+  sliding-regression, and RL-status helpers. The focused HMM/plot/main test
+  sets passed. The session-analysis test file could not be run in this
+  environment because `formulaic` and `statsmodels` were unavailable, but the
+  touched file compiled and the RL-status helper behavior was checked with
+  those unavailable imports stubbed.
+
+# 2026/06/26
+
+Added several block-level performance diagnostics for single-session and
+multisession behavior analysis. The goal was to separate early block exploration
+from later block performance, make across-session block quality easier to scan,
+and expose mouse agreement with the greedy mouse-history ideal observer.
+
+- Added post-first-correct block metrics to saved `block_performance` tables:
+  `first_correct_trial_in_block`, `n_trials_after_first_correct`, and
+  `percent_correct_after_first_correct`. Single-session plots now show this
+  metric by block, with distinct markers for blocks where no correct choice
+  occurred.
+- Added multisession percent-correct-after-first-correct summaries and raw
+  block-point CSVs. The plot shows overall, left, and right median/Q1-Q3
+  traces, raw block points, and no-correct markers while excluding dark periods.
+- Added multisession block-switch quality summaries using raw `n_switches`.
+  The plot shows overall, left, and right median/Q1-Q3 traces with underlying
+  raw block points.
+- Generalized the learning-curve input so `main_multisession()` now requests
+  `prev_n_rewarded_slope`. The code fails clearly if the requested regressor
+  column is missing from the overall-performance CSV, which should catch stale
+  session summaries.
+- Added block-level `block_history_ideal_mouse_agreement`, computed as the
+  fraction of valid behavioral-choice trials where the mouse action matches the
+  greedy mouse-history ideal-observer action. A new single-session plot shows
+  this by block, with distinct markers for blocks that have no valid ideal
+  comparisons.
+- Added focused tests for the new plotting and multisession dataframe helpers.
+  The focused performance-plot and multisession test sets passed, and the
+  session-analysis metric was smoke-tested with unavailable stats imports
+  stubbed because `formulaic` is not installed in this environment.

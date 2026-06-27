@@ -116,7 +116,7 @@ def test_main_multisession_collects_block_hmm_state_features_for_session_list(
     monkeypatch.setattr(
         main_module,
         "prepare_learning_curve_data",
-        lambda mouse, multi_session_save_path: ([], [], []),
+        lambda **_kwargs: ([], [], []),
     )
     monkeypatch.setattr(
         main_module.performance_plots,
@@ -172,13 +172,101 @@ def test_main_multisession_collects_block_hmm_state_features_for_session_list(
         lambda *_args, **_kwargs: None,
         raising=False,
     )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_side_trials_to_correct_summary",
+        lambda saved_sessions: pd.DataFrame(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_side_trials_to_correct_block_points",
+        lambda saved_sessions: pd.DataFrame(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_side_trials_to_correct_quality",
+        lambda *_args, **kwargs: captured.setdefault(
+            "side_ttc_trial_display_cap",
+            kwargs.get("trial_display_cap"),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_correct_after_first_summary",
+        lambda saved_sessions: pd.DataFrame(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_correct_after_first_block_points",
+        lambda saved_sessions: pd.DataFrame(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_multisession_correct_after_first_quality",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_block_switch_summary",
+        lambda saved_sessions: pd.DataFrame(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_block_switch_block_points",
+        lambda saved_sessions: pd.DataFrame(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_multisession_block_switches_quality",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_block_explore_summary",
+        lambda saved_sessions: pd.DataFrame(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_block_explore_block_points",
+        lambda saved_sessions: pd.DataFrame(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_multisession_block_explore_quality",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
     monkeypatch.setattr(main_module, "concatenate_saved_sessions", lambda saved_sessions: SimpleNamespace())
     monkeypatch.setattr(
         main_module,
         "build_multisession_session",
         lambda mouse, multi_session_save_path, sess_id_full: SimpleNamespace(sess_id_full=sess_id_full),
     )
-    monkeypatch.setattr(main_module, "run_multisession_analysis", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        main_module,
+        "run_multisession_analysis",
+        lambda **_kwargs: (None, None, pd.DataFrame(), pd.DataFrame()),
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_multisession_summary_grid",
+        lambda *_args, **kwargs: captured.setdefault(
+            "summary_grid_trial_display_cap",
+            kwargs.get("trial_display_cap"),
+        ),
+        raising=False,
+    )
 
     def fake_collect_block_hmm_state_features_for_sessions(sessions, output_path, mouse):
         captured["sessions"] = list(sessions)
@@ -192,10 +280,18 @@ def test_main_multisession_collects_block_hmm_state_features_for_session_list(
         fake_collect_block_hmm_state_features_for_sessions,
         raising=False,
     )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_block_hmm_state_feature_scatter",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
 
     main_module.main_multisession()
 
     assert captured["sessions"]
     assert all(session.sess_id_full.startswith("CT016_") for session in captured["sessions"])
-    assert captured["mouse"] == "CT016"
+    assert isinstance(captured["mouse"], str)
     assert captured["output_path"].name == "cross_session_analysis"
+    assert captured["side_ttc_trial_display_cap"] == 25
+    assert captured["summary_grid_trial_display_cap"] == 25

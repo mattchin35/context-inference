@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from src.behavior_analysis import state_space_plotting as ssplot
 
@@ -568,6 +569,39 @@ def test_plot_block_lm_hmm_presentation_summary_accepts_single_predictor_weights
     plt.close(fig)
 
 
+def test_plot_block_lm_hmm_presentation_observations_on_existing_axis():
+    """Presentation observation helper should draw the colored trials-to-switch panel alone."""
+    class DummyTransitions:
+        log_Ps = np.zeros((2, 2))
+
+    class DummyObservations:
+        Wks = np.array([[[0.25]], [[-0.5]]])
+        mus = np.array([[2.0], [4.0]])
+
+    class DummyHMM:
+        transitions = DummyTransitions()
+        observations = DummyObservations()
+
+    fig, ax = plt.subplots()
+
+    returned_ax = ssplot.plot_block_lm_hmm_presentation_observations(
+        obs_ax=ax,
+        posterior_probs=np.array([[0.9, 0.1], [0.2, 0.8], [0.4, 0.6]]),
+        observations=np.array([[3], [5], [4]]),
+        hmm_fit=DummyHMM(),
+        colors=["blue", "red"],
+        cmap=plt.cm.Set1.copy(),
+        line_width=0.5,
+    )
+
+    assert returned_ax is ax
+    assert len(ax.lines) == 1
+    assert ax.lines[0].get_linewidth() == 0.5
+    assert ax.get_ylabel() == "Trials to switch"
+    assert len(ax.images) == 1
+    plt.close(fig)
+
+
 def test_plot_block_lm_hmm_state_summary_uses_custom_figsize_and_line_width():
     """Block MLE predicted-state summary should accept long-session plot settings.
 
@@ -650,6 +684,124 @@ def test_plot_block_lm_hmm_state_summary_adds_bias_rl_twin_axis():
     assert bias_ax.yaxis.label.get_size() == 9
     assert {label.get_size() for label in bias_ax.get_yticklabels()} == {7}
     np.testing.assert_allclose(bias_ax.lines[0].get_ydata(), np.array([0.5, -0.25, 0.0]))
+    plt.close(fig)
+
+
+def test_add_secondary_block_trace_accepts_custom_axis_scale():
+    """Secondary block traces should support non-bias y-axis scaling."""
+    fig, ax = plt.subplots()
+
+    trace_axis = ssplot.add_secondary_block_trace(
+        obs_ax=ax,
+        secondary_trace=np.array([1.0, 2.0, 3.0]),
+        secondary_trace_label="Rewards in previous block",
+        expected_length=3,
+        secondary_axis_ylim=(0.0, 3.0),
+        secondary_axis_yticks=[0.0, 1.0, 2.0, 3.0],
+    )
+
+    assert trace_axis.get_ylabel() == "Rewards in previous block"
+    assert trace_axis.get_ylim() == (0.0, 3.0)
+    np.testing.assert_allclose(trace_axis.get_yticks(), np.array([0.0, 1.0, 2.0, 3.0]))
+    np.testing.assert_allclose(trace_axis.lines[0].get_ydata(), np.array([1.0, 2.0, 3.0]))
+    plt.close(fig)
+
+
+def test_plot_sliding_block_regression_adds_weight_and_intercept_axes():
+    """Sliding regression helper should plot reward weight and window intercept."""
+    fig, ax = plt.subplots()
+    regression_df = pd.DataFrame(
+        {
+            "window_center_position": [4.5, 9.5],
+            "prev_n_rewarded_weight": [1.0, -0.5],
+            "window_intercept": [3.0, 6.0],
+        }
+    )
+
+    intercept_ax = ssplot.plot_sliding_block_regression(ax, regression_df)
+
+    assert ax.get_ylabel() == "Reward weight"
+    assert intercept_ax.get_ylabel() == "Window intercept"
+    assert ax.lines[0].get_label() == "prev_n_rewarded weight"
+    assert intercept_ax.lines[0].get_label() == "window intercept"
+    np.testing.assert_allclose(ax.lines[0].get_xdata(), np.array([4.5, 9.5]))
+    np.testing.assert_allclose(ax.lines[0].get_ydata(), np.array([1.0, -0.5]))
+    np.testing.assert_allclose(intercept_ax.lines[0].get_ydata(), np.array([3.0, 6.0]))
+    plt.close(fig)
+
+
+def test_plot_block_lm_hmm_state_summary_adds_sliding_regression_axis():
+    """Block MLE summary should add a third subplot for sliding regressions."""
+    class DummyTransitions:
+        log_Ps = np.zeros((2, 2))
+
+    class DummyObservations:
+        mus = np.array([[3.0], [4.0]])
+        Wks = np.array([[[1.0]], [[-0.5]]])
+
+    class DummyHMM:
+        transitions = DummyTransitions()
+        observations = DummyObservations()
+
+    fig, axes = ssplot.plot_block_lm_hmm_state_summary(
+        posterior_probs=np.array([[0.9, 0.1], [0.1, 0.9], [0.8, 0.2]]),
+        observations=np.array([[3.0], [4.0], [5.0]]),
+        inputs=np.array([[1.0], [2.0], [3.0]]),
+        hmm_fit=DummyHMM(),
+        colors=["blue", "red"],
+        cmap=plt.cm.Set1.copy(),
+        sliding_regression_df=pd.DataFrame(
+            {
+                "window_center_position": [1.0, 2.0],
+                "prev_n_rewarded_weight": [0.5, -0.25],
+                "window_intercept": [4.0, 7.0],
+            }
+        ),
+    )
+
+    assert len(axes) == 3
+    regression_ax = axes[2]
+    intercept_ax = fig.axes[-1]
+    assert regression_ax.get_ylabel() == "Reward weight"
+    assert intercept_ax.get_ylabel() == "Window intercept"
+    np.testing.assert_allclose(regression_ax.lines[0].get_ydata(), np.array([0.5, -0.25]))
+    np.testing.assert_allclose(intercept_ax.lines[0].get_ydata(), np.array([4.0, 7.0]))
+    plt.close(fig)
+
+
+def test_plot_block_lm_hmm_presentation_summary_adds_sliding_regression_axis():
+    """Block MAP summary should add the same sliding regression subplot."""
+    class DummyTransitions:
+        log_Ps = np.zeros((2, 2))
+
+    class DummyObservations:
+        mus = np.array([[3.0], [4.0]])
+        Wks = np.array([[[1.0]], [[-0.5]]])
+
+    class DummyHMM:
+        transitions = DummyTransitions()
+        observations = DummyObservations()
+
+    fig, axes = ssplot.plot_block_lm_hmm_presentation_summary(
+        posterior_probs=np.array([[0.9, 0.1], [0.1, 0.9], [0.8, 0.2]]),
+        observations=np.array([[3.0], [4.0], [5.0]]),
+        inputs=np.array([[1.0], [2.0], [3.0]]),
+        hmm_fit=DummyHMM(),
+        colors=["blue", "red"],
+        cmap=plt.cm.Set1.copy(),
+        predictor_labels=["prev_n_rewarded"],
+        sliding_regression_df=pd.DataFrame(
+            {
+                "window_center_position": [1.0, 2.0],
+                "prev_n_rewarded_weight": [0.5, -0.25],
+                "window_intercept": [4.0, 7.0],
+            }
+        ),
+    )
+
+    assert len(axes) == 3
+    np.testing.assert_allclose(axes[2].lines[0].get_ydata(), np.array([0.5, -0.25]))
+    np.testing.assert_allclose(fig.axes[-1].lines[0].get_ydata(), np.array([4.0, 7.0]))
     plt.close(fig)
 
 

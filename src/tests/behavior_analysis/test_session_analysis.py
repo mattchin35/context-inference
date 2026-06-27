@@ -390,6 +390,125 @@ def test_summarize_block_performance_accepts_string_encoded_correct_values():
     assert block_performance["percent_correct"].tolist() == [0.5, 0.5, 1.0]
 
 
+def test_summarize_block_performance_counts_explore_trials_by_block():
+    """Block summaries should save the number of explore-tagged trials per block."""
+    trial_df = make_simulated_trial_df()
+    trial_df["explore_trial"] = [1, 0, True, "true", 0, "1"]
+    augmented_trial_df = session_analysis.make_augmented_trial_df(trial_df)
+
+    block_performance = session_analysis.summarize_block_performance(
+        augmented_trial_df,
+        session_id="sample_switch_mode_3_2026-03-25",
+    )
+
+    assert block_performance["n_explore_trials"].tolist() == [1, 2, 1]
+
+
+def test_summarize_block_performance_saves_percent_correct_after_first_correct():
+    """Post-first-correct accuracy should include the first correct behavioral trial."""
+    trial_df = pd.DataFrame(
+        {
+            "state": ["right", "right", "right", "right", "right"],
+            "model_stimulus": [0, 0, 0, 0, 0],
+            "action": [1, 1, 0, 0, 1],
+            "reward": [0, 0, 1, 1, 0],
+            "correct": [0, 0, 1, 1, 0],
+            "cur_block": [0, 0, 0, 0, 0],
+            "cur_trial": [0, 1, 2, 3, 4],
+            "cur_trial_in_block": [0, 1, 2, 3, 4],
+        }
+    )
+
+    _, block_performance, _ = session_analysis.analyze_session(
+        trial_df,
+        mouse="CT999",
+        date="2026-06-25",
+    )
+
+    assert block_performance.loc[0, "first_correct_trial_in_block"] == 2
+    assert block_performance.loc[0, "n_trials_after_first_correct"] == 3
+    assert block_performance.loc[0, "percent_correct_after_first_correct"] == pytest.approx(2 / 3)
+
+
+def test_summarize_block_performance_marks_no_correct_post_first_correct_metrics_missing():
+    """Blocks without a correct choice should keep post-first-correct metrics missing."""
+    trial_df = pd.DataFrame(
+        {
+            "state": ["left", "left", "left"],
+            "model_stimulus": [0, 0, 0],
+            "action": [0, 0, 0],
+            "reward": [0, 0, 0],
+            "correct": [0, 0, 0],
+            "cur_block": [0, 0, 0],
+            "cur_trial": [0, 1, 2],
+            "cur_trial_in_block": [0, 1, 2],
+        }
+    )
+
+    _, block_performance, _ = session_analysis.analyze_session(
+        trial_df,
+        mouse="CT999",
+        date="2026-06-25",
+    )
+
+    assert block_performance.loc[0, "first_correct_trial_in_block"] == "None"
+    assert block_performance.loc[0, "n_trials_after_first_correct"] == "None"
+    assert block_performance.loc[0, "percent_correct_after_first_correct"] == "None"
+
+
+def test_summarize_block_performance_saves_block_history_ideal_mouse_agreement():
+    """Block summaries should save mouse agreement with the greedy history-ideal policy."""
+    trial_df = pd.DataFrame(
+        {
+            "state": ["right", "right", "right", "right"],
+            "model_stimulus": [0, 0, 0, 0],
+            "action": [1, 1, 1, 0],
+            "reward": [0, 0, 0, 1],
+            "correct": [0, 0, 0, 1],
+            "cur_block": [0, 0, 0, 0],
+            "cur_trial": [0, 1, 2, 3],
+            "cur_trial_in_block": [0, 1, 2, 3],
+            "HMM_rel_value_logodds_decay": [1.0, -1.0, 1.0, -1.0],
+            "relative_doubt_index": [0.0, 0.0, 0.0, 0.0],
+        }
+    )
+
+    _, block_performance, _ = session_analysis.analyze_session(
+        trial_df,
+        mouse="CT999",
+        date="2026-06-26",
+    )
+
+    assert block_performance.loc[0, "block_history_ideal_mouse_agreement"] == pytest.approx(0.75)
+
+
+def test_summarize_block_performance_marks_missing_history_ideal_agreement():
+    """Blocks without valid behavioral choices should keep ideal agreement missing."""
+    trial_df = pd.DataFrame(
+        {
+            "state": ["right", "right"],
+            "model_stimulus": [0, 0],
+            "action": ["no_choice", "no_choice"],
+            "reward": [1, 1],
+            "correct": [0, 0],
+            "experimenter_reward_given": [1, 1],
+            "cur_block": [0, 0],
+            "cur_trial": [0, 1],
+            "cur_trial_in_block": [0, 1],
+            "HMM_rel_value_logodds_decay": [1.0, -1.0],
+            "relative_doubt_index": [0.0, 0.0],
+        }
+    )
+
+    _, block_performance, _ = session_analysis.analyze_session(
+        trial_df,
+        mouse="CT999",
+        date="2026-06-26",
+    )
+
+    assert block_performance.loc[0, "block_history_ideal_mouse_agreement"] == "None"
+
+
 def test_percent_correct_rejects_invalid_correct_for_behavioral_choice():
     """Malformed correctness values on animal-choice rows should fail clearly."""
     augmented_trial_df = pd.DataFrame(
@@ -583,10 +702,15 @@ def test_add_regression_stats_to_session_performance_uses_explicit_column_names(
         trials_to_correct=block_performance["trials_to_correct"],
         prev_n_correct=block_performance["prev_n_correct"],
         prev_consecutive_rewards=block_performance["prev_consecutive_rewards"],
+        prev_n_rewarded=block_performance["prev_n_rewarded"],
         n_blocks=block_performance.shape[0],
     )
 
     expected_columns = {
+        "prev_n_rewarded_slope",
+        "prev_n_rewarded_intercept",
+        "prev_n_rewarded_r_value",
+        "prev_n_rewarded_p_value",
         "prev_consecutive_rewards_slope",
         "prev_consecutive_rewards_intercept",
         "prev_consecutive_rewards_r_value",
@@ -611,11 +735,26 @@ def test_add_regression_stats_to_session_performance_uses_explicit_column_names(
         dependent_var=block_performance.loc[valid_rows, "trials_to_correct"].astype(int),
         independent_var=block_performance.loc[valid_rows, "prev_consecutive_rewards"].astype(int),
     )
+    expected_prev_n_rewarded_stats = session_analysis.session_stats(
+        dependent_var=block_performance.loc[valid_rows, "trials_to_correct"].astype(int),
+        independent_var=block_performance.loc[valid_rows, "prev_n_rewarded"].astype(int),
+    )
     expected_correct_stats = session_analysis.session_stats(
         dependent_var=block_performance.loc[valid_rows, "trials_to_correct"].astype(int),
         independent_var=block_performance.loc[valid_rows, "prev_n_correct"].astype(int),
     )
 
+    actual_prev_n_rewarded_stats = tuple(
+        session_performance.loc[
+            0,
+            [
+                "prev_n_rewarded_slope",
+                "prev_n_rewarded_intercept",
+                "prev_n_rewarded_r_value",
+                "prev_n_rewarded_p_value",
+            ],
+        ]
+    )
     actual_rewards_stats = tuple(
         session_performance.loc[
             0,
@@ -639,6 +778,11 @@ def test_add_regression_stats_to_session_performance_uses_explicit_column_names(
         ]
     )
 
+    np.testing.assert_allclose(
+        np.asarray(actual_prev_n_rewarded_stats, dtype=float),
+        np.asarray(expected_prev_n_rewarded_stats, dtype=float),
+        equal_nan=True,
+    )
     np.testing.assert_allclose(
         np.asarray(actual_rewards_stats, dtype=float),
         np.asarray(expected_rewards_stats, dtype=float),
@@ -718,6 +862,84 @@ def test_add_block_bias_columns_preserves_current_bias_calculation():
     assert block_performance.loc[~valid_rows, "bias_full_flag"].tolist() == ["None"]
 
 
+def test_add_block_bias_columns_saves_rl_status_columns():
+    """RL status columns should be added without replacing legacy bias values."""
+    block_performance = pd.DataFrame(
+        {
+            "trials_to_correct": [0, 1, 2, "None"],
+            "prev_n_correct": [0, 0, 0, 1],
+        }
+    )
+
+    block_performance = session_analysis.add_block_bias_columns(block_performance)
+
+    expected_columns = {
+        "rl_effective_prev_n_correct",
+        "rl_thresh",
+        "rl_thresh_flag",
+        "bias_rl_status_value",
+        "rl_status",
+    }
+    assert expected_columns.issubset(block_performance.columns)
+    assert block_performance["rl_effective_prev_n_correct"].tolist() == [1, 1, 1, "None"]
+    assert block_performance["rl_thresh"].tolist() == [0.0, 0.0, 0.0, "None"]
+    assert block_performance["rl_thresh_flag"].tolist() == [True, True, True, "None"]
+
+
+def test_add_block_bias_columns_zero_previous_correct_gets_one_trial_grace_period():
+    """Zero previous-correct blocks should be classified using an effective value of one."""
+    block_performance = pd.DataFrame(
+        {
+            "trials_to_correct": [1, 2],
+            "prev_n_correct": [0, 0],
+        }
+    )
+
+    block_performance = session_analysis.add_block_bias_columns(block_performance)
+
+    assert block_performance["rl_status"].tolist() == ["valid_rl", "biased_rl"]
+    assert block_performance["bias_rl_status_value"].iloc[0] == pytest.approx(0.0)
+    assert block_performance["bias_rl_status_value"].iloc[1] == pytest.approx(1 / 3)
+
+
+def test_add_block_bias_columns_marks_below_rl_threshold():
+    """Blocks below the RL threshold should be distinct from valid or biased RL."""
+    block_performance = pd.DataFrame(
+        {
+            "trials_to_correct": [1, 2, 4],
+            "prev_n_correct": [4, 4, 4],
+        }
+    )
+
+    block_performance = session_analysis.add_block_bias_columns(block_performance)
+
+    assert block_performance["rl_thresh"].tolist() == [2.0, 2.0, 2.0]
+    assert block_performance["rl_thresh_flag"].tolist() == [False, True, True]
+    assert block_performance["rl_status"].tolist() == [
+        "below_rl_threshold",
+        "valid_rl",
+        "valid_rl",
+    ]
+
+
+def test_add_block_bias_columns_keeps_invalid_rl_status_rows_as_none():
+    """Invalid trials-to-correct rows should receive None sentinels for RL status."""
+    block_performance = pd.DataFrame(
+        {
+            "trials_to_correct": ["None"],
+            "prev_n_correct": [0],
+        }
+    )
+
+    block_performance = session_analysis.add_block_bias_columns(block_performance)
+
+    assert block_performance.loc[0, "rl_effective_prev_n_correct"] == "None"
+    assert block_performance.loc[0, "rl_thresh"] == "None"
+    assert block_performance.loc[0, "rl_thresh_flag"] == "None"
+    assert block_performance.loc[0, "bias_rl_status_value"] == "None"
+    assert block_performance.loc[0, "rl_status"] == "None"
+
+
 def test_run_analysis_can_skip_multisession_save_and_load(tmp_path):
     """Simulation analysis should save within-session outputs without multisession files."""
     session = SimpleNamespace(
@@ -743,6 +965,10 @@ def test_run_analysis_can_skip_multisession_save_and_load(tmp_path):
     assert "n_blocks" in returned_session_df.columns
     assert returned_session_df.loc[0, "n_blocks"] == block_performance.shape[0]
     assert {
+        "prev_n_rewarded_slope",
+        "prev_n_rewarded_intercept",
+        "prev_n_rewarded_r_value",
+        "prev_n_rewarded_p_value",
         "prev_consecutive_rewards_slope",
         "prev_consecutive_rewards_intercept",
         "prev_consecutive_rewards_r_value",

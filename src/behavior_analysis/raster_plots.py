@@ -114,23 +114,38 @@ def _state_events_from_colorblock_array(
     return np.array(states)[state_sort_ix], state_times[state_sort_ix]
 
 
-def colorblock_raster(event_df: pd.DataFrame, fig_name: str, plot_path: str, session_info: dict,
-                      timespan: tuple = (0, np.inf), fig_format: str = 'png', plot_choices=False):
-    """
-    Create a raster plot from a single behavior session.
-    """
-    color_dict = {'right active': 'darkred', 'left active': 'blue', 'dark period': 'black'}
-    # 'right': 'cyan', 'left': 'darkgreen', 0: 'cyan', 1: 'darkkhaki'}
-    state_dict = {0: 'right', 1: 'left'}
+def _prepare_colorblock_raster_data(
+    event_df: pd.DataFrame,
+    session_info: dict,
+    timespan: tuple = (0, np.inf),
+    plot_choices: bool = False,
+) -> dict:
+    """Prepare event arrays and block spans for a colorblock raster.
 
+    Parameters
+    ----------
+    event_df : pd.DataFrame
+        Event table with shape `(n_events, n_columns)`. Required columns are
+        `Event` and `Time`; times are in seconds.
+    session_info : dict
+        Session metadata. Required key is `use_dark_period`, a bool indicating
+        whether dark-period state entries should be included.
+    timespan : tuple, default=(0, np.inf)
+        Two-element time window in seconds. `np.inf` as the right edge expands
+        to the event table's maximum time.
+    plot_choices : bool, default=False
+        If True, plot left/right choices instead of left/right licks.
+
+    Returns
+    -------
+    dict
+        Prepared arrays and labels. Event arrays are one-dimensional numpy
+        arrays of event times in seconds, grouped by raster row. State-entry
+        arrays are used to draw context-colored spans.
+    """
     cleaned_df = event_df[event_df['Event'] != 'exit_standby']
     if timespan[1] == np.inf:
         timespan = np.array([np.amin(cleaned_df['Time']), np.amax(cleaned_df['Time'])])
-
-    # if relative_time:
-    #     sess_tstart = cleaned_df['Time'].min()
-    #     cleaned_df['Time'] -= sess_tstart
-    #     timespan -= sess_tstart
 
     if plot_choices:
         event_list = ['correct_choice_left_patch', 'wrong_choice_right_patch', 'correct_choice_right_patch',
@@ -159,47 +174,133 @@ def colorblock_raster(event_df: pd.DataFrame, fig_name: str, plot_path: str, ses
         linewidths = 0.2
 
     end_time = _max_event_time(event_array, timespan)
-
     states, state_times = _state_events_from_colorblock_array(
         event_array,
         use_dark_period=session_info['use_dark_period'],
     )
-    unique_states = np.unique(states).tolist()
 
-    # stimulus plotting
     stimulus_times = cleaned_df[cleaned_df['Event'].isin(['stimulus_A_on', 'stimulus_B_on'])]
     stim_st = stimulus_times.Time.values
-    stim_end = stim_st + 10  # 10 seconds of stimulus, hardcoded - eventually want to use session_info
+    stim_end = stim_st + 10
 
-    raster_figure, ax = plot_event_raster(event_array[:2], event_labels[:2], linewidths=linewidths)
+    return {
+        "timespan": timespan,
+        "event_array": event_array,
+        "event_labels": event_labels,
+        "linewidths": linewidths,
+        "states": states,
+        "state_times": state_times,
+        "unique_states": np.unique(states).tolist(),
+        "end_time": end_time,
+        "stim_st": stim_st,
+        "stim_end": stim_end,
+    }
 
-    # color blocks
+
+def plot_colorblock_raster_on_ax(
+    ax: plt.Axes,
+    event_df: pd.DataFrame,
+    session_info: dict,
+    timespan: tuple = (0, np.inf),
+    plot_choices: bool = False,
+    axis_label_size: float = 10,
+    tick_label_size: float = 8,
+    legend_font_size: float = 7,
+) -> plt.Axes:
+    """Plot a colorblock lick/choice raster on a caller-owned axis.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axis that receives the raster events and context spans.
+    event_df : pd.DataFrame
+        Event table with shape `(n_events, n_columns)`. Required columns are
+        `Event` and `Time`; times are in seconds.
+    session_info : dict
+        Session metadata. Required key is `use_dark_period`, a bool indicating
+        whether dark-period state entries should be included.
+    timespan : tuple, default=(0, np.inf)
+        Two-element time window in seconds. `np.inf` as the right edge expands
+        to the event table's maximum time.
+    plot_choices : bool, default=False
+        If True, plot left/right choices instead of left/right licks.
+    axis_label_size : float, default=10
+        Font size for axis labels.
+    tick_label_size : float, default=8
+        Font size for x/y tick labels.
+    legend_font_size : float, default=7
+        Font size for the context legend.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The same axis passed in, with raster events and colored context spans.
+    """
+    color_dict = {'right active': 'darkred', 'left active': 'blue', 'dark period': 'black'}
+    prepared = _prepare_colorblock_raster_data(
+        event_df=event_df,
+        session_info=session_info,
+        timespan=timespan,
+        plot_choices=plot_choices,
+    )
+
+    event_array = prepared["event_array"]
+    event_labels = prepared["event_labels"]
+    states = prepared["states"]
+    state_times = prepared["state_times"]
+    end_time = prepared["end_time"]
     state_alpha = 0.15
+
+    ax.eventplot(
+        event_array[:2],
+        linelengths=0.6,
+        linewidths=prepared["linewidths"],
+        color='black',
+    )
+    ax.set_yticks(np.arange(2))
+    ax.set_yticklabels(event_labels[:2], fontsize=tick_label_size)
+
     for i in range(states.size - 1):
-        plt.axvspan(state_times[i], state_times[i + 1], color=color_dict[states[i]], alpha=state_alpha)
-        # if states[i] in unique_states:
-        #     plt.axvspan(state_times[i], state_times[i + 1], color=color_dict[states[i]], alpha=state_alpha,
-        #                 label=states[i])
-        #     unique_states.remove(states[i])
-        # else:
-        #     plt.axvspan(state_times[i], state_times[i + 1], color=color_dict[states[i]], alpha=state_alpha)
+        ax.axvspan(state_times[i], state_times[i + 1], color=color_dict[states[i]], alpha=state_alpha)
+    ax.axvspan(state_times[-1], end_time, color=color_dict[states[-1]], alpha=state_alpha)
 
-    plt.axvspan(state_times[-1], end_time, color=color_dict[states[-1]], alpha=state_alpha)
-    plt.xlim(timespan)
+    for stim_start, stim_stop in zip(prepared["stim_st"], prepared["stim_end"]):
+        ax.axvspan(stim_start, stim_stop, color='k', alpha=.2)
 
-    for i in range(stim_st.size):
-        plt.axvspan(stim_st[i], stim_end[i], color='k', alpha=.2)
-
-    # Add legend
     patches = [
         mpatches.Patch(color=color_dict[state], label=state)
         for state in color_dict
-        if state in unique_states
+        if state in prepared["unique_states"]
     ]
-    plt.legend(handles=patches, fontsize=20, fancybox=False)
-    plt.ylim(-.4, 1.4)
-    plt.xlabel("Time (seconds)", fontsize=40)
-    ax.tick_params(axis='x', which='major', labelsize=25)
+    if patches:
+        plt.sca(ax)
+        plt.legend(handles=patches, fontsize=legend_font_size, fancybox=False, frameon=False)
+    ax.set_xlim(prepared["timespan"])
+    ax.set_ylim(-.4, 1.4)
+    ax.set_xlabel("Time (seconds)", fontsize=axis_label_size)
+    ax.tick_params(axis='x', which='major', labelsize=tick_label_size)
+    ax.tick_params(axis='y', which='major', labelsize=tick_label_size)
+    return ax
+
+
+def colorblock_raster(event_df: pd.DataFrame, fig_name: str, plot_path: str, session_info: dict,
+                      timespan: tuple = (0, np.inf), fig_format: str = 'png', plot_choices=False):
+    """
+    Create a raster plot from a single behavior session.
+    """
+    raster_figure, ax = plt.subplots(1, 1)
+    raster_figure.set_figheight(10)
+    raster_figure.set_figwidth(18)
+    plot_colorblock_raster_on_ax(
+        ax=ax,
+        event_df=event_df,
+        session_info=session_info,
+        timespan=timespan,
+        plot_choices=plot_choices,
+        axis_label_size=40,
+        tick_label_size=25,
+        legend_font_size=20,
+    )
     ax.tick_params(axis='y', which='major', labelsize=45)
     for axis in ['top', 'bottom', 'left', 'right']:
         ax.spines[axis].set_linewidth(1)

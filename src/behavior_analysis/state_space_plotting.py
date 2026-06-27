@@ -2,6 +2,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 
 
 def _normalize_lm_weight_array(weights: np.ndarray) -> np.ndarray:
@@ -252,8 +253,10 @@ def add_secondary_block_trace(
     line_width: float | None = None,
     secondary_axis_label_size: float = 10,
     secondary_tick_label_size: float = 8,
+    secondary_axis_ylim: tuple[float, float] | None = None,
+    secondary_axis_yticks: list[float] | np.ndarray | None = None,
 ) -> plt.Axes:
-    """Overlay a blockwise secondary trace on a fixed right y-axis.
+    """Overlay a blockwise secondary trace on a right y-axis.
 
     Parameters
     ----------
@@ -275,6 +278,12 @@ def add_secondary_block_trace(
         Font size for the right-side secondary y-axis label, in points.
     secondary_tick_label_size : float, default=8
         Font size for the right-side secondary y-axis tick labels, in points.
+    secondary_axis_ylim : tuple[float, float] or None, default=None
+        Right y-axis limits. None preserves the historical fixed bias scale
+        of `(-1, 1)`.
+    secondary_axis_yticks : list[float] or np.ndarray or None, default=None
+        Right y-axis ticks. None preserves the historical fixed bias ticks
+        `[-1, 0, 1]`.
 
     Returns
     -------
@@ -300,11 +309,130 @@ def add_secondary_block_trace(
         label=secondary_trace_label,
         **line_kwargs,
     )
-    trace_axis.set_ylim(-1, 1)
-    trace_axis.set_yticks([-1, 0, 1])
+    if secondary_axis_ylim is None:
+        secondary_axis_ylim = (-1, 1)
+    if secondary_axis_yticks is None:
+        secondary_axis_yticks = [-1, 0, 1]
+    trace_axis.set_ylim(float(secondary_axis_ylim[0]), float(secondary_axis_ylim[1]))
+    trace_axis.set_yticks(secondary_axis_yticks)
     trace_axis.tick_params(axis="y", labelsize=secondary_tick_label_size)
     trace_axis.set_ylabel(secondary_trace_label, fontsize=secondary_axis_label_size)
     return trace_axis
+
+
+def has_sliding_regression_rows(sliding_regression_df: pd.DataFrame | None) -> bool:
+    """Return whether a sliding-regression table should be plotted.
+
+    Parameters
+    ----------
+    sliding_regression_df : pd.DataFrame or None
+        Optional table with one row per valid-block sliding regression window.
+
+    Returns
+    -------
+    bool
+        True when the table is present and contains at least one row.
+    """
+    return sliding_regression_df is not None and not sliding_regression_df.empty
+
+
+def plot_sliding_block_regression(
+    regression_ax: plt.Axes,
+    sliding_regression_df: pd.DataFrame,
+    weight_column: str = "prev_n_rewarded_weight",
+    intercept_column: str = "window_intercept",
+    x_column: str = "window_center_position",
+    line_width: float | None = None,
+    axis_label_size: float = 8,
+    tick_label_size: float = 7,
+    legend_font_size: float = 6,
+) -> plt.Axes:
+    """Plot sliding block regression weight and intercept on paired y-axes.
+
+    Parameters
+    ----------
+    regression_ax : plt.Axes
+        Left-axis matplotlib axes for the reward-history coefficient.
+    sliding_regression_df : pd.DataFrame
+        Sliding-regression summary with shape `(n_windows, n_columns)`.
+        Required columns are `window_center_position`, `prev_n_rewarded_weight`,
+        and `window_intercept`. Positions are in valid-block plot coordinates.
+    weight_column : str, default="prev_n_rewarded_weight"
+        Column containing the simple-regression slope in
+        trials-to-correct per previous-block reward.
+    intercept_column : str, default="window_intercept"
+        Column containing the simple-regression intercept in trials.
+    x_column : str, default="window_center_position"
+        Column containing valid-block x positions for each regression window.
+    line_width : float or None, default=None
+        Optional line width for both plotted traces. None preserves matplotlib
+        defaults.
+    axis_label_size : float, default=8
+        Font size for left and right y-axis labels.
+    tick_label_size : float, default=7
+        Font size for x-axis and y-axis tick labels.
+    legend_font_size : float, default=6
+        Font size for the combined weight/intercept legend.
+
+    Returns
+    -------
+    plt.Axes
+        Right-axis matplotlib axes for the window intercept trace.
+    """
+    required_columns = {x_column, weight_column, intercept_column}
+    missing_columns = sorted(required_columns.difference(sliding_regression_df.columns))
+    if missing_columns:
+        raise ValueError(f"sliding_regression_df is missing required columns: {missing_columns}")
+
+    plot_df = sliding_regression_df.loc[:, [x_column, weight_column, intercept_column]].copy()
+    for column in (x_column, weight_column, intercept_column):
+        plot_df[column] = pd.to_numeric(plot_df[column], errors="coerce")
+    plot_df.dropna(subset=[x_column, weight_column, intercept_column], inplace=True)
+
+    intercept_ax = regression_ax.twinx()
+    if plot_df.empty:
+        regression_ax.set_ylabel("Reward weight", fontsize=axis_label_size)
+        intercept_ax.set_ylabel("Window intercept", fontsize=axis_label_size)
+        regression_ax.tick_params(axis="both", labelsize=tick_label_size)
+        intercept_ax.tick_params(axis="y", labelsize=tick_label_size)
+        return intercept_ax
+
+    line_kwargs = {} if line_width is None else {"linewidth": line_width}
+    regression_ax.plot(
+        plot_df[x_column].to_numpy(dtype=float),
+        plot_df[weight_column].to_numpy(dtype=float),
+        "o-",
+        color="black",
+        label="prev_n_rewarded weight",
+        **line_kwargs,
+    )
+    intercept_ax.plot(
+        plot_df[x_column].to_numpy(dtype=float),
+        plot_df[intercept_column].to_numpy(dtype=float),
+        "s--",
+        color="gray",
+        label="window intercept",
+        **line_kwargs,
+    )
+
+    regression_ax.axhline(0, color="black", linestyle=":", linewidth=0.8)
+    regression_ax.set_ylabel("Reward weight", fontsize=axis_label_size)
+    intercept_ax.set_ylabel("Window intercept", fontsize=axis_label_size)
+    regression_ax.set_xlabel("Context changes")
+    regression_ax.tick_params(axis="both", labelsize=tick_label_size)
+    intercept_ax.tick_params(axis="y", labelsize=tick_label_size)
+
+    left_handles, left_labels = regression_ax.get_legend_handles_labels()
+    right_handles, right_labels = intercept_ax.get_legend_handles_labels()
+    if left_handles or right_handles:
+        regression_ax.legend(
+            left_handles + right_handles,
+            left_labels + right_labels,
+            frameon=False,
+            loc="best",
+            prop={"size": legend_font_size},
+        )
+    return intercept_ax
 
 
 def plot_block_lm_hmm_state_summary(
@@ -323,7 +451,10 @@ def plot_block_lm_hmm_state_summary(
     secondary_trace_label: str = "bias_rl",
     secondary_axis_label_size: float = 10,
     secondary_tick_label_size: float = 8,
-) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
+    secondary_axis_ylim: tuple[float, float] | None = None,
+    secondary_axis_yticks: list[float] | np.ndarray | None = None,
+    sliding_regression_df: pd.DataFrame | None = None,
+) -> tuple[plt.Figure, tuple[plt.Axes, ...]]:
     """Plot block LM-HMM posterior probabilities and observations.
 
     Parameters
@@ -362,14 +493,30 @@ def plot_block_lm_hmm_state_summary(
         Font size for the optional right-side secondary y-axis label.
     secondary_tick_label_size : float, default=8
         Font size for the optional right-side secondary y-axis tick labels.
+    secondary_axis_ylim : tuple[float, float] or None, default=None
+        Optional right y-axis limits for `secondary_trace`. None preserves the
+        historical `[-1, 1]` bias scale.
+    secondary_axis_yticks : list[float] or np.ndarray or None, default=None
+        Optional right y-axis ticks for `secondary_trace`. None preserves the
+        historical bias ticks `[-1, 0, 1]`.
+    sliding_regression_df : pd.DataFrame or None, default=None
+        Optional sliding-regression table with one row per valid-block window.
+        When present and nonempty, a third subplot shows `prev_n_rewarded`
+        slope on the left y-axis and `window_intercept` on the right y-axis.
 
     Returns
     -------
-    tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]
-        Figure and axes for posterior probabilities and observations.
+    tuple[plt.Figure, tuple[plt.Axes, ...]]
+        Figure and axes for posterior probabilities, observations, and
+        optionally sliding-regression diagnostics.
     """
     figure_kwargs = {} if figsize is None else {"figsize": figsize}
-    fig, (prob_ax, obs_ax) = plt.subplots(2, 1, **figure_kwargs)
+    plot_sliding_regression = has_sliding_regression_rows(sliding_regression_df)
+    if plot_sliding_regression:
+        fig, (prob_ax, obs_ax, regression_ax) = plt.subplots(3, 1, **figure_kwargs)
+    else:
+        fig, (prob_ax, obs_ax) = plt.subplots(2, 1, **figure_kwargs)
+        regression_ax = None
 
     time_bins = len(inputs)
     obs_dim = len(observations[0])
@@ -428,7 +575,7 @@ def plot_block_lm_hmm_state_summary(
 
     obs_ax.set_xlim(0, time_bins - 1)
     obs_ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), frameon=False, prop={'size': 10})
-    obs_ax.set_xlabel("Context changes")
+    obs_ax.set_xlabel("Context changes" if regression_ax is None else "")
     obs_ax.set_ylim(0, abs(observations).max())
     obs_ax.set_yticks([0, abs(observations).max()])
     if secondary_trace is not None:
@@ -440,6 +587,8 @@ def plot_block_lm_hmm_state_summary(
             line_width=line_width,
             secondary_axis_label_size=secondary_axis_label_size,
             secondary_tick_label_size=secondary_tick_label_size,
+            secondary_axis_ylim=secondary_axis_ylim,
+            secondary_axis_yticks=secondary_axis_yticks,
         )
 
     if session_lengths is not None:
@@ -447,16 +596,29 @@ def plot_block_lm_hmm_state_summary(
         for split_idx in range(splits.shape[0] - 1):
             prob_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
             obs_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+            if regression_ax is not None:
+                regression_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+
+    if regression_ax is not None:
+        plot_sliding_block_regression(
+            regression_ax=regression_ax,
+            sliding_regression_df=sliding_regression_df,
+            line_width=line_width,
+        )
+        regression_ax.set_xlim(0, time_bins - 1)
 
     if session_boundary_positions is not None:
+        boundary_axes = (prob_ax, obs_ax) if regression_ax is None else (prob_ax, obs_ax, regression_ax)
         add_session_boundary_markers(
-            axes=(prob_ax, obs_ax),
+            axes=boundary_axes,
             boundary_positions=session_boundary_positions,
             boundary_labels=session_boundary_labels,
         )
 
     fig.tight_layout()
-    return fig, (prob_ax, obs_ax)
+    if regression_ax is None:
+        return fig, (prob_ax, obs_ax)
+    return fig, (prob_ax, obs_ax, regression_ax)
 
 
 def plot_block_lm_hmm_presentation_summary(
@@ -476,7 +638,10 @@ def plot_block_lm_hmm_presentation_summary(
     secondary_trace_label: str = "bias_rl",
     secondary_axis_label_size: float = 10,
     secondary_tick_label_size: float = 8,
-) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
+    secondary_axis_ylim: tuple[float, float] | None = None,
+    secondary_axis_yticks: list[float] | np.ndarray | None = None,
+    sliding_regression_df: pd.DataFrame | None = None,
+) -> tuple[plt.Figure, tuple[plt.Axes, ...]]:
     """Plot presentation-style block LM-HMM state probabilities and weights.
 
     Parameters
@@ -517,14 +682,30 @@ def plot_block_lm_hmm_presentation_summary(
         Font size for the optional right-side secondary y-axis label.
     secondary_tick_label_size : float, default=8
         Font size for the optional right-side secondary y-axis tick labels.
+    secondary_axis_ylim : tuple[float, float] or None, default=None
+        Optional right y-axis limits for `secondary_trace`. None preserves the
+        historical `[-1, 1]` bias scale.
+    secondary_axis_yticks : list[float] or np.ndarray or None, default=None
+        Optional right y-axis ticks for `secondary_trace`. None preserves the
+        historical bias ticks `[-1, 0, 1]`.
+    sliding_regression_df : pd.DataFrame or None, default=None
+        Optional sliding-regression table with one row per valid-block window.
+        When present and nonempty, a third subplot shows `prev_n_rewarded`
+        slope on the left y-axis and `window_intercept` on the right y-axis.
 
     Returns
     -------
-    tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]
-        Figure and axes for posterior probabilities and observations.
+    tuple[plt.Figure, tuple[plt.Axes, ...]]
+        Figure and axes for posterior probabilities, observations, and
+        optionally sliding-regression diagnostics.
     """
     figure_kwargs = {} if figsize is None else {"figsize": figsize}
-    fig, (prob_ax, obs_ax) = plt.subplots(2, 1, **figure_kwargs)
+    plot_sliding_regression = has_sliding_regression_rows(sliding_regression_df)
+    if plot_sliding_regression:
+        fig, (prob_ax, obs_ax, regression_ax) = plt.subplots(3, 1, **figure_kwargs)
+    else:
+        fig, (prob_ax, obs_ax) = plt.subplots(2, 1, **figure_kwargs)
+        regression_ax = None
 
     time_bins = len(inputs)
     obs_dim = len(observations[0])
@@ -549,13 +730,121 @@ def plot_block_lm_hmm_presentation_summary(
     prob_ax.set_xlim(0, time_bins - 1)
     prob_ax.set_xticks([])
 
+    plot_block_lm_hmm_presentation_observations(
+        obs_ax=obs_ax,
+        posterior_probs=posterior_probs,
+        observations=observations,
+        hmm_fit=hmm_fit,
+        colors=colors,
+        cmap=cmap,
+        line_width=line_width,
+        xlabel="Context changes" if regression_ax is None else "",
+    )
+    if secondary_trace is not None:
+        add_secondary_block_trace(
+            obs_ax=obs_ax,
+            secondary_trace=secondary_trace,
+            secondary_trace_label=secondary_trace_label,
+            expected_length=time_bins,
+            line_width=line_width,
+            secondary_axis_label_size=secondary_axis_label_size,
+            secondary_tick_label_size=secondary_tick_label_size,
+            secondary_axis_ylim=secondary_axis_ylim,
+            secondary_axis_yticks=secondary_axis_yticks,
+        )
+
+    if session_lengths is not None:
+        splits = np.cumsum(session_lengths)
+        for split_idx in range(splits.shape[0] - 1):
+            prob_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+            obs_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+            if regression_ax is not None:
+                regression_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
+
+    if regression_ax is not None:
+        plot_sliding_block_regression(
+            regression_ax=regression_ax,
+            sliding_regression_df=sliding_regression_df,
+            line_width=line_width,
+        )
+        regression_ax.set_xlim(0, time_bins - 1)
+
+    if session_boundary_positions is not None:
+        boundary_axes = (prob_ax, obs_ax) if regression_ax is None else (prob_ax, obs_ax, regression_ax)
+        add_session_boundary_markers(
+            axes=boundary_axes,
+            boundary_positions=session_boundary_positions,
+            boundary_labels=session_boundary_labels,
+        )
+
+    fig.tight_layout()
+    if regression_ax is None:
+        return fig, (prob_ax, obs_ax)
+    return fig, (prob_ax, obs_ax, regression_ax)
+
+
+def plot_block_lm_hmm_presentation_observations(
+    obs_ax: plt.Axes,
+    posterior_probs: np.ndarray,
+    observations: np.ndarray,
+    hmm_fit,
+    colors: list,
+    cmap,
+    line_width: float | None = None,
+    xlabel: str = "Context changes",
+    axis_label_size: float = 16,
+    tick_label_size: float = 12,
+    legend_font_size: float = 6,
+) -> plt.Axes:
+    """Plot the MAP presentation trials-to-switch panel on an existing axis.
+
+    Parameters
+    ----------
+    obs_ax : matplotlib.axes.Axes
+        Axis that receives the colored inferred-state background and
+        observations.
+    posterior_probs : np.ndarray
+        Posterior state probabilities with shape `(n_blocks, num_states)`.
+        Rows correspond to the valid block sequence used by the HMM.
+    observations : np.ndarray
+        Block observations with shape `(n_blocks, obs_dim)`, in trials to
+        switch/correct.
+    hmm_fit
+        Fitted LM-HMM with `transitions.log_Ps`, `observations.mus`, and
+        `observations.Wks` attributes.
+    colors : list
+        One plotting color per HMM state.
+    cmap
+        Matplotlib colormap aligned to `colors`.
+    line_width : float or None, default=None
+        Optional linewidth for the observation trace. None preserves the
+        existing presentation-summary default.
+    xlabel : str, default="Context changes"
+        X-axis label.
+    axis_label_size : float, default=16
+        Font size for axis labels.
+    tick_label_size : float, default=12
+        Font size for tick labels.
+    legend_font_size : float, default=6
+        Font size for the observation legend.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The same axis passed in.
+    """
+    observations = np.asarray(observations)
+    posterior_probs = np.asarray(posterior_probs)
+    time_bins = observations.shape[0]
+    obs_dim = observations.shape[1]
     lim = 2 * abs(observations).max()
+    if lim == 0:
+        lim = 1.0
+
     ind_state = np.argmax(posterior_probs, axis=1)
     ind_state[np.all(posterior_probs < 0.55, axis=1)] = -1
     cmap.set_under('w')
 
-    biases = _normalize_lm_bias_array(hmm_fit.observations.mus)[ind_state]
-    weights = _normalize_lm_weight_array(hmm_fit.observations.Wks)[ind_state]
     for obs_idx in range(obs_dim):
         obs_ax.imshow(
             ind_state[None, :],
@@ -566,68 +855,31 @@ def plot_block_lm_hmm_presentation_summary(
             extent=(0, time_bins, -lim * obs_dim, lim),
             alpha=0.5,
         )
+        line_kwargs = {} if line_width is None else {"linewidth": line_width}
         obs_ax.plot(
             observations[:, 0] - lim * obs_idx,
             '-k',
             label='obs',
-            **trace_line_width_kwargs,
+            **line_kwargs,
         )
-    #     obs_ax.plot(
-    #         biases[:, 0] - lim,
-    #         ':k',
-    #         label='bias',
-    #         **trace_line_width_kwargs,
-    #     )
-
-    # for input_idx in range(input_dim):
-    #     obs_ax.plot(
-    #         weights[:, 0, input_idx] - lim * input_idx,
-    #         '--k',
-    #         label=predictor_labels[input_idx],
-    #         **trace_line_width_kwargs,
-    #     )
 
     obs_ax.set_xlim(0, time_bins - 1)
     legend = obs_ax.legend(
         loc='center left',
         bbox_to_anchor=(1, 0.5),
         frameon=False,
-        prop={'size': 6},
+        prop={'size': legend_font_size},
     )
-    for line in legend.get_lines():
-        line.set_linewidth(.5)
+    if legend is not None:
+        for line in legend.get_lines():
+            line.set_linewidth(.5)
 
-    obs_ax.set_xlabel("Context changes")
+    obs_ax.set_xlabel(xlabel)
     obs_ax.set_ylim(0, abs(observations).max())
     obs_ax.set_yticks([0, abs(observations).max()])
-    obs_ax.tick_params(axis='y', labelsize=12)
-    obs_ax.set_ylabel("Trials to switch", fontsize=16)
-    if secondary_trace is not None:
-        add_secondary_block_trace(
-            obs_ax=obs_ax,
-            secondary_trace=secondary_trace,
-            secondary_trace_label=secondary_trace_label,
-            expected_length=time_bins,
-            line_width=line_width,
-            secondary_axis_label_size=secondary_axis_label_size,
-            secondary_tick_label_size=secondary_tick_label_size,
-        )
-
-    if session_lengths is not None:
-        splits = np.cumsum(session_lengths)
-        for split_idx in range(splits.shape[0] - 1):
-            prob_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
-            obs_ax.axvline(x=splits[split_idx], color='k', linestyle='--')
-
-    if session_boundary_positions is not None:
-        add_session_boundary_markers(
-            axes=(prob_ax, obs_ax),
-            boundary_positions=session_boundary_positions,
-            boundary_labels=session_boundary_labels,
-        )
-
-    fig.tight_layout()
-    return fig, (prob_ax, obs_ax)
+    obs_ax.tick_params(axis='both', labelsize=tick_label_size)
+    obs_ax.set_ylabel("Trials to switch", fontsize=axis_label_size)
+    return obs_ax
 
 
 def plot_block_lm_hmm_weight_comparison(

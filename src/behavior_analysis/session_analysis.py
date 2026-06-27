@@ -266,6 +266,60 @@ def percent_correct(augmented_trial_df: pd.DataFrame) -> dict:
                 overall_correct=overall)
 
 
+def compute_history_ideal_mouse_agreement_by_trial(
+    augmented_trial_df: pd.DataFrame,
+    params: ideal_observer.IdealObserverParams | None = None,
+) -> np.ndarray:
+    """Return trialwise agreement with the greedy mouse-history ideal policy.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_columns)`. Required columns are
+        `action` and `reward`, plus either precomputed ideal-observer feature
+        columns (`HMM_rel_value_logodds_decay`, `relative_doubt_index`) or the
+        columns needed by `ideal_observer.compute_history_ideal_values`.
+        Experimenter rewards and no-choice trials are excluded.
+    params : ideal_observer.IdealObserverParams or None, default=None
+        Observer parameters. None uses the same defaults as the session-level
+        ideal-observer summaries.
+
+    Returns
+    -------
+    np.ndarray
+        Object array with shape `(n_trials,)`. Valid ideal-comparison rows
+        contain `1.0` for mouse/ideal agreement and `0.0` for disagreement.
+        Invalid rows contain the string sentinel `"None"`.
+    """
+    if params is None:
+        params = ideal_observer.IdealObserverParams()
+
+    agreement = np.full(augmented_trial_df.shape[0], "None", dtype=object)
+    behavioral_choice_ix = make_behavioral_choice_mask(augmented_trial_df)
+    ideal_values = ideal_observer.compute_history_ideal_values(
+        augmented_trial_df,
+        params=params,
+    )
+    numeric_ideal_values = pd.to_numeric(pd.Series(ideal_values), errors="coerce")
+    mouse_actions = pd.to_numeric(augmented_trial_df["action"], errors="coerce")
+    valid_rows = (
+        behavioral_choice_ix
+        & numeric_ideal_values.notna().to_numpy()
+        & mouse_actions.notna().to_numpy()
+    )
+    if not valid_rows.any():
+        return agreement
+
+    retained_values = numeric_ideal_values.loc[valid_rows].to_numpy(dtype=float)
+    ideal_actions = ideal_observer.choose_greedy_left_positive_actions(
+        retained_values,
+        initial_choice=params.initial_tie_choice,
+    )
+    retained_mouse_actions = mouse_actions.loc[valid_rows].to_numpy(dtype=int)
+    agreement[valid_rows] = (ideal_actions == retained_mouse_actions).astype(float)
+    return agreement
+
+
 def make_behavioral_choice_mask(trial_df: pd.DataFrame) -> np.ndarray:
     """Return rows with an animal left/right choice, excluding manual rewards."""
     experimenter_reward_given = _get_experimenter_reward_given_array(trial_df)
@@ -491,6 +545,34 @@ def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
     return n_switches, normalized_switches
 
 
+def count_explore_trials(trial_df: pd.DataFrame) -> int:
+    """Count explore-tagged trials in one block.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_columns)`. When present,
+        `explore_trial` is interpreted as a boolean/count flag where true,
+        positive numeric, or CSV-loaded string values (`"true"`, `"1"`,
+        `"1.0"`) mark one explore trial. Missing columns are treated as zero
+        explore trials for compatibility with older saved analyses.
+
+    Returns
+    -------
+    int
+        Number of explore-tagged trials in `trial_df`, in trials.
+    """
+    if "explore_trial" not in trial_df.columns:
+        return 0
+
+    explore_values = trial_df["explore_trial"]
+    text_values = explore_values.astype(str).str.strip().str.lower()
+    true_text_mask = text_values.isin(["true", "1", "1.0"])
+    numeric_values = pd.to_numeric(explore_values, errors="coerce")
+    positive_numeric_mask = numeric_values.fillna(0) > 0
+    return int((true_text_mask | positive_numeric_mask).sum())
+
+
 def make_augmented_trial_df(trial_df: pd.DataFrame) -> pd.DataFrame:
     trial_df = normalize_experimenter_reward_column(trial_df)
     augmented_trial_df = trial_df.copy(deep=True)
@@ -529,8 +611,17 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
     -------
     pd.DataFrame
         Blockwise performance table with shape `(n_blocks, n_columns)`.
+        Count columns are in trials. Post-first-correct metrics include the
+        first correct behavioral choice and all later behavioral choices in
+        the block; blocks without any correct behavioral choice receive the
+        string sentinel `"None"`. `block_history_ideal_mouse_agreement` is the
+        fraction of valid behavioral-choice trials in a block where the mouse
+        action matches the greedy mouse-history ideal-observer action.
     """
     choice_latency = augmented_trial_df['time_to_choice'].to_numpy(dtype=float)
+    history_ideal_mouse_agreement = compute_history_ideal_mouse_agreement_by_trial(
+        augmented_trial_df
+    )
     blocks = np.unique(augmented_trial_df['cur_block'])
     block_performance = []
 
@@ -551,23 +642,45 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
 
         performance = percent_correct(cur_block_df)
         n_switches, normalized_switches = get_block_switches(cur_block_df)
+        n_explore_trials = count_explore_trials(cur_block_df)
         behavioral_choice_ix = make_behavioral_choice_mask(cur_block_df)
         behavioral_block_df = cur_block_df[behavioral_choice_ix]
         correct_values = get_numeric_correct_values(cur_block_df, behavioral_choice_ix)
         behavioral_correct_values = correct_values[np.asarray(behavioral_choice_ix)]
+        block_history_ideal_values = pd.to_numeric(
+            pd.Series(history_ideal_mouse_agreement[cur_block_ix.to_numpy()]),
+            errors="coerce",
+        ).dropna()
+        if block_history_ideal_values.empty:
+            block_history_ideal_mouse_agreement = "None"
+        else:
+            block_history_ideal_mouse_agreement = float(block_history_ideal_values.mean())
+
         correct_ix = np.nonzero(behavioral_correct_values)[0]
         if correct_ix.size:
             trials_to_correct = correct_ix[0]
+            first_correct_trial_in_block = correct_ix[0]
+            correct_after_first = behavioral_correct_values[first_correct_trial_in_block:]
+            n_trials_after_first_correct = correct_after_first.shape[0]
+            percent_correct_after_first_correct = float(np.mean(correct_after_first))
         else:
             trials_to_correct = 'None' #np.nan  # could occur on last block in session, or when the task switches to dark mode
+            first_correct_trial_in_block = 'None'
+            n_trials_after_first_correct = 'None'
+            percent_correct_after_first_correct = 'None'
 
         performance = dict(block_ix=b, block_type=cur_block_df['block_type'].values[0],
                            trials_to_correct=trials_to_correct,
+                           first_correct_trial_in_block=first_correct_trial_in_block,
+                           n_trials_after_first_correct=n_trials_after_first_correct,
+                           percent_correct_after_first_correct=percent_correct_after_first_correct,
+                           block_history_ideal_mouse_agreement=block_history_ideal_mouse_agreement,
                            prev_consecutive_rewards=prev_consecutive_rewards,
                            prev_consecutive_rewards_memory=prev_consecutive_rewards_memory,
                            prev_n_correct=prev_n_correct,
                            prev_n_rewarded=prev_n_rewarded,
                            n_switches=n_switches,
+                           n_explore_trials=n_explore_trials,
                            normalized_switches=normalized_switches,
                            confusion_flag=n_switches > 3,
                            n_correct=int(np.sum(behavioral_correct_values)),
@@ -1114,6 +1227,7 @@ def add_regression_stats_to_session_performance(
     trials_to_correct: pd.Series,
     prev_n_correct: pd.Series,
     prev_consecutive_rewards: pd.Series,
+    prev_n_rewarded: pd.Series,
     n_blocks: int,
 ) -> pd.DataFrame:
     """Add block-learning regression summaries to a session summary.
@@ -1128,6 +1242,8 @@ def add_regression_stats_to_session_performance(
         Previous-block correct-trial counts with shape `(n_blocks,)`.
     prev_consecutive_rewards : pd.Series
         Previous-block consecutive-reward counts with shape `(n_blocks,)`.
+    prev_n_rewarded : pd.Series
+        Previous-block rewarded-trial counts with shape `(n_blocks,)`.
     n_blocks : int
         Number of analyzed blocks in the session.
 
@@ -1135,12 +1251,19 @@ def add_regression_stats_to_session_performance(
     -------
     pd.DataFrame
         Copy of `session_performance` with explicit regression-stat columns
-        for `prev_consecutive_rewards` and `prev_n_correct`, plus `n_blocks`.
+        for `prev_n_rewarded`, `prev_consecutive_rewards`, and
+        `prev_n_correct`, plus `n_blocks`.
     """
     session_performance = session_performance.copy()
     valid_rows = _get_valid_trials_to_correct_mask(trials_to_correct, prev_n_correct)
     dependent_var = trials_to_correct[valid_rows].astype(int)
 
+    session_performance = _add_regression_stats(
+        session_performance=session_performance,
+        column_prefix="prev_n_rewarded",
+        dependent_var=dependent_var,
+        independent_var=prev_n_rewarded[valid_rows].astype(int),
+    )
     session_performance = _add_regression_stats(
         session_performance=session_performance,
         column_prefix="prev_consecutive_rewards",
@@ -1171,8 +1294,9 @@ def add_block_bias_columns(block_performance: pd.DataFrame) -> pd.DataFrame:
     pd.DataFrame
         Copy of `block_performance` with `bias_rl`, `bias_inf`,
         `min_value_bias`, `bias_rl_flag`, `bias_inf_flag`, and
-        `bias_full_flag` columns. Invalid block rows receive the string
-        sentinel `"None"`.
+        `bias_full_flag` columns, plus RL status columns using a one-trial
+        grace period when `prev_n_correct == 0`. Invalid block rows receive
+        the string sentinel `"None"`.
     """
     block_performance = block_performance.copy()
     valid_rows = _get_valid_trials_to_correct_mask(
@@ -1194,7 +1318,8 @@ def add_block_bias_columns(block_performance: pd.DataFrame) -> pd.DataFrame:
     bias_rl = base_array.copy()
     bias_rl[valid_rows] = bias_rl_values.to_numpy()
 
-    bias_inf_values = (trials_to_correct - 5) / (trials_to_correct + 5)
+    inf_standard = 4
+    bias_inf_values = (trials_to_correct - inf_standard) / (trials_to_correct + inf_standard)
     bias_inf = base_array.copy()
     bias_inf[valid_rows] = bias_inf_values.to_numpy()
 
@@ -1207,12 +1332,34 @@ def add_block_bias_columns(block_performance: pd.DataFrame) -> pd.DataFrame:
     bias_inf_flag_values = bias_inf_values > bias_thresh
     bias_full_flag_values = bias_rl_flag_values & bias_inf_flag_values
 
+    rl_effective_prev_n_correct_values = prev_n_correct.clip(lower=1)
+    rl_thresh_values = np.floor(rl_effective_prev_n_correct_values * .5)
+    rl_thresh_flag_values = trials_to_correct >= rl_thresh_values
+    bias_rl_status_values = (
+        (trials_to_correct - rl_effective_prev_n_correct_values)
+        / (trials_to_correct + rl_effective_prev_n_correct_values + eps)
+    )
+    rl_biased_flag_values = bias_rl_status_values > bias_thresh
+    rl_status_values = pd.Series("valid_rl", index=trials_to_correct.index, dtype=object)
+    rl_status_values.loc[~rl_thresh_flag_values] = "below_rl_threshold"
+    rl_status_values.loc[rl_thresh_flag_values & rl_biased_flag_values] = "biased_rl"
+
     bias_rl_flag = base_array.copy()
     bias_rl_flag[valid_rows] = bias_rl_flag_values.to_numpy()
     bias_inf_flag = base_array.copy()
     bias_inf_flag[valid_rows] = bias_inf_flag_values.to_numpy()
     bias_full_flag = base_array.copy()
     bias_full_flag[valid_rows] = bias_full_flag_values.to_numpy()
+    rl_effective_prev_n_correct = base_array.copy()
+    rl_effective_prev_n_correct[valid_rows] = rl_effective_prev_n_correct_values.to_numpy()
+    rl_thresh = base_array.copy()
+    rl_thresh[valid_rows] = rl_thresh_values.to_numpy()
+    rl_thresh_flag = base_array.copy()
+    rl_thresh_flag[valid_rows] = rl_thresh_flag_values.to_numpy()
+    bias_rl_status_value = base_array.copy()
+    bias_rl_status_value[valid_rows] = bias_rl_status_values.to_numpy()
+    rl_status = base_array.copy()
+    rl_status[valid_rows] = rl_status_values.to_numpy()
 
     block_performance["bias_rl"] = bias_rl
     block_performance["bias_inf"] = bias_inf
@@ -1220,6 +1367,11 @@ def add_block_bias_columns(block_performance: pd.DataFrame) -> pd.DataFrame:
     block_performance["bias_rl_flag"] = bias_rl_flag
     block_performance["bias_inf_flag"] = bias_inf_flag
     block_performance["bias_full_flag"] = bias_full_flag
+    block_performance["rl_effective_prev_n_correct"] = rl_effective_prev_n_correct
+    block_performance["rl_thresh"] = rl_thresh
+    block_performance["rl_thresh_flag"] = rl_thresh_flag
+    block_performance["bias_rl_status_value"] = bias_rl_status_value
+    block_performance["rl_status"] = rl_status
     return block_performance
 
 
@@ -1369,6 +1521,7 @@ def run_analysis(
         trials_to_correct=block_performance["trials_to_correct"],
         prev_n_correct=block_performance["prev_n_correct"],
         prev_consecutive_rewards=block_performance["prev_consecutive_rewards"],
+        prev_n_rewarded=block_performance["prev_n_rewarded"],
         n_blocks=block_performance.shape[0],
     )
     block_performance = add_block_bias_columns(block_performance)

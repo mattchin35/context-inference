@@ -280,6 +280,54 @@ def test_prepare_learning_curve_data_drops_none_slopes_and_returns_numeric_array
     assert block_counts.dtype.kind in {"f", "i"}
 
 
+def test_prepare_learning_curve_data_uses_requested_regressor(tmp_path):
+    """Learning-curve preparation should read the requested regressor slope column."""
+    main_module = load_main_module()
+    cross_session_path = tmp_path / "cross_session_analysis"
+    cross_session_path.mkdir()
+    multisession_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-08"],
+            "prev_consecutive_rewards_slope": [9.9, 8.8],
+            "prev_n_rewarded_slope": [0.25, 0.5],
+            "n_blocks": [4, 5],
+        }
+    )
+    multisession_df.to_csv(cross_session_path / "CT014_overall_performance.csv", index=False)
+
+    coefficients, block_counts, dates = main_module.prepare_learning_curve_data(
+        mouse="CT014",
+        multi_session_save_path=cross_session_path,
+        learning_regressor="prev_n_rewarded",
+    )
+
+    assert coefficients.tolist() == [0.25, 0.5]
+    assert block_counts.tolist() == [4, 5]
+    assert dates.tolist() == ["2025-12-05", "2025-12-08"]
+
+
+def test_prepare_learning_curve_data_loudly_rejects_missing_requested_regressor(tmp_path):
+    """Missing requested learning regressors should fail before plotting stale data."""
+    main_module = load_main_module()
+    cross_session_path = tmp_path / "cross_session_analysis"
+    cross_session_path.mkdir()
+    multisession_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05"],
+            "prev_consecutive_rewards_slope": [0.1],
+            "n_blocks": [4],
+        }
+    )
+    multisession_df.to_csv(cross_session_path / "CT014_overall_performance.csv", index=False)
+
+    with pytest.raises(ValueError, match="prev_n_rewarded_slope"):
+        main_module.prepare_learning_curve_data(
+            mouse="CT014",
+            multi_session_save_path=cross_session_path,
+            learning_regressor="prev_n_rewarded",
+        )
+
+
 def test_prepare_session_trials_to_correct_summary_computes_median_and_quartiles():
     """Session TTC summaries should pool block types and report Q1/median/Q3."""
     main_module = load_main_module()
@@ -344,6 +392,354 @@ def test_prepare_session_trials_to_correct_summary_skips_invalid_sessions_with_w
 
     assert summary_df["session_id"].tolist() == ["CT014_2025-12-05_165240"]
     assert summary_df["n_valid_blocks"].tolist() == [2]
+
+
+def test_prepare_side_trials_to_correct_block_points_labels_side_and_no_correct_blocks():
+    """Side-specific block points should preserve numeric TTC and no-correct blocks."""
+    main_module = load_main_module()
+    session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1, 2, 3],
+                    "block_type": ["right_cued", "left_uncued", "dark period", "left_cued"],
+                    "trials_to_correct": [2, "None", 1, "6"],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        )
+    ]
+
+    points_df = main_module.prepare_side_trials_to_correct_block_points(saved_sessions)
+
+    assert points_df["block_ix"].tolist() == [0, 1, 3]
+    assert points_df["rewarded_side"].tolist() == ["right", "left", "left"]
+    assert points_df["trials_to_correct_numeric"].tolist()[:1] == [2.0]
+    assert np.isnan(points_df.loc[1, "trials_to_correct_numeric"])
+    assert points_df["no_correct_choice"].tolist() == [False, True, False]
+
+
+def test_prepare_side_trials_to_correct_summary_counts_completion_by_side():
+    """Side summaries should count no-correct blocks separately from valid TTC values."""
+    main_module = load_main_module()
+    first_session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    second_session = SimpleNamespace(sess_id_full="CT014_2025-12-16_153200", date="2025-12-16")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=first_session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1, 2, 3, 4],
+                    "block_type": ["left_cued", "left_uncued", "left_cued", "right_cued", "dark period"],
+                    "trials_to_correct": [2, 6, "None", 1, "None"],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        ),
+        main_module.SavedSessionAnalysis(
+            session=second_session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1],
+                    "block_type": ["right_uncued", "right_cued"],
+                    "trials_to_correct": ["None", 5],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        ),
+    ]
+
+    summary_df = main_module.prepare_side_trials_to_correct_summary(saved_sessions)
+
+    left_first = summary_df[
+        (summary_df["date"] == "2025-12-05") & (summary_df["rewarded_side"] == "left")
+    ].iloc[0]
+    right_second = summary_df[
+        (summary_df["date"] == "2025-12-16") & (summary_df["rewarded_side"] == "right")
+    ].iloc[0]
+
+    assert left_first["n_blocks"] == 3
+    assert left_first["n_valid_blocks"] == 2
+    assert left_first["n_no_correct_blocks"] == 1
+    assert left_first["completion_fraction"] == pytest.approx(2 / 3)
+    assert left_first["trials_to_correct_q1"] == 3.0
+    assert left_first["trials_to_correct_median"] == 4.0
+    assert left_first["trials_to_correct_q3"] == 5.0
+    assert right_second["n_blocks"] == 2
+    assert right_second["n_valid_blocks"] == 1
+    assert right_second["n_no_correct_blocks"] == 1
+    assert right_second["completion_fraction"] == pytest.approx(0.5)
+
+
+def test_prepare_side_trials_to_correct_summary_uses_nan_quartiles_without_valid_blocks():
+    """A side with only no-correct blocks should keep completion counts and NaN quartiles."""
+    main_module = load_main_module()
+    session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1],
+                    "block_type": ["left_cued", "left_uncued"],
+                    "trials_to_correct": ["None", np.nan],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        )
+    ]
+
+    summary_df = main_module.prepare_side_trials_to_correct_summary(saved_sessions)
+
+    assert summary_df["rewarded_side"].tolist() == ["left"]
+    assert summary_df.loc[0, "n_blocks"] == 2
+    assert summary_df.loc[0, "n_valid_blocks"] == 0
+    assert summary_df.loc[0, "n_no_correct_blocks"] == 2
+    assert summary_df.loc[0, "completion_fraction"] == 0
+    assert np.isnan(summary_df.loc[0, "trials_to_correct_q1"])
+    assert np.isnan(summary_df.loc[0, "trials_to_correct_median"])
+    assert np.isnan(summary_df.loc[0, "trials_to_correct_q3"])
+
+
+def test_prepare_block_switch_summary_calculates_overall_and_side_medians():
+    """Switch summaries should use raw n_switches for overall and side groups."""
+    main_module = load_main_module()
+    first_session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    second_session = SimpleNamespace(sess_id_full="CT014_2025-12-16_153200", date="2025-12-16")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=first_session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1, 2, 3],
+                    "block_type": ["left_cued", "left_uncued", "right_cued", "dark period"],
+                    "n_switches": [1, 3, 2, 9],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        ),
+        main_module.SavedSessionAnalysis(
+            session=second_session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1, 2],
+                    "block_type": ["left_cued", "right_uncued", "right_cued"],
+                    "n_switches": [5, 1, 7],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        ),
+    ]
+
+    points_df = main_module.prepare_block_switch_block_points(saved_sessions)
+    summary_df = main_module.prepare_block_switch_summary(saved_sessions)
+
+    assert points_df["switch_group"].tolist() == [
+        "overall",
+        "left",
+        "overall",
+        "left",
+        "overall",
+        "right",
+        "overall",
+        "overall",
+        "left",
+        "overall",
+        "right",
+        "overall",
+        "right",
+    ]
+
+    first_overall = summary_df[
+        (summary_df["date"] == "2025-12-05") & (summary_df["switch_group"] == "overall")
+    ].iloc[0]
+    first_left = summary_df[
+        (summary_df["date"] == "2025-12-05") & (summary_df["switch_group"] == "left")
+    ].iloc[0]
+    second_right = summary_df[
+        (summary_df["date"] == "2025-12-16") & (summary_df["switch_group"] == "right")
+    ].iloc[0]
+
+    assert first_overall["n_blocks"] == 4
+    assert first_overall["n_switches_median"] == 2.5
+    assert first_overall["n_switches_q1"] == 1.75
+    assert first_overall["n_switches_q3"] == 4.5
+    assert first_left["n_blocks"] == 2
+    assert first_left["n_switches_median"] == 2.0
+    assert second_right["n_blocks"] == 2
+    assert second_right["n_switches_median"] == 4.0
+
+
+def test_prepare_block_explore_summary_calculates_overall_and_side_medians():
+    """Explore summaries should use raw n_explore_trials for overall and side groups."""
+    main_module = load_main_module()
+    first_session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    second_session = SimpleNamespace(sess_id_full="CT014_2025-12-16_153200", date="2025-12-16")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=first_session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1, 2, 3],
+                    "block_type": ["left_cued", "left_uncued", "right_cued", "dark period"],
+                    "n_explore_trials": [1, 3, 2, 0],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        ),
+        main_module.SavedSessionAnalysis(
+            session=second_session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1, 2],
+                    "block_type": ["left_cued", "right_uncued", "right_cued"],
+                    "n_explore_trials": [5, 1, 7],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        ),
+    ]
+
+    points_df = main_module.prepare_block_explore_block_points(saved_sessions)
+    summary_df = main_module.prepare_block_explore_summary(saved_sessions)
+
+    assert points_df["explore_group"].tolist() == [
+        "overall",
+        "left",
+        "overall",
+        "left",
+        "overall",
+        "right",
+        "overall",
+        "left",
+        "overall",
+        "right",
+        "overall",
+        "right",
+    ]
+
+    first_overall = summary_df[
+        (summary_df["date"] == "2025-12-05") & (summary_df["explore_group"] == "overall")
+    ].iloc[0]
+    first_left = summary_df[
+        (summary_df["date"] == "2025-12-05") & (summary_df["explore_group"] == "left")
+    ].iloc[0]
+    second_right = summary_df[
+        (summary_df["date"] == "2025-12-16") & (summary_df["explore_group"] == "right")
+    ].iloc[0]
+
+    assert first_overall["n_blocks"] == 3
+    assert first_overall["n_explore_trials_median"] == 2.0
+    assert first_overall["n_explore_trials_q1"] == 1.5
+    assert first_overall["n_explore_trials_q3"] == 2.5
+    assert first_left["n_blocks"] == 2
+    assert first_left["n_explore_trials_median"] == 2.0
+    assert second_right["n_blocks"] == 2
+    assert second_right["n_explore_trials_median"] == 4.0
+
+
+def test_prepare_block_explore_points_derives_counts_from_augmented_trials():
+    """Saved sessions without block explore counts should use trial explore tags."""
+    main_module = load_main_module()
+    session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1],
+                    "block_type": ["left_cued", "right_uncued"],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame(
+                {
+                    "cur_block": [10, 10, 11, 11, 11],
+                    "explore_trial": [1, 0, "true", "0", 1],
+                }
+            ),
+        )
+    ]
+
+    points_df = main_module.prepare_block_explore_block_points(saved_sessions)
+
+    overall_points = points_df[points_df["explore_group"] == "overall"]
+    assert overall_points["n_explore_trials"].tolist() == [1.0, 2.0]
+
+
+def test_prepare_correct_after_first_summary_excludes_dark_periods_and_summarizes_groups():
+    """Post-first-correct summaries should use only side blocks for all groups."""
+    main_module = load_main_module()
+    session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1, 2, 3],
+                    "block_type": ["left_cued", "left_uncued", "right_cued", "dark period"],
+                    "percent_correct_after_first_correct": [0.5, 1.0, 0.25, 1.0],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        )
+    ]
+
+    points_df = main_module.prepare_correct_after_first_block_points(saved_sessions)
+    summary_df = main_module.prepare_correct_after_first_summary(saved_sessions)
+
+    assert points_df["correct_after_first_group"].tolist() == [
+        "overall",
+        "left",
+        "overall",
+        "left",
+        "overall",
+        "right",
+    ]
+    assert "dark period" not in points_df["block_type"].tolist()
+
+    overall = summary_df[summary_df["correct_after_first_group"] == "overall"].iloc[0]
+    left = summary_df[summary_df["correct_after_first_group"] == "left"].iloc[0]
+    right = summary_df[summary_df["correct_after_first_group"] == "right"].iloc[0]
+
+    assert overall["n_blocks"] == 3
+    assert overall["n_valid_blocks"] == 3
+    assert overall["percent_correct_after_first_median"] == 0.5
+    assert overall["percent_correct_after_first_q1"] == 0.375
+    assert overall["percent_correct_after_first_q3"] == 0.75
+    assert left["n_blocks"] == 2
+    assert left["percent_correct_after_first_median"] == 0.75
+    assert right["n_blocks"] == 1
+    assert right["percent_correct_after_first_median"] == 0.25
+
+
+def test_prepare_correct_after_first_block_points_marks_no_correct_blocks():
+    """Missing post-first-correct values should become no-correct marker rows."""
+    main_module = load_main_module()
+    session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1],
+                    "block_type": ["left_cued", "right_uncued"],
+                    "percent_correct_after_first_correct": ["None", np.nan],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        )
+    ]
+
+    points_df = main_module.prepare_correct_after_first_block_points(saved_sessions)
+    summary_df = main_module.prepare_correct_after_first_summary(saved_sessions)
+
+    assert points_df["no_correct_choice"].tolist() == [True, True, True, True]
+    assert points_df["percent_correct_after_first_numeric"].isna().all()
+    assert summary_df["n_valid_blocks"].tolist() == [0, 0, 0]
+    assert summary_df["n_no_correct_blocks"].tolist() == [2, 1, 1]
+    assert summary_df["percent_correct_after_first_median"].isna().all()
 
 
 def test_load_saved_multisession_augmented_trials_validates_required_columns(tmp_path):
@@ -539,13 +935,17 @@ def test_run_multisession_analysis_forwards_block_plot_settings(tmp_path, monkey
         random_seed,
         predicted_state_line_width=None,
         state_plot_figsize=None,
-        plot_bias_rl=False,
-        bias_rl_column="bias_rl",
+        block_secondary_trace=None,
+        plot_sliding_regression=False,
+        sliding_regression_window_size=10,
+        sliding_regression_step_size=5,
     ):
         captured["predicted_state_line_width"] = predicted_state_line_width
         captured["state_plot_figsize"] = state_plot_figsize
-        captured["plot_bias_rl"] = plot_bias_rl
-        captured["bias_rl_column"] = bias_rl_column
+        captured["block_secondary_trace"] = block_secondary_trace
+        captured["plot_sliding_regression"] = plot_sliding_regression
+        captured["sliding_regression_window_size"] = sliding_regression_window_size
+        captured["sliding_regression_step_size"] = sliding_regression_step_size
         return (
             block_performance.assign(inferred_strategy=[0, 1]),
             augmented_trial_df.assign(inherited_block_strategy=[0, 1], inherited_block_bias=["False", "False"]),
@@ -561,15 +961,19 @@ def test_run_multisession_analysis_forwards_block_plot_settings(tmp_path, monkey
         trial_predictor_columns=("FQlearning_rel_value",),
         block_predicted_state_line_width=0.4,
         block_state_plot_figsize=(18, 6),
-        block_plot_bias_rl=True,
-        block_bias_rl_column="bias_rl",
+        block_secondary_trace="bias_rl",
+        plot_sliding_regression=True,
+        sliding_regression_window_size=10,
+        sliding_regression_step_size=5,
     )
 
     assert captured == {
         "predicted_state_line_width": 0.4,
         "state_plot_figsize": (18, 6),
-        "plot_bias_rl": True,
-        "bias_rl_column": "bias_rl",
+        "block_secondary_trace": "bias_rl",
+        "plot_sliding_regression": True,
+        "sliding_regression_window_size": 10,
+        "sliding_regression_step_size": 5,
     }
 
 
@@ -607,8 +1011,10 @@ def test_run_multisession_analysis_runs_block_modeling_on_concatenated_inputs(tm
         random_seed,
         predicted_state_line_width=None,
         state_plot_figsize=None,
-        plot_bias_rl=False,
-        bias_rl_column="bias_rl",
+        block_secondary_trace=None,
+        plot_sliding_regression=False,
+        sliding_regression_window_size=10,
+        sliding_regression_step_size=5,
     ):
         calls.append(
             (
@@ -620,8 +1026,10 @@ def test_run_multisession_analysis_runs_block_modeling_on_concatenated_inputs(tm
                 random_seed,
                 predicted_state_line_width,
                 state_plot_figsize,
-                plot_bias_rl,
-                bias_rl_column,
+                block_secondary_trace,
+                plot_sliding_regression,
+                sliding_regression_window_size,
+                sliding_regression_step_size,
             )
         )
         return (
@@ -649,15 +1057,17 @@ def test_run_multisession_analysis_runs_block_modeling_on_concatenated_inputs(tm
         trial_predictor_columns=trial_predictor_columns,
         block_predicted_state_line_width=0.5,
         block_state_plot_figsize=(18, 6),
-        block_plot_bias_rl=True,
-        block_bias_rl_column="bias_rl",
+        block_secondary_trace="bias_rl",
+        plot_sliding_regression=True,
+        sliding_regression_window_size=10,
+        sliding_regression_step_size=5,
     )
 
     assert len(save_calls) == 1
     assert save_calls[0][0] is concatenated
     assert save_calls[0][1] is synthetic_session
     assert calls == [
-        ("block", "CT014_multisession", 2, 4, 5, 1001, 0.5, (18, 6), True, "bias_rl"),
+        ("block", "CT014_multisession", 2, 4, 5, 1001, 0.5, (18, 6), "bias_rl", True, 10, 5),
     ]
     assert block_selection is None
     assert trial_selection is None
