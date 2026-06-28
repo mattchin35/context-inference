@@ -21,7 +21,7 @@ def _import_performance_plots():
 
 
 def _capture_plot_calls(monkeypatch):
-    """Record every Axes.plot call as simple x/y/label triples."""
+    """Record every Axes.plot call as simple data/style dictionaries."""
     from matplotlib.axes import Axes
 
     plot_calls = []
@@ -32,6 +32,9 @@ def _capture_plot_calls(monkeypatch):
                 "x": np.asarray(x).tolist(),
                 "y": np.asarray(y).tolist(),
                 "label": kwargs.get("label"),
+                "color": kwargs.get("color"),
+                "linewidth": kwargs.get("linewidth"),
+                "markersize": kwargs.get("markersize"),
             }
         )
         return []
@@ -82,6 +85,29 @@ def _capture_fill_between_calls(monkeypatch):
     return fill_between_calls
 
 
+def _capture_scatter_calls(monkeypatch):
+    """Record every Axes.scatter call as simple data/style dictionaries."""
+    from matplotlib.axes import Axes
+
+    scatter_calls = []
+
+    def fake_scatter(self, x, y, *args, **kwargs):
+        scatter_calls.append(
+            {
+                "x": np.asarray(x).tolist(),
+                "y": np.asarray(y).tolist(),
+                "label": kwargs.get("label"),
+                "color": kwargs.get("color"),
+                "alpha": kwargs.get("alpha"),
+                "s": kwargs.get("s"),
+            }
+        )
+        return None
+
+    monkeypatch.setattr(Axes, "scatter", fake_scatter)
+    return scatter_calls
+
+
 def test_save_performance_figure_uses_tight_bbox_and_closes_only_saved_figure(monkeypatch, tmp_path: Path):
     """The shared save helper should improve text clipping without closing unrelated figures."""
     performance_plots = _import_performance_plots()
@@ -128,6 +154,192 @@ def test_plot_session_correct_skips_missing_percent_correct_values(monkeypatch, 
     assert [call["label"] for call in plot_calls] == ["right_cued"]
     assert plot_calls[0]["x"] == [0, 2]
     assert plot_calls[0]["y"] == [1.0, 0.5]
+
+
+def test_plot_session_agent_mouse_agreement_saves_overall_lines(monkeypatch, tmp_path: Path):
+    """Agent-agreement plot should draw one overall block line per short agent label."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2],
+            "qlearning_mouse_agreement": [0.5, "None", 1.0],
+            "observer_mouse_agreement": [1.0, 0.5, 0.0],
+        }
+    )
+
+    save_path = performance_plots.plot_session_agent_mouse_agreement(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_id_full="CT999_2026-01-01_120000",
+        agreement_columns={
+            "QL": "qlearning_mouse_agreement",
+            "Ideal": "observer_mouse_agreement",
+        },
+    )
+
+    assert save_path == tmp_path / "CT999_2026-01-01_120000_agent_mouse_agreement.png"
+    assert save_path.exists()
+    agent_calls = [call for call in plot_calls if call["label"] in {"QL", "Ideal"}]
+    assert agent_calls == [
+        {
+            "x": [0.0, 2.0],
+            "y": [0.5, 1.0],
+            "label": "QL",
+            "color": "#1f77b4",
+            "linewidth": 2,
+            "markersize": 5,
+        },
+        {
+            "x": [0.0, 1.0, 2.0],
+            "y": [1.0, 0.5, 0.0],
+            "label": "Ideal",
+            "color": "#111111",
+            "linewidth": 2,
+            "markersize": 5,
+        },
+    ]
+
+
+def test_plot_session_agent_mouse_agreement_adds_summary_scatter(monkeypatch, tmp_path: Path):
+    """Agent-agreement plot should include raw summary points and median markers."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_plot_calls(monkeypatch)
+    scatter_calls = _capture_scatter_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2],
+            "qlearning_mouse_agreement": [0.5, "None", 1.0],
+            "observer_mouse_agreement": [1.0, 0.5, 0.0],
+        }
+    )
+
+    performance_plots.plot_session_agent_mouse_agreement(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_id_full="CT999_2026-01-01_120000",
+        agreement_columns={
+            "QL": "qlearning_mouse_agreement",
+            "Ideal": "observer_mouse_agreement",
+        },
+    )
+
+    raw_summary_calls = [
+        call for call in scatter_calls
+        if call["label"] in {"QL blocks", "Ideal blocks"}
+    ]
+    assert [call["y"] for call in raw_summary_calls] == [[0.5, 1.0], [1.0, 0.5, 0.0]]
+    assert raw_summary_calls[0]["color"] == "#1f77b4"
+    assert raw_summary_calls[0]["alpha"] == 0.65
+    assert raw_summary_calls[0]["s"] == 22
+    assert raw_summary_calls[1]["color"] == "#111111"
+
+    median_calls = [
+        call for call in plot_calls
+        if call["label"] in {"QL median", "Ideal median"}
+    ]
+    assert median_calls == [
+        {
+            "x": [-0.12, 0.12],
+            "y": [0.75, 0.75],
+            "label": "QL median",
+            "color": "#1f77b4",
+            "linewidth": 4,
+            "markersize": None,
+        },
+        {
+            "x": [0.88, 1.12],
+            "y": [0.5, 0.5],
+            "label": "Ideal median",
+            "color": "#111111",
+            "linewidth": 4,
+            "markersize": None,
+        },
+    ]
+
+
+def test_plot_multisession_agent_mouse_agreement_quality_saves_png(tmp_path: Path):
+    """Multisession agent-agreement plot should save the standalone PNG."""
+    performance_plots = _import_performance_plots()
+    summary_df = pd.DataFrame(
+        {
+            "date": ["2026-01-01", "2026-01-02", "2026-01-01", "2026-01-02"],
+            "session_id": ["s1", "s2", "s1", "s2"],
+            "agent": ["QL", "QL", "Ideal", "Ideal"],
+            "n_blocks": [2, 2, 2, 2],
+            "agreement_q1": [0.25, 0.5, 0.5, 0.75],
+            "agreement_median": [0.5, 0.75, 0.75, 1.0],
+            "agreement_q3": [0.75, 1.0, 1.0, 1.0],
+        }
+    )
+    block_points_df = pd.DataFrame(
+        {
+            "date": ["2026-01-01", "2026-01-01", "2026-01-01", "2026-01-02"],
+            "session_id": ["s1", "s1", "s1", "s2"],
+            "agent": ["QL", "Ideal", "QL", "Ideal"],
+            "block_ix": [0, 0, 1, 0],
+            "block_type": ["left_cued", "left_cued", "right_cued", "right_cued"],
+            "agreement": [0.25, 0.5, 0.75, 1.0],
+        }
+    )
+
+    save_path = performance_plots.plot_multisession_agent_mouse_agreement_quality(
+        summary_df=summary_df,
+        block_points_df=block_points_df,
+        plot_path=tmp_path,
+        figure_id="CT999",
+    )
+
+    assert save_path == tmp_path / "CT999_agent-mouse-agreement-quality.png"
+    assert save_path.exists()
+
+
+def test_plot_multisession_agent_mouse_agreement_quality_uses_agent_colors(monkeypatch, tmp_path: Path):
+    """Multisession agent-agreement plot should use the bold agent palette."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_plot_calls(monkeypatch)
+    summary_df = pd.DataFrame(
+        {
+            "date": ["2026-01-01", "2026-01-02", "2026-01-01", "2026-01-02"],
+            "session_id": ["s1", "s2", "s1", "s2"],
+            "agent": ["QL", "QL", "Ideal", "Ideal"],
+            "n_blocks": [2, 2, 2, 2],
+            "agreement_q1": [0.25, 0.5, 0.5, 0.75],
+            "agreement_median": [0.5, 0.75, 0.75, 1.0],
+            "agreement_q3": [0.75, 1.0, 1.0, 1.0],
+        }
+    )
+    block_points_df = pd.DataFrame(
+        {
+            "date": ["2026-01-01", "2026-01-01", "2026-01-02", "2026-01-02"],
+            "session_id": ["s1", "s1", "s2", "s2"],
+            "agent": ["QL", "Ideal", "QL", "Ideal"],
+            "block_ix": [0, 0, 0, 0],
+            "block_type": ["left_cued", "left_cued", "right_cued", "right_cued"],
+            "agreement": [0.25, 0.5, 0.75, 1.0],
+        }
+    )
+
+    performance_plots.plot_multisession_agent_mouse_agreement_quality(
+        summary_df=summary_df,
+        block_points_df=block_points_df,
+        plot_path=tmp_path,
+        figure_id="CT999",
+    )
+
+    median_calls = [
+        call for call in plot_calls
+        if call["label"] in {"QL median", "Ideal median"}
+    ]
+    assert median_calls[0]["color"] == "#1f77b4"
+    assert median_calls[1]["color"] == "#111111"
+
+    raw_calls = [
+        call for call in plot_calls
+        if call["label"] in {"QL raw blocks", "Ideal raw blocks"}
+    ]
+    assert raw_calls[0]["color"] == "#1f77b4"
+    assert raw_calls[1]["color"] == "#111111"
 
 
 def test_plot_session_correct_after_first_correct_marks_no_correct_blocks(
@@ -792,6 +1004,37 @@ def test_plot_session_explore_trials_draws_side_medians_and_raw_points(
     assert (tmp_path / "session_explore_block_explore_trials.png").exists()
 
 
+def test_plot_session_explore_runs_draws_side_medians_and_raw_points(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Explore-run plots should include block timeline and side summaries."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2, 3],
+            "block_type": ["left_cued", "left_uncued", "right_cued", "right_uncued"],
+            "n_explore_runs": [2, 4, 1, 3],
+        }
+    )
+
+    performance_plots.plot_session_explore_runs(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_ID="session_explore_runs",
+    )
+
+    left_raw = next(call for call in plot_calls if call["kwargs"].get("label") == "left raw blocks")
+    right_median = next(call for call in plot_calls if call["kwargs"].get("label") == "right median")
+    left_iqr = next(call for call in plot_calls if call["kwargs"].get("label") == "left Q1-Q3")
+
+    np.testing.assert_array_equal(left_raw["y"], np.array([2.0, 4.0]))
+    np.testing.assert_array_equal(right_median["y"], np.array([2.0]))
+    np.testing.assert_array_equal(left_iqr["y"], np.array([2.5, 3.5]))
+    assert (tmp_path / "session_explore_runs_block_explore_runs.png").exists()
+
+
 def test_plot_session_block_quality_summary_handles_full_completion_bias(monkeypatch, tmp_path: Path):
     """A fully complete biased session should still show left/right TTC asymmetry."""
     performance_plots = _import_performance_plots()
@@ -1169,6 +1412,57 @@ def test_plot_multisession_block_explore_quality_draws_overall_left_right(
     assert raw_labels == {"overall raw blocks", "left raw blocks", "right raw blocks"}
     assert spread_labels == {"overall Q1-Q3", "left Q1-Q3", "right Q1-Q3"}
     assert (tmp_path / "CT014_block-explore-quality.png").exists()
+
+
+def test_plot_multisession_block_explore_run_quality_draws_overall_left_right(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Explore-run quality plots should draw overall, left, and right summary layers."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    fill_between_calls = _capture_fill_between_calls(monkeypatch)
+    summary_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-05"],
+            "explore_group": ["overall", "left", "right"],
+            "n_explore_runs_q1": [1.0, 2.0, 3.0],
+            "n_explore_runs_median": [2.0, 3.0, 4.0],
+            "n_explore_runs_q3": [3.0, 4.0, 5.0],
+        }
+    )
+    block_points_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-05"],
+            "explore_group": ["overall", "left", "right"],
+            "n_explore_runs": [1, 2, 3],
+        }
+    )
+
+    performance_plots.plot_multisession_block_explore_run_quality(
+        summary_df=summary_df,
+        block_points_df=block_points_df,
+        plot_path=tmp_path,
+        figure_id="CT014",
+        point_jitter=0,
+    )
+
+    median_labels = {
+        call["kwargs"].get("label")
+        for call in plot_calls
+        if call["kwargs"].get("label", "").endswith("median")
+    }
+    raw_labels = {
+        call["kwargs"].get("label")
+        for call in plot_calls
+        if call["kwargs"].get("label", "").endswith("raw blocks")
+    }
+    spread_labels = {call["label"] for call in fill_between_calls}
+
+    assert median_labels == {"overall median", "left median", "right median"}
+    assert raw_labels == {"overall raw blocks", "left raw blocks", "right raw blocks"}
+    assert spread_labels == {"overall Q1-Q3", "left Q1-Q3", "right Q1-Q3"}
+    assert (tmp_path / "CT014_block-explore-run-quality.png").exists()
 
 
 def test_plot_multisession_correct_after_first_quality_draws_groups_and_no_correct(

@@ -28,6 +28,20 @@ TRIALS_TO_CORRECT_SCATTER_REGRESSORS = {
     "prev_consecutive_rewards": "Consecutive Rewards",
     "prev_n_correct": "Correct Choices in Previous Block",
 }
+DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS = {
+    "QL": "qlearning_mouse_agreement",
+    "FQL": "fql_mouse_agreement",
+    "HMM": "hmm_logodds_mouse_agreement",
+    "HMM decay": "hmm_logodds_decay_mouse_agreement",
+    "Ideal": "observer_mouse_agreement",
+}
+AGENT_MOUSE_AGREEMENT_COLORS = {
+    "QL": "#1f77b4",
+    "FQL": "#d62728",
+    "HMM": "#2ca02c",
+    "HMM decay": "#9467bd",
+    "Ideal": "#111111",
+}
 
 
 def save_performance_figure(fig: plt.Figure, save_path: Path) -> None:
@@ -575,6 +589,202 @@ def plot_session_history_ideal_mouse_agreement(
 
     save_path = plot_path / f"{sess_ID}_history_ideal_mouse_agreement.png"
     save_performance_figure(f, save_path)
+
+
+def plot_session_agent_mouse_agreement(
+    block_performance: pd.DataFrame,
+    plot_path: Path,
+    sess_id_full: str,
+    agreement_columns: dict[str, str] | None = None,
+) -> Path:
+    """Plot blockwise mouse-agent agreement for multiple agents.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise table with shape `(n_blocks, n_columns)`. Required columns
+        are the requested agreement columns. If `block_ix` is present, it is
+        used as the x-axis; otherwise row position is used.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    sess_id_full : str
+        Full session identifier used in the plot title and output filename.
+    agreement_columns : dict[str, str] or None, default=None
+        Mapping from legend label to blockwise agreement column. None uses the
+        default Q-learning, forgetting Q-learning, HMM log-odds, HMM log-odds
+        with decay, and ideal-observer agreement columns.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path `{sess_id_full}_agent_mouse_agreement.png`.
+
+    Raises
+    ------
+    ValueError
+        If any requested agreement column is absent.
+    """
+    if agreement_columns is None:
+        agreement_columns = DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS
+
+    missing_columns = [
+        column for column in agreement_columns.values()
+        if column not in block_performance.columns
+    ]
+    if missing_columns:
+        raise ValueError(f"block_performance is missing requested agreement columns: {missing_columns}")
+
+    block_positions = _get_block_positions_for_plot(block_performance)
+    fig, axes = plt.subplots(2, 1, figsize=(8, 8))
+    timeline_ax, summary_ax = axes
+    color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", all_colors)
+    for agent_index, (label, column) in enumerate(agreement_columns.items()):
+        agreement_values = pd.to_numeric(block_performance[column], errors="coerce")
+        valid_rows = agreement_values.notna() & block_positions.notna()
+        if not valid_rows.any():
+            continue
+        color = AGENT_MOUSE_AGREEMENT_COLORS.get(label, color_cycle[agent_index % len(color_cycle)])
+        timeline_ax.plot(
+            block_positions.loc[valid_rows].to_numpy(dtype=float),
+            agreement_values.loc[valid_rows].to_numpy(dtype=float),
+            marker="o",
+            linewidth=2,
+            markersize=5,
+            color=color,
+            label=label,
+        )
+
+    timeline_ax.set_ylim(-0.05, 1.05)
+    timeline_ax.set_xlabel("Block")
+    timeline_ax.set_ylabel("Mouse-Agent Agreement")
+    timeline_ax.set_title(f"{sess_id_full} Mouse-Agent Agreement")
+    timeline_ax.axhline(0.5, color="gray", linestyle=":", linewidth=1)
+    handles, _labels = timeline_ax.get_legend_handles_labels()
+    if handles:
+        timeline_ax.legend(fancybox=False, fontsize=8)
+
+    _plot_agent_metric_summary_on_ax(
+        summary_ax=summary_ax,
+        block_performance=block_performance,
+        agreement_columns=agreement_columns,
+        y_label="Mouse-Agent Agreement",
+        color_cycle=color_cycle,
+    )
+
+    for ax in axes:
+        ax.spines["right"].set_visible(False)
+        ax.spines["top"].set_visible(False)
+
+    save_path = plot_path / f"{sess_id_full}_agent_mouse_agreement.png"
+    save_performance_figure(fig, save_path)
+    return save_path
+
+
+def _get_block_positions_for_plot(block_performance: pd.DataFrame) -> pd.Series:
+    """Return numeric block positions for plotting a blockwise metric.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise table with shape `(n_blocks, n_columns)`. Optional `block_ix`
+        values are block identifiers; otherwise row index position is used.
+
+    Returns
+    -------
+    pd.Series
+        Numeric x-axis positions with shape `(n_blocks,)`.
+    """
+    if "block_ix" in block_performance.columns:
+        block_positions = pd.to_numeric(block_performance["block_ix"], errors="coerce")
+        if not block_positions.isna().any():
+            return block_positions
+    return pd.Series(np.arange(block_performance.shape[0]), index=block_performance.index)
+
+
+def _plot_agent_metric_summary_on_ax(
+    summary_ax: plt.Axes,
+    block_performance: pd.DataFrame,
+    agreement_columns: dict[str, str],
+    y_label: str,
+    color_cycle: list | None = None,
+    rng_seed: int = 0,
+) -> None:
+    """Plot raw block values plus median and Q1-Q3 summaries by agent.
+
+    Parameters
+    ----------
+    summary_ax : matplotlib.axes.Axes
+        Axis modified in place.
+    block_performance : pd.DataFrame
+        Blockwise table with shape `(n_blocks, n_columns)`. Requested
+        agreement columns contain unitless fractions in [0, 1] or missing
+        sentinels such as `"None"`.
+    agreement_columns : dict[str, str]
+        Mapping from short visible agent label to blockwise agreement column.
+    y_label : str
+        Y-axis label.
+    color_cycle : list or None, default=None
+        Plot colors. None uses Matplotlib's current color cycle.
+    rng_seed : int, default=0
+        Seed for deterministic horizontal jitter of raw block points.
+
+    Returns
+    -------
+    None
+        Mutates `summary_ax` in place.
+    """
+    if color_cycle is None:
+        color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", all_colors)
+    rng = np.random.default_rng(rng_seed)
+    x_positions = np.arange(len(agreement_columns), dtype=float)
+    for agent_index, (label, column) in enumerate(agreement_columns.items()):
+        values = pd.to_numeric(block_performance[column], errors="coerce").dropna()
+        if values.empty:
+            continue
+        color = AGENT_MOUSE_AGREEMENT_COLORS.get(label, color_cycle[agent_index % len(color_cycle)])
+        y_values = values.to_numpy(dtype=float)
+        jittered_x = x_positions[agent_index] + rng.uniform(-0.08, 0.08, size=y_values.shape[0])
+        summary_ax.scatter(
+            jittered_x,
+            y_values,
+            s=22,
+            alpha=0.65,
+            color=color,
+            label=f"{label} blocks",
+        )
+        quartiles = values.quantile([0.25, 0.5, 0.75])
+        q1 = float(quartiles.loc[0.25])
+        median = float(quartiles.loc[0.5])
+        q3 = float(quartiles.loc[0.75])
+        summary_ax.plot(
+            [x_positions[agent_index], x_positions[agent_index]],
+            [q1, q3],
+            color=color,
+            linewidth=2,
+        )
+        for cap_y in (q1, q3):
+            summary_ax.plot(
+                [x_positions[agent_index] - 0.08, x_positions[agent_index] + 0.08],
+                [cap_y, cap_y],
+                color=color,
+                linewidth=2,
+            )
+        summary_ax.plot(
+            [x_positions[agent_index] - 0.12, x_positions[agent_index] + 0.12],
+            [median, median],
+            color=color,
+            linewidth=4,
+            label=f"{label} median",
+        )
+
+    summary_ax.set_ylim(-0.05, 1.05)
+    summary_ax.set_xlim(-0.5, len(agreement_columns) - 0.5)
+    summary_ax.set_xticks(x_positions)
+    summary_ax.set_xticklabels(list(agreement_columns.keys()), rotation=35, ha="right")
+    summary_ax.set_xlabel("Agent")
+    summary_ax.set_ylabel(y_label)
+    summary_ax.set_title("Agent Summary")
+    summary_ax.axhline(0.5, color="gray", linestyle=":", linewidth=1)
 
 
 def plot_multisession_correct(overall_df: pd.DataFrame, plot_path: Path, figure_id: str, use_dates: bool=True):
@@ -2091,6 +2301,81 @@ def plot_session_explore_trials(block_performance: pd.DataFrame, plot_path: Path
     save_performance_figure(f, save_path)
 
 
+def plot_session_explore_runs(block_performance: pd.DataFrame, plot_path: Path, sess_ID: str):
+    """Plot blockwise short exploratory leave-return run counts.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise performance table with shape `(n_blocks, n_columns)`.
+        Required columns are `block_type` and `n_explore_runs`; optional
+        `block_ix` gives the x-axis block index. `n_explore_runs` is a count in
+        runs per block.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    sess_ID : str
+        Session identifier used in the plot title and output filename.
+
+    Returns
+    -------
+    None
+        Saves `{sess_ID}_block_explore_runs.png`.
+    """
+    required_columns = {"block_type", "n_explore_runs"}
+    missing_columns = sorted(required_columns.difference(block_performance.columns))
+    if missing_columns:
+        raise ValueError(f"block_performance is missing required columns: {missing_columns}")
+
+    plot_df = block_performance.loc[:, ["block_type", "n_explore_runs"]].copy()
+    if "block_ix" in block_performance.columns:
+        plot_df["block_position"] = pd.to_numeric(block_performance["block_ix"], errors="coerce")
+        if plot_df["block_position"].isna().any():
+            plot_df["block_position"] = np.arange(len(block_performance))
+    else:
+        plot_df["block_position"] = np.arange(len(block_performance))
+    plot_df["n_explore_runs_numeric"] = pd.to_numeric(
+        plot_df["n_explore_runs"],
+        errors="coerce",
+    )
+
+    f, axes = plt.subplots(2, 1, figsize=(7, 8))
+    timeline_ax, side_ax = axes
+    for b in block_types:
+        if b == "dark period":
+            continue
+
+        block_df = plot_df[plot_df["block_type"] == b].dropna(subset=["n_explore_runs_numeric"])
+        if not block_df.empty:
+            timeline_ax.plot(
+                block_df["block_position"].to_numpy(dtype=float),
+                block_df["n_explore_runs_numeric"].to_numpy(dtype=float),
+                "o",
+                color=color_dict[b],
+                label=b,
+            )
+
+    timeline_ax.set_ylabel("Explore Runs in Block")
+    timeline_ax.set_xlabel("Block")
+    timeline_ax.set_title(f"{sess_ID} Short Explore Runs")
+    handles, _labels = timeline_ax.get_legend_handles_labels()
+    if handles:
+        timeline_ax.legend(fancybox=False)
+
+    _plot_side_metric_summary_on_ax(
+        side_ax=side_ax,
+        plot_df=plot_df,
+        metric_column="n_explore_runs_numeric",
+        y_label="Explore Runs in Block",
+    )
+
+    for ax in axes:
+        ax.spines["right"].set_visible(False)
+        ax.spines["top"].set_visible(False)
+
+    save_path = plot_path / f"{sess_ID}_block_explore_runs.png"
+    save_performance_figure(f, save_path)
+
+
 def plot_multisession_trials_to_correct(overall_df: pd.DataFrame, plot_path: Path, figure_id: str,
                                         use_dates: bool=True):
     block_types = ['right_cued_trials_to_correct', 'left_cued_trials_to_correct',
@@ -2913,6 +3198,191 @@ def plot_multisession_block_explore_quality(
     save_performance_figure(fig, save_path)
 
 
+def plot_multisession_block_explore_run_quality_on_ax(
+    ax: plt.Axes,
+    summary_df: pd.DataFrame,
+    block_points_df: pd.DataFrame,
+    figure_id: str,
+    point_jitter: float = 0.08,
+    jitter_seed: int = 0,
+) -> plt.Axes:
+    """Plot cross-session short explore runs per block on one axis.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axis that receives the explore-run summary.
+    summary_df : pd.DataFrame
+        Session/group summary table with shape `(n_session_groups,
+        n_columns)`. Required columns are `date`, `explore_group`,
+        `n_explore_runs_q1`, `n_explore_runs_median`, and
+        `n_explore_runs_q3`. Counts are runs per block.
+    block_points_df : pd.DataFrame
+        Raw explore-run table with shape `(n_points, n_columns)`. Required
+        columns are `date`, `explore_group`, and `n_explore_runs`. Side blocks
+        appear in both their side-specific group and the `"overall"` group.
+    figure_id : str
+        Mouse or subject identifier used in the plot title.
+    point_jitter : float, default=0.08
+        Maximum absolute horizontal jitter for raw block markers, in
+        categorical x-axis units. Summary lines are not jittered.
+    jitter_seed : int, default=0
+        Seed for deterministic marker jitter.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The same axis passed in.
+    """
+    summary_required_columns = {
+        "date",
+        "explore_group",
+        "n_explore_runs_q1",
+        "n_explore_runs_median",
+        "n_explore_runs_q3",
+    }
+    point_required_columns = {"date", "explore_group", "n_explore_runs"}
+    missing_summary_columns = sorted(summary_required_columns.difference(summary_df.columns))
+    missing_point_columns = sorted(point_required_columns.difference(block_points_df.columns))
+    if missing_summary_columns:
+        raise ValueError(f"summary_df is missing required columns: {missing_summary_columns}")
+    if missing_point_columns:
+        raise ValueError(f"block_points_df is missing required columns: {missing_point_columns}")
+
+    summary_plot_df = summary_df.copy()
+    point_plot_df = block_points_df.copy()
+    numeric_summary_columns = [
+        "n_explore_runs_q1",
+        "n_explore_runs_median",
+        "n_explore_runs_q3",
+    ]
+    for column in numeric_summary_columns:
+        summary_plot_df[column] = pd.to_numeric(summary_plot_df[column], errors="coerce")
+    point_plot_df["n_explore_runs"] = pd.to_numeric(
+        point_plot_df["n_explore_runs"],
+        errors="coerce",
+    )
+    point_plot_df = point_plot_df.dropna(subset=["n_explore_runs"])
+
+    if summary_plot_df.empty:
+        raise ValueError("summary_df must contain at least one session/group row to plot.")
+
+    dates = pd.unique(summary_plot_df["date"])
+    x_by_date = {date: index + 1 for index, date in enumerate(dates)}
+    group_styles = {
+        "overall": {"color": "black", "seed_offset": 0, "alpha": 0.14},
+        "left": {"color": color_dict["left_uncued"], "seed_offset": 1, "alpha": 0.18},
+        "right": {"color": color_dict["right_uncued"], "seed_offset": 2, "alpha": 0.18},
+    }
+
+    for explore_group, style in group_styles.items():
+        group_summary = summary_plot_df[summary_plot_df["explore_group"] == explore_group].copy()
+        if group_summary.empty:
+            continue
+
+        group_summary["x_position"] = group_summary["date"].map(x_by_date)
+        group_summary.sort_values("x_position", inplace=True)
+        spread_rows = group_summary.dropna(subset=numeric_summary_columns)
+        if not spread_rows.empty:
+            ax.fill_between(
+                spread_rows["x_position"].to_numpy(dtype=float),
+                spread_rows["n_explore_runs_q1"].to_numpy(dtype=float),
+                spread_rows["n_explore_runs_q3"].to_numpy(dtype=float),
+                alpha=style["alpha"],
+                linewidth=0,
+                color=style["color"],
+                label=f"{explore_group} Q1-Q3",
+            )
+            ax.plot(
+                spread_rows["x_position"].to_numpy(dtype=float),
+                spread_rows["n_explore_runs_median"].to_numpy(dtype=float),
+                "o-",
+                color=style["color"],
+                label=f"{explore_group} median",
+            )
+
+        group_points = point_plot_df[point_plot_df["explore_group"] == explore_group].copy()
+        if group_points.empty:
+            continue
+
+        group_points["x_position"] = group_points["date"].map(x_by_date)
+        group_points = group_points.dropna(subset=["x_position"])
+        if not group_points.empty:
+            ax.plot(
+                _jitter_x_coordinates(
+                    group_points["x_position"].to_numpy(dtype=float),
+                    jitter_width=point_jitter,
+                    seed=jitter_seed + style["seed_offset"],
+                ),
+                group_points["n_explore_runs"].to_numpy(dtype=float),
+                "o",
+                color=style["color"],
+                alpha=0.28 if explore_group == "overall" else 0.35,
+                markersize=4,
+                label=f"{explore_group} raw blocks",
+            )
+
+    ax.set_ylabel("Explore Runs per Block")
+    ax.set_xlabel("Session date")
+    ax.set_title(f"{figure_id} Short Explore Runs Across Sessions")
+    ax.set_xticks(np.arange(1, len(dates) + 1))
+    ax.set_xticklabels(dates, rotation=60, fontsize=8)
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(frameon=False, fontsize=8)
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+    return ax
+
+
+def plot_multisession_block_explore_run_quality(
+    summary_df: pd.DataFrame,
+    block_points_df: pd.DataFrame,
+    plot_path: Path,
+    figure_id: str,
+    point_jitter: float = 0.08,
+    jitter_seed: int = 0,
+) -> None:
+    """Plot cross-session short exploratory runs per block.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Session/group summary table with shape `(n_session_groups,
+        n_columns)`. Required columns are `date`, `explore_group`,
+        `n_explore_runs_q1`, `n_explore_runs_median`, and `n_explore_runs_q3`.
+    block_points_df : pd.DataFrame
+        Raw explore-run table with shape `(n_points, n_columns)`. Required
+        columns are `date`, `explore_group`, and `n_explore_runs`.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    figure_id : str
+        Mouse or subject identifier used in the plot title and output
+        filename.
+    point_jitter : float, default=0.08
+        Maximum absolute horizontal jitter for raw block markers.
+    jitter_seed : int, default=0
+        Seed for deterministic marker jitter.
+
+    Returns
+    -------
+    None
+        Saves `{figure_id}_block-explore-run-quality.png`.
+    """
+    fig, ax = plt.subplots(figsize=(10, 5))
+    plot_multisession_block_explore_run_quality_on_ax(
+        ax=ax,
+        summary_df=summary_df,
+        block_points_df=block_points_df,
+        figure_id=figure_id,
+        point_jitter=point_jitter,
+        jitter_seed=jitter_seed,
+    )
+
+    save_path = plot_path / f"{figure_id}_block-explore-run-quality.png"
+    save_performance_figure(fig, save_path)
+
+
 def plot_multisession_correct_after_first_quality_on_ax(
     ax: plt.Axes,
     summary_df: pd.DataFrame,
@@ -3141,6 +3611,190 @@ def plot_multisession_correct_after_first_quality(
 
     save_path = plot_path / f"{figure_id}_correct-after-first-quality.png"
     save_performance_figure(fig, save_path)
+
+
+def plot_multisession_agent_mouse_agreement_quality_on_ax(
+    ax: plt.Axes,
+    summary_df: pd.DataFrame,
+    block_points_df: pd.DataFrame,
+    figure_id: str,
+    point_jitter: float = 0.08,
+    jitter_seed: int = 0,
+) -> plt.Axes:
+    """Plot cross-session mouse-agent agreement summaries on one axis.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axis that receives the agent agreement summary.
+    summary_df : pd.DataFrame
+        Session/agent summary table with shape `(n_session_agents, n_columns)`.
+        Required columns are `date`, `agent`, `agreement_q1`,
+        `agreement_median`, and `agreement_q3`. Agreement values are fractions
+        from 0 to 1.
+    block_points_df : pd.DataFrame
+        Raw block-agent table with shape `(n_block_agents, n_columns)`.
+        Required columns are `date`, `agent`, and `agreement`.
+    figure_id : str
+        Mouse or subject identifier used in the plot title.
+    point_jitter : float, default=0.08
+        Maximum absolute horizontal jitter for raw block markers, in
+        categorical x-axis units.
+    jitter_seed : int, default=0
+        Seed for deterministic marker jitter.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The same axis passed in.
+    """
+    summary_required_columns = {
+        "date",
+        "agent",
+        "agreement_q1",
+        "agreement_median",
+        "agreement_q3",
+    }
+    point_required_columns = {"date", "agent", "agreement"}
+    missing_summary_columns = sorted(summary_required_columns.difference(summary_df.columns))
+    missing_point_columns = sorted(point_required_columns.difference(block_points_df.columns))
+    if missing_summary_columns:
+        raise ValueError(f"summary_df is missing required columns: {missing_summary_columns}")
+    if missing_point_columns:
+        raise ValueError(f"block_points_df is missing required columns: {missing_point_columns}")
+
+    summary_plot_df = summary_df.copy()
+    point_plot_df = block_points_df.copy()
+    numeric_summary_columns = ["agreement_q1", "agreement_median", "agreement_q3"]
+    for column in numeric_summary_columns:
+        summary_plot_df[column] = pd.to_numeric(summary_plot_df[column], errors="coerce")
+    point_plot_df["agreement"] = pd.to_numeric(point_plot_df["agreement"], errors="coerce")
+    point_plot_df = point_plot_df.dropna(subset=["agreement"])
+
+    if summary_plot_df.empty:
+        raise ValueError("summary_df must contain at least one session/agent row to plot.")
+
+    dates = pd.unique(summary_plot_df["date"])
+    x_by_date = {date: index + 1 for index, date in enumerate(dates)}
+    agent_order = [
+        agent for agent in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS
+        if agent in summary_plot_df["agent"].values
+    ]
+    agent_order.extend(
+        agent for agent in pd.unique(summary_plot_df["agent"])
+        if agent not in agent_order
+    )
+    if not agent_order:
+        raise ValueError("summary_df must contain at least one agent to plot.")
+
+    offsets = np.linspace(-0.24, 0.24, num=max(len(agent_order), 1))
+    offset_by_agent = dict(zip(agent_order, offsets))
+    fallback_colors = plt.rcParams["axes.prop_cycle"].by_key().get("color", all_colors)
+
+    for agent_index, agent in enumerate(agent_order):
+        color = AGENT_MOUSE_AGREEMENT_COLORS.get(agent, fallback_colors[agent_index % len(fallback_colors)])
+        offset = offset_by_agent[agent]
+        agent_summary = summary_plot_df[summary_plot_df["agent"] == agent].copy()
+        if not agent_summary.empty:
+            agent_summary["x_position"] = agent_summary["date"].map(x_by_date) + offset
+            agent_summary.sort_values("x_position", inplace=True)
+            spread_rows = agent_summary.dropna(subset=numeric_summary_columns)
+            if not spread_rows.empty:
+                x_values = spread_rows["x_position"].to_numpy(dtype=float)
+                q1_values = spread_rows["agreement_q1"].to_numpy(dtype=float)
+                median_values = spread_rows["agreement_median"].to_numpy(dtype=float)
+                q3_values = spread_rows["agreement_q3"].to_numpy(dtype=float)
+                for x_value, q1_value, q3_value in zip(x_values, q1_values, q3_values):
+                    ax.plot([x_value, x_value], [q1_value, q3_value], color=color, linewidth=2)
+                ax.plot(
+                    x_values,
+                    median_values,
+                    "o-",
+                    color=color,
+                    linewidth=2,
+                    markersize=5,
+                    label=f"{agent} median",
+                )
+
+        agent_points = point_plot_df[point_plot_df["agent"] == agent].copy()
+        if agent_points.empty:
+            continue
+
+        agent_points["x_position"] = agent_points["date"].map(x_by_date) + offset
+        agent_points = agent_points.dropna(subset=["x_position"])
+        if not agent_points.empty:
+            ax.plot(
+                _jitter_x_coordinates(
+                    agent_points["x_position"].to_numpy(dtype=float),
+                    jitter_width=point_jitter,
+                    seed=jitter_seed + agent_index,
+                ),
+                agent_points["agreement"].to_numpy(dtype=float),
+                "o",
+                color=color,
+                alpha=0.35,
+                markersize=4,
+                label=f"{agent} raw blocks",
+            )
+
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_ylabel("Mouse-Agent Agreement")
+    ax.set_xlabel("Session date")
+    ax.set_title(f"{figure_id} Mouse-Agent Agreement Across Sessions")
+    ax.axhline(0.5, color="gray", linestyle=":", linewidth=1)
+    ax.set_xticks(np.arange(1, len(dates) + 1))
+    ax.set_xticklabels(dates, rotation=60, fontsize=8)
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(frameon=False, fontsize=8)
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+    return ax
+
+
+def plot_multisession_agent_mouse_agreement_quality(
+    summary_df: pd.DataFrame,
+    block_points_df: pd.DataFrame,
+    plot_path: Path,
+    figure_id: str,
+    point_jitter: float = 0.08,
+    jitter_seed: int = 0,
+) -> Path:
+    """Plot standalone cross-session mouse-agent agreement quality.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Session/agent summary table with shape `(n_session_agents, n_columns)`.
+    block_points_df : pd.DataFrame
+        Raw block-agent table with shape `(n_block_agents, n_columns)`.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    figure_id : str
+        Mouse or subject identifier used in the output filename and title.
+    point_jitter : float, default=0.08
+        Maximum absolute horizontal jitter for raw block markers.
+    jitter_seed : int, default=0
+        Seed for deterministic marker jitter.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path `{figure_id}_agent-mouse-agreement-quality.png`.
+    """
+    fig, ax = plt.subplots(figsize=(10, 5))
+    plot_multisession_agent_mouse_agreement_quality_on_ax(
+        ax=ax,
+        summary_df=summary_df,
+        block_points_df=block_points_df,
+        figure_id=figure_id,
+        point_jitter=point_jitter,
+        jitter_seed=jitter_seed,
+    )
+
+    save_path = plot_path / f"{figure_id}_agent-mouse-agreement-quality.png"
+    save_performance_figure(fig, save_path)
+    return save_path
 
 
 def plot_multisession_oracle_behavior(

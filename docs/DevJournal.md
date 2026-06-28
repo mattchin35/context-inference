@@ -250,3 +250,44 @@ and expose mouse agreement with the greedy mouse-history ideal observer.
   The focused performance-plot and multisession test sets passed, and the
   session-analysis metric was smoke-tested with unavailable stats imports
   stubbed because `formulaic` is not installed in this environment.
+
+# 2026/06/28
+
+Added reusable block-HMM outputs and expanded mouse-agent agreement diagnostics
+for single-session and multisession behavior checks. The goal was to make
+exploratory plotting faster while comparing mouse behavior against several
+candidate model strategies without rerunning expensive HMM fits unnecessarily.
+
+- Added a file-presence block-HMM reuse flag for single-session and
+  multisession workflows. When `skip_block_hmm_if_existing` is enabled, the
+  workflow reuses existing `{sess_id_full}_block_statedict.pkl`,
+  `{sess_id_full}_block_performance.csv`, and
+  `{sess_id_full}_augmented_trials.csv`; if any required file is missing, the
+  block HMM runs normally and prints the missing paths.
+- Added blockwise mouse-agent agreement metrics for Q-learning, forgetting
+  Q-learning, HMM log-odds, HMM log-odds with decay, and the mouse-history
+  ideal observer. Greedy actions use the existing ideal-observer sign
+  convention and repeat-on-tie rule, so exact zero values repeat the previous
+  greedy action.
+- Added a single-session mouse-agent agreement figure. The top panel shows
+  blockwise agreement lines for `QL`, `FQL`, `HMM`, `HMM decay`, and `Ideal`;
+  the bottom panel shows raw block values with median and Q1-Q3 summaries for
+  each agent.
+- Added a standalone multisession mouse-agent agreement quality plot with
+  median, Q1-Q3, and raw block points across sessions. The multisession
+  workflow now saves `{mouse}_agent_mouse_agreement_summary.csv`,
+  `{mouse}_agent_mouse_agreement_block_points.csv`, and
+  `{mouse}_agent-mouse-agreement-quality.png`.
+- Made the multisession agent-agreement prep robust to older block CSVs. If
+  saved block-performance files lack the new agreement columns, the workflow
+  regenerates them from saved augmented trial features; if those trial feature
+  columns are also missing, it fails loudly and asks for single-session trial
+  feature collection to be rerun.
+- Updated the agent-agreement plots to use short visible labels and an explicit
+  bolder palette, avoiding weak default colors such as yellow. The same palette
+  is shared by the single-session and multisession agent-agreement plots.
+- Added focused pytest coverage for HMM output reuse, agent-agreement trial and
+  block summaries, robust multisession regeneration, and the new
+  single-session/multisession agent-agreement plots. The affected
+  multisession and performance-plot test modules passed, along with compile
+  checks for touched modules.

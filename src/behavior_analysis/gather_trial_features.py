@@ -38,6 +38,7 @@ class TaskParams:
     omission_lam: float = 0.5
     hazard_lam: float = 0.5
     perseveration_decay: float = 0.25
+    max_explore_run_length: int = 5
 
 
 LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE = (
@@ -64,6 +65,11 @@ TRIAL_TYPE_FLAG_COLUMNS = (
     "first_switch_in_block",
     "explore_trial",
     "block_entry_explore_trial",
+    "explore_run_start",
+    "explore_run_trial",
+    "explore_run_return",
+    "explore_run_id",
+    "explore_run_length",
 )
 
 def assert_saved_file(path: Path) -> None:
@@ -388,6 +394,147 @@ def add_trial_type_flags(augmented_trial_df: pd.DataFrame) -> pd.DataFrame:
     return output_df
 
 
+def add_explore_run_flags(
+    augmented_trial_df: pd.DataFrame,
+    max_explore_run_length: int = 5,
+) -> pd.DataFrame:
+    """Tag short exploratory leave-return runs within each block.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required
+        columns are `action`, `cur_block`, `correct`, and `reward`. Actions use
+        the task convention `0=right`, `1=left`; no-choice rows are ignored for
+        run length and do not break a candidate run. Experimenter-reward rows
+        are ignored when `experimenter_reward_given` or a legacy equivalent is
+        present.
+    max_explore_run_length : int, default=5
+        Maximum number of exploratory-side valid choice trials allowed in one
+        run. The initiating switch trial is included in this count.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `augmented_trial_df` with added columns:
+        `explore_run_start`, `explore_run_trial`, `explore_run_return`,
+        `explore_run_id`, and `explore_run_length`. Run lengths are counts of
+        exploratory-side valid choice trials. Rows outside runs receive
+        `"None"` for id/length.
+    """
+    if max_explore_run_length < 1:
+        raise ValueError("max_explore_run_length must be at least 1.")
+
+    required_columns = ["action", "cur_block", "correct", "reward"]
+    missing_columns = [column for column in required_columns if column not in augmented_trial_df.columns]
+    if missing_columns:
+        raise ValueError(f"augmented_trial_df is missing required explore-run columns: {missing_columns}")
+
+    output_df = normalize_experimenter_reward_column(augmented_trial_df).copy()
+    current_sides = pd.Series(
+        [_choice_side_or_none(action) for action in output_df["action"]],
+        index=output_df.index,
+        dtype=object,
+    )
+    experimenter_reward_flags = get_experimenter_reward_flags(output_df)
+    valid_choice = current_sides.notna() & pd.Series(experimenter_reward_flags, index=output_df.index).eq(0)
+    correct_trial = _numeric_equals_one(output_df["correct"])
+    rewarded_trial = _numeric_equals_one(output_df["reward"])
+
+    explore_run_start = np.full(output_df.shape[0], False, dtype=bool)
+    explore_run_trial = np.full(output_df.shape[0], False, dtype=bool)
+    explore_run_return = np.full(output_df.shape[0], False, dtype=bool)
+    explore_run_id = np.full(output_df.shape[0], "None", dtype=object)
+    explore_run_length = np.full(output_df.shape[0], "None", dtype=object)
+    index_positions = {index_label: position for position, index_label in enumerate(output_df.index)}
+
+    next_run_id = 0
+    for _block_id, block_df in output_df.groupby("cur_block", sort=False):
+        block_indices = block_df.index.to_numpy()
+        valid_indices = [index for index in block_indices if bool(valid_choice.loc[index])]
+        valid_position = 1
+        while valid_position < len(valid_indices):
+            previous_index = valid_indices[valid_position - 1]
+            start_index = valid_indices[valid_position]
+            previous_side = current_sides.loc[previous_index]
+            start_side = current_sides.loc[start_index]
+
+            is_candidate_start = (
+                start_side != previous_side
+                and bool(correct_trial.loc[previous_index])
+                and bool(rewarded_trial.loc[previous_index])
+            )
+            if not is_candidate_start:
+                valid_position += 1
+                continue
+
+            exploratory_indices = []
+            scan_position = valid_position
+            accepted_return_index = None
+            while scan_position < len(valid_indices):
+                scan_index = valid_indices[scan_position]
+                scan_side = current_sides.loc[scan_index]
+                if scan_side == start_side:
+                    exploratory_indices.append(scan_index)
+                    if len(exploratory_indices) > max_explore_run_length:
+                        break
+                    scan_position += 1
+                    continue
+
+                if scan_side == previous_side and bool(correct_trial.loc[scan_index]):
+                    accepted_return_index = scan_index
+                break
+
+            if (
+                accepted_return_index is not None
+                and 0 < len(exploratory_indices) <= max_explore_run_length
+            ):
+                start_position = index_positions[start_index]
+                return_position = index_positions[accepted_return_index]
+                exploratory_positions = [index_positions[index] for index in exploratory_indices]
+                explore_run_start[start_position] = True
+                explore_run_trial[exploratory_positions] = True
+                explore_run_return[return_position] = True
+                tagged_indices = exploratory_indices + [accepted_return_index]
+                tagged_positions = [index_positions[index] for index in tagged_indices]
+                explore_run_id[tagged_positions] = next_run_id
+                explore_run_length[tagged_positions] = len(exploratory_indices)
+                next_run_id += 1
+                valid_position = scan_position + 1
+            else:
+                valid_position += 1
+
+    output_df["explore_run_start"] = explore_run_start
+    output_df["explore_run_trial"] = explore_run_trial
+    output_df["explore_run_return"] = explore_run_return
+    output_df["explore_run_id"] = explore_run_id
+    output_df["explore_run_length"] = explore_run_length
+    return output_df
+
+
+def add_empty_explore_run_flags(augmented_trial_df: pd.DataFrame) -> pd.DataFrame:
+    """Add neutral explore-run columns when required run inputs are unavailable.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `augmented_trial_df` with explore-run boolean columns set to
+        False and id/length columns set to `"None"`.
+    """
+    output_df = augmented_trial_df.copy()
+    output_df["explore_run_start"] = False
+    output_df["explore_run_trial"] = False
+    output_df["explore_run_return"] = False
+    output_df["explore_run_id"] = "None"
+    output_df["explore_run_length"] = "None"
+    return output_df
+
+
 def make_prev_action_side_equivalent_trial_values(
     augmented_trial_df: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -503,6 +650,7 @@ def collect_and_save_trial_features(
     processed_data_path: Path,
     sess_id_full: str,
     params: Optional[TaskParams] = None,
+    max_explore_run_length: int | None = None,
 ) -> tuple[pd.DataFrame, TaskParams]:
     """Collect trial features from an already loaded dataframe and save outputs.
 
@@ -518,6 +666,9 @@ def collect_and_save_trial_features(
         Full session identifier used to name the augmented trial CSV.
     params : Optional[TaskParams], default=None
         Optional feature-generation parameters. If omitted, defaults are used.
+    max_explore_run_length : int or None, default=None
+        Maximum number of exploratory-side valid choice trials allowed in one
+        explore run. If None, `params.max_explore_run_length` is used.
 
     Returns
     -------
@@ -525,7 +676,11 @@ def collect_and_save_trial_features(
         - augmented_trial_df with feature columns added
         - parameters used to compute and save those features
     """
-    augmented_trial_df, params = collect_trial_features(augmented_trial_df, params=params)
+    augmented_trial_df, params = collect_trial_features(
+        augmented_trial_df,
+        params=params,
+        max_explore_run_length=max_explore_run_length,
+    )
     save_trial_features(augmented_trial_df, params, processed_data_path, sess_id_full)
     if "prev_action" in augmented_trial_df.columns:
         save_leave_stay_trial_values(augmented_trial_df, processed_data_path, sess_id_full)
@@ -796,14 +951,35 @@ def collect_residualized_trial_features(augmented_trial_df: pd.DataFrame) -> pd.
     return augmented_trial_df
 
 
-def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[TaskParams] = None) -> tuple[pd.DataFrame, TaskParams]:
-    """
-    Add model-derived relative value features to an existing augmented trial dataframe.
-    This function is intended for import/use from other files.
+def collect_trial_features(
+    augmented_trial_df: pd.DataFrame,
+    params: Optional[TaskParams] = None,
+    max_explore_run_length: int | None = None,
+) -> tuple[pd.DataFrame, TaskParams]:
+    """Add model-derived and trial-type features to an augmented trial table.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. It must contain
+        the columns required by model-value features and trial-type/run flags.
+    params : Optional[TaskParams], default=None
+        Feature-generation parameters. If omitted, defaults are used.
+    max_explore_run_length : int or None, default=None
+        Maximum number of exploratory-side valid choice trials allowed in one
+        explore run. If None, `params.max_explore_run_length` is used.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, TaskParams]
+        Feature dataframe with shape `(n_trials, n_columns + features)` and
+        the parameters used to compute the features.
     """
     augmented_trial_df = normalize_experimenter_reward_column(augmented_trial_df)
     if params is None:
         params = TaskParams()
+    if max_explore_run_length is not None:
+        params.max_explore_run_length = max_explore_run_length
 
     augmented_trial_df = collect_model_value_features(augmented_trial_df, params=params)
     augmented_trial_df = collect_trial_index_features(
@@ -815,6 +991,14 @@ def collect_trial_features(augmented_trial_df: pd.DataFrame, params: Optional[Ta
     augmented_trial_df = add_observer_value_feature(augmented_trial_df)
     augmented_trial_df = collect_residualized_trial_features(augmented_trial_df)
     augmented_trial_df = add_trial_type_flags(augmented_trial_df)
+    explore_run_required_columns = {"action", "cur_block", "correct", "reward"}
+    if explore_run_required_columns.issubset(augmented_trial_df.columns):
+        augmented_trial_df = add_explore_run_flags(
+            augmented_trial_df,
+            max_explore_run_length=params.max_explore_run_length,
+        )
+    else:
+        augmented_trial_df = add_empty_explore_run_flags(augmented_trial_df)
     return augmented_trial_df, params
 
 

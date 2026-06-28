@@ -1,11 +1,22 @@
 from pathlib import Path
 from collections import defaultdict
 from types import SimpleNamespace
+from types import ModuleType
+import sys
 import warnings
 
 import numpy as np
 import pandas as pd
 import pytest
+
+formulaic_stub = ModuleType("formulaic")
+formulaic_stub.model_matrix = lambda *_args, **_kwargs: None
+sys.modules.setdefault("formulaic", formulaic_stub)
+statsmodels_stub = ModuleType("statsmodels")
+statsmodels_api_stub = ModuleType("statsmodels.api")
+statsmodels_stub.api = statsmodels_api_stub
+sys.modules.setdefault("statsmodels", statsmodels_stub)
+sys.modules.setdefault("statsmodels.api", statsmodels_api_stub)
 
 import src.behavior_analysis.session_analysis as session_analysis
 
@@ -87,6 +98,91 @@ def test_count_decision_variables_preserves_existing_output():
     )
 
     pd.testing.assert_frame_equal(decision_vars, expected_decision_vars)
+
+
+def test_compute_agent_mouse_agreement_by_trial_uses_repeat_on_tie():
+    """Agent agreement should use the ideal-observer repeat-on-tie rule."""
+    trial_df = pd.DataFrame(
+        {
+            "action": [0, 1, 1, 0, 0],
+            "reward": [0, 0, 0, 0, 0],
+            "experimenter_reward_given": [0, 0, 0, 0, 0],
+            "agent_value": [0.0, 1.0, 0.0, -1.0, 0.0],
+        }
+    )
+
+    agreement = session_analysis.compute_agent_mouse_agreement_by_trial(
+        trial_df,
+        value_column="agent_value",
+    )
+
+    assert agreement.tolist() == [1.0, 1.0, 1.0, 1.0, 1.0]
+
+
+def test_compute_agent_mouse_agreement_by_trial_excludes_non_behavioral_rows():
+    """No-choice and experimenter-reward rows should not enter agreement."""
+    trial_df = pd.DataFrame(
+        {
+            "action": [0, "no_choice", 1, 1],
+            "reward": [0, 0, 1, 0],
+            "experimenter_reward_given": [0, 0, 1, 0],
+            "agent_value": [-1.0, 1.0, 1.0, -1.0],
+        }
+    )
+
+    agreement = session_analysis.compute_agent_mouse_agreement_by_trial(
+        trial_df,
+        value_column="agent_value",
+    )
+
+    assert agreement.tolist() == [1.0, "None", "None", 0.0]
+
+
+def test_add_block_agent_mouse_agreement_columns_summarizes_by_block():
+    """Agent agreement columns should summarize valid trialwise agreement by block."""
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [10, 11],
+            "block_type": ["right_cued", "left_cued"],
+        }
+    )
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [10, 10, 11, 11],
+            "action": [0, 1, 1, 0],
+            "reward": [0, 0, 0, 0],
+            "experimenter_reward_given": [0, 0, 0, 0],
+            "agent_value": [-1.0, -1.0, 1.0, 1.0],
+        }
+    )
+
+    updated = session_analysis.add_block_agent_mouse_agreement_columns(
+        block_performance,
+        augmented_trial_df,
+        agent_value_columns={"agent_mouse_agreement": "agent_value"},
+    )
+
+    assert updated["agent_mouse_agreement"].tolist() == [0.5, 0.5]
+
+
+def test_add_block_agent_mouse_agreement_columns_requires_missing_agent_columns():
+    """Requested agent value columns should fail loudly when absent."""
+    block_performance = pd.DataFrame({"block_ix": [0], "block_type": ["right_cued"]})
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [0],
+            "action": [0],
+            "reward": [0],
+            "experimenter_reward_given": [0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="missing_value"):
+        session_analysis.add_block_agent_mouse_agreement_columns(
+            block_performance,
+            augmented_trial_df,
+            agent_value_columns={"missing_agent_agreement": "missing_value"},
+        )
 
 
 def test_monotonic_counterfactual_value_counts_rewards_and_resets_opposite_side():

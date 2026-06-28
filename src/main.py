@@ -44,6 +44,14 @@ color_names = ["windows blue",
 colors = sns.xkcd_palette(color_names)
 cmap = ListedColormap(colors)
 
+AGENT_MOUSE_AGREEMENT_COLUMNS = {
+    "QL": "qlearning_mouse_agreement",
+    "FQL": "fql_mouse_agreement",
+    "HMM": "hmm_logodds_mouse_agreement",
+    "HMM decay": "hmm_logodds_decay_mouse_agreement",
+    "Ideal": "observer_mouse_agreement",
+}
+
 
 @dataclass
 class Session:
@@ -107,6 +115,86 @@ class ConcatenatedSessionAnalysis:
     augmented_trial_df: pd.DataFrame
     block_session_lengths: np.ndarray
     trial_session_lengths: np.ndarray
+
+
+@dataclass
+class SingleSessionAnalysisConfig:
+    """Configuration for one complete single-session analysis run.
+
+    Attributes
+    ----------
+    preprocess_raw_session : bool
+        If True, regenerate processed event/trial CSVs from the raw behavior
+        log. If False, load existing processed CSVs.
+    run_session_analysis : bool
+        If True, recompute and save session-analysis CSVs. If False, load
+        existing analysis outputs.
+    ideal_observer_n_replays : int
+        Number of fixed replay samples used by ideal-observer summaries.
+    ideal_observer_seed : int or None
+        Random seed for fixed replay ideal-observer summaries.
+    block_modeling_states : int
+        Number of HMM states used for block modeling.
+    trial_modeling_states : int
+        Number of HMM states reserved for trial modeling when enabled.
+    min_time : float
+        Minimum trial time since session start, in seconds, retained during
+        preprocessing.
+    max_time : float
+        Maximum trial time since session start, in seconds, retained during
+        preprocessing.
+    scatter_regressor : str
+        Block-performance regressor column used in trials-to-correct scatter
+        plots. Units depend on the selected column.
+    block_hmm_random_seed : int
+        Random seed for block HMM modeling.
+    skip_block_hmm_if_existing : bool
+        If True, reuse saved block HMM outputs when the model pickle, modeled
+        block table, and inherited-strategy trial table are all present.
+    trial_hmm_random_seed : int
+        Random seed reserved for trial HMM modeling when enabled.
+    block_secondary_trace : str
+        Secondary trace mode passed to block predicted-state plots.
+    plot_sliding_regression : bool
+        If True, add sliding block-regression panels to block HMM plots.
+    sliding_regression_window_size : int
+        Number of valid blocks per sliding-regression window.
+    sliding_regression_step_size : int
+        Step size between sliding-regression windows, in valid blocks.
+    trial_glm_predictor_columns : tuple[str, ...]
+        Trial-level predictor columns reserved for trial HMM modeling.
+    max_explore_run_length : int
+        Maximum number of exploratory-side valid choice trials allowed in one
+        explore run during trial-feature collection.
+    min_explore_run_length_to_count : int
+        Minimum exploratory-side run length required for an explore run to be
+        counted in block summaries and plots.
+    """
+    preprocess_raw_session: bool = True
+    run_session_analysis: bool = True
+    ideal_observer_n_replays: int = 100
+    ideal_observer_seed: int | None = 12345
+    block_modeling_states: int = 2
+    trial_modeling_states: int = 3
+    min_time: float = 0
+    max_time: float = np.inf
+    scatter_regressor: str = "prev_n_rewarded"
+    block_hmm_random_seed: int = 1001
+    skip_block_hmm_if_existing: bool = False
+    trial_hmm_random_seed: int = 2001
+    block_secondary_trace: str = "prev_n_rewarded"
+    plot_sliding_regression: bool = True
+    sliding_regression_window_size: int = 10
+    sliding_regression_step_size: int = 5
+    max_explore_run_length: int = 5
+    min_explore_run_length_to_count: int = 1
+    trial_glm_predictor_columns: tuple[str, ...] = (
+        "FQlearning_rel_value",
+        "HMM_decay_res",
+        "rel_hazard_res",
+        "relative_doubt_index",
+        "perseveration_regressor",
+    )
 
 
 def build_simulation_session(simulated_run_dir: Path, sess_id: str, session_info: dict) -> Session:
@@ -462,6 +550,338 @@ def find_saved_session_by_date(
     return sess
 
 
+def get_block_hmm_output_paths(session: Session) -> dict[str, Path]:
+    """Return the saved-output paths required to reuse block HMM results.
+
+    Parameters
+    ----------
+    session : Session
+        Session metadata with `processed_data_path` and `sess_id_full` fields.
+
+    Returns
+    -------
+    dict[str, pathlib.Path]
+        Mapping with keys `model_dict`, `block_performance`, and
+        `augmented_trials`. CSV paths contain modeled block outputs and
+        block-inherited trial labels; the pickle path contains the fitted HMM.
+    """
+    processed_data_path = Path(session.processed_data_path)
+    sess_id_full = session.sess_id_full
+    return {
+        "model_dict": processed_data_path / f"{sess_id_full}_block_statedict.pkl",
+        "block_performance": processed_data_path / f"{sess_id_full}_block_performance.csv",
+        "augmented_trials": processed_data_path / f"{sess_id_full}_augmented_trials.csv",
+    }
+
+
+def missing_block_hmm_output_paths(session: Session) -> list[Path]:
+    """List saved block HMM outputs that are absent from disk.
+
+    Parameters
+    ----------
+    session : Session
+        Session metadata with `processed_data_path` and `sess_id_full` fields.
+
+    Returns
+    -------
+    list[pathlib.Path]
+        Required output paths that do not exist. An empty list means the saved
+        block HMM run can be reused by file-presence checks.
+    """
+    return [
+        output_path
+        for output_path in get_block_hmm_output_paths(session).values()
+        if not output_path.exists()
+    ]
+
+
+def block_hmm_outputs_exist(session: Session) -> bool:
+    """Check whether all saved block HMM outputs needed for reuse exist.
+
+    Parameters
+    ----------
+    session : Session
+        Session metadata with `processed_data_path` and `sess_id_full` fields.
+
+    Returns
+    -------
+    bool
+        True when the fitted model pickle, modeled block CSV, and inherited
+        trial CSV are all present.
+    """
+    return len(missing_block_hmm_output_paths(session)) == 0
+
+
+def load_saved_block_hmm_outputs(session: Session) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load saved block HMM-modeled block and trial tables.
+
+    Parameters
+    ----------
+    session : Session
+        Session metadata with `processed_data_path` and `sess_id_full` fields.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame]
+        `(block_performance, augmented_trial_df)` loaded from saved CSVs. The
+        block table has shape `(n_blocks, n_block_columns)` and the trial table
+        has shape `(n_trials, n_trial_columns)`.
+
+    Raises
+    ------
+    FileNotFoundError
+        If any required block HMM output is missing.
+    """
+    missing_paths = missing_block_hmm_output_paths(session)
+    if missing_paths:
+        missing_summary = "\n".join(str(path) for path in missing_paths)
+        raise FileNotFoundError(
+            f"Cannot reuse saved block HMM outputs for {session.sess_id_full}; "
+            f"missing required files:\n{missing_summary}"
+        )
+
+    output_paths = get_block_hmm_output_paths(session)
+    block_performance = pd.read_csv(output_paths["block_performance"])
+    augmented_trial_df = pd.read_csv(output_paths["augmented_trials"])
+    return block_performance, augmented_trial_df
+
+
+def find_raw_session_by_date(
+    mouse: str,
+    date: str,
+    session_data_root: Path,
+    task_tag: str,
+    multi_session_save_path: Path,
+    behavior_timestamp: str | None = None,
+) -> Session:
+    """Resolve one raw behavior session from a mouse/date pair.
+
+    Parameters
+    ----------
+    mouse : str
+        Mouse identifier used in the session folder and raw timestamp folder.
+    date : str
+        Session date formatted as `YYYY-MM-DD`.
+    session_data_root : pathlib.Path
+        Mouse-level data directory containing exact task-tagged session
+        folders such as `{mouse}_YYYYMMDD_{task_tag}`.
+    task_tag : str
+        Exact task tag used in the session folder name. This is not globbed.
+    multi_session_save_path : pathlib.Path
+        Cross-session output directory assigned to returned session metadata.
+    behavior_timestamp : str or None, optional
+        Explicit behavior timestamp formatted as `HHMMSS`. If provided, the
+        exact timestamp folder is loaded even when other timestamp folders
+        exist for the date. If None, exactly one timestamp folder must exist.
+
+    Returns
+    -------
+    Session
+        Session metadata for the single matching raw timestamp folder. The
+        session-info pickle is loaded into `session_info`.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the exact task-tagged session folder, `rpi` folder, timestamp
+        folder, or session-info pickle is missing.
+    ValueError
+        If more than one timestamp folder matches the requested date, or the
+        resolved folder name does not follow `mouse_YYYY-MM-DD_HHMMSS`.
+    """
+    date_no_dash = date.replace("-", "")
+    session_data_home = session_data_root / f"{mouse}_{date_no_dash}_{task_tag}"
+    if not session_data_home.exists():
+        raise FileNotFoundError(
+            f"No exact task-tagged session folder found for {mouse} on {date}: "
+            f"{session_data_home}"
+        )
+
+    rpi_path = session_data_home / "rpi"
+    if not rpi_path.exists():
+        raise FileNotFoundError(f"No rpi folder found for {mouse} on {date}: {rpi_path}")
+
+    session_name_pattern = re.compile(rf"^{re.escape(mouse)}_{re.escape(date)}_(\d{{6}})$")
+    if behavior_timestamp is None:
+        timestamp_folders = sorted(
+            folder for folder in rpi_path.glob(f"{mouse}_{date}_*")
+            if folder.is_dir() and session_name_pattern.match(folder.name) is not None
+        )
+        if len(timestamp_folders) == 0:
+            raise FileNotFoundError(
+                f"No raw timestamp folder found for {mouse} on {date} under {rpi_path}."
+            )
+        if len(timestamp_folders) > 1:
+            matched_paths = "\n".join(str(path) for path in timestamp_folders)
+            raise ValueError(
+                f"Expected one raw timestamp folder for {mouse} on {date}, "
+                f"found {len(timestamp_folders)}:\n{matched_paths}"
+            )
+        raw_behavior_folder = timestamp_folders[0]
+    else:
+        raw_behavior_folder = rpi_path / f"{mouse}_{date}_{behavior_timestamp}"
+        if not raw_behavior_folder.exists():
+            raise FileNotFoundError(
+                f"No raw timestamp folder found for {mouse} on {date} with "
+                f"timestamp {behavior_timestamp}: {raw_behavior_folder}"
+            )
+
+    match = session_name_pattern.match(raw_behavior_folder.name)
+    if match is None:
+        raise ValueError(
+            f"Raw timestamp folder does not match expected session pattern: "
+            f"{raw_behavior_folder.name}"
+        )
+
+    timestamp = match.group(1)
+    sess_id_full = raw_behavior_folder.name
+    session_info_path = raw_behavior_folder / f"{sess_id_full}_session_info.pkl"
+    if not session_info_path.exists():
+        raise FileNotFoundError(
+            f"No session-info pickle found for {mouse} on {date}: {session_info_path}"
+        )
+    with open(session_info_path, "rb") as file:
+        session_info = pkl.load(file)
+
+    sess = Session()
+    sess.multi_session_save_path = multi_session_save_path
+    sess.session_data_home = session_data_home
+    sess.sess_id_full = sess_id_full
+    sess.sess_id_abbreviated = f"{mouse}_{date}"
+    sess.raw_behavior_folder = raw_behavior_folder
+    sess.processed_data_path = session_data_home / "processed"
+    sess.figure_path = session_data_home / "figures"
+    sess.mouse = mouse
+    sess.date = date
+    sess.timestamp = timestamp
+    sess.session_info_fname = session_info_path
+    sess.session_info = session_info
+    return sess
+
+
+def find_raw_session_dates_for_task_tag(
+    mouse: str,
+    session_data_root: Path,
+    task_tag: str,
+) -> list[str]:
+    """Find session dates for one mouse and task tag under a mouse data root.
+
+    Parameters
+    ----------
+    mouse : str
+        Mouse identifier expected at the start of each session folder name.
+    session_data_root : pathlib.Path
+        Mouse-level data directory. Only direct child directories are scanned;
+        discovery is not recursive.
+    task_tag : str
+        Exact task tag expected at the end of each session folder name.
+
+    Returns
+    -------
+    list[str]
+        Sorted session dates formatted as `YYYY-MM-DD`. Dates are parsed from
+        direct child folders named `{mouse}_YYYYMMDD_{task_tag}`.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no exact task-tagged session folders are found under
+        `session_data_root`.
+    """
+    session_folder_pattern = re.compile(
+        rf"^{re.escape(mouse)}_(\d{{8}})_{re.escape(task_tag)}$"
+    )
+    dates = []
+    for child_path in session_data_root.iterdir():
+        if not child_path.is_dir():
+            continue
+        match = session_folder_pattern.match(child_path.name)
+        if match is None:
+            continue
+        raw_date = match.group(1)
+        dates.append(f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}")
+
+    if not dates:
+        raise FileNotFoundError(
+            f"No session folders matching {mouse}_YYYYMMDD_{task_tag} found under "
+            f"{session_data_root}."
+        )
+    return sorted(dates)
+
+
+def resolve_multisession_dates(
+    mouse: str,
+    session_data_root: Path,
+    task_tag: str,
+    explicit_dates: Sequence[str],
+    use_all_dates_for_task_tag: bool,
+    require_saved_outputs: bool = True,
+    multi_session_save_path: Path | None = None,
+) -> list[str]:
+    """Choose multisession dates from an explicit list or task-tag discovery.
+
+    Parameters
+    ----------
+    mouse : str
+        Mouse identifier used in session folder and saved CSV names.
+    session_data_root : pathlib.Path
+        Mouse-level data directory. Task-tag discovery scans only direct child
+        folders named `{mouse}_YYYYMMDD_{task_tag}`.
+    task_tag : str
+        Exact task tag used for automatic date discovery.
+    explicit_dates : Sequence[str]
+        User-provided dates formatted as `YYYY-MM-DD`. These are returned
+        unchanged when `use_all_dates_for_task_tag` is False.
+    use_all_dates_for_task_tag : bool
+        If True, ignore `explicit_dates` and discover all dates matching
+        `task_tag` under `session_data_root`.
+    require_saved_outputs : bool, default=True
+        If True and date discovery is enabled, require each discovered date to
+        have exactly one saved augmented-trials CSV usable by multisession
+        analysis. Explicit dates are not validated here.
+    multi_session_save_path : pathlib.Path or None, optional
+        Cross-session output directory passed to saved-session validation. If
+        None, defaults to `session_data_root / "cross_session_analysis"`.
+
+    Returns
+    -------
+    list[str]
+        Dates formatted as `YYYY-MM-DD`, either preserving `explicit_dates`
+        order or sorted by discovered session folder date.
+    """
+    if not use_all_dates_for_task_tag:
+        return list(explicit_dates)
+
+    resolved_dates = find_raw_session_dates_for_task_tag(
+        mouse=mouse,
+        session_data_root=session_data_root,
+        task_tag=task_tag,
+    )
+    if not require_saved_outputs:
+        return resolved_dates
+
+    validation_save_path = (
+        multi_session_save_path
+        if multi_session_save_path is not None
+        else session_data_root / "cross_session_analysis"
+    )
+    for date in resolved_dates:
+        try:
+            find_saved_session_by_date(
+                mouse=mouse,
+                date=date,
+                session_data_root=session_data_root,
+                multi_session_save_path=validation_save_path,
+            )
+        except (FileNotFoundError, ValueError) as error:
+            raise type(error)(
+                f"Discovered multisession date {date} cannot be used because "
+                f"saved analysis outputs are missing or ambiguous: {error}"
+            ) from error
+
+    return resolved_dates
+
+
 def load_saved_session_analysis(session: Session) -> SavedSessionAnalysis:
     """Load saved block and augmented-trial CSVs for one session.
 
@@ -481,6 +901,10 @@ def load_saved_session_analysis(session: Session) -> SavedSessionAnalysis:
     block_performance = pd.read_csv(block_path, sep=",", na_filter=False)
     augmented_trial_df = pd.read_csv(augmented_trial_path, sep=",", na_filter=False)
     block_performance = add_block_explore_counts_from_trials(
+        block_performance,
+        augmented_trial_df,
+    )
+    block_performance = add_block_explore_run_counts_from_trials(
         block_performance,
         augmented_trial_df,
     )
@@ -821,13 +1245,14 @@ def add_block_explore_counts_from_trials(
     Parameters
     ----------
     block_performance : pd.DataFrame
-        Block table with shape `(n_blocks, n_block_columns)`. Existing
-        `n_explore_trials` values are preserved. If the column is absent, rows
-        are aligned to sorted unique `cur_block` values from `augmented_trial_df`
-        by row order, matching `session_analysis.summarize_block_performance`.
+        Block table with shape `(n_blocks, n_block_columns)`. When trial-level
+        `explore_trial` tags are available, `n_explore_trials` is derived from
+        those tags even if a saved block column already exists. If trial-level
+        tags are unavailable, existing `n_explore_trials` values are preserved.
     augmented_trial_df : pd.DataFrame
         Trial table with shape `(n_trials, n_trial_columns)`. Required column
-        is `cur_block`. Optional `explore_trial` is used to derive counts;
+        is `cur_block` when `explore_trial` is available. Optional
+        `explore_trial` is used to derive counts;
         missing `explore_trial` is treated as zero explore trials for backward
         compatibility with older saved analyses.
 
@@ -838,7 +1263,11 @@ def add_block_explore_counts_from_trials(
         are integers in trials.
     """
     output_df = block_performance.copy()
-    if "n_explore_trials" in output_df.columns:
+
+    if "explore_trial" not in augmented_trial_df.columns:
+        if "n_explore_trials" in output_df.columns:
+            return output_df
+        output_df["n_explore_trials"] = 0
         return output_df
 
     if "cur_block" not in augmented_trial_df.columns:
@@ -854,16 +1283,93 @@ def add_block_explore_counts_from_trials(
             "align one-to-one with block_performance rows."
         )
 
-    if "explore_trial" not in augmented_trial_df.columns:
-        output_df["n_explore_trials"] = 0
-        return output_df
-
     explore_counts = []
     for raw_block_id in raw_block_ids:
         block_trials = augmented_trial_df[augmented_trial_df["cur_block"] == raw_block_id]
         explore_counts.append(_count_explore_flags(block_trials["explore_trial"]))
 
     output_df["n_explore_trials"] = explore_counts
+    return output_df
+
+
+def add_block_explore_run_counts_from_trials(
+    block_performance: pd.DataFrame,
+    augmented_trial_df: pd.DataFrame,
+    min_explore_run_length_to_count: int = 1,
+) -> pd.DataFrame:
+    """Return block performance with `n_explore_runs` filled when possible.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Block table with shape `(n_blocks, n_block_columns)`. When trial-level
+        `explore_run_start` tags are available, `n_explore_runs` is derived
+        from those tags even if a saved block column already exists. If
+        trial-level tags are unavailable, existing `n_explore_runs` values are
+        preserved.
+    augmented_trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_trial_columns)`. Required column
+        is `cur_block` when `explore_run_start` is available. Optional
+        `explore_run_start` is used to derive counts; missing tags are treated
+        as zero explore runs for backward compatibility with older saved
+        analyses.
+    min_explore_run_length_to_count : int, default=1
+        Minimum exploratory-side run length required for a run to be counted.
+        This filters summary/plot counts only; it does not change the
+        trial-level run detection.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `block_performance` with an `n_explore_runs` column. Counts are
+        integers in runs.
+    """
+    if min_explore_run_length_to_count < 1:
+        raise ValueError("min_explore_run_length_to_count must be at least 1.")
+
+    output_df = block_performance.copy()
+
+    if "explore_run_start" not in augmented_trial_df.columns:
+        if "n_explore_runs" in output_df.columns:
+            return output_df
+        output_df["n_explore_runs"] = 0
+        return output_df
+
+    if "cur_block" not in augmented_trial_df.columns:
+        raise ValueError(
+            "Cannot derive n_explore_runs because augmented_trial_df is missing "
+            "columns: ['cur_block']"
+        )
+
+    raw_block_ids = np.unique(augmented_trial_df["cur_block"])
+    if raw_block_ids.shape[0] != output_df.shape[0]:
+        raise ValueError(
+            "Cannot derive n_explore_runs because trial cur_block values do not "
+            "align one-to-one with block_performance rows."
+        )
+
+    if min_explore_run_length_to_count > 1 and "explore_run_length" not in augmented_trial_df.columns:
+        raise ValueError(
+            "Cannot filter n_explore_runs by minimum length because "
+            "augmented_trial_df is missing 'explore_run_length'."
+        )
+
+    explore_run_counts = []
+    for raw_block_id in raw_block_ids:
+        block_trials = augmented_trial_df[augmented_trial_df["cur_block"] == raw_block_id]
+        if min_explore_run_length_to_count == 1:
+            explore_run_counts.append(_count_explore_flags(block_trials["explore_run_start"]))
+            continue
+
+        start_values = block_trials["explore_run_start"]
+        start_text = start_values.astype(str).str.strip().str.lower()
+        start_mask = start_text.isin(["true", "1", "1.0"])
+        start_numeric = pd.to_numeric(start_values, errors="coerce")
+        start_mask = start_mask | (start_numeric.fillna(0) > 0)
+        run_lengths = pd.to_numeric(block_trials["explore_run_length"], errors="coerce")
+        explore_run_counts.append(int((start_mask & (run_lengths >= min_explore_run_length_to_count)).sum()))
+
+    output_df["n_explore_runs"] = explore_run_counts
     return output_df
 
 
@@ -1010,6 +1516,172 @@ def prepare_side_trials_to_correct_summary(
                     "trials_to_correct_q1": q1,
                     "trials_to_correct_median": median,
                     "trials_to_correct_q3": q3,
+                }
+            )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def ensure_block_agent_mouse_agreement_columns(
+    saved_session: SavedSessionAnalysis,
+) -> SavedSessionAnalysis:
+    """Return a saved session with blockwise mouse-agent agreement columns.
+
+    Parameters
+    ----------
+    saved_session : SavedSessionAnalysis
+        Saved single-session tables. `block_performance` has shape
+        `(n_blocks, n_block_columns)` and `augmented_trial_df` has shape
+        `(n_trials, n_trial_columns)`.
+
+    Returns
+    -------
+    SavedSessionAnalysis
+        Session wrapper whose block table contains all columns listed in
+        `AGENT_MOUSE_AGREEMENT_COLUMNS`.
+
+    Raises
+    ------
+    ValueError
+        If the block columns are missing and the saved augmented trial table
+        does not contain the trial features needed to regenerate them.
+    """
+    missing_columns = [
+        column
+        for column in AGENT_MOUSE_AGREEMENT_COLUMNS.values()
+        if column not in saved_session.block_performance.columns
+    ]
+    if not missing_columns:
+        return saved_session
+
+    try:
+        block_performance = session_analysis.add_block_agent_mouse_agreement_columns(
+            saved_session.block_performance,
+            saved_session.augmented_trial_df,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"{saved_session.session.sess_id_full} is missing block agent-agreement "
+            "columns and they could not be regenerated from augmented trial features. "
+            "Rerun single-session trial feature collection for this session."
+        ) from exc
+
+    return SavedSessionAnalysis(
+        session=saved_session.session,
+        block_performance=block_performance,
+        augmented_trial_df=saved_session.augmented_trial_df,
+    )
+
+
+def prepare_agent_mouse_agreement_block_points(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+) -> pd.DataFrame:
+    """Build raw block-level mouse-agent agreement points across sessions.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order. Missing block agreement
+        columns are regenerated from each session's saved augmented trial table
+        when possible.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-form table with shape `(n_valid_block_agent_rows, 6)`. Columns are
+        `date`, `session_id`, `agent`, `block_ix`, `block_type`, and
+        `agreement`. Agreement values are fractions in [0, 1].
+    """
+    columns = ["date", "session_id", "agent", "block_ix", "block_type", "agreement"]
+    rows = []
+
+    for raw_saved_session in saved_sessions:
+        saved_session = ensure_block_agent_mouse_agreement_columns(raw_saved_session)
+        session = saved_session.session
+        block_performance = saved_session.block_performance
+        required_columns = {"block_type", *AGENT_MOUSE_AGREEMENT_COLUMNS.values()}
+        missing_columns = sorted(required_columns.difference(block_performance.columns))
+        if missing_columns:
+            raise ValueError(
+                f"{session.sess_id_full} block_performance is missing columns: {missing_columns}"
+            )
+
+        if "block_ix" in block_performance.columns:
+            block_ids = block_performance["block_ix"].tolist()
+        else:
+            block_ids = block_performance.index.tolist()
+
+        numeric_agreements = {
+            agent: pd.to_numeric(block_performance[column], errors="coerce")
+            for agent, column in AGENT_MOUSE_AGREEMENT_COLUMNS.items()
+        }
+        for row_position, (_row_index, row) in enumerate(block_performance.iterrows()):
+            for agent, agreement_values in numeric_agreements.items():
+                agreement_value = agreement_values.iloc[row_position]
+                if pd.isna(agreement_value):
+                    continue
+                rows.append(
+                    {
+                        "date": session.date,
+                        "session_id": session.sess_id_full,
+                        "agent": agent,
+                        "block_ix": block_ids[row_position],
+                        "block_type": row["block_type"],
+                        "agreement": float(agreement_value),
+                    }
+                )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def prepare_agent_mouse_agreement_summary(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+) -> pd.DataFrame:
+    """Summarize mouse-agent agreement distributions per session and agent.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order.
+
+    Returns
+    -------
+    pd.DataFrame
+        Summary table with one row per session and agent. Columns include
+        `date`, `session_id`, `agent`, `n_blocks`, `agreement_q1`,
+        `agreement_median`, and `agreement_q3`.
+    """
+    columns = [
+        "date",
+        "session_id",
+        "agent",
+        "n_blocks",
+        "agreement_q1",
+        "agreement_median",
+        "agreement_q3",
+    ]
+    block_points = prepare_agent_mouse_agreement_block_points(saved_sessions)
+    rows = []
+
+    for saved_session in saved_sessions:
+        session = saved_session.session
+        session_points = block_points[block_points["session_id"] == session.sess_id_full]
+        for agent in AGENT_MOUSE_AGREEMENT_COLUMNS.keys():
+            agent_points = session_points[session_points["agent"] == agent]
+            if agent_points.empty:
+                continue
+
+            agreement_values = agent_points["agreement"].dropna()
+            quartiles = agreement_values.quantile([0.25, 0.5, 0.75])
+            rows.append(
+                {
+                    "date": session.date,
+                    "session_id": session.sess_id_full,
+                    "agent": agent,
+                    "n_blocks": int(agreement_values.shape[0]),
+                    "agreement_q1": float(quartiles.loc[0.25]),
+                    "agreement_median": float(quartiles.loc[0.5]),
+                    "agreement_q3": float(quartiles.loc[0.75]),
                 }
             )
 
@@ -1264,6 +1936,147 @@ def prepare_block_explore_summary(
                     "n_explore_trials_q1": float(quartiles.loc[0.25]),
                     "n_explore_trials_median": float(quartiles.loc[0.5]),
                     "n_explore_trials_q3": float(quartiles.loc[0.75]),
+                }
+            )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def prepare_block_explore_run_block_points(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+    min_explore_run_length_to_count: int = 1,
+) -> pd.DataFrame:
+    """Build raw block explore-run points for cross-session quality plots.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order. Each session supplies a
+        block-performance table with shape `(n_blocks, n_block_columns)` and an
+        augmented-trial table with shape `(n_trials, n_trial_columns)`.
+        `n_explore_runs` is the number of valid exploratory leave-return runs
+        in each block. If missing from the block table, it is derived from
+        trial-level `explore_run_start` tags when available.
+    min_explore_run_length_to_count : int, default=1
+        Minimum exploratory-side run length required for a run to be counted.
+
+    Returns
+    -------
+    pd.DataFrame
+        Raw block table with one `"overall"` row for every valid block and one
+        side-specific row for every left/right block. Columns include `date`,
+        `session_id`, `explore_group`, `block_ix`, `block_type`, and
+        `n_explore_runs`. Counts are in runs per block.
+    """
+    columns = [
+        "date",
+        "session_id",
+        "explore_group",
+        "block_ix",
+        "block_type",
+        "n_explore_runs",
+    ]
+    rows = []
+
+    for saved_session in saved_sessions:
+        session = saved_session.session
+        block_performance = add_block_explore_run_counts_from_trials(
+            saved_session.block_performance,
+            saved_session.augmented_trial_df,
+            min_explore_run_length_to_count=min_explore_run_length_to_count,
+        )
+        required_columns = {"block_type", "n_explore_runs"}
+        missing_columns = sorted(required_columns.difference(block_performance.columns))
+        if missing_columns:
+            raise ValueError(
+                f"{session.sess_id_full} block_performance is missing columns: {missing_columns}"
+            )
+
+        if "block_ix" in block_performance.columns:
+            block_ids = block_performance["block_ix"].tolist()
+        else:
+            block_ids = block_performance.index.tolist()
+
+        n_explore_runs = pd.to_numeric(block_performance["n_explore_runs"], errors="coerce")
+        for row_position, (_row_index, row) in enumerate(block_performance.iterrows()):
+            rewarded_side = _get_rewarded_side_for_block_type(row["block_type"])
+            if rewarded_side is None:
+                continue
+
+            n_explore_value = n_explore_runs.iloc[row_position]
+            if pd.isna(n_explore_value):
+                continue
+
+            base_row = {
+                "date": session.date,
+                "session_id": session.sess_id_full,
+                "block_ix": block_ids[row_position],
+                "block_type": row["block_type"],
+                "n_explore_runs": float(n_explore_value),
+            }
+            rows.append(base_row | {"explore_group": "overall"})
+            rows.append(base_row | {"explore_group": rewarded_side})
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def prepare_block_explore_run_summary(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+    min_explore_run_length_to_count: int = 1,
+) -> pd.DataFrame:
+    """Summarize block explore-run distributions by session and side group.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved session analyses in plotting order. Non-side blocks contribute to
+        the `"overall"` distribution only; left/right blocks contribute to both
+        `"overall"` and their side-specific distribution.
+    min_explore_run_length_to_count : int, default=1
+        Minimum exploratory-side run length required for a run to be counted.
+
+    Returns
+    -------
+    pd.DataFrame
+        Explore-run summary table with one row per session/group present in
+        the data. Columns include `date`, `session_id`, `explore_group`,
+        `n_blocks`, `n_explore_runs_q1`, `n_explore_runs_median`, and
+        `n_explore_runs_q3`. Counts are runs per block.
+    """
+    columns = [
+        "date",
+        "session_id",
+        "explore_group",
+        "n_blocks",
+        "n_explore_runs_q1",
+        "n_explore_runs_median",
+        "n_explore_runs_q3",
+    ]
+    block_points = prepare_block_explore_run_block_points(
+        saved_sessions,
+        min_explore_run_length_to_count=min_explore_run_length_to_count,
+    )
+    rows = []
+
+    for saved_session in saved_sessions:
+        session = saved_session.session
+        session_points = block_points[block_points["session_id"] == session.sess_id_full]
+        for explore_group in ("overall", "left", "right"):
+            group_points = session_points[session_points["explore_group"] == explore_group]
+            if group_points.empty:
+                continue
+
+            explore_values = group_points["n_explore_runs"].dropna()
+            quartiles = explore_values.quantile([0.25, 0.5, 0.75])
+            rows.append(
+                {
+                    "date": session.date,
+                    "session_id": session.sess_id_full,
+                    "explore_group": explore_group,
+                    "n_blocks": int(explore_values.shape[0]),
+                    "n_explore_runs_q1": float(quartiles.loc[0.25]),
+                    "n_explore_runs_median": float(quartiles.loc[0.5]),
+                    "n_explore_runs_q3": float(quartiles.loc[0.75]),
                 }
             )
 
@@ -1565,6 +2378,7 @@ def run_multisession_analysis(
     block_random_seed: int | None = None,
     trial_random_seed: int | None = None,
     trial_predictor_columns: tuple[str, ...] | None = None,
+    skip_block_hmm_if_existing: bool = False,
     block_predicted_state_line_width: float | None = None,
     block_state_plot_figsize: tuple[float, float] | None = None,
     block_secondary_trace: str = "none",
@@ -1604,6 +2418,10 @@ def run_multisession_analysis(
         final modeling. Input matrix columns follow this order, with the bias
         column appended internally by `trial_state_space_modeling`. If None,
         the trial modeling module default predictor tuple is used.
+    skip_block_hmm_if_existing : bool, default=False
+        If True and the fitted model pickle, modeled block CSV, and
+        inherited-strategy trial CSV are all present for `session`, skip block
+        HMM fitting and load the saved block/trial CSVs instead.
     block_predicted_state_line_width : float or None, default=None
         Optional linewidth for block predicted-state summary traces. None
         preserves the existing plotting defaults.
@@ -1664,22 +2482,36 @@ def run_multisession_analysis(
         #     prior_sigma=prior_sigma,
         #     random_seed=block_random_seed,
         # )
-        save_concatenated_multisession_inputs(concatenated, session)
-        modeled_block_df, modeled_trial_df = bssm.run_block_modeling(
-            concatenated.block_performance,
-            concatenated.augmented_trial_df,
-            session=session,
-            num_states=block_num_states,
-            prior_alpha=prior_alpha,
-            prior_sigma=prior_sigma,
-            random_seed=block_random_seed,
-            predicted_state_line_width=block_predicted_state_line_width,
-            state_plot_figsize=block_state_plot_figsize,
-            block_secondary_trace=block_secondary_trace,
-            plot_sliding_regression=plot_sliding_regression,
-            sliding_regression_window_size=sliding_regression_window_size,
-            sliding_regression_step_size=sliding_regression_step_size,
-        )
+        missing_hmm_outputs = missing_block_hmm_output_paths(session)
+        if skip_block_hmm_if_existing and not missing_hmm_outputs:
+            print(
+                f"Skipping block HMM for {session.sess_id_full}; "
+                "saved block HMM outputs already exist."
+            )
+            modeled_block_df, modeled_trial_df = load_saved_block_hmm_outputs(session)
+        else:
+            if skip_block_hmm_if_existing:
+                missing_summary = "\n".join(str(path) for path in missing_hmm_outputs)
+                print(
+                    f"Block HMM skip requested for {session.sess_id_full}, but required "
+                    f"outputs are missing. Running block HMM.\n{missing_summary}"
+                )
+            save_concatenated_multisession_inputs(concatenated, session)
+            modeled_block_df, modeled_trial_df = bssm.run_block_modeling(
+                concatenated.block_performance,
+                concatenated.augmented_trial_df,
+                session=session,
+                num_states=block_num_states,
+                prior_alpha=prior_alpha,
+                prior_sigma=prior_sigma,
+                random_seed=block_random_seed,
+                predicted_state_line_width=block_predicted_state_line_width,
+                state_plot_figsize=block_state_plot_figsize,
+                block_secondary_trace=block_secondary_trace,
+                plot_sliding_regression=plot_sliding_regression,
+                sliding_regression_window_size=sliding_regression_window_size,
+                sliding_regression_step_size=sliding_regression_step_size,
+            )
     else:
         modeled_block_df = concatenated.block_performance
         modeled_trial_df = load_saved_multisession_augmented_trials(
@@ -1773,25 +2605,48 @@ def main_simulation():
 
 def main_multisession():
     """Analyze selected saved sessions as one continuous multisession table."""
-    mouse = 'CT023'
+    mouse = 'CT025'
     session_data_root = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}')
     multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
-    dates = [#'2026-04-17', '2026-04-20',
-             # '#2026-04-21', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
-             # '2026-05-01', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-08', '2026-05-09', '2026-05-10',
-             # '2026-05-11', '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-17',
-            # '2026-05-18', '
-        '2026-05-19', '2026-05-20',
-        '2026-05-21', '2026-05-22', '2026-05-24', '2026-05-25',
-        '2026-05-26', '2026-05-27', '2026-05-28', '2026-05-29',
-        '2026-05-31', '2026-06-01',
-        '2026-06-02',
-        '2026-06-03', '2026-06-04', '2026-06-05',
-        '2026-06-07', '2026-06-08', '2026-06-09',
-        '2026-06-10', '2026-06-11'
-    ]
+    task_tag = "latent_inference"
+    use_all_dates_for_task_tag = True
+    min_explore_run_length_to_count = 2
+    dates = ['2026-04-17', '2026-04-20',
+             '2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
+             '2026-05-01', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-09', '2026-05-10',
+             '2026-05-11', '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-17',
+             '2026-05-18',
+             '2026-05-19', '2026-05-20',
+             '2026-05-21', '2026-05-22', '2026-05-23', '2026-05-24', '2026-05-25',
+             # '2026-05-26',
+             '2026-05-27', '2026-05-28', '2026-05-29',]
+    #
+    # dates = [#'2026-04-17', '2026-04-20',
+    #          # '#2026-04-21', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
+    #          # '2026-05-01', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-08', '2026-05-09', '2026-05-10',
+    #          # '2026-05-11', '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-17',
+    #         # '2026-05-18', '
+    #     '2026-05-19', '2026-05-20',
+    #     '2026-05-21', '2026-05-22', '2026-05-24', '2026-05-25',
+    #     '2026-05-26', '2026-05-27', '2026-05-28', '2026-05-29',
+    #     '2026-05-31', '2026-06-01',
+    #     '2026-06-02',
+    #     '2026-06-03', '2026-06-04', '2026-06-05',
+    #     '2026-06-07', '2026-06-08', '2026-06-09',
+    #     '2026-06-10', '2026-06-11'
+    # ]
+    dates = resolve_multisession_dates(
+        mouse=mouse,
+        session_data_root=session_data_root,
+        task_tag=task_tag,
+        explicit_dates=dates,
+        use_all_dates_for_task_tag=use_all_dates_for_task_tag,
+        require_saved_outputs=True,
+        multi_session_save_path=multi_session_save_path,
+    )
     block_hmm_random_seed = 1001
     trial_hmm_random_seed = 2001
+    skip_block_hmm_if_existing = True
     block_predicted_state_line_width = 0.8
     block_state_plot_figsize = (18, 6)
     block_secondary_trace = "none"
@@ -1864,6 +2719,24 @@ def main_multisession():
         marker_mode=block_hmm_state_marker_mode,
     )
     saved_sessions = [load_saved_session_analysis(session) for session in sessions]
+    agent_mouse_agreement_summary = prepare_agent_mouse_agreement_summary(saved_sessions)
+    agent_mouse_agreement_block_points = prepare_agent_mouse_agreement_block_points(saved_sessions)
+    agent_mouse_agreement_summary.to_csv(
+        multi_session_save_path / f"{mouse}_agent_mouse_agreement_summary.csv",
+        index=False,
+        na_rep="None",
+    )
+    agent_mouse_agreement_block_points.to_csv(
+        multi_session_save_path / f"{mouse}_agent_mouse_agreement_block_points.csv",
+        index=False,
+        na_rep="None",
+    )
+    performance_plots.plot_multisession_agent_mouse_agreement_quality(
+        summary_df=agent_mouse_agreement_summary,
+        block_points_df=agent_mouse_agreement_block_points,
+        plot_path=multi_session_save_path,
+        figure_id=mouse,
+    )
     trials_to_correct_summary = prepare_session_trials_to_correct_summary(saved_sessions)
     performance_plots.plot_trials_to_correct_session_summary(
         summary_df=trials_to_correct_summary,
@@ -1943,6 +2816,30 @@ def main_multisession():
         plot_path=multi_session_save_path,
         figure_id=mouse,
     )
+    block_explore_run_summary = prepare_block_explore_run_summary(
+        saved_sessions,
+        min_explore_run_length_to_count=min_explore_run_length_to_count,
+    )
+    block_explore_run_block_points = prepare_block_explore_run_block_points(
+        saved_sessions,
+        min_explore_run_length_to_count=min_explore_run_length_to_count,
+    )
+    block_explore_run_summary.to_csv(
+        multi_session_save_path / f"{mouse}_block_explore_run_summary.csv",
+        index=False,
+        na_rep="None",
+    )
+    block_explore_run_block_points.to_csv(
+        multi_session_save_path / f"{mouse}_block_explore_run_block_points.csv",
+        index=False,
+        na_rep="None",
+    )
+    performance_plots.plot_multisession_block_explore_run_quality(
+        summary_df=block_explore_run_summary,
+        block_points_df=block_explore_run_block_points,
+        plot_path=multi_session_save_path,
+        figure_id=mouse,
+    )
     concatenated = concatenate_saved_sessions(saved_sessions)
     multisession = build_multisession_session(
         mouse=mouse,
@@ -1959,6 +2856,7 @@ def main_multisession():
         block_random_seed=block_hmm_random_seed,
         trial_random_seed=trial_hmm_random_seed,
         trial_predictor_columns=trial_glm_predictor_columns,
+        skip_block_hmm_if_existing=skip_block_hmm_if_existing,
         block_predicted_state_line_width=block_predicted_state_line_width,
         block_state_plot_figsize=block_state_plot_figsize,
         block_secondary_trace=block_secondary_trace,
@@ -1988,107 +2886,75 @@ def main_multisession():
     )
 
 
-def main_mouse():
-    """Analyze a single behavior session from start to finish."""
+def run_single_session_workflow(
+    sess: Session,
+    config: SingleSessionAnalysisConfig,
+) -> None:
+    """Run the full single-session behavior and HMM analysis workflow.
 
-    ### USER FLAGS - CHOOSE THESE FOR EACH RUN ###
-    preprocess_raw_session = True
-    run_session_analysis = True
-    ideal_observer_n_replays = 100
-    ideal_observer_seed = 12345
+    Parameters
+    ----------
+    sess : Session
+        Fully resolved single-session metadata. Required fields include
+        `raw_behavior_folder`, `processed_data_path`, `figure_path`,
+        `sess_id_full`, `sess_id_abbreviated`, `date`, and `session_info`.
+        `session_info` may be None when `session_info_fname` points to a valid
+        pickle file.
+    config : SingleSessionAnalysisConfig
+        Analysis parameters controlling preprocessing, saved-analysis loading,
+        plotting, and HMM modeling.
 
-    ### HARDCODED DATA PATHS - CHOOSE THESE FOR EACH RUN ###
-    # mouse = 'CT014'
-    # date = '2025-12-16'
-    # behavior_timestamp = '153200'
+    Returns
+    -------
+    None
+        Saves plots, CSVs, and model outputs into the session's configured
+        processed/figure directories.
+    """
+    if sess.session_info is None:
+        with open(sess.session_info_fname, "rb") as file:
+            sess.session_info = pkl.load(file)
 
-    mouse = "CT016"
-    date = "2026-05-29"
-    behavior_timestamp = "132812"
-    task_tag = 'latent_inference'
-    date_no_dash = date.replace('-', '')
-
-    block_modeling_states = 2
-    trial_modeling_states = 3
-
-    multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
-    session_data_home = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/{mouse}_{date_no_dash}_{task_tag}')
-    sess_id_full = f'{mouse}_{date}_{behavior_timestamp}'
-    sess_id_abbreviated = mouse + '_' + date
-
-    ### everything below this should be edited so it doesn't have to be commented in or out or have hardcodes changed ###
-    raw_behavior_folder = session_data_home / 'rpi' / sess_id_full
-    processed_data_path = session_data_home / 'processed'
-    figure_path = session_data_home / 'figures'
-
-    pattern = r'(\w+)_([\d\-]+)_(\d+)'
-    match = re.search(pattern, sess_id_full)
-
-    if match:
-        mouse, date, timestamp = match.groups()
-        print(f"Found session for mouse id: {mouse}, date: {date}, behavior timestamp: {timestamp}")
-    else:
-        print("Double-check the session name!")
-        return
-
-    session_info_path = raw_behavior_folder / '{}_session_info.pkl'.format(sess_id_full)
-    assert session_info_path.exists(), "session_info at {} not found!".format(session_info_path)
-    with open(session_info_path, 'rb') as f:
-        session_info = pkl.load(f)
-    
-    sess = Session()
-    sess.multi_session_save_path = multi_session_save_path
-    sess.session_data_home = session_data_home
-    sess.sess_id_full = sess_id_full
-    sess.sess_id_abbreviated = sess_id_abbreviated
-    sess.raw_behavior_folder = raw_behavior_folder
-    sess.processed_data_path = processed_data_path
-    sess.figure_path = figure_path
-    sess.mouse = mouse
-    sess.date = date
-    sess.timestamp = timestamp
-    sess.session_info_fname = session_info_path
-    sess.session_info = session_info
-    
     trial_df, event_df, water = load_or_preprocess_session(
-        raw_behavior_folder=raw_behavior_folder,
-        processed_data_path=processed_data_path,
-        sess_id_full=sess_id_full,
-        preprocess_raw_session=preprocess_raw_session,
-        min_time=0,
-        max_time=np.inf,
+        raw_behavior_folder=sess.raw_behavior_folder,
+        processed_data_path=sess.processed_data_path,
+        sess_id_full=sess.sess_id_full,
+        preprocess_raw_session=config.preprocess_raw_session,
+        min_time=config.min_time,
+        max_time=config.max_time,
     )
     if water is not None:
-        print(f"Preprocessed session log for {sess_id_full}. Water delivered: {water}")
+        print(f"Preprocessed session log for {sess.sess_id_full}. Water delivered: {water}")
 
-    plot_session(event_df, session_info, figure_path=figure_path, sess_id_full=sess_id_full)
+    plot_session(
+        event_df,
+        sess.session_info,
+        figure_path=sess.figure_path,
+        sess_id_full=sess.sess_id_full,
+    )
 
-    # analyze trials and save, or load existing analysis outputs
     augmented_trial_df, block_performance, multisession_df = load_or_run_session_analysis(
         trial_df=trial_df,
         session=sess,
-        run_session_analysis=run_session_analysis,
-        ideal_observer_n_replays=ideal_observer_n_replays,
-        ideal_observer_seed=ideal_observer_seed,
+        run_session_analysis=config.run_session_analysis,
+        ideal_observer_n_replays=config.ideal_observer_n_replays,
+        ideal_observer_seed=config.ideal_observer_seed,
     )
 
-    ### plot single session performance ###
-    performance_plots.plot_session_correct(block_performance, sess.figure_path, sess_id_full)
-    performance_plots.plot_session_correct_after_first_correct(block_performance, sess.figure_path, sess_id_full)
-    performance_plots.plot_session_history_ideal_mouse_agreement(block_performance, sess.figure_path, sess_id_full)
-    performance_plots.plot_session_trials_to_correct(block_performance, sess.figure_path, sess_id_full)
-    performance_plots.plot_session_nswitches(block_performance, sess.figure_path, sess_id_full)
-    performance_plots.plot_session_explore_trials(block_performance, sess.figure_path, sess_id_full)
+    performance_plots.plot_session_correct(block_performance, sess.figure_path, sess.sess_id_full)
+    performance_plots.plot_session_correct_after_first_correct(block_performance, sess.figure_path, sess.sess_id_full)
+    performance_plots.plot_session_history_ideal_mouse_agreement(block_performance, sess.figure_path, sess.sess_id_full)
+    performance_plots.plot_session_trials_to_correct(block_performance, sess.figure_path, sess.sess_id_full)
+    performance_plots.plot_session_nswitches(block_performance, sess.figure_path, sess.sess_id_full)
     performance_plots.plot_block_bias_quadrants(
         block_performance,
         sess.figure_path,
-        sess_id_full,
-        title=sess_id_abbreviated,
+        sess.sess_id_full,
+        title=sess.sess_id_abbreviated,
     )
     performance_plots.plot_session_block_trials_to_correct_summary(
         block_performance,
         sess.figure_path,
-        sess_id_full,
+        sess.sess_id_full,
     )
     save_and_plot_switch_persistence_for_session(
         block_performance=block_performance,
@@ -2096,108 +2962,234 @@ def main_mouse():
         session=sess,
     )
 
-    scatter_regressor = "prev_n_rewarded"  # options: "prev_n_rewarded", "prev_consecutive_rewards", "prev_n_correct"
     slope = multisession_df.loc[
-        multisession_df['date'] == date,
-        f'{scatter_regressor}_slope',
+        multisession_df["date"] == sess.date,
+        f"{config.scatter_regressor}_slope",
     ].values[0]
     intercept = multisession_df.loc[
-        multisession_df['date'] == date,
-        f'{scatter_regressor}_intercept',
+        multisession_df["date"] == sess.date,
+        f"{config.scatter_regressor}_intercept",
     ].values[0]
-    performance_plots.scatter_trials_to_correct(block_performance, slope=slope, intercept=intercept,
-                              plot_path=sess.figure_path, figure_id=sess_id_full,
-                              title=sess_id_abbreviated,
-                              regressor_column=scatter_regressor)
-
-    ### Gather trial features ###
-    augmented_trial_df, task_params = gtf.collect_and_save_trial_features(
-        augmented_trial_df,
-        processed_data_path=processed_data_path,
-        sess_id_full=sess_id_full,
+    performance_plots.scatter_trials_to_correct(
+        block_performance,
+        slope=slope,
+        intercept=intercept,
+        plot_path=sess.figure_path,
+        figure_id=sess.sess_id_full,
+        title=sess.sess_id_abbreviated,
+        regressor_column=config.scatter_regressor,
     )
+
+    augmented_trial_df, _task_params = gtf.collect_and_save_trial_features(
+        augmented_trial_df,
+        processed_data_path=sess.processed_data_path,
+        sess_id_full=sess.sess_id_full,
+        max_explore_run_length=config.max_explore_run_length,
+    )
+    block_performance = session_analysis.add_block_agent_mouse_agreement_columns(
+        block_performance,
+        augmented_trial_df,
+    )
+    block_performance = add_block_explore_counts_from_trials(
+        block_performance,
+        augmented_trial_df,
+    )
+    block_performance = add_block_explore_run_counts_from_trials(
+        block_performance,
+        augmented_trial_df,
+        min_explore_run_length_to_count=config.min_explore_run_length_to_count,
+    )
+    block_performance.to_csv(
+        sess.processed_data_path / f"{sess.sess_id_full}_block_performance.csv",
+        index=False,
+        na_rep="None",
+    )
+    performance_plots.plot_session_explore_trials(block_performance, sess.figure_path, sess.sess_id_full)
+    performance_plots.plot_session_explore_runs(block_performance, sess.figure_path, sess.sess_id_full)
+    performance_plots.plot_session_agent_mouse_agreement(block_performance, sess.figure_path, sess.sess_id_full)
     plot_mouse_history_ideal_observer_for_session(
         augmented_trial_df=augmented_trial_df,
         session=sess,
     )
 
-    block_hmm_random_seed = 1001
-    trial_hmm_random_seed = 2001
-    block_secondary_trace = "prev_n_rewarded"  # options: "none", "min_value_bias", "prev_n_rewarded"
-    plot_sliding_regression = True
-    sliding_regression_window_size = 10
-    sliding_regression_step_size = 5
-    trial_glm_predictor_columns = (
-        "FQlearning_rel_value",
-        # "HMM_rel_value_logodds_decay",
-        # "relative_hazard_index",
-        "HMM_decay_res",
-        "rel_hazard_res",
-        "relative_doubt_index",
-        "perseveration_regressor",
-        # "time_to_choice"
-    )
-
-    # prefer use of the information criteria for model selection, but here is how you'd use CV
-    # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
-    #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2,
-    #                                                random_seed=block_hmm_random_seed)
-
-    # IC
-    # block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
-    #                                                 prior_alpha=1, prior_sigma=1, max_states=5,
-    #                                                 random_seed=block_hmm_random_seed)
-
-    block_performance, augmented_trial_df = bssm.run_block_modeling(block_performance, augmented_trial_df, session=sess,
-                                                                    num_states=block_modeling_states,
-                                                                    prior_alpha=1, prior_sigma=1,
-                                                                    random_seed=block_hmm_random_seed,
-                                                                    block_secondary_trace=block_secondary_trace,
-                                                                    plot_sliding_regression=plot_sliding_regression,
-                                                                    sliding_regression_window_size=sliding_regression_window_size,
-                                                                    sliding_regression_step_size=sliding_regression_step_size)
+    missing_hmm_outputs = missing_block_hmm_output_paths(sess)
+    if config.skip_block_hmm_if_existing and not missing_hmm_outputs:
+        print(
+            f"Skipping block HMM for {sess.sess_id_full}; "
+            "saved block HMM outputs already exist."
+        )
+        block_performance, augmented_trial_df = load_saved_block_hmm_outputs(sess)
+    else:
+        if config.skip_block_hmm_if_existing:
+            missing_summary = "\n".join(str(path) for path in missing_hmm_outputs)
+            print(
+                f"Block HMM skip requested for {sess.sess_id_full}, but required "
+                f"outputs are missing. Running block HMM.\n{missing_summary}"
+            )
+        block_performance, augmented_trial_df = bssm.run_block_modeling(
+            block_performance,
+            augmented_trial_df,
+            session=sess,
+            num_states=config.block_modeling_states,
+            prior_alpha=1,
+            prior_sigma=1,
+            random_seed=config.block_hmm_random_seed,
+            block_secondary_trace=config.block_secondary_trace,
+            plot_sliding_regression=config.plot_sliding_regression,
+            sliding_regression_window_size=config.sliding_regression_window_size,
+            sliding_regression_step_size=config.sliding_regression_step_size,
+        )
 
     performance_plots.plot_single_session_summary_grid(
         block_performance=block_performance,
         augmented_trial_df=augmented_trial_df,
         event_df=event_df,
-        session_info=session_info,
+        session_info=sess.session_info,
         plot_path=sess.figure_path,
-        figure_id=sess_id_full,
-        title=sess_id_abbreviated,
+        figure_id=sess.sess_id_full,
+        title=sess.sess_id_abbreviated,
         scatter_slope=slope,
         scatter_intercept=intercept,
-        scatter_regressor=scatter_regressor,
-        processed_data_path=processed_data_path,
-        sliding_regression_window_size=sliding_regression_window_size,
-        sliding_regression_step_size=sliding_regression_step_size,
+        scatter_regressor=config.scatter_regressor,
+        processed_data_path=sess.processed_data_path,
+        sliding_regression_window_size=config.sliding_regression_window_size,
+        sliding_regression_step_size=config.sliding_regression_step_size,
     )
-    
-    # load a saved block model instead of running it
-    # block_model_dict_path = processed_data_path / (sess_id_full + '_block_statedict.pkl')
-    # with open(block_model_dict_path, 'rb') as file:
-    #     block_model_dict = pkl.load(file)
-    
-    ### trial state space modeling ###
-    # trial_model_selection = tssm.run_information_criteria(
-    #     augmented_trial_df,
-    #     session=sess,
-    #     algorithm='MLE',
-    #     prior_alpha=1,
-    #     prior_sigma=1,
-    #     predictor_columns=trial_glm_predictor_columns,
-    #     random_seed=trial_hmm_random_seed,
-    # )
-    # augmented_trial_df = tssm.run_trial_modeling(
-    #     augmented_trial_df,
-    #     session=sess,
-    #     num_states=3,
-    #     prior_alpha=1,
-    #     prior_sigma=1,
-    #     predictor_columns=trial_glm_predictor_columns,
-    #     random_seed=trial_hmm_random_seed,
-    # )
 
+
+def run_single_session_batch(
+    mouse: str,
+    dates: Sequence[str],
+    task_tag: str,
+    session_data_root: Path,
+    multi_session_save_path: Path,
+    config: SingleSessionAnalysisConfig,
+    runner=run_single_session_workflow,
+) -> list[Session]:
+    """Run the single-session workflow for multiple dates of one mouse.
+
+    Parameters
+    ----------
+    mouse : str
+        Mouse identifier used in raw session folder names.
+    dates : Sequence[str]
+        Session dates formatted as `YYYY-MM-DD`, processed in the given order.
+    task_tag : str
+        Exact task tag used in `{mouse}_YYYYMMDD_{task_tag}` folders.
+    session_data_root : pathlib.Path
+        Mouse-level data directory containing task-tagged session folders.
+    multi_session_save_path : pathlib.Path
+        Cross-session output directory assigned to each resolved session
+        metadata. This function does not concatenate sessions.
+    config : SingleSessionAnalysisConfig
+        Analysis parameters passed unchanged to `runner`.
+    runner : callable, default=run_single_session_workflow
+        Dependency-injected single-session runner. It must accept
+        `(session, config)` and return None.
+
+    Returns
+    -------
+    list[Session]
+        Resolved sessions in processing order.
+    """
+    resolved_sessions = []
+    for date in dates:
+        sess = find_raw_session_by_date(
+            mouse=mouse,
+            date=date,
+            session_data_root=session_data_root,
+            task_tag=task_tag,
+            multi_session_save_path=multi_session_save_path,
+        )
+        resolved_sessions.append(sess)
+        runner(sess, config)
+    return resolved_sessions
+
+
+def main_mouse():
+    """Analyze a single behavior session from start to finish."""
+    mouse = "CT024"
+    date = "2026-06-11"
+    behavior_timestamp = 142023  # Set to "HHMMSS" to choose one session on ambiguous dates.
+    task_tag = "latent_inference"
+    session_data_root = Path(f"/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}")
+    multi_session_save_path = session_data_root / "cross_session_analysis"
+    config = SingleSessionAnalysisConfig(
+        preprocess_raw_session=True,
+        run_session_analysis=True,
+        ideal_observer_n_replays=100,
+        ideal_observer_seed=12345,
+        block_modeling_states=2,
+        trial_modeling_states=3,
+        scatter_regressor="prev_n_rewarded",
+        block_secondary_trace="prev_n_rewarded",
+        skip_block_hmm_if_existing=True,
+        max_explore_run_length=5,
+        min_explore_run_length_to_count=2,
+    )
+
+    sess = find_raw_session_by_date(
+        mouse=mouse,
+        date=date,
+        session_data_root=session_data_root,
+        task_tag=task_tag,
+        multi_session_save_path=multi_session_save_path,
+        behavior_timestamp=behavior_timestamp,
+    )
+    run_single_session_workflow(sess, config)
+
+
+def main_mouse_batch():
+    """Run ordinary single-session analysis for several dates of one mouse."""
+    mouse = "CT023"
+    use_all_dates_for_task_tag = True
+    dates = [#'2026-04-17', '2026-04-20',
+        #'2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
+       # '2026-05-01', '2026-05-05', '2026-05-06', '2026-05-07', '2026-05-08', '2026-05-09', '2026-05-10',
+       # '2026-05-11', '2026-05-12', '2026-05-13', '2026-05-14', '2026-05-15', '2026-05-17',
+        #'2026-05-18',
+        # '2026-05-19', '2026-05-20',
+        # '2026-05-21', '2026-05-22', '2026-05-23', '2026-05-24', '2026-05-25',
+        # '2026-05-26',
+        # '2026-05-27', '2026-05-28', '2026-05-29',
+        # '2026-05-31',
+        '2026-06-01', '2026-06-02',
+        '2026-06-03', '2026-06-04', '2026-06-05',
+        '2026-06-07', '2026-06-08', '2026-06-09',
+        '2026-06-10', '2026-06-11'
+    ]
+    task_tag = "latent_inference"
+    session_data_root = Path(f"/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}")
+    multi_session_save_path = session_data_root / "cross_session_analysis"
+    if use_all_dates_for_task_tag:
+        dates = find_raw_session_dates_for_task_tag(
+            mouse=mouse,
+            session_data_root=session_data_root,
+            task_tag=task_tag,
+        )
+
+    config = SingleSessionAnalysisConfig(
+        preprocess_raw_session=True,
+        run_session_analysis=True,
+        ideal_observer_n_replays=100,
+        ideal_observer_seed=12345,
+        block_modeling_states=2,
+        trial_modeling_states=3,
+        scatter_regressor="prev_n_rewarded",
+        block_secondary_trace="prev_n_rewarded",
+        skip_block_hmm_if_existing=True,
+        max_explore_run_length=5,
+        min_explore_run_length_to_count=2,
+    )
+
+    run_single_session_batch(
+        mouse=mouse,
+        dates=dates,
+        task_tag=task_tag,
+        session_data_root=session_data_root,
+        multi_session_save_path=multi_session_save_path,
+        config=config,
+    )
 
 # def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
 #     ix_valid = bssm.make_valid_block_history_mask(block_df)
@@ -2216,5 +3208,6 @@ def main_mouse():
 
 if __name__ == '__main__':
     # main_mouse()
-    main_multisession()
+    main_mouse_batch()
+    # main_multisession()
     # main_simulation()

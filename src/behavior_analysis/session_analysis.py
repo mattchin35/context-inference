@@ -22,6 +22,14 @@ from typing import Protocol
 
 eps = np.finfo(float).eps
 
+DEFAULT_AGENT_MOUSE_AGREEMENT_VALUE_COLUMNS = {
+    "qlearning_mouse_agreement": "Qlearning_rel_value",
+    "fql_mouse_agreement": "FQlearning_rel_value",
+    "hmm_logodds_mouse_agreement": "HMM_rel_value_logodds",
+    "hmm_logodds_decay_mouse_agreement": "HMM_rel_value_logodds_decay",
+    "observer_mouse_agreement": "observer_value",
+}
+
 
 class Session(Protocol):
     multi_session_save_path: Path
@@ -318,6 +326,174 @@ def compute_history_ideal_mouse_agreement_by_trial(
     retained_mouse_actions = mouse_actions.loc[valid_rows].to_numpy(dtype=int)
     agreement[valid_rows] = (ideal_actions == retained_mouse_actions).astype(float)
     return agreement
+
+
+def compute_agent_mouse_agreement_by_trial(
+    augmented_trial_df: pd.DataFrame,
+    value_column: str,
+    initial_tie_choice: int = ideal_observer.RIGHT_CHOICE,
+) -> np.ndarray:
+    """Return trialwise mouse agreement with one agent's greedy policy.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_columns)`. Required columns are
+        `action`, an optional experimenter-reward column accepted by
+        `make_behavioral_choice_mask`, and `value_column`. Actions use
+        `0=right`, `1=left`; no-choice and experimenter-reward rows are
+        excluded.
+    value_column : str
+        Name of a signed left-positive agent value column. Positive values
+        greedily choose left, negative values choose right, and exact zeroes
+        repeat the previous greedy agent choice.
+    initial_tie_choice : int, default=ideal_observer.RIGHT_CHOICE
+        Greedy choice used when the first valid comparison row is an exact tie.
+
+    Returns
+    -------
+    np.ndarray
+        Object array with shape `(n_trials,)`. Valid comparison rows contain
+        `1.0` for mouse/agent agreement and `0.0` for disagreement. Invalid
+        rows contain the string sentinel `"None"`.
+
+    Raises
+    ------
+    ValueError
+        If `value_column` is absent from `augmented_trial_df`.
+    """
+    if value_column not in augmented_trial_df.columns:
+        raise ValueError(f"augmented_trial_df is missing requested agent value column: {value_column}")
+
+    agreement = np.full(augmented_trial_df.shape[0], "None", dtype=object)
+    behavioral_choice_ix = make_behavioral_choice_mask(augmented_trial_df)
+    agent_values = pd.to_numeric(augmented_trial_df[value_column], errors="coerce")
+    mouse_actions = pd.to_numeric(augmented_trial_df["action"], errors="coerce")
+    valid_rows = (
+        behavioral_choice_ix
+        & agent_values.notna().to_numpy()
+        & mouse_actions.notna().to_numpy()
+    )
+    if not valid_rows.any():
+        return agreement
+
+    retained_values = agent_values.loc[valid_rows].to_numpy(dtype=float)
+    agent_actions = ideal_observer.choose_greedy_left_positive_actions(
+        retained_values,
+        initial_choice=initial_tie_choice,
+    )
+    retained_mouse_actions = mouse_actions.loc[valid_rows].to_numpy(dtype=int)
+    agreement[valid_rows] = (agent_actions == retained_mouse_actions).astype(float)
+    return agreement
+
+
+def _trial_block_mask(trial_block_values: pd.Series, block_id) -> np.ndarray:
+    """Return trial rows belonging to one block id.
+
+    Parameters
+    ----------
+    trial_block_values : pd.Series
+        Trial-level block ids with shape `(n_trials,)`.
+    block_id : object
+        Block id from the block-performance table.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean mask with shape `(n_trials,)`.
+    """
+    numeric_trial_blocks = pd.to_numeric(trial_block_values, errors="coerce")
+    numeric_block_id = pd.to_numeric(pd.Series([block_id]), errors="coerce").iloc[0]
+    if not pd.isna(numeric_block_id):
+        return numeric_trial_blocks.eq(float(numeric_block_id)).to_numpy()
+    return trial_block_values.astype(str).eq(str(block_id)).to_numpy()
+
+
+def add_block_agent_mouse_agreement_columns(
+    block_performance: pd.DataFrame,
+    augmented_trial_df: pd.DataFrame,
+    agent_value_columns: dict[str, str] | None = None,
+    initial_tie_choice: int = ideal_observer.RIGHT_CHOICE,
+) -> pd.DataFrame:
+    """Add blockwise mouse-agent agreement summaries to block performance.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise table with shape `(n_blocks, n_block_columns)`. If `block_ix`
+        is present, it is used to align rows to `augmented_trial_df.cur_block`;
+        otherwise rows are aligned to the first-seen unique `cur_block` values.
+    augmented_trial_df : pd.DataFrame
+        Trialwise table with shape `(n_trials, n_trial_columns)`. Required
+        columns are `cur_block`, `action`, and the value columns requested in
+        `agent_value_columns`.
+    agent_value_columns : dict[str, str] or None, default=None
+        Mapping from output agreement column name to signed left-positive agent
+        value column name. None uses the default Q-learning, forgetting
+        Q-learning, HMM log-odds, HMM log-odds with decay, and observer values.
+    initial_tie_choice : int, default=ideal_observer.RIGHT_CHOICE
+        Greedy choice used when an agent's first valid comparison row is an
+        exact value tie.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `block_performance` with one agreement-fraction column per
+        requested agent. Agreement fractions are unitless values in [0, 1];
+        blocks without valid comparisons receive the string sentinel `"None"`.
+
+    Raises
+    ------
+    ValueError
+        If `augmented_trial_df` lacks `cur_block`, or if any requested agent
+        value column is missing.
+    """
+    if agent_value_columns is None:
+        agent_value_columns = DEFAULT_AGENT_MOUSE_AGREEMENT_VALUE_COLUMNS
+    if "cur_block" not in augmented_trial_df.columns:
+        raise ValueError("augmented_trial_df is missing required column: cur_block")
+
+    missing_value_columns = [
+        value_column
+        for value_column in agent_value_columns.values()
+        if value_column not in augmented_trial_df.columns
+    ]
+    if missing_value_columns:
+        raise ValueError(
+            "augmented_trial_df is missing requested agent value columns: "
+            f"{sorted(set(missing_value_columns))}"
+        )
+
+    output_df = block_performance.copy()
+    if "block_ix" in output_df.columns:
+        block_ids = output_df["block_ix"].tolist()
+    else:
+        block_ids = pd.unique(augmented_trial_df["cur_block"]).tolist()
+        if len(block_ids) != output_df.shape[0]:
+            raise ValueError(
+                "Cannot align block_performance rows to augmented_trial_df.cur_block; "
+                "provide a block_ix column or matching block row count."
+            )
+
+    for output_column, value_column in agent_value_columns.items():
+        trial_agreement = compute_agent_mouse_agreement_by_trial(
+            augmented_trial_df,
+            value_column=value_column,
+            initial_tie_choice=initial_tie_choice,
+        )
+        block_agreement = []
+        for block_id in block_ids:
+            block_mask = _trial_block_mask(augmented_trial_df["cur_block"], block_id)
+            agreement_values = pd.to_numeric(
+                pd.Series(trial_agreement[block_mask]),
+                errors="coerce",
+            ).dropna()
+            if agreement_values.empty:
+                block_agreement.append("None")
+            else:
+                block_agreement.append(float(agreement_values.mean()))
+        output_df[output_column] = block_agreement
+    return output_df
 
 
 def make_behavioral_choice_mask(trial_df: pd.DataFrame) -> np.ndarray:

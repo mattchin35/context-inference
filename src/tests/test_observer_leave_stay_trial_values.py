@@ -135,6 +135,130 @@ def test_add_trial_type_flags_marks_switch_stay_block_entry_and_explore_trials()
         assert flagged_df[column_name].tolist() == expected_values
 
 
+def test_add_explore_run_flags_marks_short_rewarded_leave_and_correct_return():
+    """A brief rewarded-side leave followed by a correct return should be tagged."""
+    trial_df = pd.DataFrame(
+        {
+            "cur_block": [0, 0, 0, 0, 0],
+            "action": [1, 0, 0, 1, 1],
+            "correct": [1, 0, 0, 1, 1],
+            "reward": [1, 0, 0, 0, 1],
+            "experimenter_reward_given": [0, 0, 0, 0, 0],
+        }
+    )
+
+    feature_df = gtf.add_explore_run_flags(trial_df, max_explore_run_length=5)
+
+    assert feature_df["explore_run_start"].tolist() == [False, True, False, False, False]
+    assert feature_df["explore_run_trial"].tolist() == [False, True, True, False, False]
+    assert feature_df["explore_run_return"].tolist() == [False, False, False, True, False]
+    assert feature_df["explore_run_id"].tolist() == ["None", 0, 0, 0, "None"]
+    assert feature_df["explore_run_length"].tolist() == ["None", 2, 2, 2, "None"]
+
+
+def test_add_explore_run_flags_rejects_runs_longer_than_user_limit():
+    """Runs longer than max_explore_run_length should not be treated as explore runs."""
+    trial_df = pd.DataFrame(
+        {
+            "cur_block": [0] * 8,
+            "action": [1, 0, 0, 0, 0, 0, 0, 1],
+            "correct": [1, 0, 0, 0, 0, 0, 0, 1],
+            "reward": [1, 0, 0, 0, 0, 0, 0, 0],
+            "experimenter_reward_given": [0] * 8,
+        }
+    )
+
+    rejected_df = gtf.add_explore_run_flags(trial_df, max_explore_run_length=5)
+    accepted_df = gtf.add_explore_run_flags(trial_df, max_explore_run_length=6)
+
+    assert rejected_df["explore_run_trial"].sum() == 0
+    assert rejected_df["explore_run_return"].sum() == 0
+    assert accepted_df["explore_run_trial"].tolist() == [
+        False,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        False,
+    ]
+    assert accepted_df["explore_run_return"].tolist() == [
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        True,
+    ]
+
+
+def test_add_explore_run_flags_rejects_block_boundary_switches():
+    """A switch at a block boundary should not start an exploratory run."""
+    trial_df = pd.DataFrame(
+        {
+            "cur_block": [0, 1, 1],
+            "action": [1, 0, 1],
+            "correct": [1, 0, 1],
+            "reward": [1, 0, 0],
+            "experimenter_reward_given": [0, 0, 0],
+        }
+    )
+
+    feature_df = gtf.add_explore_run_flags(trial_df, max_explore_run_length=5)
+
+    assert feature_df["explore_run_start"].sum() == 0
+    assert feature_df["explore_run_trial"].sum() == 0
+    assert feature_df["explore_run_return"].sum() == 0
+
+
+def test_add_explore_run_flags_ignores_no_choice_rows_inside_run():
+    """No-choice rows should not increase run length or break a valid run."""
+    trial_df = pd.DataFrame(
+        {
+            "cur_block": [0, 0, 0, 0, 0],
+            "action": [1, 0, "no_choice", 0, 1],
+            "correct": [1, 0, 0, 0, 1],
+            "reward": [1, 0, 0, 0, 0],
+            "experimenter_reward_given": [0, 0, 0, 0, 0],
+        }
+    )
+
+    feature_df = gtf.add_explore_run_flags(trial_df, max_explore_run_length=2)
+
+    assert feature_df["explore_run_trial"].tolist() == [False, True, False, True, False]
+    assert feature_df["explore_run_return"].tolist() == [False, False, False, False, True]
+    assert feature_df["explore_run_length"].tolist() == ["None", 2, "None", 2, 2]
+
+
+def test_add_explore_run_flags_handles_nondefault_dataframe_index():
+    """Run tagging should align to rows even when the dataframe index is not positional."""
+    trial_df = pd.DataFrame(
+        {
+            "cur_block": [0, 0, 0],
+            "action": [1, 0, 1],
+            "correct": [1, 0, 1],
+            "reward": [1, 0, 0],
+            "experimenter_reward_given": [0, 0, 0],
+        },
+        index=[10, 20, 30],
+    )
+
+    feature_df = gtf.add_explore_run_flags(trial_df, max_explore_run_length=1)
+
+    assert feature_df.index.tolist() == [10, 20, 30]
+    assert feature_df["explore_run_start"].tolist() == [False, True, False]
+    assert feature_df["explore_run_return"].tolist() == [False, False, True]
+
+
+def test_add_explore_run_flags_rejects_invalid_run_length_setting():
+    """The run-length threshold should be a positive trial count."""
+    with pytest.raises(ValueError, match="max_explore_run_length"):
+        gtf.add_explore_run_flags(make_trial_type_flag_df(), max_explore_run_length=0)
+
+
 def test_leave_stay_writer_copies_trial_type_flags_unchanged():
     """Leave-stay CSV generation should preserve augmented-trial flags."""
     feature_df = gtf.add_observer_value_feature(make_feature_df())

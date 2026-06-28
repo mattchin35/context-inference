@@ -1,4 +1,5 @@
 import importlib.util
+import pickle
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -119,6 +120,215 @@ def write_saved_session(
     return session_data_home
 
 
+def write_raw_session(
+    data_root: Path,
+    mouse: str,
+    date: str,
+    timestamp: str,
+    task_tag: str = "latent_inference",
+) -> Path:
+    """Create a raw session folder with one session-info pickle."""
+    date_compact = date.replace("-", "")
+    sess_id_full = f"{mouse}_{date}_{timestamp}"
+    raw_path = data_root / f"{mouse}_{date_compact}_{task_tag}" / "rpi" / sess_id_full
+    raw_path.mkdir(parents=True)
+    with open(raw_path / f"{sess_id_full}_session_info.pkl", "wb") as file:
+        pickle.dump({"session": sess_id_full}, file)
+    return raw_path
+
+
+def test_find_raw_session_by_date_resolves_one_timestamp_with_exact_task_tag(tmp_path):
+    """Raw date resolution should use the exact task-tagged session folder."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    cross_session_path = data_root / "cross_session_analysis"
+    cross_session_path.mkdir(parents=True)
+    write_raw_session(data_root, "CT014", "2025-12-05", "165240", task_tag="latent_inference")
+    write_raw_session(data_root, "CT014", "2025-12-05", "111111", task_tag="other_task")
+
+    session = main_module.find_raw_session_by_date(
+        mouse="CT014",
+        date="2025-12-05",
+        session_data_root=data_root,
+        task_tag="latent_inference",
+        multi_session_save_path=cross_session_path,
+    )
+
+    assert session.sess_id_full == "CT014_2025-12-05_165240"
+    assert session.sess_id_abbreviated == "CT014_2025-12-05"
+    assert session.timestamp == "165240"
+    assert session.raw_behavior_folder.name == "CT014_2025-12-05_165240"
+    assert session.processed_data_path.name == "processed"
+    assert session.figure_path.name == "figures"
+    assert session.session_info == {"session": "CT014_2025-12-05_165240"}
+
+
+def test_find_raw_session_by_date_errors_when_timestamp_is_missing(tmp_path):
+    """Missing raw timestamp folders should raise with the requested date."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    cross_session_path = data_root / "cross_session_analysis"
+    cross_session_path.mkdir(parents=True)
+    (data_root / "CT014_20251205_latent_inference" / "rpi").mkdir(parents=True)
+
+    with pytest.raises(FileNotFoundError, match="2025-12-05"):
+        main_module.find_raw_session_by_date(
+            mouse="CT014",
+            date="2025-12-05",
+            session_data_root=data_root,
+            task_tag="latent_inference",
+            multi_session_save_path=cross_session_path,
+        )
+
+
+def test_find_raw_session_by_date_errors_when_multiple_timestamps_match(tmp_path):
+    """Ambiguous raw timestamp folders should fail loudly with candidate paths."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    cross_session_path = data_root / "cross_session_analysis"
+    cross_session_path.mkdir(parents=True)
+    first_path = write_raw_session(data_root, "CT014", "2025-12-05", "165240")
+    second_path = write_raw_session(data_root, "CT014", "2025-12-05", "171212")
+
+    with pytest.raises(ValueError, match="2025-12-05") as exc_info:
+        main_module.find_raw_session_by_date(
+            mouse="CT014",
+            date="2025-12-05",
+            session_data_root=data_root,
+            task_tag="latent_inference",
+            multi_session_save_path=cross_session_path,
+        )
+
+    assert str(first_path) in str(exc_info.value)
+    assert str(second_path) in str(exc_info.value)
+
+
+def test_find_raw_session_by_date_resolves_explicit_timestamp_when_date_is_ambiguous(tmp_path):
+    """Explicit timestamps should allow single-session runs on ambiguous dates."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    cross_session_path = data_root / "cross_session_analysis"
+    cross_session_path.mkdir(parents=True)
+    write_raw_session(data_root, "CT014", "2025-12-05", "165240")
+    write_raw_session(data_root, "CT014", "2025-12-05", "171212")
+
+    session = main_module.find_raw_session_by_date(
+        mouse="CT014",
+        date="2025-12-05",
+        session_data_root=data_root,
+        task_tag="latent_inference",
+        multi_session_save_path=cross_session_path,
+        behavior_timestamp="171212",
+    )
+
+    assert session.sess_id_full == "CT014_2025-12-05_171212"
+    assert session.timestamp == "171212"
+    assert session.raw_behavior_folder.name == "CT014_2025-12-05_171212"
+
+
+def test_find_raw_session_by_date_errors_when_explicit_timestamp_is_missing(tmp_path):
+    """Missing explicit timestamp folders should raise with the requested timestamp."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    cross_session_path = data_root / "cross_session_analysis"
+    cross_session_path.mkdir(parents=True)
+    write_raw_session(data_root, "CT014", "2025-12-05", "165240")
+
+    with pytest.raises(FileNotFoundError, match="171212"):
+        main_module.find_raw_session_by_date(
+            mouse="CT014",
+            date="2025-12-05",
+            session_data_root=data_root,
+            task_tag="latent_inference",
+            multi_session_save_path=cross_session_path,
+            behavior_timestamp="171212",
+        )
+
+
+def test_find_raw_session_dates_for_task_tag_returns_sorted_exact_matches(tmp_path):
+    """Date discovery should scan direct mouse-root children for exact task folders."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    data_root.mkdir()
+    (data_root / "CT014_20251216_latent_inference").mkdir()
+    (data_root / "CT014_20251205_latent_inference").mkdir()
+    (data_root / "CT014_20251204_other_task").mkdir()
+    (data_root / "CT999_20251201_latent_inference").mkdir()
+
+    dates = main_module.find_raw_session_dates_for_task_tag(
+        mouse="CT014",
+        session_data_root=data_root,
+        task_tag="latent_inference",
+    )
+
+    assert dates == ["2025-12-05", "2025-12-16"]
+
+
+def test_find_raw_session_dates_for_task_tag_ignores_non_matching_folder_names(tmp_path):
+    """Unrelated root-level folders should not be treated as session dates."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    data_root.mkdir()
+    (data_root / "cross_session_analysis").mkdir()
+    (data_root / "CT014_20251205_latent_inference_backup").mkdir()
+    (data_root / "CT014_2025-12-05_latent_inference").mkdir()
+    (data_root / "CT014_20251205_latent_inference").mkdir()
+
+    dates = main_module.find_raw_session_dates_for_task_tag(
+        mouse="CT014",
+        session_data_root=data_root,
+        task_tag="latent_inference",
+    )
+
+    assert dates == ["2025-12-05"]
+
+
+def test_find_raw_session_dates_for_task_tag_errors_when_no_matches(tmp_path):
+    """Missing task-tagged session folders should raise with the task tag."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    data_root.mkdir()
+    (data_root / "CT014_20251205_other_task").mkdir()
+
+    with pytest.raises(FileNotFoundError, match="latent_inference"):
+        main_module.find_raw_session_dates_for_task_tag(
+            mouse="CT014",
+            session_data_root=data_root,
+            task_tag="latent_inference",
+        )
+
+
+def test_run_single_session_batch_resolves_dates_and_calls_runner(tmp_path):
+    """Batch single-session analysis should call the runner once per resolved date."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    cross_session_path = data_root / "cross_session_analysis"
+    cross_session_path.mkdir(parents=True)
+    write_raw_session(data_root, "CT014", "2025-12-05", "165240")
+    write_raw_session(data_root, "CT014", "2025-12-16", "153200")
+    captured = []
+
+    def fake_runner(session, config):
+        captured.append((session.sess_id_full, config.preprocess_raw_session))
+
+    config = main_module.SingleSessionAnalysisConfig(preprocess_raw_session=False)
+
+    main_module.run_single_session_batch(
+        mouse="CT014",
+        dates=["2025-12-05", "2025-12-16"],
+        task_tag="latent_inference",
+        session_data_root=data_root,
+        multi_session_save_path=cross_session_path,
+        config=config,
+        runner=fake_runner,
+    )
+
+    assert captured == [
+        ("CT014_2025-12-05_165240", False),
+        ("CT014_2025-12-16_153200", False),
+    ]
+
+
 def test_find_saved_session_by_date_resolves_one_saved_session(tmp_path):
     """Date resolution should find one saved session and fill Session metadata."""
     main_module = load_main_module()
@@ -161,6 +371,76 @@ def test_find_saved_session_by_date_errors_when_date_is_missing(tmp_path):
             date="2025-12-05",
             session_data_root=data_root,
             multi_session_save_path=cross_session_path,
+        )
+
+
+def test_resolve_multisession_dates_returns_explicit_dates_without_discovery(tmp_path):
+    """Explicit multisession dates should be preserved when discovery is off."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    data_root.mkdir()
+
+    dates = main_module.resolve_multisession_dates(
+        mouse="CT014",
+        session_data_root=data_root,
+        task_tag="latent_inference",
+        explicit_dates=["2025-12-16", "2025-12-05"],
+        use_all_dates_for_task_tag=False,
+        require_saved_outputs=True,
+    )
+
+    assert dates == ["2025-12-16", "2025-12-05"]
+
+
+def test_resolve_multisession_dates_discovers_task_dates_and_validates_saved_outputs(tmp_path):
+    """Discovered multisession dates should require matching saved outputs."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    write_saved_session(
+        data_root=data_root,
+        mouse="CT014",
+        date="2025-12-16",
+        timestamp="153200",
+        block_df=pd.DataFrame({"block_ix": [0], "trials_to_correct": [1]}),
+        trial_df=pd.DataFrame({"cur_block": [0], "action": [1]}),
+        directory_suffix="_latent_inference",
+    )
+    write_saved_session(
+        data_root=data_root,
+        mouse="CT014",
+        date="2025-12-05",
+        timestamp="165240",
+        block_df=pd.DataFrame({"block_ix": [0], "trials_to_correct": [2]}),
+        trial_df=pd.DataFrame({"cur_block": [0], "action": [0]}),
+        directory_suffix="_latent_inference",
+    )
+
+    dates = main_module.resolve_multisession_dates(
+        mouse="CT014",
+        session_data_root=data_root,
+        task_tag="latent_inference",
+        explicit_dates=["2025-12-01"],
+        use_all_dates_for_task_tag=True,
+        require_saved_outputs=True,
+    )
+
+    assert dates == ["2025-12-05", "2025-12-16"]
+
+
+def test_resolve_multisession_dates_errors_when_discovered_date_lacks_saved_outputs(tmp_path):
+    """Discovered raw dates without saved analysis outputs should fail loudly."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    (data_root / "CT014_20251205_latent_inference").mkdir(parents=True)
+
+    with pytest.raises(FileNotFoundError, match="2025-12-05"):
+        main_module.resolve_multisession_dates(
+            mouse="CT014",
+            session_data_root=data_root,
+            task_tag="latent_inference",
+            explicit_dates=[],
+            use_all_dates_for_task_tag=True,
+            require_saved_outputs=True,
         )
 
 
@@ -668,6 +948,306 @@ def test_prepare_block_explore_points_derives_counts_from_augmented_trials():
     assert overall_points["n_explore_trials"].tolist() == [1.0, 2.0]
 
 
+def test_add_block_explore_counts_overwrites_stale_counts_from_augmented_trials():
+    """Trial explore tags should take priority over stale saved block counts."""
+    main_module = load_main_module()
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1],
+            "block_type": ["left_cued", "right_uncued"],
+            "n_explore_trials": [0, 0],
+        }
+    )
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [5, 5, 6, 6, 6],
+            "explore_trial": [True, False, "true", "0", 1],
+        }
+    )
+
+    updated_block_performance = main_module.add_block_explore_counts_from_trials(
+        block_performance,
+        augmented_trial_df,
+    )
+
+    assert updated_block_performance["n_explore_trials"].tolist() == [1, 2]
+
+
+def test_add_block_explore_run_counts_overwrites_stale_counts_from_augmented_trials():
+    """Trial explore-run starts should take priority over stale saved block counts."""
+    main_module = load_main_module()
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1],
+            "block_type": ["left_cued", "right_uncued"],
+            "n_explore_runs": [0, 0],
+        }
+    )
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [5, 5, 6, 6, 6],
+            "explore_run_start": [True, False, "true", "0", 1],
+        }
+    )
+
+    updated_block_performance = main_module.add_block_explore_run_counts_from_trials(
+        block_performance,
+        augmented_trial_df,
+    )
+
+    assert updated_block_performance["n_explore_runs"].tolist() == [1, 2]
+
+
+def test_add_block_explore_run_counts_filters_by_minimum_run_length():
+    """Explore-run counts should optionally ignore one-trial runs."""
+    main_module = load_main_module()
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1],
+            "block_type": ["left_cued", "right_uncued"],
+        }
+    )
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [5, 5, 6, 6, 6],
+            "explore_run_start": [True, True, True, False, True],
+            "explore_run_length": [1, 2, 1, "None", 3],
+        }
+    )
+
+    updated_block_performance = main_module.add_block_explore_run_counts_from_trials(
+        block_performance,
+        augmented_trial_df,
+        min_explore_run_length_to_count=2,
+    )
+
+    assert updated_block_performance["n_explore_runs"].tolist() == [1, 1]
+
+
+def test_add_block_explore_run_counts_requires_lengths_for_filtered_counts():
+    """Filtering by run length should fail if run lengths were not saved."""
+    main_module = load_main_module()
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0],
+            "block_type": ["left_cued"],
+        }
+    )
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [5, 5],
+            "explore_run_start": [True, False],
+        }
+    )
+
+    with pytest.raises(ValueError, match="explore_run_length"):
+        main_module.add_block_explore_run_counts_from_trials(
+            block_performance,
+            augmented_trial_df,
+            min_explore_run_length_to_count=2,
+        )
+
+
+def test_ensure_block_agent_mouse_agreement_columns_regenerates_missing_columns(monkeypatch):
+    """Missing block agent-agreement columns should be regenerated from trial features."""
+    main_module = load_main_module()
+    session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    saved_session = main_module.SavedSessionAnalysis(
+        session=session,
+        block_performance=pd.DataFrame(
+            {
+                "block_ix": [0, 1],
+                "block_type": ["left_cued", "right_cued"],
+            }
+        ),
+        augmented_trial_df=pd.DataFrame({"cur_block": [0, 1]}),
+    )
+
+    def fake_add_block_agent_mouse_agreement_columns(block_performance, augmented_trial_df):
+        assert augmented_trial_df is saved_session.augmented_trial_df
+        return block_performance.assign(
+            qlearning_mouse_agreement=[0.5, 1.0],
+            fql_mouse_agreement=[0.25, 0.75],
+            hmm_logodds_mouse_agreement=[1.0, 0.0],
+            hmm_logodds_decay_mouse_agreement=[0.0, 1.0],
+            observer_mouse_agreement=[0.5, 0.5],
+        )
+
+    monkeypatch.setattr(
+        main_module.session_analysis,
+        "add_block_agent_mouse_agreement_columns",
+        fake_add_block_agent_mouse_agreement_columns,
+        raising=False,
+    )
+
+    updated = main_module.ensure_block_agent_mouse_agreement_columns(saved_session)
+
+    assert updated.block_performance["qlearning_mouse_agreement"].tolist() == [0.5, 1.0]
+    assert updated.block_performance["observer_mouse_agreement"].tolist() == [0.5, 0.5]
+
+
+def test_prepare_agent_mouse_agreement_block_points_long_format():
+    """Agent agreement block points should use one row per valid block and agent."""
+    main_module = load_main_module()
+    session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1],
+                    "block_type": ["left_cued", "right_uncued"],
+                    "qlearning_mouse_agreement": [0.5, "None"],
+                    "fql_mouse_agreement": [0.25, 0.75],
+                    "hmm_logodds_mouse_agreement": [1.0, 0.0],
+                    "hmm_logodds_decay_mouse_agreement": [0.0, 1.0],
+                    "observer_mouse_agreement": [0.5, 0.5],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0, 1]}),
+        )
+    ]
+
+    points_df = main_module.prepare_agent_mouse_agreement_block_points(saved_sessions)
+
+    assert points_df.columns.tolist() == [
+        "date",
+        "session_id",
+        "agent",
+        "block_ix",
+        "block_type",
+        "agreement",
+    ]
+    ql_points = points_df[points_df["agent"] == "QL"]
+    assert ql_points["agreement"].tolist() == [0.5]
+    ideal_points = points_df[points_df["agent"] == "Ideal"]
+    assert ideal_points["agreement"].tolist() == [0.5, 0.5]
+
+
+def test_prepare_agent_mouse_agreement_summary_calculates_session_agent_quartiles():
+    """Agent agreement summaries should calculate Q1/median/Q3 per session and agent."""
+    main_module = load_main_module()
+    session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1, 2],
+                    "block_type": ["left_cued", "right_uncued", "left_uncued"],
+                    "qlearning_mouse_agreement": [0.0, 0.5, 1.0],
+                    "fql_mouse_agreement": [0.25, 0.75, 1.0],
+                    "hmm_logodds_mouse_agreement": [1.0, 0.0, 0.5],
+                    "hmm_logodds_decay_mouse_agreement": [0.0, 1.0, 0.5],
+                    "observer_mouse_agreement": [0.5, 0.5, 1.0],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0, 1, 2]}),
+        )
+    ]
+
+    summary_df = main_module.prepare_agent_mouse_agreement_summary(saved_sessions)
+    ql_summary = summary_df[summary_df["agent"] == "QL"].iloc[0]
+
+    assert ql_summary["n_blocks"] == 3
+    assert ql_summary["agreement_q1"] == 0.25
+    assert ql_summary["agreement_median"] == 0.5
+    assert ql_summary["agreement_q3"] == 0.75
+
+
+def test_prepare_block_explore_run_summary_calculates_overall_and_side_medians():
+    """Explore-run summaries should use raw n_explore_runs for overall and side groups."""
+    main_module = load_main_module()
+    first_session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    second_session = SimpleNamespace(sess_id_full="CT014_2025-12-16_153200", date="2025-12-16")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=first_session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1, 2, 3],
+                    "block_type": ["left_cued", "left_uncued", "right_cued", "dark period"],
+                    "n_explore_runs": [1, 3, 2, 0],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        ),
+        main_module.SavedSessionAnalysis(
+            session=second_session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1, 2],
+                    "block_type": ["right_cued", "left_cued", "right_uncued"],
+                    "n_explore_runs": [5, 1, 7],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame({"cur_block": [0]}),
+        ),
+    ]
+
+    points_df = main_module.prepare_block_explore_run_block_points(saved_sessions)
+    summary_df = main_module.prepare_block_explore_run_summary(saved_sessions)
+
+    first_overall = summary_df[
+        (summary_df["date"] == "2025-12-05") & (summary_df["explore_group"] == "overall")
+    ].iloc[0]
+    first_left = summary_df[
+        (summary_df["date"] == "2025-12-05") & (summary_df["explore_group"] == "left")
+    ].iloc[0]
+    second_right = summary_df[
+        (summary_df["date"] == "2025-12-16") & (summary_df["explore_group"] == "right")
+    ].iloc[0]
+
+    overall_points = points_df[points_df["explore_group"] == "overall"]
+    assert overall_points["n_explore_runs"].tolist() == [1.0, 3.0, 2.0, 5.0, 1.0, 7.0]
+    assert first_overall["n_blocks"] == 3
+    assert first_overall["n_explore_runs_median"] == 2.0
+    assert first_overall["n_explore_runs_q1"] == 1.5
+    assert first_overall["n_explore_runs_q3"] == 2.5
+    assert first_left["n_blocks"] == 2
+    assert first_left["n_explore_runs_median"] == 2.0
+    assert second_right["n_explore_runs_median"] == 6.0
+
+
+def test_prepare_block_explore_run_summary_filters_by_minimum_run_length():
+    """Explore-run summaries should apply the requested minimum run length."""
+    main_module = load_main_module()
+    session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=session,
+            block_performance=pd.DataFrame(
+                {
+                    "block_ix": [0, 1],
+                    "block_type": ["left_cued", "right_uncued"],
+                    "n_explore_runs": [99, 99],
+                }
+            ),
+            augmented_trial_df=pd.DataFrame(
+                {
+                    "cur_block": [5, 5, 6, 6],
+                    "explore_run_start": [True, True, True, True],
+                    "explore_run_length": [1, 2, 1, 3],
+                }
+            ),
+        )
+    ]
+
+    points_df = main_module.prepare_block_explore_run_block_points(
+        saved_sessions,
+        min_explore_run_length_to_count=2,
+    )
+    summary_df = main_module.prepare_block_explore_run_summary(
+        saved_sessions,
+        min_explore_run_length_to_count=2,
+    )
+
+    overall_points = points_df[points_df["explore_group"] == "overall"]
+    overall_summary = summary_df[summary_df["explore_group"] == "overall"].iloc[0]
+    assert overall_points["n_explore_runs"].tolist() == [1.0, 1.0]
+    assert overall_summary["n_explore_runs_median"] == 1.0
+
+
 def test_prepare_correct_after_first_summary_excludes_dark_periods_and_summarizes_groups():
     """Post-first-correct summaries should use only side blocks for all groups."""
     main_module = load_main_module()
@@ -884,6 +1464,158 @@ def test_run_multisession_analysis_uses_saved_augmented_trials_when_requested(tm
     pd.testing.assert_frame_equal(modeled_block_df, concatenated.block_performance)
     assert "experimenter_reward_given" in modeled_trial_df.columns
     assert "give_reward" not in modeled_trial_df.columns
+    assert modeled_trial_df["inherited_block_strategy"].tolist() == [0, 1]
+
+
+def test_block_hmm_outputs_exist_requires_all_expected_files(tmp_path):
+    """Block HMM reuse should require the model, block table, and trial table."""
+    main_module = load_main_module()
+    session = SimpleNamespace(
+        sess_id_full="CT014_multisession",
+        processed_data_path=tmp_path,
+    )
+    output_paths = main_module.get_block_hmm_output_paths(session)
+
+    assert main_module.block_hmm_outputs_exist(session) is False
+
+    output_paths["model_dict"].write_bytes(b"placeholder")
+    output_paths["block_performance"].write_text("block_ix\n0\n")
+    assert main_module.block_hmm_outputs_exist(session) is False
+
+    output_paths["augmented_trials"].write_text("cur_block\n0\n")
+    assert main_module.block_hmm_outputs_exist(session) is True
+
+
+def test_load_saved_block_hmm_outputs_loads_block_and_trial_csvs(tmp_path):
+    """Saved block HMM reuse should load the modeled block and trial CSVs."""
+    main_module = load_main_module()
+    session = SimpleNamespace(
+        sess_id_full="CT014_multisession",
+        processed_data_path=tmp_path,
+    )
+    output_paths = main_module.get_block_hmm_output_paths(session)
+    output_paths["model_dict"].write_bytes(b"placeholder")
+    pd.DataFrame({"block_ix": [0, 1], "inferred_strategy": [1, 0]}).to_csv(
+        output_paths["block_performance"],
+        index=False,
+    )
+    pd.DataFrame({"cur_block": [0, 1], "inherited_block_strategy": [1, 0]}).to_csv(
+        output_paths["augmented_trials"],
+        index=False,
+    )
+
+    block_df, trial_df = main_module.load_saved_block_hmm_outputs(session)
+
+    assert block_df["inferred_strategy"].tolist() == [1, 0]
+    assert trial_df["inherited_block_strategy"].tolist() == [1, 0]
+
+
+def test_run_multisession_analysis_skips_block_modeling_when_outputs_exist(tmp_path, monkeypatch):
+    """Existing block HMM outputs should be reused when the skip flag is enabled."""
+    main_module = load_main_module()
+    synthetic_session = SimpleNamespace(
+        sess_id_full="CT014_multisession",
+        processed_data_path=tmp_path,
+        figure_path=tmp_path,
+    )
+    concatenated = SimpleNamespace(
+        block_performance=pd.DataFrame({"block_ix": [0, 1]}),
+        augmented_trial_df=pd.DataFrame({"cur_block": [0, 1], "action": [1, 0]}),
+        block_session_lengths=np.array([2]),
+        trial_session_lengths=np.array([2]),
+    )
+    output_paths = main_module.get_block_hmm_output_paths(synthetic_session)
+    output_paths["model_dict"].write_bytes(b"placeholder")
+    pd.DataFrame({"block_ix": [0, 1], "inferred_strategy": [1, 0]}).to_csv(
+        output_paths["block_performance"],
+        index=False,
+    )
+    pd.DataFrame({"cur_block": [0, 1], "inherited_block_strategy": [1, 0]}).to_csv(
+        output_paths["augmented_trials"],
+        index=False,
+    )
+    monkeypatch.setattr(
+        main_module.bssm,
+        "run_block_modeling",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("block modeling should be skipped")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "save_concatenated_multisession_inputs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("inputs should not be overwritten")),
+        raising=False,
+    )
+
+    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_multisession_analysis(
+        concatenated=concatenated,
+        session=synthetic_session,
+        trial_predictor_columns=("FQlearning_rel_value",),
+        skip_block_hmm_if_existing=True,
+    )
+
+    assert block_selection is None
+    assert trial_selection is None
+    assert modeled_block_df["inferred_strategy"].tolist() == [1, 0]
+    assert modeled_trial_df["inherited_block_strategy"].tolist() == [1, 0]
+
+
+def test_run_multisession_analysis_runs_block_modeling_when_skip_outputs_missing(tmp_path, monkeypatch):
+    """The skip flag should not suppress modeling when required outputs are absent."""
+    main_module = load_main_module()
+    synthetic_session = SimpleNamespace(
+        sess_id_full="CT014_multisession",
+        processed_data_path=tmp_path,
+        figure_path=tmp_path,
+    )
+    concatenated = SimpleNamespace(
+        block_performance=pd.DataFrame({"block_ix": [0, 1]}),
+        augmented_trial_df=pd.DataFrame({"cur_block": [0, 1], "action": [1, 0]}),
+        block_session_lengths=np.array([2]),
+        trial_session_lengths=np.array([2]),
+    )
+    calls = []
+    save_calls = []
+
+    def fake_run_block_modeling(
+        block_performance,
+        augmented_trial_df,
+        session,
+        num_states,
+        prior_alpha,
+        prior_sigma,
+        random_seed,
+        predicted_state_line_width=None,
+        state_plot_figsize=None,
+        block_secondary_trace=None,
+        plot_sliding_regression=False,
+        sliding_regression_window_size=10,
+        sliding_regression_step_size=5,
+    ):
+        calls.append(session.sess_id_full)
+        return (
+            block_performance.assign(inferred_strategy=[0, 1]),
+            augmented_trial_df.assign(inherited_block_strategy=[0, 1]),
+        )
+
+    monkeypatch.setattr(main_module.bssm, "run_block_modeling", fake_run_block_modeling, raising=False)
+    monkeypatch.setattr(
+        main_module,
+        "save_concatenated_multisession_inputs",
+        lambda *args, **_kwargs: save_calls.append(args),
+        raising=False,
+    )
+
+    _block_selection, _trial_selection, modeled_block_df, modeled_trial_df = main_module.run_multisession_analysis(
+        concatenated=concatenated,
+        session=synthetic_session,
+        trial_predictor_columns=("FQlearning_rel_value",),
+        skip_block_hmm_if_existing=True,
+    )
+
+    assert calls == ["CT014_multisession"]
+    assert len(save_calls) == 1
+    assert modeled_block_df["inferred_strategy"].tolist() == [0, 1]
     assert modeled_trial_df["inherited_block_strategy"].tolist() == [0, 1]
 
 
