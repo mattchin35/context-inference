@@ -1868,6 +1868,48 @@ def test_scatter_trials_to_correct_accepts_string_regression_stats(tmp_path: Pat
     assert (tmp_path / "unit_session_scatter_trials-to-correct_prev_n_rewarded.png").exists()
 
 
+def test_scatter_trials_to_correct_displays_unboxed_rounded_slope(monkeypatch, tmp_path: Path):
+    """The standalone regression figure should display its rounded slope as plain text."""
+    performance_plots = _import_performance_plots()
+    saved_annotations = []
+
+    def capture_annotations(fig, _save_path):
+        saved_annotations.extend(fig.axes[0].texts)
+        plt.close(fig)
+
+    monkeypatch.setattr(performance_plots, "save_performance_figure", capture_annotations)
+
+    performance_plots.scatter_trials_to_correct(
+        block_performance=_make_scatter_block_performance(),
+        slope=1.234,
+        intercept=1.0,
+        plot_path=tmp_path,
+        figure_id="unit_session",
+    )
+
+    slope_text = next(text for text in saved_annotations if text.get_text().startswith("slope ="))
+    assert slope_text.get_text() == "slope = 1.23"
+    assert slope_text.get_bbox_patch() is None
+
+
+def test_summary_regression_scatter_displays_unboxed_rounded_slope():
+    """The summary-grid regression panel should use the same plain slope annotation."""
+    performance_plots = _import_performance_plots()
+    fig, ax = plt.subplots()
+
+    performance_plots._plot_trials_to_correct_scatter_on_ax(
+        ax=ax,
+        block_performance=_make_scatter_block_performance(),
+        slope=1.234,
+        intercept=1.0,
+    )
+
+    slope_text = next(text for text in ax.texts if text.get_text().startswith("slope ="))
+    assert slope_text.get_text() == "slope = 1.23"
+    assert slope_text.get_bbox_patch() is None
+    plt.close(fig)
+
+
 def test_scatter_trials_to_correct_rejects_missing_regression_stats(tmp_path: Path):
     """Missing string regression stats should fail with a clear error."""
     performance_plots = _import_performance_plots()
