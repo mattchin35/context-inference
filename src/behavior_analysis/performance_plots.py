@@ -1129,6 +1129,7 @@ def scatter_trials_to_correct(
 
     x = np.array([0, np.amax(regressor_values)])
     ax1.plot(x, slope*x + intercept, 'k--')
+    _annotate_regression_slope(ax1, slope)
 
     plt.ylabel('Trials to Correct')
     x_label = TRIALS_TO_CORRECT_SCATTER_REGRESSORS[regressor_column]
@@ -1145,6 +1146,34 @@ def scatter_trials_to_correct(
 
     save_path = plot_path / f'{figure_id}_scatter_trials-to-correct_{regressor_column}.png'
     save_performance_figure(f1, save_path)
+
+
+def _annotate_regression_slope(ax: plt.Axes, slope: float) -> None:
+    """Display a regression slope in the upper-left corner of an axis.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Axis receiving the text annotation. Coordinates are interpreted in
+        axis-relative units, independent of the plotted data range.
+    slope : float
+        Regression slope in the units used by the plotted regression line.
+
+    Returns
+    -------
+    None
+        Adds unboxed text to `ax` in place. The displayed slope is rounded to
+        two decimal places.
+    """
+    ax.text(
+        0.04,
+        0.96,
+        f"slope = {slope:.2f}",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9,
+    )
 
 
 def _plot_summary_placeholder(ax: plt.Axes, message: str) -> None:
@@ -1295,6 +1324,7 @@ def _plot_trials_to_correct_scatter_on_ax(
 
     x = np.array([0, np.amax(regressor_values)])
     ax.plot(x, slope * x + intercept, "k--", linewidth=1)
+    _annotate_regression_slope(ax, slope)
     ax.set_ylabel("Trials to Correct")
     ax.set_xlabel(TRIALS_TO_CORRECT_SCATTER_REGRESSORS[regressor_column])
     ax.set_title(title)
