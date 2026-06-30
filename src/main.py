@@ -52,6 +52,16 @@ AGENT_MOUSE_AGREEMENT_COLUMNS = {
     "Ideal": "observer_mouse_agreement",
 }
 
+CROSS_MOUSE_SESSION_METRIC_SPECS = {
+    "median_TTS": {
+        "label": "Median Trials to Correct",
+    },
+    "median_post_switch_correct": {
+        "label": "Median Post-First-Correct Accuracy",
+        "ylim": (0, 1),
+    },
+}
+
 
 @dataclass
 class Session:
@@ -468,6 +478,90 @@ def save_and_plot_switch_persistence_for_session(
         figure_id=session.sess_id_full,
     )
     return detail_df, summary_df, plot_path
+
+
+def save_and_plot_post_first_correct_accuracy_for_session(
+    block_performance: pd.DataFrame,
+    augmented_trial_df: pd.DataFrame,
+    session: Session,
+) -> tuple[pd.DataFrame, pd.DataFrame, Path]:
+    """Save and plot post-first-correct accuracy for one session.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`, including
+        `block_ix` and previous-block metrics when available.
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`, including
+        `cur_block`, `state`, `action`, and `correct`.
+    session : Session
+        Session metadata with `processed_data_path`, `figure_path`, and
+        `sess_id_full` attributes.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame, pathlib.Path]
+        `(detail_df, summary_df, plot_path)`. The detail table has one row per
+        block trial, and the summary table has one row per correct-side group
+        and valid post-first-correct choice index.
+    """
+    detail_df, summary_df = switch_persistence.save_post_first_correct_accuracy_outputs(
+        block_performance=block_performance,
+        augmented_trial_df=augmented_trial_df,
+        processed_data_path=session.processed_data_path,
+        sess_id_full=session.sess_id_full,
+    )
+    plot_path = performance_plots.plot_post_first_correct_accuracy_summary(
+        summary_df=summary_df,
+        plot_path=session.figure_path,
+        figure_id=session.sess_id_full,
+    )
+    return detail_df, summary_df, plot_path
+
+
+def ensure_session_side_bias_metrics(
+    multisession_df: pd.DataFrame,
+    augmented_trial_df: pd.DataFrame,
+    session: Session,
+) -> pd.DataFrame:
+    """Return a session-summary table containing side-bias metrics.
+
+    Parameters
+    ----------
+    multisession_df : pd.DataFrame
+        Mouse-level summary table with shape `(n_sessions, n_columns)`.
+        Expected to include a `date` column when multiple sessions are present.
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`, including
+        `state`, `action`, and `observer_value`.
+    session : Session
+        Session metadata with `date` and `sess_id_full` fields. `date` is used
+        to select the summary row when possible.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `multisession_df` with the side-bias metric columns populated
+        for the current session row. Existing columns are preserved.
+    """
+    metric_values = session_analysis.compute_session_side_bias_metrics(augmented_trial_df)
+    updated_summary = multisession_df.copy()
+    if updated_summary.empty:
+        updated_summary = pd.DataFrame(index=[0])
+
+    if "date" in updated_summary.columns:
+        session_rows = updated_summary["date"].astype(str).eq(str(session.date))
+        if not session_rows.any():
+            session_row_index = updated_summary.index[0]
+        else:
+            session_row_index = updated_summary.index[session_rows][0]
+    else:
+        session_row_index = updated_summary.index[0]
+
+    for column_name, value in metric_values.items():
+        updated_summary.loc[session_row_index, column_name] = value
+    return updated_summary
 
 
 def find_saved_session_by_date(
@@ -1095,6 +1189,247 @@ def prepare_learning_curve_data(
         plot_df[block_count_col].to_numpy(),
         plot_df["date"].to_numpy(),
     )
+
+
+def discover_mice_with_overall_performance(data_root: Path) -> list[str]:
+    """Find mouse folders with saved cross-session overall-performance summaries.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory with shape `(n_mouse_folders,)` at its first level. Each
+        candidate mouse folder is expected to contain
+        `cross_session_analysis/{mouse}_overall_performance.csv`.
+
+    Returns
+    -------
+    list[str]
+        Sorted mouse identifiers whose expected summary CSV exists. Folder
+        names are used as mouse identifiers.
+    """
+    discovered_mice = []
+    for mouse_path in sorted(Path(data_root).iterdir()):
+        if not mouse_path.is_dir():
+            continue
+        mouse = mouse_path.name
+        summary_path = mouse_path / "cross_session_analysis" / f"{mouse}_overall_performance.csv"
+        if summary_path.exists():
+            discovered_mice.append(mouse)
+    return discovered_mice
+
+
+def load_cross_mouse_learning_curve_data(
+    data_root: Path,
+    mice: Sequence[str],
+    learning_regressor: str = "prev_n_rewarded",
+) -> pd.DataFrame:
+    """Load long-form learning-curve rows across mice.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory containing one folder per mouse. Each mouse folder must
+        contain `cross_session_analysis/{mouse}_overall_performance.csv`.
+    mice : Sequence[str]
+        Mouse identifiers to load. Each identifier is matched to a same-named
+        child folder under `data_root`.
+    learning_regressor : str, default="prev_n_rewarded"
+        Regression predictor prefix. The loader reads
+        `{learning_regressor}_slope`, in trials-to-switch per predictor unit.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-form dataframe with shape `(n_valid_mouse_sessions, 5)` and
+        columns `mouse`, `date`, `training_day`, `learning_regressor`, and
+        `slope`. `training_day` is assigned after sorting all sessions for a
+        mouse by date and before invalid slopes are dropped, so invalid rows
+        leave gaps in the x-axis rather than renumbering later sessions.
+    """
+    data_root = Path(data_root)
+    learning_column = f"{learning_regressor}_slope"
+    mouse_frames = []
+
+    for mouse in mice:
+        summary_path = data_root / mouse / "cross_session_analysis" / f"{mouse}_overall_performance.csv"
+        if not summary_path.exists():
+            raise FileNotFoundError(f"Missing overall performance summary for {mouse}: {summary_path}")
+
+        mouse_df = pd.read_csv(summary_path, sep=",", na_filter=False)
+        if "date" not in mouse_df.columns:
+            raise ValueError(f"{summary_path} is missing required 'date' column.")
+        if learning_column not in mouse_df.columns:
+            raise ValueError(
+                f"{mouse} overall performance summary is missing '{learning_column}'. "
+                "Rerun session analyses to calculate this learning regressor."
+            )
+
+        mouse_df = mouse_df.sort_values(by="date").reset_index(drop=True)
+        mouse_df["training_day"] = np.arange(1, mouse_df.shape[0] + 1, dtype=int)
+        mouse_df["slope"] = pd.to_numeric(mouse_df[learning_column], errors="coerce")
+        valid_mouse_df = mouse_df[mouse_df["slope"].notna()].copy()
+        if valid_mouse_df.empty:
+            continue
+        valid_mouse_df["mouse"] = mouse
+        valid_mouse_df["learning_regressor"] = learning_regressor
+        mouse_frames.append(
+            valid_mouse_df.loc[
+                :,
+                ["mouse", "date", "training_day", "learning_regressor", "slope"],
+            ]
+        )
+
+    if not mouse_frames:
+        return pd.DataFrame(
+            columns=["mouse", "date", "training_day", "learning_regressor", "slope"]
+        )
+    return pd.concat(mouse_frames, axis=0, ignore_index=True)
+
+
+def load_cross_mouse_session_metric_data(
+    data_root: Path,
+    mice: Sequence[str],
+    metric_column: str,
+    metric_label: str,
+) -> pd.DataFrame:
+    """Load long-form session metric rows across mice.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory containing one folder per mouse. Each mouse folder must
+        contain `cross_session_analysis/{mouse}_overall_performance.csv`.
+    mice : Sequence[str]
+        Mouse identifiers to load. Each identifier is matched to a same-named
+        child folder under `data_root`.
+    metric_column : str
+        Column name to read from each overall-performance CSV. Values are
+        coerced to numeric; string sentinels such as `"None"` are dropped after
+        training-day assignment.
+    metric_label : str
+        Human-readable label describing `metric_column` and its units.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-form dataframe with shape `(n_valid_mouse_sessions, 6)` and
+        columns `mouse`, `date`, `training_day`, `metric_column`,
+        `metric_label`, and `metric_value`. `training_day` is assigned after
+        sorting all sessions for a mouse by date and before invalid metric rows
+        are dropped, matching the cross-mouse learning-curve convention.
+    """
+    data_root = Path(data_root)
+    mouse_frames = []
+
+    for mouse in mice:
+        summary_path = data_root / mouse / "cross_session_analysis" / f"{mouse}_overall_performance.csv"
+        if not summary_path.exists():
+            raise FileNotFoundError(f"Missing overall performance summary for {mouse}: {summary_path}")
+
+        mouse_df = pd.read_csv(summary_path, sep=",", na_filter=False)
+        if "date" not in mouse_df.columns:
+            raise ValueError(f"{summary_path} is missing required 'date' column.")
+        if metric_column not in mouse_df.columns:
+            raise ValueError(
+                f"{mouse} overall performance summary is missing '{metric_column}'. "
+                "Rerun session analyses to calculate this session metric."
+            )
+
+        mouse_df = mouse_df.sort_values(by="date").reset_index(drop=True)
+        mouse_df["training_day"] = np.arange(1, mouse_df.shape[0] + 1, dtype=int)
+        mouse_df["metric_value"] = pd.to_numeric(mouse_df[metric_column], errors="coerce")
+        valid_mouse_df = mouse_df[mouse_df["metric_value"].notna()].copy()
+        if valid_mouse_df.empty:
+            continue
+        valid_mouse_df["mouse"] = mouse
+        valid_mouse_df["metric_column"] = metric_column
+        valid_mouse_df["metric_label"] = metric_label
+        mouse_frames.append(
+            valid_mouse_df.loc[
+                :,
+                [
+                    "mouse",
+                    "date",
+                    "training_day",
+                    "metric_column",
+                    "metric_label",
+                    "metric_value",
+                ],
+            ]
+        )
+
+    columns = [
+        "mouse",
+        "date",
+        "training_day",
+        "metric_column",
+        "metric_label",
+        "metric_value",
+    ]
+    if not mouse_frames:
+        return pd.DataFrame(columns=columns)
+    return pd.concat(mouse_frames, axis=0, ignore_index=True)
+
+
+def run_cross_mouse_session_metric_curves(
+    data_root: Path,
+    output_path: Path,
+    mice: Sequence[str],
+    metric_specs: dict[str, dict[str, object]] | None = None,
+    figure_id: str = "cross_mouse",
+) -> None:
+    """Save cross-mouse session metric CSVs and plots.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory containing one folder per mouse. Each mouse folder must
+        contain `cross_session_analysis/{mouse}_overall_performance.csv`.
+    output_path : pathlib.Path
+        Directory where long-form CSVs and PNG plots are saved.
+    mice : Sequence[str]
+        Mouse identifiers to include in each metric curve.
+    metric_specs : dict[str, dict[str, object]] or None, default=None
+        Mapping from overall-performance metric column to plot settings. Each
+        setting dictionary must include `label` and may include `ylim` as a
+        `(low, high)` tuple in metric units. None uses
+        `CROSS_MOUSE_SESSION_METRIC_SPECS`.
+    figure_id : str, default="cross_mouse"
+        Figure identifier used as the filename prefix and plot title prefix.
+
+    Returns
+    -------
+    None
+        Writes one long-form CSV and one PNG plot per requested metric.
+    """
+    if metric_specs is None:
+        metric_specs = CROSS_MOUSE_SESSION_METRIC_SPECS
+    output_path = Path(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    for metric_column, metric_spec in metric_specs.items():
+        metric_label = str(metric_spec["label"])
+        cross_mouse_df = load_cross_mouse_session_metric_data(
+            data_root=data_root,
+            mice=mice,
+            metric_column=metric_column,
+            metric_label=metric_label,
+        )
+        if cross_mouse_df.empty:
+            raise ValueError(
+                f"No valid {metric_column} rows found for selected mice: {list(mice)}"
+            )
+
+        csv_path = output_path / f"{figure_id}_{metric_column}_session_metric_curve_data.csv"
+        cross_mouse_df.to_csv(csv_path, index=False, na_rep="None")
+        performance_plots.plot_cross_mouse_session_metric_curve(
+            cross_mouse_df=cross_mouse_df,
+            plot_path=output_path,
+            figure_id=figure_id,
+            metric_column=metric_column,
+            metric_label=metric_label,
+            ylim=metric_spec.get("ylim"),
+        )
 
 
 def load_overall_performance_summary(
@@ -2605,7 +2940,7 @@ def main_simulation():
 
 def main_multisession():
     """Analyze selected saved sessions as one continuous multisession table."""
-    mouse = 'CT025'
+    mouse = 'CT016'
     session_data_root = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}')
     multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
     task_tag = "latent_inference"
@@ -2939,6 +3274,11 @@ def run_single_session_workflow(
         ideal_observer_n_replays=config.ideal_observer_n_replays,
         ideal_observer_seed=config.ideal_observer_seed,
     )
+    multisession_df = ensure_session_side_bias_metrics(
+        multisession_df=multisession_df,
+        augmented_trial_df=augmented_trial_df,
+        session=sess,
+    )
 
     performance_plots.plot_session_correct(block_performance, sess.figure_path, sess.sess_id_full)
     performance_plots.plot_session_correct_after_first_correct(block_performance, sess.figure_path, sess.sess_id_full)
@@ -2956,7 +3296,29 @@ def run_single_session_workflow(
         sess.figure_path,
         sess.sess_id_full,
     )
+    performance_plots.plot_session_zero_trials_to_correct_fraction(
+        block_performance,
+        sess.figure_path,
+        sess.sess_id_full,
+    )
+    session_summary_for_plot = multisession_df
+    if "date" in multisession_df.columns:
+        matching_session_summary = multisession_df[
+            multisession_df["date"].astype(str).eq(str(sess.date))
+        ]
+        if not matching_session_summary.empty:
+            session_summary_for_plot = matching_session_summary
+    performance_plots.plot_session_side_bias_ratios(
+        session_summary=session_summary_for_plot,
+        plot_path=sess.figure_path,
+        sess_id_full=sess.sess_id_full,
+    )
     save_and_plot_switch_persistence_for_session(
+        block_performance=block_performance,
+        augmented_trial_df=augmented_trial_df,
+        session=sess,
+    )
+    save_and_plot_post_first_correct_accuracy_for_session(
         block_performance=block_performance,
         augmented_trial_df=augmented_trial_df,
         session=sess,
@@ -3108,9 +3470,9 @@ def run_single_session_batch(
 
 def main_mouse():
     """Analyze a single behavior session from start to finish."""
-    mouse = "CT024"
-    date = "2026-06-11"
-    behavior_timestamp = 142023  # Set to "HHMMSS" to choose one session on ambiguous dates.
+    mouse = "CT019"
+    date = "2026-06-04"
+    behavior_timestamp = 121125  # Set to "HHMMSS" to choose one session on ambiguous dates.
     task_tag = "latent_inference"
     session_data_root = Path(f"/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}")
     multi_session_save_path = session_data_root / "cross_session_analysis"
@@ -3141,7 +3503,7 @@ def main_mouse():
 
 def main_mouse_batch():
     """Run ordinary single-session analysis for several dates of one mouse."""
-    mouse = "CT023"
+    mouse = "CT020"
     use_all_dates_for_task_tag = True
     dates = [#'2026-04-17', '2026-04-20',
         #'2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
@@ -3153,9 +3515,9 @@ def main_mouse_batch():
         # '2026-05-26',
         # '2026-05-27', '2026-05-28', '2026-05-29',
         # '2026-05-31',
-        '2026-06-01', '2026-06-02',
-        '2026-06-03', '2026-06-04', '2026-06-05',
-        '2026-06-07', '2026-06-08', '2026-06-09',
+        # '2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04',
+        # '2026-06-05',
+        # '2026-06-07', '2026-06-08', '2026-06-09',
         '2026-06-10', '2026-06-11'
     ]
     task_tag = "latent_inference"
@@ -3169,7 +3531,7 @@ def main_mouse_batch():
         )
 
     config = SingleSessionAnalysisConfig(
-        preprocess_raw_session=True,
+        preprocess_raw_session=False,
         run_session_analysis=True,
         ideal_observer_n_replays=100,
         ideal_observer_seed=12345,
@@ -3191,6 +3553,66 @@ def main_mouse_batch():
         config=config,
     )
 
+
+def main_cross_mouse_learning_curve():
+    """Plot cross-mouse regression learning curves from saved summaries."""
+    data_root = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData")
+    output_path = data_root / "cross_mouse_analysis"
+    learning_regressor = "prev_n_rewarded"
+    use_discovered_mice = False
+    mice = [
+        "CT016", "CT017", "CT019", "CT020","CT021", "CT022", "CT023", "CT024", "CT025",
+    ]
+
+    if use_discovered_mice:
+        mice = discover_mice_with_overall_performance(data_root)
+    if not mice:
+        raise ValueError("No mice selected for cross-mouse learning-curve plotting.")
+
+    output_path.mkdir(parents=True, exist_ok=True)
+    cross_mouse_df = load_cross_mouse_learning_curve_data(
+        data_root=data_root,
+        mice=mice,
+        learning_regressor=learning_regressor,
+    )
+    if cross_mouse_df.empty:
+        raise ValueError(
+            f"No valid {learning_regressor}_slope rows found for selected mice: {mice}"
+        )
+
+    csv_path = output_path / f"cross_mouse_{learning_regressor}_learning_curve_data.csv"
+    cross_mouse_df.to_csv(csv_path, index=False, na_rep="None")
+    performance_plots.plot_cross_mouse_learning_curve(
+        cross_mouse_df=cross_mouse_df,
+        plot_path=output_path,
+        figure_id="cross_mouse",
+        learning_regressor=learning_regressor,
+    )
+
+
+def main_cross_mouse_session_quality_metrics():
+    """Plot cross-mouse session quality metrics from saved summaries."""
+    data_root = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData")
+    output_path = data_root / "cross_mouse_analysis"
+    use_discovered_mice = False
+    mice = [
+        "CT016", "CT017", "CT019", "CT020", "CT021", "CT022", "CT023", "CT024", "CT025",
+    ]
+
+    if use_discovered_mice:
+        mice = discover_mice_with_overall_performance(data_root)
+    if not mice:
+        raise ValueError("No mice selected for cross-mouse session metric plotting.")
+
+    run_cross_mouse_session_metric_curves(
+        data_root=data_root,
+        output_path=output_path,
+        mice=mice,
+        metric_specs=CROSS_MOUSE_SESSION_METRIC_SPECS,
+        figure_id="cross_mouse",
+    )
+
+
 # def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
 #     ix_valid = bssm.make_valid_block_history_mask(block_df)
 #     df = block_df[ix_valid]
@@ -3211,3 +3633,5 @@ if __name__ == '__main__':
     main_mouse_batch()
     # main_multisession()
     # main_simulation()
+    # main_cross_mouse_learning_curve()
+    # main_cross_mouse_session_quality_metrics()

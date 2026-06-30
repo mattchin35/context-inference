@@ -119,6 +119,290 @@ def test_compute_agent_mouse_agreement_by_trial_uses_repeat_on_tie():
     assert agreement.tolist() == [1.0, 1.0, 1.0, 1.0, 1.0]
 
 
+def test_compute_session_side_bias_metrics_uses_valid_behavioral_choices_only():
+    """Session side-bias ratios should exclude no-choice and manual-reward rows."""
+    trial_df = pd.DataFrame(
+        {
+            "state": ["left", "left", "right", "right", "left", "right", "left"],
+            "action": [1, 0, 1, 1, "no_choice", 0, 1],
+            "observer_value": [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0],
+            "experimenter_reward_given": [0, 0, 0, 0, 0, 0, 1],
+        }
+    )
+
+    metrics = session_analysis.compute_session_side_bias_metrics(trial_df)
+
+    assert metrics["n_left_choices"] == 3
+    assert metrics["n_right_choices"] == 2
+    assert metrics["n_true_left_trials"] == 2
+    assert metrics["n_true_right_trials"] == 3
+    assert metrics["n_ideal_left_trials"] == 2
+    assert metrics["n_ideal_right_trials"] == 3
+    assert metrics["left_choice_per_true_left"] == 1.5
+    assert metrics["right_choice_per_true_right"] == 2 / 3
+    assert metrics["left_choice_per_ideal_left"] == 1.5
+    assert metrics["right_choice_per_ideal_right"] == 2 / 3
+
+
+def test_compute_session_side_bias_metrics_uses_ideal_observer_tie_convention():
+    """Ideal-action denominators should repeat the previous greedy choice on ties."""
+    trial_df = pd.DataFrame(
+        {
+            "state": ["left", "left", "left", "right"],
+            "action": [0, 1, 1, 0],
+            "observer_value": [0.0, 1.0, 0.0, -1.0],
+            "experimenter_reward_given": [0, 0, 0, 0],
+        }
+    )
+
+    metrics = session_analysis.compute_session_side_bias_metrics(trial_df)
+
+    assert metrics["n_left_choices"] == 2
+    assert metrics["n_right_choices"] == 2
+    assert metrics["n_ideal_left_trials"] == 2
+    assert metrics["n_ideal_right_trials"] == 2
+    assert metrics["left_choice_per_ideal_left"] == 1.0
+    assert metrics["right_choice_per_ideal_right"] == 1.0
+
+
+def test_compute_session_side_bias_metrics_returns_none_for_zero_denominator():
+    """Ratios with no matching reference-side trials should use the string sentinel."""
+    trial_df = pd.DataFrame(
+        {
+            "state": ["left", "left"],
+            "action": [1, 1],
+            "observer_value": [1.0, 1.0],
+            "experimenter_reward_given": [0, 0],
+        }
+    )
+
+    metrics = session_analysis.compute_session_side_bias_metrics(trial_df)
+
+    assert metrics["n_true_right_trials"] == 0
+    assert metrics["n_ideal_right_trials"] == 0
+    assert metrics["right_choice_per_true_right"] == "None"
+    assert metrics["right_choice_per_ideal_right"] == "None"
+
+
+def test_compute_session_side_bias_metrics_adds_signed_bias_metrics():
+    """Signed side-bias metrics should use valid behavioral choices only."""
+    trial_df = pd.DataFrame(
+        {
+            "state": ["left", "right", "right", "left", "right", "left"],
+            "action": [1, 1, 0, "no_choice", 0, 1],
+            "observer_value": [1.0, 1.0, -1.0, 1.0, -1.0, -1.0],
+            "experimenter_reward_given": [0, 0, 0, 0, 0, 1],
+        }
+    )
+
+    metrics = session_analysis.compute_session_side_bias_metrics(trial_df)
+
+    assert metrics["bias_oracle"] == pytest.approx((2 - 1) / 4)
+    assert metrics["bias_ideal"] == pytest.approx((2 - 2) / 4)
+    assert metrics["raw_side_bias"] == pytest.approx((2 - 2) / 4)
+
+
+def test_compute_session_side_bias_metrics_uses_matched_valid_ideal_trials_for_ideal_bias():
+    """Ideal-relative bias should exclude rows without a valid ideal choice."""
+    trial_df = pd.DataFrame(
+        {
+            "state": ["left", "left", "left"],
+            "action": [1, 1, 0],
+            "observer_value": [1.0, "None", -1.0],
+            "experimenter_reward_given": [0, 0, 0],
+        }
+    )
+
+    metrics = session_analysis.compute_session_side_bias_metrics(trial_df)
+
+    assert metrics["bias_oracle"] == pytest.approx((2 - 3) / 3)
+    assert metrics["bias_ideal"] == pytest.approx((1 - 1) / 2)
+
+
+def test_compute_session_block_quality_metrics_summarizes_numeric_block_values():
+    """Block summary metrics should ignore missing sentinels and use eligible rows."""
+    block_performance = pd.DataFrame(
+        {
+            "trials_to_correct": [0, 2, 7, "None"],
+            "percent_correct_after_first_correct": [1.0, 0.5, "None", 0.75],
+            "block_history_ideal_mouse_agreement": [0.9, 0.4, "None", 0.7],
+        }
+    )
+
+    metrics = session_analysis.compute_session_block_quality_metrics(
+        block_performance,
+        tts_threshold=5,
+        post_switch_correct_threshold=0.7,
+        ideal_agreement_threshold=0.6,
+    )
+
+    assert metrics["median_TTS"] == pytest.approx(2.0)
+    assert metrics["q3_TTS"] == pytest.approx(4.5)
+    assert metrics["frac_blocks_TTS_gt_5"] == pytest.approx(1 / 3)
+    assert metrics["median_post_switch_correct"] == pytest.approx(0.75)
+    assert metrics["q1_post_switch_correct"] == pytest.approx(0.625)
+    assert metrics["frac_blocks_post_switch_correct_lt_0p7"] == pytest.approx(1 / 3)
+    assert metrics["median_ideal_agreement"] == pytest.approx(0.7)
+    assert metrics["q1_ideal_agreement"] == pytest.approx(0.55)
+    assert metrics["frac_blocks_ideal_agreement_lt_0p6"] == pytest.approx(1 / 3)
+
+
+def test_compute_session_block_quality_metrics_returns_none_without_eligible_rows():
+    """Block summary metrics should use the CSV sentinel when no eligible rows exist."""
+    block_performance = pd.DataFrame(
+        {
+            "trials_to_correct": ["None"],
+            "percent_correct_after_first_correct": ["None"],
+            "block_history_ideal_mouse_agreement": ["None"],
+        }
+    )
+
+    metrics = session_analysis.compute_session_block_quality_metrics(block_performance)
+
+    assert metrics["median_TTS"] == "None"
+    assert metrics["q3_TTS"] == "None"
+    assert metrics["frac_blocks_TTS_gt_5"] == "None"
+    assert metrics["median_post_switch_correct"] == "None"
+    assert metrics["q1_post_switch_correct"] == "None"
+    assert metrics["frac_blocks_post_switch_correct_lt_0p7"] == "None"
+    assert metrics["median_ideal_agreement"] == "None"
+    assert metrics["q1_ideal_agreement"] == "None"
+    assert metrics["frac_blocks_ideal_agreement_lt_0p6"] == "None"
+
+
+def test_compute_post_switch_ideal_agreement_summary_includes_first_correct_choice():
+    """Post-switch ideal agreement should include the first correct behavioral choice."""
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [0, 0, 0, 1, 1],
+            "action": [0, 1, 1, 1, 0],
+            "reward": [0, 0, 0, 0, 0],
+            "correct": [0, 1, 1, 1, 0],
+            "observer_value": [-1.0, 1.0, 1.0, 1.0, 1.0],
+            "experimenter_reward_given": [0, 0, 0, 0, 0],
+        }
+    )
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1],
+            "block_type": ["left_uncued", "left_uncued"],
+        }
+    )
+
+    metrics = session_analysis.compute_post_switch_ideal_agreement_summary(
+        augmented_trial_df,
+        block_performance,
+    )
+
+    assert metrics["median_post_switch_ideal_agreement"] == pytest.approx(0.75)
+    assert metrics["q1_post_switch_ideal_agreement"] == pytest.approx(0.625)
+
+
+def test_summarize_session_performance_includes_new_session_summary_metrics(monkeypatch):
+    """Whole-session summaries should expose the new scalar quality metrics."""
+    monkeypatch.setattr(
+        session_analysis.ideal_observer,
+        "summarize_ideal_observer_behavior",
+        lambda *_args, **_kwargs: {},
+    )
+    augmented_trial_df = pd.DataFrame(
+        {
+            "state": ["left", "right", "right"],
+            "block_type": ["left_uncued", "right_uncued", "right_uncued"],
+            "action": [1, 0, 1],
+            "reward": [1, 1, 0],
+            "correct": [1, 1, 0],
+            "cur_block": [0, 1, 1],
+            "observer_value": [1.0, -1.0, 1.0],
+            "experimenter_reward_given": [0, 0, 0],
+        }
+    )
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1],
+            "block_type": ["left_uncued", "right_uncued"],
+            "trials_to_correct": [0, 0],
+            "percent_correct_after_first_correct": [1.0, 0.5],
+            "block_history_ideal_mouse_agreement": [1.0, 0.5],
+        }
+    )
+
+    summary = session_analysis.summarize_session_performance(
+        augmented_trial_df,
+        block_performance,
+        date="2026-06-30",
+        ideal_observer_n_replays=1,
+    )
+    row = summary.iloc[0]
+
+    assert row["bias_oracle"] == pytest.approx((2 - 1) / 3)
+    assert row["bias_ideal"] == pytest.approx((2 - 2) / 3)
+    assert row["raw_side_bias"] == pytest.approx((2 - 1) / 3)
+    assert row["median_TTS"] == 0
+    assert row["frac_blocks_TTS_gt_5"] == 0
+    assert row["median_post_switch_correct"] == pytest.approx(0.75)
+    assert row["median_ideal_agreement"] == pytest.approx(0.75)
+    assert "median_post_switch_ideal_agreement" in row.index
+
+
+def test_compute_zero_trials_to_correct_metrics_excludes_never_correct_blocks():
+    """Never-correct and dark-period blocks should not enter zero-TTC fractions."""
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2, 3, 4],
+            "block_type": ["right_uncued", "left_uncued", "left_cued", "right_cued", "dark period"],
+            "trials_to_correct": [0, 0, "None", 3, 0],
+        }
+    )
+
+    metrics = session_analysis.compute_zero_trials_to_correct_metrics(block_performance)
+
+    assert metrics["left_zero_ttc_n_blocks"] == 1
+    assert metrics["left_zero_ttc_n_zero"] == 1
+    assert metrics["right_zero_ttc_n_blocks"] == 1
+    assert metrics["right_zero_ttc_n_zero"] == 0
+    assert metrics["overall_zero_ttc_n_blocks"] == 2
+    assert metrics["overall_zero_ttc_n_zero"] == 1
+    assert metrics["overall_zero_ttc_fraction"] == 0.5
+
+
+def test_compute_zero_trials_to_correct_metrics_splits_left_right_overall():
+    """Zero-TTC fractions should summarize left, right, and pooled block changes."""
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2, 3, 4],
+            "block_type": ["right_uncued", "left_uncued", "left_cued", "right_cued", "right_uncued"],
+            "trials_to_correct": [4, 0, 2, 0, 5],
+        }
+    )
+
+    metrics = session_analysis.compute_zero_trials_to_correct_metrics(block_performance)
+
+    assert metrics["left_zero_ttc_fraction"] == 0.5
+    assert metrics["right_zero_ttc_fraction"] == 0.5
+    assert metrics["overall_zero_ttc_fraction"] == 0.5
+    assert metrics["left_zero_ttc_n_blocks"] == 2
+    assert metrics["right_zero_ttc_n_blocks"] == 2
+    assert metrics["overall_zero_ttc_n_blocks"] == 4
+
+
+def test_compute_zero_trials_to_correct_metrics_excludes_first_block_as_non_switch():
+    """The first block should not contribute because it is not a block change."""
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2],
+            "block_type": ["left_uncued", "left_uncued", "left_uncued"],
+            "trials_to_correct": [0, 2, 4],
+        }
+    )
+
+    metrics = session_analysis.compute_zero_trials_to_correct_metrics(block_performance)
+
+    assert metrics["left_zero_ttc_n_blocks"] == 2
+    assert metrics["left_zero_ttc_n_zero"] == 0
+    assert metrics["left_zero_ttc_fraction"] == 0.0
+
+
 def test_compute_agent_mouse_agreement_by_trial_excludes_non_behavioral_rows():
     """No-choice and experimenter-reward rows should not enter agreement."""
     trial_df = pd.DataFrame(
@@ -486,6 +770,21 @@ def test_summarize_block_performance_accepts_string_encoded_correct_values():
     assert block_performance["percent_correct"].tolist() == [0.5, 0.5, 1.0]
 
 
+def test_summarize_block_performance_sums_string_encoded_rewards_numerically():
+    """Block reward counts should coerce CSV-style string rewards before summing."""
+    augmented_trial_df = session_analysis.make_augmented_trial_df(
+        make_simulated_trial_df().astype({"reward": str})
+    )
+
+    block_performance = session_analysis.summarize_block_performance(
+        augmented_trial_df,
+        session_id="sample_switch_mode_3_2026-03-25",
+    )
+
+    assert block_performance["n_rewarded"].tolist() == [1.0, 1.0, 1.0]
+    assert block_performance["prev_n_rewarded"].tolist() == [0, 1.0, 1.0]
+
+
 def test_summarize_block_performance_counts_explore_trials_by_block():
     """Block summaries should save the number of explore-tagged trials per block."""
     trial_df = make_simulated_trial_df()
@@ -761,6 +1060,78 @@ def test_summarize_session_performance_includes_ideal_observer_metrics():
     assert session_performance.loc[0, "fixed_replay_ideal_n_replays"] == 4
 
 
+def test_summarize_session_performance_includes_side_bias_metrics():
+    """Session summaries should include whole-session side-bias ratios."""
+    augmented_trial_df = pd.DataFrame(
+        {
+            "state": ["left", "left", "right", "right"],
+            "action": [1, 0, 1, 0],
+            "correct": [1, 0, 0, 1],
+            "reward": [1, 0, 0, 1],
+            "observer_value": [1.0, -1.0, 1.0, -1.0],
+            "experimenter_reward_given": [0, 0, 0, 0],
+            "block_type": ["left_uncued", "left_uncued", "right_uncued", "right_uncued"],
+        }
+    )
+    block_performance = pd.DataFrame(
+        {
+            "trials_to_correct": [0, 1],
+            "block_type": ["left_uncued", "right_uncued"],
+        }
+    )
+
+    session_performance = session_analysis.summarize_session_performance(
+        augmented_trial_df,
+        block_performance,
+        date="2026-03-25",
+        ideal_observer_n_replays=1,
+        ideal_observer_seed=123,
+    )
+
+    assert session_performance.loc[0, "n_left_choices"] == 2
+    assert session_performance.loc[0, "n_right_choices"] == 2
+    assert session_performance.loc[0, "left_choice_per_true_left"] == 1.0
+    assert session_performance.loc[0, "right_choice_per_true_right"] == 1.0
+    assert session_performance.loc[0, "left_choice_per_ideal_left"] == 1.0
+    assert session_performance.loc[0, "right_choice_per_ideal_right"] == 1.0
+
+
+def test_summarize_session_performance_includes_zero_trials_to_correct_metrics():
+    """Session summaries should include immediate-correction block fractions."""
+    augmented_trial_df = pd.DataFrame(
+        {
+            "state": ["left", "right"],
+            "action": [1, 0],
+            "correct": [1, 1],
+            "reward": [1, 1],
+            "observer_value": [1.0, -1.0],
+            "experimenter_reward_given": [0, 0],
+            "block_type": ["left_uncued", "right_uncued"],
+        }
+    )
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2, 3],
+            "trials_to_correct": [0, 0, 3, "None"],
+            "block_type": ["left_uncued", "left_uncued", "right_uncued", "right_uncued"],
+        }
+    )
+
+    session_performance = session_analysis.summarize_session_performance(
+        augmented_trial_df,
+        block_performance,
+        date="2026-03-25",
+        ideal_observer_n_replays=1,
+        ideal_observer_seed=123,
+    )
+
+    assert session_performance.loc[0, "left_zero_ttc_fraction"] == 1.0
+    assert session_performance.loc[0, "right_zero_ttc_fraction"] == 0.0
+    assert session_performance.loc[0, "overall_zero_ttc_fraction"] == 0.5
+    assert session_performance.loc[0, "overall_zero_ttc_n_blocks"] == 2
+    assert session_performance.loc[0, "overall_zero_ttc_n_zero"] == 1
+
+
 def test_session_stats_returns_none_stats_for_one_valid_row():
     """Regression stats are undefined with fewer than two paired observations."""
     with warnings.catch_warnings(record=True) as recorded_warnings:
@@ -889,6 +1260,66 @@ def test_add_regression_stats_to_session_performance_uses_explicit_column_names(
         np.asarray(expected_correct_stats, dtype=float),
         equal_nan=True,
     )
+
+
+def test_add_regression_stats_to_session_performance_drops_non_numeric_prev_n_rewarded_rows(monkeypatch):
+    """Stale nonnumeric reward-count rows should not crash regression summaries."""
+    session_performance = pd.DataFrame({"date": ["2026-06-30"]})
+    block_performance = pd.DataFrame(
+        {
+            "trials_to_correct": [0, 2, 4],
+            "prev_n_correct": [1, 2, 3],
+            "prev_consecutive_rewards": [1, 2, 3],
+            "prev_n_rewarded": [1, "11111111111111111111111111111111111111111111111111", 3],
+        }
+    )
+    regression_inputs = []
+
+    def fake_session_stats(dependent_var, independent_var):
+        regression_inputs.append(
+            (
+                dependent_var.to_numpy(dtype=float).tolist(),
+                independent_var.to_numpy(dtype=float).tolist(),
+            )
+        )
+        return 0.0, 0.0, 0.0, 1.0
+
+    monkeypatch.setattr(session_analysis, "session_stats", fake_session_stats)
+
+    updated = session_analysis.add_regression_stats_to_session_performance(
+        session_performance=session_performance,
+        trials_to_correct=block_performance["trials_to_correct"],
+        prev_n_correct=block_performance["prev_n_correct"],
+        prev_consecutive_rewards=block_performance["prev_consecutive_rewards"],
+        prev_n_rewarded=block_performance["prev_n_rewarded"],
+        n_blocks=block_performance.shape[0],
+    )
+
+    assert updated.loc[0, "prev_n_rewarded_slope"] == 0.0
+    assert regression_inputs[0] == ([0.0, 4.0], [1.0, 3.0])
+    assert regression_inputs[1] == ([0.0, 2.0, 4.0], [1.0, 2.0, 3.0])
+    assert regression_inputs[2] == ([0.0, 2.0, 4.0], [1.0, 2.0, 3.0])
+
+
+def test_run_analysis_handles_string_encoded_rewards_in_prev_n_rewarded_regression(tmp_path, monkeypatch):
+    """String reward inputs should not produce concatenated previous reward counts."""
+    trial_df = make_simulated_trial_df().astype({"reward": str})
+    session = SimpleNamespace(
+        mouse="sample_switch_mode_3",
+        date="2026-03-25",
+        sess_id_full="sample_switch_mode_3_2026-03-25_120000_agent-sample_switch_mode_3",
+        processed_data_path=tmp_path,
+        multi_session_save_path=None,
+    )
+    monkeypatch.setattr(session_analysis, "session_stats", lambda *_args, **_kwargs: (0.0, 0.0, 0.0, 1.0))
+
+    _, block_performance, returned_session_df = session_analysis.run_analysis(
+        trial_df,
+        session=session,
+    )
+
+    assert block_performance["prev_n_rewarded"].tolist() == [0, 1.0, 1.0]
+    assert "prev_n_rewarded_slope" in returned_session_df.columns
 
 
 def test_add_block_bias_columns_preserves_current_bias_calculation():

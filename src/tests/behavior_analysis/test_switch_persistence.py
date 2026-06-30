@@ -411,3 +411,152 @@ def test_save_switch_persistence_outputs_writes_detail_and_summary_csvs(tmp_path
     assert summary_path.stat().st_size > 0
     pd.testing.assert_frame_equal(pd.read_csv(detail_path, na_filter=False), detail)
     pd.testing.assert_frame_equal(pd.read_csv(summary_path, na_filter=False), summary)
+
+
+def test_compute_post_first_correct_accuracy_includes_first_correct_as_index_zero():
+    """The first correct choice in each block should be the x=0 anchor."""
+    block_performance = make_block_performance().iloc[:2]
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_trial": list(range(6)),
+            "cur_block": [0, 0, 0, 1, 1, 1],
+            "state": [1, 1, 1, 0, 0, 0],
+            "action": [0, 1, 1, 1, 0, 0],
+            "correct": [0, 1, 1, 0, 1, 1],
+            "reward": [0, 1, 1, 0, 1, 1],
+            "experimenter_reward_given": [0, 0, 0, 0, 0, 0],
+        }
+    )
+
+    detail = switch_persistence.compute_post_first_correct_accuracy_trials(
+        block_performance,
+        augmented_trial_df,
+    )
+
+    included = detail[detail["include_trial_in_session_metric"]]
+    assert included["block_ix"].tolist() == [0, 0, 1, 1]
+    assert included["choice_trial_after_first_correct"].tolist() == [0, 1, 0, 1]
+    assert included["correct"].tolist() == [True, True, True, True]
+    assert included["correct_side"].tolist() == ["left", "left", "right", "right"]
+
+
+def test_compute_post_first_correct_accuracy_stays_within_block():
+    """Later x indices should not borrow choices from the following block."""
+    block_performance = make_block_performance().iloc[:2]
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_trial": list(range(5)),
+            "cur_block": [0, 0, 1, 1, 1],
+            "state": [1, 1, 0, 0, 0],
+            "action": [1, 1, 1, 0, 0],
+            "correct": [0, 1, 0, 1, 1],
+            "reward": [0, 1, 0, 1, 1],
+            "experimenter_reward_given": [0, 0, 0, 0, 0],
+        }
+    )
+
+    detail = switch_persistence.compute_post_first_correct_accuracy_trials(
+        block_performance,
+        augmented_trial_df,
+    )
+    included = detail[detail["include_trial_in_session_metric"]]
+
+    assert included[included["block_ix"] == 0]["choice_trial_after_first_correct"].tolist() == [0]
+    assert included[included["block_ix"] == 1]["choice_trial_after_first_correct"].tolist() == [0, 1]
+
+
+def test_compute_post_first_correct_accuracy_excludes_no_choice_and_manual_reward_trials():
+    """No-choice and manual-reward rows should not define or enter the accuracy curve."""
+    block_performance = make_block_performance().iloc[:1]
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_trial": list(range(5)),
+            "cur_block": [0, 0, 0, 0, 0],
+            "state": [1, 1, 1, 1, 1],
+            "action": ["no_choice", 1, 0, 1, 1],
+            "correct": ["None", 1, 0, 1, 1],
+            "reward": [0, 1, 0, 1, 1],
+            "experimenter_reward_given": [0, 1, 0, 0, 0],
+        }
+    )
+
+    detail = switch_persistence.compute_post_first_correct_accuracy_trials(
+        block_performance,
+        augmented_trial_df,
+    )
+    included = detail[detail["include_trial_in_session_metric"]]
+
+    assert detail["choice_status"].tolist() == [
+        "no_choice",
+        "manual_reward",
+        "pre_first_correct",
+        "post_first_correct",
+        "post_first_correct",
+    ]
+    assert included["cur_trial"].tolist() == [3, 4]
+    assert included["choice_trial_after_first_correct"].tolist() == [0, 1]
+
+
+def test_summarize_post_first_correct_accuracy_groups_combined_left_right():
+    """Post-first-correct summaries should produce combined and side-specific curves."""
+    detail = pd.DataFrame(
+        {
+            "correct_side": ["left", "left", "right", "right", "right"],
+            "choice_trial_after_first_correct": [0, 1, 0, 1, 2],
+            "correct": ["True", "False", "True", "True", "False"],
+            "include_trial_in_session_metric": [True, True, True, True, True],
+        }
+    )
+
+    summary = switch_persistence.summarize_post_first_correct_accuracy(detail)
+
+    combined = summary[summary["correct_group"] == "combined"].sort_values(
+        "choice_trial_after_first_correct"
+    )
+    left = summary[summary["correct_group"] == "left"].sort_values(
+        "choice_trial_after_first_correct"
+    )
+    right = summary[summary["correct_group"] == "right"].sort_values(
+        "choice_trial_after_first_correct"
+    )
+    assert combined["choice_trial_after_first_correct"].tolist() == [0, 1, 2]
+    assert combined["n_blocks"].tolist() == [2, 2, 1]
+    assert combined["n_correct"].tolist() == [2, 1, 0]
+    assert combined["proportion_correct"].tolist() == [1.0, 0.5, 0.0]
+    assert left["proportion_correct"].tolist() == [1.0, 0.0]
+    assert right["proportion_correct"].tolist() == [1.0, 1.0, 0.0]
+
+
+def test_save_post_first_correct_accuracy_outputs_writes_detail_and_summary_csvs(tmp_path):
+    """Post-first-correct saving should produce inspectable detail and summary tables."""
+    block_performance = make_block_performance().iloc[:1]
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_trial": list(range(3)),
+            "cur_block": [0, 0, 0],
+            "state": [1, 1, 1],
+            "action": [0, 1, 1],
+            "correct": [0, 1, 1],
+            "reward": [0, 1, 1],
+            "experimenter_reward_given": [0, 0, 0],
+        }
+    )
+
+    detail, summary = switch_persistence.save_post_first_correct_accuracy_outputs(
+        block_performance=block_performance,
+        augmented_trial_df=augmented_trial_df,
+        processed_data_path=tmp_path,
+        sess_id_full="CT999_2026-06-18_120000",
+    )
+
+    detail_path = tmp_path / "CT999_2026-06-18_120000_post_first_correct_accuracy_trials.csv"
+    summary_path = tmp_path / "CT999_2026-06-18_120000_post_first_correct_accuracy_summary.csv"
+    assert detail_path.exists()
+    assert summary_path.exists()
+    assert detail_path.stat().st_size > 0
+    assert summary_path.stat().st_size > 0
+    saved_detail = pd.read_csv(detail_path, na_filter=False)
+    assert saved_detail.shape == detail.shape
+    assert saved_detail["choice_status"].tolist() == detail["choice_status"].tolist()
+    assert saved_detail["choice_trial_after_first_correct"].tolist() == ["None", "0", "1"]
+    pd.testing.assert_frame_equal(pd.read_csv(summary_path, na_filter=False), summary)

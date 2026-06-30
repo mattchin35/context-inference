@@ -1890,6 +1890,7 @@ def test_scatter_trials_to_correct_displays_unboxed_rounded_slope(monkeypatch, t
     slope_text = next(text for text in saved_annotations if text.get_text().startswith("slope ="))
     assert slope_text.get_text() == "slope = 1.23"
     assert slope_text.get_bbox_patch() is None
+    assert slope_text.get_fontsize() >= 12
 
 
 def test_summary_regression_scatter_displays_unboxed_rounded_slope():
@@ -1907,6 +1908,7 @@ def test_summary_regression_scatter_displays_unboxed_rounded_slope():
     slope_text = next(text for text in ax.texts if text.get_text().startswith("slope ="))
     assert slope_text.get_text() == "slope = 1.23"
     assert slope_text.get_bbox_patch() is None
+    assert slope_text.get_fontsize() >= 12
     plt.close(fig)
 
 
@@ -2110,6 +2112,169 @@ def test_plot_block_bias_quadrants_skips_missing_flags(monkeypatch, tmp_path: Pa
     assert point_calls[0]["kwargs"]["label"] == "right cued"
     np.testing.assert_array_equal(point_calls[0]["x"], np.array([0.0]))
     np.testing.assert_array_equal(point_calls[0]["y"], np.array([0.0]))
+
+
+def test_plot_post_first_correct_accuracy_summary_saves_grouped_lines(monkeypatch, tmp_path: Path):
+    """Post-first-correct accuracy should plot combined, left, and right curves."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_plot_calls(monkeypatch)
+    summary_df = pd.DataFrame(
+        {
+            "correct_group": ["combined", "combined", "left", "right"],
+            "choice_trial_after_first_correct": [0, 1, 0, 0],
+            "proportion_correct": [1.0, 0.5, 1.0, 1.0],
+            "n_blocks": [2, 2, 1, 1],
+        }
+    )
+
+    output_path = performance_plots.plot_post_first_correct_accuracy_summary(
+        summary_df=summary_df,
+        plot_path=tmp_path,
+        figure_id="unit_session",
+    )
+
+    calls_by_label = {call["label"]: call for call in plot_calls}
+    assert output_path == tmp_path / "unit_session_post_first_correct_accuracy.png"
+    assert output_path.exists()
+    assert calls_by_label["combined"]["x"] == [0, 1]
+    assert calls_by_label["combined"]["y"] == [1.0, 0.5]
+    assert calls_by_label["left"]["color"] == performance_plots.color_dict["left_uncued"]
+    assert calls_by_label["right"]["color"] == performance_plots.color_dict["right_uncued"]
+
+
+def test_plot_session_side_bias_ratios_draws_true_and_ideal_side_ratios(monkeypatch, tmp_path: Path):
+    """Session side-bias plotting should show left/right ratios for both references."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_plot_calls(monkeypatch)
+    session_summary = pd.DataFrame(
+        {
+            "left_choice_per_true_left": [1.5],
+            "right_choice_per_true_right": [0.5],
+            "left_choice_per_ideal_left": [2.0],
+            "right_choice_per_ideal_right": ["None"],
+        }
+    )
+
+    output_path = performance_plots.plot_session_side_bias_ratios(
+        session_summary=session_summary,
+        plot_path=tmp_path,
+        sess_id_full="unit_session",
+    )
+
+    calls_by_label = {call["label"]: call for call in plot_calls}
+    assert output_path == tmp_path / "unit_session_session_side_bias_ratios.png"
+    assert output_path.exists()
+    assert calls_by_label["left"]["x"] == [0.85, 1.85]
+    assert calls_by_label["left"]["y"] == [1.5, 2.0]
+    assert calls_by_label["right"]["x"] == [1.15]
+    assert calls_by_label["right"]["y"] == [0.5]
+    assert calls_by_label["left"]["color"] == performance_plots.color_dict["left_uncued"]
+    assert calls_by_label["right"]["color"] == performance_plots.color_dict["right_uncued"]
+
+
+def test_plot_session_zero_trials_to_correct_fraction_draws_raw_flags_and_means(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Zero-TTC plotting should show raw block flags and mean fractions."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_plot_calls(monkeypatch)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1, 2, 3, 4],
+            "block_type": ["right_uncued", "left_uncued", "left_cued", "right_cued", "right_uncued"],
+            "trials_to_correct": [5, 0, 2, 0, 6],
+        }
+    )
+
+    output_path = performance_plots.plot_session_zero_trials_to_correct_fraction(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_id_full="unit_session",
+        point_jitter=0,
+    )
+
+    calls_by_label = {call["label"]: call for call in plot_calls}
+    assert output_path == tmp_path / "unit_session_zero_trials_to_correct_fraction.png"
+    assert output_path.exists()
+    assert calls_by_label["left raw blocks"]["x"] == [0.0, 0.0]
+    assert calls_by_label["left raw blocks"]["y"] == [1.0, 0.0]
+    assert calls_by_label["right raw blocks"]["x"] == [1.0, 1.0]
+    assert calls_by_label["right raw blocks"]["y"] == [1.0, 0.0]
+    assert calls_by_label["overall raw blocks"]["x"] == [2.0, 2.0, 2.0, 2.0]
+    assert calls_by_label["overall raw blocks"]["y"] == [1.0, 0.0, 1.0, 0.0]
+    assert calls_by_label["left mean"]["y"] == [0.5]
+    assert calls_by_label["right mean"]["y"] == [0.5]
+    assert calls_by_label["overall mean"]["y"] == [0.5]
+
+
+def test_plot_cross_mouse_learning_curve_draws_mouse_lines_and_group_mean(monkeypatch, tmp_path: Path):
+    """Cross-mouse learning curves should include individual mice and day means."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_plot_calls(monkeypatch)
+    cross_mouse_df = pd.DataFrame(
+        {
+            "mouse": ["CT014", "CT014", "CT016", "CT016"],
+            "training_day": [1, 3, 1, 2],
+            "slope": [0.1, 0.3, 0.2, 0.4],
+            "learning_regressor": ["prev_n_rewarded"] * 4,
+        }
+    )
+
+    output_path = performance_plots.plot_cross_mouse_learning_curve(
+        cross_mouse_df=cross_mouse_df,
+        plot_path=tmp_path,
+        figure_id="cross_mouse",
+        learning_regressor="prev_n_rewarded",
+    )
+
+    calls_by_label = {call["label"]: call for call in plot_calls}
+    assert output_path == tmp_path / "cross_mouse_prev_n_rewarded_learning_curve.png"
+    assert output_path.exists()
+    assert calls_by_label["CT014"]["x"] == [1, 3]
+    assert calls_by_label["CT014"]["y"] == [0.1, 0.3]
+    assert calls_by_label["CT016"]["x"] == [1, 2]
+    assert calls_by_label["group mean"]["x"] == [1, 2, 3]
+    assert calls_by_label["group mean"]["y"] == [0.15000000000000002, 0.4, 0.3]
+    assert calls_by_label["group mean"]["color"] == "black"
+    assert calls_by_label["group mean"]["linewidth"] > calls_by_label["CT014"]["linewidth"]
+
+
+def test_plot_cross_mouse_session_metric_curve_draws_mouse_lines_and_group_mean(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Cross-mouse session metric curves should mirror learning-curve styling."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_plot_calls(monkeypatch)
+    cross_mouse_df = pd.DataFrame(
+        {
+            "mouse": ["CT014", "CT014", "CT016", "CT016"],
+            "training_day": [1, 3, 1, 2],
+            "metric_value": [1.0, 3.0, 2.0, 4.0],
+            "metric_column": ["median_TTS"] * 4,
+            "metric_label": ["Median Trials to Correct"] * 4,
+        }
+    )
+
+    output_path = performance_plots.plot_cross_mouse_session_metric_curve(
+        cross_mouse_df=cross_mouse_df,
+        plot_path=tmp_path,
+        figure_id="cross_mouse",
+        metric_column="median_TTS",
+        metric_label="Median Trials to Correct",
+    )
+
+    calls_by_label = {call["label"]: call for call in plot_calls}
+    assert output_path == tmp_path / "cross_mouse_median_TTS_session_metric_curve.png"
+    assert output_path.exists()
+    assert calls_by_label["CT014"]["x"] == [1, 3]
+    assert calls_by_label["CT014"]["y"] == [1.0, 3.0]
+    assert calls_by_label["CT016"]["x"] == [1, 2]
+    assert calls_by_label["group mean"]["x"] == [1, 2, 3]
+    assert calls_by_label["group mean"]["y"] == [1.5, 4.0, 3.0]
+    assert calls_by_label["group mean"]["color"] == "black"
+    assert calls_by_label["group mean"]["linewidth"] > calls_by_label["CT014"]["linewidth"]
 
 
 def test_plot_block_bias_quadrants_colors_by_block_type(monkeypatch, tmp_path: Path):

@@ -291,3 +291,28 @@ candidate model strategies without rerunning expensive HMM fits unnecessarily.
   single-session/multisession agent-agreement plots. The affected
   multisession and performance-plot test modules passed, along with compile
   checks for touched modules.
+
+# 2026/06/30
+
+Expanded the single-session summary CSV metrics so session-level behavior
+quality can be scanned without manually recomputing values from trial and block
+tables.
+
+- Added signed side-bias metrics to the session summary:
+  `bias_oracle`, `bias_ideal`, and `raw_side_bias`. These use valid behavioral
+  choice rows, with `bias_ideal` restricted to rows with a valid ideal-agent
+  greedy choice.
+- Added block-derived session summary metrics for trials to switch,
+  post-first-correct correctness, and mouse-history ideal-agent agreement:
+  `median_TTS`, `q3_TTS`, `frac_blocks_TTS_gt_5`,
+  `median_post_switch_correct`, `q1_post_switch_correct`,
+  `frac_blocks_post_switch_correct_lt_0p7`, `median_ideal_agreement`,
+  `q1_ideal_agreement`, and `frac_blocks_ideal_agreement_lt_0p6`.
+- Added post-first-correct ideal-agent agreement summaries:
+  `median_post_switch_ideal_agreement` and
+  `q1_post_switch_ideal_agreement`. These include the first correct choice and
+  exclude blocks without eligible valid comparisons.
+- Increased the visible slope label size on the single-session
+  trials-to-switch regression figures.
+- Added focused tests for the new session summary helpers and the slope-label
+  size check.

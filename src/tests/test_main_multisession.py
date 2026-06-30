@@ -608,6 +608,204 @@ def test_prepare_learning_curve_data_loudly_rejects_missing_requested_regressor(
         )
 
 
+def test_discover_mice_with_overall_performance_finds_valid_mouse_folders(tmp_path):
+    """Cross-mouse discovery should return mouse folders with matching summary CSVs."""
+    main_module = load_main_module()
+    for mouse in ("CT014", "CT016"):
+        cross_session_path = tmp_path / mouse / "cross_session_analysis"
+        cross_session_path.mkdir(parents=True)
+        pd.DataFrame({"date": ["2025-12-05"]}).to_csv(
+            cross_session_path / f"{mouse}_overall_performance.csv",
+            index=False,
+        )
+    (tmp_path / "cross_mouse_analysis").mkdir()
+    mismatched_path = tmp_path / "CT999" / "cross_session_analysis"
+    mismatched_path.mkdir(parents=True)
+    pd.DataFrame({"date": ["2025-12-05"]}).to_csv(
+        mismatched_path / "wrong_name_overall_performance.csv",
+        index=False,
+    )
+
+    mice = main_module.discover_mice_with_overall_performance(tmp_path)
+
+    assert mice == ["CT014", "CT016"]
+
+
+def test_load_cross_mouse_learning_curve_data_preserves_training_day_before_dropping_invalid_slopes(tmp_path):
+    """Invalid slopes should create gaps instead of renumbering training days."""
+    main_module = load_main_module()
+    ct014_path = tmp_path / "CT014" / "cross_session_analysis"
+    ct014_path.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "date": ["2025-12-03", "2025-12-01", "2025-12-02"],
+            "prev_n_rewarded_slope": [0.3, 0.1, "None"],
+        }
+    ).to_csv(ct014_path / "CT014_overall_performance.csv", index=False)
+    ct016_path = tmp_path / "CT016" / "cross_session_analysis"
+    ct016_path.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "date": ["2025-12-01", "2025-12-02"],
+            "prev_n_rewarded_slope": [0.2, 0.4],
+        }
+    ).to_csv(ct016_path / "CT016_overall_performance.csv", index=False)
+
+    cross_mouse_df = main_module.load_cross_mouse_learning_curve_data(
+        data_root=tmp_path,
+        mice=["CT014", "CT016"],
+        learning_regressor="prev_n_rewarded",
+    )
+
+    assert cross_mouse_df["mouse"].tolist() == ["CT014", "CT014", "CT016", "CT016"]
+    assert cross_mouse_df["date"].tolist() == [
+        "2025-12-01",
+        "2025-12-03",
+        "2025-12-01",
+        "2025-12-02",
+    ]
+    assert cross_mouse_df["training_day"].tolist() == [1, 3, 1, 2]
+    assert cross_mouse_df["slope"].tolist() == [0.1, 0.3, 0.2, 0.4]
+    assert cross_mouse_df["learning_regressor"].unique().tolist() == ["prev_n_rewarded"]
+
+
+def test_load_cross_mouse_learning_curve_data_fails_loudly_when_regressor_missing(tmp_path):
+    """Cross-mouse loading should fail when a mouse lacks the requested slope column."""
+    main_module = load_main_module()
+    cross_session_path = tmp_path / "CT014" / "cross_session_analysis"
+    cross_session_path.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "date": ["2025-12-01"],
+            "prev_consecutive_rewards_slope": [0.1],
+        }
+    ).to_csv(cross_session_path / "CT014_overall_performance.csv", index=False)
+
+    with pytest.raises(ValueError, match="CT014.*prev_n_rewarded_slope"):
+        main_module.load_cross_mouse_learning_curve_data(
+            data_root=tmp_path,
+            mice=["CT014"],
+            learning_regressor="prev_n_rewarded",
+        )
+
+
+def test_load_cross_mouse_session_metric_data_preserves_training_day_before_dropping_invalid_rows(tmp_path):
+    """Invalid metric rows should leave training-day gaps, matching learning curves."""
+    main_module = load_main_module()
+    ct014_path = tmp_path / "CT014" / "cross_session_analysis"
+    ct014_path.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "date": ["2025-12-03", "2025-12-01", "2025-12-02"],
+            "median_TTS": [3, 1, "None"],
+        }
+    ).to_csv(ct014_path / "CT014_overall_performance.csv", index=False)
+    ct016_path = tmp_path / "CT016" / "cross_session_analysis"
+    ct016_path.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "date": ["2025-12-01", "2025-12-02"],
+            "median_TTS": [2, 4],
+        }
+    ).to_csv(ct016_path / "CT016_overall_performance.csv", index=False)
+
+    cross_mouse_df = main_module.load_cross_mouse_session_metric_data(
+        data_root=tmp_path,
+        mice=["CT014", "CT016"],
+        metric_column="median_TTS",
+        metric_label="Median Trials to Correct",
+    )
+
+    assert cross_mouse_df["mouse"].tolist() == ["CT014", "CT014", "CT016", "CT016"]
+    assert cross_mouse_df["date"].tolist() == [
+        "2025-12-01",
+        "2025-12-03",
+        "2025-12-01",
+        "2025-12-02",
+    ]
+    assert cross_mouse_df["training_day"].tolist() == [1, 3, 1, 2]
+    assert cross_mouse_df["metric_value"].tolist() == [1, 3, 2, 4]
+    assert cross_mouse_df["metric_column"].unique().tolist() == ["median_TTS"]
+    assert cross_mouse_df["metric_label"].unique().tolist() == ["Median Trials to Correct"]
+
+
+def test_load_cross_mouse_session_metric_data_fails_loudly_when_metric_missing(tmp_path):
+    """Cross-mouse metric loading should fail when a mouse lacks the requested column."""
+    main_module = load_main_module()
+    cross_session_path = tmp_path / "CT014" / "cross_session_analysis"
+    cross_session_path.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "date": ["2025-12-01"],
+            "median_post_switch_correct": [0.75],
+        }
+    ).to_csv(cross_session_path / "CT014_overall_performance.csv", index=False)
+
+    with pytest.raises(ValueError, match="CT014.*median_TTS"):
+        main_module.load_cross_mouse_session_metric_data(
+            data_root=tmp_path,
+            mice=["CT014"],
+            metric_column="median_TTS",
+            metric_label="Median Trials to Correct",
+        )
+
+
+def test_run_cross_mouse_session_metric_curves_writes_metric_csvs_and_plots(tmp_path, monkeypatch):
+    """The cross-mouse metric runner should save one CSV and plot per requested metric."""
+    main_module = load_main_module()
+    for mouse, tts_values, accuracy_values in (
+        ("CT014", [1, "None", 3], [0.5, 0.75, "None"]),
+        ("CT016", [2, 4, 6], [0.6, 0.8, 0.9]),
+    ):
+        cross_session_path = tmp_path / mouse / "cross_session_analysis"
+        cross_session_path.mkdir(parents=True)
+        pd.DataFrame(
+            {
+                "date": ["2025-12-01", "2025-12-02", "2025-12-03"],
+                "median_TTS": tts_values,
+                "median_post_switch_correct": accuracy_values,
+            }
+        ).to_csv(cross_session_path / f"{mouse}_overall_performance.csv", index=False)
+
+    plot_calls = []
+
+    def record_plot(**kwargs):
+        plot_calls.append(kwargs)
+        return kwargs["plot_path"] / f"{kwargs['figure_id']}_{kwargs['metric_column']}_session_metric_curve.png"
+
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_cross_mouse_session_metric_curve",
+        record_plot,
+        raising=False,
+    )
+
+    main_module.run_cross_mouse_session_metric_curves(
+        data_root=tmp_path,
+        output_path=tmp_path / "cross_mouse_analysis",
+        mice=["CT014", "CT016"],
+        metric_specs={
+            "median_TTS": {"label": "Median Trials to Correct"},
+            "median_post_switch_correct": {
+                "label": "Median Post-First-Correct Accuracy",
+                "ylim": (0, 1),
+            },
+        },
+    )
+
+    assert len(plot_calls) == 2
+    assert (tmp_path / "cross_mouse_analysis" / "cross_mouse_median_TTS_session_metric_curve_data.csv").exists()
+    assert (
+        tmp_path
+        / "cross_mouse_analysis"
+        / "cross_mouse_median_post_switch_correct_session_metric_curve_data.csv"
+    ).exists()
+    assert plot_calls[0]["metric_column"] == "median_TTS"
+    assert plot_calls[0]["metric_label"] == "Median Trials to Correct"
+    assert plot_calls[1]["metric_column"] == "median_post_switch_correct"
+    assert plot_calls[1]["ylim"] == (0, 1)
+
+
 def test_prepare_session_trials_to_correct_summary_computes_median_and_quartiles():
     """Session TTC summaries should pool block types and report Q1/median/Q3."""
     main_module = load_main_module()

@@ -232,6 +232,56 @@ def get_numeric_correct_values(
     return numeric_values.to_numpy(dtype=float)
 
 
+def get_numeric_reward_values(
+    trial_df: pd.DataFrame,
+    valid_mask: np.ndarray | pd.Series | None = None,
+) -> np.ndarray:
+    """Return numeric reward values, validating rows used for summaries.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with shape `(n_trials, n_columns)`. Required column is
+        `reward`, with values encoded as numeric 0/1, booleans, or string
+        equivalents such as `"0"`, `"1"`, `"True"`, and `"False"`.
+    valid_mask : np.ndarray, pd.Series, or None
+        Boolean mask with shape `(n_trials,)`. Rows marked True must contain a
+        valid reward value. If None, all rows are validated.
+
+    Returns
+    -------
+    np.ndarray
+        Float array with shape `(n_trials,)`; rewarded trials are 1.0 and
+        unrewarded trials are 0.0. Rows outside `valid_mask` may contain NaN if
+        their source value was missing.
+    """
+    if "reward" not in trial_df.columns:
+        raise ValueError("trial_df must contain a 'reward' column.")
+
+    if valid_mask is None:
+        valid_mask_array = np.ones(trial_df.shape[0], dtype=bool)
+    else:
+        valid_mask_array = np.asarray(valid_mask, dtype=bool)
+        if valid_mask_array.shape[0] != trial_df.shape[0]:
+            raise ValueError(
+                "valid_mask must have one entry per trial: "
+                f"got {valid_mask_array.shape[0]} for {trial_df.shape[0]} trials."
+            )
+
+    reward_values = trial_df["reward"].copy()
+    text_values = reward_values.astype(str).str.strip().str.lower()
+    normalized_values = reward_values.mask(text_values == "true", 1)
+    normalized_values = normalized_values.mask(text_values == "false", 0)
+    numeric_values = pd.to_numeric(normalized_values, errors="coerce")
+
+    invalid_mask = valid_mask_array & numeric_values.isna().to_numpy()
+    if invalid_mask.any():
+        invalid_values = sorted(reward_values.loc[invalid_mask].astype(str).unique())
+        raise ValueError(f"reward values must be numeric 0/1 for behavioral choices, got: {invalid_values}")
+
+    return numeric_values.to_numpy(dtype=float)
+
+
 def percent_correct(augmented_trial_df: pd.DataFrame) -> dict:
     """Calculate the percentage of correct choices made by the agent. Calculate for
     left uncued, right uncued, left cued, and right cued."""
@@ -385,6 +435,170 @@ def compute_agent_mouse_agreement_by_trial(
     retained_mouse_actions = mouse_actions.loc[valid_rows].to_numpy(dtype=int)
     agreement[valid_rows] = (agent_actions == retained_mouse_actions).astype(float)
     return agreement
+
+
+def safe_side_bias_ratio(numerator: int, denominator: int) -> float | str:
+    """Return a side-bias ratio or the missing-value sentinel for zero denominators.
+
+    Parameters
+    ----------
+    numerator : int
+        Count of mouse choices for one side, in trials.
+    denominator : int
+        Count of reference trials for one side, in trials.
+
+    Returns
+    -------
+    float or str
+        `numerator / denominator` when `denominator > 0`; otherwise `"None"`.
+        This ratio is unitless and is not bounded by 1.
+    """
+    if denominator == 0:
+        return "None"
+    return float(numerator / denominator)
+
+
+def safe_signed_bias(numerator: int, denominator: int) -> float | str:
+    """Return a signed bias value or the missing-value sentinel.
+
+    Parameters
+    ----------
+    numerator : int
+        Difference between mouse left-choice count and the reference left count,
+        in trials.
+    denominator : int
+        Number of valid comparison trials, in trials.
+
+    Returns
+    -------
+    float or str
+        `numerator / denominator` when `denominator > 0`; otherwise `"None"`.
+        Positive values indicate excess left choices relative to the reference.
+    """
+    if denominator == 0:
+        return "None"
+    return float(numerator / denominator)
+
+
+def compute_session_side_bias_metrics(
+    augmented_trial_df: pd.DataFrame,
+    ideal_value_column: str = "observer_value",
+    initial_tie_choice: int = ideal_observer.RIGHT_CHOICE,
+) -> dict[str, int | float | str]:
+    """Compute whole-session side-bias ratios against true and ideal choices.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required
+        columns are `action` and `state`. If `ideal_value_column` is absent,
+        mouse-history ideal values are computed from the columns accepted by
+        `ideal_observer.compute_history_ideal_values`. Actions use `0=right`,
+        `1=left`; state values are normalized to left/right with the same task
+        convention used by switch-persistence diagnostics. Rows marked as
+        no-choice or experimenter reward are excluded by
+        `make_behavioral_choice_mask`.
+    ideal_value_column : str, default="observer_value"
+        Signed left-positive ideal-agent value. Positive values greedily choose
+        left, negative values choose right, and exact zeroes repeat the
+        previous greedy ideal action.
+    initial_tie_choice : int, default=ideal_observer.RIGHT_CHOICE
+        Greedy choice used when the first valid ideal row is an exact tie.
+
+    Returns
+    -------
+    dict[str, int or float or str]
+        Session-level counts and ratios. Count values are in trials. Ratio
+        values are unitless and are not bounded by 1. Ratio fields with zero
+        denominators contain the string sentinel `"None"`.
+
+    Raises
+    ------
+    ValueError
+        If required columns are absent or valid animal-choice actions cannot
+        be parsed as numeric side choices.
+    """
+    required_columns = {"action", "state"}
+    missing_columns = sorted(required_columns.difference(augmented_trial_df.columns))
+    if missing_columns:
+        raise ValueError(f"augmented_trial_df is missing required columns: {missing_columns}")
+
+    behavioral_choice_ix = make_behavioral_choice_mask(augmented_trial_df)
+    mouse_actions = pd.to_numeric(augmented_trial_df["action"], errors="coerce")
+    valid_action_rows = behavioral_choice_ix & mouse_actions.notna().to_numpy()
+    invalid_actions = augmented_trial_df.loc[
+        behavioral_choice_ix & mouse_actions.isna().to_numpy(),
+        "action",
+    ]
+    if not invalid_actions.empty:
+        invalid_summary = sorted(invalid_actions.astype(str).unique())
+        raise ValueError(f"action values must be numeric side choices, got: {invalid_summary}")
+
+    normalized_state_sides = augmented_trial_df["state"].map(
+        switch_persistence.normalize_context_side
+    )
+    left_choice_rows = valid_action_rows & mouse_actions.eq(ideal_observer.LEFT_CHOICE).to_numpy()
+    right_choice_rows = valid_action_rows & mouse_actions.eq(ideal_observer.RIGHT_CHOICE).to_numpy()
+    true_left_rows = valid_action_rows & normalized_state_sides.eq("left").to_numpy()
+    true_right_rows = valid_action_rows & normalized_state_sides.eq("right").to_numpy()
+
+    if ideal_value_column in augmented_trial_df.columns:
+        ideal_values = pd.to_numeric(augmented_trial_df[ideal_value_column], errors="coerce")
+    else:
+        computed_ideal_values = ideal_observer.compute_history_ideal_values(
+            augmented_trial_df,
+            params=ideal_observer.IdealObserverParams(
+                initial_tie_choice=initial_tie_choice
+            ),
+        )
+        ideal_values = pd.to_numeric(pd.Series(computed_ideal_values), errors="coerce")
+    valid_ideal_rows = valid_action_rows & ideal_values.notna().to_numpy()
+    ideal_left_rows = np.zeros(augmented_trial_df.shape[0], dtype=bool)
+    ideal_right_rows = np.zeros(augmented_trial_df.shape[0], dtype=bool)
+    if valid_ideal_rows.any():
+        ideal_actions = ideal_observer.choose_greedy_left_positive_actions(
+            ideal_values.loc[valid_ideal_rows].to_numpy(dtype=float),
+            initial_choice=initial_tie_choice,
+        )
+        valid_ideal_indices = np.flatnonzero(valid_ideal_rows)
+        ideal_left_rows[valid_ideal_indices] = ideal_actions == ideal_observer.LEFT_CHOICE
+        ideal_right_rows[valid_ideal_indices] = ideal_actions == ideal_observer.RIGHT_CHOICE
+
+    n_left_choices = int(np.sum(left_choice_rows))
+    n_right_choices = int(np.sum(right_choice_rows))
+    n_true_left_trials = int(np.sum(true_left_rows))
+    n_true_right_trials = int(np.sum(true_right_rows))
+    n_ideal_left_trials = int(np.sum(ideal_left_rows))
+    n_ideal_right_trials = int(np.sum(ideal_right_rows))
+    n_valid_action_trials = n_left_choices + n_right_choices
+    ideal_valid_left_choice_rows = left_choice_rows & valid_ideal_rows
+    n_valid_ideal_trials = int(np.sum(valid_ideal_rows))
+    n_valid_ideal_left_choices = int(np.sum(ideal_valid_left_choice_rows))
+
+    return {
+        "n_left_choices": n_left_choices,
+        "n_right_choices": n_right_choices,
+        "n_true_left_trials": n_true_left_trials,
+        "n_true_right_trials": n_true_right_trials,
+        "n_ideal_left_trials": n_ideal_left_trials,
+        "n_ideal_right_trials": n_ideal_right_trials,
+        "left_choice_per_true_left": safe_side_bias_ratio(n_left_choices, n_true_left_trials),
+        "right_choice_per_true_right": safe_side_bias_ratio(n_right_choices, n_true_right_trials),
+        "left_choice_per_ideal_left": safe_side_bias_ratio(n_left_choices, n_ideal_left_trials),
+        "right_choice_per_ideal_right": safe_side_bias_ratio(n_right_choices, n_ideal_right_trials),
+        "bias_oracle": safe_signed_bias(
+            n_left_choices - n_true_left_trials,
+            n_valid_action_trials,
+        ),
+        "bias_ideal": safe_signed_bias(
+            n_valid_ideal_left_choices - n_ideal_left_trials,
+            n_valid_ideal_trials,
+        ),
+        "raw_side_bias": safe_signed_bias(
+            n_left_choices - n_right_choices,
+            n_valid_action_trials,
+        ),
+    }
 
 
 def _trial_block_mask(trial_block_values: pd.Series, block_id) -> np.ndarray:
@@ -692,6 +906,347 @@ def summarize_trials_to_correct(block_performance: pd.DataFrame) -> dict:
     )
 
 
+def safe_zero_ttc_fraction(n_zero_blocks: int, n_blocks: int) -> float | str:
+    """Return a zero-trials-to-correct fraction or the missing sentinel.
+
+    Parameters
+    ----------
+    n_zero_blocks : int
+        Number of valid block changes with `trials_to_correct == 0`, in blocks.
+    n_blocks : int
+        Number of valid block changes entering the denominator, in blocks.
+
+    Returns
+    -------
+    float or str
+        `n_zero_blocks / n_blocks` when `n_blocks > 0`; otherwise `"None"`.
+        The fraction is unitless and bounded from 0 to 1.
+    """
+    if n_blocks == 0:
+        return "None"
+    return float(n_zero_blocks / n_blocks)
+
+
+def compute_zero_trials_to_correct_metrics(block_performance: pd.DataFrame) -> dict[str, int | float | str]:
+    """Summarize immediate-correction block changes for one session.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`. Required
+        columns are `block_type` and `trials_to_correct`. The first row is
+        excluded because it is not a block change. Dark-period rows and rows
+        with missing/non-numeric `trials_to_correct` are excluded.
+
+    Returns
+    -------
+    dict[str, int or float or str]
+        Session-level zero-trials-to-correct fractions for `left`, `right`,
+        and `overall`, plus matching count fields. Fractions are unitless;
+        groups with zero valid block changes return `"None"` for the fraction.
+    """
+    required_columns = {"block_type", "trials_to_correct"}
+    missing_columns = sorted(required_columns.difference(block_performance.columns))
+    if missing_columns:
+        raise ValueError(f"block_performance is missing required columns: {missing_columns}")
+
+    metric_df = block_performance.copy().reset_index(drop=True)
+    metric_df = metric_df.iloc[1:].copy()
+    metric_df["rewarded_side"] = metric_df["block_type"].map(
+        lambda block_type: "left"
+        if str(block_type).startswith("left_")
+        else "right"
+        if str(block_type).startswith("right_")
+        else "None"
+    )
+    metric_df["trials_to_correct_numeric"] = pd.to_numeric(
+        metric_df["trials_to_correct"],
+        errors="coerce",
+    )
+    valid_blocks = metric_df[
+        metric_df["rewarded_side"].isin(["left", "right"])
+        & metric_df["trials_to_correct_numeric"].notna()
+    ].copy()
+    valid_blocks["zero_trials_to_correct_flag"] = (
+        valid_blocks["trials_to_correct_numeric"].eq(0).astype(int)
+    )
+
+    metric_summary = {}
+    for side in ("left", "right"):
+        side_flags = valid_blocks.loc[
+            valid_blocks["rewarded_side"] == side,
+            "zero_trials_to_correct_flag",
+        ]
+        n_blocks = int(side_flags.shape[0])
+        n_zero = int(side_flags.sum()) if n_blocks else 0
+        metric_summary[f"{side}_zero_ttc_fraction"] = safe_zero_ttc_fraction(
+            n_zero,
+            n_blocks,
+        )
+        metric_summary[f"{side}_zero_ttc_n_blocks"] = n_blocks
+        metric_summary[f"{side}_zero_ttc_n_zero"] = n_zero
+
+    overall_flags = valid_blocks["zero_trials_to_correct_flag"]
+    overall_n_blocks = int(overall_flags.shape[0])
+    overall_n_zero = int(overall_flags.sum()) if overall_n_blocks else 0
+    metric_summary["overall_zero_ttc_fraction"] = safe_zero_ttc_fraction(
+        overall_n_zero,
+        overall_n_blocks,
+    )
+    metric_summary["overall_zero_ttc_n_blocks"] = overall_n_blocks
+    metric_summary["overall_zero_ttc_n_zero"] = overall_n_zero
+    return metric_summary
+
+
+def _numeric_metric_values(dataframe: pd.DataFrame, column: str) -> pd.Series:
+    """Return valid numeric values for one metric column.
+
+    Parameters
+    ----------
+    dataframe : pd.DataFrame
+        Table with shape `(n_rows, n_columns)`.
+    column : str
+        Column to coerce to numeric values. Values such as `"None"` are treated
+        as missing and dropped.
+
+    Returns
+    -------
+    pd.Series
+        One-dimensional numeric series containing only eligible metric values.
+        Values are unitless unless the source column has documented units.
+    """
+    if column not in dataframe.columns:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(dataframe[column], errors="coerce").dropna()
+
+
+def _safe_median(values: pd.Series) -> float | str:
+    """Return the median of valid metric values, or `"None"` when empty.
+
+    Parameters
+    ----------
+    values : pd.Series
+        Numeric metric values with shape `(n_values,)`.
+
+    Returns
+    -------
+    float or str
+        Median value, unitless unless the source metric has units. Empty inputs
+        return the CSV missing-value sentinel `"None"`.
+    """
+    if values.empty:
+        return "None"
+    return float(values.median())
+
+
+def _safe_quantile(values: pd.Series, quantile: float) -> float | str:
+    """Return a quantile of valid metric values, or `"None"` when empty.
+
+    Parameters
+    ----------
+    values : pd.Series
+        Numeric metric values with shape `(n_values,)`.
+    quantile : float
+        Quantile in the closed interval `[0, 1]`.
+
+    Returns
+    -------
+    float or str
+        Requested quantile, unitless unless the source metric has units. Empty
+        inputs return the CSV missing-value sentinel `"None"`.
+    """
+    if values.empty:
+        return "None"
+    return float(values.quantile(quantile))
+
+
+def _safe_fraction(values: pd.Series, condition: pd.Series | np.ndarray) -> float | str:
+    """Return the fraction of valid metric values satisfying a condition.
+
+    Parameters
+    ----------
+    values : pd.Series
+        Numeric metric values with shape `(n_values,)`.
+    condition : pd.Series or np.ndarray
+        Boolean array with shape `(n_values,)`, aligned to `values`.
+
+    Returns
+    -------
+    float or str
+        Unitless fraction of values satisfying `condition`, or `"None"` when
+        no eligible values are present.
+    """
+    if values.empty:
+        return "None"
+    return float(np.mean(np.asarray(condition, dtype=bool)))
+
+
+def compute_session_block_quality_metrics(
+    block_performance: pd.DataFrame,
+    tts_threshold: float = 5,
+    post_switch_correct_threshold: float = 0.7,
+    ideal_agreement_threshold: float = 0.6,
+) -> dict[str, float | str]:
+    """Summarize block-level adaptation and maintenance metrics for one session.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise table with shape `(n_blocks, n_columns)`. Expected columns are
+        `trials_to_correct`, `percent_correct_after_first_correct`, and
+        `block_history_ideal_mouse_agreement`. Missing or nonnumeric entries
+        are excluded from the relevant metric denominator.
+    tts_threshold : float, default=5
+        Threshold in trials for the `frac_blocks_TTS_gt_5` summary.
+    post_switch_correct_threshold : float, default=0.7
+        Unitless correctness threshold for post-first-correct maintenance.
+    ideal_agreement_threshold : float, default=0.6
+        Unitless agreement threshold for mouse-history ideal-agent agreement.
+
+    Returns
+    -------
+    dict[str, float or str]
+        Session-level scalar summaries. Count-like fractions are unitless.
+        Missing summaries use the CSV sentinel `"None"`.
+    """
+    tts_values = _numeric_metric_values(block_performance, "trials_to_correct")
+    post_switch_correct_values = _numeric_metric_values(
+        block_performance,
+        "percent_correct_after_first_correct",
+    )
+    ideal_agreement_values = _numeric_metric_values(
+        block_performance,
+        "block_history_ideal_mouse_agreement",
+    )
+
+    return {
+        "median_TTS": _safe_median(tts_values),
+        "q3_TTS": _safe_quantile(tts_values, 0.75),
+        "frac_blocks_TTS_gt_5": _safe_fraction(
+            tts_values,
+            tts_values > tts_threshold,
+        ),
+        "median_post_switch_correct": _safe_median(post_switch_correct_values),
+        "q1_post_switch_correct": _safe_quantile(post_switch_correct_values, 0.25),
+        "frac_blocks_post_switch_correct_lt_0p7": _safe_fraction(
+            post_switch_correct_values,
+            post_switch_correct_values < post_switch_correct_threshold,
+        ),
+        "median_ideal_agreement": _safe_median(ideal_agreement_values),
+        "q1_ideal_agreement": _safe_quantile(ideal_agreement_values, 0.25),
+        "frac_blocks_ideal_agreement_lt_0p6": _safe_fraction(
+            ideal_agreement_values,
+            ideal_agreement_values < ideal_agreement_threshold,
+        ),
+    }
+
+
+def compute_post_switch_ideal_agreement_summary(
+    augmented_trial_df: pd.DataFrame,
+    block_performance: pd.DataFrame,
+) -> dict[str, float | str]:
+    """Summarize ideal-agent agreement after the first correct choice per block.
+
+    Parameters
+    ----------
+    augmented_trial_df : pd.DataFrame
+        Trialwise table with shape `(n_trials, n_columns)`. Required columns are
+        `cur_block`, `action`, and `correct`. If `observer_value` is present it
+        is used as the signed left-positive ideal-agent value; otherwise values
+        are computed from columns accepted by
+        `compute_history_ideal_mouse_agreement_by_trial`. Actions use
+        `0=right`, `1=left`; correctness values are 0/1. No-choice and
+        experimenter-reward rows are excluded through existing behavioral
+        choice masks.
+    block_performance : pd.DataFrame
+        Blockwise table with shape `(n_blocks, n_columns)`. If present,
+        `block_ix` is used to align blocks to `augmented_trial_df.cur_block`;
+        otherwise rows align to first-seen `cur_block` values.
+
+    Returns
+    -------
+    dict[str, float or str]
+        `median_post_switch_ideal_agreement` and
+        `q1_post_switch_ideal_agreement`, unitless fractions over eligible
+        blocks. Blocks without a first correct behavioral choice, without
+        post-switch valid trials, or without valid ideal comparisons are
+        excluded. Empty summaries use the CSV sentinel `"None"`.
+    """
+    if "cur_block" not in augmented_trial_df.columns:
+        raise ValueError("augmented_trial_df is missing required column: cur_block")
+
+    if "block_ix" in block_performance.columns:
+        block_ids = block_performance["block_ix"].to_numpy()
+    else:
+        block_ids = augmented_trial_df["cur_block"].drop_duplicates().to_numpy()
+        if len(block_ids) != len(block_performance):
+            raise ValueError(
+                "Cannot align block_performance rows to augmented_trial_df.cur_block; "
+                "provide a block_ix column or matching block row count."
+            )
+
+    if "observer_value" in augmented_trial_df.columns:
+        trial_agreement = compute_agent_mouse_agreement_by_trial(
+            augmented_trial_df,
+            value_column="observer_value",
+        )
+    else:
+        trial_agreement = compute_history_ideal_mouse_agreement_by_trial(augmented_trial_df)
+    block_post_switch_agreement = []
+
+    for block_id in block_ids:
+        block_mask = _trial_block_mask(augmented_trial_df["cur_block"], block_id)
+        cur_block_df = augmented_trial_df.loc[block_mask]
+        if cur_block_df.empty:
+            continue
+
+        behavioral_choice_mask = make_behavioral_choice_mask(cur_block_df)
+        if not behavioral_choice_mask.any():
+            continue
+
+        correct_values = get_numeric_correct_values(cur_block_df, behavioral_choice_mask)
+        behavioral_correct_values = correct_values[np.asarray(behavioral_choice_mask)]
+        first_correct_positions = np.nonzero(behavioral_correct_values)[0]
+        if first_correct_positions.size == 0:
+            continue
+
+        behavioral_trial_indices = np.flatnonzero(block_mask)[np.asarray(behavioral_choice_mask)]
+        post_switch_trial_indices = behavioral_trial_indices[first_correct_positions[0]:]
+        agreement_values = pd.to_numeric(
+            pd.Series(trial_agreement[post_switch_trial_indices]),
+            errors="coerce",
+        ).dropna()
+        if agreement_values.empty:
+            continue
+        block_post_switch_agreement.append(float(agreement_values.mean()))
+
+    summary_values = pd.Series(block_post_switch_agreement, dtype=float)
+    return {
+        "median_post_switch_ideal_agreement": _safe_median(summary_values),
+        "q1_post_switch_ideal_agreement": _safe_quantile(summary_values, 0.25),
+    }
+
+
+def missing_post_switch_ideal_agreement_summary() -> dict[str, str]:
+    """Return missing sentinels for post-switch ideal-agreement summaries.
+
+    Parameters
+    ----------
+    None
+
+    Returns
+    -------
+    dict[str, str]
+        Summary dictionary containing `"None"` for
+        `median_post_switch_ideal_agreement` and
+        `q1_post_switch_ideal_agreement`.
+    """
+    return {
+        "median_post_switch_ideal_agreement": "None",
+        "q1_post_switch_ideal_agreement": "None",
+    }
+
+
 def get_block_switches(trial_df: pd.DataFrame) -> tuple[int, int]:
     """Count left-right action switches while ignoring no-choice rows."""
     actions = np.copy(trial_df['action'].values)
@@ -820,9 +1375,10 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
         n_switches, normalized_switches = get_block_switches(cur_block_df)
         n_explore_trials = count_explore_trials(cur_block_df)
         behavioral_choice_ix = make_behavioral_choice_mask(cur_block_df)
-        behavioral_block_df = cur_block_df[behavioral_choice_ix]
         correct_values = get_numeric_correct_values(cur_block_df, behavioral_choice_ix)
+        reward_values = get_numeric_reward_values(cur_block_df, behavioral_choice_ix)
         behavioral_correct_values = correct_values[np.asarray(behavioral_choice_ix)]
+        behavioral_reward_values = reward_values[np.asarray(behavioral_choice_ix)]
         block_history_ideal_values = pd.to_numeric(
             pd.Series(history_ideal_mouse_agreement[cur_block_ix.to_numpy()]),
             errors="coerce",
@@ -861,7 +1417,7 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
                            confusion_flag=n_switches > 3,
                            n_correct=int(np.sum(behavioral_correct_values)),
                            percent_correct=performance['overall_correct'],
-                           n_rewarded=np.sum(behavioral_block_df['reward']),
+                           n_rewarded=float(np.sum(behavioral_reward_values)),
                            mean_choice_time=mean_or_nan(choice_latency[cur_block_ix.to_numpy()]),
                            median_choice_time=median_or_nan(choice_latency[cur_block_ix.to_numpy()]),
                            std_choice_time=std_or_nan(choice_latency[cur_block_ix.to_numpy()]),
@@ -905,6 +1461,12 @@ def summarize_session_performance(
     """
     session_performance = percent_correct(augmented_trial_df)
     session_performance = session_performance | summarize_trials_to_correct(block_performance)
+    session_performance = session_performance | compute_zero_trials_to_correct_metrics(
+        block_performance
+    )
+    session_performance = session_performance | compute_session_block_quality_metrics(
+        block_performance
+    )
     session_performance = session_performance | general_behavior_assessment.summarize_oracle_behavior(
         augmented_trial_df
     )
@@ -918,6 +1480,16 @@ def summarize_session_performance(
             random_seed=ideal_observer_seed,
         ),
     )
+    session_performance = session_performance | compute_session_side_bias_metrics(
+        augmented_trial_df
+    )
+    if {"cur_block", "correct"}.issubset(augmented_trial_df.columns):
+        session_performance = session_performance | compute_post_switch_ideal_agreement_summary(
+            augmented_trial_df,
+            block_performance,
+        )
+    else:
+        session_performance = session_performance | missing_post_switch_ideal_agreement_summary()
     session_performance['date'] = date
     return pd.DataFrame(session_performance, index=[0])
 
@@ -1398,6 +1970,58 @@ def _add_regression_stats(
     return session_performance
 
 
+def _coerce_regression_values(values: pd.Series) -> pd.Series:
+    """Coerce a regression input series to finite int64-safe numeric values.
+
+    Parameters
+    ----------
+    values : pd.Series
+        One-dimensional regression input with shape `(n_blocks,)`. Values are
+        expected to be block-level counts in trials, but may contain CSV
+        sentinels such as `"None"` or stale malformed string values.
+
+    Returns
+    -------
+    pd.Series
+        Float series with shape `(n_blocks,)`. Values that cannot be parsed,
+        are nonfinite, or exceed signed int64 bounds are set to NaN so the
+        corresponding regression rows can be excluded before fitting.
+    """
+    numeric_values = pd.to_numeric(values, errors="coerce")
+    int64_limit = np.iinfo(np.int64).max
+    valid_values = numeric_values.notna() & np.isfinite(numeric_values)
+    valid_values = valid_values & numeric_values.abs().le(int64_limit)
+    return numeric_values.where(valid_values)
+
+
+def _numeric_regression_inputs(
+    dependent_values: pd.Series,
+    independent_values: pd.Series,
+    base_valid_rows: pd.Series,
+) -> tuple[pd.Series, pd.Series]:
+    """Return paired numeric regression inputs after row filtering.
+
+    Parameters
+    ----------
+    dependent_values : pd.Series
+        Numeric dependent values with shape `(n_blocks,)`, in trials.
+    independent_values : pd.Series
+        Numeric independent values with shape `(n_blocks,)`, in trials.
+    base_valid_rows : pd.Series
+        Boolean mask with shape `(n_blocks,)` marking rows that are valid under
+        the shared trials-to-correct convention.
+
+    Returns
+    -------
+    tuple[pd.Series, pd.Series]
+        `(dependent_var, independent_var)` after excluding rows where either
+        series is missing or malformed. Both outputs are float-valued trial
+        counts with matching shape `(n_valid_rows,)`.
+    """
+    valid_rows = base_valid_rows & dependent_values.notna() & independent_values.notna()
+    return dependent_values[valid_rows], independent_values[valid_rows]
+
+
 def add_regression_stats_to_session_performance(
     session_performance: pd.DataFrame,
     trials_to_correct: pd.Series,
@@ -1431,26 +2055,51 @@ def add_regression_stats_to_session_performance(
         `prev_n_correct`, plus `n_blocks`.
     """
     session_performance = session_performance.copy()
-    valid_rows = _get_valid_trials_to_correct_mask(trials_to_correct, prev_n_correct)
-    dependent_var = trials_to_correct[valid_rows].astype(int)
+    trials_to_correct_numeric = _coerce_regression_values(trials_to_correct)
+    prev_n_correct_numeric = _coerce_regression_values(prev_n_correct)
+    prev_consecutive_rewards_numeric = _coerce_regression_values(prev_consecutive_rewards)
+    prev_n_rewarded_numeric = _coerce_regression_values(prev_n_rewarded)
+    valid_rows = (
+        pd.Series(
+            _get_valid_trials_to_correct_mask(trials_to_correct, prev_n_correct),
+            index=trials_to_correct.index,
+        )
+        & trials_to_correct_numeric.notna()
+        & prev_n_correct_numeric.notna()
+    )
 
+    dependent_var, independent_var = _numeric_regression_inputs(
+        dependent_values=trials_to_correct_numeric,
+        independent_values=prev_n_rewarded_numeric,
+        base_valid_rows=valid_rows,
+    )
     session_performance = _add_regression_stats(
         session_performance=session_performance,
         column_prefix="prev_n_rewarded",
         dependent_var=dependent_var,
-        independent_var=prev_n_rewarded[valid_rows].astype(int),
+        independent_var=independent_var,
+    )
+    dependent_var, independent_var = _numeric_regression_inputs(
+        dependent_values=trials_to_correct_numeric,
+        independent_values=prev_consecutive_rewards_numeric,
+        base_valid_rows=valid_rows,
     )
     session_performance = _add_regression_stats(
         session_performance=session_performance,
         column_prefix="prev_consecutive_rewards",
         dependent_var=dependent_var,
-        independent_var=prev_consecutive_rewards[valid_rows].astype(int),
+        independent_var=independent_var,
+    )
+    dependent_var, independent_var = _numeric_regression_inputs(
+        dependent_values=trials_to_correct_numeric,
+        independent_values=prev_n_correct_numeric,
+        base_valid_rows=valid_rows,
     )
     session_performance = _add_regression_stats(
         session_performance=session_performance,
         column_prefix="prev_n_correct",
         dependent_var=dependent_var,
-        independent_var=prev_n_correct[valid_rows].astype(int),
+        independent_var=independent_var,
     )
     session_performance["n_blocks"] = n_blocks
     return session_performance

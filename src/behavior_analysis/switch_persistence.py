@@ -15,6 +15,7 @@ from src.behavior_analysis.project_utils import (
 SIDE_RIGHT = "right"
 SIDE_LEFT = "left"
 SWITCH_GROUP_COMBINED = "combined"
+CORRECT_GROUP_COMBINED = "combined"
 SWITCH_DIRECTION_LABELS = {
     (SIDE_LEFT, SIDE_RIGHT): "L_to_R",
     (SIDE_RIGHT, SIDE_LEFT): "R_to_L",
@@ -642,6 +643,337 @@ def save_switch_persistence_outputs(
 
     detail_path = processed_data_path / f"{sess_id_full}_switch_persistence_trials.csv"
     summary_path = processed_data_path / f"{sess_id_full}_switch_persistence_summary.csv"
+    detail_df.to_csv(detail_path, index=False, na_rep="None")
+    summary_df.to_csv(summary_path, index=False, na_rep="None")
+    return detail_df, summary_df
+
+
+def coerce_boolean_metric(series: pd.Series, column_name: str) -> pd.Series:
+    """Normalize boolean-like metric values from memory or saved CSVs.
+
+    Parameters
+    ----------
+    series : pd.Series
+        One-dimensional metric values with shape `(n_rows,)`. Accepted values
+        are booleans, numeric `0`/`1`, and case-insensitive strings
+        `"true"`, `"false"`, `"0"`, and `"1"`.
+    column_name : str
+        Name used in the error message if unrecognized values are present.
+
+    Returns
+    -------
+    pd.Series
+        Boolean Series with shape `(n_rows,)`, aligned to `series.index`.
+    """
+    normalized = series.copy()
+    if pd.api.types.is_bool_dtype(normalized):
+        return normalized.astype(bool)
+    if pd.api.types.is_numeric_dtype(normalized):
+        numeric = pd.to_numeric(normalized, errors="raise")
+        invalid = numeric[~numeric.isin([0, 1])]
+        if not invalid.empty:
+            invalid_summary = sorted(invalid.astype(str).unique())
+            raise ValueError(f"{column_name} must contain boolean-like values, got: {invalid_summary}")
+        return numeric.astype(bool)
+
+    text_values = normalized.astype(str).str.strip().str.lower()
+    mapping = {
+        "true": True,
+        "false": False,
+        "1": True,
+        "1.0": True,
+        "0": False,
+        "0.0": False,
+    }
+    parsed = text_values.map(mapping)
+    invalid = normalized.loc[parsed.isna()]
+    if not invalid.empty:
+        invalid_summary = sorted(invalid.astype(str).unique())
+        raise ValueError(f"{column_name} must contain boolean-like values, got: {invalid_summary}")
+    return parsed.astype(bool)
+
+
+def build_post_first_correct_rows_for_block(
+    block_row: pd.Series,
+    block_df: pd.DataFrame,
+    correct_side: str,
+) -> list[dict]:
+    """Build post-first-correct diagnostic rows for one block.
+
+    Parameters
+    ----------
+    block_row : pd.Series
+        Blockwise metadata row for the current block. Required item is
+        `block_ix`; previous-block metric columns are copied when present.
+    block_df : pd.DataFrame
+        Trialwise rows from the current block, shape `(n_block_trials,
+        n_columns)`, in session order. Required columns are `cur_block`,
+        `action`, and `correct`. `correct` is a unitless binary trial outcome.
+    correct_side : str
+        Correct context side for this block, either `"left"` or `"right"`.
+
+    Returns
+    -------
+    list[dict]
+        One dictionary per trial row in `block_df`. Rows preserve no-choice,
+        manual-reward, and pre-anchor trials for diagnostics; summary rows are
+        marked by `include_trial_in_session_metric`.
+    """
+    if block_df.empty:
+        raise ValueError(f"No trial rows found for block_ix {block_row['block_ix']}.")
+
+    required_columns = {"cur_block", "action", "correct"}
+    missing_columns = sorted(required_columns.difference(block_df.columns))
+    if missing_columns:
+        raise ValueError(f"block_df is missing required columns: {missing_columns}")
+
+    trial_cur_block = int(
+        pd.to_numeric(block_df["cur_block"], errors="raise").astype(int).iloc[0]
+    )
+    normalized_block_df = normalize_experimenter_reward_column(block_df)
+    valid_choice = make_valid_choice_mask(normalized_block_df)
+    valid_correct = pd.to_numeric(
+        normalized_block_df.loc[valid_choice, "correct"],
+        errors="coerce",
+    )
+    invalid_correct = normalized_block_df.loc[valid_choice, "correct"].loc[
+        valid_correct.isna()
+    ]
+    if not invalid_correct.empty:
+        invalid_summary = sorted(invalid_correct.astype(str).unique())
+        raise ValueError(
+            f"correct values must be numeric for valid animal choices, got: {invalid_summary}"
+        )
+
+    correct_by_index = pd.Series(False, index=normalized_block_df.index)
+    correct_by_index.loc[valid_choice] = valid_correct.astype(float).gt(0).to_numpy()
+    first_correct_index = next(
+        (
+            trial_index
+            for trial_index in normalized_block_df.index
+            if bool(valid_choice.loc[trial_index]) and bool(correct_by_index.loc[trial_index])
+        ),
+        None,
+    )
+    first_correct_position = (
+        None
+        if first_correct_index is None
+        else int(normalized_block_df.index.get_loc(first_correct_index))
+    )
+    exclusion_reason = (
+        "None" if first_correct_position is not None else "no_correct_before_block_end"
+    )
+    include_block = exclusion_reason == "None"
+    choice_trial_after_first_correct = -1
+    rows = []
+
+    for position, (trial_index, trial_row) in enumerate(normalized_block_df.iterrows()):
+        action_side = parse_choice_side(trial_row["action"])
+        is_valid_choice = bool(valid_choice.loc[trial_index])
+        is_manual_reward = action_side is not None and not is_valid_choice
+        is_after_first_correct = (
+            first_correct_position is not None and position >= first_correct_position
+        )
+
+        if action_side is None:
+            choice_status = "no_choice"
+        elif is_manual_reward:
+            choice_status = "manual_reward"
+        elif is_after_first_correct:
+            choice_status = "post_first_correct"
+        else:
+            choice_status = "pre_first_correct"
+
+        include_trial = bool(include_block and is_valid_choice and is_after_first_correct)
+        if include_trial:
+            choice_trial_after_first_correct += 1
+            choice_trial_value = choice_trial_after_first_correct
+            correct_value = bool(correct_by_index.loc[trial_index])
+        else:
+            choice_trial_value = "None"
+            correct_value = "None"
+
+        row = {
+            "block_ix": int(block_row["block_ix"]),
+            "trial_cur_block": trial_cur_block,
+            "raw_trial_index": int(trial_index),
+            "trial_index_after_block_start": position,
+            "choice_trial_after_first_correct": choice_trial_value,
+            "correct_side": correct_side,
+            "action_side": action_side if action_side is not None else "None",
+            "choice_status": choice_status,
+            "correct": correct_value,
+            "include_block_in_session_metric": bool(include_block),
+            "include_trial_in_session_metric": include_trial,
+            "exclusion_reason": exclusion_reason,
+        }
+        if "cur_trial" in trial_row.index:
+            row["cur_trial"] = trial_row["cur_trial"]
+        for column_name in PREVIOUS_BLOCK_COLUMNS:
+            if column_name in block_row.index:
+                row[column_name] = block_row[column_name]
+        rows.append(row)
+
+    return rows
+
+
+def compute_post_first_correct_accuracy_trials(
+    block_performance: pd.DataFrame,
+    augmented_trial_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Compute trial-level accuracy after the first correct choice in each block.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`. Required
+        column is `block_ix`; previous-block metrics are copied when present.
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Required
+        columns are `cur_block`, `state`, `action`, and `correct`. Trial
+        rows are in session order and trial outcomes are unitless binary
+        correctness values.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long dataframe with one row per block trial. The x-axis for summaries
+        is `choice_trial_after_first_correct`, where `0` is the first correct
+        animal choice in that block. Diagnostic rows are retained even when
+        excluded from session summaries.
+    """
+    if "block_ix" not in block_performance.columns:
+        raise ValueError("block_performance must contain a 'block_ix' column.")
+    for column_name in ("cur_block", "state", "action", "correct"):
+        if column_name not in augmented_trial_df.columns:
+            raise ValueError(f"augmented_trial_df must contain a '{column_name}' column.")
+
+    trial_df = normalize_experimenter_reward_column(augmented_trial_df)
+    block_trial_id_map = build_block_trial_id_map(block_performance, trial_df)
+    trial_block_ids = pd.to_numeric(trial_df["cur_block"], errors="raise").astype(int)
+    block_sides = get_block_context_sides(trial_df)
+    rows = []
+
+    for _, block_row in block_performance.iterrows():
+        block_id = int(block_row["block_ix"])
+        trial_block_id = block_trial_id_map[block_id]
+        if trial_block_id not in block_sides:
+            missing_direct_ids = sorted(
+                set(block_performance["block_ix"].astype(int)).difference(block_sides)
+            )
+            raise ValueError(
+                "Cannot align block_performance block_ix to augmented_trial_df cur_block: "
+                f"block_ix={block_id}, trial_cur_block={trial_block_id}, "
+                f"missing_direct_block_ix={missing_direct_ids}."
+            )
+
+        block_df = trial_df[trial_block_ids == trial_block_id]
+        rows.extend(
+            build_post_first_correct_rows_for_block(
+                block_row=block_row,
+                block_df=block_df,
+                correct_side=block_sides[trial_block_id],
+            )
+        )
+
+    return pd.DataFrame(rows)
+
+
+def summarize_post_first_correct_accuracy(detail_df: pd.DataFrame) -> pd.DataFrame:
+    """Summarize correct-choice probability by index after first correct choice.
+
+    Parameters
+    ----------
+    detail_df : pd.DataFrame
+        Output from `compute_post_first_correct_accuracy_trials`, shape
+        `(n_rows, n_columns)`. Required columns are `correct_side`,
+        `choice_trial_after_first_correct`, `correct`, and
+        `include_trial_in_session_metric`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Summary dataframe with shape `(n_groups * n_trial_indices,
+        n_columns)`. Rows include `combined`, `left`, and `right` groups when
+        data are present. `proportion_correct` is unitless; counts are valid
+        block-trial counts.
+    """
+    columns = [
+        "correct_group",
+        "choice_trial_after_first_correct",
+        "n_blocks",
+        "n_correct",
+        "n_incorrect",
+        "proportion_correct",
+    ]
+    if detail_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    included = detail_df[detail_df["include_trial_in_session_metric"]].copy()
+    if included.empty:
+        return pd.DataFrame(columns=columns)
+
+    included["choice_trial_after_first_correct"] = pd.to_numeric(
+        included["choice_trial_after_first_correct"],
+        errors="raise",
+    ).astype(int)
+    included["correct"] = coerce_boolean_metric(included["correct"], "correct")
+    summary_parts = []
+    group_specs = [(CORRECT_GROUP_COMBINED, included)] + [
+        (side, included[included["correct_side"] == side])
+        for side in (SIDE_LEFT, SIDE_RIGHT)
+    ]
+    for correct_group, group_df in group_specs:
+        if group_df.empty:
+            continue
+        grouped = group_df.groupby("choice_trial_after_first_correct", sort=True)
+        summary = grouped["correct"].agg(n_blocks="size", n_correct="sum").reset_index()
+        summary["correct_group"] = correct_group
+        summary["n_correct"] = summary["n_correct"].astype(int)
+        summary["n_incorrect"] = summary["n_blocks"] - summary["n_correct"]
+        summary["proportion_correct"] = summary["n_correct"] / summary["n_blocks"]
+        summary_parts.append(summary[columns])
+
+    if not summary_parts:
+        return pd.DataFrame(columns=columns)
+    return pd.concat(summary_parts, axis=0, ignore_index=True)
+
+
+def save_post_first_correct_accuracy_outputs(
+    block_performance: pd.DataFrame,
+    augmented_trial_df: pd.DataFrame,
+    processed_data_path: Path,
+    sess_id_full: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compute and save post-first-correct detail and summary CSVs.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`.
+    augmented_trial_df : pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`.
+    processed_data_path : pathlib.Path
+        Session processed-data directory where CSV outputs are written.
+    sess_id_full : str
+        Full session identifier used as the CSV filename prefix.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame]
+        `(detail_df, summary_df)` where `detail_df` is one row per block trial
+        and `summary_df` is one row per group and valid post-first-correct
+        choice index.
+    """
+    processed_data_path.mkdir(parents=True, exist_ok=True)
+    detail_df = compute_post_first_correct_accuracy_trials(
+        block_performance,
+        augmented_trial_df,
+    )
+    summary_df = summarize_post_first_correct_accuracy(detail_df)
+
+    detail_path = processed_data_path / f"{sess_id_full}_post_first_correct_accuracy_trials.csv"
+    summary_path = processed_data_path / f"{sess_id_full}_post_first_correct_accuracy_summary.csv"
     detail_df.to_csv(detail_path, index=False, na_rep="None")
     summary_df.to_csv(summary_path, index=False, na_rep="None")
     return detail_df, summary_df

@@ -161,3 +161,94 @@ def test_save_and_plot_switch_persistence_for_session_delegates_to_analysis_and_
     assert returned_plot_path == session.figure_path / (
         "CT999_2026-06-18_120000_switch_persistence.png"
     )
+
+
+def test_save_and_plot_post_first_correct_accuracy_for_session_delegates_to_analysis_and_plotters(
+    tmp_path,
+    monkeypatch,
+):
+    """Main should wire session metadata into post-first-correct save and plot calls.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary processed-data and figure directory.
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the computation and plotting helpers with call recorders.
+
+    Returns
+    -------
+    None
+        Asserts that the main helper passes block/trial tables and session
+        paths through to the behavior-analysis module and plotter.
+    """
+    main_module = load_main_module()
+    block_performance = pd.DataFrame({"block_ix": [0, 1]})
+    augmented_trial_df = pd.DataFrame({"cur_block": [0, 1], "action": [1, 0]})
+    summary_df = pd.DataFrame(
+        {
+            "correct_group": ["combined"],
+            "choice_trial_after_first_correct": [0],
+            "proportion_correct": [1.0],
+            "n_blocks": [2],
+        }
+    )
+    detail_df = pd.DataFrame({"block_ix": [1], "choice_status": ["post_first_correct"]})
+    session = SimpleNamespace(
+        sess_id_full="CT999_2026-06-18_120000",
+        processed_data_path=tmp_path / "processed",
+        figure_path=tmp_path / "figures",
+    )
+    captured = {}
+
+    def fake_save_post_first_correct_accuracy_outputs(
+        block_performance,
+        augmented_trial_df,
+        processed_data_path,
+        sess_id_full,
+    ):
+        captured["block_performance"] = block_performance
+        captured["augmented_trial_df"] = augmented_trial_df
+        captured["processed_data_path"] = processed_data_path
+        captured["sess_id_full"] = sess_id_full
+        return detail_df, summary_df
+
+    def fake_plot_post_first_correct_accuracy_summary(summary_df, plot_path, figure_id):
+        captured["summary_df"] = summary_df
+        captured["plot_path"] = plot_path
+        captured["figure_id"] = figure_id
+        return plot_path / f"{figure_id}_post_first_correct_accuracy.png"
+
+    monkeypatch.setattr(
+        main_module.switch_persistence,
+        "save_post_first_correct_accuracy_outputs",
+        fake_save_post_first_correct_accuracy_outputs,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_post_first_correct_accuracy_summary",
+        fake_plot_post_first_correct_accuracy_summary,
+        raising=False,
+    )
+
+    returned_detail, returned_summary, returned_plot_path = (
+        main_module.save_and_plot_post_first_correct_accuracy_for_session(
+            block_performance=block_performance,
+            augmented_trial_df=augmented_trial_df,
+            session=session,
+        )
+    )
+
+    assert captured["block_performance"] is block_performance
+    assert captured["augmented_trial_df"] is augmented_trial_df
+    assert captured["processed_data_path"] == session.processed_data_path
+    assert captured["sess_id_full"] == session.sess_id_full
+    assert captured["summary_df"] is summary_df
+    assert captured["plot_path"] == session.figure_path
+    assert captured["figure_id"] == session.sess_id_full
+    assert returned_detail is detail_df
+    assert returned_summary is summary_df
+    assert returned_plot_path == session.figure_path / (
+        "CT999_2026-06-18_120000_post_first_correct_accuracy.png"
+    )

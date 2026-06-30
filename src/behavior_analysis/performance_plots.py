@@ -349,6 +349,102 @@ def plot_switch_persistence_summary(
     return save_path
 
 
+def plot_post_first_correct_accuracy_summary(
+    summary_df: pd.DataFrame,
+    plot_path: Path,
+    figure_id: str,
+) -> Path:
+    """Plot correct-choice probability after the first correct choice in a block.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Post-first-correct summary table with shape `(n_rows, n_columns)`.
+        Required columns are `correct_group`,
+        `choice_trial_after_first_correct`, `proportion_correct`, and
+        `n_blocks`. `proportion_correct` is unitless and `n_blocks` is the
+        number of valid block-trials contributing at each choice index.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    figure_id : str
+        Session identifier used in the output filename and title.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path.
+    """
+    required_columns = {
+        "correct_group",
+        "choice_trial_after_first_correct",
+        "proportion_correct",
+        "n_blocks",
+    }
+    missing_columns = sorted(required_columns.difference(summary_df.columns))
+    if missing_columns:
+        raise ValueError(f"summary_df is missing required columns: {missing_columns}")
+
+    plot_path.mkdir(parents=True, exist_ok=True)
+    plot_df = summary_df.copy()
+    plot_df["choice_trial_after_first_correct"] = pd.to_numeric(
+        plot_df["choice_trial_after_first_correct"],
+        errors="raise",
+    )
+    plot_df["proportion_correct"] = pd.to_numeric(
+        plot_df["proportion_correct"],
+        errors="raise",
+    )
+    plot_df["n_blocks"] = pd.to_numeric(plot_df["n_blocks"], errors="raise").astype(int)
+
+    group_styles = {
+        "left": {"color": color_dict["left_uncued"], "label": "left", "zorder": 2},
+        "right": {"color": color_dict["right_uncued"], "label": "right", "zorder": 2},
+        "combined": {"color": "black", "label": "combined", "zorder": 3},
+    }
+    f, ax = plt.subplots(figsize=(7, 5))
+    for group_name in ("left", "right", "combined"):
+        group_df = plot_df[plot_df["correct_group"] == group_name].sort_values(
+            "choice_trial_after_first_correct"
+        )
+        if group_df.empty:
+            continue
+        style = group_styles[group_name]
+        ax.plot(
+            group_df["choice_trial_after_first_correct"].to_numpy(),
+            group_df["proportion_correct"].to_numpy(dtype=float),
+            marker="o",
+            linewidth=2,
+            color=style["color"],
+            label=style["label"],
+            zorder=style["zorder"],
+        )
+        for _, row in group_df.iterrows():
+            ax.annotate(
+                f"n={int(row['n_blocks'])}",
+                xy=(
+                    row["choice_trial_after_first_correct"],
+                    row["proportion_correct"],
+                ),
+                xytext=(0, 7),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                color=style["color"],
+            )
+
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_xlabel("Valid choice trial after first correct choice")
+    ax.set_ylabel("Proportion correct")
+    ax.set_title(f"{figure_id} Post-First-Correct Accuracy")
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fancybox=False)
+    save_path = plot_path / f"{figure_id}_post_first_correct_accuracy.png"
+    save_performance_figure(f, save_path)
+    return save_path
+
+
 def plot_session_correct(block_performance: pd.DataFrame, plot_path: Path, sess_ID: str):
     """For a single session, plot the blockwise percentage of correct choices made by the agent."""
     block_types = ['right_cued', 'left_cued', 'right_uncued', 'left_uncued', 'dark period']
@@ -676,6 +772,231 @@ def plot_session_agent_mouse_agreement(
         ax.spines["top"].set_visible(False)
 
     save_path = plot_path / f"{sess_id_full}_agent_mouse_agreement.png"
+    save_performance_figure(fig, save_path)
+    return save_path
+
+
+def plot_session_side_bias_ratios(
+    session_summary: pd.DataFrame,
+    plot_path: Path,
+    sess_id_full: str,
+) -> Path:
+    """Plot whole-session side-bias ratios against true and ideal references.
+
+    Parameters
+    ----------
+    session_summary : pd.DataFrame
+        One-row session summary dataframe with shape `(1, n_columns)`.
+        Required ratio columns are `left_choice_per_true_left`,
+        `right_choice_per_true_right`, `left_choice_per_ideal_left`, and
+        `right_choice_per_ideal_right`. Ratio values are unitless and are not
+        bounded by 1; string `"None"` values are skipped.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    sess_id_full : str
+        Full session identifier used in the plot title and output filename.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path `{sess_id_full}_session_side_bias_ratios.png`.
+    """
+    required_columns = {
+        "left_choice_per_true_left",
+        "right_choice_per_true_right",
+        "left_choice_per_ideal_left",
+        "right_choice_per_ideal_right",
+    }
+    missing_columns = sorted(required_columns.difference(session_summary.columns))
+    if missing_columns:
+        raise ValueError(f"session_summary is missing required columns: {missing_columns}")
+    if session_summary.empty:
+        raise ValueError("session_summary must contain one session row.")
+
+    row = session_summary.iloc[0]
+    plot_path.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(6, 5))
+    x_positions = {"true": 1.0, "ideal": 2.0}
+    side_specs = {
+        "left": {
+            "offset": -0.15,
+            "color": color_dict["left_uncued"],
+            "columns": {
+                "true": "left_choice_per_true_left",
+                "ideal": "left_choice_per_ideal_left",
+            },
+        },
+        "right": {
+            "offset": 0.15,
+            "color": color_dict["right_uncued"],
+            "columns": {
+                "true": "right_choice_per_true_right",
+                "ideal": "right_choice_per_ideal_right",
+            },
+        },
+    }
+
+    for side, spec in side_specs.items():
+        x_values = []
+        y_values = []
+        for reference, column in spec["columns"].items():
+            numeric_value = pd.to_numeric(pd.Series([row[column]]), errors="coerce").iloc[0]
+            if pd.isna(numeric_value):
+                continue
+            x_values.append(x_positions[reference] + spec["offset"])
+            y_values.append(float(numeric_value))
+        if not y_values:
+            continue
+        ax.plot(
+            x_values,
+            y_values,
+            marker="o",
+            linestyle="none",
+            markersize=8,
+            color=spec["color"],
+            label=side,
+        )
+
+    ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
+    ax.set_xticks([x_positions["true"], x_positions["ideal"]])
+    ax.set_xticklabels(["True context", "Ideal agent"])
+    ax.set_ylabel("Choice Count / Reference Count")
+    ax.set_title(f"{sess_id_full} Session Side-Bias Ratios")
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fancybox=False, frameon=False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+
+    save_path = plot_path / f"{sess_id_full}_session_side_bias_ratios.png"
+    save_performance_figure(fig, save_path)
+    return save_path
+
+
+def _prepare_zero_trials_to_correct_plot_df(block_performance: pd.DataFrame) -> pd.DataFrame:
+    """Return valid block-change rows with binary zero-TTC flags for plotting.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`. Required
+        columns are `block_type` and `trials_to_correct`. The first row is
+        excluded because it is not a block change. Dark-period rows and rows
+        with missing/non-numeric `trials_to_correct` are excluded.
+
+    Returns
+    -------
+    pd.DataFrame
+        Plotting dataframe with shape `(n_valid_block_changes, n_columns)`,
+        including `rewarded_side` and `zero_trials_to_correct_flag`.
+    """
+    required_columns = {"block_type", "trials_to_correct"}
+    missing_columns = sorted(required_columns.difference(block_performance.columns))
+    if missing_columns:
+        raise ValueError(f"block_performance is missing required columns: {missing_columns}")
+
+    plot_df = block_performance.copy().reset_index(drop=True)
+    plot_df = plot_df.iloc[1:].copy()
+    plot_df["rewarded_side"] = plot_df["block_type"].map(_get_rewarded_side_for_plot)
+    plot_df["trials_to_correct_numeric"] = pd.to_numeric(
+        plot_df["trials_to_correct"],
+        errors="coerce",
+    )
+    plot_df = plot_df[
+        plot_df["rewarded_side"].isin(["left", "right"])
+        & plot_df["trials_to_correct_numeric"].notna()
+    ].copy()
+    plot_df["zero_trials_to_correct_flag"] = (
+        plot_df["trials_to_correct_numeric"].eq(0).astype(float)
+    )
+    return plot_df
+
+
+def plot_session_zero_trials_to_correct_fraction(
+    block_performance: pd.DataFrame,
+    plot_path: Path,
+    sess_id_full: str,
+    point_jitter: float = 0.08,
+    jitter_seed: int = 0,
+) -> Path:
+    """Plot block-change zero-trials-to-correct flags and mean fractions.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise dataframe with shape `(n_blocks, n_columns)`. Required
+        columns are `block_type` and `trials_to_correct`. The first block,
+        dark periods, and never-correct/non-numeric `trials_to_correct` rows
+        are excluded before plotting.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    sess_id_full : str
+        Full session identifier used in the plot title and output filename.
+    point_jitter : float, default=0.08
+        Maximum absolute horizontal jitter for raw 0/1 block markers.
+    jitter_seed : int, default=0
+        Seed for deterministic raw-marker jitter.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path `{sess_id_full}_zero_trials_to_correct_fraction.png`.
+    """
+    plot_df = _prepare_zero_trials_to_correct_plot_df(block_performance)
+    plot_path.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    group_styles = {
+        "left": {"x": 0.0, "color": color_dict["left_uncued"], "seed_offset": 0},
+        "right": {"x": 1.0, "color": color_dict["right_uncued"], "seed_offset": 1},
+        "overall": {"x": 2.0, "color": "black", "seed_offset": 2},
+    }
+    group_data = {
+        "left": plot_df[plot_df["rewarded_side"] == "left"],
+        "right": plot_df[plot_df["rewarded_side"] == "right"],
+        "overall": plot_df,
+    }
+
+    for group_name, group_df in group_data.items():
+        if group_df.empty:
+            continue
+        style = group_styles[group_name]
+        raw_values = group_df["zero_trials_to_correct_flag"].to_numpy(dtype=float)
+        ax.plot(
+            _jitter_x_coordinates(
+                np.full(raw_values.shape[0], style["x"]),
+                jitter_width=point_jitter,
+                seed=jitter_seed + style["seed_offset"],
+            ),
+            raw_values,
+            "o",
+            color=style["color"],
+            alpha=0.35,
+            markersize=4,
+            label=f"{group_name} raw blocks",
+        )
+        ax.plot(
+            [style["x"]],
+            [float(np.mean(raw_values))],
+            "D",
+            color=style["color"],
+            markersize=8,
+            label=f"{group_name} mean",
+        )
+
+    ax.set_xlim(-0.45, 2.45)
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_xticks([0, 1, 2])
+    ax.set_xticklabels(["left", "right", "overall"])
+    ax.set_xlabel("Block group")
+    ax.set_ylabel("0 Trials-to-Correct Flag")
+    ax.set_title(f"{sess_id_full} 0-Trials-to-Correct Block Changes")
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(frameon=False, fontsize=8)
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+
+    save_path = plot_path / f"{sess_id_full}_zero_trials_to_correct_fraction.png"
     save_performance_figure(fig, save_path)
     return save_path
 
@@ -1172,7 +1493,7 @@ def _annotate_regression_slope(ax: plt.Axes, slope: float) -> None:
         transform=ax.transAxes,
         ha="left",
         va="top",
-        fontsize=9,
+        fontsize=12,
     )
 
 
@@ -2457,6 +2778,179 @@ def plot_learning_curve(coefficients: np.ndarray, switches_per_session: np.ndarr
 
     save_path = plot_path / '{}_learning-curve.png'.format(figure_id)
     save_performance_figure(f, save_path)
+
+
+def plot_cross_mouse_learning_curve(
+    cross_mouse_df: pd.DataFrame,
+    plot_path: Path,
+    figure_id: str,
+    learning_regressor: str,
+) -> Path:
+    """Plot mouse-specific and group-mean learning curves.
+
+    Parameters
+    ----------
+    cross_mouse_df : pd.DataFrame
+        Long-form dataframe with shape `(n_mouse_sessions, n_columns)`.
+        Required columns are `mouse`, `training_day`, and `slope`.
+        `training_day` is a one-indexed session number within each mouse, and
+        `slope` is the regression coefficient for `learning_regressor` in
+        trials-to-switch per predictor unit.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    figure_id : str
+        Figure identifier used as the filename prefix and title label.
+    learning_regressor : str
+        Regression predictor prefix used in the plot title and filename.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path.
+    """
+    required_columns = {"mouse", "training_day", "slope"}
+    missing_columns = sorted(required_columns.difference(cross_mouse_df.columns))
+    if missing_columns:
+        raise ValueError(f"cross_mouse_df is missing required columns: {missing_columns}")
+
+    plot_df = cross_mouse_df.copy()
+    plot_df["training_day"] = pd.to_numeric(plot_df["training_day"], errors="raise").astype(int)
+    plot_df["slope"] = pd.to_numeric(plot_df["slope"], errors="raise")
+    plot_df = plot_df.sort_values(["mouse", "training_day"])
+
+    plot_path.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(9, 5))
+    mouse_names = sorted(plot_df["mouse"].astype(str).unique())
+    for mouse_index, mouse in enumerate(mouse_names):
+        mouse_df = plot_df[plot_df["mouse"].astype(str) == mouse].sort_values("training_day")
+        ax.plot(
+            mouse_df["training_day"].to_numpy(dtype=int),
+            mouse_df["slope"].to_numpy(dtype=float),
+            marker="o",
+            linewidth=1.5,
+            color=all_colors[mouse_index % len(all_colors)],
+            alpha=0.75,
+            label=mouse,
+        )
+
+    mean_df = (
+        plot_df.groupby("training_day", sort=True)["slope"]
+        .mean()
+        .reset_index()
+    )
+    ax.plot(
+        mean_df["training_day"].to_numpy(dtype=int),
+        mean_df["slope"].to_numpy(dtype=float),
+        marker="o",
+        linewidth=3.0,
+        color="black",
+        label="group mean",
+        zorder=5,
+    )
+    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+    ax.set_xlabel("Training Day")
+    ax.set_ylabel("Regression Coefficient")
+    ax.set_title(f"{figure_id} {learning_regressor} Learning Curve")
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fancybox=False, frameon=False)
+
+    save_path = plot_path / f"{figure_id}_{learning_regressor}_learning_curve.png"
+    save_performance_figure(fig, save_path)
+    return save_path
+
+
+def plot_cross_mouse_session_metric_curve(
+    cross_mouse_df: pd.DataFrame,
+    plot_path: Path,
+    figure_id: str,
+    metric_column: str,
+    metric_label: str,
+    ylim: tuple[float, float] | None = None,
+) -> Path:
+    """Plot mouse-specific and group-mean session metric curves.
+
+    Parameters
+    ----------
+    cross_mouse_df : pd.DataFrame
+        Long-form dataframe with shape `(n_mouse_sessions, n_columns)`.
+        Required columns are `mouse`, `training_day`, and `metric_value`.
+        `training_day` is a one-indexed session number within each mouse, and
+        `metric_value` is the session-level metric in the units described by
+        `metric_label`.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    figure_id : str
+        Figure identifier used as the filename prefix and title label.
+    metric_column : str
+        Source metric column name from the overall-performance CSV. This is
+        used in the output filename and title.
+    metric_label : str
+        Human-readable y-axis label describing the plotted metric and units.
+    ylim : tuple[float, float] or None, default=None
+        Optional y-axis limits in `metric_value` units. None lets matplotlib
+        choose limits from the data.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path.
+    """
+    required_columns = {"mouse", "training_day", "metric_value"}
+    missing_columns = sorted(required_columns.difference(cross_mouse_df.columns))
+    if missing_columns:
+        raise ValueError(f"cross_mouse_df is missing required columns: {missing_columns}")
+
+    plot_df = cross_mouse_df.copy()
+    plot_df["training_day"] = pd.to_numeric(plot_df["training_day"], errors="raise").astype(int)
+    plot_df["metric_value"] = pd.to_numeric(plot_df["metric_value"], errors="raise")
+    plot_df = plot_df.sort_values(["mouse", "training_day"])
+
+    plot_path.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(9, 5))
+    mouse_names = sorted(plot_df["mouse"].astype(str).unique())
+    for mouse_index, mouse in enumerate(mouse_names):
+        mouse_df = plot_df[plot_df["mouse"].astype(str) == mouse].sort_values("training_day")
+        ax.plot(
+            mouse_df["training_day"].to_numpy(dtype=int),
+            mouse_df["metric_value"].to_numpy(dtype=float),
+            marker="o",
+            linewidth=1.5,
+            color=all_colors[mouse_index % len(all_colors)],
+            alpha=0.75,
+            label=mouse,
+        )
+
+    mean_df = (
+        plot_df.groupby("training_day", sort=True)["metric_value"]
+        .mean()
+        .reset_index()
+    )
+    ax.plot(
+        mean_df["training_day"].to_numpy(dtype=int),
+        mean_df["metric_value"].to_numpy(dtype=float),
+        marker="o",
+        linewidth=3.0,
+        color="black",
+        label="group mean",
+        zorder=5,
+    )
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+    ax.set_xlabel("Training Day")
+    ax.set_ylabel(metric_label)
+    ax.set_title(f"{figure_id} {metric_column} Across Training")
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fancybox=False, frameon=False)
+
+    save_path = plot_path / f"{figure_id}_{metric_column}_session_metric_curve.png"
+    save_performance_figure(fig, save_path)
+    return save_path
 
 
 def plot_trials_to_correct_session_summary(
