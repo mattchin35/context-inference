@@ -208,9 +208,34 @@ coerce_existing_logical_columns <- function(df, columns) {
 cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
   required_non_missing_columns <- c("action", "prev_action", "prev_reward")
   base_numeric_columns <- c(
+    "cur_trial", "cur_trial_in_block", "cur_block",
     "reward_time", "start_time", "choice_time", "led_on_time", "led_off_time",
     "trial_time_since_start", "choice_time_since_start", "time_to_choice",
     "p_active_rew", "p_inactive_rew", "p_switch"
+  )
+  history_numeric_columns <- c(
+    "negative_value",
+    "consecutive_rewards_memory",
+    "consecutive_omissions_memory",
+    "consecutive_rewards",
+    "consecutive_omissions",
+    "consecutive_failures_memory",
+    "consecutive_failures",
+    "left_value",
+    "right_value",
+    "relative_value",
+    "left_omissions",
+    "right_omissions",
+    "relative_omissions",
+    "left_cf_value",
+    "right_cf_value",
+    "relative_cf_value",
+    "left_cf_omissions",
+    "right_cf_omissions",
+    "relative_cf_omissions",
+    "left_monotonic_cf_value",
+    "right_monotonic_cf_value",
+    "relative_monotonic_cf_value"
   )
   model_numeric_columns <- c(
     "Qlearning_rel_value",
@@ -223,10 +248,13 @@ cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
     "relative_doubt_index",
     "relative_hazard_index",
     "perseveration_regressor",
+    "doubt_perseveration_value",
+    "wsls_regressor",
     "observer_value",
     "HMM_decay_res",
     "rel_hazard_res"
   )
+  run_numeric_columns <- c("explore_run_id", "explore_run_length")
   factor_columns <- c(
     "state", "state_int", "action", "correct", "reward", "session_ID",
     "block_type", "prev_action", "prev_reward", "inherited_block_strategy",
@@ -239,13 +267,18 @@ cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
     "stay_trial",
     "first_switch_in_block",
     "explore_trial",
-    "block_entry_explore_trial"
+    "block_entry_explore_trial",
+    "explore_run_start",
+    "explore_run_trial",
+    "explore_run_return"
   )
   sentinel_columns <- unique(c(
     required_non_missing_columns,
     "active_stimulus", "block_stimulus",
     base_numeric_columns,
+    history_numeric_columns,
     model_numeric_columns,
+    run_numeric_columns,
     factor_columns,
     trial_type_flag_columns
   ))
@@ -263,6 +296,8 @@ cleanup_trial_dataframe <- function(df, include_model_regressors = FALSE) {
   df <- add_trial_column_compatibility(df)
   
   df <- coerce_existing_numeric_columns(df, base_numeric_columns)
+  df <- coerce_existing_numeric_columns(df, history_numeric_columns)
+  df <- coerce_existing_numeric_columns(df, run_numeric_columns)
   
   if (include_model_regressors) {
     df <- coerce_existing_numeric_columns(df, model_numeric_columns)
@@ -308,10 +343,12 @@ cleanup_leave_stay_trial_dataframe <- function(df, include_model_regressors = FA
     "relative_doubt_index_prev_action_side",
     "relative_hazard_index_prev_action_side",
     "perseveration_regressor_prev_action_side",
+    "doubt_perseveration_value_prev_action_side",
     "observer_value_prev_action_side",
     "HMM_decay_res_prev_action_side",
     "rel_hazard_res_prev_action_side"
   )
+  run_numeric_columns <- c("explore_run_id", "explore_run_length")
   factor_columns <- c(
     "state", "state_int", "raw_action", "action", "correct", "reward",
     "experimenter_reward_given", "session_ID", "block_type", "prev_action",
@@ -324,12 +361,16 @@ cleanup_leave_stay_trial_dataframe <- function(df, include_model_regressors = FA
     "stay_trial",
     "first_switch_in_block",
     "explore_trial",
-    "block_entry_explore_trial"
+    "block_entry_explore_trial",
+    "explore_run_start",
+    "explore_run_trial",
+    "explore_run_return"
   )
   sentinel_columns <- unique(c(
     required_non_missing_columns,
     base_numeric_columns,
     side_equivalent_numeric_columns,
+    run_numeric_columns,
     factor_columns,
     trial_type_flag_columns
   ))
@@ -345,6 +386,7 @@ cleanup_leave_stay_trial_dataframe <- function(df, include_model_regressors = FA
   df <- convert_existing_none_to_na(df, sentinel_columns)
   df <- removeNARows(df, required_non_missing_columns)
   df <- coerce_existing_numeric_columns(df, base_numeric_columns)
+  df <- coerce_existing_numeric_columns(df, run_numeric_columns)
   
   if (include_model_regressors) {
     df <- coerce_existing_numeric_columns(df, side_equivalent_numeric_columns)
