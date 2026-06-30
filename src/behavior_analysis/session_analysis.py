@@ -1304,6 +1304,113 @@ def count_explore_trials(trial_df: pd.DataFrame) -> int:
     return int((true_text_mask | positive_numeric_mask).sum())
 
 
+def count_terminal_omission_streak(
+    first_new_trial_index: int,
+    global_reward_values: np.ndarray,
+) -> int:
+    """Count unrewarded behavioral choices immediately before one trial.
+
+    Parameters
+    ----------
+    first_new_trial_index : int
+        Row index of the first new-side/correct choice in the full session
+        trial table, using 0-based row indexing.
+    global_reward_values : np.ndarray
+        Numeric reward values with shape `(n_trials,)`. Valid behavioral-choice
+        rows contain 0.0 or 1.0; rows excluded by behavioral-choice conventions
+        contain NaN.
+
+    Returns
+    -------
+    int
+        Number of consecutive unrewarded behavioral-choice trials before
+        `first_new_trial_index`. Invalid rows are skipped, preserving the
+        existing behavioral-choice convention.
+    """
+    reward_values = np.asarray(global_reward_values, dtype=float)
+    omission_count = 0
+    trial_index = first_new_trial_index - 1
+    while trial_index >= 0:
+        reward_value = reward_values[trial_index]
+        if np.isnan(reward_value):
+            trial_index -= 1
+            continue
+        if reward_value == 0:
+            omission_count += 1
+            trial_index -= 1
+            continue
+        break
+    return omission_count
+
+
+def compute_block_transition_metrics(
+    behavioral_correct_values: np.ndarray,
+    behavioral_trial_indices: np.ndarray,
+    global_reward_values: np.ndarray,
+) -> dict[str, bool | int | str]:
+    """Compute transition-structure metrics for one block.
+
+    Parameters
+    ----------
+    behavioral_correct_values : np.ndarray
+        Correctness values for valid behavioral choices in one block, shape
+        `(n_valid_block_choices,)`. Values use 1 for new-side/correct choices
+        and 0 for old-side/incorrect choices.
+    behavioral_trial_indices : np.ndarray
+        Full-session row indices for the same valid behavioral choices, shape
+        `(n_valid_block_choices,)`.
+    global_reward_values : np.ndarray
+        Numeric reward values for the full session, shape `(n_trials,)`, with
+        NaN on rows excluded by behavioral-choice conventions.
+
+    Returns
+    -------
+    dict[str, bool | int | str]
+        Block-level metrics. Missing metrics use the project CSV sentinel
+        `"None"`. Counts are in trials.
+    """
+    correct_values = np.asarray(behavioral_correct_values, dtype=float)
+    correct_positions = np.flatnonzero(correct_values == 1)
+    if correct_positions.size == 0:
+        return {
+            "no_switch": True,
+            "transition_width": "None",
+            "reversion_choices": "None",
+            "reversion_events": "None",
+            "terminal_omission_streak_inclusive": "None",
+            "short_or_low_postswitch_trials": True,
+        }
+
+    first_new_position = int(correct_positions[0])
+    post_switch_values = correct_values[first_new_position:]
+    old_positions_after_first_new = np.flatnonzero(post_switch_values == 0)
+    reversion_choices = int(old_positions_after_first_new.shape[0])
+    if reversion_choices == 0:
+        transition_width = 0
+    else:
+        transition_width = int(old_positions_after_first_new[-1] + 1)
+
+    if post_switch_values.shape[0] < 2:
+        reversion_events = 0
+    else:
+        reversion_events = int(
+            np.sum((post_switch_values[:-1] == 1) & (post_switch_values[1:] == 0))
+        )
+
+    first_new_trial_index = int(np.asarray(behavioral_trial_indices)[first_new_position])
+    return {
+        "no_switch": False,
+        "transition_width": transition_width,
+        "reversion_choices": reversion_choices,
+        "reversion_events": reversion_events,
+        "terminal_omission_streak_inclusive": count_terminal_omission_streak(
+            first_new_trial_index=first_new_trial_index,
+            global_reward_values=global_reward_values,
+        ),
+        "short_or_low_postswitch_trials": bool(post_switch_values.shape[0] <= 2),
+    }
+
+
 def make_augmented_trial_df(trial_df: pd.DataFrame) -> pd.DataFrame:
     trial_df = normalize_experimenter_reward_column(trial_df)
     augmented_trial_df = trial_df.copy(deep=True)
@@ -1353,8 +1460,16 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
     history_ideal_mouse_agreement = compute_history_ideal_mouse_agreement_by_trial(
         augmented_trial_df
     )
+    global_behavioral_choice_mask = make_behavioral_choice_mask(augmented_trial_df)
+    global_reward_values = get_numeric_reward_values(
+        augmented_trial_df,
+        global_behavioral_choice_mask,
+    )
+    global_reward_values[~global_behavioral_choice_mask] = np.nan
     blocks = np.unique(augmented_trial_df['cur_block'])
     block_performance = []
+    previous_block_length = "None"
+    previous_block_reward_fraction = "None"
 
     for ix, b in enumerate(blocks):
         cur_block_ix = augmented_trial_df['cur_block'] == b
@@ -1379,6 +1494,14 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
         reward_values = get_numeric_reward_values(cur_block_df, behavioral_choice_ix)
         behavioral_correct_values = correct_values[np.asarray(behavioral_choice_ix)]
         behavioral_reward_values = reward_values[np.asarray(behavioral_choice_ix)]
+        behavioral_trial_indices = np.flatnonzero(cur_block_ix.to_numpy())[
+            np.asarray(behavioral_choice_ix)
+        ]
+        transition_metrics = compute_block_transition_metrics(
+            behavioral_correct_values=behavioral_correct_values,
+            behavioral_trial_indices=behavioral_trial_indices,
+            global_reward_values=global_reward_values,
+        )
         block_history_ideal_values = pd.to_numeric(
             pd.Series(history_ideal_mouse_agreement[cur_block_ix.to_numpy()]),
             errors="coerce",
@@ -1411,6 +1534,9 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
                            prev_consecutive_rewards_memory=prev_consecutive_rewards_memory,
                            prev_n_correct=prev_n_correct,
                            prev_n_rewarded=prev_n_rewarded,
+                           previous_block_length=previous_block_length,
+                           previous_block_reward_fraction=previous_block_reward_fraction,
+                           **transition_metrics,
                            n_switches=n_switches,
                            n_explore_trials=n_explore_trials,
                            normalized_switches=normalized_switches,
@@ -1424,6 +1550,12 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
                            session_ID=session_id)
 
         block_performance.append(performance)
+        current_block_length = int(behavioral_reward_values.shape[0])
+        previous_block_length = current_block_length
+        if current_block_length == 0:
+            previous_block_reward_fraction = "None"
+        else:
+            previous_block_reward_fraction = float(np.sum(behavioral_reward_values) / current_block_length)
 
     block_performance = pd.DataFrame(block_performance)
     block_performance['block_ix'] = np.arange(len(block_performance))
@@ -2022,6 +2154,119 @@ def _numeric_regression_inputs(
     return dependent_values[valid_rows], independent_values[valid_rows]
 
 
+def _single_numeric_session_value(session_performance: pd.DataFrame, column_name: str) -> float:
+    """Return one numeric session-summary value or NaN when unavailable.
+
+    Parameters
+    ----------
+    session_performance : pd.DataFrame
+        Session summary table with shape `(1, n_columns)` or more. The first
+        row is used.
+    column_name : str
+        Column to read.
+
+    Returns
+    -------
+    float
+        Numeric value from the first row, or NaN when the column/value is
+        missing or nonnumeric.
+    """
+    if column_name not in session_performance.columns or session_performance.empty:
+        return float("nan")
+    numeric_values = pd.to_numeric(session_performance[column_name], errors="coerce")
+    return float(numeric_values.iloc[0])
+
+
+def _tts_percentile_values(trials_to_correct: pd.Series) -> pd.Series:
+    """Return within-session TTS percentile values on a 0-to-1 scale.
+
+    Parameters
+    ----------
+    trials_to_correct : pd.Series
+        Numeric TTS values with shape `(n_blocks,)`. Missing values are NaN.
+
+    Returns
+    -------
+    pd.Series
+        Percentile ranks with shape `(n_blocks,)`. The fastest valid block is
+        0.0 and the slowest valid block is 1.0. Missing TTS values remain NaN.
+    """
+    percentiles = pd.Series(np.nan, index=trials_to_correct.index, dtype=float)
+    valid_values = trials_to_correct.dropna()
+    if valid_values.empty:
+        return percentiles
+    if valid_values.shape[0] == 1:
+        percentiles.loc[valid_values.index] = 0.0
+        return percentiles
+
+    ranks = valid_values.rank(method="average", ascending=True)
+    percentiles.loc[valid_values.index] = (ranks - 1) / (valid_values.shape[0] - 1)
+    return percentiles
+
+
+def add_relative_tts_metrics(
+    block_performance: pd.DataFrame,
+    session_performance: pd.DataFrame,
+) -> pd.DataFrame:
+    """Add session-relative TTS predictions, residuals, and percentiles.
+
+    Parameters
+    ----------
+    block_performance : pd.DataFrame
+        Blockwise table with shape `(n_blocks, n_columns)`. Required columns
+        are `trials_to_correct` and `prev_n_rewarded`; values are trial counts
+        or the project missing-value sentinel `"None"`.
+    session_performance : pd.DataFrame
+        Session summary table with shape `(1, n_columns)`, including
+        `prev_n_rewarded_slope` and `prev_n_rewarded_intercept` from the
+        existing `TTS ~ prev_n_rewarded` regression.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of `block_performance` with `predicted_TTS_from_prev_rewards`,
+        `residual_TTS`, and `TTS_percentile_within_session`. Missing values use
+        the project sentinel `"None"` so CSV output matches existing block
+        metrics.
+    """
+    required_columns = {"trials_to_correct", "prev_n_rewarded"}
+    missing_columns = sorted(required_columns.difference(block_performance.columns))
+    if missing_columns:
+        raise ValueError(f"block_performance is missing required columns: {missing_columns}")
+
+    output_df = block_performance.copy()
+    trials_to_correct = pd.to_numeric(output_df["trials_to_correct"], errors="coerce")
+    previous_rewards = pd.to_numeric(output_df["prev_n_rewarded"], errors="coerce")
+    slope = _single_numeric_session_value(session_performance, "prev_n_rewarded_slope")
+    intercept = _single_numeric_session_value(session_performance, "prev_n_rewarded_intercept")
+
+    prediction_values = np.full(output_df.shape[0], "None", dtype=object)
+    residual_values = np.full(output_df.shape[0], "None", dtype=object)
+    valid_prediction_rows = (
+        trials_to_correct.notna()
+        & previous_rewards.notna()
+        & np.isfinite(slope)
+        & np.isfinite(intercept)
+    )
+    if valid_prediction_rows.any():
+        predicted = intercept + slope * previous_rewards.loc[valid_prediction_rows]
+        residual = trials_to_correct.loc[valid_prediction_rows] - predicted
+        prediction_values[valid_prediction_rows.to_numpy()] = predicted.to_numpy(dtype=float)
+        residual_values[valid_prediction_rows.to_numpy()] = residual.to_numpy(dtype=float)
+
+    percentile_values = np.full(output_df.shape[0], "None", dtype=object)
+    numeric_percentiles = _tts_percentile_values(trials_to_correct)
+    valid_percentiles = numeric_percentiles.notna()
+    percentile_values[valid_percentiles.to_numpy()] = numeric_percentiles.loc[
+        valid_percentiles
+    ].to_numpy(dtype=float)
+
+    output_df["predicted_TTS_from_prev_rewards"] = prediction_values
+    output_df["residual_TTS"] = residual_values
+    output_df["TTS_percentile_within_session"] = percentile_values
+    return output_df
+
+
 def add_regression_stats_to_session_performance(
     session_performance: pd.DataFrame,
     trials_to_correct: pd.Series,
@@ -2348,6 +2593,10 @@ def run_analysis(
         prev_consecutive_rewards=block_performance["prev_consecutive_rewards"],
         prev_n_rewarded=block_performance["prev_n_rewarded"],
         n_blocks=block_performance.shape[0],
+    )
+    block_performance = add_relative_tts_metrics(
+        block_performance=block_performance,
+        session_performance=session_performance,
     )
     block_performance = add_block_bias_columns(block_performance)
     block_performance = switch_persistence.add_previous_block_omission_metrics(
