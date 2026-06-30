@@ -135,6 +135,24 @@ def test_add_trial_type_flags_marks_switch_stay_block_entry_and_explore_trials()
         assert flagged_df[column_name].tolist() == expected_values
 
 
+def test_add_trial_type_flags_accepts_csv_loaded_experimenter_reward_flags():
+    """String zero reward flags from CSV should not invalidate every choice."""
+    trial_df = make_trial_type_flag_df()
+    trial_df["experimenter_reward_given"] = ["0", "0", "0", "0", "0", "0", "1", "0"]
+
+    flagged_df = gtf.add_trial_type_flags(trial_df)
+
+    expected = {
+        "block_entry_trial": [True, False, False, False, True, False, False, True],
+        "switch_trial": [False, False, True, False, False, True, False, False],
+        "stay_trial": [False, True, False, False, True, False, False, True],
+        "first_switch_in_block": [False, False, True, False, False, True, False, False],
+        "explore_trial": [False, False, True, False, False, True, False, False],
+    }
+    for column_name, expected_values in expected.items():
+        assert flagged_df[column_name].tolist() == expected_values
+
+
 def test_add_explore_run_flags_marks_short_rewarded_leave_and_correct_return():
     """A brief rewarded-side leave followed by a correct return should be tagged."""
     trial_df = pd.DataFrame(
