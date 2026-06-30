@@ -34,8 +34,26 @@ new_schema_trial_df <- data.frame(
   active_stimulus = c("left", "right", "left", "right"),
   block_stimulus = c("left", "right", "left", "right"),
   reward_time = c("None", "2.0", "3.0", "4.0"),
+  negative_value = c("0", "-1", "0", "-1"),
+  consecutive_rewards_memory = c("0", "1", "1", "2"),
   consecutive_omissions = c(0, 1, 2, 3),
   consecutive_omissions_memory = c(0, 1, 1, 2),
+  consecutive_rewards = c("0", "1", "2", "3"),
+  left_value = c("0.1", "0.2", "0.3", "0.4"),
+  right_value = c("0.4", "0.3", "0.2", "0.1"),
+  relative_value = c("-0.3", "-0.1", "0.1", "0.3"),
+  left_omissions = c("0", "1", "2", "3"),
+  right_omissions = c("3", "2", "1", "0"),
+  relative_omissions = c("-3", "-1", "1", "3"),
+  left_cf_value = c("0.0", "0.1", "0.2", "0.3"),
+  right_cf_value = c("0.3", "0.2", "0.1", "0.0"),
+  relative_cf_value = c("-0.3", "-0.1", "0.1", "0.3"),
+  left_cf_omissions = c("0", "1", "2", "3"),
+  right_cf_omissions = c("3", "2", "1", "0"),
+  relative_cf_omissions = c("-3", "-1", "1", "3"),
+  left_monotonic_cf_value = c("0.0", "0.2", "0.4", "0.6"),
+  right_monotonic_cf_value = c("0.6", "0.4", "0.2", "0.0"),
+  relative_monotonic_cf_value = c("-0.6", "-0.2", "0.2", "0.6"),
   Qlearning_rel_value = c("0.1", "0.2", "0.3", "0.4"),
   FQlearning_rel_value = c("0.0", "0.5", "None", "0.8"),
   FQlearning_rel_value_fast_learn = c("0.0", "0.6", "0.7", "0.9"),
@@ -45,6 +63,8 @@ new_schema_trial_df <- data.frame(
   relative_doubt_index = c("-0.2", "0.1", "0.6", "0.7"),
   relative_hazard_index = c("0.2", "0.3", "0.4", "0.5"),
   perseveration_regressor = c("0", "0.25", "0.5", "0.75"),
+  doubt_perseveration_value = c("0.0", "0.025", "0.3", "0.525"),
+  signed_omission_regressor = c("-0.5", "0.0", "0.5", "0.8"),
   observer_value = c("0.0", "0.1", "0.2", "0.3"),
   HMM_decay_res = c("-0.01", "0.02", "0.03", "0.04"),
   rel_hazard_res = c("0.11", "0.12", "0.13", "0.14"),
@@ -57,6 +77,11 @@ new_schema_trial_df <- data.frame(
   first_switch_in_block = c("FALSE", "TRUE", "FALSE", "FALSE"),
   explore_trial = c("FALSE", "FALSE", "FALSE", "FALSE"),
   block_entry_explore_trial = c("FALSE", "FALSE", "FALSE", "FALSE"),
+  explore_run_start = c("FALSE", "TRUE", "FALSE", "FALSE"),
+  explore_run_trial = c("FALSE", "TRUE", "TRUE", "FALSE"),
+  explore_run_return = c("FALSE", "FALSE", "TRUE", "FALSE"),
+  explore_run_id = c("None", "7", "7", "None"),
+  explore_run_length = c("None", "2", "2", "None"),
   stringsAsFactors = FALSE
 )
 
@@ -79,6 +104,26 @@ stopifnot(identical(as.character(cleaned_df$prev_action), "0"))
 stopifnot(identical(as.character(cleaned_df$prev_reward), "0"))
 
 numeric_columns <- c(
+  "negative_value",
+  "consecutive_rewards_memory",
+  "consecutive_omissions_memory",
+  "consecutive_rewards",
+  "consecutive_omissions",
+  "left_value",
+  "right_value",
+  "relative_value",
+  "left_omissions",
+  "right_omissions",
+  "relative_omissions",
+  "left_cf_value",
+  "right_cf_value",
+  "relative_cf_value",
+  "left_cf_omissions",
+  "right_cf_omissions",
+  "relative_cf_omissions",
+  "left_monotonic_cf_value",
+  "right_monotonic_cf_value",
+  "relative_monotonic_cf_value",
   "Qlearning_rel_value",
   "FQlearning_rel_value",
   "FQlearning_rel_value_fast_learn",
@@ -88,9 +133,13 @@ numeric_columns <- c(
   "relative_doubt_index",
   "relative_hazard_index",
   "perseveration_regressor",
+  "doubt_perseveration_value",
+  "signed_omission_regressor",
   "observer_value",
   "HMM_decay_res",
-  "rel_hazard_res"
+  "rel_hazard_res",
+  "explore_run_id",
+  "explore_run_length"
 )
 for (column_name in numeric_columns) {
   stopifnot(is.numeric(cleaned_df[[column_name]]))
@@ -120,7 +169,10 @@ flag_columns <- c(
   "stay_trial",
   "first_switch_in_block",
   "explore_trial",
-  "block_entry_explore_trial"
+  "block_entry_explore_trial",
+  "explore_run_start",
+  "explore_run_trial",
+  "explore_run_return"
 )
 for (column_name in flag_columns) {
   stopifnot(is.logical(cleaned_df[[column_name]]))

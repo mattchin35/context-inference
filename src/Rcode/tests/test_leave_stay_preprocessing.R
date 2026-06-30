@@ -59,7 +59,18 @@ leave_stay_df <- data.frame(
   first_switch_in_block = c("FALSE", "TRUE", "FALSE", "FALSE"),
   explore_trial = c("FALSE", "TRUE", "FALSE", "FALSE"),
   block_entry_explore_trial = c("FALSE", "TRUE", "FALSE", "FALSE"),
+  explore_run_start = c("FALSE", "TRUE", "FALSE", "FALSE"),
+  explore_run_trial = c("FALSE", "TRUE", "TRUE", "FALSE"),
+  explore_run_return = c("FALSE", "FALSE", "TRUE", "FALSE"),
+  explore_run_id = c("None", "3", "3", "None"),
+  explore_run_length = c("None", "2", "2", "None"),
   stringsAsFactors = FALSE
+)
+leave_stay_df[["doubt_perseveration_value_prev_action_side"]] <- c(
+  "None",
+  "-0.04",
+  "-0.12",
+  "-0.24"
 )
 
 cleaned_df <- trial_env$cleanup_leave_stay_trial_dataframe(
@@ -88,9 +99,12 @@ numeric_columns <- c(
   "relative_doubt_index_prev_action_side",
   "relative_hazard_index_prev_action_side",
   "perseveration_regressor_prev_action_side",
+  "doubt_perseveration_value_prev_action_side",
   "observer_value_prev_action_side",
   "HMM_decay_res_prev_action_side",
-  "rel_hazard_res_prev_action_side"
+  "rel_hazard_res_prev_action_side",
+  "explore_run_id",
+  "explore_run_length"
 )
 for (column_name in numeric_columns) {
   stopifnot(is.numeric(cleaned_df[[column_name]]))
@@ -122,7 +136,10 @@ flag_columns <- c(
   "stay_trial",
   "first_switch_in_block",
   "explore_trial",
-  "block_entry_explore_trial"
+  "block_entry_explore_trial",
+  "explore_run_start",
+  "explore_run_trial",
+  "explore_run_return"
 )
 for (column_name in flag_columns) {
   stopifnot(is.logical(cleaned_df[[column_name]]))
