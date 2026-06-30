@@ -6,6 +6,7 @@ import src.behavior_analysis.trial_features as trial_features
 from src.behavior_analysis.project_utils import (
     EXPERIMENTER_REWARD_GIVEN_COLUMN,
     get_experimenter_reward_flags,
+    is_zero_flag,
     make_no_choice_action_mask,
     normalize_experimenter_reward_column,
 )
@@ -334,7 +335,10 @@ def add_trial_type_flags(augmented_trial_df: pd.DataFrame) -> pd.DataFrame:
         dtype=object,
     )
     experimenter_reward_flags = get_experimenter_reward_flags(output_df)
-    valid_choice = current_sides.notna() & pd.Series(experimenter_reward_flags, index=output_df.index).eq(0)
+    experimenter_reward_is_zero = is_zero_flag(
+        pd.Series(experimenter_reward_flags, index=output_df.index)
+    )
+    valid_choice = current_sides.notna() & experimenter_reward_is_zero
 
     if "prev_action" in output_df.columns:
         previous_sides = pd.Series(
