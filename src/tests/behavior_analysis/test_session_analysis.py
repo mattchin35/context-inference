@@ -799,6 +799,103 @@ def test_summarize_block_performance_counts_explore_trials_by_block():
     assert block_performance["n_explore_trials"].tolist() == [1, 2, 1]
 
 
+def make_transition_metric_trial_df(block_patterns: list[list[str]]) -> pd.DataFrame:
+    """Build trial rows where `N` is current-side correct and `O` is old-side wrong.
+
+    Parameters
+    ----------
+    block_patterns : list[list[str]]
+        One list per block. Each entry is `"N"` for a new-side/correct choice
+        or `"O"` for an old-side/incorrect choice. Trial positions are
+        0-based within each block.
+
+    Returns
+    -------
+    pd.DataFrame
+        Trialwise dataframe with shape `(n_trials, n_columns)`. Actions use
+        1 for `N` and 0 for `O`; rewards match correctness.
+    """
+    rows = []
+    cur_trial = 0
+    for block_index, pattern in enumerate(block_patterns):
+        for trial_position, label in enumerate(pattern):
+            is_new_side = label == "N"
+            rows.append(
+                {
+                    "state": "left",
+                    "model_stimulus": 1,
+                    "action": int(is_new_side),
+                    "reward": int(is_new_side),
+                    "correct": int(is_new_side),
+                    "cur_block": block_index,
+                    "cur_trial": cur_trial,
+                    "cur_trial_in_block": trial_position,
+                }
+            )
+            cur_trial += 1
+    return pd.DataFrame(rows)
+
+
+def test_summarize_block_performance_adds_transition_structure_metrics():
+    """Block transition metrics should match the explicit off-by-one examples."""
+    trial_df = make_transition_metric_trial_df(
+        [
+            list("NNNN"),
+            list("OOONNN"),
+            list("OONOONON"),
+            list("OOOO"),
+        ]
+    )
+    augmented_trial_df = session_analysis.make_augmented_trial_df(trial_df)
+
+    block_performance = session_analysis.summarize_block_performance(
+        augmented_trial_df,
+        session_id="CT999_2026-06-30",
+    )
+
+    assert block_performance["trials_to_correct"].tolist() == [0, 3, 2, "None"]
+    assert block_performance["no_switch"].tolist() == [False, False, False, True]
+    assert block_performance["transition_width"].tolist() == [0, 0, 5, "None"]
+    assert block_performance["reversion_choices"].tolist() == [0, 0, 3, "None"]
+    assert block_performance["reversion_events"].tolist() == [0, 0, 2, "None"]
+    assert block_performance["short_or_low_postswitch_trials"].tolist() == [
+        False,
+        False,
+        False,
+        True,
+    ]
+    assert block_performance.loc[0, "percent_correct_after_first_correct"] == 1.0
+    assert block_performance.loc[1, "percent_correct_after_first_correct"] == 1.0
+
+
+def test_summarize_block_performance_counts_terminal_omissions_across_block_boundary():
+    """Terminal omission streak should include unrewarded trials from the previous block."""
+    trial_df = pd.DataFrame(
+        {
+            "state": ["right", "right", "right", "left", "left"],
+            "model_stimulus": [0, 0, 0, 1, 1],
+            "action": [0, 1, 1, 1, 1],
+            "reward": [1, 0, 0, 1, 1],
+            "correct": [1, 0, 0, 1, 1],
+            "cur_block": [0, 0, 0, 1, 1],
+            "cur_trial": [0, 1, 2, 3, 4],
+            "cur_trial_in_block": [0, 1, 2, 0, 1],
+        }
+    )
+    augmented_trial_df = session_analysis.make_augmented_trial_df(trial_df)
+
+    block_performance = session_analysis.summarize_block_performance(
+        augmented_trial_df,
+        session_id="CT999_2026-06-30",
+    )
+
+    assert block_performance.loc[1, "trials_to_correct"] == 0
+    assert block_performance.loc[1, "terminal_omission_streak_inclusive"] == 2
+    assert block_performance.loc[0, "previous_block_length"] == "None"
+    assert block_performance.loc[1, "previous_block_length"] == 3
+    assert block_performance.loc[1, "previous_block_reward_fraction"] == pytest.approx(1 / 3)
+
+
 def test_summarize_block_performance_saves_percent_correct_after_first_correct():
     """Post-first-correct accuracy should include the first correct behavioral trial."""
     trial_df = pd.DataFrame(
@@ -1299,6 +1396,35 @@ def test_add_regression_stats_to_session_performance_drops_non_numeric_prev_n_re
     assert regression_inputs[0] == ([0.0, 4.0], [1.0, 3.0])
     assert regression_inputs[1] == ([0.0, 2.0, 4.0], [1.0, 2.0, 3.0])
     assert regression_inputs[2] == ([0.0, 2.0, 4.0], [1.0, 2.0, 3.0])
+
+
+def test_add_relative_tts_metrics_uses_existing_prev_reward_regression():
+    """Block TTS residuals should use the session-level previous-reward fit."""
+    block_performance = pd.DataFrame(
+        {
+            "trials_to_correct": [1, 3, "None", 5],
+            "prev_n_rewarded": [0, 2, 3, "None"],
+        }
+    )
+    session_performance = pd.DataFrame(
+        {
+            "prev_n_rewarded_slope": [2.0],
+            "prev_n_rewarded_intercept": [1.0],
+        }
+    )
+
+    updated = session_analysis.add_relative_tts_metrics(
+        block_performance,
+        session_performance,
+    )
+
+    assert updated["predicted_TTS_from_prev_rewards"].tolist()[:2] == [1.0, 5.0]
+    assert updated.loc[2, "predicted_TTS_from_prev_rewards"] == "None"
+    assert updated.loc[3, "predicted_TTS_from_prev_rewards"] == "None"
+    assert updated["residual_TTS"].tolist()[:2] == [0.0, -2.0]
+    assert updated.loc[2, "residual_TTS"] == "None"
+    assert updated.loc[3, "residual_TTS"] == "None"
+    assert updated["TTS_percentile_within_session"].tolist() == [0.0, 0.5, "None", 1.0]
 
 
 def test_run_analysis_handles_string_encoded_rewards_in_prev_n_rewarded_regression(tmp_path, monkeypatch):
