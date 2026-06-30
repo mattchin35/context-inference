@@ -33,6 +33,9 @@ DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS = {
     "FQL": "fql_mouse_agreement",
     "HMM": "hmm_logodds_mouse_agreement",
     "HMM decay": "hmm_logodds_decay_mouse_agreement",
+    "Persev": "perseveration_mouse_agreement",
+    "Doubt+P": "doubt_perseveration_mouse_agreement",
+    "WSLS": "wsls_mouse_agreement",
     "Ideal": "observer_mouse_agreement",
 }
 AGENT_MOUSE_AGREEMENT_COLORS = {
@@ -40,6 +43,9 @@ AGENT_MOUSE_AGREEMENT_COLORS = {
     "FQL": "#d62728",
     "HMM": "#2ca02c",
     "HMM decay": "#9467bd",
+    "Persev": "#ff7f0e",
+    "Doubt+P": "#8c564b",
+    "WSLS": "#17becf",
     "Ideal": "#111111",
 }
 
@@ -752,7 +758,7 @@ def plot_session_agent_mouse_agreement(
 
     timeline_ax.set_ylim(-0.05, 1.05)
     timeline_ax.set_xlabel("Block")
-    timeline_ax.set_ylabel("Mouse-Agent Agreement")
+    timeline_ax.set_ylabel("Agent agreement")
     timeline_ax.set_title(f"{sess_id_full} Mouse-Agent Agreement")
     timeline_ax.axhline(0.5, color="gray", linestyle=":", linewidth=1)
     handles, _labels = timeline_ax.get_legend_handles_labels()
@@ -763,7 +769,7 @@ def plot_session_agent_mouse_agreement(
         summary_ax=summary_ax,
         block_performance=block_performance,
         agreement_columns=agreement_columns,
-        y_label="Mouse-Agent Agreement",
+        y_label="Agent agreement",
         color_cycle=color_cycle,
     )
 
@@ -869,6 +875,67 @@ def plot_session_side_bias_ratios(
     ax.spines["top"].set_visible(False)
 
     save_path = plot_path / f"{sess_id_full}_session_side_bias_ratios.png"
+    save_performance_figure(fig, save_path)
+    return save_path
+
+
+def plot_session_signed_side_bias(
+    session_summary: pd.DataFrame,
+    plot_path: Path,
+    sess_id_full: str,
+) -> Path:
+    """Plot signed whole-session side-bias metrics.
+
+    Parameters
+    ----------
+    session_summary : pd.DataFrame
+        One-row session summary dataframe with shape `(1, n_columns)`.
+        Required columns are `bias_oracle`, `bias_ideal`, and
+        `raw_side_bias`. Bias values are unitless signed fractions where
+        positive values indicate excess left choices.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    sess_id_full : str
+        Full session identifier used in the plot title and output filename.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path `{sess_id_full}_session_signed_side_bias.png`.
+    """
+    required_columns = ["bias_oracle", "bias_ideal", "raw_side_bias"]
+    missing_columns = sorted(set(required_columns).difference(session_summary.columns))
+    if missing_columns:
+        raise ValueError(f"session_summary is missing required columns: {missing_columns}")
+    if session_summary.empty:
+        raise ValueError("session_summary must contain one session row.")
+
+    row = session_summary.iloc[0]
+    values = pd.to_numeric(row.loc[required_columns], errors="coerce")
+    plot_path.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    x = np.arange(len(required_columns))
+    ax.plot(
+        x,
+        values.to_numpy(dtype=float),
+        "o-",
+        color="black",
+        linewidth=2,
+        markersize=7,
+        label="signed bias",
+    )
+    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+    ax.set_xticks(x)
+    ax.set_xticklabels(["Oracle", "Ideal", "Raw"], rotation=20)
+    ax.set_ylabel("Left bias")
+    ax.set_title(f"{sess_id_full} Signed Side Bias")
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(frameon=False)
+
+    save_path = plot_path / f"{sess_id_full}_session_signed_side_bias.png"
     save_performance_figure(fig, save_path)
     return save_path
 
@@ -1071,7 +1138,7 @@ def _plot_agent_metric_summary_on_ax(
             s=22,
             alpha=0.65,
             color=color,
-            label=f"{label} blocks",
+            label="_nolegend_",
         )
         quartiles = values.quantile([0.25, 0.5, 0.75])
         q1 = float(quartiles.loc[0.25])
@@ -3036,6 +3103,170 @@ def plot_trials_to_correct_session_summary(
     save_performance_figure(f, save_path)
 
 
+def plot_correct_after_first_session_summary(
+    summary_df: pd.DataFrame,
+    plot_path: Path,
+    figure_id: str,
+) -> Path:
+    """Plot overall post-first-correct accuracy median and quartile range.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Cross-session post-first-correct summary with shape `(n_rows,
+        n_columns)`. Required columns are `date`,
+        `correct_after_first_group`, `percent_correct_after_first_q1`,
+        `percent_correct_after_first_median`, and
+        `percent_correct_after_first_q3`. Only rows with
+        `correct_after_first_group == "overall"` are plotted. Values are
+        unitless fractions.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    figure_id : str
+        Mouse or subject identifier used in the plot title and output filename.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path.
+    """
+    required_columns = [
+        "date",
+        "correct_after_first_group",
+        "percent_correct_after_first_q1",
+        "percent_correct_after_first_median",
+        "percent_correct_after_first_q3",
+    ]
+    missing_columns = sorted(set(required_columns).difference(summary_df.columns))
+    if missing_columns:
+        raise ValueError(f"summary_df is missing required columns: {missing_columns}")
+
+    plot_df = summary_df.loc[
+        summary_df["correct_after_first_group"] == "overall",
+        required_columns,
+    ].copy()
+    numeric_columns = [
+        "percent_correct_after_first_q1",
+        "percent_correct_after_first_median",
+        "percent_correct_after_first_q3",
+    ]
+    for column in numeric_columns:
+        plot_df[column] = pd.to_numeric(plot_df[column], errors="coerce")
+    plot_df = plot_df.dropna(subset=numeric_columns)
+    if plot_df.empty:
+        raise ValueError("summary_df must contain at least one valid overall session row.")
+
+    x = np.arange(1, plot_df.shape[0] + 1)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.fill_between(
+        x,
+        plot_df["percent_correct_after_first_q1"].to_numpy(dtype=float),
+        plot_df["percent_correct_after_first_q3"].to_numpy(dtype=float),
+        alpha=0.3,
+        linewidth=0,
+        label="Q1-Q3",
+    )
+    ax.plot(
+        x,
+        plot_df["percent_correct_after_first_median"].to_numpy(dtype=float),
+        "ko-",
+        label="Median",
+    )
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_xlabel("Day", fontsize=16)
+    ax.set_ylabel("Post-first-correct accuracy", fontsize=16)
+    ax.set_title(f"{figure_id} Post-First-Correct Accuracy Across Sessions")
+    ax.set_xticks(x)
+    ax.set_xticklabels(plot_df["date"].to_numpy(), rotation=60, fontsize=8)
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(frameon=False)
+
+    save_path = plot_path / f"{figure_id}_correct-after-first-session-summary.png"
+    save_performance_figure(fig, save_path)
+    return save_path
+
+
+def plot_session_summary_metric_family(
+    overall_df: pd.DataFrame,
+    plot_path: Path,
+    figure_id: str,
+    family_name: str,
+    metric_specs: dict[str, str],
+    y_label: str,
+    ylim: tuple[float, float] | None = None,
+) -> Path:
+    """Plot related session summary metrics together across sessions.
+
+    Parameters
+    ----------
+    overall_df : pd.DataFrame
+        Overall-performance summary with shape `(n_sessions, n_columns)`.
+        Required columns are `date` and every key in `metric_specs`.
+    plot_path : pathlib.Path
+        Directory where the PNG figure is saved.
+    figure_id : str
+        Mouse or subject identifier used in the plot title and output filename.
+    family_name : str
+        Short name used in the output filename.
+    metric_specs : dict[str, str]
+        Mapping from overall-performance column name to legend label. Values
+        are unitless unless specified by `y_label`.
+    y_label : str
+        Axis label describing the metric family and units.
+    ylim : tuple[float, float] or None, default=None
+        Optional y-axis limits in metric units.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path `{figure_id}_{family_name}-session-summary-metrics.png`.
+    """
+    required_columns = {"date", *metric_specs.keys()}
+    missing_columns = sorted(required_columns.difference(overall_df.columns))
+    if missing_columns:
+        raise ValueError(f"overall_df is missing required columns: {missing_columns}")
+
+    plot_df = overall_df.copy()
+    for column in metric_specs:
+        plot_df[column] = pd.to_numeric(plot_df[column], errors="coerce")
+    plot_df = plot_df.sort_values("date").reset_index(drop=True)
+    x = np.arange(1, plot_df.shape[0] + 1)
+
+    plot_path.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for column, label in metric_specs.items():
+        valid_rows = plot_df[column].notna().to_numpy()
+        if not valid_rows.any():
+            continue
+        ax.plot(
+            x[valid_rows],
+            plot_df.loc[valid_rows, column].to_numpy(dtype=float),
+            "o-",
+            linewidth=2,
+            label=label,
+        )
+
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+    ax.set_xlabel("Session date")
+    ax.set_ylabel(y_label)
+    ax.set_title(f"{figure_id} {family_name.replace('_', ' ').title()} Summary")
+    ax.set_xticks(x)
+    ax.set_xticklabels(plot_df["date"].to_numpy(), rotation=60, fontsize=8)
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(frameon=False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+
+    save_path = plot_path / f"{figure_id}_{family_name}-session-summary-metrics.png"
+    save_performance_figure(fig, save_path)
+    return save_path
+
+
 def plot_side_trials_to_correct_quality_on_ax(
     ax: plt.Axes,
     summary_df: pd.DataFrame,
@@ -3125,8 +3356,9 @@ def plot_side_trials_to_correct_quality_on_ax(
     dates = pd.unique(summary_plot_df["date"])
     x_by_date = {date: index + 1 for index, date in enumerate(dates)}
     side_styles = {
-        "left": {"color": color_dict["left_uncued"], "seed_offset": 0},
-        "right": {"color": color_dict["right_uncued"], "seed_offset": 1},
+        "overall": {"color": "black", "seed_offset": 2, "zorder": 3},
+        "left": {"color": color_dict["left_uncued"], "seed_offset": 0, "zorder": 2},
+        "right": {"color": color_dict["right_uncued"], "seed_offset": 1, "zorder": 2},
     }
 
     finite_trial_values = pd.concat(
@@ -3172,6 +3404,7 @@ def plot_side_trials_to_correct_quality_on_ax(
                 linewidth=0,
                 color=style["color"],
                 label=f"{side} Q1-Q3",
+                zorder=style["zorder"],
             )
             ax.plot(
                 spread_rows["x_position"].to_numpy(dtype=float),
@@ -3179,6 +3412,7 @@ def plot_side_trials_to_correct_quality_on_ax(
                 "o-",
                 color=style["color"],
                 label=f"{side} median",
+                zorder=style["zorder"],
             )
 
         side_points = point_plot_df[point_plot_df["rewarded_side"] == side].copy()
@@ -3200,6 +3434,7 @@ def plot_side_trials_to_correct_quality_on_ax(
                 alpha=0.3,
                 markersize=4,
                 label=f"{side} raw blocks",
+                zorder=style["zorder"],
             )
 
         no_correct_points = side_points[side_points["no_correct_choice"]]
@@ -3311,6 +3546,7 @@ def plot_side_trials_to_correct_quality(
     dates = pd.unique(summary_plot_df["date"])
     x_by_date = {date: index + 1 for index, date in enumerate(dates)}
     side_styles = {
+        "overall": {"color": "black"},
         "left": {"color": color_dict["left_uncued"]},
         "right": {"color": color_dict["right_uncued"]},
     }
@@ -4229,7 +4465,12 @@ def plot_multisession_agent_mouse_agreement_quality_on_ax(
                 median_values = spread_rows["agreement_median"].to_numpy(dtype=float)
                 q3_values = spread_rows["agreement_q3"].to_numpy(dtype=float)
                 for x_value, q1_value, q3_value in zip(x_values, q1_values, q3_values):
-                    ax.plot([x_value, x_value], [q1_value, q3_value], color=color, linewidth=2)
+                    ax.plot(
+                        [x_value, x_value],
+                        [q1_value, q3_value],
+                        color=color,
+                        linewidth=2,
+                    )
                 ax.plot(
                     x_values,
                     median_values,
@@ -4258,7 +4499,7 @@ def plot_multisession_agent_mouse_agreement_quality_on_ax(
                 color=color,
                 alpha=0.35,
                 markersize=4,
-                label=f"{agent} raw blocks",
+                label="_nolegend_",
             )
 
     ax.set_ylim(-0.05, 1.05)

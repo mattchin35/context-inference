@@ -64,7 +64,7 @@ trial_df <- read.csv("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT024/
 #trial_df <- read.csv("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT024/CT024_20260529_latent_inference/processed/CT024_2026-05-29_143237_augmented_trials.csv",
                      #header = TRUE)#,
 #trial_df <- read.csv("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT024/CT024_20260520_latent_inference/processed/CT024_2026-05-20_183627_augmented_trials.csv",
- #                    header = TRUE)#,
+#                     header = TRUE)#,
 #trial_df <- read.csv("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT021/CT021_20260519_latent_inference/processed/CT021_2026-05-19_130244_augmented_trials.csv",
 #                     header = TRUE)#,
 #trial_df <- read.csv("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT016/CT016_20260529_latent_inference/processed/CT016_2026-05-29_132812_augmented_trials.csv",
@@ -79,36 +79,65 @@ flexplot(observer_value ~ 1, data=trial_df)
 flexplot(action ~ FQlearning_rel_value  + relative_doubt_index | HMM_decay_res + perseveration_regressor, data=trial_df, method="logistic")
 flexplot(action ~ HMM_rel_value_logodds_decay + relative_doubt_index | perseveration_regressor, data=trial_df, method="logistic")
 
+flexplot(action ~ FQlearning_rel_value, data=trial_df, method="logistic")
+flexplot(action ~ HMM_rel_value_logodds_decay, data=trial_df, method="logistic")
+flexplot(action ~ FQlearning_rel_value + relative_doubt_index , data=trial_df, method="logistic")
+flexplot(action ~ observer_value, data=trial_df, method="logistic")
+
 flexplot(action ~ signed_omission_regressor | HMM_rel_value_logodds_decay, data=trial_df, method="logistic")
 flexplot(action ~ signed_omission_regressor | perseveration_regressor, data=trial_df)
 flexplot(action ~ signed_omission_regressor | Qlearning_rel_value + relative_doubt_index, data=trial_df)
 flexplot(action ~ signed_omission_regressor | HMM_rel_value_logodds_decay + relative_doubt_index + perseveration_regressor, data=trial_df)
-flexplot(action ~ signed_omission_regressor | HMM_decay_res + , data=trial_df)
+#flexplot(action ~ signed_omission_regressor | HMM_decay_res + , data=trial_df)
 flexplot(action ~ signed_omission_regressor + FQlearning_rel_value | HMM_decay_res + relative_doubt_index, data=trial_df)
  #flexplot(FQlearning_rel_value ~ HMM_decay_res + rel_hazard_res, data=clean_df)
+
 
 full = glm(action ~ signed_omission_regressor + HMM_rel_value_logodds_decay + relative_doubt_index + perseveration_regressor + relative_hazard_index, data=trial_df, family=binomial)
 reduced = glm(action ~ signed_omission_regressor + HMM_rel_value_logodds_decay + relative_doubt_index + perseveration_regressor, data=trial_df, family=binomial)
 compare.fits(action ~ signed_omission_regressor | perseveration_regressor + relative_doubt_index, data=trial_df, model1=full, model2=reduced)
 model.comparison(full, reduced)
 
+observer = glm(action ~ observer_value + perseveration_regressor, data=trial_df, family=binomial)
 ideal = glm(action ~ HMM_rel_value_logodds_decay + relative_doubt_index + perseveration_regressor, data=trial_df, family=binomial)
 fql_doubt = glm(action ~ FQlearning_rel_value + relative_doubt_index + perseveration_regressor, data=trial_df, family=binomial)
 ql = glm(action ~ Qlearning_rel_value + perseveration_regressor, data=trial_df, family=binomial)
 hmm = glm(action ~ HMM_rel_value_logodds + perseveration_regressor, data=trial_df, family=binomial)
 hmm_decay = glm(action ~ HMM_rel_value_logodds_decay + perseveration_regressor, data=trial_df, family=binomial)
+fql = glm(action ~ FQlearning_rel_value + perseveration_regressor, data=trial_df, family=binomial)
 compare.fits(action ~ perseveration_regressor, data=trial_df, model1=full, model2=reduced)
 
+model.comparison(ideal, observer)
+model.comparison(ideal, fql_doubt)
 model.comparison(ideal, hmm)
+model.comparison(ideal, hmm_decay)
+model.comparison(ideal, fql)
+
 model.comparison(ideal, ql)
 model.comparison(hmm_decay, hmm)
-model.comparison(ideal, fql_doubt)
 model.comparison(fql_doubt, ql)
+model.comparison(fql_doubt, hmm_decay)
+model.comparison(fql, hmm_decay)
+model.comparison(fql_doubt, fql)
 
+df_sub <- trial_df %>%
+  filter(first_switch_in_block) %>%
+  mutate(
+    fitted_prob = predict(ideal, newdata = ., type = "response")
+  )
+
+visualize(ideal, data = df_sub)
+#visualize(ideal, data=first_switch)
+#flexplot(ideal, data = first_switch)
+
+# 5-20 CT024 seems to use FQL-doubt
 
 
 flexplot(HMM_rel_value_logodds_decay ~ 1, data=trial_df_rf)
+
 trial_df_rf_subset <- trial_df_rf %>% select(-signed_omission_regressor, 
+                                             -doubt_perseveration_value,
+                                             #-wsls_regressor,
                                              -negative_value,
                                              -consecutive_rewards_memory,-consecutive_omissions_memory,-consecutive_rewards	,-consecutive_omissions, -consecutive_failures_memory,-consecutive_failures,
                                              -left_value,-right_value,-relative_value,-left_omissions,-right_omissions,-relative_omissions,-left_cf_value,-right_cf_value,-relative_cf_value,-left_cf_omissions,-right_cf_omissions,-relative_cf_omissions,-left_monotonic_cf_value,-right_monotonic_cf_value,-relative_monotonic_cf_value,
@@ -169,4 +198,51 @@ flexplot(HMM_decay_res_prev_action_side ~ 1, data=leave_stay_df)
 flexplot(relative_hazard_index_prev_action_side ~ 1, data=leave_stay_df)
 
 
+###############################################################################
+# Fit full-data GLMs, inspect on chosen trial subset
+###############################################################################
 
+fit_df <- trial_df
+
+inspect_df <- trial_df %>%
+  dplyr::filter(.data$first_switch_in_block %in% TRUE)
+
+model_formula <- action ~ HMM_rel_value_logodds_decay +
+  relative_doubt_index +
+  perseveration_regressor
+
+ideal <- glm(
+  model_formula,
+  data = fit_df,
+  family = binomial
+)
+
+inspect_df <- inspect_df %>%
+  dplyr::mutate(
+    fitted_prob = predict(ideal, newdata = ., type = "response")
+  )
+
+# Raw subset relationship, not necessarily the fitted full-model curve.
+flexplot(
+  action ~ HMM_rel_value_logodds_decay | relative_doubt_index + perseveration_regressor,
+  data = inspect_df,
+  method = "logistic"
+)
+
+# Full model inspected on subset data.
+compare.fits(
+  action ~ HMM_rel_value_logodds_decay | relative_doubt_index + perseveration_regressor,
+  data = inspect_df,
+  model1 = ideal,
+  pred.type = "response"
+)
+
+# Direct fitted probability plot on subset.
+ggplot(inspect_df, aes(x = HMM_rel_value_logodds_decay, y = fitted_prob)) +
+  geom_point(aes(color = action), alpha = 0.7) +
+  geom_smooth(se = FALSE) +
+  labs(
+    x = "HMM decay value",
+    y = "Full-model predicted P(action = 1)",
+    color = "Observed action"
+  )

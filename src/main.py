@@ -49,6 +49,9 @@ AGENT_MOUSE_AGREEMENT_COLUMNS = {
     "FQL": "fql_mouse_agreement",
     "HMM": "hmm_logodds_mouse_agreement",
     "HMM decay": "hmm_logodds_decay_mouse_agreement",
+    "Persev": "perseveration_mouse_agreement",
+    "Doubt+P": "doubt_perseveration_mouse_agreement",
+    "WSLS": "wsls_mouse_agreement",
     "Ideal": "observer_mouse_agreement",
 }
 
@@ -58,6 +61,39 @@ CROSS_MOUSE_SESSION_METRIC_SPECS = {
     },
     "median_post_switch_correct": {
         "label": "Median Post-First-Correct Accuracy",
+        "ylim": (0, 1),
+    },
+    "median_ideal_agreement": {
+        "label": "Median Ideal-Agent Agreement",
+        "ylim": (0, 1),
+    },
+}
+
+SESSION_SUMMARY_METRIC_FAMILIES = {
+    "tts": {
+        "metrics": {
+            "median_TTS": "median TTS",
+            "q3_TTS": "Q3 TTS",
+            "frac_blocks_TTS_gt_5": "fraction TTS > 5",
+        },
+        "ylabel": "TTS summary",
+    },
+    "post_switch_correct": {
+        "metrics": {
+            "median_post_switch_correct": "median",
+            "q1_post_switch_correct": "Q1",
+            "frac_blocks_post_switch_correct_lt_0p7": "fraction < 0.7",
+        },
+        "ylabel": "Post-switch correctness",
+        "ylim": (0, 1),
+    },
+    "ideal_agreement": {
+        "metrics": {
+            "median_ideal_agreement": "median",
+            "q1_ideal_agreement": "Q1",
+            "frac_blocks_ideal_agreement_lt_0p6": "fraction < 0.6",
+        },
+        "ylabel": "Ideal agreement",
         "ylim": (0, 1),
     },
 }
@@ -1432,6 +1468,57 @@ def run_cross_mouse_session_metric_curves(
         )
 
 
+def run_cross_mouse_learning_curve(
+    data_root: Path,
+    output_path: Path,
+    mice: Sequence[str],
+    learning_regressor: str = "prev_n_rewarded",
+    figure_id: str = "cross_mouse",
+) -> None:
+    """Save the cross-mouse learning-curve CSV and plot.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory containing one folder per mouse. Each mouse folder must
+        contain `cross_session_analysis/{mouse}_overall_performance.csv`.
+    output_path : pathlib.Path
+        Directory where the long-form CSV and PNG plot are saved.
+    mice : Sequence[str]
+        Mouse identifiers to include.
+    learning_regressor : str, default="prev_n_rewarded"
+        Regression predictor prefix. The loader reads
+        `{learning_regressor}_slope`.
+    figure_id : str, default="cross_mouse"
+        Figure identifier used as the filename prefix and plot title prefix.
+
+    Returns
+    -------
+    None
+        Writes the learning-curve CSV and PNG plot.
+    """
+    output_path = Path(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+    cross_mouse_df = load_cross_mouse_learning_curve_data(
+        data_root=data_root,
+        mice=mice,
+        learning_regressor=learning_regressor,
+    )
+    if cross_mouse_df.empty:
+        raise ValueError(
+            f"No valid {learning_regressor}_slope rows found for selected mice: {list(mice)}"
+        )
+
+    csv_path = output_path / f"{figure_id}_{learning_regressor}_learning_curve_data.csv"
+    cross_mouse_df.to_csv(csv_path, index=False, na_rep="None")
+    performance_plots.plot_cross_mouse_learning_curve(
+        cross_mouse_df=cross_mouse_df,
+        plot_path=output_path,
+        figure_id=figure_id,
+        learning_regressor=learning_regressor,
+    )
+
+
 def load_overall_performance_summary(
     mouse: str,
     multi_session_save_path: Path,
@@ -1766,19 +1853,18 @@ def prepare_side_trials_to_correct_block_points(
                 continue
 
             numeric_value = trials_to_correct_numeric.iloc[row_position]
-            rows.append(
-                {
-                    "date": session.date,
-                    "session_id": session.sess_id_full,
-                    "rewarded_side": rewarded_side,
-                    "block_ix": block_ids[row_position],
-                    "block_type": row["block_type"],
-                    "trials_to_correct_numeric": float(numeric_value)
-                    if not pd.isna(numeric_value)
-                    else np.nan,
-                    "no_correct_choice": bool(pd.isna(numeric_value)),
-                }
-            )
+            base_row = {
+                "date": session.date,
+                "session_id": session.sess_id_full,
+                "block_ix": block_ids[row_position],
+                "block_type": row["block_type"],
+                "trials_to_correct_numeric": float(numeric_value)
+                if not pd.isna(numeric_value)
+                else np.nan,
+                "no_correct_choice": bool(pd.isna(numeric_value)),
+            }
+            rows.append(base_row | {"rewarded_side": "overall"})
+            rows.append(base_row | {"rewarded_side": rewarded_side})
 
     return pd.DataFrame(rows, columns=columns)
 
@@ -1823,7 +1909,7 @@ def prepare_side_trials_to_correct_summary(
     for saved_session in saved_sessions:
         session = saved_session.session
         session_points = block_points[block_points["session_id"] == session.sess_id_full]
-        for rewarded_side in ("left", "right"):
+        for rewarded_side in ("overall", "left", "right"):
             side_points = session_points[session_points["rewarded_side"] == rewarded_side]
             if side_points.empty:
                 continue
@@ -2940,7 +3026,7 @@ def main_simulation():
 
 def main_multisession():
     """Analyze selected saved sessions as one continuous multisession table."""
-    mouse = 'CT016'
+    mouse = 'CT024'
     session_data_root = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}')
     multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
     task_tag = "latent_inference"
@@ -3109,6 +3195,11 @@ def main_multisession():
         index=False,
         na_rep="None",
     )
+    performance_plots.plot_correct_after_first_session_summary(
+        summary_df=correct_after_first_summary,
+        plot_path=multi_session_save_path,
+        figure_id=mouse,
+    )
     performance_plots.plot_multisession_correct_after_first_quality(
         summary_df=correct_after_first_summary,
         block_points_df=correct_after_first_block_points,
@@ -3175,6 +3266,16 @@ def main_multisession():
         plot_path=multi_session_save_path,
         figure_id=mouse,
     )
+    for family_name, family_spec in SESSION_SUMMARY_METRIC_FAMILIES.items():
+        performance_plots.plot_session_summary_metric_family(
+            overall_df=overall_performance_df,
+            plot_path=multi_session_save_path,
+            figure_id=mouse,
+            family_name=family_name,
+            metric_specs=family_spec["metrics"],
+            y_label=family_spec["ylabel"],
+            ylim=family_spec.get("ylim"),
+        )
     concatenated = concatenate_saved_sessions(saved_sessions)
     multisession = build_multisession_session(
         mouse=mouse,
@@ -3309,6 +3410,11 @@ def run_single_session_workflow(
         if not matching_session_summary.empty:
             session_summary_for_plot = matching_session_summary
     performance_plots.plot_session_side_bias_ratios(
+        session_summary=session_summary_for_plot,
+        plot_path=sess.figure_path,
+        sess_id_full=sess.sess_id_full,
+    )
+    performance_plots.plot_session_signed_side_bias(
         session_summary=session_summary_for_plot,
         plot_path=sess.figure_path,
         sess_id_full=sess.sess_id_full,
@@ -3503,7 +3609,7 @@ def main_mouse():
 
 def main_mouse_batch():
     """Run ordinary single-session analysis for several dates of one mouse."""
-    mouse = "CT020"
+    mouse = "CT024"
     use_all_dates_for_task_tag = True
     dates = [#'2026-04-17', '2026-04-20',
         #'2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
@@ -3554,63 +3660,67 @@ def main_mouse_batch():
     )
 
 
-def main_cross_mouse_learning_curve():
-    """Plot cross-mouse regression learning curves from saved summaries."""
-    data_root = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData")
-    output_path = data_root / "cross_mouse_analysis"
-    learning_regressor = "prev_n_rewarded"
-    use_discovered_mice = False
-    mice = [
-        "CT016", "CT017", "CT019", "CT020","CT021", "CT022", "CT023", "CT024", "CT025",
-    ]
+def main_cross_mouse_metrics(
+    data_root: Path = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData"),
+    use_discovered_mice: bool = False,
+    mice: Sequence[str] | None = None,
+    learning_regressor: str = "prev_n_rewarded",
+) -> None:
+    """Plot all configured cross-mouse metrics from saved summaries.
 
-    if use_discovered_mice:
-        mice = discover_mice_with_overall_performance(data_root)
-    if not mice:
-        raise ValueError("No mice selected for cross-mouse learning-curve plotting.")
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory containing one folder per mouse and the
+        `cross_mouse_analysis` output directory.
+    use_discovered_mice : bool, default=False
+        If True, discover mouse folders containing
+        `{mouse}_overall_performance.csv` files. If False, use `mice`.
+    mice : Sequence[str] or None, default=None
+        Explicit mouse identifiers to include when `use_discovered_mice` is
+        False. None uses the current hardcoded cross-mouse cohort.
+    learning_regressor : str, default="prev_n_rewarded"
+        Regression predictor prefix for the learning-curve plot.
 
-    output_path.mkdir(parents=True, exist_ok=True)
-    cross_mouse_df = load_cross_mouse_learning_curve_data(
+    Returns
+    -------
+    None
+        Writes all configured cross-mouse CSVs and PNG plots.
+    """
+    output_path = Path(data_root) / "cross_mouse_analysis"
+    if mice is None:
+        mice = [
+            "CT016", "CT017", "CT019", "CT020", "CT021", "CT022", "CT023", "CT024", "CT025",
+        ]
+
+    selected_mice = discover_mice_with_overall_performance(data_root) if use_discovered_mice else list(mice)
+    if not selected_mice:
+        raise ValueError("No mice selected for cross-mouse metric plotting.")
+
+    run_cross_mouse_learning_curve(
         data_root=data_root,
-        mice=mice,
+        output_path=output_path,
+        mice=selected_mice,
         learning_regressor=learning_regressor,
-    )
-    if cross_mouse_df.empty:
-        raise ValueError(
-            f"No valid {learning_regressor}_slope rows found for selected mice: {mice}"
-        )
-
-    csv_path = output_path / f"cross_mouse_{learning_regressor}_learning_curve_data.csv"
-    cross_mouse_df.to_csv(csv_path, index=False, na_rep="None")
-    performance_plots.plot_cross_mouse_learning_curve(
-        cross_mouse_df=cross_mouse_df,
-        plot_path=output_path,
         figure_id="cross_mouse",
-        learning_regressor=learning_regressor,
     )
-
-
-def main_cross_mouse_session_quality_metrics():
-    """Plot cross-mouse session quality metrics from saved summaries."""
-    data_root = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData")
-    output_path = data_root / "cross_mouse_analysis"
-    use_discovered_mice = False
-    mice = [
-        "CT016", "CT017", "CT019", "CT020", "CT021", "CT022", "CT023", "CT024", "CT025",
-    ]
-
-    if use_discovered_mice:
-        mice = discover_mice_with_overall_performance(data_root)
-    if not mice:
-        raise ValueError("No mice selected for cross-mouse session metric plotting.")
-
     run_cross_mouse_session_metric_curves(
         data_root=data_root,
         output_path=output_path,
-        mice=mice,
+        mice=selected_mice,
         metric_specs=CROSS_MOUSE_SESSION_METRIC_SPECS,
         figure_id="cross_mouse",
     )
+
+
+def main_cross_mouse_learning_curve():
+    """Backward-compatible wrapper for the unified cross-mouse metric entry point."""
+    main_cross_mouse_metrics()
+
+
+def main_cross_mouse_session_quality_metrics():
+    """Backward-compatible wrapper for the unified cross-mouse metric entry point."""
+    main_cross_mouse_metrics()
 
 
 # def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
@@ -3635,3 +3745,4 @@ if __name__ == '__main__':
     # main_simulation()
     # main_cross_mouse_learning_curve()
     # main_cross_mouse_session_quality_metrics()
+    # main_cross_mouse_metrics()

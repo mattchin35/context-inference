@@ -750,6 +750,64 @@ def perseveration_regressor_vectorized(choices, decay=0.25):
     return pers
 
 
+def win_stay_lose_switch_regressor(actions, rewards, experimenter_reward_given=None):
+    """Return a signed win-stay/lose-switch policy regressor.
+
+    Parameters
+    ----------
+    actions : array-like of shape `(n_trials,)`
+        Trial choices. Valid choices use task coding `0=right`, `1=left`.
+        No-choice labels accepted by `make_skip_trial_mask` are skipped.
+    rewards : array-like of shape `(n_trials,)`
+        Trial rewards aligned to `actions`. Positive rewards are treated as
+        wins; zero or negative rewards are treated as omissions/losses.
+    experimenter_reward_given : array-like of shape `(n_trials,)` or None
+        Optional manual-reward flags aligned to `actions`. Flagged rows are
+        skipped and do not update the last-valid-choice history.
+
+    Returns
+    -------
+    np.ndarray
+        Object array with shape `(n_trials,)`. Valid rows contain signed
+        left-positive policy values: `+1` predicts left, `-1` predicts right,
+        and `0` marks the first valid trial before any behavioral history is
+        available. Skipped rows contain None.
+    """
+    actions = np.asarray(actions)
+    rewards = np.asarray(rewards)
+    _validate_lengths(actions, rewards)
+
+    skip_trials = make_skip_trial_mask(experimenter_reward_given=experimenter_reward_given, actions=actions)
+    if skip_trials is None:
+        skip_trials = np.zeros(actions.shape[0], dtype=bool)
+
+    wsls_values = np.empty(actions.shape[0], dtype=object)
+    last_valid_action = None
+    last_valid_reward = None
+
+    for i, (action, reward) in enumerate(zip(actions, rewards)):
+        if skip_trials[i]:
+            wsls_values[i] = None
+            continue
+
+        if last_valid_action is None:
+            wsls_values[i] = 0.0
+        elif last_valid_reward > 0:
+            wsls_values[i] = _choice_side_to_signed_left_positive(last_valid_action)
+        else:
+            switch_action = ChoiceSide.LEFT if last_valid_action == ChoiceSide.RIGHT else ChoiceSide.RIGHT
+            wsls_values[i] = _choice_side_to_signed_left_positive(switch_action)
+
+        parsed_action = _parse_choice_side(action, N_ACTIONS)
+        parsed_reward = _parse_reward(reward)
+        if parsed_action is None or parsed_reward is None:
+            continue
+        last_valid_action = parsed_action
+        last_valid_reward = parsed_reward
+
+    return wsls_values
+
+
 def _choices_to_signed_left_positive(choice_side):
     """
     Map choices to sign convention used by relative-value features:

@@ -27,6 +27,9 @@ DEFAULT_AGENT_MOUSE_AGREEMENT_VALUE_COLUMNS = {
     "fql_mouse_agreement": "FQlearning_rel_value",
     "hmm_logodds_mouse_agreement": "HMM_rel_value_logodds",
     "hmm_logodds_decay_mouse_agreement": "HMM_rel_value_logodds_decay",
+    "perseveration_mouse_agreement": "perseveration_regressor",
+    "doubt_perseveration_mouse_agreement": "doubt_perseveration_value",
+    "wsls_mouse_agreement": "wsls_regressor",
     "observer_mouse_agreement": "observer_value",
 }
 
@@ -644,7 +647,8 @@ def add_block_agent_mouse_agreement_columns(
     agent_value_columns : dict[str, str] or None, default=None
         Mapping from output agreement column name to signed left-positive agent
         value column name. None uses the default Q-learning, forgetting
-        Q-learning, HMM log-odds, HMM log-odds with decay, and observer values.
+        Q-learning, HMM log-odds, HMM log-odds with decay, simple heuristic,
+        and observer values.
     initial_tie_choice : int, default=ideal_observer.RIGHT_CHOICE
         Greedy choice used when an agent's first valid comparison row is an
         exact value tie.

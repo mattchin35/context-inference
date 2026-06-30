@@ -806,6 +806,34 @@ def test_run_cross_mouse_session_metric_curves_writes_metric_csvs_and_plots(tmp_
     assert plot_calls[1]["ylim"] == (0, 1)
 
 
+def test_main_cross_mouse_metrics_runs_learning_and_session_metrics(monkeypatch):
+    """The user-facing cross-mouse entry point should run all cross-mouse metric plots."""
+    main_module = load_main_module()
+    calls = []
+
+    monkeypatch.setattr(main_module, "discover_mice_with_overall_performance", lambda _root: ["CT014"])
+    monkeypatch.setattr(
+        main_module,
+        "run_cross_mouse_learning_curve",
+        lambda **kwargs: calls.append(("learning", kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "run_cross_mouse_session_metric_curves",
+        lambda **kwargs: calls.append(("session", kwargs)),
+    )
+
+    main_module.main_cross_mouse_metrics(
+        data_root=Path("/tmp/contextProjectData"),
+        use_discovered_mice=True,
+        mice=[],
+    )
+
+    assert [call[0] for call in calls] == ["learning", "session"]
+    assert "median_ideal_agreement" in calls[1][1]["metric_specs"]
+
+
 def test_prepare_session_trials_to_correct_summary_computes_median_and_quartiles():
     """Session TTC summaries should pool block types and report Q1/median/Q3."""
     main_module = load_main_module()
@@ -892,11 +920,11 @@ def test_prepare_side_trials_to_correct_block_points_labels_side_and_no_correct_
 
     points_df = main_module.prepare_side_trials_to_correct_block_points(saved_sessions)
 
-    assert points_df["block_ix"].tolist() == [0, 1, 3]
-    assert points_df["rewarded_side"].tolist() == ["right", "left", "left"]
+    assert points_df["block_ix"].tolist() == [0, 0, 1, 1, 3, 3]
+    assert points_df["rewarded_side"].tolist() == ["overall", "right", "overall", "left", "overall", "left"]
     assert points_df["trials_to_correct_numeric"].tolist()[:1] == [2.0]
-    assert np.isnan(points_df.loc[1, "trials_to_correct_numeric"])
-    assert points_df["no_correct_choice"].tolist() == [False, True, False]
+    assert np.isnan(points_df.loc[2, "trials_to_correct_numeric"])
+    assert points_df["no_correct_choice"].tolist() == [False, False, True, True, False, False]
 
 
 def test_prepare_side_trials_to_correct_summary_counts_completion_by_side():
@@ -934,6 +962,9 @@ def test_prepare_side_trials_to_correct_summary_counts_completion_by_side():
     left_first = summary_df[
         (summary_df["date"] == "2025-12-05") & (summary_df["rewarded_side"] == "left")
     ].iloc[0]
+    overall_first = summary_df[
+        (summary_df["date"] == "2025-12-05") & (summary_df["rewarded_side"] == "overall")
+    ].iloc[0]
     right_second = summary_df[
         (summary_df["date"] == "2025-12-16") & (summary_df["rewarded_side"] == "right")
     ].iloc[0]
@@ -945,6 +976,11 @@ def test_prepare_side_trials_to_correct_summary_counts_completion_by_side():
     assert left_first["trials_to_correct_q1"] == 3.0
     assert left_first["trials_to_correct_median"] == 4.0
     assert left_first["trials_to_correct_q3"] == 5.0
+    assert overall_first["n_blocks"] == 4
+    assert overall_first["n_valid_blocks"] == 3
+    assert overall_first["n_no_correct_blocks"] == 1
+    assert overall_first["completion_fraction"] == pytest.approx(3 / 4)
+    assert overall_first["trials_to_correct_median"] == 2.0
     assert right_second["n_blocks"] == 2
     assert right_second["n_valid_blocks"] == 1
     assert right_second["n_no_correct_blocks"] == 1
@@ -971,7 +1007,7 @@ def test_prepare_side_trials_to_correct_summary_uses_nan_quartiles_without_valid
 
     summary_df = main_module.prepare_side_trials_to_correct_summary(saved_sessions)
 
-    assert summary_df["rewarded_side"].tolist() == ["left"]
+    assert summary_df["rewarded_side"].tolist() == ["overall", "left"]
     assert summary_df.loc[0, "n_blocks"] == 2
     assert summary_df.loc[0, "n_valid_blocks"] == 0
     assert summary_df.loc[0, "n_no_correct_blocks"] == 2
@@ -1268,6 +1304,9 @@ def test_ensure_block_agent_mouse_agreement_columns_regenerates_missing_columns(
             fql_mouse_agreement=[0.25, 0.75],
             hmm_logodds_mouse_agreement=[1.0, 0.0],
             hmm_logodds_decay_mouse_agreement=[0.0, 1.0],
+            perseveration_mouse_agreement=[0.5, 0.25],
+            doubt_perseveration_mouse_agreement=[0.75, 0.25],
+            wsls_mouse_agreement=[1.0, 0.5],
             observer_mouse_agreement=[0.5, 0.5],
         )
 
@@ -1281,6 +1320,7 @@ def test_ensure_block_agent_mouse_agreement_columns_regenerates_missing_columns(
     updated = main_module.ensure_block_agent_mouse_agreement_columns(saved_session)
 
     assert updated.block_performance["qlearning_mouse_agreement"].tolist() == [0.5, 1.0]
+    assert updated.block_performance["wsls_mouse_agreement"].tolist() == [1.0, 0.5]
     assert updated.block_performance["observer_mouse_agreement"].tolist() == [0.5, 0.5]
 
 
@@ -1299,6 +1339,9 @@ def test_prepare_agent_mouse_agreement_block_points_long_format():
                     "fql_mouse_agreement": [0.25, 0.75],
                     "hmm_logodds_mouse_agreement": [1.0, 0.0],
                     "hmm_logodds_decay_mouse_agreement": [0.0, 1.0],
+                    "perseveration_mouse_agreement": [0.25, 0.5],
+                    "doubt_perseveration_mouse_agreement": [0.75, 0.25],
+                    "wsls_mouse_agreement": [1.0, "None"],
                     "observer_mouse_agreement": [0.5, 0.5],
                 }
             ),
@@ -1320,6 +1363,8 @@ def test_prepare_agent_mouse_agreement_block_points_long_format():
     assert ql_points["agreement"].tolist() == [0.5]
     ideal_points = points_df[points_df["agent"] == "Ideal"]
     assert ideal_points["agreement"].tolist() == [0.5, 0.5]
+    wsls_points = points_df[points_df["agent"] == "WSLS"]
+    assert wsls_points["agreement"].tolist() == [1.0]
 
 
 def test_prepare_agent_mouse_agreement_summary_calculates_session_agent_quartiles():
@@ -1337,6 +1382,9 @@ def test_prepare_agent_mouse_agreement_summary_calculates_session_agent_quartile
                     "fql_mouse_agreement": [0.25, 0.75, 1.0],
                     "hmm_logodds_mouse_agreement": [1.0, 0.0, 0.5],
                     "hmm_logodds_decay_mouse_agreement": [0.0, 1.0, 0.5],
+                    "perseveration_mouse_agreement": [0.25, 0.5, 0.75],
+                    "doubt_perseveration_mouse_agreement": [0.0, 0.5, 1.0],
+                    "wsls_mouse_agreement": [1.0, 0.5, 0.0],
                     "observer_mouse_agreement": [0.5, 0.5, 1.0],
                 }
             ),
@@ -1351,6 +1399,7 @@ def test_prepare_agent_mouse_agreement_summary_calculates_session_agent_quartile
     assert ql_summary["agreement_q1"] == 0.25
     assert ql_summary["agreement_median"] == 0.5
     assert ql_summary["agreement_q3"] == 0.75
+    assert {"Persev", "Doubt+P", "WSLS"}.issubset(set(summary_df["agent"]))
 
 
 def test_prepare_block_explore_run_summary_calculates_overall_and_side_medians():

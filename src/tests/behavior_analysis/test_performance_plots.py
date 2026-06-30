@@ -226,8 +226,9 @@ def test_plot_session_agent_mouse_agreement_adds_summary_scatter(monkeypatch, tm
 
     raw_summary_calls = [
         call for call in scatter_calls
-        if call["label"] in {"QL blocks", "Ideal blocks"}
+        if call["label"] == "_nolegend_"
     ]
+    assert len(raw_summary_calls) == 2
     assert [call["y"] for call in raw_summary_calls] == [[0.5, 1.0], [1.0, 0.5, 0.0]]
     assert raw_summary_calls[0]["color"] == "#1f77b4"
     assert raw_summary_calls[0]["alpha"] == 0.65
@@ -333,13 +334,32 @@ def test_plot_multisession_agent_mouse_agreement_quality_uses_agent_colors(monke
     ]
     assert median_calls[0]["color"] == "#1f77b4"
     assert median_calls[1]["color"] == "#111111"
+    visible_range_labels = [
+        call for call in plot_calls
+        if call["label"] in {"QL Q1-Q3", "Ideal Q1-Q3"}
+    ]
+    assert visible_range_labels == []
 
     raw_calls = [
         call for call in plot_calls
-        if call["label"] in {"QL raw blocks", "Ideal raw blocks"}
+        if call["label"] == "_nolegend_"
     ]
+    assert len(raw_calls) == 2
     assert raw_calls[0]["color"] == "#1f77b4"
     assert raw_calls[1]["color"] == "#111111"
+
+
+def test_default_agent_agreement_plotting_includes_simple_heuristics():
+    """Agent agreement defaults should include the unfit heuristic strategies."""
+    performance_plots = _import_performance_plots()
+
+    assert performance_plots.DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS["Persev"] == "perseveration_mouse_agreement"
+    assert (
+        performance_plots.DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS["Doubt+P"]
+        == "doubt_perseveration_mouse_agreement"
+    )
+    assert performance_plots.DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS["WSLS"] == "wsls_mouse_agreement"
+    assert performance_plots.AGENT_MOUSE_AGREEMENT_COLORS["WSLS"] != "#111111"
 
 
 def test_plot_session_correct_after_first_correct_marks_no_correct_blocks(
@@ -1312,6 +1332,89 @@ def test_plot_multisession_block_switches_quality_draws_overall_left_right(
     assert (tmp_path / "CT014_block-switches-quality.png").exists()
 
 
+def test_plot_side_trials_to_correct_quality_draws_overall_left_right(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """TTC quality plots should include overall, left, and right summary layers."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
+    fill_between_calls = _capture_fill_between_calls(monkeypatch)
+    summary_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-05"],
+            "rewarded_side": ["overall", "left", "right"],
+            "completion_fraction": [1.0, 1.0, 1.0],
+            "trials_to_correct_q1": [1.0, 2.0, 3.0],
+            "trials_to_correct_median": [2.0, 3.0, 4.0],
+            "trials_to_correct_q3": [3.0, 4.0, 5.0],
+        }
+    )
+    block_points_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-05", "2025-12-05"],
+            "rewarded_side": ["overall", "left", "right"],
+            "trials_to_correct_numeric": [1.0, 2.0, 3.0],
+            "no_correct_choice": [False, False, False],
+        }
+    )
+
+    performance_plots.plot_side_trials_to_correct_quality(
+        summary_df=summary_df,
+        block_points_df=block_points_df,
+        plot_path=tmp_path,
+        figure_id="CT014",
+        point_jitter=0,
+    )
+
+    median_labels = {
+        call["kwargs"].get("label")
+        for call in plot_calls
+        if call["kwargs"].get("label", "").endswith("median")
+    }
+    raw_labels = {
+        call["kwargs"].get("label")
+        for call in plot_calls
+        if call["kwargs"].get("label", "").endswith("raw blocks")
+    }
+    spread_labels = {call["label"] for call in fill_between_calls}
+
+    assert median_labels == {"overall median", "left median", "right median"}
+    assert raw_labels == {"overall raw blocks", "left raw blocks", "right raw blocks"}
+    assert spread_labels == {"overall Q1-Q3", "left Q1-Q3", "right Q1-Q3"}
+
+
+def test_plot_correct_after_first_session_summary_draws_overall_median_iqr(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Overall post-first-correct summary should mirror the overall TTC plot."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_plot_calls(monkeypatch)
+    fill_between_calls = _capture_fill_between_calls(monkeypatch)
+    summary_df = pd.DataFrame(
+        {
+            "date": ["2025-12-05", "2025-12-06"],
+            "correct_after_first_group": ["overall", "overall"],
+            "percent_correct_after_first_q1": [0.25, 0.5],
+            "percent_correct_after_first_median": [0.5, 0.75],
+            "percent_correct_after_first_q3": [0.75, 1.0],
+        }
+    )
+
+    performance_plots.plot_correct_after_first_session_summary(
+        summary_df=summary_df,
+        plot_path=tmp_path,
+        figure_id="CT014",
+    )
+
+    median_call = next(call for call in plot_calls if call["label"] == "Median")
+    assert median_call["y"] == [0.5, 0.75]
+    assert fill_between_calls[0]["y1"] == [0.25, 0.5]
+    assert fill_between_calls[0]["y2"] == [0.75, 1.0]
+    assert (tmp_path / "CT014_correct-after-first-session-summary.png").exists()
+
+
 def test_plot_multisession_block_switches_quality_on_ax_draws_overall_left_right(
     monkeypatch,
 ):
@@ -2275,6 +2378,98 @@ def test_plot_cross_mouse_session_metric_curve_draws_mouse_lines_and_group_mean(
     assert calls_by_label["group mean"]["y"] == [1.5, 4.0, 3.0]
     assert calls_by_label["group mean"]["color"] == "black"
     assert calls_by_label["group mean"]["linewidth"] > calls_by_label["CT014"]["linewidth"]
+
+
+def test_plot_session_signed_side_bias_draws_three_bias_metrics(monkeypatch, tmp_path: Path):
+    """Signed side-bias plotting should show oracle, ideal, and raw bias metrics."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_plot_calls(monkeypatch)
+    session_summary = pd.DataFrame(
+        {
+            "bias_oracle": [0.25],
+            "bias_ideal": [-0.1],
+            "raw_side_bias": [0.5],
+        }
+    )
+
+    output_path = performance_plots.plot_session_signed_side_bias(
+        session_summary=session_summary,
+        plot_path=tmp_path,
+        sess_id_full="unit_session",
+    )
+
+    metric_call = next(call for call in plot_calls if call["label"] == "signed bias")
+    assert output_path == tmp_path / "unit_session_session_signed_side_bias.png"
+    assert output_path.exists()
+    assert metric_call["x"] == [0, 1, 2]
+    assert metric_call["y"] == [0.25, -0.1, 0.5]
+
+
+def test_plot_session_agent_mouse_agreement_uses_short_ylabel(monkeypatch, tmp_path: Path):
+    """Single-session agent agreement should use a compact y-axis label."""
+    performance_plots = _import_performance_plots()
+    captured = {}
+
+    def capture_figure(fig, save_path):
+        captured["ylabel"] = fig.axes[0].get_ylabel()
+        fig.savefig(save_path)
+        plt.close(fig)
+
+    monkeypatch.setattr(performance_plots, "save_performance_figure", capture_figure)
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1],
+            "qlearning_mouse_agreement": [0.5, 0.6],
+            "fql_mouse_agreement": [0.6, 0.7],
+            "hmm_logodds_mouse_agreement": [0.7, 0.8],
+            "hmm_logodds_decay_mouse_agreement": [0.8, 0.9],
+            "perseveration_mouse_agreement": [0.4, 0.5],
+            "doubt_perseveration_mouse_agreement": [0.3, 0.4],
+            "wsls_mouse_agreement": [0.5, 0.5],
+            "observer_mouse_agreement": [0.9, 1.0],
+        }
+    )
+
+    performance_plots.plot_session_agent_mouse_agreement(
+        block_performance=block_performance,
+        plot_path=tmp_path,
+        sess_id_full="unit_session",
+    )
+
+    assert captured["ylabel"] == "Agent agreement"
+    assert (tmp_path / "unit_session_agent_mouse_agreement.png").exists()
+
+
+def test_plot_session_summary_metric_family_draws_multiple_session_metrics(monkeypatch, tmp_path: Path):
+    """Metric-family plots should combine related session summary columns."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_plot_calls(monkeypatch)
+    overall_df = pd.DataFrame(
+        {
+            "date": ["2025-12-01", "2025-12-02"],
+            "median_TTS": [1.0, 2.0],
+            "q3_TTS": [3.0, 4.0],
+            "frac_blocks_TTS_gt_5": [0.25, 0.5],
+        }
+    )
+
+    output_path = performance_plots.plot_session_summary_metric_family(
+        overall_df=overall_df,
+        plot_path=tmp_path,
+        figure_id="CT014",
+        family_name="tts",
+        metric_specs={
+            "median_TTS": "median",
+            "q3_TTS": "Q3",
+            "frac_blocks_TTS_gt_5": "fraction > 5",
+        },
+        y_label="TTS summary",
+    )
+
+    labels = {call["label"] for call in plot_calls}
+    assert output_path == tmp_path / "CT014_tts-session-summary-metrics.png"
+    assert output_path.exists()
+    assert labels == {"median", "Q3", "fraction > 5"}
 
 
 def test_plot_block_bias_quadrants_colors_by_block_type(monkeypatch, tmp_path: Path):

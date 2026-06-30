@@ -449,6 +449,47 @@ def test_add_block_agent_mouse_agreement_columns_summarizes_by_block():
     assert updated["agent_mouse_agreement"].tolist() == [0.5, 0.5]
 
 
+def test_add_block_agent_mouse_agreement_columns_includes_simple_heuristics_by_default():
+    """Default agent agreement should include perseveration, doubt+perseveration, and WSLS."""
+    block_performance = pd.DataFrame(
+        {
+            "block_ix": [0, 1],
+            "block_type": ["right_cued", "left_cued"],
+        }
+    )
+    augmented_trial_df = pd.DataFrame(
+        {
+            "cur_block": [0, 0, 1, 1],
+            "action": [0, 1, 1, 0],
+            "reward": [1, 0, 1, 0],
+            "experimenter_reward_given": [0, 0, 0, 0],
+            "Qlearning_rel_value": [-1.0, 1.0, 1.0, -1.0],
+            "FQlearning_rel_value": [-1.0, 1.0, 1.0, -1.0],
+            "HMM_rel_value_logodds": [-1.0, 1.0, 1.0, -1.0],
+            "HMM_rel_value_logodds_decay": [-1.0, 1.0, 1.0, -1.0],
+            "observer_value": [-1.0, 1.0, 1.0, -1.0],
+            "perseveration_regressor": [-1.0, -1.0, 1.0, 1.0],
+            "doubt_perseveration_value": [-1.0, -1.0, 1.0, 1.0],
+            "wsls_regressor": [0.0, -1.0, 1.0, 1.0],
+        }
+    )
+
+    updated = session_analysis.add_block_agent_mouse_agreement_columns(
+        block_performance,
+        augmented_trial_df,
+    )
+
+    expected_columns = {
+        "perseveration_mouse_agreement",
+        "doubt_perseveration_mouse_agreement",
+        "wsls_mouse_agreement",
+    }
+    assert expected_columns.issubset(updated.columns)
+    assert updated["perseveration_mouse_agreement"].tolist() == [0.5, 0.5]
+    assert updated["doubt_perseveration_mouse_agreement"].tolist() == [0.5, 0.5]
+    assert updated["wsls_mouse_agreement"].tolist() == [0.5, 0.5]
+
+
 def test_add_block_agent_mouse_agreement_columns_requires_missing_agent_columns():
     """Requested agent value columns should fail loudly when absent."""
     block_performance = pd.DataFrame({"block_ix": [0], "block_type": ["right_cued"]})

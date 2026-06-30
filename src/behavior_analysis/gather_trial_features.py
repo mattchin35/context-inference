@@ -53,6 +53,8 @@ LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE = (
     "relative_doubt_index",
     "relative_hazard_index",
     "perseveration_regressor",
+    "doubt_perseveration_value",
+    "wsls_regressor",
     "observer_value",
     "HMM_decay_res",
     "rel_hazard_res",
@@ -728,7 +730,7 @@ def collect_trial_index_features(
     augmented_trial_df : pd.DataFrame
         Trialwise dataframe with shape `(n_trials, n_columns)`. Required
         columns include side-specific omission counters, `consecutive_omissions`,
-        `relative_monotonic_cf_value`, `action`, and optional
+        `relative_monotonic_cf_value`, `action`, `reward`, and optional
         `experimenter_reward_given`.
     omission_lam : float, default=0.5
         Positive saturation parameter for omission-derived regressors.
@@ -742,6 +744,9 @@ def collect_trial_index_features(
     pd.DataFrame
         Copy of `augmented_trial_df` with omission, hazard, and perseveration
         regressor columns added. Regressors use left-positive sign convention.
+        `doubt_perseveration_value` is the unfit sum of
+        `relative_doubt_index + perseveration_regressor`; `wsls_regressor` is
+        a signed win-stay/lose-switch heuristic based on the last valid choice.
     """
     right_omissions = _get_column_or_raise(augmented_trial_df, ("right_omissions",)).to_numpy()
     left_omissions = _get_column_or_raise(augmented_trial_df, ("left_omissions",)).to_numpy()
@@ -753,6 +758,7 @@ def collect_trial_index_features(
         ("relative_monotonic_cf_value",),
     ).to_numpy()
     actions = _get_column_or_raise(augmented_trial_df, ("action",)).to_numpy()
+    rewards = _get_column_or_raise(augmented_trial_df, ("reward",)).to_numpy()
 
     augmented_trial_df = normalize_experimenter_reward_column(augmented_trial_df)
     n_trials = augmented_trial_df.shape[0]
@@ -768,6 +774,7 @@ def collect_trial_index_features(
     relative_doubt_index = np.full(n_trials, None, dtype=object)
     relative_hazard_index = np.full(n_trials, None, dtype=object)
     perseveration_regressor = np.full(n_trials, None, dtype=object)
+    doubt_perseveration_value = np.full(n_trials, None, dtype=object)
 
     rel_omission_valid = trial_features.relative_omissions_index(
         R_omissions=right_omissions_counterfactual[valid_mask],
@@ -798,12 +805,24 @@ def collect_trial_index_features(
     relative_hazard_index[valid_mask] = rel_hazard_valid
     perseveration_regressor[valid_mask] = perseveration_valid
 
+    doubt_perseveration_value[valid_mask] = (
+        np.asarray(rel_doubt_valid, dtype=float)
+        + np.asarray(perseveration_valid, dtype=float)
+    )
+    wsls_regressor = trial_features.win_stay_lose_switch_regressor(
+        actions=actions,
+        rewards=rewards,
+        experimenter_reward_given=experimenter_reward_given,
+    )
+
     augmented_trial_df = augmented_trial_df.copy()
     augmented_trial_df["relative_omissions_index"] = relative_omissions_index
     augmented_trial_df["signed_omission_regressor"] = signed_omission_regressor
     augmented_trial_df["relative_doubt_index"] = relative_doubt_index
     augmented_trial_df["relative_hazard_index"] = relative_hazard_index
     augmented_trial_df["perseveration_regressor"] = perseveration_regressor
+    augmented_trial_df["doubt_perseveration_value"] = doubt_perseveration_value
+    augmented_trial_df["wsls_regressor"] = wsls_regressor
     return augmented_trial_df
 
 

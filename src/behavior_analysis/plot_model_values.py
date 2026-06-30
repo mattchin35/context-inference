@@ -24,7 +24,60 @@ action_int_to_string = {0: 'Right', 1: 'Left'}
 color_dict = {'right_cued': 'cyan', 'left_cued': 'darkgreen', 'right_uncued': 'plum', 'left_uncued': 'indigo',
               'right': 'cyan', 'left': 'darkgreen',
               0: 'cyan', 1: 'darkkhaki'}
+mouse_history_colorblock_dict = {
+    'right_cued': 'darkred',
+    'right_uncued': 'darkred',
+    'right': 'darkred',
+    'left_cued': 'blue',
+    'left_uncued': 'blue',
+    'left': 'blue',
+    'dark period': 'black',
+}
 state_dict = {0: 'right', 1: 'left'}
+
+
+def _add_mouse_history_colorblocks(
+    axes: list[plt.Axes] | np.ndarray,
+    observer_run_df: pd.DataFrame,
+    alpha: float = 0.12,
+) -> None:
+    """Add task-context spans to one or more mouse-history observer axes.
+
+    Parameters
+    ----------
+    axes : list[matplotlib.axes.Axes] or np.ndarray
+        Axes receiving background spans. Each axis is assumed to use trial
+        index on the x-axis.
+    observer_run_df : pd.DataFrame
+        Observer run table with shape `(n_valid_trials, n_columns)`. Must
+        contain a `state` column with task-context labels such as `left`,
+        `right`, or `dark period`.
+    alpha : float, default=0.12
+        Transparency of the color spans in matplotlib alpha units.
+
+    Returns
+    -------
+    None
+        Mutates the supplied axes by adding background patches.
+    """
+    if "state" not in observer_run_df.columns or observer_run_df.empty:
+        return
+
+    states = observer_run_df["state"].astype(str).to_numpy()
+    if states.size == 0:
+        return
+
+    state_change_ix = np.flatnonzero(states[:-1] != states[1:]) + 1
+    state_starts = np.concatenate(([0], state_change_ix))
+    state_ends = np.concatenate((state_change_ix, [states.size]))
+
+    for ax in np.atleast_1d(axes):
+        for start_ix, end_ix in zip(state_starts, state_ends):
+            state_name = states[start_ix]
+            color = mouse_history_colorblock_dict.get(state_name)
+            if color is None:
+                continue
+            ax.axvspan(start_ix, end_ix, color=color, alpha=alpha, zorder=1)
 
 
 def plot_multiple_runs(value_dfs: list[pd.DataFrame], plot_name: str, action_df: Optional[pd.DataFrame], ):
@@ -673,6 +726,10 @@ def plot_mouse_history_ideal_observer_values(
         show=False,
         theme=theme,
     )
+    if hasattr(fig, "axes"):
+        _add_mouse_history_colorblocks(fig.axes, observer_run_df)
+    if hasattr(fig, "savefig"):
+        fig.savefig(save_path, dpi=300)
     plt.close(fig)
     print("saved figure as {}".format(save_path))
     return observer_run_df, save_path
