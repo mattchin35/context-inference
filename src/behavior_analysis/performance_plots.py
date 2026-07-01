@@ -2893,7 +2893,6 @@ def plot_cross_mouse_learning_curve(
         ax.plot(
             mouse_df["training_day"].to_numpy(dtype=int),
             mouse_df["slope"].to_numpy(dtype=float),
-            marker="o",
             linewidth=1.5,
             color=all_colors[mouse_index % len(all_colors)],
             alpha=0.75,
@@ -2908,7 +2907,6 @@ def plot_cross_mouse_learning_curve(
     ax.plot(
         mean_df["training_day"].to_numpy(dtype=int),
         mean_df["slope"].to_numpy(dtype=float),
-        marker="o",
         linewidth=3.0,
         color="black",
         label="group mean",
@@ -2983,7 +2981,6 @@ def plot_cross_mouse_session_metric_curve(
         ax.plot(
             mouse_df["training_day"].to_numpy(dtype=int),
             mouse_df["metric_value"].to_numpy(dtype=float),
-            marker="o",
             linewidth=1.5,
             color=all_colors[mouse_index % len(all_colors)],
             alpha=0.75,
@@ -2998,7 +2995,6 @@ def plot_cross_mouse_session_metric_curve(
     ax.plot(
         mean_df["training_day"].to_numpy(dtype=int),
         mean_df["metric_value"].to_numpy(dtype=float),
-        marker="o",
         linewidth=3.0,
         color="black",
         label="group mean",
@@ -4380,6 +4376,7 @@ def plot_multisession_agent_mouse_agreement_quality_on_ax(
     figure_id: str,
     point_jitter: float = 0.08,
     jitter_seed: int = 0,
+    show_raw_blocks: bool = True,
 ) -> plt.Axes:
     """Plot cross-session mouse-agent agreement summaries on one axis.
 
@@ -4402,6 +4399,9 @@ def plot_multisession_agent_mouse_agreement_quality_on_ax(
         categorical x-axis units.
     jitter_seed : int, default=0
         Seed for deterministic marker jitter.
+    show_raw_blocks : bool, default=True
+        If True, overlay jittered raw block agreement markers. If False, plot
+        only session medians and Q1-Q3 ranges.
 
     Returns
     -------
@@ -4481,26 +4481,27 @@ def plot_multisession_agent_mouse_agreement_quality_on_ax(
                     label=f"{agent} median",
                 )
 
-        agent_points = point_plot_df[point_plot_df["agent"] == agent].copy()
-        if agent_points.empty:
-            continue
+        if show_raw_blocks:
+            agent_points = point_plot_df[point_plot_df["agent"] == agent].copy()
+            if agent_points.empty:
+                continue
 
-        agent_points["x_position"] = agent_points["date"].map(x_by_date) + offset
-        agent_points = agent_points.dropna(subset=["x_position"])
-        if not agent_points.empty:
-            ax.plot(
-                _jitter_x_coordinates(
-                    agent_points["x_position"].to_numpy(dtype=float),
-                    jitter_width=point_jitter,
-                    seed=jitter_seed + agent_index,
-                ),
-                agent_points["agreement"].to_numpy(dtype=float),
-                "o",
-                color=color,
-                alpha=0.35,
-                markersize=4,
-                label="_nolegend_",
-            )
+            agent_points["x_position"] = agent_points["date"].map(x_by_date) + offset
+            agent_points = agent_points.dropna(subset=["x_position"])
+            if not agent_points.empty:
+                ax.plot(
+                    _jitter_x_coordinates(
+                        agent_points["x_position"].to_numpy(dtype=float),
+                        jitter_width=point_jitter,
+                        seed=jitter_seed + agent_index,
+                    ),
+                    agent_points["agreement"].to_numpy(dtype=float),
+                    "o",
+                    color=color,
+                    alpha=0.35,
+                    markersize=4,
+                    label="_nolegend_",
+                )
 
     ax.set_ylim(-0.05, 1.05)
     ax.set_ylabel("Mouse-Agent Agreement")
@@ -4524,6 +4525,7 @@ def plot_multisession_agent_mouse_agreement_quality(
     figure_id: str,
     point_jitter: float = 0.08,
     jitter_seed: int = 0,
+    show_raw_blocks: bool = True,
 ) -> Path:
     """Plot standalone cross-session mouse-agent agreement quality.
 
@@ -4541,6 +4543,9 @@ def plot_multisession_agent_mouse_agreement_quality(
         Maximum absolute horizontal jitter for raw block markers.
     jitter_seed : int, default=0
         Seed for deterministic marker jitter.
+    show_raw_blocks : bool, default=True
+        If True, overlay jittered raw block agreement markers. If False, plot
+        only session medians and Q1-Q3 ranges.
 
     Returns
     -------
@@ -4555,6 +4560,7 @@ def plot_multisession_agent_mouse_agreement_quality(
         figure_id=figure_id,
         point_jitter=point_jitter,
         jitter_seed=jitter_seed,
+        show_raw_blocks=show_raw_blocks,
     )
 
     save_path = plot_path / f"{figure_id}_agent-mouse-agreement-quality.png"

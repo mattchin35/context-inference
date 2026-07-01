@@ -3075,6 +3075,7 @@ def main_multisession():
     sliding_regression_window_size = 10
     sliding_regression_step_size = 5
     block_hmm_state_marker_mode = "alpha"  # default, markersize, or alpha
+    plot_agent_agreement_raw_blocks = False
     learning_regressor = "prev_n_rewarded"
     trials_to_correct_display_cap = 25
     trial_state_plot_line_width = 0.5
@@ -3157,6 +3158,7 @@ def main_multisession():
         block_points_df=agent_mouse_agreement_block_points,
         plot_path=multi_session_save_path,
         figure_id=mouse,
+        show_raw_blocks=plot_agent_agreement_raw_blocks,
     )
     trials_to_correct_summary = prepare_session_trials_to_correct_summary(saved_sessions)
     performance_plots.plot_trials_to_correct_session_summary(
@@ -3741,8 +3743,6 @@ def main_cross_mouse_session_quality_metrics():
 if __name__ == '__main__':
     # main_mouse()
     main_mouse_batch()
-    # main_multisession()
+    main_multisession()
     # main_simulation()
-    # main_cross_mouse_learning_curve()
-    # main_cross_mouse_session_quality_metrics()
     # main_cross_mouse_metrics()

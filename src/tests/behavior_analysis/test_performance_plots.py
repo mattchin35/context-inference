@@ -349,6 +349,49 @@ def test_plot_multisession_agent_mouse_agreement_quality_uses_agent_colors(monke
     assert raw_calls[1]["color"] == "#111111"
 
 
+def test_plot_multisession_agent_mouse_agreement_quality_can_hide_raw_blocks(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Agent-agreement quality plots should allow hiding raw block markers."""
+    performance_plots = _import_performance_plots()
+    plot_calls = _capture_plot_calls(monkeypatch)
+    summary_df = pd.DataFrame(
+        {
+            "date": ["2026-01-01", "2026-01-02", "2026-01-01", "2026-01-02"],
+            "session_id": ["s1", "s2", "s1", "s2"],
+            "agent": ["QL", "QL", "Ideal", "Ideal"],
+            "n_blocks": [2, 2, 2, 2],
+            "agreement_q1": [0.25, 0.5, 0.5, 0.75],
+            "agreement_median": [0.5, 0.75, 0.75, 1.0],
+            "agreement_q3": [0.75, 1.0, 1.0, 1.0],
+        }
+    )
+    block_points_df = pd.DataFrame(
+        {
+            "date": ["2026-01-01", "2026-01-01", "2026-01-02", "2026-01-02"],
+            "session_id": ["s1", "s1", "s2", "s2"],
+            "agent": ["QL", "Ideal", "QL", "Ideal"],
+            "block_ix": [0, 0, 0, 0],
+            "block_type": ["left_cued", "left_cued", "right_cued", "right_cued"],
+            "agreement": [0.25, 0.5, 0.75, 1.0],
+        }
+    )
+
+    performance_plots.plot_multisession_agent_mouse_agreement_quality(
+        summary_df=summary_df,
+        block_points_df=block_points_df,
+        plot_path=tmp_path,
+        figure_id="CT999",
+        show_raw_blocks=False,
+    )
+
+    labels = [call["label"] for call in plot_calls]
+    assert "QL median" in labels
+    assert "Ideal median" in labels
+    assert "_nolegend_" not in labels
+
+
 def test_default_agent_agreement_plotting_includes_simple_heuristics():
     """Agent agreement defaults should include the unfit heuristic strategies."""
     performance_plots = _import_performance_plots()
@@ -2314,7 +2357,7 @@ def test_plot_session_zero_trials_to_correct_fraction_draws_raw_flags_and_means(
 def test_plot_cross_mouse_learning_curve_draws_mouse_lines_and_group_mean(monkeypatch, tmp_path: Path):
     """Cross-mouse learning curves should include individual mice and day means."""
     performance_plots = _import_performance_plots()
-    plot_calls = _capture_plot_calls(monkeypatch)
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
     cross_mouse_df = pd.DataFrame(
         {
             "mouse": ["CT014", "CT014", "CT016", "CT016"],
@@ -2331,16 +2374,18 @@ def test_plot_cross_mouse_learning_curve_draws_mouse_lines_and_group_mean(monkey
         learning_regressor="prev_n_rewarded",
     )
 
-    calls_by_label = {call["label"]: call for call in plot_calls}
+    calls_by_label = {call["kwargs"].get("label"): call for call in plot_calls}
     assert output_path == tmp_path / "cross_mouse_prev_n_rewarded_learning_curve.png"
     assert output_path.exists()
-    assert calls_by_label["CT014"]["x"] == [1, 3]
-    assert calls_by_label["CT014"]["y"] == [0.1, 0.3]
-    assert calls_by_label["CT016"]["x"] == [1, 2]
-    assert calls_by_label["group mean"]["x"] == [1, 2, 3]
-    assert calls_by_label["group mean"]["y"] == [0.15000000000000002, 0.4, 0.3]
-    assert calls_by_label["group mean"]["color"] == "black"
-    assert calls_by_label["group mean"]["linewidth"] > calls_by_label["CT014"]["linewidth"]
+    assert calls_by_label["CT014"]["x"].tolist() == [1, 3]
+    assert calls_by_label["CT014"]["y"].tolist() == [0.1, 0.3]
+    assert calls_by_label["CT014"]["kwargs"].get("marker") is None
+    assert calls_by_label["CT016"]["x"].tolist() == [1, 2]
+    assert calls_by_label["group mean"]["x"].tolist() == [1, 2, 3]
+    assert calls_by_label["group mean"]["y"].tolist() == [0.15000000000000002, 0.4, 0.3]
+    assert calls_by_label["group mean"]["kwargs"]["color"] == "black"
+    assert calls_by_label["group mean"]["kwargs"].get("marker") is None
+    assert calls_by_label["group mean"]["kwargs"]["linewidth"] > calls_by_label["CT014"]["kwargs"]["linewidth"]
 
 
 def test_plot_cross_mouse_session_metric_curve_draws_mouse_lines_and_group_mean(
@@ -2349,7 +2394,7 @@ def test_plot_cross_mouse_session_metric_curve_draws_mouse_lines_and_group_mean(
 ):
     """Cross-mouse session metric curves should mirror learning-curve styling."""
     performance_plots = _import_performance_plots()
-    plot_calls = _capture_plot_calls(monkeypatch)
+    plot_calls = _capture_detailed_plot_calls(monkeypatch)
     cross_mouse_df = pd.DataFrame(
         {
             "mouse": ["CT014", "CT014", "CT016", "CT016"],
@@ -2368,16 +2413,18 @@ def test_plot_cross_mouse_session_metric_curve_draws_mouse_lines_and_group_mean(
         metric_label="Median Trials to Correct",
     )
 
-    calls_by_label = {call["label"]: call for call in plot_calls}
+    calls_by_label = {call["kwargs"].get("label"): call for call in plot_calls}
     assert output_path == tmp_path / "cross_mouse_median_TTS_session_metric_curve.png"
     assert output_path.exists()
-    assert calls_by_label["CT014"]["x"] == [1, 3]
-    assert calls_by_label["CT014"]["y"] == [1.0, 3.0]
-    assert calls_by_label["CT016"]["x"] == [1, 2]
-    assert calls_by_label["group mean"]["x"] == [1, 2, 3]
-    assert calls_by_label["group mean"]["y"] == [1.5, 4.0, 3.0]
-    assert calls_by_label["group mean"]["color"] == "black"
-    assert calls_by_label["group mean"]["linewidth"] > calls_by_label["CT014"]["linewidth"]
+    assert calls_by_label["CT014"]["x"].tolist() == [1, 3]
+    assert calls_by_label["CT014"]["y"].tolist() == [1.0, 3.0]
+    assert calls_by_label["CT014"]["kwargs"].get("marker") is None
+    assert calls_by_label["CT016"]["x"].tolist() == [1, 2]
+    assert calls_by_label["group mean"]["x"].tolist() == [1, 2, 3]
+    assert calls_by_label["group mean"]["y"].tolist() == [1.5, 4.0, 3.0]
+    assert calls_by_label["group mean"]["kwargs"]["color"] == "black"
+    assert calls_by_label["group mean"]["kwargs"].get("marker") is None
+    assert calls_by_label["group mean"]["kwargs"]["linewidth"] > calls_by_label["CT014"]["kwargs"]["linewidth"]
 
 
 def test_plot_session_signed_side_bias_draws_three_bias_metrics(monkeypatch, tmp_path: Path):
