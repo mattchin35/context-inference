@@ -27,9 +27,11 @@ color_dict = {'right_cued': 'cyan', 'left_cued': 'darkgreen', 'right_uncued': 'p
 mouse_history_colorblock_dict = {
     'right_cued': 'darkred',
     'right_uncued': 'darkred',
+    'right_patch': 'darkred',
     'right': 'darkred',
     'left_cued': 'blue',
     'left_uncued': 'blue',
+    'left_patch': 'blue',
     'left': 'blue',
     'dark period': 'black',
 }

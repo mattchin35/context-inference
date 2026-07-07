@@ -54,14 +54,16 @@ def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
     return posix_decoded, datetime_decoded, frame_ix
 
 
-file_path = Path.home() / 'Documents' / 'ephys_transfer' / 'treadmill_20251008' / 'CoolTerm Capture (Untitled_0) 2025-10-21 12-36-20-447.txt'
+# file_path = Path.home() / 'Documents' / 'ephys_transfer' / 'treadmill_20251008' / 'CoolTerm Capture (Untitled_0) 2025-10-21 12-36-20-447.txt'
+file_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/irig_test_20260707/CoolTerm Capture (Untitled_0) 2026-07-07 12-06-51-676.txt')
 # df = pd.read_csv(filepath, sep=';', header=None, on_bad_lines='skip', usecols=[1, 2, 4])
 
 log_labels = ['Fdistance', 'Bdistance', 'dacval', 'runSpeed']
 irig_labels = ['syncPinState']
 log_dicts = []
 
-pc_timestamp_present = False
+pc_timestamp_present = True
+lines = []
 try:
     with open(file_path, 'r') as file:
         filesize = file_path.stat().st_size
@@ -134,7 +136,7 @@ irig_bits_fordf[~irig_bit_ix] = np.nan
 df['irig_bit'] = irig_bits_fordf
 irig_bits = irig_bits[irig_signal_values]
 
-t_decoded, frameix_decoded = decode_irig_bits(irig_bits)
+t_decoded, datetime_decoded, frameix_decoded = decode_irig_bits(irig_bits)
 unix_time = np.zeros_like(irig_bits, dtype=float)
 unix_time[frameix_decoded] = t_decoded
 

@@ -488,6 +488,10 @@ def main_ni_only(
         print(frame_df.head(5).to_string(index=False))
     return pulse_df, frame_df
 
+def main_treadmill_only():
+    """Decode a treadmill's IRIG signals. For use with serial-message txt files with IRIG pulses."""
+    pass
+
 
 def main_workflow() -> None:
     session_data_home = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251211_latentInference")
@@ -559,5 +563,5 @@ def main_workflow() -> None:
 
 
 if __name__ == "__main__":
-    main_workflow()
-    #main_ni_only()
+    # main_workflow()
+    main_ni_only()

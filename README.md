@@ -31,6 +31,14 @@ Plotting is handled separately from run saving. The controller supports:
 Controller plots are built from the output dataframe and are intended to show actions, rewards, and model values
 together on a single figure so the model trajectory can be inspected alongside the observed simulated behavior.
 
+
+# Neural data analysis
+
+## Synchronization
+DAQ signals, LFPs, and spikes have to be synchronized in order to be used with behavior. There are two entry points to synchronization:
+- sync_ephys.py, which is based around IRIG synchronization to UTC.
+- preprocess_daq.py, which is based around manual synchronization of a sync line recorded in the DAQ, probes, and behavior.
+
 ## Running tests
 
 This repository currently supports test execution through `uv` from the repository root:

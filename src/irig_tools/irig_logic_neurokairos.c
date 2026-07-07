@@ -70,7 +70,6 @@ static const int SECONDS_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40};
 static const int MINUTES_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40};
 static const int HOURS_WEIGHTS[] = {1, 2, 4, 8, 10, 20};
 static const int DAY_OF_YEAR_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40, 80, 100, 200};
-static const int DECISECONDS_WEIGHTS[] = {1, 2, 4, 8};
 static const int YEARS_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40, 80};
 
 volatile sig_atomic_t running = 1;
@@ -160,8 +159,7 @@ void load_mock_chrony_status(irig_logic_neurokairos_t *logic) {
 void generate_irig_h_frame(irig_logic_neurokairos_t *logic, const struct tm *time_info,
                            time_t frame_reference_second, irig_bit_t *frame) {
     int seconds_bcd[7], minutes_bcd[7], hours_bcd[6];
-    int day_of_year_bcd[10], deciseconds_bcd[4], year_bcd[8];
-    int pos = 0;
+    int day_of_year_bcd[10], year_bcd[8];
     int stratum_enc;
     int dispersion_enc;
 
@@ -171,54 +169,57 @@ void generate_irig_h_frame(irig_logic_neurokairos_t *logic, const struct tm *tim
     bcd_encode(time_info->tm_min, MINUTES_WEIGHTS, 7, minutes_bcd);
     bcd_encode(time_info->tm_hour, HOURS_WEIGHTS, 6, hours_bcd);
     bcd_encode(time_info->tm_yday + 1, DAY_OF_YEAR_WEIGHTS, 10, day_of_year_bcd);
-    bcd_encode(0, DECISECONDS_WEIGHTS, 4, deciseconds_bcd);
     bcd_encode((time_info->tm_year + 1900) % 100, YEARS_WEIGHTS, 8, year_bcd);
 
-    frame[pos++] = IRIG_P;
-
-    for (int i = 0; i < 4; i++) frame[pos++] = seconds_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-    frame[pos++] = IRIG_ZERO;
-    for (int i = 4; i < 7; i++) frame[pos++] = seconds_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-    frame[pos++] = IRIG_P;
-
-    for (int i = 0; i < 4; i++) frame[pos++] = minutes_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-    frame[pos++] = IRIG_ZERO;
-    for (int i = 4; i < 7; i++) frame[pos++] = minutes_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-    frame[pos++] = IRIG_ZERO;
-    frame[pos++] = IRIG_P;
-
-    for (int i = 0; i < 4; i++) frame[pos++] = hours_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-    frame[pos++] = IRIG_ZERO;
-    for (int i = 4; i < 6; i++) frame[pos++] = hours_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-    frame[pos++] = IRIG_ZERO;
-    frame[pos++] = IRIG_ZERO;
-    frame[pos++] = IRIG_P;
-
-    for (int i = 0; i < 4; i++) frame[pos++] = day_of_year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-    frame[pos++] = IRIG_ZERO;
-    for (int i = 4; i < 8; i++) frame[pos++] = day_of_year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-    frame[pos++] = IRIG_P;
-    for (int i = 8; i < 10; i++) frame[pos++] = day_of_year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-
-    frame[pos++] = IRIG_ZERO;
-    frame[pos++] = IRIG_ZERO;
-    frame[pos++] = IRIG_ZERO;
-    for (int i = 0; i < 4; i++) frame[pos++] = deciseconds_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-    frame[pos++] = IRIG_P;
-
-    for (int i = 0; i < 4; i++) frame[pos++] = year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-    frame[pos++] = IRIG_ZERO;
-    for (int i = 4; i < 8; i++) frame[pos++] = year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-    frame[pos++] = IRIG_P;
-
     stratum_enc = encode_stratum(logic->chrony_stratum);
+    dispersion_enc = encode_root_dispersion(logic->chrony_root_dispersion);
+
+    // Bits 00-08: seconds. Bit 05 is reserved zero.
+    frame[0] = IRIG_P;
+    for (int i = 0; i < 4; i++) frame[1 + i] = seconds_bcd[i] ? IRIG_ONE : IRIG_ZERO;
+    frame[5] = IRIG_ZERO;
+    for (int i = 4; i < 7; i++) frame[2 + i] = seconds_bcd[i] ? IRIG_ONE : IRIG_ZERO;
+
+    // Bits 09-18: minutes. Bits 14 and 18 are reserved zero.
+    frame[9] = IRIG_P;
+    for (int i = 0; i < 4; i++) frame[10 + i] = minutes_bcd[i] ? IRIG_ONE : IRIG_ZERO;
+    frame[14] = IRIG_ZERO;
+    for (int i = 4; i < 7; i++) frame[11 + i] = minutes_bcd[i] ? IRIG_ONE : IRIG_ZERO;
+    frame[18] = IRIG_ZERO;
+
+    // Bits 19-28: hours. Bits 24, 27, and 28 are reserved zero.
+    frame[19] = IRIG_P;
+    for (int i = 0; i < 4; i++) frame[20 + i] = hours_bcd[i] ? IRIG_ONE : IRIG_ZERO;
+    frame[24] = IRIG_ZERO;
+    for (int i = 4; i < 6; i++) frame[21 + i] = hours_bcd[i] ? IRIG_ONE : IRIG_ZERO;
+    frame[27] = IRIG_ZERO;
+    frame[28] = IRIG_ZERO;
+
+    // Bits 29-41: day of year. Bit 34 is reserved zero.
+    frame[29] = IRIG_P;
+    for (int i = 0; i < 4; i++) frame[30 + i] = day_of_year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
+    frame[34] = IRIG_ZERO;
+    for (int i = 4; i < 8; i++) frame[31 + i] = day_of_year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
+    frame[39] = IRIG_P;
+    for (int i = 8; i < 10; i++) frame[32 + i] = day_of_year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
+
+    // Bits 42-48: NeuroKairos clock-quality metadata.
+    // Bit 42 is reserved. Bits 43-44 encode chrony stratum.
+    // Bit 45 is reserved. Bits 46-48 encode root-dispersion bucket.
+    frame[42] = IRIG_ZERO;
     frame[43] = (stratum_enc & 1) ? IRIG_ONE : IRIG_ZERO;
     frame[44] = (stratum_enc & 2) ? IRIG_ONE : IRIG_ZERO;
-
-    dispersion_enc = encode_root_dispersion(logic->chrony_root_dispersion);
+    frame[45] = IRIG_ZERO;
     frame[46] = (dispersion_enc & 1) ? IRIG_ONE : IRIG_ZERO;
     frame[47] = (dispersion_enc & 2) ? IRIG_ONE : IRIG_ZERO;
     frame[48] = (dispersion_enc & 4) ? IRIG_ONE : IRIG_ZERO;
+
+    // Bits 49-59: year. Bit 54 is reserved zero.
+    frame[49] = IRIG_P;
+    for (int i = 0; i < 4; i++) frame[50 + i] = year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
+    frame[54] = IRIG_ZERO;
+    for (int i = 4; i < 8; i++) frame[51 + i] = year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
+    frame[59] = IRIG_P;
 }
 
 void init_timing_constants(void) {

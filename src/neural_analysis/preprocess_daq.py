@@ -219,7 +219,7 @@ def decode_flipper_barcodes(flipper_signal: np.ndarray, sample_rate: float=25000
 
     # ic(events['crossing_t'])
     # events = remove_signal_noise(flipper_signal, events, noise_length=.001)
-    ic(events['crossing_t'])
+    # ic(events['crossing_t'])
 
     wrapper_t = []
     pulse_times = np.diff(events['crossing_t'])

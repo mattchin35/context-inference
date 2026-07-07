@@ -98,6 +98,18 @@ reduced = glm(action ~ signed_omission_regressor + HMM_rel_value_logodds_decay +
 compare.fits(action ~ signed_omission_regressor | perseveration_regressor + relative_doubt_index, data=trial_df, model1=full, model2=reduced)
 model.comparison(full, reduced)
 
+### stepdowns to compare different fits and regressor strengths ###
+full_res_hazard = glm(action ~ FQlearning_rel_value + HMM_decay_res + relative_doubt_index + perseveration_regressor + relative_hazard_index, data=trial_df, family=binomial)
+full_res = glm(action ~ FQlearning_rel_value + HMM_decay_res + relative_doubt_index + perseveration_regressor, data=trial_df, family=binomial)
+ideal_res = glm(action ~ FQlearning_rel_value + HMM_decay_res + relative_doubt_index, data=trial_df, family=binomial)
+hmm_res_simple = glm(action ~ FQlearning_rel_value + HMM_decay_res, data=trial_df, family=binomial)
+pers = glm(action ~ perseveration_regressor, data=trial_df, family=binomial)
+ql_simple = glm(action ~ Qlearning_rel_value, family=binomial, data=trial_df)
+fql_simple = glm(action ~ FQlearning_rel_value, family=binomial, data=trial_df)
+model.comparison(full_res_hazard, full_res)
+model.comparison(full_res, ideal_res)
+
+
 observer = glm(action ~ observer_value + perseveration_regressor, data=trial_df, family=binomial)
 ideal = glm(action ~ HMM_rel_value_logodds_decay + relative_doubt_index + perseveration_regressor, data=trial_df, family=binomial)
 fql_doubt = glm(action ~ FQlearning_rel_value + relative_doubt_index + perseveration_regressor, data=trial_df, family=binomial)
@@ -106,6 +118,9 @@ hmm = glm(action ~ HMM_rel_value_logodds + perseveration_regressor, data=trial_d
 hmm_decay = glm(action ~ HMM_rel_value_logodds_decay + perseveration_regressor, data=trial_df, family=binomial)
 fql = glm(action ~ FQlearning_rel_value + perseveration_regressor, data=trial_df, family=binomial)
 compare.fits(action ~ perseveration_regressor, data=trial_df, model1=full, model2=reduced)
+
+model.comparison(ambigious, fql_doubt)
+model.comparison(ambigious, ideal)
 
 model.comparison(ideal, observer)
 model.comparison(ideal, fql_doubt)
