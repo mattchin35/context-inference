@@ -488,8 +488,12 @@ def main_ni_only(
         print(frame_df.head(5).to_string(index=False))
     return pulse_df, frame_df
 
-def main_treadmill_only():
+
+def main_treadmill_serial():
     """Decode a treadmill's IRIG signals. For use with serial-message txt files with IRIG pulses."""
+    file_path = Path(
+        "/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/irig_test_20260707/CoolTerm Capture (Untitled_0) 2026-07-07 12-06-51-676.txt"
+    )
     pass
 
 

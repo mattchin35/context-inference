@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from icecream import ic
 import irig_h_gpio as irig
+from src.irig_tools import desktop_irig_decode
 from typing import Generator, List, Optional, Tuple, Literal
 from datetime import datetime, timezone
 
@@ -54,6 +55,63 @@ def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
     return posix_decoded, datetime_decoded, frame_ix
 
 
+def treadmill_log_to_transition_df(
+        parsed_df: pd.DataFrame,
+        local_timezone: str = "America/New_York") -> pd.DataFrame:
+    """Convert parsed CoolTerm sync rows into the desktop IRIG transition format.
+
+    Args:
+        parsed_df: Parsed serial log table. Required columns are ``label``,
+            ``value``, ``time_value``, ``pc_date``, and ``pc_time``. The
+            ``time_value`` column must have shape ``(n_rows,)`` in seconds and
+            represents the serial interval attached to each transition row.
+        local_timezone: IANA timezone name for interpreting PC timestamp text.
+
+    Returns:
+        pd.DataFrame: Transition table with one row per sync transition and
+        required desktop decoder columns ``utc_seconds``, ``local_datetime``,
+        and ``pin_state``. ``utc_seconds`` is anchored to the first PC timestamp
+        but subsequent timing uses serial intervals, not PC timestamps.
+    """
+    sync_df = parsed_df.loc[parsed_df['label'] == 'syncPinState'].copy()
+    if sync_df.empty:
+        raise ValueError("No syncPinState rows found in parsed serial log.")
+
+    while not sync_df.empty and sync_df.iloc[0]['value'] != 'HIGH':
+        sync_df = sync_df.iloc[1:].copy()
+    while not sync_df.empty and sync_df.iloc[-1]['value'] != 'LOW':
+        sync_df = sync_df.iloc[:-1].copy()
+    if sync_df.empty:
+        raise ValueError("No complete HIGH/LOW transition sequence found.")
+
+    pc_local_datetime = pd.to_datetime(sync_df['pc_date'] + ' ' + sync_df['pc_time'])
+    pc_local_datetime = pc_local_datetime.dt.tz_localize(local_timezone)
+    pc_utc_seconds = pc_local_datetime.map(lambda timestamp: timestamp.timestamp())
+
+    serial_intervals_s = sync_df['time_value'].to_numpy(dtype=float)
+    transition_elapsed_s = np.zeros(sync_df.shape[0], dtype=float)
+    if sync_df.shape[0] > 1:
+        transition_elapsed_s[1:] = np.cumsum(serial_intervals_s[1:])
+
+    reconstructed_utc_seconds = float(pc_utc_seconds.iloc[0]) + transition_elapsed_s
+    reconstructed_local_datetime = pd.to_datetime(
+        reconstructed_utc_seconds,
+        unit='s',
+        utc=True,
+    ).tz_convert(local_timezone)
+
+    return pd.DataFrame(
+        {
+            'utc_seconds': reconstructed_utc_seconds,
+            'local_datetime': reconstructed_local_datetime.astype(str),
+            'pin_state': (sync_df['value'].to_numpy() == 'HIGH').astype(int),
+            'pc_local_datetime': pc_local_datetime.astype(str).to_numpy(),
+            'pc_utc_seconds': pc_utc_seconds.to_numpy(dtype=float),
+            'pc_vs_reconstructed_error_s': pc_utc_seconds.to_numpy(dtype=float) - reconstructed_utc_seconds,
+        }
+    )
+
+
 # file_path = Path.home() / 'Documents' / 'ephys_transfer' / 'treadmill_20251008' / 'CoolTerm Capture (Untitled_0) 2025-10-21 12-36-20-447.txt'
 file_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/irig_test_20260707/CoolTerm Capture (Untitled_0) 2026-07-07 12-06-51-676.txt')
 # df = pd.read_csv(filepath, sep=';', header=None, on_bad_lines='skip', usecols=[1, 2, 4])
@@ -94,6 +152,45 @@ df = pd.DataFrame(log_dicts)
 
 # df['value'] = df['value'] == 'LOW'  # flip values to make Low = True, High = False - not sure why raw data is inverted
 df['time_value'] = df['time_value'].astype(float) / 1e6  # convert to seconds
+
+transition_df = treadmill_log_to_transition_df(df)
+pulse_df = desktop_irig_decode.extract_irig_pulses_from_transitions(transition_df)
+pulse_debug_df = desktop_irig_decode.build_pulse_debug_table(pulse_df)
+frame_debug_df = desktop_irig_decode.build_frame_debug_table(pulse_df)
+
+print("NeuroKairos-compatible transition rows:")
+print(
+    transition_df.loc[
+        :,
+        ['utc_seconds', 'local_datetime', 'pin_state', 'pc_local_datetime', 'pc_vs_reconstructed_error_s'],
+    ].head(10).to_string(index=False)
+)
+print("NeuroKairos-compatible pulse rows:")
+print(
+    pulse_debug_df.loc[
+        :,
+        ['rising_edge_ix', 'rising_edge_utc_seconds', 'pulse_width_s', 'irig_bit'],
+    ].head(10).to_string(index=False)
+)
+print("NeuroKairos-compatible decoded frames:")
+if frame_debug_df.empty:
+    print("No valid 60-pulse NeuroKairos frames found.")
+else:
+    print(
+        frame_debug_df.loc[
+            :,
+            [
+                'frame_ix',
+                'observed_start_utc_seconds',
+                'observed_start_local_datetime',
+                'decoded_utc_seconds',
+                'decoded_datetime_utc',
+                'decoded_stratum',
+                'decoded_dispersion_bucket',
+            ],
+        ].head(10).to_string(index=False)
+    )
+
 irig_ix = df['label'] == 'syncPinState'
 irig_cumulative_time = df[irig_ix]['time_value'].cumsum() - df[irig_ix]['time_value'].iloc[0]
 # df['cumulative_time'] = (df['time_value'].cumsum() - df['time_value'].iloc[0]) #/ 1e6  # convert to seconds

@@ -102,12 +102,7 @@ static const int SECONDS_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40};
 static const int MINUTES_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40};
 static const int HOURS_WEIGHTS[] = {1, 2, 4, 8, 10, 20};
 static const int DAY_OF_YEAR_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40, 80, 100, 200};
-#if 0
-// Historical IRIG-H decisecond weights. NeuroKairos uses these bit positions
-// for sync-quality metadata instead; do not enable this without disabling the
-// NeuroKairos stratum/root-dispersion fields in generate_irig_h_frame().
 static const int DECISECONDS_WEIGHTS[] = {1, 2, 4, 8};
-#endif
 static const int YEARS_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40, 80};
 
 // --- Mock GPIO support --- //
@@ -143,7 +138,6 @@ typedef struct {
     int64_t *pulse_latency_ns;     // actual onset - ideal second boundary
     size_t pulse_count;
     size_t pulse_capacity;
-    bool pulse_latency_failed;
 
     // Chrony sync status (polled every ~60 seconds)
     int chrony_stratum;            // 0 = not synced, 1-15 = NTP stratum
@@ -156,7 +150,6 @@ typedef struct {
 void init_timing_constants(void);
 uint64_t timespec_to_ns(const struct timespec *ts);
 void ultra_wait_until_ns(uint64_t target_ns);
-static void append_pulse_latency(irig_h_sender_t *sender, int64_t latency_ns);
 
 volatile sig_atomic_t running = 1;
 static int debug_mode = 0;
@@ -391,28 +384,6 @@ void bcd_encode(int value, const int *weights, int weight_count, int *result) {
             value -= weights[i];
         }
     }
-}
-
-static void append_pulse_latency(irig_h_sender_t *sender, int64_t latency_ns) {
-    if (!sender->pulse_latency_ns || sender->pulse_latency_failed) {
-        return;
-    }
-
-    if (sender->pulse_count >= sender->pulse_capacity) {
-        size_t new_capacity = (sender->pulse_capacity == 0) ? 1024 : sender->pulse_capacity * 2;
-        int64_t *new_buffer = realloc(sender->pulse_latency_ns, sizeof(int64_t) * new_capacity);
-
-        if (!new_buffer) {
-            fprintf(stderr, "Warning: latency log buffer growth failed; further latency samples will be dropped.\n");
-            sender->pulse_latency_failed = true;
-            return;
-        }
-
-        sender->pulse_latency_ns = new_buffer;
-        sender->pulse_capacity = new_capacity;
-    }
-
-    sender->pulse_latency_ns[sender->pulse_count++] = latency_ns;
 }
 
 // --- Chrony status polling --- //
@@ -706,17 +677,15 @@ void update_led_status(irig_h_sender_t *sender) {
 
 #endif  // MOCK_GPIO
 
-void generate_irig_h_frame(irig_h_sender_t *sender, struct tm *time_info,
-                           time_t frame_reference_second, irig_bit_t *frame) {
-    append_double(&sender->encoded_times, (double)frame_reference_second);
-
+void generate_irig_h_frame(irig_h_sender_t *sender, struct tm *time_info, irig_bit_t *frame) {
     int seconds_bcd[7], minutes_bcd[7], hours_bcd[6];
-    int day_of_year_bcd[10], year_bcd[8];
+    int day_of_year_bcd[10], deciseconds_bcd[4], year_bcd[8];
 
     bcd_encode(time_info->tm_sec, SECONDS_WEIGHTS, 7, seconds_bcd);
     bcd_encode(time_info->tm_min, MINUTES_WEIGHTS, 7, minutes_bcd);
     bcd_encode(time_info->tm_hour, HOURS_WEIGHTS, 6, hours_bcd);
     bcd_encode(time_info->tm_yday + 1, DAY_OF_YEAR_WEIGHTS, 10, day_of_year_bcd);
+    bcd_encode(0, DECISECONDS_WEIGHTS, 4, deciseconds_bcd);
     bcd_encode((time_info->tm_year + 1900) % 100, YEARS_WEIGHTS, 8, year_bcd);
 
     int pos = 0;
@@ -745,40 +714,27 @@ void generate_irig_h_frame(irig_h_sender_t *sender, struct tm *time_info,
     frame[pos++] = IRIG_P;
     for (int i = 8; i < 10; i++) frame[pos++] = day_of_year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
 
-    // NeuroKairos sync-status field, positions 42-48.
-    // Bit 42: reserved zero.
-    // Bits 43-44: encoded stratum.
-    // Bit 45: reserved zero.
-    // Bits 46-48: encoded root-dispersion bucket.
-    frame[42] = IRIG_ZERO;
-    int stratum_enc = encode_stratum(sender->chrony_stratum);
-    frame[43] = (stratum_enc & 1) ? IRIG_ONE : IRIG_ZERO;
-    frame[44] = (stratum_enc & 2) ? IRIG_ONE : IRIG_ZERO;
-    frame[45] = IRIG_ZERO;
-    int disp_enc = encode_root_dispersion(sender->chrony_root_dispersion);
-    frame[46] = (disp_enc & 1) ? IRIG_ONE : IRIG_ZERO;
-    frame[47] = (disp_enc & 2) ? IRIG_ONE : IRIG_ZERO;
-    frame[48] = (disp_enc & 4) ? IRIG_ONE : IRIG_ZERO;
-    frame[49] = IRIG_P;
-    pos = 50;
-
-#if 0
-    // Historical standard-IRIG-H alternative for positions 42-49.
-    // This encodes bits 45-48 as deciseconds and conflicts with the active
-    // NeuroKairos root-dispersion metadata above.
-    int deciseconds_bcd[4];
-    bcd_encode(0, DECISECONDS_WEIGHTS, 4, deciseconds_bcd);
-    frame[42] = IRIG_ZERO;
-    frame[43] = IRIG_ZERO;
-    frame[44] = IRIG_ZERO;
-    for (int i = 0; i < 4; i++) frame[45 + i] = deciseconds_bcd[i] ? IRIG_ONE : IRIG_ZERO;
-    frame[49] = IRIG_P;
-#endif
+    frame[pos++] = IRIG_ZERO; frame[pos++] = IRIG_ZERO; frame[pos++] = IRIG_ZERO;
+    for (int i = 0; i < 4; i++) frame[pos++] = deciseconds_bcd[i] ? IRIG_ONE : IRIG_ZERO;
+    frame[pos++] = IRIG_P;
 
     for (int i = 0; i < 4; i++) frame[pos++] = year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
     frame[pos++] = IRIG_ZERO;
     for (int i = 4; i < 8; i++) frame[pos++] = year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
     frame[pos++] = IRIG_P;
+
+    // Overwrite sync status bits (NeuroKairos extension).
+    // Bits 42, 45 remain zero (reserved).
+    // Bits 43-44: encoded stratum (2 bits)
+    int stratum_enc = encode_stratum(sender->chrony_stratum);
+    frame[43] = (stratum_enc & 1) ? IRIG_ONE : IRIG_ZERO;
+    frame[44] = (stratum_enc & 2) ? IRIG_ONE : IRIG_ZERO;
+
+    // Bits 46-48: encoded root dispersion bucket (3 bits)
+    int disp_enc = encode_root_dispersion(sender->chrony_root_dispersion);
+    frame[46] = (disp_enc & 1) ? IRIG_ONE : IRIG_ZERO;
+    frame[47] = (disp_enc & 2) ? IRIG_ONE : IRIG_ZERO;
+    frame[48] = (disp_enc & 4) ? IRIG_ONE : IRIG_ZERO;
 }
 
 void init_timing_constants(void) {
@@ -916,7 +872,7 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
 #ifdef MOCK_GPIO
     if (mock_log) {
         struct timespec falling_ts;
-        clock_gettime(CLOCK_MONOTONIC, &falling_ts);
+        clock_gettime(CLOCK_REALTIME, &falling_ts);
         fprintf(mock_log, "%llu,%llu\n",
                 (unsigned long long)start_ns,
                 (unsigned long long)timespec_to_ns(&falling_ts));
@@ -927,7 +883,8 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
 // Pre-calculate timing for the next frame
 void precalculate_next_frame(irig_h_sender_t *sender, time_t target_second) {
     struct tm *time_info = gmtime(&target_second);
-    generate_irig_h_frame(sender, time_info, target_second, sender->next_frame);
+    append_double(&sender->encoded_times, (double)target_second);
+    generate_irig_h_frame(sender, time_info, sender->next_frame);
 
     uint64_t frame_start_ns = (uint64_t)target_second * NS_PER_SEC;
     for (int i = 0; i < 60; i++) {
@@ -1013,7 +970,9 @@ void* continuous_irig_sending(void *arg) {
                 // ideal second boundary = bit_start_times[i] + offset_ns
                 uint64_t ideal_ns = sender->bit_start_times[i] + offset_ns;
                 int64_t latency = (int64_t)(actual_ns - ideal_ns);
-                append_pulse_latency(sender, latency);
+                if (sender->pulse_count < sender->pulse_capacity) {
+                    sender->pulse_latency_ns[sender->pulse_count++] = latency;
+                }
             }
 
             if (debug_mode) {
@@ -1074,12 +1033,10 @@ irig_h_sender_t* create_irig_h_sender(int gpio_pin, int inverted_gpio_pin) {
         sender->pulse_capacity = 6000;
         sender->pulse_latency_ns = malloc(sizeof(int64_t) * sender->pulse_capacity);
         sender->pulse_count = 0;
-        sender->pulse_latency_failed = false;
     } else {
         sender->pulse_latency_ns = NULL;
         sender->pulse_count = 0;
         sender->pulse_capacity = 0;
-        sender->pulse_latency_failed = false;
     }
 
     // Initialize chrony status to safe defaults (unsynchronized)
@@ -1098,7 +1055,6 @@ irig_h_sender_t* create_irig_h_sender(int gpio_pin, int inverted_gpio_pin) {
         printf("Failed to initialize GPIO hardware access\n");
         free(sender->encoded_times.data);
         free(sender->sending_starts.data);
-        free(sender->pulse_latency_ns);
         free(sender);
         return NULL;
     }
@@ -1221,9 +1177,9 @@ int validate_gpio_pin(int pin, const char *label) {
         return -1;
     }
 
-    // BCM 4: commonly used for GPS PPS input — warn but allow
+    // BCM 4: commonly used for Adafruit-style GPS HAT PPS input — warn but allow
     if (pin == 4) {
-        printf("Warning: BCM GPIO 4 is commonly used for GPS PPS input; using it for IRIG output may conflict with clock disciplining.\n");
+        printf("Warning: BCM GPIO 4 is commonly used for PPS on Adafruit-style GPS HATs; many Waveshare GNSS HATs use GPIO 18 instead. Using GPIO 4 for IRIG output may conflict with clock disciplining.\n");
     }
 
     return 0;

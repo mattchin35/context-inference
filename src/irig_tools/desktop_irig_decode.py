@@ -186,12 +186,18 @@ def find_irig_frame_spans(irig_bits: np.ndarray | pd.Series) -> list[tuple[int, 
     if irig_bits.size < 60:
         return frame_spans
 
-    scan_max = min(120, irig_bits.size - 1)
     frame_start = None
-    for bit_ix in range(scan_max):
+    for bit_ix in range(irig_bits.size - 1):
         if irig_bits[bit_ix] == "P" and irig_bits[bit_ix + 1] == "P":
-            frame_start = bit_ix + 1 - 60
-            break
+            candidate_start = bit_ix + 1 - 60
+            if candidate_start < 0:
+                continue
+
+            candidate_end = candidate_start + 60
+            candidate_bits = irig_bits[candidate_start:candidate_end]
+            if all(candidate_bits[pos] == "P" for pos in MARKER_POSITIONS):
+                frame_start = candidate_start
+                break
     if frame_start is None or frame_start < 0:
         return frame_spans
 
@@ -445,22 +451,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
+def run_logic_csv_decode(
+    transition_csv_path: Path | str,
+    timestamps_csv_path: Path | str | None = None,
+    timezone_name: str = "America/New_York",
+    frames: int = 10,
+    century_base: int | None = None,
+) -> None:
     """Run a NeuroKairos desktop IRIG decode and print a compact inspection summary."""
 
-    args = parse_args()
-    repo_dir = Path(__file__).resolve().parent
-
-    if args.transition_csv:
-        transition_csv_path = Path(args.transition_csv).expanduser().resolve()
-    else:
-        transition_csv_path = find_latest_transition_csv(repo_dir)
-
-    timestamps_csv_path = None
-    if args.timestamps_csv:
-        timestamps_csv_path = Path(args.timestamps_csv).expanduser().resolve()
-    else:
-        timestamps_csv_path = infer_timestamp_csv_path(transition_csv_path)
+    transition_csv_path = Path(transition_csv_path).expanduser().resolve()
+    if timestamps_csv_path is not None:
+        timestamps_csv_path = Path(timestamps_csv_path).expanduser().resolve()
 
     transition_df = load_irig_transition_csv(transition_csv_path)
     pulse_df = extract_irig_pulses_from_transitions(transition_df)
@@ -473,8 +475,8 @@ def main() -> None:
     frame_debug_df = build_frame_debug_table(
         pulse_df,
         timestamps_df=timestamps_df,
-        timezone_name=args.timezone,
-        century_base=args.century_base,
+        timezone_name=timezone_name,
+        century_base=century_base,
     )
 
     print("NeuroKairos desktop IRIG decode summary")
@@ -534,7 +536,7 @@ def main() -> None:
                 "decoded_vs_csv_encoded_error_s",
             ],
         ]
-        .head(args.frames)
+        .head(frames)
         .to_string(index=False)
     )
 
@@ -542,5 +544,54 @@ def main() -> None:
     print(frame_debug_df.iloc[0].to_string())
 
 
+def main_logic_csv() -> None:
+    """Run the desktop IRIG decode with IDE-friendly hardcoded inputs."""
+
+    transition_csv_path = Path(
+        "/home/matt/Documents/matt_irig_mods/irig_logic_neurokairos_transitions_2026-04-03_17-51-00.csv"
+    )
+    timestamps_csv_path = None
+    timezone_name = "America/New_York"
+    frames = 10
+    century_base = None
+
+    if timestamps_csv_path is None:
+        timestamps_csv_path = infer_timestamp_csv_path(transition_csv_path)
+
+    run_logic_csv_decode(
+        transition_csv_path=transition_csv_path,
+        timestamps_csv_path=timestamps_csv_path,
+        timezone_name=timezone_name,
+        frames=frames,
+        century_base=century_base,
+    )
+
+
+def main_cli() -> None:
+    """Run the desktop IRIG decode from command-line arguments."""
+
+    args = parse_args()
+    repo_dir = Path(__file__).resolve().parent
+
+    if args.transition_csv:
+        transition_csv_path = Path(args.transition_csv).expanduser().resolve()
+    else:
+        transition_csv_path = find_latest_transition_csv(repo_dir)
+
+    if args.timestamps_csv:
+        timestamps_csv_path = Path(args.timestamps_csv).expanduser().resolve()
+    else:
+        timestamps_csv_path = infer_timestamp_csv_path(transition_csv_path)
+
+    run_logic_csv_decode(
+        transition_csv_path=transition_csv_path,
+        timestamps_csv_path=timestamps_csv_path,
+        timezone_name=args.timezone,
+        frames=args.frames,
+        century_base=args.century_base,
+    )
+
+
 if __name__ == "__main__":
-    main()
+    main_logic_csv()
+    # main_cli()
