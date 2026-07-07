@@ -111,10 +111,7 @@ def _irig_frame_to_utc_unix(frame_bits: list[object]) -> Optional[float]:
         Optional[float]: UTC unix time in seconds, or ``None`` if decoding
         fails.
     """
-    decoded_datetime = irig.irig_h_to_datetime(frame_bits)
-    if decoded_datetime is None:
-        return None
-    return float(decoded_datetime.replace(tzinfo=timezone.utc).timestamp())
+    return irig.irig_h_to_unix(frame_bits)
 
 
 def decode_irig_h_frame_anchors(irig_bits: npt.ArrayLike) -> list[tuple[int, float]]:

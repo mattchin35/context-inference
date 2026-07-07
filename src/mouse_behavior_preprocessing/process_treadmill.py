@@ -107,7 +107,7 @@ def decode_irig_bits(irig_bits: np.array) -> list[tuple[float, float]]:
     frame_ix = good_frame_ix
 
     # irig.irig_h_to_datetime(irig_frames[0])
-    posix_decoded = [irig.irig_h_to_posix(frame) for frame in irig_frames]
+    posix_decoded = [irig.irig_h_to_unix(frame) for frame in irig_frames]
     datetime_decoded = [irig.irig_h_to_datetime(frame) for frame in irig_frames]
 
     # Handle invalid timecodes
@@ -232,7 +232,7 @@ def decode_irig_times(treadmill_df: pd.DataFrame, interpolate_irig=True) -> pd.D
             else:
                 unix_time_fordf[ix] = last_unixtime + treadmill_df['time_value'].iloc[ix]
 
-    datetime_for_df = [datetime.fromtimestamp(t) for t in unix_time_fordf[~np.isnan(unix_time_fordf)]]
+    datetime_for_df = [datetime.fromtimestamp(t, tz=timezone.utc) for t in unix_time_fordf[~np.isnan(unix_time_fordf)]]
     treadmill_df['unix_time'] = unix_time_fordf
     treadmill_df['datetime'] = datetime_for_df
     return treadmill_df
@@ -246,7 +246,7 @@ def gather_runspeed(treadmill_df: pd.DataFrame, plot=False) -> pd.DataFrame:
     runspeed_df = treadmill_df.loc[ix, ['event_label', 'unix_time', 'event_value']].copy()
     runspeed_df = runspeed_df.sort_values('unix_time').reset_index(drop=True)
     runspeed_df['utc_datetime'] = [
-        datetime.fromtimestamp(t) if pd.notna(t) else pd.NaT
+        datetime.fromtimestamp(t, tz=timezone.utc) if pd.notna(t) else pd.NaT
         for t in pd.to_numeric(runspeed_df['unix_time'], errors='coerce')
     ]
 
@@ -301,7 +301,7 @@ def gather_runspeed_with_buffer(treadmill_df: pd.DataFrame, plot=False) -> pd.Da
         runspeed_df = runspeed_df.sort_values('unix_time').reset_index(drop=True)
 
     runspeed_df['utc_datetime'] = [
-        datetime.fromtimestamp(t) if pd.notna(t) else pd.NaT
+        datetime.fromtimestamp(t, tz=timezone.utc) if pd.notna(t) else pd.NaT
         for t in pd.to_numeric(runspeed_df['unix_time'], errors='coerce')
     ]
 

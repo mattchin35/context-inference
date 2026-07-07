@@ -38,7 +38,7 @@ def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
     print('irig frame 0:',
           irig_frames[0])
     ic(irig.irig_h_to_datetime(irig_frames[0]))
-    decoded = [irig.irig_h_to_posix(frame) for frame in irig_frames]
+    decoded = [irig.irig_h_to_unix(frame) for frame in irig_frames]
 
     # Handle invalid timecodes
     decoded = [item for item in decoded if item is not None]
@@ -98,9 +98,8 @@ irig_bits[irig_pulselen == .8] = 'P'
 # irig_bits = irig_bits[irig_ix]
 
 decoded, frame_ix = decode_irig_bits(irig_bits)
-ic([datetime.fromtimestamp(t) for t in decoded])
+ic([datetime.fromtimestamp(t, tz=timezone.utc) for t in decoded])
 
 """
 irig intervals are from the onset (rising edge) of a pulse to its falling edge
 """
-

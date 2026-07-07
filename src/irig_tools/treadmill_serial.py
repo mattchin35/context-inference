@@ -45,7 +45,7 @@ def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
     frame_ix = good_frameix
 
     # irig.irig_h_to_datetime(irig_frames[0])
-    posix_decoded = [irig.irig_h_to_posix(frame) for frame in irig_frames]
+    posix_decoded = [irig.irig_h_to_unix(frame) for frame in irig_frames]
     datetime_decoded = [irig.irig_h_to_datetime(frame) for frame in irig_frames]
 
     # Handle invalid timecodes
@@ -260,4 +260,4 @@ for ix in range(first_unix_ix, df.shape[0]):
         unix_time_fordf[ix] = last_unixtime + (df['cumulative_time'].iloc[ix] - df['cumulative_time'].iloc[last_unixix])
 df['unix_time'] = unix_time_fordf
 ic(unix_time_fordf)
-print([datetime.fromtimestamp(t) for t in unix_time_fordf[~np.isnan(unix_time_fordf)][:10]])
+print([datetime.fromtimestamp(t, tz=timezone.utc) for t in unix_time_fordf[~np.isnan(unix_time_fordf)][:10]])

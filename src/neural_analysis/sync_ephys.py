@@ -447,7 +447,8 @@ def decode_ni_irig_debug(
 
 def main_ni_only(
     ni_file: Path | str = Path(
-        "/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/irig_neurokairos_20260408/run0_g0/run0_g0_t0.nidq.bin"
+        # "/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/irig_neurokairos_20260408/run0_g0/run0_g0_t0.nidq.bin"
+        '/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/irig_test_20260707/run0_g0/run0_g0_t0.nidq.bin'
     ),
     digital_word: int = 0,
     irig_line: int = 0,

@@ -3,7 +3,6 @@ import scipy as sp
 import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
-from datetime import datetime, timezone
 from typing import Optional
 import src.external_tools.readSGLX as readSGLX
 from src.irig_tools import irig_h_gpio as irig
@@ -80,11 +79,7 @@ def _irig_frame_to_utc_unix(frame_bits: list[object]) -> Optional[float]:
     """
     Convert one IRIG-H frame to unix time assuming the encoded clock is UTC.
     """
-    decoded_dt = irig.irig_h_to_datetime(frame_bits)
-    if decoded_dt is None:
-        return None
-    decoded_dt_utc = decoded_dt.replace(tzinfo=timezone.utc)
-    return float(decoded_dt_utc.timestamp())
+    return irig.irig_h_to_unix(frame_bits)
 
 
 def decode_irig_h_frame_anchors(irig_bits: np.ndarray) -> list[tuple[int, float]]:

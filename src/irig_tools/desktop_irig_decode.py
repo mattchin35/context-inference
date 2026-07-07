@@ -136,7 +136,7 @@ def extract_irig_pulses_from_transitions(transitions_df: pd.DataFrame) -> pd.Dat
         raise ValueError("Transition rows must start with a rising edge where pin_state becomes 1.")
     if pin_state[-1] != 0:
         raise ValueError("Transition rows must end with a falling edge where pin_state becomes 0.")
-
+    
     expected_pattern = np.tile(np.array([1, 0], dtype=int), ordered_df.shape[0] // 2)
     if not np.array_equal(pin_state, expected_pattern):
         raise ValueError("Transition rows must alternate rising and falling edges.")
