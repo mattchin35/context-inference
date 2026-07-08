@@ -3,9 +3,31 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 from icecream import ic
-import irig_h_gpio as irig
+from src.irig_tools import irig_core
 from typing import Generator, List, Optional, Tuple, Literal
 from datetime import datetime, timezone
+
+
+def decode_standard_decisecond_frame(frame: list[object]) -> float | None:
+    """Decode one legacy standard-decisecond IRIG frame to UTC Unix seconds.
+
+    Args:
+        frame: IRIG frame bits with shape ``(60,)``.
+
+    Returns:
+        float | None: UTC Unix seconds, or ``None`` if the frame is invalid.
+    """
+    try:
+        frame_fields = irig_core.decode_irig_frame(
+            frame,
+            irig_format="standard_decisecond",
+        )
+        decoded_unix = float(frame_fields["decoded_utc_seconds"])
+        if np.isfinite(decoded_unix):
+            return decoded_unix
+        return None
+    except ValueError:
+        return None
 
 
 def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
@@ -37,8 +59,9 @@ def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
     irig_frames = [frame for frame in irig_frames if len(frame) == 60]
     print('irig frame 0:',
           irig_frames[0])
-    ic(irig.irig_h_to_datetime(irig_frames[0]))
-    decoded = [irig.irig_h_to_unix(frame) for frame in irig_frames]
+    first_frame_unix = decode_standard_decisecond_frame(irig_frames[0])
+    ic(datetime.fromtimestamp(first_frame_unix, tz=timezone.utc) if first_frame_unix is not None else None)
+    decoded = [decode_standard_decisecond_frame(frame) for frame in irig_frames]
 
     # Handle invalid timecodes
     decoded = [item for item in decoded if item is not None]

@@ -5,8 +5,31 @@ import re
 from icecream import ic
 from pathlib import Path
 from datetime import datetime, timezone
-from src.irig_tools import irig_h_gpio as irig
+from src.irig_tools import irig_core
 from typing import Optional, Any
+
+
+def decode_standard_decisecond_frame(frame: list[object]) -> tuple[float | None, datetime | None]:
+    """Decode one legacy standard-decisecond IRIG frame.
+
+    Args:
+        frame: IRIG frame bits with shape ``(60,)``.
+
+    Returns:
+        tuple[float | None, datetime | None]: UTC Unix seconds and UTC-aware
+        datetime. Both are ``None`` if the frame is invalid.
+    """
+    try:
+        frame_fields = irig_core.decode_irig_frame(
+            frame,
+            irig_format="standard_decisecond",
+        )
+        decoded_unix = float(frame_fields["decoded_utc_seconds"])
+        if not np.isfinite(decoded_unix):
+            return None, None
+        return decoded_unix, datetime.fromtimestamp(decoded_unix, tz=timezone.utc)
+    except ValueError:
+        return None, None
 
 
 
@@ -106,9 +129,9 @@ def decode_irig_bits(irig_bits: np.array) -> list[tuple[float, float]]:
     irig_frames = good_frames
     frame_ix = good_frame_ix
 
-    # irig.irig_h_to_datetime(irig_frames[0])
-    posix_decoded = [irig.irig_h_to_unix(frame) for frame in irig_frames]
-    datetime_decoded = [irig.irig_h_to_datetime(frame) for frame in irig_frames]
+    decoded_pairs = [decode_standard_decisecond_frame(frame) for frame in irig_frames]
+    posix_decoded = [decoded_pair[0] for decoded_pair in decoded_pairs]
+    datetime_decoded = [decoded_pair[1] for decoded_pair in decoded_pairs]
 
     # Handle invalid timecodes
     # decoded = [item for item in decoded if item is not None]

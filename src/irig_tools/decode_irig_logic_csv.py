@@ -8,32 +8,24 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from src.irig_tools import irig_core
 from zoneinfo import ZoneInfo
 
 
-SECONDS_WEIGHTS = [1, 2, 4, 8, 10, 20, 40]
-MINUTES_WEIGHTS = [1, 2, 4, 8, 10, 20, 40]
-HOURS_WEIGHTS = [1, 2, 4, 8, 10, 20]
-DAY_OF_YEAR_WEIGHTS = [1, 2, 4, 8, 10, 20, 40, 80, 100, 200]
-YEARS_WEIGHTS = [1, 2, 4, 8, 10, 20, 40, 80]
+SECONDS_WEIGHTS = irig_core.SECONDS_WEIGHTS
+MINUTES_WEIGHTS = irig_core.MINUTES_WEIGHTS
+HOURS_WEIGHTS = irig_core.HOURS_WEIGHTS
+DAY_OF_YEAR_WEIGHTS = irig_core.DAY_OF_YEAR_WEIGHTS
+YEARS_WEIGHTS = irig_core.YEARS_WEIGHTS
 
-MARKER_POSITIONS = {0, 9, 19, 29, 39, 49, 59}
-BIT_PERIOD_SECONDS = 1.0
+MARKER_POSITIONS = irig_core.MARKER_POSITIONS
+BIT_PERIOD_SECONDS = irig_core.BIT_PERIOD_SECONDS
 
 
 def bcd_decode(bits: list[object], weights: list[int]) -> int:
     """Decode a BCD-style weighted bit slice into an integer."""
 
-    if len(bits) != len(weights):
-        raise ValueError("Bit and weight lists must be the same length.")
-
-    total = 0
-    for bit, weight in zip(bits, weights):
-        if bit not in (False, True, 0, 1):
-            raise ValueError(f"Cannot BCD-decode non-binary bit value: {bit!r}")
-        if bool(bit):
-            total += weight
-    return total
+    return irig_core.bcd_decode(bits, weights)
 
 
 def load_irig_transition_csv(csv_path: Path | str) -> pd.DataFrame:
@@ -162,98 +154,38 @@ def extract_irig_pulses_from_transitions(transitions_df: pd.DataFrame) -> pd.Dat
 
 def classify_irig_pulse_widths_seconds(
     pulse_width_s: np.ndarray | pd.Series,
-    bit_period_s: float = BIT_PERIOD_SECONDS,
+    bit_period_s: float = irig_core.BIT_PERIOD_SECONDS,
 ) -> np.ndarray:
     """Classify pulse widths into ``False``, ``True``, ``'P'``, or ``None``."""
 
-    pulse_width_s = np.asarray(pulse_width_s, dtype=float).reshape(-1)
-    p_thresh = 0.75 * float(bit_period_s)
-    one_thresh = 0.45 * float(bit_period_s)
-    zero_thresh = 0.05 * float(bit_period_s)
-
-    bit_labels = np.full(pulse_width_s.shape, None, dtype=object)
-    bit_labels[pulse_width_s > p_thresh] = "P"
-    bit_labels[(pulse_width_s > one_thresh) & (pulse_width_s <= p_thresh)] = True
-    bit_labels[(pulse_width_s > zero_thresh) & (pulse_width_s <= one_thresh)] = False
-    return bit_labels
+    return irig_core.classify_pulse_widths_seconds(
+        pulse_width_s=pulse_width_s,
+        bit_period_s=bit_period_s,
+    )
 
 
 def find_irig_frame_spans(irig_bits: np.ndarray | pd.Series) -> list[tuple[int, int]]:
     """Locate consecutive 60-pulse IRIG frames from a classified bit sequence."""
 
-    irig_bits = np.asarray(irig_bits, dtype=object).reshape(-1)
-    frame_spans: list[tuple[int, int]] = []
-    if irig_bits.size < 60:
-        return frame_spans
-
-    frame_start = None
-    for bit_ix in range(irig_bits.size - 1):
-        if irig_bits[bit_ix] == "P" and irig_bits[bit_ix + 1] == "P":
-            candidate_start = bit_ix + 1 - 60
-            if candidate_start < 0:
-                continue
-
-            candidate_end = candidate_start + 60
-            candidate_bits = irig_bits[candidate_start:candidate_end]
-            if all(candidate_bits[pos] == "P" for pos in MARKER_POSITIONS):
-                frame_start = candidate_start
-                break
-    if frame_start is None or frame_start < 0:
-        return frame_spans
-
-    while frame_start + 60 <= irig_bits.size:
-        frame_end = frame_start + 60
-        frame_bits = irig_bits[frame_start:frame_end]
-        if all(frame_bits[pos] == "P" for pos in MARKER_POSITIONS):
-            frame_spans.append((frame_start, frame_end))
-            frame_start = frame_end
-        else:
-            frame_start += 1
-    return frame_spans
+    return irig_core.find_irig_frame_spans(irig_bits)
 
 
 def decode_stratum_code(raw_code: int) -> str:
     """Decode the custom 2-bit NeuroKairos stratum encoding."""
 
-    if raw_code == 0:
-        return "stratum_1"
-    if raw_code == 1:
-        return "stratum_2"
-    if raw_code == 2:
-        return "stratum_3"
-    return "stratum_4_or_higher"
+    return irig_core.decode_stratum_code(raw_code)
 
 
 def describe_dispersion_code(raw_code: int) -> str:
     """Describe the custom 3-bit NeuroKairos root-dispersion bucket."""
 
-    if raw_code == 0:
-        return "<0.25 ms"
-    if raw_code == 1:
-        return "0.25-0.5 ms"
-    if raw_code == 2:
-        return "0.5-1 ms"
-    if raw_code == 3:
-        return "1-2 ms"
-    if raw_code == 4:
-        return "2-4 ms"
-    if raw_code == 5:
-        return "4-8 ms"
-    if raw_code == 6:
-        return "8-16 ms"
-    return ">=16 ms"
+    return irig_core.describe_dispersion_code(raw_code)
 
 
 def bit_symbol(bit: object) -> str:
     """Convert a classified bit to a compact printable symbol."""
 
-    if bit == "P":
-        return "P"
-    if bit is True:
-        return "1"
-    if bit is False:
-        return "0"
-    return "?"
+    return irig_core.bit_symbol(bit)
 
 
 def decode_neurokairos_frame_fields(
@@ -262,78 +194,11 @@ def decode_neurokairos_frame_fields(
 ) -> dict[str, object]:
     """Decode one 60-pulse NeuroKairos frame as emitted by the C simulator."""
 
-    frame_bits = list(np.asarray(frame_bits, dtype=object).reshape(-1))
-    if len(frame_bits) != 60:
-        raise ValueError("frame_bits must contain exactly 60 IRIG bits.")
-    if any(frame_bits[pos] != "P" for pos in MARKER_POSITIONS):
-        raise ValueError("frame_bits does not contain markers at the expected positions.")
-
-    seconds = bcd_decode(frame_bits[1:5], SECONDS_WEIGHTS[0:4]) + bcd_decode(
-        frame_bits[6:9], SECONDS_WEIGHTS[4:7]
+    return irig_core.decode_irig_frame(
+        frame_bits=frame_bits,
+        irig_format="neurokairos",
+        century_base=century_base,
     )
-    minutes = bcd_decode(frame_bits[10:14], MINUTES_WEIGHTS[0:4]) + bcd_decode(
-        frame_bits[15:18], MINUTES_WEIGHTS[4:7]
-    )
-    hours = bcd_decode(frame_bits[20:24], HOURS_WEIGHTS[0:4]) + bcd_decode(
-        frame_bits[25:27], HOURS_WEIGHTS[4:6]
-    )
-    day_of_year = (
-        bcd_decode(frame_bits[30:34], DAY_OF_YEAR_WEIGHTS[0:4])
-        + bcd_decode(frame_bits[35:39], DAY_OF_YEAR_WEIGHTS[4:8])
-        + bcd_decode(frame_bits[40:42], DAY_OF_YEAR_WEIGHTS[8:10])
-    )
-    year_two_digit = bcd_decode(frame_bits[50:54], YEARS_WEIGHTS[0:4]) + bcd_decode(
-        frame_bits[55:59], YEARS_WEIGHTS[4:8]
-    )
-
-    raw_stratum_code = int(bool(frame_bits[43])) + (int(bool(frame_bits[44])) << 1)
-    raw_dispersion_code = (
-        int(bool(frame_bits[46]))
-        + (int(bool(frame_bits[47])) << 1)
-        + (int(bool(frame_bits[48])) << 2)
-    )
-
-    if century_base is None:
-        century_base = (datetime.datetime.now(datetime.timezone.utc).year // 100) * 100
-    decoded_year = century_base + year_two_digit
-
-    decoded_datetime_utc = None
-    decoded_datetime_utc_text = None
-    decoded_utc_seconds = np.nan
-    try:
-        decoded_datetime_utc = datetime.datetime(
-            decoded_year,
-            1,
-            1,
-            hours,
-            minutes,
-            seconds,
-            tzinfo=datetime.timezone.utc,
-        ) + datetime.timedelta(days=day_of_year - 1)
-        decoded_utc_seconds = decoded_datetime_utc.timestamp()
-        decoded_datetime_utc_text = decoded_datetime_utc.isoformat()
-    except ValueError:
-        decoded_datetime_utc = None
-        decoded_datetime_utc_text = None
-        decoded_utc_seconds = np.nan
-
-    return {
-        "seconds": seconds,
-        "minutes": minutes,
-        "hours": hours,
-        "day_of_year": day_of_year,
-        "year_two_digit": year_two_digit,
-        "decoded_year": decoded_year,
-        "decoded_datetime_utc": decoded_datetime_utc_text,
-        "decoded_utc_seconds": decoded_utc_seconds,
-        "reserved_bit_42": int(bool(frame_bits[42])),
-        "custom_stratum_code": raw_stratum_code,
-        "decoded_stratum": decode_stratum_code(raw_stratum_code),
-        "reserved_bit_45": int(bool(frame_bits[45])),
-        "custom_dispersion_code": raw_dispersion_code,
-        "decoded_dispersion_bucket": describe_dispersion_code(raw_dispersion_code),
-        "bit_string": "".join(bit_symbol(bit) for bit in frame_bits),
-    }
 
 
 def build_pulse_debug_table(pulse_df: pd.DataFrame) -> pd.DataFrame:

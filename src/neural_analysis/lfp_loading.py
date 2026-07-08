@@ -7,7 +7,7 @@ import pandas as pd
 import pynapple as nap
 
 import src.external_tools.readSGLX as readSGLX
-from src.neural_analysis import sync_ephys
+from src.neural_analysis import ephys_sync_utils
 
 
 def load_lfp_metadata(lfp_path: Path | str) -> dict:
@@ -93,7 +93,7 @@ def decode_lfp_sync(
         Decoded IRIG dataframe and LFP sample rate in Hz.
     """
 
-    return sync_ephys.decode_binary_file_irig_utc(
+    return ephys_sync_utils.decode_binary_file_irig_utc(
         binary_file=Path(lfp_path),
         digital_word=int(digital_word),
         irig_line=int(irig_line),

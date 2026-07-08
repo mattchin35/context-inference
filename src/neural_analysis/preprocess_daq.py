@@ -5,7 +5,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Optional
 import src.external_tools.readSGLX as readSGLX
-from src.irig_tools import irig_h_gpio as irig
+from src.irig_tools import irig_core
 from icecream import ic
 import time
 import numpy.typing as npt
@@ -13,7 +13,7 @@ import re
 import pickle as pkl
 from scipy.signal import savgol_filter, medfilt
 from src.neural_analysis import modified_sinc_smoother as mss
-from src.neural_analysis.irig_sync_utils import (
+from src.irig_tools.irig_sync_utils import (
     assign_utc_to_irig_bits as shared_assign_utc_to_irig_bits,
     classify_irig_h_pulses as shared_classify_irig_h_pulses,
     decode_irig_h_frame_anchors as shared_decode_irig_h_frame_anchors,
@@ -79,7 +79,14 @@ def _irig_frame_to_utc_unix(frame_bits: list[object]) -> Optional[float]:
     """
     Convert one IRIG-H frame to unix time assuming the encoded clock is UTC.
     """
-    return irig.irig_h_to_unix(frame_bits)
+    frame_fields = irig_core.decode_irig_frame(
+        frame_bits,
+        irig_format="standard_decisecond",
+    )
+    decoded_unix = float(frame_fields["decoded_utc_seconds"])
+    if np.isfinite(decoded_unix):
+        return decoded_unix
+    return None
 
 
 def decode_irig_h_frame_anchors(irig_bits: np.ndarray) -> list[tuple[int, float]]:

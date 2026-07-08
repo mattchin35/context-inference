@@ -3,10 +3,34 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 from icecream import ic
-import irig_h_gpio as irig
-from src.irig_tools import desktop_irig_decode
+from src.irig_tools import irig_core
+from src.irig_tools import decode_irig_logic_csv
+from src.irig_tools import irig_serial_io
 from typing import Generator, List, Optional, Tuple, Literal
 from datetime import datetime, timezone
+
+
+def decode_standard_decisecond_frame(frame: list[object]) -> tuple[float | None, datetime | None]:
+    """Decode one legacy standard-decisecond IRIG frame.
+
+    Args:
+        frame: IRIG frame bits with shape ``(60,)``.
+
+    Returns:
+        tuple[float | None, datetime | None]: UTC Unix seconds and UTC-aware
+        datetime. Both are ``None`` if the frame is invalid.
+    """
+    try:
+        frame_fields = irig_core.decode_irig_frame(
+            frame,
+            irig_format="standard_decisecond",
+        )
+        decoded_unix = float(frame_fields["decoded_utc_seconds"])
+        if not np.isfinite(decoded_unix):
+            return None, None
+        return decoded_unix, datetime.fromtimestamp(decoded_unix, tz=timezone.utc)
+    except ValueError:
+        return None, None
 
 
 def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
@@ -44,9 +68,9 @@ def decode_irig_bits(irig_bits: np.array) -> List[Tuple[float, float]]:
     irig_frames = good_frames
     frame_ix = good_frameix
 
-    # irig.irig_h_to_datetime(irig_frames[0])
-    posix_decoded = [irig.irig_h_to_unix(frame) for frame in irig_frames]
-    datetime_decoded = [irig.irig_h_to_datetime(frame) for frame in irig_frames]
+    decoded_pairs = [decode_standard_decisecond_frame(frame) for frame in irig_frames]
+    posix_decoded = [decoded_pair[0] for decoded_pair in decoded_pairs]
+    datetime_decoded = [decoded_pair[1] for decoded_pair in decoded_pairs]
 
     # Handle invalid timecodes
     # decoded = [item for item in decoded if item is not None]
@@ -73,42 +97,9 @@ def treadmill_log_to_transition_df(
         and ``pin_state``. ``utc_seconds`` is anchored to the first PC timestamp
         but subsequent timing uses serial intervals, not PC timestamps.
     """
-    sync_df = parsed_df.loc[parsed_df['label'] == 'syncPinState'].copy()
-    if sync_df.empty:
-        raise ValueError("No syncPinState rows found in parsed serial log.")
-
-    while not sync_df.empty and sync_df.iloc[0]['value'] != 'HIGH':
-        sync_df = sync_df.iloc[1:].copy()
-    while not sync_df.empty and sync_df.iloc[-1]['value'] != 'LOW':
-        sync_df = sync_df.iloc[:-1].copy()
-    if sync_df.empty:
-        raise ValueError("No complete HIGH/LOW transition sequence found.")
-
-    pc_local_datetime = pd.to_datetime(sync_df['pc_date'] + ' ' + sync_df['pc_time'])
-    pc_local_datetime = pc_local_datetime.dt.tz_localize(local_timezone)
-    pc_utc_seconds = pc_local_datetime.map(lambda timestamp: timestamp.timestamp())
-
-    serial_intervals_s = sync_df['time_value'].to_numpy(dtype=float)
-    transition_elapsed_s = np.zeros(sync_df.shape[0], dtype=float)
-    if sync_df.shape[0] > 1:
-        transition_elapsed_s[1:] = np.cumsum(serial_intervals_s[1:])
-
-    reconstructed_utc_seconds = float(pc_utc_seconds.iloc[0]) + transition_elapsed_s
-    reconstructed_local_datetime = pd.to_datetime(
-        reconstructed_utc_seconds,
-        unit='s',
-        utc=True,
-    ).tz_convert(local_timezone)
-
-    return pd.DataFrame(
-        {
-            'utc_seconds': reconstructed_utc_seconds,
-            'local_datetime': reconstructed_local_datetime.astype(str),
-            'pin_state': (sync_df['value'].to_numpy() == 'HIGH').astype(int),
-            'pc_local_datetime': pc_local_datetime.astype(str).to_numpy(),
-            'pc_utc_seconds': pc_utc_seconds.to_numpy(dtype=float),
-            'pc_vs_reconstructed_error_s': pc_utc_seconds.to_numpy(dtype=float) - reconstructed_utc_seconds,
-        }
+    return irig_serial_io.treadmill_log_to_transition_df(
+        parsed_df=parsed_df,
+        local_timezone=local_timezone,
     )
 
 
@@ -118,45 +109,26 @@ file_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/
 
 log_labels = ['Fdistance', 'Bdistance', 'dacval', 'runSpeed']
 irig_labels = ['syncPinState']
-log_dicts = []
 
 pc_timestamp_present = True
-lines = []
 try:
-    with open(file_path, 'r') as file:
-        filesize = file_path.stat().st_size
-        print(f"File size: {filesize} bytes")
-        lines = [line.strip() for line in file]
+    filesize = file_path.stat().st_size
+    print(f"File size: {filesize} bytes")
+    df = irig_serial_io.load_coolterm_serial_txt(
+        file_path,
+        pc_timestamp_present=pc_timestamp_present,
+    )
 except FileNotFoundError:
     print(f"Error: The file '{file_path}' was not found.")
+    df = pd.DataFrame()
 except Exception as e:
     print(f"An error occurred: {e}")
-
-for line in lines:
-    if line == '':
-        continue
-    if pc_timestamp_present:
-        pc_timestamp, serial_msg = line.split('\t')
-        pc_date, pc_time = pc_timestamp.split(' ')
-    else:
-        serial_msg = line
-        pc_date = ''
-        pc_time = ''
-
-    words = serial_msg.split(';')
-    label, value = words[0].split(':')
-    time_label, time_value = words[1].split(':')
-    log_dicts.append(dict(pc_date=pc_date, pc_time=pc_time, label=label, value=value, time_label=time_label, time_value=time_value))
-
-df = pd.DataFrame(log_dicts)
-
-# df['value'] = df['value'] == 'LOW'  # flip values to make Low = True, High = False - not sure why raw data is inverted
-df['time_value'] = df['time_value'].astype(float) / 1e6  # convert to seconds
+    df = pd.DataFrame()
 
 transition_df = treadmill_log_to_transition_df(df)
-pulse_df = desktop_irig_decode.extract_irig_pulses_from_transitions(transition_df)
-pulse_debug_df = desktop_irig_decode.build_pulse_debug_table(pulse_df)
-frame_debug_df = desktop_irig_decode.build_frame_debug_table(pulse_df)
+pulse_df = decode_irig_logic_csv.extract_irig_pulses_from_transitions(transition_df)
+pulse_debug_df = decode_irig_logic_csv.build_pulse_debug_table(pulse_df)
+frame_debug_df = decode_irig_logic_csv.build_frame_debug_table(pulse_df)
 
 print("NeuroKairos-compatible transition rows:")
 print(

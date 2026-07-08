@@ -1,4 +1,4 @@
-"""Reusable IRIG-H synchronization helpers for neural-analysis workflows."""
+"""Reusable IRIG-H synchronization helpers for sampled signals and event times."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from src.irig_tools import irig_h_gpio as irig
+from src.irig_tools import irig_core
 
 
 def find_signal_edges(binary_signal: npt.ArrayLike) -> tuple[np.ndarray, np.ndarray]:
@@ -25,16 +25,7 @@ def find_signal_edges(binary_signal: npt.ArrayLike) -> tuple[np.ndarray, np.ndar
             - Falling edge sample indices with shape ``(n_falling,)`` in
               samples.
     """
-    signal = np.asarray(binary_signal, dtype=bool).reshape(-1)
-    if signal.size == 0:
-        return np.array([], dtype=np.int64), np.array([], dtype=np.int64)
-
-    rising_ix = np.flatnonzero(~signal[:-1] & signal[1:]) + 1
-    falling_ix = np.flatnonzero(signal[:-1] & ~signal[1:]) + 1
-    if signal[0]:
-        rising_ix = np.insert(rising_ix, 0, 0)
-
-    return rising_ix.astype(np.int64), falling_ix.astype(np.int64)
+    return irig_core.find_signal_edges(binary_signal)
 
 
 def pulse_lengths_from_edges(
@@ -55,21 +46,7 @@ def pulse_lengths_from_edges(
               ``(n_pulses,)`` in samples.
             - Pulse lengths with shape ``(n_pulses,)`` in samples.
     """
-    rising_ix = np.asarray(rising_ix, dtype=np.int64).reshape(-1)
-    falling_ix = np.asarray(falling_ix, dtype=np.int64).reshape(-1)
-
-    if rising_ix.size == 0 or falling_ix.size == 0:
-        return np.array([], dtype=np.int64), np.array([], dtype=float)
-
-    next_falling_pos = np.searchsorted(falling_ix, rising_ix, side="right")
-    valid_mask = next_falling_pos < falling_ix.size
-    if not np.any(valid_mask):
-        return np.array([], dtype=np.int64), np.array([], dtype=float)
-
-    paired_rising_ix = rising_ix[valid_mask]
-    paired_falling_ix = falling_ix[next_falling_pos[valid_mask]]
-    pulse_lengths_samples = (paired_falling_ix - paired_rising_ix).astype(float)
-    return paired_rising_ix.astype(np.int64), pulse_lengths_samples
+    return irig_core.pulse_lengths_from_edges(rising_ix, falling_ix)
 
 
 def classify_irig_h_pulses(
@@ -88,72 +65,57 @@ def classify_irig_h_pulses(
     Returns:
         np.ndarray: Object array with shape ``(n_pulses,)``.
     """
-    pulse_lengths_samples = np.asarray(pulse_lengths_samples, dtype=float).reshape(-1)
-    samples_per_bit = float(sample_rate_hz) * float(bit_period_s)
-    p_thresh = 0.75 * samples_per_bit
-    one_thresh = 0.45 * samples_per_bit
-    zero_thresh = 0.05 * samples_per_bit
-
-    bits = np.full(pulse_lengths_samples.shape, None, dtype=object)
-    bits[pulse_lengths_samples > p_thresh] = "P"
-    bits[(pulse_lengths_samples > one_thresh) & (pulse_lengths_samples <= p_thresh)] = True
-    bits[(pulse_lengths_samples > zero_thresh) & (pulse_lengths_samples <= one_thresh)] = False
-    return bits
+    return irig_core.classify_pulse_widths_samples(
+        pulse_lengths_samples=pulse_lengths_samples,
+        sample_rate_hz=sample_rate_hz,
+        bit_period_s=bit_period_s,
+    )
 
 
-def _irig_frame_to_utc_unix(frame_bits: list[object]) -> Optional[float]:
+def _irig_frame_to_utc_unix(
+    frame_bits: list[object],
+    irig_format: irig_core.IRIGFormat = "neurokairos",
+) -> Optional[float]:
     """Decode one 60-bit IRIG-H frame into UTC unix time.
 
     Args:
         frame_bits: IRIG-H frame bits with length ``60``.
+        irig_format: ``"neurokairos"`` or ``"standard_decisecond"``.
 
     Returns:
         Optional[float]: UTC unix time in seconds, or ``None`` if decoding
         fails.
     """
-    return irig.irig_h_to_unix(frame_bits)
+    try:
+        frame_fields = irig_core.decode_irig_frame(frame_bits, irig_format=irig_format)
+        decoded_unix = float(frame_fields["decoded_utc_seconds"])
+        if np.isfinite(decoded_unix):
+            return decoded_unix
+        return None
+    except ValueError:
+        return None
 
 
-def decode_irig_h_frame_anchors(irig_bits: npt.ArrayLike) -> list[tuple[int, float]]:
+def decode_irig_h_frame_anchors(
+    irig_bits: npt.ArrayLike,
+    irig_format: irig_core.IRIGFormat = "neurokairos",
+) -> list[tuple[int, float]]:
     """Decode IRIG-H frame anchor positions from classified bit values.
 
     Args:
         irig_bits: Object array with shape ``(n_bits,)`` containing ``False``,
             ``True``, ``'P'``, or ``None``.
+        irig_format: ``"neurokairos"`` or ``"standard_decisecond"``.
 
     Returns:
         list[tuple[int, float]]: ``(frame_start_bit_ix, frame_start_utc_unix)``
         pairs, where bit indices are in bit units and UTC values are in
         seconds.
     """
-    irig_bits = np.asarray(irig_bits, dtype=object).reshape(-1)
-    if irig_bits.size < 122:
-        return []
-
-    tracking_start = None
-    scan_max = min(120, irig_bits.size - 1)
-    for bit_ix in range(scan_max):
-        if irig_bits[bit_ix] == "P" and irig_bits[bit_ix + 1] == "P":
-            tracking_start = bit_ix + 1
-            break
-    if tracking_start is None:
-        return []
-
-    anchors: list[tuple[int, float]] = []
-    frame_bits: list[object] = []
-    frame_ix: list[int] = []
-    for bit_ix in range(tracking_start, irig_bits.size - 1):
-        frame_bits.append(irig_bits[bit_ix])
-        frame_ix.append(bit_ix)
-        if irig_bits[bit_ix] == "P" and irig_bits[bit_ix + 1] == "P":
-            if len(frame_bits) == 60:
-                frame_unix = _irig_frame_to_utc_unix(frame_bits)
-                if frame_unix is not None:
-                    anchors.append((frame_ix[0], float(frame_unix)))
-            frame_bits = []
-            frame_ix = []
-
-    return anchors
+    return irig_core.decode_irig_frame_anchors(
+        irig_bits=irig_bits,
+        irig_format=irig_format,
+    )
 
 
 def assign_utc_to_irig_bits(
@@ -170,27 +132,7 @@ def assign_utc_to_irig_bits(
         np.ndarray: UTC unix time for each bit with shape ``(n_bits,)`` in
         seconds. Missing values are ``NaN``.
     """
-    unix_time = np.full(int(n_bits), np.nan, dtype=float)
-    if n_bits == 0 or len(frame_anchors) == 0:
-        return unix_time
-
-    anchor_ix = np.asarray([anchor[0] for anchor in frame_anchors], dtype=np.int64)
-    anchor_unix = np.asarray([anchor[1] for anchor in frame_anchors], dtype=float)
-    keep_mask = np.concatenate(([True], np.diff(anchor_ix) > 0))
-    anchor_ix = anchor_ix[keep_mask]
-    anchor_unix = anchor_unix[keep_mask]
-    if anchor_ix.size == 0:
-        return unix_time
-
-    first_anchor_ix = int(anchor_ix[0])
-    unix_time[first_anchor_ix:] = anchor_unix[0] + np.arange(n_bits - first_anchor_ix, dtype=float)
-    unix_time[:first_anchor_ix] = anchor_unix[0] - np.arange(first_anchor_ix, 0, -1, dtype=float)
-
-    for anchor_position in range(1, anchor_ix.size):
-        start_ix = int(anchor_ix[anchor_position])
-        unix_time[start_ix:] = anchor_unix[anchor_position] + np.arange(n_bits - start_ix, dtype=float)
-
-    return unix_time
+    return irig_core.assign_utc_to_irig_bits(n_bits=n_bits, frame_anchors=frame_anchors)
 
 
 def decode_sync_line_to_irig_utc(
@@ -198,6 +140,7 @@ def decode_sync_line_to_irig_utc(
     sample_rate_hz: float,
     bit_period_s: float = 1.0,
     align_first_rising_edge_unix: Optional[float] = None,
+    irig_format: irig_core.IRIGFormat = "neurokairos",
 ) -> pd.DataFrame:
     """Decode an IRIG-H sync line into UTC timestamps for pulse onsets.
 
@@ -209,47 +152,53 @@ def decode_sync_line_to_irig_utc(
         align_first_rising_edge_unix: Optional UTC unix time in seconds used to
             shift the decoded sequence so the first finite rising edge matches a
             known timestamp.
+        irig_format: ``"neurokairos"`` or ``"standard_decisecond"``.
 
     Returns:
         pd.DataFrame: One row per paired IRIG pulse onset with columns
             ``sample_ix``, ``recording_time_s``, ``pulse_len_samples``,
             ``irig_bit``, ``utc_unix``, and ``utc_datetime``.
     """
-    rising_ix, falling_ix = find_signal_edges(sync_signal)
-    paired_rising_ix, pulse_lengths_samples = pulse_lengths_from_edges(rising_ix, falling_ix)
-    irig_bits = classify_irig_h_pulses(
-        pulse_lengths_samples=pulse_lengths_samples,
+    decoded = irig_core.decode_sync_signal_to_irig(
+        sync_signal=sync_signal,
         sample_rate_hz=sample_rate_hz,
         bit_period_s=bit_period_s,
+        irig_format=irig_format,
     )
-
-    valid_mask = np.asarray([bit is not None for bit in irig_bits], dtype=bool)
-    valid_bits = irig_bits[valid_mask]
-    frame_anchors = decode_irig_h_frame_anchors(valid_bits)
-    valid_unix = assign_utc_to_irig_bits(valid_bits.size, frame_anchors)
-
-    all_unix = np.full(irig_bits.shape[0], np.nan, dtype=float)
-    all_unix[valid_mask] = valid_unix
+    irig_df = decoded.pulse_df.rename(
+        columns={
+            "source_onset_ix": "sample_ix",
+            "source_onset_time_s": "recording_time_s",
+            "pulse_width_s": "pulse_len_seconds",
+        }
+    )
+    irig_df["pulse_len_samples"] = irig_df["pulse_len_seconds"].to_numpy(dtype=float) * float(
+        sample_rate_hz
+    )
+    all_unix = irig_df["utc_unix"].to_numpy(dtype=float)
     if align_first_rising_edge_unix is not None and np.isfinite(align_first_rising_edge_unix):
         finite_ix = np.where(np.isfinite(all_unix))[0]
         if finite_ix.size > 0:
             shift_s = float(align_first_rising_edge_unix) - float(all_unix[finite_ix[0]])
             all_unix = all_unix + shift_s
+            irig_df["utc_unix"] = all_unix
 
     utc_datetime = [
         datetime.fromtimestamp(unix_time, tz=timezone.utc) if np.isfinite(unix_time) else pd.NaT
         for unix_time in all_unix
     ]
-    return pd.DataFrame(
-        {
-            "sample_ix": paired_rising_ix.astype(np.int64),
-            "recording_time_s": paired_rising_ix.astype(float) / float(sample_rate_hz),
-            "pulse_len_samples": pulse_lengths_samples.astype(float),
-            "irig_bit": irig_bits,
-            "utc_unix": all_unix,
-            "utc_datetime": utc_datetime,
-        }
-    )
+    irig_df["utc_datetime"] = utc_datetime
+    return irig_df.loc[
+        :,
+        [
+            "sample_ix",
+            "recording_time_s",
+            "pulse_len_samples",
+            "irig_bit",
+            "utc_unix",
+            "utc_datetime",
+        ],
+    ]
 
 
 def interpolate_with_linear_extrapolation(
