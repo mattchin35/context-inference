@@ -12,16 +12,6 @@ from src.irig_tools import irig_core
 from zoneinfo import ZoneInfo
 
 
-SECONDS_WEIGHTS = irig_core.SECONDS_WEIGHTS
-MINUTES_WEIGHTS = irig_core.MINUTES_WEIGHTS
-HOURS_WEIGHTS = irig_core.HOURS_WEIGHTS
-DAY_OF_YEAR_WEIGHTS = irig_core.DAY_OF_YEAR_WEIGHTS
-YEARS_WEIGHTS = irig_core.YEARS_WEIGHTS
-
-MARKER_POSITIONS = irig_core.MARKER_POSITIONS
-BIT_PERIOD_SECONDS = irig_core.BIT_PERIOD_SECONDS
-
-
 def bcd_decode(bits: list[object], weights: list[int]) -> int:
     """Decode a BCD-style weighted bit slice into an integer."""
 

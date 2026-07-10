@@ -101,12 +101,13 @@ def main_workflow() -> None:
     sorting_output1 = imec1_folder / sorting1_output_name
     ap1_file = _require_existing_file(imec1_folder / "run0_g0_tcat.imec1.ap.bin")
     spike_times_file1 = _require_existing_file(sorting_output1 / "spike_times.npy")
-
+    
     ni_file = _require_existing_file(raw_ephys_folder / "run0_g0_t0.nidq.bin")
     imec_output_dir = output_root / "aligned_imec"
     nidaq_output_dir = output_root / "aligned_nidaq"
+    
     ephys_sync_utils.write_alignment_note(output_root=output_root, utc_offset_hours=utc_offset_hours)
-
+    
     spike_df, imec_irig_df = ephys_sync_utils.sync_imec_spikes_to_utc(
         imec_ap_file=ap0_file,
         spike_times_npy=spike_times_file0,

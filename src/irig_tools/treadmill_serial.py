@@ -104,19 +104,25 @@ def treadmill_log_to_transition_df(
 
 
 # file_path = Path.home() / 'Documents' / 'ephys_transfer' / 'treadmill_20251008' / 'CoolTerm Capture (Untitled_0) 2025-10-21 12-36-20-447.txt'
-file_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/irig_test_20260707/CoolTerm Capture (Untitled_0) 2026-07-07 12-06-51-676.txt')
+# file_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/irig_test_20260707/CoolTerm Capture (Untitled_0) 2026-07-07 12-06-51-676.txt')
+file_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/irig_test_20260709/CoolTerm Capture (Untitled_0) 2026-07-09 15-02-21-650.txt')
+# file_path = Path('/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/irig_test_20260709/CoolTerm Capture (Untitled_0) 2026-07-09 15-33-35-476.txt')
 # df = pd.read_csv(filepath, sep=';', header=None, on_bad_lines='skip', usecols=[1, 2, 4])
 
 log_labels = ['Fdistance', 'Bdistance', 'dacval', 'runSpeed']
 irig_labels = ['syncPinState']
 
-pc_timestamp_present = True
+pc_timestamp_format = "millisecondtime"
+pc_reference_date = "2026-07-09"
+pc_reference_start_time = None
 try:
     filesize = file_path.stat().st_size
     print(f"File size: {filesize} bytes")
     df = irig_serial_io.load_coolterm_serial_txt(
         file_path,
-        pc_timestamp_present=pc_timestamp_present,
+        pc_timestamp_format=pc_timestamp_format,
+        pc_reference_date=pc_reference_date,
+        pc_reference_start_time=pc_reference_start_time,
     )
 except FileNotFoundError:
     print(f"Error: The file '{file_path}' was not found.")
