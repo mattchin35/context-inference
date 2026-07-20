@@ -137,6 +137,30 @@ def write_raw_session(
     return raw_path
 
 
+def block_collection_columns(block_types: list[str], prev_rewards: list[object]) -> dict[str, list[object]]:
+    """Return required block collection columns for multisession fixtures."""
+    numeric_prev_rewards = pd.to_numeric(pd.Series(prev_rewards), errors="coerce")
+    prev_reward_mean = numeric_prev_rewards.dropna().mean()
+    centered_rewards = [
+        float(value - prev_reward_mean) if not pd.isna(value) else "None"
+        for value in numeric_prev_rewards
+    ]
+    side_codes = []
+    for block_type in block_types:
+        if str(block_type).startswith("right_"):
+            side_codes.append(-0.5)
+        elif str(block_type).startswith("left_"):
+            side_codes.append(0.5)
+        else:
+            side_codes.append("None")
+    return {
+        "block_type": block_types,
+        "prev_n_rewarded": prev_rewards,
+        "prev_rewards_session_centered": centered_rewards,
+        "block_side_code": side_codes,
+    }
+
+
 def test_find_raw_session_by_date_resolves_one_timestamp_with_exact_task_tag(tmp_path):
     """Raw date resolution should use the exact task-tagged session folder."""
     main_module = load_main_module()
@@ -447,18 +471,44 @@ def test_resolve_multisession_dates_errors_when_discovered_date_lacks_saved_outp
 def test_concatenate_saved_sessions_offsets_block_and_trial_block_ids(tmp_path):
     """Continuous concat should offset block ids while preserving source ids."""
     main_module = load_main_module()
-    first_session = SimpleNamespace(sess_id_full="CT014_2025-12-05_165240", date="2025-12-05")
-    second_session = SimpleNamespace(sess_id_full="CT014_2025-12-16_153200", date="2025-12-16")
+    first_session = SimpleNamespace(
+        mouse="CT014",
+        sess_id_full="CT014_2025-12-05_165240",
+        date="2025-12-05",
+    )
+    second_session = SimpleNamespace(
+        mouse="CT014",
+        sess_id_full="CT014_2025-12-16_153200",
+        date="2025-12-16",
+    )
     first = main_module.SavedSessionAnalysis(
         session=first_session,
-        block_performance=pd.DataFrame({"block_ix": [0, 1], "value": [10, 11]}),
+        block_performance=pd.DataFrame(
+            {
+                "block_ix": [0, 1],
+                "value": [10, 11],
+                **block_collection_columns(
+                    ["right_uncued", "left_uncued"],
+                    [0, 2],
+                ),
+            }
+        ),
         augmented_trial_df=pd.DataFrame(
             {"cur_trial": [0, 1, 2], "cur_block": [0, 1, 1], "action": [1, 0, 0]}
         ),
     )
     second = main_module.SavedSessionAnalysis(
         session=second_session,
-        block_performance=pd.DataFrame({"block_ix": [0, 1, 2], "value": [20, 21, 22]}),
+        block_performance=pd.DataFrame(
+            {
+                "block_ix": [0, 1, 2],
+                "value": [20, 21, 22],
+                **block_collection_columns(
+                    ["right_uncued", "right_uncued", "left_uncued"],
+                    [4, 6, "None"],
+                ),
+            }
+        ),
         augmented_trial_df=pd.DataFrame(
             {"cur_trial": [0, 1, 2, 3], "cur_block": [0, 0, 1, 2], "action": [0, 1, 1, 0]}
         ),
@@ -488,6 +538,31 @@ def test_concatenate_saved_sessions_offsets_block_and_trial_block_ids(tmp_path):
         "2025-12-16",
         "2025-12-16",
     ]
+    assert concatenated.block_performance["mouse"].tolist() == ["CT014"] * 5
+    assert concatenated.block_performance["source_mouse"].tolist() == ["CT014"] * 5
+    assert concatenated.augmented_trial_df["mouse"].tolist() == ["CT014"] * 7
+    assert concatenated.augmented_trial_df["source_mouse"].tolist() == ["CT014"] * 7
+    assert concatenated.block_performance["prev_rewards_session_centered"].tolist() == [
+        -1.0,
+        1.0,
+        -1.0,
+        1.0,
+        "None",
+    ]
+    assert concatenated.block_performance["prev_rewards_mouse_centered"].tolist() == [
+        -3.0,
+        -1.0,
+        1.0,
+        3.0,
+        "None",
+    ]
+    assert concatenated.block_performance["block_side_code"].tolist() == [
+        -0.5,
+        0.5,
+        -0.5,
+        -0.5,
+        0.5,
+    ]
 
 
 def test_concatenate_saved_sessions_uses_raw_trial_block_ids_as_source_blocks(tmp_path):
@@ -496,7 +571,16 @@ def test_concatenate_saved_sessions_uses_raw_trial_block_ids_as_source_blocks(tm
     session = SimpleNamespace(sess_id_full="CT014_2025-12-23_163505", date="2025-12-23")
     saved = main_module.SavedSessionAnalysis(
         session=session,
-        block_performance=pd.DataFrame({"block_ix": [0, 1, 2], "value": [10, 11, 12]}),
+        block_performance=pd.DataFrame(
+            {
+                "block_ix": [0, 1, 2],
+                "value": [10, 11, 12],
+                **block_collection_columns(
+                    ["right_uncued", "left_uncued", "right_uncued"],
+                    [0, 1, 2],
+                ),
+            }
+        ),
         augmented_trial_df=pd.DataFrame(
             {
                 "cur_trial": [0, 1, 2, 3, 4],
@@ -520,7 +604,16 @@ def test_concatenate_saved_sessions_rejects_block_count_mismatch(tmp_path):
     session = SimpleNamespace(sess_id_full="CT014_2025-12-23_163505", date="2025-12-23")
     saved = main_module.SavedSessionAnalysis(
         session=session,
-        block_performance=pd.DataFrame({"block_ix": [0, 1], "value": [10, 11]}),
+        block_performance=pd.DataFrame(
+            {
+                "block_ix": [0, 1],
+                "value": [10, 11],
+                **block_collection_columns(
+                    ["right_uncued", "left_uncued"],
+                    [0, 1],
+                ),
+            }
+        ),
         augmented_trial_df=pd.DataFrame(
             {
                 "cur_trial": [0, 1, 2],
@@ -531,6 +624,30 @@ def test_concatenate_saved_sessions_rejects_block_count_mismatch(tmp_path):
     )
 
     with pytest.raises(ValueError, match="3 trial blocks but 2 block rows"):
+        main_module.concatenate_saved_sessions([saved])
+
+
+def test_concatenate_saved_sessions_rejects_missing_collection_columns(tmp_path):
+    """Multisession concat should require current single-session block variables."""
+    main_module = load_main_module()
+    session = SimpleNamespace(
+        mouse="CT014",
+        sess_id_full="CT014_2025-12-23_163505",
+        date="2025-12-23",
+    )
+    saved = main_module.SavedSessionAnalysis(
+        session=session,
+        block_performance=pd.DataFrame(
+            {
+                "block_ix": [0, 1],
+                "block_type": ["right_uncued", "left_uncued"],
+                "prev_n_rewarded": [0, 1],
+            }
+        ),
+        augmented_trial_df=pd.DataFrame({"cur_trial": [0, 1], "cur_block": [0, 1]}),
+    )
+
+    with pytest.raises(ValueError, match="prev_rewards_session_centered.*block_side_code"):
         main_module.concatenate_saved_sessions([saved])
 
 
@@ -750,6 +867,140 @@ def test_load_cross_mouse_session_metric_data_fails_loudly_when_metric_missing(t
         )
 
 
+def test_load_cross_mouse_multisession_block_performance_fills_legacy_mouse_metadata(tmp_path):
+    """Cross-mouse block loading should tag old multisession CSVs by selected mouse."""
+    main_module = load_main_module()
+    cross_session_path = tmp_path / "CT014" / "cross_session_analysis"
+    cross_session_path.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "source_session_id": ["CT014_2025-12-05_165240", "CT014_2025-12-05_165240"],
+            "source_date": ["2025-12-05", "2025-12-05"],
+            "block_ix": [0, 1],
+            "block_type": ["right_uncued", "left_uncued"],
+            "prev_n_rewarded": [0, 2],
+            "prev_rewards_session_centered": [-1.0, 1.0],
+            "prev_rewards_mouse_centered": [-1.0, 1.0],
+            "block_side_code": [-0.5, 0.5],
+            "trials_to_correct": [1, 2],
+        }
+    ).to_csv(cross_session_path / "CT014_multisession_block_performance.csv", index=False)
+
+    cross_mouse_df = main_module.load_cross_mouse_multisession_block_performance(
+        data_root=tmp_path,
+        mice=["CT014"],
+    )
+
+    assert cross_mouse_df["mouse"].tolist() == ["CT014", "CT014"]
+    assert cross_mouse_df["source_mouse"].tolist() == ["CT014", "CT014"]
+    assert cross_mouse_df["session_id"].tolist() == [
+        "CT014_2025-12-05_165240",
+        "CT014_2025-12-05_165240",
+    ]
+    assert cross_mouse_df["mouse_order"].tolist() == [0, 0]
+    assert cross_mouse_df["prev_rewards_global_centered"].tolist() == [-1.0, 1.0]
+
+
+def test_collect_cross_mouse_multisession_block_performance_writes_combined_csv(tmp_path):
+    """Collector should save one concatenated multisession block CSV."""
+    main_module = load_main_module()
+    for mouse, ttc_value in (("CT014", 1), ("CT016", 2)):
+        cross_session_path = tmp_path / mouse / "cross_session_analysis"
+        cross_session_path.mkdir(parents=True)
+        pd.DataFrame(
+            {
+                "mouse": [mouse],
+                "source_mouse": [mouse],
+                "source_session_id": [f"{mouse}_2025-12-05_165240"],
+                "source_date": ["2025-12-05"],
+                "block_ix": [0],
+                "block_type": ["right_uncued"],
+                "prev_n_rewarded": [ttc_value],
+                "prev_rewards_session_centered": [0.0],
+                "prev_rewards_mouse_centered": [0.0],
+                "block_side_code": [-0.5],
+                "trials_to_correct": [ttc_value],
+            }
+        ).to_csv(cross_session_path / f"{mouse}_multisession_block_performance.csv", index=False)
+
+    saved_path = main_module.collect_cross_mouse_multisession_block_performance(
+        data_root=tmp_path,
+        output_path=tmp_path / "cross_mouse_analysis",
+        mice=["CT014", "CT016"],
+    )
+
+    saved_df = pd.read_csv(saved_path, na_filter=False)
+    assert saved_path == (
+        tmp_path
+        / "cross_mouse_analysis"
+        / "cross_mouse_multisession_block_performance.csv"
+    )
+    assert saved_df["mouse"].tolist() == ["CT014", "CT016"]
+    assert saved_df["trials_to_correct"].tolist() == [1, 2]
+    assert saved_df["prev_rewards_global_centered"].tolist() == [-0.5, 0.5]
+
+
+def test_load_cross_mouse_multisession_block_performance_requires_centered_columns(tmp_path):
+    """Cross-mouse collection should fail until mouse multisession CSVs are rerun."""
+    main_module = load_main_module()
+    cross_session_path = tmp_path / "CT014" / "cross_session_analysis"
+    cross_session_path.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "source_session_id": ["CT014_2025-12-05_165240"],
+            "source_date": ["2025-12-05"],
+            "block_ix": [0],
+            "block_type": ["right_uncued"],
+            "prev_n_rewarded": [0],
+        }
+    ).to_csv(cross_session_path / "CT014_multisession_block_performance.csv", index=False)
+
+    with pytest.raises(ValueError, match="prev_rewards_session_centered.*prev_rewards_mouse_centered.*block_side_code"):
+        main_module.load_cross_mouse_multisession_block_performance(
+            data_root=tmp_path,
+            mice=["CT014"],
+        )
+
+
+def test_main_cross_mouse_multisession_block_performance_uses_cross_mouse_output(monkeypatch):
+    """The entry point should write into the cross-mouse analysis folder."""
+    main_module = load_main_module()
+    calls = []
+
+    def record_collect(**kwargs):
+        calls.append(kwargs)
+        return kwargs["output_path"] / "cross_mouse_multisession_block_performance.csv"
+
+    monkeypatch.setattr(
+        main_module,
+        "collect_cross_mouse_multisession_block_performance",
+        record_collect,
+    )
+
+    saved_path = main_module.main_cross_mouse_multisession_block_performance(
+        data_root=Path("/tmp/contextProjectData"),
+        mice=["CT014", "CT016"],
+    )
+
+    assert calls[0]["data_root"] == Path("/tmp/contextProjectData")
+    assert calls[0]["output_path"] == Path("/tmp/contextProjectData/cross_mouse_analysis")
+    assert calls[0]["mice"] == ["CT014", "CT016"]
+    assert saved_path == Path(
+        "/tmp/contextProjectData/cross_mouse_analysis/cross_mouse_multisession_block_performance.csv"
+    )
+
+
+def test_load_cross_mouse_multisession_block_performance_fails_for_missing_mouse_csv(tmp_path):
+    """Selected mice without multisession block CSVs should fail loudly."""
+    main_module = load_main_module()
+
+    with pytest.raises(FileNotFoundError, match="CT014.*multisession block performance"):
+        main_module.load_cross_mouse_multisession_block_performance(
+            data_root=tmp_path,
+            mice=["CT014"],
+        )
+
+
 def test_run_cross_mouse_session_metric_curves_writes_metric_csvs_and_plots(tmp_path, monkeypatch):
     """The cross-mouse metric runner should save one CSV and plot per requested metric."""
     main_module = load_main_module()
@@ -806,6 +1057,146 @@ def test_run_cross_mouse_session_metric_curves_writes_metric_csvs_and_plots(tmp_
     assert plot_calls[1]["ylim"] == (0, 1)
 
 
+def test_run_or_collect_multisession_collection_only_overwrites_inputs_and_skips_hmm(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    """Collection-only mode should overwrite multisession CSVs without HMM calls."""
+    main_module = load_main_module()
+    concatenated = SimpleNamespace(
+        block_performance=pd.DataFrame({"block_ix": [0], "prev_n_rewarded": [1]}),
+        augmented_trial_df=pd.DataFrame({"cur_block": [0], "action": [1]}),
+    )
+    multisession = SimpleNamespace(
+        sess_id_full="CT014_multisession",
+        processed_data_path=tmp_path,
+        figure_path=tmp_path,
+    )
+    calls = []
+
+    def fail_hmm(**_kwargs):
+        raise AssertionError("HMM should not run in collection-only mode")
+
+    monkeypatch.setattr(main_module, "run_multisession_analysis", fail_hmm)
+
+    result = main_module.run_or_collect_multisession_analysis(
+        concatenated=concatenated,
+        session=multisession,
+        collection_only=True,
+    )
+
+    saved_block_df = pd.read_csv(tmp_path / "CT014_multisession_block_performance.csv")
+    saved_trial_df = pd.read_csv(tmp_path / "CT014_multisession_augmented_trials.csv")
+    pd.testing.assert_frame_equal(saved_block_df, concatenated.block_performance)
+    pd.testing.assert_frame_equal(saved_trial_df, concatenated.augmented_trial_df)
+    assert result is None
+    assert "collection-only mode overwrote multisession block/trial CSVs" in capsys.readouterr().out
+    assert calls == []
+
+
+def test_run_or_collect_multisession_modeling_path_calls_hmm(monkeypatch):
+    """Normal multisession mode should still call the HMM orchestration."""
+    main_module = load_main_module()
+    concatenated = SimpleNamespace()
+    multisession = SimpleNamespace(sess_id_full="CT014_multisession")
+    expected = (None, None, pd.DataFrame({"block_ix": [0]}), pd.DataFrame({"cur_block": [0]}))
+    captured = {}
+
+    def record_hmm(**kwargs):
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(main_module, "run_multisession_analysis", record_hmm)
+
+    result = main_module.run_or_collect_multisession_analysis(
+        concatenated=concatenated,
+        session=multisession,
+        collection_only=False,
+        block_num_states=3,
+        trial_num_states=4,
+        prior_alpha=1,
+        prior_sigma=2,
+    )
+
+    assert result == expected
+    assert captured["concatenated"] is concatenated
+    assert captured["session"] is multisession
+    assert captured["block_num_states"] == 3
+    assert captured["trial_num_states"] == 4
+
+
+def test_main_multisession_collection_only_saves_and_skips_plot_and_hmm_work(
+    tmp_path,
+    monkeypatch,
+):
+    """Collection-only main flow should save concatenated CSVs and return early."""
+    main_module = load_main_module()
+    session = SimpleNamespace(
+        mouse="CT017",
+        sess_id_full="CT017_2026-04-17_131606",
+        date="2026-04-17",
+    )
+    concatenated = SimpleNamespace(
+        block_performance=pd.DataFrame({"block_ix": [0], "prev_n_rewarded": [2]}),
+        augmented_trial_df=pd.DataFrame({"cur_block": [0], "action": [1]}),
+    )
+    multisession = SimpleNamespace(
+        sess_id_full="CT017_multisession",
+        processed_data_path=tmp_path,
+        figure_path=tmp_path,
+    )
+
+    monkeypatch.setattr(
+        main_module,
+        "resolve_multisession_dates",
+        lambda **_kwargs: ["2026-04-17"],
+    )
+    monkeypatch.setattr(
+        main_module,
+        "find_saved_session_by_date",
+        lambda **_kwargs: session,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "load_saved_session_analysis",
+        lambda loaded_session: SimpleNamespace(session=loaded_session),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "concatenate_saved_sessions",
+        lambda saved_sessions: concatenated,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "build_multisession_session",
+        lambda **_kwargs: multisession,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_learning_curve_data",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("plot setup should be skipped")),
+    )
+    monkeypatch.setattr(
+        main_module.bssm,
+        "collect_block_hmm_state_features_for_sessions",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("HMM feature collection should be skipped")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "run_multisession_analysis",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("HMM modeling should be skipped")),
+    )
+
+    main_module.main_multisession()
+
+    saved_block_df = pd.read_csv(tmp_path / "CT017_multisession_block_performance.csv")
+    saved_trial_df = pd.read_csv(tmp_path / "CT017_multisession_augmented_trials.csv")
+    pd.testing.assert_frame_equal(saved_block_df, concatenated.block_performance)
+    pd.testing.assert_frame_equal(saved_trial_df, concatenated.augmented_trial_df)
+
+
 def test_main_cross_mouse_metrics_runs_learning_and_session_metrics(monkeypatch):
     """The user-facing cross-mouse entry point should run all cross-mouse metric plots."""
     main_module = load_main_module()
@@ -823,6 +1214,16 @@ def test_main_cross_mouse_metrics_runs_learning_and_session_metrics(monkeypatch)
         "run_cross_mouse_session_metric_curves",
         lambda **kwargs: calls.append(("session", kwargs)),
     )
+    monkeypatch.setattr(
+        main_module,
+        "collect_cross_mouse_multisession_block_performance",
+        lambda **kwargs: calls.append(("blocks", kwargs)),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "collect_cross_mouse_block_residual_model_summaries",
+        lambda **kwargs: calls.append(("residual_models", kwargs)),
+    )
 
     main_module.main_cross_mouse_metrics(
         data_root=Path("/tmp/contextProjectData"),
@@ -830,8 +1231,10 @@ def test_main_cross_mouse_metrics_runs_learning_and_session_metrics(monkeypatch)
         mice=[],
     )
 
-    assert [call[0] for call in calls] == ["learning", "session"]
+    assert [call[0] for call in calls] == ["learning", "session", "blocks", "residual_models"]
     assert "median_ideal_agreement" in calls[1][1]["metric_specs"]
+    assert calls[2][1]["mice"] == ["CT014"]
+    assert calls[3][1]["mice"] == ["CT014"]
 
 
 def test_prepare_session_trials_to_correct_summary_computes_median_and_quartiles():

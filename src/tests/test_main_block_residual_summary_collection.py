@@ -106,11 +106,15 @@ def test_load_cross_mouse_block_residual_model_summaries_combines_mice(tmp_path)
     for mouse in ("CT024", "CT025"):
         cross_session_path = tmp_path / mouse / "cross_session_analysis"
         cross_session_path.mkdir(parents=True)
-        make_residual_summary(
-            session_id=f"{mouse}_2026-06-09_143852",
-            mouse=mouse,
-            date="2026-06-09",
-        ).to_csv(cross_session_path / f"{mouse}_block_residual_model_summary.csv", index=False)
+        (
+            make_residual_summary(
+                session_id=f"{mouse}_2026-06-09_143852",
+                mouse=mouse,
+                date="2026-06-09",
+            )
+            .assign(training_day=1)
+            .to_csv(cross_session_path / f"{mouse}_block_residual_model_summary.csv", index=False)
+        )
 
     combined = main_module.load_cross_mouse_block_residual_model_summaries(
         data_root=tmp_path,
@@ -131,7 +135,10 @@ def test_collect_cross_mouse_block_residual_model_summaries_writes_combined_csv(
         session_id="CT024_2026-06-09_143852",
         mouse="CT024",
         date="2026-06-09",
-    ).to_csv(cross_session_path / "CT024_block_residual_model_summary.csv", index=False)
+    ).assign(training_day=1).to_csv(
+        cross_session_path / "CT024_block_residual_model_summary.csv",
+        index=False,
+    )
 
     saved_path = main_module.collect_cross_mouse_block_residual_model_summaries(
         data_root=tmp_path,

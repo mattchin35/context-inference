@@ -162,6 +162,24 @@ def test_main_multisession_collects_block_hmm_state_features_for_session_list(
     )
     monkeypatch.setattr(
         main_module,
+        "prepare_agent_mouse_agreement_summary",
+        lambda saved_sessions: pd.DataFrame(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_agent_mouse_agreement_block_points",
+        lambda saved_sessions: pd.DataFrame(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_multisession_agent_mouse_agreement_quality",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
         "prepare_session_trials_to_correct_summary",
         lambda saved_sessions: pd.DataFrame(),
         raising=False,
@@ -212,6 +230,12 @@ def test_main_multisession_collects_block_hmm_state_features_for_session_list(
         raising=False,
     )
     monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_correct_after_first_session_summary",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
         main_module,
         "prepare_block_switch_summary",
         lambda saved_sessions: pd.DataFrame(),
@@ -244,6 +268,30 @@ def test_main_multisession_collects_block_hmm_state_features_for_session_list(
     monkeypatch.setattr(
         main_module.performance_plots,
         "plot_multisession_block_explore_quality",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_block_explore_run_summary",
+        lambda saved_sessions, min_explore_run_length_to_count: pd.DataFrame(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_block_explore_run_block_points",
+        lambda saved_sessions, min_explore_run_length_to_count: pd.DataFrame(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_multisession_block_explore_run_quality",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_session_summary_metric_family",
         lambda *_args, **_kwargs: None,
         raising=False,
     )
@@ -287,7 +335,7 @@ def test_main_multisession_collects_block_hmm_state_features_for_session_list(
         raising=False,
     )
 
-    main_module.main_multisession()
+    main_module.main_multisession(multisession_collection_only=False)
 
     assert captured["sessions"]
     assert all(session.sess_id_full.startswith("CT016_") for session in captured["sessions"])

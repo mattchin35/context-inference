@@ -13,7 +13,7 @@ from src.behavior_analysis.project_utils import (
     EXPERIMENTER_REWARD_GIVEN_COLUMN,
     normalize_experimenter_reward_column,
 )
-import src.state_space_modeling.utilplot as utilplot
+# import src.state_space_modeling.utilplot as utilplot
 import pickle as pkl
 from pathlib import Path
 import pandas as pd
@@ -1068,6 +1068,190 @@ def _offset_numeric_column(values: pd.Series, offset: int, column_name: str) -> 
     return numeric_values.astype(int) + offset
 
 
+def _mouse_from_session_metadata(session) -> str:
+    """Return the mouse identifier from a session-like object.
+
+    Parameters
+    ----------
+    session : object
+        Session-like object with `mouse` and/or `sess_id_full` attributes.
+        `sess_id_full` is expected to contain `{mouse}_{YYYY-MM-DD}_{HHMMSS}`.
+
+    Returns
+    -------
+    str
+        Mouse identifier.
+
+    Raises
+    ------
+    ValueError
+        If neither `mouse` nor a parseable `sess_id_full` is available.
+    """
+    mouse = getattr(session, "mouse", None)
+    if mouse is not None:
+        return str(mouse)
+
+    sess_id_full = getattr(session, "sess_id_full", None)
+    if sess_id_full is None:
+        raise ValueError("Session metadata is missing both 'mouse' and 'sess_id_full'.")
+    match = re.search(r"(.+?)_\d{4}-\d{2}-\d{2}_\d{6}", str(sess_id_full))
+    if match is None:
+        raise ValueError(f"Cannot parse mouse from session id: {sess_id_full}")
+    return match.group(1)
+
+
+def _add_mouse_metadata_columns(
+    table: pd.DataFrame,
+    mouse: str,
+    source_mouse: str | None = None,
+) -> pd.DataFrame:
+    """Attach mouse identifiers to a block or trial table.
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        Analysis table with shape `(n_rows, n_columns)`.
+    mouse : str
+        Mouse identifier for the row in the current analysis context.
+    source_mouse : str or None, default=None
+        Original mouse identifier before concatenation. None uses `mouse`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of `table` with `mouse` and `source_mouse` columns. Existing
+        columns with these names are overwritten with the supplied metadata.
+    """
+    table_with_metadata = table.copy()
+    source_mouse = mouse if source_mouse is None else source_mouse
+    metadata_values = {"mouse": mouse, "source_mouse": source_mouse}
+    for column_name, column_value in metadata_values.items():
+        table_with_metadata[column_name] = column_value
+    leading_columns = [column for column in metadata_values if column in table_with_metadata.columns]
+    remaining_columns = [
+        column for column in table_with_metadata.columns if column not in leading_columns
+    ]
+    return table_with_metadata.loc[:, leading_columns + remaining_columns]
+
+
+def _add_single_session_metadata_columns(
+    table: pd.DataFrame,
+    session: Session,
+) -> pd.DataFrame:
+    """Attach mouse, session, and date identifiers to a single-session table.
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        Analysis table with shape `(n_rows, n_columns)`.
+    session : Session
+        Session metadata object with `mouse`, `sess_id_full`, and `date`
+        attributes.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of `table` with `mouse`, `session_id`, and `date` columns.
+        Existing columns with these names are overwritten.
+    """
+    table_with_metadata = table.copy()
+    metadata_values = {
+        "mouse": str(session.mouse),
+        "session_id": str(session.sess_id_full),
+        "date": str(session.date),
+    }
+    for column_name, column_value in metadata_values.items():
+        table_with_metadata[column_name] = column_value
+    leading_columns = [column for column in metadata_values if column in table_with_metadata.columns]
+    remaining_columns = [
+        column for column in table_with_metadata.columns if column not in leading_columns
+    ]
+    return table_with_metadata.loc[:, leading_columns + remaining_columns]
+
+
+def _require_columns(table: pd.DataFrame, required_columns: Sequence[str], context: str) -> None:
+    """Raise a clear error when an analysis table lacks required columns.
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        Analysis table with shape `(n_rows, n_columns)`.
+    required_columns : Sequence[str]
+        Column names required by the caller, checked in the supplied order.
+    context : str
+        Human-readable source description used in the error message.
+
+    Returns
+    -------
+    None
+        Returns None when all required columns are present.
+
+    Raises
+    ------
+    ValueError
+        If any required column is absent.
+    """
+    missing_columns = [column for column in required_columns if column not in table.columns]
+    if missing_columns:
+        raise ValueError(f"{context} is missing required columns: {missing_columns}")
+
+
+def _add_centered_prev_rewards_column(
+    table: pd.DataFrame,
+    output_column: str,
+) -> pd.DataFrame:
+    """Add previous-reward counts centered over all numeric rows in a table.
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        Block table with shape `(n_blocks, n_columns)`. Must contain
+        `prev_n_rewarded`, measured in rewarded trials in the previous block.
+    output_column : str
+        Name of the centered output column. Values are in rewarded trials
+        relative to the mean of all numeric `prev_n_rewarded` rows.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of `table` with `output_column` added. Nonnumeric source rows are
+        assigned the string sentinel `"None"`.
+    """
+    _require_columns(table, ["prev_n_rewarded"], "block table")
+    output_df = table.copy()
+    prev_rewards = pd.to_numeric(output_df["prev_n_rewarded"], errors="coerce")
+    numeric_rows = prev_rewards.notna()
+    centered_values = np.full(output_df.shape[0], "None", dtype=object)
+    if numeric_rows.any():
+        centered_values[numeric_rows.to_numpy()] = (
+            prev_rewards.loc[numeric_rows] - prev_rewards.loc[numeric_rows].mean()
+        ).to_numpy(dtype=float)
+    output_df[output_column] = centered_values
+    return output_df
+
+
+def _require_session_block_collection_columns(block_performance: pd.DataFrame, context: str) -> None:
+    """Require single-session block variables needed for multisession collection.
+
+    Parameters
+    ----------
+    block_performance : pandas.DataFrame
+        Single-session block table with shape `(n_blocks, n_columns)`.
+    context : str
+        Human-readable source description used in the error message.
+
+    Returns
+    -------
+    None
+        Returns None when all required collection columns are present.
+    """
+    _require_columns(
+        block_performance,
+        ["prev_rewards_session_centered", "block_side_code"],
+        context,
+    )
+
+
 def concatenate_saved_sessions(
     saved_sessions: Sequence[SavedSessionAnalysis],
 ) -> ConcatenatedSessionAnalysis:
@@ -1101,13 +1285,28 @@ def concatenate_saved_sessions(
 
     for session_index, saved_session in enumerate(saved_sessions):
         session = saved_session.session
+        source_mouse = _mouse_from_session_metadata(session)
         block_df = saved_session.block_performance.copy()
         trial_df = saved_session.augmented_trial_df.copy()
+        block_df = _add_mouse_metadata_columns(
+            block_df,
+            mouse=source_mouse,
+            source_mouse=source_mouse,
+        )
+        trial_df = _add_mouse_metadata_columns(
+            trial_df,
+            mouse=source_mouse,
+            source_mouse=source_mouse,
+        )
 
         if "block_ix" not in block_df.columns:
             raise ValueError(f"{session.sess_id_full} block_performance is missing 'block_ix'.")
         if "cur_block" not in trial_df.columns:
             raise ValueError(f"{session.sess_id_full} augmented_trial_df is missing 'cur_block'.")
+        _require_session_block_collection_columns(
+            block_df,
+            context=f"{session.sess_id_full} block_performance",
+        )
 
         raw_trial_block_ids = pd.Series(
             sorted(pd.to_numeric(trial_df["cur_block"], errors="raise").astype(int).unique())
@@ -1146,8 +1345,14 @@ def concatenate_saved_sessions(
         trial_session_lengths.append(trial_df.shape[0])
         block_offset += block_df.shape[0]
 
+    concatenated_block_performance = pd.concat(concatenated_blocks, axis=0, ignore_index=True)
+    concatenated_block_performance = _add_centered_prev_rewards_column(
+        concatenated_block_performance,
+        output_column="prev_rewards_mouse_centered",
+    )
+
     return ConcatenatedSessionAnalysis(
-        block_performance=pd.concat(concatenated_blocks, axis=0, ignore_index=True),
+        block_performance=concatenated_block_performance,
         augmented_trial_df=pd.concat(concatenated_trials, axis=0, ignore_index=True),
         block_session_lengths=np.asarray(block_session_lengths, dtype=int),
         trial_session_lengths=np.asarray(trial_session_lengths, dtype=int),
@@ -1252,6 +1457,412 @@ def discover_mice_with_overall_performance(data_root: Path) -> list[str]:
         if summary_path.exists():
             discovered_mice.append(mouse)
     return discovered_mice
+
+
+def multisession_block_performance_path(data_root: Path, mouse: str) -> Path:
+    """Build the expected saved multisession block-performance CSV path.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory containing one folder per mouse.
+    mouse : str
+        Mouse identifier. The expected file is
+        `{data_root}/{mouse}/cross_session_analysis/{mouse}_multisession_block_performance.csv`.
+
+    Returns
+    -------
+    pathlib.Path
+        Expected multisession block-performance CSV path.
+    """
+    return (
+        Path(data_root)
+        / mouse
+        / "cross_session_analysis"
+        / f"{mouse}_multisession_block_performance.csv"
+    )
+
+
+def _fill_missing_metadata_column(
+    table: pd.DataFrame,
+    column_name: str,
+    fill_value: str,
+) -> pd.DataFrame:
+    """Fill absent or sentinel metadata values with a known identifier.
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        Analysis table with shape `(n_rows, n_columns)`.
+    column_name : str
+        Metadata column to add or patch.
+    fill_value : str
+        Value used where `column_name` is absent, empty, or the string `"None"`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of `table` with `column_name` present and missing metadata filled.
+    """
+    table_with_metadata = table.copy()
+    if column_name not in table_with_metadata.columns:
+        table_with_metadata[column_name] = fill_value
+        return table_with_metadata
+
+    missing_values = table_with_metadata[column_name].isna() | table_with_metadata[column_name].isin(
+        ["", "None"]
+    )
+    table_with_metadata.loc[missing_values, column_name] = fill_value
+    return table_with_metadata
+
+
+def load_cross_mouse_multisession_block_performance(
+    data_root: Path,
+    mice: Sequence[str],
+) -> pd.DataFrame:
+    """Load saved multisession block-performance tables across mice.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory containing one folder per mouse. Each selected mouse must
+        contain `cross_session_analysis/{mouse}_multisession_block_performance.csv`.
+    mice : Sequence[str]
+        Mouse identifiers to load in the requested order.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Concatenated block-performance table with shape
+        `(n_total_blocks, n_columns)`. Legacy CSVs without `mouse` or
+        `source_mouse` columns are filled from the selected mouse name.
+
+    Raises
+    ------
+    FileNotFoundError
+        If any selected mouse lacks its multisession block-performance CSV.
+    """
+    mouse_frames = []
+    for mouse_order, mouse in enumerate(mice):
+        block_path = multisession_block_performance_path(data_root, mouse)
+        if not block_path.exists():
+            raise FileNotFoundError(
+                f"{mouse} is missing multisession block performance: {block_path}"
+            )
+
+        mouse_df = pd.read_csv(block_path, sep=",", na_filter=False)
+        _require_columns(
+            mouse_df,
+            [
+                "prev_rewards_session_centered",
+                "prev_rewards_mouse_centered",
+                "block_side_code",
+                "prev_n_rewarded",
+            ],
+            context=f"{mouse} multisession block performance",
+        )
+        mouse_df = _fill_missing_metadata_column(mouse_df, "mouse", mouse)
+        mouse_df = _fill_missing_metadata_column(mouse_df, "source_mouse", mouse)
+        if "session_id" not in mouse_df.columns and "source_session_id" in mouse_df.columns:
+            mouse_df["session_id"] = mouse_df["source_session_id"]
+        elif "session_id" in mouse_df.columns and "source_session_id" in mouse_df.columns:
+            missing_session_id = mouse_df["session_id"].isna() | mouse_df["session_id"].isin(
+                ["", "None"]
+            )
+            mouse_df.loc[missing_session_id, "session_id"] = mouse_df.loc[
+                missing_session_id,
+                "source_session_id",
+            ]
+        mouse_df["mouse_order"] = mouse_order
+        leading_columns = [
+            column
+            for column in ["mouse", "source_mouse", "mouse_order", "session_id"]
+            if column in mouse_df.columns
+        ]
+        remaining_columns = [column for column in mouse_df.columns if column not in leading_columns]
+        mouse_frames.append(mouse_df.loc[:, leading_columns + remaining_columns])
+
+    if not mouse_frames:
+        return pd.DataFrame(
+            columns=[
+                "mouse",
+                "source_mouse",
+                "mouse_order",
+                "session_id",
+                "prev_rewards_global_centered",
+            ]
+        )
+    cross_mouse_df = pd.concat(mouse_frames, axis=0, ignore_index=True)
+    return _add_centered_prev_rewards_column(
+        cross_mouse_df,
+        output_column="prev_rewards_global_centered",
+    )
+
+
+def collect_cross_mouse_multisession_block_performance(
+    data_root: Path,
+    output_path: Path,
+    mice: Sequence[str],
+    output_filename: str = "cross_mouse_multisession_block_performance.csv",
+) -> Path:
+    """Save a combined cross-mouse multisession block-performance CSV.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory containing one folder per mouse.
+    output_path : pathlib.Path
+        Directory where the combined CSV is saved.
+    mice : Sequence[str]
+        Mouse identifiers to include.
+    output_filename : str, default="cross_mouse_multisession_block_performance.csv"
+        Name of the combined output CSV.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to the saved combined CSV.
+    """
+    output_path = Path(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+    cross_mouse_df = load_cross_mouse_multisession_block_performance(
+        data_root=data_root,
+        mice=mice,
+    )
+    output_csv_path = output_path / output_filename
+    cross_mouse_df.to_csv(output_csv_path, index=False, na_rep="None")
+    return output_csv_path
+
+
+BLOCK_RESIDUAL_MODEL_SUMMARY_COLUMNS = (
+    "session_id",
+    "mouse",
+    "date",
+    "model_type",
+    "lambda_choice",
+    "lambda_value",
+    "alpha",
+    "n_valid_blocks",
+    "coefficient_intercept",
+    "coefficient_prev_n_rewarded",
+    "coefficient_block_side_left",
+    "coefficient_prev_n_rewarded_block_side_left",
+    "residual_mad_raw",
+    "residual_mad_scaled",
+    "residual_iqr",
+    "residual_rmse",
+)
+
+
+def block_residual_model_summary_path_for_session(session: Session) -> Path:
+    """Build the residual-model summary CSV path for one saved session.
+
+    Parameters
+    ----------
+    session : Session
+        Single-session metadata with `processed_data_path` and `sess_id_full`.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to `{sess_id_full}_block_residual_model_summary.csv` inside the
+        session processed-data directory.
+    """
+    return (
+        Path(session.processed_data_path)
+        / f"{session.sess_id_full}_block_residual_model_summary.csv"
+    )
+
+
+def load_session_block_residual_model_summary(session: Session) -> pd.DataFrame:
+    """Load and validate one per-session residual-model summary CSV.
+
+    Parameters
+    ----------
+    session : Session
+        Single-session metadata with `processed_data_path`, `sess_id_full`,
+        `mouse`, and `date` attributes.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Residual-model summary table with one row per model/lambda pair. String
+        missing-value sentinels are preserved.
+    """
+    summary_path = block_residual_model_summary_path_for_session(session)
+    if not summary_path.exists():
+        raise FileNotFoundError(f"Missing block residual model summary: {summary_path}")
+
+    summary_df = pd.read_csv(summary_path, sep=",", na_filter=False)
+    _require_columns(
+        summary_df,
+        BLOCK_RESIDUAL_MODEL_SUMMARY_COLUMNS,
+        context=f"{session.sess_id_full} block residual model summary",
+    )
+    return summary_df
+
+
+def collect_mouse_block_residual_model_summaries(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+    output_path: Path,
+    mouse: str,
+) -> Path:
+    """Collect per-session residual-model summaries for one mouse.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved sessions in the desired mouse-level collection set. Each session
+        must have a `{sess_id_full}_block_residual_model_summary.csv` in its
+        processed-data directory.
+    output_path : pathlib.Path
+        Mouse-level cross-session output directory.
+    mouse : str
+        Mouse identifier used in the output file name and metadata columns.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved `{mouse}_block_residual_model_summary.csv` path.
+    """
+    output_path = Path(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+    rows = []
+    sorted_sessions = sorted(saved_sessions, key=lambda saved: str(saved.session.date))
+
+    for training_day, saved_session in enumerate(sorted_sessions, start=1):
+        session = saved_session.session
+        session_df = load_session_block_residual_model_summary(session)
+        session_df = session_df.copy()
+        session_df["mouse"] = mouse
+        session_df["date"] = str(session.date)
+        session_df["session_id"] = str(session.sess_id_full)
+        session_df["training_day"] = training_day
+        rows.append(session_df)
+
+    if rows:
+        mouse_summary_df = pd.concat(rows, axis=0, ignore_index=True)
+        mouse_summary_df.sort_values(
+            by=["date", "session_id", "model_type", "lambda_choice"],
+            inplace=True,
+        )
+        mouse_summary_df.reset_index(drop=True, inplace=True)
+    else:
+        mouse_summary_df = pd.DataFrame(
+            columns=[*BLOCK_RESIDUAL_MODEL_SUMMARY_COLUMNS, "training_day"]
+        )
+
+    output_csv_path = output_path / f"{mouse}_block_residual_model_summary.csv"
+    mouse_summary_df.to_csv(output_csv_path, index=False, na_rep="None")
+    return output_csv_path
+
+
+def block_residual_model_summary_path(data_root: Path, mouse: str) -> Path:
+    """Build the mouse-level residual-model summary path.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory containing one folder per mouse.
+    mouse : str
+        Mouse identifier.
+
+    Returns
+    -------
+    pathlib.Path
+        `{data_root}/{mouse}/cross_session_analysis/{mouse}_block_residual_model_summary.csv`.
+    """
+    return (
+        Path(data_root)
+        / mouse
+        / "cross_session_analysis"
+        / f"{mouse}_block_residual_model_summary.csv"
+    )
+
+
+def load_cross_mouse_block_residual_model_summaries(
+    data_root: Path,
+    mice: Sequence[str],
+) -> pd.DataFrame:
+    """Load mouse-level residual-model summaries across mice.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory containing one folder per mouse.
+    mice : Sequence[str]
+        Mouse identifiers to include in the combined table.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Combined residual-model summary rows with `source_mouse` and
+        `mouse_order` columns added.
+    """
+    frames = []
+    for mouse_order, mouse in enumerate(mice):
+        summary_path = block_residual_model_summary_path(data_root, mouse)
+        if not summary_path.exists():
+            raise FileNotFoundError(
+                f"{mouse} is missing block residual model summary: {summary_path}"
+            )
+
+        summary_df = pd.read_csv(summary_path, sep=",", na_filter=False)
+        _require_columns(
+            summary_df,
+            [*BLOCK_RESIDUAL_MODEL_SUMMARY_COLUMNS, "training_day"],
+            context=f"{mouse} block residual model summary",
+        )
+        summary_df = summary_df.copy()
+        summary_df["source_mouse"] = mouse
+        summary_df["mouse_order"] = mouse_order
+        frames.append(summary_df)
+
+    if not frames:
+        return pd.DataFrame(
+            columns=[
+                *BLOCK_RESIDUAL_MODEL_SUMMARY_COLUMNS,
+                "training_day",
+                "source_mouse",
+                "mouse_order",
+            ]
+        )
+    return pd.concat(frames, axis=0, ignore_index=True)
+
+
+def collect_cross_mouse_block_residual_model_summaries(
+    data_root: Path,
+    output_path: Path,
+    mice: Sequence[str],
+    output_filename: str = "cross_mouse_block_residual_model_summary.csv",
+) -> Path:
+    """Save a combined cross-mouse residual-model summary CSV.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory containing one folder per mouse.
+    output_path : pathlib.Path
+        Directory where the combined CSV is saved.
+    mice : Sequence[str]
+        Mouse identifiers to include.
+    output_filename : str, default="cross_mouse_block_residual_model_summary.csv"
+        Name of the combined output CSV.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to the saved cross-mouse summary CSV.
+    """
+    output_path = Path(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+    cross_mouse_df = load_cross_mouse_block_residual_model_summaries(
+        data_root=data_root,
+        mice=mice,
+    )
+    output_csv_path = output_path / output_filename
+    cross_mouse_df.to_csv(output_csv_path, index=False, na_rep="None")
+    return output_csv_path
 
 
 def load_cross_mouse_learning_curve_data(
@@ -2963,6 +3574,56 @@ def run_multisession_analysis(
     return block_model_selection, trial_model_selection, modeled_block_df, modeled_trial_df
 
 
+def run_or_collect_multisession_analysis(
+    concatenated: ConcatenatedSessionAnalysis,
+    session: Session,
+    collection_only: bool = False,
+    **modeling_kwargs,
+) -> tuple | None:
+    """Either save refreshed multisession CSVs or run full multisession modeling.
+
+    Parameters
+    ----------
+    concatenated : ConcatenatedSessionAnalysis
+        Concatenated block and trial tables. Block table shape is
+        `(n_blocks, n_block_columns)` and trial table shape is
+        `(n_trials, n_trial_columns)`. Existing within-session history columns
+        are preserved.
+    session : Session
+        Synthetic multisession metadata with `processed_data_path`,
+        `figure_path`, and `sess_id_full` attributes.
+    collection_only : bool, default=False
+        If True, overwrite `{sess_id_full}_block_performance.csv` and
+        `{sess_id_full}_augmented_trials.csv` from `concatenated` and skip all
+        HMM work. If False, forward to `run_multisession_analysis`.
+    **modeling_kwargs
+        Keyword arguments forwarded unchanged to `run_multisession_analysis`
+        when `collection_only` is False.
+
+    Returns
+    -------
+    tuple or None
+        Returns None in collection-only mode. Otherwise returns
+        `(block_model_selection, trial_model_selection, modeled_block_df,
+        modeled_trial_df)` from `run_multisession_analysis`.
+    """
+    if collection_only:
+        save_concatenated_multisession_inputs(concatenated, session)
+        print(
+            "WARNING: collection-only mode overwrote multisession block/trial CSVs "
+            f"for {session.sess_id_full} without rerunning HMM. Existing HMM "
+            "pickle files and plots may no longer match these CSVs. Disable "
+            "skip_block_hmm_if_existing or rerun HMM before interpreting HMM outputs."
+        )
+        return None
+
+    return run_multisession_analysis(
+        concatenated=concatenated,
+        session=session,
+        **modeling_kwargs,
+    )
+
+
 def plot_session(event_df: pd.DataFrame, session_info: dict, figure_path: Path, sess_id_full: str):
     if not figure_path.exists():
         figure_path.mkdir()
@@ -3024,8 +3685,16 @@ def main_simulation():
     #                                              prior_sigma=1)
 
 
-def main_multisession():
-    """Analyze selected saved sessions as one continuous multisession table."""
+def main_multisession(multisession_collection_only: bool = True):
+    """Analyze selected saved sessions as one continuous multisession table.
+
+    Parameters
+    ----------
+    multisession_collection_only : bool, default=True
+        If True, overwrite the saved multisession block/trial CSVs from the
+        current single-session CSVs and return before plotting or HMM-related
+        work. If False, run the full multisession plotting and modeling flow.
+    """
     mouse = 'CT024'
     session_data_root = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}')
     multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
@@ -3089,6 +3758,36 @@ def main_multisession():
         "time_to_choice"
     )
 
+    sessions = [
+        find_saved_session_by_date(
+            mouse=mouse,
+            date=date,
+            session_data_root=session_data_root,
+            multi_session_save_path=multi_session_save_path,
+        )
+        for date in dates
+    ]
+    saved_sessions = [load_saved_session_analysis(session) for session in sessions]
+    if all(hasattr(saved_session.session, "processed_data_path") for saved_session in saved_sessions):
+        collect_mouse_block_residual_model_summaries(
+            saved_sessions=saved_sessions,
+            output_path=multi_session_save_path,
+            mouse=mouse,
+        )
+    concatenated = concatenate_saved_sessions(saved_sessions)
+    multisession = build_multisession_session(
+        mouse=mouse,
+        multi_session_save_path=multi_session_save_path,
+        sess_id_full=f'{mouse}_multisession',
+    )
+    if multisession_collection_only:
+        run_or_collect_multisession_analysis(
+            concatenated=concatenated,
+            session=multisession,
+            collection_only=True,
+        )
+        return
+
     learning_coefficients, learning_block_counts, learning_dates = prepare_learning_curve_data(
         mouse=mouse,
         multi_session_save_path=multi_session_save_path,
@@ -3116,15 +3815,6 @@ def main_multisession():
         figure_id=mouse,
     )
 
-    sessions = [
-        find_saved_session_by_date(
-            mouse=mouse,
-            date=date,
-            session_data_root=session_data_root,
-            multi_session_save_path=multi_session_save_path,
-        )
-        for date in dates
-    ]
     block_hmm_state_features = bssm.collect_block_hmm_state_features_for_sessions(
         sessions=sessions,
         output_path=multi_session_save_path,
@@ -3140,7 +3830,6 @@ def main_multisession():
         size_column="state_block_count",
         marker_mode=block_hmm_state_marker_mode,
     )
-    saved_sessions = [load_saved_session_analysis(session) for session in sessions]
     agent_mouse_agreement_summary = prepare_agent_mouse_agreement_summary(saved_sessions)
     agent_mouse_agreement_block_points = prepare_agent_mouse_agreement_block_points(saved_sessions)
     agent_mouse_agreement_summary.to_csv(
@@ -3278,15 +3967,10 @@ def main_multisession():
             y_label=family_spec["ylabel"],
             ylim=family_spec.get("ylim"),
         )
-    concatenated = concatenate_saved_sessions(saved_sessions)
-    multisession = build_multisession_session(
-        mouse=mouse,
-        multi_session_save_path=multi_session_save_path,
-        sess_id_full=f'{mouse}_multisession',
-    )
-    _block_selection, _trial_selection, modeled_block_df, _modeled_trial_df = run_multisession_analysis(
+    multisession_result = run_or_collect_multisession_analysis(
         concatenated=concatenated,
         session=multisession,
+        collection_only=multisession_collection_only,
         block_num_states=3,
         trial_num_states=3,
         prior_alpha=1,
@@ -3305,6 +3989,9 @@ def main_multisession():
         trial_state_plot_line_width=trial_state_plot_line_width,
         trial_state_plot_figsize=trial_state_plot_figsize,
     )
+    if multisession_result is None:
+        return
+    _block_selection, _trial_selection, modeled_block_df, _modeled_trial_df = multisession_result
     performance_plots.plot_multisession_summary_grid(
         block_performance=modeled_block_df,
         side_trials_to_correct_summary=side_trials_to_correct_summary,
@@ -3469,6 +4156,8 @@ def run_single_session_workflow(
         augmented_trial_df,
         min_explore_run_length_to_count=config.min_explore_run_length_to_count,
     )
+    block_performance = session_analysis.add_session_block_collection_variables(block_performance)
+    block_performance = _add_single_session_metadata_columns(block_performance, sess)
     block_performance.to_csv(
         sess.processed_data_path / f"{sess.sess_id_full}_block_performance.csv",
         index=False,
@@ -3713,16 +4402,48 @@ def main_cross_mouse_metrics(
         metric_specs=CROSS_MOUSE_SESSION_METRIC_SPECS,
         figure_id="cross_mouse",
     )
+    collect_cross_mouse_multisession_block_performance(
+        data_root=data_root,
+        output_path=output_path,
+        mice=selected_mice,
+    )
+    collect_cross_mouse_block_residual_model_summaries(
+        data_root=data_root,
+        output_path=output_path,
+        mice=selected_mice,
+    )
 
 
-def main_cross_mouse_learning_curve():
-    """Backward-compatible wrapper for the unified cross-mouse metric entry point."""
-    main_cross_mouse_metrics()
+def main_cross_mouse_multisession_block_performance(
+    data_root: Path = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData"),
+    mice: Sequence[str] | None = None,
+) -> Path:
+    """Collect saved multisession block-performance CSVs across mice.
 
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Directory containing one folder per mouse and the
+        `cross_mouse_analysis` output directory.
+    mice : Sequence[str] or None, default=None
+        Explicit mouse identifiers to include. None uses the current hardcoded
+        cross-mouse cohort.
 
-def main_cross_mouse_session_quality_metrics():
-    """Backward-compatible wrapper for the unified cross-mouse metric entry point."""
-    main_cross_mouse_metrics()
+    Returns
+    -------
+    pathlib.Path
+        Path to the saved combined block-performance CSV.
+    """
+    if mice is None:
+        mice = [
+            "CT016", "CT017", "CT019", "CT020", "CT021", "CT022", "CT023", "CT024", "CT025",
+        ]
+    output_path = Path(data_root) / "cross_mouse_analysis"
+    return collect_cross_mouse_multisession_block_performance(
+        data_root=data_root,
+        output_path=output_path,
+        mice=list(mice),
+    )
 
 
 # def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
@@ -3743,6 +4464,6 @@ def main_cross_mouse_session_quality_metrics():
 if __name__ == '__main__':
     # main_mouse()
     main_mouse_batch()
-    main_multisession()
+    main_multisession(multisession_collection_only=True)
     # main_simulation()
     # main_cross_mouse_metrics()

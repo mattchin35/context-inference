@@ -1739,7 +1739,13 @@ def test_save_analysis_replaces_existing_multisession_date(tmp_path):
 
     multisession_df = session_analysis.save_analysis(
         session_performance=session_performance,
-        block_performance=pd.DataFrame({"block_ix": [0, 1, 2]}),
+        block_performance=pd.DataFrame(
+            {
+                "block_ix": [0, 1, 2],
+                "block_type": ["right_uncued", "left_uncued", "right_uncued"],
+                "prev_n_rewarded": [0, 1, 2],
+            }
+        ),
         augmented_trial_df=pd.DataFrame({"cur_trial": [0, 1, 2]}),
         sess_id=sess_id,
         session_save_path=session_save_path,
@@ -1755,6 +1761,51 @@ def test_save_analysis_replaces_existing_multisession_date(tmp_path):
         multisession_df["date"] == "2026-03-25",
         "prev_consecutive_rewards_slope",
     ].tolist() == [0.25]
+
+
+def test_save_analysis_adds_mouse_session_and_date_to_block_csv(tmp_path):
+    """Saved block-performance rows should carry session-level metadata."""
+    session_save_path = tmp_path / "processed"
+    session_save_path.mkdir()
+    sess_id = "CT014_2025-12-05_165240"
+
+    session_analysis.save_analysis(
+        session_performance=pd.DataFrame({"date": ["2025-12-05"], "n_blocks": [2]}),
+        block_performance=pd.DataFrame(
+            {
+                "block_ix": [0, 1],
+                "block_type": ["right_uncued", "left_uncued"],
+                "prev_n_rewarded": [0, 4],
+            }
+        ),
+        augmented_trial_df=pd.DataFrame({"cur_trial": [0, 1]}),
+        sess_id=sess_id,
+        session_save_path=session_save_path,
+        multisession_save_path=None,
+    )
+
+    saved_block_performance = pd.read_csv(
+        session_save_path / f"{sess_id}_block_performance.csv",
+        na_filter=False,
+    )
+    assert saved_block_performance["mouse"].tolist() == ["CT014", "CT014"]
+    assert saved_block_performance["session_id"].tolist() == [sess_id, sess_id]
+    assert saved_block_performance["date"].tolist() == ["2025-12-05", "2025-12-05"]
+
+
+def test_add_session_block_collection_variables_centers_rewards_and_codes_side():
+    """Session block collection columns should use all numeric previous-reward rows."""
+    block_performance = pd.DataFrame(
+        {
+            "block_type": ["right_uncued", "left_cued", "dark period", "unknown"],
+            "prev_n_rewarded": [0, "4", "None", 2],
+        }
+    )
+
+    output_df = session_analysis.add_session_block_collection_variables(block_performance)
+
+    assert output_df["prev_rewards_session_centered"].tolist() == [-2.0, 2.0, "None", 0.0]
+    assert output_df["block_side_code"].tolist() == [-0.5, 0.5, "None", "None"]
 
 
 def test_assert_saved_csv_accepts_nonempty_file_and_rejects_missing_or_empty(tmp_path):

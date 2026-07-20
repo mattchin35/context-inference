@@ -206,10 +206,10 @@ clean_block_dataframe <- function(df, drop_missing_tts = FALSE) {
   factor_columns <- c(
     "block_type",
     "session_ID",
-    "rl_status",
-    "inferred_strategy",
-    "declared_strategy",
-    "hardcoded_strategy"
+    "rl_status"
+    #"inferred_strategy",
+    #"declared_strategy",
+    #"hardcoded_strategy"
   )
   sentinel_columns <- unique(c(numeric_columns, logical_columns, factor_columns))
   
