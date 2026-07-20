@@ -4,6 +4,7 @@ import numpy as np
 import re
 import warnings
 from collections import defaultdict
+from src.behavior_analysis import block_residual_models
 from src.behavior_analysis import general_behavior_assessment
 from src.behavior_analysis import ideal_observer
 from src.behavior_analysis import switch_persistence
@@ -481,6 +482,105 @@ def safe_signed_bias(numerator: int, denominator: int) -> float | str:
     if denominator == 0:
         return "None"
     return float(numerator / denominator)
+
+
+def add_prev_rewards_centered(
+    block_performance: pd.DataFrame,
+    output_column: str,
+) -> pd.DataFrame:
+    """Add a centered previous-reward count column.
+
+    Parameters
+    ----------
+    block_performance : pandas.DataFrame
+        Block table with shape `(n_blocks, n_columns)`. Must contain
+        `prev_n_rewarded`, measured in rewarded trials in the previous block.
+    output_column : str
+        Name of the output centered column. Values are in rewarded trials
+        relative to the mean of all numeric `prev_n_rewarded` rows.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of `block_performance` with `output_column` added. Numeric rows
+        contain floats; nonnumeric rows contain the string sentinel `"None"`.
+
+    Raises
+    ------
+    ValueError
+        If `prev_n_rewarded` is absent.
+    """
+    if "prev_n_rewarded" not in block_performance.columns:
+        raise ValueError("block_performance is missing required column: prev_n_rewarded")
+
+    output_df = block_performance.copy()
+    prev_rewards = pd.to_numeric(output_df["prev_n_rewarded"], errors="coerce")
+    numeric_rows = prev_rewards.notna()
+    centered_values = np.full(output_df.shape[0], "None", dtype=object)
+    if numeric_rows.any():
+        centered_values[numeric_rows.to_numpy()] = (
+            prev_rewards.loc[numeric_rows] - prev_rewards.loc[numeric_rows].mean()
+        ).to_numpy(dtype=float)
+    output_df[output_column] = centered_values
+    return output_df
+
+
+def add_block_side_code(block_performance: pd.DataFrame) -> pd.DataFrame:
+    """Add a signed side-code column from block labels.
+
+    Parameters
+    ----------
+    block_performance : pandas.DataFrame
+        Block table with shape `(n_blocks, n_columns)`. Must contain
+        `block_type`, with left blocks beginning with `"left_"` and right
+        blocks beginning with `"right_"`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of `block_performance` with `block_side_code` added. Values are
+        `-0.5` for right blocks and `+0.5` for left blocks, matching the task
+        convention `0=right`, `1=left`. Other block types receive `"None"`.
+
+    Raises
+    ------
+    ValueError
+        If `block_type` is absent.
+    """
+    if "block_type" not in block_performance.columns:
+        raise ValueError("block_performance is missing required column: block_type")
+
+    output_df = block_performance.copy()
+    side_codes = np.full(output_df.shape[0], "None", dtype=object)
+    block_types = output_df["block_type"].astype(str)
+    side_codes[block_types.str.startswith("right_").to_numpy()] = -0.5
+    side_codes[block_types.str.startswith("left_").to_numpy()] = 0.5
+    output_df["block_side_code"] = side_codes
+    return output_df
+
+
+def add_session_block_collection_variables(block_performance: pd.DataFrame) -> pd.DataFrame:
+    """Add block variables needed for downstream multisession collection.
+
+    Parameters
+    ----------
+    block_performance : pandas.DataFrame
+        Single-session block table with shape `(n_blocks, n_columns)`. Required
+        columns are `prev_n_rewarded` and `block_type`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of `block_performance` with `prev_rewards_session_centered` and
+        `block_side_code`. Centering uses all numeric `prev_n_rewarded` rows in
+        the session.
+    """
+    output_df = add_prev_rewards_centered(
+        block_performance,
+        output_column="prev_rewards_session_centered",
+    )
+    output_df = add_block_side_code(output_df)
+    return output_df
 
 
 def compute_session_side_bias_metrics(
@@ -2475,6 +2575,52 @@ def assert_saved_csv(path: Path) -> None:
         raise OSError(f"Expected saved CSV is empty: {path}")
 
 
+def add_session_metadata_columns(
+    table: pd.DataFrame,
+    mouse: str,
+    session_id: str,
+    date: str,
+) -> pd.DataFrame:
+    """Attach session identifiers to a saved analysis table.
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        Analysis table with shape `(n_rows, n_columns)`. Rows may be block,
+        trial, or session summaries.
+    mouse : str
+        Mouse identifier parsed from the session id.
+    session_id : str
+        Full behavior session identifier, usually
+        `{mouse}_{YYYY-MM-DD}_{HHMMSS}`.
+    date : str
+        Session date formatted as `YYYY-MM-DD`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy of `table` with `mouse`, `session_id`, and `date` columns. Existing
+        columns with these names are overwritten with the supplied metadata.
+    """
+    table_with_metadata = table.copy()
+    metadata_values = {
+        "mouse": mouse,
+        "session_id": session_id,
+        "date": date,
+    }
+    for column_name, column_value in metadata_values.items():
+        if column_name in table_with_metadata.columns:
+            table_with_metadata[column_name] = column_value
+        else:
+            insert_at = min(len(metadata_values), table_with_metadata.shape[1])
+            table_with_metadata.insert(insert_at, column_name, column_value)
+    leading_columns = [column for column in metadata_values if column in table_with_metadata.columns]
+    remaining_columns = [
+        column for column in table_with_metadata.columns if column not in leading_columns
+    ]
+    return table_with_metadata.loc[:, leading_columns + remaining_columns]
+
+
 def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataFrame, augmented_trial_df: pd.DataFrame,
                   sess_id: str, session_save_path: Path, multisession_save_path: Path=None) -> pd.DataFrame:
     """Save within-session outputs and optionally update multisession summaries.
@@ -2511,10 +2657,38 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
     augmented_trial_path = session_save_path / (sess_id + '_augmented_trials.csv')
 
     augmented_trial_df = normalize_experimenter_reward_column(augmented_trial_df)
+    block_performance = add_session_block_collection_variables(block_performance)
+    block_performance, session_performance, residual_model_summary = (
+        block_residual_models.add_block_residual_model_outputs(
+            block_performance=block_performance,
+            session_performance=session_performance,
+            session_id=sess_id,
+            mouse=mouse,
+            date=date,
+        )
+    )
+    session_performance = add_session_metadata_columns(
+        session_performance,
+        mouse=mouse,
+        session_id=sess_id,
+        date=date,
+    )
+    block_performance = add_session_metadata_columns(
+        block_performance,
+        mouse=mouse,
+        session_id=sess_id,
+        date=date,
+    )
     block_performance.to_csv(block_performance_path, index=False, na_rep='None')
     augmented_trial_df.to_csv(augmented_trial_path, index=False, na_rep='None')
+    residual_model_summary_path = block_residual_models.save_block_residual_model_summary(
+        residual_model_summary,
+        session_save_path=session_save_path,
+        sess_id=sess_id,
+    )
     assert_saved_csv(block_performance_path)
     assert_saved_csv(augmented_trial_path)
+    assert_saved_csv(residual_model_summary_path)
 
     if multisession_save_path is None:
         return session_performance

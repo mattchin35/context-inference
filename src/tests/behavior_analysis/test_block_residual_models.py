@@ -1,8 +1,19 @@
 from pathlib import Path
+from types import ModuleType
+import sys
 
 import numpy as np
 import pandas as pd
 import pytest
+
+formulaic_stub = ModuleType("formulaic")
+formulaic_stub.model_matrix = lambda *_args, **_kwargs: None
+sys.modules.setdefault("formulaic", formulaic_stub)
+statsmodels_stub = ModuleType("statsmodels")
+statsmodels_api_stub = ModuleType("statsmodels.api")
+statsmodels_stub.api = statsmodels_api_stub
+sys.modules.setdefault("statsmodels", statsmodels_stub)
+sys.modules.setdefault("statsmodels.api", statsmodels_api_stub)
 
 from src.behavior_analysis import block_residual_models
 from src.behavior_analysis import session_analysis
@@ -109,6 +120,7 @@ def test_fit_block_residual_models_adds_residual_columns_and_summary_rows():
 def test_fit_block_residual_models_preserves_missing_rows_as_none():
     """Rows excluded from fitting should keep a clear missing residual sentinel."""
     block_df = make_block_model_df()
+    block_df["trials_to_correct"] = block_df["trials_to_correct"].astype(object)
     block_df.loc[3, "trials_to_correct"] = "None"
     session_performance = pd.DataFrame({"existing_metric": [1]})
 
