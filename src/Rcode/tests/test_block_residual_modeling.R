@@ -60,19 +60,44 @@ stopifnot(all(c(
   "lasso_lambda_min_residual_TTS",
   "lasso_lambda_1se_residual_TTS",
   "elastic_net_lambda_min_residual_TTS",
-  "elastic_net_lambda_1se_residual_TTS"
+  "elastic_net_lambda_1se_residual_TTS",
+  "lasso_rewards_x_side_lambda_min_residual_TTS",
+  "lasso_rewards_x_side_lambda_1se_residual_TTS",
+  "elastic_net_rewards_x_side_lambda_min_residual_TTS",
+  "elastic_net_rewards_x_side_lambda_1se_residual_TTS",
+  "lasso_rewards_plus_side_lambda_min_residual_TTS",
+  "lasso_rewards_plus_side_lambda_1se_residual_TTS",
+  "elastic_net_rewards_plus_side_lambda_min_residual_TTS",
+  "elastic_net_rewards_plus_side_lambda_1se_residual_TTS"
 ) %in% names(fit_result$block_df)))
-stopifnot(nrow(fit_result$summary_df) == 4)
+stopifnot(nrow(fit_result$summary_df) == 8)
 stopifnot(all(c(
+  "model_formula",
   "coefficient_intercept",
   "coefficient_prev_n_rewarded",
   "coefficient_block_side_left",
-  "coefficient_prev_n_rewarded_block_side_left"
+  "coefficient_prev_n_rewarded_block_side_left",
+  "right_intercept",
+  "left_intercept",
+  "right_reward_slope",
+  "left_reward_slope",
+  "side_intercept_delta_left_minus_right",
+  "side_reward_slope_delta_left_minus_right"
 ) %in% names(fit_result$summary_df)))
+stopifnot(identical(
+  sort(unique(fit_result$summary_df$model_formula)),
+  c("rewards_plus_side", "rewards_x_side")
+))
+additive_rows <- fit_result$summary_df[fit_result$summary_df$model_formula == "rewards_plus_side", ]
+stopifnot(all(additive_rows$coefficient_prev_n_rewarded_block_side_left == 0))
+stopifnot(isTRUE(all.equal(
+  as.numeric(additive_rows$right_reward_slope),
+  as.numeric(additive_rows$left_reward_slope)
+)))
 
 small_result <- add_block_residual_model_outputs(block_df[1:4, ], seed = 123, min_valid_blocks = 5)
 stopifnot(all(small_result$block_df$lasso_lambda_min_residual_TTS == "None"))
 stopifnot(all(small_result$summary_df$coefficient_intercept == "None"))
-stopifnot(identical(small_result$summary_df$n_valid_blocks, c(4L, 4L, 4L, 4L)))
+stopifnot(identical(small_result$summary_df$n_valid_blocks, rep(4L, 8)))
 
 cat("All block residual modeling tests passed.\n")

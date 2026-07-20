@@ -81,7 +81,7 @@ def test_residual_spread_metrics_include_raw_scaled_mad_iqr_and_rmse():
 
 
 def test_fit_block_residual_models_adds_residual_columns_and_summary_rows():
-    """Lasso and elastic-net fits should add one residual column per lambda choice."""
+    """Fits should save interaction/additive residuals and interpretable side slopes."""
     block_df = make_block_model_df()
     session_performance = pd.DataFrame({"existing_metric": [1]})
 
@@ -96,23 +96,58 @@ def test_fit_block_residual_models_adds_residual_columns_and_summary_rows():
         "lasso_lambda_1se_residual_TTS",
         "elastic_net_lambda_min_residual_TTS",
         "elastic_net_lambda_1se_residual_TTS",
+        "lasso_rewards_x_side_lambda_min_residual_TTS",
+        "lasso_rewards_x_side_lambda_1se_residual_TTS",
+        "elastic_net_rewards_x_side_lambda_min_residual_TTS",
+        "elastic_net_rewards_x_side_lambda_1se_residual_TTS",
+        "lasso_rewards_plus_side_lambda_min_residual_TTS",
+        "lasso_rewards_plus_side_lambda_1se_residual_TTS",
+        "elastic_net_rewards_plus_side_lambda_min_residual_TTS",
+        "elastic_net_rewards_plus_side_lambda_1se_residual_TTS",
     }
     assert expected_residual_columns.issubset(updated_blocks.columns)
     for column in expected_residual_columns:
         assert pd.to_numeric(updated_blocks[column], errors="coerce").notna().all()
 
+    assert set(summary_df["model_formula"]) == {"rewards_x_side", "rewards_plus_side"}
     assert set(summary_df["model_type"]) == {"lasso", "elastic_net"}
     assert set(summary_df["lambda_choice"]) == {"lambda.min", "lambda.1se"}
-    assert summary_df.shape[0] == 4
+    assert summary_df.shape[0] == 8
     for coefficient_column in [
         "coefficient_intercept",
         "coefficient_prev_n_rewarded",
         "coefficient_block_side_left",
         "coefficient_prev_n_rewarded_block_side_left",
+        "right_intercept",
+        "left_intercept",
+        "right_reward_slope",
+        "left_reward_slope",
+        "side_intercept_delta_left_minus_right",
+        "side_reward_slope_delta_left_minus_right",
     ]:
         assert coefficient_column in summary_df.columns
 
+    additive_rows = summary_df[summary_df["model_formula"] == "rewards_plus_side"]
+    assert (additive_rows["coefficient_prev_n_rewarded_block_side_left"] == 0.0).all()
+    np.testing.assert_allclose(
+        additive_rows["right_reward_slope"].astype(float),
+        additive_rows["left_reward_slope"].astype(float),
+    )
+
+    interaction_rows = summary_df[summary_df["model_formula"] == "rewards_x_side"]
+    np.testing.assert_allclose(
+        interaction_rows["left_reward_slope"].astype(float),
+        interaction_rows["coefficient_prev_n_rewarded"].astype(float)
+        + interaction_rows["coefficient_prev_n_rewarded_block_side_left"].astype(float),
+    )
+
     for metric_prefix in ["lasso_lambda_min", "elastic_net_lambda_1se"]:
+        assert f"{metric_prefix}_residual_rmse" in updated_session.columns
+        assert pd.to_numeric(updated_session.loc[0, f"{metric_prefix}_residual_rmse"], errors="coerce") >= 0
+    for metric_prefix in [
+        "lasso_rewards_plus_side_lambda_min",
+        "elastic_net_rewards_x_side_lambda_1se",
+    ]:
         assert f"{metric_prefix}_residual_rmse" in updated_session.columns
         assert pd.to_numeric(updated_session.loc[0, f"{metric_prefix}_residual_rmse"], errors="coerce") >= 0
 
@@ -149,30 +184,40 @@ def test_fit_block_residual_models_skips_small_sessions():
     )
 
     assert (updated_blocks["lasso_lambda_min_residual_TTS"] == "None").all()
-    assert summary_df.shape[0] == 4
-    assert summary_df["n_valid_blocks"].tolist() == [4, 4, 4, 4]
+    assert summary_df.shape[0] == 8
+    assert summary_df["n_valid_blocks"].tolist() == [4] * 8
+    assert set(summary_df["model_formula"]) == {"rewards_x_side", "rewards_plus_side"}
     assert (summary_df["coefficient_intercept"] == "None").all()
     assert updated_session.loc[0, "lasso_lambda_min_residual_rmse"] == "None"
+    assert updated_session.loc[0, "lasso_rewards_plus_side_lambda_min_residual_rmse"] == "None"
 
 
-def test_save_block_residual_model_summary_writes_single_summary_csv(tmp_path: Path):
-    """The per-session residual-model summary should be saved as one CSV."""
+def test_save_block_residual_model_summaries_writes_combined_and_formula_csvs(tmp_path: Path):
+    """Per-session residual summaries should be saved as combined and formula-specific CSVs."""
     summary_df = pd.DataFrame(
         {
-            "session_id": ["CT024_2026-06-09_143852"],
-            "model_type": ["lasso"],
-            "lambda_choice": ["lambda.min"],
+            "session_id": ["CT024_2026-06-09_143852", "CT024_2026-06-09_143852"],
+            "model_formula": ["rewards_x_side", "rewards_plus_side"],
+            "model_type": ["lasso", "lasso"],
+            "lambda_choice": ["lambda.min", "lambda.min"],
         }
     )
 
-    saved_path = block_residual_models.save_block_residual_model_summary(
+    saved_paths = block_residual_models.save_block_residual_model_summaries(
         summary_df,
         session_save_path=tmp_path,
         sess_id="CT024_2026-06-09_143852",
     )
 
-    assert saved_path == tmp_path / "CT024_2026-06-09_143852_block_residual_model_summary.csv"
-    assert saved_path.exists()
+    assert saved_paths["combined"] == tmp_path / "CT024_2026-06-09_143852_block_residual_model_summary.csv"
+    assert saved_paths["rewards_x_side"] == (
+        tmp_path / "CT024_2026-06-09_143852_block_residual_model_summary_rewards_x_side.csv"
+    )
+    assert saved_paths["rewards_plus_side"] == (
+        tmp_path / "CT024_2026-06-09_143852_block_residual_model_summary_rewards_plus_side.csv"
+    )
+    for saved_path in saved_paths.values():
+        assert saved_path.exists()
 
 
 def test_save_analysis_adds_block_residual_outputs_and_summary_csv(tmp_path: Path):
@@ -200,13 +245,24 @@ def test_save_analysis_adds_block_residual_outputs_and_summary_csv(tmp_path: Pat
 
     saved_block = pd.read_csv(tmp_path / "CT024_2026-06-09_143852_block_performance.csv", na_filter=False)
     saved_summary = pd.read_csv(
-        tmp_path / "CT024_2026-06-09_143852_block_residual_model_summary.csv",
+        tmp_path / "CT024_2026-06-09_143852_block_residual_model_summary_rewards_x_side.csv",
+        na_filter=False,
+    )
+    saved_additive_summary = pd.read_csv(
+        tmp_path / "CT024_2026-06-09_143852_block_residual_model_summary_rewards_plus_side.csv",
         na_filter=False,
     )
     saved_overall = pd.read_csv(multisession_path / "CT024_overall_performance.csv", na_filter=False)
 
     assert "lasso_lambda_min_residual_TTS" in saved_block.columns
+    assert "lasso_rewards_plus_side_lambda_min_residual_TTS" in saved_block.columns
     assert "elastic_net_lambda_1se_residual_rmse" in multisession_df.columns
+    assert "elastic_net_rewards_plus_side_lambda_1se_residual_rmse" in multisession_df.columns
     assert "elastic_net_lambda_1se_residual_rmse" in saved_overall.columns
+    assert "elastic_net_rewards_plus_side_lambda_1se_residual_rmse" in saved_overall.columns
     assert saved_summary.shape[0] == 4
+    assert saved_additive_summary.shape[0] == 4
+    assert (saved_summary["model_formula"] == "rewards_x_side").all()
+    assert (saved_additive_summary["model_formula"] == "rewards_plus_side").all()
     assert "coefficient_intercept" in saved_summary.columns
+    assert "left_reward_slope" in saved_summary.columns
