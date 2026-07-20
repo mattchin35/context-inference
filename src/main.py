@@ -1638,6 +1638,7 @@ BLOCK_RESIDUAL_MODEL_SUMMARY_COLUMNS = (
     "session_id",
     "mouse",
     "date",
+    "model_formula",
     "model_type",
     "lambda_choice",
     "lambda_value",
@@ -1647,34 +1648,56 @@ BLOCK_RESIDUAL_MODEL_SUMMARY_COLUMNS = (
     "coefficient_prev_n_rewarded",
     "coefficient_block_side_left",
     "coefficient_prev_n_rewarded_block_side_left",
+    "right_intercept",
+    "left_intercept",
+    "right_reward_slope",
+    "left_reward_slope",
+    "side_intercept_delta_left_minus_right",
+    "side_reward_slope_delta_left_minus_right",
     "residual_mad_raw",
     "residual_mad_scaled",
     "residual_iqr",
     "residual_rmse",
 )
+BLOCK_RESIDUAL_MODEL_FORMULAS = ("rewards_x_side", "rewards_plus_side")
 
 
-def block_residual_model_summary_path_for_session(session: Session) -> Path:
+def _block_residual_model_summary_filename(owner_id: str, model_formula: str) -> str:
+    """Build a formula-specific residual-model summary filename."""
+    if model_formula not in BLOCK_RESIDUAL_MODEL_FORMULAS:
+        raise ValueError(f"Unknown block residual model formula: {model_formula}")
+    return f"{owner_id}_block_residual_model_summary_{model_formula}.csv"
+
+
+def block_residual_model_summary_path_for_session(
+    session: Session,
+    model_formula: str = "rewards_x_side",
+) -> Path:
     """Build the residual-model summary CSV path for one saved session.
 
     Parameters
     ----------
     session : Session
         Single-session metadata with `processed_data_path` and `sess_id_full`.
+    model_formula : str, default="rewards_x_side"
+        Formula-specific residual model summary to load.
 
     Returns
     -------
     pathlib.Path
-        Path to `{sess_id_full}_block_residual_model_summary.csv` inside the
-        session processed-data directory.
+        Path to the formula-specific summary inside the session processed-data
+        directory.
     """
     return (
         Path(session.processed_data_path)
-        / f"{session.sess_id_full}_block_residual_model_summary.csv"
+        / _block_residual_model_summary_filename(session.sess_id_full, model_formula)
     )
 
 
-def load_session_block_residual_model_summary(session: Session) -> pd.DataFrame:
+def load_session_block_residual_model_summary(
+    session: Session,
+    model_formula: str = "rewards_x_side",
+) -> pd.DataFrame:
     """Load and validate one per-session residual-model summary CSV.
 
     Parameters
@@ -1682,6 +1705,8 @@ def load_session_block_residual_model_summary(session: Session) -> pd.DataFrame:
     session : Session
         Single-session metadata with `processed_data_path`, `sess_id_full`,
         `mouse`, and `date` attributes.
+    model_formula : str, default="rewards_x_side"
+        Formula-specific residual model summary to load.
 
     Returns
     -------
@@ -1689,7 +1714,10 @@ def load_session_block_residual_model_summary(session: Session) -> pd.DataFrame:
         Residual-model summary table with one row per model/lambda pair. String
         missing-value sentinels are preserved.
     """
-    summary_path = block_residual_model_summary_path_for_session(session)
+    summary_path = block_residual_model_summary_path_for_session(
+        session,
+        model_formula=model_formula,
+    )
     if not summary_path.exists():
         raise FileNotFoundError(f"Missing block residual model summary: {summary_path}")
 
@@ -1706,6 +1734,7 @@ def collect_mouse_block_residual_model_summaries(
     saved_sessions: Sequence[SavedSessionAnalysis],
     output_path: Path,
     mouse: str,
+    model_formula: str = "rewards_x_side",
 ) -> Path:
     """Collect per-session residual-model summaries for one mouse.
 
@@ -1719,11 +1748,13 @@ def collect_mouse_block_residual_model_summaries(
         Mouse-level cross-session output directory.
     mouse : str
         Mouse identifier used in the output file name and metadata columns.
+    model_formula : str, default="rewards_x_side"
+        Formula-specific residual model summary to collect.
 
     Returns
     -------
     pathlib.Path
-        Saved `{mouse}_block_residual_model_summary.csv` path.
+        Saved formula-specific mouse-level summary path.
     """
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -1732,18 +1763,22 @@ def collect_mouse_block_residual_model_summaries(
 
     for training_day, saved_session in enumerate(sorted_sessions, start=1):
         session = saved_session.session
-        session_df = load_session_block_residual_model_summary(session)
+        session_df = load_session_block_residual_model_summary(
+            session,
+            model_formula=model_formula,
+        )
         session_df = session_df.copy()
         session_df["mouse"] = mouse
         session_df["date"] = str(session.date)
         session_df["session_id"] = str(session.sess_id_full)
+        session_df["model_formula"] = model_formula
         session_df["training_day"] = training_day
         rows.append(session_df)
 
     if rows:
         mouse_summary_df = pd.concat(rows, axis=0, ignore_index=True)
         mouse_summary_df.sort_values(
-            by=["date", "session_id", "model_type", "lambda_choice"],
+            by=["date", "session_id", "model_formula", "model_type", "lambda_choice"],
             inplace=True,
         )
         mouse_summary_df.reset_index(drop=True, inplace=True)
@@ -1752,12 +1787,19 @@ def collect_mouse_block_residual_model_summaries(
             columns=[*BLOCK_RESIDUAL_MODEL_SUMMARY_COLUMNS, "training_day"]
         )
 
-    output_csv_path = output_path / f"{mouse}_block_residual_model_summary.csv"
+    output_csv_path = output_path / _block_residual_model_summary_filename(
+        mouse,
+        model_formula,
+    )
     mouse_summary_df.to_csv(output_csv_path, index=False, na_rep="None")
     return output_csv_path
 
 
-def block_residual_model_summary_path(data_root: Path, mouse: str) -> Path:
+def block_residual_model_summary_path(
+    data_root: Path,
+    mouse: str,
+    model_formula: str = "rewards_x_side",
+) -> Path:
     """Build the mouse-level residual-model summary path.
 
     Parameters
@@ -1766,23 +1808,26 @@ def block_residual_model_summary_path(data_root: Path, mouse: str) -> Path:
         Directory containing one folder per mouse.
     mouse : str
         Mouse identifier.
+    model_formula : str, default="rewards_x_side"
+        Formula-specific residual model summary to load.
 
     Returns
     -------
     pathlib.Path
-        `{data_root}/{mouse}/cross_session_analysis/{mouse}_block_residual_model_summary.csv`.
+        Formula-specific mouse-level summary path.
     """
     return (
         Path(data_root)
         / mouse
         / "cross_session_analysis"
-        / f"{mouse}_block_residual_model_summary.csv"
+        / _block_residual_model_summary_filename(mouse, model_formula)
     )
 
 
 def load_cross_mouse_block_residual_model_summaries(
     data_root: Path,
     mice: Sequence[str],
+    model_formula: str = "rewards_x_side",
 ) -> pd.DataFrame:
     """Load mouse-level residual-model summaries across mice.
 
@@ -1792,6 +1837,8 @@ def load_cross_mouse_block_residual_model_summaries(
         Directory containing one folder per mouse.
     mice : Sequence[str]
         Mouse identifiers to include in the combined table.
+    model_formula : str, default="rewards_x_side"
+        Formula-specific residual model summary to load.
 
     Returns
     -------
@@ -1801,7 +1848,11 @@ def load_cross_mouse_block_residual_model_summaries(
     """
     frames = []
     for mouse_order, mouse in enumerate(mice):
-        summary_path = block_residual_model_summary_path(data_root, mouse)
+        summary_path = block_residual_model_summary_path(
+            data_root,
+            mouse,
+            model_formula=model_formula,
+        )
         if not summary_path.exists():
             raise FileNotFoundError(
                 f"{mouse} is missing block residual model summary: {summary_path}"
@@ -1814,6 +1865,7 @@ def load_cross_mouse_block_residual_model_summaries(
             context=f"{mouse} block residual model summary",
         )
         summary_df = summary_df.copy()
+        summary_df["model_formula"] = model_formula
         summary_df["source_mouse"] = mouse
         summary_df["mouse_order"] = mouse_order
         frames.append(summary_df)
@@ -1834,8 +1886,10 @@ def collect_cross_mouse_block_residual_model_summaries(
     data_root: Path,
     output_path: Path,
     mice: Sequence[str],
-    output_filename: str = "cross_mouse_block_residual_model_summary.csv",
-) -> Path:
+    model_formula: str = "rewards_x_side",
+    model_formulas: Sequence[str] | None = None,
+    output_filename: str | None = None,
+) -> Path | dict[str, Path]:
     """Save a combined cross-mouse residual-model summary CSV.
 
     Parameters
@@ -1846,20 +1900,41 @@ def collect_cross_mouse_block_residual_model_summaries(
         Directory where the combined CSV is saved.
     mice : Sequence[str]
         Mouse identifiers to include.
-    output_filename : str, default="cross_mouse_block_residual_model_summary.csv"
-        Name of the combined output CSV.
+    model_formula : str, default="rewards_x_side"
+        Formula-specific residual model summary to collect when
+        `model_formulas` is None.
+    model_formulas : Sequence[str] or None, default=None
+        If provided, collect one output CSV per formula and return a mapping.
+    output_filename : str or None, default=None
+        Optional name of the combined output CSV for single-formula collection.
+        None uses the formula-specific convention.
 
     Returns
     -------
-    pathlib.Path
-        Path to the saved cross-mouse summary CSV.
+    pathlib.Path or dict[str, pathlib.Path]
+        Path to the saved cross-mouse summary CSV for single-formula
+        collection, or a mapping from formula identifier to saved path.
     """
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
+    if model_formulas is not None:
+        return {
+            formula: collect_cross_mouse_block_residual_model_summaries(
+                data_root=data_root,
+                output_path=output_path,
+                mice=mice,
+                model_formula=formula,
+            )
+            for formula in model_formulas
+        }
+
     cross_mouse_df = load_cross_mouse_block_residual_model_summaries(
         data_root=data_root,
         mice=mice,
+        model_formula=model_formula,
     )
+    if output_filename is None:
+        output_filename = f"cross_mouse_block_residual_model_summary_{model_formula}.csv"
     output_csv_path = output_path / output_filename
     cross_mouse_df.to_csv(output_csv_path, index=False, na_rep="None")
     return output_csv_path
@@ -3769,11 +3844,13 @@ def main_multisession(multisession_collection_only: bool = True):
     ]
     saved_sessions = [load_saved_session_analysis(session) for session in sessions]
     if all(hasattr(saved_session.session, "processed_data_path") for saved_session in saved_sessions):
-        collect_mouse_block_residual_model_summaries(
-            saved_sessions=saved_sessions,
-            output_path=multi_session_save_path,
-            mouse=mouse,
-        )
+        for model_formula in BLOCK_RESIDUAL_MODEL_FORMULAS:
+            collect_mouse_block_residual_model_summaries(
+                saved_sessions=saved_sessions,
+                output_path=multi_session_save_path,
+                mouse=mouse,
+                model_formula=model_formula,
+            )
     concatenated = concatenate_saved_sessions(saved_sessions)
     multisession = build_multisession_session(
         mouse=mouse,
@@ -4411,6 +4488,7 @@ def main_cross_mouse_metrics(
         data_root=data_root,
         output_path=output_path,
         mice=selected_mice,
+        model_formulas=BLOCK_RESIDUAL_MODEL_FORMULAS,
     )
 
 

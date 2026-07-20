@@ -2681,14 +2681,15 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
     )
     block_performance.to_csv(block_performance_path, index=False, na_rep='None')
     augmented_trial_df.to_csv(augmented_trial_path, index=False, na_rep='None')
-    residual_model_summary_path = block_residual_models.save_block_residual_model_summary(
+    residual_model_summary_paths = block_residual_models.save_block_residual_model_summaries(
         residual_model_summary,
         session_save_path=session_save_path,
         sess_id=sess_id,
     )
     assert_saved_csv(block_performance_path)
     assert_saved_csv(augmented_trial_path)
-    assert_saved_csv(residual_model_summary_path)
+    for residual_model_summary_path in residual_model_summary_paths.values():
+        assert_saved_csv(residual_model_summary_path)
 
     if multisession_save_path is None:
         return session_performance

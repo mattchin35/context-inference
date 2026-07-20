@@ -17,10 +17,16 @@ MODEL_SPECS: tuple[tuple[str, float], ...] = (
     ("elastic_net", 0.5),
 )
 LAMBDA_CHOICES: tuple[str, ...] = ("lambda.min", "lambda.1se")
-FEATURE_NAMES: tuple[str, ...] = (
+INTERACTION_FORMULA = "rewards_x_side"
+ADDITIVE_FORMULA = "rewards_plus_side"
+INTERACTION_FEATURE_NAMES: tuple[str, ...] = (
     "prev_n_rewarded",
     "block_side_left",
     "prev_n_rewarded:block_side_left",
+)
+ADDITIVE_FEATURE_NAMES: tuple[str, ...] = (
+    "prev_n_rewarded",
+    "block_side_left",
 )
 COEFFICIENT_COLUMNS: tuple[str, ...] = (
     "coefficient_intercept",
@@ -28,9 +34,57 @@ COEFFICIENT_COLUMNS: tuple[str, ...] = (
     "coefficient_block_side_left",
     "coefficient_prev_n_rewarded_block_side_left",
 )
+SIDE_SPECIFIC_COEFFICIENT_COLUMNS: tuple[str, ...] = (
+    "right_intercept",
+    "left_intercept",
+    "right_reward_slope",
+    "left_reward_slope",
+    "side_intercept_delta_left_minus_right",
+    "side_reward_slope_delta_left_minus_right",
+)
 REQUIRED_COLUMNS: tuple[str, ...] = ("trials_to_correct", "prev_n_rewarded", "block_type")
 MISSING_VALUE = "None"
 SCALED_MAD_CONSTANT = 1.4826
+
+
+@dataclass(frozen=True)
+class BlockResidualFormulaSpec:
+    """Design-matrix contract for one block residual model formula.
+
+    Attributes
+    ----------
+    name : str
+        Stable formula identifier used in summary rows and output filenames.
+    feature_names : tuple[str, ...]
+        Predictor names in the design matrix column order. Counts are in
+        rewarded trials; side indicator is unitless.
+    include_interaction : bool
+        If True, include the reward-by-left-side interaction term.
+    write_legacy_aliases : bool
+        If True, also write the original formula-unspecified residual and
+        session metric columns for backward compatibility.
+    """
+
+    name: str
+    feature_names: tuple[str, ...]
+    include_interaction: bool
+    write_legacy_aliases: bool = False
+
+
+FORMULA_SPECS: tuple[BlockResidualFormulaSpec, ...] = (
+    BlockResidualFormulaSpec(
+        name=INTERACTION_FORMULA,
+        feature_names=INTERACTION_FEATURE_NAMES,
+        include_interaction=True,
+        write_legacy_aliases=True,
+    ),
+    BlockResidualFormulaSpec(
+        name=ADDITIVE_FORMULA,
+        feature_names=ADDITIVE_FEATURE_NAMES,
+        include_interaction=False,
+        write_legacy_aliases=False,
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -40,9 +94,9 @@ class PreparedBlockResidualData:
     Attributes
     ----------
     x : numpy.ndarray
-        Predictor matrix with shape `(n_valid_blocks, 3)`. Columns are
-        `prev_n_rewarded`, `block_side_left`, and their interaction. Counts are
-        in rewarded trials; side indicator is unitless.
+        Predictor matrix with shape `(n_valid_blocks, n_features)`. Columns are
+        defined by `feature_names`. Counts are in rewarded trials; side
+        indicator is unitless.
     y : numpy.ndarray
         Trials-to-correct values with shape `(n_valid_blocks,)`, in trials.
     valid_index : pandas.Index
@@ -81,7 +135,18 @@ def derive_block_side(block_type_values: Iterable[object]) -> pd.Series:
     return block_side
 
 
-def prepare_block_residual_model_data(block_performance: pd.DataFrame) -> PreparedBlockResidualData:
+def _formula_spec_by_name(model_formula: str) -> BlockResidualFormulaSpec:
+    """Return the configured formula spec for a stable formula identifier."""
+    for formula_spec in FORMULA_SPECS:
+        if formula_spec.name == model_formula:
+            return formula_spec
+    raise ValueError(f"Unknown block residual model formula: {model_formula}")
+
+
+def prepare_block_residual_model_data(
+    block_performance: pd.DataFrame,
+    model_formula: str = INTERACTION_FORMULA,
+) -> PreparedBlockResidualData:
     """Build a right-reference design matrix for one session.
 
     Parameters
@@ -90,21 +155,26 @@ def prepare_block_residual_model_data(block_performance: pd.DataFrame) -> Prepar
         Block table with shape `(n_blocks, n_columns)`. Required columns are
         `trials_to_correct` in trials, `prev_n_rewarded` in rewarded trials,
         and `block_type` labels that begin with `left` or `right`.
+    model_formula : str, default="rewards_x_side"
+        Formula identifier. Supported values are `"rewards_x_side"` for
+        `trials_to_correct ~ prev_n_rewarded * block_side` and
+        `"rewards_plus_side"` for
+        `trials_to_correct ~ prev_n_rewarded + block_side`.
 
     Returns
     -------
     PreparedBlockResidualData
         Valid rows and numeric design matrix for
-        `trials_to_correct ~ prev_n_rewarded * block_side`, with right as the
-        reference side.
+        the requested formula, with right as the reference side.
     """
+    formula_spec = _formula_spec_by_name(model_formula)
     missing_columns = [column for column in REQUIRED_COLUMNS if column not in block_performance.columns]
     if missing_columns:
         return PreparedBlockResidualData(
-            x=np.empty((0, len(FEATURE_NAMES)), dtype=float),
+            x=np.empty((0, len(formula_spec.feature_names)), dtype=float),
             y=np.empty(0, dtype=float),
             valid_index=pd.Index([], dtype=block_performance.index.dtype),
-            feature_names=list(FEATURE_NAMES),
+            feature_names=list(formula_spec.feature_names),
         )
 
     trials_to_correct = pd.to_numeric(block_performance["trials_to_correct"], errors="coerce")
@@ -115,14 +185,16 @@ def prepare_block_residual_model_data(block_performance: pd.DataFrame) -> Prepar
     valid_index = block_performance.index[valid_rows]
     previous_rewards_valid = previous_rewards.loc[valid_rows].to_numpy(dtype=float)
     side_left = (block_side.loc[valid_rows].to_numpy(dtype=object) == "left").astype(float)
-    interaction = previous_rewards_valid * side_left
-    x = np.column_stack([previous_rewards_valid, side_left, interaction])
+    x_columns = [previous_rewards_valid, side_left]
+    if formula_spec.include_interaction:
+        x_columns.append(previous_rewards_valid * side_left)
+    x = np.column_stack(x_columns)
     y = trials_to_correct.loc[valid_rows].to_numpy(dtype=float)
     return PreparedBlockResidualData(
         x=x,
         y=y,
         valid_index=valid_index,
-        feature_names=list(FEATURE_NAMES),
+        feature_names=list(formula_spec.feature_names),
     )
 
 
@@ -173,9 +245,20 @@ def _summary_prefix(model_type: str, lambda_choice: str) -> str:
     return f"{model_type}_{lambda_tag}"
 
 
+def _formula_summary_prefix(model_formula: str, model_type: str, lambda_choice: str) -> str:
+    """Return the stable output prefix for one formula/model/lambda pair."""
+    lambda_tag = "lambda_min" if lambda_choice == "lambda.min" else "lambda_1se"
+    return f"{model_type}_{model_formula}_{lambda_tag}"
+
+
 def _residual_column(model_type: str, lambda_choice: str) -> str:
     """Return the block-level residual column for one model/lambda pair."""
     return f"{_summary_prefix(model_type, lambda_choice)}_residual_TTS"
+
+
+def _formula_residual_column(model_formula: str, model_type: str, lambda_choice: str) -> str:
+    """Return the formula-specific block residual column."""
+    return f"{_formula_summary_prefix(model_formula, model_type, lambda_choice)}_residual_TTS"
 
 
 def _metric_column(model_type: str, lambda_choice: str, metric_name: str) -> str:
@@ -183,7 +266,18 @@ def _metric_column(model_type: str, lambda_choice: str, metric_name: str) -> str
     return f"{_summary_prefix(model_type, lambda_choice)}_{metric_name}"
 
 
+def _formula_metric_column(
+    model_formula: str,
+    model_type: str,
+    lambda_choice: str,
+    metric_name: str,
+) -> str:
+    """Return the formula-specific session-level metric column."""
+    return f"{_formula_summary_prefix(model_formula, model_type, lambda_choice)}_{metric_name}"
+
+
 def _empty_summary_row(
+    model_formula: str,
     model_type: str,
     alpha: float,
     lambda_choice: str,
@@ -197,6 +291,7 @@ def _empty_summary_row(
         "session_id": session_id or MISSING_VALUE,
         "mouse": mouse or MISSING_VALUE,
         "date": date or MISSING_VALUE,
+        "model_formula": model_formula,
         "model_type": model_type,
         "lambda_choice": lambda_choice,
         "lambda_value": MISSING_VALUE,
@@ -204,6 +299,7 @@ def _empty_summary_row(
         "n_valid_blocks": int(n_valid_blocks),
     }
     row.update({column: MISSING_VALUE for column in COEFFICIENT_COLUMNS})
+    row.update({column: MISSING_VALUE for column in SIDE_SPECIFIC_COEFFICIENT_COLUMNS})
     row.update(_missing_residual_metrics())
     return row
 
@@ -241,23 +337,53 @@ def _fit_selected_elastic_net(
     return model
 
 
-def _original_scale_coefficients(model: ElasticNet, scaler: StandardScaler) -> dict[str, float]:
+def _side_specific_coefficients(coefficient_values: dict[str, float]) -> dict[str, float]:
+    """Derive side-specific intercepts and reward slopes from right-reference terms."""
+    intercept = coefficient_values["coefficient_intercept"]
+    reward_slope = coefficient_values["coefficient_prev_n_rewarded"]
+    left_offset = coefficient_values["coefficient_block_side_left"]
+    left_reward_delta = coefficient_values["coefficient_prev_n_rewarded_block_side_left"]
+    return {
+        "right_intercept": float(intercept),
+        "left_intercept": float(intercept + left_offset),
+        "right_reward_slope": float(reward_slope),
+        "left_reward_slope": float(reward_slope + left_reward_delta),
+        "side_intercept_delta_left_minus_right": float(left_offset),
+        "side_reward_slope_delta_left_minus_right": float(left_reward_delta),
+    }
+
+
+def _original_scale_coefficients(
+    model: ElasticNet,
+    scaler: StandardScaler,
+    feature_names: list[str],
+) -> dict[str, float]:
     """Convert coefficients from standardized predictors to original units."""
     standardized_coef = np.asarray(model.coef_, dtype=float)
     scale = np.asarray(scaler.scale_, dtype=float)
     mean = np.asarray(scaler.mean_, dtype=float)
     original_coef = standardized_coef / scale
     original_intercept = float(model.intercept_ - np.sum(standardized_coef * mean / scale))
-    return {
-        "coefficient_intercept": original_intercept,
-        "coefficient_prev_n_rewarded": float(original_coef[0]),
-        "coefficient_block_side_left": float(original_coef[1]),
-        "coefficient_prev_n_rewarded_block_side_left": float(original_coef[2]),
+    coefficient_by_feature = {
+        feature_name: float(coefficient)
+        for feature_name, coefficient in zip(feature_names, original_coef, strict=True)
     }
+    coefficient_values = {
+        "coefficient_intercept": original_intercept,
+        "coefficient_prev_n_rewarded": coefficient_by_feature.get("prev_n_rewarded", 0.0),
+        "coefficient_block_side_left": coefficient_by_feature.get("block_side_left", 0.0),
+        "coefficient_prev_n_rewarded_block_side_left": coefficient_by_feature.get(
+            "prev_n_rewarded:block_side_left",
+            0.0,
+        ),
+    }
+    coefficient_values.update(_side_specific_coefficients(coefficient_values))
+    return coefficient_values
 
 
 def _fit_model_family(
     prepared: PreparedBlockResidualData,
+    model_formula: str,
     model_type: str,
     alpha: float,
     seed: int,
@@ -301,17 +427,22 @@ def _fit_model_family(
         predictions = model.predict(x_scaled)
         residuals = prepared.y - predictions
         residual_metrics = compute_residual_spread_metrics(residuals)
-        coefficient_values = _original_scale_coefficients(model, scaler)
         row: dict[str, object] = {
             "session_id": session_id or MISSING_VALUE,
             "mouse": mouse or MISSING_VALUE,
             "date": date or MISSING_VALUE,
+            "model_formula": model_formula,
             "model_type": model_type,
             "lambda_choice": lambda_choice,
             "lambda_value": selected_alpha,
             "alpha": alpha,
             "n_valid_blocks": int(prepared.y.shape[0]),
         }
+        coefficient_values = _original_scale_coefficients(
+            model,
+            scaler,
+            feature_names=prepared.feature_names,
+        )
         row.update(coefficient_values)
         row.update(residual_metrics)
         summary_rows.append(row)
@@ -325,10 +456,12 @@ def _empty_summary_dataframe(
     session_id: str | None,
     mouse: str | None,
     date: str | None,
+    formula_specs: tuple[BlockResidualFormulaSpec, ...] = FORMULA_SPECS,
 ) -> pd.DataFrame:
-    """Return four missing rows for skipped residual-model fitting."""
+    """Return missing rows for skipped residual-model fitting."""
     rows = [
         _empty_summary_row(
+            model_formula=formula_spec.name,
             model_type=model_type,
             alpha=alpha,
             lambda_choice=lambda_choice,
@@ -337,6 +470,7 @@ def _empty_summary_dataframe(
             mouse=mouse,
             date=date,
         )
+        for formula_spec in formula_specs
         for model_type, alpha in MODEL_SPECS
         for lambda_choice in LAMBDA_CHOICES
     ]
@@ -380,52 +514,91 @@ def add_block_residual_model_outputs(
     if updated_session.empty:
         updated_session = pd.DataFrame(index=[0])
 
-    for model_type, _alpha in MODEL_SPECS:
-        for lambda_choice in LAMBDA_CHOICES:
-            updated_blocks[_residual_column(model_type, lambda_choice)] = pd.Series(
-                np.full(updated_blocks.shape[0], MISSING_VALUE, dtype=object),
-                index=updated_blocks.index,
-                dtype=object,
-            )
-            missing_metrics = _missing_residual_metrics()
-            for metric_name, metric_value in missing_metrics.items():
-                updated_session[_metric_column(model_type, lambda_choice, metric_name)] = metric_value
+    for formula_spec in FORMULA_SPECS:
+        for model_type, _alpha in MODEL_SPECS:
+            for lambda_choice in LAMBDA_CHOICES:
+                initialized_residual = pd.Series(
+                    np.full(updated_blocks.shape[0], MISSING_VALUE, dtype=object),
+                    index=updated_blocks.index,
+                    dtype=object,
+                )
+                updated_blocks[
+                    _formula_residual_column(formula_spec.name, model_type, lambda_choice)
+                ] = initialized_residual.copy()
+                if formula_spec.write_legacy_aliases:
+                    updated_blocks[_residual_column(model_type, lambda_choice)] = initialized_residual.copy()
 
-    prepared = prepare_block_residual_model_data(updated_blocks)
-    n_valid_blocks = int(prepared.y.shape[0])
-    if n_valid_blocks < min_valid_blocks:
-        return (
-            updated_blocks,
-            updated_session,
-            _empty_summary_dataframe(
-                n_valid_blocks=n_valid_blocks,
+                missing_metrics = _missing_residual_metrics()
+                for metric_name, metric_value in missing_metrics.items():
+                    updated_session[
+                        _formula_metric_column(
+                            formula_spec.name,
+                            model_type,
+                            lambda_choice,
+                            metric_name,
+                        )
+                    ] = metric_value
+                    if formula_spec.write_legacy_aliases:
+                        updated_session[
+                            _metric_column(model_type, lambda_choice, metric_name)
+                        ] = metric_value
+
+    summary_rows: list[dict[str, object]] = []
+    for formula_spec in FORMULA_SPECS:
+        prepared = prepare_block_residual_model_data(updated_blocks, model_formula=formula_spec.name)
+        n_valid_blocks = int(prepared.y.shape[0])
+        if n_valid_blocks < min_valid_blocks:
+            summary_rows.extend(
+                _empty_summary_dataframe(
+                    n_valid_blocks=n_valid_blocks,
+                    session_id=session_id,
+                    mouse=mouse,
+                    date=date,
+                    formula_specs=(formula_spec,),
+                ).to_dict(orient="records")
+            )
+            continue
+
+        nfolds = min(10, n_valid_blocks)
+        for model_type, alpha in MODEL_SPECS:
+            residuals_by_lambda, model_summary_rows, metric_values = _fit_model_family(
+                prepared=prepared,
+                model_formula=formula_spec.name,
+                model_type=model_type,
+                alpha=alpha,
+                seed=seed,
+                nfolds=nfolds,
                 session_id=session_id,
                 mouse=mouse,
                 date=date,
-            ),
-        )
-
-    nfolds = min(10, n_valid_blocks)
-    summary_rows: list[dict[str, object]] = []
-    for model_type, alpha in MODEL_SPECS:
-        residuals_by_lambda, model_summary_rows, metric_values = _fit_model_family(
-            prepared=prepared,
-            model_type=model_type,
-            alpha=alpha,
-            seed=seed,
-            nfolds=nfolds,
-            session_id=session_id,
-            mouse=mouse,
-            date=date,
-        )
-        summary_rows.extend(model_summary_rows)
-        for lambda_choice in LAMBDA_CHOICES:
-            residual_column = _residual_column(model_type, lambda_choice)
-            updated_blocks.loc[prepared.valid_index, residual_column] = residuals_by_lambda[
-                lambda_choice
-            ].astype(float)
-            for metric_name, metric_value in metric_values[lambda_choice].items():
-                updated_session[_metric_column(model_type, lambda_choice, metric_name)] = metric_value
+            )
+            summary_rows.extend(model_summary_rows)
+            for lambda_choice in LAMBDA_CHOICES:
+                residual_values = residuals_by_lambda[lambda_choice].astype(float)
+                formula_residual_column = _formula_residual_column(
+                    formula_spec.name,
+                    model_type,
+                    lambda_choice,
+                )
+                updated_blocks.loc[prepared.valid_index, formula_residual_column] = residual_values
+                if formula_spec.write_legacy_aliases:
+                    updated_blocks.loc[
+                        prepared.valid_index,
+                        _residual_column(model_type, lambda_choice),
+                    ] = residual_values
+                for metric_name, metric_value in metric_values[lambda_choice].items():
+                    updated_session[
+                        _formula_metric_column(
+                            formula_spec.name,
+                            model_type,
+                            lambda_choice,
+                            metric_name,
+                        )
+                    ] = metric_value
+                    if formula_spec.write_legacy_aliases:
+                        updated_session[
+                            _metric_column(model_type, lambda_choice, metric_name)
+                        ] = metric_value
 
     return updated_blocks, updated_session, pd.DataFrame(summary_rows)
 
@@ -456,3 +629,47 @@ def save_block_residual_model_summary(
     summary_path = session_save_path / f"{sess_id}_block_residual_model_summary.csv"
     summary_df.to_csv(summary_path, index=False, na_rep=MISSING_VALUE)
     return summary_path
+
+
+def save_block_residual_model_summaries(
+    summary_df: pd.DataFrame,
+    session_save_path: Path,
+    sess_id: str,
+) -> dict[str, Path]:
+    """Save combined and formula-specific residual-model summary CSVs.
+
+    Parameters
+    ----------
+    summary_df : pandas.DataFrame
+        Summary table with shape `(n_model_rows, n_columns)`. Must include
+        `model_formula` when formula-specific CSVs should be written.
+    session_save_path : pathlib.Path
+        Directory where the session's processed outputs are saved.
+    sess_id : str
+        Full session identifier used in output file names.
+
+    Returns
+    -------
+    dict[str, pathlib.Path]
+        Mapping from `"combined"` and each formula identifier to the saved CSV
+        path. The combined path preserves the original filename convention.
+    """
+    saved_paths = {
+        "combined": save_block_residual_model_summary(
+            summary_df,
+            session_save_path=session_save_path,
+            sess_id=sess_id,
+        )
+    }
+    if "model_formula" not in summary_df.columns:
+        return saved_paths
+
+    for formula_spec in FORMULA_SPECS:
+        formula_rows = summary_df[summary_df["model_formula"] == formula_spec.name]
+        formula_path = (
+            session_save_path
+            / f"{sess_id}_block_residual_model_summary_{formula_spec.name}.csv"
+        )
+        formula_rows.to_csv(formula_path, index=False, na_rep=MISSING_VALUE)
+        saved_paths[formula_spec.name] = formula_path
+    return saved_paths
