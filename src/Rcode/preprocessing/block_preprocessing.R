@@ -157,6 +157,10 @@ clean_block_dataframe <- function(df, drop_missing_tts = FALSE) {
     "prev_consecutive_rewards_memory",
     "prev_n_correct",
     "prev_n_rewarded",
+    "prev_rewards_session_centered",
+    "prev_rewards_mouse_centered",
+    "prev_rewards_global_centered",
+    "block_side_code",
     "previous_block_length",
     "previous_block_reward_fraction",
     "transition_width",
@@ -192,7 +196,19 @@ clean_block_dataframe <- function(df, drop_missing_tts = FALSE) {
     "wsls_mouse_agreement",
     "observer_mouse_agreement",
     "n_explore_runs",
-    "cur_strategy_slope"
+    "cur_strategy_slope",
+    "lasso_lambda_min_residual_TTS",
+    "lasso_lambda_1se_residual_TTS",
+    "elastic_net_lambda_min_residual_TTS",
+    "elastic_net_lambda_1se_residual_TTS",
+    "lasso_rewards_x_side_lambda_min_residual_TTS",
+    "lasso_rewards_x_side_lambda_1se_residual_TTS",
+    "elastic_net_rewards_x_side_lambda_min_residual_TTS",
+    "elastic_net_rewards_x_side_lambda_1se_residual_TTS",
+    "lasso_rewards_plus_side_lambda_min_residual_TTS",
+    "lasso_rewards_plus_side_lambda_1se_residual_TTS",
+    "elastic_net_rewards_plus_side_lambda_min_residual_TTS",
+    "elastic_net_rewards_plus_side_lambda_1se_residual_TTS"
   )
   logical_columns <- c(
     "no_switch",
@@ -206,10 +222,16 @@ clean_block_dataframe <- function(df, drop_missing_tts = FALSE) {
   factor_columns <- c(
     "block_type",
     "session_ID",
-    "rl_status"
-    #"inferred_strategy",
-    #"declared_strategy",
-    #"hardcoded_strategy"
+    "rl_status",
+    "mouse",
+    "source_mouse",
+    "session_id",
+    "source_session_id",
+    "date",
+    "source_date",
+    "inferred_strategy",
+    "declared_strategy",
+    "hardcoded_strategy"
   )
   sentinel_columns <- unique(c(numeric_columns, logical_columns, factor_columns))
   
