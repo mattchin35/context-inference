@@ -113,17 +113,20 @@ flexplot(previous_block_length ~ 1, data=rl_session)
 flexplot(trials_to_correct ~ previous_block_length, data=rl_session)
 flexplot(trials_to_correct ~ prev_n_correct, data=rl_session)
 flexplot(trials_to_correct ~ prev_n_rewarded, data=rl_session)
-
+flexplot(block_side_code ~ 1, data=inf_session)
 
 flexplot(trials_to_correct ~ prev_n_rewarded + block_type, data=inf_session, method='lm') + ggtitle("Expert inference session")
-flexplot(trials_to_correct ~ previous_block_length + block_type, data=inf_session, method='lm') + ggtitle("Expert inference session")
+flexplot(trials_to_correct ~ prev_n_rewarded | block_side_code, data=inf_session, method='lm') + ggtitle("Expert inference session")
+summary(lm(trials_to_correct ~ prev_n_rewarded + block_side_code, data=inf_session))
+
+#flexplot(trials_to_correct ~ previous_block_length + block_type, data=inf_session, method='lm') + ggtitle("Expert inference session")
 flexplot(trials_to_correct ~ prev_n_rewarded + block_type, data=bias_session, method='lm') + ggtitle("Biased inference session")
-flexplot(trials_to_correct ~ previous_block_length + block_type, data=bias_session, method='lm') + ggtitle("Biased inference session")
+#flexplot(trials_to_correct ~ previous_block_length + block_type, data=bias_session, method='lm') + ggtitle("Biased inference session")
 flexplot(trials_to_correct ~ prev_n_rewarded + block_type, data=rl_session, method='lm') + ggtitle("Non-expert RL session")
-flexplot(trials_to_correct ~ previous_block_length + block_type, data=rl_session, method='lm') + ggtitle("Non-expert RL session")
+#flexplot(trials_to_correct ~ previous_block_length + block_type, data=rl_session, method='lm') + ggtitle("Non-expert RL session")
 flexplot(trials_to_correct ~ prev_n_rewarded + block_type, data=uncorr_session, method='lm') + ggtitle("Naive uncorrelated session")
-flexplot(trials_to_correct ~ previous_block_length + block_type, data=uncorr_session, method='lm') + ggtitle("Naive uncorrelated session")
-flexplot(trials_to_correct ~ prev_n_rewarded, data=uncorr_session) + ggtitle("Naive uncorrelated session")
+#flexplot(trials_to_correct ~ previous_block_length + block_type, data=uncorr_session, method='lm') + ggtitle("Naive uncorrelated session")
+flexplot(trials_to_correct ~ prev_n_rewarded + block_type, data=uncorr_session, method='lm') + ggtitle("Naive uncorrelated session")
 flexplot(trials_to_correct ~ prev_n_rewarded + block_type, data=naive_session, method='lm') + ggtitle("Fully naive session")
 
 # a quick flexplot analysis shows that the FLAT model is better for the expert inference session!
@@ -307,6 +310,8 @@ mixed_small_fit <- lmer(
   data = single_mouse_multisession
 )
 visualize(mixed_session_fit, plot="model", formula = trials_to_correct ~ prev_n_rewarded)
+flexplot(trials_to_correct ~ prev_n_rewarded + source_session_id, data=single_mouse_multisession, method='lm') + ggtitle("Single mouse multi-session analysis")
+
 visualize(mixed_complete_fit, plot="model", formula = trials_to_correct ~ prev_n_rewarded)
 visualize(mixed_full_fit, plot="model", formula = trials_to_correct ~ prev_n_rewarded + block_type)
 visualize(mixed_full_nointeraction_fit, plot="model", formula = trials_to_correct ~ prev_n_rewarded | block_type)
@@ -428,8 +433,12 @@ multimouse_small_fit <- lmer(
 )
 
 flexplot(TTS_z ~ prev_rewards_z + block_type, data=multimouse_df, method='lm') + ggtitle("Multi-mouse multi-session analysis")
+flexplot(trials_to_correct ~ prev_n_rewarded + mouse, data=multimouse_df, method='lm') + ggtitle("Multi-mouse multi-session analysis")
+flexplot(trials_to_correct ~ prev_n_rewarded + source_session_id, data=multimouse_df, method='lm') + ggtitle("Multi-mouse multi-session analysis") + 
+  theme(legend.position = 'none')
 
 visualize(multimouse_sessioninteraction_fit, plot="model", formula = trials_to_correct ~ prev_n_rewarded)
+visualize(multimouse_sessioninteraction_fit, plot="model", formula = trials_to_correct ~ prev_n_rewarded, sample=50)
 visualize(multimouse_allinteration_fit, plot="model", formula = trials_to_correct ~ prev_n_rewarded)
 visualize(multimouse_allfixedinteraction_fit, plot="model", formula = trials_to_correct ~ prev_n_rewarded)
 visualize(multimouse_nointeraction_fit, plot="model", formula = trials_to_correct ~ prev_n_rewarded)
@@ -464,4 +473,89 @@ coef(mixed_complete_fit)$source_session_id
 summary(mixed_full_nointeraction_fit)
 coef(mixed_full_nointeraction_fit)$source_session_id
 cluster_adjusted_scatter(trials_to_correct ~ prev_n_rewarded, object=multimouse_nointeraction_fit)
+cluster_adjusted_scatter(trials_to_correct ~ prev_n_rewarded, object=multimouse_sessioninteraction_fit)
 cluster_adjusted_scatter(trials_to_correct ~ prev_n_rewarded + block_type, data = ct024_multisession, random = ~(prev_n_rewarded * block_type | source_session_id))
+
+
+###################################################
+###################################################
+
+ct024_cross_session_path <- "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT024/cross_session_analysis"
+
+ct024_resid_x_side <- read.csv(
+  file.path(
+    ct024_cross_session_path,
+    "CT024_block_residual_model_summary_rewards_x_side.csv"
+  ),
+  header = TRUE,
+  na.strings = c("None", "NA", "")
+)
+
+ct024_resid_plus_side <- read.csv(
+  file.path(
+    ct024_cross_session_path,
+    "CT024_block_residual_model_summary_rewards_plus_side.csv"
+  ),
+  header = TRUE,
+  na.strings = c("None", "NA", "")
+)
+
+ct024_resid_models <- dplyr::bind_rows(
+  ct024_resid_x_side,
+  ct024_resid_plus_side
+)
+
+# Inspect the easy plotting columns
+ct024_resid_models %>%
+  dplyr::select(
+    training_day,
+    date,
+    session_id,
+    model_formula,
+    model_type,
+    lambda_choice,
+    right_intercept,
+    left_intercept,
+    right_reward_slope,
+    left_reward_slope,
+    residual_rmse,
+    residual_mad_scaled
+  )
+
+ct024_elastic_min <- ct024_resid_models %>%
+  dplyr::filter(
+    model_type == "elastic_net",
+    lambda_choice == "lambda.min"
+  )
+ct024_elastic_min_x_side <- ct024_resid_models %>%
+  dplyr::filter(
+    model_formula == "rewards_x_side",
+    model_type == "elastic_net",
+    lambda_choice == "lambda.min"
+  )
+ct024_elastic_min_plus_side <- ct024_resid_models %>%
+  dplyr::filter(
+    model_formula == "rewards_plus_side",
+    model_type == "elastic_net",
+    lambda_choice == "lambda.min"
+  )
+flexplot(left_intercept ~ 1, data=ct024_elastic_min_plus_side)
+flexplot(right_intercept ~ 1, data=ct024_elastic_min_plus_side)
+flexplot(left_reward_slope ~ 1, data=ct024_elastic_min_plus_side)
+flexplot(right_reward_slope ~ 1, data=ct024_elastic_min_plus_side)
+flexplot(side_intercept_delta_left_minus_right ~ 1, data=ct024_elastic_min_plus_side)
+#flexplot(side_reward_slope_delta_left_minus_right ~ 1, data=ct024_elastic_min_plus_side)
+flexplot(residual_iqr ~ 1, data=ct024_elastic_min_plus_side, bins=20)
+flexplot(residual_rmse ~ 1, data=ct024_elastic_min_plus_side, bins=20)
+
+
+flexplot(left_intercept ~ 1, data=ct024_elastic_min_x_side)
+flexplot(right_intercept ~ 1, data=ct024_elastic_min_x_side)
+flexplot(left_reward_slope ~ 1, data=ct024_elastic_min_x_side)
+flexplot(right_reward_slope ~ 1, data=ct024_elastic_min_x_side)
+flexplot(side_intercept_delta_left_minus_right ~ 1, data=ct024_elastic_min_x_side)
+flexplot(side_reward_slope_delta_left_minus_right ~ 1, data=ct024_elastic_min_x_side)
+flexplot(residual_iqr ~ 1, data=ct024_elastic_min_x_side)
+flexplot(residual_rmse ~ 1, data=ct024_elastic_min_x_side)
+
+
