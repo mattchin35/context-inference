@@ -25,6 +25,10 @@ make_current_block_dataframe <- function() {
     prev_consecutive_rewards_memory = c("0", "1", "3"),
     prev_n_correct = c("0", "2", "3"),
     prev_n_rewarded = c("0.0", "2.0", "1.0"),
+    prev_rewards_session_centered = c("-1.0", "1.0", "None"),
+    prev_rewards_mouse_centered = c("-2.0", "0.0", "2.0"),
+    prev_rewards_global_centered = c("-3.0", "None", "3.0"),
+    block_side_code = c("-0.5", "0.5", "None"),
     previous_block_length = c("None", "5", "6"),
     previous_block_reward_fraction = c("None", "0.4", "0.5"),
     no_switch = c("False", "True", "False"),
@@ -69,6 +73,32 @@ make_current_block_dataframe <- function() {
     wsls_mouse_agreement = c("0.66", "None", "0.75"),
     observer_mouse_agreement = c("0.66", "None", "0.75"),
     n_explore_runs = c("0", "0", "1"),
+    lasso_lambda_min_residual_TTS = c("0.1", "None", "-0.1"),
+    lasso_lambda_1se_residual_TTS = c("0.2", "None", "-0.2"),
+    elastic_net_lambda_min_residual_TTS = c("0.3", "None", "-0.3"),
+    elastic_net_lambda_1se_residual_TTS = c("0.4", "None", "-0.4"),
+    lasso_rewards_x_side_lambda_min_residual_TTS = c("0.5", "None", "-0.5"),
+    lasso_rewards_x_side_lambda_1se_residual_TTS = c("0.6", "None", "-0.6"),
+    elastic_net_rewards_x_side_lambda_min_residual_TTS = c("0.7", "None", "-0.7"),
+    elastic_net_rewards_x_side_lambda_1se_residual_TTS = c("0.8", "None", "-0.8"),
+    lasso_rewards_plus_side_lambda_min_residual_TTS = c("0.9", "None", "-0.9"),
+    lasso_rewards_plus_side_lambda_1se_residual_TTS = c("1.0", "None", "-1.0"),
+    elastic_net_rewards_plus_side_lambda_min_residual_TTS = c("1.1", "None", "-1.1"),
+    elastic_net_rewards_plus_side_lambda_1se_residual_TTS = c("1.2", "None", "-1.2"),
+    mouse = c("CT024", "CT024", "CT024"),
+    source_mouse = c("CT024", "CT024", "CT024"),
+    session_id = c(
+      "CT024_2026-06-09_143852",
+      "CT024_2026-06-09_143852",
+      "CT024_2026-06-09_143852"
+    ),
+    source_session_id = c(
+      "CT024_2026-06-09_143852",
+      "CT024_2026-06-09_143852",
+      "CT024_2026-06-09_143852"
+    ),
+    date = c("2026-06-09", "2026-06-09", "2026-06-09"),
+    source_date = c("2026-06-09", "2026-06-09", "2026-06-09"),
     stringsAsFactors = FALSE
   )
 }
@@ -107,6 +137,10 @@ numeric_columns <- c(
   "prev_consecutive_rewards_memory",
   "prev_n_correct",
   "prev_n_rewarded",
+  "prev_rewards_session_centered",
+  "prev_rewards_mouse_centered",
+  "prev_rewards_global_centered",
+  "block_side_code",
   "previous_block_length",
   "previous_block_reward_fraction",
   "transition_width",
@@ -141,13 +175,35 @@ numeric_columns <- c(
   "doubt_perseveration_mouse_agreement",
   "wsls_mouse_agreement",
   "observer_mouse_agreement",
-  "n_explore_runs"
+  "n_explore_runs",
+  "lasso_lambda_min_residual_TTS",
+  "lasso_lambda_1se_residual_TTS",
+  "elastic_net_lambda_min_residual_TTS",
+  "elastic_net_lambda_1se_residual_TTS",
+  "lasso_rewards_x_side_lambda_min_residual_TTS",
+  "lasso_rewards_x_side_lambda_1se_residual_TTS",
+  "elastic_net_rewards_x_side_lambda_min_residual_TTS",
+  "elastic_net_rewards_x_side_lambda_1se_residual_TTS",
+  "lasso_rewards_plus_side_lambda_min_residual_TTS",
+  "lasso_rewards_plus_side_lambda_1se_residual_TTS",
+  "elastic_net_rewards_plus_side_lambda_min_residual_TTS",
+  "elastic_net_rewards_plus_side_lambda_1se_residual_TTS"
 )
 for (column_name in numeric_columns) {
   stopifnot(is.numeric(cleaned_df[[column_name]]))
 }
 
-factor_columns <- c("block_type", "session_ID", "rl_status")
+factor_columns <- c(
+  "block_type",
+  "session_ID",
+  "rl_status",
+  "mouse",
+  "source_mouse",
+  "session_id",
+  "source_session_id",
+  "date",
+  "source_date"
+)
 for (column_name in factor_columns) {
   stopifnot(is.factor(cleaned_df[[column_name]]))
 }
