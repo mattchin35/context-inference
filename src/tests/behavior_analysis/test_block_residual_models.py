@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import ModuleType
+import json
 import sys
 
 import numpy as np
@@ -287,9 +288,15 @@ def test_save_analysis_adds_block_residual_outputs_and_summary_csv(tmp_path: Pat
         na_filter=False,
     )
     saved_overall = pd.read_csv(multisession_path / "CT024_overall_performance.csv", na_filter=False)
+    exemplar_parameters_csv = tmp_path / "CT024_2026-06-09_143852_block_exemplar_model_parameters.csv"
+    exemplar_parameters_json = tmp_path / "CT024_2026-06-09_143852_block_exemplar_model_parameters.json"
 
     assert "lasso_lambda_min_residual_TTS" in saved_block.columns
     assert "lasso_rewards_plus_side_lambda_min_residual_TTS" in saved_block.columns
+    assert "fast_low_variance_exemplar_residual_TTS" in saved_block.columns
+    assert "fast_low_variance_exemplar_normalized_residual_TTS" in saved_block.columns
+    assert "fast_low_variance_exemplar_prediction_TTS" not in saved_block.columns
+    assert "fast_low_variance_exemplar_absolute_residual_TTS" not in saved_block.columns
     assert "elastic_net_lambda_1se_residual_rmse" in multisession_df.columns
     assert "elastic_net_lambda_1se_residual_sd" in multisession_df.columns
     assert "elastic_net_rewards_plus_side_lambda_1se_residual_rmse" in multisession_df.columns
@@ -308,3 +315,9 @@ def test_save_analysis_adds_block_residual_outputs_and_summary_csv(tmp_path: Pat
     assert "average_reward_slope" in saved_summary.columns
     assert "residual_sd" in saved_summary.columns
     assert "residual_sd" in saved_additive_summary.columns
+    assert exemplar_parameters_csv.exists()
+    assert exemplar_parameters_json.exists()
+    assert pd.read_csv(exemplar_parameters_csv).shape[0] == 4
+    with exemplar_parameters_json.open("r", encoding="utf-8") as file:
+        exemplar_json = json.load(file)
+    assert len(exemplar_json["models"]) == 4

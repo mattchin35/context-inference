@@ -85,6 +85,8 @@ make_current_block_dataframe <- function() {
     lasso_rewards_plus_side_lambda_1se_residual_TTS = c("1.0", "None", "-1.0"),
     elastic_net_rewards_plus_side_lambda_min_residual_TTS = c("1.1", "None", "-1.1"),
     elastic_net_rewards_plus_side_lambda_1se_residual_TTS = c("1.2", "None", "-1.2"),
+    custom_exemplar_exemplar_residual_TTS = c("1.3", "None", "-1.3"),
+    custom_exemplar_exemplar_normalized_residual_TTS = c("0.65", "None", "-0.65"),
     mouse = c("CT024", "CT024", "CT024"),
     source_mouse = c("CT024", "CT024", "CT024"),
     session_id = c(
@@ -187,7 +189,9 @@ numeric_columns <- c(
   "lasso_rewards_plus_side_lambda_min_residual_TTS",
   "lasso_rewards_plus_side_lambda_1se_residual_TTS",
   "elastic_net_rewards_plus_side_lambda_min_residual_TTS",
-  "elastic_net_rewards_plus_side_lambda_1se_residual_TTS"
+  "elastic_net_rewards_plus_side_lambda_1se_residual_TTS",
+  "custom_exemplar_exemplar_residual_TTS",
+  "custom_exemplar_exemplar_normalized_residual_TTS"
 )
 for (column_name in numeric_columns) {
   stopifnot(is.numeric(cleaned_df[[column_name]]))
