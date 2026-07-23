@@ -117,6 +117,7 @@ flexplot(block_side_code ~ 1, data=inf_session)
 
 flexplot(trials_to_correct ~ prev_n_rewarded + block_type, data=inf_session, method='lm') + ggtitle("Expert inference session")
 flexplot(trials_to_correct ~ prev_n_rewarded | block_side_code, data=inf_session, method='lm') + ggtitle("Expert inference session")
+summary(lm(trials_to_correct ~ prev_n_rewarded + block_type, data=inf_session))
 summary(lm(trials_to_correct ~ prev_n_rewarded + block_side_code, data=inf_session))
 
 #flexplot(trials_to_correct ~ previous_block_length + block_type, data=inf_session, method='lm') + ggtitle("Expert inference session")
@@ -557,5 +558,99 @@ flexplot(side_intercept_delta_left_minus_right ~ 1, data=ct024_elastic_min_x_sid
 flexplot(side_reward_slope_delta_left_minus_right ~ 1, data=ct024_elastic_min_x_side)
 flexplot(residual_iqr ~ 1, data=ct024_elastic_min_x_side)
 flexplot(residual_rmse ~ 1, data=ct024_elastic_min_x_side)
+
+###
+cross_mouse_path <- "/home/matt/Documents/EXPERIMENTS/contextProjectData/cross_mouse_analysis"
+
+resid_x_side <- read.csv(
+  file.path(
+    cross_mouse_path,
+    "cross_mouse_block_residual_model_summary_rewards_x_side.csv"
+  ),
+  header = TRUE,
+  na.strings = c("None", "NA", "")
+)
+
+resid_plus_side <- read.csv(
+  file.path(
+    cross_mouse_path,
+    "cross_mouse_block_residual_model_summary_rewards_plus_side.csv"
+  ),
+  header = TRUE,
+  na.strings = c("None", "NA", "")
+)
+
+resid_models <- dplyr::bind_rows(
+  resid_x_side,
+  resid_plus_side
+)
+
+# Inspect the easy plotting columns
+resid_models %>%
+  dplyr::select(
+    training_day,
+    date,
+    session_id,
+    model_formula,
+    model_type,
+    lambda_choice,
+    right_intercept,
+    left_intercept,
+    right_reward_slope,
+    left_reward_slope,
+    residual_rmse,
+    residual_mad_scaled
+  )
+
+elastic_min_x_side <- resid_models %>%
+  dplyr::filter(
+    model_formula == "rewards_x_side",
+    model_type == "elastic_net",
+    lambda_choice == "lambda.min"
+  )
+elastic_min_plus_side <- resid_models %>%
+  dplyr::filter(
+    model_formula == "rewards_plus_side",
+    model_type == "elastic_net",
+    lambda_choice == "lambda.min"
+  )
+flexplot(left_intercept ~ 1, data=elastic_min_plus_side)
+flexplot(right_intercept ~ 1, data=elastic_min_plus_side)
+flexplot(left_reward_slope ~ 1, data=elastic_min_plus_side)
+flexplot(right_reward_slope ~ 1, data=elastic_min_plus_side)
+flexplot(side_intercept_delta_left_minus_right ~ 1, data=elastic_min_plus_side)
+#flexplot(side_reward_slope_delta_left_minus_right ~ 1, data=elastic_min_plus_side)
+flexplot(residual_iqr ~ 1, data=elastic_min_plus_side, bins=20)
+flexplot(residual_rmse ~ 1, data=elastic_min_plus_side, bins=20)
+
+
+flexplot(left_intercept ~ 1, data=elastic_min_x_side)
+flexplot(right_intercept ~ 1, data=elastic_min_x_side)
+flexplot(left_reward_slope ~ 1, data=elastic_min_x_side)
+flexplot(right_reward_slope ~ 1, data=elastic_min_x_side)
+flexplot(side_intercept_delta_left_minus_right ~ 1, data=elastic_min_x_side)
+flexplot(side_reward_slope_delta_left_minus_right ~ 1, data=elastic_min_x_side)
+flexplot(residual_iqr ~ 1, data=elastic_min_x_side)
+flexplot(residual_rmse ~ 1, data=elastic_min_x_side)
+
+
+# find some typical sessions to make averages 
+df_uncorr <- elastic_min_x_side %>% filter(abs(left_reward_slope) <= .5, abs(right_reward_slope) <= .5)
+df_rl <- elastic_min_x_side %>% filter(left_reward_slope > .5, right_reward_slope > .5)
+df_unbias <- elastic_min_x_side %>% filter(abs(side_intercept_delta_left_minus_right) <= .5, abs(side_reward_slope_delta_left_minus_right) <=.5)
+df_sameslope <- elastic_min_x_side %>% filter(abs(side_reward_slope_delta_left_minus_right) <=.5)
+df_naive <- elastic_min_x_side %>% filter(left_intercept > 5 | right_intercept > 5)
+df_pro <- elastic_min_x_side %>% filter(left_intercept <= 5, right_intercept <= 5)
+
+
+# classify existing sessions - make flags for them
+ix_uncorr <- abs(elastic_min_x_side$left_reward_slope) <= .5 & abs(elastic_min_x_side$right_reward_slope) <= .5
+ix_rl <- elastic_min_x_side$left_reward_slope > .5 & elastic_min_x_side$right_reward_slope > .5
+ix_unbias <- abs(elastic_min_x_side$side_intercept_delta_left_minus_right) <= .5 & 
+  abs(elastic_min_x_side$side_reward_slope_delta_left_minus_right) <=.5
+ix_sameslope <- abs(elastic_min_x_side$side_reward_slope_delta_left_minus_right) <=.5
+ix_naive <- elastic_min_x_side$left_intercept > 5 | elastic_min_x_side$right_intercept > 5
+ix_pro <- elastic_min_x_side$left_intercept <= 5 & elastic_min_x_side$right_intercept <= 5
+
 
 
