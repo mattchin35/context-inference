@@ -4,6 +4,7 @@ import numpy as np
 import re
 import warnings
 from collections import defaultdict
+from src.behavior_analysis import block_exemplar_models
 from src.behavior_analysis import block_residual_models
 from src.behavior_analysis import general_behavior_assessment
 from src.behavior_analysis import ideal_observer
@@ -2667,6 +2668,9 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
             date=date,
         )
     )
+    block_performance, exemplar_model_parameters = (
+        block_exemplar_models.add_block_exemplar_model_outputs(block_performance)
+    )
     session_performance = add_session_metadata_columns(
         session_performance,
         mouse=mouse,
@@ -2686,10 +2690,17 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
         session_save_path=session_save_path,
         sess_id=sess_id,
     )
+    exemplar_model_parameter_paths = block_exemplar_models.save_block_exemplar_model_parameters(
+        exemplar_model_parameters,
+        session_save_path=session_save_path,
+        sess_id=sess_id,
+    )
     assert_saved_csv(block_performance_path)
     assert_saved_csv(augmented_trial_path)
     for residual_model_summary_path in residual_model_summary_paths.values():
         assert_saved_csv(residual_model_summary_path)
+    for exemplar_model_parameter_path in exemplar_model_parameter_paths.values():
+        assert_saved_csv(exemplar_model_parameter_path)
 
     if multisession_save_path is None:
         return session_performance

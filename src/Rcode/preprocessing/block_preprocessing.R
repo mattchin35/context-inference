@@ -233,6 +233,12 @@ clean_block_dataframe <- function(df, drop_missing_tts = FALSE) {
     "declared_strategy",
     "hardcoded_strategy"
   )
+  exemplar_numeric_columns <- grep(
+    "_exemplar_(normalized_)?residual_TTS$",
+    names(df),
+    value = TRUE
+  )
+  numeric_columns <- unique(c(numeric_columns, exemplar_numeric_columns))
   sentinel_columns <- unique(c(numeric_columns, logical_columns, factor_columns))
   
   df <- convert_existing_block_none_to_na(df, sentinel_columns)
