@@ -54,6 +54,10 @@ stopifnot(isTRUE(all.equal(metrics$residual_mad_raw, 1)))
 stopifnot(isTRUE(all.equal(metrics$residual_mad_scaled, 1.4826)))
 stopifnot(isTRUE(all.equal(metrics$residual_iqr, 2)))
 stopifnot(isTRUE(all.equal(metrics$residual_rmse, sqrt(2))))
+stopifnot(isTRUE(all.equal(metrics$residual_sd, stats::sd(c(-2, -1, 0, 1, 2)))))
+
+single_metric <- compute_residual_spread_metrics(c(1))
+stopifnot(identical(single_metric$residual_sd, BLOCK_RESIDUAL_MISSING_VALUE))
 
 fit_result <- add_block_residual_model_outputs(block_df, seed = 123, min_valid_blocks = 5)
 stopifnot(all(c(
@@ -82,7 +86,8 @@ stopifnot(all(c(
   "right_reward_slope",
   "left_reward_slope",
   "side_intercept_delta_left_minus_right",
-  "side_reward_slope_delta_left_minus_right"
+  "side_reward_slope_delta_left_minus_right",
+  "residual_sd"
 ) %in% names(fit_result$summary_df)))
 stopifnot(identical(
   sort(unique(fit_result$summary_df$model_formula)),
@@ -98,6 +103,7 @@ stopifnot(isTRUE(all.equal(
 small_result <- add_block_residual_model_outputs(block_df[1:4, ], seed = 123, min_valid_blocks = 5)
 stopifnot(all(small_result$block_df$lasso_lambda_min_residual_TTS == "None"))
 stopifnot(all(small_result$summary_df$coefficient_intercept == "None"))
+stopifnot(all(small_result$summary_df$residual_sd == "None"))
 stopifnot(identical(small_result$summary_df$n_valid_blocks, rep(4L, 8)))
 
 cat("All block residual modeling tests passed.\n")

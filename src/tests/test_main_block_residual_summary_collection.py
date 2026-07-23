@@ -43,6 +43,7 @@ def make_residual_summary(
                     "residual_mad_scaled": 0.7413,
                     "residual_iqr": 1.0,
                     "residual_rmse": 0.8,
+                    "residual_sd": 0.9,
                 }
             )
     return pd.DataFrame(rows)
@@ -104,6 +105,7 @@ def test_collect_mouse_block_residual_model_summaries_writes_formula_csv(tmp_pat
     assert collected["session_id"].tolist()[:4] == ["CT024_2026-06-09_143852"] * 4
     assert collected["training_day"].tolist() == [1, 1, 1, 1, 2, 2, 2, 2]
     assert collected["left_reward_slope"].tolist() == [0.2] * 8
+    assert collected["residual_sd"].tolist() == [0.9] * 8
 
 
 def test_collect_mouse_block_residual_model_summaries_fails_for_missing_session_summary(tmp_path):

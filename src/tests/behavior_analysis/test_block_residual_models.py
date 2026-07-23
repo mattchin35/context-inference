@@ -68,8 +68,8 @@ def test_prepare_block_residual_design_matrix_uses_right_reference():
     assert prepared.valid_index.tolist() == [0, 1]
 
 
-def test_residual_spread_metrics_include_raw_scaled_mad_iqr_and_rmse():
-    """Residual summaries should include raw MAD, R-style scaled MAD, IQR, and RMSE."""
+def test_residual_spread_metrics_include_raw_scaled_mad_iqr_rmse_and_sd():
+    """Residual summaries should include MAD, IQR, RMSE, and sample SD."""
     residuals = np.array([-2.0, -1.0, 0.0, 1.0, 2.0])
 
     metrics = block_residual_models.compute_residual_spread_metrics(residuals)
@@ -78,6 +78,17 @@ def test_residual_spread_metrics_include_raw_scaled_mad_iqr_and_rmse():
     assert metrics["residual_mad_scaled"] == pytest.approx(1.4826)
     assert metrics["residual_iqr"] == pytest.approx(2.0)
     assert metrics["residual_rmse"] == pytest.approx(np.sqrt(2.0))
+    assert metrics["residual_sd"] == pytest.approx(np.std(residuals, ddof=1))
+
+
+def test_residual_spread_metrics_use_none_for_sd_with_too_few_values():
+    """Sample SD should be unavailable when fewer than two residuals exist."""
+    metrics = block_residual_models.compute_residual_spread_metrics(np.array([1.0]))
+
+    assert metrics["residual_sd"] == "None"
+    assert metrics["residual_mad_raw"] == pytest.approx(0.0)
+    assert metrics["residual_iqr"] == pytest.approx(0.0)
+    assert metrics["residual_rmse"] == pytest.approx(1.0)
 
 
 def test_fit_block_residual_models_adds_residual_columns_and_summary_rows():
@@ -144,12 +155,16 @@ def test_fit_block_residual_models_adds_residual_columns_and_summary_rows():
     for metric_prefix in ["lasso_lambda_min", "elastic_net_lambda_1se"]:
         assert f"{metric_prefix}_residual_rmse" in updated_session.columns
         assert pd.to_numeric(updated_session.loc[0, f"{metric_prefix}_residual_rmse"], errors="coerce") >= 0
+        assert f"{metric_prefix}_residual_sd" in updated_session.columns
+        assert pd.to_numeric(updated_session.loc[0, f"{metric_prefix}_residual_sd"], errors="coerce") >= 0
     for metric_prefix in [
         "lasso_rewards_plus_side_lambda_min",
         "elastic_net_rewards_x_side_lambda_1se",
     ]:
         assert f"{metric_prefix}_residual_rmse" in updated_session.columns
         assert pd.to_numeric(updated_session.loc[0, f"{metric_prefix}_residual_rmse"], errors="coerce") >= 0
+        assert f"{metric_prefix}_residual_sd" in updated_session.columns
+        assert pd.to_numeric(updated_session.loc[0, f"{metric_prefix}_residual_sd"], errors="coerce") >= 0
 
 
 def test_fit_block_residual_models_preserves_missing_rows_as_none():
@@ -189,7 +204,9 @@ def test_fit_block_residual_models_skips_small_sessions():
     assert set(summary_df["model_formula"]) == {"rewards_x_side", "rewards_plus_side"}
     assert (summary_df["coefficient_intercept"] == "None").all()
     assert updated_session.loc[0, "lasso_lambda_min_residual_rmse"] == "None"
+    assert updated_session.loc[0, "lasso_lambda_min_residual_sd"] == "None"
     assert updated_session.loc[0, "lasso_rewards_plus_side_lambda_min_residual_rmse"] == "None"
+    assert updated_session.loc[0, "lasso_rewards_plus_side_lambda_min_residual_sd"] == "None"
 
 
 def test_save_block_residual_model_summaries_writes_combined_and_formula_csvs(tmp_path: Path):
@@ -257,12 +274,18 @@ def test_save_analysis_adds_block_residual_outputs_and_summary_csv(tmp_path: Pat
     assert "lasso_lambda_min_residual_TTS" in saved_block.columns
     assert "lasso_rewards_plus_side_lambda_min_residual_TTS" in saved_block.columns
     assert "elastic_net_lambda_1se_residual_rmse" in multisession_df.columns
+    assert "elastic_net_lambda_1se_residual_sd" in multisession_df.columns
     assert "elastic_net_rewards_plus_side_lambda_1se_residual_rmse" in multisession_df.columns
+    assert "elastic_net_rewards_plus_side_lambda_1se_residual_sd" in multisession_df.columns
     assert "elastic_net_lambda_1se_residual_rmse" in saved_overall.columns
+    assert "elastic_net_lambda_1se_residual_sd" in saved_overall.columns
     assert "elastic_net_rewards_plus_side_lambda_1se_residual_rmse" in saved_overall.columns
+    assert "elastic_net_rewards_plus_side_lambda_1se_residual_sd" in saved_overall.columns
     assert saved_summary.shape[0] == 4
     assert saved_additive_summary.shape[0] == 4
     assert (saved_summary["model_formula"] == "rewards_x_side").all()
     assert (saved_additive_summary["model_formula"] == "rewards_plus_side").all()
     assert "coefficient_intercept" in saved_summary.columns
     assert "left_reward_slope" in saved_summary.columns
+    assert "residual_sd" in saved_summary.columns
+    assert "residual_sd" in saved_additive_summary.columns
