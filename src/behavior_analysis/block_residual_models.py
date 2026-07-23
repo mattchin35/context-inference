@@ -210,8 +210,9 @@ def compute_residual_spread_metrics(residuals: np.ndarray) -> dict[str, float | 
     Returns
     -------
     dict[str, float | str]
-        Raw MAD, scaled MAD using R's default 1.4826 multiplier, IQR, and RMSE.
-        Empty or all-missing vectors return the project missing sentinel.
+        Raw MAD, scaled MAD using R's default 1.4826 multiplier, IQR, RMSE,
+        and sample SD. Empty or all-missing vectors return the project missing
+        sentinel.
     """
     residual_values = np.asarray(residuals, dtype=float)
     residual_values = residual_values[np.isfinite(residual_values)]
@@ -221,11 +222,15 @@ def compute_residual_spread_metrics(residuals: np.ndarray) -> dict[str, float | 
     median_residual = float(np.median(residual_values))
     mad_raw = float(np.median(np.abs(residual_values - median_residual)))
     q1, q3 = np.percentile(residual_values, [25, 75])
+    residual_sd: float | str = MISSING_VALUE
+    if residual_values.size >= 2:
+        residual_sd = float(np.std(residual_values, ddof=1))
     return {
         "residual_mad_raw": mad_raw,
         "residual_mad_scaled": float(mad_raw * SCALED_MAD_CONSTANT),
         "residual_iqr": float(q3 - q1),
         "residual_rmse": float(np.sqrt(np.mean(residual_values**2))),
+        "residual_sd": residual_sd,
     }
 
 
@@ -236,6 +241,7 @@ def _missing_residual_metrics() -> dict[str, str]:
         "residual_mad_scaled": MISSING_VALUE,
         "residual_iqr": MISSING_VALUE,
         "residual_rmse": MISSING_VALUE,
+        "residual_sd": MISSING_VALUE,
     }
 
 

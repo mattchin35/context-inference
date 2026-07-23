@@ -99,7 +99,8 @@ prepare_block_residual_model_dataframe <- function(block_df, model_formula = "re
 #     trials-to-correct minus fitted trials-to-correct.
 #
 # Returns:
-#   data.frame with one row and raw MAD, R-style scaled MAD, IQR, and RMSE.
+#   data.frame with one row and raw MAD, R-style scaled MAD, IQR, RMSE, and
+#   sample SD.
 compute_residual_spread_metrics <- function(residuals) {
   residual_values <- residuals[is.finite(residuals)]
   if (length(residual_values) == 0) {
@@ -108,16 +109,23 @@ compute_residual_spread_metrics <- function(residuals) {
       residual_mad_scaled = BLOCK_RESIDUAL_MISSING_VALUE,
       residual_iqr = BLOCK_RESIDUAL_MISSING_VALUE,
       residual_rmse = BLOCK_RESIDUAL_MISSING_VALUE,
+      residual_sd = BLOCK_RESIDUAL_MISSING_VALUE,
       stringsAsFactors = FALSE
     ))
   }
   residual_median <- stats::median(residual_values)
   mad_raw <- stats::median(abs(residual_values - residual_median))
+  residual_sd <- if (length(residual_values) >= 2) {
+    as.numeric(stats::sd(residual_values))
+  } else {
+    BLOCK_RESIDUAL_MISSING_VALUE
+  }
   data.frame(
     residual_mad_raw = as.numeric(mad_raw),
     residual_mad_scaled = as.numeric(mad_raw * BLOCK_RESIDUAL_SCALED_MAD_CONSTANT),
     residual_iqr = as.numeric(stats::IQR(residual_values)),
     residual_rmse = as.numeric(sqrt(mean(residual_values^2))),
+    residual_sd = residual_sd,
     stringsAsFactors = FALSE
   )
 }

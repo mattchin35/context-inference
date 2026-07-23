@@ -1658,6 +1658,7 @@ BLOCK_RESIDUAL_MODEL_SUMMARY_COLUMNS = (
     "residual_mad_scaled",
     "residual_iqr",
     "residual_rmse",
+    "residual_sd",
 )
 BLOCK_RESIDUAL_MODEL_FORMULAS = ("rewards_x_side", "rewards_plus_side")
 
