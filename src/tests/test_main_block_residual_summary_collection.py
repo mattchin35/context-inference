@@ -35,8 +35,10 @@ def make_residual_summary(
                     "coefficient_prev_n_rewarded_block_side_left": interaction_term,
                     "right_intercept": 1.0,
                     "left_intercept": 1.3,
+                    "average_intercept": 1.15,
                     "right_reward_slope": 0.2,
                     "left_reward_slope": 0.2 + interaction_term,
+                    "average_reward_slope": 0.2 + (interaction_term / 2),
                     "side_intercept_delta_left_minus_right": 0.3,
                     "side_reward_slope_delta_left_minus_right": interaction_term,
                     "residual_mad_raw": 0.5,
@@ -105,6 +107,7 @@ def test_collect_mouse_block_residual_model_summaries_writes_formula_csv(tmp_pat
     assert collected["session_id"].tolist()[:4] == ["CT024_2026-06-09_143852"] * 4
     assert collected["training_day"].tolist() == [1, 1, 1, 1, 2, 2, 2, 2]
     assert collected["left_reward_slope"].tolist() == [0.2] * 8
+    assert collected["average_reward_slope"].tolist() == [0.2] * 8
     assert collected["residual_sd"].tolist() == [0.9] * 8
 
 

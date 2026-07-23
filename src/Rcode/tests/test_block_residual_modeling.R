@@ -83,12 +83,28 @@ stopifnot(all(c(
   "coefficient_prev_n_rewarded_block_side_left",
   "right_intercept",
   "left_intercept",
+  "average_intercept",
   "right_reward_slope",
   "left_reward_slope",
+  "average_reward_slope",
   "side_intercept_delta_left_minus_right",
   "side_reward_slope_delta_left_minus_right",
   "residual_sd"
 ) %in% names(fit_result$summary_df)))
+stopifnot(isTRUE(all.equal(
+  as.numeric(fit_result$summary_df$average_intercept),
+  (
+    as.numeric(fit_result$summary_df$right_intercept) +
+      as.numeric(fit_result$summary_df$left_intercept)
+  ) / 2
+)))
+stopifnot(isTRUE(all.equal(
+  as.numeric(fit_result$summary_df$average_reward_slope),
+  (
+    as.numeric(fit_result$summary_df$right_reward_slope) +
+      as.numeric(fit_result$summary_df$left_reward_slope)
+  ) / 2
+)))
 stopifnot(identical(
   sort(unique(fit_result$summary_df$model_formula)),
   c("rewards_plus_side", "rewards_x_side")

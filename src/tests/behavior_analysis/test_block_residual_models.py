@@ -131,12 +131,29 @@ def test_fit_block_residual_models_adds_residual_columns_and_summary_rows():
         "coefficient_prev_n_rewarded_block_side_left",
         "right_intercept",
         "left_intercept",
+        "average_intercept",
         "right_reward_slope",
         "left_reward_slope",
+        "average_reward_slope",
         "side_intercept_delta_left_minus_right",
         "side_reward_slope_delta_left_minus_right",
     ]:
         assert coefficient_column in summary_df.columns
+
+    np.testing.assert_allclose(
+        summary_df["average_intercept"].astype(float),
+        (
+            summary_df["right_intercept"].astype(float)
+            + summary_df["left_intercept"].astype(float)
+        ) / 2,
+    )
+    np.testing.assert_allclose(
+        summary_df["average_reward_slope"].astype(float),
+        (
+            summary_df["right_reward_slope"].astype(float)
+            + summary_df["left_reward_slope"].astype(float)
+        ) / 2,
+    )
 
     additive_rows = summary_df[summary_df["model_formula"] == "rewards_plus_side"]
     assert (additive_rows["coefficient_prev_n_rewarded_block_side_left"] == 0.0).all()
@@ -287,5 +304,7 @@ def test_save_analysis_adds_block_residual_outputs_and_summary_csv(tmp_path: Pat
     assert (saved_additive_summary["model_formula"] == "rewards_plus_side").all()
     assert "coefficient_intercept" in saved_summary.columns
     assert "left_reward_slope" in saved_summary.columns
+    assert "average_intercept" in saved_summary.columns
+    assert "average_reward_slope" in saved_summary.columns
     assert "residual_sd" in saved_summary.columns
     assert "residual_sd" in saved_additive_summary.columns
