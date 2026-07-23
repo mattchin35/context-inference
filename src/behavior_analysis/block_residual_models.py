@@ -37,8 +37,10 @@ COEFFICIENT_COLUMNS: tuple[str, ...] = (
 SIDE_SPECIFIC_COEFFICIENT_COLUMNS: tuple[str, ...] = (
     "right_intercept",
     "left_intercept",
+    "average_intercept",
     "right_reward_slope",
     "left_reward_slope",
+    "average_reward_slope",
     "side_intercept_delta_left_minus_right",
     "side_reward_slope_delta_left_minus_right",
 )
@@ -349,11 +351,17 @@ def _side_specific_coefficients(coefficient_values: dict[str, float]) -> dict[st
     reward_slope = coefficient_values["coefficient_prev_n_rewarded"]
     left_offset = coefficient_values["coefficient_block_side_left"]
     left_reward_delta = coefficient_values["coefficient_prev_n_rewarded_block_side_left"]
+    right_intercept = float(intercept)
+    left_intercept = float(intercept + left_offset)
+    right_reward_slope = float(reward_slope)
+    left_reward_slope = float(reward_slope + left_reward_delta)
     return {
-        "right_intercept": float(intercept),
-        "left_intercept": float(intercept + left_offset),
-        "right_reward_slope": float(reward_slope),
-        "left_reward_slope": float(reward_slope + left_reward_delta),
+        "right_intercept": right_intercept,
+        "left_intercept": left_intercept,
+        "average_intercept": float((right_intercept + left_intercept) / 2),
+        "right_reward_slope": right_reward_slope,
+        "left_reward_slope": left_reward_slope,
+        "average_reward_slope": float((right_reward_slope + left_reward_slope) / 2),
         "side_intercept_delta_left_minus_right": float(left_offset),
         "side_reward_slope_delta_left_minus_right": float(left_reward_delta),
     }

@@ -153,11 +153,17 @@ derive_side_specific_coefficients <- function(coefficient_values) {
   reward_slope <- coefficient_values$coefficient_prev_n_rewarded
   left_offset <- coefficient_values$coefficient_block_side_left
   left_reward_delta <- coefficient_values$coefficient_prev_n_rewarded_block_side_left
+  right_intercept <- as.numeric(intercept)
+  left_intercept <- as.numeric(intercept + left_offset)
+  right_reward_slope <- as.numeric(reward_slope)
+  left_reward_slope <- as.numeric(reward_slope + left_reward_delta)
   data.frame(
-    right_intercept = as.numeric(intercept),
-    left_intercept = as.numeric(intercept + left_offset),
-    right_reward_slope = as.numeric(reward_slope),
-    left_reward_slope = as.numeric(reward_slope + left_reward_delta),
+    right_intercept = right_intercept,
+    left_intercept = left_intercept,
+    average_intercept = as.numeric((right_intercept + left_intercept) / 2),
+    right_reward_slope = right_reward_slope,
+    left_reward_slope = left_reward_slope,
+    average_reward_slope = as.numeric((right_reward_slope + left_reward_slope) / 2),
     side_intercept_delta_left_minus_right = as.numeric(left_offset),
     side_reward_slope_delta_left_minus_right = as.numeric(left_reward_delta),
     stringsAsFactors = FALSE
@@ -179,8 +185,10 @@ missing_summary_row <- function(model_formula, model_type, alpha, lambda_choice,
     coefficient_prev_n_rewarded_block_side_left = BLOCK_RESIDUAL_MISSING_VALUE,
     right_intercept = BLOCK_RESIDUAL_MISSING_VALUE,
     left_intercept = BLOCK_RESIDUAL_MISSING_VALUE,
+    average_intercept = BLOCK_RESIDUAL_MISSING_VALUE,
     right_reward_slope = BLOCK_RESIDUAL_MISSING_VALUE,
     left_reward_slope = BLOCK_RESIDUAL_MISSING_VALUE,
+    average_reward_slope = BLOCK_RESIDUAL_MISSING_VALUE,
     side_intercept_delta_left_minus_right = BLOCK_RESIDUAL_MISSING_VALUE,
     side_reward_slope_delta_left_minus_right = BLOCK_RESIDUAL_MISSING_VALUE,
     metrics,
