@@ -1695,6 +1695,11 @@ def test_run_analysis_returns_multisession_df_without_reloading(tmp_path, monkey
         raise AssertionError("run_analysis should not reload CSVs after saving")
 
     monkeypatch.setattr(session_analysis, "load_analysis", fail_if_reloaded)
+    monkeypatch.setattr(
+        session_analysis,
+        "session_stats",
+        lambda *_args, **_kwargs: (0.0, 0.0, 0.0, 1.0),
+    )
 
     augmented_trial_df, block_performance, multisession_df = session_analysis.run_analysis(
         make_simulated_trial_df(),
@@ -1709,6 +1714,21 @@ def test_run_analysis_returns_multisession_df_without_reloading(tmp_path, monkey
     assert multisession_df.loc[0, "date"] == session.date
     assert block_performance.shape[0] == 3
     assert augmented_trial_df.shape[0] == 6
+    first_exemplar_name = (
+        session_analysis.block_exemplar_models.DEFAULT_BLOCK_EXEMPLAR_MODELS[0].name
+    )
+    exemplar_residual_column = f"{first_exemplar_name}_exemplar_residual_TTS"
+    exemplar_normalized_residual_column = (
+        f"{first_exemplar_name}_exemplar_normalized_residual_TTS"
+    )
+    assert exemplar_residual_column in block_performance.columns
+    assert exemplar_normalized_residual_column in block_performance.columns
+
+    main_style_rewrite_path = processed_data_path / "main_style_rewrite_block_performance.csv"
+    block_performance.to_csv(main_style_rewrite_path, index=False, na_rep="None")
+    reloaded_block_performance = pd.read_csv(main_style_rewrite_path, na_filter=False)
+    assert exemplar_residual_column in reloaded_block_performance.columns
+    assert exemplar_normalized_residual_column in reloaded_block_performance.columns
 
 
 def test_save_analysis_replaces_existing_multisession_date(tmp_path):
