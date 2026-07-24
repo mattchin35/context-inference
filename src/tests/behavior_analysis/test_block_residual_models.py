@@ -293,10 +293,13 @@ def test_save_analysis_adds_block_residual_outputs_and_summary_csv(tmp_path: Pat
 
     assert "lasso_lambda_min_residual_TTS" in saved_block.columns
     assert "lasso_rewards_plus_side_lambda_min_residual_TTS" in saved_block.columns
-    assert "fast_low_variance_exemplar_residual_TTS" in saved_block.columns
-    assert "fast_low_variance_exemplar_normalized_residual_TTS" in saved_block.columns
-    assert "fast_low_variance_exemplar_prediction_TTS" not in saved_block.columns
-    assert "fast_low_variance_exemplar_absolute_residual_TTS" not in saved_block.columns
+    first_exemplar_name = (
+        session_analysis.block_exemplar_models.DEFAULT_BLOCK_EXEMPLAR_MODELS[0].name
+    )
+    assert f"{first_exemplar_name}_exemplar_residual_TTS" in saved_block.columns
+    assert f"{first_exemplar_name}_exemplar_normalized_residual_TTS" in saved_block.columns
+    assert f"{first_exemplar_name}_exemplar_prediction_TTS" not in saved_block.columns
+    assert f"{first_exemplar_name}_exemplar_absolute_residual_TTS" not in saved_block.columns
     assert "elastic_net_lambda_1se_residual_rmse" in multisession_df.columns
     assert "elastic_net_lambda_1se_residual_sd" in multisession_df.columns
     assert "elastic_net_rewards_plus_side_lambda_1se_residual_rmse" in multisession_df.columns

@@ -2622,8 +2622,88 @@ def add_session_metadata_columns(
     return table_with_metadata.loc[:, leading_columns + remaining_columns]
 
 
-def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataFrame, augmented_trial_df: pd.DataFrame,
-                  sess_id: str, session_save_path: Path, multisession_save_path: Path=None) -> pd.DataFrame:
+def prepare_block_model_outputs_for_session(
+    block_performance: pd.DataFrame,
+    session_performance: pd.DataFrame,
+    session_id: str,
+    mouse: str,
+    date: str,
+    residual_model_summary: pd.DataFrame | None = None,
+    exemplar_model_parameters: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Add block-model outputs needed by saved and returned session tables.
+
+    Parameters
+    ----------
+    block_performance : pandas.DataFrame
+        Blockwise table with shape `(n_blocks, n_columns)`. Expected columns
+        for full model outputs are `block_type`, `prev_n_rewarded`, and
+        `trials_to_correct`; residual models also use the same columns.
+    session_performance : pandas.DataFrame
+        One-row session summary table with shape `(1, n_columns)`.
+    session_id : str
+        Full behavior session identifier copied into residual-model summary
+        rows.
+    mouse : str
+        Mouse identifier copied into residual-model summary rows.
+    date : str
+        Session date formatted as `YYYY-MM-DD`, copied into summary rows.
+    residual_model_summary : pandas.DataFrame or None, default=None
+        Precomputed residual-model summary table. If None, it is computed from
+        `block_performance`.
+    exemplar_model_parameters : pandas.DataFrame or None, default=None
+        Precomputed exemplar parameter table. If None, it is created from the
+        configured exemplar specs; block-level exemplar residual columns are
+        added only when required input columns are present.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]
+        `(updated_block_performance, updated_session_performance,
+        residual_model_summary, exemplar_model_parameters)`. Block residuals
+        and exemplar residuals are in trials; normalized exemplar residuals are
+        in exemplar residual-SD units.
+    """
+    updated_blocks = add_session_block_collection_variables(block_performance)
+    updated_session = session_performance.copy()
+
+    if residual_model_summary is None:
+        updated_blocks, updated_session, residual_model_summary = (
+            block_residual_models.add_block_residual_model_outputs(
+                block_performance=updated_blocks,
+                session_performance=updated_session,
+                session_id=session_id,
+                mouse=mouse,
+                date=date,
+            )
+        )
+
+    if exemplar_model_parameters is None:
+        exemplar_input_columns = {"trials_to_correct", "prev_n_rewarded"}
+        if exemplar_input_columns.issubset(updated_blocks.columns):
+            updated_blocks, exemplar_model_parameters = (
+                block_exemplar_models.add_block_exemplar_model_outputs(updated_blocks)
+            )
+        else:
+            exemplar_model_parameters = (
+                block_exemplar_models.exemplar_model_parameters_dataframe(
+                    block_exemplar_models.DEFAULT_BLOCK_EXEMPLAR_MODELS
+                )
+            )
+
+    return updated_blocks, updated_session, residual_model_summary, exemplar_model_parameters
+
+
+def save_analysis(
+    session_performance: pd.DataFrame,
+    block_performance: pd.DataFrame,
+    augmented_trial_df: pd.DataFrame,
+    sess_id: str,
+    session_save_path: Path,
+    multisession_save_path: Path=None,
+    residual_model_summary: pd.DataFrame | None = None,
+    exemplar_model_parameters: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Save within-session outputs and optionally update multisession summaries.
 
     Parameters
@@ -2641,6 +2721,12 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
     multisession_save_path : Path or None, default=None
         Multisession summary directory. If None, only within-session outputs
         are written and `session_performance` is returned unchanged.
+    residual_model_summary : pandas.DataFrame or None, default=None
+        Precomputed residual-model summary table. Passing this avoids refitting
+        residual models when `block_performance` has already been enriched.
+    exemplar_model_parameters : pandas.DataFrame or None, default=None
+        Precomputed exemplar parameter table. Passing this avoids rebuilding
+        parameter output when `block_performance` has already been enriched.
 
     Returns
     -------
@@ -2658,18 +2744,16 @@ def save_analysis(session_performance: pd.DataFrame, block_performance: pd.DataF
     augmented_trial_path = session_save_path / (sess_id + '_augmented_trials.csv')
 
     augmented_trial_df = normalize_experimenter_reward_column(augmented_trial_df)
-    block_performance = add_session_block_collection_variables(block_performance)
-    block_performance, session_performance, residual_model_summary = (
-        block_residual_models.add_block_residual_model_outputs(
+    block_performance, session_performance, residual_model_summary, exemplar_model_parameters = (
+        prepare_block_model_outputs_for_session(
             block_performance=block_performance,
             session_performance=session_performance,
             session_id=sess_id,
             mouse=mouse,
             date=date,
+            residual_model_summary=residual_model_summary,
+            exemplar_model_parameters=exemplar_model_parameters,
         )
-    )
-    block_performance, exemplar_model_parameters = (
-        block_exemplar_models.add_block_exemplar_model_outputs(block_performance)
     )
     session_performance = add_session_metadata_columns(
         session_performance,
@@ -2793,6 +2877,15 @@ def run_analysis(
         block_performance=block_performance,
         augmented_trial_df=augmented_trial_df,
     )
+    block_performance, session_performance, residual_model_summary, exemplar_model_parameters = (
+        prepare_block_model_outputs_for_session(
+            block_performance=block_performance,
+            session_performance=session_performance,
+            session_id=session.sess_id_full,
+            mouse=session.mouse,
+            date=session.date,
+        )
+    )
 
     print(
         "prev_consecutive_rewards slope: {}, intercept: {}, r_value: {}, p_value: {}".format(
@@ -2818,6 +2911,8 @@ def run_analysis(
         sess_id=session.sess_id_full,
         session_save_path=session.processed_data_path,
         multisession_save_path=getattr(session, "multi_session_save_path", None),
+        residual_model_summary=residual_model_summary,
+        exemplar_model_parameters=exemplar_model_parameters,
     )
     switch_persistence.save_switch_persistence_outputs(
         block_performance=block_performance,
