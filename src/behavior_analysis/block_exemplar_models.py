@@ -45,32 +45,32 @@ class BlockExemplarModelSpec:
 
 DEFAULT_BLOCK_EXEMPLAR_MODELS: tuple[BlockExemplarModelSpec, ...] = (
     BlockExemplarModelSpec(
-        name="fast_low_variance",
-        intercept=1.0,
+        name="expert_inf",
+        intercept=2.0,
         reward_slope=0.0,
-        residual_sd=1.0,
-        description="Editable exemplar: fast switching with low residual variance.",
+        residual_sd=2.0,
+        description="Fast uncorrelated switching with low residual variance.",
     ),
     BlockExemplarModelSpec(
-        name="fast_reward_sensitive",
-        intercept=1.0,
-        reward_slope=0.25,
-        residual_sd=1.5,
-        description="Editable exemplar: fast baseline with reward-load sensitivity.",
-    ),
-    BlockExemplarModelSpec(
-        name="slow_low_variance",
-        intercept=4.0,
-        reward_slope=0.0,
-        residual_sd=1.0,
-        description="Editable exemplar: slow switching with low residual variance.",
-    ),
-    BlockExemplarModelSpec(
-        name="slow_reward_sensitive",
+        name="expert_rl",
         intercept=2.0,
         reward_slope=0.5,
         residual_sd=2.0,
-        description="Editable exemplar: slower switching with reward-load sensitivity.",
+        description="Low reward-load sensitivity with low residual variance.",
+    ),
+    BlockExemplarModelSpec(
+        name="naive_inf",
+        intercept=6.0,
+        reward_slope=0.0,
+        residual_sd=5.0,
+        description="Slow uncorrelated switching with high residual variance.",
+    ),
+    BlockExemplarModelSpec(
+        name="naive_rl",
+        intercept=4.0,
+        reward_slope=1.0,
+        residual_sd=5.0,
+        description="High reward-load sensitivity with high residual variance.",
     ),
 )
 

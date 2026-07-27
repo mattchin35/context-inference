@@ -316,3 +316,87 @@ tables.
   trials-to-switch regression figures.
 - Added focused tests for the new session summary helpers and the slope-label
   size check.
+
+# 2026/07/23
+
+Expanded the block-level behavior-analysis pipeline so saved CSVs are easier to
+inspect in R while carrying richer block outcome, residual-model, and exemplar-
+model information through the single-session, multisession, and cross-mouse
+workflows. The main design goal was to keep Python as the canonical computation
+path, while making the resulting tables self-describing enough that exploratory
+R analysis can load them directly and select interpretable subsets or model
+summaries without recomputing hidden state.
+
+- Refactored R source loading for scripts under `src/Rcode` so preprocessing
+  helpers can be sourced relative to the R project root instead of the current
+  working directory. This made `inspect_trials.R` and `inspect_blocks.R` more
+  robust when run from RStudio's Source button or from `Rscript`.
+- Updated trial preprocessing to match the current augmented-trial schema. The
+  R cleanup path now handles the new model-value columns and current behavioral
+  choice conventions, and trial-index flags such as `block_entry_trial`,
+  `first_switch_in_block`, `switch_trial`, `stay_trial`, `explore_trial`, and
+  `block_entry_explore_trial` are generated from the augmented trial dataframe
+  and ported to leave-stay trial-value CSVs for consistent filtering.
+- Added detailed block-level switch and transition metrics to the Python block
+  performance tables. New metrics include TTS/no-switch handling,
+  post-switch correctness, transition width, reversion choices/events,
+  terminal omission streaks, previous-block reward load, session-relative TTS
+  residuals, within-session TTS percentile ranks, and QC flags for no-switch or
+  very short post-switch blocks. These metrics preserve the existing behavioral
+  side conventions and retain the first block behavior expected by the older
+  pipeline.
+- Updated R block preprocessing for current single-session, multisession, and
+  cross-mouse block-performance CSVs. The cleaner now treats centered reward
+  columns (`prev_rewards_session_centered`, `prev_rewards_mouse_centered`, and
+  `prev_rewards_global_centered`), `block_side_code`, residual model columns,
+  exemplar residual columns, and mouse/session metadata columns with the correct
+  numeric or factor types. Filtering of missing TTS remains opt-in so no-switch
+  blocks can be inspected instead of silently dropped.
+- Added regularized block residual models for session-level block performance.
+  The canonical Python path and the R exploratory helper now fit lasso and
+  elastic-net versions of both `trials_to_correct ~ prev_n_rewarded * side` and
+  `trials_to_correct ~ prev_n_rewarded + side`. Outputs include per-block raw
+  residuals, session-level residual spread summaries, and per-session model
+  summary CSVs. The original interaction-model residual column names are kept
+  as aliases, while formula-specific names make additive and interaction models
+  explicit.
+- Made the residual model summaries directly interpretable by saving
+  right-side and left-side intercepts/slopes as derived columns, plus
+  `average_intercept` and `average_reward_slope`. The raw right-reference model
+  terms are still preserved, but the derived columns make it easier to plot
+  side-specific reward-load effects without re-deriving contrasts in R.
+- Expanded residual spread summaries beyond MAD/IQR/RMSE by adding sample
+  standard deviation (`residual_sd`). The Python implementation uses
+  `np.std(..., ddof=1)` to match R's `sd()`, and returns the project missing
+  sentinel when fewer than two residuals are available. The new metric now
+  propagates into session summaries and residual-model summary CSVs.
+- Added mouse-level and cross-mouse collection for residual model summary CSVs,
+  separate from the existing `overall_performance.csv`. Mouse-level outputs are
+  saved under each mouse's `cross_session_analysis` directory, and cross-mouse
+  outputs are saved under `cross_mouse_analysis`. Interaction and additive
+  formulas are collected into separate formula-specific CSVs so downstream
+  plots do not accidentally mix model families.
+- Added code-defined block exemplar models as a separate concept from fitted
+  residual models. `block_exemplar_models.py` now defines editable exemplar
+  specs with `name`, `intercept`, `reward_slope`, `residual_sd`, and
+  `description`. For each block, the pipeline saves only the raw residual and
+  normalized residual for each exemplar, using
+  `trials_to_correct - (intercept + reward_slope * prev_n_rewarded)` and
+  division by the exemplar residual SD. Predictions and absolute residuals are
+  intentionally not saved to keep the block CSV focused.
+- Saved exemplar model parameter CSV and JSON files for each session so the
+  exact code-defined exemplar parameters used for a processed session can be
+  inspected later. The exemplar parameters are not added to
+  `overall_performance.csv`; they are block-level residual diagnostics plus
+  session-local parameter metadata.
+- Added R exploratory examples in `inspect_blocks.R` for loading CT024
+  cross-session residual-model summary CSVs, filtering to one model family such
+  as elastic net with `lambda.min`, and plotting right/left or average reward
+  slopes over training day. The intended workflow is now to load precomputed
+  Python outputs in R, filter by `model_formula`, `model_type`, and
+  `lambda_choice`, and inspect the saved interpretable columns directly.
+- Added focused Python and R tests across the new behavior. The test coverage
+  now includes residual model fitting and summary rows, formula-specific CSV
+  saving and collection, R/Python residual-spread parity, R block-preprocessing
+  coercion for new schemas, exemplar model validation and residual calculation,
+  save-analysis integration, and parameter CSV/JSON writing.

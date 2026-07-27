@@ -3773,7 +3773,7 @@ def main_multisession(multisession_collection_only: bool = True):
         current single-session CSVs and return before plotting or HMM-related
         work. If False, run the full multisession plotting and modeling flow.
     """
-    mouse = 'CT019'
+    mouse = 'CT024'
     session_data_root = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}')
     multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
     task_tag = "latent_inference"
@@ -4380,7 +4380,7 @@ def main_mouse():
 
 def main_mouse_batch():
     """Run ordinary single-session analysis for several dates of one mouse."""
-    mouse = "CT016"
+    mouse = "CT024"
     use_all_dates_for_task_tag = True
     dates = [#'2026-04-17', '2026-04-20',
         #'2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
@@ -4544,7 +4544,7 @@ def main_cross_mouse_multisession_block_performance(
 
 if __name__ == '__main__':
     # main_mouse()
-    main_mouse_batch()
-    # main_multisession(multisession_collection_only=True)
+    # main_mouse_batch()
+    main_multisession(multisession_collection_only=True)
     # main_simulation()
     # main_cross_mouse_metrics()
