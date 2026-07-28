@@ -42,7 +42,20 @@ def _write_ttl_folder(
 
 
 def _transition_df(times_s: list[float], states: list[int], sample_rate_hz: float = 30_000.0) -> pd.DataFrame:
-    """Build a transition table in the expected Open Ephys adapter schema."""
+    """Build a transition table in the expected Open Ephys adapter schema.
+
+    Args:
+        times_s: Transition times with shape ``(n_events,)`` in seconds.
+        states: Binary TTL states with shape ``(n_events,)`` where 1 is high
+            and 0 is low.
+        sample_rate_hz: Sampling rate in Hz used only to create integer sample
+            indices from ``times_s``.
+
+    Returns:
+        pd.DataFrame: Transition table with shape ``(n_events, 4)`` and columns
+        ``sample_ix`` in samples, ``recording_time_s`` in seconds, zero-based
+        ``line``, and binary ``state``.
+    """
     times = np.asarray(times_s, dtype=float)
     return pd.DataFrame(
         {
