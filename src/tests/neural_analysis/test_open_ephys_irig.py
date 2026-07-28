@@ -90,12 +90,13 @@ def _synthetic_open_ephys_irig_folder(
         )
         for bit_ix, bit in enumerate(frame_bits):
             bit_time_s = float(frame_ix * 60 + bit_ix)
+            pulse_width_s = pulse_width_lookup[bit]
             if bit_ix % 17 == 0:
-                glitch_time_s = bit_time_s + 0.123
+                glitch_time_s = bit_time_s + pulse_width_s + 0.05
                 transition_times.extend([glitch_time_s, glitch_time_s + 1.0 / sample_rate_hz])
                 transition_states.extend([1, 0])
 
-            transition_times.extend([bit_time_s, bit_time_s + pulse_width_lookup[bit]])
+            transition_times.extend([bit_time_s, bit_time_s + pulse_width_s])
             transition_states.extend([1, 0])
             valid_onset_samples.append(int(round(bit_time_s * sample_rate_hz)))
             expected_unix.append(frame_start.timestamp() + bit_ix)
