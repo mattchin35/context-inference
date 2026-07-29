@@ -167,50 +167,29 @@ def main_workflow() -> None:
         )
 
 
-def main_open_ephys_workflow(
-    session_data_home: Path | str = Path(
-        "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260727_alternating_latent"
-    ),
-    raw_recording_name: str = "2026-07-27_14-37-43",
-    record_node_name: str = "Record Node 101",
-    experiment_name: str = "experiment1",
-    recording_name: str = "recording1",
-    derived_record_node_name: str = "Record_Node_101",
-    processor_prefix: str = "Neuropix-PXI-100.",
-    probe_names: tuple[str, ...] = ("ProbeA",),
-    kilosort_subdir: str = "kilosort4",
-    irig_line: int = 0,
-    bit_period_s: float = 1.0,
-    utc_offset_hours: float = 0.0,
-) -> dict[str, tuple[pd.DataFrame, pd.DataFrame]]:
-    """Run Open Ephys Kilosort spike synchronization for one recording.
-
-    Args:
-        session_data_home: Session directory containing ``ephys/raw``,
-            ``ephys/derived``, and output ``ephys/aligned`` directories.
-        raw_recording_name: Open Ephys raw recording folder name.
-        record_node_name: Raw Open Ephys record-node directory name.
-        experiment_name: Open Ephys experiment directory name.
-        recording_name: Open Ephys recording directory name.
-        derived_record_node_name: Record-node prefix used in derived probe
-            directories.
-        processor_prefix: Processor-name prefix before probe labels, for
-            example ``"Neuropix-PXI-100."``.
-        probe_names: Probe labels to sync. Pass ``("ProbeA", "ProbeB")`` when
-            both derived Kilosort outputs are present.
-        kilosort_subdir: Kilosort output directory name inside each derived
-            probe folder.
-        irig_line: Zero-based Open Ephys TTL line carrying IRIG-H.
-        bit_period_s: IRIG-H bit period in seconds.
-        utc_offset_hours: Constant offset added to decoded UTC timestamps, in
-            hours.
+def main_open_ephys_workflow() -> dict[str, tuple[pd.DataFrame, pd.DataFrame]]:
+    """Run the hardcoded CT026 Open Ephys Kilosort spike synchronization.
 
     Returns:
         dict[str, tuple[pd.DataFrame, pd.DataFrame]]: Mapping from probe name
         to ``(spike_df, irig_df)``. Spike samples are preserved in
         Kilosort-relative and Open Ephys global sample coordinates.
     """
-    session_path = Path(session_data_home)
+    session_path = Path(
+        "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260727_alternating_latent"
+    )
+    raw_recording_name = "2026-07-27_14-37-43"
+    record_node_name = "Record Node 101"
+    experiment_name = "experiment1"
+    recording_name = "recording1"
+    derived_record_node_name = "Record_Node_101"
+    processor_prefix = "Neuropix-PXI-100."
+    probe_names = ("ProbeA",)
+    kilosort_subdir = "kilosort4"
+    irig_line = 0
+    bit_period_s = 1.0
+    utc_offset_hours = 0.0
+
     raw_recording_dir = (
         session_path
         / "ephys"
@@ -259,4 +238,5 @@ def main_open_ephys_workflow(
 
 if __name__ == "__main__":
     # main_workflow()
-    main_ni_only()
+    # main_ni_only()
+    main_open_ephys_workflow()
