@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -229,7 +230,8 @@ def test_main_open_ephys_workflow_syncs_probe_a_and_probe_b_with_expected_paths(
         / "experiment1"
         / "recording1"
     )
-    for probe_name in ("ProbeA", "ProbeB"):
+    probe_name = "ProbeA"
+    for probe_name in ("ProbeA",):
         processor_name = f"Neuropix-PXI-100.{probe_name}"
         (raw_recording_dir / "continuous" / processor_name).mkdir(parents=True)
         (raw_recording_dir / "events" / processor_name / "TTL").mkdir(parents=True)
@@ -241,30 +243,34 @@ def test_main_open_ephys_workflow_syncs_probe_a_and_probe_b_with_expected_paths(
             / "kilosort4"
         ).mkdir(parents=True)
 
+    hardcoded_session_path = (
+        "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/"
+        "CT026_20260727_alternating_latent"
+    )
+
+    def fake_path(path_value: str | Path) -> Path:
+        if str(path_value) == hardcoded_session_path:
+            return session_data_home
+        return Path(path_value)
+
     calls: list[dict[str, object]] = []
 
     def fake_sync_open_ephys_kilosort_spikes_to_utc(**kwargs):
         calls.append(kwargs)
         return pd.DataFrame(), pd.DataFrame()
 
+    monkeypatch.setattr(sync_ephys, "Path", fake_path)
     monkeypatch.setattr(
         ephys_sync_utils,
         "sync_open_ephys_kilosort_spikes_to_utc",
         fake_sync_open_ephys_kilosort_spikes_to_utc,
     )
 
-    result = sync_ephys.main_open_ephys_workflow(
-        session_data_home=session_data_home,
-        raw_recording_name="2026-07-27_14-37-43",
-        record_node_name="Record Node 101",
-        processor_prefix="Neuropix-PXI-100.",
-        probe_names=("ProbeA", "ProbeB"),
-        utc_offset_hours=1.0,
-    )
+    result = sync_ephys.main_open_ephys_workflow()
 
-    assert set(result.keys()) == {"ProbeA", "ProbeB"}
-    assert [Path(call["output_file"]).name for call in calls] == ["probeA_sync.npz", "probeB_sync.npz"]
+    assert inspect.signature(sync_ephys.main_open_ephys_workflow).parameters == {}
+    assert set(result.keys()) == {"ProbeA"}
+    assert [Path(call["output_file"]).name for call in calls] == ["probeA_sync.npz"]
     assert calls[0]["ttl_dir"] == raw_recording_dir / "events" / "Neuropix-PXI-100.ProbeA" / "TTL"
-    assert calls[1]["ttl_dir"] == raw_recording_dir / "events" / "Neuropix-PXI-100.ProbeB" / "TTL"
-    assert calls[0]["utc_offset_hours"] == 1.0
-    assert calls[1]["probe_name"] == "ProbeB"
+    assert calls[0]["utc_offset_hours"] == 0.0
+    assert calls[0]["probe_name"] == "ProbeA"
