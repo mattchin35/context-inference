@@ -26,6 +26,24 @@ def _require_existing_file(file_path: Path) -> Path:
     return file_path
 
 
+def _require_existing_dir(dir_path: Path) -> Path:
+    """Validate that an expected input directory exists.
+
+    Args:
+        dir_path: Directory path expected to exist on disk.
+
+    Returns:
+        Path: The same path after validation.
+
+    Raises:
+        FileNotFoundError: If ``dir_path`` does not exist or is not a
+        directory.
+    """
+    if not dir_path.is_dir():
+        raise FileNotFoundError(f"Required input directory not found: {dir_path}")
+    return dir_path
+
+
 def main_ni_only(
     ni_file: Path | str = Path(
         # "/home/matt/Documents/EXPERIMENTS/contextProjectData/test_runs/irig_neurokairos_20260408/run0_g0/run0_g0_t0.nidq.bin"
@@ -149,7 +167,96 @@ def main_workflow() -> None:
         )
 
 
+def main_open_ephys_workflow(
+    session_data_home: Path | str = Path(
+        "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260727_alternating_latent"
+    ),
+    raw_recording_name: str = "2026-07-27_14-37-43",
+    record_node_name: str = "Record Node 101",
+    experiment_name: str = "experiment1",
+    recording_name: str = "recording1",
+    derived_record_node_name: str = "Record_Node_101",
+    processor_prefix: str = "Neuropix-PXI-100.",
+    probe_names: tuple[str, ...] = ("ProbeA",),
+    kilosort_subdir: str = "kilosort4",
+    irig_line: int = 0,
+    bit_period_s: float = 1.0,
+    utc_offset_hours: float = 0.0,
+) -> dict[str, tuple[pd.DataFrame, pd.DataFrame]]:
+    """Run Open Ephys Kilosort spike synchronization for one recording.
+
+    Args:
+        session_data_home: Session directory containing ``ephys/raw``,
+            ``ephys/derived``, and output ``ephys/aligned`` directories.
+        raw_recording_name: Open Ephys raw recording folder name.
+        record_node_name: Raw Open Ephys record-node directory name.
+        experiment_name: Open Ephys experiment directory name.
+        recording_name: Open Ephys recording directory name.
+        derived_record_node_name: Record-node prefix used in derived probe
+            directories.
+        processor_prefix: Processor-name prefix before probe labels, for
+            example ``"Neuropix-PXI-100."``.
+        probe_names: Probe labels to sync. Pass ``("ProbeA", "ProbeB")`` when
+            both derived Kilosort outputs are present.
+        kilosort_subdir: Kilosort output directory name inside each derived
+            probe folder.
+        irig_line: Zero-based Open Ephys TTL line carrying IRIG-H.
+        bit_period_s: IRIG-H bit period in seconds.
+        utc_offset_hours: Constant offset added to decoded UTC timestamps, in
+            hours.
+
+    Returns:
+        dict[str, tuple[pd.DataFrame, pd.DataFrame]]: Mapping from probe name
+        to ``(spike_df, irig_df)``. Spike samples are preserved in
+        Kilosort-relative and Open Ephys global sample coordinates.
+    """
+    session_path = Path(session_data_home)
+    raw_recording_dir = (
+        session_path
+        / "ephys"
+        / "raw"
+        / raw_recording_name
+        / record_node_name
+        / experiment_name
+        / recording_name
+    )
+    derived_root = session_path / "ephys" / "derived"
+    output_dir = session_path / "ephys" / "aligned" / "aligned_open_ephys"
+
+    ephys_sync_utils.write_alignment_note(
+        output_root=session_path / "ephys" / "aligned",
+        utc_offset_hours=utc_offset_hours,
+    )
+
+    sync_results: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
+    for probe_name in probe_names:
+        processor_name = f"{processor_prefix}{probe_name}"
+        kilosort_dir = _require_existing_dir(
+            derived_root / f"{derived_record_node_name}_{processor_name}" / kilosort_subdir
+        )
+        ttl_dir = _require_existing_dir(raw_recording_dir / "events" / processor_name / "TTL")
+        continuous_dir = _require_existing_dir(raw_recording_dir / "continuous" / processor_name)
+        output_name = f"{probe_name[:1].lower()}{probe_name[1:]}_sync.npz"
+
+        spike_df, irig_df = ephys_sync_utils.sync_open_ephys_kilosort_spikes_to_utc(
+            kilosort_dir=kilosort_dir,
+            ttl_dir=ttl_dir,
+            continuous_dir=continuous_dir,
+            output_file=output_dir / output_name,
+            probe_name=probe_name,
+            line=irig_line,
+            bit_period_s=bit_period_s,
+            utc_offset_hours=utc_offset_hours,
+        )
+        print(
+            f"{probe_name}: mapped {spike_df.shape[0]} spikes using "
+            f"{irig_df.shape[0]} IRIG rising edges."
+        )
+        sync_results[probe_name] = (spike_df, irig_df)
+
+    return sync_results
+
+
 if __name__ == "__main__":
     # main_workflow()
     main_ni_only()
-

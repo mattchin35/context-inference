@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
+import warnings
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -21,12 +23,31 @@ from src.irig_tools.irig_sync_utils import (
     map_sample_indices_to_utc,
     pulse_lengths_from_edges,
 )
+from src.irig_tools.open_ephys_irig import decode_open_ephys_ttl_irig_utc
 from src.neural_analysis.spikeglx_sync_io import read_digital_line as read_spikeglx_digital_line
 
 
 NEW_YORK_TZ = ZoneInfo("America/New_York")
 ReadDigitalLineFn = Callable[[Path | str, int, int], tuple[np.ndarray, float]]
 DecodeSyncLineFn = Callable[..., pd.DataFrame]
+DecodeOpenEphysTTLIRIGFn = Callable[..., pd.DataFrame]
+
+
+@dataclass(frozen=True)
+class OpenEphysContinuousSampleBounds:
+    """Sample-number bounds for one Open Ephys continuous stream.
+
+    Attributes:
+        first_sample_ix: First Open Ephys global sample number in the
+            continuous stream, in samples.
+        last_sample_ix: Last Open Ephys global sample number in the continuous
+            stream, in samples.
+        n_samples: Number of samples in the continuous stream.
+    """
+
+    first_sample_ix: int
+    last_sample_ix: int
+    n_samples: int
 
 
 def save_stream_sync_npz(
@@ -187,6 +208,247 @@ def map_spike_times_to_utc(
         seconds, and ``utc_datetime`` as timezone-aware UTC datetimes.
     """
     return map_sample_indices_to_utc(spike_sample_ix, imec_irig_df)
+
+
+def load_open_ephys_continuous_sample_bounds(
+    continuous_dir: Path | str,
+) -> OpenEphysContinuousSampleBounds:
+    """Load sample-number bounds for one Open Ephys continuous stream.
+
+    Args:
+        continuous_dir: Open Ephys continuous-stream directory containing
+            ``sample_numbers.npy`` with shape ``(n_samples,)``. Values are Open
+            Ephys global sample numbers in samples.
+
+    Returns:
+        OpenEphysContinuousSampleBounds: First sample, last sample, and sample
+        count for the stream. All sample indices are in Open Ephys global
+        sample-number coordinates.
+    """
+    sample_numbers_path = Path(continuous_dir) / "sample_numbers.npy"
+    if not sample_numbers_path.exists():
+        raise FileNotFoundError(f"Open Ephys continuous sample_numbers.npy not found: {sample_numbers_path}")
+
+    sample_numbers = np.load(sample_numbers_path, allow_pickle=False, mmap_mode="r").reshape(-1)
+    if sample_numbers.size == 0:
+        raise ValueError(f"Open Ephys continuous sample_numbers.npy is empty: {sample_numbers_path}")
+
+    return OpenEphysContinuousSampleBounds(
+        first_sample_ix=int(sample_numbers[0]),
+        last_sample_ix=int(sample_numbers[-1]),
+        n_samples=int(sample_numbers.size),
+    )
+
+
+def convert_kilosort_samples_to_open_ephys_samples(
+    spike_sample_ix: npt.ArrayLike,
+    continuous_start_sample_ix: int,
+) -> np.ndarray:
+    """Convert Kilosort-relative spike samples to Open Ephys global samples.
+
+    Args:
+        spike_sample_ix: Kilosort spike sample indices with shape
+            ``(n_spikes,)`` in samples relative to the sorted continuous data.
+        continuous_start_sample_ix: First Open Ephys global sample number for
+            that continuous stream, in samples.
+
+    Returns:
+        np.ndarray: Open Ephys global spike sample numbers with shape
+        ``(n_spikes,)`` in samples.
+    """
+    spike_sample_ix = np.asarray(spike_sample_ix, dtype=np.int64).reshape(-1)
+    return spike_sample_ix + int(continuous_start_sample_ix)
+
+
+def warn_if_samples_extrapolated(
+    sample_ix: npt.ArrayLike,
+    irig_df: pd.DataFrame,
+    label: str = "samples",
+) -> dict[str, int | float | str]:
+    """Warn when samples fall outside finite IRIG UTC anchor boundaries.
+
+    Args:
+        sample_ix: Query sample indices with shape ``(n_samples,)`` in the same
+            sample-number coordinates as ``irig_df["sample_ix"]``.
+        irig_df: IRIG dataframe with shape ``(n_pulses, n_columns)``. Required
+            columns are ``sample_ix`` in samples and ``utc_unix`` in seconds.
+        label: Human-readable label for warning messages and metadata.
+
+    Returns:
+        dict[str, int | float | str]: Extrapolation metadata containing counts
+        before and after the finite IRIG anchor range plus the first/last safe
+        sample and UTC boundaries.
+    """
+    sample_ix = np.asarray(sample_ix, dtype=np.int64).reshape(-1)
+    known = irig_df.loc[np.isfinite(irig_df["utc_unix"]), ["sample_ix", "utc_unix"]].copy()
+    known = known.drop_duplicates(subset="sample_ix").sort_values("sample_ix")
+    if known.shape[0] < 2:
+        raise ValueError("Need at least two finite IRIG UTC points to evaluate extrapolation boundaries.")
+
+    first_safe_sample_ix = int(known["sample_ix"].iloc[0])
+    last_safe_sample_ix = int(known["sample_ix"].iloc[-1])
+    first_safe_utc_unix = float(known["utc_unix"].iloc[0])
+    last_safe_utc_unix = float(known["utc_unix"].iloc[-1])
+    n_before = int(np.count_nonzero(sample_ix < first_safe_sample_ix))
+    n_after = int(np.count_nonzero(sample_ix > last_safe_sample_ix))
+
+    first_safe_utc = datetime.fromtimestamp(first_safe_utc_unix, tz=timezone.utc).isoformat()
+    last_safe_utc = datetime.fromtimestamp(last_safe_utc_unix, tz=timezone.utc).isoformat()
+    if n_before > 0 or n_after > 0:
+        warnings.warn(
+            (
+                f"{label}: {n_before} samples before and {n_after} samples after are "
+                "outside finite IRIG UTC anchor range and will be linearly extrapolated. "
+                f"Safe sample range is {first_safe_sample_ix} to {last_safe_sample_ix}; "
+                f"safe UTC range is {first_safe_utc} to {last_safe_utc}."
+            ),
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    return {
+        "label": str(label),
+        "n_extrapolated_before_irig": n_before,
+        "n_extrapolated_after_irig": n_after,
+        "first_safe_sample_ix": first_safe_sample_ix,
+        "last_safe_sample_ix": last_safe_sample_ix,
+        "first_safe_utc_unix": first_safe_utc_unix,
+        "last_safe_utc_unix": last_safe_utc_unix,
+        "first_safe_utc_datetime": first_safe_utc,
+        "last_safe_utc_datetime": last_safe_utc,
+    }
+
+
+def sync_open_ephys_kilosort_spikes_to_utc(
+    kilosort_dir: Path | str,
+    ttl_dir: Path | str,
+    continuous_dir: Path | str,
+    output_file: Optional[Path | str] = None,
+    probe_name: str = "",
+    line: int = 0,
+    bit_period_s: float = 1.0,
+    irig_format: str = "neurokairos",
+    sample_rate_hz: float | None = None,
+    min_high_duration_s: float = 0.01,
+    min_low_duration_s: float = 0.01,
+    utc_offset_hours: float = 0.0,
+    warn_invalid: bool = True,
+    decode_open_ephys_ttl_irig_utc_fn: DecodeOpenEphysTTLIRIGFn = decode_open_ephys_ttl_irig_utc,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Decode Open Ephys TTL IRIG and assign UTC timestamps to Kilosort spikes.
+
+    Args:
+        kilosort_dir: Kilosort output directory containing ``spike_times.npy``.
+        ttl_dir: Open Ephys TTL event directory containing IRIG transitions.
+        continuous_dir: Open Ephys continuous-stream directory containing
+            ``sample_numbers.npy``. Kilosort spike times are assumed to be
+            relative to this stream's first sample.
+        output_file: Optional ``.npz`` output path for the synced probe.
+        probe_name: Optional probe label, for example ``"ProbeA"``.
+        line: Zero-based TTL line carrying IRIG-H.
+        bit_period_s: IRIG-H bit period in seconds.
+        irig_format: IRIG frame format passed to the Open Ephys TTL decoder.
+        sample_rate_hz: Optional sample rate in Hz, used only if TTL
+            ``timestamps.npy`` is absent.
+        min_high_duration_s: Debounce threshold for short high glitches, in
+            seconds.
+        min_low_duration_s: Debounce threshold for short low glitches, in
+            seconds.
+        utc_offset_hours: Constant offset added to decoded UTC timestamps, in
+            hours.
+        warn_invalid: If ``True``, warn about unclassified IRIG pulses.
+        decode_open_ephys_ttl_irig_utc_fn: Function that decodes Open Ephys TTL
+            IRIG into the common IRIG UTC dataframe schema.
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]:
+            - Spike UTC dataframe with Kilosort-relative ``sample_ix`` in
+              samples, ``open_ephys_sample_ix`` in Open Ephys global samples,
+              ``utc_unix`` in seconds, and UTC datetimes.
+            - Open Ephys IRIG rising-edge dataframe in global sample-number
+              coordinates.
+    """
+    kilosort_path = Path(kilosort_dir)
+    ttl_path = Path(ttl_dir)
+    continuous_path = Path(continuous_dir)
+    spike_times_path = kilosort_path / "spike_times.npy"
+    if not spike_times_path.exists():
+        raise FileNotFoundError(f"Kilosort spike_times.npy not found: {spike_times_path}")
+
+    continuous_bounds = load_open_ephys_continuous_sample_bounds(continuous_path)
+    irig_df = decode_open_ephys_ttl_irig_utc_fn(
+        ttl_dir=ttl_path,
+        line=line,
+        bit_period_s=bit_period_s,
+        irig_format=irig_format,
+        sample_rate_hz=sample_rate_hz,
+        min_high_duration_s=min_high_duration_s,
+        min_low_duration_s=min_low_duration_s,
+        warn_invalid=warn_invalid,
+    )
+    irig_df = apply_utc_hour_offset(irig_df, utc_offset_hours=utc_offset_hours)
+
+    spike_sample_ix = np.asarray(np.load(spike_times_path, allow_pickle=True), dtype=np.int64).reshape(-1)
+    open_ephys_spike_sample_ix = convert_kilosort_samples_to_open_ephys_samples(
+        spike_sample_ix=spike_sample_ix,
+        continuous_start_sample_ix=continuous_bounds.first_sample_ix,
+    )
+    extrapolation_meta = warn_if_samples_extrapolated(
+        sample_ix=open_ephys_spike_sample_ix,
+        irig_df=irig_df,
+        label=f"{probe_name or 'Open Ephys'} spikes",
+    )
+
+    mapped_df = map_sample_indices_to_utc(open_ephys_spike_sample_ix, irig_df)
+    spike_df = mapped_df.rename(columns={"sample_ix": "open_ephys_sample_ix"})
+    spike_df.insert(0, "sample_ix", spike_sample_ix.astype(np.int64))
+
+    if output_file is not None:
+        meta = {
+            "generator": "sync_open_ephys_kilosort_spikes_to_utc",
+            "analysis_version": "0.3.0",
+            "kilosort_dir": str(kilosort_path),
+            "spike_times_file": str(spike_times_path),
+            "ttl_dir": str(ttl_path),
+            "continuous_dir": str(continuous_path),
+            "probe_name": str(probe_name),
+            "continuous_start_sample_ix": int(continuous_bounds.first_sample_ix),
+            "continuous_last_sample_ix": int(continuous_bounds.last_sample_ix),
+            "continuous_n_samples": int(continuous_bounds.n_samples),
+            "line": int(line),
+            "bit_period_s": float(bit_period_s),
+            "irig_format": str(irig_format),
+            "sample_rate_hz": None if sample_rate_hz is None else float(sample_rate_hz),
+            "min_high_duration_s": float(min_high_duration_s),
+            "min_low_duration_s": float(min_low_duration_s),
+            "utc_offset_hours": float(utc_offset_hours),
+            "extrapolation": extrapolation_meta,
+            "units": {
+                "spike_sample_ix": "samples relative to Kilosort continuous data",
+                "spike_open_ephys_sample_ix": "Open Ephys global samples",
+                "irig_sample_ix": "Open Ephys global samples",
+                "irig_recording_time_s": "seconds",
+                "irig_pulse_len_samples": "samples",
+                "utc_unix": "seconds",
+            },
+            "axis_convention": "1D sample index along acquisition time",
+        }
+        save_stream_sync_npz(
+            output_file=output_file,
+            arrays={
+                "spike_sample_ix": spike_df["sample_ix"].to_numpy(dtype=np.int64),
+                "spike_open_ephys_sample_ix": spike_df["open_ephys_sample_ix"].to_numpy(dtype=np.int64),
+                "spike_utc_unix": spike_df["utc_unix"].to_numpy(dtype=float),
+                "irig_sample_ix": irig_df["sample_ix"].to_numpy(dtype=np.int64),
+                "irig_recording_time_s": irig_df["recording_time_s"].to_numpy(dtype=float),
+                "irig_pulse_len_samples": irig_df["pulse_len_samples"].to_numpy(dtype=np.int64),
+                "irig_bit": irig_df["irig_bit"].to_numpy(dtype=object),
+                "irig_utc_unix": irig_df["utc_unix"].to_numpy(dtype=float),
+            },
+            meta=meta,
+        )
+
+    return spike_df, irig_df
 
 
 def sync_imec_spikes_to_utc(
