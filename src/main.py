@@ -4527,24 +4527,9 @@ def main_cross_mouse_multisession_block_performance(
     )
 
 
-# def presentation_plots(block_df: pd.DataFrame, trial_df: pd.DataFrame):
-#     ix_valid = bssm.make_valid_block_history_mask(block_df)
-#     df = block_df[ix_valid]
-#
-#     consecutive_rewards = df['prev_consecutive_rewards'].to_numpy().reshape(-1, 1).astype(int)
-#     prev_rewards = df['prev_n_rewarded'].to_numpy().reshape(-1, 1).astype(int)
-#     # prev_correct = df['prev_n_correct'].to_numpy().reshape(-1, 1).astype(int)
-#     trials_to_correct = df['trials_to_correct'].to_numpy().reshape(-1, 1).astype(int)
-#     bias_flag = df['bias_full_flag'].to_numpy().reshape(-1, 1) == 'True'
-#     predictors = np.concatenate([prev_rewards, bias_flag], axis=1)
-#     pred_labels = ['previous rewards', 'block bias flag']
-#
-#     utilplot.plot_postprob_obs_for_presentation(block_model_dict['map']['posterior_probs'], trials_to_correct, predictors, map_hmm, colors, cmap, predictor_labels = pred_labels)
-
-
 if __name__ == '__main__':
-    # main_mouse()
+    main_mouse()
     # main_mouse_batch()
-    main_multisession(multisession_collection_only=True)
+    # main_multisession(multisession_collection_only=True)
     # main_simulation()
     # main_cross_mouse_metrics()

@@ -400,3 +400,42 @@ summaries without recomputing hidden state.
   saving and collection, R/Python residual-spread parity, R block-preprocessing
   coercion for new schemas, exemplar model validation and residual calculation,
   save-analysis integration, and parameter CSV/JSON writing.
+
+# 2026/07/27
+
+Added first-pass Dynamax-based HMM tooling for block exemplar model diagnostics.
+The main goal was to classify blocks against the already defined exemplar
+models without fitting new emission models, so the resulting states remain
+interpretable as exemplar names rather than arbitrary latent Gaussian clusters.
+
+- Added `dynamax` as a project dependency and verified the local HMM API,
+  including `GaussianHMM` and low-level `hmm_smoother` support.
+- Added an exploratory fitted Gaussian-HMM path using the four normalized
+  exemplar residual columns as a 4D emission vector. This path was kept
+  available as example/inspection code, but it is not the preferred modeling
+  workflow because its hidden states are learned clusters rather than fixed
+  exemplar identities.
+- Added the fixed-exemplar likelihood workflow in
+  `exemplar_hmm_modeling.py`. It loads the saved exemplar parameter CSV for
+  model names and residual spreads, uses the existing raw residual columns to
+  compute Gaussian log likelihoods, reads the existing normalized residual
+  columns for output and plotting, computes independent likelihood-normalized
+  probabilities, and smooths the fixed likelihoods with Dynamax
+  `hmm_smoother`.
+- Saved interpretable block-level outputs including
+  `exemplar_z_residual_<model>`, `exemplar_log_likelihood_<model>`,
+  `exemplar_independent_prob_<model>`,
+  `exemplar_hmm_smoothed_prob_<model>`, `exemplar_ll_argmax_model`, and
+  `exemplar_hmm_smoothed_model`.
+- Added diagnostic plots with four panels: normalized residual traces, fixed
+  exemplar log likelihoods, independent likelihood argmax assignments, and
+  HMM-smoothed exemplar assignments. The categorical panels use exemplar model
+  names as y-axis labels.
+- Added one-mouse multisession support for cross-session block-performance
+  CSVs, with a hardcoded `main_multisession()` entry point and optional
+  session-boundary markers derived from `source_date` or `source_session_id`
+  after valid-row filtering.
+- Added focused pytest coverage for fixed likelihood scoring, sticky
+  transition matrix construction, Dynamax smoothing, output-column creation,
+  diagnostic plotting, loadable pickle payloads, and multisession boundary
+  handling.
