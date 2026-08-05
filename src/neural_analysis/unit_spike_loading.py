@@ -373,6 +373,7 @@ def filter_cluster_metadata(
     region_channels: np.ndarray | list[int],
     quality_labels: tuple[str, ...] | list[str] | None = ("good", "mua"),
     default_group: str = "mua",
+    quality_column: str = "group",
 ) -> pd.DataFrame:
     """
     Select unit metadata by channel and optional quality label.
@@ -380,8 +381,9 @@ def filter_cluster_metadata(
     Parameters
     ----------
     cluster_info : pd.DataFrame
-        Sorter cluster table with columns ``cluster_id``, ``ch``, and ``group``.
-        Rows correspond to clusters; channel ids are integer sorter channels.
+        Sorter cluster table with columns ``cluster_id``, ``ch``, and
+        ``quality_column``. Rows correspond to clusters; channel ids are
+        integer sorter channels.
     region_channels : np.ndarray | list[int]
         One-dimensional channel ids with shape ``(n_channels,)`` used to select
         units in the active region.
@@ -389,6 +391,9 @@ def filter_cluster_metadata(
         Quality labels to include. ``None`` disables quality filtering.
     default_group : str, default="mua"
         Label used when the sorter table contains a string ``"nan"`` group.
+    quality_column : str, default="group"
+        Name of the cluster-quality column to filter, such as ``"group"`` for
+        manual Phy labels or ``"KSLabel"`` for Kilosort labels.
 
     Returns
     -------
@@ -397,7 +402,7 @@ def filter_cluster_metadata(
         ``quality_label`` column with normalized quality strings.
     """
 
-    required_columns = {"cluster_id", "ch", "group"}
+    required_columns = {"cluster_id", "ch", str(quality_column)}
     missing_columns = required_columns - set(cluster_info.columns)
     if missing_columns:
         raise ValueError(f"cluster_info is missing required columns: {sorted(missing_columns)}")
@@ -405,7 +410,7 @@ def filter_cluster_metadata(
     normalized_channels = np.asarray(region_channels, dtype=int).reshape(-1)
     cluster_metadata = cluster_info.copy()
     cluster_metadata["quality_label"] = normalize_quality_labels(
-        cluster_metadata["group"],
+        cluster_metadata[str(quality_column)],
         default_group=default_group,
     )
     selected_mask = cluster_metadata["ch"].isin(normalized_channels)

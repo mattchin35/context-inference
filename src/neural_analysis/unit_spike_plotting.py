@@ -752,6 +752,7 @@ def plot_trial_behavior_and_spike_raster(
     lfp_time_s: np.ndarray | None = None,
     lfp_uv: np.ndarray | None = None,
     lfp_label: str | None = None,
+    lfp_y_label: str = "LFP (uV)",
     figure_size: tuple[float, float] = (12.0, 10.0),
     spike_row_spacing: float = 1.0,
 ) -> tuple[plt.Figure, plt.Axes | np.ndarray]:
@@ -797,6 +798,9 @@ def plot_trial_behavior_and_spike_raster(
         ``(n_lfp_samples,)``.
     lfp_label : str | None, optional
         Label shown on the LFP axis title, such as the saved channel index.
+    lfp_y_label : str, default="LFP (uV)"
+        Y-axis label for the LFP trace. Use neutral labels such as ``"LFP"``
+        when the loaded values are not guaranteed to be microvolts.
     figure_size : tuple[float, float], default=(12.0, 10.0)
         Matplotlib figure size as ``(width_inches, height_inches)``.
     spike_row_spacing : float, default=1.0
@@ -913,7 +917,7 @@ def plot_trial_behavior_and_spike_raster(
     if lfp_axis is not None:
         lfp_axis.plot(lfp_time_s, lfp_uv, color="black", linewidth=0.8)
         lfp_axis.axvline(0.0, color="gray", linestyle="--", linewidth=1.2)
-        lfp_axis.set_ylabel("LFP (uV)")
+        lfp_axis.set_ylabel(str(lfp_y_label))
         lfp_axis.set_xlim(float(window[0]), float(window[1]))
         lfp_axis.set_title(lfp_label or "LFP")
 

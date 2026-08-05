@@ -38,6 +38,9 @@ COMPARE_LEFT_RIGHT_ACTION = "compare_lr"
 POPULATION_PSTH_UNIT_SCOPE_OPTIONS = ["Visible page units", "All selected units"]
 LFP_DROPDOWN_LABEL_HPC_V1 = "HPC/V1 LFP"
 LFP_DROPDOWN_LABEL_PFC = "PFC LFP"
+LFP_FORMAT_SPIKEGLX = "SpikeGLX"
+LFP_FORMAT_OPEN_EPHYS_DERIVED = "Open Ephys derived"
+LFP_FORMAT_OPTIONS = [LFP_FORMAT_SPIKEGLX, LFP_FORMAT_OPEN_EPHYS_DERIVED]
 LFP_FILTER_BANDS = {
     "Default": None,
     "Theta (5-10 Hz)": (5.0, 10.0),
@@ -144,6 +147,7 @@ def decode_lfp_sync_cached(
 
 @st.cache_data(show_spinner="Loading LFP trace...")
 def load_trial_lfp_trace_cached(
+    lfp_format: str,
     lfp_path: str,
     saved_channel_index: int,
     alignment_time_s: float,
@@ -156,14 +160,18 @@ def load_trial_lfp_trace_cached(
     filter_low_hz: float | None,
     filter_high_hz: float | None,
     filter_padding_s: float,
+    aligned_sync_npz_path: str | None = None,
 ):
     """
     Load and cache one trial-aligned LFP channel window.
 
     Parameters
     ----------
+    lfp_format : str
+        LFP file format. Supported values are ``LFP_FORMAT_SPIKEGLX`` and
+        ``LFP_FORMAT_OPEN_EPHYS_DERIVED``.
     lfp_path : str
-        SpikeGLX ``.lf.bin`` file path.
+        LFP binary file path. Units: filesystem path.
     saved_channel_index : int
         Zero-based saved channel index into the binary rows.
     alignment_time_s : float
@@ -184,34 +192,133 @@ def load_trial_lfp_trace_cached(
         unfiltered.
     filter_padding_s : float
         Seconds added to both sides of the requested window before filtering.
+    aligned_sync_npz_path : str | None, optional
+        Open Ephys probe sync ``.npz`` path. Required for
+        ``LFP_FORMAT_OPEN_EPHYS_DERIVED`` and ignored for SpikeGLX.
 
     Returns
     -------
     tuple[np.ndarray, np.ndarray]
-        ``(relative_time_s, lfp_uv)`` for plotting.
+        ``(relative_time_s, lfp_values)`` for plotting. Time is in seconds
+        relative to alignment.
     """
 
-    lfp_irig_df, sample_rate_hz = decode_lfp_sync_cached(
+    return load_trial_lfp_trace_for_format(
+        lfp_format=lfp_format,
         lfp_path=lfp_path,
+        saved_channel_index=int(saved_channel_index),
+        alignment_time_s=float(alignment_time_s),
+        window_start_s=float(window_start_s),
+        window_end_s=float(window_end_s),
         digital_word=int(digital_word),
         irig_line=int(irig_line),
         bit_period_s=float(bit_period_s),
         utc_offset_hours=float(utc_offset_hours),
-    )
-    return lfp_loading.load_trial_lfp_trace(
-        lfp_path=Path(lfp_path),
-        saved_channel_index=int(saved_channel_index),
-        alignment_time_s=float(alignment_time_s),
-        window=(float(window_start_s), float(window_end_s)),
-        lfp_irig_df=lfp_irig_df,
-        sample_rate_hz=float(sample_rate_hz),
-        frequency_band_hz=(
-            (float(filter_low_hz), float(filter_high_hz))
-            if filter_low_hz is not None and filter_high_hz is not None
-            else None
-        ),
+        filter_low_hz=filter_low_hz,
+        filter_high_hz=filter_high_hz,
         filter_padding_s=float(filter_padding_s),
+        aligned_sync_npz_path=aligned_sync_npz_path,
     )
+
+
+def load_trial_lfp_trace_for_format(
+    lfp_format: str,
+    lfp_path: str,
+    saved_channel_index: int,
+    alignment_time_s: float,
+    window_start_s: float,
+    window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    filter_low_hz: float | None,
+    filter_high_hz: float | None,
+    filter_padding_s: float,
+    aligned_sync_npz_path: str | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Load one LFP trace using the selected acquisition format.
+
+    Parameters
+    ----------
+    lfp_format : str
+        LFP file format. Supported values are ``LFP_FORMAT_SPIKEGLX`` and
+        ``LFP_FORMAT_OPEN_EPHYS_DERIVED``.
+    lfp_path : str
+        LFP binary file path. SpikeGLX expects ``.lf.bin`` with a sibling
+        ``.meta`` file; Open Ephys expects derived ``lfp.dat`` with a sibling
+        ``lfp_preprocessing.json``. Units: filesystem path.
+    saved_channel_index : int
+        Zero-based saved channel index. Units: channel index.
+    alignment_time_s : float
+        Absolute trial alignment timestamp in UTC Unix seconds.
+    window_start_s, window_end_s : float
+        Relative window bounds in seconds around ``alignment_time_s``.
+    digital_word : int
+        SpikeGLX digital word index. Ignored for Open Ephys derived LFP.
+    irig_line : int
+        SpikeGLX IRIG-H digital line. Ignored for Open Ephys derived LFP.
+    bit_period_s : float
+        SpikeGLX IRIG-H bit period in seconds. Ignored for Open Ephys derived
+        LFP.
+    utc_offset_hours : float
+        Constant UTC offset in hours applied to decoded sync anchors.
+    filter_low_hz, filter_high_hz : float | None
+        Optional bandpass cutoff frequencies in Hz. Both values must be
+        provided to filter; ``None`` for either value keeps the trace
+        unfiltered.
+    filter_padding_s : float
+        Seconds added to both sides of the requested window before filtering.
+    aligned_sync_npz_path : str | None, optional
+        Open Ephys probe sync ``.npz`` path containing IRIG anchors. Required
+        for Open Ephys derived LFP and ignored for SpikeGLX.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        ``(relative_time_s, lfp_values)``. Both arrays have shape
+        ``(n_samples,)``. Time is in seconds relative to alignment; LFP units
+        depend on the selected file format.
+    """
+
+    frequency_band_hz = (
+        (float(filter_low_hz), float(filter_high_hz))
+        if filter_low_hz is not None and filter_high_hz is not None
+        else None
+    )
+    if lfp_format == LFP_FORMAT_SPIKEGLX:
+        lfp_irig_df, sample_rate_hz = lfp_loading.decode_lfp_sync(
+            lfp_path=Path(lfp_path),
+            digital_word=int(digital_word),
+            irig_line=int(irig_line),
+            bit_period_s=float(bit_period_s),
+            utc_offset_hours=float(utc_offset_hours),
+        )
+        return lfp_loading.load_trial_lfp_trace(
+            lfp_path=Path(lfp_path),
+            saved_channel_index=int(saved_channel_index),
+            alignment_time_s=float(alignment_time_s),
+            window=(float(window_start_s), float(window_end_s)),
+            lfp_irig_df=lfp_irig_df,
+            sample_rate_hz=float(sample_rate_hz),
+            frequency_band_hz=frequency_band_hz,
+            filter_padding_s=float(filter_padding_s),
+        )
+    if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED:
+        if aligned_sync_npz_path is None or str(aligned_sync_npz_path).strip() == "":
+            raise ValueError("Open Ephys derived LFP requires an aligned sync .npz path.")
+        return lfp_loading.load_open_ephys_trial_lfp_trace(
+            lfp_path=Path(lfp_path),
+            aligned_sync_npz_path=Path(aligned_sync_npz_path),
+            saved_channel_index=int(saved_channel_index),
+            alignment_time_s=float(alignment_time_s),
+            window=(float(window_start_s), float(window_end_s)),
+            utc_offset_hours=float(utc_offset_hours),
+            frequency_band_hz=frequency_band_hz,
+            filter_padding_s=float(filter_padding_s),
+        )
+    raise ValueError(f"Unsupported LFP format: {lfp_format!r}")
 
 
 def _build_channel_text(region_name: str) -> str:
@@ -514,7 +621,18 @@ def _render_path_browser() -> None:
 def _select_unit_metadata(cluster_info, region_channels):
     """Render unit-quality controls and return filtered unit metadata."""
 
-    quality_labels = unit_spike_loading.normalize_quality_labels(cluster_info["group"])
+    quality_column_options = [column for column in ("group", "KSLabel") if column in cluster_info.columns]
+    if not quality_column_options:
+        st.warning("cluster_info.tsv must contain a quality column such as group or KSLabel.")
+        return cluster_info.iloc[0:0].copy()
+    quality_column = st.sidebar.selectbox(
+        "Quality column",
+        options=quality_column_options,
+        index=0,
+        help="Use group for manual Phy labels or KSLabel for Kilosort labels.",
+    )
+
+    quality_labels = unit_spike_loading.normalize_quality_labels(cluster_info[quality_column])
     available_quality_labels = sorted(quality_labels.unique().tolist())
     default_quality_labels = [label for label in ("good", "mua") if label in available_quality_labels]
     if not default_quality_labels:
@@ -533,6 +651,7 @@ def _select_unit_metadata(cluster_info, region_channels):
         cluster_info,
         region_channels=region_channels,
         quality_labels=tuple(selected_quality_labels),
+        quality_column=quality_column,
     )
 
 
@@ -921,11 +1040,17 @@ def main() -> None:
         lfp_time_s = None
         lfp_uv = None
         lfp_label = None
+        lfp_y_label = "LFP (uV)"
         lfp_utc_offset_hours = None
         if show_lfp_trace:
             lfp_digital_word = 0
             lfp_irig_line = 6
             lfp_bit_period_s = 1.0
+            lfp_format = st.sidebar.selectbox(
+                "LFP format",
+                options=LFP_FORMAT_OPTIONS,
+                index=0,
+            )
             lfp_utc_offset_hours = st.sidebar.number_input(
                 "LFP UTC offset (hours)",
                 value=0,
@@ -936,7 +1061,8 @@ def main() -> None:
                     "trial times to LFP samples. Use -1 if decoded LFP times are one hour too late."
                 ),
             )
-            st.sidebar.caption(f"LFP sync digital line: {lfp_irig_line}")
+            if lfp_format == LFP_FORMAT_SPIKEGLX:
+                st.sidebar.caption(f"LFP sync digital line: {lfp_irig_line}")
             st.sidebar.caption(f"LFP UTC offset: {int(lfp_utc_offset_hours)} h")
             lfp_filter_label = st.sidebar.selectbox(
                 "LFP filter band",
@@ -959,6 +1085,19 @@ def main() -> None:
                 index=list(lfp_dropdown_options.keys()).index(default_lfp_label),
             )
             selected_lfp_path = lfp_dropdown_options[selected_lfp_label]
+            default_aligned_sync_path = (
+                hpc_v1_aligned_spike_path
+                if selected_lfp_label == LFP_DROPDOWN_LABEL_HPC_V1
+                else pfc_aligned_spike_path
+            )
+            selected_aligned_sync_path = default_aligned_sync_path
+            if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED:
+                selected_aligned_sync_path = st.sidebar.text_input(
+                    "Open Ephys aligned sync path",
+                    value=str(default_aligned_sync_path),
+                    help="Use the probe sync .npz produced by the Open Ephys spike synchronization workflow.",
+                )
+                lfp_y_label = "LFP"
             st.sidebar.caption(selected_lfp_path or "No LFP path entered for this selection.")
             lfp_saved_channel_index = st.sidebar.number_input(
                 "LFP saved channel index",
@@ -969,9 +1108,10 @@ def main() -> None:
             if str(selected_lfp_path).strip() == "":
                 st.warning("LFP trace requested, but no active LFP path is set.")
             else:
-                lfp_meta_path = _spikeglx_meta_path(Path(selected_lfp_path))
-                if not lfp_meta_path.exists():
-                    st.warning(f"Expected LFP metadata file was not found: {lfp_meta_path}")
+                if lfp_format == LFP_FORMAT_SPIKEGLX:
+                    lfp_meta_path = _spikeglx_meta_path(Path(selected_lfp_path))
+                    if not lfp_meta_path.exists():
+                        st.warning(f"Expected LFP metadata file was not found: {lfp_meta_path}")
                 try:
                     alignment_time_s = unit_spike_plotting.get_trial_alignment_time(
                         trial_df=trial_df,
@@ -979,6 +1119,7 @@ def main() -> None:
                         alignment_event=alignment_event,
                     )
                     lfp_time_s, lfp_uv = load_trial_lfp_trace_cached(
+                        lfp_format=lfp_format,
                         lfp_path=str(selected_lfp_path),
                         saved_channel_index=int(lfp_saved_channel_index),
                         alignment_time_s=float(alignment_time_s),
@@ -991,8 +1132,13 @@ def main() -> None:
                         filter_low_hz=lfp_filter_band[0] if lfp_filter_band is not None else None,
                         filter_high_hz=lfp_filter_band[1] if lfp_filter_band is not None else None,
                         filter_padding_s=LFP_FILTER_PADDING_S,
+                        aligned_sync_npz_path=(
+                            str(selected_aligned_sync_path)
+                            if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED
+                            else None
+                        ),
                     )
-                    lfp_label = f"{selected_lfp_label}, saved channel {int(lfp_saved_channel_index)}"
+                    lfp_label = f"{selected_lfp_label}, {lfp_format}, saved channel {int(lfp_saved_channel_index)}"
                     if lfp_filter_band is not None:
                         lfp_label = f"{lfp_label}, {lfp_filter_label}"
                 except Exception as error:  # noqa: BLE001 - Optional LFP should not block raster plotting.
@@ -1012,6 +1158,7 @@ def main() -> None:
                 lfp_time_s=lfp_time_s,
                 lfp_uv=lfp_uv,
                 lfp_label=lfp_label,
+                lfp_y_label=lfp_y_label,
                 figure_size=raster_layout["figure_size"],
                 spike_row_spacing=raster_layout["row_spacing"],
             )

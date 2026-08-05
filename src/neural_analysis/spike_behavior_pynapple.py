@@ -201,8 +201,15 @@ def load_sorter_metadata(sorter_output_path: Path) -> tuple[np.ndarray, pd.DataF
         ``cluster_info`` has one row per cluster with sorter metadata.
     """
 
-    spike_clusters = np.load(sorter_output_path / "spike_clusters.npy", allow_pickle=True).astype(int)
-    cluster_info = pd.read_csv(sorter_output_path / "cluster_info.tsv", sep="\t")
+    sorter_path = Path(sorter_output_path)
+    spike_clusters = np.load(sorter_path / "spike_clusters.npy", allow_pickle=True).astype(int)
+    cluster_info_path = sorter_path / "cluster_info.tsv"
+    if not cluster_info_path.exists():
+        raise FileNotFoundError(
+            "Missing cluster_info.tsv: manual spike curation in Phy must be performed before "
+            f"behavior integration, or its output is missing: {cluster_info_path}"
+        )
+    cluster_info = pd.read_csv(cluster_info_path, sep="\t")
     return spike_clusters, cluster_info
 
 
@@ -548,19 +555,32 @@ def normalize_region_channels(region_channels: np.ndarray | list[int]) -> np.nda
     return normalized_channels
 
 
-def select_units_by_channels(cluster_info: pd.DataFrame, region_channels: np.ndarray | list[int], default_group='mua') -> np.ndarray:
+def select_units_by_channels(
+    cluster_info: pd.DataFrame,
+    region_channels: np.ndarray | list[int],
+    default_group: str = "mua",
+    quality_column: str = "group",
+) -> np.ndarray:
     """
     Select cluster ids assigned to a user-provided set of channels.
 
     Parameters
     ----------
     cluster_info : pd.DataFrame
-        Cluster metadata table with columns ``cluster_id``, ``ch``, and ``group``. ``ch`` is an
-        integer channel index with no physical-unit conversion. ``group`` is a cluster-quality
-        label, and only ``"good"`` and ``"mua"`` clusters are retained.
+        Cluster metadata table with columns ``cluster_id``, ``ch``, and
+        ``quality_column``. ``ch`` is an integer channel index with no
+        physical-unit conversion. ``quality_column`` is a cluster-quality label,
+        and only ``"good"`` and ``"mua"`` clusters are retained.
     region_channels : np.ndarray | list[int]
         One-dimensional list-like collection of channel indices with shape ``(n_channels,)``.
         Channel ids are integer labels with no physical-unit conversion.
+    default_group : str, default="mua"
+        Label used when the quality column contains missing values or missing
+        sentinels such as ``"nan"``. Units: not applicable.
+    quality_column : str, default="group"
+        Name of the cluster-quality column to use, such as ``"group"`` for
+        manual Phy labels or ``"KSLabel"`` for Kilosort labels. Units: not
+        applicable.
 
     Returns
     -------
@@ -570,15 +590,17 @@ def select_units_by_channels(cluster_info: pd.DataFrame, region_channels: np.nda
         ``"good"`` or ``"mua"``.
     """
 
-    required_columns = {"cluster_id", "ch", "group"}
+    required_columns = {"cluster_id", "ch", str(quality_column)}
     missing_columns = required_columns - set(cluster_info.columns)
     if missing_columns:
         raise ValueError(f"cluster_info is missing required columns: {sorted(missing_columns)}")
 
     normalized_channels = normalize_region_channels(region_channels)
-    normalized_groups = cluster_info["group"].astype(str).str.strip().str.lower()
-    nan_mask = normalized_groups == 'nan'
-    normalized_groups[nan_mask] = default_group
+    normalized_groups = cluster_info[str(quality_column)].copy()
+    normalized_groups.loc[normalized_groups.isna()] = default_group
+    normalized_groups = normalized_groups.astype(str).str.strip().str.lower()
+    missing_sentinels = {"", "nan", "none"}
+    normalized_groups.loc[normalized_groups.isin(missing_sentinels)] = default_group
     selected_mask = cluster_info["ch"].isin(normalized_channels) & normalized_groups.isin({"good", "mua"})
     return cluster_info.loc[selected_mask, "cluster_id"].to_numpy(dtype=int)
 
