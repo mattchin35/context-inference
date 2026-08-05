@@ -34,6 +34,9 @@ UNIT_PLOT_TYPE_OPTIONS = [
     "Binned rate: trials + mean",
     "Binned rate: mean +/- SD",
 ]
+CHANNEL_SOURCE_MANUAL = "Manual / preset"
+CHANNEL_SOURCE_CHANNEL_QUALITY = "channel_quality"
+CHANNEL_SOURCE_OPTIONS = [CHANNEL_SOURCE_MANUAL, CHANNEL_SOURCE_CHANNEL_QUALITY]
 COMPARE_LEFT_RIGHT_ACTION = "compare_lr"
 POPULATION_PSTH_UNIT_SCOPE_OPTIONS = ["Visible page units", "All selected units"]
 LFP_DROPDOWN_LABEL_HPC_V1 = "HPC/V1 LFP"
@@ -104,6 +107,28 @@ def load_viewer_data_cached(
         sess_id_full=sess_id_full,
         probe_paths=probe_paths,
     )
+
+
+@st.cache_data(show_spinner="Loading channel quality...")
+def load_channel_quality_cached(channel_quality_path: str):
+    """
+    Load normalized channel-quality metadata with Streamlit caching.
+
+    Parameters
+    ----------
+    channel_quality_path : str
+        Path to ``channel_quality.csv``, ``channel_quality.json``, or a probe
+        directory containing one of those files. Units: filesystem path.
+
+    Returns
+    -------
+    pd.DataFrame
+        Normalized channel-quality dataframe from
+        ``unit_spike_loading.load_channel_quality``. Rows are channels; ``ch``
+        is a zero-based channel index.
+    """
+
+    return unit_spike_loading.load_channel_quality(Path(channel_quality_path))
 
 
 @st.cache_resource(show_spinner="Decoding LFP sync...")
@@ -326,6 +351,58 @@ def _build_channel_text(region_name: str) -> str:
 
     presets = unit_spike_loading.get_ct014_region_channel_presets()
     return unit_spike_loading.format_channel_list(presets.get(region_name, np.array([], dtype=int)))
+
+
+def resolve_region_channels_for_source(
+    channel_source: str,
+    manual_channel_text: str,
+    channel_quality: pd.DataFrame | None,
+    require_inside_brain: bool,
+    channel_quality_labels: tuple[str, ...] | list[str] | None,
+) -> tuple[np.ndarray, str]:
+    """
+    Resolve active region channels from manual text or channel-quality metadata.
+
+    Parameters
+    ----------
+    channel_source : str
+        Channel source label. Supported values are ``CHANNEL_SOURCE_MANUAL`` and
+        ``CHANNEL_SOURCE_CHANNEL_QUALITY``.
+    manual_channel_text : str
+        Editable channel text. Used only for ``CHANNEL_SOURCE_MANUAL``. Values
+        are zero-based channel ids separated by commas or whitespace.
+    channel_quality : pd.DataFrame | None
+        Normalized channel-quality table with shape ``(n_channels, n_columns)``.
+        Required for ``CHANNEL_SOURCE_CHANNEL_QUALITY``. ``None`` is allowed
+        only for manual channels.
+    require_inside_brain : bool
+        If ``True``, channel-quality selection keeps only channels with
+        ``inside_brain == True``. Ignored for manual channels.
+    channel_quality_labels : tuple[str, ...] | list[str] | None
+        Channel-quality labels to include, such as ``("good",)``. ``None``
+        disables label filtering. Ignored for manual channels.
+
+    Returns
+    -------
+    tuple[np.ndarray, str]
+        ``(region_channels, summary)``. ``region_channels`` is a one-dimensional
+        integer array of zero-based channel ids. ``summary`` is a concise
+        human-readable description of the selection.
+    """
+
+    if channel_source == CHANNEL_SOURCE_MANUAL:
+        region_channels = unit_spike_loading.parse_channel_list(manual_channel_text)
+        return region_channels, f"Manual channel selection: {region_channels.size} channels."
+    if channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY:
+        if channel_quality is None:
+            raise ValueError("channel_quality metadata is required for channel_quality channel source.")
+        region_channels = unit_spike_loading.select_channels_from_quality(
+            channel_quality=channel_quality,
+            require_inside_brain=bool(require_inside_brain),
+            labels=channel_quality_labels,
+        )
+        return region_channels, f"channel_quality selected {region_channels.size} / {channel_quality.shape[0]} channels."
+    raise ValueError(f"Unsupported channel source: {channel_source!r}")
 
 
 def build_lfp_dropdown_options(hpc_v1_lfp_path: str, pfc_lfp_path: str) -> dict[str, str]:
@@ -736,22 +813,6 @@ def main() -> None:
         st.stop()
     st.sidebar.caption(f"Active probe: {active_probe_label}")
 
-    channel_text = st.sidebar.text_area(
-        "Region channels",
-        value=_build_channel_text(region_name),
-        key=f"channel_text_{region_name}",
-        height=140,
-        help="CT014 presets are editable defaults. Replace with custom channel ids when needed.",
-    )
-    try:
-        region_channels = unit_spike_loading.parse_channel_list(channel_text)
-    except ValueError as error:
-        st.error(str(error))
-        st.stop()
-    if region_channels.size == 0:
-        st.warning("No region channels are selected.")
-        st.stop()
-
     if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1:
         active_sorter_output_path = hpc_v1_sorter_output_path
         active_aligned_spike_path = hpc_v1_aligned_spike_path
@@ -760,6 +821,78 @@ def main() -> None:
         active_sorter_output_path = pfc_sorter_output_path
         active_aligned_spike_path = pfc_aligned_spike_path
         active_lfp_path = pfc_lfp_path
+
+    inferred_probe_derived_dir = unit_spike_loading.infer_probe_derived_dir(
+        sorter_output_path=active_sorter_output_path,
+        lfp_path=active_lfp_path,
+    )
+    channel_quality_path = None
+    if inferred_probe_derived_dir is not None:
+        try:
+            channel_quality_path = unit_spike_loading.resolve_channel_quality_path(inferred_probe_derived_dir)
+        except (FileNotFoundError, ValueError):
+            channel_quality_path = None
+    channel_source_options = [CHANNEL_SOURCE_MANUAL]
+    if channel_quality_path is not None:
+        channel_source_options.append(CHANNEL_SOURCE_CHANNEL_QUALITY)
+    channel_source = st.sidebar.selectbox(
+        "Channel source",
+        options=channel_source_options,
+        index=1 if CHANNEL_SOURCE_CHANNEL_QUALITY in channel_source_options else 0,
+        help="Use channel_quality when available to select good in-brain probe sites.",
+    )
+
+    channel_quality = None
+    channel_quality_labels = ("good",)
+    require_inside_brain = True
+    if channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY:
+        try:
+            channel_quality = load_channel_quality_cached(str(channel_quality_path))
+        except Exception as error:  # noqa: BLE001 - Streamlit should show metadata failures cleanly.
+            st.error(f"Could not load channel quality: {error}")
+            st.stop()
+        st.sidebar.caption(f"Channel quality: {channel_quality_path}")
+        available_channel_labels = sorted(channel_quality["label"].astype(str).str.strip().str.lower().unique().tolist())
+        default_channel_labels = ["good"] if "good" in available_channel_labels else available_channel_labels
+        channel_quality_labels = tuple(
+            st.sidebar.multiselect(
+                "Channel labels",
+                options=available_channel_labels,
+                default=default_channel_labels,
+                help="Good-site selection uses channel_quality label values; label='good' is the default.",
+            )
+        )
+        require_inside_brain = st.sidebar.checkbox("Inside brain only", value=True)
+        label_good_mask = channel_quality["label"].astype(str).str.strip().str.lower().eq("good")
+        is_good_mask = channel_quality["is_good"].astype(bool)
+        disagreement_count = int((label_good_mask != is_good_mask).sum())
+        if disagreement_count > 0:
+            st.sidebar.warning(f"{disagreement_count} channels disagree between label == 'good' and is_good.")
+        manual_channel_text = _build_channel_text(region_name)
+    else:
+        manual_channel_text = st.sidebar.text_area(
+            "Region channels",
+            value=_build_channel_text(region_name),
+            key=f"channel_text_{region_name}",
+            height=140,
+            help="CT014 presets are editable defaults. Replace with custom channel ids when needed.",
+        )
+
+    try:
+        region_channels, channel_summary = resolve_region_channels_for_source(
+            channel_source=channel_source,
+            manual_channel_text=manual_channel_text,
+            channel_quality=channel_quality,
+            require_inside_brain=require_inside_brain,
+            channel_quality_labels=channel_quality_labels,
+        )
+    except ValueError as error:
+        st.error(str(error))
+        st.stop()
+    st.sidebar.caption(channel_summary)
+    if region_channels.size == 0:
+        st.warning("No region channels are selected.")
+        st.stop()
 
     try:
         viewer_data = load_viewer_data_cached(
@@ -1099,12 +1232,20 @@ def main() -> None:
                 )
                 lfp_y_label = "LFP"
             st.sidebar.caption(selected_lfp_path or "No LFP path entered for this selection.")
-            lfp_saved_channel_index = st.sidebar.number_input(
-                "LFP saved channel index",
-                min_value=0,
-                value=0,
-                step=1,
-            )
+            if channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY and region_channels.size > 0:
+                lfp_saved_channel_index = st.sidebar.selectbox(
+                    "LFP saved channel index",
+                    options=region_channels.tolist(),
+                    index=0,
+                    help="Restricted to the selected channel_quality channels.",
+                )
+            else:
+                lfp_saved_channel_index = st.sidebar.number_input(
+                    "LFP saved channel index",
+                    min_value=0,
+                    value=0,
+                    step=1,
+                )
             if str(selected_lfp_path).strip() == "":
                 st.warning("LFP trace requested, but no active LFP path is set.")
             else:

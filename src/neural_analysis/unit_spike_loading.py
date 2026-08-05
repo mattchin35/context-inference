@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -133,6 +135,236 @@ def list_path_browser_entries(
         "directories": sorted(directories, key=lambda path: path.name.lower()),
         "files": sorted(files, key=lambda path: path.name.lower()),
     }
+
+
+def resolve_channel_quality_path(channel_quality_path_or_probe_dir: Path | str) -> Path:
+    """
+    Resolve a channel-quality file from either a file path or probe directory.
+
+    Parameters
+    ----------
+    channel_quality_path_or_probe_dir : Path | str
+        Either a direct path to ``channel_quality.csv`` or
+        ``channel_quality.json``, or a probe-derived directory containing one
+        of those files. Units: filesystem path.
+
+    Returns
+    -------
+    Path
+        Existing channel-quality file path. CSV is preferred over JSON when a
+        directory contains both files.
+    """
+
+    input_path = Path(channel_quality_path_or_probe_dir).expanduser()
+    if input_path.is_dir():
+        for filename in ("channel_quality.csv", "channel_quality.json"):
+            candidate_path = input_path / filename
+            if candidate_path.exists():
+                return candidate_path
+        raise FileNotFoundError(f"No channel_quality.csv or channel_quality.json found in {input_path}.")
+    if input_path.exists():
+        if input_path.name not in {"channel_quality.csv", "channel_quality.json"}:
+            raise ValueError(f"Unsupported channel-quality filename: {input_path.name}")
+        return input_path
+    raise FileNotFoundError(f"Channel-quality path does not exist: {input_path}")
+
+
+def _coerce_bool_series(values: pd.Series, column_name: str) -> pd.Series:
+    """
+    Convert a mixed-type boolean-like column to real booleans.
+
+    Parameters
+    ----------
+    values : pd.Series
+        One-dimensional column with shape ``(n_channels,)``. Values may be
+        booleans, 0/1 integers, or true/false strings.
+    column_name : str
+        Column name used in validation error messages. Units: not applicable.
+
+    Returns
+    -------
+    pd.Series
+        Boolean series with shape ``(n_channels,)`` aligned to ``values``.
+    """
+
+    normalized_values = values.astype(str).str.strip().str.lower()
+    bool_values = normalized_values.map(
+        {
+            "true": True,
+            "1": True,
+            "yes": True,
+            "false": False,
+            "0": False,
+            "no": False,
+        }
+    )
+    if bool_values.isna().any():
+        invalid_values = sorted(normalized_values.loc[bool_values.isna()].unique().tolist())
+        raise ValueError(f"Column {column_name!r} contains non-boolean values: {invalid_values}")
+    return bool_values.astype(bool)
+
+
+def _normalize_channel_quality_dataframe(channel_quality: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize raw channel-quality rows to the webapp channel contract.
+
+    Parameters
+    ----------
+    channel_quality : pd.DataFrame
+        Raw channel-quality table with shape ``(n_channels, n_columns)``.
+        Required columns are ``channel_id``, ``label``, ``inside_brain``,
+        ``x_um``, and ``y_um``. ``is_good`` is optional and inferred from
+        ``label == "good"`` when absent.
+
+    Returns
+    -------
+    pd.DataFrame
+        Normalized table sorted by ``ch`` with columns ``ch``, ``channel_id``,
+        ``label``, ``is_good``, ``inside_brain``, ``x_um``, and ``y_um``.
+        ``ch`` is a zero-based integer channel id; coordinates are in
+        micrometers.
+    """
+
+    required_columns = {"channel_id", "label", "inside_brain", "x_um", "y_um"}
+    missing_columns = required_columns - set(channel_quality.columns)
+    if missing_columns:
+        raise ValueError(f"channel_quality is missing required columns: {sorted(missing_columns)}")
+
+    normalized_quality = channel_quality.copy()
+    normalized_quality["channel_id"] = normalized_quality["channel_id"].astype(str).str.strip()
+    parsed_channel = normalized_quality["channel_id"].str.extract(r"(\d+)", expand=False)
+    if parsed_channel.isna().any():
+        invalid_channel_ids = normalized_quality.loc[parsed_channel.isna(), "channel_id"].tolist()
+        raise ValueError(f"Could not parse integer channel ids from channel_quality: {invalid_channel_ids}")
+    normalized_quality["ch"] = parsed_channel.astype(int)
+    if normalized_quality["ch"].duplicated().any():
+        duplicate_channels = sorted(normalized_quality.loc[normalized_quality["ch"].duplicated(), "ch"].unique().tolist())
+        raise ValueError(f"Duplicate channel ids in channel_quality: {duplicate_channels}")
+
+    normalized_quality["label"] = normalized_quality["label"].astype(str).str.strip().str.lower()
+    if "is_good" in normalized_quality.columns:
+        normalized_quality["is_good"] = _coerce_bool_series(normalized_quality["is_good"], "is_good")
+    else:
+        normalized_quality["is_good"] = normalized_quality["label"].eq("good")
+    normalized_quality["inside_brain"] = _coerce_bool_series(normalized_quality["inside_brain"], "inside_brain")
+    normalized_quality["x_um"] = pd.to_numeric(normalized_quality["x_um"], errors="raise").astype(float)
+    normalized_quality["y_um"] = pd.to_numeric(normalized_quality["y_um"], errors="raise").astype(float)
+
+    output_columns = ["ch", "channel_id", "label", "is_good", "inside_brain", "x_um", "y_um"]
+    return normalized_quality.loc[:, output_columns].sort_values("ch").reset_index(drop=True)
+
+
+def load_channel_quality(channel_quality_path_or_probe_dir: Path | str) -> pd.DataFrame:
+    """
+    Load and normalize channel-quality metadata for one probe.
+
+    Parameters
+    ----------
+    channel_quality_path_or_probe_dir : Path | str
+        Either a direct path to ``channel_quality.csv`` or
+        ``channel_quality.json``, or a probe-derived directory containing one
+        of those files. Units: filesystem path.
+
+    Returns
+    -------
+    pd.DataFrame
+        Normalized channel-quality dataframe with one row per channel. Columns
+        are ``ch`` as zero-based channel index, ``channel_id``, ``label``,
+        ``is_good``, ``inside_brain``, ``x_um``, and ``y_um``. Coordinates are
+        in micrometers.
+    """
+
+    channel_quality_path = resolve_channel_quality_path(channel_quality_path_or_probe_dir)
+    if channel_quality_path.suffix.lower() == ".csv":
+        raw_channel_quality = pd.read_csv(channel_quality_path)
+    elif channel_quality_path.suffix.lower() == ".json":
+        with channel_quality_path.open("r", encoding="utf-8") as file_handle:
+            payload = json.load(file_handle)
+        if isinstance(payload, dict) and "channels" in payload:
+            raw_channel_quality = pd.DataFrame(payload["channels"])
+        elif isinstance(payload, list):
+            raw_channel_quality = pd.DataFrame(payload)
+        else:
+            raw_channel_quality = pd.DataFrame(payload)
+    else:
+        raise ValueError(f"Unsupported channel-quality file type: {channel_quality_path.suffix}")
+    return _normalize_channel_quality_dataframe(raw_channel_quality)
+
+
+def select_channels_from_quality(
+    channel_quality: pd.DataFrame,
+    require_inside_brain: bool = True,
+    labels: tuple[str, ...] | list[str] | None = ("good",),
+) -> np.ndarray:
+    """
+    Select channel ids from normalized channel-quality metadata.
+
+    Parameters
+    ----------
+    channel_quality : pd.DataFrame
+        Normalized channel-quality table with shape ``(n_channels, n_columns)``.
+        Required columns are ``ch``, ``label``, and ``inside_brain``.
+    require_inside_brain : bool, default=True
+        If ``True``, only channels with ``inside_brain == True`` are retained.
+    labels : tuple[str, ...] | list[str] | None, default=("good",)
+        Channel labels to retain. Matching is case-insensitive. ``None``
+        disables label filtering.
+
+    Returns
+    -------
+    np.ndarray
+        Sorted one-dimensional integer array with shape ``(n_selected_channels,)``
+        containing zero-based channel ids.
+    """
+
+    required_columns = {"ch", "label", "inside_brain"}
+    missing_columns = required_columns - set(channel_quality.columns)
+    if missing_columns:
+        raise ValueError(f"channel_quality is missing required columns: {sorted(missing_columns)}")
+
+    selected_mask = pd.Series(True, index=channel_quality.index)
+    if require_inside_brain:
+        selected_mask = selected_mask & _coerce_bool_series(channel_quality["inside_brain"], "inside_brain")
+    if labels is not None:
+        normalized_labels = {str(label).strip().lower() for label in labels}
+        normalized_channel_labels = channel_quality["label"].astype(str).str.strip().str.lower()
+        selected_mask = selected_mask & normalized_channel_labels.isin(normalized_labels)
+    return np.sort(channel_quality.loc[selected_mask, "ch"].to_numpy(dtype=int))
+
+
+def infer_probe_derived_dir(
+    sorter_output_path: Path | str | None,
+    lfp_path: Path | str | None,
+) -> Path | None:
+    """
+    Infer the probe-derived directory from active sorter and LFP paths.
+
+    Parameters
+    ----------
+    sorter_output_path : Path | str | None
+        Sorter output directory, typically ``.../ProbeA/kilosort4``. Units:
+        filesystem path.
+    lfp_path : Path | str | None
+        LFP binary path, typically ``.../ProbeA/lfp.dat``. Units: filesystem
+        path.
+
+    Returns
+    -------
+    Path | None
+        Inferred probe-derived directory, such as ``.../ProbeA``. Returns
+        ``None`` when neither input path is available.
+    """
+
+    sorter_path = _normalize_optional_path(sorter_output_path)
+    if sorter_path is not None:
+        if sorter_path.name == "kilosort4":
+            return sorter_path.parent
+        return sorter_path
+
+    normalized_lfp_path = _normalize_optional_path(lfp_path)
+    if normalized_lfp_path is not None:
+        return normalized_lfp_path.parent
+    return None
 
 
 def get_probe_label_for_region(region_name: str, custom_probe_label: str | None = None) -> str:
