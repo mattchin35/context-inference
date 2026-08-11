@@ -445,6 +445,77 @@ def resolve_population_pca_unit_ids(
     return selected_unit_metadata["cluster_id"].to_numpy(dtype=int)
 
 
+@st.cache_data(show_spinner="Computing population PCA...")
+def compute_population_pca_cached(
+    session_key: str,
+    aligned_spike_path: str,
+    unit_ids: tuple[int, ...],
+    trial_indices: tuple[int, ...],
+    alignment_event: str,
+    window_start_s: float,
+    window_end_s: float,
+    bin_size_s: float,
+    normalization: str,
+    component_count: int,
+    _spike_group,
+    _trial_df: pd.DataFrame,
+):
+    """
+    Compute and cache population PCA for one webapp trial selection.
+
+    Parameters
+    ----------
+    session_key : str
+        Session identifier included in the Streamlit cache key.
+    aligned_spike_path : str
+        Aligned spike file path included in the cache key. Units: filesystem
+        path.
+    unit_ids : tuple[int, ...]
+        Unit ids included as PCA features, shape ``(n_units,)``.
+    trial_indices : tuple[int, ...]
+        Filtered trial row indices used to fit PCA, shape ``(n_trials,)``.
+    alignment_event : str
+        Trial time column used as time zero.
+    window_start_s, window_end_s : float
+        Relative window bounds in seconds.
+    bin_size_s : float
+        PCA bin width in seconds.
+    normalization : str
+        PCA normalization mode.
+    component_count : int
+        Requested number of PCs.
+    _spike_group
+        Pynapple spike group keyed by unit id. Leading underscore excludes this
+        potentially large object from Streamlit hashing.
+    _trial_df : pd.DataFrame
+        Trial table. Leading underscore excludes this dataframe from Streamlit
+        hashing; ``session_key`` and ``trial_indices`` carry the cache identity.
+
+    Returns
+    -------
+    tuple[np.ndarray, population_pca.PopulationPCAResult]
+        ``(pca_time_s, pca_result)``. ``pca_time_s`` has shape ``(n_bins,)`` in
+        seconds relative to alignment. ``pca_result.scores`` has shape
+        ``(n_trials, n_bins, n_components)``.
+    """
+
+    rate_tensor_hz, pca_time_s = population_pca.build_trial_unit_rate_tensor(
+        spike_group=_spike_group,
+        unit_ids=np.asarray(unit_ids, dtype=int),
+        trial_df=_trial_df,
+        trial_indices=np.asarray(trial_indices, dtype=int),
+        alignment_event=alignment_event,
+        window=(float(window_start_s), float(window_end_s)),
+        bin_size_s=float(bin_size_s),
+    )
+    pca_result = population_pca.fit_population_pca(
+        rate_tensor_hz=rate_tensor_hz,
+        n_components=int(component_count),
+        normalization=normalization,
+    )
+    return pca_time_s, pca_result
+
+
 def build_lfp_dropdown_options(hpc_v1_lfp_path: str, pfc_lfp_path: str) -> dict[str, str]:
     """
     Build explicit LFP-file choices from the two probe path inputs.
@@ -1364,19 +1435,19 @@ def main() -> None:
                     selected_unit_metadata=selected_unit_metadata,
                     page_unit_ids=page_unit_ids,
                 )
-                rate_tensor_hz, pca_time_s = population_pca.build_trial_unit_rate_tensor(
-                    spike_group=spike_group,
-                    unit_ids=pca_unit_ids,
-                    trial_df=trial_df,
-                    trial_indices=selected_trial_indices,
+                pca_time_s, pca_result = compute_population_pca_cached(
+                    session_key=f"{session.sess_id_full}:{active_probe_label}",
+                    aligned_spike_path=str(active_aligned_spike_path),
+                    unit_ids=tuple(int(unit_id) for unit_id in pca_unit_ids),
+                    trial_indices=tuple(int(trial_index_value) for trial_index_value in selected_trial_indices),
                     alignment_event=alignment_event,
-                    window=window,
+                    window_start_s=float(window[0]),
+                    window_end_s=float(window[1]),
                     bin_size_s=float(pca_bin_size_s),
-                )
-                pca_result = population_pca.fit_population_pca(
-                    rate_tensor_hz=rate_tensor_hz,
-                    n_components=int(pca_component_count),
                     normalization=pca_normalization,
+                    component_count=int(pca_component_count),
+                    _spike_group=spike_group,
+                    _trial_df=trial_df,
                 )
                 figure, axes = unit_spike_plotting.plot_trial_behavior_and_population_pca(
                     trial_df=trial_df,
