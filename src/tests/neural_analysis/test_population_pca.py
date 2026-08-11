@@ -173,6 +173,34 @@ def test_fit_population_pca_returns_scores_and_explained_variance_shapes():
     assert np.all(np.diff(result.cumulative_explained_variance) >= -1e-12)
 
 
+def test_profile_population_pca_pipeline_reports_timings_and_dimensions():
+    fake_times = iter([0.0, 1.0, 3.0, 6.0])
+
+    profile = population_pca.profile_population_pca_pipeline(
+        spike_group=_make_spike_group(),
+        unit_ids=np.array([1, 2, 3], dtype=int),
+        trial_df=_make_trial_df(),
+        trial_indices=np.array([0, 1], dtype=int),
+        alignment_event="start_time",
+        window=(0.0, 0.4),
+        bin_size_s=0.1,
+        n_components=2,
+        normalization=population_pca.PCA_NORMALIZATION_ZSCORE,
+        timer=lambda: next(fake_times),
+        print_summary=False,
+    )
+
+    assert profile.rate_tensor_shape == (2, 4, 3)
+    assert profile.observation_shape == (8, 3)
+    assert profile.fitted_component_count == 2
+    assert profile.timings_s == {
+        "binning": 1.0,
+        "normalization": 2.0,
+        "pca_fit": 3.0,
+        "total": 6.0,
+    }
+
+
 def test_fit_population_pca_rejects_too_few_units_or_observations():
     with pytest.raises(ValueError, match="At least two units"):
         population_pca.fit_population_pca(
@@ -229,6 +257,20 @@ def test_plot_pca_cumulative_explained_variance_uses_pc_numbers():
     figure.clf()
 
 
+def test_plot_pca_cumulative_explained_variance_can_limit_many_pcs_with_sparse_ticks():
+    cumulative_variance = np.linspace(0.05, 0.95, 100)
+
+    figure, axis = unit_spike_plotting.plot_pca_cumulative_explained_variance(
+        cumulative_explained_variance=cumulative_variance,
+        pc_count=50,
+    )
+
+    np.testing.assert_array_equal(axis.lines[0].get_xdata(), np.arange(1, 51))
+    np.testing.assert_allclose(axis.lines[0].get_ydata(), cumulative_variance[:50])
+    assert 3 <= len(axis.get_xticks()) < 50
+    figure.clf()
+
+
 def test_webapp_population_pca_uses_all_selected_units_not_paginated_units():
     selected_unit_metadata = pd.DataFrame({"cluster_id": [10, 11, 12]})
 
@@ -238,3 +280,43 @@ def test_webapp_population_pca_uses_all_selected_units_not_paginated_units():
     )
 
     np.testing.assert_array_equal(pca_unit_ids, np.array([10, 11, 12], dtype=int))
+
+
+def test_webapp_population_pca_cache_fits_maximum_requested_component_count(monkeypatch):
+    captured_component_counts = []
+
+    def fake_build_trial_unit_rate_tensor(**kwargs):
+        return np.zeros((2, 4, 60), dtype=float), np.arange(4, dtype=float)
+
+    def fake_fit_population_pca(*, rate_tensor_hz, n_components, normalization):
+        captured_component_counts.append(int(n_components))
+        return population_pca.PopulationPCAResult(
+            scores=np.zeros((2, 4, int(n_components)), dtype=float),
+            explained_variance_ratio=np.zeros(int(n_components), dtype=float),
+            cumulative_explained_variance=np.zeros(int(n_components), dtype=float),
+            unit_mean_hz=np.zeros(rate_tensor_hz.shape[2], dtype=float),
+            unit_scale_hz=np.ones(rate_tensor_hz.shape[2], dtype=float),
+            normalization=normalization,
+        )
+
+    monkeypatch.setattr(population_pca, "build_trial_unit_rate_tensor", fake_build_trial_unit_rate_tensor)
+    monkeypatch.setattr(population_pca, "fit_population_pca", fake_fit_population_pca)
+
+    _, pca_result = psth_webapp.compute_population_pca_cached.__wrapped__(
+        session_key="test-session:PFC",
+        aligned_spike_path="/tmp/probeA_sync.npz",
+        unit_ids=tuple(range(60)),
+        trial_indices=(0, 1),
+        alignment_event="choice_time",
+        window_start_s=-2.0,
+        window_end_s=2.0,
+        bin_size_s=0.1,
+        normalization=population_pca.PCA_NORMALIZATION_ZSCORE,
+        trajectory_component_count=5,
+        variance_component_count=50,
+        _spike_group=object(),
+        _trial_df=pd.DataFrame({"choice_time": [1.0, 2.0]}),
+    )
+
+    assert captured_component_counts == [50]
+    assert pca_result.scores.shape[2] == 50
