@@ -1016,6 +1016,255 @@ def plot_trial_behavior_and_spike_raster(
     return (figure, axis) if n_axes == 1 else (figure, axes)
 
 
+def plot_trial_behavior_and_population_pca(
+    trial_df: pd.DataFrame,
+    trial_index: int,
+    lick_times: Mapping[str, nap.Ts],
+    pca_time_s: np.ndarray,
+    pca_scores: np.ndarray,
+    trial_position: int,
+    alignment_event: str,
+    window: tuple[float, float],
+    pc_count: int = 5,
+    lfp_time_s: np.ndarray | None = None,
+    lfp_uv: np.ndarray | None = None,
+    lfp_label: str | None = None,
+    lfp_y_label: str = "LFP (uV)",
+    figure_size: tuple[float, float] = (12.0, 10.0),
+) -> tuple[plt.Figure, np.ndarray]:
+    """
+    Plot one trial's behavior events and population PCA time courses.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with one row per trial. Required columns are
+        ``start_time``, ``choice_time``, ``led_on_time``, and ``action``.
+        Times are in seconds.
+    trial_index : int
+        Trial row index used to extract behavior events from ``trial_df``.
+    lick_times : Mapping[str, nap.Ts]
+        Mapping with ``"left_entry"`` and ``"right_entry"`` keys. Each value
+        is a one-dimensional Pynapple ``Ts`` of lick timestamps in seconds.
+    pca_time_s : np.ndarray
+        One-dimensional PCA bin centers with shape ``(n_bins,)`` in seconds
+        relative to ``alignment_event``.
+    pca_scores : np.ndarray
+        PCA score tensor with shape ``(n_trials, n_bins, n_components)``.
+        ``trial_position`` selects the first axis.
+    trial_position : int
+        Zero-based position of ``trial_index`` within the PCA fit trial set.
+    alignment_event : str
+        Event column used as relative time zero, typically ``"start_time"`` or
+        ``"choice_time"``.
+    window : tuple[float, float]
+        Plot bounds in seconds relative to ``alignment_event``.
+    pc_count : int, default=5
+        Number of leading PCs to plot. The plotted count is capped by the
+        number of fitted components.
+    lfp_time_s : np.ndarray | None, optional
+        Optional LFP time axis with shape ``(n_lfp_samples,)`` in seconds
+        relative to alignment. If provided, ``lfp_uv`` must also be provided.
+    lfp_uv : np.ndarray | None, optional
+        Optional LFP trace with shape ``(n_lfp_samples,)``.
+    lfp_label : str | None, optional
+        Title label for the optional LFP axis.
+    lfp_y_label : str, default="LFP (uV)"
+        Y-axis label for the optional LFP trace.
+    figure_size : tuple[float, float], default=(12.0, 10.0)
+        Matplotlib figure size as ``(width_inches, height_inches)``.
+
+    Returns
+    -------
+    tuple[plt.Figure, np.ndarray]
+        Matplotlib figure and axes in top-to-bottom order: optional LFP,
+        behavior events, and PCA traces. X-axis units are seconds relative to
+        ``alignment_event``.
+    """
+
+    required_columns = {"start_time", "choice_time", "led_on_time", "action"}
+    missing_columns = required_columns - set(trial_df.columns)
+    if missing_columns:
+        raise ValueError(f"trial_df is missing required columns: {sorted(missing_columns)}")
+    if LEFT_LICK_EVENT not in lick_times or RIGHT_LICK_EVENT not in lick_times:
+        raise ValueError("lick_times must contain 'left_entry' and 'right_entry' keys.")
+    if len(window) != 2 or float(window[0]) >= float(window[1]):
+        raise ValueError("window must be a two-value tuple with start < end.")
+    if int(pc_count) < 1:
+        raise ValueError("pc_count must be positive.")
+    if len(figure_size) != 2 or float(figure_size[0]) <= 0 or float(figure_size[1]) <= 0:
+        raise ValueError("figure_size must be a two-value tuple of positive inches.")
+
+    pca_time_s = np.asarray(pca_time_s, dtype=float).reshape(-1)
+    pca_scores = np.asarray(pca_scores, dtype=float)
+    if pca_scores.ndim != 3:
+        raise ValueError("pca_scores must have shape (n_trials, n_bins, n_components).")
+    if int(trial_position) < 0 or int(trial_position) >= pca_scores.shape[0]:
+        raise ValueError("trial_position is outside the PCA score trial axis.")
+    if pca_time_s.shape[0] != pca_scores.shape[1]:
+        raise ValueError("pca_time_s length must match the PCA score time axis.")
+
+    show_lfp = lfp_time_s is not None or lfp_uv is not None
+    if show_lfp:
+        if lfp_time_s is None or lfp_uv is None:
+            raise ValueError("lfp_time_s and lfp_uv must be provided together.")
+        lfp_time_s = np.asarray(lfp_time_s, dtype=float).reshape(-1)
+        lfp_uv = np.asarray(lfp_uv, dtype=float).reshape(-1)
+        if lfp_time_s.shape != lfp_uv.shape:
+            raise ValueError("lfp_time_s and lfp_uv must have the same one-dimensional shape.")
+
+    reference_time = get_trial_alignment_time(
+        trial_df=trial_df,
+        trial_index=int(trial_index),
+        alignment_event=alignment_event,
+    )
+    left_licks = extract_relative_events_for_trial(
+        event_times=lick_times[LEFT_LICK_EVENT],
+        reference_time=reference_time,
+        window=window,
+    )
+    right_licks = extract_relative_events_for_trial(
+        event_times=lick_times[RIGHT_LICK_EVENT],
+        reference_time=reference_time,
+        window=window,
+    )
+
+    n_axes = 3 if show_lfp else 2
+    height_ratios = [1, 1, 3] if show_lfp else [1, 3]
+    figure, axes = plt.subplots(
+        n_axes,
+        1,
+        sharex=True,
+        figsize=(float(figure_size[0]), float(figure_size[1])),
+        height_ratios=height_ratios,
+    )
+    axes = np.asarray(axes, dtype=object).reshape(-1)
+    axis_index = 0
+    if show_lfp:
+        lfp_axis = axes[axis_index]
+        axis_index += 1
+        lfp_axis.plot(lfp_time_s, lfp_uv, color="black", linewidth=0.8)
+        lfp_axis.axvline(0.0, color="gray", linestyle="--", linewidth=1.2)
+        lfp_axis.set_ylabel(str(lfp_y_label))
+        lfp_axis.set_xlim(float(window[0]), float(window[1]))
+        lfp_axis.set_title(lfp_label or "LFP")
+
+    behavior_axis = axes[axis_index]
+    pca_axis = axes[axis_index + 1]
+
+    behavior_axis.eventplot(
+        [right_licks],
+        orientation="horizontal",
+        lineoffsets=[0.0],
+        linelengths=0.7,
+        linewidths=1.0,
+        colors=LICK_RASTER_STYLES[RIGHT_LICK_EVENT]["color"],
+        label=LICK_RASTER_STYLES[RIGHT_LICK_EVENT]["label"],
+    )
+    behavior_axis.eventplot(
+        [left_licks],
+        orientation="horizontal",
+        lineoffsets=[1.0],
+        linelengths=0.7,
+        linewidths=1.0,
+        colors=LICK_RASTER_STYLES[LEFT_LICK_EVENT]["color"],
+        label=LICK_RASTER_STYLES[LEFT_LICK_EVENT]["label"],
+    )
+    trial_row = trial_df.loc[int(trial_index)]
+    choice_time = pd.to_numeric(pd.Series([trial_row["choice_time"]]), errors="coerce").iloc[0]
+    if not pd.isna(choice_time):
+        choice_offset = float(choice_time) - reference_time
+        action_value = pd.to_numeric(pd.Series([trial_row["action"]]), errors="coerce").iloc[0]
+        choice_y = 0.5
+        if not pd.isna(action_value):
+            choice_y = 1.0 if int(action_value) == LEFT_CHOICE_ACTION else 0.0
+        behavior_axis.vlines(
+            choice_offset,
+            choice_y - 0.35,
+            choice_y + 0.35,
+            colors="tab:purple",
+            linewidth=1.4,
+            label="Choice",
+        )
+    led_time = pd.to_numeric(pd.Series([trial_row["led_on_time"]]), errors="coerce").iloc[0]
+    if not pd.isna(led_time):
+        behavior_axis.vlines(
+            float(led_time) - reference_time,
+            -0.35,
+            1.35,
+            colors="tab:green",
+            linewidth=1.1,
+            label="LED",
+        )
+    behavior_axis.axvline(0.0, color="gray", linestyle="--", linewidth=1.2, label=alignment_event)
+    behavior_axis.set_yticks([0.0, 1.0])
+    behavior_axis.set_yticklabels(["Right licks", "Left licks"])
+    behavior_axis.set_ylim(-0.7, 1.7)
+    behavior_axis.set_ylabel("Behavior")
+    behavior_axis.set_xlim(float(window[0]), float(window[1]))
+    behavior_axis.set_title(f"Trial {trial_index} behavior aligned to {alignment_event}")
+    behavior_axis.legend(loc="upper right", fontsize="small")
+
+    plotted_pc_count = min(int(pc_count), pca_scores.shape[2])
+    for pc_index in range(plotted_pc_count):
+        pca_axis.plot(
+            pca_time_s,
+            pca_scores[int(trial_position), :, pc_index],
+            linewidth=1.2,
+            label=f"PC{pc_index + 1}",
+        )
+    pca_axis.axvline(0.0, color="gray", linestyle="--", linewidth=1.2)
+    pca_axis.set_xlim(float(window[0]), float(window[1]))
+    pca_axis.set_ylabel("PC score")
+    pca_axis.set_xlabel(f"Time from {alignment_event} (s)")
+    pca_axis.set_title(f"Population PCA trajectory, first {plotted_pc_count} PCs")
+    pca_axis.legend(loc="upper right", fontsize="small", ncol=min(plotted_pc_count, 5))
+
+    figure.tight_layout()
+    return figure, axes
+
+
+def plot_pca_cumulative_explained_variance(
+    cumulative_explained_variance: np.ndarray,
+    figure_size: tuple[float, float] = (5.0, 3.0),
+) -> tuple[plt.Figure, plt.Axes]:
+    """
+    Plot cumulative explained variance against the number of PCs.
+
+    Parameters
+    ----------
+    cumulative_explained_variance : np.ndarray
+        One-dimensional cumulative explained variance ratio with shape
+        ``(n_components,)``. Values are fractions between 0 and 1.
+    figure_size : tuple[float, float], default=(5.0, 3.0)
+        Matplotlib figure size as ``(width_inches, height_inches)``.
+
+    Returns
+    -------
+    tuple[plt.Figure, plt.Axes]
+        Matplotlib figure and axis. X-axis is one-based PC count; y-axis is
+        cumulative explained variance ratio.
+    """
+
+    cumulative_explained_variance = np.asarray(cumulative_explained_variance, dtype=float).reshape(-1)
+    if cumulative_explained_variance.size == 0:
+        raise ValueError("cumulative_explained_variance must contain at least one value.")
+    if not np.isfinite(cumulative_explained_variance).all():
+        raise ValueError("cumulative_explained_variance must contain only finite values.")
+    if len(figure_size) != 2 or float(figure_size[0]) <= 0 or float(figure_size[1]) <= 0:
+        raise ValueError("figure_size must be a two-value tuple of positive inches.")
+
+    pc_numbers = np.arange(1, cumulative_explained_variance.size + 1, dtype=int)
+    figure, axis = plt.subplots(1, 1, figsize=(float(figure_size[0]), float(figure_size[1])))
+    axis.plot(pc_numbers, cumulative_explained_variance, marker="o", color="black", linewidth=1.2)
+    axis.set_xlabel("Number of PCs")
+    axis.set_ylabel("Cumulative explained variance")
+    axis.set_ylim(0.0, min(1.05, max(1.0, float(cumulative_explained_variance.max()) * 1.05)))
+    axis.set_xticks(pc_numbers)
+    figure.tight_layout()
+    return figure, axis
+
+
 def _validate_unit_summary_plot_type(summary_plot_type: str) -> None:
     """
     Validate a single-unit lower-panel summary plot type.

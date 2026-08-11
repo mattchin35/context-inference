@@ -8,7 +8,13 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from src.neural_analysis import lfp_loading, spike_behavior_pynapple, unit_spike_loading, unit_spike_plotting
+from src.neural_analysis import (
+    lfp_loading,
+    population_pca,
+    spike_behavior_pynapple,
+    unit_spike_loading,
+    unit_spike_plotting,
+)
 
 
 CONDITION_OPTIONS = [
@@ -34,6 +40,11 @@ UNIT_PLOT_TYPE_OPTIONS = [
     "Binned rate: trials + mean",
     "Binned rate: mean +/- SD",
 ]
+NEURAL_DISPLAY_SPIKE_RASTER = "Spike raster"
+NEURAL_DISPLAY_POPULATION_PCA = "Population PCA"
+NEURAL_DISPLAY_OPTIONS = [NEURAL_DISPLAY_SPIKE_RASTER, NEURAL_DISPLAY_POPULATION_PCA]
+PCA_BIN_SIZE_OPTIONS = [0.1, 0.05, 0.02]
+DEFAULT_PCA_COMPONENT_COUNT = 5
 CHANNEL_SOURCE_MANUAL = "Manual / preset"
 CHANNEL_SOURCE_CHANNEL_QUALITY = "channel_quality"
 CHANNEL_SOURCE_OPTIONS = [CHANNEL_SOURCE_MANUAL, CHANNEL_SOURCE_CHANNEL_QUALITY]
@@ -403,6 +414,35 @@ def resolve_region_channels_for_source(
         )
         return region_channels, f"channel_quality selected {region_channels.size} / {channel_quality.shape[0]} channels."
     raise ValueError(f"Unsupported channel source: {channel_source!r}")
+
+
+def resolve_population_pca_unit_ids(
+    selected_unit_metadata: pd.DataFrame,
+    page_unit_ids: np.ndarray | None = None,
+) -> np.ndarray:
+    """
+    Resolve unit ids used for population PCA in the trial-view webapp.
+
+    Parameters
+    ----------
+    selected_unit_metadata : pd.DataFrame
+        Filtered unit metadata table with one row per selected unit and a
+        ``cluster_id`` column. Rows are the current region/channel/quality
+        selection.
+    page_unit_ids : np.ndarray | None, optional
+        Paginated visible unit ids from raster mode. This input is accepted to
+        make the contract explicit but is not used for PCA.
+
+    Returns
+    -------
+    np.ndarray
+        One-dimensional integer array with shape ``(n_selected_units,)``. These
+        are all selected region units, not only a displayed page.
+    """
+
+    if "cluster_id" not in selected_unit_metadata.columns:
+        raise ValueError("selected_unit_metadata is missing cluster_id column.")
+    return selected_unit_metadata["cluster_id"].to_numpy(dtype=int)
 
 
 def build_lfp_dropdown_options(hpc_v1_lfp_path: str, pfc_lfp_path: str) -> dict[str, str]:
@@ -1145,30 +1185,60 @@ def main() -> None:
             step=1,
         )
         trial_index = int(selected_trial_indices[int(trial_position)])
-        unit_page_size = st.sidebar.selectbox("Units per page", options=PAGE_SIZE_OPTIONS, index=0)
-        n_unit_pages = max(1, math.ceil(unit_ids.size / int(unit_page_size)))
-        unit_page_index = st.sidebar.number_input(
-            "Unit page",
-            min_value=0,
-            max_value=n_unit_pages - 1,
-            value=0,
-            step=1,
-        )
-        page_unit_ids = unit_spike_plotting.paginate_unit_ids(
-            unit_ids,
-            page_index=int(unit_page_index),
-            page_size=int(unit_page_size),
-        )
-        population_psth_unit_scope = st.sidebar.selectbox(
-            "Population PSTH units",
-            options=POPULATION_PSTH_UNIT_SCOPE_OPTIONS,
-        )
-        population_psth_bin_size = st.sidebar.selectbox(
-            "Population PSTH bin size (s)",
-            options=PSTH_BIN_OPTIONS,
-            index=0,
-        )
-        psth_unit_ids = page_unit_ids if population_psth_unit_scope == "Visible page units" else unit_ids
+        neural_display = st.sidebar.selectbox("Neural display", options=NEURAL_DISPLAY_OPTIONS)
+        pca_bin_size_s = PCA_BIN_SIZE_OPTIONS[0]
+        pca_normalization = population_pca.PCA_NORMALIZATION_ZSCORE
+        pca_component_count = DEFAULT_PCA_COMPONENT_COUNT
+        if neural_display == NEURAL_DISPLAY_SPIKE_RASTER:
+            unit_page_size = st.sidebar.selectbox("Units per page", options=PAGE_SIZE_OPTIONS, index=0)
+            n_unit_pages = max(1, math.ceil(unit_ids.size / int(unit_page_size)))
+            unit_page_index = st.sidebar.number_input(
+                "Unit page",
+                min_value=0,
+                max_value=n_unit_pages - 1,
+                value=0,
+                step=1,
+            )
+            page_unit_ids = unit_spike_plotting.paginate_unit_ids(
+                unit_ids,
+                page_index=int(unit_page_index),
+                page_size=int(unit_page_size),
+            )
+            population_psth_unit_scope = st.sidebar.selectbox(
+                "Population PSTH units",
+                options=POPULATION_PSTH_UNIT_SCOPE_OPTIONS,
+            )
+            population_psth_bin_size = st.sidebar.selectbox(
+                "Population PSTH bin size (s)",
+                options=PSTH_BIN_OPTIONS,
+                index=0,
+            )
+            psth_unit_ids = page_unit_ids if population_psth_unit_scope == "Visible page units" else unit_ids
+        else:
+            pca_bin_size_s = st.sidebar.selectbox(
+                "PCA bin size (s)",
+                options=PCA_BIN_SIZE_OPTIONS,
+                index=0,
+            )
+            pca_normalization = st.sidebar.selectbox(
+                "PCA normalization",
+                options=list(population_pca.PCA_NORMALIZATION_OPTIONS),
+                index=0,
+            )
+            pca_component_count = int(
+                st.sidebar.number_input(
+                    "PC count",
+                    min_value=1,
+                    value=DEFAULT_PCA_COMPONENT_COUNT,
+                    step=1,
+                )
+            )
+            unit_page_index = 0
+            n_unit_pages = 1
+            page_unit_ids = np.array([], dtype=int)
+            population_psth_unit_scope = "Omitted in PCA mode"
+            population_psth_bin_size = float(pca_bin_size_s)
+            psth_unit_ids = np.array([], dtype=int)
         show_lfp_trace = st.sidebar.checkbox("Show LFP trace", value=False)
         lfp_time_s = None
         lfp_uv = None
@@ -1284,27 +1354,69 @@ def main() -> None:
                         lfp_label = f"{lfp_label}, {lfp_filter_label}"
                 except Exception as error:  # noqa: BLE001 - Optional LFP should not block raster plotting.
                     st.warning(f"Could not load LFP trace; plotting rasters without LFP. {error}")
+        variance_figure = None
+        pca_result = None
+        pca_unit_ids = np.array([], dtype=int)
         try:
             lick_times = spike_behavior_pynapple.build_lick_time_dict(event_df)
-            figure, axes = unit_spike_plotting.plot_trial_behavior_and_spike_raster(
-                trial_df=trial_df,
-                trial_index=trial_index,
-                lick_times=lick_times,
-                spike_group=spike_group,
-                raster_unit_ids=page_unit_ids,
-                psth_unit_ids=psth_unit_ids,
-                alignment_event=alignment_event,
-                window=window,
-                psth_bin_size=float(population_psth_bin_size),
-                lfp_time_s=lfp_time_s,
-                lfp_uv=lfp_uv,
-                lfp_label=lfp_label,
-                lfp_y_label=lfp_y_label,
-                figure_size=raster_layout["figure_size"],
-                spike_row_spacing=raster_layout["row_spacing"],
-            )
+            if neural_display == NEURAL_DISPLAY_POPULATION_PCA:
+                pca_unit_ids = resolve_population_pca_unit_ids(
+                    selected_unit_metadata=selected_unit_metadata,
+                    page_unit_ids=page_unit_ids,
+                )
+                rate_tensor_hz, pca_time_s = population_pca.build_trial_unit_rate_tensor(
+                    spike_group=spike_group,
+                    unit_ids=pca_unit_ids,
+                    trial_df=trial_df,
+                    trial_indices=selected_trial_indices,
+                    alignment_event=alignment_event,
+                    window=window,
+                    bin_size_s=float(pca_bin_size_s),
+                )
+                pca_result = population_pca.fit_population_pca(
+                    rate_tensor_hz=rate_tensor_hz,
+                    n_components=int(pca_component_count),
+                    normalization=pca_normalization,
+                )
+                figure, axes = unit_spike_plotting.plot_trial_behavior_and_population_pca(
+                    trial_df=trial_df,
+                    trial_index=trial_index,
+                    lick_times=lick_times,
+                    pca_time_s=pca_time_s,
+                    pca_scores=pca_result.scores,
+                    trial_position=int(trial_position),
+                    alignment_event=alignment_event,
+                    window=window,
+                    pc_count=int(pca_component_count),
+                    lfp_time_s=lfp_time_s,
+                    lfp_uv=lfp_uv,
+                    lfp_label=lfp_label,
+                    lfp_y_label=lfp_y_label,
+                    figure_size=raster_layout["figure_size"],
+                )
+                variance_figure, _ = unit_spike_plotting.plot_pca_cumulative_explained_variance(
+                    cumulative_explained_variance=pca_result.cumulative_explained_variance,
+                )
+            else:
+                figure, axes = unit_spike_plotting.plot_trial_behavior_and_spike_raster(
+                    trial_df=trial_df,
+                    trial_index=trial_index,
+                    lick_times=lick_times,
+                    spike_group=spike_group,
+                    raster_unit_ids=page_unit_ids,
+                    psth_unit_ids=psth_unit_ids,
+                    alignment_event=alignment_event,
+                    window=window,
+                    psth_bin_size=float(population_psth_bin_size),
+                    lfp_time_s=lfp_time_s,
+                    lfp_uv=lfp_uv,
+                    lfp_label=lfp_label,
+                    lfp_y_label=lfp_y_label,
+                    figure_size=raster_layout["figure_size"],
+                    spike_row_spacing=raster_layout["row_spacing"],
+                )
         except Exception as error:  # noqa: BLE001 - Streamlit should show plot failures cleanly.
-            st.error(f"Could not build trial behavior/spike raster: {error}")
+            st.error(f"Could not build trial behavior/neural plot: {error}")
             st.stop()
 
         metadata_column, plot_column = st.columns([1, 3])
@@ -1314,14 +1426,24 @@ def main() -> None:
             st.write(f"Filtered units: {selected_unit_metadata.shape[0]}")
             st.write(f"Filtered trials: {selected_trial_indices.size}")
             st.write(f"Trial index: {trial_index}")
-            st.write(f"Unit page: {int(unit_page_index) + 1}/{n_unit_pages}")
-            st.write(f"Units on page: {page_unit_ids.size}")
-            st.write(f"Population PSTH units: {population_psth_unit_scope}")
-            st.write(f"Population PSTH unit count: {psth_unit_ids.size}")
+            st.write(f"Neural display: {neural_display}")
+            if neural_display == NEURAL_DISPLAY_POPULATION_PCA:
+                st.write(f"PCA units: {pca_unit_ids.size}")
+                st.write(f"PCA bin size: {float(pca_bin_size_s):g} s")
+                st.write(f"PCA normalization: {pca_normalization}")
+                if pca_result is not None:
+                    st.write(f"PCs shown: {pca_result.scores.shape[2]}")
+            else:
+                st.write(f"Unit page: {int(unit_page_index) + 1}/{n_unit_pages}")
+                st.write(f"Units on page: {page_unit_ids.size}")
+                st.write(f"Population PSTH units: {population_psth_unit_scope}")
+                st.write(f"Population PSTH unit count: {psth_unit_ids.size}")
             if lfp_label is not None:
                 st.write(lfp_label)
         with plot_column:
             st.pyplot(figure)
+            if variance_figure is not None:
+                st.pyplot(variance_figure)
 
         if st.button("Save current plot"):
             save_path = build_trial_view_plot_save_path(
@@ -1344,6 +1466,8 @@ def main() -> None:
             st.success(f"Saved plot to {save_path}")
 
     plt.close(figure)
+    if "variance_figure" in locals() and variance_figure is not None:
+        plt.close(variance_figure)
 
 
 if __name__ == "__main__":
