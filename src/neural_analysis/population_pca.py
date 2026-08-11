@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -44,6 +46,39 @@ class PopulationPCAResult:
     unit_mean_hz: np.ndarray
     unit_scale_hz: np.ndarray
     normalization: str
+
+
+@dataclass(frozen=True)
+class PopulationPCAProfile:
+    """
+    Timed output from one population PCA computation.
+
+    Attributes
+    ----------
+    result : PopulationPCAResult
+        PCA result fit from the profiled rate tensor.
+    bin_centers_s : np.ndarray
+        One-dimensional PCA bin centers with shape ``(n_bins,)`` in seconds
+        relative to the alignment event.
+    rate_tensor_shape : tuple[int, int, int]
+        Shape of the firing-rate tensor as ``(n_trials, n_bins, n_units)``.
+        Rates are in Hz.
+    observation_shape : tuple[int, int]
+        Shape of the flattened PCA matrix as ``(n_observations, n_units)``.
+    fitted_component_count : int
+        Number of components actually fit after capping by available units and
+        observations.
+    timings_s : dict[str, float]
+        Stage timings in seconds with keys ``"binning"``, ``"normalization"``,
+        ``"pca_fit"``, and ``"total"``.
+    """
+
+    result: PopulationPCAResult
+    bin_centers_s: np.ndarray
+    rate_tensor_shape: tuple[int, int, int]
+    observation_shape: tuple[int, int]
+    fitted_component_count: int
+    timings_s: dict[str, float]
 
 
 def _make_bin_edges(window: tuple[float, float], bin_size_s: float) -> np.ndarray:
@@ -277,3 +312,131 @@ def fit_population_pca(
         unit_scale_hz=unit_scale_hz,
         normalization=normalization,
     )
+
+
+def profile_population_pca_pipeline(
+    spike_group: nap.TsGroup,
+    unit_ids: np.ndarray,
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+    alignment_event: str,
+    window: tuple[float, float],
+    bin_size_s: float,
+    n_components: int,
+    normalization: str = PCA_NORMALIZATION_ZSCORE,
+    timer: Callable[[], float] = perf_counter,
+    print_summary: bool = True,
+) -> PopulationPCAProfile:
+    """
+    Profile one population PCA pipeline run from spikes through PCA fit.
+
+    Parameters
+    ----------
+    spike_group : nap.TsGroup
+        Pynapple spike group keyed by integer cluster id. Spike times are in
+        seconds.
+    unit_ids : np.ndarray
+        One-dimensional unit ids with shape ``(n_units,)``.
+    trial_df : pd.DataFrame
+        Trial table with one row per trial and an ``alignment_event`` column in
+        seconds.
+    trial_indices : np.ndarray
+        One-dimensional trial row indices with shape ``(n_trials,)``.
+    alignment_event : str
+        Trial time column used as time zero.
+    window : tuple[float, float]
+        Relative window bounds in seconds as ``(start_s, end_s)``.
+    bin_size_s : float
+        Bin width in seconds. Spike counts are divided by this value to produce
+        firing rates in Hz.
+    n_components : int
+        Requested number of principal components. The fit count is capped at
+        ``min(n_components, n_units, n_observations)``.
+    normalization : str, default=PCA_NORMALIZATION_ZSCORE
+        Unit normalization applied before PCA.
+    timer : Callable[[], float], default=time.perf_counter
+        Monotonic timer returning seconds. Tests may pass a deterministic timer.
+    print_summary : bool, default=True
+        If true, print a compact stage-timing summary to stdout.
+
+    Returns
+    -------
+    PopulationPCAProfile
+        PCA result, bin centers, dimensions, and stage timings in seconds.
+    """
+
+    start_time = timer()
+    rate_tensor_hz, bin_centers_s = build_trial_unit_rate_tensor(
+        spike_group=spike_group,
+        unit_ids=unit_ids,
+        trial_df=trial_df,
+        trial_indices=trial_indices,
+        alignment_event=alignment_event,
+        window=window,
+        bin_size_s=bin_size_s,
+    )
+    after_binning_time = timer()
+
+    rates = np.asarray(rate_tensor_hz, dtype=float)
+    if rates.ndim != 3:
+        raise ValueError("rate_tensor_hz must have shape (n_trials, n_bins, n_units).")
+    n_trials, n_bins, n_units = rates.shape
+    n_observations = n_trials * n_bins
+    if n_units < 2:
+        raise ValueError("At least two units are required for population PCA.")
+    if n_observations < 2:
+        raise ValueError("At least two observations are required for population PCA.")
+    if int(n_components) < 1:
+        raise ValueError("n_components must be positive.")
+
+    observations, unit_mean_hz, unit_scale_hz = prepare_pca_observation_matrix(
+        rates,
+        normalization=normalization,
+    )
+    after_normalization_time = timer()
+
+    n_components_fit = min(int(n_components), n_units, n_observations)
+    pca_model = PCA(n_components=n_components_fit)
+    flat_scores = pca_model.fit_transform(observations)
+    scores = flat_scores.reshape(n_trials, n_bins, n_components_fit)
+    explained_variance_ratio = np.asarray(pca_model.explained_variance_ratio_, dtype=float)
+    cumulative_explained_variance = np.cumsum(explained_variance_ratio)
+    after_pca_fit_time = timer()
+
+    pca_result = PopulationPCAResult(
+        scores=scores,
+        explained_variance_ratio=explained_variance_ratio,
+        cumulative_explained_variance=cumulative_explained_variance,
+        unit_mean_hz=unit_mean_hz,
+        unit_scale_hz=unit_scale_hz,
+        normalization=normalization,
+    )
+    timings_s = {
+        "binning": float(after_binning_time - start_time),
+        "normalization": float(after_normalization_time - after_binning_time),
+        "pca_fit": float(after_pca_fit_time - after_normalization_time),
+        "total": float(after_pca_fit_time - start_time),
+    }
+    profile = PopulationPCAProfile(
+        result=pca_result,
+        bin_centers_s=bin_centers_s,
+        rate_tensor_shape=tuple(int(value) for value in rate_tensor_hz.shape),
+        observation_shape=tuple(int(value) for value in observations.shape),
+        fitted_component_count=int(n_components_fit),
+        timings_s=timings_s,
+    )
+
+    if print_summary:
+        print("Population PCA profile")
+        print(
+            f"  dimensions: trials={n_trials}, bins={n_bins}, units={n_units}, "
+            f"observations={n_observations}, fitted_pcs={n_components_fit}"
+        )
+        print(
+            "  timings_s: "
+            f"binning={timings_s['binning']:.3f}, "
+            f"normalization={timings_s['normalization']:.3f}, "
+            f"pca_fit={timings_s['pca_fit']:.3f}, "
+            f"total={timings_s['total']:.3f}"
+        )
+    return profile

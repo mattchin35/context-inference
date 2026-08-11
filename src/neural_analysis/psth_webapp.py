@@ -44,7 +44,9 @@ NEURAL_DISPLAY_SPIKE_RASTER = "Spike raster"
 NEURAL_DISPLAY_POPULATION_PCA = "Population PCA"
 NEURAL_DISPLAY_OPTIONS = [NEURAL_DISPLAY_SPIKE_RASTER, NEURAL_DISPLAY_POPULATION_PCA]
 PCA_BIN_SIZE_OPTIONS = [0.1, 0.05, 0.02]
-DEFAULT_PCA_COMPONENT_COUNT = 5
+DEFAULT_PCA_TRAJECTORY_COMPONENT_COUNT = 5
+DEFAULT_PCA_VARIANCE_COMPONENT_COUNT = 50
+DEFAULT_PCA_COMPONENT_COUNT = DEFAULT_PCA_TRAJECTORY_COMPONENT_COUNT
 CHANNEL_SOURCE_MANUAL = "Manual / preset"
 CHANNEL_SOURCE_CHANNEL_QUALITY = "channel_quality"
 CHANNEL_SOURCE_OPTIONS = [CHANNEL_SOURCE_MANUAL, CHANNEL_SOURCE_CHANNEL_QUALITY]
@@ -61,7 +63,7 @@ LFP_FILTER_BANDS = {
     "Gamma (50-70 Hz)": (50.0, 70.0),
 }
 LFP_FILTER_PADDING_S = 1.0
-DEFAULT_BROWSER_ROOT = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014")
+DEFAULT_BROWSER_ROOT = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026")
 RASTER_LAYOUT_OPTIONS = {
     "Compact": {"row_spacing": 1.0, "figure_size": (12.0, 7.0)},
     "Separated": {"row_spacing": 1.5, "figure_size": (12.0, 10.0)},
@@ -456,7 +458,8 @@ def compute_population_pca_cached(
     window_end_s: float,
     bin_size_s: float,
     normalization: str,
-    component_count: int,
+    trajectory_component_count: int,
+    variance_component_count: int,
     _spike_group,
     _trial_df: pd.DataFrame,
 ):
@@ -482,8 +485,11 @@ def compute_population_pca_cached(
         PCA bin width in seconds.
     normalization : str
         PCA normalization mode.
-    component_count : int
-        Requested number of PCs.
+    trajectory_component_count : int
+        Requested number of leading PCs to display in the trial trajectory plot.
+    variance_component_count : int
+        Requested number of leading PCs to display in the cumulative explained
+        variance plot.
     _spike_group
         Pynapple spike group keyed by unit id. Leading underscore excludes this
         potentially large object from Streamlit hashing.
@@ -496,9 +502,15 @@ def compute_population_pca_cached(
     tuple[np.ndarray, population_pca.PopulationPCAResult]
         ``(pca_time_s, pca_result)``. ``pca_time_s`` has shape ``(n_bins,)`` in
         seconds relative to alignment. ``pca_result.scores`` has shape
-        ``(n_trials, n_bins, n_components)``.
+        ``(n_trials, n_bins, n_fit_components)``. ``n_fit_components`` is the
+        larger requested display count capped inside ``fit_population_pca``.
     """
 
+    trajectory_component_count = int(trajectory_component_count)
+    variance_component_count = int(variance_component_count)
+    if trajectory_component_count < 1 or variance_component_count < 1:
+        raise ValueError("PCA component counts must be positive.")
+    fit_component_count = max(trajectory_component_count, variance_component_count)
     rate_tensor_hz, pca_time_s = population_pca.build_trial_unit_rate_tensor(
         spike_group=_spike_group,
         unit_ids=np.asarray(unit_ids, dtype=int),
@@ -510,7 +522,7 @@ def compute_population_pca_cached(
     )
     pca_result = population_pca.fit_population_pca(
         rate_tensor_hz=rate_tensor_hz,
-        n_components=int(component_count),
+        n_components=fit_component_count,
         normalization=normalization,
     )
     return pca_time_s, pca_result
@@ -1259,7 +1271,8 @@ def main() -> None:
         neural_display = st.sidebar.selectbox("Neural display", options=NEURAL_DISPLAY_OPTIONS)
         pca_bin_size_s = PCA_BIN_SIZE_OPTIONS[0]
         pca_normalization = population_pca.PCA_NORMALIZATION_ZSCORE
-        pca_component_count = DEFAULT_PCA_COMPONENT_COUNT
+        pca_trajectory_component_count = DEFAULT_PCA_TRAJECTORY_COMPONENT_COUNT
+        pca_variance_component_count = DEFAULT_PCA_VARIANCE_COMPONENT_COUNT
         if neural_display == NEURAL_DISPLAY_SPIKE_RASTER:
             unit_page_size = st.sidebar.selectbox("Units per page", options=PAGE_SIZE_OPTIONS, index=0)
             n_unit_pages = max(1, math.ceil(unit_ids.size / int(unit_page_size)))
@@ -1296,11 +1309,19 @@ def main() -> None:
                 options=list(population_pca.PCA_NORMALIZATION_OPTIONS),
                 index=0,
             )
-            pca_component_count = int(
+            pca_trajectory_component_count = int(
                 st.sidebar.number_input(
-                    "PC count",
+                    "Trajectory PC count",
                     min_value=1,
-                    value=DEFAULT_PCA_COMPONENT_COUNT,
+                    value=DEFAULT_PCA_TRAJECTORY_COMPONENT_COUNT,
+                    step=1,
+                )
+            )
+            pca_variance_component_count = int(
+                st.sidebar.number_input(
+                    "Variance PC count",
+                    min_value=1,
+                    value=DEFAULT_PCA_VARIANCE_COMPONENT_COUNT,
                     step=1,
                 )
             )
@@ -1445,7 +1466,8 @@ def main() -> None:
                     window_end_s=float(window[1]),
                     bin_size_s=float(pca_bin_size_s),
                     normalization=pca_normalization,
-                    component_count=int(pca_component_count),
+                    trajectory_component_count=int(pca_trajectory_component_count),
+                    variance_component_count=int(pca_variance_component_count),
                     _spike_group=spike_group,
                     _trial_df=trial_df,
                 )
@@ -1458,7 +1480,7 @@ def main() -> None:
                     trial_position=int(trial_position),
                     alignment_event=alignment_event,
                     window=window,
-                    pc_count=int(pca_component_count),
+                    pc_count=int(pca_trajectory_component_count),
                     lfp_time_s=lfp_time_s,
                     lfp_uv=lfp_uv,
                     lfp_label=lfp_label,
@@ -1467,6 +1489,7 @@ def main() -> None:
                 )
                 variance_figure, _ = unit_spike_plotting.plot_pca_cumulative_explained_variance(
                     cumulative_explained_variance=pca_result.cumulative_explained_variance,
+                    pc_count=int(pca_variance_component_count),
                 )
             else:
                 figure, axes = unit_spike_plotting.plot_trial_behavior_and_spike_raster(
@@ -1503,7 +1526,12 @@ def main() -> None:
                 st.write(f"PCA bin size: {float(pca_bin_size_s):g} s")
                 st.write(f"PCA normalization: {pca_normalization}")
                 if pca_result is not None:
-                    st.write(f"PCs shown: {pca_result.scores.shape[2]}")
+                    trajectory_pcs_shown = min(
+                        int(pca_trajectory_component_count),
+                        pca_result.scores.shape[2],
+                    )
+                    st.write(f"Trajectory PCs shown: {trajectory_pcs_shown}")
+                    st.write(f"Variance PCs fit: {pca_result.cumulative_explained_variance.size}")
             else:
                 st.write(f"Unit page: {int(unit_page_index) + 1}/{n_unit_pages}")
                 st.write(f"Units on page: {page_unit_ids.size}")

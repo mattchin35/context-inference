@@ -176,15 +176,15 @@ def main_open_ephys_workflow() -> dict[str, tuple[pd.DataFrame, pd.DataFrame]]:
         Kilosort-relative and Open Ephys global sample coordinates.
     """
     session_path = Path(
-        "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260727_alternating_latent"
+        "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference"
     )
-    raw_recording_name = "2026-07-27_14-37-43"
+    raw_recording_name = "2026-08-01_13-08-22"
     record_node_name = "Record Node 101"
     experiment_name = "experiment1"
     recording_name = "recording1"
     derived_record_node_name = "Record_Node_101"
-    processor_prefix = "Neuropix-PXI-100."
-    probe_names = ("ProbeA",)
+    processor_prefix = "Neuropix-PXI-110."
+    probe_names = ("ProbeA", "ProbeB")
     kilosort_subdir = "kilosort4"
     irig_line = 0
     bit_period_s = 1.0
@@ -240,3 +240,4 @@ if __name__ == "__main__":
     # main_workflow()
     # main_ni_only()
     main_open_ephys_workflow()
+

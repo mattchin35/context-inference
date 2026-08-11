@@ -13,23 +13,29 @@ from src.neural_analysis import spike_behavior_pynapple as sbp
 
 
 DEFAULT_SESSION_DATA_HOME = Path(
-    "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT014/CT014_20251223_latentInference"
+    "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference"
 )
-DEFAULT_SESSION_ID = "CT014_2025-12-23_163505"
+DEFAULT_SESSION_ID = "CT026_2026-08-01_130853"
 DEFAULT_HPC_SORTER_OUTPUT_PATH = (
     DEFAULT_SESSION_DATA_HOME
-    / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/Kilosort2.5.2_2026-03-19_183540/sorting_mchin_20260331"
+    / "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeB/kilosort4"
 )
-DEFAULT_ALIGNED_SPIKE_PATH = DEFAULT_SESSION_DATA_HOME / "ephys" / "imec1_sync.npz"
+DEFAULT_ALIGNED_SPIKE_PATH = DEFAULT_SESSION_DATA_HOME / "ephys/aligned/aligned_open_ephys/probeB_sync.npz"
 DEFAULT_PFC_SORTER_OUTPUT_PATH = (
     DEFAULT_SESSION_DATA_HOME
-    / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/Kilosort2.5.2_2026-03-19_180103/sorting_mchin_20260330"
+    / "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeA/kilosort4"
 )
-DEFAULT_ALIGNED_SPIKE_DIR = DEFAULT_SESSION_DATA_HOME / "ephys" / "aligned" / "aligned_imec"
-DEFAULT_HPC_V1_ALIGNED_SPIKE_PATH = DEFAULT_ALIGNED_SPIKE_DIR / "imec1_sync.npz"
-DEFAULT_PFC_ALIGNED_SPIKE_PATH = DEFAULT_ALIGNED_SPIKE_DIR / "imec0_sync.npz"
-DEFAULT_HPC_V1_LFP_PATH = DEFAULT_SESSION_DATA_HOME / "ephys/catgt/catgt_run0_g0/run0_g0_imec1/run0_g0_t0.imec1.lf.bin"
-DEFAULT_PFC_LFP_PATH = DEFAULT_SESSION_DATA_HOME / "ephys/catgt/catgt_run0_g0/run0_g0_imec0/run0_g0_t0.imec0.lf.bin"
+DEFAULT_ALIGNED_SPIKE_DIR = DEFAULT_SESSION_DATA_HOME / "ephys" / "aligned" / "aligned_open_ephys"
+DEFAULT_HPC_V1_ALIGNED_SPIKE_PATH = DEFAULT_ALIGNED_SPIKE_DIR / "probeB_sync.npz"
+DEFAULT_PFC_ALIGNED_SPIKE_PATH = DEFAULT_ALIGNED_SPIKE_DIR / "probeA_sync.npz"
+DEFAULT_HPC_V1_LFP_PATH = (
+    DEFAULT_SESSION_DATA_HOME
+    / "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeB/lfp.dat"
+)
+DEFAULT_PFC_LFP_PATH = (
+    DEFAULT_SESSION_DATA_HOME
+    / "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeA/lfp.dat"
+)
 PROBE_LABEL_HPC_V1 = "HPC/V1"
 PROBE_LABEL_PFC = "PFC"
 SUPPORTED_PROBE_LABELS = (PROBE_LABEL_HPC_V1, PROBE_LABEL_PFC)

@@ -1226,6 +1226,7 @@ def plot_trial_behavior_and_population_pca(
 
 def plot_pca_cumulative_explained_variance(
     cumulative_explained_variance: np.ndarray,
+    pc_count: int | None = None,
     figure_size: tuple[float, float] = (5.0, 3.0),
 ) -> tuple[plt.Figure, plt.Axes]:
     """
@@ -1236,6 +1237,10 @@ def plot_pca_cumulative_explained_variance(
     cumulative_explained_variance : np.ndarray
         One-dimensional cumulative explained variance ratio with shape
         ``(n_components,)``. Values are fractions between 0 and 1.
+    pc_count : int | None, optional
+        Maximum number of leading PCs to display. ``None`` displays all
+        supplied components. The displayed count is capped by available
+        components.
     figure_size : tuple[float, float], default=(5.0, 3.0)
         Matplotlib figure size as ``(width_inches, height_inches)``.
 
@@ -1251,16 +1256,35 @@ def plot_pca_cumulative_explained_variance(
         raise ValueError("cumulative_explained_variance must contain at least one value.")
     if not np.isfinite(cumulative_explained_variance).all():
         raise ValueError("cumulative_explained_variance must contain only finite values.")
+    if pc_count is not None and int(pc_count) < 1:
+        raise ValueError("pc_count must be positive when provided.")
     if len(figure_size) != 2 or float(figure_size[0]) <= 0 or float(figure_size[1]) <= 0:
         raise ValueError("figure_size must be a two-value tuple of positive inches.")
 
+    displayed_pc_count = cumulative_explained_variance.size
+    if pc_count is not None:
+        displayed_pc_count = min(displayed_pc_count, int(pc_count))
+    cumulative_explained_variance = cumulative_explained_variance[:displayed_pc_count]
     pc_numbers = np.arange(1, cumulative_explained_variance.size + 1, dtype=int)
     figure, axis = plt.subplots(1, 1, figsize=(float(figure_size[0]), float(figure_size[1])))
     axis.plot(pc_numbers, cumulative_explained_variance, marker="o", color="black", linewidth=1.2)
     axis.set_xlabel("Number of PCs")
     axis.set_ylabel("Cumulative explained variance")
     axis.set_ylim(0.0, min(1.05, max(1.0, float(cumulative_explained_variance.max()) * 1.05)))
-    axis.set_xticks(pc_numbers)
+    if displayed_pc_count <= 20:
+        axis.set_xticks(pc_numbers)
+    else:
+        tick_interval = max(1, int(np.ceil(displayed_pc_count / 10)))
+        sparse_ticks = np.unique(
+            np.concatenate(
+                [
+                    np.array([1], dtype=int),
+                    np.arange(tick_interval, displayed_pc_count + 1, tick_interval, dtype=int),
+                    np.array([displayed_pc_count], dtype=int),
+                ]
+            )
+        )
+        axis.set_xticks(sparse_ticks)
     figure.tight_layout()
     return figure, axis
 
