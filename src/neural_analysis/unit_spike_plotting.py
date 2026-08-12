@@ -1483,11 +1483,16 @@ def plot_concatenated_trial_behavior_and_population_pca(
             )
 
     plotted_pc_count = min(int(pc_count), pca_scores.shape[2])
+    pc_color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["C0"])
+    if not pc_color_cycle:
+        pc_color_cycle = ["C0"]
     for pc_index in range(plotted_pc_count):
+        pc_color = pc_color_cycle[pc_index % len(pc_color_cycle)]
         for trial_position in range(normalized_trial_indices.size):
             pca_axis.plot(
                 x_by_trial[trial_position],
                 pca_scores[trial_position, :, pc_index],
+                color=pc_color,
                 linewidth=1.0,
                 label=f"PC{pc_index + 1}",
             )
