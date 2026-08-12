@@ -1326,7 +1326,7 @@ def plot_concatenated_trial_behavior_and_population_pca(
     alignment_event: str,
     window: tuple[float, float],
     pc_count: int = 5,
-    figure_size: tuple[float, float] = (14.0, 8.0),
+    figure_size: tuple[float, float] = (11.0, 5.0),
     axis_mode: str = "auto",
 ) -> tuple[plt.Figure, np.ndarray, dict[str, object]]:
     """
@@ -1356,7 +1356,7 @@ def plot_concatenated_trial_behavior_and_population_pca(
     pc_count : int, default=5
         Number of leading PCs to plot. The plotted count is capped by fitted
         components.
-    figure_size : tuple[float, float], default=(14.0, 8.0)
+    figure_size : tuple[float, float], default=(11.0, 5.0)
         Matplotlib figure size as ``(width_inches, height_inches)``.
     axis_mode : str, default="auto"
         X-axis layout passed to ``build_concatenated_trial_time_axis``.
@@ -1407,7 +1407,7 @@ def plot_concatenated_trial_behavior_and_population_pca(
         1,
         sharex=True,
         figsize=(float(figure_size[0]), float(figure_size[1])),
-        height_ratios=[1, 3],
+        height_ratios=[0.9, 2.6],
     )
     axes = np.asarray(axes, dtype=object).reshape(-1)
     behavior_axis = axes[0]
