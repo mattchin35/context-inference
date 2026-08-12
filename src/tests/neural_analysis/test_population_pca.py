@@ -76,8 +76,8 @@ def test_build_trial_unit_rate_tensor_returns_expected_shape_and_hz_values():
     )
 
 
-def test_build_trial_unit_rate_tensor_numpy_matches_default_implementation():
-    """The default PCA binning path should remain the current NumPy implementation."""
+def test_build_trial_unit_rate_tensor_pynapple_matches_default_implementation():
+    """The default PCA binning path should use the faster Pynapple implementation."""
     default_rate_tensor_hz, default_bin_centers_s = population_pca.build_trial_unit_rate_tensor(
         spike_group=_make_spike_group(),
         unit_ids=np.array([1, 2, 3], dtype=int),
@@ -87,7 +87,7 @@ def test_build_trial_unit_rate_tensor_numpy_matches_default_implementation():
         window=(0.0, 0.4),
         bin_size_s=0.1,
     )
-    numpy_rate_tensor_hz, numpy_bin_centers_s = population_pca.build_trial_unit_rate_tensor_numpy(
+    pynapple_rate_tensor_hz, pynapple_bin_centers_s = population_pca.build_trial_unit_rate_tensor_pynapple(
         spike_group=_make_spike_group(),
         unit_ids=np.array([1, 2, 3], dtype=int),
         trial_df=_make_trial_df(),
@@ -97,8 +97,8 @@ def test_build_trial_unit_rate_tensor_numpy_matches_default_implementation():
         bin_size_s=0.1,
     )
 
-    np.testing.assert_allclose(default_rate_tensor_hz, numpy_rate_tensor_hz)
-    np.testing.assert_allclose(default_bin_centers_s, numpy_bin_centers_s)
+    np.testing.assert_allclose(default_rate_tensor_hz, pynapple_rate_tensor_hz)
+    np.testing.assert_allclose(default_bin_centers_s, pynapple_bin_centers_s)
 
 
 def test_build_trial_unit_rate_tensor_pynapple_matches_numpy_for_nonboundary_spikes():
@@ -309,7 +309,7 @@ def test_profile_population_pca_pipeline_reports_timings_and_dimensions():
     assert profile.rate_tensor_shape == (2, 4, 3)
     assert profile.observation_shape == (8, 3)
     assert profile.fitted_component_count == 2
-    assert profile.binning_method == population_pca.PCA_BINNING_METHOD_NUMPY
+    assert profile.binning_method == population_pca.PCA_BINNING_METHOD_PYNAPPLE
     assert profile.timings_s == {
         "binning": 1.0,
         "normalization": 2.0,
@@ -338,6 +338,30 @@ def test_profile_population_pca_pipeline_accepts_pynapple_binning_method():
 
     assert profile.binning_method == population_pca.PCA_BINNING_METHOD_PYNAPPLE
     assert profile.rate_tensor_shape == (2, 4, 3)
+
+
+def test_webapp_valid_alignment_filter_returns_valid_and_invalid_trials():
+    trial_df = pd.DataFrame({"choice_time": [1.0, np.nan, "bad", 4.0]})
+
+    valid_trial_indices, invalid_trial_indices = psth_webapp.filter_trial_indices_for_valid_alignment(
+        trial_df=trial_df,
+        trial_indices=np.array([0, 1, 2, 3], dtype=int),
+        alignment_event="choice_time",
+    )
+
+    np.testing.assert_array_equal(valid_trial_indices, np.array([0, 3], dtype=int))
+    np.testing.assert_array_equal(invalid_trial_indices, np.array([1, 2], dtype=int))
+
+
+def test_webapp_valid_alignment_filter_rejects_all_invalid_trials():
+    trial_df = pd.DataFrame({"choice_time": [np.nan, "bad"]})
+
+    with pytest.raises(ValueError, match="No selected trials have valid"):
+        psth_webapp.filter_trial_indices_for_valid_alignment(
+            trial_df=trial_df,
+            trial_indices=np.array([0, 1], dtype=int),
+            alignment_event="choice_time",
+        )
 
 
 def test_fit_population_pca_rejects_too_few_units_or_observations():
