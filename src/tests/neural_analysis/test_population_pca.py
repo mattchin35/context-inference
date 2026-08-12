@@ -563,6 +563,53 @@ def test_plot_concatenated_pca_does_not_connect_pc_lines_across_trials():
     figure.clf()
 
 
+def test_plot_concatenated_pca_keeps_pc_colors_across_trial_segments():
+    """Each PC should keep one color even though trials are drawn as separate lines."""
+    trial_df = pd.DataFrame(
+        {
+            "start_time": [0.0, 1.0, 2.0],
+            "choice_time": [0.1, 1.1, 2.1],
+            "reward_time": [0.2, np.nan, 2.2],
+            "led_on_time": [0.05, 1.05, 2.05],
+            "action": [0, 1, 0],
+            "reward": [1, 0, 1],
+        }
+    )
+    pca_scores = np.zeros((3, 3, 2), dtype=float)
+    pca_scores[:, :, 0] = np.array(
+        [
+            [0.0, 1.0, 0.0],
+            [2.0, 3.0, 2.0],
+            [4.0, 5.0, 4.0],
+        ]
+    )
+    pca_scores[:, :, 1] = pca_scores[:, :, 0] + 10.0
+
+    figure, axes, _axis_data = unit_spike_plotting.plot_concatenated_trial_behavior_and_population_pca(
+        trial_df=trial_df,
+        trial_indices=np.array([0, 1, 2], dtype=int),
+        lick_times={
+            "left_entry": nap.Ts(t=np.array([], dtype=float)),
+            "right_entry": nap.Ts(t=np.array([], dtype=float)),
+        },
+        pca_time_s=np.array([0.05, 0.15, 0.25], dtype=float),
+        pca_scores=pca_scores,
+        alignment_event="start_time",
+        window=(0.0, 0.3),
+        pc_count=2,
+    )
+
+    pca_axis = np.asarray(axes, dtype=object).reshape(-1)[1]
+    pc1_colors = [line.get_color() for line in pca_axis.lines if line.get_label() == "PC1"]
+    pc2_colors = [line.get_color() for line in pca_axis.lines if line.get_label() == "PC2"]
+    assert len(pc1_colors) == 3
+    assert len(pc2_colors) == 3
+    assert len(set(pc1_colors)) == 1
+    assert len(set(pc2_colors)) == 1
+    assert pc1_colors[0] != pc2_colors[0]
+    figure.clf()
+
+
 def test_plot_concatenated_pca_default_figure_is_compact():
     """The fixed viewport plot should fit behavior and PC traces on screen together."""
     pca_scores = np.zeros((2, 3, 1), dtype=float)
