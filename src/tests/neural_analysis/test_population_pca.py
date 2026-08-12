@@ -76,6 +76,122 @@ def test_build_trial_unit_rate_tensor_returns_expected_shape_and_hz_values():
     )
 
 
+def test_build_trial_unit_rate_tensor_numpy_matches_default_implementation():
+    """The default PCA binning path should remain the current NumPy implementation."""
+    default_rate_tensor_hz, default_bin_centers_s = population_pca.build_trial_unit_rate_tensor(
+        spike_group=_make_spike_group(),
+        unit_ids=np.array([1, 2, 3], dtype=int),
+        trial_df=_make_trial_df(),
+        trial_indices=np.array([0, 1], dtype=int),
+        alignment_event="start_time",
+        window=(0.0, 0.4),
+        bin_size_s=0.1,
+    )
+    numpy_rate_tensor_hz, numpy_bin_centers_s = population_pca.build_trial_unit_rate_tensor_numpy(
+        spike_group=_make_spike_group(),
+        unit_ids=np.array([1, 2, 3], dtype=int),
+        trial_df=_make_trial_df(),
+        trial_indices=np.array([0, 1], dtype=int),
+        alignment_event="start_time",
+        window=(0.0, 0.4),
+        bin_size_s=0.1,
+    )
+
+    np.testing.assert_allclose(default_rate_tensor_hz, numpy_rate_tensor_hz)
+    np.testing.assert_allclose(default_bin_centers_s, numpy_bin_centers_s)
+
+
+def test_build_trial_unit_rate_tensor_pynapple_matches_numpy_for_nonboundary_spikes():
+    """The Pynapple implementation should match NumPy away from exact window-end boundaries."""
+    numpy_rate_tensor_hz, numpy_bin_centers_s = population_pca.build_trial_unit_rate_tensor_numpy(
+        spike_group=_make_spike_group(),
+        unit_ids=np.array([1, 2, 3], dtype=int),
+        trial_df=_make_trial_df(),
+        trial_indices=np.array([0, 1], dtype=int),
+        alignment_event="start_time",
+        window=(0.0, 0.4),
+        bin_size_s=0.1,
+    )
+    pynapple_rate_tensor_hz, pynapple_bin_centers_s = population_pca.build_trial_unit_rate_tensor_pynapple(
+        spike_group=_make_spike_group(),
+        unit_ids=np.array([1, 2, 3], dtype=int),
+        trial_df=_make_trial_df(),
+        trial_indices=np.array([0, 1], dtype=int),
+        alignment_event="start_time",
+        window=(0.0, 0.4),
+        bin_size_s=0.1,
+    )
+
+    assert pynapple_rate_tensor_hz.shape == (2, 4, 3)
+    np.testing.assert_allclose(pynapple_rate_tensor_hz, numpy_rate_tensor_hz)
+    np.testing.assert_allclose(pynapple_bin_centers_s, numpy_bin_centers_s)
+
+
+def test_build_trial_unit_rate_tensor_pynapple_preserves_requested_unit_order():
+    """Pynapple sorts TsGroup indices, so the wrapper must restore the requested unit order."""
+    spike_group = nap.TsGroup(
+        {
+            12: nap.Ts(t=np.array([0.05, 0.15, 9.0], dtype=float)),
+            3: nap.Ts(t=np.array([0.05, 9.0], dtype=float)),
+            8: nap.Ts(t=np.array([0.25, 9.0], dtype=float)),
+        }
+    )
+    trial_df = pd.DataFrame({"start_time": [0.0]})
+
+    rate_tensor_hz, _ = population_pca.build_trial_unit_rate_tensor_pynapple(
+        spike_group=spike_group,
+        unit_ids=np.array([12, 3, 8], dtype=int),
+        trial_df=trial_df,
+        trial_indices=np.array([0], dtype=int),
+        alignment_event="start_time",
+        window=(0.0, 0.4),
+        bin_size_s=0.1,
+    )
+
+    expected_counts = np.array(
+        [
+            [1.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ]
+    )
+    np.testing.assert_allclose(rate_tensor_hz[0].T, expected_counts / 0.1)
+
+
+def test_build_trial_unit_rate_tensor_pynapple_rejects_invalid_alignment_times():
+    """Invalid alignment values should fail loudly instead of entering PCA as zero-filled trials."""
+    trial_df = pd.DataFrame({"start_time": [0.0, np.nan]})
+
+    with pytest.raises(ValueError, match="Invalid alignment times"):
+        population_pca.build_trial_unit_rate_tensor_pynapple(
+            spike_group=_make_spike_group(),
+            unit_ids=np.array([1, 2], dtype=int),
+            trial_df=trial_df,
+            trial_indices=np.array([0, 1], dtype=int),
+            alignment_event="start_time",
+            window=(0.0, 0.4),
+            bin_size_s=0.1,
+        )
+
+
+def test_build_trial_unit_rate_tensor_pynapple_uses_half_open_final_edge():
+    """Pynapple excludes a spike exactly at the trial-window end; this is accepted behavior."""
+    spike_group = nap.TsGroup({1: nap.Ts(t=np.array([0.0, 0.1, 0.2, 0.3, 0.4], dtype=float))})
+    trial_df = pd.DataFrame({"start_time": [0.0]})
+
+    rate_tensor_hz, _ = population_pca.build_trial_unit_rate_tensor_pynapple(
+        spike_group=spike_group,
+        unit_ids=np.array([1], dtype=int),
+        trial_df=trial_df,
+        trial_indices=np.array([0], dtype=int),
+        alignment_event="start_time",
+        window=(0.0, 0.4),
+        bin_size_s=0.1,
+    )
+
+    np.testing.assert_allclose(rate_tensor_hz[0, :, 0], np.array([10.0, 10.0, 10.0, 10.0]))
+
+
 def test_build_trial_unit_rate_tensor_aligns_to_choice_time():
     rate_tensor_hz, bin_centers_s = population_pca.build_trial_unit_rate_tensor(
         spike_group=_make_spike_group(),
@@ -193,12 +309,35 @@ def test_profile_population_pca_pipeline_reports_timings_and_dimensions():
     assert profile.rate_tensor_shape == (2, 4, 3)
     assert profile.observation_shape == (8, 3)
     assert profile.fitted_component_count == 2
+    assert profile.binning_method == population_pca.PCA_BINNING_METHOD_NUMPY
     assert profile.timings_s == {
         "binning": 1.0,
         "normalization": 2.0,
         "pca_fit": 3.0,
         "total": 6.0,
     }
+
+
+def test_profile_population_pca_pipeline_accepts_pynapple_binning_method():
+    fake_times = iter([0.0, 1.0, 3.0, 6.0])
+
+    profile = population_pca.profile_population_pca_pipeline(
+        spike_group=_make_spike_group(),
+        unit_ids=np.array([1, 2, 3], dtype=int),
+        trial_df=_make_trial_df(),
+        trial_indices=np.array([0, 1], dtype=int),
+        alignment_event="start_time",
+        window=(0.0, 0.4),
+        bin_size_s=0.1,
+        n_components=2,
+        normalization=population_pca.PCA_NORMALIZATION_ZSCORE,
+        binning_method=population_pca.PCA_BINNING_METHOD_PYNAPPLE,
+        timer=lambda: next(fake_times),
+        print_summary=False,
+    )
+
+    assert profile.binning_method == population_pca.PCA_BINNING_METHOD_PYNAPPLE
+    assert profile.rate_tensor_shape == (2, 4, 3)
 
 
 def test_fit_population_pca_rejects_too_few_units_or_observations():
