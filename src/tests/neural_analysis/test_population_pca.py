@@ -447,6 +447,26 @@ def test_build_concatenated_trial_time_axis_falls_back_to_pseudo_time_for_overla
     assert axis_data["mode"] == "pseudo_time"
 
 
+def test_build_concatenated_trial_time_axis_can_force_pseudo_time():
+    trial_df = pd.DataFrame({"choice_time": [10.0, 15.0]})
+
+    axis_data = unit_spike_plotting.build_concatenated_trial_time_axis(
+        trial_df=trial_df,
+        trial_indices=np.array([0, 1], dtype=int),
+        pca_time_s=np.array([-0.5, 0.0, 0.5], dtype=float),
+        alignment_event="choice_time",
+        window=(-1.0, 1.0),
+        axis_mode="pseudo_time",
+    )
+
+    np.testing.assert_allclose(axis_data["x_by_trial"][0], np.array([0.5, 1.0, 1.5]))
+    np.testing.assert_allclose(axis_data["x_by_trial"][1], np.array([2.5, 3.0, 3.5]))
+    np.testing.assert_allclose(axis_data["trial_start_x"], np.array([0.0, 2.0]))
+    np.testing.assert_allclose(axis_data["trial_end_x"], np.array([2.0, 4.0]))
+    np.testing.assert_allclose(axis_data["trial_break_x"], np.array([2.0]))
+    assert axis_data["mode"] == "pseudo_time"
+
+
 def test_plot_concatenated_trial_behavior_and_population_pca_draws_rewards_and_shading():
     pca_scores = np.zeros((2, 3, 2), dtype=float)
     pca_scores[0, :, 0] = np.array([0.0, 1.0, 0.0])
@@ -475,6 +495,71 @@ def test_plot_concatenated_trial_behavior_and_population_pca_draws_rewards_and_s
     assert any(line.get_label() == "Reward" for line in behavior_axis.lines)
     assert len(pca_axis.patches) >= 2
     assert all(patch.get_alpha() <= 0.1 for patch in pca_axis.patches)
+    figure.clf()
+
+
+def test_plot_concatenated_pca_draws_trial_break_lines_between_trials():
+    pca_scores = np.zeros((3, 3, 1), dtype=float)
+
+    figure, axes, axis_data = unit_spike_plotting.plot_concatenated_trial_behavior_and_population_pca(
+        trial_df=pd.DataFrame(
+            {
+                "start_time": [0.0, 1.0, 2.0],
+                "choice_time": [0.1, 1.1, 2.1],
+                "reward_time": [0.2, np.nan, 2.2],
+                "led_on_time": [0.05, 1.05, 2.05],
+                "action": [0, 1, 0],
+                "reward": [1, 0, 1],
+            }
+        ),
+        trial_indices=np.array([0, 1, 2], dtype=int),
+        lick_times={
+            "left_entry": nap.Ts(t=np.array([], dtype=float)),
+            "right_entry": nap.Ts(t=np.array([], dtype=float)),
+        },
+        pca_time_s=np.array([0.05, 0.15, 0.25], dtype=float),
+        pca_scores=pca_scores,
+        alignment_event="start_time",
+        window=(0.0, 0.3),
+        pc_count=1,
+    )
+
+    axes = np.asarray(axes, dtype=object).reshape(-1)
+    break_positions = np.asarray(axis_data["trial_break_x"], dtype=float)
+    assert break_positions.shape == (2,)
+    for axis in axes:
+        break_lines = [
+            line for line in axis.lines
+            if line.get_label() == "Trial break" and line.get_alpha() == pytest.approx(0.25)
+        ]
+        assert len(break_lines) == 2
+        np.testing.assert_allclose([line.get_xdata()[0] for line in break_lines], break_positions)
+    figure.clf()
+
+
+def test_plot_concatenated_pca_does_not_connect_pc_lines_across_trials():
+    pca_scores = np.zeros((2, 3, 1), dtype=float)
+    pca_scores[0, :, 0] = np.array([0.0, 1.0, 0.0])
+    pca_scores[1, :, 0] = np.array([10.0, 11.0, 10.0])
+
+    figure, axes, _axis_data = unit_spike_plotting.plot_concatenated_trial_behavior_and_population_pca(
+        trial_df=_make_trial_df(),
+        trial_indices=np.array([0, 1], dtype=int),
+        lick_times={
+            "left_entry": nap.Ts(t=np.array([], dtype=float)),
+            "right_entry": nap.Ts(t=np.array([], dtype=float)),
+        },
+        pca_time_s=np.array([0.05, 0.15, 0.25], dtype=float),
+        pca_scores=pca_scores,
+        alignment_event="start_time",
+        window=(0.0, 0.3),
+        pc_count=1,
+    )
+
+    pca_axis = np.asarray(axes, dtype=object).reshape(-1)[1]
+    pc_lines = [line for line in pca_axis.lines if line.get_label() == "PC1"]
+    assert len(pc_lines) == 2
+    assert all(line.get_xdata().shape == (3,) for line in pc_lines)
     figure.clf()
 
 
