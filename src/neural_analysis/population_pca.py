@@ -13,6 +13,9 @@ from sklearn.decomposition import PCA
 PCA_NORMALIZATION_ZSCORE = "Z-score units"
 PCA_NORMALIZATION_MEAN_CENTER = "Mean-center only"
 PCA_NORMALIZATION_OPTIONS = (PCA_NORMALIZATION_ZSCORE, PCA_NORMALIZATION_MEAN_CENTER)
+PCA_BINNING_METHOD_NUMPY = "numpy"
+PCA_BINNING_METHOD_PYNAPPLE = "pynapple"
+PCA_BINNING_METHOD_OPTIONS = (PCA_BINNING_METHOD_NUMPY, PCA_BINNING_METHOD_PYNAPPLE)
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,8 @@ class PopulationPCAProfile:
     timings_s : dict[str, float]
         Stage timings in seconds with keys ``"binning"``, ``"normalization"``,
         ``"pca_fit"``, and ``"total"``.
+    binning_method : str
+        Binning implementation used to build the rate tensor.
     """
 
     result: PopulationPCAResult
@@ -79,6 +84,7 @@ class PopulationPCAProfile:
     observation_shape: tuple[int, int]
     fitted_component_count: int
     timings_s: dict[str, float]
+    binning_method: str
 
 
 def _make_bin_edges(window: tuple[float, float], bin_size_s: float) -> np.ndarray:
@@ -133,6 +139,65 @@ def _get_spike_times_seconds(spike_group: nap.TsGroup, unit_id: int) -> np.ndarr
     return np.asarray(spike_group[int(unit_id)].index.to_numpy(), dtype=float).reshape(-1)
 
 
+def _normalize_binning_inputs(
+    spike_group: nap.TsGroup,
+    unit_ids: np.ndarray,
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+    alignment_event: str,
+    window: tuple[float, float],
+    bin_size_s: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Validate shared rate-tensor inputs and compute common bin geometry.
+
+    Parameters
+    ----------
+    spike_group : nap.TsGroup
+        Pynapple spike group keyed by integer cluster id. Spike times are in
+        seconds.
+    unit_ids : np.ndarray
+        One-dimensional unit ids with shape ``(n_units,)``. All units are
+        included as PCA features.
+    trial_df : pd.DataFrame
+        Trial table with one row per trial and an ``alignment_event`` time
+        column in seconds.
+    trial_indices : np.ndarray
+        One-dimensional trial row indices with shape ``(n_trials,)``.
+    alignment_event : str
+        Trial time column used as time zero, such as ``"choice_time"`` or
+        ``"start_time"``.
+    window : tuple[float, float]
+        Relative window bounds in seconds as ``(start_s, end_s)``.
+    bin_size_s : float
+        Bin width in seconds.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+        ``(normalized_unit_ids, normalized_trial_indices, bin_edges,
+        bin_centers_s)``. Unit and trial arrays are one-dimensional integer
+        arrays. Bin edges and centers are in seconds relative to
+        ``alignment_event``.
+    """
+
+    if not isinstance(spike_group, nap.TsGroup):
+        raise TypeError("spike_group must be a pynapple TsGroup.")
+    if alignment_event not in trial_df.columns:
+        raise ValueError(f"trial_df is missing alignment event column {alignment_event!r}.")
+
+    normalized_unit_ids = np.asarray(unit_ids, dtype=int).reshape(-1)
+    normalized_trial_indices = np.asarray(trial_indices, dtype=int).reshape(-1)
+    if normalized_unit_ids.size == 0:
+        raise ValueError("unit_ids must contain at least one unit.")
+    if normalized_trial_indices.size == 0:
+        raise ValueError("trial_indices must contain at least one trial.")
+
+    bin_edges = _make_bin_edges(window=window, bin_size_s=bin_size_s)
+    bin_centers_s = bin_edges[:-1] + np.diff(bin_edges) / 2.0
+    return normalized_unit_ids, normalized_trial_indices, bin_edges, bin_centers_s
+
+
 def build_trial_unit_rate_tensor(
     spike_group: nap.TsGroup,
     unit_ids: np.ndarray,
@@ -174,20 +239,66 @@ def build_trial_unit_rate_tensor(
         ``(n_bins,)`` in seconds relative to ``alignment_event``.
     """
 
-    if not isinstance(spike_group, nap.TsGroup):
-        raise TypeError("spike_group must be a pynapple TsGroup.")
-    if alignment_event not in trial_df.columns:
-        raise ValueError(f"trial_df is missing alignment event column {alignment_event!r}.")
+    return build_trial_unit_rate_tensor_numpy(
+        spike_group=spike_group,
+        unit_ids=unit_ids,
+        trial_df=trial_df,
+        trial_indices=trial_indices,
+        alignment_event=alignment_event,
+        window=window,
+        bin_size_s=bin_size_s,
+    )
 
-    normalized_unit_ids = np.asarray(unit_ids, dtype=int).reshape(-1)
-    normalized_trial_indices = np.asarray(trial_indices, dtype=int).reshape(-1)
-    if normalized_unit_ids.size == 0:
-        raise ValueError("unit_ids must contain at least one unit.")
-    if normalized_trial_indices.size == 0:
-        raise ValueError("trial_indices must contain at least one trial.")
 
-    bin_edges = _make_bin_edges(window=window, bin_size_s=bin_size_s)
-    bin_centers_s = bin_edges[:-1] + np.diff(bin_edges) / 2.0
+def build_trial_unit_rate_tensor_numpy(
+    spike_group: nap.TsGroup,
+    unit_ids: np.ndarray,
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+    alignment_event: str,
+    window: tuple[float, float],
+    bin_size_s: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Bin selected units with the original NumPy histogram implementation.
+
+    Parameters
+    ----------
+    spike_group : nap.TsGroup
+        Pynapple spike group keyed by integer cluster id. Spike times are in
+        seconds.
+    unit_ids : np.ndarray
+        One-dimensional unit ids with shape ``(n_units,)``. Output unit axis
+        follows this order.
+    trial_df : pd.DataFrame
+        Trial table with one row per trial and an ``alignment_event`` time
+        column in seconds.
+    trial_indices : np.ndarray
+        One-dimensional trial row indices with shape ``(n_trials,)``.
+    alignment_event : str
+        Trial time column used as time zero.
+    window : tuple[float, float]
+        Relative window bounds in seconds as ``(start_s, end_s)``.
+    bin_size_s : float
+        Bin width in seconds. Counts are divided by this value to produce Hz.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        ``(rate_tensor_hz, bin_centers_s)``. ``rate_tensor_hz`` has shape
+        ``(n_trials, n_bins, n_units)`` in Hz. ``bin_centers_s`` has shape
+        ``(n_bins,)`` in seconds relative to ``alignment_event``.
+    """
+
+    normalized_unit_ids, normalized_trial_indices, bin_edges, bin_centers_s = _normalize_binning_inputs(
+        spike_group=spike_group,
+        unit_ids=unit_ids,
+        trial_df=trial_df,
+        trial_indices=trial_indices,
+        alignment_event=alignment_event,
+        window=window,
+        bin_size_s=bin_size_s,
+    )
     rate_tensor_hz = np.zeros(
         (normalized_trial_indices.size, bin_centers_s.size, normalized_unit_ids.size),
         dtype=float,
@@ -209,6 +320,107 @@ def build_trial_unit_rate_tensor(
             relative_spikes_s = unit_spike_times[int(unit_id)] - alignment_time_s
             spike_counts, _ = np.histogram(relative_spikes_s, bins=bin_edges)
             rate_tensor_hz[trial_position, :, unit_position] = spike_counts.astype(float) / float(bin_size_s)
+    return rate_tensor_hz, bin_centers_s
+
+
+def build_trial_unit_rate_tensor_pynapple(
+    spike_group: nap.TsGroup,
+    unit_ids: np.ndarray,
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+    alignment_event: str,
+    window: tuple[float, float],
+    bin_size_s: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Bin selected units with Pynapple ``build_tensor`` / ``TsGroup.trial_count``.
+
+    Parameters
+    ----------
+    spike_group : nap.TsGroup
+        Pynapple spike group keyed by integer cluster id. Spike times are in
+        seconds.
+    unit_ids : np.ndarray
+        One-dimensional unit ids with shape ``(n_units,)``. Output unit axis
+        follows this order even though Pynapple sorts ``TsGroup.index``.
+    trial_df : pd.DataFrame
+        Trial table with one row per trial and an ``alignment_event`` time
+        column in seconds. Invalid alignment values raise ``ValueError``.
+    trial_indices : np.ndarray
+        One-dimensional trial row indices with shape ``(n_trials,)``.
+    alignment_event : str
+        Trial time column used as time zero.
+    window : tuple[float, float]
+        Relative window bounds in seconds as ``(start_s, end_s)``. The effective
+        end is the last complete bin edge, matching ``_make_bin_edges``.
+    bin_size_s : float
+        Bin width in seconds. Counts are divided by this value to produce Hz.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        ``(rate_tensor_hz, bin_centers_s)``. ``rate_tensor_hz`` has shape
+        ``(n_trials, n_bins, n_units)`` in Hz. ``bin_centers_s`` has shape
+        ``(n_bins,)`` in seconds relative to ``alignment_event``. Pynapple uses
+        half-open final edge behavior, so spikes exactly at ``window_end`` are
+        excluded from the final bin.
+    """
+
+    normalized_unit_ids, normalized_trial_indices, bin_edges, bin_centers_s = _normalize_binning_inputs(
+        spike_group=spike_group,
+        unit_ids=unit_ids,
+        trial_df=trial_df,
+        trial_indices=trial_indices,
+        alignment_event=alignment_event,
+        window=window,
+        bin_size_s=bin_size_s,
+    )
+
+    alignment_values = pd.to_numeric(
+        trial_df.loc[normalized_trial_indices, alignment_event],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    invalid_alignment_mask = ~np.isfinite(alignment_values)
+    if invalid_alignment_mask.any():
+        invalid_trial_indices = normalized_trial_indices[invalid_alignment_mask]
+        preview = invalid_trial_indices[:10].tolist()
+        raise ValueError(f"Invalid alignment times for {alignment_event!r}: trial indices {preview}")
+
+    unique_unit_ids = np.unique(normalized_unit_ids)
+    selected_spike_group = nap.TsGroup(
+        {int(unit_id): spike_group[int(unit_id)] for unit_id in unique_unit_ids}
+    )
+    actual_unit_order = np.asarray(selected_spike_group.index, dtype=int)
+    unit_position_by_id = {int(unit_id): index for index, unit_id in enumerate(actual_unit_order)}
+    reorder_indices = np.asarray(
+        [unit_position_by_id[int(unit_id)] for unit_id in normalized_unit_ids],
+        dtype=int,
+    )
+
+    trial_epochs = nap.IntervalSet(
+        start=alignment_values + float(bin_edges[0]),
+        end=alignment_values + float(bin_edges[-1]),
+        time_units="s",
+    )
+    counts_units_trials_bins = nap.build_tensor(
+        selected_spike_group,
+        trial_epochs,
+        bin_size=float(bin_size_s),
+        align="start",
+        padding_value=np.nan,
+        time_unit="s",
+    )
+    counts_units_trials_bins = np.asarray(counts_units_trials_bins, dtype=float)
+    if counts_units_trials_bins.shape[2] != bin_centers_s.size:
+        raise ValueError(
+            "Pynapple build_tensor returned an unexpected bin count: "
+            f"{counts_units_trials_bins.shape[2]} != {bin_centers_s.size}."
+        )
+    if np.isnan(counts_units_trials_bins).any():
+        raise ValueError("Pynapple build_tensor returned NaN padding; trial windows should have equal duration.")
+
+    ordered_counts = counts_units_trials_bins[reorder_indices, :, :]
+    rate_tensor_hz = np.transpose(ordered_counts, (1, 2, 0)) / float(bin_size_s)
     return rate_tensor_hz, bin_centers_s
 
 
@@ -324,6 +536,7 @@ def profile_population_pca_pipeline(
     bin_size_s: float,
     n_components: int,
     normalization: str = PCA_NORMALIZATION_ZSCORE,
+    binning_method: str = PCA_BINNING_METHOD_NUMPY,
     timer: Callable[[], float] = perf_counter,
     print_summary: bool = True,
 ) -> PopulationPCAProfile:
@@ -354,6 +567,10 @@ def profile_population_pca_pipeline(
         ``min(n_components, n_units, n_observations)``.
     normalization : str, default=PCA_NORMALIZATION_ZSCORE
         Unit normalization applied before PCA.
+    binning_method : str, default=PCA_BINNING_METHOD_NUMPY
+        Binning implementation. Supported values are ``"numpy"`` for the
+        original histogram loop and ``"pynapple"`` for Pynapple
+        ``build_tensor`` / ``TsGroup.trial_count``.
     timer : Callable[[], float], default=time.perf_counter
         Monotonic timer returning seconds. Tests may pass a deterministic timer.
     print_summary : bool, default=True
@@ -365,8 +582,15 @@ def profile_population_pca_pipeline(
         PCA result, bin centers, dimensions, and stage timings in seconds.
     """
 
+    if binning_method not in PCA_BINNING_METHOD_OPTIONS:
+        raise ValueError(f"binning_method must be one of {PCA_BINNING_METHOD_OPTIONS}.")
+    if binning_method == PCA_BINNING_METHOD_NUMPY:
+        binning_function = build_trial_unit_rate_tensor_numpy
+    else:
+        binning_function = build_trial_unit_rate_tensor_pynapple
+
     start_time = timer()
-    rate_tensor_hz, bin_centers_s = build_trial_unit_rate_tensor(
+    rate_tensor_hz, bin_centers_s = binning_function(
         spike_group=spike_group,
         unit_ids=unit_ids,
         trial_df=trial_df,
@@ -424,10 +648,14 @@ def profile_population_pca_pipeline(
         observation_shape=tuple(int(value) for value in observations.shape),
         fitted_component_count=int(n_components_fit),
         timings_s=timings_s,
+        binning_method=binning_method,
     )
 
     if print_summary:
         print("Population PCA profile")
+        print(
+            f"  binning_method: {binning_method}"
+        )
         print(
             f"  dimensions: trials={n_trials}, bins={n_bins}, units={n_units}, "
             f"observations={n_observations}, fitted_pcs={n_components_fit}"
