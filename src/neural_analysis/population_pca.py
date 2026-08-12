@@ -239,7 +239,7 @@ def build_trial_unit_rate_tensor(
         ``(n_bins,)`` in seconds relative to ``alignment_event``.
     """
 
-    return build_trial_unit_rate_tensor_numpy(
+    return build_trial_unit_rate_tensor_pynapple(
         spike_group=spike_group,
         unit_ids=unit_ids,
         trial_df=trial_df,
@@ -536,7 +536,7 @@ def profile_population_pca_pipeline(
     bin_size_s: float,
     n_components: int,
     normalization: str = PCA_NORMALIZATION_ZSCORE,
-    binning_method: str = PCA_BINNING_METHOD_NUMPY,
+    binning_method: str = PCA_BINNING_METHOD_PYNAPPLE,
     timer: Callable[[], float] = perf_counter,
     print_summary: bool = True,
 ) -> PopulationPCAProfile:
@@ -567,7 +567,7 @@ def profile_population_pca_pipeline(
         ``min(n_components, n_units, n_observations)``.
     normalization : str, default=PCA_NORMALIZATION_ZSCORE
         Unit normalization applied before PCA.
-    binning_method : str, default=PCA_BINNING_METHOD_NUMPY
+    binning_method : str, default=PCA_BINNING_METHOD_PYNAPPLE
         Binning implementation. Supported values are ``"numpy"`` for the
         original histogram loop and ``"pynapple"`` for Pynapple
         ``build_tensor`` / ``TsGroup.trial_count``.

@@ -447,6 +447,56 @@ def resolve_population_pca_unit_ids(
     return selected_unit_metadata["cluster_id"].to_numpy(dtype=int)
 
 
+def filter_trial_indices_for_valid_alignment(
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+    alignment_event: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Split selected trials by whether they have a finite alignment time.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with one row per trial and an ``alignment_event`` column in
+        seconds.
+    trial_indices : np.ndarray
+        One-dimensional trial row indices with shape ``(n_trials,)``.
+    alignment_event : str
+        Trial time column used as time zero, such as ``"choice_time"`` or
+        ``"start_time"``.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        ``(valid_trial_indices, invalid_trial_indices)``. Both arrays are
+        one-dimensional integer arrays of trial row indices. Valid trials have
+        finite alignment times in seconds.
+
+    Raises
+    ------
+    ValueError
+        If ``alignment_event`` is missing, no trial indices are supplied, or no
+        selected trials have valid alignment times.
+    """
+
+    if alignment_event not in trial_df.columns:
+        raise ValueError(f"trial_df is missing alignment event column {alignment_event!r}.")
+    normalized_trial_indices = np.asarray(trial_indices, dtype=int).reshape(-1)
+    if normalized_trial_indices.size == 0:
+        raise ValueError("trial_indices must contain at least one trial.")
+    alignment_times = pd.to_numeric(
+        trial_df.loc[normalized_trial_indices, alignment_event],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    valid_mask = np.isfinite(alignment_times)
+    valid_trial_indices = normalized_trial_indices[valid_mask]
+    invalid_trial_indices = normalized_trial_indices[~valid_mask]
+    if valid_trial_indices.size == 0:
+        raise ValueError(f"No selected trials have valid {alignment_event} alignment times.")
+    return valid_trial_indices, invalid_trial_indices
+
+
 @st.cache_data(show_spinner="Computing population PCA...")
 def compute_population_pca_cached(
     session_key: str,
@@ -1260,15 +1310,33 @@ def main() -> None:
             st.success(f"Saved plot to {save_path}")
 
     else:
+        neural_display = st.sidebar.selectbox("Neural display", options=NEURAL_DISPLAY_OPTIONS)
+        plot_trial_indices = selected_trial_indices
+        invalid_alignment_trial_indices = np.array([], dtype=int)
+        if neural_display == NEURAL_DISPLAY_POPULATION_PCA:
+            try:
+                plot_trial_indices, invalid_alignment_trial_indices = filter_trial_indices_for_valid_alignment(
+                    trial_df=trial_df,
+                    trial_indices=selected_trial_indices,
+                    alignment_event=alignment_event,
+                )
+            except ValueError as error:
+                st.error(str(error))
+                st.stop()
+            if invalid_alignment_trial_indices.size > 0:
+                preview = invalid_alignment_trial_indices[:10].tolist()
+                st.warning(
+                    f"Omitting {invalid_alignment_trial_indices.size} trials without valid "
+                    f"{alignment_event} alignment times from PCA. First omitted trials: {preview}"
+                )
         trial_position = st.sidebar.number_input(
             "Trial position",
             min_value=0,
-            max_value=int(selected_trial_indices.size - 1),
+            max_value=int(plot_trial_indices.size - 1),
             value=0,
             step=1,
         )
-        trial_index = int(selected_trial_indices[int(trial_position)])
-        neural_display = st.sidebar.selectbox("Neural display", options=NEURAL_DISPLAY_OPTIONS)
+        trial_index = int(plot_trial_indices[int(trial_position)])
         pca_bin_size_s = PCA_BIN_SIZE_OPTIONS[0]
         pca_normalization = population_pca.PCA_NORMALIZATION_ZSCORE
         pca_trajectory_component_count = DEFAULT_PCA_TRAJECTORY_COMPONENT_COUNT
@@ -1460,7 +1528,7 @@ def main() -> None:
                     session_key=f"{session.sess_id_full}:{active_probe_label}",
                     aligned_spike_path=str(active_aligned_spike_path),
                     unit_ids=tuple(int(unit_id) for unit_id in pca_unit_ids),
-                    trial_indices=tuple(int(trial_index_value) for trial_index_value in selected_trial_indices),
+                    trial_indices=tuple(int(trial_index_value) for trial_index_value in plot_trial_indices),
                     alignment_event=alignment_event,
                     window_start_s=float(window[0]),
                     window_end_s=float(window[1]),
@@ -1522,6 +1590,11 @@ def main() -> None:
             st.write(f"Trial index: {trial_index}")
             st.write(f"Neural display: {neural_display}")
             if neural_display == NEURAL_DISPLAY_POPULATION_PCA:
+                if invalid_alignment_trial_indices.size > 0:
+                    st.write(
+                        f"PCA trials omitted for missing {alignment_event}: "
+                        f"{invalid_alignment_trial_indices.size}"
+                    )
                 st.write(f"PCA units: {pca_unit_ids.size}")
                 st.write(f"PCA bin size: {float(pca_bin_size_s):g} s")
                 st.write(f"PCA normalization: {pca_normalization}")
