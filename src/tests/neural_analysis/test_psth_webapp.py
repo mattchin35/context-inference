@@ -163,3 +163,16 @@ def test_concatenated_pca_defaults_are_compact_for_fixed_viewport():
     assert psth_webapp.DEFAULT_CONCATENATED_PCA_VISIBLE_TRIAL_COUNT == 20
     assert psth_webapp.DEFAULT_CONCATENATED_PCA_COMPONENT_COUNT == 3
     assert psth_webapp.CONCATENATED_PCA_FIGURE_SIZE == (11.0, 5.0)
+
+
+def test_webapp_has_matplotlib_cleanup_dependency():
+    """The Streamlit app should keep the pyplot handle used for figure cleanup."""
+    assert callable(psth_webapp.plt.close)
+
+
+def test_webapp_dataframe_width_argument_avoids_deprecated_streamlit_api():
+    """Metadata tables should use Streamlit's current width argument."""
+    webapp_source = Path(psth_webapp.__file__).read_text()
+
+    assert "use_container_width" not in webapp_source
+    assert 'width="stretch"' in webapp_source
