@@ -563,6 +563,28 @@ def test_plot_concatenated_pca_does_not_connect_pc_lines_across_trials():
     figure.clf()
 
 
+def test_plot_concatenated_pca_default_figure_is_compact():
+    """The fixed viewport plot should fit behavior and PC traces on screen together."""
+    pca_scores = np.zeros((2, 3, 1), dtype=float)
+
+    figure, _axes, _axis_data = unit_spike_plotting.plot_concatenated_trial_behavior_and_population_pca(
+        trial_df=_make_trial_df(),
+        trial_indices=np.array([0, 1], dtype=int),
+        lick_times={
+            "left_entry": nap.Ts(t=np.array([], dtype=float)),
+            "right_entry": nap.Ts(t=np.array([], dtype=float)),
+        },
+        pca_time_s=np.array([0.05, 0.15, 0.25], dtype=float),
+        pca_scores=pca_scores,
+        alignment_event="start_time",
+        window=(0.0, 0.3),
+        pc_count=1,
+    )
+
+    np.testing.assert_allclose(figure.get_size_inches(), np.array([11.0, 5.0], dtype=float))
+    figure.clf()
+
+
 def test_plot_pca_cumulative_explained_variance_uses_pc_numbers():
     figure, axis = unit_spike_plotting.plot_pca_cumulative_explained_variance(
         cumulative_explained_variance=np.array([0.5, 0.8, 0.9], dtype=float),
@@ -639,5 +661,5 @@ def test_webapp_population_pca_cache_fits_maximum_requested_component_count(monk
     assert pca_result.scores.shape[2] == 50
 
 
-def test_webapp_concatenated_pca_visible_trial_default_is_ten():
-    assert psth_webapp.DEFAULT_CONCATENATED_PCA_VISIBLE_TRIAL_COUNT == 10
+def test_webapp_concatenated_pca_visible_trial_default_is_twenty():
+    assert psth_webapp.DEFAULT_CONCATENATED_PCA_VISIBLE_TRIAL_COUNT == 20

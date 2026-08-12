@@ -128,3 +128,38 @@ def test_select_visible_concatenated_trial_indices_clamps_oversized_page():
 
     np.testing.assert_array_equal(visible_trial_indices, np.arange(20, 23, dtype=int))
     assert page_count == 3
+
+
+def test_select_concatenated_trial_viewport_uses_start_position():
+    """The fixed concatenated PCA viewport should slide through the selected trial list."""
+    trial_indices = np.arange(30, dtype=int)
+
+    visible_trial_indices, clamped_start_position = psth_webapp.select_concatenated_trial_viewport(
+        trial_indices=trial_indices,
+        start_position=12,
+        visible_trial_count=8,
+    )
+
+    np.testing.assert_array_equal(visible_trial_indices, np.arange(12, 20, dtype=int))
+    assert clamped_start_position == 12
+
+
+def test_select_concatenated_trial_viewport_clamps_to_last_full_window():
+    """Oversized start positions should keep the viewport filled when enough trials exist."""
+    trial_indices = np.arange(30, dtype=int)
+
+    visible_trial_indices, clamped_start_position = psth_webapp.select_concatenated_trial_viewport(
+        trial_indices=trial_indices,
+        start_position=999,
+        visible_trial_count=8,
+    )
+
+    np.testing.assert_array_equal(visible_trial_indices, np.arange(22, 30, dtype=int))
+    assert clamped_start_position == 22
+
+
+def test_concatenated_pca_defaults_are_compact_for_fixed_viewport():
+    """The default concatenated PCA view should fit as a compact on-screen viewport."""
+    assert psth_webapp.DEFAULT_CONCATENATED_PCA_VISIBLE_TRIAL_COUNT == 20
+    assert psth_webapp.DEFAULT_CONCATENATED_PCA_COMPONENT_COUNT == 3
+    assert psth_webapp.CONCATENATED_PCA_FIGURE_SIZE == (11.0, 5.0)
