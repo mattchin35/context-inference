@@ -44,8 +44,10 @@ def _make_trial_df() -> pd.DataFrame:
         {
             "start_time": [0.0, 1.0],
             "choice_time": [0.1, 1.1],
+            "reward_time": [0.3, np.nan],
             "led_on_time": [0.2, 1.2],
             "action": [0, 1],
+            "reward": [1, 0],
         }
     )
 
@@ -409,6 +411,73 @@ def test_plot_trial_behavior_and_population_pca_draws_pc_lines_and_behavior_even
     figure.clf()
 
 
+def test_build_concatenated_trial_time_axis_uses_real_time_for_nonoverlapping_windows():
+    trial_df = pd.DataFrame({"choice_time": [10.0, 15.0]})
+
+    axis_data = unit_spike_plotting.build_concatenated_trial_time_axis(
+        trial_df=trial_df,
+        trial_indices=np.array([0, 1], dtype=int),
+        pca_time_s=np.array([-0.5, 0.0, 0.5], dtype=float),
+        alignment_event="choice_time",
+        window=(-1.0, 1.0),
+    )
+
+    np.testing.assert_allclose(axis_data["x_by_trial"][0], np.array([0.5, 1.0, 1.5]))
+    np.testing.assert_allclose(axis_data["x_by_trial"][1], np.array([5.5, 6.0, 6.5]))
+    np.testing.assert_allclose(axis_data["trial_start_x"], np.array([0.0, 5.0]))
+    np.testing.assert_allclose(axis_data["trial_end_x"], np.array([2.0, 7.0]))
+    assert axis_data["mode"] == "real_time"
+
+
+def test_build_concatenated_trial_time_axis_falls_back_to_pseudo_time_for_overlaps():
+    trial_df = pd.DataFrame({"choice_time": [10.0, 10.5]})
+
+    axis_data = unit_spike_plotting.build_concatenated_trial_time_axis(
+        trial_df=trial_df,
+        trial_indices=np.array([0, 1], dtype=int),
+        pca_time_s=np.array([-0.5, 0.0, 0.5], dtype=float),
+        alignment_event="choice_time",
+        window=(-1.0, 1.0),
+    )
+
+    np.testing.assert_allclose(axis_data["x_by_trial"][0], np.array([0.5, 1.0, 1.5]))
+    np.testing.assert_allclose(axis_data["x_by_trial"][1], np.array([2.5, 3.0, 3.5]))
+    np.testing.assert_allclose(axis_data["trial_start_x"], np.array([0.0, 2.0]))
+    np.testing.assert_allclose(axis_data["trial_end_x"], np.array([2.0, 4.0]))
+    assert axis_data["mode"] == "pseudo_time"
+
+
+def test_plot_concatenated_trial_behavior_and_population_pca_draws_rewards_and_shading():
+    pca_scores = np.zeros((2, 3, 2), dtype=float)
+    pca_scores[0, :, 0] = np.array([0.0, 1.0, 0.0])
+    pca_scores[1, :, 0] = np.array([0.0, -1.0, 0.0])
+    pca_scores[:, :, 1] = 0.5
+
+    figure, axes, axis_data = unit_spike_plotting.plot_concatenated_trial_behavior_and_population_pca(
+        trial_df=_make_trial_df(),
+        trial_indices=np.array([0, 1], dtype=int),
+        lick_times={
+            "left_entry": nap.Ts(t=np.array([0.15, 1.2], dtype=float)),
+            "right_entry": nap.Ts(t=np.array([0.05], dtype=float)),
+        },
+        pca_time_s=np.array([-0.05, 0.05, 0.15], dtype=float),
+        pca_scores=pca_scores,
+        alignment_event="start_time",
+        window=(0.0, 0.3),
+        pc_count=2,
+    )
+
+    axes = np.asarray(axes, dtype=object).reshape(-1)
+    behavior_axis = axes[0]
+    pca_axis = axes[1]
+    assert axis_data["mode"] == "real_time"
+    assert len(pca_axis.lines) >= 4
+    assert any(line.get_label() == "Reward" for line in behavior_axis.lines)
+    assert len(pca_axis.patches) >= 2
+    assert all(patch.get_alpha() <= 0.1 for patch in pca_axis.patches)
+    figure.clf()
+
+
 def test_plot_pca_cumulative_explained_variance_uses_pc_numbers():
     figure, axis = unit_spike_plotting.plot_pca_cumulative_explained_variance(
         cumulative_explained_variance=np.array([0.5, 0.8, 0.9], dtype=float),
@@ -483,3 +552,7 @@ def test_webapp_population_pca_cache_fits_maximum_requested_component_count(monk
 
     assert captured_component_counts == [50]
     assert pca_result.scores.shape[2] == 50
+
+
+def test_webapp_concatenated_pca_visible_trial_default_is_ten():
+    assert psth_webapp.DEFAULT_CONCATENATED_PCA_VISIBLE_TRIAL_COUNT == 10
