@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import io
 import math
 from pathlib import Path
 
@@ -7,6 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from src.neural_analysis import (
     lfp_loading,
@@ -42,11 +45,18 @@ UNIT_PLOT_TYPE_OPTIONS = [
 ]
 NEURAL_DISPLAY_SPIKE_RASTER = "Spike raster"
 NEURAL_DISPLAY_POPULATION_PCA = "Population PCA"
-NEURAL_DISPLAY_OPTIONS = [NEURAL_DISPLAY_SPIKE_RASTER, NEURAL_DISPLAY_POPULATION_PCA]
+NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED = "Population PCA: concatenated trials"
+NEURAL_DISPLAY_OPTIONS = [
+    NEURAL_DISPLAY_SPIKE_RASTER,
+    NEURAL_DISPLAY_POPULATION_PCA,
+    NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED,
+]
 PCA_BIN_SIZE_OPTIONS = [0.1, 0.05, 0.02]
 DEFAULT_PCA_TRAJECTORY_COMPONENT_COUNT = 5
 DEFAULT_PCA_VARIANCE_COMPONENT_COUNT = 50
 DEFAULT_PCA_COMPONENT_COUNT = DEFAULT_PCA_TRAJECTORY_COMPONENT_COUNT
+DEFAULT_CONCATENATED_PCA_VISIBLE_TRIAL_COUNT = 10
+CONCATENATED_PCA_VISIBLE_TRIAL_OPTIONS = [10, 25, 50]
 CHANNEL_SOURCE_MANUAL = "Manual / preset"
 CHANNEL_SOURCE_CHANNEL_QUALITY = "channel_quality"
 CHANNEL_SOURCE_OPTIONS = [CHANNEL_SOURCE_MANUAL, CHANNEL_SOURCE_CHANNEL_QUALITY]
@@ -74,6 +84,113 @@ EVENT_MARKER_STYLES = {
     "choice_time": {"label": "choice", "color": "tab:purple"},
     "led_on_time": {"label": "LED", "color": "tab:green"},
 }
+
+
+def is_population_pca_display(neural_display: str) -> bool:
+    """
+    Return whether a trial-view neural display uses population PCA.
+
+    Parameters
+    ----------
+    neural_display : str
+        Display label selected from ``NEURAL_DISPLAY_OPTIONS``.
+
+    Returns
+    -------
+    bool
+        ``True`` for single-trial and concatenated population PCA displays;
+        ``False`` for spike-raster displays.
+    """
+
+    return neural_display in {
+        NEURAL_DISPLAY_POPULATION_PCA,
+        NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED,
+    }
+
+
+def select_visible_concatenated_trial_indices(
+    trial_indices: np.ndarray,
+    page_index: int,
+    visible_trial_count: int,
+) -> tuple[np.ndarray, int]:
+    """
+    Select one bounded page of trial indices for concatenated PCA plotting.
+
+    Parameters
+    ----------
+    trial_indices : np.ndarray
+        One-dimensional trial indices with shape ``(n_trials,)``. Values are
+        row indices into the trial table.
+    page_index : int
+        Zero-based requested page index. Values beyond the last page are
+        clamped to the last available page.
+    visible_trial_count : int
+        Maximum number of trials shown in one concatenated figure.
+
+    Returns
+    -------
+    tuple[np.ndarray, int]
+        ``(visible_trial_indices, page_count)``. ``visible_trial_indices`` has
+        shape ``(n_visible_trials,)`` and preserves the input order.
+        ``page_count`` is at least one for nonempty inputs and zero for empty
+        inputs.
+    """
+
+    normalized_trial_indices = np.asarray(trial_indices, dtype=int).reshape(-1)
+    if int(visible_trial_count) <= 0:
+        raise ValueError("visible_trial_count must be positive.")
+    if normalized_trial_indices.size == 0:
+        return np.array([], dtype=int), 0
+
+    page_count = int(math.ceil(normalized_trial_indices.size / int(visible_trial_count)))
+    clamped_page_index = min(max(int(page_index), 0), page_count - 1)
+    start_index = clamped_page_index * int(visible_trial_count)
+    end_index = start_index + int(visible_trial_count)
+    return normalized_trial_indices[start_index:end_index], page_count
+
+
+def render_scrollable_matplotlib_figure(
+    figure: plt.Figure,
+    *,
+    height_px: int = 760,
+    image_width_px: int | None = None,
+) -> None:
+    """
+    Render a Matplotlib figure in a horizontally scrollable Streamlit container.
+
+    Parameters
+    ----------
+    figure : plt.Figure
+        Figure to render. Dimensions are interpreted in display pixels after
+        PNG export.
+    height_px : int, default=760
+        Component height in screen pixels.
+    image_width_px : int | None, optional
+        Explicit image width in screen pixels. If ``None``, width is inferred
+        from ``figure.get_size_inches() * figure.dpi``.
+
+    Returns
+    -------
+    None
+        Writes HTML to the active Streamlit app.
+    """
+
+    if int(height_px) <= 0:
+        raise ValueError("height_px must be positive.")
+    image_buffer = io.BytesIO()
+    figure.savefig(image_buffer, format="png", dpi=150, bbox_inches="tight")
+    image_data = base64.b64encode(image_buffer.getvalue()).decode("ascii")
+    if image_width_px is None:
+        image_width_px = int(max(1, round(float(figure.get_size_inches()[0]) * 150.0)))
+    html = f"""
+    <div style="overflow-x: auto; overflow-y: hidden; width: 100%;">
+      <img
+        src="data:image/png;base64,{image_data}"
+        style="display: block; max-width: none; width: {int(image_width_px)}px;"
+      />
+    </div>
+    """
+    components.html(html, height=int(height_px), scrolling=True)
 
 
 @st.cache_resource(show_spinner="Loading session data...")
@@ -1313,7 +1430,8 @@ def main() -> None:
         neural_display = st.sidebar.selectbox("Neural display", options=NEURAL_DISPLAY_OPTIONS)
         plot_trial_indices = selected_trial_indices
         invalid_alignment_trial_indices = np.array([], dtype=int)
-        if neural_display == NEURAL_DISPLAY_POPULATION_PCA:
+        pca_display = is_population_pca_display(neural_display)
+        if pca_display:
             try:
                 plot_trial_indices, invalid_alignment_trial_indices = filter_trial_indices_for_valid_alignment(
                     trial_df=trial_df,
@@ -1329,13 +1447,51 @@ def main() -> None:
                     f"Omitting {invalid_alignment_trial_indices.size} trials without valid "
                     f"{alignment_event} alignment times from PCA. First omitted trials: {preview}"
                 )
-        trial_position = st.sidebar.number_input(
-            "Trial position",
-            min_value=0,
-            max_value=int(plot_trial_indices.size - 1),
-            value=0,
-            step=1,
-        )
+        concatenated_visible_trial_indices = np.array([], dtype=int)
+        concatenated_visible_trial_positions = np.array([], dtype=int)
+        concatenated_pca_page_index = 0
+        concatenated_pca_page_count = 1
+        if neural_display == NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED:
+            concatenated_visible_trial_count = st.sidebar.selectbox(
+                "Visible concatenated trials",
+                options=CONCATENATED_PCA_VISIBLE_TRIAL_OPTIONS,
+                index=CONCATENATED_PCA_VISIBLE_TRIAL_OPTIONS.index(DEFAULT_CONCATENATED_PCA_VISIBLE_TRIAL_COUNT),
+            )
+            concatenated_pca_page_count = max(
+                1,
+                math.ceil(plot_trial_indices.size / int(concatenated_visible_trial_count)),
+            )
+            concatenated_pca_page_index = int(
+                st.sidebar.number_input(
+                    "Concatenated trial page",
+                    min_value=0,
+                    max_value=concatenated_pca_page_count - 1,
+                    value=0,
+                    step=1,
+                )
+            )
+            concatenated_visible_trial_indices, concatenated_pca_page_count = select_visible_concatenated_trial_indices(
+                trial_indices=plot_trial_indices,
+                page_index=concatenated_pca_page_index,
+                visible_trial_count=int(concatenated_visible_trial_count),
+            )
+            trial_position_by_index = {
+                int(trial_index_value): trial_position_value
+                for trial_position_value, trial_index_value in enumerate(plot_trial_indices)
+            }
+            concatenated_visible_trial_positions = np.asarray(
+                [trial_position_by_index[int(trial_index_value)] for trial_index_value in concatenated_visible_trial_indices],
+                dtype=int,
+            )
+            trial_position = int(concatenated_visible_trial_positions[0])
+        else:
+            trial_position = st.sidebar.number_input(
+                "Trial position",
+                min_value=0,
+                max_value=int(plot_trial_indices.size - 1),
+                value=0,
+                step=1,
+            )
         trial_index = int(plot_trial_indices[int(trial_position)])
         pca_bin_size_s = PCA_BIN_SIZE_OPTIONS[0]
         pca_normalization = population_pca.PCA_NORMALIZATION_ZSCORE
@@ -1399,7 +1555,11 @@ def main() -> None:
             population_psth_unit_scope = "Omitted in PCA mode"
             population_psth_bin_size = float(pca_bin_size_s)
             psth_unit_ids = np.array([], dtype=int)
-        show_lfp_trace = st.sidebar.checkbox("Show LFP trace", value=False)
+        show_lfp_trace = (
+            False
+            if neural_display == NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED
+            else st.sidebar.checkbox("Show LFP trace", value=False)
+        )
         lfp_time_s = None
         lfp_uv = None
         lfp_label = None
@@ -1519,7 +1679,7 @@ def main() -> None:
         pca_unit_ids = np.array([], dtype=int)
         try:
             lick_times = spike_behavior_pynapple.build_lick_time_dict(event_df)
-            if neural_display == NEURAL_DISPLAY_POPULATION_PCA:
+            if pca_display:
                 pca_unit_ids = resolve_population_pca_unit_ids(
                     selected_unit_metadata=selected_unit_metadata,
                     page_unit_ids=page_unit_ids,
@@ -1539,22 +1699,38 @@ def main() -> None:
                     _spike_group=spike_group,
                     _trial_df=trial_df,
                 )
-                figure, axes = unit_spike_plotting.plot_trial_behavior_and_population_pca(
-                    trial_df=trial_df,
-                    trial_index=trial_index,
-                    lick_times=lick_times,
-                    pca_time_s=pca_time_s,
-                    pca_scores=pca_result.scores,
-                    trial_position=int(trial_position),
-                    alignment_event=alignment_event,
-                    window=window,
-                    pc_count=int(pca_trajectory_component_count),
-                    lfp_time_s=lfp_time_s,
-                    lfp_uv=lfp_uv,
-                    lfp_label=lfp_label,
-                    lfp_y_label=lfp_y_label,
-                    figure_size=raster_layout["figure_size"],
-                )
+                if neural_display == NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED:
+                    visible_trial_count = concatenated_visible_trial_indices.size
+                    figure_width_inches = max(14.0, 1.2 * float(visible_trial_count))
+                    figure, axes, _axis_data = unit_spike_plotting.plot_concatenated_trial_behavior_and_population_pca(
+                        trial_df=trial_df,
+                        trial_indices=concatenated_visible_trial_indices,
+                        lick_times=lick_times,
+                        pca_time_s=pca_time_s,
+                        pca_scores=pca_result.scores[concatenated_visible_trial_positions, :, :],
+                        alignment_event=alignment_event,
+                        window=window,
+                        pc_count=int(pca_trajectory_component_count),
+                        figure_size=(figure_width_inches, float(raster_layout["figure_size"][1])),
+                        axis_mode="pseudo_time",
+                    )
+                else:
+                    figure, axes = unit_spike_plotting.plot_trial_behavior_and_population_pca(
+                        trial_df=trial_df,
+                        trial_index=trial_index,
+                        lick_times=lick_times,
+                        pca_time_s=pca_time_s,
+                        pca_scores=pca_result.scores,
+                        trial_position=int(trial_position),
+                        alignment_event=alignment_event,
+                        window=window,
+                        pc_count=int(pca_trajectory_component_count),
+                        lfp_time_s=lfp_time_s,
+                        lfp_uv=lfp_uv,
+                        lfp_label=lfp_label,
+                        lfp_y_label=lfp_y_label,
+                        figure_size=raster_layout["figure_size"],
+                    )
                 variance_figure, _ = unit_spike_plotting.plot_pca_cumulative_explained_variance(
                     cumulative_explained_variance=pca_result.cumulative_explained_variance,
                     pc_count=int(pca_variance_component_count),
@@ -1589,7 +1765,7 @@ def main() -> None:
             st.write(f"Filtered trials: {selected_trial_indices.size}")
             st.write(f"Trial index: {trial_index}")
             st.write(f"Neural display: {neural_display}")
-            if neural_display == NEURAL_DISPLAY_POPULATION_PCA:
+            if pca_display:
                 if invalid_alignment_trial_indices.size > 0:
                     st.write(
                         f"PCA trials omitted for missing {alignment_event}: "
@@ -1605,6 +1781,9 @@ def main() -> None:
                     )
                     st.write(f"Trajectory PCs shown: {trajectory_pcs_shown}")
                     st.write(f"Variance PCs fit: {pca_result.cumulative_explained_variance.size}")
+                if neural_display == NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED:
+                    st.write(f"Concatenated trial page: {int(concatenated_pca_page_index) + 1}/{concatenated_pca_page_count}")
+                    st.write(f"Visible concatenated trials: {concatenated_visible_trial_indices.size}")
             else:
                 st.write(f"Unit page: {int(unit_page_index) + 1}/{n_unit_pages}")
                 st.write(f"Units on page: {page_unit_ids.size}")
@@ -1613,7 +1792,14 @@ def main() -> None:
             if lfp_label is not None:
                 st.write(lfp_label)
         with plot_column:
-            st.pyplot(figure)
+            if neural_display == NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED:
+                render_scrollable_matplotlib_figure(
+                    figure,
+                    height_px=820,
+                    image_width_px=int(max(1, round(float(figure.get_size_inches()[0]) * 150.0))),
+                )
+            else:
+                st.pyplot(figure)
             if variance_figure is not None:
                 st.pyplot(variance_figure)
 

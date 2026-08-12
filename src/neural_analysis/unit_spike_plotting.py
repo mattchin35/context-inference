@@ -1224,6 +1224,315 @@ def plot_trial_behavior_and_population_pca(
     return figure, axes
 
 
+def build_concatenated_trial_time_axis(
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+    pca_time_s: np.ndarray,
+    alignment_event: str,
+    window: tuple[float, float],
+    axis_mode: str = "auto",
+) -> dict[str, object]:
+    """
+    Build x-axis coordinates for concatenated trial-window PCA inspection.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with one row per trial and an ``alignment_event`` column in
+        seconds.
+    trial_indices : np.ndarray
+        One-dimensional trial row indices with shape ``(n_trials,)``.
+    pca_time_s : np.ndarray
+        One-dimensional PCA bin centers with shape ``(n_bins,)`` in seconds
+        relative to ``alignment_event``.
+    alignment_event : str
+        Trial time column used as time zero.
+    window : tuple[float, float]
+        Relative window bounds in seconds as ``(start_s, end_s)``.
+    axis_mode : str, default="auto"
+        X-axis layout. ``"auto"`` preserves real elapsed time when trial
+        windows are non-overlapping and otherwise falls back to pseudo-time.
+        ``"pseudo_time"`` forces equal-width side-by-side trial windows.
+        ``"real_time"`` requires finite, non-overlapping trial windows.
+
+    Returns
+    -------
+    dict[str, object]
+        Dictionary containing ``x_by_trial`` with shape ``(n_trials, n_bins)``,
+        ``trial_start_x`` and ``trial_end_x`` with shape ``(n_trials,)``,
+        ``trial_break_x`` with shape ``(max(n_trials - 1, 0),)``, and ``mode``
+        as either ``"real_time"`` or ``"pseudo_time"``. X values are seconds
+        from the first visible trial-window start in real-time mode, or seconds
+        in concatenated trial-window coordinates in pseudo-time mode.
+    """
+
+    if alignment_event not in trial_df.columns:
+        raise ValueError(f"trial_df is missing alignment event column {alignment_event!r}.")
+    if len(window) != 2 or float(window[0]) >= float(window[1]):
+        raise ValueError("window must be a two-value tuple with start < end.")
+    if axis_mode not in {"auto", "real_time", "pseudo_time"}:
+        raise ValueError("axis_mode must be 'auto', 'real_time', or 'pseudo_time'.")
+    normalized_trial_indices = np.asarray(trial_indices, dtype=int).reshape(-1)
+    if normalized_trial_indices.size == 0:
+        raise ValueError("trial_indices must contain at least one trial.")
+    pca_time_s = np.asarray(pca_time_s, dtype=float).reshape(-1)
+    if pca_time_s.size == 0:
+        raise ValueError("pca_time_s must contain at least one time bin.")
+
+    alignment_times = pd.to_numeric(
+        trial_df.loc[normalized_trial_indices, alignment_event],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    window_start_s = float(window[0])
+    window_end_s = float(window[1])
+    window_width_s = window_end_s - window_start_s
+    absolute_start_s = alignment_times + window_start_s
+    absolute_end_s = alignment_times + window_end_s
+
+    can_use_real_time = np.isfinite(alignment_times).all()
+    if can_use_real_time and absolute_start_s.size > 1:
+        can_use_real_time = bool(np.all(absolute_start_s[1:] >= absolute_end_s[:-1]))
+    if axis_mode == "real_time" and not can_use_real_time:
+        raise ValueError("axis_mode='real_time' requires finite, non-overlapping trial windows.")
+
+    if axis_mode != "pseudo_time" and can_use_real_time:
+        first_window_start_s = float(absolute_start_s[0])
+        x_by_trial = alignment_times[:, np.newaxis] + pca_time_s[np.newaxis, :] - first_window_start_s
+        trial_start_x = absolute_start_s - first_window_start_s
+        trial_end_x = absolute_end_s - first_window_start_s
+        mode = "real_time"
+    else:
+        trial_start_x = np.arange(normalized_trial_indices.size, dtype=float) * window_width_s
+        trial_end_x = trial_start_x + window_width_s
+        x_by_trial = trial_start_x[:, np.newaxis] + (pca_time_s[np.newaxis, :] - window_start_s)
+        mode = "pseudo_time"
+    trial_break_x = trial_start_x[1:].copy()
+
+    return {
+        "x_by_trial": x_by_trial,
+        "trial_start_x": trial_start_x,
+        "trial_end_x": trial_end_x,
+        "trial_break_x": trial_break_x,
+        "mode": mode,
+    }
+
+
+def plot_concatenated_trial_behavior_and_population_pca(
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+    lick_times: Mapping[str, nap.Ts],
+    pca_time_s: np.ndarray,
+    pca_scores: np.ndarray,
+    alignment_event: str,
+    window: tuple[float, float],
+    pc_count: int = 5,
+    figure_size: tuple[float, float] = (14.0, 8.0),
+    axis_mode: str = "auto",
+) -> tuple[plt.Figure, np.ndarray, dict[str, object]]:
+    """
+    Plot behavior events and PCA trajectories across concatenated trial windows.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with one row per trial. Required columns are
+        ``start_time``, ``choice_time``, ``reward_time``, ``led_on_time``,
+        ``action``, and ``reward``. Times are in seconds.
+    trial_indices : np.ndarray
+        One-dimensional trial row indices with shape ``(n_trials,)`` matching
+        the first axis of ``pca_scores``.
+    lick_times : Mapping[str, nap.Ts]
+        Mapping with ``"left_entry"`` and ``"right_entry"`` keys. Each value is
+        a one-dimensional Pynapple ``Ts`` of lick timestamps in seconds.
+    pca_time_s : np.ndarray
+        One-dimensional PCA bin centers with shape ``(n_bins,)`` in seconds
+        relative to ``alignment_event``.
+    pca_scores : np.ndarray
+        PCA score tensor with shape ``(n_trials, n_bins, n_components)``.
+    alignment_event : str
+        Event column used as relative time zero.
+    window : tuple[float, float]
+        Plot bounds in seconds relative to ``alignment_event``.
+    pc_count : int, default=5
+        Number of leading PCs to plot. The plotted count is capped by fitted
+        components.
+    figure_size : tuple[float, float], default=(14.0, 8.0)
+        Matplotlib figure size as ``(width_inches, height_inches)``.
+    axis_mode : str, default="auto"
+        X-axis layout passed to ``build_concatenated_trial_time_axis``.
+
+    Returns
+    -------
+    tuple[plt.Figure, np.ndarray, dict[str, object]]
+        Figure, two axes in top-to-bottom order, and axis-coordinate metadata
+        from ``build_concatenated_trial_time_axis``.
+    """
+
+    required_columns = {"start_time", "choice_time", "reward_time", "led_on_time", "action", "reward"}
+    missing_columns = required_columns - set(trial_df.columns)
+    if missing_columns:
+        raise ValueError(f"trial_df is missing required columns: {sorted(missing_columns)}")
+    if LEFT_LICK_EVENT not in lick_times or RIGHT_LICK_EVENT not in lick_times:
+        raise ValueError("lick_times must contain 'left_entry' and 'right_entry' keys.")
+    if int(pc_count) < 1:
+        raise ValueError("pc_count must be positive.")
+    if len(figure_size) != 2 or float(figure_size[0]) <= 0 or float(figure_size[1]) <= 0:
+        raise ValueError("figure_size must be a two-value tuple of positive inches.")
+
+    normalized_trial_indices = np.asarray(trial_indices, dtype=int).reshape(-1)
+    pca_time_s = np.asarray(pca_time_s, dtype=float).reshape(-1)
+    pca_scores = np.asarray(pca_scores, dtype=float)
+    if pca_scores.ndim != 3:
+        raise ValueError("pca_scores must have shape (n_trials, n_bins, n_components).")
+    if pca_scores.shape[0] != normalized_trial_indices.size:
+        raise ValueError("pca_scores trial axis must match trial_indices length.")
+    if pca_scores.shape[1] != pca_time_s.size:
+        raise ValueError("pca_scores time axis must match pca_time_s length.")
+
+    axis_data = build_concatenated_trial_time_axis(
+        trial_df=trial_df,
+        trial_indices=normalized_trial_indices,
+        pca_time_s=pca_time_s,
+        alignment_event=alignment_event,
+        window=window,
+        axis_mode=axis_mode,
+    )
+    x_by_trial = np.asarray(axis_data["x_by_trial"], dtype=float)
+    trial_start_x = np.asarray(axis_data["trial_start_x"], dtype=float)
+    trial_end_x = np.asarray(axis_data["trial_end_x"], dtype=float)
+    trial_break_x = np.asarray(axis_data["trial_break_x"], dtype=float)
+
+    figure, axes = plt.subplots(
+        2,
+        1,
+        sharex=True,
+        figsize=(float(figure_size[0]), float(figure_size[1])),
+        height_ratios=[1, 3],
+    )
+    axes = np.asarray(axes, dtype=object).reshape(-1)
+    behavior_axis = axes[0]
+    pca_axis = axes[1]
+
+    for trial_position, trial_index in enumerate(normalized_trial_indices):
+        trial_row = trial_df.loc[int(trial_index)]
+        reward_value = pd.to_numeric(pd.Series([trial_row["reward"]]), errors="coerce").iloc[0]
+        shade_color = "tab:green" if not pd.isna(reward_value) and int(reward_value) == 1 else "tab:red"
+        for axis in (behavior_axis, pca_axis):
+            axis.axvspan(
+                trial_start_x[trial_position],
+                trial_end_x[trial_position],
+                color=shade_color,
+                alpha=0.08,
+                linewidth=0,
+            )
+            axis.axvline(trial_start_x[trial_position], color="0.6", linewidth=0.8, alpha=0.35)
+        pca_axis.axvline(trial_end_x[trial_position], color="0.6", linewidth=0.8, alpha=0.2)
+
+        reference_time = get_trial_alignment_time(
+            trial_df=trial_df,
+            trial_index=int(trial_index),
+            alignment_event=alignment_event,
+        )
+        trial_offset_x = x_by_trial[trial_position, 0] - pca_time_s[0]
+        for event_column, y_value, color, label in (
+            ("led_on_time", 0.5, "tab:green", "LED"),
+            ("choice_time", 1.5, "tab:purple", "Choice"),
+            ("reward_time", 2.5, "tab:green", "Reward"),
+        ):
+            event_time = pd.to_numeric(pd.Series([trial_row[event_column]]), errors="coerce").iloc[0]
+            if pd.isna(event_time):
+                continue
+            relative_event_time = float(event_time) - reference_time
+            if float(window[0]) <= relative_event_time <= float(window[1]):
+                event_x = trial_offset_x + relative_event_time
+                behavior_axis.plot(
+                    [event_x, event_x],
+                    [y_value - 0.3, y_value + 0.3],
+                    color=color,
+                    linewidth=1.2,
+                    label=label,
+                )
+
+        left_licks = extract_relative_events_for_trial(
+            event_times=lick_times[LEFT_LICK_EVENT],
+            reference_time=reference_time,
+            window=window,
+        )
+        right_licks = extract_relative_events_for_trial(
+            event_times=lick_times[RIGHT_LICK_EVENT],
+            reference_time=reference_time,
+            window=window,
+        )
+        if right_licks.size:
+            behavior_axis.eventplot(
+                [trial_offset_x + right_licks],
+                orientation="horizontal",
+                lineoffsets=[3.5],
+                linelengths=0.4,
+                linewidths=0.8,
+                colors=LICK_RASTER_STYLES[RIGHT_LICK_EVENT]["color"],
+            )
+        if left_licks.size:
+            behavior_axis.eventplot(
+                [trial_offset_x + left_licks],
+                orientation="horizontal",
+                lineoffsets=[4.5],
+                linelengths=0.4,
+                linewidths=0.8,
+                colors=LICK_RASTER_STYLES[LEFT_LICK_EVENT]["color"],
+            )
+
+    plotted_pc_count = min(int(pc_count), pca_scores.shape[2])
+    for pc_index in range(plotted_pc_count):
+        for trial_position in range(normalized_trial_indices.size):
+            pca_axis.plot(
+                x_by_trial[trial_position],
+                pca_scores[trial_position, :, pc_index],
+                linewidth=1.0,
+                label=f"PC{pc_index + 1}",
+            )
+
+    for break_position_x in trial_break_x:
+        for axis in (behavior_axis, pca_axis):
+            axis.axvline(
+                float(break_position_x),
+                color="black",
+                linewidth=1.6,
+                alpha=0.25,
+                label="Trial break",
+            )
+
+    behavior_axis.set_yticks([0.5, 1.5, 2.5, 3.5, 4.5])
+    behavior_axis.set_yticklabels(["LED", "Choice", "Reward", "Right licks", "Left licks"])
+    behavior_axis.set_ylim(0.0, 5.0)
+    behavior_axis.set_ylabel("Behavior")
+    behavior_axis.set_title("Concatenated trial behavior and PCA")
+
+    handles, labels = behavior_axis.get_legend_handles_labels()
+    unique_labels: dict[str, object] = {}
+    for handle, label in zip(handles, labels):
+        unique_labels.setdefault(label, handle)
+    if unique_labels:
+        behavior_axis.legend(unique_labels.values(), unique_labels.keys(), loc="upper right", fontsize="small")
+
+    pca_axis.set_xlim(float(trial_start_x[0]), float(trial_end_x[-1]))
+    pca_axis.set_ylabel("PC score")
+    pca_axis.set_xlabel(
+        "Time from first visible trial window start (s)"
+        if axis_data["mode"] == "real_time"
+        else "Concatenated trial-window time (s)"
+    )
+    pca_axis.set_title(f"Population PCA trajectories, first {plotted_pc_count} PCs")
+    handles, labels = pca_axis.get_legend_handles_labels()
+    unique_labels = {}
+    for handle, label in zip(handles, labels):
+        unique_labels.setdefault(label, handle)
+    pca_axis.legend(unique_labels.values(), unique_labels.keys(), loc="upper right", fontsize="small", ncol=min(plotted_pc_count, 5))
+
+    figure.tight_layout()
+    return figure, axes, axis_data
+
+
 def plot_pca_cumulative_explained_variance(
     cumulative_explained_variance: np.ndarray,
     pc_count: int | None = None,
