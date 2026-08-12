@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -1392,7 +1393,7 @@ def main() -> None:
         metadata_column, plot_column = st.columns([1, 3])
         with metadata_column:
             st.subheader("Unit Metadata")
-            st.dataframe(format_metadata_row_for_display(selected_unit_row), use_container_width=True)
+            st.dataframe(format_metadata_row_for_display(selected_unit_row), width="stretch")
             st.write(f"Active probe: {active_probe_label}")
             st.write(f"Unit plot type: {unit_plot_type}")
             st.write(f"Filtered units: {selected_unit_metadata.shape[0]}")
