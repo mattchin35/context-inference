@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pynapple as nap
@@ -542,6 +543,95 @@ def summarize_pca_decoding_results(results_df: pd.DataFrame) -> pd.DataFrame:
     if missing_columns:
         raise ValueError(f"results_df is missing required columns: {sorted(missing_columns)}")
     return results_df.loc[:, PCA_DECODING_DISPLAY_COLUMNS].copy()
+
+
+def plot_pca_decoding_pre_post_scores(
+    results_df: pd.DataFrame,
+    figure_size: tuple[float, float] = (7.0, 3.0),
+) -> tuple[plt.Figure, plt.Axes]:
+    """
+    Plot side-by-side pre/post choice PCA decoding accuracy by condition.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        Long-form PCA decoding result table with ``condition``, ``window``,
+        ``status``, and ``cv_score`` columns. Only rows with ``status == "ok"``
+        and finite ``cv_score`` are plotted.
+    figure_size : tuple[float, float], default=(7.0, 3.0)
+        Matplotlib figure size as ``(width_inches, height_inches)``.
+
+    Returns
+    -------
+    tuple[plt.Figure, plt.Axes]
+        Figure and axis containing grouped bars. X-axis groups are base
+        conditions; pre/post bars are horizontally adjacent within each group.
+    """
+
+    required_columns = {"condition", "window", "status", "cv_score"}
+    missing_columns = required_columns - set(results_df.columns)
+    if missing_columns:
+        raise ValueError(f"results_df is missing required columns: {sorted(missing_columns)}")
+    if len(figure_size) != 2 or float(figure_size[0]) <= 0 or float(figure_size[1]) <= 0:
+        raise ValueError("figure_size must be a two-value tuple of positive inches.")
+
+    ok_rows = results_df.loc[results_df["status"] == "ok"].copy()
+    ok_rows["cv_score"] = pd.to_numeric(ok_rows["cv_score"], errors="coerce")
+    ok_rows = ok_rows.loc[ok_rows["cv_score"].notna()]
+
+    figure, axis = plt.subplots(1, 1, figsize=(float(figure_size[0]), float(figure_size[1])))
+    if ok_rows.empty:
+        axis.set_ylabel("CV decoding accuracy")
+        axis.set_ylim(0.0, 1.0)
+        axis.set_title("PCA decoding before/after choice")
+        figure.tight_layout()
+        return figure, axis
+
+    condition_order = [
+        condition_name
+        for condition_name in PCA_DECODING_BASE_CONDITIONS
+        if condition_name in set(ok_rows["condition"])
+    ]
+    condition_order.extend(
+        condition_name
+        for condition_name in ok_rows["condition"].tolist()
+        if condition_name not in condition_order
+    )
+    condition_order = list(dict.fromkeys(condition_order))
+    window_offsets = {"pre_choice": -0.18, "post_choice": 0.18}
+    window_colors = {"pre_choice": "tab:blue", "post_choice": "tab:orange"}
+    bar_width = 0.32
+    group_spacing = 1.35
+    group_centers = np.arange(len(condition_order), dtype=float) * group_spacing
+
+    for condition_position, condition_name in enumerate(condition_order):
+        condition_rows = ok_rows.loc[ok_rows["condition"] == condition_name]
+        for window_name in ("pre_choice", "post_choice"):
+            window_rows = condition_rows.loc[condition_rows["window"] == window_name]
+            if window_rows.empty:
+                continue
+            bar_x = group_centers[condition_position] + window_offsets[window_name]
+            axis.bar(
+                bar_x,
+                float(window_rows.iloc[0]["cv_score"]),
+                width=bar_width,
+                color=window_colors[window_name],
+                label=window_name,
+            )
+
+    handles, labels = axis.get_legend_handles_labels()
+    unique_labels: dict[str, object] = {}
+    for handle, label in zip(handles, labels):
+        unique_labels.setdefault(label, handle)
+    if unique_labels:
+        axis.legend(unique_labels.values(), unique_labels.keys(), loc="upper right", fontsize="small")
+    axis.set_xticks(group_centers)
+    axis.set_xticklabels(condition_order, rotation=25, ha="right")
+    axis.set_ylabel("CV decoding accuracy")
+    axis.set_ylim(0.0, 1.0)
+    axis.set_title("PCA decoding before/after choice")
+    figure.tight_layout()
+    return figure, axis
 
 
 def _validate_decoder_trial_table(trial_df: pd.DataFrame) -> None:

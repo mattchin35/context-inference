@@ -1411,10 +1411,11 @@ def main() -> None:
         with result_column:
             st.subheader("Before/After Choice Decoding Performance")
             st.dataframe(decoding_display, width="stretch")
-            ok_rows = decoding_display.loc[decoding_display["status"] == "ok"].copy()
-            if not ok_rows.empty:
-                chart_df = ok_rows.pivot(index="condition", columns="window", values="cv_score")
-                st.bar_chart(chart_df)
+            decoding_figure, _decoding_axis = population_pca_decoding.plot_pca_decoding_pre_post_scores(
+                decoding_display
+            )
+            st.pyplot(decoding_figure)
+            plt.close(decoding_figure)
         return
 
     st.sidebar.header("Trials")
