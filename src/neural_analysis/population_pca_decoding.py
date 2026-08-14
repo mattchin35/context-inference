@@ -1,0 +1,888 @@
+from __future__ import annotations
+
+from typing import Any, Mapping
+
+import numpy as np
+import pandas as pd
+import pynapple as nap
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold, permutation_test_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+from src.neural_analysis import population_pca
+from src.neural_analysis import spike_behavior_pynapple
+
+
+PCA_DECODING_MODE_EXPLORATORY = "Exploratory"
+PCA_DECODING_MODE_RIGOROUS = "Rigorous"
+PCA_DECODING_MODE_OPTIONS = (PCA_DECODING_MODE_EXPLORATORY, PCA_DECODING_MODE_RIGOROUS)
+PCA_DECODING_BASE_CONDITIONS = [
+    "correct_rewarded",
+    "incorrect",
+    "omission",
+    "switch",
+    "stay",
+]
+PCA_DECODING_WINDOWS = {
+    "pre_choice": (-0.5, 0.0),
+    "post_choice": (0.0, 0.5),
+}
+PCA_DECODING_BIN_SIZE_S = 0.5
+PCA_DECODING_WINDOW = (-0.5, 0.5)
+PCA_DECODING_DISPLAY_COLUMNS = [
+    "condition",
+    "window",
+    "target",
+    "mode",
+    "status",
+    "reason",
+    "n_samples",
+    "n_classes",
+    "cv_score",
+    "cv_pvalue",
+    "permutation_score_mean",
+    "permutation_score_std",
+]
+
+
+def build_choice_aligned_rate_tensor(
+    spike_group: nap.TsGroup,
+    unit_ids: np.ndarray,
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+    bin_size_s: float = PCA_DECODING_BIN_SIZE_S,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Build the fixed choice-aligned firing-rate tensor used by PCA decoding.
+
+    Parameters
+    ----------
+    spike_group : nap.TsGroup
+        Pynapple spike group keyed by integer cluster id. Spike times are in
+        seconds.
+    unit_ids : np.ndarray
+        One-dimensional unit ids with shape ``(n_units,)``. These are the raw
+        neural features before PCA.
+    trial_df : pd.DataFrame
+        Trial table with one row per trial and a numeric ``choice_time`` column
+        in seconds.
+    trial_indices : np.ndarray
+        One-dimensional trial row positions with shape ``(n_trials,)``.
+    bin_size_s : float, default=0.5
+        Bin width in seconds. The initial decoding view uses ``0.5`` so each
+        trial contributes one pre-choice and one post-choice sample.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        ``(rate_tensor_hz, bin_centers_s)``. ``rate_tensor_hz`` has shape
+        ``(n_trials, 2, n_units)`` in Hz for the fixed ``(-0.5, 0.5)`` window.
+        ``bin_centers_s`` has shape ``(2,)`` in seconds relative to choice.
+    """
+
+    return population_pca.build_trial_unit_rate_tensor(
+        spike_group=spike_group,
+        unit_ids=unit_ids,
+        trial_df=trial_df,
+        trial_indices=trial_indices,
+        alignment_event="choice_time",
+        window=PCA_DECODING_WINDOW,
+        bin_size_s=float(bin_size_s),
+    )
+
+
+def select_pca_decoding_trial_indices(
+    trial_df: pd.DataFrame,
+    condition_names: list[str] | tuple[str, ...] = tuple(PCA_DECODING_BASE_CONDITIONS),
+) -> np.ndarray:
+    """
+    Select trials eligible for PCA fitting under the base decoding conditions.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with one row per trial. Must contain the columns required
+        by ``spike_behavior_pynapple.make_trial_type_masks`` and a numeric
+        ``choice_time`` column in seconds.
+    condition_names : list[str] | tuple[str, ...], default=base conditions
+        Base condition masks to include in the PCA fit. Conditions are combined
+        by logical OR. These are decoding-specific conditions, not the generic
+        webapp trial filters.
+
+    Returns
+    -------
+    np.ndarray
+        One-dimensional integer trial positions with shape ``(n_selected,)``.
+        Only trials in at least one requested base condition and with finite
+        choice times are returned.
+    """
+
+    if "choice_time" not in trial_df.columns:
+        raise ValueError("trial_df is missing required choice_time column.")
+    trial_masks = spike_behavior_pynapple.make_trial_type_masks(trial_df)
+    finite_choice_mask = pd.to_numeric(trial_df["choice_time"], errors="coerce").notna()
+    selected_mask = pd.Series(False, index=trial_df.index)
+    for condition_name in condition_names:
+        if condition_name not in trial_masks:
+            raise ValueError(f"Unknown PCA decoding condition {condition_name!r}.")
+        selected_mask = selected_mask | trial_masks[condition_name]
+    selected_mask = selected_mask & finite_choice_mask
+    return np.flatnonzero(np.asarray(selected_mask, dtype=bool))
+
+
+def build_valid_base_condition_masks(
+    trial_df: pd.DataFrame,
+    condition_names: list[str] | tuple[str, ...],
+) -> dict[str, pd.Series]:
+    """
+    Build base-condition masks restricted to finite choice-aligned trials.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with one row per trial and a numeric ``choice_time`` column
+        in seconds.
+    condition_names : list[str] | tuple[str, ...]
+        Names from ``PCA_DECODING_BASE_CONDITIONS`` to return.
+
+    Returns
+    -------
+    dict[str, pd.Series]
+        Mapping from condition name to a boolean mask indexed like
+        ``trial_df``. Masks exclude trials with missing ``choice_time``.
+    """
+
+    if "choice_time" not in trial_df.columns:
+        raise ValueError("trial_df is missing required choice_time column.")
+    trial_masks = spike_behavior_pynapple.make_trial_type_masks(trial_df)
+    finite_choice_mask = pd.to_numeric(trial_df["choice_time"], errors="coerce").notna()
+    valid_masks: dict[str, pd.Series] = {}
+    for condition_name in condition_names:
+        if condition_name not in trial_masks:
+            raise ValueError(f"Unknown PCA decoding condition {condition_name!r}.")
+        valid_masks[condition_name] = trial_masks[condition_name] & finite_choice_mask
+    return valid_masks
+
+
+def build_exploratory_pca_decoder_trial_bins(
+    rate_tensor_hz: np.ndarray,
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+    n_components: int,
+    normalization: str = population_pca.PCA_NORMALIZATION_ZSCORE,
+) -> tuple[list[dict[str, Any]], population_pca.PopulationPCAResult]:
+    """
+    Convert choice-window PCA scores into the existing decoder-bin structure.
+
+    Parameters
+    ----------
+    rate_tensor_hz : np.ndarray
+        Choice-aligned firing-rate tensor with shape ``(n_selected_trials, 2,
+        n_units)`` in Hz. Axes are selected trial, choice-window bin, unit.
+    trial_df : pd.DataFrame
+        Full trial table with one row per trial. Required columns are
+        ``choice_time``, ``state_int``, and ``action``. Times are in seconds.
+    trial_indices : np.ndarray
+        One-dimensional full-table trial positions represented by
+        ``rate_tensor_hz``, shape ``(n_selected_trials,)``.
+    n_components : int
+        Requested number of PCA components. The fit count is capped by the
+        PCA implementation.
+    normalization : str, default=PCA_NORMALIZATION_ZSCORE
+        Unit normalization applied before exploratory PCA.
+
+    Returns
+    -------
+    tuple[list[dict[str, Any]], population_pca.PopulationPCAResult]
+        ``trial_bins`` has length ``len(trial_df)``. Entries corresponding to
+        ``trial_indices`` contain PC scores under the legacy key
+        ``"binned_spikes"`` with shape ``(n_fit_pcs, 2)``. Scores are in PCA
+        units, not spike counts. ``pca_result`` contains the full PCA result.
+    """
+
+    _validate_decoder_trial_table(trial_df)
+    normalized_trial_indices = _normalize_trial_indices(trial_indices, trial_df)
+    rates = np.asarray(rate_tensor_hz, dtype=float)
+    if rates.ndim != 3:
+        raise ValueError("rate_tensor_hz must have shape (n_trials, 2, n_units).")
+    if rates.shape[0] != normalized_trial_indices.size:
+        raise ValueError("rate_tensor_hz trial axis must match trial_indices length.")
+    if rates.shape[1] != 2:
+        raise ValueError("rate_tensor_hz must contain exactly two choice-window bins.")
+
+    pca_result = population_pca.fit_population_pca(
+        rates,
+        n_components=int(n_components),
+        normalization=normalization,
+    )
+    trial_bins = _build_decoder_trial_bins_from_scores(
+        pca_scores=pca_result.scores,
+        trial_df=trial_df,
+        trial_indices=normalized_trial_indices,
+    )
+    return trial_bins, pca_result
+
+
+def run_exploratory_pca_choice_decoding(
+    rate_tensor_hz: np.ndarray,
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+    n_components: int,
+    condition_names: list[str] | tuple[str, ...],
+    target: str,
+    cv: int = 5,
+    n_permutations: int = 100,
+    random_state: int = 42,
+    normalization: str = population_pca.PCA_NORMALIZATION_ZSCORE,
+) -> pd.DataFrame:
+    """
+    Decode trial variables from PCA scores fit once on selected trial windows.
+
+    Parameters
+    ----------
+    rate_tensor_hz : np.ndarray
+        Choice-aligned firing-rate tensor with shape ``(n_selected_trials, 2,
+        n_units)`` in Hz.
+    trial_df : pd.DataFrame
+        Full trial table with base-condition columns, ``choice_time``,
+        ``state_int``, and ``action``.
+    trial_indices : np.ndarray
+        Full-table trial positions represented in ``rate_tensor_hz``.
+    n_components : int
+        Requested number of leading PCs.
+    condition_names : list[str] | tuple[str, ...]
+        Base decoding conditions to evaluate.
+    target : str
+        Decode target. Supported values are ``"state_int"`` and ``"action"``.
+    cv : int, default=5
+        Number of cross-validation folds.
+    n_permutations : int, default=100
+        Number of label permutations for null scoring.
+    random_state : int, default=42
+        Random seed passed to stochastic decoder steps.
+    normalization : str, default=PCA_NORMALIZATION_ZSCORE
+        Unit normalization applied before exploratory PCA.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-form decoding results with one row per condition and pre/post
+        choice window. The schema includes ``PCA_DECODING_DISPLAY_COLUMNS`` and
+        PCA metadata columns.
+    """
+
+    _validate_decode_target(trial_df, target)
+    trial_bins, pca_result = build_exploratory_pca_decoder_trial_bins(
+        rate_tensor_hz=rate_tensor_hz,
+        trial_df=trial_df,
+        trial_indices=trial_indices,
+        n_components=int(n_components),
+        normalization=normalization,
+    )
+    condition_masks = build_valid_base_condition_masks(trial_df, condition_names)
+    collected_bins = spike_behavior_pynapple.collect_condition_classifier_bins(
+        region_trial_binned=trial_bins,
+        trial_df=trial_df,
+        trial_masks=condition_masks,
+        condition_names=list(condition_names),
+        windows=PCA_DECODING_WINDOWS,
+        event="choice_time",
+    )
+    rows = _decode_collected_condition_bins(
+        collected_bins=collected_bins,
+        condition_names=condition_names,
+        target=target,
+        mode=PCA_DECODING_MODE_EXPLORATORY,
+        n_components_requested=int(n_components),
+        n_components_fit=int(pca_result.scores.shape[2]),
+        cv=int(cv),
+        n_permutations=int(n_permutations),
+        random_state=int(random_state),
+    )
+    return pd.DataFrame(rows)
+
+
+def run_rigorous_pca_choice_decoding(
+    rate_tensor_hz: np.ndarray,
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+    n_components: int,
+    condition_names: list[str] | tuple[str, ...],
+    target: str,
+    cv: int = 5,
+    n_permutations: int = 100,
+    random_state: int = 42,
+) -> pd.DataFrame:
+    """
+    Decode trial variables with scaler/PCA fit inside each CV training split.
+
+    Parameters
+    ----------
+    rate_tensor_hz : np.ndarray
+        Choice-aligned firing-rate tensor with shape ``(n_selected_trials, 2,
+        n_units)`` in Hz.
+    trial_df : pd.DataFrame
+        Full trial table with base-condition columns, ``choice_time``,
+        ``state_int``, and ``action``.
+    trial_indices : np.ndarray
+        Full-table trial positions represented in ``rate_tensor_hz``.
+    n_components : int
+        Requested number of leading PCs. The effective count is capped so PCA
+        can be fit inside the smallest CV training fold.
+    condition_names : list[str] | tuple[str, ...]
+        Base decoding conditions to evaluate.
+    target : str
+        Decode target. Supported values are ``"state_int"`` and ``"action"``.
+    cv : int, default=5
+        Number of cross-validation folds.
+    n_permutations : int, default=100
+        Number of label permutations for null scoring.
+    random_state : int, default=42
+        Random seed passed to stochastic decoder steps.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-form decoding results with the same display schema as
+        ``run_exploratory_pca_choice_decoding``.
+    """
+
+    _validate_decoder_trial_table(trial_df)
+    _validate_decode_target(trial_df, target)
+    normalized_trial_indices = _normalize_trial_indices(trial_indices, trial_df)
+    rates = np.asarray(rate_tensor_hz, dtype=float)
+    if rates.ndim != 3:
+        raise ValueError("rate_tensor_hz must have shape (n_trials, 2, n_units).")
+    if rates.shape[0] != normalized_trial_indices.size:
+        raise ValueError("rate_tensor_hz trial axis must match trial_indices length.")
+    if rates.shape[1] != 2:
+        raise ValueError("rate_tensor_hz must contain exactly two choice-window bins.")
+
+    condition_masks = build_valid_base_condition_masks(trial_df, condition_names)
+    rate_position_by_trial = {
+        int(trial_index): trial_position
+        for trial_position, trial_index in enumerate(normalized_trial_indices)
+    }
+
+    rows: list[dict[str, Any]] = []
+    for condition_name in condition_names:
+        condition_mask = np.asarray(condition_masks[condition_name], dtype=bool)
+        condition_trial_indices = [
+            int(trial_index)
+            for trial_index in np.flatnonzero(condition_mask)
+            if int(trial_index) in rate_position_by_trial
+        ]
+        for window_name, bin_index in (("pre_choice", 0), ("post_choice", 1)):
+            label = f"{condition_name}_{window_name}"
+            if not condition_trial_indices:
+                rows.append(
+                    _failed_result_row(
+                        reason="no_selected_bins",
+                        label=label,
+                        condition=condition_name,
+                        window=window_name,
+                        target=target,
+                        mode=PCA_DECODING_MODE_RIGOROUS,
+                        n_components_requested=int(n_components),
+                        n_components_fit=0,
+                    )
+                )
+                continue
+
+            rate_positions = np.asarray(
+                [rate_position_by_trial[int(trial_index)] for trial_index in condition_trial_indices],
+                dtype=int,
+            )
+            raw_feature_bins = rates[rate_positions, bin_index, :].T
+            target_values = pd.to_numeric(
+                trial_df.iloc[condition_trial_indices][target],
+                errors="coerce",
+            ).to_numpy(dtype=float)
+            decode_result = cv_decodeability_score_with_pca_pipeline(
+                binned_rates=raw_feature_bins,
+                target_values=target_values,
+                n_components=int(n_components),
+                cv=int(cv),
+                n_permutations=int(n_permutations),
+                random_state=int(random_state),
+                label=label,
+            )
+            rows.append(
+                {
+                    "condition": condition_name,
+                    "window": window_name,
+                    "target": target,
+                    "mode": PCA_DECODING_MODE_RIGOROUS,
+                    "n_pcs_requested": int(n_components),
+                    **decode_result,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def cv_decodeability_score_with_pca_pipeline(
+    binned_rates: np.ndarray,
+    target_values: np.ndarray,
+    n_components: int,
+    cv: int = 5,
+    n_permutations: int = 100,
+    random_state: int = 42,
+    label: str = "",
+) -> dict[str, Any]:
+    """
+    Compute rigorous PCA decodeability with PCA fit inside CV folds.
+
+    Parameters
+    ----------
+    binned_rates : np.ndarray
+        Raw firing-rate feature matrix with shape ``(n_units, n_samples)`` in
+        Hz.
+    target_values : np.ndarray
+        One-dimensional target labels with shape ``(n_samples,)``.
+    n_components : int
+        Requested PCA component count.
+    cv : int, default=5
+        Number of stratified cross-validation folds.
+    n_permutations : int, default=100
+        Number of label permutations for null scoring.
+    random_state : int, default=42
+        Random seed for CV shuffling, permutation testing, and logistic
+        regression.
+    label : str, default=""
+        Human-readable label for the decoding run.
+
+    Returns
+    -------
+    dict[str, Any]
+        Decodeability metrics or a standardized failed-result dictionary. The
+        returned ``n_pcs_fit`` is the PCA component count actually used inside
+        the pipeline.
+    """
+
+    filtered_rates, filtered_targets, summary = _prepare_feature_target_inputs(
+        feature_bins=binned_rates,
+        target_values=target_values,
+    )
+    result_base = {"label": label, **summary}
+    if summary["n_samples"] == 0:
+        return _failed_decode_result("no_valid_samples", n_pcs_fit=0, **result_base)
+    if summary["n_classes"] < 2:
+        return _failed_decode_result("insufficient_classes", n_pcs_fit=0, **result_base)
+
+    class_counts = np.unique(filtered_targets, return_counts=True)[1]
+    if summary["n_samples"] < int(cv) or int(class_counts.min()) < int(cv):
+        return _failed_decode_result("insufficient_samples", cv=int(cv), n_pcs_fit=0, **result_base)
+
+    splitter = StratifiedKFold(n_splits=int(cv), shuffle=True, random_state=int(random_state))
+    min_train_size = min(
+        train_indices.size
+        for train_indices, _test_indices in splitter.split(filtered_rates.T, filtered_targets)
+    )
+    n_components_fit = min(int(n_components), filtered_rates.shape[0], int(min_train_size))
+    if n_components_fit < 1:
+        return _failed_decode_result("insufficient_samples", cv=int(cv), n_pcs_fit=0, **result_base)
+
+    classifier = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("pca", PCA(n_components=int(n_components_fit))),
+            (
+                "classifier",
+                LogisticRegression(
+                    solver="saga",
+                    max_iter=10000,
+                    random_state=int(random_state),
+                ),
+            ),
+        ]
+    )
+    cv_score, permutation_scores, cv_pvalue = permutation_test_score(
+        classifier,
+        filtered_rates.T,
+        filtered_targets,
+        scoring="accuracy",
+        cv=splitter,
+        n_permutations=int(n_permutations),
+        random_state=int(random_state),
+    )
+    return {
+        "status": "ok",
+        "reason": "",
+        "label": label,
+        "n_samples": summary["n_samples"],
+        "n_classes": summary["n_classes"],
+        "n_pcs_fit": int(n_components_fit),
+        "cv_score": float(cv_score),
+        "cv_pvalue": float(cv_pvalue),
+        "permutation_scores": np.asarray(permutation_scores, dtype=float),
+        "permutation_score_mean": float(np.mean(permutation_scores)),
+        "permutation_score_std": float(np.std(permutation_scores)),
+    }
+
+
+def summarize_pca_decoding_results(results_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Select the compact columns shown in the PCA decoding webapp view.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        Long-form PCA decoding result table. Must contain
+        ``PCA_DECODING_DISPLAY_COLUMNS``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Shallow copy with only display columns, preserving row order.
+    """
+
+    missing_columns = set(PCA_DECODING_DISPLAY_COLUMNS) - set(results_df.columns)
+    if missing_columns:
+        raise ValueError(f"results_df is missing required columns: {sorted(missing_columns)}")
+    return results_df.loc[:, PCA_DECODING_DISPLAY_COLUMNS].copy()
+
+
+def _validate_decoder_trial_table(trial_df: pd.DataFrame) -> None:
+    """
+    Validate columns needed to adapt PCA scores to decoder bins.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with one row per trial.
+
+    Returns
+    -------
+    None
+        Raises ``ValueError`` if required columns are missing.
+    """
+
+    required_columns = {"choice_time", "state_int", "action"}
+    missing_columns = required_columns - set(trial_df.columns)
+    if missing_columns:
+        raise ValueError(f"trial_df is missing required columns: {sorted(missing_columns)}")
+
+
+def _validate_decode_target(trial_df: pd.DataFrame, target: str) -> None:
+    """
+    Validate the requested decode target.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with one row per trial.
+    target : str
+        Requested target column. Supported values are ``"state_int"`` and
+        ``"action"``.
+
+    Returns
+    -------
+    None
+        Raises ``ValueError`` if the target is unsupported or missing.
+    """
+
+    if target not in {"state_int", "action"}:
+        raise ValueError("target must be 'state_int' or 'action'.")
+    if target not in trial_df.columns:
+        raise ValueError(f"trial_df is missing requested target column {target!r}.")
+
+
+def _normalize_trial_indices(trial_indices: np.ndarray, trial_df: pd.DataFrame) -> np.ndarray:
+    """
+    Normalize full-table trial positions for decoder-rate tensors.
+
+    Parameters
+    ----------
+    trial_indices : np.ndarray
+        One-dimensional trial row positions.
+    trial_df : pd.DataFrame
+        Trial table used for bounds checking.
+
+    Returns
+    -------
+    np.ndarray
+        One-dimensional integer trial positions.
+    """
+
+    normalized_trial_indices = np.asarray(trial_indices, dtype=int).reshape(-1)
+    if normalized_trial_indices.size == 0:
+        raise ValueError("trial_indices must contain at least one trial.")
+    if normalized_trial_indices.min() < 0 or normalized_trial_indices.max() >= len(trial_df):
+        raise ValueError("trial_indices must be row positions within trial_df.")
+    return normalized_trial_indices
+
+
+def _build_decoder_trial_bins_from_scores(
+    pca_scores: np.ndarray,
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+) -> list[dict[str, Any]]:
+    """
+    Build decoder-compatible trial dictionaries from PCA score tensors.
+
+    Parameters
+    ----------
+    pca_scores : np.ndarray
+        PCA score tensor with shape ``(n_selected_trials, 2, n_pcs)``.
+    trial_df : pd.DataFrame
+        Full trial table with one row per trial.
+    trial_indices : np.ndarray
+        Full-table row positions corresponding to the first axis of
+        ``pca_scores``.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        One decoder-compatible dictionary per trial row. PCA score entries are
+        stored as ``"binned_spikes"`` with shape ``(n_pcs, 2)`` for
+        compatibility with existing decoding helpers.
+    """
+
+    scores = np.asarray(pca_scores, dtype=float)
+    if scores.ndim != 3 or scores.shape[1] != 2:
+        raise ValueError("pca_scores must have shape (n_trials, 2, n_pcs).")
+    if scores.shape[0] != trial_indices.size:
+        raise ValueError("pca_scores trial axis must match trial_indices length.")
+
+    n_pcs = int(scores.shape[2])
+    score_position_by_trial = {
+        int(trial_index): trial_position
+        for trial_position, trial_index in enumerate(trial_indices)
+    }
+    trial_bins: list[dict[str, Any]] = []
+    for trial_position in range(len(trial_df)):
+        trial_row = trial_df.iloc[trial_position]
+        choice_time = pd.to_numeric(pd.Series([trial_row["choice_time"]]), errors="coerce").iloc[0]
+        if pd.isna(choice_time):
+            bin_edges = np.full(3, np.nan, dtype=float)
+        else:
+            bin_edges = float(choice_time) + np.array([-0.5, 0.0, 0.5], dtype=float)
+
+        if trial_position in score_position_by_trial:
+            selected_position = score_position_by_trial[trial_position]
+            feature_bins = scores[selected_position, :, :].T
+        else:
+            feature_bins = np.zeros((n_pcs, 2), dtype=float)
+
+        state_value = pd.to_numeric(pd.Series([trial_row["state_int"]]), errors="coerce").iloc[0]
+        action_value = pd.to_numeric(pd.Series([trial_row["action"]]), errors="coerce").iloc[0]
+        trial_bins.append(
+            {
+                "trial_ix": int(trial_position),
+                "binned_spikes": feature_bins,
+                "bin_edges": bin_edges,
+                "bin_states": np.full(2, float(state_value) if not pd.isna(state_value) else np.nan, dtype=float),
+                "bin_choices": np.full(2, float(action_value) if not pd.isna(action_value) else np.nan, dtype=float),
+            }
+        )
+    return trial_bins
+
+
+def _decode_collected_condition_bins(
+    collected_bins: Mapping[tuple[str, str], dict[str, Any]],
+    condition_names: list[str] | tuple[str, ...],
+    target: str,
+    mode: str,
+    n_components_requested: int,
+    n_components_fit: int,
+    cv: int,
+    n_permutations: int,
+    random_state: int,
+) -> list[dict[str, Any]]:
+    """
+    Decode collected condition/window feature matrices with existing helpers.
+
+    Parameters
+    ----------
+    collected_bins : Mapping[tuple[str, str], dict[str, Any]]
+        Output from ``collect_condition_classifier_bins``.
+    condition_names : list[str] | tuple[str, ...]
+        Ordered condition names.
+    target : str
+        Decode target, either ``"state_int"`` or ``"action"``.
+    mode : str
+        PCA decoding mode label.
+    n_components_requested : int
+        Requested PC count.
+    n_components_fit : int
+        Fit PC count.
+    cv : int
+        Cross-validation fold count.
+    n_permutations : int
+        Number of permutation-test shuffles.
+    random_state : int
+        Random seed.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        Long-form decoding result rows.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for condition_name in condition_names:
+        for window_name in PCA_DECODING_WINDOWS:
+            label = f"{condition_name}_{window_name}"
+            entry = collected_bins[(condition_name, window_name)]
+            if entry["status"] != "ok":
+                rows.append(
+                    _failed_result_row(
+                        reason=str(entry.get("reason", "no_selected_bins")),
+                        label=label,
+                        condition=condition_name,
+                        window=window_name,
+                        target=target,
+                        mode=mode,
+                        n_components_requested=int(n_components_requested),
+                        n_components_fit=int(n_components_fit),
+                    )
+                )
+                continue
+
+            target_values = entry["state_bins"] if target == "state_int" else entry["choice_bins"]
+            decode_result = spike_behavior_pynapple.cv_decodeability_score(
+                binned_spikes=entry["spike_bins"],
+                target_values=target_values,
+                cv=int(cv),
+                n_permutations=int(n_permutations),
+                random_state=int(random_state),
+                label=label,
+            )
+            rows.append(
+                {
+                    "condition": condition_name,
+                    "window": window_name,
+                    "target": target,
+                    "mode": mode,
+                    "n_pcs_requested": int(n_components_requested),
+                    "n_pcs_fit": int(n_components_fit),
+                    **decode_result,
+                }
+            )
+    return rows
+
+
+def _prepare_feature_target_inputs(
+    feature_bins: np.ndarray,
+    target_values: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+    """
+    Filter raw feature matrices and target labels for decoding.
+
+    Parameters
+    ----------
+    feature_bins : np.ndarray
+        Feature matrix with shape ``(n_features, n_samples)``.
+    target_values : np.ndarray
+        One-dimensional target labels with shape ``(n_samples,)``.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, dict[str, int]]
+        ``(filtered_features, filtered_targets, summary)`` after dropping
+        samples with missing targets.
+    """
+
+    filtered_targets = np.asarray(target_values, dtype=float)
+    filtered_features = np.asarray(feature_bins, dtype=float)
+    if filtered_features.ndim != 2:
+        raise ValueError("feature_bins must be a two-dimensional array with shape (n_features, n_samples).")
+    if filtered_targets.ndim != 1:
+        raise ValueError("target_values must be a one-dimensional array.")
+    if filtered_features.shape[1] != filtered_targets.shape[0]:
+        raise ValueError("feature_bins and target_values must agree on sample count.")
+
+    valid_target_mask = ~np.isnan(filtered_targets)
+    filtered_features = filtered_features[:, valid_target_mask]
+    filtered_targets = filtered_targets[valid_target_mask]
+    summary = {
+        "n_samples": int(filtered_targets.shape[0]),
+        "n_classes": int(np.unique(filtered_targets).size),
+    }
+    return filtered_features, filtered_targets, summary
+
+
+def _failed_decode_result(reason: str, label: str = "", **extra_fields: Any) -> dict[str, Any]:
+    """
+    Build a standardized failed PCA-decoding result.
+
+    Parameters
+    ----------
+    reason : str
+        Machine-readable failure reason.
+    label : str, default=""
+        Human-readable condition/window label.
+    **extra_fields : Any
+        Additional metadata fields to include.
+
+    Returns
+    -------
+    dict[str, Any]
+        Result dictionary with failed status and NaN performance metrics.
+    """
+
+    result = {
+        "status": "failed",
+        "reason": reason,
+        "label": label,
+        "n_samples": int(extra_fields.pop("n_samples", 0)),
+        "n_classes": int(extra_fields.pop("n_classes", 0)),
+        "cv_score": np.nan,
+        "cv_pvalue": np.nan,
+        "permutation_scores": np.array([], dtype=float),
+        "permutation_score_mean": np.nan,
+        "permutation_score_std": np.nan,
+    }
+    result.update(extra_fields)
+    return result
+
+
+def _failed_result_row(
+    reason: str,
+    label: str,
+    condition: str,
+    window: str,
+    target: str,
+    mode: str,
+    n_components_requested: int,
+    n_components_fit: int,
+) -> dict[str, Any]:
+    """
+    Build a full long-form failed row for condition/window decoding.
+
+    Parameters
+    ----------
+    reason : str
+        Failure reason.
+    label : str
+        Human-readable condition/window label.
+    condition : str
+        Base condition name.
+    window : str
+        Window name, ``"pre_choice"`` or ``"post_choice"``.
+    target : str
+        Decode target.
+    mode : str
+        PCA decoding mode.
+    n_components_requested : int
+        Requested PC count.
+    n_components_fit : int
+        Effective fit PC count.
+
+    Returns
+    -------
+    dict[str, Any]
+        Long-form failed decoding row.
+    """
+
+    return {
+        "condition": condition,
+        "window": window,
+        "target": target,
+        "mode": mode,
+        "n_pcs_requested": int(n_components_requested),
+        "n_pcs_fit": int(n_components_fit),
+        **_failed_decode_result(reason=reason, label=label),
+    }

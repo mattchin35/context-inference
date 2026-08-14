@@ -11,6 +11,7 @@ import streamlit as st
 from src.neural_analysis import (
     lfp_loading,
     population_pca,
+    population_pca_decoding,
     spike_behavior_pynapple,
     unit_spike_loading,
     unit_spike_plotting,
@@ -34,7 +35,10 @@ ACTION_OPTIONS = {
 ALIGNMENT_OPTIONS = ["choice_time", "start_time"]
 PAGE_SIZE_OPTIONS = [25, 50, 100]
 PSTH_BIN_OPTIONS = [0.05, 0.1]
-PLOT_VIEW_OPTIONS = ["Unit raster/PSTH", "Trial spikes/licks/choices"]
+PLOT_VIEW_UNIT_RASTER = "Unit raster/PSTH"
+PLOT_VIEW_TRIAL_SPIKES = "Trial spikes/licks/choices"
+PLOT_VIEW_PCA_DECODING = "Population PCA decoding"
+PLOT_VIEW_OPTIONS = [PLOT_VIEW_UNIT_RASTER, PLOT_VIEW_TRIAL_SPIKES, PLOT_VIEW_PCA_DECODING]
 UNIT_PLOT_TYPE_OPTIONS = [
     "PSTH",
     "Binned rate: trials + mean",
@@ -56,6 +60,9 @@ DEFAULT_CONCATENATED_PCA_VISIBLE_TRIAL_COUNT = 20
 CONCATENATED_PCA_VISIBLE_TRIAL_OPTIONS = [10, 20, 40]
 DEFAULT_CONCATENATED_PCA_COMPONENT_COUNT = 3
 CONCATENATED_PCA_FIGURE_SIZE = (11.0, 5.0)
+PCA_DECODING_DEFAULT_COMPONENT_COUNT = 5
+PCA_DECODING_DEFAULT_CV_FOLDS = 5
+PCA_DECODING_DEFAULT_PERMUTATIONS = 100
 CHANNEL_SOURCE_MANUAL = "Manual / preset"
 CHANNEL_SOURCE_CHANNEL_QUALITY = "channel_quality"
 CHANNEL_SOURCE_OPTIONS = [CHANNEL_SOURCE_MANUAL, CHANNEL_SOURCE_CHANNEL_QUALITY]
@@ -692,6 +699,109 @@ def compute_population_pca_cached(
     return pca_time_s, pca_result
 
 
+@st.cache_data(show_spinner="Computing PCA decoding...")
+def compute_population_pca_decoding_cached(
+    session_key: str,
+    aligned_spike_path: str,
+    unit_ids: tuple[int, ...],
+    condition_names: tuple[str, ...],
+    target: str,
+    mode: str,
+    n_components: int,
+    cv: int,
+    n_permutations: int,
+    normalization: str,
+    _spike_group,
+    _trial_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, int]:
+    """
+    Compute and cache choice-aligned PCA decoding for the webapp.
+
+    Parameters
+    ----------
+    session_key : str
+        Session/probe identifier included in the Streamlit cache key.
+    aligned_spike_path : str
+        Aligned spike file path included in the cache key. Units: filesystem
+        path.
+    unit_ids : tuple[int, ...]
+        Unit ids used as raw PCA features, shape ``(n_units,)``.
+    condition_names : tuple[str, ...]
+        Base decoding condition names to evaluate.
+    target : str
+        Decode target, ``"state_int"`` or ``"action"``.
+    mode : str
+        PCA fitting mode from ``population_pca_decoding.PCA_DECODING_MODE_OPTIONS``.
+    n_components : int
+        Requested number of leading PCs.
+    cv : int
+        Number of cross-validation folds.
+    n_permutations : int
+        Number of label permutations for null scoring.
+    normalization : str
+        Exploratory PCA unit-normalization mode. Rigorous mode fits a scaler in
+        each CV split and ignores this value.
+    _spike_group
+        Pynapple spike group keyed by unit id. Leading underscore excludes this
+        potentially large object from Streamlit hashing.
+    _trial_df : pd.DataFrame
+        Trial table. Leading underscore excludes this dataframe from Streamlit
+        hashing; ``session_key`` and decoding settings carry cache identity.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, int]
+        ``(results_df, n_pca_trials)``. ``results_df`` is long-form decoding
+        performance. ``n_pca_trials`` is the number of base-condition trials
+        used to fit/extract the PCA decoding rates.
+    """
+
+    if mode not in population_pca_decoding.PCA_DECODING_MODE_OPTIONS:
+        raise ValueError(f"Unknown PCA decoding mode {mode!r}.")
+    if len(condition_names) == 0:
+        raise ValueError("Select at least one PCA decoding base condition.")
+
+    trial_indices = population_pca_decoding.select_pca_decoding_trial_indices(
+        trial_df=_trial_df,
+        condition_names=condition_names,
+    )
+    if trial_indices.size == 0:
+        raise ValueError("No valid trials match the selected PCA decoding base conditions.")
+    rate_tensor_hz, _bin_centers_s = population_pca_decoding.build_choice_aligned_rate_tensor(
+        spike_group=_spike_group,
+        unit_ids=np.asarray(unit_ids, dtype=int),
+        trial_df=_trial_df,
+        trial_indices=trial_indices,
+        bin_size_s=population_pca_decoding.PCA_DECODING_BIN_SIZE_S,
+    )
+    if mode == population_pca_decoding.PCA_DECODING_MODE_EXPLORATORY:
+        results_df = population_pca_decoding.run_exploratory_pca_choice_decoding(
+            rate_tensor_hz=rate_tensor_hz,
+            trial_df=_trial_df,
+            trial_indices=trial_indices,
+            n_components=int(n_components),
+            condition_names=condition_names,
+            target=target,
+            cv=int(cv),
+            n_permutations=int(n_permutations),
+            random_state=42,
+            normalization=normalization,
+        )
+    else:
+        results_df = population_pca_decoding.run_rigorous_pca_choice_decoding(
+            rate_tensor_hz=rate_tensor_hz,
+            trial_df=_trial_df,
+            trial_indices=trial_indices,
+            n_components=int(n_components),
+            condition_names=condition_names,
+            target=target,
+            cv=int(cv),
+            n_permutations=int(n_permutations),
+            random_state=42,
+        )
+    return results_df, int(trial_indices.size)
+
+
 def build_lfp_dropdown_options(hpc_v1_lfp_path: str, pfc_lfp_path: str) -> dict[str, str]:
     """
     Build explicit LFP-file choices from the two probe path inputs.
@@ -1207,6 +1317,105 @@ def main() -> None:
 
     unit_ids = selected_unit_metadata["cluster_id"].to_numpy(dtype=int)
     plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+
+    if plot_view == PLOT_VIEW_PCA_DECODING:
+        st.sidebar.header("PCA Decoding")
+        decode_target = st.sidebar.selectbox(
+            "Decode target",
+            options=["state_int", "action"],
+            index=0,
+        )
+        pca_decoding_mode = st.sidebar.selectbox(
+            "PCA fitting mode",
+            options=list(population_pca_decoding.PCA_DECODING_MODE_OPTIONS),
+            index=0,
+        )
+        pca_decoding_component_count = int(
+            st.sidebar.number_input(
+                "PCA component count",
+                min_value=1,
+                value=PCA_DECODING_DEFAULT_COMPONENT_COUNT,
+                step=1,
+            )
+        )
+        selected_base_conditions = tuple(
+            st.sidebar.multiselect(
+                "Base conditions",
+                options=population_pca_decoding.PCA_DECODING_BASE_CONDITIONS,
+                default=population_pca_decoding.PCA_DECODING_BASE_CONDITIONS,
+            )
+        )
+        if not selected_base_conditions:
+            st.warning("Select at least one base condition for PCA decoding.")
+            st.stop()
+        pca_decoding_cv = int(
+            st.sidebar.number_input(
+                "CV folds",
+                min_value=2,
+                value=PCA_DECODING_DEFAULT_CV_FOLDS,
+                step=1,
+            )
+        )
+        pca_decoding_permutations = int(
+            st.sidebar.number_input(
+                "Permutations",
+                min_value=1,
+                value=PCA_DECODING_DEFAULT_PERMUTATIONS,
+                step=1,
+            )
+        )
+        pca_decoding_normalization = population_pca.PCA_NORMALIZATION_ZSCORE
+        if pca_decoding_mode == population_pca_decoding.PCA_DECODING_MODE_EXPLORATORY:
+            pca_decoding_normalization = st.sidebar.selectbox(
+                "Exploratory PCA normalization",
+                options=list(population_pca.PCA_NORMALIZATION_OPTIONS),
+                index=0,
+            )
+
+        pca_unit_ids = resolve_population_pca_unit_ids(
+            selected_unit_metadata=selected_unit_metadata,
+            page_unit_ids=None,
+        )
+        try:
+            pca_decoding_results, pca_decoding_trial_count = compute_population_pca_decoding_cached(
+                session_key=f"{session.sess_id_full}:{active_probe_label}",
+                aligned_spike_path=str(active_aligned_spike_path),
+                unit_ids=tuple(int(unit_id) for unit_id in pca_unit_ids),
+                condition_names=selected_base_conditions,
+                target=decode_target,
+                mode=pca_decoding_mode,
+                n_components=int(pca_decoding_component_count),
+                cv=int(pca_decoding_cv),
+                n_permutations=int(pca_decoding_permutations),
+                normalization=pca_decoding_normalization,
+                _spike_group=spike_group,
+                _trial_df=trial_df,
+            )
+        except Exception as error:  # noqa: BLE001 - Streamlit should show analysis failures cleanly.
+            st.error(f"Could not compute PCA decoding: {error}")
+            st.stop()
+
+        decoding_display = population_pca_decoding.summarize_pca_decoding_results(pca_decoding_results)
+        metadata_column, result_column = st.columns([1, 3])
+        with metadata_column:
+            st.subheader("PCA Decoding")
+            st.write(f"Active probe: {active_probe_label}")
+            st.write(f"Filtered units: {selected_unit_metadata.shape[0]}")
+            st.write(f"PCA units: {pca_unit_ids.size}")
+            st.write(f"Base-condition trials: {pca_decoding_trial_count}")
+            st.write(f"Target: {decode_target}")
+            st.write(f"Mode: {pca_decoding_mode}")
+            st.write(f"Requested PCs: {int(pca_decoding_component_count)}")
+            st.write(f"Bin size: {population_pca_decoding.PCA_DECODING_BIN_SIZE_S:g} s")
+            st.write("Choice windows: -0.5 to 0 s, 0 to 0.5 s")
+        with result_column:
+            st.subheader("Before/After Choice Decoding Performance")
+            st.dataframe(decoding_display, width="stretch")
+            ok_rows = decoding_display.loc[decoding_display["status"] == "ok"].copy()
+            if not ok_rows.empty:
+                chart_df = ok_rows.pivot(index="condition", columns="window", values="cv_score")
+                st.bar_chart(chart_df)
+        return
 
     st.sidebar.header("Trials")
     condition = st.sidebar.selectbox("Condition", options=CONDITION_OPTIONS)
