@@ -153,3 +153,82 @@ def test_summarize_pca_decoding_results_keeps_display_columns():
 
     assert display_results.columns.tolist() == population_pca_decoding.PCA_DECODING_DISPLAY_COLUMNS
     assert display_results.iloc[0]["condition"] == "correct_rewarded"
+
+
+def test_plot_pca_decoding_pre_post_scores_groups_bars_side_by_side():
+    """Pre/post bars should sit beside each other, with larger gaps between conditions."""
+    results = pd.DataFrame(
+        [
+            {
+                "condition": "correct_rewarded",
+                "window": "pre_choice",
+                "target": "state_int",
+                "mode": population_pca_decoding.PCA_DECODING_MODE_EXPLORATORY,
+                "status": "ok",
+                "reason": "",
+                "n_samples": 8,
+                "n_classes": 2,
+                "cv_score": 0.6,
+                "cv_pvalue": 0.2,
+                "permutation_score_mean": 0.5,
+                "permutation_score_std": 0.1,
+            },
+            {
+                "condition": "correct_rewarded",
+                "window": "post_choice",
+                "target": "state_int",
+                "mode": population_pca_decoding.PCA_DECODING_MODE_EXPLORATORY,
+                "status": "ok",
+                "reason": "",
+                "n_samples": 8,
+                "n_classes": 2,
+                "cv_score": 0.8,
+                "cv_pvalue": 0.05,
+                "permutation_score_mean": 0.5,
+                "permutation_score_std": 0.1,
+            },
+            {
+                "condition": "incorrect",
+                "window": "pre_choice",
+                "target": "state_int",
+                "mode": population_pca_decoding.PCA_DECODING_MODE_EXPLORATORY,
+                "status": "ok",
+                "reason": "",
+                "n_samples": 6,
+                "n_classes": 2,
+                "cv_score": 0.55,
+                "cv_pvalue": 0.4,
+                "permutation_score_mean": 0.5,
+                "permutation_score_std": 0.1,
+            },
+            {
+                "condition": "incorrect",
+                "window": "post_choice",
+                "target": "state_int",
+                "mode": population_pca_decoding.PCA_DECODING_MODE_EXPLORATORY,
+                "status": "failed",
+                "reason": "insufficient_classes",
+                "n_samples": 1,
+                "n_classes": 1,
+                "cv_score": np.nan,
+                "cv_pvalue": np.nan,
+                "permutation_score_mean": np.nan,
+                "permutation_score_std": np.nan,
+            },
+        ]
+    )
+
+    figure, axis = population_pca_decoding.plot_pca_decoding_pre_post_scores(results)
+
+    bar_centers = np.array(
+        [patch.get_x() + patch.get_width() / 2.0 for patch in axis.patches],
+        dtype=float,
+    )
+    bar_heights = np.array([patch.get_height() for patch in axis.patches], dtype=float)
+    assert bar_centers.shape == (3,)
+    np.testing.assert_allclose(np.sort(bar_heights), np.array([0.55, 0.6, 0.8]))
+    within_condition_spacing = abs(bar_centers[1] - bar_centers[0])
+    between_condition_spacing = abs(bar_centers[2] - np.mean(bar_centers[:2]))
+    assert between_condition_spacing > within_condition_spacing * 2.0
+    assert axis.get_ylim()[1] == 1.0
+    figure.clf()
