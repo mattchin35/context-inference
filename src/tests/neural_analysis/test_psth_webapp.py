@@ -111,6 +111,22 @@ def test_pca_decoding_has_separate_plot_view_from_trial_filters():
     assert psth_webapp.PCA_DECODING_DISPLAY_AVERAGE_PC in psth_webapp.PCA_DECODING_DISPLAY_OPTIONS
 
 
+def test_resolve_pca_decoding_component_minimum_requires_two_for_pc_score_plot():
+    """Average PC score plots need PC1 and PC2 while performance decoding can use one PC."""
+    assert (
+        psth_webapp.resolve_pca_decoding_component_minimum(
+            psth_webapp.PCA_DECODING_DISPLAY_AVERAGE_PC
+        )
+        == 2
+    )
+    assert (
+        psth_webapp.resolve_pca_decoding_component_minimum(
+            psth_webapp.PCA_DECODING_DISPLAY_PERFORMANCE
+        )
+        == 1
+    )
+
+
 def test_select_visible_concatenated_trial_indices_limits_page_size():
     """Concatenated PCA should display a bounded page of selected trials."""
     trial_indices = np.arange(25, dtype=int)
