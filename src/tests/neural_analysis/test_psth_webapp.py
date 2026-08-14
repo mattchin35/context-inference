@@ -109,6 +109,7 @@ def test_pca_decoding_has_separate_plot_view_from_trial_filters():
     assert psth_webapp.PCA_DECODING_DEFAULT_COMPONENT_COUNT == 5
     assert psth_webapp.PCA_DECODING_DISPLAY_PERFORMANCE in psth_webapp.PCA_DECODING_DISPLAY_OPTIONS
     assert psth_webapp.PCA_DECODING_DISPLAY_AVERAGE_PC in psth_webapp.PCA_DECODING_DISPLAY_OPTIONS
+    assert psth_webapp.PCA_DECODING_SHOW_RAW_PC_SCORES_DEFAULT is False
 
 
 def test_resolve_pca_decoding_component_minimum_requires_two_for_pc_score_plot():

@@ -320,6 +320,34 @@ def test_summarize_pca_scores_by_condition_and_target_requires_two_pcs():
         raise AssertionError("Expected one-PC score summaries to raise ValueError.")
 
 
+def test_extract_pca_score_points_by_condition_and_target_preserves_overlapping_memberships():
+    """Raw PC points should keep condition memberships even when one trial appears in multiple masks."""
+    trial_df = _make_score_summary_trial_df()
+
+    raw_points = population_pca_decoding.extract_pca_score_points_by_condition_and_target(
+        pca_scores=_make_score_summary_pca_scores(),
+        trial_df=trial_df,
+        trial_indices=np.arange(5, dtype=int),
+        condition_names=["incorrect", "switch"],
+        target="state_int",
+    )
+
+    assert raw_points.columns.tolist() == population_pca_decoding.PCA_RAW_SCORE_COLUMNS
+    assert raw_points.shape[0] == 6
+    duplicated_trial_rows = raw_points.loc[raw_points["trial_index"] == 3]
+    assert duplicated_trial_rows.shape[0] == 4
+    assert set(duplicated_trial_rows["condition"]) == {"incorrect", "switch"}
+
+    switch_pre = raw_points.loc[
+        (raw_points["condition"] == "switch")
+        & (raw_points["trial_index"] == 3)
+        & (raw_points["window"] == "pre_choice")
+    ].iloc[0]
+    assert switch_pre["target_label"] == "state 0"
+    assert switch_pre["pc1"] == 6.0
+    assert switch_pre["pc2"] == 6.0
+
+
 def test_plot_average_pca_scores_by_condition_and_target_returns_pre_post_axes():
     """Average PC score plots should have separate pre-choice and post-choice panels."""
     trial_df = _make_score_summary_trial_df()
@@ -339,4 +367,40 @@ def test_plot_average_pca_scores_by_condition_and_target_returns_pre_post_axes()
     assert axes[1].get_title() == "Post-choice (0 to 0.5 s)"
     assert len(axes[0].collections) > 0
     assert len(axes[1].collections) > 0
+    figure.clf()
+
+
+def test_plot_average_pca_scores_by_condition_and_target_can_overlay_raw_points():
+    """Raw PC score points should be drawn transparently beneath larger average markers."""
+    trial_df = _make_score_summary_trial_df()
+    pca_scores = _make_score_summary_pca_scores()
+    summary = population_pca_decoding.summarize_pca_scores_by_condition_and_target(
+        pca_scores=pca_scores,
+        trial_df=trial_df,
+        trial_indices=np.arange(5, dtype=int),
+        condition_names=["incorrect", "switch"],
+        target="state_int",
+    )
+    raw_points = population_pca_decoding.extract_pca_score_points_by_condition_and_target(
+        pca_scores=pca_scores,
+        trial_df=trial_df,
+        trial_indices=np.arange(5, dtype=int),
+        condition_names=["incorrect", "switch"],
+        target="state_int",
+    )
+
+    figure, axes = population_pca_decoding.plot_average_pca_scores_by_condition_and_target(
+        summary,
+        raw_score_df=raw_points,
+    )
+
+    axes = np.asarray(axes, dtype=object).reshape(-1)
+    pre_collections = axes[0].collections
+    raw_alpha = pre_collections[0].get_alpha()
+    average_alpha = pre_collections[-1].get_alpha()
+    raw_sizes = pre_collections[0].get_sizes()
+    average_sizes = pre_collections[-1].get_sizes()
+    assert raw_alpha < 0.5
+    assert average_alpha is None or average_alpha == 1.0
+    assert float(np.max(raw_sizes)) < float(np.max(average_sizes))
     figure.clf()
