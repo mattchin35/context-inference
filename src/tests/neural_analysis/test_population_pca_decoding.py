@@ -40,6 +40,41 @@ def _make_rate_tensor_hz() -> np.ndarray:
     return rates
 
 
+def _make_score_summary_trial_df() -> pd.DataFrame:
+    """Build mixed condition/target rows for average PC score tests."""
+
+    return pd.DataFrame(
+        {
+            "give_reward": [0, 0, 0, 0, 0],
+            "correct": [1, 1, 1, 0, 0],
+            "reward": [1, 1, 1, 0, 0],
+            "action": [0, 1, 0, 1, 0],
+            "state_int": [0, 0, 1, 0, 1],
+            "start_time": np.arange(5, dtype=float),
+            "choice_time": np.arange(5, dtype=float) + 0.5,
+            "reward_time": np.arange(5, dtype=float) + 0.8,
+        }
+    )
+
+
+def _make_score_summary_pca_scores() -> np.ndarray:
+    """Build score tensor with trial, pre/post, and PC axes."""
+
+    scores = np.zeros((5, 2, 2), dtype=float)
+    scores[:, 0, :] = np.array(
+        [
+            [0.0, 0.0],
+            [2.0, 2.0],
+            [4.0, 4.0],
+            [6.0, 6.0],
+            [8.0, 8.0],
+        ],
+        dtype=float,
+    )
+    scores[:, 1, :] = scores[:, 0, :] + np.array([10.0, 20.0], dtype=float)
+    return scores
+
+
 def test_build_exploratory_pca_decoder_trial_bins_preserves_choice_windows():
     """Exploratory PCA scores should be adapted to the existing decoder-bin contract."""
     trial_df = _make_decoding_trial_df()
@@ -231,4 +266,77 @@ def test_plot_pca_decoding_pre_post_scores_groups_bars_side_by_side():
     between_condition_spacing = abs(bar_centers[2] - np.mean(bar_centers[:2]))
     assert between_condition_spacing > within_condition_spacing * 2.0
     assert axis.get_ylim()[1] == 1.0
+    figure.clf()
+
+
+def test_summarize_pca_scores_by_condition_and_target_groups_pre_post_target_values():
+    """Average PC summaries should group by base condition, window, and target value."""
+    trial_df = _make_score_summary_trial_df()
+
+    summary = population_pca_decoding.summarize_pca_scores_by_condition_and_target(
+        pca_scores=_make_score_summary_pca_scores(),
+        trial_df=trial_df,
+        trial_indices=np.arange(5, dtype=int),
+        condition_names=["correct_rewarded", "incorrect"],
+        target="state_int",
+    )
+
+    assert summary.shape[0] == 8
+    correct_state0_pre = summary.loc[
+        (summary["condition"] == "correct_rewarded")
+        & (summary["window"] == "pre_choice")
+        & (summary["target_value"] == 0.0)
+    ].iloc[0]
+    assert correct_state0_pre["target_label"] == "state 0"
+    assert correct_state0_pre["n_trials"] == 2
+    assert correct_state0_pre["pc1_mean"] == 1.0
+    assert correct_state0_pre["pc2_mean"] == 1.0
+
+    incorrect_state1_post = summary.loc[
+        (summary["condition"] == "incorrect")
+        & (summary["window"] == "post_choice")
+        & (summary["target_value"] == 1.0)
+    ].iloc[0]
+    assert incorrect_state1_post["n_trials"] == 1
+    assert incorrect_state1_post["pc1_mean"] == 18.0
+    assert incorrect_state1_post["pc2_mean"] == 28.0
+
+
+def test_summarize_pca_scores_by_condition_and_target_requires_two_pcs():
+    """PC score-space summaries require PC1 and PC2."""
+    trial_df = _make_score_summary_trial_df()
+
+    try:
+        population_pca_decoding.summarize_pca_scores_by_condition_and_target(
+            pca_scores=np.zeros((5, 2, 1), dtype=float),
+            trial_df=trial_df,
+            trial_indices=np.arange(5, dtype=int),
+            condition_names=["correct_rewarded"],
+            target="state_int",
+        )
+    except ValueError as error:
+        assert "at least two PCs" in str(error)
+    else:
+        raise AssertionError("Expected one-PC score summaries to raise ValueError.")
+
+
+def test_plot_average_pca_scores_by_condition_and_target_returns_pre_post_axes():
+    """Average PC score plots should have separate pre-choice and post-choice panels."""
+    trial_df = _make_score_summary_trial_df()
+    summary = population_pca_decoding.summarize_pca_scores_by_condition_and_target(
+        pca_scores=_make_score_summary_pca_scores(),
+        trial_df=trial_df,
+        trial_indices=np.arange(5, dtype=int),
+        condition_names=["correct_rewarded", "incorrect"],
+        target="action",
+    )
+
+    figure, axes = population_pca_decoding.plot_average_pca_scores_by_condition_and_target(summary)
+
+    axes = np.asarray(axes, dtype=object).reshape(-1)
+    assert axes.shape == (2,)
+    assert axes[0].get_title() == "Pre-choice (-0.5 to 0 s)"
+    assert axes[1].get_title() == "Post-choice (0 to 0.5 s)"
+    assert len(axes[0].collections) > 0
+    assert len(axes[1].collections) > 0
     figure.clf()
