@@ -69,6 +69,7 @@ PCA_DECODING_DISPLAY_OPTIONS = [
     PCA_DECODING_DISPLAY_PERFORMANCE,
     PCA_DECODING_DISPLAY_AVERAGE_PC,
 ]
+PCA_DECODING_SHOW_RAW_PC_SCORES_DEFAULT = False
 CHANNEL_SOURCE_MANUAL = "Manual / preset"
 CHANNEL_SOURCE_CHANNEL_QUALITY = "channel_quality"
 CHANNEL_SOURCE_OPTIONS = [CHANNEL_SOURCE_MANUAL, CHANNEL_SOURCE_CHANNEL_QUALITY]
@@ -741,9 +742,10 @@ def compute_population_pca_decoding_cached(
     n_permutations: int,
     normalization: str,
     include_score_summary: bool,
+    include_raw_score_points: bool,
     _spike_group,
     _trial_df: pd.DataFrame,
-) -> tuple[pd.DataFrame, int, pd.DataFrame]:
+) -> tuple[pd.DataFrame, int, pd.DataFrame, pd.DataFrame]:
     """
     Compute and cache choice-aligned PCA decoding for the webapp.
 
@@ -774,6 +776,10 @@ def compute_population_pca_decoding_cached(
     include_score_summary : bool
         If ``True``, also compute average PC1/PC2 score summaries in one shared
         exploratory PCA coordinate system.
+    include_raw_score_points : bool
+        If ``True``, also compute raw trial-level PC1/PC2 score points in the
+        same shared exploratory PCA coordinate system. Rows are condition
+        memberships, so overlapping base conditions can duplicate a trial index.
     _spike_group
         Pynapple spike group keyed by unit id. Leading underscore excludes this
         potentially large object from Streamlit hashing.
@@ -783,11 +789,12 @@ def compute_population_pca_decoding_cached(
 
     Returns
     -------
-    tuple[pd.DataFrame, int, pd.DataFrame]
-        ``(results_df, n_pca_trials, score_summary_df)``. ``results_df`` is
-        long-form decoding performance. ``n_pca_trials`` is the number of
-        base-condition trials used to fit/extract the PCA decoding rates.
-        ``score_summary_df`` is empty unless ``include_score_summary`` is true.
+    tuple[pd.DataFrame, int, pd.DataFrame, pd.DataFrame]
+        ``(results_df, n_pca_trials, score_summary_df, raw_score_df)``.
+        ``results_df`` is long-form decoding performance. ``n_pca_trials`` is
+        the number of base-condition trials used to fit/extract the PCA decoding
+        rates. ``score_summary_df`` and ``raw_score_df`` are empty unless their
+        corresponding include flags are true.
     """
 
     if mode not in population_pca_decoding.PCA_DECODING_MODE_OPTIONS:
@@ -809,7 +816,8 @@ def compute_population_pca_decoding_cached(
         bin_size_s=population_pca_decoding.PCA_DECODING_BIN_SIZE_S,
     )
     score_summary_df = pd.DataFrame(columns=population_pca_decoding.PCA_SCORE_SUMMARY_COLUMNS)
-    if include_score_summary:
+    raw_score_df = pd.DataFrame(columns=population_pca_decoding.PCA_RAW_SCORE_COLUMNS)
+    if include_score_summary or include_raw_score_points:
         _trial_bins, exploratory_pca_result = population_pca_decoding.build_exploratory_pca_decoder_trial_bins(
             rate_tensor_hz=rate_tensor_hz,
             trial_df=_trial_df,
@@ -817,13 +825,22 @@ def compute_population_pca_decoding_cached(
             n_components=int(n_components),
             normalization=normalization,
         )
-        score_summary_df = population_pca_decoding.summarize_pca_scores_by_condition_and_target(
-            pca_scores=exploratory_pca_result.scores,
-            trial_df=_trial_df,
-            trial_indices=trial_indices,
-            condition_names=condition_names,
-            target=target,
-        )
+        if include_score_summary:
+            score_summary_df = population_pca_decoding.summarize_pca_scores_by_condition_and_target(
+                pca_scores=exploratory_pca_result.scores,
+                trial_df=_trial_df,
+                trial_indices=trial_indices,
+                condition_names=condition_names,
+                target=target,
+            )
+        if include_raw_score_points:
+            raw_score_df = population_pca_decoding.extract_pca_score_points_by_condition_and_target(
+                pca_scores=exploratory_pca_result.scores,
+                trial_df=_trial_df,
+                trial_indices=trial_indices,
+                condition_names=condition_names,
+                target=target,
+            )
     if mode == population_pca_decoding.PCA_DECODING_MODE_EXPLORATORY:
         results_df = population_pca_decoding.run_exploratory_pca_choice_decoding(
             rate_tensor_hz=rate_tensor_hz,
@@ -849,7 +866,7 @@ def compute_population_pca_decoding_cached(
             n_permutations=int(n_permutations),
             random_state=42,
         )
-    return results_df, int(trial_indices.size), score_summary_df
+    return results_df, int(trial_indices.size), score_summary_df, raw_score_df
 
 
 def build_lfp_dropdown_options(hpc_v1_lfp_path: str, pfc_lfp_path: str) -> dict[str, str]:
@@ -1432,6 +1449,12 @@ def main() -> None:
             and pca_decoding_mode == population_pca_decoding.PCA_DECODING_MODE_RIGOROUS
         ):
             st.sidebar.warning("Average PC score plots use exploratory PCA coordinates.")
+        show_raw_pc_scores = False
+        if pca_decoding_display == PCA_DECODING_DISPLAY_AVERAGE_PC:
+            show_raw_pc_scores = st.sidebar.checkbox(
+                "Show raw trial PC scores",
+                value=PCA_DECODING_SHOW_RAW_PC_SCORES_DEFAULT,
+            )
 
         pca_unit_ids = resolve_population_pca_unit_ids(
             selected_unit_metadata=selected_unit_metadata,
@@ -1442,6 +1465,7 @@ def main() -> None:
                 pca_decoding_results,
                 pca_decoding_trial_count,
                 pca_score_summary,
+                pca_raw_scores,
             ) = compute_population_pca_decoding_cached(
                 session_key=f"{session.sess_id_full}:{active_probe_label}",
                 aligned_spike_path=str(active_aligned_spike_path),
@@ -1454,6 +1478,7 @@ def main() -> None:
                 n_permutations=int(pca_decoding_permutations),
                 normalization=pca_decoding_normalization,
                 include_score_summary=pca_decoding_display == PCA_DECODING_DISPLAY_AVERAGE_PC,
+                include_raw_score_points=show_raw_pc_scores,
                 _spike_group=spike_group,
                 _trial_df=trial_df,
             )
@@ -1478,8 +1503,14 @@ def main() -> None:
             if pca_decoding_display == PCA_DECODING_DISPLAY_AVERAGE_PC:
                 st.subheader("Average PC Score by Condition and Target")
                 st.dataframe(pca_score_summary, width="stretch")
+                if show_raw_pc_scores:
+                    st.caption(
+                        "Raw PC points are condition memberships; a trial can appear more than once "
+                        "when selected base conditions overlap."
+                    )
                 score_figure, _score_axes = population_pca_decoding.plot_average_pca_scores_by_condition_and_target(
-                    pca_score_summary
+                    pca_score_summary,
+                    raw_score_df=pca_raw_scores if show_raw_pc_scores else None,
                 )
                 st.pyplot(score_figure)
                 plt.close(score_figure)
