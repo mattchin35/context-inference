@@ -102,6 +102,13 @@ def test_is_population_pca_display_includes_concatenated_mode():
     assert not psth_webapp.is_population_pca_display(psth_webapp.NEURAL_DISPLAY_SPIKE_RASTER)
 
 
+def test_pca_decoding_has_separate_plot_view_from_trial_filters():
+    """PCA decoding should be a separate performance-only view, not a trial display mode."""
+    assert psth_webapp.PLOT_VIEW_PCA_DECODING in psth_webapp.PLOT_VIEW_OPTIONS
+    assert psth_webapp.PLOT_VIEW_PCA_DECODING != "Trial spikes/licks/choices"
+    assert psth_webapp.PCA_DECODING_DEFAULT_COMPONENT_COUNT == 5
+
+
 def test_select_visible_concatenated_trial_indices_limits_page_size():
     """Concatenated PCA should display a bounded page of selected trials."""
     trial_indices = np.arange(25, dtype=int)
