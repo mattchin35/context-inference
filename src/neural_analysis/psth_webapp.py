@@ -63,6 +63,12 @@ CONCATENATED_PCA_FIGURE_SIZE = (11.0, 5.0)
 PCA_DECODING_DEFAULT_COMPONENT_COUNT = 5
 PCA_DECODING_DEFAULT_CV_FOLDS = 5
 PCA_DECODING_DEFAULT_PERMUTATIONS = 100
+PCA_DECODING_DISPLAY_PERFORMANCE = "Decoding performance"
+PCA_DECODING_DISPLAY_AVERAGE_PC = "Average PC by condition/target"
+PCA_DECODING_DISPLAY_OPTIONS = [
+    PCA_DECODING_DISPLAY_PERFORMANCE,
+    PCA_DECODING_DISPLAY_AVERAGE_PC,
+]
 CHANNEL_SOURCE_MANUAL = "Manual / preset"
 CHANNEL_SOURCE_CHANNEL_QUALITY = "channel_quality"
 CHANNEL_SOURCE_OPTIONS = [CHANNEL_SOURCE_MANUAL, CHANNEL_SOURCE_CHANNEL_QUALITY]
@@ -112,6 +118,29 @@ def is_population_pca_display(neural_display: str) -> bool:
         NEURAL_DISPLAY_POPULATION_PCA,
         NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED,
     }
+
+
+def resolve_pca_decoding_component_minimum(display_option: str) -> int:
+    """
+    Resolve the minimum PCA component count for a PCA decoding display.
+
+    Parameters
+    ----------
+    display_option : str
+        Selected PCA decoding display mode. Expected values are entries in
+        ``PCA_DECODING_DISPLAY_OPTIONS``.
+
+    Returns
+    -------
+    int
+        Minimum number of PCA components. The average PC score display requires
+        two components because it plots mean PC1 against mean PC2; decoding
+        performance can use one component.
+    """
+
+    if display_option == PCA_DECODING_DISPLAY_AVERAGE_PC:
+        return 2
+    return 1
 
 
 def select_visible_concatenated_trial_indices(
@@ -711,9 +740,10 @@ def compute_population_pca_decoding_cached(
     cv: int,
     n_permutations: int,
     normalization: str,
+    include_score_summary: bool,
     _spike_group,
     _trial_df: pd.DataFrame,
-) -> tuple[pd.DataFrame, int]:
+) -> tuple[pd.DataFrame, int, pd.DataFrame]:
     """
     Compute and cache choice-aligned PCA decoding for the webapp.
 
@@ -741,6 +771,9 @@ def compute_population_pca_decoding_cached(
     normalization : str
         Exploratory PCA unit-normalization mode. Rigorous mode fits a scaler in
         each CV split and ignores this value.
+    include_score_summary : bool
+        If ``True``, also compute average PC1/PC2 score summaries in one shared
+        exploratory PCA coordinate system.
     _spike_group
         Pynapple spike group keyed by unit id. Leading underscore excludes this
         potentially large object from Streamlit hashing.
@@ -750,10 +783,11 @@ def compute_population_pca_decoding_cached(
 
     Returns
     -------
-    tuple[pd.DataFrame, int]
-        ``(results_df, n_pca_trials)``. ``results_df`` is long-form decoding
-        performance. ``n_pca_trials`` is the number of base-condition trials
-        used to fit/extract the PCA decoding rates.
+    tuple[pd.DataFrame, int, pd.DataFrame]
+        ``(results_df, n_pca_trials, score_summary_df)``. ``results_df`` is
+        long-form decoding performance. ``n_pca_trials`` is the number of
+        base-condition trials used to fit/extract the PCA decoding rates.
+        ``score_summary_df`` is empty unless ``include_score_summary`` is true.
     """
 
     if mode not in population_pca_decoding.PCA_DECODING_MODE_OPTIONS:
@@ -774,6 +808,22 @@ def compute_population_pca_decoding_cached(
         trial_indices=trial_indices,
         bin_size_s=population_pca_decoding.PCA_DECODING_BIN_SIZE_S,
     )
+    score_summary_df = pd.DataFrame(columns=population_pca_decoding.PCA_SCORE_SUMMARY_COLUMNS)
+    if include_score_summary:
+        _trial_bins, exploratory_pca_result = population_pca_decoding.build_exploratory_pca_decoder_trial_bins(
+            rate_tensor_hz=rate_tensor_hz,
+            trial_df=_trial_df,
+            trial_indices=trial_indices,
+            n_components=int(n_components),
+            normalization=normalization,
+        )
+        score_summary_df = population_pca_decoding.summarize_pca_scores_by_condition_and_target(
+            pca_scores=exploratory_pca_result.scores,
+            trial_df=_trial_df,
+            trial_indices=trial_indices,
+            condition_names=condition_names,
+            target=target,
+        )
     if mode == population_pca_decoding.PCA_DECODING_MODE_EXPLORATORY:
         results_df = population_pca_decoding.run_exploratory_pca_choice_decoding(
             rate_tensor_hz=rate_tensor_hz,
@@ -799,7 +849,7 @@ def compute_population_pca_decoding_cached(
             n_permutations=int(n_permutations),
             random_state=42,
         )
-    return results_df, int(trial_indices.size)
+    return results_df, int(trial_indices.size), score_summary_df
 
 
 def build_lfp_dropdown_options(hpc_v1_lfp_path: str, pfc_lfp_path: str) -> dict[str, str]:
@@ -1330,11 +1380,17 @@ def main() -> None:
             options=list(population_pca_decoding.PCA_DECODING_MODE_OPTIONS),
             index=0,
         )
+        pca_decoding_display = st.sidebar.selectbox(
+            "Display",
+            options=PCA_DECODING_DISPLAY_OPTIONS,
+            index=0,
+        )
+        pca_decoding_component_minimum = resolve_pca_decoding_component_minimum(pca_decoding_display)
         pca_decoding_component_count = int(
             st.sidebar.number_input(
                 "PCA component count",
-                min_value=1,
-                value=PCA_DECODING_DEFAULT_COMPONENT_COUNT,
+                min_value=pca_decoding_component_minimum,
+                value=max(PCA_DECODING_DEFAULT_COMPONENT_COUNT, pca_decoding_component_minimum),
                 step=1,
             )
         )
@@ -1371,13 +1427,22 @@ def main() -> None:
                 options=list(population_pca.PCA_NORMALIZATION_OPTIONS),
                 index=0,
             )
+        if (
+            pca_decoding_display == PCA_DECODING_DISPLAY_AVERAGE_PC
+            and pca_decoding_mode == population_pca_decoding.PCA_DECODING_MODE_RIGOROUS
+        ):
+            st.sidebar.warning("Average PC score plots use exploratory PCA coordinates.")
 
         pca_unit_ids = resolve_population_pca_unit_ids(
             selected_unit_metadata=selected_unit_metadata,
             page_unit_ids=None,
         )
         try:
-            pca_decoding_results, pca_decoding_trial_count = compute_population_pca_decoding_cached(
+            (
+                pca_decoding_results,
+                pca_decoding_trial_count,
+                pca_score_summary,
+            ) = compute_population_pca_decoding_cached(
                 session_key=f"{session.sess_id_full}:{active_probe_label}",
                 aligned_spike_path=str(active_aligned_spike_path),
                 unit_ids=tuple(int(unit_id) for unit_id in pca_unit_ids),
@@ -1388,6 +1453,7 @@ def main() -> None:
                 cv=int(pca_decoding_cv),
                 n_permutations=int(pca_decoding_permutations),
                 normalization=pca_decoding_normalization,
+                include_score_summary=pca_decoding_display == PCA_DECODING_DISPLAY_AVERAGE_PC,
                 _spike_group=spike_group,
                 _trial_df=trial_df,
             )
@@ -1409,13 +1475,22 @@ def main() -> None:
             st.write(f"Bin size: {population_pca_decoding.PCA_DECODING_BIN_SIZE_S:g} s")
             st.write("Choice windows: -0.5 to 0 s, 0 to 0.5 s")
         with result_column:
-            st.subheader("Before/After Choice Decoding Performance")
-            st.dataframe(decoding_display, width="stretch")
-            decoding_figure, _decoding_axis = population_pca_decoding.plot_pca_decoding_pre_post_scores(
-                decoding_display
-            )
-            st.pyplot(decoding_figure)
-            plt.close(decoding_figure)
+            if pca_decoding_display == PCA_DECODING_DISPLAY_AVERAGE_PC:
+                st.subheader("Average PC Score by Condition and Target")
+                st.dataframe(pca_score_summary, width="stretch")
+                score_figure, _score_axes = population_pca_decoding.plot_average_pca_scores_by_condition_and_target(
+                    pca_score_summary
+                )
+                st.pyplot(score_figure)
+                plt.close(score_figure)
+            else:
+                st.subheader("Before/After Choice Decoding Performance")
+                st.dataframe(decoding_display, width="stretch")
+                decoding_figure, _decoding_axis = population_pca_decoding.plot_pca_decoding_pre_post_scores(
+                    decoding_display
+                )
+                st.pyplot(decoding_figure)
+                plt.close(decoding_figure)
         return
 
     st.sidebar.header("Trials")

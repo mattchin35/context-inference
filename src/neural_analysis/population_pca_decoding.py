@@ -46,6 +46,16 @@ PCA_DECODING_DISPLAY_COLUMNS = [
     "permutation_score_mean",
     "permutation_score_std",
 ]
+PCA_SCORE_SUMMARY_COLUMNS = [
+    "condition",
+    "window",
+    "target",
+    "target_value",
+    "target_label",
+    "pc1_mean",
+    "pc2_mean",
+    "n_trials",
+]
 
 
 def build_choice_aligned_rate_tensor(
@@ -632,6 +642,251 @@ def plot_pca_decoding_pre_post_scores(
     axis.set_title("PCA decoding before/after choice")
     figure.tight_layout()
     return figure, axis
+
+
+def summarize_pca_scores_by_condition_and_target(
+    pca_scores: np.ndarray,
+    trial_df: pd.DataFrame,
+    trial_indices: np.ndarray,
+    condition_names: list[str] | tuple[str, ...],
+    target: str,
+) -> pd.DataFrame:
+    """
+    Average PC1/PC2 scores by base condition, choice window, and target value.
+
+    Parameters
+    ----------
+    pca_scores : np.ndarray
+        Exploratory PCA score tensor with shape ``(n_selected_trials, 2,
+        n_pcs)``. Axes are selected trial, pre/post choice bin, and PC. Scores
+        must contain at least two PCs.
+    trial_df : pd.DataFrame
+        Full trial table with base-condition columns and the requested target
+        column. ``choice_time`` values are in seconds.
+    trial_indices : np.ndarray
+        Full-table trial positions represented by the first axis of
+        ``pca_scores``.
+    condition_names : list[str] | tuple[str, ...]
+        Base condition masks to summarize.
+    target : str
+        Grouping target. Supported values are ``"state_int"`` and ``"action"``.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per populated ``condition x window x target_value`` group with
+        columns ``PCA_SCORE_SUMMARY_COLUMNS``. ``pc1_mean`` and ``pc2_mean`` are
+        PCA score means in the shared exploratory PCA coordinate system.
+    """
+
+    _validate_decode_target(trial_df, target)
+    scores = np.asarray(pca_scores, dtype=float)
+    if scores.ndim != 3:
+        raise ValueError("pca_scores must have shape (n_trials, 2, n_pcs).")
+    if scores.shape[1] != 2:
+        raise ValueError("pca_scores must contain exactly two choice-window bins.")
+    if scores.shape[2] < 2:
+        raise ValueError("pca_scores must contain at least two PCs.")
+
+    normalized_trial_indices = _normalize_trial_indices(trial_indices, trial_df)
+    if scores.shape[0] != normalized_trial_indices.size:
+        raise ValueError("pca_scores trial axis must match trial_indices length.")
+
+    condition_masks = build_valid_base_condition_masks(trial_df, condition_names)
+    target_values = pd.to_numeric(trial_df[target], errors="coerce").to_numpy(dtype=float)
+    score_position_by_trial = {
+        int(trial_index): score_position
+        for score_position, trial_index in enumerate(normalized_trial_indices)
+    }
+
+    rows: list[dict[str, Any]] = []
+    for condition_name in condition_names:
+        condition_trial_indices = [
+            int(trial_index)
+            for trial_index in np.flatnonzero(np.asarray(condition_masks[condition_name], dtype=bool))
+            if int(trial_index) in score_position_by_trial
+        ]
+        if not condition_trial_indices:
+            continue
+
+        condition_targets = target_values[np.asarray(condition_trial_indices, dtype=int)]
+        unique_target_values = [
+            float(target_value)
+            for target_value in np.unique(condition_targets[np.isfinite(condition_targets)])
+        ]
+        for target_value in unique_target_values:
+            matching_trials = [
+                trial_index
+                for trial_index in condition_trial_indices
+                if np.isfinite(target_values[trial_index]) and float(target_values[trial_index]) == target_value
+            ]
+            if not matching_trials:
+                continue
+            score_positions = np.asarray(
+                [score_position_by_trial[int(trial_index)] for trial_index in matching_trials],
+                dtype=int,
+            )
+            for window_name, window_index in (("pre_choice", 0), ("post_choice", 1)):
+                group_scores = scores[score_positions, window_index, :2]
+                rows.append(
+                    {
+                        "condition": condition_name,
+                        "window": window_name,
+                        "target": target,
+                        "target_value": float(target_value),
+                        "target_label": format_pca_score_target_label(target=target, target_value=target_value),
+                        "pc1_mean": float(np.mean(group_scores[:, 0])),
+                        "pc2_mean": float(np.mean(group_scores[:, 1])),
+                        "n_trials": int(score_positions.size),
+                    }
+                )
+    return pd.DataFrame(rows, columns=PCA_SCORE_SUMMARY_COLUMNS)
+
+
+def format_pca_score_target_label(target: str, target_value: float) -> str:
+    """
+    Format target values for PCA score summary displays.
+
+    Parameters
+    ----------
+    target : str
+        Target column name, either ``"state_int"`` or ``"action"``.
+    target_value : float
+        Numeric target value.
+
+    Returns
+    -------
+    str
+        Human-readable label for legends and tables.
+    """
+
+    if target == "state_int":
+        return f"state {int(target_value)}"
+    if target == "action":
+        if int(target_value) == 0:
+            return "right (0)"
+        if int(target_value) == 1:
+            return "left (1)"
+        return f"action {int(target_value)}"
+    raise ValueError("target must be 'state_int' or 'action'.")
+
+
+def plot_average_pca_scores_by_condition_and_target(
+    score_summary_df: pd.DataFrame,
+    figure_size: tuple[float, float] = (8.0, 4.0),
+) -> tuple[plt.Figure, np.ndarray]:
+    """
+    Plot average PC1/PC2 score points by condition and target value.
+
+    Parameters
+    ----------
+    score_summary_df : pd.DataFrame
+        Output from ``summarize_pca_scores_by_condition_and_target`` with
+        columns ``PCA_SCORE_SUMMARY_COLUMNS``.
+    figure_size : tuple[float, float], default=(8.0, 4.0)
+        Matplotlib figure size as ``(width_inches, height_inches)``.
+
+    Returns
+    -------
+    tuple[plt.Figure, np.ndarray]
+        Figure and two axes. The first axis shows pre-choice group means; the
+        second axis shows post-choice group means. X is mean PC1 and Y is mean
+        PC2.
+    """
+
+    missing_columns = set(PCA_SCORE_SUMMARY_COLUMNS) - set(score_summary_df.columns)
+    if missing_columns:
+        raise ValueError(f"score_summary_df is missing required columns: {sorted(missing_columns)}")
+    if len(figure_size) != 2 or float(figure_size[0]) <= 0 or float(figure_size[1]) <= 0:
+        raise ValueError("figure_size must be a two-value tuple of positive inches.")
+
+    figure, axes = plt.subplots(
+        1,
+        2,
+        sharex=True,
+        sharey=True,
+        figsize=(float(figure_size[0]), float(figure_size[1])),
+    )
+    axes = np.asarray(axes, dtype=object).reshape(-1)
+
+    condition_order = [
+        condition_name
+        for condition_name in PCA_DECODING_BASE_CONDITIONS
+        if condition_name in set(score_summary_df["condition"])
+    ]
+    condition_order.extend(
+        condition_name
+        for condition_name in score_summary_df["condition"].tolist()
+        if condition_name not in condition_order
+    )
+    condition_order = list(dict.fromkeys(condition_order))
+    color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", ["C0"])
+    condition_colors = {
+        condition_name: color_cycle[index % len(color_cycle)]
+        for index, condition_name in enumerate(condition_order)
+    }
+    target_labels = list(dict.fromkeys(score_summary_df["target_label"].tolist()))
+    marker_cycle = ["o", "^", "s", "D", "P", "X"]
+    target_markers = {
+        target_label: marker_cycle[index % len(marker_cycle)]
+        for index, target_label in enumerate(target_labels)
+    }
+
+    for axis, window_name, title in zip(
+        axes,
+        ("pre_choice", "post_choice"),
+        ("Pre-choice (-0.5 to 0 s)", "Post-choice (0 to 0.5 s)"),
+        strict=True,
+    ):
+        window_rows = score_summary_df.loc[score_summary_df["window"] == window_name]
+        for _, row in window_rows.iterrows():
+            axis.scatter(
+                float(row["pc1_mean"]),
+                float(row["pc2_mean"]),
+                color=condition_colors[str(row["condition"])],
+                marker=target_markers[str(row["target_label"])],
+                s=70,
+                edgecolor="black",
+                linewidth=0.6,
+            )
+        axis.axhline(0.0, color="0.75", linewidth=0.8, zorder=0)
+        axis.axvline(0.0, color="0.75", linewidth=0.8, zorder=0)
+        axis.set_title(title)
+        axis.set_xlabel("Mean PC1 score")
+    axes[0].set_ylabel("Mean PC2 score")
+
+    condition_handles = [
+        plt.Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="",
+            color=condition_colors[condition_name],
+            label=condition_name,
+        )
+        for condition_name in condition_order
+    ]
+    target_handles = [
+        plt.Line2D(
+            [0],
+            [0],
+            marker=target_markers[target_label],
+            linestyle="",
+            color="black",
+            markerfacecolor="white",
+            label=target_label,
+        )
+        for target_label in target_labels
+    ]
+    if condition_handles:
+        axes[1].legend(
+            handles=[*condition_handles, *target_handles],
+            loc="best",
+            fontsize="small",
+            title="Condition / target",
+        )
+    figure.tight_layout()
+    return figure, axes
 
 
 def _validate_decoder_trial_table(trial_df: pd.DataFrame) -> None:
