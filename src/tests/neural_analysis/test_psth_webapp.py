@@ -112,6 +112,12 @@ def test_pca_decoding_has_separate_plot_view_from_trial_filters():
     assert psth_webapp.PCA_DECODING_SHOW_RAW_PC_SCORES_DEFAULT is False
 
 
+def test_pca_switch_trajectories_have_a_separate_plot_view():
+    """Choice-switch trajectories should not reuse decoding or trial-view controls."""
+    assert psth_webapp.PLOT_VIEW_PCA_SWITCH_TRAJECTORIES in psth_webapp.PLOT_VIEW_OPTIONS
+    assert psth_webapp.PLOT_VIEW_PCA_SWITCH_TRAJECTORIES != psth_webapp.PLOT_VIEW_PCA_DECODING
+
+
 def test_resolve_pca_decoding_component_minimum_requires_two_for_pc_score_plot():
     """Average PC score plots need PC1 and PC2 while performance decoding can use one PC."""
     assert (
