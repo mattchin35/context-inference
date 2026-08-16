@@ -57,6 +57,12 @@ def test_select_choice_switch_events_uses_any_adjacent_valid_choice_switch():
         "incorrect_to_correct",
         "correct_to_correct",
     ]
+    assert events["switch_direction"].tolist() == [
+        "right_to_left",
+        "left_to_right",
+        "left_to_right",
+        "right_to_left",
+    ]
     assert 2 not in events["previous_trial_index"].tolist()
     assert 5 not in events["previous_trial_index"].tolist()
 
@@ -103,11 +109,12 @@ def test_extract_switch_event_pca_trajectories_returns_four_ordered_points():
     ]
     np.testing.assert_allclose(first_event["pc1"], np.array([0.0, 1.0, 10.0, 11.0]))
     np.testing.assert_allclose(first_event["pc2"], np.array([100.0, 200.0, 101.0, 201.0]))
+    assert first_event["switch_direction"].unique().tolist() == ["right_to_left"]
     assert trajectories.groupby("event_id").size().eq(4).all()
 
 
-def test_plot_switch_event_pca_trajectories_uses_three_shared_scale_panels():
-    """The plot should show individual and mean paths on identical PC limits."""
+def test_plot_switch_event_pca_trajectories_uses_six_direction_split_panels():
+    """The plot should split direction rows while retaining correctness columns."""
     trial_df = _make_switch_trial_df()
     trial_indices = population_pca_switch_trajectories.select_valid_choice_trial_indices(trial_df)
     events = population_pca_switch_trajectories.select_choice_switch_events(
@@ -124,16 +131,24 @@ def test_plot_switch_event_pca_trajectories_uses_three_shared_scale_panels():
         trajectories
     )
 
-    axes = np.asarray(axes, dtype=object).reshape(-1)
-    assert axes.shape == (3,)
-    assert [axis.get_title() for axis in axes] == [
+    axes = np.asarray(axes, dtype=object)
+    assert axes.shape == (2, 3)
+    assert [axis.get_title() for axis in axes[0]] == [
         "Incorrect to correct",
         "Correct to incorrect",
         "Correct to correct",
     ]
-    assert all(axis.get_xlim() == axes[0].get_xlim() for axis in axes[1:])
-    assert all(axis.get_ylim() == axes[0].get_ylim() for axis in axes[1:])
-    assert all(len(axis.lines) >= 2 for axis in axes)
-    assert all(max(line.get_linewidth() for line in axis.lines) >= 2.0 for axis in axes)
-    assert all(min(line.get_alpha() or 1.0 for line in axis.lines) < 0.5 for axis in axes)
+    assert [axis.get_title() for axis in axes[1]] == ["", "", ""]
+    assert axes[0, 0].get_ylabel() == "Left to right\nPC2 score"
+    assert axes[1, 0].get_ylabel() == "Right to left\nPC2 score"
+
+    flattened_axes = axes.reshape(-1)
+    assert all(axis.get_xlim() == flattened_axes[0].get_xlim() for axis in flattened_axes[1:])
+    assert all(axis.get_ylim() == flattened_axes[0].get_ylim() for axis in flattened_axes[1:])
+    populated_axes = [axes[0, 0], axes[0, 1], axes[1, 0], axes[1, 2]]
+    assert all(len(axis.lines) >= 2 for axis in populated_axes)
+    assert all(max(line.get_linewidth() for line in axis.lines) >= 2.0 for axis in populated_axes)
+    assert all(min(line.get_alpha() or 1.0 for line in axis.lines) < 0.5 for axis in populated_axes)
+    empty_panel_labels = [text.get_text() for axis in (axes[0, 2], axes[1, 1]) for text in axis.texts]
+    assert empty_panel_labels.count("No events") == 2
     figure.clf()
