@@ -12,6 +12,7 @@ from src.neural_analysis import (
     lfp_loading,
     population_pca,
     population_pca_decoding,
+    population_pca_switch_trajectories,
     spike_behavior_pynapple,
     unit_spike_loading,
     unit_spike_plotting,
@@ -38,7 +39,13 @@ PSTH_BIN_OPTIONS = [0.05, 0.1]
 PLOT_VIEW_UNIT_RASTER = "Unit raster/PSTH"
 PLOT_VIEW_TRIAL_SPIKES = "Trial spikes/licks/choices"
 PLOT_VIEW_PCA_DECODING = "Population PCA decoding"
-PLOT_VIEW_OPTIONS = [PLOT_VIEW_UNIT_RASTER, PLOT_VIEW_TRIAL_SPIKES, PLOT_VIEW_PCA_DECODING]
+PLOT_VIEW_PCA_SWITCH_TRAJECTORIES = "Population PCA switch trajectories"
+PLOT_VIEW_OPTIONS = [
+    PLOT_VIEW_UNIT_RASTER,
+    PLOT_VIEW_TRIAL_SPIKES,
+    PLOT_VIEW_PCA_DECODING,
+    PLOT_VIEW_PCA_SWITCH_TRAJECTORIES,
+]
 UNIT_PLOT_TYPE_OPTIONS = [
     "PSTH",
     "Binned rate: trials + mean",
@@ -869,6 +876,82 @@ def compute_population_pca_decoding_cached(
     return results_df, int(trial_indices.size), score_summary_df, raw_score_df
 
 
+@st.cache_data(show_spinner="Computing PCA switch trajectories...")
+def compute_population_pca_switch_trajectories_cached(
+    session_key: str,
+    aligned_spike_path: str,
+    unit_ids: tuple[int, ...],
+    pre_switch_filter: str,
+    normalization: str,
+    _spike_group,
+    _trial_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, int]:
+    """
+    Fit choice-aligned PCA on all valid trials and extract switch trajectories.
+
+    Parameters
+    ----------
+    session_key : str
+        Session/probe identifier included in the Streamlit cache key.
+    aligned_spike_path : str
+        Aligned spike file path included in the cache key. Units: filesystem
+        path.
+    unit_ids : tuple[int, ...]
+        Unit ids used as PCA features, shape ``(n_units,)``.
+    pre_switch_filter : str
+        Previous-trial outcome filter from
+        ``population_pca_switch_trajectories.SWITCH_PRE_FILTER_OPTIONS``.
+    normalization : str
+        Unit normalization mode passed to ``fit_population_pca``.
+    _spike_group
+        Pynapple spike group keyed by unit id. The leading underscore excludes
+        this potentially large object from Streamlit hashing.
+    _trial_df : pd.DataFrame
+        Full trial table with choice times in seconds and scalar action,
+        correctness, and reward labels. The leading underscore excludes the
+        dataframe from Streamlit hashing.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame, int]
+        ``(trajectory_df, event_count_df, n_pca_trials)``. ``trajectory_df``
+        has four PC1/PC2 rows per plotted switch event. ``event_count_df`` has
+        one row per supported correctness transition. ``n_pca_trials`` is the
+        number of all-valid trials used for the PCA fit.
+    """
+
+    trial_indices = population_pca_switch_trajectories.select_valid_choice_trial_indices(
+        _trial_df
+    )
+    if trial_indices.size == 0:
+        raise ValueError("No valid trials have finite choice times and actions.")
+    rate_tensor_hz, _bin_centers_s = population_pca_decoding.build_choice_aligned_rate_tensor(
+        spike_group=_spike_group,
+        unit_ids=np.asarray(unit_ids, dtype=int),
+        trial_df=_trial_df,
+        trial_indices=trial_indices,
+        bin_size_s=population_pca_decoding.PCA_DECODING_BIN_SIZE_S,
+    )
+    pca_result = population_pca.fit_population_pca(
+        rate_tensor_hz=rate_tensor_hz,
+        n_components=2,
+        normalization=normalization,
+    )
+    switch_events = population_pca_switch_trajectories.select_choice_switch_events(
+        trial_df=_trial_df,
+        pre_switch_filter=pre_switch_filter,
+    )
+    trajectory_df = population_pca_switch_trajectories.extract_switch_event_pca_trajectories(
+        pca_scores=pca_result.scores,
+        pca_trial_indices=trial_indices,
+        switch_events=switch_events,
+    )
+    event_count_df = population_pca_switch_trajectories.summarize_switch_event_counts(
+        switch_events
+    )
+    return trajectory_df, event_count_df, int(trial_indices.size)
+
+
 def build_lfp_dropdown_options(hpc_v1_lfp_path: str, pfc_lfp_path: str) -> dict[str, str]:
     """
     Build explicit LFP-file choices from the two probe path inputs.
@@ -1384,6 +1467,57 @@ def main() -> None:
 
     unit_ids = selected_unit_metadata["cluster_id"].to_numpy(dtype=int)
     plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+
+    if plot_view == PLOT_VIEW_PCA_SWITCH_TRAJECTORIES:
+        st.sidebar.header("PCA Switch Trajectories")
+        pre_switch_filter = st.sidebar.selectbox(
+            "Pre-switch trials",
+            options=list(population_pca_switch_trajectories.SWITCH_PRE_FILTER_OPTIONS),
+            index=0,
+        )
+        switch_pca_normalization = st.sidebar.selectbox(
+            "PCA normalization",
+            options=list(population_pca.PCA_NORMALIZATION_OPTIONS),
+            index=0,
+        )
+        pca_unit_ids = resolve_population_pca_unit_ids(
+            selected_unit_metadata=selected_unit_metadata,
+            page_unit_ids=None,
+        )
+        try:
+            switch_trajectory_df, switch_event_counts, switch_pca_trial_count = (
+                compute_population_pca_switch_trajectories_cached(
+                    session_key=f"{session.sess_id_full}:{active_probe_label}",
+                    aligned_spike_path=str(active_aligned_spike_path),
+                    unit_ids=tuple(int(unit_id) for unit_id in pca_unit_ids),
+                    pre_switch_filter=pre_switch_filter,
+                    normalization=switch_pca_normalization,
+                    _spike_group=spike_group,
+                    _trial_df=trial_df,
+                )
+            )
+        except Exception as error:  # noqa: BLE001 - Streamlit should show analysis failures cleanly.
+            st.error(f"Could not compute PCA switch trajectories: {error}")
+            st.stop()
+
+        st.subheader("Population PCA Switch Trajectories")
+        st.caption(
+            f"PCA fit on {switch_pca_trial_count} valid trials from {pca_unit_ids.size} units; "
+            "each point is one 0.5 s choice-aligned bin."
+        )
+        st.dataframe(
+            switch_event_counts[["label", "n_events"]],
+            width="content",
+            hide_index=True,
+        )
+        switch_figure, _switch_axes = (
+            population_pca_switch_trajectories.plot_switch_event_pca_trajectories(
+                switch_trajectory_df
+            )
+        )
+        st.pyplot(switch_figure)
+        plt.close(switch_figure)
+        return
 
     if plot_view == PLOT_VIEW_PCA_DECODING:
         st.sidebar.header("PCA Decoding")
