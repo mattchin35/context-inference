@@ -26,6 +26,11 @@ SWITCH_TYPE_TITLES = {
     "correct_to_incorrect": "Correct to incorrect",
     "correct_to_correct": "Correct to correct",
 }
+SWITCH_DIRECTION_ORDER = ("left_to_right", "right_to_left")
+SWITCH_DIRECTION_TITLES = {
+    "left_to_right": "Left to right",
+    "right_to_left": "Right to left",
+}
 SWITCH_EVENT_COLUMNS = [
     "event_id",
     "previous_trial_index",
@@ -34,10 +39,12 @@ SWITCH_EVENT_COLUMNS = [
     "next_correct",
     "previous_reward",
     "switch_type",
+    "switch_direction",
 ]
 SWITCH_TRAJECTORY_COLUMNS = [
     "event_id",
     "switch_type",
+    "switch_direction",
     "previous_trial_index",
     "next_trial_index",
     "point_order",
@@ -134,6 +141,12 @@ def select_choice_switch_events(
         switch_type = _classify_switch_type(previous_correct, next_correct)
         if switch_type not in SWITCH_TYPE_ORDER:
             continue
+        switch_direction = _classify_switch_direction(
+            previous_action=action_values[previous_trial_index],
+            next_action=action_values[next_trial_index],
+        )
+        if switch_direction is None:
+            continue
         if not _matches_pre_switch_filter(
             previous_correct=previous_correct,
             previous_reward=reward_values[previous_trial_index],
@@ -150,6 +163,7 @@ def select_choice_switch_events(
                 "next_correct": int(next_correct),
                 "previous_reward": reward_values[previous_trial_index],
                 "switch_type": switch_type,
+                "switch_direction": switch_direction,
             }
         )
     return pd.DataFrame(event_rows, columns=SWITCH_EVENT_COLUMNS)
@@ -193,9 +207,13 @@ def extract_switch_event_pca_trajectories(
         raise ValueError("Switch trajectories require at least two PCs.")
     if np.unique(trial_indices).size != trial_indices.size:
         raise ValueError("pca_trial_indices must contain unique trial positions.")
-    missing_event_columns = {"event_id", "previous_trial_index", "next_trial_index", "switch_type"} - set(
-        switch_events.columns
-    )
+    missing_event_columns = {
+        "event_id",
+        "previous_trial_index",
+        "next_trial_index",
+        "switch_type",
+        "switch_direction",
+    } - set(switch_events.columns)
     if missing_event_columns:
         raise ValueError(f"switch_events is missing required columns: {sorted(missing_event_columns)}")
 
@@ -226,6 +244,7 @@ def extract_switch_event_pca_trajectories(
                 {
                     "event_id": int(event.event_id),
                     "switch_type": str(event.switch_type),
+                    "switch_direction": str(event.switch_direction),
                     "previous_trial_index": previous_trial_index,
                     "next_trial_index": next_trial_index,
                     "point_order": point_order,
@@ -269,7 +288,7 @@ def summarize_switch_event_counts(switch_events: pd.DataFrame) -> pd.DataFrame:
 
 def plot_switch_event_pca_trajectories(
     trajectory_df: pd.DataFrame,
-    figure_size: tuple[float, float] = (11.0, 4.5),
+    figure_size: tuple[float, float] = (11.0, 7.0),
 ) -> tuple[plt.Figure, np.ndarray]:
     """
     Plot individual and mean four-point switch trajectories in PC1/PC2 space.
@@ -280,37 +299,60 @@ def plot_switch_event_pca_trajectories(
         Long-form trajectory table returned by
         ``extract_switch_event_pca_trajectories``. PC coordinates are in PCA
         score units.
-    figure_size : tuple[float, float], default=(11, 4.5)
+    figure_size : tuple[float, float], default=(11, 7)
         Matplotlib figure width and height in inches.
 
     Returns
     -------
     tuple[matplotlib.figure.Figure, np.ndarray]
-        Figure and one-dimensional object array of three axes in
-        ``SWITCH_TYPE_ORDER``. All axes use identical PC1 and PC2 limits.
+        Figure and object array with shape ``(2, 3)``. Rows follow
+        ``SWITCH_DIRECTION_ORDER`` and columns follow ``SWITCH_TYPE_ORDER``.
+        All six axes use identical PC1 and PC2 limits.
     """
 
-    required_columns = {"event_id", "switch_type", "point_order", "pc1", "pc2"}
+    required_columns = {
+        "event_id",
+        "switch_type",
+        "switch_direction",
+        "point_order",
+        "pc1",
+        "pc2",
+    }
     missing_columns = required_columns - set(trajectory_df.columns)
     if missing_columns:
         raise ValueError(f"trajectory_df is missing required columns: {sorted(missing_columns)}")
 
-    figure, axes = plt.subplots(1, 3, figsize=figure_size, sharex=True, sharey=True)
-    axes = np.asarray(axes, dtype=object).reshape(-1)
+    figure, axes = plt.subplots(2, 3, figsize=figure_size, sharex=True, sharey=True)
+    axes = np.asarray(axes, dtype=object).reshape(2, 3)
     panel_colors = ("tab:green", "tab:red", "tab:blue")
     point_markers = ("o", "s", "^", "D")
 
-    for axis, switch_type, color in zip(axes, SWITCH_TYPE_ORDER, panel_colors, strict=True):
-        panel_df = trajectory_df.loc[trajectory_df["switch_type"] == switch_type]
-        for _event_id, event_df in panel_df.groupby("event_id", sort=False):
-            ordered_event = event_df.sort_values("point_order")
-            x_values = ordered_event["pc1"].to_numpy(dtype=float)
-            y_values = ordered_event["pc2"].to_numpy(dtype=float)
-            axis.plot(x_values, y_values, color=color, linewidth=0.8, alpha=0.2, zorder=1)
-            _draw_directed_segments(axis, x_values, y_values, color=color, alpha=0.2, linewidth=0.8)
-            for point_order, marker in enumerate(point_markers):
-                point = ordered_event.loc[ordered_event["point_order"] == point_order]
-                if not point.empty:
+    for row_index, switch_direction in enumerate(SWITCH_DIRECTION_ORDER):
+        for column_index, (switch_type, color) in enumerate(
+            zip(SWITCH_TYPE_ORDER, panel_colors, strict=True)
+        ):
+            axis = axes[row_index, column_index]
+            panel_mask = trajectory_df["switch_type"].eq(switch_type) & trajectory_df[
+                "switch_direction"
+            ].eq(switch_direction)
+            panel_df = trajectory_df.loc[panel_mask]
+            for _event_id, event_df in panel_df.groupby("event_id", sort=False):
+                ordered_event = event_df.sort_values("point_order")
+                x_values = ordered_event["pc1"].to_numpy(dtype=float)
+                y_values = ordered_event["pc2"].to_numpy(dtype=float)
+                axis.plot(x_values, y_values, color=color, linewidth=0.8, alpha=0.2, zorder=1)
+                _draw_directed_segments(
+                    axis,
+                    x_values,
+                    y_values,
+                    color=color,
+                    alpha=0.2,
+                    linewidth=0.8,
+                )
+                for point_order, marker in enumerate(point_markers):
+                    point = ordered_event.loc[ordered_event["point_order"] == point_order]
+                    if point.empty:
+                        continue
                     axis.scatter(
                         point["pc1"],
                         point["pc2"],
@@ -322,39 +364,64 @@ def plot_switch_event_pca_trajectories(
                         zorder=2,
                     )
 
-        if not panel_df.empty:
-            mean_points = (
-                panel_df.groupby("point_order", sort=True)[["pc1", "pc2"]]
-                .mean()
-                .reindex(range(4))
-            )
-            mean_x = mean_points["pc1"].to_numpy(dtype=float)
-            mean_y = mean_points["pc2"].to_numpy(dtype=float)
-            axis.plot(mean_x, mean_y, color=color, linewidth=2.8, alpha=1.0, zorder=4)
-            _draw_directed_segments(axis, mean_x, mean_y, color=color, alpha=1.0, linewidth=2.2)
-            for point_order, marker in enumerate(point_markers):
-                axis.scatter(
-                    mean_x[point_order],
-                    mean_y[point_order],
-                    color=color,
-                    edgecolor="white",
-                    linewidth=0.8,
-                    marker=marker,
-                    s=75,
-                    zorder=5,
+            if not panel_df.empty:
+                mean_points = (
+                    panel_df.groupby("point_order", sort=True)[["pc1", "pc2"]]
+                    .mean()
+                    .reindex(range(4))
                 )
-        else:
-            axis.text(0.5, 0.5, "No events", ha="center", va="center", transform=axis.transAxes)
+                mean_x = mean_points["pc1"].to_numpy(dtype=float)
+                mean_y = mean_points["pc2"].to_numpy(dtype=float)
+                axis.plot(mean_x, mean_y, color=color, linewidth=2.8, alpha=1.0, zorder=4)
+                _draw_directed_segments(
+                    axis,
+                    mean_x,
+                    mean_y,
+                    color=color,
+                    alpha=1.0,
+                    linewidth=2.2,
+                )
+                for point_order, marker in enumerate(point_markers):
+                    axis.scatter(
+                        mean_x[point_order],
+                        mean_y[point_order],
+                        color=color,
+                        edgecolor="white",
+                        linewidth=0.8,
+                        marker=marker,
+                        s=75,
+                        zorder=5,
+                    )
+            else:
+                axis.text(
+                    0.5,
+                    0.5,
+                    "No events",
+                    ha="center",
+                    va="center",
+                    transform=axis.transAxes,
+                )
 
-        event_count = int(panel_df["event_id"].nunique())
-        axis.set_title(SWITCH_TYPE_TITLES[switch_type])
-        axis.text(0.03, 0.97, f"n = {event_count}", ha="left", va="top", transform=axis.transAxes)
-        axis.set_xlabel("PC1 score")
-        axis.grid(alpha=0.2)
-    axes[0].set_ylabel("PC2 score")
+            event_count = int(panel_df["event_id"].nunique())
+            if row_index == 0:
+                axis.set_title(SWITCH_TYPE_TITLES[switch_type])
+            if row_index == len(SWITCH_DIRECTION_ORDER) - 1:
+                axis.set_xlabel("PC1 score")
+            axis.text(
+                0.03,
+                0.97,
+                f"n = {event_count}",
+                ha="left",
+                va="top",
+                transform=axis.transAxes,
+            )
+            axis.grid(alpha=0.2)
+        axes[row_index, 0].set_ylabel(
+            f"{SWITCH_DIRECTION_TITLES[switch_direction]}\nPC2 score"
+        )
 
     x_limits, y_limits = _compute_shared_axis_limits(trajectory_df)
-    for axis in axes:
+    for axis in axes.reshape(-1):
         axis.set_xlim(x_limits)
         axis.set_ylim(y_limits)
 
@@ -390,7 +457,7 @@ def plot_switch_event_pca_trajectories(
         va="bottom",
         fontsize=9,
     )
-    figure.tight_layout(rect=(0.0, 0.07, 1.0, 0.84))
+    figure.tight_layout(rect=(0.0, 0.06, 1.0, 0.88))
     return figure, axes
 
 
@@ -412,6 +479,29 @@ def _classify_switch_type(previous_correct: float, next_correct: float) -> str:
     previous_label = "correct" if previous_correct == 1.0 else "incorrect"
     next_label = "correct" if next_correct == 1.0 else "incorrect"
     return f"{previous_label}_to_{next_label}"
+
+
+def _classify_switch_direction(previous_action: object, next_action: object) -> str | None:
+    """
+    Classify one binary choice switch using the established action convention.
+
+    Parameters
+    ----------
+    previous_action, next_action : object
+        Scalar action labels. Action ``1`` is left and action ``0`` is right.
+
+    Returns
+    -------
+    str | None
+        ``"left_to_right"`` for ``1 -> 0``, ``"right_to_left"`` for
+        ``0 -> 1``, or ``None`` when the labels are not a supported switch.
+    """
+
+    if previous_action == 1 and next_action == 0:
+        return "left_to_right"
+    if previous_action == 0 and next_action == 1:
+        return "right_to_left"
+    return None
 
 
 def _matches_pre_switch_filter(
