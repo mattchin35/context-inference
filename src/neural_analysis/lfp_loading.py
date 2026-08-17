@@ -574,6 +574,58 @@ def load_trial_lfp_trace(
     return relative_time_s, lfp_uv
 
 
+def load_trial_lfp_trace_with_sample_rate(
+    lfp_path: Path | str,
+    saved_channel_index: int,
+    alignment_time_s: float,
+    window: tuple[float, float],
+    lfp_irig_df: pd.DataFrame,
+    sample_rate_hz: float,
+    frequency_band_hz: tuple[float, float] | None = None,
+    filter_padding_s: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """
+    Load one SpikeGLX trial LFP trace and retain its sample rate.
+
+    Parameters
+    ----------
+    lfp_path : Path | str
+        SpikeGLX ``.lf.bin`` file path.
+    saved_channel_index : int
+        Zero-based saved-channel row index.
+    alignment_time_s : float
+        Absolute alignment timestamp in seconds.
+    window : tuple[float, float]
+        Relative window bounds in seconds around ``alignment_time_s``.
+    lfp_irig_df : pd.DataFrame
+        IRIG anchors with ``sample_ix`` in samples and ``utc_unix`` in seconds.
+    sample_rate_hz : float
+        LFP sample rate in Hz.
+    frequency_band_hz : tuple[float, float] | None, default=None
+        Optional bandpass frequencies in Hz. ``None`` returns unfiltered data.
+    filter_padding_s : float, default=1.0
+        Filtering padding on each side in seconds.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, float]
+        ``(relative_time_s, lfp_uv, sample_rate_hz)``. The arrays have shape
+        ``(n_samples,)``; time is in seconds and LFP is in microvolts.
+    """
+
+    relative_time_s, lfp_uv = load_trial_lfp_trace(
+        lfp_path=lfp_path,
+        saved_channel_index=int(saved_channel_index),
+        alignment_time_s=float(alignment_time_s),
+        window=window,
+        lfp_irig_df=lfp_irig_df,
+        sample_rate_hz=float(sample_rate_hz),
+        frequency_band_hz=frequency_band_hz,
+        filter_padding_s=float(filter_padding_s),
+    )
+    return relative_time_s, lfp_uv, float(sample_rate_hz)
+
+
 def load_open_ephys_trial_lfp_trace(
     lfp_path: Path | str,
     aligned_sync_npz_path: Path | str,

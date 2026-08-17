@@ -10,6 +10,7 @@ import streamlit as st
 
 from src.neural_analysis import (
     lfp_loading,
+    lfp_spectrogram,
     population_pca,
     population_pca_decoding,
     population_pca_switch_trajectories,
@@ -52,10 +53,12 @@ UNIT_PLOT_TYPE_OPTIONS = [
     "Binned rate: mean +/- SD",
 ]
 NEURAL_DISPLAY_SPIKE_RASTER = "Spike raster"
+NEURAL_DISPLAY_LFP_SPECTROGRAM = "LFP spectrogram + trace"
 NEURAL_DISPLAY_POPULATION_PCA = "Population PCA"
 NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED = "Population PCA: concatenated trials"
 NEURAL_DISPLAY_OPTIONS = [
     NEURAL_DISPLAY_SPIKE_RASTER,
+    NEURAL_DISPLAY_LFP_SPECTROGRAM,
     NEURAL_DISPLAY_POPULATION_PCA,
     NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED,
 ]
@@ -93,6 +96,17 @@ LFP_FILTER_BANDS = {
     "Gamma (50-70 Hz)": (50.0, 70.0),
 }
 LFP_FILTER_PADDING_S = 1.0
+LFP_SPECTROGRAM_MIN_FREQUENCY_HZ = 2.0
+LFP_SPECTROGRAM_MAX_FREQUENCY_HZ = 80.0
+LFP_SPECTROGRAM_FREQUENCY_COUNT = 40
+LFP_SPECTROGRAM_REFERENCE_TRIAL_COUNT = 24
+LFP_SPECTROGRAM_COLOR_PERCENTILES = (2.0, 98.0)
+LFP_SPECTROGRAM_NOTCH_DEFAULT = False
+LFP_SPECTROGRAM_GAUSSIAN_WIDTH = 1.5
+LFP_SPECTROGRAM_WINDOW_LENGTH = 1.0
+LFP_SPECTROGRAM_PRECISION = 16
+LFP_SPECTROGRAM_TARGET_SAMPLE_RATE_HZ = 500.0
+LFP_SPECTROGRAM_NOTCH_QUALITY_FACTOR = 30.0
 DEFAULT_BROWSER_ROOT = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026")
 RASTER_LAYOUT_OPTIONS = {
     "Compact": {"row_spacing": 1.0, "figure_size": (12.0, 7.0)},
@@ -515,6 +529,297 @@ def load_trial_lfp_trace_for_format(
             filter_padding_s=float(filter_padding_s),
         )
     raise ValueError(f"Unsupported LFP format: {lfp_format!r}")
+
+
+def load_trial_lfp_trace_for_format_with_sample_rate(
+    lfp_format: str,
+    lfp_path: str,
+    saved_channel_index: int,
+    alignment_time_s: float,
+    window_start_s: float,
+    window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    aligned_sync_npz_path: str | None = None,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """
+    Load an unfiltered LFP window and sample rate for spectrogram analysis.
+
+    Parameters
+    ----------
+    lfp_format : str
+        LFP format from ``LFP_FORMAT_OPTIONS``.
+    lfp_path : str
+        SpikeGLX ``.lf.bin`` or derived Open Ephys ``lfp.dat`` path.
+    saved_channel_index : int
+        Zero-based saved-channel index.
+    alignment_time_s : float
+        Absolute trial alignment timestamp in UTC Unix seconds.
+    window_start_s, window_end_s : float
+        Relative LFP bounds in seconds around ``alignment_time_s``.
+    digital_word : int
+        SpikeGLX sync digital word. Ignored for Open Ephys.
+    irig_line : int
+        SpikeGLX IRIG line. Ignored for Open Ephys.
+    bit_period_s : float
+        SpikeGLX IRIG bit period in seconds. Ignored for Open Ephys.
+    utc_offset_hours : float
+        Constant offset applied to sync timestamps in hours.
+    aligned_sync_npz_path : str | None, optional
+        Open Ephys aligned sync ``.npz`` path; required for that format.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, float]
+        Relative times and LFP values with shape ``(n_samples,)``, followed by
+        sample rate in Hz. SpikeGLX values are microvolts; Open Ephys values
+        retain their derived-file units.
+    """
+
+    if lfp_format == LFP_FORMAT_SPIKEGLX:
+        lfp_irig_df, sample_rate_hz = decode_lfp_sync_cached(
+            lfp_path=str(lfp_path),
+            digital_word=int(digital_word),
+            irig_line=int(irig_line),
+            bit_period_s=float(bit_period_s),
+            utc_offset_hours=float(utc_offset_hours),
+        )
+        return lfp_loading.load_trial_lfp_trace_with_sample_rate(
+            lfp_path=Path(lfp_path),
+            saved_channel_index=int(saved_channel_index),
+            alignment_time_s=float(alignment_time_s),
+            window=(float(window_start_s), float(window_end_s)),
+            lfp_irig_df=lfp_irig_df,
+            sample_rate_hz=float(sample_rate_hz),
+        )
+    if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED:
+        if aligned_sync_npz_path is None or str(aligned_sync_npz_path).strip() == "":
+            raise ValueError("Open Ephys derived LFP requires an aligned sync .npz path.")
+        metadata = lfp_loading.load_open_ephys_lfp_metadata(Path(lfp_path))
+        sample_rate_hz = float(metadata["sampling_frequency_hz"])
+        relative_time_s, lfp_values = lfp_loading.load_open_ephys_trial_lfp_trace(
+            lfp_path=Path(lfp_path),
+            aligned_sync_npz_path=Path(aligned_sync_npz_path),
+            saved_channel_index=int(saved_channel_index),
+            alignment_time_s=float(alignment_time_s),
+            window=(float(window_start_s), float(window_end_s)),
+            utc_offset_hours=float(utc_offset_hours),
+        )
+        return relative_time_s, lfp_values, sample_rate_hz
+    raise ValueError(f"Unsupported LFP format: {lfp_format!r}")
+
+
+@st.cache_data(show_spinner="Computing trial LFP spectrogram...")
+def compute_trial_lfp_spectrogram_cached(
+    lfp_format: str,
+    lfp_path: str,
+    saved_channel_index: int,
+    alignment_time_s: float,
+    visible_window_start_s: float,
+    visible_window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    frequencies_hz: tuple[float, ...],
+    gaussian_width: float,
+    window_length: float,
+    precision: int,
+    norm: str,
+    target_sample_rate_hz: float,
+    notch_60_hz: bool,
+    notch_quality_factor: float,
+    aligned_sync_npz_path: str | None = None,
+) -> lfp_spectrogram.LFPSpectrogramResult:
+    """
+    Load, pad, decimate, and cache one trial's absolute Morlet power.
+
+    Parameters
+    ----------
+    lfp_format : str
+        LFP format from ``LFP_FORMAT_OPTIONS``.
+    lfp_path : str
+        Input LFP binary path.
+    saved_channel_index : int
+        Zero-based saved-channel index.
+    alignment_time_s : float
+        Absolute trial alignment timestamp in UTC Unix seconds.
+    visible_window_start_s, visible_window_end_s : float
+        Returned relative time bounds in seconds.
+    digital_word : int
+        SpikeGLX sync digital word.
+    irig_line : int
+        SpikeGLX IRIG line.
+    bit_period_s : float
+        SpikeGLX IRIG bit period in seconds.
+    utc_offset_hours : float
+        Sync timestamp offset in hours.
+    frequencies_hz : tuple[float, ...]
+        Morlet frequencies in Hz.
+    gaussian_width : float
+        Pynapple Morlet Gaussian width, dimensionless.
+    window_length : float
+        Pynapple Morlet window-length parameter, dimensionless.
+    precision : int
+        Base-2 Morlet evaluation precision.
+    norm : str
+        Pynapple wavelet normalization, ``"l1"`` or ``"l2"``.
+    target_sample_rate_hz : float
+        Preferred post-decimation sample rate in Hz.
+    notch_60_hz : bool
+        Whether to apply a 60 Hz notch before decimation.
+    notch_quality_factor : float
+        Dimensionless 60 Hz notch quality factor.
+    aligned_sync_npz_path : str | None, optional
+        Open Ephys aligned sync path; ignored for SpikeGLX.
+
+    Returns
+    -------
+    lfp_spectrogram.LFPSpectrogramResult
+        Visible trace and absolute power. Power shape is
+        ``(n_visible_samples, n_frequencies)`` in dB relative to one squared
+        input unit; time is in relative seconds and frequencies are in Hz.
+    """
+
+    frequencies = np.asarray(frequencies_hz, dtype=float)
+    padding_s = lfp_spectrogram.compute_wavelet_padding_s(
+        minimum_frequency_hz=float(np.min(frequencies)),
+        window_length=float(window_length),
+    )
+    padded_start_s = float(visible_window_start_s) - padding_s
+    padded_end_s = float(visible_window_end_s) + padding_s
+    relative_time_s, lfp_values, sample_rate_hz = load_trial_lfp_trace_for_format_with_sample_rate(
+        lfp_format=lfp_format,
+        lfp_path=lfp_path,
+        saved_channel_index=int(saved_channel_index),
+        alignment_time_s=float(alignment_time_s),
+        window_start_s=padded_start_s,
+        window_end_s=padded_end_s,
+        digital_word=int(digital_word),
+        irig_line=int(irig_line),
+        bit_period_s=float(bit_period_s),
+        utc_offset_hours=float(utc_offset_hours),
+        aligned_sync_npz_path=aligned_sync_npz_path,
+    )
+    return lfp_spectrogram.compute_morlet_log_power(
+        relative_time_s=relative_time_s,
+        lfp_values=lfp_values,
+        sample_rate_hz=float(sample_rate_hz),
+        frequencies_hz=frequencies,
+        visible_window=(float(visible_window_start_s), float(visible_window_end_s)),
+        gaussian_width=float(gaussian_width),
+        window_length=float(window_length),
+        precision=int(precision),
+        norm=norm,
+        target_sample_rate_hz=float(target_sample_rate_hz),
+        notch_60_hz=bool(notch_60_hz),
+        notch_quality_factor=float(notch_quality_factor),
+    )
+
+
+@st.cache_data(show_spinner="Estimating shared LFP power scale...")
+def compute_shared_lfp_power_limits_cached(
+    reference_alignment_times_s: tuple[float, ...],
+    lfp_format: str,
+    lfp_path: str,
+    saved_channel_index: int,
+    visible_window_start_s: float,
+    visible_window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    frequencies_hz: tuple[float, ...],
+    gaussian_width: float,
+    window_length: float,
+    precision: int,
+    norm: str,
+    target_sample_rate_hz: float,
+    notch_60_hz: bool,
+    notch_quality_factor: float,
+    lower_percentile: float,
+    upper_percentile: float,
+    aligned_sync_npz_path: str | None = None,
+) -> tuple[tuple[float, float], int]:
+    """
+    Compute a shared robust power scale from session reference trials.
+
+    Parameters
+    ----------
+    reference_alignment_times_s : tuple[float, ...]
+        Absolute alignment times for deterministic reference trials in seconds.
+    lfp_format, lfp_path, saved_channel_index : str, str, int
+        LFP acquisition format, binary path, and zero-based channel index.
+    visible_window_start_s, visible_window_end_s : float
+        Relative displayed bounds in seconds.
+    digital_word, irig_line : int
+        SpikeGLX sync word and line.
+    bit_period_s : float
+        SpikeGLX IRIG bit period in seconds.
+    utc_offset_hours : float
+        Sync offset in hours.
+    frequencies_hz : tuple[float, ...]
+        Morlet frequencies in Hz.
+    gaussian_width, window_length : float
+        Dimensionless Pynapple Morlet parameters.
+    precision : int
+        Base-2 Morlet evaluation precision.
+    norm : str
+        Pynapple wavelet normalization.
+    target_sample_rate_hz : float
+        Preferred post-decimation sample rate in Hz.
+    notch_60_hz : bool
+        Whether to apply a 60 Hz notch.
+    notch_quality_factor : float
+        Dimensionless notch quality factor.
+    lower_percentile, upper_percentile : float
+        Pooled robust percentile bounds in percent.
+    aligned_sync_npz_path : str | None, optional
+        Open Ephys aligned sync path.
+
+    Returns
+    -------
+    tuple[tuple[float, float], int]
+        Shared ``(minimum_db, maximum_db)`` limits and the number of reference
+        trials successfully included. Power units are dB relative to one
+        squared input unit.
+    """
+
+    reference_power = []
+    for alignment_time_s in reference_alignment_times_s:
+        try:
+            result = compute_trial_lfp_spectrogram_cached(
+                lfp_format=lfp_format,
+                lfp_path=lfp_path,
+                saved_channel_index=int(saved_channel_index),
+                alignment_time_s=float(alignment_time_s),
+                visible_window_start_s=float(visible_window_start_s),
+                visible_window_end_s=float(visible_window_end_s),
+                digital_word=int(digital_word),
+                irig_line=int(irig_line),
+                bit_period_s=float(bit_period_s),
+                utc_offset_hours=float(utc_offset_hours),
+                frequencies_hz=frequencies_hz,
+                gaussian_width=float(gaussian_width),
+                window_length=float(window_length),
+                precision=int(precision),
+                norm=norm,
+                target_sample_rate_hz=float(target_sample_rate_hz),
+                notch_60_hz=bool(notch_60_hz),
+                notch_quality_factor=float(notch_quality_factor),
+                aligned_sync_npz_path=aligned_sync_npz_path,
+            )
+        except (FileNotFoundError, OSError, ValueError):
+            continue
+        reference_power.append(result.log_power_db)
+    limits = lfp_spectrogram.estimate_shared_log_power_limits(
+        reference_power,
+        lower_percentile=float(lower_percentile),
+        upper_percentile=float(upper_percentile),
+    )
+    return limits, len(reference_power)
 
 
 def _build_channel_text(region_name: str) -> str:
@@ -1878,7 +2183,8 @@ def main() -> None:
         plot_trial_indices = selected_trial_indices
         invalid_alignment_trial_indices = np.array([], dtype=int)
         pca_display = is_population_pca_display(neural_display)
-        if pca_display:
+        lfp_spectrogram_display = neural_display == NEURAL_DISPLAY_LFP_SPECTROGRAM
+        if pca_display or lfp_spectrogram_display:
             try:
                 plot_trial_indices, invalid_alignment_trial_indices = filter_trial_indices_for_valid_alignment(
                     trial_df=trial_df,
@@ -1892,7 +2198,7 @@ def main() -> None:
                 preview = invalid_alignment_trial_indices[:10].tolist()
                 st.warning(
                     f"Omitting {invalid_alignment_trial_indices.size} trials without valid "
-                    f"{alignment_event} alignment times from PCA. First omitted trials: {preview}"
+                    f"{alignment_event} alignment times from this view. First omitted trials: {preview}"
                 )
         concatenated_visible_trial_indices = np.array([], dtype=int)
         concatenated_visible_trial_positions = np.array([], dtype=int)
@@ -1965,7 +2271,7 @@ def main() -> None:
                 index=0,
             )
             psth_unit_ids = page_unit_ids if population_psth_unit_scope == "Visible page units" else unit_ids
-        else:
+        elif pca_display:
             pca_bin_size_s = st.sidebar.selectbox(
                 "PCA bin size (s)",
                 options=PCA_BIN_SIZE_OPTIONS,
@@ -2002,16 +2308,28 @@ def main() -> None:
             population_psth_unit_scope = "Omitted in PCA mode"
             population_psth_bin_size = float(pca_bin_size_s)
             psth_unit_ids = np.array([], dtype=int)
-        show_lfp_trace = (
-            False
-            if neural_display == NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED
-            else st.sidebar.checkbox("Show LFP trace", value=False)
-        )
+        else:
+            unit_page_index = 0
+            n_unit_pages = 1
+            page_unit_ids = np.array([], dtype=int)
+            population_psth_unit_scope = "Omitted in LFP spectrogram mode"
+            population_psth_bin_size = float(PSTH_BIN_OPTIONS[0])
+            psth_unit_ids = np.array([], dtype=int)
+        if lfp_spectrogram_display:
+            show_lfp_trace = True
+        elif neural_display == NEURAL_DISPLAY_POPULATION_PCA_CONCATENATED:
+            show_lfp_trace = False
+        else:
+            show_lfp_trace = st.sidebar.checkbox("Show LFP trace", value=False)
         lfp_time_s = None
         lfp_uv = None
         lfp_label = None
         lfp_y_label = "LFP (uV)"
+        lfp_power_unit_label = "dB re 1 uV^2"
         lfp_utc_offset_hours = None
+        lfp_spectrogram_result = None
+        lfp_spectrogram_power_limits = None
+        lfp_spectrogram_reference_count = 0
         if show_lfp_trace:
             lfp_digital_word = 0
             lfp_irig_line = 6
@@ -2034,12 +2352,75 @@ def main() -> None:
             if lfp_format == LFP_FORMAT_SPIKEGLX:
                 st.sidebar.caption(f"LFP sync digital line: {lfp_irig_line}")
             st.sidebar.caption(f"LFP UTC offset: {int(lfp_utc_offset_hours)} h")
-            lfp_filter_label = st.sidebar.selectbox(
-                "LFP filter band",
-                options=list(LFP_FILTER_BANDS.keys()),
-                index=0,
-            )
-            lfp_filter_band = resolve_lfp_filter_band(lfp_filter_label)
+            if lfp_spectrogram_display:
+                spectrogram_min_frequency_hz = float(
+                    st.sidebar.number_input(
+                        "Minimum frequency (Hz)",
+                        min_value=0.1,
+                        value=float(LFP_SPECTROGRAM_MIN_FREQUENCY_HZ),
+                        step=0.5,
+                    )
+                )
+                spectrogram_max_frequency_hz = float(
+                    st.sidebar.number_input(
+                        "Maximum frequency (Hz)",
+                        min_value=0.2,
+                        value=float(LFP_SPECTROGRAM_MAX_FREQUENCY_HZ),
+                        step=5.0,
+                    )
+                )
+                spectrogram_frequency_count = int(
+                    st.sidebar.number_input(
+                        "Frequency count",
+                        min_value=2,
+                        value=int(LFP_SPECTROGRAM_FREQUENCY_COUNT),
+                        step=1,
+                    )
+                )
+                spectrogram_gaussian_width = float(
+                    st.sidebar.number_input(
+                        "Morlet Gaussian width",
+                        min_value=0.1,
+                        value=float(LFP_SPECTROGRAM_GAUSSIAN_WIDTH),
+                        step=0.1,
+                    )
+                )
+                spectrogram_window_length = float(
+                    st.sidebar.number_input(
+                        "Morlet window length",
+                        min_value=0.1,
+                        value=float(LFP_SPECTROGRAM_WINDOW_LENGTH),
+                        step=0.1,
+                    )
+                )
+                spectrogram_norm = st.sidebar.selectbox(
+                    "Morlet normalization",
+                    options=["l1", "l2"],
+                    index=0,
+                )
+                spectrogram_notch_60_hz = st.sidebar.checkbox(
+                    "Apply 60 Hz notch",
+                    value=LFP_SPECTROGRAM_NOTCH_DEFAULT,
+                )
+                if spectrogram_max_frequency_hz <= spectrogram_min_frequency_hz:
+                    st.error("Maximum frequency must be greater than minimum frequency.")
+                    st.stop()
+                spectrogram_frequencies_hz = tuple(
+                    np.geomspace(
+                        spectrogram_min_frequency_hz,
+                        spectrogram_max_frequency_hz,
+                        spectrogram_frequency_count,
+                    ).tolist()
+                )
+                lfp_filter_label = "Unfiltered input"
+                lfp_filter_band = None
+            else:
+                lfp_filter_label = st.sidebar.selectbox(
+                    "LFP filter band",
+                    options=list(LFP_FILTER_BANDS.keys()),
+                    index=0,
+                )
+                lfp_filter_band = resolve_lfp_filter_band(lfp_filter_label)
             lfp_dropdown_options = build_lfp_dropdown_options(
                 hpc_v1_lfp_path=hpc_v1_lfp_path,
                 pfc_lfp_path=pfc_lfp_path,
@@ -2068,6 +2449,7 @@ def main() -> None:
                     help="Use the probe sync .npz produced by the Open Ephys spike synchronization workflow.",
                 )
                 lfp_y_label = "LFP"
+                lfp_power_unit_label = "dB re 1 input-unit^2"
             st.sidebar.caption(selected_lfp_path or "No LFP path entered for this selection.")
             if channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY and region_channels.size > 0:
                 lfp_saved_channel_index = st.sidebar.selectbox(
@@ -2096,37 +2478,123 @@ def main() -> None:
                         trial_index=trial_index,
                         alignment_event=alignment_event,
                     )
-                    lfp_time_s, lfp_uv = load_trial_lfp_trace_cached(
-                        lfp_format=lfp_format,
-                        lfp_path=str(selected_lfp_path),
-                        saved_channel_index=int(lfp_saved_channel_index),
-                        alignment_time_s=float(alignment_time_s),
-                        window_start_s=float(window[0]),
-                        window_end_s=float(window[1]),
-                        digital_word=lfp_digital_word,
-                        irig_line=lfp_irig_line,
-                        bit_period_s=lfp_bit_period_s,
-                        utc_offset_hours=lfp_utc_offset_hours,
-                        filter_low_hz=lfp_filter_band[0] if lfp_filter_band is not None else None,
-                        filter_high_hz=lfp_filter_band[1] if lfp_filter_band is not None else None,
-                        filter_padding_s=LFP_FILTER_PADDING_S,
-                        aligned_sync_npz_path=(
-                            str(selected_aligned_sync_path)
-                            if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED
-                            else None
-                        ),
+                    aligned_sync_path_argument = (
+                        str(selected_aligned_sync_path)
+                        if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED
+                        else None
                     )
                     lfp_label = f"{selected_lfp_label}, {lfp_format}, saved channel {int(lfp_saved_channel_index)}"
+                    if lfp_spectrogram_display:
+                        lfp_spectrogram_result = compute_trial_lfp_spectrogram_cached(
+                            lfp_format=lfp_format,
+                            lfp_path=str(selected_lfp_path),
+                            saved_channel_index=int(lfp_saved_channel_index),
+                            alignment_time_s=float(alignment_time_s),
+                            visible_window_start_s=float(window[0]),
+                            visible_window_end_s=float(window[1]),
+                            digital_word=lfp_digital_word,
+                            irig_line=lfp_irig_line,
+                            bit_period_s=lfp_bit_period_s,
+                            utc_offset_hours=float(lfp_utc_offset_hours),
+                            frequencies_hz=spectrogram_frequencies_hz,
+                            gaussian_width=spectrogram_gaussian_width,
+                            window_length=spectrogram_window_length,
+                            precision=LFP_SPECTROGRAM_PRECISION,
+                            norm=spectrogram_norm,
+                            target_sample_rate_hz=LFP_SPECTROGRAM_TARGET_SAMPLE_RATE_HZ,
+                            notch_60_hz=spectrogram_notch_60_hz,
+                            notch_quality_factor=LFP_SPECTROGRAM_NOTCH_QUALITY_FACTOR,
+                            aligned_sync_npz_path=aligned_sync_path_argument,
+                        )
+                        reference_trial_indices = lfp_spectrogram.select_reference_trial_indices(
+                            trial_df=trial_df,
+                            alignment_event=alignment_event,
+                            maximum_trial_count=LFP_SPECTROGRAM_REFERENCE_TRIAL_COUNT,
+                        )
+                        reference_alignment_times_s = tuple(
+                            pd.to_numeric(
+                                trial_df.loc[reference_trial_indices, alignment_event],
+                                errors="coerce",
+                            ).to_numpy(dtype=float)
+                        )
+                        (
+                            lfp_spectrogram_power_limits,
+                            lfp_spectrogram_reference_count,
+                        ) = compute_shared_lfp_power_limits_cached(
+                            reference_alignment_times_s=reference_alignment_times_s,
+                            lfp_format=lfp_format,
+                            lfp_path=str(selected_lfp_path),
+                            saved_channel_index=int(lfp_saved_channel_index),
+                            visible_window_start_s=float(window[0]),
+                            visible_window_end_s=float(window[1]),
+                            digital_word=lfp_digital_word,
+                            irig_line=lfp_irig_line,
+                            bit_period_s=lfp_bit_period_s,
+                            utc_offset_hours=float(lfp_utc_offset_hours),
+                            frequencies_hz=spectrogram_frequencies_hz,
+                            gaussian_width=spectrogram_gaussian_width,
+                            window_length=spectrogram_window_length,
+                            precision=LFP_SPECTROGRAM_PRECISION,
+                            norm=spectrogram_norm,
+                            target_sample_rate_hz=LFP_SPECTROGRAM_TARGET_SAMPLE_RATE_HZ,
+                            notch_60_hz=spectrogram_notch_60_hz,
+                            notch_quality_factor=LFP_SPECTROGRAM_NOTCH_QUALITY_FACTOR,
+                            lower_percentile=LFP_SPECTROGRAM_COLOR_PERCENTILES[0],
+                            upper_percentile=LFP_SPECTROGRAM_COLOR_PERCENTILES[1],
+                            aligned_sync_npz_path=aligned_sync_path_argument,
+                        )
+                        lfp_time_s = lfp_spectrogram_result.time_s
+                        lfp_uv = lfp_spectrogram_result.lfp_values
+                    else:
+                        lfp_time_s, lfp_uv = load_trial_lfp_trace_cached(
+                            lfp_format=lfp_format,
+                            lfp_path=str(selected_lfp_path),
+                            saved_channel_index=int(lfp_saved_channel_index),
+                            alignment_time_s=float(alignment_time_s),
+                            window_start_s=float(window[0]),
+                            window_end_s=float(window[1]),
+                            digital_word=lfp_digital_word,
+                            irig_line=lfp_irig_line,
+                            bit_period_s=lfp_bit_period_s,
+                            utc_offset_hours=lfp_utc_offset_hours,
+                            filter_low_hz=lfp_filter_band[0] if lfp_filter_band is not None else None,
+                            filter_high_hz=lfp_filter_band[1] if lfp_filter_band is not None else None,
+                            filter_padding_s=LFP_FILTER_PADDING_S,
+                            aligned_sync_npz_path=aligned_sync_path_argument,
+                        )
                     if lfp_filter_band is not None:
                         lfp_label = f"{lfp_label}, {lfp_filter_label}"
                 except Exception as error:  # noqa: BLE001 - Optional LFP should not block raster plotting.
-                    st.warning(f"Could not load LFP trace; plotting rasters without LFP. {error}")
+                    if lfp_spectrogram_display:
+                        st.error(f"Could not build LFP spectrogram: {error}")
+                    else:
+                        st.warning(f"Could not load LFP trace; plotting rasters without LFP. {error}")
         variance_figure = None
         pca_result = None
         pca_unit_ids = np.array([], dtype=int)
         try:
             lick_times = spike_behavior_pynapple.build_lick_time_dict(event_df)
-            if pca_display:
+            if lfp_spectrogram_display:
+                if lfp_spectrogram_result is None or lfp_spectrogram_power_limits is None or lfp_label is None:
+                    raise ValueError("LFP spectrogram data are unavailable for the selected trial and channel.")
+                figure, axes = unit_spike_plotting.plot_trial_lfp_spectrogram_and_behavior(
+                    trial_df=trial_df,
+                    trial_index=trial_index,
+                    lick_times=lick_times,
+                    spectrogram_time_s=lfp_spectrogram_result.time_s,
+                    frequencies_hz=lfp_spectrogram_result.frequencies_hz,
+                    log_power_db=lfp_spectrogram_result.log_power_db,
+                    lfp_time_s=lfp_spectrogram_result.time_s,
+                    lfp_values=lfp_spectrogram_result.lfp_values,
+                    alignment_event=alignment_event,
+                    window=window,
+                    power_limits_db=lfp_spectrogram_power_limits,
+                    lfp_label=lfp_label,
+                    power_unit_label=lfp_power_unit_label,
+                    reference_trial_count=lfp_spectrogram_reference_count,
+                    lfp_y_label=lfp_y_label,
+                )
+            elif pca_display:
                 pca_unit_ids = resolve_population_pca_unit_ids(
                     selected_unit_metadata=selected_unit_metadata,
                     page_unit_ids=page_unit_ids,
@@ -2210,7 +2678,23 @@ def main() -> None:
             st.write(f"Filtered trials: {selected_trial_indices.size}")
             st.write(f"Trial index: {trial_index}")
             st.write(f"Neural display: {neural_display}")
-            if pca_display:
+            if lfp_spectrogram_display:
+                st.write(
+                    f"Frequencies: {spectrogram_min_frequency_hz:g}-"
+                    f"{spectrogram_max_frequency_hz:g} Hz ({spectrogram_frequency_count})"
+                )
+                st.write(f"Morlet Gaussian width: {spectrogram_gaussian_width:g}")
+                st.write(f"Morlet window length: {spectrogram_window_length:g}")
+                st.write(f"Morlet normalization: {spectrogram_norm}")
+                st.write(f"60 Hz notch: {'on' if spectrogram_notch_60_hz else 'off'}")
+                st.write(f"Shared power reference trials: {lfp_spectrogram_reference_count}")
+                if lfp_spectrogram_power_limits is not None:
+                    st.write(
+                        "Shared power limits: "
+                        f"{lfp_spectrogram_power_limits[0]:.1f} to "
+                        f"{lfp_spectrogram_power_limits[1]:.1f} dB"
+                    )
+            elif pca_display:
                 if invalid_alignment_trial_indices.size > 0:
                     st.write(
                         f"PCA trials omitted for missing {alignment_event}: "

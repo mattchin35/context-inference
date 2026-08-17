@@ -1016,6 +1016,280 @@ def plot_trial_behavior_and_spike_raster(
     return (figure, axis) if n_axes == 1 else (figure, axes)
 
 
+def draw_single_trial_behavior_axis(
+    axis: plt.Axes,
+    trial_df: pd.DataFrame,
+    trial_index: int,
+    lick_times: Mapping[str, nap.Ts],
+    alignment_event: str,
+    window: tuple[float, float],
+) -> plt.Axes:
+    """
+    Draw lick, LED, choice, reward, and alignment events for one trial.
+
+    Parameters
+    ----------
+    axis : plt.Axes
+        Matplotlib axis receiving the event raster.
+    trial_df : pd.DataFrame
+        Trial table with one row per trial. Required columns are
+        ``alignment_event``, ``choice_time``, ``led_on_time``, and ``action``;
+        optional ``reward_time`` values are plotted when finite. Times are in
+        seconds on the same absolute time base as ``lick_times``.
+    trial_index : int
+        Integer row index selecting the displayed trial.
+    lick_times : Mapping[str, nap.Ts]
+        Mapping containing ``"left_entry"`` and ``"right_entry"`` Pynapple
+        timestamp series in seconds.
+    alignment_event : str
+        Trial timestamp column used as relative time zero.
+    window : tuple[float, float]
+        Visible relative bounds as ``(start_s, end_s)`` in seconds.
+
+    Returns
+    -------
+    plt.Axes
+        The same axis, configured with behavior events and seconds on x.
+    """
+
+    required_columns = {alignment_event, "choice_time", "led_on_time", "action"}
+    missing_columns = required_columns - set(trial_df.columns)
+    if missing_columns:
+        raise ValueError(f"trial_df is missing required columns: {sorted(missing_columns)}")
+    if int(trial_index) not in trial_df.index:
+        raise ValueError(f"trial_index {trial_index} is not present in trial_df.")
+    if LEFT_LICK_EVENT not in lick_times or RIGHT_LICK_EVENT not in lick_times:
+        raise ValueError("lick_times must contain 'left_entry' and 'right_entry' keys.")
+    if len(window) != 2 or float(window[0]) >= float(window[1]):
+        raise ValueError("window must be a two-value tuple with start < end.")
+
+    reference_time = get_trial_alignment_time(
+        trial_df=trial_df,
+        trial_index=int(trial_index),
+        alignment_event=alignment_event,
+    )
+    left_licks = extract_relative_events_for_trial(
+        event_times=lick_times[LEFT_LICK_EVENT],
+        reference_time=reference_time,
+        window=window,
+    )
+    right_licks = extract_relative_events_for_trial(
+        event_times=lick_times[RIGHT_LICK_EVENT],
+        reference_time=reference_time,
+        window=window,
+    )
+    axis.eventplot(
+        [right_licks],
+        orientation="horizontal",
+        lineoffsets=[0.0],
+        linelengths=0.7,
+        linewidths=1.0,
+        colors=LICK_RASTER_STYLES[RIGHT_LICK_EVENT]["color"],
+        label=LICK_RASTER_STYLES[RIGHT_LICK_EVENT]["label"],
+    )
+    axis.eventplot(
+        [left_licks],
+        orientation="horizontal",
+        lineoffsets=[1.0],
+        linelengths=0.7,
+        linewidths=1.0,
+        colors=LICK_RASTER_STYLES[LEFT_LICK_EVENT]["color"],
+        label=LICK_RASTER_STYLES[LEFT_LICK_EVENT]["label"],
+    )
+
+    trial_row = trial_df.loc[int(trial_index)]
+    choice_time = pd.to_numeric(pd.Series([trial_row["choice_time"]]), errors="coerce").iloc[0]
+    if not pd.isna(choice_time):
+        action_value = pd.to_numeric(pd.Series([trial_row["action"]]), errors="coerce").iloc[0]
+        choice_y = 0.5
+        if not pd.isna(action_value):
+            choice_y = 1.0 if int(action_value) == LEFT_CHOICE_ACTION else 0.0
+        axis.vlines(
+            float(choice_time) - reference_time,
+            choice_y - 0.35,
+            choice_y + 0.35,
+            colors="tab:purple",
+            linewidth=1.4,
+            label="Choice",
+        )
+
+    led_time = pd.to_numeric(pd.Series([trial_row["led_on_time"]]), errors="coerce").iloc[0]
+    if not pd.isna(led_time):
+        axis.vlines(
+            float(led_time) - reference_time,
+            -0.35,
+            1.35,
+            colors="tab:green",
+            linewidth=1.1,
+            label="LED",
+        )
+    if "reward_time" in trial_df.columns:
+        reward_time = pd.to_numeric(pd.Series([trial_row["reward_time"]]), errors="coerce").iloc[0]
+        if not pd.isna(reward_time):
+            axis.vlines(
+                float(reward_time) - reference_time,
+                -0.35,
+                1.35,
+                colors="tab:red",
+                linewidth=1.2,
+                label="Reward",
+            )
+
+    axis.axvline(0.0, color="gray", linestyle="--", linewidth=1.2, label=alignment_event)
+    axis.set_yticks([0.0, 1.0])
+    axis.set_yticklabels(["Right licks", "Left licks"])
+    axis.set_ylim(-0.7, 1.7)
+    axis.set_ylabel("Behavior")
+    axis.set_xlim(float(window[0]), float(window[1]))
+    axis.set_title(f"Trial {trial_index} behavior aligned to {alignment_event}")
+    axis.legend(loc="upper right", fontsize="small", ncol=3)
+    return axis
+
+
+def plot_trial_lfp_spectrogram_and_behavior(
+    trial_df: pd.DataFrame,
+    trial_index: int,
+    lick_times: Mapping[str, nap.Ts],
+    spectrogram_time_s: np.ndarray,
+    frequencies_hz: np.ndarray,
+    log_power_db: np.ndarray,
+    lfp_time_s: np.ndarray,
+    lfp_values: np.ndarray,
+    alignment_event: str,
+    window: tuple[float, float],
+    power_limits_db: tuple[float, float],
+    lfp_label: str,
+    power_unit_label: str,
+    reference_trial_count: int,
+    lfp_y_label: str = "LFP (uV)",
+    figure_size: tuple[float, float] = (11.0, 7.0),
+) -> tuple[plt.Figure, np.ndarray]:
+    """
+    Plot one trial's Morlet spectrogram, LFP trace, and behavior events.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with one row per trial and behavior columns documented by
+        ``draw_single_trial_behavior_axis``. Event times are in seconds.
+    trial_index : int
+        Integer row index selecting the displayed trial.
+    lick_times : Mapping[str, nap.Ts]
+        Left and right lick timestamps in seconds.
+    spectrogram_time_s : np.ndarray
+        Spectrogram sample times with shape ``(n_times,)`` in seconds relative
+        to ``alignment_event``.
+    frequencies_hz : np.ndarray
+        Wavelet frequencies with shape ``(n_frequencies,)`` in Hz.
+    log_power_db : np.ndarray
+        Absolute log power with shape ``(n_times, n_frequencies)`` in dB
+        relative to one squared source-unit.
+    lfp_time_s : np.ndarray
+        Trace times with shape ``(n_trace_samples,)`` in relative seconds.
+    lfp_values : np.ndarray
+        LFP trace with shape ``(n_trace_samples,)`` in source voltage units.
+    alignment_event : str
+        Trial event column used as relative time zero.
+    window : tuple[float, float]
+        Shared x bounds in relative seconds.
+    power_limits_db : tuple[float, float]
+        Shared spectrogram color limits as ``(minimum_db, maximum_db)``.
+    lfp_label : str
+        Source and channel title for the LFP trace.
+    power_unit_label : str
+        Colorbar unit text, such as ``"dB re 1 uV^2"``.
+    reference_trial_count : int
+        Number of session reference trials used to estimate color limits.
+    lfp_y_label : str, default="LFP (uV)"
+        LFP trace y-axis label with source units.
+    figure_size : tuple[float, float], default=(11.0, 7.0)
+        Figure dimensions as ``(width_inches, height_inches)``.
+
+    Returns
+    -------
+    tuple[plt.Figure, np.ndarray]
+        Figure and three axes in order: spectrogram, LFP trace, behavior.
+        All x axes use seconds relative to ``alignment_event``.
+    """
+
+    spectrogram_time_s = np.asarray(spectrogram_time_s, dtype=float).reshape(-1)
+    frequencies_hz = np.asarray(frequencies_hz, dtype=float).reshape(-1)
+    log_power_db = np.asarray(log_power_db, dtype=float)
+    lfp_time_s = np.asarray(lfp_time_s, dtype=float).reshape(-1)
+    lfp_values = np.asarray(lfp_values, dtype=float).reshape(-1)
+    if log_power_db.shape != (spectrogram_time_s.size, frequencies_hz.size):
+        raise ValueError("log_power_db must have shape (n_times, n_frequencies).")
+    if lfp_time_s.shape != lfp_values.shape:
+        raise ValueError("lfp_time_s and lfp_values must have matching one-dimensional shapes.")
+    if frequencies_hz.size == 0 or np.any(frequencies_hz <= 0):
+        raise ValueError("frequencies_hz must contain positive values.")
+    if len(power_limits_db) != 2 or float(power_limits_db[0]) >= float(power_limits_db[1]):
+        raise ValueError("power_limits_db must contain increasing limits.")
+    if int(reference_trial_count) < 1:
+        raise ValueError("reference_trial_count must be positive.")
+
+    figure, axes = plt.subplots(
+        3,
+        1,
+        sharex=True,
+        figsize=(float(figure_size[0]), float(figure_size[1])),
+        height_ratios=[2.5, 0.8, 1.0],
+    )
+    axes = np.asarray(axes, dtype=object).reshape(-1)
+    spectrogram_axis, lfp_axis, behavior_axis = axes
+
+    power_mesh = spectrogram_axis.pcolormesh(
+        spectrogram_time_s,
+        frequencies_hz,
+        log_power_db.T,
+        shading="auto",
+        cmap="magma",
+        vmin=float(power_limits_db[0]),
+        vmax=float(power_limits_db[1]),
+    )
+    spectrogram_axis.axvline(0.0, color="white", linestyle="--", linewidth=1.0)
+    spectrogram_axis.set_yscale("log")
+    spectrogram_axis.set_ylim(float(np.min(frequencies_hz)), float(np.max(frequencies_hz)))
+    frequency_ticks = np.geomspace(float(np.min(frequencies_hz)), float(np.max(frequencies_hz)), 5)
+    spectrogram_axis.set_yticks(frequency_ticks)
+    spectrogram_axis.set_yticklabels([f"{frequency:g}" for frequency in frequency_ticks])
+    spectrogram_axis.set_ylabel("Frequency (Hz)")
+    spectrogram_axis.set_title(f"Morlet power, {lfp_label}")
+    colorbar = figure.colorbar(power_mesh, ax=spectrogram_axis, pad=0.015)
+    colorbar.set_label(str(power_unit_label))
+
+    lfp_axis.plot(lfp_time_s, lfp_values, color="black", linewidth=0.8)
+    lfp_axis.axvline(0.0, color="gray", linestyle="--", linewidth=1.0)
+    lfp_axis.set_ylabel(str(lfp_y_label))
+    lfp_axis.set_title(str(lfp_label))
+    draw_single_trial_behavior_axis(
+        axis=behavior_axis,
+        trial_df=trial_df,
+        trial_index=int(trial_index),
+        lick_times=lick_times,
+        alignment_event=alignment_event,
+        window=window,
+    )
+    behavior_axis.set_xlabel(f"Time from {alignment_event} (s)")
+    for axis in axes:
+        axis.set_xlim(float(window[0]), float(window[1]))
+
+    figure.subplots_adjust(left=0.1, right=0.9, top=0.92, bottom=0.12, hspace=0.35)
+    figure.text(
+        0.5,
+        0.025,
+        (
+            f"Absolute log power uses shared {power_limits_db[0]:.1f} to "
+            f"{power_limits_db[1]:.1f} dB limits estimated from "
+            f"{int(reference_trial_count)} reference trials."
+        ),
+        ha="center",
+        va="bottom",
+        fontsize="small",
+    )
+    return figure, axes
+
+
 def plot_trial_behavior_and_population_pca(
     trial_df: pd.DataFrame,
     trial_index: int,
