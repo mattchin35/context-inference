@@ -102,6 +102,17 @@ def test_is_population_pca_display_includes_concatenated_mode():
     assert not psth_webapp.is_population_pca_display(psth_webapp.NEURAL_DISPLAY_SPIKE_RASTER)
 
 
+def test_webapp_exposes_single_trial_lfp_spectrogram_defaults():
+    """The dedicated LFP view should expose the approved scientific defaults."""
+    assert psth_webapp.NEURAL_DISPLAY_LFP_SPECTROGRAM in psth_webapp.NEURAL_DISPLAY_OPTIONS
+    assert psth_webapp.LFP_SPECTROGRAM_MIN_FREQUENCY_HZ == 2.0
+    assert psth_webapp.LFP_SPECTROGRAM_MAX_FREQUENCY_HZ == 80.0
+    assert psth_webapp.LFP_SPECTROGRAM_FREQUENCY_COUNT == 40
+    assert psth_webapp.LFP_SPECTROGRAM_REFERENCE_TRIAL_COUNT == 24
+    assert psth_webapp.LFP_SPECTROGRAM_COLOR_PERCENTILES == (2.0, 98.0)
+    assert psth_webapp.LFP_SPECTROGRAM_NOTCH_DEFAULT is False
+
+
 def test_pca_decoding_has_separate_plot_view_from_trial_filters():
     """PCA decoding should be a separate performance-only view, not a trial display mode."""
     assert psth_webapp.PLOT_VIEW_PCA_DECODING in psth_webapp.PLOT_VIEW_OPTIONS
