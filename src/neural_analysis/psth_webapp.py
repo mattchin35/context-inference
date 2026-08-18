@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import math
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import streamlit as st
 
 from src.neural_analysis import (
     lfp_loading,
+    lfp_phase_clustering,
     lfp_spectrogram,
     population_pca,
     population_pca_decoding,
@@ -41,11 +43,13 @@ PLOT_VIEW_UNIT_RASTER = "Unit raster/PSTH"
 PLOT_VIEW_TRIAL_SPIKES = "Trial spikes/licks/choices"
 PLOT_VIEW_PCA_DECODING = "Population PCA decoding"
 PLOT_VIEW_PCA_SWITCH_TRAJECTORIES = "Population PCA switch trajectories"
+PLOT_VIEW_LFP_PHASE_CLUSTERING = "LFP phase clustering"
 PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_UNIT_RASTER,
     PLOT_VIEW_TRIAL_SPIKES,
     PLOT_VIEW_PCA_DECODING,
     PLOT_VIEW_PCA_SWITCH_TRAJECTORIES,
+    PLOT_VIEW_LFP_PHASE_CLUSTERING,
 ]
 UNIT_PLOT_TYPE_OPTIONS = [
     "PSTH",
@@ -107,6 +111,14 @@ LFP_SPECTROGRAM_WINDOW_LENGTH = 1.0
 LFP_SPECTROGRAM_PRECISION = 16
 LFP_SPECTROGRAM_TARGET_SAMPLE_RATE_HZ = 500.0
 LFP_SPECTROGRAM_NOTCH_QUALITY_FACTOR = 30.0
+LFP_PHASE_CLUSTERING_ANALYSIS_OPTIONS = ("ITPC", "ISPC")
+LFP_PHASE_CLUSTERING_MIN_FREQUENCY_HZ = 2.0
+LFP_PHASE_CLUSTERING_MAX_FREQUENCY_HZ = 100.0
+LFP_PHASE_CLUSTERING_FREQUENCY_COUNT = 50
+LFP_PHASE_CLUSTERING_OUTPUT_SAMPLE_RATE_HZ = 500.0
+LFP_PHASE_CLUSTERING_DEFAULT_WINDOW = (-1.0, 2.0)
+LFP_PHASE_CLUSTERING_MAXIMUM_CORE_DURATION_S = 120.0
+LFP_PHASE_CLUSTERING_MINIMUM_RELATIVE_MAGNITUDE = 1e-12
 DEFAULT_BROWSER_ROOT = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026")
 RASTER_LAYOUT_OPTIONS = {
     "Compact": {"row_spacing": 1.0, "figure_size": (12.0, 7.0)},
@@ -292,6 +304,46 @@ def load_viewer_data_cached(
         sess_id_full=sess_id_full,
         probe_paths=probe_paths,
     )
+
+
+@st.cache_resource(show_spinner="Loading behavior data...")
+def load_phase_clustering_session_cached(
+    session_data_home: str,
+    sess_id_full: str,
+) -> tuple[spike_behavior_pynapple.Session, pd.DataFrame]:
+    """
+    Load session metadata and trials without requiring sorted spike data.
+
+    Parameters
+    ----------
+    session_data_home : str
+        Root directory for one experimental session.
+    sess_id_full : str
+        Session identifier formatted as ``mouse_YYYY-MM-DD_hhmmss``.
+
+    Returns
+    -------
+    tuple[spike_behavior_pynapple.Session, pd.DataFrame]
+        Session metadata and trial table with shape
+        ``(n_trials, n_trial_columns)``. Trial event columns are in absolute
+        seconds.
+    """
+
+    session_home = Path(session_data_home)
+    mouse, date, timestamp = spike_behavior_pynapple.parse_session_id(sess_id_full)
+    session = spike_behavior_pynapple.Session(
+        session_data_home=session_home,
+        sess_id_full=sess_id_full,
+        sess_id_abbreviated=f"{mouse}_{date}",
+        raw_behavior_folder=session_home / "rpi" / sess_id_full,
+        processed_data_path=session_home / "processed",
+        figure_path=session_home / "figures",
+        mouse=mouse,
+        date=date,
+        timestamp=timestamp,
+    )
+    _event_df, trial_df = spike_behavior_pynapple.load_session_tables(session)
+    return session, trial_df
 
 
 @st.cache_data(show_spinner="Loading channel quality...")
@@ -822,6 +874,128 @@ def compute_shared_lfp_power_limits_cached(
     return limits, len(reference_power)
 
 
+@st.cache_data(show_spinner="Computing continuous LFP phase tensors...")
+def compute_lfp_phase_site_cached(
+    lfp_format: str,
+    lfp_path: str,
+    lfp_file_mtime_ns: int,
+    saved_channel_index: int,
+    event_times_s: tuple[float, ...],
+    trial_indices: tuple[int, ...],
+    window_start_s: float,
+    window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    frequencies_hz: tuple[float, ...],
+    gaussian_width: float,
+    window_length: float,
+    precision: int,
+    norm: str,
+    output_sample_rate_hz: float,
+    notch_60_hz: bool,
+    notch_quality_factor: float,
+    minimum_relative_magnitude: float,
+    maximum_core_duration_s: float,
+    aligned_sync_npz_path: str | None = None,
+) -> lfp_phase_clustering.PhaseTrialTensor:
+    """
+    Cache continuous-block Morlet phase preprocessing for one LFP site.
+
+    Parameters
+    ----------
+    lfp_format : str
+        LFP acquisition format from ``LFP_FORMAT_OPTIONS``.
+    lfp_path : str
+        LFP binary filesystem path.
+    lfp_file_mtime_ns : int
+        Source-file modification time in nanoseconds, used only for cache
+        invalidation.
+    saved_channel_index : int
+        Zero-based saved-channel row index.
+    event_times_s : tuple[float, ...]
+        Chronological absolute event timestamps in seconds.
+    trial_indices : tuple[int, ...]
+        Trial-table row positions matching ``event_times_s``.
+    window_start_s, window_end_s : float
+        Event-relative output bounds in seconds.
+    digital_word, irig_line : int
+        SpikeGLX sync digital word and IRIG line.
+    bit_period_s : float
+        SpikeGLX IRIG bit period in seconds.
+    utc_offset_hours : float
+        Offset applied to synchronized LFP timestamps in hours.
+    frequencies_hz : tuple[float, ...]
+        Positive Morlet frequencies in Hz.
+    gaussian_width, window_length : float
+        Dimensionless Pynapple Morlet parameters.
+    precision : int
+        Base-2 Pynapple wavelet evaluation precision.
+    norm : str
+        Pynapple wavelet normalization.
+    output_sample_rate_hz : float
+        Exact event-relative phase tensor rate in Hz.
+    notch_60_hz : bool
+        Whether to apply the optional 60 Hz notch.
+    notch_quality_factor : float
+        Dimensionless notch quality factor.
+    minimum_relative_magnitude : float
+        Relative wavelet magnitude threshold for valid phase.
+    maximum_core_duration_s : float
+        Maximum unpadded continuous transform block duration in seconds.
+    aligned_sync_npz_path : str | None, optional
+        Open Ephys aligned sync path; ignored for SpikeGLX.
+
+    Returns
+    -------
+    lfp_phase_clustering.PhaseTrialTensor
+        One-site phase tensor with shape ``(1, frequency, trial, time)``;
+        phase is unitless complex phase and time is in event-relative seconds.
+    """
+
+    del lfp_file_mtime_ns
+
+    def load_absolute_block(
+        block_start_s: float,
+        block_end_s: float,
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        """Load one absolute block and preserve its UTC-like sample times."""
+
+        block_center_s = 0.5 * (float(block_start_s) + float(block_end_s))
+        relative_time_s, lfp_values, sample_rate_hz = load_trial_lfp_trace_for_format_with_sample_rate(
+            lfp_format=lfp_format,
+            lfp_path=lfp_path,
+            saved_channel_index=int(saved_channel_index),
+            alignment_time_s=block_center_s,
+            window_start_s=float(block_start_s) - block_center_s,
+            window_end_s=float(block_end_s) - block_center_s,
+            digital_word=int(digital_word),
+            irig_line=int(irig_line),
+            bit_period_s=float(bit_period_s),
+            utc_offset_hours=float(utc_offset_hours),
+            aligned_sync_npz_path=aligned_sync_npz_path,
+        )
+        return block_center_s + relative_time_s, lfp_values, float(sample_rate_hz)
+
+    return lfp_phase_clustering.compute_site_phase_trial_tensor(
+        event_times_s=np.asarray(event_times_s, dtype=float),
+        trial_indices=np.asarray(trial_indices, dtype=int),
+        block_loader=load_absolute_block,
+        frequencies_hz=np.asarray(frequencies_hz, dtype=float),
+        window=(float(window_start_s), float(window_end_s)),
+        output_sample_rate_hz=float(output_sample_rate_hz),
+        gaussian_width=float(gaussian_width),
+        window_length=float(window_length),
+        precision=int(precision),
+        norm=norm,
+        notch_60_hz=bool(notch_60_hz),
+        notch_quality_factor=float(notch_quality_factor),
+        minimum_relative_magnitude=float(minimum_relative_magnitude),
+        maximum_core_duration_s=float(maximum_core_duration_s),
+    )
+
+
 def _build_channel_text(region_name: str) -> str:
     """Return editable default channel text for one preset region."""
 
@@ -879,6 +1053,363 @@ def resolve_region_channels_for_source(
         )
         return region_channels, f"channel_quality selected {region_channels.size} / {channel_quality.shape[0]} channels."
     raise ValueError(f"Unsupported channel source: {channel_source!r}")
+
+
+def render_lfp_phase_clustering_view(
+    trial_df: pd.DataFrame,
+    session: spike_behavior_pynapple.Session,
+    hpc_v1_lfp_path: str,
+    pfc_lfp_path: str,
+    hpc_v1_aligned_spike_path: str,
+    pfc_aligned_spike_path: str,
+) -> None:
+    """
+    Render and optionally save one-session LFP phase-clustering results.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Session trial table with shape ``(n_trials, n_columns)``. Event times
+        are absolute seconds and trial conditions follow project conventions.
+    session : spike_behavior_pynapple.Session
+        Session metadata; ``session_data_home`` supplies the output root and
+        ``sess_id_full`` identifies saved results.
+    hpc_v1_lfp_path, pfc_lfp_path : str
+        Probe-specific continuous LFP binary paths.
+    hpc_v1_aligned_spike_path, pfc_aligned_spike_path : str
+        Probe-specific aligned sync paths used for Open Ephys-derived LFP.
+
+    Returns
+    -------
+    None
+        Streamlit renders one selected ITPC site or ISPC pair. On request, all
+        currently calculated frequency-by-time matrices are saved as NPZ files
+        with frequencies in Hz and event-relative times in seconds.
+    """
+
+    st.sidebar.header("LFP Phase Clustering")
+    metric = st.sidebar.selectbox("Analysis", options=LFP_PHASE_CLUSTERING_ANALYSIS_OPTIONS)
+    condition = st.sidebar.selectbox("Trial condition", options=CONDITION_OPTIONS)
+    alignment_event = st.sidebar.selectbox("Alignment event", options=ALIGNMENT_OPTIONS)
+    window_start_s = float(
+        st.sidebar.number_input(
+            "Window start (s)", value=float(LFP_PHASE_CLUSTERING_DEFAULT_WINDOW[0]), step=0.1
+        )
+    )
+    window_end_s = float(
+        st.sidebar.number_input(
+            "Window end (s)", value=float(LFP_PHASE_CLUSTERING_DEFAULT_WINDOW[1]), step=0.1
+        )
+    )
+    lfp_format = st.sidebar.selectbox("LFP format", options=LFP_FORMAT_OPTIONS)
+    utc_offset_hours = float(
+        st.sidebar.number_input("LFP UTC offset (hours)", value=0, step=1, format="%d")
+    )
+
+    minimum_frequency_hz = float(
+        st.sidebar.number_input(
+            "Minimum frequency (Hz)",
+            min_value=0.1,
+            value=float(LFP_PHASE_CLUSTERING_MIN_FREQUENCY_HZ),
+            step=0.5,
+        )
+    )
+    maximum_frequency_hz = float(
+        st.sidebar.number_input(
+            "Maximum frequency (Hz)",
+            min_value=0.2,
+            value=float(LFP_PHASE_CLUSTERING_MAX_FREQUENCY_HZ),
+            step=5.0,
+        )
+    )
+    frequency_count = int(
+        st.sidebar.number_input(
+            "Frequency count",
+            min_value=2,
+            value=int(LFP_PHASE_CLUSTERING_FREQUENCY_COUNT),
+            step=1,
+        )
+    )
+    gaussian_width = float(
+        st.sidebar.number_input(
+            "Morlet Gaussian width",
+            min_value=0.1,
+            value=float(LFP_SPECTROGRAM_GAUSSIAN_WIDTH),
+            step=0.1,
+        )
+    )
+    wavelet_window_length = float(
+        st.sidebar.number_input(
+            "Morlet window length",
+            min_value=0.1,
+            value=float(LFP_SPECTROGRAM_WINDOW_LENGTH),
+            step=0.1,
+        )
+    )
+    wavelet_norm = st.sidebar.selectbox("Morlet normalization", options=["l1", "l2"])
+    notch_60_hz = st.sidebar.checkbox("Apply 60 Hz notch", value=False)
+
+    if window_start_s >= window_end_s:
+        st.error("Window start must be less than window end.")
+        st.stop()
+    if minimum_frequency_hz >= maximum_frequency_hz:
+        st.error("Maximum frequency must be greater than minimum frequency.")
+        st.stop()
+
+    probe_options = [LFP_DROPDOWN_LABEL_HPC_V1, LFP_DROPDOWN_LABEL_PFC]
+    requested_pairs: list[tuple[tuple[str, int], tuple[str, int]]] = []
+    requested_sites: list[tuple[str, int]] = []
+    if metric == "ITPC":
+        site_count = int(st.sidebar.number_input("ITPC site count", min_value=1, max_value=8, value=1, step=1))
+        for site_number in range(site_count):
+            probe_label = st.sidebar.selectbox(
+                f"Site {site_number + 1} probe",
+                options=probe_options,
+                key=f"phase_itpc_probe_{site_number}",
+            )
+            saved_channel_index = int(
+                st.sidebar.number_input(
+                    f"Site {site_number + 1} saved channel",
+                    min_value=0,
+                    value=site_number,
+                    step=1,
+                    key=f"phase_itpc_channel_{site_number}",
+                )
+            )
+            requested_sites.append((probe_label, saved_channel_index))
+    else:
+        pair_count = int(st.sidebar.number_input("ISPC pair count", min_value=1, max_value=8, value=1, step=1))
+        for pair_number in range(pair_count):
+            pair_sites = []
+            for member_label, default_probe_index in (("A", 0), ("B", 1)):
+                probe_label = st.sidebar.selectbox(
+                    f"Pair {pair_number + 1} site {member_label} probe",
+                    options=probe_options,
+                    index=default_probe_index,
+                    key=f"phase_ispc_probe_{pair_number}_{member_label}",
+                )
+                saved_channel_index = int(
+                    st.sidebar.number_input(
+                        f"Pair {pair_number + 1} site {member_label} saved channel",
+                        min_value=0,
+                        value=pair_number,
+                        step=1,
+                        key=f"phase_ispc_channel_{pair_number}_{member_label}",
+                    )
+                )
+                pair_sites.append((probe_label, saved_channel_index))
+            if pair_sites[0] == pair_sites[1]:
+                st.error(f"ISPC pair {pair_number + 1} must contain two distinct sites.")
+                st.stop()
+            requested_pairs.append((pair_sites[0], pair_sites[1]))
+            requested_sites.extend(pair_sites)
+
+    unique_sites = list(dict.fromkeys(requested_sites))
+    probe_sources = {
+        LFP_DROPDOWN_LABEL_HPC_V1: (hpc_v1_lfp_path, hpc_v1_aligned_spike_path),
+        LFP_DROPDOWN_LABEL_PFC: (pfc_lfp_path, pfc_aligned_spike_path),
+    }
+    condition_masks = lfp_phase_clustering.make_phase_condition_masks(trial_df)
+    event_values = pd.to_numeric(trial_df[alignment_event], errors="coerce").to_numpy(dtype=float)
+    preprocessing_mask = condition_masks["all"] & np.isfinite(event_values)
+    preprocessing_trial_indices = np.flatnonzero(preprocessing_mask)
+    if preprocessing_trial_indices.size == 0:
+        st.warning("No valid trials have a finite selected alignment time.")
+        st.stop()
+    frequencies_hz = np.geomspace(minimum_frequency_hz, maximum_frequency_hz, frequency_count)
+
+    site_tensors = []
+    site_labels = []
+    source_paths = []
+    for probe_label, saved_channel_index in unique_sites:
+        source_path, aligned_sync_path = probe_sources[probe_label]
+        source = Path(str(source_path)).expanduser()
+        if not str(source_path).strip() or not source.exists():
+            st.error(f"LFP path for {probe_label} does not exist: {source_path}")
+            st.stop()
+        aligned_sync_argument = str(aligned_sync_path) if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED else None
+        site_label = f"{probe_label}, channel {saved_channel_index}"
+        try:
+            site_tensor = compute_lfp_phase_site_cached(
+                lfp_format=lfp_format,
+                lfp_path=str(source),
+                lfp_file_mtime_ns=source.stat().st_mtime_ns,
+                saved_channel_index=saved_channel_index,
+                event_times_s=tuple(event_values[preprocessing_trial_indices].tolist()),
+                trial_indices=tuple(preprocessing_trial_indices.tolist()),
+                window_start_s=window_start_s,
+                window_end_s=window_end_s,
+                digital_word=0,
+                irig_line=6,
+                bit_period_s=1.0,
+                utc_offset_hours=utc_offset_hours,
+                frequencies_hz=tuple(frequencies_hz.tolist()),
+                gaussian_width=gaussian_width,
+                window_length=wavelet_window_length,
+                precision=LFP_SPECTROGRAM_PRECISION,
+                norm=wavelet_norm,
+                output_sample_rate_hz=LFP_PHASE_CLUSTERING_OUTPUT_SAMPLE_RATE_HZ,
+                notch_60_hz=notch_60_hz,
+                notch_quality_factor=LFP_SPECTROGRAM_NOTCH_QUALITY_FACTOR,
+                minimum_relative_magnitude=LFP_PHASE_CLUSTERING_MINIMUM_RELATIVE_MAGNITUDE,
+                maximum_core_duration_s=LFP_PHASE_CLUSTERING_MAXIMUM_CORE_DURATION_S,
+                aligned_sync_npz_path=aligned_sync_argument,
+            )
+        except Exception as error:  # noqa: BLE001 - Streamlit should report site-specific loading failures.
+            st.error(f"Could not preprocess {site_label}: {error}")
+            st.stop()
+        site_tensors.append(site_tensor)
+        site_labels.append(site_label)
+        source_paths.append(str(source))
+
+    try:
+        combined_tensor = lfp_phase_clustering.combine_phase_trial_tensors(site_tensors)
+    except ValueError as error:
+        st.error(str(error))
+        st.stop()
+    selected_trial_mask = lfp_phase_clustering.select_tensor_trial_mask(
+        combined_tensor.trial_indices,
+        condition_masks[condition],
+    )
+    selected_trial_indices = combined_tensor.trial_indices[selected_trial_mask]
+    if selected_trial_indices.size == 0:
+        st.warning(f"No retained trials match condition {condition!r}.")
+        st.stop()
+
+    calculated_results: list[tuple[str, lfp_phase_clustering.PhaseClusteringResult]] = []
+    if metric == "ITPC":
+        all_site_result = lfp_phase_clustering.compute_itpc(
+            combined_tensor.phase,
+            trial_mask=selected_trial_mask,
+            valid_mask=combined_tensor.valid,
+        )
+        for site_index, site_label in enumerate(site_labels):
+            calculated_results.append(
+                (
+                    site_label,
+                    lfp_phase_clustering.PhaseClusteringResult(
+                        values=all_site_result.values[site_index],
+                        effective_trial_count=all_site_result.effective_trial_count[site_index],
+                        n_trials=all_site_result.n_trials,
+                    ),
+                )
+            )
+    else:
+        site_index_by_spec = {site_spec: index for index, site_spec in enumerate(unique_sites)}
+        for site_a, site_b in requested_pairs:
+            pair_label = f"{site_labels[site_index_by_spec[site_a]]} vs {site_labels[site_index_by_spec[site_b]]}"
+            pair_result = lfp_phase_clustering.compute_ispc(
+                combined_tensor.phase,
+                site_a=site_index_by_spec[site_a],
+                site_b=site_index_by_spec[site_b],
+                trial_mask=selected_trial_mask,
+                valid_mask=combined_tensor.valid,
+            )
+            calculated_results.append((pair_label, pair_result))
+
+    result_labels = [label for label, _result in calculated_results]
+    displayed_label = st.selectbox("Displayed site/pair", options=result_labels)
+    displayed_result = calculated_results[result_labels.index(displayed_label)][1]
+    figure, _axis = lfp_phase_clustering.plot_phase_clustering(
+        displayed_result.values,
+        frequencies_hz=frequencies_hz,
+        relative_time_s=combined_tensor.relative_time_s,
+        metric_label=metric,
+        site_label=displayed_label,
+        condition_label=condition,
+        n_trials=displayed_result.n_trials,
+        figure_size=(9.0, 4.8),
+    )
+
+    metadata_column, figure_column = st.columns([1, 3])
+    with metadata_column:
+        st.subheader("LFP Phase Clustering")
+        st.write(f"Metric: {metric}")
+        st.write(f"Condition: {condition}")
+        st.write(f"Alignment: {alignment_event}")
+        st.write(f"Selected trials: {selected_trial_indices.size}")
+        st.write(f"Excluded during preprocessing: {combined_tensor.excluded_trial_indices.size}")
+        st.write(
+            "Effective trials per pixel: "
+            f"{int(displayed_result.effective_trial_count.min())}-"
+            f"{int(displayed_result.effective_trial_count.max())}"
+        )
+        st.caption(
+            "Switch/stay use the established current unrewarded-trial restriction and compare "
+            "the current choice with the next row's choice."
+        )
+    with figure_column:
+        st.pyplot(figure, width="stretch")
+        st.caption(
+            "Phase consistency is bounded from 0 to 1. The continuous LFP is transformed before "
+            "event-aligned trial extraction; no power baseline normalization is applied."
+        )
+
+    if st.button("Save phase-clustering results"):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        numeric_output_dir = (
+            Path(session.session_data_home) / "ephys" / "derived" / "phase_clustering" / timestamp
+        )
+        run_output_dir = Path(session.session_data_home) / "analysis_runs" / f"lfp_phase_clustering_{timestamp}"
+        common_metadata = {
+            "generator": "src.neural_analysis.lfp_phase_clustering",
+            "analysis_version": lfp_phase_clustering.ANALYSIS_VERSION,
+            "session_id": session.sess_id_full,
+            "metric": metric,
+            "condition": condition,
+            "alignment_event": alignment_event,
+            "window_s": [window_start_s, window_end_s],
+            "frequencies_hz": frequencies_hz.tolist(),
+            "gaussian_width": gaussian_width,
+            "window_length": wavelet_window_length,
+            "normalization": wavelet_norm,
+            "notch_60_hz": notch_60_hz,
+            "output_sample_rate_hz": LFP_PHASE_CLUSTERING_OUTPUT_SAMPLE_RATE_HZ,
+            "lfp_format": lfp_format,
+            "utc_offset_hours": utc_offset_hours,
+            "site_labels": site_labels,
+            "source_paths": source_paths,
+            "excluded_trial_indices": combined_tensor.excluded_trial_indices.tolist(),
+            "axis_order": ["frequency", "time"],
+            "value_units": "dimensionless phase consistency",
+            "frequency_units": "Hz",
+            "time_units": "s relative to alignment event",
+            "random_seed": None,
+        }
+        for result_number, (result_label, result) in enumerate(calculated_results, start=1):
+            result_metadata = dict(common_metadata)
+            result_metadata["site_or_pair"] = result_label
+            lfp_phase_clustering.save_phase_clustering_result(
+                numeric_output_dir / f"result_{result_number:02d}_{metric.lower()}.npz",
+                values=result.values,
+                effective_trial_count=result.effective_trial_count,
+                frequencies_hz=frequencies_hz,
+                relative_time_s=combined_tensor.relative_time_s,
+                trial_indices=selected_trial_indices,
+                metadata=result_metadata,
+            )
+        run_output_dir.mkdir(parents=True, exist_ok=False)
+        figure.savefig(run_output_dir / f"{metric.lower()}_heatmap.png", dpi=200, bbox_inches="tight")
+        (run_output_dir / "summary.md").write_text(
+            "\n".join(
+                [
+                    "# LFP phase clustering",
+                    "",
+                    f"Session: {session.sess_id_full}",
+                    f"Goal: {metric} around {alignment_event} for {condition} trials.",
+                    f"Numeric results: {numeric_output_dir}",
+                    f"Sites/pairs: {', '.join(result_labels)}",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (run_output_dir / "run.log").write_text(
+            f"Completed {datetime.now().isoformat()}\nParameters: {common_metadata!r}\n",
+            encoding="utf-8",
+        )
+        st.success(f"Saved numeric results to {numeric_output_dir} and figure run to {run_output_dir}")
+    plt.close(figure)
 
 
 def resolve_population_pca_unit_ids(
@@ -1645,6 +2176,26 @@ def main() -> None:
         key="pfc_lfp_path_input",
     )
     _render_path_browser()
+    plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+
+    if plot_view == PLOT_VIEW_LFP_PHASE_CLUSTERING:
+        try:
+            phase_session, phase_trial_df = load_phase_clustering_session_cached(
+                session_data_home=session_data_home,
+                sess_id_full=sess_id_full,
+            )
+        except Exception as error:  # noqa: BLE001 - Streamlit should display behavior loading failures cleanly.
+            st.error(f"Could not load session behavior data: {error}")
+            st.stop()
+        render_lfp_phase_clustering_view(
+            trial_df=phase_trial_df,
+            session=phase_session,
+            hpc_v1_lfp_path=hpc_v1_lfp_path,
+            pfc_lfp_path=pfc_lfp_path,
+            hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
+            pfc_aligned_spike_path=pfc_aligned_spike_path,
+        )
+        return
 
     st.sidebar.header("Region and Units")
     preset_options = list(unit_spike_loading.get_ct014_region_channel_presets().keys())
@@ -1771,8 +2322,6 @@ def main() -> None:
         st.stop()
 
     unit_ids = selected_unit_metadata["cluster_id"].to_numpy(dtype=int)
-    plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
-
     if plot_view == PLOT_VIEW_PCA_SWITCH_TRAJECTORIES:
         st.sidebar.header("PCA Switch Trajectories")
         pre_switch_filter = st.sidebar.selectbox(

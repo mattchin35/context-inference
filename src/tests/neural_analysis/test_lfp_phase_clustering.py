@@ -131,6 +131,43 @@ def test_compute_itpc_distinguishes_locked_and_random_trial_phase():
     np.testing.assert_array_equal(locked_result.effective_trial_count, np.full((1, 3, 6), 200))
 
 
+def test_combine_phase_trial_tensors_uses_cross_site_trial_intersection():
+    """Cross-probe tensors should retain only identically indexed trials in source order."""
+    relative_time_s = np.array([-0.1, 0.0], dtype=float)
+    first = lfp_phase_clustering.PhaseTrialTensor(
+        phase=np.ones((1, 2, 3, 2), dtype=np.complex64),
+        valid=np.ones((1, 2, 3, 2), dtype=bool),
+        relative_time_s=relative_time_s,
+        trial_indices=np.array([1, 2, 4]),
+        excluded_trial_indices=np.array([0]),
+    )
+    second = lfp_phase_clustering.PhaseTrialTensor(
+        phase=np.full((1, 2, 3, 2), 1j, dtype=np.complex64),
+        valid=np.ones((1, 2, 3, 2), dtype=bool),
+        relative_time_s=relative_time_s,
+        trial_indices=np.array([2, 3, 4]),
+        excluded_trial_indices=np.array([5]),
+    )
+
+    combined = lfp_phase_clustering.combine_phase_trial_tensors([first, second])
+
+    assert combined.phase.shape == (2, 2, 2, 2)
+    np.testing.assert_array_equal(combined.trial_indices, np.array([2, 4]))
+    np.testing.assert_array_equal(combined.excluded_trial_indices, np.array([0, 1, 3, 5]))
+    np.testing.assert_array_equal(combined.phase[0], np.ones((2, 2, 2), dtype=np.complex64))
+    np.testing.assert_array_equal(combined.phase[1], np.full((2, 2, 2), 1j, dtype=np.complex64))
+
+
+def test_select_tensor_trial_mask_maps_full_trial_table_mask_by_trial_index():
+    """Condition masks should map by source trial id after site exclusions."""
+    selected = lfp_phase_clustering.select_tensor_trial_mask(
+        tensor_trial_indices=np.array([1, 4, 7]),
+        full_trial_mask=np.array([False, True, False, False, True, False, False, False]),
+    )
+
+    np.testing.assert_array_equal(selected, np.array([True, True, False]))
+
+
 def test_compute_itpc_applies_trial_mask_without_mutating_phase_tensor():
     """Conditions should subset the trial axis after phase preprocessing."""
     phase = np.ones((2, 1, 4, 3), dtype=np.complex64)
@@ -192,7 +229,7 @@ def test_phase_condition_masks_reuse_older_unrewarded_switch_and_stay_convention
 
     assert np.flatnonzero(masks["correct_rewarded"]).tolist() == [0]
     assert np.flatnonzero(masks["incorrect"]).tolist() == [2]
-    assert np.flatnonzero(masks["omission"]).tolist() == [1, 3]
+    assert np.flatnonzero(masks["omission"]).tolist() == [1, 3, 5]
     assert np.flatnonzero(masks["switch"]).tolist() == [1]
     assert np.flatnonzero(masks["stay"]).tolist() == [2]
 
@@ -250,4 +287,3 @@ def test_save_phase_clustering_result_round_trips_named_arrays_and_metadata(tmp_
     np.testing.assert_array_equal(saved["effective_trial_count"], effective_counts)
     np.testing.assert_array_equal(saved["trial_indices"], np.arange(12, dtype=int))
     assert saved["meta"].item() == metadata
-
