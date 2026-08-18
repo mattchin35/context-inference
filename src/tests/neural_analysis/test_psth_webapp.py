@@ -113,6 +113,17 @@ def test_webapp_exposes_single_trial_lfp_spectrogram_defaults():
     assert psth_webapp.LFP_SPECTROGRAM_NOTCH_DEFAULT is False
 
 
+def test_webapp_exposes_separate_lfp_phase_clustering_view_defaults():
+    """ITPC/ISPC should use a dedicated view with the approved initial settings."""
+    assert psth_webapp.PLOT_VIEW_LFP_PHASE_CLUSTERING in psth_webapp.PLOT_VIEW_OPTIONS
+    assert psth_webapp.LFP_PHASE_CLUSTERING_ANALYSIS_OPTIONS == ("ITPC", "ISPC")
+    assert psth_webapp.LFP_PHASE_CLUSTERING_MIN_FREQUENCY_HZ == 2.0
+    assert psth_webapp.LFP_PHASE_CLUSTERING_MAX_FREQUENCY_HZ == 100.0
+    assert psth_webapp.LFP_PHASE_CLUSTERING_FREQUENCY_COUNT == 50
+    assert psth_webapp.LFP_PHASE_CLUSTERING_OUTPUT_SAMPLE_RATE_HZ == 500.0
+    assert psth_webapp.LFP_PHASE_CLUSTERING_DEFAULT_WINDOW == (-1.0, 2.0)
+
+
 def test_pca_decoding_has_separate_plot_view_from_trial_filters():
     """PCA decoding should be a separate performance-only view, not a trial display mode."""
     assert psth_webapp.PLOT_VIEW_PCA_DECODING in psth_webapp.PLOT_VIEW_OPTIONS
