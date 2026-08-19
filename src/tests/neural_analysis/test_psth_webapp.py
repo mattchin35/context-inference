@@ -124,6 +124,21 @@ def test_webapp_exposes_separate_lfp_phase_clustering_view_defaults():
     assert psth_webapp.LFP_PHASE_CLUSTERING_DEFAULT_WINDOW == (-1.0, 2.0)
 
 
+def test_webapp_exposes_single_trial_relative_phase_view_defaults():
+    """Relative phase should be a lightweight top-level single-trial view."""
+    assert psth_webapp.PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE in psth_webapp.PLOT_VIEW_OPTIONS
+    assert psth_webapp.RELATIVE_PHASE_DEFAULT_WINDOW == (-1.0, 2.0)
+    assert psth_webapp.RELATIVE_PHASE_MIN_FREQUENCY_HZ == 2.0
+    assert psth_webapp.RELATIVE_PHASE_MAX_FREQUENCY_HZ == 100.0
+    assert psth_webapp.RELATIVE_PHASE_FREQUENCY_COUNT == 50
+    assert psth_webapp.RELATIVE_PHASE_OUTPUT_SAMPLE_RATE_HZ == 500.0
+    assert psth_webapp.RELATIVE_PHASE_AMPLITUDE_MASK_OPTIONS == (
+        "Off",
+        "Per-frequency percentile",
+        "Absolute magnitude",
+    )
+
+
 def test_pca_decoding_has_separate_plot_view_from_trial_filters():
     """PCA decoding should be a separate performance-only view, not a trial display mode."""
     assert psth_webapp.PLOT_VIEW_PCA_DECODING in psth_webapp.PLOT_VIEW_OPTIONS

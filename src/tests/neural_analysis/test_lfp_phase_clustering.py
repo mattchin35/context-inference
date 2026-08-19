@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from src.neural_analysis import lfp_phase_clustering
+from src.neural_analysis import lfp_phase_clustering, unit_spike_plotting
 
 
 def _make_trial_df() -> pd.DataFrame:
@@ -234,6 +234,17 @@ def test_phase_condition_masks_reuse_older_unrewarded_switch_and_stay_convention
     assert np.flatnonzero(masks["stay"]).tolist() == [2]
 
 
+def test_relative_phase_trial_selection_combines_condition_and_action():
+    """Single-trial browsing should allow left/right selection within a base condition."""
+    trial_indices = unit_spike_plotting.filter_trials_for_unit_plot(
+        _make_trial_df(),
+        condition="omission",
+        action=1,
+    )
+
+    np.testing.assert_array_equal(trial_indices, np.array([3]))
+
+
 def test_plot_phase_clustering_uses_fixed_scale_log_frequency_and_alignment_line():
     """Phase-clustering heatmaps should preserve their bounded scientific scale."""
     frequencies_hz = np.geomspace(2.0, 100.0, 8)
@@ -287,3 +298,198 @@ def test_save_phase_clustering_result_round_trips_named_arrays_and_metadata(tmp_
     np.testing.assert_array_equal(saved["effective_trial_count"], effective_counts)
     np.testing.assert_array_equal(saved["trial_indices"], np.arange(12, dtype=int))
     assert saved["meta"].item() == metadata
+
+
+def _make_coefficient_result(
+    phase_offset_rad: float,
+    coefficient_time_offset_s: float = 0.0,
+) -> lfp_phase_clustering.WaveletCoefficientResult:
+    """Build padded coefficients with a controlled phase offset and source trace."""
+
+    frequencies_hz = np.array([5.0, 10.0], dtype=float)
+    time_s = np.arange(5.0 + coefficient_time_offset_s, 15.0, 0.002)
+    coefficients = np.stack(
+        [
+            (1.0 + frequency_index) * np.exp(
+                1j * (2.0 * np.pi * frequency_hz * time_s + float(phase_offset_rad))
+            )
+            for frequency_index, frequency_hz in enumerate(frequencies_hz)
+        ]
+    ).astype(np.complex64)
+    source_time_s = np.arange(5.0, 15.0, 0.0004)
+    return lfp_phase_clustering.WaveletCoefficientResult(
+        time_s=time_s,
+        frequencies_hz=frequencies_hz,
+        coefficients=coefficients,
+        sample_rate_hz=500.0,
+        source_time_s=source_time_s,
+        source_lfp_values=np.sin(2.0 * np.pi * 10.0 * source_time_s),
+        source_sample_rate_hz=2500.0,
+    )
+
+
+def test_single_trial_relative_phase_preserves_offset_sign_and_compact_dtypes():
+    """The returned angle must represent phase A minus phase B with compact arrays."""
+    site_a = _make_coefficient_result(phase_offset_rad=np.pi / 2.0)
+    site_b = _make_coefficient_result(phase_offset_rad=0.0)
+
+    result = lfp_phase_clustering.compute_single_trial_relative_phase(
+        site_a=site_a,
+        site_b=site_b,
+        event_time_s=10.0,
+        visible_window=(-1.0, 2.0),
+        output_sample_rate_hz=500.0,
+        trial_index=7,
+        site_a_label="HPC channel 2",
+        site_b_label="PFC channel 3",
+    )
+
+    assert result.relative_phase_complex.shape == (2, 1500)
+    assert result.phase_angle_rad.shape == (2, 1500)
+    assert result.relative_phase_complex.dtype == np.complex64
+    assert result.phase_angle_rad.dtype == np.float32
+    assert result.amplitude_a.dtype == np.float32
+    assert result.amplitude_b.dtype == np.float32
+    np.testing.assert_allclose(result.phase_angle_rad, np.pi / 2.0, atol=0.04)
+    assert result.trial_index == 7
+    assert result.event_time_s == 10.0
+    assert result.site_a_label == "HPC channel 2"
+    assert result.site_b_label == "PFC channel 3"
+
+
+def test_single_trial_relative_phase_interpolates_sites_to_exact_common_grid():
+    """Small differences in transformed timestamps must not alter a known phase offset."""
+    site_a = _make_coefficient_result(phase_offset_rad=0.7)
+    site_b = _make_coefficient_result(phase_offset_rad=0.0, coefficient_time_offset_s=0.0003)
+
+    result = lfp_phase_clustering.compute_single_trial_relative_phase(
+        site_a=site_a,
+        site_b=site_b,
+        event_time_s=10.0,
+        visible_window=(-0.5, 0.5),
+        output_sample_rate_hz=500.0,
+        trial_index=4,
+        site_a_label="A",
+        site_b_label="B",
+    )
+
+    np.testing.assert_allclose(result.relative_time_s, -0.5 + np.arange(500) / 500.0)
+    np.testing.assert_allclose(result.phase_angle_rad, 0.7, atol=0.04)
+    assert result.source_time_a_s[0] >= -0.5
+    assert result.source_time_a_s[-1] < 0.5
+    assert result.source_time_b_s[0] >= -0.5
+    assert result.source_time_b_s[-1] < 0.5
+
+
+def test_single_trial_relative_phase_matches_existing_trial_tensor_pathway():
+    """The lightweight path should agree with the established complex-phase interpolation."""
+    site_a = _make_coefficient_result(phase_offset_rad=0.9)
+    site_b = _make_coefficient_result(phase_offset_rad=-0.2)
+    result = lfp_phase_clustering.compute_single_trial_relative_phase(
+        site_a=site_a,
+        site_b=site_b,
+        event_time_s=10.0,
+        visible_window=(-0.2, 0.3),
+        output_sample_rate_hz=500.0,
+        trial_index=3,
+        site_a_label="A",
+        site_b_label="B",
+    )
+    phase_a, _valid_a = lfp_phase_clustering.normalize_wavelet_phase(site_a.coefficients)
+    phase_b, _valid_b = lfp_phase_clustering.normalize_wavelet_phase(site_b.coefficients)
+    tensor = lfp_phase_clustering.make_phase_trial_tensor(
+        coefficient_times_s=site_a.time_s,
+        unit_phase=np.stack([phase_a, phase_b]),
+        event_times_s=np.array([10.0]),
+        trial_indices=np.array([3]),
+        window=(-0.2, 0.3),
+        output_sample_rate_hz=500.0,
+    )
+    expected = tensor.phase[0, :, 0] * np.conjugate(tensor.phase[1, :, 0])
+
+    np.testing.assert_allclose(result.relative_phase_complex, expected, atol=1e-6)
+
+
+def test_relative_phase_amplitude_mask_supports_off_percentile_and_absolute_modes():
+    """Optional masking should invalidate a pixel when either site has insufficient amplitude."""
+    result = lfp_phase_clustering.compute_single_trial_relative_phase(
+        site_a=_make_coefficient_result(phase_offset_rad=0.0),
+        site_b=_make_coefficient_result(phase_offset_rad=0.0),
+        event_time_s=10.0,
+        visible_window=(-0.1, 0.1),
+        output_sample_rate_hz=500.0,
+        trial_index=1,
+        site_a_label="A",
+        site_b_label="B",
+    )
+    result.amplitude_a[0, 2] = 0.1
+    result.amplitude_b[1, 3] = 0.1
+
+    off_mask = lfp_phase_clustering.make_relative_phase_display_mask(result, mode="Off")
+    percentile_mask = lfp_phase_clustering.make_relative_phase_display_mask(
+        result,
+        mode="Per-frequency percentile",
+        percentile=10.0,
+    )
+    absolute_mask = lfp_phase_clustering.make_relative_phase_display_mask(
+        result,
+        mode="Absolute magnitude",
+        absolute_threshold_a=0.5,
+        absolute_threshold_b=0.5,
+    )
+
+    np.testing.assert_array_equal(off_mask, result.numerical_valid)
+    assert not percentile_mask[0, 2]
+    assert not absolute_mask[0, 2]
+    assert not absolute_mask[1, 3]
+    assert absolute_mask[0, 0]
+
+
+def test_plot_single_trial_relative_phase_draws_heatmap_traces_and_behavior():
+    """The viewer figure should contain phase, two source traces, and behavior panels."""
+    result = lfp_phase_clustering.compute_single_trial_relative_phase(
+        site_a=_make_coefficient_result(phase_offset_rad=np.pi / 2.0),
+        site_b=_make_coefficient_result(phase_offset_rad=0.0),
+        event_time_s=10.0,
+        visible_window=(-0.2, 0.3),
+        output_sample_rate_hz=500.0,
+        trial_index=1,
+        site_a_label="HPC channel 2",
+        site_b_label="PFC channel 3",
+    )
+    trial_df = pd.DataFrame(
+        {
+            "start_time": [0.0, 9.0],
+            "choice_time": [1.0, 10.0],
+            "led_on_time": [0.5, 9.5],
+            "reward_time": [1.2, 10.2],
+            "action": [0, 1],
+        }
+    )
+    lick_times = {
+        unit_spike_plotting.LEFT_LICK_EVENT: np.array([9.8, 10.1]),
+        unit_spike_plotting.RIGHT_LICK_EVENT: np.array([9.9]),
+    }
+
+    figure, axes = unit_spike_plotting.plot_trial_lfp_relative_phase_and_behavior(
+        trial_df=trial_df,
+        trial_index=1,
+        lick_times=lick_times,
+        result=result,
+        display_valid_mask=result.numerical_valid,
+        alignment_event="choice_time",
+        window=(-0.2, 0.3),
+    )
+
+    assert axes.shape == (4,)
+    assert axes[0].get_yscale() == "log"
+    assert axes[0].collections[0].get_clim() == (-np.pi, np.pi)
+    assert axes[1].get_title().endswith("(unprocessed)")
+    assert axes[2].get_title().endswith("(unprocessed)")
+    assert axes[3].get_ylabel() == "Behavior"
+    assert figure.axes[-1].get_ylabel() == "Phase difference A - B (rad)"
+    np.testing.assert_allclose(
+        figure.axes[-1].get_yticks(),
+        [-np.pi, -np.pi / 2.0, 0.0, np.pi / 2.0, np.pi],
+    )
+    plt.close(figure)
