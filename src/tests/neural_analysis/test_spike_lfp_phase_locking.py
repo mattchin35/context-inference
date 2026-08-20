@@ -251,3 +251,243 @@ def test_save_spike_lfp_phase_locking_result_preserves_vectors_and_metadata(tmp_
     np.testing.assert_allclose(saved["merged_intervals_s"], [[0.0, 2.0], [4.0, 6.0]])
     assert saved["meta"].item()["normalization"] == "l1"
 
+
+def test_bin_phase_spike_counts_returns_frequency_by_phase_counts():
+    """Valid spike phases are binned into an integer frequency-by-phase matrix."""
+
+    phase_bin_edges_rad = np.array([-np.pi, -np.pi / 2.0, 0.0, np.pi / 2.0, np.pi])
+    phase_vectors = np.exp(
+        1j
+        * np.array(
+            [
+                [-2.8, -0.2, 0.2, 2.5],
+                [-2.8, -0.2, 0.2, 2.5],
+            ]
+        )
+    ).astype(np.complex64)
+    valid_mask = np.array(
+        [
+            [True, True, True, True],
+            [True, False, True, False],
+        ]
+    )
+
+    counts = spike_lfp_phase_locking.bin_phase_spike_counts(
+        phase_vectors=phase_vectors,
+        valid_mask=valid_mask,
+        phase_bin_edges_rad=phase_bin_edges_rad,
+    )
+
+    np.testing.assert_array_equal(counts, np.array([[1, 1, 1, 1], [1, 0, 1, 0]]))
+    assert counts.dtype.kind in "iu"
+
+
+def test_compute_phase_occupancy_uses_clipped_sample_support_and_masks():
+    """Occupancy is measured in seconds after interval clipping and validity masks."""
+
+    phase_bin_edges_rad = np.array([-np.pi, -np.pi / 2.0, 0.0, np.pi / 2.0, np.pi])
+    time_s = np.array([0.0, 0.25, 0.5, 0.75])
+    phase_vectors = np.exp(
+        1j
+        * np.array(
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [np.pi / 2.0, np.pi / 2.0, np.pi / 2.0, np.pi / 2.0],
+            ]
+        )
+    ).astype(np.complex64)
+    valid_mask = np.array(
+        [
+            [True, True, True, True],
+            [True, False, True, True],
+        ]
+    )
+    amplitude = np.array(
+        [
+            [2.0, 2.0, 0.5, 2.0],
+            [2.0, 2.0, 2.0, 2.0],
+        ]
+    )
+
+    occupancy = spike_lfp_phase_locking.compute_phase_occupancy(
+        phase_vectors=phase_vectors,
+        valid_mask=valid_mask,
+        time_s=time_s,
+        intervals_s=np.array([[0.125, 0.875]]),
+        phase_bin_edges_rad=phase_bin_edges_rad,
+        sample_rate_hz=4.0,
+        amplitude=amplitude,
+        absolute_amplitude_threshold=1.0,
+    )
+
+    expected = np.zeros((2, 4), dtype=float)
+    expected[0, 2] = 0.5
+    expected[1, 3] = 0.5
+    np.testing.assert_allclose(occupancy, expected)
+    assert occupancy.dtype.kind == "f"
+
+
+def test_compute_phase_firing_rate_returns_nan_for_zero_occupancy():
+    """Occupancy-normalized rates are in Hz and never represent zero exposure as infinity."""
+
+    spike_counts = np.array([[2, 1, 0], [0, 3, 1]], dtype=int)
+    occupancy_s = np.array([[1.0, 0.0, 0.5], [0.0, 1.5, 0.0]], dtype=float)
+
+    firing_rate_hz = spike_lfp_phase_locking.compute_phase_firing_rate_hz(
+        spike_counts=spike_counts,
+        occupancy_s=occupancy_s,
+    )
+
+    expected = np.array([[2.0, np.nan, 0.0], [np.nan, 2.0, np.nan]])
+    np.testing.assert_allclose(firing_rate_hz, expected, equal_nan=True)
+    assert not np.isinf(firing_rate_hz).any()
+
+
+def test_compute_frequency_phase_metrics_retains_phase_tuning_arrays_and_shapes():
+    """The result stores edges, counts, occupancy, and Hz rates with explicit axes."""
+
+    phase_bin_edges_rad = np.array([-np.pi, 0.0, np.pi])
+    phase_vectors = np.exp(1j * np.array([[-2.0, -0.2, 2.0], [0.1, 0.2, 0.3]])).astype(np.complex64)
+    occupancy_s = np.array([[1.0, 2.0], [0.5, 1.5]])
+
+    result = spike_lfp_phase_locking.compute_frequency_phase_metrics(
+        spike_phase_vectors=phase_vectors,
+        valid_mask=np.ones((2, 3), dtype=bool),
+        frequencies_hz=np.array([4.0, 8.0]),
+        spike_times_s=np.array([0.0, 1.0, 2.0]),
+        unit_id=5,
+        lfp_site_label="site",
+        phase_bin_edges_rad=phase_bin_edges_rad,
+        phase_occupancy_s=occupancy_s,
+    )
+
+    np.testing.assert_array_equal(result.phase_bin_edges_rad, phase_bin_edges_rad)
+    np.testing.assert_array_equal(result.phase_spike_counts, np.array([[2, 1], [0, 3]]))
+    np.testing.assert_allclose(result.phase_occupancy_s, occupancy_s)
+    np.testing.assert_allclose(result.phase_firing_rate_hz, [[2.0, 0.5], [0.0, 2.0]])
+    assert result.phase_spike_counts.shape == (2, 2)
+    assert result.phase_occupancy_s.shape == (2, 2)
+    assert result.phase_firing_rate_hz.shape == (2, 2)
+
+
+def _constant_wavelet_block_loader(load_calls: list[tuple[float, float]]):
+    """Build a deterministic loader for occupancy tests, with unit phase at 10 Hz."""
+
+    def block_loader(start_s: float, end_s: float) -> tuple[np.ndarray, np.ndarray, float]:
+        load_calls.append((start_s, end_s))
+        time_s = np.arange(start_s, end_s, 0.1)
+        return time_s, np.zeros(time_s.size), 10.0
+
+    return block_loader
+
+
+def test_trial_aligned_phase_locking_includes_occupancy_from_blocks_without_spikes(monkeypatch):
+    """A block contributes valid phase exposure even when no unit spikes occur there."""
+
+    load_calls: list[tuple[float, float]] = []
+
+    def fake_compute_wavelet_coefficients(**kwargs):
+        time_s = np.asarray(kwargs["time_s"], dtype=float)
+        frequencies_hz = np.asarray(kwargs["frequencies_hz"], dtype=float)
+        return lfp_phase_clustering.WaveletCoefficientResult(
+            time_s=time_s,
+            frequencies_hz=frequencies_hz,
+            coefficients=np.ones((frequencies_hz.size, time_s.size), dtype=np.complex64),
+            sample_rate_hz=10.0,
+            source_time_s=time_s,
+            source_lfp_values=np.asarray(kwargs["lfp_values"], dtype=float),
+            source_sample_rate_hz=10.0,
+        )
+
+    monkeypatch.setattr(
+        spike_lfp_phase_locking.lfp_phase_clustering,
+        "compute_wavelet_coefficients",
+        fake_compute_wavelet_coefficients,
+    )
+    result = spike_lfp_phase_locking.compute_trial_aligned_spike_phase_locking(
+        unit_spike_times_s=np.array([0.0]),
+        event_times_s=np.array([0.0, 10.0]),
+        trial_indices=np.array([0, 1]),
+        window=(-0.5, 0.5),
+        frequencies_hz=np.array([8.0]),
+        wavelet_padding_s=0.1,
+        maximum_core_duration_s=2.0,
+        block_loader=_constant_wavelet_block_loader(load_calls),
+        unit_id=1,
+        lfp_site_label="site",
+    )
+
+    assert len(load_calls) == 2
+    assert result.n_spikes[0] == 1
+    np.testing.assert_allclose(result.phase_occupancy_s[0].sum(), 2.0, atol=1e-7)
+
+
+def test_trial_aligned_phase_locking_deduplicates_overlapping_block_support(monkeypatch):
+    """Overlapping blocks count a shared interval and physical spike only once."""
+
+    load_calls: list[tuple[float, float]] = []
+
+    def fake_compute_wavelet_coefficients(**kwargs):
+        time_s = np.asarray(kwargs["time_s"], dtype=float)
+        frequencies_hz = np.asarray(kwargs["frequencies_hz"], dtype=float)
+        return lfp_phase_clustering.WaveletCoefficientResult(
+            time_s=time_s,
+            frequencies_hz=frequencies_hz,
+            coefficients=np.ones((frequencies_hz.size, time_s.size), dtype=np.complex64),
+            sample_rate_hz=10.0,
+            source_time_s=time_s,
+            source_lfp_values=np.asarray(kwargs["lfp_values"], dtype=float),
+            source_sample_rate_hz=10.0,
+        )
+
+    monkeypatch.setattr(
+        spike_lfp_phase_locking.lfp_phase_clustering,
+        "compute_wavelet_coefficients",
+        fake_compute_wavelet_coefficients,
+    )
+    result = spike_lfp_phase_locking.compute_trial_aligned_spike_phase_locking(
+        unit_spike_times_s=np.array([0.0]),
+        event_times_s=np.array([0.0, 1.0]),
+        trial_indices=np.array([0, 1]),
+        window=(-2.0, 2.0),
+        frequencies_hz=np.array([8.0]),
+        wavelet_padding_s=0.1,
+        maximum_core_duration_s=3.0,
+        block_loader=_constant_wavelet_block_loader(load_calls),
+        unit_id=1,
+        lfp_site_label="site",
+    )
+
+    assert len(load_calls) == 2
+    np.testing.assert_array_equal(result.spike_times_s, np.array([0.0]))
+    np.testing.assert_array_equal(result.n_spikes, np.array([1]))
+    np.testing.assert_allclose(result.phase_occupancy_s[0].sum(), 5.0, atol=1e-7)
+
+
+def test_save_spike_lfp_phase_locking_result_writes_phase_tuning_arrays(tmp_path: Path):
+    """NPZ output retains phase-bin edges, counts, occupancy, and firing rates."""
+
+    phase_bin_edges_rad = np.array([-np.pi, 0.0, np.pi])
+    result = spike_lfp_phase_locking.compute_frequency_phase_metrics(
+        spike_phase_vectors=np.exp(1j * np.array([[-2.0, -0.2, 2.0]])).astype(np.complex64),
+        valid_mask=np.ones((1, 3), dtype=bool),
+        frequencies_hz=np.array([8.0]),
+        spike_times_s=np.array([0.0, 1.0, 2.0]),
+        unit_id=5,
+        lfp_site_label="site",
+        phase_bin_edges_rad=phase_bin_edges_rad,
+        phase_occupancy_s=np.array([[1.0, 2.0]]),
+    )
+    output_path = tmp_path / "phase_tuning.npz"
+
+    spike_lfp_phase_locking.save_spike_lfp_phase_locking_result(
+        output_path=output_path,
+        result=result,
+        metadata={"analysis_version": "0.2.0"},
+    )
+
+    saved = np.load(output_path, allow_pickle=True)
+    np.testing.assert_array_equal(saved["phase_bin_edges_rad"], result.phase_bin_edges_rad)
+    np.testing.assert_array_equal(saved["phase_spike_counts"], result.phase_spike_counts)
+    np.testing.assert_allclose(saved["phase_occupancy_s"], result.phase_occupancy_s)
+    np.testing.assert_allclose(saved["phase_firing_rate_hz"], result.phase_firing_rate_hz)

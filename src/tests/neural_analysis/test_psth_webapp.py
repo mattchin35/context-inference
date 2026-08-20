@@ -30,6 +30,7 @@ def test_webapp_exposes_spike_lfp_phase_locking_defaults_and_cache_contract():
     assert psth_webapp.SPIKE_LFP_PHASE_MAX_FREQUENCY_HZ == 100.0
     assert psth_webapp.SPIKE_LFP_PHASE_FREQUENCY_COUNT == 50
     assert psth_webapp.SPIKE_LFP_PHASE_DEFAULT_POLAR_FREQUENCY_HZ == 8.0
+    assert psth_webapp.SPIKE_LFP_PHASE_BIN_COUNT == 24
     assert psth_webapp.SPIKE_LFP_PHASE_AMPLITUDE_MASK_OPTIONS == ("Off", "Absolute magnitude")
     assert psth_webapp.SPIKE_LFP_PHASE_CACHE_MAX_ENTRIES == 6
     parameters = inspect.signature(psth_webapp.compute_spike_lfp_phase_locking_cached).parameters
@@ -43,8 +44,18 @@ def test_webapp_exposes_spike_lfp_phase_locking_defaults_and_cache_contract():
         "lfp_path",
         "saved_channel_index",
         "absolute_amplitude_threshold",
+        "phase_bin_count",
     ):
         assert required_parameter in parameters
+
+
+def test_spike_lfp_phase_locking_cache_phase_bin_count_is_explicitly_cacheable():
+    """The phase-bin setting must participate in the cached computation contract."""
+    parameter = inspect.signature(psth_webapp.compute_spike_lfp_phase_locking_cached).parameters[
+        "phase_bin_count"
+    ]
+
+    assert parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
 
 
 def test_build_lfp_dropdown_options_preserves_empty_paths():
