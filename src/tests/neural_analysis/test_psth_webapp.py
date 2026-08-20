@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +19,32 @@ def test_build_lfp_dropdown_options_uses_only_explicit_probe_paths():
     assert list(options.keys()) == ["HPC/V1 LFP", "PFC LFP"]
     assert options["HPC/V1 LFP"] == "/data/hpc_v1/run0_g0_t0.imec1.lf.bin"
     assert options["PFC LFP"] == "/data/pfc/run0_g0_t0.imec0.lf.bin"
+
+
+def test_webapp_exposes_spike_lfp_phase_locking_defaults_and_cache_contract():
+    """Spike-LFP locking should be a dedicated pooled-trial view with explicit defaults."""
+
+    assert psth_webapp.PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING in psth_webapp.PLOT_VIEW_OPTIONS
+    assert psth_webapp.SPIKE_LFP_PHASE_DEFAULT_WINDOW == (-0.5, 0.5)
+    assert psth_webapp.SPIKE_LFP_PHASE_MIN_FREQUENCY_HZ == 2.0
+    assert psth_webapp.SPIKE_LFP_PHASE_MAX_FREQUENCY_HZ == 100.0
+    assert psth_webapp.SPIKE_LFP_PHASE_FREQUENCY_COUNT == 50
+    assert psth_webapp.SPIKE_LFP_PHASE_DEFAULT_POLAR_FREQUENCY_HZ == 8.0
+    assert psth_webapp.SPIKE_LFP_PHASE_AMPLITUDE_MASK_OPTIONS == ("Off", "Absolute magnitude")
+    assert psth_webapp.SPIKE_LFP_PHASE_CACHE_MAX_ENTRIES == 6
+    parameters = inspect.signature(psth_webapp.compute_spike_lfp_phase_locking_cached).parameters
+    for required_parameter in (
+        "unit_id",
+        "unit_spike_times_s",
+        "trial_indices",
+        "event_times_s",
+        "window_start_s",
+        "window_end_s",
+        "lfp_path",
+        "saved_channel_index",
+        "absolute_amplitude_threshold",
+    ):
+        assert required_parameter in parameters
 
 
 def test_build_lfp_dropdown_options_preserves_empty_paths():
