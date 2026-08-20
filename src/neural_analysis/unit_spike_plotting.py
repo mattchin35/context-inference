@@ -13,6 +13,7 @@ from src.neural_analysis.spike_behavior_pynapple import make_trial_type_masks
 
 if TYPE_CHECKING:
     from src.neural_analysis.lfp_phase_clustering import SingleTrialRelativePhaseResult, WithinTrialPLVResult
+    from src.neural_analysis.spike_lfp_phase_locking import SpikePhaseLockingResult
 
 
 LEFT_LICK_EVENT = "left_entry"
@@ -23,6 +24,100 @@ LICK_RASTER_STYLES = {
     LEFT_LICK_EVENT: {"label": "Left licks", "color": "tab:orange"},
     RIGHT_LICK_EVENT: {"label": "Right licks", "color": "tab:blue"},
 }
+
+
+def plot_spike_lfp_phase_locking(
+    result: SpikePhaseLockingResult,
+    polar_frequency_hz: float,
+    polar_bin_count: int = 24,
+    figure_size: tuple[float, float] = (11.0, 6.0),
+) -> tuple[plt.Figure, dict[str, plt.Axes]]:
+    """
+    Plot frequency-resolved locking metrics and one spike-phase histogram.
+
+    Parameters
+    ----------
+    result : SpikePhaseLockingResult
+        Frequency metrics with shape ``(frequency,)`` and sampled complex phase
+        arrays with shape ``(frequency, spike)``. Frequencies are in Hz and
+        preferred phase is in radians.
+    polar_frequency_hz : float
+        Requested positive frequency in Hz. The nearest computed frequency is
+        displayed and identified in the polar title.
+    polar_bin_count : int, default=24
+        Positive number of equal-width phase bins spanning ``[-pi, pi]``.
+    figure_size : tuple[float, float], default=(11.0, 6.0)
+        Figure dimensions in inches.
+
+    Returns
+    -------
+    tuple[plt.Figure, dict[str, plt.Axes]]
+        Figure and axes named ``ppc``, ``resultant_length``, and ``polar``.
+    """
+
+    frequencies_hz = np.asarray(result.frequencies_hz, dtype=float).reshape(-1)
+    ppc = np.asarray(result.ppc, dtype=float).reshape(-1)
+    resultant_length = np.asarray(result.resultant_length, dtype=float).reshape(-1)
+    preferred_phase = np.asarray(result.preferred_phase_rad, dtype=float).reshape(-1)
+    spike_counts = np.asarray(result.n_spikes, dtype=int).reshape(-1)
+    phase_vectors = np.asarray(result.spike_phase_vectors)
+    phase_valid = np.asarray(result.spike_phase_valid, dtype=bool)
+    if frequencies_hz.size == 0 or np.any(frequencies_hz <= 0.0):
+        raise ValueError("result frequencies_hz must contain positive values.")
+    if any(values.shape != frequencies_hz.shape for values in (ppc, resultant_length, preferred_phase, spike_counts)):
+        raise ValueError("Frequency metrics must match frequencies_hz.")
+    if phase_vectors.shape != phase_valid.shape or phase_vectors.shape[0] != frequencies_hz.size:
+        raise ValueError("Sampled phase arrays must have shape (frequency, spike).")
+    if not np.isfinite(float(polar_frequency_hz)) or float(polar_frequency_hz) <= 0.0:
+        raise ValueError("polar_frequency_hz must be positive and finite.")
+    if int(polar_bin_count) != polar_bin_count or int(polar_bin_count) < 1:
+        raise ValueError("polar_bin_count must be a positive integer.")
+
+    figure = plt.figure(figsize=(float(figure_size[0]), float(figure_size[1])))
+    grid = figure.add_gridspec(2, 2, width_ratios=[1.5, 1.0], hspace=0.3, wspace=0.3)
+    ppc_axis = figure.add_subplot(grid[0, 0])
+    resultant_axis = figure.add_subplot(grid[1, 0], sharex=ppc_axis)
+    polar_axis = figure.add_subplot(grid[:, 1], projection="polar")
+    axes = {"ppc": ppc_axis, "resultant_length": resultant_axis, "polar": polar_axis}
+
+    ppc_axis.plot(frequencies_hz, ppc, color="tab:blue", marker=".", linewidth=1.2)
+    ppc_axis.axhline(0.0, color="0.4", linestyle="--", linewidth=1.0)
+    ppc_axis.set_xscale("log")
+    ppc_axis.set_ylabel("PPC")
+    ppc_axis.set_title(f"Unit {result.unit_id} to {result.lfp_site_label}")
+    resultant_axis.plot(frequencies_hz, resultant_length, color="tab:orange", marker=".", linewidth=1.2)
+    resultant_axis.set_xscale("log")
+    resultant_axis.set_ylim(0.0, 1.0)
+    resultant_axis.set_xlabel("Frequency (Hz)")
+    resultant_axis.set_ylabel("Mean resultant length")
+
+    frequency_index = int(np.argmin(np.abs(frequencies_hz - float(polar_frequency_hz))))
+    selected_frequency_hz = float(frequencies_hz[frequency_index])
+    selected_vectors = phase_vectors[frequency_index, phase_valid[frequency_index]]
+    selected_phases = np.angle(selected_vectors)
+    bin_edges = np.linspace(-np.pi, np.pi, int(polar_bin_count) + 1)
+    counts, _ = np.histogram(selected_phases, bins=bin_edges)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+    bin_width = float(2.0 * np.pi / int(polar_bin_count))
+    polar_axis.bar(bin_centers, counts, width=bin_width, color="tab:blue", alpha=0.55, edgecolor="white")
+    maximum_count = max(1.0, float(np.max(counts)) if counts.size else 1.0)
+    if np.isfinite(preferred_phase[frequency_index]):
+        vector_radius = maximum_count * float(resultant_length[frequency_index])
+        polar_axis.annotate(
+            "",
+            xy=(float(preferred_phase[frequency_index]), vector_radius),
+            xytext=(0.0, 0.0),
+            arrowprops={"arrowstyle": "->", "color": "black", "linewidth": 2.0},
+        )
+    polar_axis.set_theta_zero_location("E")
+    polar_axis.set_theta_direction(1)
+    polar_axis.set_title(
+        f"Spike phases at {selected_frequency_hz:g} Hz\n"
+        f"n={int(spike_counts[frequency_index])}, preferred={preferred_phase[frequency_index]:.2f} rad",
+        pad=20.0,
+    )
+    figure.subplots_adjust(left=0.08, right=0.95, top=0.9, bottom=0.1)
+    return figure, axes
 
 
 def filter_trials_for_unit_plot(

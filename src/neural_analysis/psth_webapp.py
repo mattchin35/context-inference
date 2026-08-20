@@ -17,6 +17,7 @@ from src.neural_analysis import (
     population_pca_decoding,
     population_pca_switch_trajectories,
     spike_behavior_pynapple,
+    spike_lfp_phase_locking,
     unit_spike_loading,
     unit_spike_plotting,
 )
@@ -45,6 +46,7 @@ PLOT_VIEW_PCA_DECODING = "Population PCA decoding"
 PLOT_VIEW_PCA_SWITCH_TRAJECTORIES = "Population PCA switch trajectories"
 PLOT_VIEW_LFP_PHASE_CLUSTERING = "LFP phase clustering"
 PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE = "Single-trial relative phase"
+PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING = "Spike-LFP phase locking"
 PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_UNIT_RASTER,
     PLOT_VIEW_TRIAL_SPIKES,
@@ -52,6 +54,7 @@ PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_PCA_SWITCH_TRAJECTORIES,
     PLOT_VIEW_LFP_PHASE_CLUSTERING,
     PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE,
+    PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING,
 ]
 UNIT_PLOT_TYPE_OPTIONS = [
     "PSTH",
@@ -136,6 +139,14 @@ WITHIN_TRIAL_PLV_MAX_WINDOW_DEFAULT_ENABLED = False
 WITHIN_TRIAL_PLV_DEFAULT_MIN_WINDOW_S = 0.05
 WITHIN_TRIAL_PLV_DEFAULT_MAX_WINDOW_S = 1.0
 RELATIVE_PHASE_CACHE_MAX_ENTRIES = 12
+SPIKE_LFP_PHASE_DEFAULT_WINDOW = (-0.5, 0.5)
+SPIKE_LFP_PHASE_MIN_FREQUENCY_HZ = 2.0
+SPIKE_LFP_PHASE_MAX_FREQUENCY_HZ = 100.0
+SPIKE_LFP_PHASE_FREQUENCY_COUNT = 50
+SPIKE_LFP_PHASE_DEFAULT_POLAR_FREQUENCY_HZ = 8.0
+SPIKE_LFP_PHASE_AMPLITUDE_MASK_OPTIONS = ("Off", "Absolute magnitude")
+SPIKE_LFP_PHASE_MAXIMUM_CORE_DURATION_S = 120.0
+SPIKE_LFP_PHASE_CACHE_MAX_ENTRIES = 6
 DEFAULT_BROWSER_ROOT = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026")
 RASTER_LAYOUT_OPTIONS = {
     "Compact": {"row_spacing": 1.0, "figure_size": (12.0, 7.0)},
@@ -1183,6 +1194,152 @@ def compute_single_trial_relative_phase_cached(
             float(window_start_s) - plv_support_s,
             float(window_end_s) + plv_support_s,
         ),
+    )
+
+
+@st.cache_data(
+    show_spinner="Computing spike-LFP phase locking...",
+    max_entries=SPIKE_LFP_PHASE_CACHE_MAX_ENTRIES,
+)
+def compute_spike_lfp_phase_locking_cached(
+    lfp_format: str,
+    lfp_path: str,
+    lfp_mtime_ns: int,
+    saved_channel_index: int,
+    lfp_site_label: str,
+    aligned_sync_path: str | None,
+    aligned_sync_mtime_ns: int,
+    unit_id: int,
+    unit_spike_times_s: tuple[float, ...],
+    trial_indices: tuple[int, ...],
+    event_times_s: tuple[float, ...],
+    window_start_s: float,
+    window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    frequencies_hz: tuple[float, ...],
+    gaussian_width: float,
+    wavelet_window_length: float,
+    precision: int,
+    norm: str,
+    target_sample_rate_hz: float,
+    notch_60_hz: bool,
+    notch_quality_factor: float,
+    minimum_relative_magnitude: float,
+    absolute_amplitude_threshold: float,
+    maximum_core_duration_s: float,
+) -> spike_lfp_phase_locking.SpikePhaseLockingResult:
+    """
+    Load bounded continuous LFP blocks and pool one unit's trial-window phases.
+
+    Parameters
+    ----------
+    lfp_format : str
+        Shared acquisition format from ``LFP_FORMAT_OPTIONS``.
+    lfp_path : str
+        SpikeGLX ``.lf.bin`` or Open Ephys-derived ``lfp.dat`` path.
+    lfp_mtime_ns : int
+        LFP modification time in nanoseconds used for cache invalidation.
+    saved_channel_index : int
+        Zero-based LFP saved-channel index.
+    lfp_site_label : str
+        Human-readable independent probe/channel label.
+    aligned_sync_path : str | None
+        Open Ephys aligned sync path; ``None`` for SpikeGLX.
+    aligned_sync_mtime_ns : int
+        Sync-file modification time in nanoseconds or ``-1`` when unused.
+    unit_id : int
+        Source sorter cluster identifier.
+    unit_spike_times_s : tuple[float, ...]
+        Unit spike timestamps in synchronized absolute seconds.
+    trial_indices : tuple[int, ...]
+        Selected integer source trial rows.
+    event_times_s : tuple[float, ...]
+        Selected chronological alignment timestamps in absolute seconds.
+    window_start_s, window_end_s : float
+        Event-relative half-open analysis bounds in seconds.
+    digital_word, irig_line : int
+        SpikeGLX synchronization word and IRIG line.
+    bit_period_s : float
+        SpikeGLX IRIG bit period in seconds.
+    utc_offset_hours : float
+        Constant synchronization offset in hours.
+    frequencies_hz : tuple[float, ...]
+        Positive Morlet frequencies in Hz.
+    gaussian_width, wavelet_window_length : float
+        Dimensionless Pynapple Morlet parameters.
+    precision : int
+        Base-2 Morlet precision.
+    norm : str
+        Pynapple wavelet normalization.
+    target_sample_rate_hz : float
+        Preferred post-decimation wavelet sample rate in Hz.
+    notch_60_hz : bool
+        Whether to apply the existing 60 Hz notch before decimation.
+    notch_quality_factor : float
+        Dimensionless notch quality factor.
+    minimum_relative_magnitude : float
+        Relative numerical coefficient threshold.
+    absolute_amplitude_threshold : float
+        Source-dependent wavelet magnitude threshold at spike timestamps.
+    maximum_core_duration_s : float
+        Maximum unpadded transform block span in seconds.
+
+    Returns
+    -------
+    spike_lfp_phase_locking.SpikePhaseLockingResult
+        Frequency metrics and retained arrays with shape
+        ``(frequency, selected_spike)``.
+    """
+
+    del lfp_mtime_ns, aligned_sync_mtime_ns
+    frequencies = np.asarray(frequencies_hz, dtype=float)
+    padding_s = lfp_spectrogram.compute_wavelet_padding_s(
+        minimum_frequency_hz=float(np.min(frequencies)),
+        window_length=float(wavelet_window_length),
+    )
+
+    def load_absolute_block(start_s: float, end_s: float) -> tuple[np.ndarray, np.ndarray, float]:
+        """Load one synchronized absolute LFP interval and preserve source units."""
+
+        center_s = (float(start_s) + float(end_s)) / 2.0
+        relative_time_s, lfp_values, sample_rate_hz = load_trial_lfp_trace_for_format_with_sample_rate(
+            lfp_format=lfp_format,
+            lfp_path=lfp_path,
+            saved_channel_index=int(saved_channel_index),
+            alignment_time_s=center_s,
+            window_start_s=float(start_s) - center_s,
+            window_end_s=float(end_s) - center_s,
+            digital_word=int(digital_word),
+            irig_line=int(irig_line),
+            bit_period_s=float(bit_period_s),
+            utc_offset_hours=float(utc_offset_hours),
+            aligned_sync_npz_path=aligned_sync_path,
+        )
+        return center_s + relative_time_s, lfp_values, float(sample_rate_hz)
+
+    return spike_lfp_phase_locking.compute_trial_aligned_spike_phase_locking(
+        unit_spike_times_s=np.asarray(unit_spike_times_s, dtype=float),
+        event_times_s=np.asarray(event_times_s, dtype=float),
+        trial_indices=np.asarray(trial_indices, dtype=int),
+        window=(float(window_start_s), float(window_end_s)),
+        frequencies_hz=frequencies,
+        wavelet_padding_s=padding_s,
+        maximum_core_duration_s=float(maximum_core_duration_s),
+        block_loader=load_absolute_block,
+        unit_id=int(unit_id),
+        lfp_site_label=lfp_site_label,
+        gaussian_width=float(gaussian_width),
+        wavelet_window_length=float(wavelet_window_length),
+        precision=int(precision),
+        norm=norm,
+        target_sample_rate_hz=float(target_sample_rate_hz),
+        notch_60_hz=bool(notch_60_hz),
+        notch_quality_factor=float(notch_quality_factor),
+        minimum_relative_magnitude=float(minimum_relative_magnitude),
+        absolute_amplitude_threshold=float(absolute_amplitude_threshold),
     )
 
 
@@ -2730,6 +2887,310 @@ def _select_unit_metadata(cluster_info, region_channels):
     )
 
 
+def render_spike_lfp_phase_locking_view(
+    trial_df: pd.DataFrame,
+    session: spike_behavior_pynapple.Session,
+    spike_group: object,
+    unit_ids: np.ndarray,
+    active_probe_label: str,
+    hpc_v1_lfp_path: str,
+    pfc_lfp_path: str,
+    hpc_v1_aligned_spike_path: str,
+    pfc_aligned_spike_path: str,
+) -> None:
+    """
+    Render and optionally save pooled trial-aligned spike-LFP phase locking.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Session trial table with shape ``(n_trials, n_columns)`` and absolute
+        synchronized event times in seconds.
+    session : spike_behavior_pynapple.Session
+        Session metadata whose data root receives timestamped outputs.
+    spike_group : object
+        Pynapple ``TsGroup`` keyed by integer cluster id, with timestamps in
+        synchronized absolute seconds.
+    unit_ids : np.ndarray
+        Selectable integer unit ids with shape ``(n_units,)`` from the active
+        probe's current region and quality filters.
+    active_probe_label : str
+        Probe owning the selected units. The LFP site remains independently
+        selectable.
+    hpc_v1_lfp_path, pfc_lfp_path : str
+        Probe-specific continuous LFP binary paths.
+    hpc_v1_aligned_spike_path, pfc_aligned_spike_path : str
+        Probe-specific aligned sync paths for Open Ephys-derived LFP.
+
+    Returns
+    -------
+    None
+        Streamlit renders frequency metrics, a polar phase histogram, and
+        optional timestamped NPZ/PNG outputs.
+    """
+
+    st.sidebar.header("Spike-LFP Phase Locking")
+    available_unit_ids = np.asarray(unit_ids, dtype=int).reshape(-1)
+    selected_unit_id = int(st.sidebar.selectbox("Unit", options=available_unit_ids.tolist()))
+    condition = st.sidebar.selectbox("Trial condition", options=CONDITION_OPTIONS)
+    action_options = {label: value for label, value in ACTION_OPTIONS.items() if value != COMPARE_LEFT_RIGHT_ACTION}
+    action_label = st.sidebar.selectbox("Action", options=list(action_options))
+    alignment_event = st.sidebar.selectbox("Alignment event", options=ALIGNMENT_OPTIONS)
+    window_start_s = float(
+        st.sidebar.number_input(
+            "Window start (s)",
+            value=float(SPIKE_LFP_PHASE_DEFAULT_WINDOW[0]),
+            step=0.1,
+        )
+    )
+    window_end_s = float(
+        st.sidebar.number_input(
+            "Window end (s)",
+            value=float(SPIKE_LFP_PHASE_DEFAULT_WINDOW[1]),
+            step=0.1,
+        )
+    )
+    if window_start_s >= window_end_s:
+        st.error("Window start must be less than window end.")
+        st.stop()
+
+    selected_trial_indices = unit_spike_plotting.filter_trials_for_unit_plot(
+        trial_df=trial_df,
+        condition=condition,
+        action=action_options[action_label],
+    )
+    alignment_times = pd.to_numeric(trial_df[alignment_event], errors="coerce").to_numpy(dtype=float)
+    finite_alignment = np.isfinite(alignment_times[selected_trial_indices])
+    selected_trial_indices = selected_trial_indices[finite_alignment]
+    if selected_trial_indices.size == 0:
+        st.warning("No trials match the selected condition, action, and alignment event.")
+        st.stop()
+
+    lfp_format = st.sidebar.selectbox("LFP format", options=LFP_FORMAT_OPTIONS)
+    utc_offset_hours = float(
+        st.sidebar.number_input("LFP UTC offset (hours)", value=0, step=1, format="%d")
+    )
+    probe_options = [LFP_DROPDOWN_LABEL_HPC_V1, LFP_DROPDOWN_LABEL_PFC]
+    default_probe_index = 0 if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1 else 1
+    lfp_probe_label = st.sidebar.selectbox("LFP probe", options=probe_options, index=default_probe_index)
+    lfp_saved_channel_index = int(
+        st.sidebar.number_input("LFP saved channel", min_value=0, value=0, step=1)
+    )
+
+    minimum_frequency_hz = float(
+        st.sidebar.number_input(
+            "Minimum frequency (Hz)",
+            min_value=0.1,
+            value=float(SPIKE_LFP_PHASE_MIN_FREQUENCY_HZ),
+            step=0.5,
+        )
+    )
+    maximum_frequency_hz = float(
+        st.sidebar.number_input(
+            "Maximum frequency (Hz)",
+            min_value=0.2,
+            value=float(SPIKE_LFP_PHASE_MAX_FREQUENCY_HZ),
+            step=5.0,
+        )
+    )
+    frequency_count = int(
+        st.sidebar.number_input(
+            "Frequency count",
+            min_value=2,
+            value=int(SPIKE_LFP_PHASE_FREQUENCY_COUNT),
+            step=1,
+        )
+    )
+    if minimum_frequency_hz >= maximum_frequency_hz:
+        st.error("Maximum frequency must be greater than minimum frequency.")
+        st.stop()
+    frequencies_hz = np.geomspace(minimum_frequency_hz, maximum_frequency_hz, frequency_count)
+    polar_default_index = int(np.argmin(np.abs(frequencies_hz - SPIKE_LFP_PHASE_DEFAULT_POLAR_FREQUENCY_HZ)))
+    polar_frequency_hz = float(
+        st.sidebar.selectbox(
+            "Polar frequency (Hz)",
+            options=frequencies_hz.tolist(),
+            index=polar_default_index,
+            format_func=lambda value: f"{float(value):.3g}",
+        )
+    )
+    gaussian_width = float(
+        st.sidebar.number_input(
+            "Morlet Gaussian width",
+            min_value=0.1,
+            value=float(LFP_SPECTROGRAM_GAUSSIAN_WIDTH),
+            step=0.1,
+        )
+    )
+    wavelet_window_length = float(
+        st.sidebar.number_input(
+            "Morlet window length",
+            min_value=0.1,
+            value=float(LFP_SPECTROGRAM_WINDOW_LENGTH),
+            step=0.1,
+        )
+    )
+    wavelet_norm = st.sidebar.selectbox("Morlet normalization", options=["l1", "l2"])
+    notch_60_hz = st.sidebar.checkbox("Apply 60 Hz notch", value=False)
+    amplitude_mask_mode = st.sidebar.selectbox(
+        "Low-amplitude masking",
+        options=SPIKE_LFP_PHASE_AMPLITUDE_MASK_OPTIONS,
+    )
+    absolute_amplitude_threshold = 0.0
+    if amplitude_mask_mode == "Absolute magnitude":
+        absolute_amplitude_threshold = float(
+            st.sidebar.number_input(
+                "Wavelet magnitude threshold",
+                min_value=0.0,
+                value=0.0,
+                format="%.6g",
+            )
+        )
+
+    probe_sources = {
+        LFP_DROPDOWN_LABEL_HPC_V1: (hpc_v1_lfp_path, hpc_v1_aligned_spike_path),
+        LFP_DROPDOWN_LABEL_PFC: (pfc_lfp_path, pfc_aligned_spike_path),
+    }
+    raw_lfp_path, raw_sync_path = probe_sources[lfp_probe_label]
+    lfp_source = Path(str(raw_lfp_path)).expanduser()
+    if not str(raw_lfp_path).strip() or not lfp_source.is_file():
+        st.error(f"LFP path for {lfp_probe_label} does not exist: {lfp_source}")
+        st.stop()
+    aligned_sync_path = None
+    aligned_sync_mtime_ns = -1
+    if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED:
+        sync_source = Path(str(raw_sync_path)).expanduser()
+        if not str(raw_sync_path).strip() or not sync_source.is_file():
+            st.error(f"Aligned sync path for {lfp_probe_label} does not exist: {sync_source}")
+            st.stop()
+        aligned_sync_path = str(sync_source)
+        aligned_sync_mtime_ns = sync_source.stat().st_mtime_ns
+
+    unit_spike_times_s = unit_spike_loading.get_unit_spike_times(spike_group, selected_unit_id)
+    lfp_site_label = f"{lfp_probe_label}, channel {lfp_saved_channel_index}"
+    try:
+        result = compute_spike_lfp_phase_locking_cached(
+            lfp_format=lfp_format,
+            lfp_path=str(lfp_source),
+            lfp_mtime_ns=lfp_source.stat().st_mtime_ns,
+            saved_channel_index=lfp_saved_channel_index,
+            lfp_site_label=lfp_site_label,
+            aligned_sync_path=aligned_sync_path,
+            aligned_sync_mtime_ns=aligned_sync_mtime_ns,
+            unit_id=selected_unit_id,
+            unit_spike_times_s=tuple(unit_spike_times_s.tolist()),
+            trial_indices=tuple(selected_trial_indices.tolist()),
+            event_times_s=tuple(alignment_times[selected_trial_indices].tolist()),
+            window_start_s=window_start_s,
+            window_end_s=window_end_s,
+            digital_word=0,
+            irig_line=6,
+            bit_period_s=1.0,
+            utc_offset_hours=utc_offset_hours,
+            frequencies_hz=tuple(frequencies_hz.tolist()),
+            gaussian_width=gaussian_width,
+            wavelet_window_length=wavelet_window_length,
+            precision=LFP_SPECTROGRAM_PRECISION,
+            norm=wavelet_norm,
+            target_sample_rate_hz=LFP_PHASE_CLUSTERING_OUTPUT_SAMPLE_RATE_HZ,
+            notch_60_hz=notch_60_hz,
+            notch_quality_factor=LFP_SPECTROGRAM_NOTCH_QUALITY_FACTOR,
+            minimum_relative_magnitude=LFP_PHASE_CLUSTERING_MINIMUM_RELATIVE_MAGNITUDE,
+            absolute_amplitude_threshold=absolute_amplitude_threshold,
+            maximum_core_duration_s=SPIKE_LFP_PHASE_MAXIMUM_CORE_DURATION_S,
+        )
+    except Exception as error:  # noqa: BLE001 - Streamlit should report unit/site-specific failures.
+        st.error(f"Could not compute spike-LFP phase locking: {error}")
+        st.stop()
+
+    figure, _axes = unit_spike_plotting.plot_spike_lfp_phase_locking(
+        result=result,
+        polar_frequency_hz=polar_frequency_hz,
+    )
+    metadata_column, figure_column = st.columns([1, 3])
+    with metadata_column:
+        st.subheader("Spike-LFP Phase Locking")
+        st.write(f"Unit: {selected_unit_id} ({active_probe_label})")
+        st.write(f"LFP site: {lfp_site_label}")
+        st.write(f"Condition: {condition}")
+        st.write(f"Action: {action_label}")
+        st.write(f"Trials: {selected_trial_indices.size}")
+        st.write(f"Selected spikes: {result.spike_times_s.size}")
+        retained_bytes = (
+            result.spike_phase_vectors.nbytes
+            + result.spike_phase_valid.nbytes
+            + result.amplitude_at_spikes.nbytes
+        )
+        st.write(f"Retained phase data: {retained_bytes / (1024.0**2):.1f} MB")
+    with figure_column:
+        st.pyplot(figure, width="stretch")
+        st.caption(
+            "PPC is not clipped and may be negative. It is descriptive here: spikes can be temporally "
+            "correlated, and high-frequency phase from a nearby LFP site can contain spike contamination."
+        )
+
+    if st.button("Save spike-LFP phase-locking result"):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        numeric_output_dir = (
+            Path(session.session_data_home) / "ephys" / "derived" / "spike_lfp_phase_locking" / timestamp
+        )
+        run_output_dir = (
+            Path(session.session_data_home) / "analysis_runs" / f"spike_lfp_phase_locking_{timestamp}"
+        )
+        metadata = {
+            "generator": "src.neural_analysis.spike_lfp_phase_locking",
+            "analysis_version": spike_lfp_phase_locking.ANALYSIS_VERSION,
+            "session_id": session.sess_id_full,
+            "unit_id": selected_unit_id,
+            "unit_probe": active_probe_label,
+            "lfp_site": lfp_site_label,
+            "lfp_path": str(lfp_source),
+            "lfp_format": lfp_format,
+            "condition": condition,
+            "action": action_label,
+            "alignment_event": alignment_event,
+            "window_s": [window_start_s, window_end_s],
+            "frequencies_hz": frequencies_hz.tolist(),
+            "gaussian_width": gaussian_width,
+            "window_length": wavelet_window_length,
+            "normalization": wavelet_norm,
+            "notch_60_hz": notch_60_hz,
+            "target_sample_rate_hz": LFP_PHASE_CLUSTERING_OUTPUT_SAMPLE_RATE_HZ,
+            "amplitude_mask_mode": amplitude_mask_mode,
+            "absolute_amplitude_threshold": absolute_amplitude_threshold,
+            "amplitude_units": "source-dependent wavelet magnitude",
+            "phase_units": "radians",
+            "time_units": "absolute synchronized seconds",
+            "axis_order": ["frequency", "spike"],
+            "random_seed": None,
+        }
+        spike_lfp_phase_locking.save_spike_lfp_phase_locking_result(
+            output_path=numeric_output_dir / "spike_lfp_phase_locking.npz",
+            result=result,
+            metadata=metadata,
+        )
+        run_output_dir.mkdir(parents=True, exist_ok=False)
+        figure.savefig(run_output_dir / "spike_lfp_phase_locking.png", dpi=200, bbox_inches="tight")
+        (run_output_dir / "summary.md").write_text(
+            "\n".join(
+                [
+                    "# Spike-LFP phase locking",
+                    "",
+                    f"Session: {session.sess_id_full}",
+                    f"Unit: {selected_unit_id} ({active_probe_label})",
+                    f"LFP site: {lfp_site_label}",
+                    f"Selected trials: {selected_trial_indices.size}",
+                    f"Selected spikes: {result.spike_times_s.size}",
+                    f"Numeric result: {numeric_output_dir / 'spike_lfp_phase_locking.npz'}",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        st.success(f"Saved analysis to {run_output_dir}")
+    plt.close(figure)
+
+
 def main() -> None:
     """
     Run the local Streamlit unit raster/PSTH browser.
@@ -2948,6 +3409,19 @@ def main() -> None:
         st.stop()
 
     unit_ids = selected_unit_metadata["cluster_id"].to_numpy(dtype=int)
+    if plot_view == PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING:
+        render_spike_lfp_phase_locking_view(
+            trial_df=trial_df,
+            session=session,
+            spike_group=spike_group,
+            unit_ids=unit_ids,
+            active_probe_label=active_probe_label,
+            hpc_v1_lfp_path=hpc_v1_lfp_path,
+            pfc_lfp_path=pfc_lfp_path,
+            hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
+            pfc_aligned_spike_path=pfc_aligned_spike_path,
+        )
+        return
     if plot_view == PLOT_VIEW_PCA_SWITCH_TRAJECTORIES:
         st.sidebar.header("PCA Switch Trajectories")
         pre_switch_filter = st.sidebar.selectbox(
