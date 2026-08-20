@@ -524,3 +524,252 @@ def test_save_single_trial_relative_phase_result_round_trips_numeric_output(tmp_
     np.testing.assert_array_equal(saved["source_lfp_a"], result.source_lfp_a)
     assert saved["trial_index"].item() == 8
     assert saved["meta"].item()["mask_mode"] == "Off"
+
+
+def test_plv_window_samples_follow_cycles_and_use_odd_centered_windows():
+    """Cycle windows should become odd sample counts with documented effective durations."""
+    sample_counts, effective_window_s = lfp_phase_clustering.compute_plv_window_samples(
+        frequencies_hz=np.array([4.0, 8.0, 20.0, 40.0]),
+        sample_rate_hz=1000.0,
+        window_cycles=3.0,
+    )
+
+    np.testing.assert_array_equal(sample_counts % 2, np.ones(4, dtype=int))
+    np.testing.assert_array_equal(sample_counts, np.array([751, 375, 151, 75]))
+    np.testing.assert_allclose(effective_window_s, sample_counts / 1000.0)
+
+
+def test_plv_window_samples_apply_independent_optional_duration_bounds():
+    """Enabled minimum and maximum bounds should clip before odd sample conversion."""
+    sample_counts, effective_window_s = lfp_phase_clustering.compute_plv_window_samples(
+        frequencies_hz=np.array([2.0, 100.0]),
+        sample_rate_hz=500.0,
+        window_cycles=3.0,
+        min_window_s=0.05,
+        max_window_s=1.0,
+    )
+
+    np.testing.assert_array_equal(sample_counts, np.array([501, 25]))
+    np.testing.assert_allclose(effective_window_s, np.array([1.002, 0.05]))
+
+
+def _compute_test_plv(
+    relative_phase: np.ndarray,
+    valid: np.ndarray | None = None,
+    visible_window: tuple[float, float] = (-0.5, 0.5),
+    min_valid_fraction: float = 0.8,
+) -> lfp_phase_clustering.WithinTrialPLVResult:
+    """Compute PLV for deterministic frequency-by-time synthetic phase vectors."""
+
+    time_s = np.arange(-1.0, 1.0, 0.002)
+    phase = np.asarray(relative_phase, dtype=np.complex64)
+    if phase.ndim == 1:
+        phase = phase[np.newaxis, :]
+    if valid is None:
+        valid = np.ones(phase.shape, dtype=bool)
+    return lfp_phase_clustering.compute_within_trial_plv(
+        relative_phase_complex=phase,
+        valid_mask=np.asarray(valid, dtype=bool),
+        frequencies_hz=np.full(phase.shape[0], 10.0),
+        relative_time_s=time_s,
+        visible_window=visible_window,
+        window_cycles=3.0,
+        min_valid_fraction=min_valid_fraction,
+        trial_index=5,
+        site_a_label="A",
+        site_b_label="B",
+    )
+
+
+def test_within_trial_plv_is_high_for_zero_quadrature_and_pi_offsets():
+    """PLV should measure phase stability rather than proximity to zero lag."""
+    time_s = np.arange(-1.0, 1.0, 0.002)
+    phase = np.stack(
+        [np.exp(1j * offset) * np.ones(time_s.size) for offset in (0.0, np.pi / 2.0, np.pi)]
+    )
+
+    result = _compute_test_plv(phase)
+
+    np.testing.assert_allclose(result.plv, 1.0, atol=1e-6)
+    assert result.plv.dtype == np.float32
+    assert result.plv.shape == (3, 500)
+    assert result.window_cycles == 3.0
+
+
+def test_within_trial_plv_drops_for_changing_and_random_relative_phase():
+    """Temporal phase drift and unrelated phase should reduce local vector length."""
+    random_generator = np.random.default_rng(91)
+    time_s = np.arange(-1.0, 1.0, 0.002)
+    changing = np.exp(1j * 2.0 * np.pi * 10.0 * time_s)
+    random_phase = np.exp(1j * random_generator.uniform(-np.pi, np.pi, time_s.size))
+
+    result = _compute_test_plv(np.stack([changing, random_phase]))
+
+    assert float(np.nanmedian(result.plv[0])) < 0.05
+    assert float(np.nanmedian(result.plv[1])) < 0.2
+
+
+def test_within_trial_plv_uses_padded_support_and_requires_full_centered_window():
+    """Visible-edge estimates should be finite only when phase support extends beyond the crop."""
+    full_time_s = np.arange(-1.0, 1.0, 0.002)
+    full_phase = np.ones((1, full_time_s.size), dtype=np.complex64)
+    padded = _compute_test_plv(full_phase, visible_window=(-0.5, 0.5))
+    visible_only = lfp_phase_clustering.compute_within_trial_plv(
+        relative_phase_complex=np.ones((1, 500), dtype=np.complex64),
+        valid_mask=np.ones((1, 500), dtype=bool),
+        frequencies_hz=np.array([10.0]),
+        relative_time_s=np.arange(-0.5, 0.5, 0.002),
+        visible_window=(-0.5, 0.5),
+        window_cycles=3.0,
+        min_valid_fraction=0.8,
+        trial_index=5,
+        site_a_label="A",
+        site_b_label="B",
+    )
+
+    assert np.isfinite(padded.plv).all()
+    assert np.isnan(visible_only.plv[0, 0])
+    assert np.isnan(visible_only.plv[0, -1])
+    assert np.isfinite(visible_only.plv[0, 250])
+
+
+def test_within_trial_plv_uses_valid_samples_unweighted_and_enforces_fraction():
+    """Amplitude validity should gate samples without weighting their phase vectors."""
+    time_s = np.arange(-1.0, 1.0, 0.002)
+    phase = np.ones((1, time_s.size), dtype=np.complex64)
+    valid = np.ones_like(phase, dtype=bool)
+    center = time_s.size // 2
+    valid[:, center - 20 : center + 20] = False
+    accepted = _compute_test_plv(phase, valid=valid, min_valid_fraction=0.7)
+    rejected = _compute_test_plv(phase, valid=valid, min_valid_fraction=0.9)
+
+    assert accepted.plv[0, 250] == 1.0
+    assert np.isnan(rejected.plv[0, 250])
+    assert accepted.valid_sample_count[0, 250] == 111
+
+
+def test_within_trial_plv_detects_a_known_phase_locked_interval():
+    """A stable interval should have larger PLV than surrounding rapidly changing phase."""
+    time_s = np.arange(-1.0, 1.0, 0.002)
+    phase_angle = 2.0 * np.pi * 12.0 * time_s
+    locked = (time_s >= -0.2) & (time_s <= 0.2)
+    phase_angle[locked] = np.pi / 3.0
+    result = _compute_test_plv(np.exp(1j * phase_angle))
+
+    center_plv = float(result.plv[0, np.argmin(np.abs(result.relative_time_s))])
+    outside_plv = float(result.plv[0, np.argmin(np.abs(result.relative_time_s - 0.4))])
+    assert center_plv > 0.95
+    assert outside_plv < 0.2
+
+
+def test_plot_single_trial_phase_analysis_supports_plv_only_and_combined_layouts():
+    """PLV should reuse the compact trace/behavior view and combine heatmaps side by side."""
+    phase_result = lfp_phase_clustering.compute_single_trial_relative_phase(
+        site_a=_make_coefficient_result(phase_offset_rad=np.pi / 2.0),
+        site_b=_make_coefficient_result(phase_offset_rad=0.0),
+        event_time_s=10.0,
+        visible_window=(-0.2, 0.3),
+        output_sample_rate_hz=500.0,
+        trial_index=1,
+        site_a_label="A",
+        site_b_label="B",
+    )
+    plv_result = lfp_phase_clustering.compute_within_trial_plv(
+        relative_phase_complex=phase_result.relative_phase_complex,
+        valid_mask=phase_result.numerical_valid,
+        frequencies_hz=phase_result.frequencies_hz,
+        relative_time_s=phase_result.relative_time_s,
+        visible_window=(-0.2, 0.3),
+        window_cycles=0.1,
+        min_valid_fraction=0.8,
+        trial_index=1,
+        site_a_label="A",
+        site_b_label="B",
+    )
+    trial_df = pd.DataFrame(
+        {
+            "start_time": [0.0, 9.0],
+            "choice_time": [1.0, 10.0],
+            "led_on_time": [0.5, 9.5],
+            "reward_time": [1.2, 10.2],
+            "action": [0, 1],
+        }
+    )
+    lick_times = {
+        unit_spike_plotting.LEFT_LICK_EVENT: np.array([9.8, 10.1]),
+        unit_spike_plotting.RIGHT_LICK_EVENT: np.array([9.9]),
+    }
+
+    plv_figure, plv_axes = unit_spike_plotting.plot_trial_lfp_phase_analysis_and_behavior(
+        trial_df=trial_df,
+        trial_index=1,
+        lick_times=lick_times,
+        phase_result=phase_result,
+        plv_result=plv_result,
+        phase_display_valid_mask=phase_result.numerical_valid,
+        display_mode="Within-trial PLV",
+        alignment_event="choice_time",
+        window=(-0.2, 0.3),
+    )
+    combined_figure, combined_axes = unit_spike_plotting.plot_trial_lfp_phase_analysis_and_behavior(
+        trial_df=trial_df,
+        trial_index=1,
+        lick_times=lick_times,
+        phase_result=phase_result,
+        plv_result=plv_result,
+        phase_display_valid_mask=phase_result.numerical_valid,
+        display_mode="Phase + PLV",
+        alignment_event="choice_time",
+        window=(-0.2, 0.3),
+    )
+
+    assert plv_axes["plv"].collections[0].get_clim() == (0.0, 1.0)
+    assert plv_axes["plv"].get_yscale() == "log"
+    assert "phase" not in plv_axes
+    assert {"phase", "plv", "site_a", "site_b", "behavior"} <= combined_axes.keys()
+    assert combined_axes["phase"].get_position().y0 == combined_axes["plv"].get_position().y0
+    assert any(axis.get_ylabel() == "Within-trial PLV" for axis in plv_figure.axes)
+    plt.close(plv_figure)
+    plt.close(combined_figure)
+
+
+def test_save_single_trial_phase_analysis_combines_phase_and_plv_arrays(tmp_path: Path):
+    """One NPZ should preserve phase, PLV, effective windows, counts, and metadata."""
+    phase_result = lfp_phase_clustering.compute_single_trial_relative_phase(
+        site_a=_make_coefficient_result(phase_offset_rad=0.5),
+        site_b=_make_coefficient_result(phase_offset_rad=0.0),
+        event_time_s=10.0,
+        visible_window=(-0.2, 0.2),
+        output_sample_rate_hz=500.0,
+        trial_index=9,
+        site_a_label="A",
+        site_b_label="B",
+    )
+    plv_result = lfp_phase_clustering.compute_within_trial_plv(
+        relative_phase_complex=phase_result.relative_phase_complex,
+        valid_mask=phase_result.numerical_valid,
+        frequencies_hz=phase_result.frequencies_hz,
+        relative_time_s=phase_result.relative_time_s,
+        visible_window=(-0.2, 0.2),
+        window_cycles=0.1,
+        min_valid_fraction=0.8,
+        trial_index=9,
+        site_a_label="A",
+        site_b_label="B",
+    )
+    output_path = tmp_path / "phase_and_plv.npz"
+
+    lfp_phase_clustering.save_single_trial_phase_analysis_result(
+        output_path,
+        phase_result=phase_result,
+        plv_result=plv_result,
+        phase_display_valid_mask=phase_result.numerical_valid,
+        metadata={"display": "Within-trial PLV"},
+    )
+
+    saved = np.load(output_path, allow_pickle=True)
+    np.testing.assert_array_equal(saved["relative_phase_complex"], phase_result.relative_phase_complex)
+    np.testing.assert_array_equal(saved["plv"], plv_result.plv)
+    np.testing.assert_array_equal(saved["plv_window_sample_count"], plv_result.window_sample_count)
+    np.testing.assert_array_equal(saved["plv_valid_sample_count"], plv_result.valid_sample_count)
+    assert saved["meta"].item()["display"] == "Within-trial PLV"

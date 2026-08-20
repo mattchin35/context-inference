@@ -137,6 +137,17 @@ def test_webapp_exposes_single_trial_relative_phase_view_defaults():
         "Per-frequency percentile",
         "Absolute magnitude",
     )
+    assert psth_webapp.RELATIVE_PHASE_DISPLAY_OPTIONS == (
+        "Phase difference",
+        "Within-trial PLV",
+        "Phase + PLV",
+    )
+    assert psth_webapp.RELATIVE_PHASE_DEFAULT_DISPLAY == "Within-trial PLV"
+    assert psth_webapp.WITHIN_TRIAL_PLV_DEFAULT_WINDOW_CYCLES == 3.0
+    assert psth_webapp.WITHIN_TRIAL_PLV_DEFAULT_MIN_VALID_FRACTION == 0.8
+    assert psth_webapp.WITHIN_TRIAL_PLV_MIN_WINDOW_DEFAULT_ENABLED is False
+    assert psth_webapp.WITHIN_TRIAL_PLV_MAX_WINDOW_DEFAULT_ENABLED is False
+    assert psth_webapp.RELATIVE_PHASE_CACHE_MAX_ENTRIES == 12
 
 
 def test_single_trial_relative_phase_cache_loads_only_two_padded_trial_segments(monkeypatch):
@@ -211,10 +222,15 @@ def test_single_trial_relative_phase_cache_loads_only_two_padded_trial_segments(
         notch_60_hz=False,
         notch_quality_factor=30.0,
         minimum_relative_magnitude=1e-12,
+        plv_window_cycles=3.0,
+        plv_min_window_s=None,
+        plv_max_window_s=None,
     )
 
     assert result.phase_angle_rad.shape == (2, 1500)
-    assert load_calls == [("a.lf.bin", -5.0, 6.0), ("b.lf.bin", -5.0, 6.0)]
+    assert load_calls == [("a.lf.bin", -5.75, 6.75), ("b.lf.bin", -5.75, 6.75)]
+    assert result.support_relative_time_s[0] == -1.75
+    assert np.isclose(result.support_relative_time_s[-1], 2.748)
 
 
 def test_pca_decoding_has_separate_plot_view_from_trial_filters():
