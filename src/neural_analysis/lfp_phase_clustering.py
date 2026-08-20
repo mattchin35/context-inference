@@ -16,6 +16,11 @@ from src.neural_analysis import lfp_spectrogram, spike_behavior_pynapple
 
 ANALYSIS_VERSION = "0.1.0"
 PHASE_TENSOR_AXIS_ORDER = ("site", "frequency", "trial", "time")
+RELATIVE_PHASE_AMPLITUDE_MASK_OPTIONS = (
+    "Off",
+    "Per-frequency percentile",
+    "Absolute magnitude",
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +33,19 @@ class ContinuousProcessingBlock:
     core_end_s: float
     load_start_s: float
     load_end_s: float
+
+
+@dataclass(frozen=True)
+class WaveletCoefficientResult:
+    """Complex wavelet coefficients plus the unprocessed source-rate trace."""
+
+    time_s: np.ndarray
+    frequencies_hz: np.ndarray
+    coefficients: np.ndarray
+    sample_rate_hz: float
+    source_time_s: np.ndarray
+    source_lfp_values: np.ndarray
+    source_sample_rate_hz: float
 
 
 @dataclass(frozen=True)
@@ -59,6 +77,29 @@ class PhaseClusteringResult:
     values: np.ndarray
     effective_trial_count: np.ndarray
     n_trials: int
+
+
+@dataclass(frozen=True)
+class SingleTrialRelativePhaseResult:
+    """One trial's relative phase, amplitude, axes, source traces, and metadata."""
+
+    relative_phase_complex: np.ndarray
+    phase_angle_rad: np.ndarray
+    amplitude_a: np.ndarray
+    amplitude_b: np.ndarray
+    numerical_valid: np.ndarray
+    amplitude_percentiles_a: np.ndarray
+    amplitude_percentiles_b: np.ndarray
+    frequencies_hz: np.ndarray
+    relative_time_s: np.ndarray
+    source_time_a_s: np.ndarray
+    source_lfp_a: np.ndarray
+    source_time_b_s: np.ndarray
+    source_lfp_b: np.ndarray
+    trial_index: int
+    event_time_s: float
+    site_a_label: str
+    site_b_label: str
 
 
 def normalize_wavelet_phase(
@@ -101,7 +142,7 @@ def normalize_wavelet_phase(
     return unit_phase, valid
 
 
-def compute_wavelet_phase(
+def compute_wavelet_coefficients(
     time_s: np.ndarray,
     lfp_values: np.ndarray,
     sample_rate_hz: float,
@@ -113,10 +154,9 @@ def compute_wavelet_phase(
     target_sample_rate_hz: float = 500.0,
     notch_60_hz: bool = False,
     notch_quality_factor: float = 30.0,
-    minimum_relative_magnitude: float = 1e-12,
-) -> WaveletPhaseResult:
+) -> WaveletCoefficientResult:
     """
-    Compute continuous Morlet unit phase for one LFP site.
+    Compute continuous Morlet coefficients while retaining the source trace.
 
     Parameters
     ----------
@@ -143,15 +183,13 @@ def compute_wavelet_phase(
         Whether to apply the existing zero-phase 60 Hz notch before decimation.
     notch_quality_factor : float, default=30.0
         Dimensionless notch quality factor.
-    minimum_relative_magnitude : float, default=1e-12
-        Relative coefficient magnitude threshold for valid phase.
-
     Returns
     -------
-    WaveletPhaseResult
-        ``phase`` and ``valid`` have shape ``(n_frequencies, n_output_times)``;
-        ``time_s`` has shape ``(n_output_times,)`` in seconds and
-        ``sample_rate_hz`` is the post-decimation rate in Hz.
+    WaveletCoefficientResult
+        ``coefficients`` has shape ``(n_frequencies, n_output_times)`` as
+        ``complex64``. ``time_s`` is in seconds at the post-decimation rate.
+        ``source_time_s`` and ``source_lfp_values`` preserve the unprocessed
+        one-dimensional source-rate input and its original physical units.
     """
 
     input_time_s = np.asarray(time_s, dtype=float).reshape(-1)
@@ -190,17 +228,91 @@ def compute_wavelet_phase(
         precision=int(precision),
         norm=norm,
     )
-    coefficient_values = np.asarray(coefficients.values).T
+    coefficient_values = np.asarray(coefficients.values).T.astype(np.complex64)
+    return WaveletCoefficientResult(
+        time_s=np.asarray(continuous_tsd.index, dtype=float).reshape(-1),
+        frequencies_hz=frequencies.copy(),
+        coefficients=coefficient_values,
+        sample_rate_hz=output_sample_rate_hz,
+        source_time_s=input_time_s.copy(),
+        source_lfp_values=input_values.copy(),
+        source_sample_rate_hz=float(sample_rate_hz),
+    )
+
+
+def compute_wavelet_phase(
+    time_s: np.ndarray,
+    lfp_values: np.ndarray,
+    sample_rate_hz: float,
+    frequencies_hz: np.ndarray,
+    gaussian_width: float = 1.5,
+    window_length: float = 1.0,
+    precision: int = 16,
+    norm: str | None = "l1",
+    target_sample_rate_hz: float = 500.0,
+    notch_60_hz: bool = False,
+    notch_quality_factor: float = 30.0,
+    minimum_relative_magnitude: float = 1e-12,
+) -> WaveletPhaseResult:
+    """
+    Compute continuous Morlet unit phase for one LFP site.
+
+    Parameters
+    ----------
+    time_s : np.ndarray
+        Uniform one-dimensional source times with shape ``(n_samples,)`` in
+        seconds.
+    lfp_values : np.ndarray
+        One-dimensional LFP values with shape ``(n_samples,)`` in source units.
+    sample_rate_hz : float
+        Input sample rate in Hz.
+    frequencies_hz : np.ndarray
+        Positive frequencies with shape ``(n_frequencies,)`` in Hz.
+    gaussian_width, window_length : float
+        Dimensionless Pynapple Morlet parameters.
+    precision : int, default=16
+        Base-2 Pynapple wavelet evaluation precision.
+    norm : str | None, default="l1"
+        Pynapple wavelet normalization.
+    target_sample_rate_hz : float, default=500.0
+        Preferred post-decimation sample rate in Hz.
+    notch_60_hz : bool, default=False
+        Whether to apply the existing zero-phase 60 Hz notch.
+    notch_quality_factor : float, default=30.0
+        Dimensionless notch-filter quality factor.
+    minimum_relative_magnitude : float, default=1e-12
+        Relative coefficient magnitude threshold for numerical validity.
+
+    Returns
+    -------
+    WaveletPhaseResult
+        ``phase`` and ``valid`` have shape ``(frequency, output_time)``;
+        phase is unitless complex phase and output times are in seconds.
+    """
+
+    coefficient_result = compute_wavelet_coefficients(
+        time_s=time_s,
+        lfp_values=lfp_values,
+        sample_rate_hz=float(sample_rate_hz),
+        frequencies_hz=frequencies_hz,
+        gaussian_width=float(gaussian_width),
+        window_length=float(window_length),
+        precision=int(precision),
+        norm=norm,
+        target_sample_rate_hz=float(target_sample_rate_hz),
+        notch_60_hz=bool(notch_60_hz),
+        notch_quality_factor=float(notch_quality_factor),
+    )
     unit_phase, valid = normalize_wavelet_phase(
-        coefficient_values,
+        coefficient_result.coefficients,
         minimum_relative_magnitude=float(minimum_relative_magnitude),
     )
     return WaveletPhaseResult(
-        time_s=np.asarray(continuous_tsd.index, dtype=float).reshape(-1),
-        frequencies_hz=frequencies.copy(),
+        time_s=coefficient_result.time_s.copy(),
+        frequencies_hz=coefficient_result.frequencies_hz.copy(),
         phase=unit_phase,
         valid=valid,
-        sample_rate_hz=output_sample_rate_hz,
+        sample_rate_hz=coefficient_result.sample_rate_hz,
     )
 
 
@@ -386,6 +498,239 @@ def make_phase_trial_tensor(
         trial_indices=indices[np.asarray(included_positions, dtype=int)],
         excluded_trial_indices=indices[np.asarray(excluded_positions, dtype=int)],
     )
+
+
+def compute_single_trial_relative_phase(
+    site_a: WaveletCoefficientResult,
+    site_b: WaveletCoefficientResult,
+    event_time_s: float,
+    visible_window: tuple[float, float],
+    output_sample_rate_hz: float,
+    trial_index: int,
+    site_a_label: str,
+    site_b_label: str,
+    minimum_relative_magnitude: float = 1e-12,
+) -> SingleTrialRelativePhaseResult:
+    """
+    Compare two padded wavelet results on one exact event-relative grid.
+
+    Parameters
+    ----------
+    site_a, site_b : WaveletCoefficientResult
+        Independently synchronized padded transforms. Coefficients use shape
+        ``(frequency, transformed_time)`` and times use absolute seconds.
+    event_time_s : float
+        Absolute behavioral alignment time in seconds.
+    visible_window : tuple[float, float]
+        Returned half-open event-relative interval in seconds.
+    output_sample_rate_hz : float
+        Exact comparison-grid sample rate in Hz.
+    trial_index : int
+        Source trial-table row identifier.
+    site_a_label, site_b_label : str
+        Human-readable probe/channel labels defining the ordered A-minus-B
+        phase difference.
+    minimum_relative_magnitude : float, default=1e-12
+        Numerical-validity threshold relative to each site's largest padded
+        coefficient magnitude.
+
+    Returns
+    -------
+    SingleTrialRelativePhaseResult
+        Frequency-by-time relative complex phase, angle in radians, amplitudes,
+        validity, percentile references, exact axes, cropped unprocessed source
+        traces, and identifying metadata. Relative phase is ``A * conjugate(B)``.
+    """
+
+    if not np.isfinite(float(event_time_s)):
+        raise ValueError("event_time_s must be finite.")
+    if len(visible_window) != 2 or float(visible_window[0]) >= float(visible_window[1]):
+        raise ValueError("visible_window must contain increasing bounds.")
+    if float(output_sample_rate_hz) <= 0:
+        raise ValueError("output_sample_rate_hz must be positive.")
+    if not np.array_equal(site_a.frequencies_hz, site_b.frequencies_hz):
+        raise ValueError("Both sites must use an identical frequency vector.")
+
+    output_sample_count = int(
+        np.round((float(visible_window[1]) - float(visible_window[0])) * float(output_sample_rate_hz))
+    )
+    if output_sample_count < 1:
+        raise ValueError("visible_window contains no output samples.")
+    relative_time_s = float(visible_window[0]) + np.arange(output_sample_count) / float(output_sample_rate_hz)
+    absolute_time_s = float(event_time_s) + relative_time_s
+
+    phase_a, amplitude_a, valid_a = _interpolate_site_coefficients(
+        site_a,
+        absolute_time_s,
+        minimum_relative_magnitude=float(minimum_relative_magnitude),
+    )
+    phase_b, amplitude_b, valid_b = _interpolate_site_coefficients(
+        site_b,
+        absolute_time_s,
+        minimum_relative_magnitude=float(minimum_relative_magnitude),
+    )
+    numerical_valid = valid_a & valid_b
+    relative_phase = phase_a * np.conjugate(phase_b)
+    relative_phase[~numerical_valid] = 0.0j
+    relative_phase_magnitude = np.abs(relative_phase)
+    np.divide(
+        relative_phase,
+        relative_phase_magnitude,
+        out=relative_phase,
+        where=numerical_valid & (relative_phase_magnitude > 0.0),
+    )
+    phase_angle = np.angle(relative_phase).astype(np.float32)
+    phase_angle[~numerical_valid] = np.nan
+
+    source_time_a_s, source_lfp_a = _crop_source_trace(site_a, float(event_time_s), visible_window)
+    source_time_b_s, source_lfp_b = _crop_source_trace(site_b, float(event_time_s), visible_window)
+    percentile_axis = np.arange(101, dtype=float)
+    amplitude_percentiles_a = np.percentile(np.abs(site_a.coefficients), percentile_axis, axis=1).T
+    amplitude_percentiles_b = np.percentile(np.abs(site_b.coefficients), percentile_axis, axis=1).T
+    return SingleTrialRelativePhaseResult(
+        relative_phase_complex=relative_phase.astype(np.complex64),
+        phase_angle_rad=phase_angle,
+        amplitude_a=amplitude_a.astype(np.float32),
+        amplitude_b=amplitude_b.astype(np.float32),
+        numerical_valid=numerical_valid,
+        amplitude_percentiles_a=amplitude_percentiles_a.astype(np.float32),
+        amplitude_percentiles_b=amplitude_percentiles_b.astype(np.float32),
+        frequencies_hz=np.asarray(site_a.frequencies_hz, dtype=float).copy(),
+        relative_time_s=relative_time_s,
+        source_time_a_s=source_time_a_s,
+        source_lfp_a=source_lfp_a,
+        source_time_b_s=source_time_b_s,
+        source_lfp_b=source_lfp_b,
+        trial_index=int(trial_index),
+        event_time_s=float(event_time_s),
+        site_a_label=str(site_a_label),
+        site_b_label=str(site_b_label),
+    )
+
+
+def make_relative_phase_display_mask(
+    result: SingleTrialRelativePhaseResult,
+    mode: str = "Off",
+    percentile: float = 10.0,
+    absolute_threshold_a: float = 0.0,
+    absolute_threshold_b: float = 0.0,
+) -> np.ndarray:
+    """
+    Build a display mask from numerical validity and optional amplitude rules.
+
+    Parameters
+    ----------
+    result : SingleTrialRelativePhaseResult
+        Single-trial arrays with shape ``(frequency, time)`` and coefficient
+        amplitudes in each site's source-dependent wavelet units.
+    mode : str, default="Off"
+        One of ``RELATIVE_PHASE_AMPLITUDE_MASK_OPTIONS``.
+    percentile : float, default=10.0
+        Padded-segment per-frequency percentile in ``[0, 100]`` used for both
+        sites in percentile mode.
+    absolute_threshold_a, absolute_threshold_b : float, default=0.0
+        Nonnegative site-specific coefficient magnitude thresholds used in
+        absolute mode.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean display mask with shape ``(frequency, time)``. A pixel is valid
+        only when both sites satisfy numerical and selected amplitude criteria.
+    """
+
+    if mode not in RELATIVE_PHASE_AMPLITUDE_MASK_OPTIONS:
+        raise ValueError(f"Unknown relative-phase amplitude mask mode: {mode!r}.")
+    display_valid = np.asarray(result.numerical_valid, dtype=bool).copy()
+    if mode == "Off":
+        return display_valid
+    if mode == "Per-frequency percentile":
+        if not 0.0 <= float(percentile) <= 100.0:
+            raise ValueError("percentile must be in [0, 100].")
+        percentile_axis = np.arange(101, dtype=float)
+        threshold_a = np.asarray(
+            [np.interp(float(percentile), percentile_axis, row) for row in result.amplitude_percentiles_a]
+        )
+        threshold_b = np.asarray(
+            [np.interp(float(percentile), percentile_axis, row) for row in result.amplitude_percentiles_b]
+        )
+        return display_valid & (result.amplitude_a >= threshold_a[:, np.newaxis]) & (
+            result.amplitude_b >= threshold_b[:, np.newaxis]
+        )
+    if float(absolute_threshold_a) < 0.0 or float(absolute_threshold_b) < 0.0:
+        raise ValueError("Absolute amplitude thresholds must be nonnegative.")
+    return display_valid & (result.amplitude_a >= float(absolute_threshold_a)) & (
+        result.amplitude_b >= float(absolute_threshold_b)
+    )
+
+
+def _interpolate_site_coefficients(
+    result: WaveletCoefficientResult,
+    target_time_s: np.ndarray,
+    minimum_relative_magnitude: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Interpolate one padded coefficient matrix to absolute target seconds."""
+
+    source_time_s = np.asarray(result.time_s, dtype=float).reshape(-1)
+    coefficients = np.asarray(result.coefficients)
+    target = np.asarray(target_time_s, dtype=float).reshape(-1)
+    if coefficients.shape != (result.frequencies_hz.size, source_time_s.size):
+        raise ValueError("coefficients must have shape (frequency, transformed_time).")
+    if source_time_s.size < 2 or np.any(np.diff(source_time_s) <= 0):
+        raise ValueError("Wavelet coefficient times must be strictly increasing.")
+    if target[0] < source_time_s[0] or target[-1] > source_time_s[-1]:
+        raise ValueError("Padded wavelet coefficients do not cover the requested visible window.")
+
+    source_phase, source_valid = normalize_wavelet_phase(
+        coefficients,
+        minimum_relative_magnitude=float(minimum_relative_magnitude),
+    )
+    output_phase = np.zeros((coefficients.shape[0], target.size), dtype=np.complex64)
+    output_amplitude = np.zeros((coefficients.shape[0], target.size), dtype=np.float32)
+    output_valid = np.zeros((coefficients.shape[0], target.size), dtype=bool)
+    for frequency_index in range(coefficients.shape[0]):
+        valid = source_valid[frequency_index]
+        if valid.sum() < 2:
+            continue
+        interpolated_phase = np.interp(
+            target,
+            source_time_s[valid],
+            source_phase[frequency_index, valid].real,
+        ) + 1j * np.interp(
+            target,
+            source_time_s[valid],
+            source_phase[frequency_index, valid].imag,
+        )
+        normalized, interpolated_valid = normalize_wavelet_phase(
+            interpolated_phase,
+            minimum_relative_magnitude=0.0,
+        )
+        output_phase[frequency_index] = normalized
+        output_valid[frequency_index] = interpolated_valid
+        output_amplitude[frequency_index] = np.interp(
+            target,
+            source_time_s[valid],
+            np.abs(coefficients[frequency_index, valid]),
+        ).astype(np.float32)
+    return output_phase, output_amplitude, output_valid
+
+
+def _crop_source_trace(
+    result: WaveletCoefficientResult,
+    event_time_s: float,
+    visible_window: tuple[float, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Crop an unprocessed source-rate trace and convert its time to event-relative seconds."""
+
+    source_time_s = np.asarray(result.source_time_s, dtype=float).reshape(-1)
+    source_lfp = np.asarray(result.source_lfp_values, dtype=float).reshape(-1)
+    if source_time_s.shape != source_lfp.shape:
+        raise ValueError("Source LFP times and values must have matching shapes.")
+    relative_time_s = source_time_s - float(event_time_s)
+    visible = (relative_time_s >= float(visible_window[0])) & (relative_time_s < float(visible_window[1]))
+    if not visible.any():
+        raise ValueError("Source trace contains no samples in the visible window.")
+    return relative_time_s[visible], source_lfp[visible]
 
 
 def compute_itpc(
@@ -732,6 +1077,68 @@ def save_phase_clustering_result(
         frequencies_hz=np.asarray(frequencies_hz, dtype=float).reshape(-1),
         relative_time_s=np.asarray(relative_time_s, dtype=float).reshape(-1),
         trial_indices=np.asarray(trial_indices, dtype=int).reshape(-1),
+        meta=np.asarray(dict(metadata), dtype=object),
+    )
+    return destination
+
+
+def save_single_trial_relative_phase_result(
+    output_path: Path | str,
+    result: SingleTrialRelativePhaseResult,
+    display_valid_mask: np.ndarray,
+    metadata: dict,
+) -> Path:
+    """
+    Save one relative-phase result and its current display mask to NPZ.
+
+    Parameters
+    ----------
+    output_path : Path | str
+        New ``.npz`` destination. Existing files are never overwritten.
+    result : SingleTrialRelativePhaseResult
+        Frequency-by-time phase/amplitude arrays, axes, source-rate traces,
+        and trial/site metadata.
+    display_valid_mask : np.ndarray
+        Boolean array matching ``result.phase_angle_rad`` for the selected
+        optional amplitude-mask settings.
+    metadata : dict
+        Serializable analysis parameters, units, source paths, and version.
+
+    Returns
+    -------
+    Path
+        Created filesystem path.
+    """
+
+    destination = Path(output_path)
+    if destination.suffix.lower() != ".npz":
+        raise ValueError("output_path must end in .npz.")
+    if destination.exists():
+        raise FileExistsError(f"Refusing to overwrite existing analysis result: {destination}")
+    display_valid = np.asarray(display_valid_mask, dtype=bool)
+    if display_valid.shape != result.phase_angle_rad.shape:
+        raise ValueError("display_valid_mask must match phase_angle_rad.")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        destination,
+        relative_phase_complex=result.relative_phase_complex,
+        phase_angle_rad=result.phase_angle_rad,
+        amplitude_a=result.amplitude_a,
+        amplitude_b=result.amplitude_b,
+        numerical_valid=result.numerical_valid,
+        display_valid=display_valid,
+        amplitude_percentiles_a=result.amplitude_percentiles_a,
+        amplitude_percentiles_b=result.amplitude_percentiles_b,
+        frequencies_hz=result.frequencies_hz,
+        relative_time_s=result.relative_time_s,
+        source_time_a_s=result.source_time_a_s,
+        source_lfp_a=result.source_lfp_a,
+        source_time_b_s=result.source_time_b_s,
+        source_lfp_b=result.source_lfp_b,
+        trial_index=np.asarray(result.trial_index, dtype=int),
+        event_time_s=np.asarray(result.event_time_s, dtype=float),
+        site_a_label=np.asarray(result.site_a_label),
+        site_b_label=np.asarray(result.site_b_label),
         meta=np.asarray(dict(metadata), dtype=object),
     )
     return destination

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,6 +10,9 @@ import pandas as pd
 import pynapple as nap
 
 from src.neural_analysis.spike_behavior_pynapple import make_trial_type_masks
+
+if TYPE_CHECKING:
+    from src.neural_analysis.lfp_phase_clustering import SingleTrialRelativePhaseResult
 
 
 LEFT_LICK_EVENT = "left_entry"
@@ -1287,6 +1290,126 @@ def plot_trial_lfp_spectrogram_and_behavior(
         va="bottom",
         fontsize="small",
     )
+    return figure, axes
+
+
+def plot_trial_lfp_relative_phase_and_behavior(
+    trial_df: pd.DataFrame,
+    trial_index: int,
+    lick_times: Mapping[str, nap.Ts | np.ndarray],
+    result: SingleTrialRelativePhaseResult,
+    display_valid_mask: np.ndarray,
+    alignment_event: str,
+    window: tuple[float, float],
+    lfp_y_label: str = "LFP",
+    figure_size: tuple[float, float] = (11.0, 8.0),
+) -> tuple[plt.Figure, np.ndarray]:
+    """
+    Plot one trial's relative phase, source-rate traces, and behavior events.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with behavior columns required by
+        ``draw_single_trial_behavior_axis`` and event times in seconds.
+    trial_index : int
+        Integer trial-table row identifier.
+    lick_times : Mapping[str, nap.Ts | np.ndarray]
+        Left/right lick timestamps in absolute seconds.
+    result : SingleTrialRelativePhaseResult
+        Relative phase with shape ``(frequency, time)``, axes in Hz/seconds,
+        and two source-rate LFP traces in source-dependent voltage units.
+    display_valid_mask : np.ndarray
+        Boolean frequency-by-time mask matching ``result.phase_angle_rad``.
+    alignment_event : str
+        Trial event column defining relative time zero.
+    window : tuple[float, float]
+        Shared visible x bounds in event-relative seconds.
+    lfp_y_label : str, default="LFP"
+        Source-trace y-axis label.
+    figure_size : tuple[float, float], default=(11.0, 8.0)
+        Figure dimensions in inches.
+
+    Returns
+    -------
+    tuple[plt.Figure, np.ndarray]
+        Figure and four primary axes ordered as relative phase, source A,
+        source B, and behavior. The colorbar is an additional figure axis.
+    """
+
+    phase_angle = np.asarray(result.phase_angle_rad, dtype=float)
+    display_valid = np.asarray(display_valid_mask, dtype=bool)
+    frequencies_hz = np.asarray(result.frequencies_hz, dtype=float).reshape(-1)
+    relative_time_s = np.asarray(result.relative_time_s, dtype=float).reshape(-1)
+    if phase_angle.shape != (frequencies_hz.size, relative_time_s.size):
+        raise ValueError("phase_angle_rad must have shape (frequency, time).")
+    if display_valid.shape != phase_angle.shape:
+        raise ValueError("display_valid_mask must match phase_angle_rad.")
+    if frequencies_hz.size == 0 or np.any(frequencies_hz <= 0.0):
+        raise ValueError("frequencies_hz must contain positive values.")
+
+    figure, axes = plt.subplots(
+        4,
+        1,
+        sharex=True,
+        figsize=(float(figure_size[0]), float(figure_size[1])),
+        height_ratios=[3.0, 0.8, 0.8, 1.1],
+    )
+    axes = np.asarray(axes, dtype=object).reshape(-1)
+    phase_axis, site_a_axis, site_b_axis, behavior_axis = axes
+    cyclic_colormap = plt.get_cmap("twilight_shifted").copy()
+    cyclic_colormap.set_bad(color="0.82", alpha=1.0)
+    displayed_angles = np.ma.array(phase_angle, mask=~display_valid)
+    phase_mesh = phase_axis.pcolormesh(
+        relative_time_s,
+        frequencies_hz,
+        displayed_angles,
+        shading="auto",
+        cmap=cyclic_colormap,
+        vmin=-np.pi,
+        vmax=np.pi,
+    )
+    phase_axis.axvline(0.0, color="white", linestyle="--", linewidth=1.0)
+    phase_axis.set_yscale("log")
+    phase_axis.set_ylim(float(np.min(frequencies_hz)), float(np.max(frequencies_hz)))
+    frequency_ticks = np.geomspace(float(np.min(frequencies_hz)), float(np.max(frequencies_hz)), 5)
+    phase_axis.set_yticks(frequency_ticks)
+    phase_axis.set_yticklabels([f"{frequency:g}" for frequency in frequency_ticks])
+    phase_axis.minorticks_off()
+    phase_axis.set_ylabel("Frequency (Hz)")
+    phase_axis.set_title(
+        f"Trial {int(trial_index)} relative phase: {result.site_a_label} - {result.site_b_label}"
+    )
+    colorbar = figure.colorbar(
+        phase_mesh,
+        ax=phase_axis,
+        pad=0.015,
+        ticks=[-np.pi, -np.pi / 2.0, 0.0, np.pi / 2.0, np.pi],
+    )
+    colorbar.set_ticklabels(["-pi", "-pi/2", "0", "pi/2", "pi"])
+    colorbar.set_label("Phase difference A - B (rad)")
+
+    site_a_axis.plot(result.source_time_a_s, result.source_lfp_a, color="tab:blue", linewidth=0.7)
+    site_a_axis.axvline(0.0, color="gray", linestyle="--", linewidth=1.0)
+    site_a_axis.set_ylabel(str(lfp_y_label))
+    site_a_axis.set_title(f"{result.site_a_label} (unprocessed)")
+    site_b_axis.plot(result.source_time_b_s, result.source_lfp_b, color="tab:orange", linewidth=0.7)
+    site_b_axis.axvline(0.0, color="gray", linestyle="--", linewidth=1.0)
+    site_b_axis.set_ylabel(str(lfp_y_label))
+    site_b_axis.set_title(f"{result.site_b_label} (unprocessed)")
+
+    draw_single_trial_behavior_axis(
+        axis=behavior_axis,
+        trial_df=trial_df,
+        trial_index=int(trial_index),
+        lick_times=lick_times,
+        alignment_event=alignment_event,
+        window=window,
+    )
+    behavior_axis.set_xlabel(f"Time from {alignment_event} (s)")
+    for axis in axes:
+        axis.set_xlim(float(window[0]), float(window[1]))
+    figure.subplots_adjust(left=0.1, right=0.9, top=0.94, bottom=0.08, hspace=0.45)
     return figure, axes
 
 

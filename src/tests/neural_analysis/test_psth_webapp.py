@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.neural_analysis import psth_webapp
+from src.neural_analysis import lfp_phase_clustering, psth_webapp
 
 
 def test_build_lfp_dropdown_options_uses_only_explicit_probe_paths():
@@ -137,6 +137,84 @@ def test_webapp_exposes_single_trial_relative_phase_view_defaults():
         "Per-frequency percentile",
         "Absolute magnitude",
     )
+
+
+def test_single_trial_relative_phase_cache_loads_only_two_padded_trial_segments(monkeypatch):
+    """The lightweight viewer must not load or construct a full-session trial tensor."""
+    load_calls = []
+
+    def fake_load_trial_lfp_trace_for_format_with_sample_rate(**kwargs):
+        """Record requested relative bounds and return one synthetic source-rate segment."""
+        load_calls.append((kwargs["lfp_path"], kwargs["window_start_s"], kwargs["window_end_s"]))
+        relative_time_s = np.arange(kwargs["window_start_s"], kwargs["window_end_s"], 0.002)
+        phase_offset = 0.4 if kwargs["saved_channel_index"] == 1 else 0.0
+        values = np.sin(2.0 * np.pi * 10.0 * relative_time_s + phase_offset)
+        return relative_time_s, values, 500.0
+
+    def fake_compute_wavelet_coefficients(time_s, lfp_values, sample_rate_hz, frequencies_hz, **_kwargs):
+        """Return deterministic coefficients on the loaded absolute sample grid."""
+        times = np.asarray(time_s, dtype=float)
+        frequencies = np.asarray(frequencies_hz, dtype=float)
+        coefficients = np.stack(
+            [np.exp(1j * 2.0 * np.pi * frequency * times) for frequency in frequencies]
+        ).astype(np.complex64)
+        return lfp_phase_clustering.WaveletCoefficientResult(
+            time_s=times,
+            frequencies_hz=frequencies,
+            coefficients=coefficients,
+            sample_rate_hz=float(sample_rate_hz),
+            source_time_s=times,
+            source_lfp_values=np.asarray(lfp_values),
+            source_sample_rate_hz=float(sample_rate_hz),
+        )
+
+    monkeypatch.setattr(
+        psth_webapp,
+        "load_trial_lfp_trace_for_format_with_sample_rate",
+        fake_load_trial_lfp_trace_for_format_with_sample_rate,
+    )
+    monkeypatch.setattr(
+        lfp_phase_clustering,
+        "compute_wavelet_coefficients",
+        fake_compute_wavelet_coefficients,
+    )
+    psth_webapp.compute_single_trial_relative_phase_cached.clear()
+
+    result = psth_webapp.compute_single_trial_relative_phase_cached(
+        lfp_format=psth_webapp.LFP_FORMAT_SPIKEGLX,
+        lfp_path_a="a.lf.bin",
+        lfp_mtime_ns_a=1,
+        channel_a=1,
+        site_a_label="A",
+        aligned_sync_path_a=None,
+        aligned_sync_mtime_ns_a=-1,
+        lfp_path_b="b.lf.bin",
+        lfp_mtime_ns_b=2,
+        channel_b=2,
+        site_b_label="B",
+        aligned_sync_path_b=None,
+        aligned_sync_mtime_ns_b=-1,
+        trial_index=3,
+        event_time_s=100.0,
+        window_start_s=-1.0,
+        window_end_s=2.0,
+        digital_word=0,
+        irig_line=6,
+        bit_period_s=1.0,
+        utc_offset_hours=0.0,
+        frequencies_hz=(2.0, 10.0),
+        gaussian_width=1.5,
+        wavelet_window_length=1.0,
+        precision=16,
+        norm="l1",
+        output_sample_rate_hz=500.0,
+        notch_60_hz=False,
+        notch_quality_factor=30.0,
+        minimum_relative_magnitude=1e-12,
+    )
+
+    assert result.phase_angle_rad.shape == (2, 1500)
+    assert load_calls == [("a.lf.bin", -5.0, 6.0), ("b.lf.bin", -5.0, 6.0)]
 
 
 def test_pca_decoding_has_separate_plot_view_from_trial_filters():

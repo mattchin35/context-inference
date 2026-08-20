@@ -493,3 +493,34 @@ def test_plot_single_trial_relative_phase_draws_heatmap_traces_and_behavior():
         [-np.pi, -np.pi / 2.0, 0.0, np.pi / 2.0, np.pi],
     )
     plt.close(figure)
+
+
+def test_save_single_trial_relative_phase_result_round_trips_numeric_output(tmp_path: Path):
+    """Relative-phase exports should preserve reusable arrays and display settings."""
+    result = lfp_phase_clustering.compute_single_trial_relative_phase(
+        site_a=_make_coefficient_result(phase_offset_rad=0.5),
+        site_b=_make_coefficient_result(phase_offset_rad=0.0),
+        event_time_s=10.0,
+        visible_window=(-0.1, 0.1),
+        output_sample_rate_hz=500.0,
+        trial_index=8,
+        site_a_label="A",
+        site_b_label="B",
+    )
+    display_valid = lfp_phase_clustering.make_relative_phase_display_mask(result)
+    output_path = tmp_path / "relative_phase.npz"
+
+    lfp_phase_clustering.save_single_trial_relative_phase_result(
+        output_path,
+        result=result,
+        display_valid_mask=display_valid,
+        metadata={"mask_mode": "Off", "phase_units": "radians, A minus B"},
+    )
+
+    saved = np.load(output_path, allow_pickle=True)
+    np.testing.assert_array_equal(saved["relative_phase_complex"], result.relative_phase_complex)
+    np.testing.assert_array_equal(saved["phase_angle_rad"], result.phase_angle_rad)
+    np.testing.assert_array_equal(saved["display_valid"], display_valid)
+    np.testing.assert_array_equal(saved["source_lfp_a"], result.source_lfp_a)
+    assert saved["trial_index"].item() == 8
+    assert saved["meta"].item()["mask_mode"] == "Off"
