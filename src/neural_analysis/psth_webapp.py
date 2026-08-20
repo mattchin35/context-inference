@@ -144,6 +144,7 @@ SPIKE_LFP_PHASE_MIN_FREQUENCY_HZ = 2.0
 SPIKE_LFP_PHASE_MAX_FREQUENCY_HZ = 100.0
 SPIKE_LFP_PHASE_FREQUENCY_COUNT = 50
 SPIKE_LFP_PHASE_DEFAULT_POLAR_FREQUENCY_HZ = 8.0
+SPIKE_LFP_PHASE_BIN_COUNT = 24
 SPIKE_LFP_PHASE_AMPLITUDE_MASK_OPTIONS = ("Off", "Absolute magnitude")
 SPIKE_LFP_PHASE_MAXIMUM_CORE_DURATION_S = 120.0
 SPIKE_LFP_PHASE_CACHE_MAX_ENTRIES = 6
@@ -1230,6 +1231,7 @@ def compute_spike_lfp_phase_locking_cached(
     minimum_relative_magnitude: float,
     absolute_amplitude_threshold: float,
     maximum_core_duration_s: float,
+    phase_bin_count: int,
 ) -> spike_lfp_phase_locking.SpikePhaseLockingResult:
     """
     Load bounded continuous LFP blocks and pool one unit's trial-window phases.
@@ -1283,15 +1285,21 @@ def compute_spike_lfp_phase_locking_cached(
     minimum_relative_magnitude : float
         Relative numerical coefficient threshold.
     absolute_amplitude_threshold : float
-        Source-dependent wavelet magnitude threshold at spike timestamps.
+        Source-dependent wavelet magnitude threshold applied to continuous
+        phase occupancy and interpolated spike samples.
     maximum_core_duration_s : float
         Maximum unpadded transform block span in seconds.
+    phase_bin_count : int
+        Number of equal-width phase bins spanning ``[-pi, pi]``. This is an
+        explicit cache parameter so phase-tuning results cannot be reused
+        across different binning settings.
 
     Returns
     -------
     spike_lfp_phase_locking.SpikePhaseLockingResult
-        Frequency metrics and retained arrays with shape
-        ``(frequency, selected_spike)``.
+        Frequency metrics, retained spike-sample arrays with shape
+        ``(frequency, selected_spike)``, and phase-tuning arrays with shape
+        ``(frequency, phase_bin)``.
     """
 
     del lfp_mtime_ns, aligned_sync_mtime_ns
@@ -1340,6 +1348,7 @@ def compute_spike_lfp_phase_locking_cached(
         notch_quality_factor=float(notch_quality_factor),
         minimum_relative_magnitude=float(minimum_relative_magnitude),
         absolute_amplitude_threshold=float(absolute_amplitude_threshold),
+        phase_bin_count=int(phase_bin_count),
     )
 
 
@@ -2925,7 +2934,8 @@ def render_spike_lfp_phase_locking_view(
     Returns
     -------
     None
-        Streamlit renders frequency metrics, a polar phase histogram, and
+        Streamlit renders frequency metrics, a polar occupancy-normalized
+        firing-rate histogram in Hz, and
         optional timestamped NPZ/PNG outputs.
     """
 
@@ -3098,6 +3108,7 @@ def render_spike_lfp_phase_locking_view(
             minimum_relative_magnitude=LFP_PHASE_CLUSTERING_MINIMUM_RELATIVE_MAGNITUDE,
             absolute_amplitude_threshold=absolute_amplitude_threshold,
             maximum_core_duration_s=SPIKE_LFP_PHASE_MAXIMUM_CORE_DURATION_S,
+            phase_bin_count=SPIKE_LFP_PHASE_BIN_COUNT,
         )
     except Exception as error:  # noqa: BLE001 - Streamlit should report unit/site-specific failures.
         st.error(f"Could not compute spike-LFP phase locking: {error}")
@@ -3106,6 +3117,13 @@ def render_spike_lfp_phase_locking_view(
     figure, _axes = unit_spike_plotting.plot_spike_lfp_phase_locking(
         result=result,
         polar_frequency_hz=polar_frequency_hz,
+        polar_bin_count=SPIKE_LFP_PHASE_BIN_COUNT,
+    )
+    polar_frequency_index = int(np.argmin(np.abs(frequencies_hz - polar_frequency_hz)))
+    actual_polar_frequency_hz = float(frequencies_hz[polar_frequency_index])
+    phase_rate_sparsity = spike_lfp_phase_locking.assess_phase_rate_sparsity(
+        phase_spike_counts=result.phase_spike_counts[polar_frequency_index],
+        phase_occupancy_s=result.phase_occupancy_s[polar_frequency_index],
     )
     metadata_column, figure_column = st.columns([1, 3])
     with metadata_column:
@@ -3120,11 +3138,33 @@ def render_spike_lfp_phase_locking_view(
             result.spike_phase_vectors.nbytes
             + result.spike_phase_valid.nbytes
             + result.amplitude_at_spikes.nbytes
+            + result.phase_bin_edges_rad.nbytes
+            + result.phase_spike_counts.nbytes
+            + result.phase_occupancy_s.nbytes
+            + result.phase_firing_rate_hz.nbytes
         )
-        st.write(f"Retained phase data: {retained_bytes / (1024.0**2):.1f} MB")
+        st.write(f"Retained phase data: {retained_bytes / (1024.0**2):.4f} MB")
+        if phase_rate_sparsity.is_sparse:
+            warning_reasons = []
+            if phase_rate_sparsity.low_spike_count:
+                warning_reasons.append(
+                    f"{phase_rate_sparsity.valid_spike_count} valid spikes "
+                    f"({phase_rate_sparsity.mean_spikes_per_bin:.1f} per bin; "
+                    f"heuristic target: {phase_rate_sparsity.minimum_recommended_spikes} total)"
+                )
+            if phase_rate_sparsity.has_zero_occupancy:
+                warning_reasons.append(
+                    f"{phase_rate_sparsity.zero_occupancy_bin_count} phase bins have no valid LFP occupancy"
+                )
+            st.warning(
+                "Sparse phase-rate estimate at "
+                f"{actual_polar_frequency_hz:.3g} Hz: {'; '.join(warning_reasons)}. "
+                "This sampling heuristic is not a significance test."
+            )
     with figure_column:
         st.pyplot(figure, width="stretch")
         st.caption(
+            "The polar panel shows occupancy-normalized phase firing rate in Hz. "
             "PPC is not clipped and may be negative. It is descriptive here: spikes can be temporally "
             "correlated, and high-frequency phase from a nearby LFP site can contain spike contamination."
         )
@@ -3160,8 +3200,37 @@ def render_spike_lfp_phase_locking_view(
             "absolute_amplitude_threshold": absolute_amplitude_threshold,
             "amplitude_units": "source-dependent wavelet magnitude",
             "phase_units": "radians",
+            "phase_bin_count": int(SPIKE_LFP_PHASE_BIN_COUNT),
+            "phase_bin_range_rad": [-float(np.pi), float(np.pi)],
+            "phase_occupancy_units": "seconds",
+            "phase_firing_rate_units": "Hz",
+            "phase_tuning_axis_order": ["frequency", "phase_bin"],
+            "phase_mask_policy": {
+                "minimum_relative_magnitude": float(LFP_PHASE_CLUSTERING_MINIMUM_RELATIVE_MAGNITUDE),
+                "absolute_amplitude_threshold": float(absolute_amplitude_threshold),
+                "amplitude_mask_mode": amplitude_mask_mode,
+                "scope": "continuous occupancy and spike phase samples",
+            },
             "time_units": "absolute synchronized seconds",
             "axis_order": ["frequency", "spike"],
+            "polar_frequency_requested_hz": float(polar_frequency_hz),
+            "polar_frequency_actual_hz": actual_polar_frequency_hz,
+            "phase_rate_sparsity": {
+                "is_sparse": bool(phase_rate_sparsity.is_sparse),
+                "valid_spike_count": int(phase_rate_sparsity.valid_spike_count),
+                "phase_bin_count": int(phase_rate_sparsity.phase_bin_count),
+                "mean_spikes_per_bin": float(phase_rate_sparsity.mean_spikes_per_bin),
+                "minimum_mean_spikes_per_bin": float(
+                    phase_rate_sparsity.minimum_mean_spikes_per_bin
+                ),
+                "minimum_recommended_spikes": int(
+                    phase_rate_sparsity.minimum_recommended_spikes
+                ),
+                "zero_occupancy_bin_count": int(
+                    phase_rate_sparsity.zero_occupancy_bin_count
+                ),
+                "criterion": "descriptive sampling heuristic, not a significance test",
+            },
             "random_seed": None,
         }
         spike_lfp_phase_locking.save_spike_lfp_phase_locking_result(

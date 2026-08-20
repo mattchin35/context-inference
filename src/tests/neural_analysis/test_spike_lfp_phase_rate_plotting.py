@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
+from matplotlib.text import Annotation
 import numpy as np
 
 from src.neural_analysis import spike_lfp_phase_locking, unit_spike_plotting
@@ -99,8 +100,8 @@ def test_preferred_phase_marker_radius_is_independent_of_rate_scale():
         polar_bin_count=4,
     )
 
-    assert not [child for child in low_axes["polar"].get_children() if hasattr(child, "xy")]
-    assert not [child for child in high_axes["polar"].get_children() if hasattr(child, "xy")]
+    assert not [child for child in low_axes["polar"].get_children() if isinstance(child, Annotation)]
+    assert not [child for child in high_axes["polar"].get_children() if isinstance(child, Annotation)]
     for axis in (low_axes["polar"], high_axes["polar"]):
         preferred_phase_lines = [
             line

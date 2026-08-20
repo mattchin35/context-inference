@@ -33,19 +33,22 @@ def plot_spike_lfp_phase_locking(
     figure_size: tuple[float, float] = (11.0, 6.0),
 ) -> tuple[plt.Figure, dict[str, plt.Axes]]:
     """
-    Plot frequency-resolved locking metrics and one spike-phase histogram.
+    Plot frequency-resolved locking metrics and one phase tuning curve.
 
     Parameters
     ----------
     result : SpikePhaseLockingResult
-        Frequency metrics with shape ``(frequency,)`` and sampled complex phase
-        arrays with shape ``(frequency, spike)``. Frequencies are in Hz and
-        preferred phase is in radians.
+        Frequency metrics with shape ``(frequency,)``, sampled complex phase
+        arrays with shape ``(frequency, spike)``, and occupancy-normalized
+        phase tuning arrays with shape ``(frequency, phase_bin)``. Frequencies
+        are in Hz, phase edges and preferred phase are in radians, occupancy is
+        in seconds, and phase firing rates are in Hz.
     polar_frequency_hz : float
         Requested positive frequency in Hz. The nearest computed frequency is
         displayed and identified in the polar title.
     polar_bin_count : int, default=24
-        Positive number of equal-width phase bins spanning ``[-pi, pi]``.
+        Positive number of phase bins. It must match the stored phase tuning
+        arrays and the number of intervals in ``result.phase_bin_edges_rad``.
     figure_size : tuple[float, float], default=(11.0, 6.0)
         Figure dimensions in inches.
 
@@ -62,6 +65,10 @@ def plot_spike_lfp_phase_locking(
     spike_counts = np.asarray(result.n_spikes, dtype=int).reshape(-1)
     phase_vectors = np.asarray(result.spike_phase_vectors)
     phase_valid = np.asarray(result.spike_phase_valid, dtype=bool)
+    phase_bin_edges = np.asarray(result.phase_bin_edges_rad, dtype=float)
+    phase_spike_counts = np.asarray(result.phase_spike_counts)
+    phase_occupancy_s = np.asarray(result.phase_occupancy_s, dtype=float)
+    phase_firing_rate_hz = np.asarray(result.phase_firing_rate_hz, dtype=float)
     if frequencies_hz.size == 0 or np.any(frequencies_hz <= 0.0):
         raise ValueError("result frequencies_hz must contain positive values.")
     if any(values.shape != frequencies_hz.shape for values in (ppc, resultant_length, preferred_phase, spike_counts)):
@@ -72,6 +79,16 @@ def plot_spike_lfp_phase_locking(
         raise ValueError("polar_frequency_hz must be positive and finite.")
     if int(polar_bin_count) != polar_bin_count or int(polar_bin_count) < 1:
         raise ValueError("polar_bin_count must be a positive integer.")
+    expected_tuning_shape = (frequencies_hz.size, int(polar_bin_count))
+    if phase_bin_edges.shape != (int(polar_bin_count) + 1,):
+        raise ValueError("phase_bin_edges_rad must contain polar_bin_count + 1 edges.")
+    if not np.all(np.isfinite(phase_bin_edges)) or np.any(np.diff(phase_bin_edges) <= 0.0):
+        raise ValueError("phase_bin_edges_rad must be finite and strictly increasing.")
+    if any(
+        values.shape != expected_tuning_shape
+        for values in (phase_spike_counts, phase_occupancy_s, phase_firing_rate_hz)
+    ):
+        raise ValueError("Phase tuning arrays must have shape (frequency, phase_bin_count).")
 
     figure = plt.figure(figsize=(float(figure_size[0]), float(figure_size[1])))
     grid = figure.add_gridspec(2, 2, width_ratios=[1.5, 1.0], hspace=0.3, wspace=0.3)
@@ -93,27 +110,42 @@ def plot_spike_lfp_phase_locking(
 
     frequency_index = int(np.argmin(np.abs(frequencies_hz - float(polar_frequency_hz))))
     selected_frequency_hz = float(frequencies_hz[frequency_index])
-    selected_vectors = phase_vectors[frequency_index, phase_valid[frequency_index]]
-    selected_phases = np.angle(selected_vectors)
-    bin_edges = np.linspace(-np.pi, np.pi, int(polar_bin_count) + 1)
-    counts, _ = np.histogram(selected_phases, bins=bin_edges)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-    bin_width = float(2.0 * np.pi / int(polar_bin_count))
-    polar_axis.bar(bin_centers, counts, width=bin_width, color="tab:blue", alpha=0.55, edgecolor="white")
-    maximum_count = max(1.0, float(np.max(counts)) if counts.size else 1.0)
+    selected_rates_hz = phase_firing_rate_hz[frequency_index]
+    bin_centers = (phase_bin_edges[:-1] + phase_bin_edges[1:]) / 2.0
+    bin_widths = np.diff(phase_bin_edges)
+    finite_rate_mask = np.isfinite(selected_rates_hz)
+    polar_axis.bar(
+        bin_centers[finite_rate_mask],
+        selected_rates_hz[finite_rate_mask],
+        width=bin_widths[finite_rate_mask],
+        color="tab:blue",
+        alpha=0.55,
+        edgecolor="white",
+    )
     if np.isfinite(preferred_phase[frequency_index]):
-        vector_radius = maximum_count * float(resultant_length[frequency_index])
-        polar_axis.annotate(
-            "",
-            xy=(float(preferred_phase[frequency_index]), vector_radius),
-            xytext=(0.0, 0.0),
-            arrowprops={"arrowstyle": "->", "color": "black", "linewidth": 2.0},
+        polar_axis.axvline(
+            float(preferred_phase[frequency_index]),
+            ymin=0.0,
+            ymax=1.0,
+            color="black",
+            linewidth=2.0,
         )
     polar_axis.set_theta_zero_location("E")
     polar_axis.set_theta_direction(1)
+    polar_axis.set_ylabel("Firing rate (Hz)")
+    exposure_s = float(np.nansum(phase_occupancy_s[frequency_index]))
+    preferred_phase_text = preferred_phase[frequency_index]
+    preferred_phase_label = (
+        f"{preferred_phase_text:.2f} rad" if np.isfinite(preferred_phase_text) else "n/a"
+    )
+    resultant_length_text = resultant_length[frequency_index]
+    resultant_length_label = (
+        f"{resultant_length_text:.2f}" if np.isfinite(resultant_length_text) else "n/a"
+    )
     polar_axis.set_title(
-        f"Spike phases at {selected_frequency_hz:g} Hz\n"
-        f"n={int(spike_counts[frequency_index])}, preferred={preferred_phase[frequency_index]:.2f} rad",
+        f"Firing rate by phase at {selected_frequency_hz:g} Hz\n"
+        f"n={int(spike_counts[frequency_index])}, exposure={exposure_s:.2f} s, "
+        f"preferred={preferred_phase_label}, R={resultant_length_label}",
         pad=20.0,
     )
     figure.subplots_adjust(left=0.08, right=0.95, top=0.9, bottom=0.1)
