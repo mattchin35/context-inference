@@ -12,7 +12,7 @@ import pynapple as nap
 from src.neural_analysis.spike_behavior_pynapple import make_trial_type_masks
 
 if TYPE_CHECKING:
-    from src.neural_analysis.lfp_phase_clustering import SingleTrialRelativePhaseResult
+    from src.neural_analysis.lfp_phase_clustering import SingleTrialRelativePhaseResult, WithinTrialPLVResult
 
 
 LEFT_LICK_EVENT = "left_entry"
@@ -1410,6 +1410,169 @@ def plot_trial_lfp_relative_phase_and_behavior(
     for axis in axes:
         axis.set_xlim(float(window[0]), float(window[1]))
     figure.subplots_adjust(left=0.1, right=0.9, top=0.94, bottom=0.08, hspace=0.45)
+    return figure, axes
+
+
+def plot_trial_lfp_phase_analysis_and_behavior(
+    trial_df: pd.DataFrame,
+    trial_index: int,
+    lick_times: Mapping[str, nap.Ts | np.ndarray],
+    phase_result: SingleTrialRelativePhaseResult,
+    plv_result: WithinTrialPLVResult,
+    phase_display_valid_mask: np.ndarray,
+    display_mode: str,
+    alignment_event: str,
+    window: tuple[float, float],
+    lfp_y_label: str = "LFP",
+    figure_size: tuple[float, float] = (11.0, 8.0),
+) -> tuple[plt.Figure, dict[str, plt.Axes]]:
+    """
+    Plot phase and/or PLV above source-rate LFP traces and trial behavior.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with behavior columns required by
+        ``draw_single_trial_behavior_axis`` and absolute event times in seconds.
+    trial_index : int
+        Integer trial-table row identifier.
+    lick_times : Mapping[str, nap.Ts | np.ndarray]
+        Left/right lick timestamps in absolute seconds.
+    phase_result : SingleTrialRelativePhaseResult
+        Visible phase arrays with shape ``(frequency, time)``, axes in
+        Hz/seconds, and source-rate LFP traces in source-dependent units.
+    plv_result : WithinTrialPLVResult
+        Dimensionless PLV with shape ``(frequency, time)`` and values in
+        ``[0, 1]`` or NaN.
+    phase_display_valid_mask : np.ndarray
+        Boolean frequency-by-time mask matching
+        ``phase_result.phase_angle_rad``.
+    display_mode : str
+        One of ``"Phase difference"``, ``"Within-trial PLV"``, or
+        ``"Phase + PLV"``.
+    alignment_event : str
+        Trial event column defining relative time zero.
+    window : tuple[float, float]
+        Shared visible x bounds in event-relative seconds.
+    lfp_y_label : str, default="LFP"
+        Source-trace y-axis label.
+    figure_size : tuple[float, float], default=(11.0, 8.0)
+        Figure dimensions in inches.
+
+    Returns
+    -------
+    tuple[plt.Figure, dict[str, plt.Axes]]
+        Figure and named primary axes. Heatmap keys depend on ``display_mode``;
+        ``site_a``, ``site_b``, and ``behavior`` are always present.
+    """
+
+    display_options = {"Phase difference", "Within-trial PLV", "Phase + PLV"}
+    if display_mode not in display_options:
+        raise ValueError(f"Unknown phase-analysis display mode: {display_mode!r}.")
+    phase_angle = np.asarray(phase_result.phase_angle_rad, dtype=float)
+    phase_valid = np.asarray(phase_display_valid_mask, dtype=bool)
+    frequencies_hz = np.asarray(phase_result.frequencies_hz, dtype=float).reshape(-1)
+    relative_time_s = np.asarray(phase_result.relative_time_s, dtype=float).reshape(-1)
+    if phase_angle.shape != (frequencies_hz.size, relative_time_s.size):
+        raise ValueError("phase_angle_rad must have shape (frequency, time).")
+    if phase_valid.shape != phase_angle.shape:
+        raise ValueError("phase_display_valid_mask must match phase_angle_rad.")
+    if frequencies_hz.size == 0 or np.any(frequencies_hz <= 0.0):
+        raise ValueError("frequencies_hz must contain positive values.")
+
+    combined = display_mode == "Phase + PLV"
+    figure = plt.figure(figsize=(float(figure_size[0]), float(figure_size[1])))
+    grid = figure.add_gridspec(
+        4,
+        2 if combined else 1,
+        height_ratios=[3.0, 0.8, 0.8, 1.1],
+        hspace=0.55,
+        wspace=0.35,
+    )
+    axes: dict[str, plt.Axes] = {}
+    if display_mode in {"Phase difference", "Phase + PLV"}:
+        phase_axis = figure.add_subplot(grid[0, 0])
+        axes["phase"] = phase_axis
+        cyclic_colormap = plt.get_cmap("twilight_shifted").copy()
+        cyclic_colormap.set_bad(color="0.82", alpha=1.0)
+        phase_mesh = phase_axis.pcolormesh(
+            relative_time_s,
+            frequencies_hz,
+            np.ma.array(phase_angle, mask=~phase_valid),
+            shading="auto",
+            cmap=cyclic_colormap,
+            vmin=-np.pi,
+            vmax=np.pi,
+        )
+        phase_colorbar = figure.colorbar(
+            phase_mesh,
+            ax=phase_axis,
+            pad=0.015,
+            ticks=[-np.pi, -np.pi / 2.0, 0.0, np.pi / 2.0, np.pi],
+        )
+        phase_colorbar.set_ticklabels(["-pi", "-pi/2", "0", "pi/2", "pi"])
+        phase_colorbar.set_label("Phase difference A - B (rad)")
+        phase_axis.set_title("Instantaneous relative phase")
+    if display_mode in {"Within-trial PLV", "Phase + PLV"}:
+        plv_column = 1 if combined else 0
+        plv_axis = figure.add_subplot(grid[0, plv_column])
+        axes["plv"] = plv_axis
+        plv_values = np.asarray(plv_result.plv, dtype=float)
+        plv_time_s = np.asarray(plv_result.relative_time_s, dtype=float).reshape(-1)
+        if plv_values.shape != (frequencies_hz.size, plv_time_s.size):
+            raise ValueError("plv must have shape (frequency, time).")
+        plv_colormap = plt.get_cmap("viridis").copy()
+        plv_colormap.set_bad(color="0.82", alpha=1.0)
+        plv_mesh = plv_axis.pcolormesh(
+            plv_time_s,
+            frequencies_hz,
+            np.ma.masked_invalid(plv_values),
+            shading="auto",
+            cmap=plv_colormap,
+            vmin=0.0,
+            vmax=1.0,
+        )
+        plv_colorbar = figure.colorbar(plv_mesh, ax=plv_axis, pad=0.015)
+        plv_colorbar.set_label("Within-trial PLV")
+        plv_axis.set_title(f"Local PLV ({plv_result.window_cycles:g} cycles)")
+
+    for heatmap_axis in [axes[key] for key in ("phase", "plv") if key in axes]:
+        heatmap_axis.axvline(0.0, color="white", linestyle="--", linewidth=1.0)
+        heatmap_axis.set_yscale("log")
+        heatmap_axis.set_ylim(float(np.min(frequencies_hz)), float(np.max(frequencies_hz)))
+        frequency_ticks = np.geomspace(float(np.min(frequencies_hz)), float(np.max(frequencies_hz)), 5)
+        heatmap_axis.set_yticks(frequency_ticks)
+        heatmap_axis.set_yticklabels([f"{frequency:g}" for frequency in frequency_ticks])
+        heatmap_axis.minorticks_off()
+        heatmap_axis.set_ylabel("Frequency (Hz)")
+
+    site_a_axis = figure.add_subplot(grid[1, :])
+    site_b_axis = figure.add_subplot(grid[2, :], sharex=site_a_axis)
+    behavior_axis = figure.add_subplot(grid[3, :], sharex=site_a_axis)
+    axes.update(site_a=site_a_axis, site_b=site_b_axis, behavior=behavior_axis)
+    site_a_axis.plot(phase_result.source_time_a_s, phase_result.source_lfp_a, color="tab:blue", linewidth=0.7)
+    site_a_axis.set_ylabel(str(lfp_y_label))
+    site_a_axis.set_title(f"{phase_result.site_a_label} (unprocessed)")
+    site_b_axis.plot(phase_result.source_time_b_s, phase_result.source_lfp_b, color="tab:orange", linewidth=0.7)
+    site_b_axis.set_ylabel(str(lfp_y_label))
+    site_b_axis.set_title(f"{phase_result.site_b_label} (unprocessed)")
+    draw_single_trial_behavior_axis(
+        axis=behavior_axis,
+        trial_df=trial_df,
+        trial_index=int(trial_index),
+        lick_times=lick_times,
+        alignment_event=alignment_event,
+        window=window,
+    )
+    behavior_axis.set_xlabel(f"Time from {alignment_event} (s)")
+    for axis in axes.values():
+        axis.axvline(0.0, color="gray" if axis not in (axes.get("phase"), axes.get("plv")) else "white", linestyle="--", linewidth=1.0)
+        axis.set_xlim(float(window[0]), float(window[1]))
+    figure.suptitle(
+        f"Trial {int(trial_index)}: {phase_result.site_a_label} - {phase_result.site_b_label}",
+        y=0.99,
+    )
+    figure.subplots_adjust(left=0.09, right=0.92, top=0.93, bottom=0.08)
     return figure, axes
 
 

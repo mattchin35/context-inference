@@ -127,7 +127,15 @@ RELATIVE_PHASE_FREQUENCY_COUNT = 50
 RELATIVE_PHASE_OUTPUT_SAMPLE_RATE_HZ = 500.0
 RELATIVE_PHASE_DEFAULT_WINDOW = (-1.0, 2.0)
 RELATIVE_PHASE_AMPLITUDE_MASK_OPTIONS = lfp_phase_clustering.RELATIVE_PHASE_AMPLITUDE_MASK_OPTIONS
-RELATIVE_PHASE_CACHE_MAX_ENTRIES = 32
+RELATIVE_PHASE_DISPLAY_OPTIONS = ("Phase difference", "Within-trial PLV", "Phase + PLV")
+RELATIVE_PHASE_DEFAULT_DISPLAY = "Within-trial PLV"
+WITHIN_TRIAL_PLV_DEFAULT_WINDOW_CYCLES = 3.0
+WITHIN_TRIAL_PLV_DEFAULT_MIN_VALID_FRACTION = 0.8
+WITHIN_TRIAL_PLV_MIN_WINDOW_DEFAULT_ENABLED = False
+WITHIN_TRIAL_PLV_MAX_WINDOW_DEFAULT_ENABLED = False
+WITHIN_TRIAL_PLV_DEFAULT_MIN_WINDOW_S = 0.05
+WITHIN_TRIAL_PLV_DEFAULT_MAX_WINDOW_S = 1.0
+RELATIVE_PHASE_CACHE_MAX_ENTRIES = 12
 DEFAULT_BROWSER_ROOT = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026")
 RASTER_LAYOUT_OPTIONS = {
     "Compact": {"row_spacing": 1.0, "figure_size": (12.0, 7.0)},
@@ -1040,6 +1048,9 @@ def compute_single_trial_relative_phase_cached(
     notch_60_hz: bool,
     notch_quality_factor: float,
     minimum_relative_magnitude: float,
+    plv_window_cycles: float,
+    plv_min_window_s: float | None,
+    plv_max_window_s: float | None,
 ) -> lfp_phase_clustering.SingleTrialRelativePhaseResult:
     """
     Load and compare two padded LFP segments for one selected trial.
@@ -1088,12 +1099,18 @@ def compute_single_trial_relative_phase_cached(
         Dimensionless notch-filter quality factor.
     minimum_relative_magnitude : float
         Relative numerical-validity threshold for wavelet coefficients.
+    plv_window_cycles : float
+        Positive cycles per local PLV window.
+    plv_min_window_s, plv_max_window_s : float | None
+        Optional local PLV duration bounds in seconds. These affect the retained
+        support interval and therefore participate in the cache key.
 
     Returns
     -------
     lfp_phase_clustering.SingleTrialRelativePhaseResult
-        Cropped frequency-by-time phase/amplitude arrays and unprocessed
-        source-rate traces. Padded coefficients are not retained in the cache.
+        Visible and PLV-support frequency-by-time phase/amplitude arrays plus
+        visible unprocessed source-rate traces. Wavelet coefficients and
+        Morlet-only padding are not retained in the cache.
     """
 
     del (
@@ -1107,6 +1124,14 @@ def compute_single_trial_relative_phase_cached(
         minimum_frequency_hz=float(np.min(frequencies)),
         window_length=float(wavelet_window_length),
     )
+    plv_window_sample_count, _effective_window_s = lfp_phase_clustering.compute_plv_window_samples(
+        frequencies_hz=frequencies,
+        sample_rate_hz=float(output_sample_rate_hz),
+        window_cycles=float(plv_window_cycles),
+        min_window_s=plv_min_window_s,
+        max_window_s=plv_max_window_s,
+    )
+    plv_support_s = float(np.max(plv_window_sample_count // 2)) / float(output_sample_rate_hz)
 
     def load_site(
         lfp_path: str,
@@ -1120,8 +1145,8 @@ def compute_single_trial_relative_phase_cached(
             lfp_path=lfp_path,
             saved_channel_index=int(channel),
             alignment_time_s=float(event_time_s),
-            window_start_s=float(window_start_s) - padding_s,
-            window_end_s=float(window_end_s) + padding_s,
+            window_start_s=float(window_start_s) - plv_support_s - padding_s,
+            window_end_s=float(window_end_s) + plv_support_s + padding_s,
             digital_word=int(digital_word),
             irig_line=int(irig_line),
             bit_period_s=float(bit_period_s),
@@ -1154,6 +1179,10 @@ def compute_single_trial_relative_phase_cached(
         site_a_label=site_a_label,
         site_b_label=site_b_label,
         minimum_relative_magnitude=float(minimum_relative_magnitude),
+        support_window=(
+            float(window_start_s) - plv_support_s,
+            float(window_end_s) + plv_support_s,
+        ),
     )
 
 
@@ -1350,6 +1379,60 @@ def render_single_trial_relative_phase_view(
         st.stop()
     frequencies_hz = np.geomspace(minimum_frequency_hz, maximum_frequency_hz, frequency_count)
 
+    display_mode = st.sidebar.selectbox(
+        "Phase analysis display",
+        options=RELATIVE_PHASE_DISPLAY_OPTIONS,
+        index=RELATIVE_PHASE_DISPLAY_OPTIONS.index(RELATIVE_PHASE_DEFAULT_DISPLAY),
+    )
+    plv_window_cycles = float(
+        st.sidebar.number_input(
+            "PLV window (cycles)",
+            min_value=0.1,
+            value=float(WITHIN_TRIAL_PLV_DEFAULT_WINDOW_CYCLES),
+            step=0.5,
+        )
+    )
+    use_plv_min_window = st.sidebar.checkbox(
+        "Minimum PLV window duration",
+        value=WITHIN_TRIAL_PLV_MIN_WINDOW_DEFAULT_ENABLED,
+    )
+    plv_min_window_s = None
+    if use_plv_min_window:
+        plv_min_window_s = float(
+            st.sidebar.number_input(
+                "Minimum PLV window (s)",
+                min_value=0.001,
+                value=float(WITHIN_TRIAL_PLV_DEFAULT_MIN_WINDOW_S),
+                step=0.01,
+            )
+        )
+    use_plv_max_window = st.sidebar.checkbox(
+        "Maximum PLV window duration",
+        value=WITHIN_TRIAL_PLV_MAX_WINDOW_DEFAULT_ENABLED,
+    )
+    plv_max_window_s = None
+    if use_plv_max_window:
+        plv_max_window_s = float(
+            st.sidebar.number_input(
+                "Maximum PLV window (s)",
+                min_value=0.001,
+                value=float(WITHIN_TRIAL_PLV_DEFAULT_MAX_WINDOW_S),
+                step=0.05,
+            )
+        )
+    if plv_min_window_s is not None and plv_max_window_s is not None and plv_min_window_s > plv_max_window_s:
+        st.error("Minimum PLV window duration cannot exceed the maximum.")
+        st.stop()
+    plv_min_valid_fraction = float(
+        st.sidebar.slider(
+            "Minimum valid PLV fraction",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(WITHIN_TRIAL_PLV_DEFAULT_MIN_VALID_FRACTION),
+            step=0.05,
+        )
+    )
+
     amplitude_mask_mode = st.sidebar.selectbox(
         "Low-amplitude masking",
         options=RELATIVE_PHASE_AMPLITUDE_MASK_OPTIONS,
@@ -1440,6 +1523,9 @@ def render_single_trial_relative_phase_view(
             notch_60_hz=notch_60_hz,
             notch_quality_factor=LFP_SPECTROGRAM_NOTCH_QUALITY_FACTOR,
             minimum_relative_magnitude=LFP_PHASE_CLUSTERING_MINIMUM_RELATIVE_MAGNITUDE,
+            plv_window_cycles=plv_window_cycles,
+            plv_min_window_s=plv_min_window_s,
+            plv_max_window_s=plv_max_window_s,
         )
     except Exception as error:  # noqa: BLE001 - Streamlit should report pair-specific loading failures.
         st.error(f"Could not compute single-trial relative phase: {error}")
@@ -1452,14 +1538,37 @@ def render_single_trial_relative_phase_view(
         absolute_threshold_a=absolute_threshold_a,
         absolute_threshold_b=absolute_threshold_b,
     )
+    support_valid = lfp_phase_clustering.make_relative_phase_support_mask(
+        result,
+        mode=amplitude_mask_mode,
+        percentile=amplitude_percentile,
+        absolute_threshold_a=absolute_threshold_a,
+        absolute_threshold_b=absolute_threshold_b,
+    )
+    plv_result = lfp_phase_clustering.compute_within_trial_plv(
+        relative_phase_complex=result.support_relative_phase_complex,
+        valid_mask=support_valid,
+        frequencies_hz=result.frequencies_hz,
+        relative_time_s=result.support_relative_time_s,
+        visible_window=(window_start_s, window_end_s),
+        window_cycles=plv_window_cycles,
+        min_window_s=plv_min_window_s,
+        max_window_s=plv_max_window_s,
+        min_valid_fraction=plv_min_valid_fraction,
+        trial_index=trial_index,
+        site_a_label=site_a_label,
+        site_b_label=site_b_label,
+    )
     lick_times = spike_behavior_pynapple.build_lick_time_dict(event_df)
     lfp_y_label = "LFP (uV)" if lfp_format == LFP_FORMAT_SPIKEGLX else "LFP"
-    figure, _axes = unit_spike_plotting.plot_trial_lfp_relative_phase_and_behavior(
+    figure, _axes = unit_spike_plotting.plot_trial_lfp_phase_analysis_and_behavior(
         trial_df=trial_df,
         trial_index=trial_index,
         lick_times=lick_times,
-        result=result,
-        display_valid_mask=display_valid,
+        phase_result=result,
+        plv_result=plv_result,
+        phase_display_valid_mask=display_valid,
+        display_mode=display_mode,
         alignment_event=alignment_event,
         window=(window_start_s, window_end_s),
         lfp_y_label=lfp_y_label,
@@ -1467,29 +1576,32 @@ def render_single_trial_relative_phase_view(
 
     metadata_column, figure_column = st.columns([1, 3])
     with metadata_column:
-        st.subheader("Single-Trial Relative Phase")
+        st.subheader("Single-Trial Phase Analysis")
         st.write(f"Trial row: {trial_index}")
         st.write(f"Condition: {condition}")
         st.write(f"Action: {action_label}")
         st.write(f"Alignment: {alignment_event}")
         st.write(f"Site A: {site_a_label}")
         st.write(f"Site B: {site_b_label}")
+        st.write(f"Display: {display_mode}")
+        st.write(f"PLV window: {plv_window_cycles:g} cycles")
         st.write(f"Masking: {amplitude_mask_mode}")
         st.write(f"Displayed pixels: {100.0 * float(np.mean(display_valid)):.1f}%")
     with figure_column:
         st.pyplot(figure, width="stretch")
         st.caption(
-            "Color is instantaneous phase A minus phase B, not synchronization strength. "
-            "Trace panels show unprocessed source-rate LFP; notch and decimation apply only to the heatmap."
+            "Phase color is instantaneous phase A minus phase B. PLV is local phase stability, "
+            "not a significance test, and short windows have finite-sample upward bias. Trace panels "
+            "show unprocessed source-rate LFP; notch and decimation apply only to the heatmaps."
         )
 
-    if st.button("Save single-trial relative-phase result"):
+    if st.button("Save single-trial phase-analysis result"):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         numeric_output_dir = (
-            Path(session.session_data_home) / "ephys" / "derived" / "single_trial_relative_phase" / timestamp
+            Path(session.session_data_home) / "ephys" / "derived" / "single_trial_phase_analysis" / timestamp
         )
         run_output_dir = (
-            Path(session.session_data_home) / "analysis_runs" / f"single_trial_relative_phase_{timestamp}"
+            Path(session.session_data_home) / "analysis_runs" / f"single_trial_phase_analysis_{timestamp}"
         )
         metadata = {
             "generator": "src.neural_analysis.lfp_phase_clustering",
@@ -1511,6 +1623,12 @@ def render_single_trial_relative_phase_view(
             "normalization": wavelet_norm,
             "notch_60_hz": notch_60_hz,
             "comparison_sample_rate_hz": RELATIVE_PHASE_OUTPUT_SAMPLE_RATE_HZ,
+            "display_mode": display_mode,
+            "plv_window_cycles": plv_window_cycles,
+            "plv_min_window_s": plv_min_window_s,
+            "plv_max_window_s": plv_max_window_s,
+            "plv_min_valid_fraction": plv_min_valid_fraction,
+            "plv_interpretation": "within-trial local phase stability; finite-sample biased",
             "mask_mode": amplitude_mask_mode,
             "mask_percentile": amplitude_percentile,
             "absolute_threshold_a": absolute_threshold_a,
@@ -1521,23 +1639,24 @@ def render_single_trial_relative_phase_view(
             "time_units": "s relative to alignment event",
             "random_seed": None,
         }
-        lfp_phase_clustering.save_single_trial_relative_phase_result(
-            numeric_output_dir / "relative_phase.npz",
-            result=result,
-            display_valid_mask=display_valid,
+        lfp_phase_clustering.save_single_trial_phase_analysis_result(
+            numeric_output_dir / "phase_and_plv.npz",
+            phase_result=result,
+            plv_result=plv_result,
+            phase_display_valid_mask=display_valid,
             metadata=metadata,
         )
         run_output_dir.mkdir(parents=True, exist_ok=False)
-        figure.savefig(run_output_dir / "relative_phase.png", dpi=200, bbox_inches="tight")
+        figure.savefig(run_output_dir / "phase_and_plv.png", dpi=200, bbox_inches="tight")
         (run_output_dir / "summary.md").write_text(
             "\n".join(
                 [
-                    "# Single-trial relative phase",
+                    "# Single-trial phase analysis",
                     "",
                     f"Session: {session.sess_id_full}",
                     f"Trial row: {trial_index}",
-                    f"Goal: inspect instantaneous phase {site_a_label} minus {site_b_label}.",
-                    f"Numeric result: {numeric_output_dir / 'relative_phase.npz'}",
+                    f"Goal: inspect instantaneous phase and local PLV for {site_a_label} minus {site_b_label}.",
+                    f"Numeric result: {numeric_output_dir / 'phase_and_plv.npz'}",
                 ]
             )
             + "\n",

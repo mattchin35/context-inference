@@ -14,7 +14,7 @@ import pynapple as nap
 from src.neural_analysis import lfp_spectrogram, spike_behavior_pynapple
 
 
-ANALYSIS_VERSION = "0.1.0"
+ANALYSIS_VERSION = "0.2.0"
 PHASE_TENSOR_AXIS_ORDER = ("site", "frequency", "trial", "time")
 RELATIVE_PHASE_AMPLITUDE_MASK_OPTIONS = (
     "Off",
@@ -88,6 +88,11 @@ class SingleTrialRelativePhaseResult:
     amplitude_a: np.ndarray
     amplitude_b: np.ndarray
     numerical_valid: np.ndarray
+    support_relative_phase_complex: np.ndarray
+    support_amplitude_a: np.ndarray
+    support_amplitude_b: np.ndarray
+    support_numerical_valid: np.ndarray
+    support_relative_time_s: np.ndarray
     amplitude_percentiles_a: np.ndarray
     amplitude_percentiles_b: np.ndarray
     frequencies_hz: np.ndarray
@@ -98,6 +103,23 @@ class SingleTrialRelativePhaseResult:
     source_lfp_b: np.ndarray
     trial_index: int
     event_time_s: float
+    site_a_label: str
+    site_b_label: str
+
+
+@dataclass(frozen=True)
+class WithinTrialPLVResult:
+    """Local within-trial phase-locking values and window diagnostics."""
+
+    plv: np.ndarray
+    frequencies_hz: np.ndarray
+    relative_time_s: np.ndarray
+    window_cycles: float
+    effective_window_s: np.ndarray
+    window_sample_count: np.ndarray
+    valid_sample_count: np.ndarray
+    valid_fraction: np.ndarray
+    trial_index: int
     site_a_label: str
     site_b_label: str
 
@@ -510,6 +532,7 @@ def compute_single_trial_relative_phase(
     site_a_label: str,
     site_b_label: str,
     minimum_relative_magnitude: float = 1e-12,
+    support_window: tuple[float, float] | None = None,
 ) -> SingleTrialRelativePhaseResult:
     """
     Compare two padded wavelet results on one exact event-relative grid.
@@ -533,13 +556,20 @@ def compute_single_trial_relative_phase(
     minimum_relative_magnitude : float, default=1e-12
         Numerical-validity threshold relative to each site's largest padded
         coefficient magnitude.
+    support_window : tuple[float, float] | None, default=None
+        Half-open event-relative interval in seconds retained for centered
+        downstream calculations. It must contain ``visible_window``. ``None``
+        retains only the visible interval.
 
     Returns
     -------
     SingleTrialRelativePhaseResult
         Frequency-by-time relative complex phase, angle in radians, amplitudes,
         validity, percentile references, exact axes, cropped unprocessed source
-        traces, and identifying metadata. Relative phase is ``A * conjugate(B)``.
+        traces, and identifying metadata. Support arrays use shape
+        ``(frequency, support_time)``; visible arrays use shape
+        ``(frequency, visible_time)``. Relative phase is
+        ``A * conjugate(B)``.
     """
 
     if not np.isfinite(float(event_time_s)):
@@ -551,34 +581,56 @@ def compute_single_trial_relative_phase(
     if not np.array_equal(site_a.frequencies_hz, site_b.frequencies_hz):
         raise ValueError("Both sites must use an identical frequency vector.")
 
+    support_bounds = visible_window if support_window is None else support_window
+    if len(support_bounds) != 2 or float(support_bounds[0]) >= float(support_bounds[1]):
+        raise ValueError("support_window must contain increasing bounds.")
+    if float(support_bounds[0]) > float(visible_window[0]) or float(support_bounds[1]) < float(
+        visible_window[1]
+    ):
+        raise ValueError("support_window must contain visible_window.")
     output_sample_count = int(
-        np.round((float(visible_window[1]) - float(visible_window[0])) * float(output_sample_rate_hz))
+        np.round((float(support_bounds[1]) - float(support_bounds[0])) * float(output_sample_rate_hz))
     )
     if output_sample_count < 1:
         raise ValueError("visible_window contains no output samples.")
-    relative_time_s = float(visible_window[0]) + np.arange(output_sample_count) / float(output_sample_rate_hz)
-    absolute_time_s = float(event_time_s) + relative_time_s
+    support_relative_time_s = float(support_bounds[0]) + np.arange(output_sample_count) / float(
+        output_sample_rate_hz
+    )
+    absolute_time_s = float(event_time_s) + support_relative_time_s
 
-    phase_a, amplitude_a, valid_a = _interpolate_site_coefficients(
+    phase_a, support_amplitude_a, valid_a = _interpolate_site_coefficients(
         site_a,
         absolute_time_s,
         minimum_relative_magnitude=float(minimum_relative_magnitude),
     )
-    phase_b, amplitude_b, valid_b = _interpolate_site_coefficients(
+    phase_b, support_amplitude_b, valid_b = _interpolate_site_coefficients(
         site_b,
         absolute_time_s,
         minimum_relative_magnitude=float(minimum_relative_magnitude),
     )
-    numerical_valid = valid_a & valid_b
-    relative_phase = phase_a * np.conjugate(phase_b)
-    relative_phase[~numerical_valid] = 0.0j
-    relative_phase_magnitude = np.abs(relative_phase)
+    support_numerical_valid = valid_a & valid_b
+    support_relative_phase = phase_a * np.conjugate(phase_b)
+    support_relative_phase[~support_numerical_valid] = 0.0j
+    relative_phase_magnitude = np.abs(support_relative_phase)
     np.divide(
-        relative_phase,
+        support_relative_phase,
         relative_phase_magnitude,
-        out=relative_phase,
-        where=numerical_valid & (relative_phase_magnitude > 0.0),
+        out=support_relative_phase,
+        where=support_numerical_valid & (relative_phase_magnitude > 0.0),
     )
+    visible_positions = (support_relative_time_s >= float(visible_window[0])) & (
+        support_relative_time_s < float(visible_window[1])
+    )
+    expected_visible_count = int(
+        np.round((float(visible_window[1]) - float(visible_window[0])) * float(output_sample_rate_hz))
+    )
+    if int(np.sum(visible_positions)) != expected_visible_count:
+        raise ValueError("support_window does not produce the requested exact visible grid.")
+    relative_time_s = support_relative_time_s[visible_positions]
+    relative_phase = support_relative_phase[:, visible_positions]
+    amplitude_a = support_amplitude_a[:, visible_positions]
+    amplitude_b = support_amplitude_b[:, visible_positions]
+    numerical_valid = support_numerical_valid[:, visible_positions]
     phase_angle = np.angle(relative_phase).astype(np.float32)
     phase_angle[~numerical_valid] = np.nan
 
@@ -593,6 +645,11 @@ def compute_single_trial_relative_phase(
         amplitude_a=amplitude_a.astype(np.float32),
         amplitude_b=amplitude_b.astype(np.float32),
         numerical_valid=numerical_valid,
+        support_relative_phase_complex=support_relative_phase.astype(np.complex64),
+        support_amplitude_a=support_amplitude_a.astype(np.float32),
+        support_amplitude_b=support_amplitude_b.astype(np.float32),
+        support_numerical_valid=support_numerical_valid,
+        support_relative_time_s=support_relative_time_s,
         amplitude_percentiles_a=amplitude_percentiles_a.astype(np.float32),
         amplitude_percentiles_b=amplitude_percentiles_b.astype(np.float32),
         frequencies_hz=np.asarray(site_a.frequencies_hz, dtype=float).copy(),
@@ -661,6 +718,251 @@ def make_relative_phase_display_mask(
         raise ValueError("Absolute amplitude thresholds must be nonnegative.")
     return display_valid & (result.amplitude_a >= float(absolute_threshold_a)) & (
         result.amplitude_b >= float(absolute_threshold_b)
+    )
+
+
+def make_relative_phase_support_mask(
+    result: SingleTrialRelativePhaseResult,
+    mode: str = "Off",
+    percentile: float = 10.0,
+    absolute_threshold_a: float = 0.0,
+    absolute_threshold_b: float = 0.0,
+) -> np.ndarray:
+    """
+    Build an amplitude-validity mask over the retained padded support interval.
+
+    Parameters
+    ----------
+    result : SingleTrialRelativePhaseResult
+        Support arrays with shape ``(frequency, support_time)``. Time is in
+        event-relative seconds and amplitudes use source wavelet units.
+    mode : str, default="Off"
+        One of ``RELATIVE_PHASE_AMPLITUDE_MASK_OPTIONS``.
+    percentile : float, default=10.0
+        Per-frequency padded-segment percentile in ``[0, 100]``.
+    absolute_threshold_a, absolute_threshold_b : float, default=0.0
+        Nonnegative site-specific wavelet-magnitude thresholds.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean array with shape ``(frequency, support_time)``.
+    """
+
+    if mode not in RELATIVE_PHASE_AMPLITUDE_MASK_OPTIONS:
+        raise ValueError(f"Unknown relative-phase amplitude mask mode: {mode!r}.")
+    valid = np.asarray(result.support_numerical_valid, dtype=bool).copy()
+    if mode == "Off":
+        return valid
+    if mode == "Per-frequency percentile":
+        if not 0.0 <= float(percentile) <= 100.0:
+            raise ValueError("percentile must be in [0, 100].")
+        percentile_axis = np.arange(101, dtype=float)
+        threshold_a = np.asarray(
+            [np.interp(float(percentile), percentile_axis, row) for row in result.amplitude_percentiles_a]
+        )
+        threshold_b = np.asarray(
+            [np.interp(float(percentile), percentile_axis, row) for row in result.amplitude_percentiles_b]
+        )
+        return valid & (result.support_amplitude_a >= threshold_a[:, np.newaxis]) & (
+            result.support_amplitude_b >= threshold_b[:, np.newaxis]
+        )
+    if float(absolute_threshold_a) < 0.0 or float(absolute_threshold_b) < 0.0:
+        raise ValueError("Absolute amplitude thresholds must be nonnegative.")
+    return valid & (result.support_amplitude_a >= float(absolute_threshold_a)) & (
+        result.support_amplitude_b >= float(absolute_threshold_b)
+    )
+
+
+def compute_plv_window_samples(
+    frequencies_hz: np.ndarray,
+    sample_rate_hz: float,
+    window_cycles: float,
+    min_window_s: float | None = None,
+    max_window_s: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Convert cycle-defined PLV windows to centered odd sample counts.
+
+    Parameters
+    ----------
+    frequencies_hz : np.ndarray
+        One-dimensional positive frequency vector in Hz.
+    sample_rate_hz : float
+        Positive common phase-grid sample rate in samples/second.
+    window_cycles : float
+        Positive number of oscillatory cycles in each local window.
+    min_window_s, max_window_s : float | None, default=None
+        Optional positive duration bounds in seconds, applied before sample
+        conversion. Bounds are independent; when both are supplied the minimum
+        cannot exceed the maximum.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        Integer odd sample counts and their effective durations in seconds,
+        both with shape ``(frequency,)``.
+    """
+
+    frequencies = np.asarray(frequencies_hz, dtype=float).reshape(-1)
+    if frequencies.size == 0 or np.any(~np.isfinite(frequencies)) or np.any(frequencies <= 0.0):
+        raise ValueError("frequencies_hz must contain positive finite values.")
+    if not np.isfinite(float(sample_rate_hz)) or float(sample_rate_hz) <= 0.0:
+        raise ValueError("sample_rate_hz must be positive and finite.")
+    if not np.isfinite(float(window_cycles)) or float(window_cycles) <= 0.0:
+        raise ValueError("window_cycles must be positive and finite.")
+    if min_window_s is not None and float(min_window_s) <= 0.0:
+        raise ValueError("min_window_s must be positive when supplied.")
+    if max_window_s is not None and float(max_window_s) <= 0.0:
+        raise ValueError("max_window_s must be positive when supplied.")
+    if min_window_s is not None and max_window_s is not None and float(min_window_s) > float(max_window_s):
+        raise ValueError("min_window_s cannot exceed max_window_s.")
+
+    durations_s = float(window_cycles) / frequencies
+    if min_window_s is not None:
+        durations_s = np.maximum(durations_s, float(min_window_s))
+    if max_window_s is not None:
+        durations_s = np.minimum(durations_s, float(max_window_s))
+    sample_counts = np.maximum(1, np.rint(durations_s * float(sample_rate_hz)).astype(int))
+    sample_counts += (sample_counts % 2 == 0).astype(int)
+    return sample_counts, sample_counts.astype(float) / float(sample_rate_hz)
+
+
+def compute_within_trial_plv(
+    relative_phase_complex: np.ndarray,
+    valid_mask: np.ndarray,
+    frequencies_hz: np.ndarray,
+    relative_time_s: np.ndarray,
+    visible_window: tuple[float, float],
+    window_cycles: float = 3.0,
+    min_window_s: float | None = None,
+    max_window_s: float | None = None,
+    min_valid_fraction: float = 0.8,
+    step_samples: int = 1,
+    trial_index: int = -1,
+    site_a_label: str = "A",
+    site_b_label: str = "B",
+) -> WithinTrialPLVResult:
+    """
+    Compute centered local phase stability within one padded trial segment.
+
+    Parameters
+    ----------
+    relative_phase_complex : np.ndarray
+        Unit complex A-minus-B phase vectors with shape
+        ``(frequency, support_time)``.
+    valid_mask : np.ndarray
+        Boolean array matching ``relative_phase_complex``. Invalid samples are
+        excluded without amplitude weighting.
+    frequencies_hz : np.ndarray
+        Positive frequencies in Hz with shape ``(frequency,)``.
+    relative_time_s : np.ndarray
+        Strictly increasing, uniformly sampled support times in seconds with
+        shape ``(support_time,)``.
+    visible_window : tuple[float, float]
+        Returned half-open event-relative interval in seconds. Complete windows
+        may use support samples outside this interval.
+    window_cycles : float, default=3.0
+        Number of cycles included in each frequency-specific centered window.
+    min_window_s, max_window_s : float | None, default=None
+        Optional duration bounds in seconds.
+    min_valid_fraction : float, default=0.8
+        Required fraction of the complete requested window in ``[0, 1]``.
+    step_samples : int, default=1
+        Positive evaluation stride on the support grid.
+    trial_index : int, default=-1
+        Source trial-table row identifier.
+    site_a_label, site_b_label : str, default="A", "B"
+        Ordered site labels for the underlying A-minus-B phase vectors.
+
+    Returns
+    -------
+    WithinTrialPLVResult
+        ``plv``, valid counts, and valid fractions have shape
+        ``(frequency, visible_time)``. PLV is dimensionless float32 in
+        ``[0, 1]`` or NaN when a full window is unavailable or insufficiently
+        valid. Window metadata has shape ``(frequency,)``.
+
+    Notes
+    -----
+    Short-window PLV has finite-sample upward bias. This function provides no
+    significance threshold and is intended for within-trial inspection.
+    """
+
+    phase = np.asarray(relative_phase_complex)
+    valid = np.asarray(valid_mask, dtype=bool).copy()
+    frequencies = np.asarray(frequencies_hz, dtype=float).reshape(-1)
+    times = np.asarray(relative_time_s, dtype=float).reshape(-1)
+    if phase.ndim != 2 or phase.shape != valid.shape:
+        raise ValueError("relative_phase_complex and valid_mask must share shape (frequency, support_time).")
+    if phase.shape != (frequencies.size, times.size):
+        raise ValueError("Phase arrays must match the frequency and support-time axes.")
+    if times.size < 2:
+        raise ValueError("relative_time_s must contain at least two samples.")
+    time_steps = np.diff(times)
+    if np.any(time_steps <= 0.0) or not np.allclose(time_steps, time_steps[0], rtol=1e-6, atol=1e-12):
+        raise ValueError("relative_time_s must be strictly increasing and uniformly sampled.")
+    if len(visible_window) != 2 or float(visible_window[0]) >= float(visible_window[1]):
+        raise ValueError("visible_window must contain increasing bounds.")
+    if not 0.0 <= float(min_valid_fraction) <= 1.0:
+        raise ValueError("min_valid_fraction must be in [0, 1].")
+    if int(step_samples) != step_samples or int(step_samples) < 1:
+        raise ValueError("step_samples must be a positive integer.")
+
+    sample_rate_hz = 1.0 / float(time_steps[0])
+    window_sample_count, effective_window_s = compute_plv_window_samples(
+        frequencies_hz=frequencies,
+        sample_rate_hz=sample_rate_hz,
+        window_cycles=float(window_cycles),
+        min_window_s=min_window_s,
+        max_window_s=max_window_s,
+    )
+    finite_phase = np.isfinite(phase.real) & np.isfinite(phase.imag) & (np.abs(phase) > 0.0)
+    valid &= finite_phase
+    unit_phase = np.zeros(phase.shape, dtype=np.complex128)
+    unit_phase[valid] = phase[valid] / np.abs(phase[valid])
+    plv_support = np.full(phase.shape, np.nan, dtype=np.float32)
+    count_support = np.zeros(phase.shape, dtype=np.int32)
+
+    centers = np.arange(times.size)
+    for frequency_index, sample_count in enumerate(window_sample_count):
+        half_window = int(sample_count) // 2
+        starts = centers - half_window
+        stops = centers + half_window + 1
+        complete = (starts >= 0) & (stops <= times.size)
+        valid_centers = centers[complete]
+        valid_starts = starts[complete]
+        valid_stops = stops[complete]
+        phase_prefix = np.concatenate(([0.0j], np.cumsum(unit_phase[frequency_index])))
+        count_prefix = np.concatenate(([0], np.cumsum(valid[frequency_index], dtype=np.int64)))
+        local_sums = phase_prefix[valid_stops] - phase_prefix[valid_starts]
+        local_counts = count_prefix[valid_stops] - count_prefix[valid_starts]
+        accepted = (local_counts / float(sample_count)) >= float(min_valid_fraction)
+        accepted &= local_counts > 0
+        accepted_centers = valid_centers[accepted]
+        plv_support[frequency_index, accepted_centers] = (
+            np.abs(local_sums[accepted] / local_counts[accepted]).astype(np.float32)
+        )
+        count_support[frequency_index, valid_centers] = local_counts.astype(np.int32)
+
+    visible_positions = np.flatnonzero(
+        (times >= float(visible_window[0])) & (times < float(visible_window[1]))
+    )[:: int(step_samples)]
+    if visible_positions.size == 0:
+        raise ValueError("visible_window contains no support-grid samples.")
+    visible_counts = count_support[:, visible_positions]
+    return WithinTrialPLVResult(
+        plv=plv_support[:, visible_positions],
+        frequencies_hz=frequencies.copy(),
+        relative_time_s=times[visible_positions].copy(),
+        window_cycles=float(window_cycles),
+        effective_window_s=effective_window_s,
+        window_sample_count=window_sample_count,
+        valid_sample_count=visible_counts,
+        valid_fraction=visible_counts.astype(np.float32) / window_sample_count[:, np.newaxis],
+        trial_index=int(trial_index),
+        site_a_label=str(site_a_label),
+        site_b_label=str(site_b_label),
     )
 
 
@@ -1139,6 +1441,78 @@ def save_single_trial_relative_phase_result(
         event_time_s=np.asarray(result.event_time_s, dtype=float),
         site_a_label=np.asarray(result.site_a_label),
         site_b_label=np.asarray(result.site_b_label),
+        meta=np.asarray(dict(metadata), dtype=object),
+    )
+    return destination
+
+
+def save_single_trial_phase_analysis_result(
+    output_path: Path | str,
+    phase_result: SingleTrialRelativePhaseResult,
+    plv_result: WithinTrialPLVResult,
+    phase_display_valid_mask: np.ndarray,
+    metadata: dict,
+) -> Path:
+    """
+    Save combined single-trial relative-phase and within-trial PLV arrays.
+
+    Parameters
+    ----------
+    output_path : Path | str
+        New ``.npz`` destination. Existing files are never overwritten.
+    phase_result : SingleTrialRelativePhaseResult
+        Visible frequency-by-time phase and amplitude arrays, source traces,
+        and ordered site/trial metadata.
+    plv_result : WithinTrialPLVResult
+        Visible frequency-by-time dimensionless PLV plus per-frequency window
+        sizes and frequency-by-time valid sample counts.
+    phase_display_valid_mask : np.ndarray
+        Boolean array matching ``phase_result.phase_angle_rad``.
+    metadata : dict
+        Serializable parameters, units, source identifiers, and version.
+
+    Returns
+    -------
+    Path
+        Created filesystem path.
+    """
+
+    destination = Path(output_path)
+    if destination.suffix.lower() != ".npz":
+        raise ValueError("output_path must end in .npz.")
+    if destination.exists():
+        raise FileExistsError(f"Refusing to overwrite existing analysis result: {destination}")
+    display_valid = np.asarray(phase_display_valid_mask, dtype=bool)
+    if display_valid.shape != phase_result.phase_angle_rad.shape:
+        raise ValueError("phase_display_valid_mask must match phase_angle_rad.")
+    if not np.array_equal(phase_result.frequencies_hz, plv_result.frequencies_hz):
+        raise ValueError("Phase and PLV frequency axes must match.")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        destination,
+        relative_phase_complex=phase_result.relative_phase_complex,
+        phase_angle_rad=phase_result.phase_angle_rad,
+        amplitude_a=phase_result.amplitude_a,
+        amplitude_b=phase_result.amplitude_b,
+        numerical_valid=phase_result.numerical_valid,
+        phase_display_valid=display_valid,
+        frequencies_hz=phase_result.frequencies_hz,
+        relative_time_s=phase_result.relative_time_s,
+        source_time_a_s=phase_result.source_time_a_s,
+        source_lfp_a=phase_result.source_lfp_a,
+        source_time_b_s=phase_result.source_time_b_s,
+        source_lfp_b=phase_result.source_lfp_b,
+        plv=plv_result.plv,
+        plv_relative_time_s=plv_result.relative_time_s,
+        plv_effective_window_s=plv_result.effective_window_s,
+        plv_window_sample_count=plv_result.window_sample_count,
+        plv_valid_sample_count=plv_result.valid_sample_count,
+        plv_valid_fraction=plv_result.valid_fraction,
+        plv_window_cycles=np.asarray(plv_result.window_cycles, dtype=float),
+        trial_index=np.asarray(phase_result.trial_index, dtype=int),
+        event_time_s=np.asarray(phase_result.event_time_s, dtype=float),
+        site_a_label=np.asarray(phase_result.site_a_label),
+        site_b_label=np.asarray(phase_result.site_b_label),
         meta=np.asarray(dict(metadata), dtype=object),
     )
     return destination
