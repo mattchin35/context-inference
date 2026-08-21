@@ -49,6 +49,75 @@ def test_webapp_exposes_spike_lfp_phase_locking_defaults_and_cache_contract():
         assert required_parameter in parameters
 
 
+def test_webapp_exposes_single_trial_spike_lfp_hilbert_view_and_cache_contract():
+    """The single-trial Hilbert viewer must be a separate source-rate cached path."""
+
+    assert psth_webapp.PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT == "Single-trial spike-LFP phase"
+    assert psth_webapp.PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT in psth_webapp.PLOT_VIEW_OPTIONS
+    assert callable(psth_webapp.render_single_trial_spike_lfp_hilbert_view)
+    parameters = inspect.signature(psth_webapp.compute_single_trial_spike_lfp_hilbert_cached).parameters
+    for required_parameter in (
+        "lfp_path",
+        "lfp_mtime_ns",
+        "saved_channel_index",
+        "aligned_sync_mtime_ns",
+        "unit_id",
+        "unit_spike_times_s",
+        "trial_index",
+        "event_time_s",
+        "window_start_s",
+        "window_end_s",
+        "band_low_hz",
+        "band_high_hz",
+        "filter_padding_s",
+    ):
+        assert required_parameter in parameters
+
+
+def test_single_trial_spike_lfp_hilbert_cache_loads_one_padded_source_rate_trace(monkeypatch):
+    """The single-trial cache should load exactly one padded raw LFP interval."""
+
+    load_calls = []
+
+    def fake_loader(**kwargs):
+        """Record the requested bounds and return a deterministic source-rate segment."""
+
+        load_calls.append(kwargs)
+        time_s = np.arange(kwargs["window_start_s"], kwargs["window_end_s"], 0.01)
+        return time_s, np.sin(2.0 * np.pi * 8.0 * time_s), 100.0
+
+    monkeypatch.setattr(psth_webapp, "load_trial_lfp_trace_for_format_with_sample_rate", fake_loader)
+    psth_webapp.compute_single_trial_spike_lfp_hilbert_cached.clear()
+    result = psth_webapp.compute_single_trial_spike_lfp_hilbert_cached(
+        lfp_format=psth_webapp.LFP_FORMAT_SPIKEGLX,
+        lfp_path="pfc.lf.bin",
+        lfp_mtime_ns=1,
+        saved_channel_index=4,
+        lfp_site_label="PFC channel 4",
+        aligned_sync_path=None,
+        aligned_sync_mtime_ns=-1,
+        unit_id=12,
+        unit_spike_times_s=(99.8, 100.2),
+        trial_index=3,
+        event_time_s=100.0,
+        window_start_s=-1.0,
+        window_end_s=2.0,
+        band_low_hz=6.0,
+        band_high_hz=10.0,
+        filter_padding_s=1.0,
+        digital_word=0,
+        irig_line=6,
+        bit_period_s=1.0,
+        utc_offset_hours=0.0,
+        minimum_envelope=0.0,
+    )
+
+    assert len(load_calls) == 1
+    assert load_calls[0]["window_start_s"] == -2.0
+    assert load_calls[0]["window_end_s"] == 3.0
+    assert result.source_sample_rate_hz == 100.0
+
+
 def test_spike_lfp_phase_locking_cache_phase_bin_count_is_explicitly_cacheable():
     """The phase-bin setting must participate in the cached computation contract."""
     parameter = inspect.signature(psth_webapp.compute_spike_lfp_phase_locking_cached).parameters[
