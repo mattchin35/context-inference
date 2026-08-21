@@ -17,6 +17,7 @@ from src.neural_analysis import (
     population_pca_decoding,
     population_pca_switch_trajectories,
     spike_behavior_pynapple,
+    spike_lfp_hilbert_phase,
     spike_lfp_phase_locking,
     unit_spike_loading,
     unit_spike_plotting,
@@ -47,6 +48,7 @@ PLOT_VIEW_PCA_SWITCH_TRAJECTORIES = "Population PCA switch trajectories"
 PLOT_VIEW_LFP_PHASE_CLUSTERING = "LFP phase clustering"
 PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE = "Single-trial relative phase"
 PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING = "Spike-LFP phase locking"
+PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT = "Single-trial spike-LFP phase"
 PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_UNIT_RASTER,
     PLOT_VIEW_TRIAL_SPIKES,
@@ -55,6 +57,7 @@ PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_LFP_PHASE_CLUSTERING,
     PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE,
     PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING,
+    PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT,
 ]
 UNIT_PLOT_TYPE_OPTIONS = [
     "PSTH",
@@ -148,6 +151,11 @@ SPIKE_LFP_PHASE_BIN_COUNT = 24
 SPIKE_LFP_PHASE_AMPLITUDE_MASK_OPTIONS = ("Off", "Absolute magnitude")
 SPIKE_LFP_PHASE_MAXIMUM_CORE_DURATION_S = 120.0
 SPIKE_LFP_PHASE_CACHE_MAX_ENTRIES = 6
+SPIKE_LFP_HILBERT_DEFAULT_WINDOW = (-1.0, 2.0)
+SPIKE_LFP_HILBERT_PHASE_BAND_HZ = (6.0, 10.0)
+SPIKE_LFP_HILBERT_FILTER_PADDING_S = 1.0
+SPIKE_LFP_HILBERT_MINIMUM_ENVELOPE = 0.0
+SPIKE_LFP_HILBERT_CACHE_MAX_ENTRIES = 12
 DEFAULT_BROWSER_ROOT = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026")
 RASTER_LAYOUT_OPTIONS = {
     "Compact": {"row_spacing": 1.0, "figure_size": (12.0, 7.0)},
@@ -1349,6 +1357,116 @@ def compute_spike_lfp_phase_locking_cached(
         minimum_relative_magnitude=float(minimum_relative_magnitude),
         absolute_amplitude_threshold=float(absolute_amplitude_threshold),
         phase_bin_count=int(phase_bin_count),
+    )
+
+
+@st.cache_data(
+    show_spinner="Computing single-trial spike-LFP Hilbert phase...",
+    max_entries=SPIKE_LFP_HILBERT_CACHE_MAX_ENTRIES,
+)
+def compute_single_trial_spike_lfp_hilbert_cached(
+    lfp_format: str,
+    lfp_path: str,
+    lfp_mtime_ns: int,
+    saved_channel_index: int,
+    lfp_site_label: str,
+    aligned_sync_path: str | None,
+    aligned_sync_mtime_ns: int,
+    unit_id: int,
+    unit_spike_times_s: tuple[float, ...],
+    trial_index: int,
+    event_time_s: float,
+    window_start_s: float,
+    window_end_s: float,
+    band_low_hz: float,
+    band_high_hz: float,
+    filter_padding_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    minimum_envelope: float,
+) -> spike_lfp_hilbert_phase.SingleTrialSpikeLFPHilbertResult:
+    """Load one padded raw LFP interval and compute visible Hilbert phase.
+
+    Parameters
+    ----------
+    lfp_format : str
+        Shared acquisition format from ``LFP_FORMAT_OPTIONS``.
+    lfp_path : str
+        Continuous LFP source file.
+    lfp_mtime_ns : int
+        LFP modification timestamp in nanoseconds used only to invalidate this
+        Streamlit cache entry.
+    saved_channel_index : int
+        Zero-based channel index in the LFP source file.
+    lfp_site_label : str
+        Human-readable independent LFP probe/channel label.
+    aligned_sync_path : str | None
+        Open Ephys synchronization path, or ``None`` for SpikeGLX.
+    aligned_sync_mtime_ns : int
+        Synchronization-file modification timestamp used only for cache
+        invalidation, or ``-1`` when no file is needed.
+    unit_id : int
+        Selected sorter cluster identifier.
+    unit_spike_times_s : tuple[float, ...]
+        Synchronized absolute unit spike timestamps in seconds.
+    trial_index : int
+        Source trial-table row.
+    event_time_s : float
+        Absolute synchronized alignment-event timestamp in seconds.
+    window_start_s, window_end_s : float
+        Visible half-open event-relative interval in seconds.
+    band_low_hz, band_high_hz : float
+        Fixed Hilbert bandpass cutoffs in Hz.
+    filter_padding_s : float
+        Continuous raw-LFP padding on both sides in seconds.
+    digital_word, irig_line : int
+        SpikeGLX synchronization settings; ignored by Open Ephys.
+    bit_period_s : float
+        SpikeGLX IRIG bit period in seconds; ignored by Open Ephys.
+    utc_offset_hours : float
+        Constant synchronization offset in hours.
+    minimum_envelope : float
+        Nonnegative source-unit Hilbert envelope validity threshold.
+
+    Returns
+    -------
+    spike_lfp_hilbert_phase.SingleTrialSpikeLFPHilbertResult
+        Visible source-rate LFP, 6--10 Hz Hilbert phase, and spike-phase
+        observations. No Morlet transform, notch, or decimation is used.
+    """
+
+    # These values are cache-key inputs, not numerical computation inputs.
+    del lfp_mtime_ns, aligned_sync_mtime_ns
+    padded_start_s = float(window_start_s) - float(filter_padding_s)
+    padded_end_s = float(window_end_s) + float(filter_padding_s)
+    relative_time_s, raw_lfp, source_sample_rate_hz = load_trial_lfp_trace_for_format_with_sample_rate(
+        lfp_format=lfp_format,
+        lfp_path=lfp_path,
+        saved_channel_index=int(saved_channel_index),
+        alignment_time_s=float(event_time_s),
+        window_start_s=padded_start_s,
+        window_end_s=padded_end_s,
+        digital_word=int(digital_word),
+        irig_line=int(irig_line),
+        bit_period_s=float(bit_period_s),
+        utc_offset_hours=float(utc_offset_hours),
+        aligned_sync_npz_path=aligned_sync_path,
+    )
+    return spike_lfp_hilbert_phase.compute_single_trial_spike_lfp_hilbert(
+        padded_relative_time_s=relative_time_s,
+        padded_raw_lfp=raw_lfp,
+        source_sample_rate_hz=float(source_sample_rate_hz),
+        unit_spike_times_absolute_s=np.asarray(unit_spike_times_s, dtype=float),
+        event_time_s=float(event_time_s),
+        visible_window=(float(window_start_s), float(window_end_s)),
+        frequency_band_hz=(float(band_low_hz), float(band_high_hz)),
+        filter_padding_s=float(filter_padding_s),
+        minimum_envelope=float(minimum_envelope),
+        trial_index=int(trial_index),
+        unit_id=int(unit_id),
+        lfp_site_label=lfp_site_label,
     )
 
 
@@ -3260,6 +3378,278 @@ def render_spike_lfp_phase_locking_view(
     plt.close(figure)
 
 
+def render_single_trial_spike_lfp_hilbert_view(
+    trial_df: pd.DataFrame,
+    event_df: pd.DataFrame,
+    session: spike_behavior_pynapple.Session,
+    spike_group: object,
+    unit_ids: np.ndarray,
+    active_probe_label: str,
+    hpc_v1_lfp_path: str,
+    pfc_lfp_path: str,
+    hpc_v1_aligned_spike_path: str,
+    pfc_aligned_spike_path: str,
+) -> None:
+    """Render and optionally save one unit's trial-level Hilbert phase trace.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with shape ``(n_trials, n_columns)``. Alignment columns
+        contain synchronized absolute timestamps in seconds.
+    event_df : pd.DataFrame
+        Event table used to build left/right lick timestamps in seconds.
+    session : spike_behavior_pynapple.Session
+        Session metadata containing output root and full session identifier.
+    spike_group : object
+        Pynapple ``TsGroup`` keyed by unit id with synchronized absolute spike
+        timestamps in seconds.
+    unit_ids : np.ndarray
+        Eligible integer unit ids with shape ``(n_units,)``.
+    active_probe_label : str
+        Probe owning the selected unit. The LFP probe remains independent.
+    hpc_v1_lfp_path, pfc_lfp_path : str
+        Probe-specific continuous LFP source paths.
+    hpc_v1_aligned_spike_path, pfc_aligned_spike_path : str
+        Probe-specific aligned sync paths required by derived Open Ephys LFP.
+
+    Returns
+    -------
+    None
+        Streamlit renders raw source-rate LFP, fixed 6--10 Hz Hilbert phase,
+        spike observations, behavior events, and optional timestamped outputs.
+    """
+
+    st.sidebar.header("Single-Trial Spike-LFP Phase")
+    available_unit_ids = np.asarray(unit_ids, dtype=int).reshape(-1)
+    selected_unit_id = int(st.sidebar.selectbox("Unit", options=available_unit_ids.tolist()))
+    condition = st.sidebar.selectbox("Trial condition", options=CONDITION_OPTIONS)
+    action_options = {label: value for label, value in ACTION_OPTIONS.items() if value != COMPARE_LEFT_RIGHT_ACTION}
+    action_label = st.sidebar.selectbox("Action", options=list(action_options))
+    alignment_event = st.sidebar.selectbox("Alignment event", options=ALIGNMENT_OPTIONS)
+    window_start_s = float(
+        st.sidebar.number_input(
+            "Window start (s)",
+            value=float(SPIKE_LFP_HILBERT_DEFAULT_WINDOW[0]),
+            step=0.1,
+        )
+    )
+    window_end_s = float(
+        st.sidebar.number_input(
+            "Window end (s)",
+            value=float(SPIKE_LFP_HILBERT_DEFAULT_WINDOW[1]),
+            step=0.1,
+        )
+    )
+    if window_start_s >= window_end_s:
+        st.error("Window start must be less than window end.")
+        st.stop()
+
+    selected_trial_indices = unit_spike_plotting.filter_trials_for_unit_plot(
+        trial_df=trial_df,
+        condition=condition,
+        action=action_options[action_label],
+    )
+    alignment_times_s = pd.to_numeric(trial_df[alignment_event], errors="coerce").to_numpy(dtype=float)
+    selected_trial_indices = selected_trial_indices[np.isfinite(alignment_times_s[selected_trial_indices])]
+    if selected_trial_indices.size == 0:
+        st.warning("No trials match the selected condition, action, and alignment event.")
+        st.stop()
+    trial_position = int(
+        st.sidebar.number_input(
+            "Trial position",
+            min_value=0,
+            max_value=int(selected_trial_indices.size - 1),
+            value=0,
+            step=1,
+        )
+    )
+    trial_index = int(selected_trial_indices[trial_position])
+    event_time_s = float(alignment_times_s[trial_index])
+    st.sidebar.caption(f"Trial row {trial_index}; {selected_trial_indices.size} matching trials")
+
+    lfp_format = st.sidebar.selectbox("LFP format", options=LFP_FORMAT_OPTIONS)
+    utc_offset_hours = float(
+        st.sidebar.number_input("LFP UTC offset (hours)", value=0, step=1, format="%d")
+    )
+    probe_options = [LFP_DROPDOWN_LABEL_HPC_V1, LFP_DROPDOWN_LABEL_PFC]
+    default_probe_index = 0 if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1 else 1
+    lfp_probe_label = st.sidebar.selectbox("LFP probe", options=probe_options, index=default_probe_index)
+    lfp_saved_channel_index = int(
+        st.sidebar.number_input("LFP saved channel", min_value=0, value=0, step=1)
+    )
+    st.sidebar.caption(
+        "Phase band is fixed at 6--10 Hz: Pynapple Butterworth bandpass followed by SciPy Hilbert."
+    )
+
+    probe_sources = {
+        LFP_DROPDOWN_LABEL_HPC_V1: (hpc_v1_lfp_path, hpc_v1_aligned_spike_path),
+        LFP_DROPDOWN_LABEL_PFC: (pfc_lfp_path, pfc_aligned_spike_path),
+    }
+    raw_lfp_path, raw_sync_path = probe_sources[lfp_probe_label]
+    lfp_source = Path(str(raw_lfp_path)).expanduser()
+    if not str(raw_lfp_path).strip() or not lfp_source.is_file():
+        st.error(f"LFP path for {lfp_probe_label} does not exist: {lfp_source}")
+        st.stop()
+    aligned_sync_path = None
+    aligned_sync_mtime_ns = -1
+    if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED:
+        sync_source = Path(str(raw_sync_path)).expanduser()
+        if not str(raw_sync_path).strip() or not sync_source.is_file():
+            st.error(f"Aligned sync path for {lfp_probe_label} does not exist: {sync_source}")
+            st.stop()
+        aligned_sync_path = str(sync_source)
+        aligned_sync_mtime_ns = sync_source.stat().st_mtime_ns
+
+    unit_spike_times_s = unit_spike_loading.get_unit_spike_times(spike_group, selected_unit_id)
+    lfp_site_label = f"{lfp_probe_label}, channel {lfp_saved_channel_index}"
+    try:
+        result = compute_single_trial_spike_lfp_hilbert_cached(
+            lfp_format=lfp_format,
+            lfp_path=str(lfp_source),
+            lfp_mtime_ns=lfp_source.stat().st_mtime_ns,
+            saved_channel_index=lfp_saved_channel_index,
+            lfp_site_label=lfp_site_label,
+            aligned_sync_path=aligned_sync_path,
+            aligned_sync_mtime_ns=aligned_sync_mtime_ns,
+            unit_id=selected_unit_id,
+            unit_spike_times_s=tuple(unit_spike_times_s.tolist()),
+            trial_index=trial_index,
+            event_time_s=event_time_s,
+            window_start_s=window_start_s,
+            window_end_s=window_end_s,
+            band_low_hz=float(SPIKE_LFP_HILBERT_PHASE_BAND_HZ[0]),
+            band_high_hz=float(SPIKE_LFP_HILBERT_PHASE_BAND_HZ[1]),
+            filter_padding_s=float(SPIKE_LFP_HILBERT_FILTER_PADDING_S),
+            digital_word=0,
+            irig_line=6,
+            bit_period_s=1.0,
+            utc_offset_hours=utc_offset_hours,
+            minimum_envelope=float(SPIKE_LFP_HILBERT_MINIMUM_ENVELOPE),
+        )
+    except Exception as error:  # noqa: BLE001 - Streamlit should display unit/site loading failures cleanly.
+        st.error(f"Could not compute single-trial spike-LFP phase: {error}")
+        st.stop()
+
+    lick_times = spike_behavior_pynapple.build_lick_time_dict(event_df)
+    lfp_y_label = "LFP (uV)" if lfp_format == LFP_FORMAT_SPIKEGLX else "LFP"
+    figure, _axes = unit_spike_plotting.plot_trial_spike_lfp_hilbert_phase_and_behavior(
+        trial_df=trial_df,
+        trial_index=trial_index,
+        lick_times=lick_times,
+        result=result,
+        alignment_event=alignment_event,
+        window=(window_start_s, window_end_s),
+        lfp_y_label=lfp_y_label,
+    )
+
+    metadata_column, figure_column = st.columns([1, 3])
+    with metadata_column:
+        st.subheader("Single-Trial Spike-LFP Phase")
+        st.write(f"Trial row: {trial_index}")
+        st.write(f"Matching trials: {selected_trial_indices.size}")
+        st.write(f"Unit: {selected_unit_id} ({active_probe_label})")
+        st.write(f"LFP site: {lfp_site_label}")
+        st.write(f"Condition: {condition}")
+        st.write(f"Action: {action_label}")
+        st.write(f"Alignment: {alignment_event}")
+        st.write(f"Visible spikes: {result.spike_times_relative_s.size}")
+        st.write(f"Phase-valid spikes: {int(np.count_nonzero(result.spike_phase_valid))}")
+        st.write(f"Source sample rate: {result.source_sample_rate_hz:g} Hz")
+        st.caption(
+            "This 6--10 Hz Hilbert phase is a trial-inspection signal and is not identical to "
+            "the frequency-specific Morlet phase used by the pooled PPC view."
+        )
+    with figure_column:
+        st.pyplot(figure, width="stretch")
+        st.caption(
+            "Raw LFP remains at source rate. The filtered and phase traces use padded continuous LFP before "
+            "cropping; phase points are sampled at the unit's exact spike timestamps."
+        )
+
+    if st.button("Save single-trial spike-LFP phase result"):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        numeric_output_dir = (
+            Path(session.session_data_home) / "ephys" / "derived" / "single_trial_spike_lfp_hilbert" / timestamp
+        )
+        run_output_dir = (
+            Path(session.session_data_home) / "analysis_runs" / f"single_trial_spike_lfp_hilbert_{timestamp}"
+        )
+        metadata = {
+            "generator": "src.neural_analysis.spike_lfp_hilbert_phase",
+            "analysis_version": spike_lfp_hilbert_phase.ANALYSIS_VERSION,
+            "session_id": session.sess_id_full,
+            "trial_index": trial_index,
+            "trial_position": trial_position,
+            "matching_trial_count": int(selected_trial_indices.size),
+            "unit_id": selected_unit_id,
+            "unit_probe": active_probe_label,
+            "lfp_site": lfp_site_label,
+            "lfp_path": str(lfp_source),
+            "lfp_format": lfp_format,
+            "condition": condition,
+            "action": action_label,
+            "alignment_event": alignment_event,
+            "window_s": [window_start_s, window_end_s],
+            "phase_band_hz": list(SPIKE_LFP_HILBERT_PHASE_BAND_HZ),
+            "filter_method": "Pynapple Butterworth bandpass",
+            "phase_method": "scipy.signal.hilbert",
+            "phase_convention": "angle(hilbert(Pynapple Butterworth bandpass))",
+            "phase_units": "radians",
+            "phase_range_rad": [-float(np.pi), float(np.pi)],
+            "raw_lfp_units": "uV" if lfp_format == LFP_FORMAT_SPIKEGLX else "source units",
+            "filtered_lfp_units": "uV" if lfp_format == LFP_FORMAT_SPIKEGLX else "source units",
+            "time_units": "seconds relative to alignment event",
+            "spike_time_units": "seconds relative to alignment event",
+            "spike_phase_units": "radians",
+            "axis_order": ["time"],
+            "filter_padding_s": float(SPIKE_LFP_HILBERT_FILTER_PADDING_S),
+            "decimation": "none",
+            "source_sample_rate_hz": float(result.source_sample_rate_hz),
+            "minimum_envelope": float(SPIKE_LFP_HILBERT_MINIMUM_ENVELOPE),
+            "visible_spike_count": int(result.spike_times_relative_s.size),
+            "phase_valid_spike_count": int(np.count_nonzero(result.spike_phase_valid)),
+            "lfp_mtime_ns": int(lfp_source.stat().st_mtime_ns),
+            "aligned_sync_path": aligned_sync_path,
+            "aligned_sync_mtime_ns": int(aligned_sync_mtime_ns),
+            "hilbert_vs_pooled_morlet_caveat": (
+                "The 6-10 Hz Hilbert phase shown here is not identical to the pooled "
+                "frequency-specific Morlet phase used for PPC."
+            ),
+            "random_seed": None,
+        }
+        spike_lfp_hilbert_phase.save_single_trial_spike_lfp_hilbert_result(
+            output_path=numeric_output_dir / "single_trial_spike_lfp_hilbert.npz",
+            result=result,
+            metadata=metadata,
+        )
+        run_output_dir.mkdir(parents=True, exist_ok=False)
+        figure.savefig(run_output_dir / "single_trial_spike_lfp_hilbert.png", dpi=200, bbox_inches="tight")
+        (run_output_dir / "summary.md").write_text(
+            "\n".join(
+                [
+                    "# Single-trial spike-LFP Hilbert phase",
+                    "",
+                    f"Session: {session.sess_id_full}",
+                    f"Trial row: {trial_index} ({trial_position} of {selected_trial_indices.size} matching trials)",
+                    f"Unit: {selected_unit_id} ({active_probe_label})",
+                    f"LFP site: {lfp_site_label}",
+                    f"Visible spikes: {result.spike_times_relative_s.size}; phase-valid: "
+                    f"{int(np.count_nonzero(result.spike_phase_valid))}",
+                    f"Numeric result: {numeric_output_dir / 'single_trial_spike_lfp_hilbert.npz'}",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (run_output_dir / "run.log").write_text(
+            f"Completed {datetime.now().isoformat()}\nParameters: {metadata!r}\n",
+            encoding="utf-8",
+        )
+        st.success(f"Saved numeric result to {numeric_output_dir} and figure run to {run_output_dir}")
+    plt.close(figure)
+
+
 def main() -> None:
     """
     Run the local Streamlit unit raster/PSTH browser.
@@ -3481,6 +3871,20 @@ def main() -> None:
     if plot_view == PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING:
         render_spike_lfp_phase_locking_view(
             trial_df=trial_df,
+            session=session,
+            spike_group=spike_group,
+            unit_ids=unit_ids,
+            active_probe_label=active_probe_label,
+            hpc_v1_lfp_path=hpc_v1_lfp_path,
+            pfc_lfp_path=pfc_lfp_path,
+            hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
+            pfc_aligned_spike_path=pfc_aligned_spike_path,
+        )
+        return
+    if plot_view == PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT:
+        render_single_trial_spike_lfp_hilbert_view(
+            trial_df=trial_df,
+            event_df=event_df,
             session=session,
             spike_group=spike_group,
             unit_ids=unit_ids,

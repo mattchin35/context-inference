@@ -13,6 +13,7 @@ from src.neural_analysis.spike_behavior_pynapple import make_trial_type_masks
 
 if TYPE_CHECKING:
     from src.neural_analysis.lfp_phase_clustering import SingleTrialRelativePhaseResult, WithinTrialPLVResult
+    from src.neural_analysis.spike_lfp_hilbert_phase import SingleTrialSpikeLFPHilbertResult
     from src.neural_analysis.spike_lfp_phase_locking import SpikePhaseLockingResult
 
 
@@ -122,23 +123,52 @@ def plot_spike_lfp_phase_locking(
         alpha=0.55,
         edgecolor="white",
     )
-    if np.isfinite(preferred_phase[frequency_index]):
-        polar_axis.axvline(
-            float(preferred_phase[frequency_index]),
-            ymin=0.0,
-            ymax=1.0,
-            color="black",
-            linewidth=2.0,
+    finite_rates_hz = selected_rates_hz[np.isfinite(selected_rates_hz)]
+    maximum_rate_hz = float(np.max(finite_rates_hz)) if finite_rates_hz.size else 0.0
+    radial_maximum_hz = maximum_rate_hz * 1.10 if maximum_rate_hz > 0.0 else 1.0
+    polar_axis.set_ylim(0.0, radial_maximum_hz)
+    radial_ticks_hz = np.linspace(0.0, radial_maximum_hz, 4)[1:]
+    polar_axis.set_yticks(radial_ticks_hz)
+    polar_axis.set_yticklabels([f"{tick:g}" for tick in radial_ticks_hz])
+    polar_axis.set_rlabel_position(22.5)
+
+    selected_preferred_phase = float(preferred_phase[frequency_index])
+    selected_resultant_length = float(resultant_length[frequency_index])
+    if np.isfinite(selected_preferred_phase) and np.isfinite(selected_resultant_length):
+        arrow_radius_hz = selected_resultant_length * radial_maximum_hz
+        polar_axis.annotate(
+            "",
+            xy=(selected_preferred_phase, arrow_radius_hz),
+            xytext=(selected_preferred_phase, 0.0),
+            arrowprops={"arrowstyle": "->", "color": "black", "linewidth": 1.8},
         )
     polar_axis.set_theta_zero_location("E")
     polar_axis.set_theta_direction(1)
     polar_axis.set_ylabel("Firing rate (Hz)")
     exposure_s = float(np.nansum(phase_occupancy_s[frequency_index]))
-    preferred_phase_text = preferred_phase[frequency_index]
+    selected_phase_spike_counts = np.asarray(phase_spike_counts[frequency_index], dtype=float)
+    valid_spike_count = int(np.nansum(selected_phase_spike_counts))
+    mean_spikes_per_bin = float(np.nanmean(selected_phase_spike_counts))
+    maximum_bin_count = int(np.nanmax(selected_phase_spike_counts))
+    polar_axis.text(
+        0.02,
+        0.02,
+        (
+            f"Valid spikes: {valid_spike_count}\n"
+            f"Mean spikes/bin: {mean_spikes_per_bin:.2f}\n"
+            f"Maximum bin count: {maximum_bin_count}\n"
+            "Arrow length encodes R, not Hz."
+        ),
+        transform=polar_axis.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize="small",
+    )
+    preferred_phase_text = selected_preferred_phase
     preferred_phase_label = (
         f"{preferred_phase_text:.2f} rad" if np.isfinite(preferred_phase_text) else "n/a"
     )
-    resultant_length_text = resultant_length[frequency_index]
+    resultant_length_text = selected_resultant_length
     resultant_length_label = (
         f"{resultant_length_text:.2f}" if np.isfinite(resultant_length_text) else "n/a"
     )
@@ -150,6 +180,47 @@ def plot_spike_lfp_phase_locking(
     )
     figure.subplots_adjust(left=0.08, right=0.95, top=0.9, bottom=0.1)
     return figure, axes
+
+
+def break_wrapped_phase_trace(
+    phase_rad: np.ndarray,
+    jump_threshold_rad: float = np.pi,
+) -> np.ndarray:
+    """Break a wrapped phase trace at discontinuities for line plotting.
+
+    Parameters
+    ----------
+    phase_rad : np.ndarray
+        One-dimensional wrapped phase samples with shape ``(n_samples,)`` in
+        radians. Finite values normally lie in ``[-pi, pi]``; existing NaNs
+        mark invalid phase estimates and are preserved.
+    jump_threshold_rad : float, default=pi
+        Positive finite angular jump threshold in radians. The later sample of
+        every adjacent finite pair whose absolute difference exceeds this
+        threshold is replaced by NaN.
+
+    Returns
+    -------
+    np.ndarray
+        Float copy with shape ``(n_samples,)`` in radians. It preserves input
+        finite values except for later samples at detected wrap discontinuities
+        and preserves existing NaNs.
+    """
+
+    phase_values = np.asarray(phase_rad, dtype=float)
+    if phase_values.ndim != 1:
+        raise ValueError("phase_rad must be one-dimensional.")
+    threshold = float(jump_threshold_rad)
+    if not np.isfinite(threshold) or threshold <= 0.0:
+        raise ValueError("jump_threshold_rad must be finite and positive.")
+
+    broken_phase = phase_values.copy()
+    if broken_phase.size < 2:
+        return broken_phase
+    adjacent_finite = np.isfinite(phase_values[:-1]) & np.isfinite(phase_values[1:])
+    wrap_jumps = adjacent_finite & (np.abs(np.diff(phase_values)) > threshold)
+    broken_phase[1:][wrap_jumps] = np.nan
+    return broken_phase
 
 
 def filter_trials_for_unit_plot(
@@ -1276,6 +1347,167 @@ def draw_single_trial_behavior_axis(
     return axis
 
 
+def plot_trial_spike_lfp_hilbert_phase_and_behavior(
+    trial_df: pd.DataFrame,
+    trial_index: int,
+    lick_times: Mapping[str, nap.Ts | np.ndarray],
+    result: SingleTrialSpikeLFPHilbertResult,
+    alignment_event: str,
+    window: tuple[float, float],
+    lfp_y_label: str = "LFP",
+    figure_size: tuple[float, float] = (11.0, 8.0),
+) -> tuple[plt.Figure, dict[str, plt.Axes]]:
+    """Plot one unit's spikes against a trial's band-limited Hilbert phase.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with behavior columns required by
+        ``draw_single_trial_behavior_axis``. Event times are absolute seconds.
+    trial_index : int
+        Integer row index selecting the displayed trial.
+    lick_times : Mapping[str, nap.Ts | np.ndarray]
+        Left and right lick timestamps in absolute seconds. The mapping must
+        contain the standard ``left_entry`` and ``right_entry`` keys.
+    result : SingleTrialSpikeLFPHilbertResult
+        Visible-only trial result. Time-indexed arrays have shape
+        ``(n_samples,)`` with event-relative seconds and source LFP units;
+        spike-indexed arrays have shape ``(n_spikes,)`` with seconds and
+        wrapped phase in radians.
+    alignment_event : str
+        Trial-table event column defining relative time zero.
+    window : tuple[float, float]
+        Increasing visible x-axis bounds as ``(start_s, end_s)`` in
+        event-relative seconds.
+    lfp_y_label : str, default="LFP"
+        Source-voltage label for the raw and bandpassed trace axes.
+    figure_size : tuple[float, float], default=(11.0, 8.0)
+        Compact figure dimensions in inches.
+
+    Returns
+    -------
+    tuple[plt.Figure, dict[str, plt.Axes]]
+        Figure and four shared-x axes named ``raw_lfp``, ``bandpassed_lfp``,
+        ``phase``, and ``behavior``. Phase traces and spike phase observations
+        are in radians; LFP traces retain source voltage units.
+    """
+
+    if len(window) != 2 or not np.all(np.isfinite(window)) or float(window[0]) >= float(window[1]):
+        raise ValueError("window must contain two finite bounds with start < end.")
+    if len(figure_size) != 2 or not np.all(np.isfinite(figure_size)):
+        raise ValueError("figure_size must contain two finite dimensions.")
+    if float(figure_size[0]) <= 0.0 or float(figure_size[1]) <= 0.0:
+        raise ValueError("figure_size dimensions must be positive.")
+
+    relative_time_s = np.asarray(result.relative_time_s, dtype=float)
+    raw_lfp = np.asarray(result.raw_lfp, dtype=float)
+    bandpassed_lfp = np.asarray(result.bandpassed_lfp, dtype=float)
+    phase_rad = np.asarray(result.phase_rad, dtype=float)
+    phase_valid = np.asarray(result.phase_valid, dtype=bool)
+    if relative_time_s.ndim != 1 or relative_time_s.size == 0:
+        raise ValueError("result.relative_time_s must be a nonempty one-dimensional array.")
+    time_shape = relative_time_s.shape
+    time_arrays = (raw_lfp, bandpassed_lfp, phase_rad, phase_valid)
+    if any(values.ndim != 1 or values.shape != time_shape for values in time_arrays):
+        raise ValueError("Visible LFP and phase arrays must have shape (n_samples,).")
+    if not np.all(np.isfinite(relative_time_s)) or np.any(np.diff(relative_time_s) <= 0.0):
+        raise ValueError("result.relative_time_s must be finite and strictly increasing.")
+    if np.any(relative_time_s < float(window[0])) or np.any(relative_time_s > float(window[1])):
+        raise ValueError("result.relative_time_s must lie within window.")
+
+    spike_times_s = np.asarray(result.spike_times_relative_s, dtype=float)
+    spike_phase_rad = np.asarray(result.spike_phase_rad, dtype=float)
+    spike_phase_valid = np.asarray(result.spike_phase_valid, dtype=bool)
+    if any(values.ndim != 1 for values in (spike_times_s, spike_phase_rad, spike_phase_valid)):
+        raise ValueError("Spike arrays must be one-dimensional.")
+    if spike_phase_rad.shape != spike_times_s.shape or spike_phase_valid.shape != spike_times_s.shape:
+        raise ValueError("Spike arrays must share shape (n_spikes,).")
+    if not np.all(np.isfinite(spike_times_s)):
+        raise ValueError("result.spike_times_relative_s must contain finite seconds.")
+    if np.any(spike_times_s < float(window[0])) or np.any(spike_times_s >= float(window[1])):
+        raise ValueError("result.spike_times_relative_s must lie in the half-open visible window.")
+
+    figure, axis_array = plt.subplots(
+        4,
+        1,
+        sharex=True,
+        figsize=(float(figure_size[0]), float(figure_size[1])),
+        height_ratios=[1.25, 1.25, 1.2, 1.0],
+    )
+    raw_axis, bandpassed_axis, phase_axis, behavior_axis = np.asarray(axis_array, dtype=object).reshape(-1)
+    axes = {
+        "raw_lfp": raw_axis,
+        "bandpassed_lfp": bandpassed_axis,
+        "phase": phase_axis,
+        "behavior": behavior_axis,
+    }
+
+    raw_axis.plot(relative_time_s, raw_lfp, color="0.15", linewidth=0.65)
+    raw_axis.set_ylabel(str(lfp_y_label))
+    raw_axis.set_title("Raw LFP")
+
+    low_hz, high_hz = (float(result.frequency_band_hz[0]), float(result.frequency_band_hz[1]))
+    bandpassed_axis.plot(relative_time_s, bandpassed_lfp, color="tab:blue", linewidth=0.8)
+    if spike_times_s.size:
+        bandpassed_axis.vlines(
+            spike_times_s,
+            0.03,
+            0.16,
+            color="black",
+            linewidth=0.9,
+            transform=bandpassed_axis.get_xaxis_transform(),
+            label=f"Unit {int(result.unit_id)} spikes",
+        )
+    bandpassed_axis.set_ylabel(str(lfp_y_label))
+    bandpassed_axis.set_title(f"{low_hz:g}-{high_hz:g} Hz bandpassed LFP")
+
+    phase_axis.plot(
+        relative_time_s,
+        break_wrapped_phase_trace(phase_rad),
+        color="tab:purple",
+        linewidth=0.8,
+        label="Hilbert phase",
+    )
+    valid_spike_phase_mask = spike_phase_valid & np.isfinite(spike_phase_rad)
+    if np.any(valid_spike_phase_mask):
+        phase_axis.scatter(
+            spike_times_s[valid_spike_phase_mask],
+            spike_phase_rad[valid_spike_phase_mask],
+            color="black",
+            s=18,
+            zorder=3,
+            label="Spike phase",
+        )
+    phase_axis.set_ylim(-np.pi, np.pi)
+    phase_axis.set_yticks([-np.pi, -np.pi / 2.0, 0.0, np.pi / 2.0, np.pi])
+    phase_axis.set_yticklabels(["-pi", "-pi/2", "0", "pi/2", "pi"])
+    phase_axis.set_ylabel("Phase (rad)")
+    phase_axis.set_title("6-10 Hz Hilbert phase at unit spikes")
+
+    draw_single_trial_behavior_axis(
+        axis=behavior_axis,
+        trial_df=trial_df,
+        trial_index=int(trial_index),
+        lick_times=lick_times,
+        alignment_event=alignment_event,
+        window=window,
+    )
+    behavior_axis.set_xlabel(f"Time from {alignment_event} (s)")
+
+    for axis in axes.values():
+        axis.axvline(0.0, color="gray", linestyle="--", linewidth=1.0)
+        axis.set_xlim(float(window[0]), float(window[1]))
+    figure.suptitle(
+        (
+            f"Trial {int(trial_index)}: unit {int(result.unit_id)} and {result.lfp_site_label} "
+            f"({low_hz:g}-{high_hz:g} Hz, {spike_times_s.size} spikes)"
+        ),
+        fontsize="medium",
+    )
+    figure.subplots_adjust(left=0.09, right=0.98, top=0.91, bottom=0.08, hspace=0.42)
+    return figure, axes
+
+
 def plot_trial_lfp_spectrogram_and_behavior(
     trial_df: pd.DataFrame,
     trial_index: int,
@@ -1417,6 +1649,176 @@ def plot_trial_lfp_spectrogram_and_behavior(
         va="bottom",
         fontsize="small",
     )
+    return figure, axes
+
+
+def plot_trial_spike_lfp_hilbert_phase_and_behavior(
+    trial_df: pd.DataFrame,
+    trial_index: int,
+    lick_times: Mapping[str, nap.Ts | np.ndarray],
+    result: SingleTrialSpikeLFPHilbertResult,
+    alignment_event: str,
+    window: tuple[float, float],
+    lfp_y_label: str = "LFP",
+    figure_size: tuple[float, float] = (11.0, 8.0),
+) -> tuple[plt.Figure, dict[str, plt.Axes]]:
+    """Plot one trial's raw LFP, Hilbert phase, unit spikes, and behavior.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Trial table with behavior columns required by
+        ``draw_single_trial_behavior_axis``. Event times are synchronized
+        absolute seconds.
+    trial_index : int
+        Integer trial-table row identifier for the displayed trial.
+    lick_times : Mapping[str, nap.Ts | np.ndarray]
+        Absolute left and right lick timestamps in seconds, keyed by
+        ``"left_entry"`` and ``"right_entry"``.
+    result : SingleTrialSpikeLFPHilbertResult
+        Visible-trial output. Time-indexed arrays have shape
+        ``(n_visible_samples,)``; times are seconds relative to the alignment
+        event and LFP arrays retain their source voltage units. Spike-indexed
+        arrays have shape ``(n_visible_spikes,)`` with spike phases in
+        wrapped radians.
+    alignment_event : str
+        Trial timestamp column defining relative time zero.
+    window : tuple[float, float]
+        Finite increasing visible relative-time bounds ``(start_s, end_s)``.
+    lfp_y_label : str, default="LFP"
+        Y-axis label for raw and bandpassed source-voltage traces.
+    figure_size : tuple[float, float], default=(11.0, 8.0)
+        Figure dimensions in inches.
+
+    Returns
+    -------
+    tuple[plt.Figure, dict[str, plt.Axes]]
+        Figure and shared-x axes named ``raw_lfp``, ``bandpassed_lfp``,
+        ``phase``, and ``behavior``. The phase axis displays radians in
+        ``[-pi, pi]``; invalid spike-phase samples are excluded only from its
+        scatter points and remain represented by filtered-trace spike rugs.
+    """
+
+    if len(window) != 2:
+        raise ValueError("window must contain exactly two bounds.")
+    window_start_s, window_end_s = (float(window[0]), float(window[1]))
+    if not np.isfinite(window_start_s) or not np.isfinite(window_end_s) or window_start_s >= window_end_s:
+        raise ValueError("window must contain finite increasing bounds.")
+    if len(figure_size) != 2 or any(not np.isfinite(float(value)) or float(value) <= 0.0 for value in figure_size):
+        raise ValueError("figure_size must contain two positive finite values.")
+
+    relative_time_s = np.asarray(result.relative_time_s, dtype=float)
+    raw_lfp = np.asarray(result.raw_lfp, dtype=float)
+    bandpassed_lfp = np.asarray(result.bandpassed_lfp, dtype=float)
+    phase_rad = np.asarray(result.phase_rad, dtype=float)
+    phase_valid = np.asarray(result.phase_valid, dtype=bool)
+    time_indexed_values = (raw_lfp, bandpassed_lfp, phase_rad, phase_valid)
+    if relative_time_s.ndim != 1 or relative_time_s.size == 0:
+        raise ValueError("result.relative_time_s must be a nonempty one-dimensional array.")
+    if any(values.ndim != 1 or values.shape != relative_time_s.shape for values in time_indexed_values):
+        raise ValueError("Visible LFP and phase arrays must be one-dimensional and match relative_time_s.")
+    if not np.all(np.isfinite(relative_time_s)) or np.any(np.diff(relative_time_s) <= 0.0):
+        raise ValueError("result.relative_time_s must be finite and strictly increasing.")
+    if not np.all(np.isfinite(raw_lfp)) or not np.all(np.isfinite(bandpassed_lfp)):
+        raise ValueError("Visible raw and bandpassed LFP arrays must be finite.")
+
+    spike_times_s = np.asarray(result.spike_times_relative_s, dtype=float)
+    spike_phase_rad = np.asarray(result.spike_phase_rad, dtype=float)
+    spike_phase_valid = np.asarray(result.spike_phase_valid, dtype=bool)
+    if (
+        spike_times_s.ndim != 1
+        or spike_phase_rad.ndim != 1
+        or spike_phase_valid.ndim != 1
+        or spike_phase_rad.shape != spike_times_s.shape
+        or spike_phase_valid.shape != spike_times_s.shape
+    ):
+        raise ValueError("Spike time, phase, and validity arrays must share one spike dimension.")
+    if not np.all(np.isfinite(spike_times_s)):
+        raise ValueError("result.spike_times_relative_s must be finite.")
+    if len(result.frequency_band_hz) != 2:
+        raise ValueError("result.frequency_band_hz must contain two cutoff frequencies.")
+    band_low_hz, band_high_hz = (float(result.frequency_band_hz[0]), float(result.frequency_band_hz[1]))
+    if not np.isfinite(band_low_hz) or not np.isfinite(band_high_hz) or band_low_hz >= band_high_hz:
+        raise ValueError("result.frequency_band_hz must contain finite increasing values.")
+
+    figure, axis_array = plt.subplots(
+        4,
+        1,
+        sharex=True,
+        figsize=(float(figure_size[0]), float(figure_size[1])),
+        height_ratios=[1.05, 1.05, 1.0, 0.8],
+    )
+    raw_axis, bandpassed_axis, phase_axis, behavior_axis = np.asarray(axis_array, dtype=object).reshape(-1)
+    axes = {
+        "raw_lfp": raw_axis,
+        "bandpassed_lfp": bandpassed_axis,
+        "phase": phase_axis,
+        "behavior": behavior_axis,
+    }
+
+    raw_axis.plot(relative_time_s, raw_lfp, color="0.15", linewidth=0.75)
+    raw_axis.axvline(0.0, color="0.45", linestyle="--", linewidth=1.0)
+    raw_axis.set_ylabel(str(lfp_y_label))
+    raw_axis.set_title("Raw LFP")
+
+    bandpassed_axis.plot(relative_time_s, bandpassed_lfp, color="tab:blue", linewidth=0.85)
+    bandpassed_axis.axvline(0.0, color="0.45", linestyle="--", linewidth=1.0)
+    if spike_times_s.size:
+        bandpassed_axis.vlines(
+            spike_times_s,
+            0.0,
+            0.10,
+            color="black",
+            linewidth=0.8,
+            transform=bandpassed_axis.get_xaxis_transform(),
+            label=f"Spikes (n={spike_times_s.size})",
+        )
+        bandpassed_axis.legend(loc="upper right", fontsize="small")
+    bandpassed_axis.set_ylabel(str(lfp_y_label))
+    bandpassed_axis.set_title(f"{band_low_hz:g}-{band_high_hz:g} Hz bandpass")
+
+    phase_axis.plot(
+        relative_time_s,
+        break_wrapped_phase_trace(phase_rad),
+        color="tab:purple",
+        linewidth=0.85,
+        label="Hilbert phase",
+    )
+    phase_axis.axvline(0.0, color="0.45", linestyle="--", linewidth=1.0)
+    valid_spike_phase = spike_phase_valid & np.isfinite(spike_phase_rad)
+    if np.any(valid_spike_phase):
+        phase_axis.scatter(
+            spike_times_s[valid_spike_phase],
+            spike_phase_rad[valid_spike_phase],
+            color="black",
+            s=20.0,
+            zorder=3,
+            label=f"Spike phase (n={int(np.count_nonzero(valid_spike_phase))})",
+        )
+    phase_axis.set_ylim(-np.pi, np.pi)
+    phase_axis.set_yticks([-np.pi, -np.pi / 2.0, 0.0, np.pi / 2.0, np.pi])
+    phase_axis.set_yticklabels(["-pi", "-pi/2", "0", "pi/2", "pi"])
+    phase_axis.set_ylabel("Phase (rad)")
+    phase_axis.set_title("Hilbert phase at selected-unit spikes")
+    phase_axis.legend(loc="upper right", fontsize="small")
+
+    draw_single_trial_behavior_axis(
+        axis=behavior_axis,
+        trial_df=trial_df,
+        trial_index=int(trial_index),
+        lick_times=lick_times,
+        alignment_event=alignment_event,
+        window=(window_start_s, window_end_s),
+    )
+    behavior_axis.set_xlabel(f"Time from {alignment_event} (s)")
+    for axis in axes.values():
+        axis.set_xlim(window_start_s, window_end_s)
+
+    figure.suptitle(
+        f"Trial {int(trial_index)}: unit {int(result.unit_id)} and {result.lfp_site_label}",
+        y=0.99,
+    )
+    figure.subplots_adjust(left=0.1, right=0.94, top=0.93, bottom=0.08, hspace=0.45)
     return figure, axes
 
 
