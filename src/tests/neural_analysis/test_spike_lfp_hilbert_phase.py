@@ -107,7 +107,9 @@ def test_single_trial_processing_filters_padded_trace_before_half_open_visible_c
     assert result.relative_time_s[0] == 0.0
     assert result.relative_time_s[-1] < 1.0
     assert result.relative_time_s.size == 1_000
-    np.testing.assert_allclose(result.raw_lfp, raw_lfp[(time_s >= 0.0) & (time_s < 1.0)])
+    half_sample_s = 0.5 / sample_rate_hz
+    expected_visible = (time_s >= -half_sample_s) & (time_s < 1.0 - half_sample_s)
+    np.testing.assert_allclose(result.raw_lfp, raw_lfp[expected_visible])
     np.testing.assert_allclose(result.spike_times_absolute_s, [100.0, 100.25])
     np.testing.assert_allclose(result.spike_times_relative_s, [0.0, 0.25])
     assert result.source_sample_rate_hz == sample_rate_hz
