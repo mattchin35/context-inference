@@ -365,3 +365,22 @@ def test_spike_payload_offsets_index_each_unit_trial_and_bound_packed_spikes() -
     assert np.all(np.diff(offsets, axis=1) >= 0)
     assert np.array_equal(offsets[:-1, -1], offsets[1:, 0])
     assert offsets[-1, -1] == packed_times.size
+
+
+def test_payload_validation_rejects_forged_schema_or_component_filename() -> None:
+    """Validation must bind safe arrays to the exact manifest schema and basename."""
+
+    payload = build_component_payload("power", _arrays_for("power"))
+    forged_schema = ComponentPayload(
+        payload.arrays,
+        {**payload.manifest_entry, "array_schema": {}},
+    )
+    with pytest.raises(ValueError, match="schema"):
+        validate_component_payload("power", forged_schema)
+
+    unsafe_filename = ComponentPayload(
+        payload.arrays,
+        {**payload.manifest_entry, "file_name": "../power.npz"},
+    )
+    with pytest.raises(ValueError, match="file|name|basename"):
+        validate_component_payload("power", unsafe_filename)
