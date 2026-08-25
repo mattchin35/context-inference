@@ -28,7 +28,7 @@ _AXIS_LENGTHS = {
     "time": 1,
     "phase_bin": 1,
     "phase_bin_edge": 2,
-    "spike": 1,
+    "spike": 2,
 }
 
 
