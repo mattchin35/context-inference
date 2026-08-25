@@ -11,6 +11,7 @@ import pytest
 
 from src.neural_analysis.lfp_summary_io import (
     assess_component_status,
+    load_or_initialize_manifest,
     load_component_arrays,
     write_component_transaction,
 )
@@ -98,6 +99,57 @@ def _manifest(
             }
         },
     }
+
+
+def test_load_or_initialize_manifest_creates_write_ready_metadata_when_absent(
+    tmp_path: Path,
+) -> None:
+    """An absent manifest yields all required top-level metadata and empty components."""
+    config = default_lfp_summary_config()
+
+    manifest = load_or_initialize_manifest(tmp_path, config)
+
+    assert manifest["schema_version"] == config.schema_version
+    assert manifest["session_id"] == config.session_id
+    assert manifest["components"] == {}
+    for field in ("generator", "configuration", "reference", "processing_metadata"):
+        assert field in manifest
+
+    entry = {
+        "file_name": "power.npz",
+        "array_schema": _power_array_schema(),
+        "state": "complete",
+    }
+    write_ready = {**manifest, "components": {"power": entry}}
+    write_component_transaction(tmp_path, "power", _power_arrays(), write_ready)
+    assert (tmp_path / "manifest.json").is_file()
+
+
+def test_load_or_initialize_manifest_loads_valid_json_and_rejects_corruption_or_nonmapping(
+    tmp_path: Path,
+) -> None:
+    """Only a JSON object manifest can seed an atomic component transaction."""
+    config = default_lfp_summary_config()
+    manifest_path = tmp_path / "manifest.json"
+    valid_manifest = {
+        "schema_version": config.schema_version,
+        "session_id": config.session_id,
+        "components": {},
+        "generator": {"name": "test"},
+        "configuration": {},
+        "reference": {},
+        "processing_metadata": {},
+    }
+    manifest_path.write_text(json.dumps(valid_manifest), encoding="ascii")
+    assert load_or_initialize_manifest(tmp_path, config) == valid_manifest
+
+    manifest_path.write_text("{not valid json", encoding="ascii")
+    with pytest.raises(ValueError, match="manifest|JSON|json"):
+        load_or_initialize_manifest(tmp_path, config)
+
+    manifest_path.write_text("[]", encoding="ascii")
+    with pytest.raises(ValueError, match="mapping|object|manifest"):
+        load_or_initialize_manifest(tmp_path, config)
 
 
 def test_numeric_boolean_and_fixed_unicode_arrays_load_without_pickle(tmp_path: Path) -> None:
