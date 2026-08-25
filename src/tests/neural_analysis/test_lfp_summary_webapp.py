@@ -556,10 +556,19 @@ def test_production_power_plot_delegates_cache_arrays_to_plotting_module(
     arrays = {
         "frequency_hz": np.array((0.0, 40.0, 100.0, 102.0)),
         "normalized_psd_session_db": normalized_psd,
-        "condition_names": np.array(("correct_rewarded", "omission")),
-        "condition_membership": np.array(((True, False), (True, True))),
+        "condition_names": np.array(
+            ("correct_rewarded", "omission", "incorrect", "switch", "stay")
+        ),
+        "condition_membership": np.array(
+            (
+                (True, False, False, False, False),
+                (True, True, False, False, False),
+            )
+        ),
         "filter_membership": np.array((True, False)),
-        "condition_effective_trial_count": np.array(((1,), (1,))),
+        "condition_effective_trial_count": np.array(
+            ((1,), (1,), (0,), (0,), (0,))
+        ),
         "site_ids": np.array(("PFC",)),
         "site_voltage_units": np.array(("uV",)),
         "epoch_names": np.array(("whole", "before", "after")),
