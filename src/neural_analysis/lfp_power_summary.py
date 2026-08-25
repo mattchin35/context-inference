@@ -308,7 +308,13 @@ def compute_presession_reference_psd(
         return unavailable
     baseline_times = times[mask]
     baseline_values = samples[mask]
-    if not np.allclose(baseline_times, expected_time_s, rtol=0.0, atol=1e-9):
+    coordinate_tolerance_s = _time_coordinate_tolerance_s(expected_time_s)
+    if not np.allclose(
+        baseline_times,
+        expected_time_s,
+        rtol=0.0,
+        atol=coordinate_tolerance_s,
+    ):
         return unavailable
     if not np.all(np.isfinite(baseline_values)):
         return unavailable
@@ -507,13 +513,40 @@ def _welch_lengths(sample_rate_hz: float, config: PowerAnalysisConfig) -> tuple[
 
 
 def _validate_native_spacing(time_s: np.ndarray, sample_rate_hz: float) -> None:
-    """Require exact native-rate support so half-open windows have known counts."""
+    """Require native-rate support within float precision at the coordinate scale."""
 
     if time_s.size < 2:
         raise ValueError("time coordinates require at least two samples")
     expected_step_s = 1.0 / sample_rate_hz
-    if not np.allclose(np.diff(time_s), expected_step_s, rtol=0.0, atol=1e-9):
+    coordinate_tolerance_s = _time_coordinate_tolerance_s(time_s)
+    if not np.allclose(
+        np.diff(time_s),
+        expected_step_s,
+        rtol=0.0,
+        atol=coordinate_tolerance_s,
+    ):
         raise ValueError("time coordinates do not match sample_rate_hz")
+
+
+def _time_coordinate_tolerance_s(time_s: np.ndarray) -> float:
+    """Return seconds tolerance for float64 coordinates without relaxing sample rate.
+
+    Parameters
+    ----------
+    time_s : numpy.ndarray
+        Finite time coordinates in seconds. Values may be event-relative or UTC
+        Unix timestamps whose float64 spacing is coarser than one nanosecond.
+
+    Returns
+    -------
+    float
+        Maximum of one nanosecond and two float64 units in the last place at
+        the largest coordinate magnitude. This covers unavoidable subtraction
+        roundoff but remains far below one 2.5-kHz sample interval.
+    """
+    maximum_magnitude_s = float(np.max(np.abs(time_s)))
+    coordinate_ulp_s = float(np.spacing(maximum_magnitude_s))
+    return max(1e-9, 2.0 * coordinate_ulp_s)
 
 
 def _retained_intervals(
