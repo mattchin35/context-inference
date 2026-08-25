@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.neural_analysis import lfp_phase_clustering, psth_webapp
 
@@ -26,6 +27,109 @@ def test_webapp_keeps_existing_routes_and_exposes_lfp_summary_route():
 
     assert expected_routes.issubset(psth_webapp.PLOT_VIEW_OPTIONS)
     assert callable(psth_webapp.render_lfp_summary_view)
+
+
+def test_real_summary_route_builds_usable_production_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The live route must supply production Power dependencies when none are injected.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Records the production factory and route delegation without Streamlit UI.
+    tmp_path : pathlib.Path
+        Temporary active session directory passed through unchanged.
+    """
+    sentinel_dependencies = object()
+    received: dict[str, object] = {}
+
+    def fake_factory() -> object:
+        """Return a usable opaque dependency marker for route delegation."""
+        return sentinel_dependencies
+
+    def fake_render(*args: object, **kwargs: object) -> None:
+        """Record summary-view delegation keyword arguments."""
+        del args
+        received.update(kwargs)
+
+    monkeypatch.setattr(
+        psth_webapp.lfp_summary_webapp,
+        "make_production_summary_dependencies",
+        fake_factory,
+    )
+    monkeypatch.setattr(psth_webapp.lfp_summary_webapp, "render_lfp_summary_view", fake_render)
+
+    psth_webapp.render_lfp_summary_view(
+        str(tmp_path),
+        "CT026_2026-08-01_130853",
+        "hpc.lf.bin",
+        "pfc.lf.bin",
+        "hpc.sync.npz",
+        "pfc.sync.npz",
+    )
+
+    assert received["dependencies"] is sentinel_dependencies
+    assert received["session_path"] == tmp_path
+
+
+def test_derived_open_ephys_lfp_paths_use_aligned_sync_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Derived ``lfp.dat`` inputs must not be mislabeled as SpikeGLX binaries.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Records route delegation without opening the native recordings.
+    tmp_path : pathlib.Path
+        Temporary session root used to construct explicit probe paths.
+    """
+    received: dict[str, object] = {}
+
+    def fake_render(*args: object, **kwargs: object) -> None:
+        """Record summary-view delegation keyword arguments."""
+        del args
+        received.update(kwargs)
+
+    monkeypatch.setattr(
+        psth_webapp.lfp_summary_webapp,
+        "make_production_summary_dependencies",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        psth_webapp.lfp_summary_webapp,
+        "render_lfp_summary_view",
+        fake_render,
+    )
+    probe_a = tmp_path / "ProbeA" / "lfp.dat"
+    probe_b = tmp_path / "ProbeB" / "lfp.dat"
+    probe_a_sync = tmp_path / "probeA_sync.npz"
+    probe_b_sync = tmp_path / "probeB_sync.npz"
+
+    psth_webapp.render_lfp_summary_view(
+        str(tmp_path),
+        "CT026_2026-08-01_130853",
+        str(probe_b),
+        str(probe_a),
+        str(probe_b_sync),
+        str(probe_a_sync),
+    )
+
+    sites = received["sites"]
+    assert isinstance(sites, tuple)
+    assert [site.acquisition_format for site in sites] == [
+        "open_ephys",
+        "open_ephys",
+        "open_ephys",
+    ]
+    assert [site.aligned_sync_path for site in sites] == [
+        probe_a_sync,
+        probe_b_sync,
+        probe_b_sync,
+    ]
 
 
 def test_build_lfp_dropdown_options_uses_only_explicit_probe_paths():

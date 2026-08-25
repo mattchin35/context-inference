@@ -420,6 +420,11 @@ def test_full_summary_route_maps_visible_controls_into_computation_config(
     assert not config.phase.notch_enabled
     assert config.phase.output_rate_hz == 400.0
     assert config.phase.seed == 19 and config.ppc.seed == 19
+    assert config.trial_table_path == (
+        tmp_path
+        / "processed"
+        / "CT026_2026-08-01_130853_augmented_trials.csv"
+    )
     assert {
         "Choice filter",
         "Context filter",
@@ -430,3 +435,118 @@ def test_full_summary_route_maps_visible_controls_into_computation_config(
         "Bootstrap count",
         "Random seed",
     }.issubset(streamlit.sidebar.labels)
+
+
+def test_production_power_action_delegates_to_atomic_runtime_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production Power dispatch must use the pipeline and atomic runtime I/O seams.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces production bridge construction and pipeline computation without
+        opening LFP files or writing a cache.
+    """
+    config = default_lfp_summary_config()
+    calls: list[object] = []
+    sentinel_dependencies = object()
+
+    def fake_runtime_dependencies(**kwargs: object) -> object:
+        """Record the runtime factory call and return an opaque dependency object."""
+        calls.append(kwargs)
+        return sentinel_dependencies
+
+    def fake_compute(active_config: object, dependencies: object) -> object:
+        """Record pipeline inputs and return a successful pipeline-like result."""
+        calls.append((active_config, dependencies))
+        return type(
+            "Result",
+            (),
+            {"component": "power", "state": "complete", "error": None},
+        )()
+
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_runtime,
+        "make_power_pipeline_dependencies",
+        fake_runtime_dependencies,
+    )
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_pipeline,
+        "compute_power_component",
+        fake_compute,
+    )
+
+    result = lfp_summary_webapp.compute_production_power(config)
+
+    assert result.component == "power"
+    assert result.state == "complete"
+    assert calls[-1] == (config, sentinel_dependencies)
+    assert callable(calls[0]["trial_table_loader"])
+
+
+def test_production_dependencies_load_cached_power_without_preparing_raw_lfp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cached Power selection should read only ``power.npz`` instead of raw LFP.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fails if raw Power preparation is reached and records cache-array loads.
+    """
+    config = default_lfp_summary_config()
+    calls: list[str] = []
+
+    def fail_prepare(*args: object, **kwargs: object) -> object:
+        """Fail if a cached view attempts to reopen native LFP input."""
+        del args, kwargs
+        raise AssertionError("cached Power view reopened raw LFP")
+
+    def fake_load(
+        path: Path,
+        manifest: dict[str, object],
+        component: str,
+    ) -> dict[str, np.ndarray]:
+        """Record the cache component request and return one safe numeric array."""
+        del path, manifest
+        calls.append(component)
+        return {"trial_indices": np.array([0], dtype=np.int64)}
+
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_runtime,
+        "prepare_power_run",
+        fail_prepare,
+    )
+    monkeypatch.setattr(lfp_summary_webapp, "load_component_arrays", fake_load)
+    dependencies = lfp_summary_webapp.make_production_summary_dependencies()
+
+    arrays = lfp_summary_webapp.load_summary_view_arrays(
+        "power",
+        config,
+        {"components": {"power": {}}},
+        dependencies,
+    )
+
+    assert calls == ["power"]
+    assert arrays["power"]["trial_indices"].tolist() == [0]
+
+
+@pytest.mark.parametrize("action", ("synchrony", "spike_phase", "all"))
+def test_production_dependencies_report_unavailable_nonpower_actions(action: str) -> None:
+    """Unavailable Synchrony/Spike actions must fail explicitly without fabricated results.
+
+    Parameters
+    ----------
+    action : str
+        Unsupported production action selected by pytest parametrization.
+    """
+    config = default_lfp_summary_config()
+    dependencies = lfp_summary_webapp.make_production_summary_dependencies()
+
+    result = lfp_summary_webapp.run_summary_action(action, config, dependencies)
+
+    assert result.state == "failed"
+    assert result.manifest is None
+    assert result.error is not None
+    assert "unavailable" in result.error.lower()

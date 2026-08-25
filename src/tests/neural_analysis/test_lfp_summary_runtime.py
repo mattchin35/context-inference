@@ -24,6 +24,7 @@ from src.neural_analysis.lfp_summary_payloads import validate_component_payload
 from src.neural_analysis.lfp_summary_runtime import (
     PreparedPowerRun,
     build_power_payload,
+    load_configured_trial_table,
     make_power_pipeline_dependencies,
     prepare_power_run,
 )
@@ -84,6 +85,24 @@ def _trial_table() -> pd.DataFrame:
             "state_int": [0, 1, 0],
         }
     )
+
+
+def test_configured_trial_table_loader_reads_the_active_ct026_csv(tmp_path: Path) -> None:
+    """The production loader must use the configured table path, not a hidden default.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary session directory containing a minimal CT026 trial CSV.
+    """
+    trial_csv = tmp_path / "CT026_2026-08-01_130853_trials.csv"
+    expected = _trial_table()
+    expected.to_csv(trial_csv, index=False)
+    config = replace(_config(tmp_path / "cache"), trial_table_path=trial_csv)
+
+    loaded = load_configured_trial_table(config)
+
+    pd.testing.assert_frame_equal(loaded, expected)
 
 
 def _normalized_loader(calls: list[dict[str, object]]):
