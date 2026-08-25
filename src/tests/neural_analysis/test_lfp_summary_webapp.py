@@ -181,7 +181,13 @@ def _fake_dependencies(
         calls.append(f"load_{component}")
         return {"component_code": np.array([len(component)], dtype=np.int64)}
 
-    def plot_view(view: str, arrays: dict[str, dict[str, np.ndarray]]) -> plt.Figure:
+    def plot_view(
+        view: str,
+        arrays: dict[str, dict[str, np.ndarray]],
+        config: object,
+    ) -> plt.Figure:
+        """Record a cache-only plot request with its active configuration."""
+        del config
         calls.append(f"plot_{view}")
         figure, _axis = plt.subplots()
         return figure
@@ -530,6 +536,61 @@ def test_production_dependencies_load_cached_power_without_preparing_raw_lfp(
 
     assert calls == ["power"]
     assert arrays["power"]["trial_indices"].tolist() == [0]
+
+
+def test_production_power_plot_delegates_cache_arrays_to_plotting_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The web boundary should adapt cached axes, not implement Matplotlib views.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the pure plotting function and records its cache-derived inputs.
+    """
+    config = default_lfp_summary_config()
+    normalized_psd = np.arange(24, dtype=float).reshape(1, 2, 3, 4)
+    arrays = {
+        "frequency_hz": np.arange(4, dtype=float) * 2.0,
+        "normalized_psd_session_db": normalized_psd,
+        "condition_names": np.array(("correct_rewarded", "omission")),
+        "condition_membership": np.array(((True, False), (False, True))),
+        "condition_effective_trial_count": np.array(((1,), (1,))),
+        "site_ids": np.array(("PFC",)),
+        "site_voltage_units": np.array(("uV",)),
+        "epoch_names": np.array(("whole", "before", "after")),
+    }
+    captured: dict[str, object] = {}
+    expected_figure, _axis = plt.subplots()
+
+    def fake_plot(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture the plotting adapter's positional and keyword arguments."""
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return expected_figure, {}
+
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_plotting,
+        "plot_condition_psd",
+        fake_plot,
+    )
+    dependencies = lfp_summary_webapp.make_production_summary_dependencies()
+
+    figure = dependencies.plot_view("power", {"power": arrays}, config)
+
+    assert figure is expected_figure
+    args = captured["args"]
+    assert isinstance(args, tuple)
+    condition_psd = args[1]
+    assert isinstance(condition_psd, np.ndarray)
+    assert np.array_equal(condition_psd[0, 0], normalized_psd[0, 0, 0])
+    assert np.isnan(condition_psd[0, 1]).all()
+    assert np.isnan(condition_psd[1, 0]).all()
+    assert np.array_equal(condition_psd[1, 1], normalized_psd[0, 1, 0])
+    context = args[-1]
+    assert context.session_id == config.session_id
+    assert context.alignment_event == config.analysis_windows.alignment_event
+    assert context.source_voltage_unit == "uV"
 
 
 @pytest.mark.parametrize("action", ("synchrony", "spike_phase", "all"))
