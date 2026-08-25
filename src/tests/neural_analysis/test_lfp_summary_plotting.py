@@ -260,6 +260,26 @@ def test_plv_distribution_and_exemplar_distinguish_trial_metric_from_illustratio
     assert "pooled" in caption and "illustrative" in caption and "trial 7" in caption
 
 
+def test_plv_distribution_summarizes_large_trial_coverage_without_layout_failure() -> None:
+    """Large trial populations must not expand captions by one row per trial."""
+    trial_count = 427
+    figure, axes = plot_plv_distribution(
+        trial_band_plv=np.full((trial_count, 3), 0.5),
+        trial_valid_sample_counts=np.tile((2000, 1000, 1000), (trial_count, 1)),
+        trial_valid_sample_fractions=np.ones((trial_count, 3)),
+        epoch_names=("whole", "before", "after"),
+        pair_label="PFC-HPC1",
+        band_name="theta",
+        condition_name="correct_rewarded",
+        context=_context(),
+    )
+
+    _assert_figure_contract(figure, axes, {"distribution", "coverage"})
+    caption = figure.texts[-1].get_text()
+    assert "median" in caption
+    assert len(caption) < 1500
+
+
 def test_ppc_maps_preserve_reference_unit_order_and_reliability_inspection() -> None:
     """PPC unit heatmaps retain supplied ordering and make unreliable cells inspectable."""
 
