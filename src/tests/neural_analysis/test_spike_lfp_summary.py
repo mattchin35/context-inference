@@ -346,6 +346,20 @@ def test_shuffle_inference_retains_overlapping_trial_local_spikes_with_warning()
     assert not hasattr(inference, "merged_intervals_s")
 
 
+def test_shuffle_ineligibility_requires_two_spike_contributing_trials() -> None:
+    """One nonempty train cannot make a two-condition-trial shuffle eligible."""
+    inference = spike_lfp_summary.compute_trial_shuffle_ppc(
+        trial_relative_spike_times_s=(np.zeros(50), np.array([], dtype=float)),
+        phase_time_s=np.array([0.0]),
+        trial_phase_vectors=np.ones((2, 1, 1), dtype=complex),
+        frequencies_hz=np.array([8.0]),
+        schedule=np.array([[1, 0]]),
+    )
+
+    assert not inference.null_summary.null_eligible[0]
+    assert np.isnan(inference.p_value[0])
+
+
 def test_trial_shuffle_coupling_exceeds_null_while_independent_data_do_not() -> None:
     """Trial-specific phase coupling has smaller plus-one p than independent traces."""
     trial_count = 4
