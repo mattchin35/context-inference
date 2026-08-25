@@ -332,6 +332,7 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
             np.ones(4, dtype=bool),
         )
     )
+    filter_membership = np.asarray(prepared.filter_membership, dtype=bool)
     psd = [
         compute_trial_epoch_psds(
             traces[site], _TIME_S, _FS_HZ, config.analysis_windows, config.power
@@ -510,6 +511,7 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
         site_voltage_units=np.array(("uV", "uV")),
         condition_names=np.array(_CONDITION_NAMES),
         condition_membership=condition_membership,
+        filter_membership=filter_membership,
         condition_trial_count=condition_membership.sum(0),
         condition_effective_trial_count=np.tile(
             condition_membership.sum(0)[:, None], (1, 2)
@@ -553,6 +555,7 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
         site_voltage_units=np.array(("uV", "uV")),
         condition_names=np.array(_CONDITION_NAMES),
         condition_membership=condition_membership,
+        filter_membership=filter_membership,
         frequency_hz=_FREQUENCY_HZ,
         epoch_names=np.array(_EPOCH_NAMES),
         band_names=np.array(_BAND_NAMES),
@@ -599,6 +602,7 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
         site_voltage_units=np.array(("uV", "uV")),
         condition_names=np.array(_CONDITION_NAMES),
         condition_membership=condition_membership,
+        filter_membership=filter_membership,
         epoch_names=np.array(_EPOCH_NAMES),
         band_names=np.array(_BAND_NAMES),
         frequency_hz=_FREQUENCY_HZ,
@@ -673,6 +677,10 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
     assert all(
         assess_component_status(config.output_directory, name, config, manifest).status
         == "compatible"
+        for name in loaded
+    )
+    assert all(
+        np.array_equal(loaded[name]["filter_membership"], filter_membership)
         for name in loaded
     )
 

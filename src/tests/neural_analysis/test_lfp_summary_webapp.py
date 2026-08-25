@@ -548,13 +548,17 @@ def test_production_power_plot_delegates_cache_arrays_to_plotting_module(
     monkeypatch : pytest.MonkeyPatch
         Replaces the pure plotting function and records its cache-derived inputs.
     """
-    config = default_lfp_summary_config()
+    config = replace(
+        default_lfp_summary_config(),
+        trial_filter=lfp_summary_webapp.TrialFilterConfig(choice="left"),
+    )
     normalized_psd = np.arange(24, dtype=float).reshape(1, 2, 3, 4)
     arrays = {
         "frequency_hz": np.arange(4, dtype=float) * 2.0,
         "normalized_psd_session_db": normalized_psd,
         "condition_names": np.array(("correct_rewarded", "omission")),
-        "condition_membership": np.array(((True, False), (False, True))),
+        "condition_membership": np.array(((True, False), (True, True))),
+        "filter_membership": np.array((True, False)),
         "condition_effective_trial_count": np.array(((1,), (1,))),
         "site_ids": np.array(("PFC",)),
         "site_voltage_units": np.array(("uV",)),
@@ -586,7 +590,7 @@ def test_production_power_plot_delegates_cache_arrays_to_plotting_module(
     assert np.array_equal(condition_psd[0, 0], normalized_psd[0, 0, 0])
     assert np.isnan(condition_psd[0, 1]).all()
     assert np.isnan(condition_psd[1, 0]).all()
-    assert np.array_equal(condition_psd[1, 1], normalized_psd[0, 1, 0])
+    assert np.isnan(condition_psd[1, 1]).all()
     context = args[-1]
     assert context.session_id == config.session_id
     assert context.alignment_event == config.analysis_windows.alignment_event

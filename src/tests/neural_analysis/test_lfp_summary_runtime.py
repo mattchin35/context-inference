@@ -158,6 +158,7 @@ def test_prepare_power_run_loads_active_trials_whole_and_exact_presession_window
     assert trial_loader_calls == [config]
     assert prepared.trial_indices.tolist() == [0, 1, 2]
     assert prepared.prepared_trials.objective_valid.tolist() == [True, False, True]
+    assert prepared.prepared_trials.filter_membership.dtype == np.dtype(bool)
     assert prepared.site_traces["PFC"].source_trace.shape == (3, 10000)
     assert prepared.site_traces["PFC"].relative_time_s[0] == pytest.approx(-2.0)
     assert prepared.site_traces["PFC"].relative_time_s[-1] == pytest.approx(1.9996)
@@ -195,6 +196,10 @@ def test_build_power_payload_uses_real_cores_and_preserves_cache_axes_units_coun
     assert arrays["frequency_hz"].tolist() == list(np.arange(0.0, 1252.0, 2.0))
     assert arrays["epoch_names"].tolist() == ["whole", "before", "after"]
     assert arrays["objective_valid"].tolist() == [[True, False, True]]
+    assert np.array_equal(
+        arrays["filter_membership"],
+        prepared.prepared_trials.filter_membership,
+    )
     assert arrays["site_valid"].tolist() == [[True, False, True]]
     assert arrays["exclusion_reason_code"].tolist() == [["", "missing_choice_time", ""]]
     assert arrays["psd_valid"].tolist() == [[[True, True, True], [False] * 3, [True] * 3]]

@@ -57,6 +57,7 @@ def _power_arrays() -> dict[str, np.ndarray]:
         "normalized_psd_session_db": np.zeros((3, 2, 3, 3), dtype=float),
         "band_power_session_db": np.zeros((3, 2, 3, 2), dtype=float),
         "condition_membership": np.array(((True, False), (False, True))),
+        "filter_membership": np.array((True, False)),
         "site_valid": np.ones((3, 2), dtype=bool),
         "user_excluded": np.array((False, False)),
         "exclusion_reason_code": np.full((3, 2), "", dtype="<U1"),
@@ -211,7 +212,9 @@ def _validation_dependencies(
         tuple[_FakeFigure, dict[str, object]]
             Unsaved fake figure and empty categorical axes mapping.
         """
-        assert "condition_trial_psd_db" in kwargs
+        values = kwargs["condition_trial_psd_db"]
+        assert isinstance(values, np.ndarray)
+        assert np.isnan(values[:, 1]).all()
         calls.append("plot_psd")
         return _FakeFigure([]), {}
 
@@ -228,7 +231,9 @@ def _validation_dependencies(
         tuple[_FakeFigure, dict[str, object]]
             Unsaved fake figure and empty categorical axes mapping.
         """
-        assert "condition_trial_band_power_db" in kwargs
+        values = kwargs["condition_trial_band_power_db"]
+        assert isinstance(values, np.ndarray)
+        assert np.isnan(values[:, 1]).all()
         calls.append("plot_band")
         return _FakeFigure([]), {}
 
@@ -385,7 +390,7 @@ def test_power_validation_writes_immutable_report_and_cached_site_pngs(
     assert result.wall_time_s == pytest.approx(12.5)
     assert result.peak_memory_bytes == 4096
     assert result.cache_size_bytes >= 0 and result.component_size_bytes >= 0
-    assert result.trial_count == 2
+    assert result.trial_count == 1
     assert result.exclusion_count == 0
     assert "warnings" in result.report and "nine_filter_projection" in result.report
     assert calls.count("compute_power") == 1
