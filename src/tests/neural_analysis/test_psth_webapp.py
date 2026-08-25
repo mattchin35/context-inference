@@ -9,6 +9,25 @@ import pandas as pd
 from src.neural_analysis import lfp_phase_clustering, psth_webapp
 
 
+def test_webapp_keeps_existing_routes_and_exposes_lfp_summary_route():
+    """The new cached-summary entry must coexist with every established neural route."""
+
+    expected_routes = {
+        psth_webapp.PLOT_VIEW_UNIT_RASTER,
+        psth_webapp.PLOT_VIEW_TRIAL_SPIKES,
+        psth_webapp.PLOT_VIEW_PCA_DECODING,
+        psth_webapp.PLOT_VIEW_PCA_SWITCH_TRAJECTORIES,
+        psth_webapp.PLOT_VIEW_LFP_PHASE_CLUSTERING,
+        psth_webapp.PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE,
+        psth_webapp.PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING,
+        psth_webapp.PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT,
+        psth_webapp.PLOT_VIEW_LFP_SUMMARY,
+    }
+
+    assert expected_routes.issubset(psth_webapp.PLOT_VIEW_OPTIONS)
+    assert callable(psth_webapp.render_lfp_summary_view)
+
+
 def test_build_lfp_dropdown_options_uses_only_explicit_probe_paths():
     """LFP dropdown choices should come directly from user-entered probe path fields."""
     options = psth_webapp.build_lfp_dropdown_options(
