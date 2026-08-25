@@ -135,6 +135,20 @@ def test_native_psds_interpolate_in_linear_units_to_one_canonical_grid() -> None
     assert np.allclose(interpolated[0], 2.0 * canonical_hz + 1.0)
 
 
+def test_linear_psd_interpolation_preserves_interior_unavailable_native_bin() -> None:
+    """A missing native PSD bin remains unavailable instead of being bridged."""
+
+    interpolated = interpolate_linear_psd_to_canonical_grid(
+        np.array([0.0, 2.0, 4.0]),
+        np.array([1.0, np.nan, 5.0]),
+        np.array([0.0, 2.0, 4.0]),
+    )
+
+    assert interpolated[0] == pytest.approx(1.0)
+    assert np.isnan(interpolated[1])
+    assert interpolated[2] == pytest.approx(5.0)
+
+
 def test_identical_psd_reference_normalizes_to_zero_db_and_nonpositive_reference_is_nan() -> None:
     """Normalization has no undocumented epsilon substitution."""
 
@@ -238,6 +252,20 @@ def test_constant_psd_band_means_preserve_theta_and_gamma_power_and_bandwidth() 
     assert theta_bandwidth_hz == pytest.approx(4.0)
     assert gamma_mean == pytest.approx(7.5)
     assert gamma_bandwidth_hz == pytest.approx(46.0)
+
+
+def test_band_mean_is_nan_when_a_retained_interior_frequency_is_unavailable() -> None:
+    """Band integration cannot bridge missing sampled PSD values within retained support."""
+
+    theta = FrequencyBandConfig("theta", 6.0, 10.0)
+    mean_power, retained_bandwidth_hz = mean_band_power_linear(
+        np.array([2.0, np.nan, 2.0]),
+        np.array([6.0, 8.0, 10.0]),
+        theta,
+    )
+
+    assert np.isnan(mean_power)
+    assert retained_bandwidth_hz == pytest.approx(4.0)
 
 
 def test_trial_median_iqr_preserves_trial_axis_and_source_units() -> None:

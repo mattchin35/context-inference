@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from src.neural_analysis import lfp_phase_clustering, lfp_synchrony_summary
 from src.neural_analysis.lfp_summary_models import FrequencyBandConfig
@@ -138,6 +139,48 @@ def test_trial_plv_coverage_is_independent_of_magnitude_and_requires_two_samples
     assert not below_boundary.computable[0, 0, 0, 0]
     assert np.isnan(below_boundary.plv_by_frequency[0, 0, 0, 0])
     assert not one_sample.computable[0, 0, 0, 0]
+
+
+def test_trial_plv_coverage_uses_configured_epoch_grid_count() -> None:
+    """Coverage must include absent expected grid samples, not only present timestamps."""
+
+    relative_time_s = np.array([0.0, 0.002, 0.004, 0.006])
+    phase = np.ones((1, 1, 1, 4), dtype=np.complex64)
+    epoch_windows = {"whole": (0.0, 0.01)}
+
+    four_valid = lfp_synchrony_summary.compute_trial_plv_by_frequency(
+        relative_phase_complex=phase,
+        valid_mask=np.ones_like(phase, dtype=bool),
+        relative_time_s=relative_time_s,
+        epoch_windows=epoch_windows,
+        minimum_valid_fraction=0.8,
+    )
+    three_valid = lfp_synchrony_summary.compute_trial_plv_by_frequency(
+        relative_phase_complex=phase,
+        valid_mask=np.array([[[[True, True, True, False]]]]),
+        relative_time_s=relative_time_s,
+        epoch_windows=epoch_windows,
+        minimum_valid_fraction=0.8,
+    )
+
+    assert four_valid.valid_sample_count[0, 0, 0, 0] == 4
+    assert four_valid.valid_sample_fraction[0, 0, 0, 0] == 0.8
+    assert four_valid.computable[0, 0, 0, 0]
+    assert three_valid.valid_sample_count[0, 0, 0, 0] == 3
+    assert three_valid.valid_sample_fraction[0, 0, 0, 0] == 0.6
+    assert not three_valid.computable[0, 0, 0, 0]
+
+
+def test_trial_plv_rejects_nonuniform_relative_time_grid() -> None:
+    """Coverage is only defined on the exact uniform shared event-relative grid."""
+
+    with pytest.raises(ValueError, match="uniform"):
+        lfp_synchrony_summary.compute_trial_plv_by_frequency(
+            relative_phase_complex=np.ones((1, 1, 1, 4), dtype=np.complex64),
+            valid_mask=np.ones((1, 1, 1, 4), dtype=bool),
+            relative_time_s=np.array([0.0, 0.002, 0.005, 0.007]),
+            epoch_windows={"whole": (0.0, 0.01)},
+        )
 
 
 def test_shared_complex_interpolation_recovers_known_lag_on_exact_500_hz_grid() -> None:

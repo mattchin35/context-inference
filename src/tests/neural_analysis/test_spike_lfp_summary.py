@@ -180,6 +180,53 @@ def test_representative_histograms_use_fixed_frequency_and_pool_all_trials() -> 
     assert histograms.source_label == "pooled eligible trials"
 
 
+def test_representative_histograms_do_not_mutate_caller_validity_mask() -> None:
+    """Zero/nonfinite vectors are excluded locally without altering caller-owned masks."""
+    frequencies_hz = np.array([8.0, 40.0])
+    phase_vectors = np.array(
+        [
+            [1.0, 0.0, np.nan + 0.0j],
+            [1.0j, 0.0, np.nan + 0.0j],
+        ],
+        dtype=complex,
+    )
+    valid_mask = np.ones(phase_vectors.shape, dtype=bool)
+    original_valid_mask = valid_mask.copy()
+
+    histograms = spike_lfp_summary.build_representative_phase_histograms(
+        frequencies_hz=frequencies_hz,
+        spike_phase_vectors=phase_vectors,
+        valid_mask=valid_mask,
+        trial_indices=np.array([0, 0, 1]),
+        phase_bin_edges_rad=np.linspace(-np.pi, np.pi, 5),
+    )
+
+    np.testing.assert_array_equal(valid_mask, original_valid_mask)
+    np.testing.assert_array_equal(histograms.spike_count_by_band.sum(axis=1), [1, 1])
+
+
+def test_population_reference_order_excludes_subcomputable_ppc_values() -> None:
+    """A count-one PPC cannot outrank a lower computable theta observation."""
+    unit_ids = ("PFC:9", "HPC:2", "PFC:1", "HPC:1")
+    # Axes are (unit, condition, site, epoch, frequency).
+    ppc = np.array([0.99, 0.50, 0.30, 0.80], dtype=float)[:, None, None, None, None]
+    ppc = np.repeat(ppc, 2, axis=-1)
+    spike_count = np.array([1, 50, 50, 1], dtype=int)[:, None, None, None, None]
+    spike_count = np.repeat(spike_count, 2, axis=-1)
+
+    summary = spike_lfp_summary.build_population_ppc_summary(
+        unit_ids=unit_ids,
+        condition_names=("correct_rewarded",),
+        site_ids=("PFC",),
+        epoch_names=("whole",),
+        frequencies_hz=np.array([6.0, 8.0]),
+        ppc=ppc,
+        spike_count=spike_count,
+    )
+
+    assert summary.unit_order_ids == ("HPC:2", "PFC:1", "HPC:1", "PFC:9")
+
+
 def test_exemplar_selection_is_deterministic_and_labels_pooled_vs_illustrative() -> None:
     """High/low band PPC and median-spike trials use approved deterministic ties."""
     selection = spike_lfp_summary.select_ppc_exemplars(
