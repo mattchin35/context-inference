@@ -58,9 +58,16 @@ def _power_arrays() -> dict[str, np.ndarray]:
         "band_power_session_db": np.zeros((3, 2, 3, 2), dtype=float),
         "condition_membership": np.array(((True, False), (False, True))),
         "filter_membership": np.array((True, False)),
+        "condition_effective_trial_count": np.array(((1, 1, 1), (0, 0, 0))),
+        "condition_unstable": np.array(
+            ((True, True, True), (True, True, True)),
+            dtype=bool,
+        ),
+        "objective_valid": np.ones((3, 2), dtype=bool),
         "site_valid": np.ones((3, 2), dtype=bool),
         "user_excluded": np.array((False, False)),
         "exclusion_reason_code": np.full((3, 2), "", dtype="<U1"),
+        "presession_reference_available": np.array((True, False, True)),
     }
 
 
@@ -393,6 +400,22 @@ def test_power_validation_writes_immutable_report_and_cached_site_pngs(
     assert result.trial_count == 1
     assert result.exclusion_count == 0
     assert "warnings" in result.report and "nine_filter_projection" in result.report
+    assert result.report["total_trial_count"] == 2
+    assert result.report["filtered_trial_count"] == 1
+    assert result.report["condition_effective_trial_count"]["PFC"] == {
+        "correct_rewarded": 1,
+        "omission": 0,
+    }
+    assert result.report["site_valid_trial_count"] == {
+        "PFC": 1,
+        "HPC1": 1,
+        "HPC2": 1,
+    }
+    assert any(
+        "presession" in warning.lower() for warning in result.report["warnings"]
+    )
+    summary_text = result.summary_path.read_text(encoding="ascii")
+    assert "Goal" in summary_text and _SESSION_ID in summary_text
     assert calls.count("compute_power") == 1
     assert (
         "load_power" in calls
