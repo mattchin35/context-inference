@@ -227,6 +227,36 @@ def test_phase_band_summary_accepts_percentile_ci_not_containing_estimate() -> N
     assert len(axes["summary"].collections) >= 1
 
 
+def test_phase_band_summary_reserves_space_for_nine_condition_labels() -> None:
+    """Nine long condition names must remain separated from the caption."""
+    labels = (
+        "correct_rewarded",
+        "omission",
+        "incorrect",
+        "switch",
+        "stay",
+        "omission_switch",
+        "omission_stay",
+        "incorrect_switch",
+        "incorrect_stay",
+    )
+    figure, axes = plot_phase_band_summary(
+        estimates=np.linspace(0.1, 0.9, len(labels)),
+        ci_low=np.linspace(0.05, 0.85, len(labels)),
+        ci_high=np.linspace(0.15, 0.95, len(labels)),
+        contributing_trial_counts=np.arange(10, 10 + len(labels)),
+        labels=labels,
+        band_name="theta",
+        epoch_name="before",
+        metric_name="ITPC PFC",
+        context=_context(),
+    )
+
+    _assert_figure_contract(figure, axes, {"summary"})
+    assert figure.get_size_inches()[0] >= 12.0
+    assert figure.subplotpars.bottom >= 0.35
+
+
 def test_plv_distribution_and_exemplar_distinguish_trial_metric_from_illustration() -> None:
     """PLV figures show coverage/count diagnostics and explicitly label illustrative trials."""
 

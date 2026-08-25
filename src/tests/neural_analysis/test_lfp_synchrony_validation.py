@@ -281,4 +281,24 @@ def test_cached_synchrony_validation_renders_without_recomputing(
     assert "compute_synchrony" not in calls
     assert result.wall_time_s == pytest.approx(600.5)
     assert result.peak_memory_bytes == 8192
+    assert result.report["peak_memory_available"] is True
     assert result.run_directory.is_dir()
+
+
+def test_cached_synchrony_validation_marks_zero_peak_memory_unavailable(
+    tmp_path: Path,
+) -> None:
+    """A zero memory sentinel must not be reported as a measured zero-byte peak."""
+    config = build_ct026_synchrony_config(tmp_path / "CT026")
+
+    result = render_cached_synchrony_validation(
+        config,
+        tmp_path / "runs",
+        _dependencies([]),
+        synchrony_wall_time_s=600.5,
+        synchrony_peak_memory_bytes=0,
+    )
+
+    assert result.report["peak_memory_available"] is False
+    assert any("peak memory unavailable" in warning for warning in result.report["warnings"])
+    assert "Peak memory: unavailable" in result.summary_path.read_text(encoding="ascii")
