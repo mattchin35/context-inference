@@ -729,7 +729,7 @@ def _spikeglx_adapter(
 def _open_ephys_adapter(
     site: LFPSiteConfig,
 ) -> tuple[Callable[..., tuple[np.ndarray, np.ndarray, float]], LFPSiteConfig]:
-    """Read metadata once and adapt the real Open Ephys loader signature."""
+    """Read metadata once and adapt fractional Open Ephys grids to native samples."""
     if site.aligned_sync_path is None:
         raise ValueError("Open Ephys site requires aligned sync path")
     metadata = lfp_loading.load_open_ephys_lfp_metadata(site.lfp_path)
@@ -748,8 +748,72 @@ def _open_ephys_adapter(
             alignment_time_s=alignment_time_s,
             window=window,
         )
-        return time_s, values, sample_rate_hz
+        target_time_s = build_common_event_grid(window[0], window[1], sample_rate_hz)
+        target_values = _interpolate_open_ephys_trace_to_native_grid(
+            time_s,
+            values,
+            target_time_s,
+        )
+        return target_time_s, target_values, sample_rate_hz
     return loader, effective_site
+
+
+def _interpolate_open_ephys_trace_to_native_grid(
+    source_time_s: np.ndarray,
+    source_values: np.ndarray,
+    target_time_s: np.ndarray,
+) -> np.ndarray:
+    """Interpolate one fractional Open Ephys trace onto an exact native grid.
+
+    Parameters
+    ----------
+    source_time_s : numpy.ndarray
+        Finite, strictly increasing `(source_time,)` event-relative seconds from
+        the production Open Ephys loader. It may contain one extra edge sample
+        because a fractional alignment residual selects whole source samples.
+    source_values : numpy.ndarray
+        Finite `(source_time,)` source-voltage values sharing ``source_time_s``.
+    target_time_s : numpy.ndarray
+        Finite, strictly increasing `(time,)` exact half-open native seconds
+        grid requested by :func:`prepare_site_trial_traces`.
+
+    Returns
+    -------
+    numpy.ndarray
+        Float64 `(time,)` source-voltage values on ``target_time_s``. Linear
+        interpolation corrects only the sub-sample alignment residual; units
+        and target shape are unchanged.
+
+    Raises
+    ------
+    ValueError
+        If source axes are invalid, values are nonfinite, or target support is
+        incomplete. The helper never extrapolates beyond finite continuous input
+        support or bridges missing samples.
+    """
+    source_time = np.asarray(source_time_s, dtype=float)
+    source = np.asarray(source_values, dtype=float)
+    target_time = np.asarray(target_time_s, dtype=float)
+    valid_axes = (
+        source_time.ndim == 1
+        and source.ndim == 1
+        and target_time.ndim == 1
+        and source_time.size == source.size
+        and source_time.size >= 2
+    )
+    if not valid_axes:
+        raise ValueError("Open Ephys trace must have matching one-dimensional support")
+    if (
+        not np.isfinite(source_time).all()
+        or not np.isfinite(source).all()
+        or not np.isfinite(target_time).all()
+        or np.any(np.diff(source_time) <= 0)
+        or np.any(np.diff(target_time) <= 0)
+    ):
+        raise ValueError("Open Ephys trace support must be finite and strictly increasing")
+    if target_time[0] < source_time[0] or target_time[-1] > source_time[-1]:
+        raise ValueError("Open Ephys trace does not continuously cover the native grid")
+    return np.interp(target_time, source_time, source).astype(float, copy=False)
 
 
 def _finite_vector(values: np.ndarray, name: str) -> np.ndarray:
