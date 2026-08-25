@@ -459,7 +459,11 @@ def plot_phase_band_summary(
     figure, axes = _figure(("summary",))
     axis = axes["summary"]
     x = np.arange(e.size)
-    axis.errorbar(x, e, yerr=np.vstack((e - lo, hi - e)), fmt="o")
+    finite_interval = np.isfinite(lo) & np.isfinite(hi)
+    if np.any(lo[finite_interval] > hi[finite_interval]):
+        raise ValueError("phase-summary confidence interval bounds are reversed")
+    axis.plot(x, e, "o", linestyle="none")
+    axis.vlines(x[finite_interval], lo[finite_interval], hi[finite_interval])
     axis.set_xticks(x, labels)
     axis.set_ylabel(metric_name)
     axis.set_title(f"{band_name} {epoch_name}")

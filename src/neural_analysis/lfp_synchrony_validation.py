@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import time
 from typing import Any, Callable, Mapping
 
@@ -334,14 +335,6 @@ def _write_validation_report(
     SynchronyValidationResult
         Immutable report paths, sizes, times, and categorical counts.
     """
-    run_parent.mkdir(parents=True, exist_ok=True)
-    run_directory.mkdir()
-    png_paths = _render_cached_synchrony_pngs(
-        config,
-        arrays,
-        run_directory,
-        dependencies,
-    )
     cache_size = _directory_size_bytes(config.output_directory)
     component_size = _component_size_bytes(config.output_directory, manifest)
     report = _build_report(
@@ -353,13 +346,29 @@ def _write_validation_report(
         cache_size,
         component_size,
     )
-    paths = _write_report_artifacts(
-        run_directory,
-        manifest,
-        config,
-        report,
-        dependencies.source_identifiers(config),
-    )
+    run_parent.mkdir(parents=True, exist_ok=True)
+    prefix = f".{run_directory.name}.staging-"
+    with TemporaryDirectory(prefix=prefix, dir=run_parent) as temporary_path:
+        staging_directory = Path(temporary_path)
+        staged_png_paths = _render_cached_synchrony_pngs(
+            config,
+            arrays,
+            staging_directory,
+            dependencies,
+        )
+        staged_paths = _write_report_artifacts(
+            staging_directory,
+            manifest,
+            config,
+            report,
+            dependencies.source_identifiers(config),
+        )
+        staging_directory.replace(run_directory)
+    png_paths = tuple(run_directory / path.name for path in staged_png_paths)
+    paths = {
+        name: run_directory / path.name
+        for name, path in staged_paths.items()
+    }
     return SynchronyValidationResult(
         "synchrony",
         run_directory,
