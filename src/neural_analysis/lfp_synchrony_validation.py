@@ -169,6 +169,65 @@ def run_synchrony_validation(
     )
 
 
+def render_cached_synchrony_validation(
+    config: LFPSummaryConfig,
+    run_parent: Path,
+    dependencies: SynchronyValidationDependencies,
+    *,
+    synchrony_wall_time_s: float,
+    synchrony_peak_memory_bytes: int,
+) -> SynchronyValidationResult:
+    """Write a report from compatible Synchrony cache without recomputation.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Active immutable configuration used to assess cache compatibility.
+    run_parent : pathlib.Path
+        Parent for the new timestamped human-readable report directory.
+    dependencies : SynchronyValidationDependencies
+        Cache loading, plotting, reporting, and source-identity seams. The
+        compute and monotonic-clock seams are not called.
+    synchrony_wall_time_s : float
+        Seconds measured for the computation that produced the cache.
+    synchrony_peak_memory_bytes : int
+        Peak resident memory in bytes measured for that computation.
+
+    Returns
+    -------
+    SynchronyValidationResult
+        Cache-backed report paths and the supplied performance measurements.
+
+    Raises
+    ------
+    FileExistsError
+        If the timestamped report directory already exists.
+    RuntimeError
+        If the existing Synchrony cache is not compatible with ``config``.
+    ValueError
+        If either performance measurement is negative or nonfinite.
+    """
+    wall_time_s = float(synchrony_wall_time_s)
+    peak_memory_bytes = int(synchrony_peak_memory_bytes)
+    if not np.isfinite(wall_time_s) or wall_time_s < 0.0:
+        raise ValueError("synchrony_wall_time_s must be finite and nonnegative")
+    if peak_memory_bytes < 0:
+        raise ValueError("synchrony_peak_memory_bytes must be nonnegative")
+    run_directory = _planned_run_directory(config, run_parent, dependencies)
+    manifest, status, arrays = _load_compatible_synchrony(config, dependencies)
+    return _write_validation_report(
+        config,
+        Path(run_parent),
+        run_directory,
+        manifest,
+        status,
+        arrays,
+        wall_time_s,
+        peak_memory_bytes,
+        dependencies,
+    )
+
+
 def make_production_synchrony_validation_dependencies(
 ) -> SynchronyValidationDependencies:
     """Bind real Synchrony runtime, safe cache loading, Matplotlib, and clocks.
