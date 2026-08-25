@@ -375,6 +375,7 @@ def _plot_cached_power(
         "normalized_psd_session_db",
         "condition_names",
         "condition_membership",
+        "filter_membership",
         "condition_effective_trial_count",
         "site_ids",
         "site_voltage_units",
@@ -387,6 +388,7 @@ def _plot_cached_power(
     normalized_psd_db = arrays["normalized_psd_session_db"]
     condition_names = arrays["condition_names"]
     membership = arrays["condition_membership"]
+    filter_membership = arrays["filter_membership"]
     effective_count = arrays["condition_effective_trial_count"]
     site_ids = arrays["site_ids"]
     voltage_units = arrays["site_voltage_units"]
@@ -396,6 +398,7 @@ def _plot_cached_power(
         or normalized_psd_db.ndim != 4
         or condition_names.ndim != 1
         or membership.ndim != 2
+        or filter_membership.ndim != 1
         or effective_count.ndim != 2
         or site_ids.ndim != 1
         or voltage_units.ndim != 1
@@ -407,6 +410,7 @@ def _plot_cached_power(
     if (
         frequency_hz.size != frequency_count
         or membership.shape != (trial_count, condition_count)
+        or filter_membership.shape != (trial_count,)
         or effective_count.shape != (condition_count, site_count)
         or site_ids.size != site_count
         or voltage_units.size != site_count
@@ -422,10 +426,10 @@ def _plot_cached_power(
         np.nan,
         dtype=normalized_psd_db.dtype,
     )
+    if membership.dtype != np.dtype(bool) or filter_membership.dtype != np.dtype(bool):
+        raise ValueError("cached Power condition and filter membership must be boolean")
     for condition_index in range(condition_count):
-        selected_trials = membership[:, condition_index]
-        if selected_trials.dtype != np.dtype(bool):
-            raise ValueError("cached Power condition_membership must be boolean")
+        selected_trials = membership[:, condition_index] & filter_membership
         condition_psd_db[condition_index, selected_trials] = normalized_psd_db[
             0,
             selected_trials,

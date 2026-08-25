@@ -501,6 +501,7 @@ def _assemble_power_arrays(
         ),
         "condition_names": np.asarray(prepared.prepared_trials.condition_names, dtype="<U64"),
         "condition_membership": prepared.prepared_trials.condition_membership.copy(),
+        "filter_membership": prepared.prepared_trials.filter_membership.copy(),
         "condition_trial_count": prepared.prepared_trials.condition_membership.sum(
             axis=0
         ).astype(np.int64),
