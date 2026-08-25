@@ -14,6 +14,7 @@ from src.neural_analysis.lfp_summary_models import (
     TrialFilterConfig,
 )
 from src.neural_analysis.spike_behavior_pynapple import make_trial_type_masks
+from src.neural_analysis import lfp_loading
 from src.neural_analysis.lfp_summary_preparation import (
     build_common_event_grid,
     build_prepared_trials,
@@ -183,7 +184,10 @@ def test_existing_acquisition_routes_use_injected_loaders_and_preserve_units_rat
     )
     assert calls == ["glx", "oe"]
     assert loaded["PFC"].sample_rate_hz == 2500.0 and loaded["HPC"].voltage_unit == "mV"
-    assert loaded["PFC"].source_trace.shape == loaded["HPC"].source_trace.shape == (1, 1)
+    assert loaded["PFC"].source_trace.shape == (1, 5000)
+    assert loaded["HPC"].source_trace.shape == (1, 2000)
+    assert not loaded["PFC"].valid[0]
+    assert not loaded["HPC"].valid[0]
 
 
 def test_progress_events_are_framework_independent_and_monotonic() -> None:
@@ -192,3 +196,97 @@ def test_progress_events_are_framework_independent_and_monotonic() -> None:
     validate_progress_events(events)
     with pytest.raises(ValueError):
         validate_progress_events([events[1], events[0]])
+
+
+def test_default_spikeglx_route_decodes_sync_once_and_uses_real_loader_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SpikeGLX routing reuses one decoded sync table and the decoded LFP rate per site."""
+    site = LFPSiteConfig("PFC", "PFC", "spikeglx", Path("pfc.bin"), None, "PFC", 5, "uV", 2500.0)
+    decoded_sync = pd.DataFrame({"sample_ix": [0], "utc_unix": [0.0]})
+    decode_calls: list[Path] = []
+    loader_kwargs: list[dict[str, object]] = []
+
+    def fake_decode(lfp_path: Path) -> tuple[pd.DataFrame, float]:
+        """Return one IRIG anchor and its 1250-Hz LFP rate for one path."""
+        decode_calls.append(lfp_path)
+        return decoded_sync, 1250.0
+
+    def fake_loader(**kwargs: object) -> tuple[np.ndarray, np.ndarray, float]:
+        """Record real SpikeGLX loader kwargs and return `(time, uV, Hz)` arrays."""
+        loader_kwargs.append(kwargs)
+        return np.array([0.0]), np.array([2.0]), 1250.0
+
+    monkeypatch.setattr(lfp_loading, "decode_lfp_sync", fake_decode)
+    monkeypatch.setattr(lfp_loading, "load_trial_lfp_trace_with_sample_rate", fake_loader)
+    loaded = load_site_trial_traces([site], np.array([0, 1]), np.array([1.0, 2.0]), (-1.0, 1.0))
+
+    assert decode_calls == [Path("pfc.bin")]
+    assert len(loader_kwargs) == 2
+    assert all(
+        set(kwargs) == {
+            "lfp_path", "saved_channel_index", "alignment_time_s", "window",
+            "lfp_irig_df", "sample_rate_hz",
+        }
+        for kwargs in loader_kwargs
+    )
+    assert all(kwargs["lfp_irig_df"] is decoded_sync for kwargs in loader_kwargs)
+    assert loaded["PFC"].sample_rate_hz == 1250.0
+
+
+def test_default_open_ephys_route_reports_lfp_metadata_rate_not_ap_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Open Ephys routing obtains LFP rate from metadata and passes only its real API kwargs."""
+    site = LFPSiteConfig("HPC", "HPC", "open_ephys", Path("hpc.dat"), Path("hpc.npz"), "HPC", 2, "mV", 30000.0)
+    loader_kwargs: list[dict[str, object]] = []
+
+    def fake_metadata(_: Path) -> dict[str, float]:
+        """Return derived-LFP metadata with a 1000-Hz sampling frequency."""
+        return {"sampling_frequency_hz": 1000.0}
+
+    def fake_loader(**kwargs: object) -> tuple[np.ndarray, np.ndarray]:
+        """Record real Open Ephys loader kwargs and return `(time, mV)` arrays."""
+        loader_kwargs.append(kwargs)
+        return np.array([0.0]), np.array([3.0])
+
+    monkeypatch.setattr(lfp_loading, "load_open_ephys_lfp_metadata", fake_metadata)
+    monkeypatch.setattr(lfp_loading, "load_open_ephys_trial_lfp_trace", fake_loader)
+    loaded = load_site_trial_traces([site], np.array([0]), np.array([1.0]), (-1.0, 1.0))
+
+    assert len(loader_kwargs) == 1
+    assert set(loader_kwargs[0]) == {
+        "lfp_path", "aligned_sync_npz_path", "saved_channel_index", "alignment_time_s", "window"
+    }
+    assert loaded["HPC"].sample_rate_hz == 1000.0
+
+
+def test_malformed_last_trial_cannot_change_canonical_trace_axis() -> None:
+    """Later malformed traces retain the canonical native `(trial, time)` axis."""
+    site = LFPSiteConfig("PFC", "PFC", "spikeglx", Path("pfc.bin"), None, "PFC", 5, "uV", 1000.0)
+    results = [
+        (np.array([-0.002, -0.001, 0.0, 0.001]), np.arange(4.0), 1000.0),
+        (np.array([-0.002, 0.0]), np.array([1.0, 2.0]), 1000.0),
+    ]
+    prepared = prepare_site_trial_traces(site, np.array([0, 1]), np.array([1.0, 2.0]), (-0.002, 0.002), lambda *_: results.pop(0))
+    assert np.array_equal(prepared.relative_time_s, np.array([-0.002, -0.001, 0.0, 0.001]))
+    assert prepared.source_trace.shape == (2, 4)
+
+
+def test_asymmetric_overlapping_windows_use_absolute_interval_endpoints() -> None:
+    """Events at 0 and 2 overlap under the asymmetric half-open window [-2, 1)."""
+    result = build_trial_relative_spike_trains(
+        probe_label="PFC", cluster_id=10, unit_spike_times_s=np.array([0.0]),
+        event_times_s=np.array([0.0, 2.0]), window=(-2.0, 1.0),
+    )
+    assert result.overlap_trial_indices.tolist() == [0, 1]
+
+
+def test_common_grid_and_progress_reject_invalid_invariants() -> None:
+    """Nonpositive grids and decreasing/over-complete progress records are invalid."""
+    with pytest.raises(ValueError):
+        build_common_event_grid(1.0, -1.0, 500.0)
+    with pytest.raises(ValueError):
+        build_common_event_grid(-1.0, 1.0, 0.0)
+    with pytest.raises(ValueError):
+        validate_progress_events([ProgressEvent("power", "load", 3, 2, "too far")])
