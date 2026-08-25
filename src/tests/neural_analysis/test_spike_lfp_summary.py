@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.stats import false_discovery_control
 
 from src.neural_analysis import spike_lfp_phase_locking, spike_lfp_summary
+from src.neural_analysis.lfp_summary_preparation import build_trial_relative_spike_trains
 
 
 def test_observed_ppc_reuses_existing_pairwise_formula_and_retains_negative_values() -> None:
@@ -260,3 +262,290 @@ def test_probe_qualified_ids_prevent_same_cluster_number_collisions() -> None:
 
     assert identifiers == ("PFC:12", "HPC1:12", "HPC1:13")
     assert len(set(identifiers)) == 3
+
+
+def test_shuffle_schedule_is_seeded_derangement_and_deterministic() -> None:
+    """Every shuffle remaps each source trial to a distinct nonself phase trial."""
+    first = spike_lfp_summary.generate_trial_derangement_schedule(
+        trial_count=5,
+        shuffle_count=12,
+        seed=17,
+    )
+    second = spike_lfp_summary.generate_trial_derangement_schedule(
+        trial_count=5,
+        shuffle_count=12,
+        seed=17,
+    )
+
+    assert first.shape == (12, 5)
+    np.testing.assert_array_equal(first, second)
+    for permutation in first:
+        np.testing.assert_array_equal(np.sort(permutation), np.arange(5))
+        assert not np.any(permutation == np.arange(5))
+
+
+def test_shuffle_schedule_is_reused_without_mutating_trial_local_spikes() -> None:
+    """Two units can share one schedule while retaining separate input train arrays."""
+    schedule = spike_lfp_summary.generate_trial_derangement_schedule(
+        trial_count=2,
+        shuffle_count=3,
+        seed=4,
+    )
+    phase_time_s = np.array([0.0, 1.0])
+    phase_vectors = np.ones((2, 1, 2), dtype=complex)
+    unit_a_spikes = (np.array([0.0]), np.array([1.0]))
+    unit_b_spikes = (np.array([1.0]), np.array([0.0]))
+    original_a = tuple(values.copy() for values in unit_a_spikes)
+    original_b = tuple(values.copy() for values in unit_b_spikes)
+
+    first = spike_lfp_summary.compute_trial_shuffle_ppc(
+        trial_relative_spike_times_s=unit_a_spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase_vectors,
+        frequencies_hz=np.array([8.0]),
+        schedule=schedule,
+    )
+    second = spike_lfp_summary.compute_trial_shuffle_ppc(
+        trial_relative_spike_times_s=unit_b_spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase_vectors,
+        frequencies_hz=np.array([8.0]),
+        schedule=schedule,
+    )
+
+    np.testing.assert_array_equal(first.schedule, schedule)
+    np.testing.assert_array_equal(second.schedule, schedule)
+    for actual, expected in zip(unit_a_spikes, original_a, strict=True):
+        np.testing.assert_array_equal(actual, expected)
+    for actual, expected in zip(unit_b_spikes, original_b, strict=True):
+        np.testing.assert_array_equal(actual, expected)
+
+
+def test_shuffle_inference_retains_overlapping_trial_local_spikes_with_warning() -> None:
+    """Overlapping windows remain trial-local and are never replaced by merged intervals."""
+    prepared = build_trial_relative_spike_trains(
+        probe_label="PFC",
+        cluster_id=1,
+        unit_spike_times_s=np.array([10.0, 11.0]),
+        event_times_s=np.array([9.0, 10.0]),
+        window=(0.0, 2.0),
+    )
+    inference = spike_lfp_summary.compute_trial_shuffle_ppc(
+        trial_relative_spike_times_s=prepared.relative_spike_times,
+        phase_time_s=np.array([0.0, 1.0]),
+        trial_phase_vectors=np.ones((2, 1, 2), dtype=complex),
+        frequencies_hz=np.array([8.0]),
+        schedule=np.array([[1, 0]]),
+        overlap_trial_indices=prepared.overlap_trial_indices,
+    )
+
+    assert inference.overlap_warning is True
+    np.testing.assert_array_equal(inference.overlap_trial_indices, [0, 1])
+    assert inference.trial_relative_spike_times_s[0].tolist() == [1.0]
+    assert inference.trial_relative_spike_times_s[1].tolist() == [0.0, 1.0]
+    assert not hasattr(inference, "merged_intervals_s")
+
+
+def test_trial_shuffle_coupling_exceeds_null_while_independent_data_do_not() -> None:
+    """Trial-specific phase coupling has smaller plus-one p than independent traces."""
+    trial_count = 4
+    phase_time_s = np.arange(trial_count, dtype=float)
+    schedule = np.array(
+        [
+            [1, 2, 3, 0],
+            [2, 3, 0, 1],
+            [3, 0, 1, 2],
+        ]
+        * 10,
+        dtype=int,
+    )
+    trial_spikes = tuple(np.full(13, float(index)) for index in range(trial_count))
+    coupled = np.empty((trial_count, 1, trial_count), dtype=complex)
+    for phase_trial in range(trial_count):
+        for source_trial in range(trial_count):
+            angle = 0.0 if phase_trial == source_trial else 2.0 * np.pi * phase_trial / trial_count
+            coupled[phase_trial, 0, source_trial] = np.exp(1j * angle)
+    independent = np.broadcast_to(
+        np.exp(2j * np.pi * np.arange(trial_count) / trial_count),
+        (trial_count, trial_count),
+    )[:, np.newaxis, :].copy()
+
+    coupled_result = spike_lfp_summary.compute_trial_shuffle_ppc(
+        trial_relative_spike_times_s=trial_spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=coupled,
+        frequencies_hz=np.array([8.0]),
+        schedule=schedule,
+    )
+    independent_result = spike_lfp_summary.compute_trial_shuffle_ppc(
+        trial_relative_spike_times_s=trial_spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=independent,
+        frequencies_hz=np.array([8.0]),
+        schedule=schedule,
+    )
+
+    assert coupled_result.observed_ppc[0] > coupled_result.null_mean[0]
+    assert coupled_result.p_value[0] < independent_result.p_value[0]
+    assert independent_result.p_value[0] == pytest.approx(1.0)
+
+
+def test_permutation_plus_one_and_ineligibility_are_explicit() -> None:
+    """Null inference distinguishes ineligible data from a nonsignificant result."""
+    eligible = spike_lfp_summary.summarize_permutation_null(
+        observed_ppc=np.array([0.50]),
+        null_ppc_chunks=(np.array([[0.60], [0.40], [0.70], [0.20]]),),
+        spike_count=np.array([50]),
+        eligible_trial_count=2,
+    )
+    few_spikes = spike_lfp_summary.summarize_permutation_null(
+        observed_ppc=np.array([0.50]),
+        null_ppc_chunks=(np.array([[0.10], [0.20]]),),
+        spike_count=np.array([49]),
+        eligible_trial_count=2,
+    )
+    one_trial = spike_lfp_summary.summarize_permutation_null(
+        observed_ppc=np.array([0.50]),
+        null_ppc_chunks=(np.array([[0.10], [0.20]]),),
+        spike_count=np.array([50]),
+        eligible_trial_count=1,
+    )
+
+    assert eligible.p_value[0] == pytest.approx((1 + 2) / (1 + 4))
+    assert eligible.null_eligible[0]
+    for ineligible in (few_spikes, one_trial):
+        assert not ineligible.null_eligible[0]
+        assert np.isnan(ineligible.p_value[0])
+        assert not ineligible.significant[0]
+
+
+def test_fdr_uses_scipy_bh_per_frequency_family(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each unit-condition-site-epoch spectrum is adjusted only across frequency."""
+    calls: list[tuple[tuple[int, ...], int, str]] = []
+
+    def recording_bh(
+        p_values: np.ndarray,
+        *,
+        axis: int = 0,
+        method: str = "bh",
+    ) -> np.ndarray:
+        """Record SciPy-family arguments and return SciPy BH-adjusted p values."""
+        calls.append((p_values.shape, axis, method))
+        return false_discovery_control(p_values, axis=axis, method=method)
+
+    monkeypatch.setattr(spike_lfp_summary, "false_discovery_control", recording_bh)
+    p_value = np.array([[[[[0.01, 0.04, 0.03]]]], [[[[0.02, 0.20, 0.40]]]]])
+    null_eligible = np.array([[[[[True, True, True]]]], [[[[True, False, True]]]]])
+
+    q_value = spike_lfp_summary.adjust_ppc_pvalues_bh(
+        p_value=p_value,
+        null_eligible=null_eligible,
+    )
+
+    expected_first = false_discovery_control(np.array([0.01, 0.04, 0.03]), method="bh")
+    np.testing.assert_allclose(q_value[0, 0, 0, 0], expected_first)
+    assert np.isnan(q_value[1, 0, 0, 0, 1])
+    assert calls == [((3,), 0, "bh"), ((2,), 0, "bh")]
+
+
+def test_shuffle_null_accumulator_round_trips_numeric_summaries_without_draws() -> None:
+    """Cache-ready null summaries retain moments/percentiles, never complete draws."""
+    summary = spike_lfp_summary.summarize_permutation_null(
+        observed_ppc=np.array([0.2, 0.5]),
+        null_ppc_chunks=(
+            np.array([[0.1, 0.4], [0.3, 0.6]]),
+            np.array([[0.2, 0.8], [0.4, 0.2]]),
+        ),
+        spike_count=np.array([50, 50]),
+        eligible_trial_count=3,
+    )
+    arrays = spike_lfp_summary.permutation_null_summary_to_arrays(summary)
+    restored = spike_lfp_summary.permutation_null_summary_from_arrays(arrays)
+
+    expected_names = {
+        "null_exceedance_count",
+        "permutation_count",
+        "p_value",
+        "null_mean",
+        "null_std",
+        "null_p025",
+        "null_p50",
+        "null_p975",
+    }
+    assert expected_names <= arrays.keys()
+    assert not any("draw" in name for name in arrays)
+    for name in expected_names:
+        np.testing.assert_allclose(
+            getattr(restored, name),
+            getattr(summary, name),
+            equal_nan=True,
+        )
+
+
+def test_shuffle_chunks_match_an_unchunked_permutation_reference() -> None:
+    """Streaming null chunks give the same statistics as one unchunked draw array."""
+    draws = np.array([[0.1], [0.2], [0.5], [0.7], [0.3]], dtype=float)
+    unchunked = spike_lfp_summary.summarize_permutation_null(
+        observed_ppc=np.array([0.4]),
+        null_ppc_chunks=(draws,),
+        spike_count=np.array([50]),
+        eligible_trial_count=3,
+    )
+    chunked = spike_lfp_summary.summarize_permutation_null(
+        observed_ppc=np.array([0.4]),
+        null_ppc_chunks=(draws[:2], draws[2:]),
+        spike_count=np.array([50]),
+        eligible_trial_count=3,
+    )
+
+    for name in (
+        "null_exceedance_count",
+        "permutation_count",
+        "p_value",
+        "null_mean",
+        "null_std",
+        "null_p025",
+        "null_p50",
+        "null_p975",
+    ):
+        np.testing.assert_allclose(getattr(chunked, name), getattr(unchunked, name))
+
+
+def test_shuffle_preview_and_final_metadata_have_distinct_fingerprints() -> None:
+    """Preview 100 and final 1000 shuffles are explicit incompatible cache metadata."""
+    preview = spike_lfp_summary.build_shuffle_run_metadata(
+        shuffle_count=100,
+        seed=5,
+        mode="preview",
+    )
+    final = spike_lfp_summary.build_shuffle_run_metadata(
+        shuffle_count=1000,
+        seed=5,
+        mode="final",
+    )
+
+    assert preview["shuffle_count"] == 100
+    assert final["shuffle_count"] == 1000
+    assert preview["fingerprint"] != final["fingerprint"]
+
+
+def test_significant_prevalence_uses_eligible_denominator_or_nan() -> None:
+    """Prevalence divides significant units by eligible units, never all selected units."""
+    q_value = np.array([[[[[0.01, 0.20]]]], [[[[0.03, np.nan]]]], [[[[0.80, 0.01]]]]])
+    null_eligible = np.array([[[[[True, True]]]], [[[[True, False]]]], [[[[False, False]]]]])
+
+    prevalence = spike_lfp_summary.compute_significant_prevalence(
+        q_value=q_value,
+        null_eligible=null_eligible,
+        alpha=0.05,
+    )
+
+    np.testing.assert_allclose(prevalence.prevalence[0, 0, 0], [1.0, 0.0])
+    np.testing.assert_array_equal(prevalence.eligible_unit_count[0, 0, 0], [2, 1])
+    np.testing.assert_array_equal(prevalence.total_unit_count[0, 0, 0], [3, 3])
+    no_eligible = spike_lfp_summary.compute_significant_prevalence(
+        q_value=np.full((2, 1, 1, 1, 1), np.nan),
+        null_eligible=np.zeros((2, 1, 1, 1, 1), dtype=bool),
+        alpha=0.05,
+    )
+    assert np.isnan(no_eligible.prevalence[0, 0, 0, 0])
