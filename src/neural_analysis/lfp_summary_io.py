@@ -13,6 +13,7 @@ import numpy as np
 
 from src.neural_analysis.lfp_summary_models import (
     LFPSummaryConfig,
+    canonical_config_json,
     component_fingerprint,
     fingerprint_source_files,
 )
@@ -24,6 +25,96 @@ class ComponentStatus:
 
     status: str
     differences: tuple[str, ...] = ()
+
+
+def load_or_initialize_manifest(
+    cache_directory: Path,
+    config: LFPSummaryConfig,
+) -> dict[str, object]:
+    """Load a compatible manifest or return an unwritten JSON-ready initial mapping.
+
+    Parameters
+    ----------
+    cache_directory : pathlib.Path
+        Intended cache directory containing an optional ``manifest.json``. This
+        function never creates the directory or writes a manifest.
+    config : LFPSummaryConfig
+        Validated active configuration supplying session and schema identities.
+
+    Returns
+    -------
+    dict[str, object]
+        Existing JSON manifest mapping, or an initial mapping with schema,
+        generator, configuration, reference, processing metadata, and empty
+        components ready for the first atomic write.
+
+    Raises
+    ------
+    ValueError
+        If an existing manifest is invalid JSON, is not an object, or is not
+        compatible with the active session/schema/components merge boundary.
+    """
+    manifest_path = cache_directory / "manifest.json"
+    if not manifest_path.exists():
+        return _initial_manifest(config)
+    try:
+        decoded = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("manifest contains invalid JSON") from error
+    if not isinstance(decoded, dict):
+        raise ValueError("manifest must be a JSON mapping object")
+    _validate_loaded_manifest(decoded, config)
+    return decoded
+
+
+def _initial_manifest(config: LFPSummaryConfig) -> dict[str, object]:
+    """Build an unwritten manifest mapping with all top-level metadata fields.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Active configuration retained as a canonical JSON-compatible snapshot.
+
+    Returns
+    -------
+    dict[str, object]
+        Initial manifest with no component entries and no filesystem side effect.
+    """
+    return {
+        "schema_version": config.schema_version,
+        "session_id": config.session_id,
+        "generator": {"module": "src.neural_analysis.lfp_summary_io"},
+        "configuration": json.loads(canonical_config_json(config)),
+        "reference": {
+            "statement": "Component references and normalization metadata are stored per component."
+        },
+        "processing_metadata": {"status": "initialized"},
+        "components": {},
+    }
+
+
+def _validate_loaded_manifest(manifest: Mapping[str, object], config: LFPSummaryConfig) -> None:
+    """Validate fields required to safely merge one component into a loaded manifest.
+
+    Parameters
+    ----------
+    manifest : Mapping[str, object]
+        Existing JSON-decoded manifest mapping.
+    config : LFPSummaryConfig
+        Active schema and session identity.
+
+    Returns
+    -------
+    None
+        The decoded mapping is not modified.
+    """
+    if manifest.get("schema_version") != config.schema_version:
+        raise ValueError("manifest schema version differs from active configuration")
+    if manifest.get("session_id") != config.session_id:
+        raise ValueError("manifest session id differs from active configuration")
+    components = manifest.get("components")
+    if not isinstance(components, Mapping):
+        raise ValueError("manifest components must be a mapping")
 
 
 def _component_entry(manifest: Mapping[str, Any], component: str) -> Mapping[str, Any]:
