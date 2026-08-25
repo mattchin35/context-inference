@@ -3,6 +3,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import re
+import textwrap
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -82,16 +83,26 @@ def _caption(figure: plt.Figure, context: PlotContext, text: str) -> None:
     bounds = ", ".join(
         f"{key}={value}" for key, value in context.epoch_bounds_s.items()
     )
-    figure.subplots_adjust(bottom=0.20, hspace=0.55)
+    caption = textwrap.fill(
+        (
+            f"{text}. Alignment={context.alignment_event}; windows={bounds}; "
+            f"60-Hz notch {notch}; gamma excludes "
+            f"{context.gamma_exclusion_hz[0]:g}-"
+            f"{context.gamma_exclusion_hz[1]:g} Hz; "
+            f"{context.reference_description}; "
+            f"source unit={context.source_voltage_unit}."
+        ),
+        width=135,
+    )
+    caption_line_count = caption.count("\n") + 1
+    figure.subplots_adjust(
+        bottom=max(0.20, 0.09 + 0.045 * caption_line_count),
+        hspace=0.55,
+    )
     figure.text(
         0.01,
         0.015,
-        (
-            f"{text}. Alignment={context.alignment_event}; windows={bounds}; "
-            f"60-Hz notch {notch}; gamma excludes {context.gamma_exclusion_hz[0]:g}-"
-            f"{context.gamma_exclusion_hz[1]:g} Hz; {context.reference_description}; "
-            f"source unit={context.source_voltage_unit}."
-        ),
+        caption,
         fontsize=9,
         va="bottom",
     )
@@ -172,6 +183,7 @@ def plot_condition_psd(
     ):
         raise ValueError("condition PSD axes are invalid")
     figure, axes = _figure(("spectrum",))
+    figure.set_size_inches(14.0, 6.0)
     axis = axes["spectrum"]
     labels = []
     for index, name in enumerate(condition_names):
@@ -187,7 +199,12 @@ def plot_condition_psd(
         ylabel="PSD (dB)",
         title=f"{site_label}: {epoch_name} ({normalization})",
     )
-    axis.legend(fontsize=9)
+    axis.legend(
+        fontsize=9,
+        loc="upper left",
+        bbox_to_anchor=(1.01, 1.0),
+    )
+    figure.subplots_adjust(right=0.74)
     _caption(
         figure,
         context,
@@ -248,30 +265,60 @@ def plot_band_power_summary(
         raise ValueError("required band/epoch labels missing")
     figure, axes = _figure(("band_power",))
     axis = axes["band_power"]
-    labels = []
-    x = []
-    y = []
     order = [
         ("theta", "before"),
         ("theta", "after"),
         ("gamma", "before"),
         ("gamma", "after"),
     ]
-    for ci, name in enumerate(condition_names):
-        for bi, (band, epoch) in enumerate(order):
-            ei = epoch_names.index(epoch)
-            gi = band_names.index(band)
-            x.append(ci * 5 + bi)
-            y.append(np.nanmedian(data[ci, :, ei, gi]))
-            labels.append(f"{name} {band}-{epoch}")
-    axis.bar(x, y)
-    axis.set_xticks(x, labels, rotation=35, ha="right")
+    condition_positions = np.arange(len(condition_names), dtype=float)
+    bar_width = 0.18
+    for measurement_index, (band, epoch) in enumerate(order):
+        epoch_index = epoch_names.index(epoch)
+        band_index = band_names.index(band)
+        medians = np.full(len(condition_names), np.nan, dtype=float)
+        lower_errors = np.zeros(len(condition_names), dtype=float)
+        upper_errors = np.zeros(len(condition_names), dtype=float)
+        for condition_index in range(len(condition_names)):
+            finite_values = data[condition_index, :, epoch_index, band_index]
+            finite_values = finite_values[np.isfinite(finite_values)]
+            if not finite_values.size:
+                continue
+            low, median, high = np.percentile(finite_values, (25.0, 50.0, 75.0))
+            medians[condition_index] = median
+            lower_errors[condition_index] = median - low
+            upper_errors[condition_index] = high - median
+        offset = (measurement_index - 1.5) * bar_width
+        axis.bar(
+            condition_positions + offset,
+            medians,
+            bar_width,
+            yerr=np.stack((lower_errors, upper_errors)),
+            capsize=3,
+            label=f"{band}-{epoch}",
+        )
+    figure.set_size_inches(max(12.0, 1.25 * len(condition_names)), 6.0)
+    axis.set_xticks(condition_positions, condition_names, rotation=25, ha="right")
     axis.set_ylabel("Band power (dB)")
     axis.set_title(f"{site_label} ({normalization})")
+    axis.legend(ncol=4, fontsize=9, loc="upper center")
+    before_index = epoch_names.index("before")
+    after_index = epoch_names.index("after")
+    count_labels = []
+    for condition_index, condition_name in enumerate(condition_names):
+        before_count = int(counts[condition_index, before_index])
+        after_count = int(counts[condition_index, after_index])
+        if before_count == after_count:
+            count_labels.append(f"{condition_name} n={before_count}")
+        else:
+            count_labels.append(
+                f"{condition_name} n_before={before_count}, n_after={after_count}"
+            )
     _caption(
         figure,
         context,
-        f"Band medians; counts={counts.tolist()}; normalization={normalization}",
+        "Band medians and IQR; "
+        f"counts={'; '.join(count_labels)}; normalization={normalization}",
     )
     return figure, axes
 

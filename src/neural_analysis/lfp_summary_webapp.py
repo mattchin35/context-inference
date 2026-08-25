@@ -421,8 +421,11 @@ def _plot_cached_power(
     if whole_matches.size != 1:
         raise ValueError("cached Power epoch_names must include exactly one whole epoch")
     whole_epoch_index = int(whole_matches[0])
+    display_frequency = frequency_hz <= 100.0
+    if not np.any(display_frequency):
+        raise ValueError("cached Power frequency grid does not include 0-100 Hz")
     condition_psd_db = np.full(
-        (condition_count, trial_count, frequency_count),
+        (condition_count, trial_count, int(np.count_nonzero(display_frequency))),
         np.nan,
         dtype=normalized_psd_db.dtype,
     )
@@ -434,7 +437,7 @@ def _plot_cached_power(
             0,
             selected_trials,
             whole_epoch_index,
-        ]
+        ][:, display_frequency]
     gamma_band = next(band for band in config.power.bands if band.name == "gamma")
     gamma_exclusion_hz = gamma_band.excluded_intervals_hz[0]
     context = lfp_summary_plotting.PlotContext(
@@ -463,7 +466,7 @@ def _plot_cached_power(
         source_voltage_unit=str(voltage_units[0]),
     )
     figure, _axes = lfp_summary_plotting.plot_condition_psd(
-        frequency_hz,
+        frequency_hz[display_frequency],
         condition_psd_db,
         tuple(str(name) for name in condition_names),
         effective_count[:, 0],

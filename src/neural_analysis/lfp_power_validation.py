@@ -266,7 +266,7 @@ def make_production_power_validation_dependencies() -> PowerValidationDependenci
 
     def save_png(figure: Any, path: Path) -> None:
         """Save one opaque-light Matplotlib figure as a PNG report artifact."""
-        figure.savefig(path, dpi=150, facecolor="white")
+        figure.savefig(path, dpi=150, facecolor="white", bbox_inches="tight")
 
     def now_utc() -> str:
         """Return a filesystem-safe UTC timestamp for an immutable run directory."""
@@ -324,6 +324,10 @@ def _render_cached_power_pngs(
     site_valid = np.asarray(arrays["site_valid"], dtype=bool)
     excluded = np.asarray(arrays["user_excluded"], dtype=bool)
     context = _plot_context(config)
+    frequency_hz = np.asarray(arrays["frequency_hz"], dtype=float)
+    display_frequency = frequency_hz <= 100.0
+    if not np.any(display_frequency):
+        raise ValueError("Power cache frequency grid does not include 0-100 Hz")
     paths: list[Path] = []
     for site_index, site_id in enumerate(site_ids):
         valid_condition = (
@@ -334,12 +338,17 @@ def _render_cached_power_pngs(
             & ~excluded[:, None]
         )
         counts = valid_condition.sum(axis=0, dtype=np.int64)
+        site_whole_psd = np.asarray(arrays["normalized_psd_session_db"])[
+            site_index,
+            :,
+            0,
+        ]
         condition_psd = _condition_trials(
-            np.asarray(arrays["normalized_psd_session_db"])[site_index, :, 0],
+            site_whole_psd[:, display_frequency],
             valid_condition,
         )
         figure, _ = dependencies.plot_condition_psd(
-            frequency_hz=np.asarray(arrays["frequency_hz"]),
+            frequency_hz=frequency_hz[display_frequency],
             condition_trial_psd_db=condition_psd,
             condition_names=condition_names,
             contributing_trial_counts=counts,
@@ -473,7 +482,7 @@ def _build_report(
     site_valid = np.asarray(arrays["site_valid"], dtype=bool)
     excluded = np.asarray(arrays["user_excluded"], dtype=bool)
     reasons = np.asarray(arrays["exclusion_reason_code"]).astype(str)
-    warning_values = sorted({value for value in reasons.ravel() if value})
+    warning_values = sorted({str(value) for value in reasons.ravel() if value})
     warnings = list(status.differences) + warning_values
     presession_available = np.asarray(
         arrays["presession_reference_available"],
