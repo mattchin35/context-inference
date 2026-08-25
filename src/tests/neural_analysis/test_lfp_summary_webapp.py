@@ -46,6 +46,68 @@ class FakeStreamlit:
         self.figures.append(figure)
 
 
+class FakeSidebar:
+    """Return selected control values and record every visible input label."""
+
+    def __init__(self) -> None:
+        self.labels: list[str] = []
+
+    def header(self, label: str) -> None:
+        """Record a sidebar header."""
+
+        self.labels.append(label)
+
+    def selectbox(self, label: str, *, options: tuple[str, ...]) -> str:
+        """Return deterministic nondefault filter/alignment selections."""
+
+        self.labels.append(label)
+        selected = {
+            "Summary action": "power",
+            "Summary view": "power",
+            "Choice filter": "left",
+            "Context filter": "right",
+            "Alignment event": "start_time",
+        }
+        return selected.get(label, options[0])
+
+    def checkbox(self, label: str, *, value: bool) -> bool:
+        """Disable notch and stale inspection while recording the label."""
+
+        self.labels.append(label)
+        return False if label == "Apply 60 Hz notch" else value
+
+    def number_input(self, label: str, *, value: float | int, **kwargs: object) -> float | int:
+        """Return deterministic advanced values while recording the label."""
+
+        self.labels.append(label)
+        selected: dict[str, float | int] = {
+            "Phase output rate (Hz)": 400.0,
+            "Bootstrap count": 1000,
+            "Random seed": 19,
+        }
+        return selected.get(label, value)
+
+    def text_input(self, label: str, *, value: str) -> str:
+        """Return two excluded trial rows while recording the label."""
+
+        self.labels.append(label)
+        return "2, 5" if label == "Excluded trial rows" else value
+
+    def button(self, label: str) -> bool:
+        """Trigger the synchronous compute action."""
+
+        self.labels.append(label)
+        return True
+
+
+class InteractiveFakeStreamlit(FakeStreamlit):
+    """Expose the sidebar protocol used by the full summary route."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sidebar = FakeSidebar()
+
+
 def _summary_sites(root: Path) -> tuple[LFPSiteConfig, ...]:
     """Build explicit CT026-style site inputs for configuration assembly tests."""
 
@@ -321,3 +383,50 @@ def test_summary_figure_renderer_closes_matplotlib_figure_after_streamlit_displa
 
     assert streamlit.figures == [figure]
     assert not plt.fignum_exists(figure_number)
+
+
+def test_full_summary_route_maps_visible_controls_into_computation_config(
+    tmp_path: Path,
+) -> None:
+    """The route must not silently replace visible filters with hard-coded defaults."""
+
+    streamlit = InteractiveFakeStreamlit()
+    received_configs = []
+    dependencies = _fake_dependencies([], [])
+    dependencies = replace(
+        dependencies,
+        compute_power=lambda config: (
+            received_configs.append(config)
+            or lfp_summary_webapp.SummaryActionResult("power", "complete", None, None)
+        ),
+    )
+
+    lfp_summary_webapp.render_lfp_summary_view(
+        streamlit,
+        session_id="CT026_2026-08-01_130853",
+        session_path=tmp_path,
+        output_directory=tmp_path / "processed" / "lfp_summary_cache",
+        sites=_summary_sites(tmp_path),
+        site_pairs=(("PFC", "HPC1"),),
+        dependencies=dependencies,
+    )
+
+    config = received_configs[0]
+    assert config.trial_filter.choice == "left"
+    assert config.trial_filter.context == "right"
+    assert config.trial_filter.excluded_trial_indices == (2, 5)
+    assert config.analysis_windows.alignment_event == "start_time"
+    assert not config.power.notch_enabled
+    assert not config.phase.notch_enabled
+    assert config.phase.output_rate_hz == 400.0
+    assert config.phase.seed == 19 and config.ppc.seed == 19
+    assert {
+        "Choice filter",
+        "Context filter",
+        "Excluded trial rows",
+        "Alignment event",
+        "Apply 60 Hz notch",
+        "Phase output rate (Hz)",
+        "Bootstrap count",
+        "Random seed",
+    }.issubset(streamlit.sidebar.labels)
