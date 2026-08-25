@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +14,13 @@ from src.neural_analysis.lfp_summary_io import (
     load_component_arrays,
     write_component_transaction,
 )
-from src.neural_analysis.lfp_summary_models import component_fingerprint, default_lfp_summary_config
+from src.neural_analysis.lfp_summary_models import (
+    LFPSummaryConfig,
+    canonical_config_json,
+    component_fingerprint,
+    default_lfp_summary_config,
+    fingerprint_source_files,
+)
 
 
 def _power_arrays() -> dict[str, np.ndarray]:
@@ -51,7 +58,13 @@ def _power_array_schema() -> dict[str, dict[str, object]]:
     }
 
 
-def _manifest(config_fingerprint: str, *, state: str = "complete") -> dict[str, object]:
+def _manifest(
+    config_fingerprint: str,
+    *,
+    config: LFPSummaryConfig | None = None,
+    state: str = "complete",
+    file_name: str = "power.npz",
+) -> dict[str, object]:
     """Return minimal manifest metadata for one power-component cache.
 
     Parameters
@@ -64,14 +77,19 @@ def _manifest(config_fingerprint: str, *, state: str = "complete") -> dict[str, 
     Returns
     -------
     dict[str, object]
-        JSON-serializable manifest with axes, units, component identity, and state.
+        JSON-serializable manifest with axes, units, component identity, state,
+        source fingerprints, and a canonical configuration snapshot.
     """
+    config = default_lfp_summary_config() if config is None else config
     return {
         "schema_version": "1",
+        "session_id": config.session_id,
         "components": {
             "power": {
-                "file_name": "power.npz",
+                "file_name": file_name,
                 "configuration_fingerprint": config_fingerprint,
+                "configuration_snapshot": json.loads(canonical_config_json(config)),
+                "source_fingerprints": fingerprint_source_files(config),
                 "array_schema": _power_array_schema(),
                 "state": state,
             }
@@ -258,3 +276,86 @@ def test_component_statuses_report_missing_compatible_stale_and_failed_diffs(tmp
     failed = assess_component_status(tmp_path, "power", config, failed_manifest)
     assert failed.status == "failed"
     assert any("failed" in difference.lower() for difference in failed.differences)
+
+
+def test_running_component_is_never_reported_compatible(tmp_path: Path) -> None:
+    """A running component remains unavailable to saved-result views."""
+    config = default_lfp_summary_config()
+    fingerprint = component_fingerprint("power", config)
+    np.savez(tmp_path / "power.npz", **_power_arrays())
+
+    running = assess_component_status(tmp_path, "power", config, _manifest(fingerprint, state="running"))
+    assert running.status == "running"
+
+
+def test_corrupt_component_is_never_reported_compatible(tmp_path: Path) -> None:
+    """A present but schema-invalid component reports a failed inspection state."""
+    config = default_lfp_summary_config()
+    fingerprint = component_fingerprint("power", config)
+    np.savez(tmp_path / "power.npz", **{"trial_indices": np.array([0], dtype=np.int64)})
+    corrupt = assess_component_status(tmp_path, "power", config, _manifest(fingerprint))
+    assert corrupt.status == "failed"
+    assert any("invalid" in difference.lower() or "missing" in difference.lower() for difference in corrupt.differences)
+
+
+def _source_config_and_manifest(tmp_path: Path) -> tuple[LFPSummaryConfig, dict[str, object], Path]:
+    """Create a committed component manifest with one mutable source recording path."""
+    config = default_lfp_summary_config()
+    lfp_path = tmp_path / "PFC.bin"
+    sync_path = tmp_path / "PFC.sync.json"
+    lfp_path.write_bytes(b"first recording")
+    sync_path.write_text("{}", encoding="ascii")
+    configured_site = replace(config.sites[0], lfp_path=lfp_path, aligned_sync_path=sync_path)
+    source_config = replace(config, sites=(configured_site,) + config.sites[1:])
+    manifest = _manifest(component_fingerprint("power", source_config), config=source_config)
+    np.savez(tmp_path / "power.npz", **_power_arrays())
+
+    assert assess_component_status(tmp_path, "power", source_config, manifest).status == "compatible"
+    return source_config, manifest, lfp_path
+
+
+def test_status_rejects_changed_session_dependency(tmp_path: Path) -> None:
+    """Status rejects a cache manifest whose session snapshot differs from the active session."""
+    source_config, manifest, _ = _source_config_and_manifest(tmp_path)
+
+    changed_session = replace(source_config, session_id="different-session")
+    session_status = assess_component_status(tmp_path, "power", changed_session, manifest)
+    assert session_status.status == "stale"
+    assert any("session" in difference.lower() for difference in session_status.differences)
+
+
+def test_status_rejects_changed_filter_dependency(tmp_path: Path) -> None:
+    """Status rejects a cache computed with a different choice/context selection."""
+    source_config, manifest, _ = _source_config_and_manifest(tmp_path)
+
+    changed_filter = replace(source_config, trial_filter=replace(source_config.trial_filter, context="left"))
+    filter_status = assess_component_status(tmp_path, "power", changed_filter, manifest)
+    assert filter_status.status == "stale"
+    assert any("fingerprint" in difference.lower() or "filter" in difference.lower() for difference in filter_status.differences)
+
+
+def test_status_rejects_changed_source_dependency(tmp_path: Path) -> None:
+    """Status rejects a cache when the recorded LFP source fingerprint changes."""
+    source_config, manifest, lfp_path = _source_config_and_manifest(tmp_path)
+
+    lfp_path.write_bytes(b"changed recording source")
+    source_status = assess_component_status(tmp_path, "power", source_config, manifest)
+    assert source_status.status == "stale"
+    assert any("source" in difference.lower() for difference in source_status.differences)
+
+
+def test_transaction_rejects_component_filename_outside_cache_directory(tmp_path: Path) -> None:
+    """Manifest component filenames cannot escape the selected cache directory."""
+    config = default_lfp_summary_config()
+    escaped_path = tmp_path.parent / "escaped-power.npz"
+    manifest = _manifest(
+        component_fingerprint("power", config),
+        config=config,
+        file_name="../escaped-power.npz",
+    )
+
+    try:
+        with pytest.raises(ValueError, match="file.*name|path|cache"):
+            write_component_transaction(tmp_path, "power", _power_arrays(), manifest)
+    finally:
+        escaped_path.unlink(missing_ok=True)

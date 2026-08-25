@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from math import nan
 from pathlib import Path
 from typing import Callable
 
@@ -10,6 +11,8 @@ import pytest
 
 from src.neural_analysis.lfp_summary_models import (
     LFPSummaryConfig,
+    FrequencyBandConfig,
+    UnitPopulationConfig,
     canonical_config_json,
     component_fingerprint,
     default_lfp_summary_config,
@@ -58,6 +61,125 @@ def test_default_configuration_is_frozen_deterministic_and_round_trips() -> None
     assert decoded_config == config
     with pytest.raises((AttributeError, TypeError)):
         config.schema_version = "mutated"  # type: ignore[misc]
+
+
+def test_default_phase_frequency_grid_matches_approved_contract() -> None:
+    """Default wavelet frequencies are the configured linear 2--100 Hz grid."""
+    config = default_lfp_summary_config()
+
+    assert config.analysis_windows.alignment_event == "choice_time"
+    assert config.phase.frequency_hz == tuple(float(value) for value in range(2, 101, 2))
+
+
+def test_default_wavelet_transform_settings_match_approved_contract() -> None:
+    """Default Morlet settings preserve the approved transform implementation contract."""
+    config = default_lfp_summary_config()
+
+    assert config.phase.output_rate_hz == 500.0
+    assert config.phase.morlet_gaussian_width == 1.5
+    assert config.phase.morlet_window_length_s == 1.0
+    assert config.phase.morlet_precision == 16
+    assert config.phase.morlet_normalization == "l1"
+    assert config.phase.block_duration_s == 120.0
+
+
+def test_default_notch_and_presession_reference_settings_match_contract() -> None:
+    """Default power settings explicitly retain the notch and exact reference duration."""
+    config = default_lfp_summary_config()
+
+    assert config.power.notch_enabled is True
+    assert config.power.notch_hz == 60.0
+    assert config.power.notch_quality_factor == 30.0
+    assert config.power.presession_reference_duration_s == 10.0
+
+
+def test_default_power_bands_and_welch_contract_match_approved_settings() -> None:
+    """Power defaults retain approved bands, line-noise gap, and Welch estimator settings."""
+    config = default_lfp_summary_config()
+
+    assert config.power.bands == (
+        FrequencyBandConfig("theta", 6.0, 12.0),
+        FrequencyBandConfig("gamma", 30.0, 80.0, ((58.0, 62.0),)),
+    )
+    assert config.power.welch_window == "hann_periodic"
+    assert config.power.welch_detrend == "constant"
+    assert config.power.welch_overlap_fraction == 0.5
+    assert config.power.canonical_frequency_step_hz == 2.0
+
+
+def test_default_phase_notch_and_site_sample_rate_contracts_are_explicit() -> None:
+    """Phase preprocessing and every selected site expose their required physical settings."""
+    config = default_lfp_summary_config()
+
+    assert config.phase.notch_enabled is True
+    assert config.phase.notch_hz == 60.0
+    assert config.phase.notch_quality_factor == 30.0
+    assert all(site.sample_rate_hz > 0.0 for site in config.sites)
+
+
+def test_start_time_is_supported_and_unapproved_alignments_are_rejected() -> None:
+    """Only the approved choice-time and start-time event columns are valid."""
+    config = default_lfp_summary_config()
+
+    validate_lfp_summary_config(
+        replace(config, analysis_windows=replace(config.analysis_windows, alignment_event="start_time"))
+    )
+    for unapproved_event in ("cue_time", "outcome_time"):
+        with pytest.raises(ValueError):
+            validate_lfp_summary_config(
+                replace(config, analysis_windows=replace(config.analysis_windows, alignment_event=unapproved_event))
+            )
+
+
+@pytest.mark.parametrize(
+    "mutated_config",
+    [
+        lambda config: replace(config, analysis_windows=replace(config.analysis_windows, before_stop_s=-0.5)),
+        lambda config: replace(config, phase=replace(config.phase, frequency_hz=(2.0, 8.0, 6.0))),
+        lambda config: replace(config, phase=replace(config.phase, bootstrap_count=0)),
+        lambda config: replace(config, ppc=replace(config.ppc, minimum_reliable_spikes=1)),
+        lambda config: replace(config, sites=(replace(config.sites[0], saved_channel_index=-1),) + config.sites[1:]),
+        lambda config: replace(
+            config,
+            unit_population=UnitPopulationConfig("units", "PFC", None, None, (1, 1), (), ("PFC:1",)),
+        ),
+        lambda config: replace(config, power=replace(config.power, welch_window_s=nan)),
+        lambda config: replace(config, phase=replace(config.phase, output_rate_hz=nan)),
+        lambda config: replace(config, ppc=replace(config.ppc, fdr_alpha=nan)),
+        lambda config: replace(
+            config,
+            power=replace(
+                config.power,
+                bands=(config.power.bands[0], replace(config.power.bands[0], lower_hz=7.0)),
+            ),
+        ),
+        lambda config: replace(
+            config,
+            power=replace(
+                config.power,
+                bands=(
+                    replace(config.power.bands[1], excluded_intervals_hz=((40.0, 60.0), (50.0, 70.0))),
+                ),
+            ),
+        ),
+        lambda config: replace(
+            config,
+            unit_population=UnitPopulationConfig("units", "PFC", None, None, (-1,), (), ("PFC:1",)),
+        ),
+        lambda config: replace(
+            config,
+            unit_population=UnitPopulationConfig("units", "PFC", None, None, (1,), (), ("PFC:1", "PFC:1")),
+        ),
+        lambda config: replace(
+            config,
+            unit_population=UnitPopulationConfig("units", "PFC", None, None, (1,), (), ("unqualified-id",)),
+        ),
+    ],
+)
+def test_invalid_numeric_epoch_and_unit_contracts_are_rejected(mutated_config: ConfigMutation) -> None:
+    """Reject malformed epoch partitions, numerical settings, and unit selections before I/O."""
+    with pytest.raises(ValueError):
+        validate_lfp_summary_config(mutated_config(default_lfp_summary_config()))
 
 
 @pytest.mark.parametrize(
@@ -144,10 +266,6 @@ def test_component_fingerprints_only_include_relevant_settings() -> None:
         config,
         power=replace(config.power, baseline_start_s=config.power.baseline_start_s - 0.1),
     )
-    changed_phase = replace(
-        config,
-        phase=replace(config.phase, bootstrap_count=config.phase.bootstrap_count + 1),
-    )
 
     assert component_fingerprint("power", config) == component_fingerprint("power", changed_ppc)
     assert component_fingerprint("synchrony", config) == component_fingerprint("synchrony", changed_ppc)
@@ -155,9 +273,50 @@ def test_component_fingerprints_only_include_relevant_settings() -> None:
     assert component_fingerprint("power", config) != component_fingerprint("power", changed_power)
     assert component_fingerprint("synchrony", config) == component_fingerprint("synchrony", changed_power)
     assert component_fingerprint("spike_phase", config) == component_fingerprint("spike_phase", changed_power)
-    assert component_fingerprint("power", config) == component_fingerprint("power", changed_phase)
-    assert component_fingerprint("synchrony", config) != component_fingerprint("synchrony", changed_phase)
-    assert component_fingerprint("spike_phase", config) != component_fingerprint("spike_phase", changed_phase)
+
+
+def test_transform_fingerprint_change_affects_synchrony_and_spike_phase() -> None:
+    """A phase-transform setting invalidates both consumers of Morlet coefficients."""
+    config = default_lfp_summary_config()
+    changed_transform = replace(
+        config,
+        phase=replace(config.phase, morlet_gaussian_width=config.phase.morlet_gaussian_width + 0.1),
+    )
+
+    assert component_fingerprint("power", config) == component_fingerprint("power", changed_transform)
+    assert component_fingerprint("synchrony", config) != component_fingerprint("synchrony", changed_transform)
+    assert component_fingerprint("spike_phase", config) != component_fingerprint("spike_phase", changed_transform)
+
+
+def test_bootstrap_count_fingerprint_change_affects_synchrony_only() -> None:
+    """Synchrony bootstrap resampling does not invalidate the spike-phase component."""
+    config = default_lfp_summary_config()
+    changed_bootstrap_count = replace(
+        config,
+        phase=replace(config.phase, bootstrap_count=config.phase.bootstrap_count + 1),
+    )
+
+    assert component_fingerprint("power", config) == component_fingerprint("power", changed_bootstrap_count)
+    assert component_fingerprint("synchrony", config) != component_fingerprint("synchrony", changed_bootstrap_count)
+    assert component_fingerprint("spike_phase", config) == component_fingerprint("spike_phase", changed_bootstrap_count)
+
+
+@pytest.mark.parametrize("component", ("power", "synchrony", "spike_phase"))
+def test_component_fingerprints_include_session_identity(component: str) -> None:
+    """Every component fingerprint distinguishes different active sessions."""
+    config = default_lfp_summary_config()
+    changed_session = replace(config, session_id="another-session")
+
+    assert component_fingerprint(component, config) != component_fingerprint(component, changed_session)
+
+
+@pytest.mark.parametrize("component", ("power", "synchrony", "spike_phase"))
+def test_component_fingerprints_include_affected_trial_filters(component: str) -> None:
+    """Choice/context selection changes the cache identity of every summary component."""
+    config = default_lfp_summary_config()
+    changed_filter = replace(config, trial_filter=replace(config.trial_filter, choice="left"))
+
+    assert component_fingerprint(component, config) != component_fingerprint(component, changed_filter)
 
 
 def test_source_fingerprints_include_files_and_required_sidecars(tmp_path: Path) -> None:
