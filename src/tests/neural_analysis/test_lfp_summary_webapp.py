@@ -593,6 +593,57 @@ def test_production_power_plot_delegates_cache_arrays_to_plotting_module(
     assert context.source_voltage_unit == "uV"
 
 
+def test_full_route_assesses_fingerprint_compatibility_before_cached_render(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A manifest ``complete`` flag alone must not bypass stale-config checks.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces compatibility assessment with a visible stale difference.
+    tmp_path : pathlib.Path
+        Temporary active session root used by configuration assembly.
+    """
+    streamlit = InteractiveFakeStreamlit()
+    streamlit.sidebar.button = lambda _label: False
+    calls: list[str] = []
+    dependencies = _fake_dependencies(calls, [])
+    dependencies = replace(
+        dependencies,
+        load_manifest=lambda _path: {
+            "components": {"power": {"state": "complete"}}
+        },
+    )
+
+    def fake_assess(*args: object, **kwargs: object) -> ComponentStatus:
+        """Return one stale fingerprint difference without touching cache files."""
+        del args, kwargs
+        return ComponentStatus("stale", ("trial_filter.choice: all -> left",))
+
+    monkeypatch.setattr(
+        lfp_summary_webapp,
+        "assess_component_status",
+        fake_assess,
+    )
+
+    lfp_summary_webapp.render_lfp_summary_view(
+        streamlit,
+        session_id="CT026_2026-08-01_130853",
+        session_path=tmp_path,
+        output_directory=tmp_path / "processed" / "lfp_summary_cache",
+        sites=_summary_sites(tmp_path),
+        site_pairs=(("PFC", "HPC1"),),
+        dependencies=dependencies,
+    )
+
+    messages = " ".join(message for _kind, message in streamlit.messages)
+    assert "stale" in messages
+    assert "trial_filter.choice" in messages
+    assert "load_power" not in calls
+
+
 @pytest.mark.parametrize("action", ("synchrony", "spike_phase", "all"))
 def test_production_dependencies_report_unavailable_nonpower_actions(action: str) -> None:
     """Unavailable Synchrony/Spike actions must fail explicitly without fabricated results.
