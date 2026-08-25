@@ -192,7 +192,8 @@ def test_synchrony_validation_runs_only_synchrony_and_writes_cache_backed_report
     names = {path.name for path in result.png_paths}
     assert "PFC_correct_rewarded_itpc_map.png" in names
     assert "PFC_HPC1_correct_rewarded_ispc_map.png" in names
-    assert "theta_before_phase_band_summary.png" in names
+    assert "PFC_theta_before_itpc_band_summary.png" in names
+    assert "PFC_HPC1_theta_before_ispc_band_summary.png" in names
     assert "PFC_HPC1_correct_rewarded_theta_plv_distribution.png" in names
     assert "PFC_HPC1_correct_rewarded_theta_low_plv_exemplar.png" in names
     assert "PFC_HPC1_correct_rewarded_theta_high_plv_exemplar.png" in names
