@@ -5,7 +5,23 @@ from dataclasses import dataclass
 import re
 import textwrap
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 import numpy as np
+
+
+POWER_BASE_CONDITIONS = (
+    "correct_rewarded",
+    "omission",
+    "incorrect",
+    "switch",
+    "stay",
+)
+POWER_SUBDIVISION_CONDITIONS = (
+    "omission_switch",
+    "omission_stay",
+    "incorrect_switch",
+    "incorrect_stay",
+)
 
 
 @dataclass(frozen=True)
@@ -208,7 +224,10 @@ def plot_condition_psd(
     _caption(
         figure,
         context,
-        f"Conditions: {', '.join(labels)}; normalization={normalization}",
+        (
+            f"Conditions: {', '.join(labels)}; condition masks may be overlapping; "
+            f"normalization={normalization}"
+        ),
     )
     return figure, axes
 
@@ -223,7 +242,7 @@ def plot_band_power_summary(
     normalization: str,
     context: PlotContext,
 ) -> tuple[plt.Figure, dict[str, plt.Axes]]:
-    """Plot condition-level theta/gamma band-power medians.
+    """Plot condition-level theta/gamma trial distributions as box plots.
 
     Parameters
     ----------
@@ -272,36 +291,41 @@ def plot_band_power_summary(
         ("gamma", "after"),
     ]
     condition_positions = np.arange(len(condition_names), dtype=float)
-    bar_width = 0.18
+    box_width = 0.16
+    colors = plt.get_cmap("tab10").colors[: len(order)]
+    legend_handles = []
     for measurement_index, (band, epoch) in enumerate(order):
         epoch_index = epoch_names.index(epoch)
         band_index = band_names.index(band)
-        medians = np.full(len(condition_names), np.nan, dtype=float)
-        lower_errors = np.zeros(len(condition_names), dtype=float)
-        upper_errors = np.zeros(len(condition_names), dtype=float)
+        condition_values = []
         for condition_index in range(len(condition_names)):
             finite_values = data[condition_index, :, epoch_index, band_index]
             finite_values = finite_values[np.isfinite(finite_values)]
-            if not finite_values.size:
-                continue
-            low, median, high = np.percentile(finite_values, (25.0, 50.0, 75.0))
-            medians[condition_index] = median
-            lower_errors[condition_index] = median - low
-            upper_errors[condition_index] = high - median
-        offset = (measurement_index - 1.5) * bar_width
-        axis.bar(
-            condition_positions + offset,
-            medians,
-            bar_width,
-            yerr=np.stack((lower_errors, upper_errors)),
-            capsize=3,
-            label=f"{band}-{epoch}",
+            condition_values.append(finite_values)
+        offset = (measurement_index - 1.5) * box_width
+        color = colors[measurement_index]
+        label = f"{band}-{epoch}"
+        axis.boxplot(
+            condition_values,
+            orientation="vertical",
+            positions=condition_positions + offset,
+            widths=box_width,
+            whis=1.5,
+            showfliers=False,
+            patch_artist=True,
+            manage_ticks=False,
+            label=label,
+            boxprops={"facecolor": color, "edgecolor": color, "alpha": 0.55},
+            medianprops={"color": "black", "linewidth": 1.4},
+            whiskerprops={"color": color},
+            capprops={"color": color},
         )
+        legend_handles.append(Patch(facecolor=color, edgecolor=color, label=label))
     figure.set_size_inches(max(12.0, 1.25 * len(condition_names)), 6.0)
     axis.set_xticks(condition_positions, condition_names, rotation=25, ha="right")
     axis.set_ylabel("Band power (dB)")
     axis.set_title(f"{site_label} ({normalization})")
-    axis.legend(ncol=4, fontsize=9, loc="upper center")
+    axis.legend(handles=legend_handles, ncol=4, fontsize=9, loc="upper center")
     before_index = epoch_names.index("before")
     after_index = epoch_names.index("after")
     count_labels = []
@@ -317,8 +341,11 @@ def plot_band_power_summary(
     _caption(
         figure,
         context,
-        "Band medians and IQR; "
-        f"counts={'; '.join(count_labels)}; normalization={normalization}",
+        (
+            "Boxes show trial medians and quartiles with Tukey 1.5-IQR whiskers; "
+            "outlier markers are hidden; condition masks may be overlapping; "
+            f"counts={'; '.join(count_labels)}; normalization={normalization}"
+        ),
     )
     return figure, axes
 

@@ -406,6 +406,19 @@ def _plot_cached_power(
     ):
         raise ValueError("cached Power arrays have incompatible axes")
     site_count, trial_count, epoch_count, frequency_count = normalized_psd_db.shape
+    cached_condition_names = tuple(str(name) for name in condition_names)
+    try:
+        base_condition_indices = np.array(
+            [
+                cached_condition_names.index(name)
+                for name in lfp_summary_plotting.POWER_BASE_CONDITIONS
+            ],
+            dtype=np.int64,
+        )
+    except ValueError as error:
+        raise ValueError(
+            "cached Power condition_names lack a required base condition"
+        ) from error
     condition_count = condition_names.size
     if (
         frequency_hz.size != frequency_count
@@ -425,15 +438,19 @@ def _plot_cached_power(
     if not np.any(display_frequency):
         raise ValueError("cached Power frequency grid does not include 0-100 Hz")
     condition_psd_db = np.full(
-        (condition_count, trial_count, int(np.count_nonzero(display_frequency))),
+        (
+            base_condition_indices.size,
+            trial_count,
+            int(np.count_nonzero(display_frequency)),
+        ),
         np.nan,
         dtype=normalized_psd_db.dtype,
     )
     if membership.dtype != np.dtype(bool) or filter_membership.dtype != np.dtype(bool):
         raise ValueError("cached Power condition and filter membership must be boolean")
-    for condition_index in range(condition_count):
+    for output_index, condition_index in enumerate(base_condition_indices):
         selected_trials = membership[:, condition_index] & filter_membership
-        condition_psd_db[condition_index, selected_trials] = normalized_psd_db[
+        condition_psd_db[output_index, selected_trials] = normalized_psd_db[
             0,
             selected_trials,
             whole_epoch_index,
@@ -468,8 +485,8 @@ def _plot_cached_power(
     figure, _axes = lfp_summary_plotting.plot_condition_psd(
         frequency_hz[display_frequency],
         condition_psd_db,
-        tuple(str(name) for name in condition_names),
-        effective_count[:, 0],
+        lfp_summary_plotting.POWER_BASE_CONDITIONS,
+        effective_count[base_condition_indices, 0],
         str(site_ids[0]),
         "whole",
         "session-normalized dB",

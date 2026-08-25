@@ -35,6 +35,8 @@ from src.neural_analysis.lfp_summary_pipeline import (
     compute_power_component,
 )
 from src.neural_analysis.lfp_summary_plotting import (
+    POWER_BASE_CONDITIONS,
+    POWER_SUBDIVISION_CONDITIONS,
     PlotContext,
     plot_band_power_summary,
     plot_condition_psd,
@@ -172,7 +174,7 @@ def run_power_validation(
     Returns
     -------
     PowerValidationResult
-        Run paths, six cache-backed PNG paths, measurements, counts, and report
+        Run paths, twelve cache-backed PNG paths, measurements, counts, and report
         metadata. No raw LFP arrays or wavelets are returned.
 
     Raises
@@ -183,11 +185,7 @@ def run_power_validation(
         If Power fails or its committed cache is not compatible. No report
         directory is created in either failure case.
     """
-    parent = Path(run_parent)
-    timestamp = dependencies.now_utc()
-    run_directory = parent / f"{config.session_id}_{_RUN_LABEL}_{timestamp}"
-    if run_directory.exists():
-        raise FileExistsError(f"validation run already exists: {run_directory}")
+    parent, run_directory = _planned_run_directory(config, run_parent, dependencies)
 
     start_s = float(dependencies.monotonic_seconds())
     component_result = dependencies.compute_power_component(
@@ -198,6 +196,141 @@ def run_power_validation(
     if component_result.state != "complete":
         raise RuntimeError(component_result.error or "Power component failed")
 
+    wall_time_s = stop_s - start_s
+    peak_memory_bytes = int(dependencies.peak_memory_bytes())
+    manifest, status, arrays = _load_compatible_power(config, dependencies)
+    return _write_power_validation_report(
+        config,
+        parent,
+        run_directory,
+        manifest,
+        arrays,
+        status,
+        wall_time_s,
+        peak_memory_bytes,
+        dependencies,
+        power_recomputed=True,
+    )
+
+
+def render_cached_power_validation(
+    config: LFPSummaryConfig,
+    run_parent: Path,
+    dependencies: PowerValidationDependencies,
+    *,
+    power_wall_time_s: float,
+    power_peak_memory_bytes: int,
+) -> PowerValidationResult:
+    """Write revised Power figures from a compatible cache without recomputation.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Active immutable configuration used to assess cache compatibility.
+    run_parent : pathlib.Path
+        Parent of the new timestamped human-readable report directory.
+    dependencies : PowerValidationDependencies
+        Cache loading, plotting, reporting, and source-identity seams. The
+        compute and monotonic-clock seams are deliberately not called.
+    power_wall_time_s : float
+        Seconds measured for the Power computation that produced the cache.
+    power_peak_memory_bytes : int
+        Peak resident memory in bytes measured for that Power computation.
+
+    Returns
+    -------
+    PowerValidationResult
+        New twelve-PNG report paths and preserved Power performance metrics.
+
+    Raises
+    ------
+    FileExistsError
+        If the timestamped report directory already exists.
+    RuntimeError
+        If the existing Power cache is not compatible with ``config``.
+    ValueError
+        If either supplied performance measurement is negative or nonfinite.
+    """
+    wall_time_s = float(power_wall_time_s)
+    peak_memory_bytes = int(power_peak_memory_bytes)
+    if not np.isfinite(wall_time_s) or wall_time_s < 0.0:
+        raise ValueError("power_wall_time_s must be finite and nonnegative")
+    if peak_memory_bytes < 0:
+        raise ValueError("power_peak_memory_bytes must be nonnegative")
+    parent, run_directory = _planned_run_directory(config, run_parent, dependencies)
+    manifest, status, arrays = _load_compatible_power(config, dependencies)
+    return _write_power_validation_report(
+        config,
+        parent,
+        run_directory,
+        manifest,
+        arrays,
+        status,
+        wall_time_s,
+        peak_memory_bytes,
+        dependencies,
+        power_recomputed=False,
+    )
+
+
+def _planned_run_directory(
+    config: LFPSummaryConfig,
+    run_parent: Path,
+    dependencies: PowerValidationDependencies,
+) -> tuple[Path, Path]:
+    """Return the report parent and unused timestamped child path.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Active session identity used in the directory name.
+    run_parent : pathlib.Path
+        Parent filesystem path for human-readable outputs.
+    dependencies : PowerValidationDependencies
+        Supplies a filesystem-safe UTC timestamp string.
+
+    Returns
+    -------
+    tuple[pathlib.Path, pathlib.Path]
+        Parent and planned run paths. Neither path is created.
+
+    Raises
+    ------
+    FileExistsError
+        If the planned immutable run directory already exists.
+    """
+    parent = Path(run_parent)
+    timestamp = dependencies.now_utc()
+    run_directory = parent / f"{config.session_id}_{_RUN_LABEL}_{timestamp}"
+    if run_directory.exists():
+        raise FileExistsError(f"validation run already exists: {run_directory}")
+    return parent, run_directory
+
+
+def _load_compatible_power(
+    config: LFPSummaryConfig,
+    dependencies: PowerValidationDependencies,
+) -> tuple[dict[str, object], ComponentStatus, dict[str, np.ndarray]]:
+    """Load one compatible Power manifest and its validated cache arrays.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Active cache path and fingerprint inputs.
+    dependencies : PowerValidationDependencies
+        Manifest, status-assessment, and safe component-loading seams.
+
+    Returns
+    -------
+    tuple[dict[str, object], ComponentStatus, dict[str, numpy.ndarray]]
+        Compatible manifest, status, and named Power arrays with cached units
+        and axes unchanged.
+
+    Raises
+    ------
+    RuntimeError
+        If the Power cache is missing, stale, running, or failed.
+    """
     manifest = dependencies.load_manifest(config.output_directory, config)
     status = dependencies.assess_component_status(
         config.output_directory,
@@ -207,14 +340,56 @@ def run_power_validation(
     )
     if status.status != "compatible":
         detail = "; ".join(status.differences)
-        raise RuntimeError(f"Power cache is not compatible: {status.status} {detail}".strip())
+        message = f"Power cache is not compatible: {status.status} {detail}"
+        raise RuntimeError(message.strip())
     arrays = dependencies.load_power_arrays(config.output_directory, manifest)
+    return manifest, status, arrays
 
+
+def _write_power_validation_report(
+    config: LFPSummaryConfig,
+    parent: Path,
+    run_directory: Path,
+    manifest: Mapping[str, object],
+    arrays: Mapping[str, np.ndarray],
+    status: ComponentStatus,
+    wall_time_s: float,
+    peak_memory_bytes: int,
+    dependencies: PowerValidationDependencies,
+    *,
+    power_recomputed: bool,
+) -> PowerValidationResult:
+    """Render cache-only figures and write one complete immutable report.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Active session configuration and generic cache path.
+    parent, run_directory : pathlib.Path
+        Report parent and unused timestamped child filesystem paths.
+    manifest : Mapping[str, object]
+        Compatible manifest metadata without raw numerical arrays.
+    arrays : Mapping[str, numpy.ndarray]
+        Validated Power cache arrays retaining their named axes and units.
+    status : ComponentStatus
+        Compatible Power status used in report metadata.
+    wall_time_s : float
+        Power computation duration in seconds.
+    peak_memory_bytes : int
+        Power computation peak resident memory in bytes.
+    dependencies : PowerValidationDependencies
+        Plot, save, close, and source-identity seams.
+    power_recomputed : bool
+        Whether this report invocation recomputed Power before cache loading.
+
+    Returns
+    -------
+    PowerValidationResult
+        Paths to twelve figures and report artifacts plus measured metadata.
+    """
     parent.mkdir(parents=True, exist_ok=True)
     run_directory.mkdir()
     png_paths = _render_cached_power_pngs(config, arrays, run_directory, dependencies)
-    wall_time_s = stop_s - start_s
-    peak_memory_bytes = int(dependencies.peak_memory_bytes())
     cache_size_bytes = _directory_size_bytes(config.output_directory)
     component_size_bytes = _component_size_bytes(config.output_directory, manifest)
     report = _build_report(
@@ -225,20 +400,31 @@ def run_power_validation(
         peak_memory_bytes,
         cache_size_bytes,
         component_size_bytes,
+        power_recomputed=power_recomputed,
     )
-    source_identifiers = dependencies.source_identifiers(config)
     paths = _write_report_artifacts(
         run_directory,
         manifest,
         config,
         report,
-        source_identifiers,
+        dependencies.source_identifiers(config),
     )
     return PowerValidationResult(
-        "power", run_directory, paths["manifest"], paths["configuration"],
-        paths["summary"], paths["log"], paths["source_identifiers"], png_paths,
-        wall_time_s, peak_memory_bytes, cache_size_bytes, component_size_bytes,
-        int(report["trial_count"]), int(report["exclusion_count"]), report,
+        component="power",
+        run_directory=run_directory,
+        manifest_snapshot_path=paths["manifest"],
+        configuration_snapshot_path=paths["configuration"],
+        summary_path=paths["summary"],
+        log_path=paths["log"],
+        source_identifiers_path=paths["source_identifiers"],
+        png_paths=png_paths,
+        wall_time_s=wall_time_s,
+        peak_memory_bytes=peak_memory_bytes,
+        cache_size_bytes=cache_size_bytes,
+        component_size_bytes=component_size_bytes,
+        trial_count=int(report["trial_count"]),
+        exclusion_count=int(report["exclusion_count"]),
+        report=report,
     )
 
 
@@ -295,7 +481,7 @@ def _render_cached_power_pngs(
     run_directory: Path,
     dependencies: PowerValidationDependencies,
 ) -> tuple[Path, ...]:
-    """Render and close PSD and band summaries for every configured cached site.
+    """Render base and subdivision PSD/band summaries for each cached site.
 
     Parameters
     ----------
@@ -305,14 +491,14 @@ def _render_cached_power_pngs(
         Reloaded Power cache arrays. Required axes are site/trial/epoch/frequency
         and site/trial/epoch/band; no raw file loader is used.
     run_directory : pathlib.Path
-        Existing timestamped report directory receiving six PNGs.
+        Existing timestamped report directory receiving twelve PNGs.
     dependencies : PowerValidationDependencies
         Cache-only plotting, saving, and closing seams.
 
     Returns
     -------
     tuple[pathlib.Path, ...]
-        Six saved PNG report paths: condition PSD and band summary for each site.
+        Twelve paths: PSD and band summaries for both condition groups per site.
     """
     site_ids = tuple(str(value) for value in arrays["site_ids"])
     condition_names = tuple(str(value) for value in arrays["condition_names"])
@@ -328,6 +514,13 @@ def _render_cached_power_pngs(
     display_frequency = frequency_hz <= 100.0
     if not np.any(display_frequency):
         raise ValueError("Power cache frequency grid does not include 0-100 Hz")
+    condition_groups = (
+        ("base", POWER_BASE_CONDITIONS),
+        ("subdivisions", POWER_SUBDIVISION_CONDITIONS),
+    )
+    cached_name_to_index = {name: index for index, name in enumerate(condition_names)}
+    if len(cached_name_to_index) != len(condition_names):
+        raise ValueError("Power cache condition_names must be unique")
     paths: list[Path] = []
     for site_index, site_id in enumerate(site_ids):
         valid_condition = (
@@ -337,54 +530,63 @@ def _render_cached_power_pngs(
             & site_valid[site_index, :, None]
             & ~excluded[:, None]
         )
-        counts = valid_condition.sum(axis=0, dtype=np.int64)
         site_whole_psd = np.asarray(arrays["normalized_psd_session_db"])[
             site_index,
             :,
             0,
         ]
-        condition_psd = _condition_trials(
-            site_whole_psd[:, display_frequency],
-            valid_condition,
-        )
-        figure, _ = dependencies.plot_condition_psd(
-            frequency_hz=frequency_hz[display_frequency],
-            condition_trial_psd_db=condition_psd,
-            condition_names=condition_names,
-            contributing_trial_counts=counts,
-            site_label=site_id,
-            epoch_name="whole",
-            normalization="session_median",
-            context=context,
-        )
-        path = run_directory / f"{site_id}_condition_psd.png"
-        try:
-            dependencies.save_png(figure, path)
-        finally:
-            dependencies.close_figure(figure)
-        paths.append(path)
+        site_band_power = np.asarray(arrays["band_power_session_db"])[site_index]
+        for group_label, group_names in condition_groups:
+            try:
+                group_indices = np.array(
+                    [cached_name_to_index[name] for name in group_names],
+                    dtype=np.int64,
+                )
+            except KeyError as error:
+                raise ValueError(
+                    f"Power cache lacks required condition {error.args[0]!r}"
+                ) from error
+            group_membership = valid_condition[:, group_indices]
+            counts = group_membership.sum(axis=0, dtype=np.int64)
+            condition_psd = _condition_trials(
+                site_whole_psd[:, display_frequency],
+                group_membership,
+            )
+            figure, _ = dependencies.plot_condition_psd(
+                frequency_hz=frequency_hz[display_frequency],
+                condition_trial_psd_db=condition_psd,
+                condition_names=group_names,
+                contributing_trial_counts=counts,
+                site_label=site_id,
+                epoch_name="whole",
+                normalization="session_median",
+                context=context,
+            )
+            path = run_directory / f"{site_id}_{group_label}_condition_psd.png"
+            try:
+                dependencies.save_png(figure, path)
+            finally:
+                dependencies.close_figure(figure)
+            paths.append(path)
 
-        condition_band = _condition_trials(
-            np.asarray(arrays["band_power_session_db"])[site_index],
-            valid_condition,
-        )
-        epoch_counts = np.repeat(counts[:, None], len(epoch_names), axis=1)
-        figure, _ = dependencies.plot_band_power_summary(
-            condition_trial_band_power_db=condition_band,
-            condition_names=condition_names,
-            epoch_names=epoch_names,
-            band_names=band_names,
-            contributing_trial_counts=epoch_counts,
-            site_label=site_id,
-            normalization="session_median",
-            context=context,
-        )
-        path = run_directory / f"{site_id}_band_power.png"
-        try:
-            dependencies.save_png(figure, path)
-        finally:
-            dependencies.close_figure(figure)
-        paths.append(path)
+            condition_band = _condition_trials(site_band_power, group_membership)
+            epoch_counts = np.repeat(counts[:, None], len(epoch_names), axis=1)
+            figure, _ = dependencies.plot_band_power_summary(
+                condition_trial_band_power_db=condition_band,
+                condition_names=group_names,
+                epoch_names=epoch_names,
+                band_names=band_names,
+                contributing_trial_counts=epoch_counts,
+                site_label=site_id,
+                normalization="session_median",
+                context=context,
+            )
+            path = run_directory / f"{site_id}_{group_label}_band_power.png"
+            try:
+                dependencies.save_png(figure, path)
+            finally:
+                dependencies.close_figure(figure)
+            paths.append(path)
     return tuple(paths)
 
 
@@ -452,6 +654,8 @@ def _build_report(
     peak_memory_bytes: int,
     cache_size_bytes: int,
     component_size_bytes: int,
+    *,
+    power_recomputed: bool,
 ) -> dict[str, object]:
     """Summarize cache validity, workload, exclusions, and nine-filter projection.
 
@@ -467,6 +671,8 @@ def _build_report(
         Measured elapsed Power execution seconds.
     peak_memory_bytes, cache_size_bytes, component_size_bytes : int
         Process peak and persisted size measurements in bytes.
+    power_recomputed : bool
+        Whether this report invocation recomputed Power before cache loading.
 
     Returns
     -------
@@ -532,6 +738,7 @@ def _build_report(
     return {
         "session_id": config.session_id,
         "component": "power",
+        "power_recomputed": power_recomputed,
         "cache_status": status.status,
         "wall_time_s": float(wall_time_s),
         "peak_memory_bytes": int(peak_memory_bytes),
@@ -604,6 +811,7 @@ def _markdown_summary(report: Mapping[str, object]) -> str:
         "Goal: inspect condition-resolved Power summaries before running "
         "Synchrony or spike-phase analyses.\n\n"
         f"Session: {report['session_id']}\n\n"
+        f"Power recomputed for this report: {report['power_recomputed']}\n\n"
         f"Wall time: {report['wall_time_s']} s\n\n"
         f"Peak memory: {report['peak_memory_bytes']} bytes\n\n"
         f"Trials: {report['trial_count']}; exclusions: {report['exclusion_count']}\n\n"
