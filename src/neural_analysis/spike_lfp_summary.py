@@ -1,17 +1,20 @@
-"""Observed spike-LFP PPC summaries without shuffle-based inference.
+"""Observed spike-LFP PPC summaries and trial-shuffle inference.
 
 This module deliberately delegates PPC and circular metrics to
-``spike_lfp_phase_locking.compute_frequency_phase_metrics``. WP5B adds null
-distributions and significance fields later; no shuffle calculation belongs here.
+``spike_lfp_phase_locking.compute_frequency_phase_metrics`` so all observed and
+null values use one established formula.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+import json
 from types import MappingProxyType
 from typing import Mapping, Sequence
 
 import numpy as np
+from scipy.stats import false_discovery_control
 
 from src.neural_analysis import spike_lfp_phase_locking
 
@@ -162,6 +165,116 @@ class PPCExemplarSelection:
     illustrative_trial_index_by_unit: Mapping[str, int]
     pooled_metric_label: str
     illustrative_trial_label: str
+
+
+@dataclass(frozen=True)
+class PermutationNullSummary:
+    """Cache-ready trial-shuffle null statistics without retained shuffle draws.
+
+    Attributes
+    ----------
+    null_exceedance_count, permutation_count, eligible_trial_count : numpy.ndarray
+        Int64 shape ``metric_axes`` counts of finite null PPC values greater
+        than or equal to observed PPC, all finite null values, and trials with
+        at least one valid same-trial spike phase, respectively.
+    p_value, null_mean, null_std, null_p025, null_p50, null_p975 : numpy.ndarray
+        Float64 shape ``metric_axes`` dimensionless PPC statistics. ``p_value``
+        is NaN when null inference is ineligible; null moments are NaN when no
+        finite draw contributes.
+    null_eligible, significant : numpy.ndarray
+        Boolean shape ``metric_axes``. Eligibility requires finite observed PPC,
+        fifty spikes, two trials, and one finite permutation; significance is
+        false here until frequency-family FDR is applied.
+    """
+
+    null_exceedance_count: np.ndarray
+    permutation_count: np.ndarray
+    eligible_trial_count: np.ndarray
+    p_value: np.ndarray
+    null_mean: np.ndarray
+    null_std: np.ndarray
+    null_p025: np.ndarray
+    null_p50: np.ndarray
+    null_p975: np.ndarray
+    null_eligible: np.ndarray
+    significant: np.ndarray
+
+
+@dataclass(frozen=True)
+class TrialShufflePPCResult:
+    """Observed and same-condition trial-shuffle PPC for one unit/site job.
+
+    Attributes
+    ----------
+    observed_ppc, spike_count : numpy.ndarray
+        Float64 dimensionless PPC and int64 valid phase count, each shape
+        ``(frequency,)``. PPC is NaN below two valid phases.
+    schedule : numpy.ndarray
+        Int64 shape ``(shuffle, trial)`` source-to-target derangements, copied
+        from validated input.
+    trial_relative_spike_times_s : tuple[numpy.ndarray, ...]
+        Owned float64 ``(spike_in_trial,)`` relative-seconds arrays, one per
+        trial. Overlapping memberships remain duplicated across their trials.
+    overlap_warning : bool
+        True when ``overlap_trial_indices`` is nonempty.
+    overlap_trial_indices : numpy.ndarray
+        Owned int64 ``(overlapping_trial,)`` table-row positions; empty when no
+        overlap warning applies.
+    null_summary : PermutationNullSummary
+        Cache-ready null statistics with ``metric_axes == (frequency,)``.
+    """
+
+    observed_ppc: np.ndarray
+    spike_count: np.ndarray
+    schedule: np.ndarray
+    trial_relative_spike_times_s: tuple[np.ndarray, ...]
+    overlap_warning: bool
+    overlap_trial_indices: np.ndarray
+    null_summary: PermutationNullSummary
+
+    @property
+    def p_value(self) -> np.ndarray:
+        """Return owned-elsewhere frequency PPC p values from the null summary.
+
+        Returns
+        -------
+        numpy.ndarray
+            Float64 ``(frequency,)`` plus-one p values; ineligible entries are
+            NaN. The array belongs to ``null_summary`` and callers should copy
+            before mutation.
+        """
+        return self.null_summary.p_value
+
+    @property
+    def null_mean(self) -> np.ndarray:
+        """Return frequency-wise dimensionless null PPC mean values.
+
+        Returns
+        -------
+        numpy.ndarray
+            Float64 ``(frequency,)`` null means; no finite draw is NaN. The
+            array belongs to ``null_summary`` and callers should copy to mutate.
+        """
+        return self.null_summary.null_mean
+
+
+@dataclass(frozen=True)
+class SignificantPrevalenceSummary:
+    """FDR-significant PPC prevalence reduced over the unit axis only.
+
+    Attributes
+    ----------
+    prevalence : numpy.ndarray
+        Float64 shape ``(condition, site, epoch, frequency)`` fraction of
+        eligible units with q below alpha. It is NaN when no unit is eligible.
+    eligible_unit_count, total_unit_count : numpy.ndarray
+        Int64 shape ``(condition, site, epoch, frequency)`` denominator and all
+        selected-unit count. Counts have categorical unit totals, not Hz/seconds.
+    """
+
+    prevalence: np.ndarray
+    eligible_unit_count: np.ndarray
+    total_unit_count: np.ndarray
 
 
 def build_probe_qualified_unit_ids(
@@ -539,6 +652,435 @@ def select_ppc_exemplars(
         illustrative_trial_index_by_unit=MappingProxyType(illustrative),
         pooled_metric_label=POOLED_METRIC_LABEL,
         illustrative_trial_label=ILLUSTRATIVE_TRIAL_LABEL,
+    )
+
+
+def generate_trial_derangement_schedule(
+    trial_count: int,
+    shuffle_count: int,
+    *,
+    seed: int,
+) -> np.ndarray:
+    """Generate deterministic source-to-target trial derangements.
+
+    Parameters
+    ----------
+    trial_count : int
+        Number of eligible trial-local spike trains and phase traces. It must be
+        at least two; this is a categorical axis size, not a duration.
+    shuffle_count : int
+        Positive number of schedule rows. Preview and final runs normally use
+        100 and 1000 rows, respectively.
+    seed : int
+        Integer NumPy random-generator seed with no physical units.
+
+    Returns
+    -------
+    numpy.ndarray
+        Owned int64 shape ``(shuffle, trial)`` array. Every row is a permutation
+        of trial positions and has no fixed point; no missing schedule exists.
+
+    Raises
+    ------
+    ValueError
+        If trial/shuffle counts are invalid or a seed is not an integer.
+    """
+    if not isinstance(trial_count, (int, np.integer)) or int(trial_count) < 2:
+        raise ValueError("trial_count must be an integer of at least two")
+    if not isinstance(shuffle_count, (int, np.integer)) or int(shuffle_count) < 1:
+        raise ValueError("shuffle_count must be a positive integer")
+    if not isinstance(seed, (int, np.integer)):
+        raise ValueError("seed must be an integer")
+    trial_count = int(trial_count)
+    generator = np.random.default_rng(int(seed))
+    schedule = np.empty((int(shuffle_count), trial_count), dtype=np.int64)
+    identity = np.arange(trial_count)
+    for shuffle_index in range(schedule.shape[0]):
+        permutation = generator.permutation(trial_count)
+        while np.any(permutation == identity):
+            permutation = generator.permutation(trial_count)
+        schedule[shuffle_index] = permutation
+    return schedule
+
+
+def compute_trial_shuffle_ppc(
+    *,
+    trial_relative_spike_times_s: Sequence[np.ndarray],
+    phase_time_s: np.ndarray,
+    trial_phase_vectors: np.ndarray,
+    frequencies_hz: np.ndarray,
+    schedule: np.ndarray,
+    overlap_trial_indices: np.ndarray | None = None,
+) -> TrialShufflePPCResult:
+    """Compute observed PPC and a same-condition trial-shuffle null.
+
+    Parameters
+    ----------
+    trial_relative_spike_times_s : Sequence[numpy.ndarray]
+        One finite float ``(spike_in_trial,)`` event-relative seconds array per
+        eligible trial. Arrays are preserved separately; overlapping trials may
+        legitimately contain the same physical spike.
+    phase_time_s : numpy.ndarray
+        Finite strictly increasing float64 ``(time,)`` common relative-seconds
+        coordinate shared by all phase traces.
+    trial_phase_vectors : numpy.ndarray
+        Complex shape ``(trial, frequency, time)`` LFP coefficients. Nonfinite,
+        zero-magnitude, or out-of-support interpolation results are invalid.
+    frequencies_hz : numpy.ndarray
+        Finite positive float shape ``(frequency,)`` coordinates in Hz.
+    schedule : numpy.ndarray
+        Int64 source-to-target shape ``(shuffle, trial)`` derangements. Source
+        spike times are sampled on the target trial's phase trace unchanged.
+    overlap_trial_indices : numpy.ndarray or None, default=None
+        Optional integer ``(overlapping_trial,)`` source trial rows. It is copied
+        and recorded as a warning, never merged into a pooled interval.
+
+    Returns
+    -------
+    TrialShufflePPCResult
+        Observed and cache-ready null dimensionless PPC per frequency. Null p
+        values are NaN/ineligible below fifty spikes, two trials, or a finite
+        null draw. Returned arrays and trial trains are owned copies.
+
+    Raises
+    ------
+    ValueError
+        If trial/frequency/time axes, seconds coordinates, phase coefficients,
+        local spikes, schedule, or overlap indices violate their contracts.
+    """
+    phase_time = _strict_relative_seconds(phase_time_s, "phase_time_s")
+    frequencies = _frequency_vector(frequencies_hz)
+    phase = np.asarray(trial_phase_vectors)
+    trial_spikes = _trial_local_spike_arrays(trial_relative_spike_times_s)
+    expected_shape = (len(trial_spikes), frequencies.size, phase_time.size)
+    if phase.shape != expected_shape:
+        raise ValueError("trial_phase_vectors must have shape (trial, frequency, time)")
+    if not np.issubdtype(phase.dtype, np.number):
+        raise ValueError("trial_phase_vectors must be numeric complex coefficients")
+    schedule_array = _derangement_schedule(schedule, len(trial_spikes))
+    overlap_indices = _overlap_index_array(overlap_trial_indices)
+
+    sampled = _precompute_trial_phase_samples(phase_time, phase, trial_spikes)
+    observed_vectors = _pooled_sampled_phase_vectors(sampled, np.arange(len(trial_spikes)))
+    observed_metrics = _phase_metrics_from_vectors(observed_vectors, frequencies)
+    eligible_trial_count = _spike_contributing_trial_count(sampled)
+    null_rows = np.empty((schedule_array.shape[0], frequencies.size), dtype=float)
+    for shuffle_index, target_trials in enumerate(schedule_array):
+        shuffled_vectors = _pooled_sampled_phase_vectors(sampled, target_trials)
+        null_rows[shuffle_index] = _phase_metrics_from_vectors(
+            shuffled_vectors,
+            frequencies,
+        ).ppc
+    null_summary = summarize_permutation_null(
+        observed_ppc=observed_metrics.ppc,
+        null_ppc_chunks=(null_rows,),
+        spike_count=observed_metrics.n_spikes,
+        eligible_trial_count=eligible_trial_count,
+    )
+    return TrialShufflePPCResult(
+        observed_ppc=np.asarray(observed_metrics.ppc, dtype=float).copy(),
+        spike_count=np.asarray(observed_metrics.n_spikes, dtype=np.int64).copy(),
+        schedule=schedule_array.copy(),
+        trial_relative_spike_times_s=tuple(values.copy() for values in trial_spikes),
+        overlap_warning=bool(overlap_indices.size),
+        overlap_trial_indices=overlap_indices.copy(),
+        null_summary=null_summary,
+    )
+
+
+def summarize_permutation_null(
+    *,
+    observed_ppc: np.ndarray,
+    null_ppc_chunks: Sequence[np.ndarray],
+    spike_count: np.ndarray,
+    eligible_trial_count: int | np.ndarray,
+) -> PermutationNullSummary:
+    """Accumulate finite PPC null draws into cache-ready scalar statistics.
+
+    Parameters
+    ----------
+    observed_ppc : numpy.ndarray
+        Float shape ``metric_axes`` dimensionless observed PPC. NaN is an
+        unavailable observation.
+    null_ppc_chunks : Sequence[numpy.ndarray]
+        Temporary arrays, each shape ``(shuffle_chunk,) + metric_axes`` of
+        dimensionless null PPC. Nonfinite draws are ignored per metric cell;
+        exact percentiles may concatenate these supplied chunks in memory.
+    spike_count : numpy.ndarray
+        Nonnegative integer shape ``metric_axes`` observed valid phase counts.
+    eligible_trial_count : int or numpy.ndarray
+        Nonnegative scalar or int64 ``metric_axes`` count of trials with at
+        least one valid same-trial spike phase. A scalar is broadcast across
+        metrics for legacy direct callers.
+
+    Returns
+    -------
+    PermutationNullSummary
+        Counts, plus-one p values, moments, and percentiles with ``metric_axes``.
+        No full draw array is retained. Ineligible p values are NaN and their
+        significant flags are false.
+
+    Raises
+    ------
+    ValueError
+        If axes do not match, a chunk has no shuffle axis, counts are invalid,
+        or eligible_trial_count is invalid. A cell is ineligible below two
+        spike-contributing trials even if its condition includes more trials.
+    """
+    observed = np.asarray(observed_ppc, dtype=float)
+    counts = _count_array(spike_count)
+    if observed.shape != counts.shape:
+        raise ValueError("observed_ppc and spike_count must have matching axes")
+    contributing_trials = _eligible_trial_counts(
+        eligible_trial_count,
+        observed.shape,
+    )
+    chunks = _null_chunk_arrays(null_ppc_chunks, observed.shape)
+    draws = np.concatenate(chunks, axis=0)
+    finite_draw = np.isfinite(draws)
+    permutation_count = finite_draw.sum(axis=0, dtype=np.int64)
+    exceedance_count = (
+        finite_draw & (draws >= observed[np.newaxis, ...])
+    ).sum(axis=0, dtype=np.int64)
+    null_mean, null_std, null_p025, null_p50, null_p975 = _null_distribution_statistics(
+        draws,
+        finite_draw,
+    )
+    null_eligible = (
+        np.isfinite(observed)
+        & (counts >= MINIMUM_RELIABLE_SPIKES)
+        & (contributing_trials >= 2)
+        & (permutation_count > 0)
+    )
+    p_value = np.full(observed.shape, np.nan, dtype=float)
+    p_value[null_eligible] = (
+        (1.0 + exceedance_count[null_eligible])
+        / (1.0 + permutation_count[null_eligible])
+    )
+    return PermutationNullSummary(
+        null_exceedance_count=exceedance_count,
+        permutation_count=permutation_count,
+        eligible_trial_count=contributing_trials,
+        p_value=p_value,
+        null_mean=null_mean,
+        null_std=null_std,
+        null_p025=null_p025,
+        null_p50=null_p50,
+        null_p975=null_p975,
+        null_eligible=null_eligible,
+        significant=np.zeros(observed.shape, dtype=bool),
+    )
+
+
+def permutation_null_summary_to_arrays(
+    summary: PermutationNullSummary,
+) -> dict[str, np.ndarray]:
+    """Convert a null summary into owned cache-safe numeric/boolean arrays.
+
+    Parameters
+    ----------
+    summary : PermutationNullSummary
+        Cache-ready dimensionless PPC statistics with one shared ``metric_axes``
+        shape. It contains no retained shuffle-draw axis.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Owned numeric/boolean arrays for every summary field. The mapping omits
+        full null draws by contract; unavailable statistics remain NaN.
+
+    Raises
+    ------
+    ValueError
+        If a field has inconsistent axes or unsupported numeric/boolean dtype.
+    """
+    arrays = {
+        "null_exceedance_count": summary.null_exceedance_count,
+        "permutation_count": summary.permutation_count,
+        "eligible_trial_count": summary.eligible_trial_count,
+        "p_value": summary.p_value,
+        "null_mean": summary.null_mean,
+        "null_std": summary.null_std,
+        "null_p025": summary.null_p025,
+        "null_p50": summary.null_p50,
+        "null_p975": summary.null_p975,
+        "null_eligible": summary.null_eligible,
+        "significant": summary.significant,
+    }
+    return _validated_summary_arrays(arrays)
+
+
+def permutation_null_summary_from_arrays(
+    arrays: Mapping[str, np.ndarray],
+) -> PermutationNullSummary:
+    """Reconstruct a null summary from cache-safe numeric/boolean arrays.
+
+    Parameters
+    ----------
+    arrays : Mapping[str, numpy.ndarray]
+        Named numeric/boolean arrays from ``permutation_null_summary_to_arrays``
+        with a common ``metric_axes`` shape. NaNs retain unavailable statistics.
+
+    Returns
+    -------
+    PermutationNullSummary
+        Frozen summary with owned copies of every input array and no null draws.
+
+    Raises
+    ------
+    ValueError
+        If names are missing, dtypes are wrong, or metric axes are inconsistent.
+    """
+    validated = _validated_summary_arrays(arrays)
+    return PermutationNullSummary(**validated)
+
+
+def adjust_ppc_pvalues_bh(
+    *,
+    p_value: np.ndarray,
+    null_eligible: np.ndarray,
+) -> np.ndarray:
+    """Apply SciPy Benjamini-Hochberg separately within each frequency family.
+
+    Parameters
+    ----------
+    p_value : numpy.ndarray
+        Float shape ``(unit, condition, site, epoch, frequency)`` uncorrected
+        permutation p values in ``[0, 1]``; NaN denotes unavailable inference.
+    null_eligible : numpy.ndarray
+        Boolean array matching ``p_value``. Only finite eligible frequencies are
+        passed to SciPy within each unit/condition/site/epoch family.
+
+    Returns
+    -------
+    numpy.ndarray
+        Owned float64 shape matching ``p_value`` of BH q values. Ineligible or
+        missing p values stay NaN and are never silently treated as tests.
+
+    Raises
+    ------
+    ValueError
+        If axes mismatch, input is not five-dimensional, or finite p values lie
+        outside ``[0, 1]``.
+    """
+    p_values = np.asarray(p_value, dtype=float)
+    eligible = np.asarray(null_eligible, dtype=bool)
+    if p_values.ndim != 5 or eligible.shape != p_values.shape:
+        raise ValueError("p_value and null_eligible require matching five-dimensional axes")
+    finite = np.isfinite(p_values)
+    if np.any((p_values[finite] < 0.0) | (p_values[finite] > 1.0)):
+        raise ValueError("finite p values must lie in [0, 1]")
+    q_value = np.full(p_values.shape, np.nan, dtype=float)
+    for family_index in np.ndindex(p_values.shape[:-1]):
+        family_p = p_values[family_index]
+        family_mask = eligible[family_index] & np.isfinite(family_p)
+        if np.any(family_mask):
+            q_value[family_index][family_mask] = false_discovery_control(
+                family_p[family_mask],
+                axis=0,
+                method="bh",
+            )
+    return q_value
+
+
+def build_shuffle_run_metadata(
+    *,
+    shuffle_count: int,
+    seed: int,
+    mode: str,
+) -> Mapping[str, int | str]:
+    """Build canonical preview/final shuffle metadata and its SHA256 fingerprint.
+
+    Parameters
+    ----------
+    shuffle_count : int
+        Number of schedule rows: exactly 100 for ``"preview"`` or 1000 for
+        ``"final"``.
+    seed : int
+        Integer schedule seed with no physical units.
+    mode : str
+        Explicit categorical run mode, either ``"preview"`` or ``"final"``.
+
+    Returns
+    -------
+    Mapping[str, int | str]
+        Immutable metadata containing mode, count, seed, and SHA256 fingerprint.
+        It has no missing-value representation.
+
+    Raises
+    ------
+    ValueError
+        If mode/count combinations are not approved or seed is not an integer.
+    """
+    expected_counts = {"preview": 100, "final": 1000}
+    if mode not in expected_counts or shuffle_count != expected_counts[mode]:
+        raise ValueError("preview requires 100 and final requires 1000 shuffles")
+    if not isinstance(seed, (int, np.integer)):
+        raise ValueError("seed must be an integer")
+    payload = {
+        "mode": mode,
+        "seed": int(seed),
+        "shuffle_count": int(shuffle_count),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    metadata: dict[str, int | str] = dict(payload)
+    metadata["fingerprint"] = sha256(canonical.encode("ascii")).hexdigest()
+    return MappingProxyType(metadata)
+
+
+def compute_significant_prevalence(
+    *,
+    q_value: np.ndarray,
+    null_eligible: np.ndarray,
+    alpha: float,
+) -> SignificantPrevalenceSummary:
+    """Compute FDR-significant unit prevalence over eligible units only.
+
+    Parameters
+    ----------
+    q_value : numpy.ndarray
+        Float shape ``(unit, condition, site, epoch, frequency)`` BH q values.
+        NaN means unavailable/ineligible inference.
+    null_eligible : numpy.ndarray
+        Boolean array matching ``q_value``; it defines the denominator.
+    alpha : float
+        Finite significance threshold in ``(0, 1)`` with no physical units.
+
+    Returns
+    -------
+    SignificantPrevalenceSummary
+        Prevalence and integer eligible/total counts shaped ``(condition, site,
+        epoch, frequency)``. Zero eligible units produce NaN, never zero.
+
+    Raises
+    ------
+    ValueError
+        If axes mismatch, q values are out of range, or alpha is invalid.
+    """
+    q_values = np.asarray(q_value, dtype=float)
+    eligible = np.asarray(null_eligible, dtype=bool)
+    if q_values.ndim != 5 or eligible.shape != q_values.shape:
+        raise ValueError("q_value and null_eligible require matching five-dimensional axes")
+    if not np.isfinite(alpha) or not 0.0 < float(alpha) < 1.0:
+        raise ValueError("alpha must be finite and in (0, 1)")
+    finite = np.isfinite(q_values)
+    if np.any((q_values[finite] < 0.0) | (q_values[finite] > 1.0)):
+        raise ValueError("finite q values must lie in [0, 1]")
+    eligible_count = eligible.sum(axis=0, dtype=np.int64)
+    total_count = np.full(eligible_count.shape, q_values.shape[0], dtype=np.int64)
+    significant = eligible & finite & (q_values < float(alpha))
+    significant_count = significant.sum(axis=0, dtype=np.int64)
+    prevalence = np.full(eligible_count.shape, np.nan, dtype=float)
+    np.divide(
+        significant_count,
+        eligible_count,
+        out=prevalence,
+        where=eligible_count > 0,
+    )
+    return SignificantPrevalenceSummary(
+        prevalence=prevalence,
+        eligible_unit_count=eligible_count,
+        total_unit_count=total_count,
     )
 
 
@@ -1004,3 +1546,484 @@ def _unavailable_exemplars() -> PPCExemplarSelection:
         pooled_metric_label=POOLED_METRIC_LABEL,
         illustrative_trial_label=ILLUSTRATIVE_TRIAL_LABEL,
     )
+
+
+def _strict_relative_seconds(values: np.ndarray, name: str) -> np.ndarray:
+    """Validate an owned, nonempty, strictly increasing relative-seconds axis.
+
+    Parameters
+    ----------
+    values : numpy.ndarray
+        Candidate float ``(time,)`` coordinate in event-relative seconds.
+    name : str
+        Parameter name used for validation errors.
+
+    Returns
+    -------
+    numpy.ndarray
+        Owned float64 ``(time,)`` seconds coordinate without missing values.
+
+    Raises
+    ------
+    ValueError
+        If the coordinate is empty, nonfinite, non-one-dimensional, or not
+        strictly increasing.
+    """
+    coordinate = np.asarray(values, dtype=float)
+    if (
+        coordinate.ndim != 1
+        or coordinate.size == 0
+        or not np.isfinite(coordinate).all()
+        or np.any(np.diff(coordinate) <= 0.0)
+    ):
+        raise ValueError(f"{name} must be a finite strictly increasing seconds axis")
+    return coordinate.copy()
+
+
+def _trial_local_spike_arrays(values: Sequence[np.ndarray]) -> tuple[np.ndarray, ...]:
+    """Copy finite relative-seconds spike arrays without merging trial membership.
+
+    Parameters
+    ----------
+    values : Sequence[numpy.ndarray]
+        One candidate float ``(spike_in_trial,)`` array per trial in relative
+        seconds. Empty arrays mean a trial has no spike.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, ...]
+        Owned float64 arrays in original trial order; no pooled or merged axis.
+
+    Raises
+    ------
+    ValueError
+        If fewer than two trials exist or an array is nonfinite/non-1D.
+    """
+    if len(values) < 2:
+        raise ValueError("trial-shuffle PPC requires at least two trial-local trains")
+    copied: list[np.ndarray] = []
+    for trial_values in values:
+        spikes = np.asarray(trial_values, dtype=float)
+        if spikes.ndim != 1 or not np.isfinite(spikes).all():
+            raise ValueError("trial-local spikes must be finite one-dimensional seconds")
+        copied.append(spikes.copy())
+    return tuple(copied)
+
+
+def _derangement_schedule(values: np.ndarray, trial_count: int) -> np.ndarray:
+    """Validate and copy source-to-target trial derangement rows.
+
+    Parameters
+    ----------
+    values : numpy.ndarray
+        Candidate integer shape ``(shuffle, trial)`` schedule.
+    trial_count : int
+        Expected trial-axis size, at least two.
+
+    Returns
+    -------
+    numpy.ndarray
+        Owned int64 schedule where every row permutes all trial positions and
+        has no fixed point.
+
+    Raises
+    ------
+    ValueError
+        If axes, dtype, row permutations, or fixed-point constraints fail.
+    """
+    schedule = np.asarray(values)
+    if (
+        schedule.ndim != 2
+        or schedule.shape[0] < 1
+        or schedule.shape[1] != trial_count
+        or not np.issubdtype(schedule.dtype, np.integer)
+    ):
+        raise ValueError("schedule must be an integer array with shape (shuffle, trial)")
+    identity = np.arange(trial_count)
+    for row in schedule:
+        if not np.array_equal(np.sort(row), identity) or np.any(row == identity):
+            raise ValueError("every schedule row must be a derangement")
+    return schedule.astype(np.int64, copy=True)
+
+
+def _overlap_index_array(values: np.ndarray | None) -> np.ndarray:
+    """Validate and copy optional overlapping source trial-row indices.
+
+    Parameters
+    ----------
+    values : numpy.ndarray or None
+        Integer ``(overlapping_trial,)`` trial-table rows, or ``None`` for none.
+
+    Returns
+    -------
+    numpy.ndarray
+        Owned int64 one-dimensional rows. An empty array represents no warning.
+
+    Raises
+    ------
+    ValueError
+        If supplied rows are not one-dimensional nonnegative integers.
+    """
+    if values is None:
+        return np.empty(0, dtype=np.int64)
+    indices = np.asarray(values)
+    if (
+        indices.ndim != 1
+        or not np.issubdtype(indices.dtype, np.integer)
+        or np.any(indices < 0)
+    ):
+        raise ValueError("overlap_trial_indices must be nonnegative integer rows")
+    return indices.astype(np.int64, copy=True)
+
+
+def _precompute_trial_phase_samples(
+    phase_time_s: np.ndarray,
+    phase_vectors: np.ndarray,
+    trial_spikes_s: tuple[np.ndarray, ...],
+) -> tuple[tuple[np.ndarray, ...], ...]:
+    """Sample every source train on every target trial phase trace once.
+
+    Parameters
+    ----------
+    phase_time_s : numpy.ndarray
+        Float64 ``(time,)`` common relative-seconds coordinate.
+    phase_vectors : numpy.ndarray
+        Complex ``(trial, frequency, time)`` coefficient tensor.
+    trial_spikes_s : tuple[numpy.ndarray, ...]
+        Float64 relative-seconds ``(spike_in_trial,)`` arrays by source trial.
+
+    Returns
+    -------
+    tuple[tuple[numpy.ndarray, ...], ...]
+        ``(source_trial, target_trial)`` nested tuples of complex normalized
+        ``(frequency, spike_in_source_trial)`` samples. Invalid samples are NaN.
+    """
+    sampled_rows: list[tuple[np.ndarray, ...]] = []
+    for source_spikes in trial_spikes_s:
+        target_samples = tuple(
+            _interpolate_unit_phase(phase_time_s, phase_vectors[target], source_spikes)
+            for target in range(phase_vectors.shape[0])
+        )
+        sampled_rows.append(target_samples)
+    return tuple(sampled_rows)
+
+
+def _interpolate_unit_phase(
+    source_time_s: np.ndarray,
+    coefficients: np.ndarray,
+    target_time_s: np.ndarray,
+) -> np.ndarray:
+    """Interpolate complex coefficients by components then normalize unit phase.
+
+    Parameters
+    ----------
+    source_time_s : numpy.ndarray
+        Float64 ``(time,)`` strictly increasing relative seconds.
+    coefficients : numpy.ndarray
+        Complex ``(frequency, time)`` coefficients matching source time.
+    target_time_s : numpy.ndarray
+        Float64 ``(spike,)`` relative seconds; outside support is unavailable.
+
+    Returns
+    -------
+    numpy.ndarray
+        Complex128 ``(frequency, spike)`` unit vectors. Nonfinite, zero-magnitude,
+        and out-of-support samples are complex NaN.
+    """
+    output = np.full((coefficients.shape[0], target_time_s.size), np.nan + 1j * np.nan)
+    for frequency_index, row in enumerate(coefficients):
+        real = np.interp(target_time_s, source_time_s, row.real, left=np.nan, right=np.nan)
+        imaginary = np.interp(
+            target_time_s,
+            source_time_s,
+            row.imag,
+            left=np.nan,
+            right=np.nan,
+        )
+        combined = real + 1j * imaginary
+        magnitude = np.abs(combined)
+        output[frequency_index] = np.divide(
+            combined,
+            magnitude,
+            out=np.full(target_time_s.size, np.nan + 1j * np.nan),
+            where=np.isfinite(magnitude) & (magnitude > 0.0),
+        )
+    return output
+
+
+def _pooled_sampled_phase_vectors(
+    sampled: tuple[tuple[np.ndarray, ...], ...],
+    target_trials: np.ndarray,
+) -> np.ndarray:
+    """Pool one source train's sampled phases for each source-to-target mapping.
+
+    Parameters
+    ----------
+    sampled : tuple[tuple[numpy.ndarray, ...], ...]
+        Nested ``(source_trial, target_trial)`` normalized phase samples with
+        arrays shaped ``(frequency, spike_in_source_trial)``.
+    target_trials : numpy.ndarray
+        Int64 ``(trial,)`` target phase-trial position for every source trial.
+
+    Returns
+    -------
+    numpy.ndarray
+        Complex ``(frequency, pooled_spike)`` concatenation. Empty source trains
+        contribute zero columns and preserve no merged interval representation.
+    """
+    parts = [
+        sampled[source_index][int(target_index)]
+        for source_index, target_index in enumerate(target_trials)
+    ]
+    return np.concatenate(parts, axis=1)
+
+
+def _phase_metrics_from_vectors(
+    phase_vectors: np.ndarray,
+    frequencies_hz: np.ndarray,
+) -> spike_lfp_phase_locking.SpikePhaseLockingResult:
+    """Delegate pooled normalized phase PPC to the established project helper.
+
+    Parameters
+    ----------
+    phase_vectors : numpy.ndarray
+        Complex ``(frequency, spike)`` normalized samples; complex NaN means
+        unavailable phase observation.
+    frequencies_hz : numpy.ndarray
+        Float64 ``(frequency,)`` Morlet coordinates in Hz.
+
+    Returns
+    -------
+    SpikePhaseLockingResult
+        Existing-helper PPC/circular metrics with dimensionless PPC and counts.
+        Missing phase values are excluded by its validity mask.
+    """
+    valid = np.isfinite(phase_vectors.real) & np.isfinite(phase_vectors.imag)
+    spike_times = np.arange(phase_vectors.shape[1], dtype=float)
+    return spike_lfp_phase_locking.compute_frequency_phase_metrics(
+        spike_phase_vectors=phase_vectors,
+        valid_mask=valid,
+        frequencies_hz=frequencies_hz,
+        spike_times_s=spike_times,
+        unit_id=0,
+        lfp_site_label="trial_shuffle",
+    )
+
+
+def _null_chunk_arrays(
+    values: Sequence[np.ndarray],
+    metric_shape: tuple[int, ...],
+) -> tuple[np.ndarray, ...]:
+    """Validate temporary null chunks with a leading shuffle axis.
+
+    Parameters
+    ----------
+    values : Sequence[numpy.ndarray]
+        Candidate float arrays shaped ``(shuffle_chunk,) + metric_axes``.
+    metric_shape : tuple[int, ...]
+        Required observed-PPC axes after the leading shuffle axis.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, ...]
+        Owned float64 chunks. Nonfinite draw values remain as missing null draws.
+
+    Raises
+    ------
+    ValueError
+        If no chunk exists, a chunk has no rows, or axes do not match.
+    """
+    if not values:
+        raise ValueError("null_ppc_chunks must contain at least one chunk")
+    chunks: list[np.ndarray] = []
+    for chunk in values:
+        array = np.asarray(chunk, dtype=float)
+        if array.ndim != len(metric_shape) + 1 or array.shape[1:] != metric_shape:
+            raise ValueError("null chunks require shape (shuffle,) + observed_ppc.shape")
+        if array.shape[0] < 1:
+            raise ValueError("null chunks must contain at least one shuffle row")
+        chunks.append(array.copy())
+    return tuple(chunks)
+
+
+def _eligible_trial_counts(
+    values: int | np.ndarray,
+    metric_shape: tuple[int, ...],
+) -> np.ndarray:
+    """Validate/broadcast spike-contributing trial counts to metric axes.
+
+    Parameters
+    ----------
+    values : int or numpy.ndarray
+        Nonnegative scalar or integer ``metric_axes`` count of trials with at
+        least one valid same-trial spike phase at each frequency/metric cell.
+    metric_shape : tuple[int, ...]
+        Target observed-PPC axes, typically ``(frequency,)``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Owned int64 ``metric_axes`` count array. No missing count sentinel is
+        accepted because ineligibility is represented by values below two.
+
+    Raises
+    ------
+    ValueError
+        If counts are noninteger, negative, or incompatible with metric axes.
+    """
+    if isinstance(values, (int, np.integer)):
+        if int(values) < 0:
+            raise ValueError("eligible_trial_count must be nonnegative")
+        return np.full(metric_shape, int(values), dtype=np.int64)
+    counts = _count_array(values)
+    if counts.shape != metric_shape:
+        raise ValueError("eligible_trial_count must match observed PPC axes")
+    return counts
+
+
+def _spike_contributing_trial_count(
+    sampled: tuple[tuple[np.ndarray, ...], ...],
+) -> np.ndarray:
+    """Count trials with a valid same-trial phase sample per frequency.
+
+    Parameters
+    ----------
+    sampled : tuple[tuple[numpy.ndarray, ...], ...]
+        ``(source_trial, target_trial)`` normalized complex samples shaped
+        ``(frequency, spike_in_source_trial)`` from the precomputation cache.
+
+    Returns
+    -------
+    numpy.ndarray
+        Owned int64 ``(frequency,)`` count of source trials contributing at
+        least one finite phase to the observed same-trial PPC. Empty/nonfinite
+        trial samples contribute zero and are not eligible trial evidence.
+    """
+    frequency_count = sampled[0][0].shape[0]
+    counts = np.zeros(frequency_count, dtype=np.int64)
+    for trial_index, target_samples in enumerate(sampled):
+        same_trial_samples = target_samples[trial_index]
+        valid = np.isfinite(same_trial_samples.real) & np.isfinite(
+            same_trial_samples.imag
+        )
+        counts += np.any(valid, axis=1)
+    return counts
+
+
+def _null_distribution_statistics(
+    draws: np.ndarray,
+    finite_draw: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Calculate finite-null moments and exact percentiles without returning draws.
+
+    Parameters
+    ----------
+    draws : numpy.ndarray
+        Float ``(shuffle,) + metric_axes`` temporary null PPC draws.
+    finite_draw : numpy.ndarray
+        Boolean mask matching ``draws`` for finite null values.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray]
+        Float64 ``metric_axes`` null mean, population std, and 2.5/50/97.5
+        percentiles. A cell with no finite draw is NaN in all fields.
+    """
+    output_shape = draws.shape[1:]
+    mean = np.full(output_shape, np.nan, dtype=float)
+    std = np.full(output_shape, np.nan, dtype=float)
+    p025 = np.full(output_shape, np.nan, dtype=float)
+    p50 = np.full(output_shape, np.nan, dtype=float)
+    p975 = np.full(output_shape, np.nan, dtype=float)
+    for index in np.ndindex(output_shape):
+        values = draws[(slice(None),) + index]
+        values = values[finite_draw[(slice(None),) + index]]
+        if values.size:
+            mean[index] = np.mean(values)
+            std[index] = np.std(values)
+            p025[index], p50[index], p975[index] = np.percentile(
+                values,
+                [2.5, 50.0, 97.5],
+            )
+    return mean, std, p025, p50, p975
+
+
+def _validated_summary_arrays(
+    arrays: Mapping[str, np.ndarray],
+) -> dict[str, np.ndarray]:
+    """Validate/copy the numeric cache representation of a null summary.
+
+    Parameters
+    ----------
+    arrays : Mapping[str, numpy.ndarray]
+        Named count, float statistic, and boolean eligibility arrays sharing
+        ``metric_axes``. Full shuffle draws are unsupported by this contract.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Owned canonical int64, float64, and boolean arrays for reconstruction.
+
+    Raises
+    ------
+    ValueError
+        If required names, supported dtypes, nonnegative counts, or axes fail.
+    """
+    count_names = (
+        "null_exceedance_count",
+        "permutation_count",
+        "eligible_trial_count",
+    )
+    float_names = ("p_value", "null_mean", "null_std", "null_p025", "null_p50", "null_p975")
+    bool_names = ("null_eligible", "significant")
+    required_names = set(count_names + float_names + bool_names)
+    if set(arrays) != required_names:
+        raise ValueError("null summary arrays must contain exactly the required fields")
+    copied: dict[str, np.ndarray] = {}
+    common_shape: tuple[int, ...] | None = None
+    for name in count_names:
+        value = _count_array(arrays[name])
+        copied[name] = value
+        common_shape = _matching_shape(common_shape, value.shape, name)
+    for name in float_names:
+        value = np.asarray(arrays[name], dtype=float)
+        copied[name] = value.copy()
+        common_shape = _matching_shape(common_shape, value.shape, name)
+    for name in bool_names:
+        value = np.asarray(arrays[name])
+        if value.dtype != bool:
+            raise ValueError(f"{name} must be a boolean array")
+        copied[name] = value.copy()
+        common_shape = _matching_shape(common_shape, value.shape, name)
+    return copied
+
+
+def _matching_shape(
+    expected: tuple[int, ...] | None,
+    actual: tuple[int, ...],
+    name: str,
+) -> tuple[int, ...]:
+    """Check one cache field shape against the first observed metric axes.
+
+    Parameters
+    ----------
+    expected : tuple[int, ...] or None
+        First field's metric axes, or ``None`` before validation begins.
+    actual : tuple[int, ...]
+        Current field's metric axes.
+    name : str
+        Field name used in an error message.
+
+    Returns
+    -------
+    tuple[int, ...]
+        Shared metric axes after accepting the current field.
+
+    Raises
+    ------
+    ValueError
+        If the current field has incompatible axes.
+    """
+    if expected is not None and actual != expected:
+        raise ValueError(f"{name} must match null summary metric axes")
+    return actual
