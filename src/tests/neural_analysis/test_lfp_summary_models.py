@@ -77,7 +77,7 @@ def test_default_wavelet_transform_settings_match_approved_contract() -> None:
 
     assert config.phase.output_rate_hz == 500.0
     assert config.phase.morlet_gaussian_width == 1.5
-    assert config.phase.morlet_window_length_s == 1.0
+    assert config.phase.morlet_window_length == 1.0
     assert config.phase.morlet_precision == 16
     assert config.phase.morlet_normalization == "l1"
     assert config.phase.block_duration_s == 120.0
@@ -98,7 +98,7 @@ def test_default_power_bands_and_welch_contract_match_approved_settings() -> Non
     config = default_lfp_summary_config()
 
     assert config.power.bands == (
-        FrequencyBandConfig("theta", 6.0, 12.0),
+        FrequencyBandConfig("theta", 6.0, 10.0),
         FrequencyBandConfig("gamma", 30.0, 80.0, ((58.0, 62.0),)),
     )
     assert config.power.welch_window == "hann_periodic"
@@ -114,7 +114,32 @@ def test_default_phase_notch_and_site_sample_rate_contracts_are_explicit() -> No
     assert config.phase.notch_enabled is True
     assert config.phase.notch_hz == 60.0
     assert config.phase.notch_quality_factor == 30.0
+    assert config.phase.bands == (
+        FrequencyBandConfig("theta", 6.0, 10.0),
+        FrequencyBandConfig("gamma", 30.0, 80.0, ((58.0, 62.0),)),
+    )
+    assert config.phase.absolute_amplitude_thresholds == ()
     assert all(site.sample_rate_hz > 0.0 for site in config.sites)
+
+
+def test_per_site_absolute_amplitude_thresholds_are_validated_by_stable_site_id() -> None:
+    """Absolute phase-amplitude thresholds are optional nonnegative values per stable site."""
+    config = default_lfp_summary_config()
+    configured_threshold = replace(
+        config,
+        phase=replace(config.phase, absolute_amplitude_thresholds=(("PFC", 25.0),)),
+    )
+
+    validate_lfp_summary_config(configured_threshold)
+    for invalid_thresholds in (
+        (("unknown-site", 25.0),),
+        (("PFC", -1.0),),
+        (("PFC", 1.0), ("PFC", 2.0)),
+    ):
+        with pytest.raises(ValueError):
+            validate_lfp_summary_config(
+                replace(config, phase=replace(config.phase, absolute_amplitude_thresholds=invalid_thresholds))
+            )
 
 
 def test_start_time_is_supported_and_unapproved_alignments_are_rejected() -> None:
@@ -264,7 +289,10 @@ def test_component_fingerprints_only_include_relevant_settings() -> None:
     changed_ppc = replace(config, ppc=replace(config.ppc, shuffle_count=config.ppc.shuffle_count + 1))
     changed_power = replace(
         config,
-        power=replace(config.power, baseline_start_s=config.power.baseline_start_s - 0.1),
+        power=replace(
+            config.power,
+            canonical_frequency_step_hz=config.power.canonical_frequency_step_hz + 0.5,
+        ),
     )
 
     assert component_fingerprint("power", config) == component_fingerprint("power", changed_ppc)
@@ -351,3 +379,30 @@ def test_source_fingerprint_records_resolved_path_size_and_mtime(tmp_path: Path)
     assert lfp_entry["path"] == str(Path(config.sites[0].lfp_path).resolve())
     assert lfp_entry["size_bytes"] == 3
     assert isinstance(lfp_entry["mtime_ns"], int)
+
+
+def test_component_source_fingerprints_scope_unit_and_trial_table_inputs(tmp_path: Path) -> None:
+    """Unit sources affect Spike phase only; the trial table is shared by every component."""
+    config = _default_config_with_temporary_sources(tmp_path)
+    sorter_path = tmp_path / "spike_clusters.npy"
+    aligned_spike_path = tmp_path / "aligned_spikes.npy"
+    trial_table_path = tmp_path / "trials.csv"
+    sorter_path.write_bytes(b"sorter")
+    aligned_spike_path.write_bytes(b"aligned")
+    trial_table_path.write_text("choice_time\n1.0\n", encoding="ascii")
+    configured_population = UnitPopulationConfig(
+        "units", "PFC", sorter_path, aligned_spike_path, (5,), (), ("PFC:1",)
+    )
+    config = replace(config, unit_population=configured_population, trial_table_path=trial_table_path)
+
+    power_sources = fingerprint_source_files(config, component="power")
+    synchrony_sources = fingerprint_source_files(config, component="synchrony")
+    spike_sources = fingerprint_source_files(config, component="spike_phase")
+
+    assert str(sorter_path.resolve()) not in power_sources
+    assert str(sorter_path.resolve()) not in synchrony_sources
+    assert str(sorter_path.resolve()) in spike_sources
+    assert str(aligned_spike_path.resolve()) in spike_sources
+    assert str(trial_table_path.resolve()) in power_sources
+    assert str(trial_table_path.resolve()) in synchrony_sources
+    assert str(trial_table_path.resolve()) in spike_sources

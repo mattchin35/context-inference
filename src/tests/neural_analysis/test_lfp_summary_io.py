@@ -16,6 +16,7 @@ from src.neural_analysis.lfp_summary_io import (
 )
 from src.neural_analysis.lfp_summary_models import (
     LFPSummaryConfig,
+    UnitPopulationConfig,
     canonical_config_json,
     component_fingerprint,
     default_lfp_summary_config,
@@ -62,8 +63,9 @@ def _manifest(
     config_fingerprint: str,
     *,
     config: LFPSummaryConfig | None = None,
+    component: str = "power",
     state: str = "complete",
-    file_name: str = "power.npz",
+    file_name: str | None = None,
 ) -> dict[str, object]:
     """Return minimal manifest metadata for one power-component cache.
 
@@ -81,15 +83,16 @@ def _manifest(
         source fingerprints, and a canonical configuration snapshot.
     """
     config = default_lfp_summary_config() if config is None else config
+    file_name = f"{component}.npz" if file_name is None else file_name
     return {
         "schema_version": "1",
         "session_id": config.session_id,
         "components": {
-            "power": {
+            component: {
                 "file_name": file_name,
                 "configuration_fingerprint": config_fingerprint,
                 "configuration_snapshot": json.loads(canonical_config_json(config)),
-                "source_fingerprints": fingerprint_source_files(config),
+                "source_fingerprints": fingerprint_source_files(config, component=component),
                 "array_schema": _power_array_schema(),
                 "state": state,
             }
@@ -342,6 +345,50 @@ def test_status_rejects_changed_source_dependency(tmp_path: Path) -> None:
     source_status = assess_component_status(tmp_path, "power", source_config, manifest)
     assert source_status.status == "stale"
     assert any("source" in difference.lower() for difference in source_status.differences)
+
+
+def test_unit_source_change_stales_spike_phase_only(tmp_path: Path) -> None:
+    """Sorter and aligned-spike changes do not invalidate Power or Synchrony caches."""
+    config = default_lfp_summary_config()
+    sorter_path = tmp_path / "spike_clusters.npy"
+    aligned_spike_path = tmp_path / "aligned_spikes.npy"
+    trial_table_path = tmp_path / "trials.csv"
+    sorter_path.write_bytes(b"sorter-v1")
+    aligned_spike_path.write_bytes(b"aligned-v1")
+    trial_table_path.write_text("choice_time\n1.0\n", encoding="ascii")
+    population = UnitPopulationConfig("units", "PFC", sorter_path, aligned_spike_path, (5,), (), ("PFC:1",))
+    config = replace(config, unit_population=population, trial_table_path=trial_table_path)
+    manifests = {
+        component: _manifest(component_fingerprint(component, config), config=config, component=component)
+        for component in ("power", "synchrony", "spike_phase")
+    }
+    for component in manifests:
+        np.savez(tmp_path / f"{component}.npz", **_power_arrays())
+
+    sorter_path.write_bytes(b"sorter-v2")
+
+    assert assess_component_status(tmp_path, "power", config, manifests["power"]).status == "compatible"
+    assert assess_component_status(tmp_path, "synchrony", config, manifests["synchrony"]).status == "compatible"
+    assert assess_component_status(tmp_path, "spike_phase", config, manifests["spike_phase"]).status == "stale"
+
+
+def test_trial_table_source_change_stales_every_component(tmp_path: Path) -> None:
+    """Behavior/trial-table changes invalidate each component that uses trial membership."""
+    config = default_lfp_summary_config()
+    trial_table_path = tmp_path / "trials.csv"
+    trial_table_path.write_text("choice_time\n1.0\n", encoding="ascii")
+    config = replace(config, trial_table_path=trial_table_path)
+    manifests = {
+        component: _manifest(component_fingerprint(component, config), config=config, component=component)
+        for component in ("power", "synchrony", "spike_phase")
+    }
+    for component in manifests:
+        np.savez(tmp_path / f"{component}.npz", **_power_arrays())
+
+    trial_table_path.write_text("choice_time\n2.0\n", encoding="ascii")
+
+    for component, manifest in manifests.items():
+        assert assess_component_status(tmp_path, component, config, manifest).status == "stale"
 
 
 def test_transaction_rejects_component_filename_outside_cache_directory(tmp_path: Path) -> None:
