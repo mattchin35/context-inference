@@ -215,7 +215,12 @@ def test_power_dependencies_commit_reload_and_report_unsupported_components(
     assert arrays["source_trace"].shape == (1, 3, 2000)
     manifest_text = (config.output_directory / "manifest.json").read_text(encoding="ascii")
     assert "streamlit" not in manifest_text.lower()
-    assert "source_trace" not in manifest_text
+    power_entry = manifest["components"]["power"]
+    assert power_entry["array_schema"]["source_trace"] == {
+        "axes": ["site", "trial", "time"],
+        "units": "source-voltage-unit",
+    }
+    assert not {"arrays", "array_values", "source_trace_values"}.intersection(power_entry)
     with pytest.raises((NotImplementedError, RuntimeError), match="synchrony|spike|unsupported"):
         dependencies.prepare_phase(config)
     with pytest.raises((NotImplementedError, RuntimeError), match="synchrony|spike|unsupported"):
