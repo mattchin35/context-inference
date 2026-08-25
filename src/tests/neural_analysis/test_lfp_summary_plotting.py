@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 import numpy as np
+import pytest
 
 from src.neural_analysis.lfp_summary_plotting import (
     PlotContext,
@@ -85,8 +87,60 @@ def test_condition_psd_shows_every_condition_median_iqr_count_reference_and_unit
     assert "\n" in caption
 
 
-def test_band_summary_uses_required_theta_before_after_gamma_measurement_order() -> None:
-    """Band bars use condition-wide spacing and epoch/band ordering fixed by the plan."""
+def test_condition_psd_preserves_nine_cache_groups_and_states_masks_overlap() -> None:
+    """PSD legends retain the required cache order and disclose overlapping groups."""
+    groups = (
+        "correct_rewarded",
+        "omission",
+        "incorrect",
+        "switch",
+        "stay",
+        "omission_switch",
+        "omission_stay",
+        "incorrect_switch",
+        "incorrect_stay",
+    )
+    figure, axes = plot_condition_psd(
+        frequency_hz=np.array((6.0, 8.0)),
+        condition_trial_psd_db=np.ones((len(groups), 1, 2), dtype=float),
+        condition_names=groups,
+        contributing_trial_counts=np.ones(len(groups), dtype=np.int64),
+        site_label="PFC",
+        epoch_name="whole",
+        normalization="session_median",
+        context=_context(),
+    )
+
+    legend = axes["spectrum"].get_legend()
+    assert legend is not None
+    labels = [text.get_text() for text in legend.get_texts()]
+    assert [label.split(" (n=")[0] for label in labels] == list(groups)
+    assert "overlapping" in figure.texts[-1].get_text().lower()
+
+
+def test_band_summary_uses_trial_boxplots_in_required_measurement_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Band boxes retain trial values and use the required theta/gamma ordering.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Captures Matplotlib boxplot arguments without rendering artists.
+    """
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def capture_boxplot(
+        axis: Axes,
+        values: object,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        """Record one condition/measurement boxplot request."""
+        del axis
+        calls.append((values, kwargs))
+        return {}
+
+    monkeypatch.setattr(Axes, "boxplot", capture_boxplot)
 
     figure, axes = plot_band_power_summary(
         condition_trial_band_power_db=np.arange(24.0).reshape(2, 2, 3, 2),
@@ -110,7 +164,17 @@ def test_band_summary_uses_required_theta_before_after_gamma_measurement_order()
         "gamma-before",
         "gamma-after",
     ]
-    assert axes["band_power"].collections
+    assert len(calls) == 4
+    assert all(call[1]["showfliers"] is False for call in calls)
+    assert all(call[1]["whis"] == 1.5 for call in calls)
+    assert [call[1]["label"] for call in calls] == [
+        "theta-before",
+        "theta-after",
+        "gamma-before",
+        "gamma-after",
+    ]
+    assert all(len(call[0]) == 2 for call in calls)
+    assert "overlapping" in figure.texts[-1].get_text().lower()
     assert axes["band_power"].get_ylabel().startswith("Band power (dB")
 
 

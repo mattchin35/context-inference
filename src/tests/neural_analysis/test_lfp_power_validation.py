@@ -12,6 +12,7 @@ import pytest
 from src.neural_analysis.lfp_power_validation import (
     PowerValidationDependencies,
     build_ct026_power_config,
+    render_cached_power_validation,
     run_power_validation,
 )
 from src.neural_analysis.lfp_summary_io import ComponentStatus
@@ -39,30 +40,46 @@ class _FakeFigure:
 
 
 def _power_arrays() -> dict[str, np.ndarray]:
-    """Return minimal cache-backed Power arrays for three sites and two conditions.
+    """Return minimal cache-backed Power arrays for three sites and nine conditions.
 
     Returns
     -------
     dict[str, numpy.ndarray]
         Numeric/Unicode arrays with Power cache axes: site=3, trial=2, epoch=3,
-        frequency=4, band=2, condition=2, and time=2. PSD values are dB; source
+        frequency=4, band=2, condition=9, and time=2. PSD values are dB; source
         trace values are uV; identity arrays are fixed-width Unicode.
     """
     return {
         "site_ids": np.array(("PFC", "HPC1", "HPC2")),
-        "condition_names": np.array(("correct_rewarded", "omission")),
+        "condition_names": np.array(
+            (
+                "correct_rewarded",
+                "omission",
+                "incorrect",
+                "switch",
+                "stay",
+                "omission_switch",
+                "omission_stay",
+                "incorrect_switch",
+                "incorrect_stay",
+            )
+        ),
         "epoch_names": np.array(("whole", "before", "after")),
         "band_names": np.array(("theta", "gamma")),
         "frequency_hz": np.array((6.0, 8.0, 40.0, 120.0)),
         "normalized_psd_session_db": np.zeros((3, 2, 3, 4), dtype=float),
         "band_power_session_db": np.zeros((3, 2, 3, 2), dtype=float),
-        "condition_membership": np.array(((True, False), (False, True))),
-        "filter_membership": np.array((True, False)),
-        "condition_effective_trial_count": np.array(((1, 1, 1), (0, 0, 0))),
-        "condition_unstable": np.array(
-            ((True, True, True), (True, True, True)),
-            dtype=bool,
+        "condition_membership": np.array(
+            (
+                (True, False, False, True, False, False, False, False, False),
+                (False, True, False, False, True, False, True, False, False),
+            )
         ),
+        "filter_membership": np.array((True, False)),
+        "condition_effective_trial_count": np.array(
+            ((1, 1, 1),) + ((0, 0, 0),) * 8
+        ),
+        "condition_unstable": np.ones((9, 3), dtype=bool),
         "objective_valid": np.ones((3, 2), dtype=bool),
         "site_valid": np.ones((3, 2), dtype=bool),
         "user_excluded": np.array((False, False)),
@@ -223,6 +240,15 @@ def _validation_dependencies(
         assert isinstance(values, np.ndarray)
         assert np.max(kwargs["frequency_hz"]) <= 100.0
         assert np.isnan(values[:, 1]).all()
+        assert kwargs["condition_names"] in (
+            ("correct_rewarded", "omission", "incorrect", "switch", "stay"),
+            (
+                "omission_switch",
+                "omission_stay",
+                "incorrect_switch",
+                "incorrect_stay",
+            ),
+        )
         calls.append("plot_psd")
         return _FakeFigure([]), {}
 
@@ -242,6 +268,15 @@ def _validation_dependencies(
         values = kwargs["condition_trial_band_power_db"]
         assert isinstance(values, np.ndarray)
         assert np.isnan(values[:, 1]).all()
+        assert kwargs["condition_names"] in (
+            ("correct_rewarded", "omission", "incorrect", "switch", "stay"),
+            (
+                "omission_switch",
+                "omission_stay",
+                "incorrect_switch",
+                "incorrect_stay",
+            ),
+        )
         calls.append("plot_band")
         return _FakeFigure([]), {}
 
@@ -390,7 +425,7 @@ def test_power_validation_writes_immutable_report_and_cached_site_pngs(
     assert result.summary_path.name == "run_summary.md"
     assert result.log_path.name == "run.log"
     assert result.source_identifiers_path.name == "source_identifiers.json"
-    assert len(result.png_paths) == 6
+    assert len(result.png_paths) == 12
     assert all(
         path.suffix == ".png" and path.parent == result.run_directory
         for path in result.png_paths
@@ -403,10 +438,10 @@ def test_power_validation_writes_immutable_report_and_cached_site_pngs(
     assert "warnings" in result.report and "nine_filter_projection" in result.report
     assert result.report["total_trial_count"] == 2
     assert result.report["filtered_trial_count"] == 1
-    assert result.report["condition_effective_trial_count"]["PFC"] == {
-        "correct_rewarded": 1,
-        "omission": 0,
-    }
+    assert result.report["condition_effective_trial_count"]["PFC"][
+        "correct_rewarded"
+    ] == 1
+    assert result.report["condition_effective_trial_count"]["PFC"]["omission"] == 0
     assert result.report["site_valid_trial_count"] == {
         "PFC": 1,
         "HPC1": 1,
@@ -420,10 +455,45 @@ def test_power_validation_writes_immutable_report_and_cached_site_pngs(
     assert calls.count("compute_power") == 1
     assert (
         "load_power" in calls
-        and calls.count("plot_psd") == 3
-        and calls.count("plot_band") == 3
+        and calls.count("plot_psd") == 6
+        and calls.count("plot_band") == 6
     )
-    assert calls.count("save_png") == 6 and calls.count("close_figure") == 6
+    assert calls.count("save_png") == 12 and calls.count("close_figure") == 12
+    assert {path.name for path in result.png_paths} == {
+        f"{site}_{group}_{kind}.png"
+        for site in ("PFC", "HPC1", "HPC2")
+        for group in ("base", "subdivisions")
+        for kind in ("condition_psd", "band_power")
+    }
+
+
+def test_cached_power_validation_renders_without_recomputing_power(
+    tmp_path: Path,
+) -> None:
+    """A revised report must reuse a compatible cache and measured run metrics.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary cache and report roots; no raw recordings are accessed.
+    """
+    config = build_ct026_power_config(tmp_path / "session")
+    calls: list[str] = []
+
+    result = render_cached_power_validation(
+        config,
+        tmp_path / "analysis-runs",
+        _validation_dependencies(calls, power_result=_completed_power_result()),
+        power_wall_time_s=12.5,
+        power_peak_memory_bytes=4096,
+    )
+
+    assert "compute_power" not in calls
+    assert "load_power" in calls
+    assert result.report["power_recomputed"] is False
+    assert result.wall_time_s == 12.5
+    assert result.peak_memory_bytes == 4096
+    assert len(result.png_paths) == 12
 
 
 def test_power_validation_refuses_to_overwrite_same_timestamped_run(

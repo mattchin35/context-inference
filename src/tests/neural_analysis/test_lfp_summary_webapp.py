@@ -598,6 +598,68 @@ def test_production_power_plot_delegates_cache_arrays_to_plotting_module(
     assert context.source_voltage_unit == "uV"
 
 
+def test_cached_power_default_plot_uses_only_the_base_five_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The compact cached Power view must not silently render all nine groups.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Captures pure plotting input without raw LFP loading.
+    """
+    group_names = np.array(
+        (
+            "correct_rewarded",
+            "omission",
+            "incorrect",
+            "switch",
+            "stay",
+            "omission_switch",
+            "omission_stay",
+            "incorrect_switch",
+            "incorrect_stay",
+        )
+    )
+    arrays = {
+        "frequency_hz": np.array((8.0,)),
+        "normalized_psd_session_db": np.ones((1, 1, 3, 1), dtype=float),
+        "condition_names": group_names,
+        "condition_membership": np.ones((1, group_names.size), dtype=bool),
+        "filter_membership": np.array((True,)),
+        "condition_effective_trial_count": np.ones(
+            (group_names.size, 1),
+            dtype=np.int64,
+        ),
+        "site_ids": np.array(("PFC",)),
+        "site_voltage_units": np.array(("uV",)),
+        "epoch_names": np.array(("whole", "before", "after")),
+    }
+    captured: dict[str, object] = {}
+
+    def fake_plot(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture cache-derived condition names and return an unsaved figure."""
+        captured["condition_names"] = args[2]
+        return plt.figure(), {}
+
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_plotting,
+        "plot_condition_psd",
+        fake_plot,
+    )
+    dependencies = lfp_summary_webapp.make_production_summary_dependencies()
+
+    dependencies.plot_view("power", {"power": arrays}, default_lfp_summary_config())
+
+    assert captured["condition_names"] == (
+        "correct_rewarded",
+        "omission",
+        "incorrect",
+        "switch",
+        "stay",
+    )
+
+
 def test_full_route_assesses_fingerprint_compatibility_before_cached_render(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
