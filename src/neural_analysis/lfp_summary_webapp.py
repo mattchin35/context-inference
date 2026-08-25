@@ -9,12 +9,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Mapping, Protocol
+from typing import Callable, Protocol
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.neural_analysis.lfp_summary_io import ComponentStatus
+from src.neural_analysis import (
+    lfp_summary_pipeline,
+    lfp_summary_plotting,
+    lfp_summary_runtime,
+)
+from src.neural_analysis.lfp_summary_io import (
+    ComponentStatus,
+    assess_component_status,
+    load_component_arrays,
+)
 from src.neural_analysis.lfp_summary_models import (
     LFPSiteConfig,
     LFPSummaryConfig,
@@ -82,7 +91,7 @@ class SummaryActionResult:
 ComputeAction = Callable[[LFPSummaryConfig], SummaryActionResult]
 LoadManifest = Callable[[Path], dict[str, object]]
 LoadComponent = Callable[[Path, dict[str, object], str], dict[str, np.ndarray]]
-PlotView = Callable[[str, dict[str, dict[str, np.ndarray]]], plt.Figure]
+PlotView = Callable[[str, dict[str, dict[str, np.ndarray]], LFPSummaryConfig], plt.Figure]
 
 
 @dataclass(frozen=True)
@@ -92,7 +101,8 @@ class SummaryWebDependencies:
     Compute functions synchronously run the corresponding injected pipeline
     entry point. Cache loaders return validated numeric arrays with their axes
     and units defined by the manifest. ``plot_view`` consumes only those arrays
-    and returns an unsaved Matplotlib figure.
+    plus immutable configuration metadata and returns an unsaved Matplotlib
+    figure.
     """
 
     compute_power: ComputeAction
@@ -226,10 +236,239 @@ def assemble_summary_config(
         power=power,
         phase=phase,
         ppc=ppc,
+        trial_table_path=(
+            Path(session_path) / "processed" / f"{session_id}_augmented_trials.csv"
+        ),
         random_seed=int(random_seed),
     )
     validate_lfp_summary_config(config)
     return config
+
+
+def compute_production_power(config: LFPSummaryConfig) -> SummaryActionResult:
+    """Run the real atomic Power pipeline for one configured active session.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Validated active session configuration. Its trial CSV, source sites,
+        output directory, axes, and physical units are passed unchanged to the
+        runtime and pipeline layers.
+
+    Returns
+    -------
+    SummaryActionResult
+        Completed Power result with its committed manifest, or a failed result
+        identifying the pipeline stage without replacing a previous cache.
+    """
+    dependencies = lfp_summary_runtime.make_power_pipeline_dependencies(
+        trial_table_loader=lfp_summary_runtime.load_configured_trial_table,
+    )
+    result = lfp_summary_pipeline.compute_power_component(config, dependencies)
+    return SummaryActionResult(
+        result.component,
+        result.state,
+        getattr(result, "manifest", None),
+        result.error,
+    )
+
+
+def make_production_summary_dependencies() -> SummaryWebDependencies:
+    """Create live Power compute/cache dependencies and explicit unavailable actions.
+
+    Returns
+    -------
+    SummaryWebDependencies
+        Power delegates to the production atomic pipeline. Cached views load
+        NPZ arrays only. Synchrony, Spike-phase, and Compute All report their
+        unavailable production status until their runtime bridges are supplied.
+    """
+    def unavailable(component: str) -> ComputeAction:
+        """Return one action reporting an unavailable production component."""
+        def action(_: LFPSummaryConfig) -> SummaryActionResult:
+            """Return failure metadata without preparing data or writing a cache."""
+            return SummaryActionResult(
+                component,
+                "failed",
+                None,
+                f"{component} production action is unavailable",
+            )
+
+        return action
+
+    def load_manifest(cache_directory: Path) -> dict[str, object]:
+        """Load active cache metadata using the configuration bound by view callers."""
+        manifest_path = cache_directory / "manifest.json"
+        if not manifest_path.is_file():
+            raise ValueError("no readable LFP summary manifest")
+        try:
+            import json
+
+            decoded = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("no readable LFP summary manifest") from error
+        if not isinstance(decoded, dict):
+            raise ValueError("no readable LFP summary manifest")
+        return decoded
+
+    def plot_view(
+        view: str,
+        arrays: dict[str, dict[str, np.ndarray]],
+        config: LFPSummaryConfig,
+    ) -> plt.Figure:
+        """Render a cached component view without raw-LFP preparation.
+
+        Parameters
+        ----------
+        view : str
+            Cached component selected by the webapp.
+        arrays : dict[str, dict[str, numpy.ndarray]]
+            Validated component NPZ arrays already loaded by the cache seam.
+        config : LFPSummaryConfig
+            Immutable metadata for labels, exact windows, and preprocessing
+            provenance; it is not used to open raw recordings.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            Unsaved figure built entirely from cache arrays and configuration.
+        """
+        if view != "power":
+            raise ValueError(f"{view} cached plotting is unavailable")
+        return _plot_cached_power(arrays["power"], config)
+
+    return SummaryWebDependencies(
+        compute_power=compute_production_power,
+        compute_synchrony=unavailable("synchrony"),
+        compute_spike_phase=unavailable("spike_phase"),
+        compute_all=unavailable("all"),
+        load_manifest=load_manifest,
+        load_component=load_component_arrays,
+        plot_view=plot_view,
+    )
+
+
+def _plot_cached_power(
+    arrays: dict[str, np.ndarray],
+    config: LFPSummaryConfig,
+) -> plt.Figure:
+    """Adapt validated Power cache axes to the shared condition-PSD plotter.
+
+    Parameters
+    ----------
+    arrays : dict[str, numpy.ndarray]
+        Validated ``power.npz`` arrays. ``frequency_hz`` has Hz coordinates,
+        condition membership has ``(trial, condition)`` axes, and normalized
+        PSD has ``(site, trial, epoch, frequency)`` dB axes. No source paths,
+        traces, or recordings are opened here.
+    config : LFPSummaryConfig
+        Immutable session, half-open window, notch, band, and source-unit
+        metadata used only to label the cache-backed figure.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        Unsaved condition-resolved whole-window PSD figure.
+    """
+    required_names = {
+        "frequency_hz",
+        "normalized_psd_session_db",
+        "condition_names",
+        "condition_membership",
+        "condition_effective_trial_count",
+        "site_ids",
+        "site_voltage_units",
+        "epoch_names",
+    }
+    missing_names = sorted(required_names - set(arrays))
+    if missing_names:
+        raise ValueError(f"cached Power arrays lack required array: {missing_names[0]}")
+    frequency_hz = arrays["frequency_hz"]
+    normalized_psd_db = arrays["normalized_psd_session_db"]
+    condition_names = arrays["condition_names"]
+    membership = arrays["condition_membership"]
+    effective_count = arrays["condition_effective_trial_count"]
+    site_ids = arrays["site_ids"]
+    voltage_units = arrays["site_voltage_units"]
+    epoch_names = arrays["epoch_names"]
+    if (
+        frequency_hz.ndim != 1
+        or normalized_psd_db.ndim != 4
+        or condition_names.ndim != 1
+        or membership.ndim != 2
+        or effective_count.ndim != 2
+        or site_ids.ndim != 1
+        or voltage_units.ndim != 1
+        or epoch_names.ndim != 1
+    ):
+        raise ValueError("cached Power arrays have incompatible axes")
+    site_count, trial_count, epoch_count, frequency_count = normalized_psd_db.shape
+    condition_count = condition_names.size
+    if (
+        frequency_hz.size != frequency_count
+        or membership.shape != (trial_count, condition_count)
+        or effective_count.shape != (condition_count, site_count)
+        or site_ids.size != site_count
+        or voltage_units.size != site_count
+        or epoch_names.size != epoch_count
+    ):
+        raise ValueError("cached Power arrays have inconsistent named-axis lengths")
+    whole_matches = np.flatnonzero(epoch_names == "whole")
+    if whole_matches.size != 1:
+        raise ValueError("cached Power epoch_names must include exactly one whole epoch")
+    whole_epoch_index = int(whole_matches[0])
+    condition_psd_db = np.full(
+        (condition_count, trial_count, frequency_count),
+        np.nan,
+        dtype=normalized_psd_db.dtype,
+    )
+    for condition_index in range(condition_count):
+        selected_trials = membership[:, condition_index]
+        if selected_trials.dtype != np.dtype(bool):
+            raise ValueError("cached Power condition_membership must be boolean")
+        condition_psd_db[condition_index, selected_trials] = normalized_psd_db[
+            0,
+            selected_trials,
+            whole_epoch_index,
+        ]
+    gamma_band = next(band for band in config.power.bands if band.name == "gamma")
+    gamma_exclusion_hz = gamma_band.excluded_intervals_hz[0]
+    context = lfp_summary_plotting.PlotContext(
+        session_id=config.session_id,
+        alignment_event=config.analysis_windows.alignment_event,
+        epoch_bounds_s={
+            "whole": (
+                config.analysis_windows.whole_start_s,
+                config.analysis_windows.whole_stop_s,
+            ),
+            "before": (
+                config.analysis_windows.before_start_s,
+                config.analysis_windows.before_stop_s,
+            ),
+            "after": (
+                config.analysis_windows.after_start_s,
+                config.analysis_windows.after_stop_s,
+            ),
+        },
+        notch_enabled=config.power.notch_enabled,
+        gamma_exclusion_hz=gamma_exclusion_hz,
+        reference_description=(
+            "External/session reference and preprocessing provenance are cached "
+            "in manifest metadata; inspect warnings before interpretation."
+        ),
+        source_voltage_unit=str(voltage_units[0]),
+    )
+    figure, _axes = lfp_summary_plotting.plot_condition_psd(
+        frequency_hz,
+        condition_psd_db,
+        tuple(str(name) for name in condition_names),
+        effective_count[:, 0],
+        str(site_ids[0]),
+        "whole",
+        "session-normalized dB",
+        context,
+    )
+    return figure
 
 
 def component_status_message(status: ComponentStatus) -> str:
@@ -468,14 +707,17 @@ def render_lfp_summary_view(
         except (OSError, ValueError) as error:
             streamlit.error(f"No readable LFP summary cache: {error}")
             return
-    component_entry = previous_manifest.get("components", {}).get(view, {})
-    state = str(component_entry.get("state", "missing"))
-    status = ComponentStatus(state)
+    status = assess_component_status(
+        config.output_directory,
+        view,
+        config,
+        previous_manifest,
+    )
     streamlit.info(component_status_message(status))
     try:
         require_renderable_component(status, allow_stale)
         arrays = load_summary_view_arrays(view, config, previous_manifest, dependencies)
-        figure = dependencies.plot_view(view, arrays)
+        figure = dependencies.plot_view(view, arrays, config)
     except (OSError, ValueError) as error:
         streamlit.error(str(error))
         return

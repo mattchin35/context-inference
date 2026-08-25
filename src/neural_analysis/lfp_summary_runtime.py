@@ -70,6 +70,36 @@ class PreparedPowerRun:
     first_start_time_s: float
 
 
+def load_configured_trial_table(config: LFPSummaryConfig) -> pd.DataFrame:
+    """Load the active session trial table from its explicit configured CSV path.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Validated summary configuration whose ``trial_table_path`` identifies
+        the active CT026-style augmented trial CSV.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per trial with values and column names preserved from the CSV.
+        Time columns remain in their stored seconds until preparation validates
+        and selects the active alignment event.
+
+    Raises
+    ------
+    ValueError
+        If the configuration does not identify a trial CSV or the CSV cannot be
+        read as a tabular trial table.
+    """
+    if config.trial_table_path is None:
+        raise ValueError("Power production runtime requires config.trial_table_path")
+    try:
+        return pd.read_csv(config.trial_table_path)
+    except (OSError, UnicodeDecodeError, pd.errors.ParserError) as error:
+        raise ValueError("unable to read configured trial-table CSV") from error
+
+
 def prepare_power_run(
     config: LFPSummaryConfig,
     trial_table_loader: Callable[[LFPSummaryConfig], pd.DataFrame],

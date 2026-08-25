@@ -200,11 +200,15 @@ def render_lfp_summary_view(
     """
 
     session_path = Path(session_data_home)
+    if dependencies is None:
+        dependencies = lfp_summary_webapp.make_production_summary_dependencies()
+    pfc_format = _summary_lfp_format(pfc_lfp_path)
+    hpc_format = _summary_lfp_format(hpc_v1_lfp_path)
     sites = (
         lfp_summary_webapp.LFPSiteConfig(
             "PFC",
             "PFC",
-            "spikeglx",
+            pfc_format,
             Path(pfc_lfp_path),
             Path(pfc_aligned_spike_path) if pfc_aligned_spike_path else None,
             "ProbeA",
@@ -215,7 +219,7 @@ def render_lfp_summary_view(
         lfp_summary_webapp.LFPSiteConfig(
             "HPC1",
             "HPC1",
-            "spikeglx",
+            hpc_format,
             Path(hpc_v1_lfp_path),
             Path(hpc_v1_aligned_spike_path) if hpc_v1_aligned_spike_path else None,
             "ProbeB",
@@ -226,7 +230,7 @@ def render_lfp_summary_view(
         lfp_summary_webapp.LFPSiteConfig(
             "HPC2",
             "HPC2",
-            "spikeglx",
+            hpc_format,
             Path(hpc_v1_lfp_path),
             Path(hpc_v1_aligned_spike_path) if hpc_v1_aligned_spike_path else None,
             "ProbeB",
@@ -244,6 +248,23 @@ def render_lfp_summary_view(
         site_pairs=(("PFC", "HPC1"), ("PFC", "HPC2"), ("HPC1", "HPC2")),
         dependencies=dependencies,
     )
+
+
+def _summary_lfp_format(lfp_path: str) -> str:
+    """Infer the supported LFP loader family from an active recording filename.
+
+    Parameters
+    ----------
+    lfp_path : str
+        Active continuous LFP path. ``lfp.dat`` denotes an Open Ephys-derived
+        recording; all other paths retain the existing SpikeGLX route.
+
+    Returns
+    -------
+    str
+        ``"open_ephys"`` for ``lfp.dat`` and ``"spikeglx"`` otherwise.
+    """
+    return "open_ephys" if Path(lfp_path).name == "lfp.dat" else "spikeglx"
 EVENT_MARKER_STYLES = {
     "start_time": {"label": "trial start", "color": "black"},
     "choice_time": {"label": "choice", "color": "tab:purple"},
