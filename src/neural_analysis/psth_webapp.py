@@ -12,6 +12,7 @@ import streamlit as st
 from src.neural_analysis import (
     lfp_loading,
     lfp_phase_clustering,
+    lfp_summary_webapp,
     lfp_spectrogram,
     population_pca,
     population_pca_decoding,
@@ -49,6 +50,7 @@ PLOT_VIEW_LFP_PHASE_CLUSTERING = "LFP phase clustering"
 PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE = "Single-trial relative phase"
 PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING = "Spike-LFP phase locking"
 PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT = "Single-trial spike-LFP phase"
+PLOT_VIEW_LFP_SUMMARY = "Cached LFP summary"
 PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_UNIT_RASTER,
     PLOT_VIEW_TRIAL_SPIKES,
@@ -58,6 +60,7 @@ PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE,
     PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING,
     PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT,
+    PLOT_VIEW_LFP_SUMMARY,
 ]
 UNIT_PLOT_TYPE_OPTIONS = [
     "PSTH",
@@ -162,6 +165,85 @@ RASTER_LAYOUT_OPTIONS = {
     "Separated": {"row_spacing": 1.5, "figure_size": (12.0, 10.0)},
     "Wide": {"row_spacing": 2.0, "figure_size": (12.0, 13.0)},
 }
+
+
+def render_lfp_summary_view(
+    session_data_home: str,
+    sess_id_full: str,
+    hpc_v1_lfp_path: str,
+    pfc_lfp_path: str,
+    hpc_v1_aligned_spike_path: str,
+    pfc_aligned_spike_path: str,
+    dependencies: lfp_summary_webapp.SummaryWebDependencies | None = None,
+) -> None:
+    """Delegate the cached LFP summary route using active session/probe inputs.
+
+    Parameters
+    ----------
+    session_data_home : str
+        Active session directory path.
+    sess_id_full : str
+        Active session identifier.
+    hpc_v1_lfp_path, pfc_lfp_path : str
+        Active continuous LFP source paths for the HPC and PFC probes.
+    hpc_v1_aligned_spike_path, pfc_aligned_spike_path : str
+        Active synchronized sidecar paths used as site source metadata.
+    dependencies : SummaryWebDependencies | None
+        Injected summary pipeline/cache seams. ``None`` reports the currently
+        explicit production integration gap without computing numerical data.
+
+    Returns
+    -------
+    None
+        Delegates Streamlit controls and cached-result rendering to
+        ``lfp_summary_webapp``. LFP source values remain in their native units.
+    """
+
+    session_path = Path(session_data_home)
+    sites = (
+        lfp_summary_webapp.LFPSiteConfig(
+            "PFC",
+            "PFC",
+            "spikeglx",
+            Path(pfc_lfp_path),
+            Path(pfc_aligned_spike_path) if pfc_aligned_spike_path else None,
+            "ProbeA",
+            5,
+            "uV",
+            2500.0,
+        ),
+        lfp_summary_webapp.LFPSiteConfig(
+            "HPC1",
+            "HPC1",
+            "spikeglx",
+            Path(hpc_v1_lfp_path),
+            Path(hpc_v1_aligned_spike_path) if hpc_v1_aligned_spike_path else None,
+            "ProbeB",
+            222,
+            "uV",
+            2500.0,
+        ),
+        lfp_summary_webapp.LFPSiteConfig(
+            "HPC2",
+            "HPC2",
+            "spikeglx",
+            Path(hpc_v1_lfp_path),
+            Path(hpc_v1_aligned_spike_path) if hpc_v1_aligned_spike_path else None,
+            "ProbeB",
+            14,
+            "uV",
+            2500.0,
+        ),
+    )
+    lfp_summary_webapp.render_lfp_summary_view(
+        st,
+        session_id=sess_id_full,
+        session_path=session_path,
+        output_directory=session_path / "processed" / "lfp_summary_cache",
+        sites=sites,
+        site_pairs=(("PFC", "HPC1"), ("PFC", "HPC2"), ("HPC1", "HPC2")),
+        dependencies=dependencies,
+    )
 EVENT_MARKER_STYLES = {
     "start_time": {"label": "trial start", "color": "black"},
     "choice_time": {"label": "choice", "color": "tab:purple"},
@@ -3712,6 +3794,17 @@ def main() -> None:
     )
     _render_path_browser()
     plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+
+    if plot_view == PLOT_VIEW_LFP_SUMMARY:
+        render_lfp_summary_view(
+            session_data_home=session_data_home,
+            sess_id_full=sess_id_full,
+            hpc_v1_lfp_path=hpc_v1_lfp_path,
+            pfc_lfp_path=pfc_lfp_path,
+            hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
+            pfc_aligned_spike_path=pfc_aligned_spike_path,
+        )
+        return
 
     if plot_view in {PLOT_VIEW_LFP_PHASE_CLUSTERING, PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE}:
         try:
