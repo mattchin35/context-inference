@@ -229,6 +229,24 @@ def test_gamma_band_mean_uses_disjoint_intervals_and_exact_retained_bandwidth() 
     assert mean_power == pytest.approx(expected_integral / 46.0)
 
 
+def test_gamma_mean_excludes_line_noise_gap_boundary_bins_from_quadrature() -> None:
+    """Excluded 58/60/62-Hz samples cannot contaminate retained gamma endpoints."""
+
+    frequency_hz = np.arange(30.0, 82.0, 2.0)
+    psd_linear = np.ones(frequency_hz.size)
+    psd_linear[np.isin(frequency_hz, [58.0, 60.0, 62.0])] = 1_000_000.0
+    gamma = FrequencyBandConfig("gamma", 30.0, 80.0, ((58.0, 62.0),))
+
+    mean_power, retained_bandwidth_hz = mean_band_power_linear(
+        psd_linear,
+        frequency_hz,
+        gamma,
+    )
+
+    assert mean_power == pytest.approx(1.0)
+    assert retained_bandwidth_hz == pytest.approx(46.0)
+
+
 def test_constant_psd_band_means_preserve_theta_and_gamma_power_and_bandwidth() -> None:
     """Constant linear PSD has the same mean in both retained theta and gamma bands."""
 
