@@ -261,6 +261,65 @@ def test_default_open_ephys_route_reports_lfp_metadata_rate_not_ap_rate(
     assert loaded["HPC"].sample_rate_hz == 1000.0
 
 
+def test_open_ephys_fractional_alignment_is_interpolated_to_exact_native_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sub-sample sync offset should retain valid exact event-relative samples.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces Open Ephys metadata and trace loading with a fractional-offset
+        native grid matching the production loader's sample-window behavior.
+    """
+    site = LFPSiteConfig(
+        "HPC",
+        "HPC",
+        "open_ephys",
+        Path("hpc.dat"),
+        Path("hpc.npz"),
+        "HPC",
+        2,
+        "uV",
+        1000.0,
+    )
+
+    monkeypatch.setattr(
+        lfp_loading,
+        "load_open_ephys_lfp_metadata",
+        lambda _: {"sampling_frequency_hz": 1000.0},
+    )
+
+    def fake_loader(**_: object) -> tuple[np.ndarray, np.ndarray]:
+        """Return one extra native sample around a 0.25-ms alignment residual."""
+        time_s = -0.00225 + np.arange(5, dtype=float) / 1000.0
+        return time_s, 2.0 * time_s + 1.0
+
+    monkeypatch.setattr(
+        lfp_loading,
+        "load_open_ephys_trial_lfp_trace",
+        fake_loader,
+    )
+
+    loaded = load_site_trial_traces(
+        [site],
+        np.array([0]),
+        np.array([1.0]),
+        (-0.002, 0.002),
+    )["HPC"]
+
+    assert loaded.valid.tolist() == [True]
+    assert loaded.exclusion_reason.tolist() == [""]
+    assert np.array_equal(
+        loaded.relative_time_s,
+        np.array([-0.002, -0.001, 0.0, 0.001]),
+    )
+    assert np.allclose(
+        loaded.source_trace[0],
+        2.0 * loaded.relative_time_s + 1.0,
+    )
+
+
 def test_malformed_last_trial_cannot_change_canonical_trace_axis() -> None:
     """Later malformed traces retain the canonical native `(trial, time)` axis."""
     site = LFPSiteConfig("PFC", "PFC", "spikeglx", Path("pfc.bin"), None, "PFC", 5, "uV", 1000.0)
