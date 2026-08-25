@@ -225,3 +225,27 @@ def test_power_dependencies_commit_reload_and_report_unsupported_components(
         dependencies.prepare_phase(config)
     with pytest.raises((NotImplementedError, RuntimeError), match="synchrony|spike|unsupported"):
         dependencies.prepare_spike(config, object())
+
+
+def test_cached_500_hz_trace_uses_antialias_filter_before_decimation(tmp_path: Path) -> None:
+    """A 600-Hz native component must not alias into the 500-Hz inspection trace."""
+
+    config = _config(tmp_path / "cache")
+
+    def high_frequency_loader(**kwargs: object) -> tuple[np.ndarray, np.ndarray, float]:
+        """Return a native 600-Hz signal above the cached 250-Hz Nyquist limit."""
+
+        start_s, stop_s = kwargs["window"]
+        time_s = np.arange(float(start_s), float(stop_s), 1.0 / 2500.0)
+        values_uv = np.sin(2.0 * np.pi * 600.0 * time_s)
+        return time_s, values_uv, 2500.0
+
+    prepared = prepare_power_run(
+        config,
+        lambda _: _trial_table(),
+        spikeglx_loader=high_frequency_loader,
+    )
+    cached_trace = build_power_payload(config, prepared).arrays["source_trace"]
+
+    valid_cached_rows = cached_trace[0, [0, 2]]
+    assert np.sqrt(np.mean(valid_cached_rows**2)) < 0.05
