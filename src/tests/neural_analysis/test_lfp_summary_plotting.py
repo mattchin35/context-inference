@@ -209,6 +209,24 @@ def test_phase_maps_and_band_summaries_expose_counts_uncertainty_and_instability
     assert "95%" in figure.texts[-1].get_text()
 
 
+def test_phase_band_summary_accepts_percentile_ci_not_containing_estimate() -> None:
+    """Percentile intervals may validly lie entirely above the point estimate."""
+    figure, axes = plot_phase_band_summary(
+        estimates=np.array([0.2, 0.8]),
+        ci_low=np.array([0.4, 0.1]),
+        ci_high=np.array([0.6, 0.7]),
+        contributing_trial_counts=np.array([8, 12]),
+        labels=("PFC", "PFC-HPC1"),
+        band_name="gamma",
+        epoch_name="before",
+        metric_name="ITPC/ISPC",
+        context=_context(),
+    )
+
+    _assert_figure_contract(figure, axes, {"summary"})
+    assert len(axes["summary"].collections) >= 1
+
+
 def test_plv_distribution_and_exemplar_distinguish_trial_metric_from_illustration() -> None:
     """PLV figures show coverage/count diagnostics and explicitly label illustrative trials."""
 

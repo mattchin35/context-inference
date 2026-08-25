@@ -223,3 +223,32 @@ def test_synchrony_validation_aborts_before_report_when_component_fails(tmp_path
 
     assert calls == ["compute_synchrony"]
     assert not (tmp_path / "runs").exists()
+
+
+def test_synchrony_validation_does_not_publish_partial_report_on_plot_failure(
+    tmp_path: Path,
+) -> None:
+    """A failed cache-only render must leave no visible immutable run directory.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary generic cache and report roots.
+    """
+    config = build_ct026_synchrony_config(tmp_path / "CT026")
+    calls: list[str] = []
+    dependencies = _dependencies(calls)
+
+    def failed_save(figure: _FakeFigure, path: Path) -> None:
+        """Raise before publishing the first cache-backed PNG."""
+        del figure, path
+        raise OSError("render failed")
+
+    dependencies = SynchronyValidationDependencies(
+        **{**dependencies.__dict__, "save_png": failed_save}
+    )
+    run_parent = tmp_path / "runs"
+    with pytest.raises(OSError, match="render failed"):
+        run_synchrony_validation(config, run_parent, dependencies)
+
+    assert not run_parent.exists() or not tuple(run_parent.iterdir())
