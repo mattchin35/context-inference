@@ -1,4 +1,4 @@
-"""Production bridge for offline Power-summary preparation, calculation, and caching.
+"""Production bridge for offline Power and Synchrony preparation and caching.
 
 The bridge intentionally has no Streamlit dependency. It loads native-rate LFP
 traces through the preparation adapters, performs PSD calculations before
@@ -15,6 +15,12 @@ import numpy as np
 import pandas as pd
 from scipy import signal
 
+from src.neural_analysis import (
+    lfp_loading,
+    lfp_phase_clustering,
+    lfp_spectrogram,
+    spike_lfp_hilbert_phase,
+)
 from src.neural_analysis.lfp_power_summary import (
     compute_presession_reference_psd,
     compute_session_reference_psd,
@@ -33,8 +39,15 @@ from src.neural_analysis.lfp_summary_pipeline import ComponentPayload, PipelineD
 from src.neural_analysis.lfp_summary_preparation import (
     PreparedSiteTraces,
     PreparedTrials,
+    build_common_event_grid,
     build_prepared_trials,
     load_site_trial_traces,
+)
+from src.neural_analysis.lfp_synchrony_summary import (
+    aggregate_trial_plv_bands,
+    bootstrap_phase_clustering_bands,
+    compute_phase_clustering_summary,
+    compute_trial_plv_by_frequency,
 )
 
 
@@ -68,6 +81,43 @@ class PreparedPowerRun:
     presession_traces: dict[str, np.ndarray]
     presession_time_s: dict[str, np.ndarray]
     first_start_time_s: float
+
+
+@dataclass(frozen=True)
+class PreparedPhaseRun:
+    """Full-trial-axis phase and cached exemplar inputs for Synchrony.
+
+    Attributes
+    ----------
+    trial_indices : numpy.ndarray
+        Int64 shape ``(trial,)`` trial-table row positions.
+    prepared_trials : PreparedTrials
+        Condition/filter/objective/user masks plus per-site/pair validity.
+    phase_tensor : numpy.ndarray
+        Complex64 unit phase with axes ``(site, frequency, trial, time)``.
+        Invalid entries are zero and are interpreted only through
+        ``phase_valid``.
+    phase_valid : numpy.ndarray
+        Boolean numerical validity with the same axes as ``phase_tensor``.
+    relative_time_s : numpy.ndarray
+        Exact 500-Hz shape ``(time,)`` half-open event-relative seconds.
+    site_valid : numpy.ndarray
+        Boolean shape ``(site, trial)`` retained continuous-transform trials.
+    pair_valid : numpy.ndarray
+        Boolean shape ``(pair, trial)`` ordered site-pair intersections.
+    source_trace : numpy.ndarray
+        Float shape ``(site, trial, time)`` unprocessed source-voltage samples
+        anti-aliased onto the exact 500-Hz cache grid. Invalid rows are NaN.
+    """
+
+    trial_indices: np.ndarray
+    prepared_trials: PreparedTrials
+    phase_tensor: np.ndarray
+    phase_valid: np.ndarray
+    relative_time_s: np.ndarray
+    site_valid: np.ndarray
+    pair_valid: np.ndarray
+    source_trace: np.ndarray
 
 
 def load_configured_trial_table(config: LFPSummaryConfig) -> pd.DataFrame:
@@ -164,6 +214,144 @@ def prepare_power_run(
     )
 
 
+def prepare_phase_run(
+    config: LFPSummaryConfig,
+    trial_table_loader: Callable[[LFPSummaryConfig], pd.DataFrame],
+    *,
+    site_phase_tensor_builder: Callable[..., lfp_phase_clustering.PhaseTrialTensor] = (
+        lfp_phase_clustering.compute_site_phase_trial_tensor
+    ),
+    block_loader_factory: Callable[
+        [LFPSiteConfig],
+        Callable[[float, float], tuple[np.ndarray, np.ndarray, float]],
+    ]
+    | None = None,
+    spikeglx_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None = None,
+    open_ephys_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None = None,
+) -> PreparedPhaseRun:
+    """Prepare bounded continuous phase tensors on one exact full trial axis.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Immutable phase settings. Window bounds are seconds, frequencies are
+        Hz, and output rate is samples/second.
+    trial_table_loader : callable
+        Called once with ``config`` and returns one pandas row per trial.
+    site_phase_tensor_builder : callable
+        Existing/injected one-site bounded transform accepting the
+        ``compute_site_phase_trial_tensor`` keyword contract.
+    block_loader_factory : callable or None
+        Optional site-to-continuous-loader seam. Each loader accepts absolute
+        ``start_s, stop_s`` seconds and returns absolute time, source-voltage
+        values, and native sample rate in Hz. ``None`` uses production files.
+    spikeglx_loader, open_ephys_loader : callable or None
+        Optional normalized per-trial loaders for cache exemplar source traces.
+
+    Returns
+    -------
+    PreparedPhaseRun
+        Complex64 phase and boolean validity on
+        ``(site, frequency, trial, time)`` axes, pair-specific validity, and
+        500-Hz source-voltage exemplar traces. No wavelet coefficients persist.
+
+    Raises
+    ------
+    ValueError
+        If the trial table, configured sites/pairs, transform axes, or common
+        phase/source time grids are invalid.
+    """
+    trial_table = trial_table_loader(config)
+    if not isinstance(trial_table, pd.DataFrame):
+        raise ValueError("trial_table_loader must return a pandas DataFrame")
+    trial_indices = np.arange(len(trial_table), dtype=np.int64)
+    alignment_times_s = _alignment_times(trial_table, config)
+    preliminary_trials = build_prepared_trials(
+        trial_table,
+        config.trial_filter,
+        config.analysis_windows.alignment_event,
+    )
+    transform_positions = np.flatnonzero(preliminary_trials.objective_valid)
+    if not transform_positions.size:
+        raise ValueError("phase preparation requires at least one finite alignment")
+    factory = block_loader_factory or _production_phase_block_loader_factory
+    frequency_hz = np.asarray(config.phase.frequency_hz, dtype=float)
+    whole_window = (
+        config.analysis_windows.whole_start_s,
+        config.analysis_windows.whole_stop_s,
+    )
+    site_tensors = []
+    for site in config.sites:
+        tensor = site_phase_tensor_builder(
+            event_times_s=alignment_times_s[transform_positions],
+            trial_indices=trial_indices[transform_positions],
+            block_loader=factory(site),
+            frequencies_hz=frequency_hz,
+            window=whole_window,
+            output_sample_rate_hz=config.phase.output_rate_hz,
+            gaussian_width=config.phase.morlet_gaussian_width,
+            window_length=config.phase.morlet_window_length,
+            precision=config.phase.morlet_precision,
+            norm=config.phase.morlet_normalization,
+            notch_60_hz=config.phase.notch_enabled,
+            notch_quality_factor=config.phase.notch_quality_factor,
+            minimum_relative_magnitude=config.phase.numerical_amplitude_threshold,
+            maximum_core_duration_s=config.phase.block_duration_s,
+        )
+        _validate_site_phase_tensor(tensor, frequency_hz.size)
+        site_tensors.append(tensor)
+    relative_time_s, phase_tensor, phase_valid, site_valid = _full_phase_axes(
+        site_tensors,
+        trial_indices,
+        frequency_hz.size,
+    )
+    canonical_time_s = build_common_event_grid(
+        whole_window[0],
+        whole_window[1],
+        config.phase.output_rate_hz,
+    )
+    if not np.allclose(relative_time_s, canonical_time_s, rtol=0.0, atol=1e-12):
+        raise ValueError("phase transform did not return the canonical output grid")
+    relative_time_s = canonical_time_s
+    pair_indices = _configured_pair_indices(config)
+    pair_valid = np.stack(
+        [site_valid[site_a] & site_valid[site_b] for site_a, site_b in pair_indices]
+    )
+    prepared_trials = build_prepared_trials(
+        trial_table,
+        config.trial_filter,
+        config.analysis_windows.alignment_event,
+        site_validity={
+            site.stable_id: site_valid[index]
+            for index, site in enumerate(config.sites)
+        },
+    )
+    native_traces = load_site_trial_traces(
+        config.sites,
+        trial_indices,
+        alignment_times_s,
+        whole_window,
+        spikeglx_loader=spikeglx_loader,
+        open_ephys_loader=open_ephys_loader,
+    )
+    source_time_s, source_trace = _cached_prepared_source_traces(
+        config,
+        native_traces,
+    )
+    if not np.array_equal(source_time_s, relative_time_s):
+        raise ValueError("phase and cached source traces require the same exact 500-Hz grid")
+    return PreparedPhaseRun(
+        trial_indices=trial_indices,
+        prepared_trials=prepared_trials,
+        phase_tensor=phase_tensor,
+        phase_valid=phase_valid,
+        relative_time_s=relative_time_s,
+        site_valid=site_valid,
+        pair_valid=pair_valid,
+        source_trace=source_trace,
+    )
+
+
 def build_power_payload(
     config: LFPSummaryConfig,
     prepared: PreparedPowerRun,
@@ -190,6 +378,197 @@ def build_power_payload(
     frequency_hz = _common_frequency_grid(site_results)
     arrays = _assemble_power_arrays(config, prepared, site_results, frequency_hz)
     return build_component_payload("power", arrays)
+
+
+def build_synchrony_payload(
+    config: LFPSummaryConfig,
+    prepared: PreparedPhaseRun,
+) -> ComponentPayload:
+    """Compute the complete Synchrony cache payload from prepared unit phase.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Immutable site/pair, phase-frequency, band, half-open epoch, bootstrap,
+        filter, and seed settings. Times are seconds and frequencies are Hz.
+    prepared : PreparedPhaseRun
+        Full-trial complex64 phase, numerical validity, site/pair masks, and
+        source-voltage 500-Hz traces.
+
+    Returns
+    -------
+    ComponentPayload
+        Exact ``SYNCHRONY_ARRAY_SCHEMA`` arrays. ITPC/ISPC/PLV are
+        dimensionless, offsets/Hilbert phase are radians, counts are trials or
+        samples, and no wavelet tensor is retained.
+
+    Raises
+    ------
+    ValueError
+        If prepared axes or identities disagree with the active configuration.
+    """
+    _validate_prepared_phase_run(config, prepared)
+    frequencies_hz = np.asarray(config.phase.frequency_hz, dtype=float)
+    condition_membership = _analysis_condition_membership(prepared.prepared_trials)
+    pair_indices = _configured_pair_indices(config)
+    clustering = compute_phase_clustering_summary(
+        prepared.phase_tensor,
+        prepared.phase_valid,
+        prepared.prepared_trials.condition_names,
+        condition_membership,
+        pair_indices,
+    )
+    epoch_windows = _epoch_windows(config)
+    epoch_names = tuple(epoch_windows)
+    band_names = tuple(band.name for band in config.phase.bands)
+    condition_count = len(prepared.prepared_trials.condition_names)
+    site_count = len(config.sites)
+    pair_count = len(pair_indices)
+    epoch_count = len(epoch_names)
+    band_count = len(band_names)
+    itpc_band = np.full(
+        (condition_count, site_count, epoch_count, band_count),
+        np.nan,
+    )
+    itpc_low = itpc_band.copy()
+    itpc_high = itpc_band.copy()
+    itpc_unstable = np.ones(itpc_band.shape, dtype=bool)
+    ispc_band = np.full(
+        (condition_count, pair_count, epoch_count, band_count),
+        np.nan,
+    )
+    ispc_low = ispc_band.copy()
+    ispc_high = ispc_band.copy()
+    ispc_unstable = np.ones(ispc_band.shape, dtype=bool)
+    for condition_index in range(condition_count):
+        condition_mask = condition_membership[:, condition_index]
+        condition_seed = int(config.phase.seed) + condition_index
+        for site_index in range(site_count):
+            summary = bootstrap_phase_clustering_bands(
+                np.moveaxis(prepared.phase_tensor[site_index], 1, 0),
+                np.moveaxis(prepared.phase_valid[site_index], 1, 0),
+                condition_mask & prepared.site_valid[site_index],
+                frequencies_hz,
+                prepared.relative_time_s,
+                epoch_windows,
+                config.phase.bands,
+                config.phase.bootstrap_count,
+                condition_seed,
+            )
+            itpc_band[condition_index, site_index] = summary.estimate
+            itpc_low[condition_index, site_index] = summary.ci_low
+            itpc_high[condition_index, site_index] = summary.ci_high
+            itpc_unstable[condition_index, site_index] = summary.unstable
+
+    plv_shape = (
+        prepared.trial_indices.size,
+        pair_count,
+        epoch_count,
+        frequencies_hz.size,
+    )
+    plv_by_frequency = np.full(plv_shape, np.nan)
+    plv_offset = np.full(plv_shape, np.nan)
+    plv_count = np.zeros(plv_shape, dtype=np.int32)
+    plv_fraction = np.zeros(plv_shape, dtype=float)
+    plv_computable = np.zeros(plv_shape, dtype=bool)
+    plv_band = np.full(plv_shape[:3] + (band_count,), np.nan)
+    for pair_index, (site_a, site_b) in enumerate(pair_indices):
+        relative_phase = (
+            prepared.phase_tensor[site_a] * np.conjugate(prepared.phase_tensor[site_b])
+        )
+        relative_valid = prepared.phase_valid[site_a] & prepared.phase_valid[site_b]
+        pair_plv = compute_trial_plv_by_frequency(
+            np.moveaxis(relative_phase, 1, 0)[None],
+            np.moveaxis(relative_valid, 1, 0)[None],
+            prepared.relative_time_s,
+            epoch_windows,
+        )
+        plv_by_frequency[:, pair_index] = pair_plv.plv_by_frequency[0]
+        plv_offset[:, pair_index] = pair_plv.plv_phase_offset_rad[0]
+        plv_count[:, pair_index] = pair_plv.valid_sample_count[0]
+        plv_fraction[:, pair_index] = pair_plv.valid_sample_fraction[0]
+        plv_computable[:, pair_index] = pair_plv.computable[0]
+        pair_band = aggregate_trial_plv_bands(
+            pair_plv.plv_by_frequency,
+            frequencies_hz,
+            config.phase.bands,
+        )
+        plv_band[:, pair_index] = pair_band[0]
+        for condition_index in range(condition_count):
+            condition_mask = condition_membership[:, condition_index]
+            summary = bootstrap_phase_clustering_bands(
+                np.moveaxis(relative_phase, 1, 0),
+                np.moveaxis(relative_valid, 1, 0),
+                condition_mask & prepared.pair_valid[pair_index],
+                frequencies_hz,
+                prepared.relative_time_s,
+                epoch_windows,
+                config.phase.bands,
+                config.phase.bootstrap_count,
+                int(config.phase.seed) + condition_index,
+            )
+            ispc_band[condition_index, pair_index] = summary.estimate
+            ispc_low[condition_index, pair_index] = summary.ci_low
+            ispc_high[condition_index, pair_index] = summary.ci_high
+            ispc_unstable[condition_index, pair_index] = summary.unstable
+    filtered_trace, hilbert_phase_rad = _band_hilbert_traces(config, prepared)
+    arrays = {
+        "trial_indices": prepared.trial_indices.astype(np.int64, copy=True),
+        "site_ids": np.asarray([site.stable_id for site in config.sites], dtype="<U64"),
+        "site_voltage_units": np.asarray(
+            [site.voltage_unit for site in config.sites],
+            dtype="<U64",
+        ),
+        "condition_names": np.asarray(
+            prepared.prepared_trials.condition_names,
+            dtype="<U64",
+        ),
+        "condition_membership": prepared.prepared_trials.condition_membership.copy(),
+        "filter_membership": prepared.prepared_trials.filter_membership.copy(),
+        "frequency_hz": frequencies_hz.copy(),
+        "epoch_names": np.asarray(epoch_names, dtype="<U16"),
+        "band_names": np.asarray(band_names, dtype="<U64"),
+        "relative_time_s": prepared.relative_time_s.copy(),
+        "site_valid": prepared.site_valid.copy(),
+        "pair_valid": prepared.pair_valid.copy(),
+        "site_exclusion_count": np.count_nonzero(~prepared.site_valid, axis=1).astype(
+            np.int64
+        ),
+        "pair_exclusion_count": np.count_nonzero(~prepared.pair_valid, axis=1).astype(
+            np.int64
+        ),
+        "pair_site_a_ids": np.asarray(
+            [config.sites[index].stable_id for index, _ in pair_indices],
+            dtype="<U64",
+        ),
+        "pair_site_b_ids": np.asarray(
+            [config.sites[index].stable_id for _, index in pair_indices],
+            dtype="<U64",
+        ),
+        "itpc": clustering.itpc,
+        "itpc_effective_trial_count": clustering.itpc_effective_trial_count,
+        "ispc": clustering.ispc,
+        "ispc_phase_offset_rad": clustering.ispc_phase_offset_rad,
+        "ispc_effective_trial_count": clustering.ispc_effective_trial_count,
+        "itpc_band_mean": itpc_band,
+        "itpc_ci_low": itpc_low,
+        "itpc_ci_high": itpc_high,
+        "itpc_unstable": itpc_unstable,
+        "ispc_band_mean": ispc_band,
+        "ispc_ci_low": ispc_low,
+        "ispc_ci_high": ispc_high,
+        "ispc_unstable": ispc_unstable,
+        "plv_by_frequency": plv_by_frequency,
+        "plv_phase_offset_rad": plv_offset,
+        "plv_valid_sample_count": plv_count,
+        "plv_valid_sample_fraction": plv_fraction,
+        "plv_computable": plv_computable,
+        "plv_band_mean": plv_band,
+        "source_trace": prepared.source_trace.copy(),
+        "band_filtered_trace": filtered_trace,
+        "hilbert_phase_rad": hilbert_phase_rad,
+    }
+    return build_component_payload("synchrony", arrays)
 
 
 def make_power_pipeline_dependencies(
@@ -274,6 +653,88 @@ def make_power_pipeline_dependencies(
     )
 
 
+def make_synchrony_pipeline_dependencies(
+    *,
+    trial_table_loader: Callable[[LFPSummaryConfig], pd.DataFrame],
+    site_phase_tensor_builder: Callable[..., lfp_phase_clustering.PhaseTrialTensor] = (
+        lfp_phase_clustering.compute_site_phase_trial_tensor
+    ),
+    block_loader_factory: Callable[
+        [LFPSiteConfig],
+        Callable[[float, float], tuple[np.ndarray, np.ndarray, float]],
+    ]
+    | None = None,
+    spikeglx_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None = None,
+    open_ephys_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None = None,
+) -> PipelineDependencies:
+    """Bind real phase preparation, Synchrony calculation, and atomic cache I/O.
+
+    Parameters
+    ----------
+    trial_table_loader, site_phase_tensor_builder, block_loader_factory : callable
+        Production or injected seams accepted by :func:`prepare_phase_run`.
+    spikeglx_loader, open_ephys_loader : callable or None
+        Optional normalized per-trial trace loaders for exemplar cache arrays.
+
+    Returns
+    -------
+    PipelineDependencies
+        Synchrony-only production dependencies. Power and spike-phase seams
+        raise explicitly instead of creating placeholder arrays.
+    """
+    active_config: LFPSummaryConfig | None = None
+
+    def prepare_phase(config: LFPSummaryConfig) -> PreparedPhaseRun:
+        """Prepare phase products using the factory's fixed loader seams."""
+        nonlocal active_config
+        active_config = config
+        return prepare_phase_run(
+            config,
+            trial_table_loader,
+            site_phase_tensor_builder=site_phase_tensor_builder,
+            block_loader_factory=block_loader_factory,
+            spikeglx_loader=spikeglx_loader,
+            open_ephys_loader=open_ephys_loader,
+        )
+
+    def load_manifest(directory: Path) -> dict[str, object]:
+        """Load the active configuration's JSON-ready cache manifest."""
+        if active_config is None:
+            raise RuntimeError("Synchrony manifest loading requires prepared configuration")
+        return load_or_initialize_manifest(directory, active_config)
+
+    def unsupported_power(_: LFPSummaryConfig) -> object:
+        """Reject unbound Power work without returning fake arrays."""
+        raise NotImplementedError("power is unsupported by the Synchrony runtime")
+
+    def unsupported_spike(_: LFPSummaryConfig, __: object) -> object:
+        """Reject unbound spike preparation without returning fake arrays."""
+        raise NotImplementedError("spike preparation is unsupported by Synchrony runtime")
+
+    def unsupported_power_payload(_: LFPSummaryConfig, __: object) -> ComponentPayload:
+        """Reject unbound Power payload work without placeholder values."""
+        raise NotImplementedError("power payload is unsupported by Synchrony runtime")
+
+    def unsupported_spike_payload(
+        _: LFPSummaryConfig,
+        __: object,
+        ___: object,
+    ) -> ComponentPayload:
+        """Reject unbound spike payload work without placeholder values."""
+        raise NotImplementedError("spike payload is unsupported by Synchrony runtime")
+
+    return PipelineDependencies(
+        prepare_power=unsupported_power,
+        prepare_phase=prepare_phase,
+        prepare_spike=unsupported_spike,
+        build_power_payload=unsupported_power_payload,
+        build_synchrony_payload=build_synchrony_payload,
+        build_spike_phase_payload=unsupported_spike_payload,
+        load_manifest=load_manifest,
+        write_component=write_component_transaction,
+    )
+
+
 @dataclass(frozen=True)
 class _SitePowerResult:
     """Native site PSD products before cache-axis assembly."""
@@ -286,6 +747,300 @@ class _SitePowerResult:
     session_reference_psd_linear: np.ndarray
     presession_reference_psd_linear: np.ndarray
     presession_reference_available: bool
+
+
+def _validate_site_phase_tensor(
+    tensor: lfp_phase_clustering.PhaseTrialTensor,
+    frequency_count: int,
+) -> None:
+    """Validate one site's complex phase axes without changing its storage."""
+    if not isinstance(tensor, lfp_phase_clustering.PhaseTrialTensor):
+        raise ValueError("site phase builder must return PhaseTrialTensor")
+    phase = np.asarray(tensor.phase)
+    valid = np.asarray(tensor.valid)
+    times = np.asarray(tensor.relative_time_s)
+    indices = np.asarray(tensor.trial_indices)
+    expected = (1, frequency_count, indices.size, times.size)
+    if phase.shape != expected or valid.shape != phase.shape:
+        raise ValueError("site phase tensor axes are invalid")
+    if not np.iscomplexobj(phase) or valid.dtype != np.dtype(bool):
+        raise ValueError("site phase and validity dtypes are invalid")
+    if times.ndim != 1 or times.size < 2 or not np.isfinite(times).all():
+        raise ValueError("site phase time must be a finite nontrivial vector")
+    if np.any(np.diff(times) <= 0.0):
+        raise ValueError("site phase time must be strictly increasing")
+    if indices.ndim != 1 or not np.issubdtype(indices.dtype, np.integer):
+        raise ValueError("site phase trial indices must be integer row positions")
+    if np.unique(indices).size != indices.size:
+        raise ValueError("site phase trial indices must be unique")
+
+
+def _full_phase_axes(
+    site_tensors: list[lfp_phase_clustering.PhaseTrialTensor],
+    trial_indices: np.ndarray,
+    frequency_count: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Place independent site tensors on one full trial axis without intersection.
+
+    Parameters
+    ----------
+    site_tensors : list[PhaseTrialTensor]
+        One independently retained tensor per configured site.
+    trial_indices : numpy.ndarray
+        Int64 shape ``(trial,)`` full trial-table row positions.
+    frequency_count : int
+        Positive size of the configured phase-frequency axis.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray]
+        Exact relative seconds ``(time,)``, complex64 phase and boolean validity
+        ``(site, frequency, trial, time)``, and boolean ``(site, trial)``
+        retention. Missing sites/trials remain zero/false, never globally drop.
+    """
+    if not site_tensors:
+        raise ValueError("phase preparation requires at least one site")
+    relative_time_s = np.asarray(site_tensors[0].relative_time_s, dtype=float).copy()
+    shape = (
+        len(site_tensors),
+        frequency_count,
+        trial_indices.size,
+        relative_time_s.size,
+    )
+    phase = np.zeros(shape, dtype=np.complex64)
+    valid = np.zeros(shape, dtype=bool)
+    site_valid = np.zeros((len(site_tensors), trial_indices.size), dtype=bool)
+    position_by_row = {int(row): position for position, row in enumerate(trial_indices)}
+    for site_index, tensor in enumerate(site_tensors):
+        if not np.array_equal(relative_time_s, tensor.relative_time_s):
+            raise ValueError("site phase tensors do not share an exact time grid")
+        try:
+            positions = np.asarray(
+                [position_by_row[int(row)] for row in tensor.trial_indices],
+                dtype=np.int64,
+            )
+        except KeyError as error:
+            raise ValueError("site phase tensor contains an unknown trial row") from error
+        phase[site_index][:, positions, :] = np.asarray(tensor.phase[0], np.complex64)
+        valid[site_index][:, positions, :] = tensor.valid[0]
+        site_valid[site_index, positions] = np.any(tensor.valid[0], axis=(0, 2))
+    return relative_time_s, phase, valid, site_valid
+
+
+def _configured_pair_indices(config: LFPSummaryConfig) -> tuple[tuple[int, int], ...]:
+    """Map ordered stable site-pair ids to distinct zero-based site indices."""
+    position = {site.stable_id: index for index, site in enumerate(config.sites)}
+    pairs = []
+    for site_a_id, site_b_id in config.site_pairs:
+        try:
+            site_a = position[site_a_id]
+            site_b = position[site_b_id]
+        except KeyError as error:
+            raise ValueError("configured pair references an unknown site") from error
+        if site_a == site_b:
+            raise ValueError("configured Synchrony pairs require distinct sites")
+        pairs.append((site_a, site_b))
+    if not pairs:
+        raise ValueError("Synchrony requires at least one configured site pair")
+    return tuple(pairs)
+
+
+def _cached_prepared_source_traces(
+    config: LFPSummaryConfig,
+    site_traces: dict[str, PreparedSiteTraces],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Anti-alias native prepared traces onto the exact 500-Hz cache grid."""
+    if not np.isclose(config.phase.output_rate_hz, _CACHE_SAMPLE_RATE_HZ):
+        raise ValueError("Synchrony production output_rate_hz must be exactly 500")
+    cached = []
+    relative_time_s: np.ndarray | None = None
+    for site in config.sites:
+        traces = site_traces[site.stable_id]
+        ratio = traces.sample_rate_hz / _CACHE_SAMPLE_RATE_HZ
+        factor = round(ratio)
+        if factor < 1 or not np.isclose(ratio, factor, rtol=0.0, atol=1e-9):
+            raise ValueError("Synchrony source traces require integer decimation to 500 Hz")
+        selected_time = traces.relative_time_s[::factor]
+        selected_trace = _resample_trace_rows(
+            traces.source_trace,
+            factor,
+            selected_time.size,
+        )
+        if relative_time_s is None:
+            relative_time_s = selected_time.copy()
+        elif not np.array_equal(relative_time_s, selected_time):
+            raise ValueError("Synchrony source traces do not share an exact time grid")
+        cached.append(selected_trace)
+    if relative_time_s is None:
+        raise ValueError("Synchrony source traces require at least one site")
+    return relative_time_s, np.stack(cached)
+
+
+def _production_phase_block_loader_factory(
+    site: LFPSiteConfig,
+) -> Callable[[float, float], tuple[np.ndarray, np.ndarray, float]]:
+    """Bind one configured site's production continuous absolute-time loader.
+
+    Parameters
+    ----------
+    site : LFPSiteConfig
+        Saved LFP channel, acquisition format, sync path, and source units.
+
+    Returns
+    -------
+    Callable
+        Loader accepting absolute start/stop seconds and returning matching
+        absolute seconds, source-voltage samples, and native rate in Hz.
+    """
+    if site.acquisition_format == "open_ephys":
+        if site.aligned_sync_path is None:
+            raise ValueError("Open Ephys phase loading requires aligned_sync_path")
+        metadata = lfp_loading.load_open_ephys_lfp_metadata(site.lfp_path)
+        sample_rate_hz = float(metadata["sampling_frequency_hz"])
+        sync = lfp_loading.build_open_ephys_lfp_irig_df(
+            site.aligned_sync_path,
+            sample_rate_hz,
+        )
+
+        def load_open_ephys(
+            start_s: float,
+            stop_s: float,
+        ) -> tuple[np.ndarray, np.ndarray, float]:
+            """Read one Open Ephys channel block on its inferred absolute grid."""
+            relative, start_sample, stop_sample = lfp_loading.map_lfp_time_window_to_samples(
+                start_s,
+                (0.0, stop_s - start_s),
+                sync,
+                sample_rate_hz,
+            )
+            values, file_rate_hz = lfp_loading.read_open_ephys_lfp_channel_window(
+                site.lfp_path,
+                site.saved_channel_index,
+                start_sample,
+                stop_sample,
+            )
+            return start_s + relative, values, file_rate_hz
+
+        return load_open_ephys
+    if site.acquisition_format == "spikeglx":
+        metadata = lfp_loading.load_lfp_metadata(site.lfp_path)
+        lfp_loading.validate_lfp_saved_channel(metadata, site.saved_channel_index)
+        sync, sample_rate_hz = lfp_loading.decode_lfp_sync(site.lfp_path)
+
+        def load_spikeglx(
+            start_s: float,
+            stop_s: float,
+        ) -> tuple[np.ndarray, np.ndarray, float]:
+            """Read one SpikeGLX channel block on its decoded absolute grid."""
+            relative, start_sample, stop_sample = lfp_loading.map_lfp_time_window_to_samples(
+                start_s,
+                (0.0, stop_s - start_s),
+                sync,
+                sample_rate_hz,
+            )
+            values, file_rate_hz = lfp_loading.read_lfp_saved_channel_window(
+                site.lfp_path,
+                site.saved_channel_index,
+                start_sample,
+                stop_sample,
+            )
+            return start_s + relative, values, file_rate_hz
+
+        return load_spikeglx
+    raise ValueError(f"unsupported phase acquisition format: {site.acquisition_format}")
+
+
+def _validate_prepared_phase_run(
+    config: LFPSummaryConfig,
+    prepared: PreparedPhaseRun,
+) -> None:
+    """Validate prepared Synchrony identities, dtypes, axes, seconds, and masks."""
+    if not isinstance(prepared, PreparedPhaseRun):
+        raise ValueError("prepared must be a PreparedPhaseRun")
+    trial_count = prepared.trial_indices.size
+    expected_phase = (
+        len(config.sites),
+        len(config.phase.frequency_hz),
+        trial_count,
+        prepared.relative_time_s.size,
+    )
+    if prepared.phase_tensor.shape != expected_phase:
+        raise ValueError("prepared phase axes disagree with configuration")
+    if prepared.phase_tensor.dtype != np.dtype(np.complex64):
+        raise ValueError("prepared phase storage must remain complex64")
+    if prepared.phase_valid.shape != expected_phase:
+        raise ValueError("prepared phase validity axes are invalid")
+    if prepared.site_valid.shape != (len(config.sites), trial_count):
+        raise ValueError("prepared site validity axes are invalid")
+    if prepared.pair_valid.shape != (len(config.site_pairs), trial_count):
+        raise ValueError("prepared pair validity axes are invalid")
+    expected_source = (len(config.sites), trial_count, prepared.relative_time_s.size)
+    if prepared.source_trace.shape != expected_source:
+        raise ValueError("prepared source trace axes are invalid")
+    if not np.isfinite(prepared.relative_time_s).all():
+        raise ValueError("prepared phase time must be finite seconds")
+
+
+def _analysis_condition_membership(prepared: PreparedTrials) -> np.ndarray:
+    """Return trial-by-condition masks after shared filter/objective/user gates."""
+    shared = (
+        prepared.filter_membership
+        & prepared.objective_valid
+        & ~prepared.user_excluded
+    )
+    return prepared.condition_membership & shared[:, None]
+
+
+def _epoch_windows(config: LFPSummaryConfig) -> dict[str, tuple[float, float]]:
+    """Return ordered whole/before/after half-open bounds in seconds."""
+    windows = config.analysis_windows
+    return {
+        "whole": (windows.whole_start_s, windows.whole_stop_s),
+        "before": (windows.before_start_s, windows.before_stop_s),
+        "after": (windows.after_start_s, windows.after_stop_s),
+    }
+
+
+def _band_hilbert_traces(
+    config: LFPSummaryConfig,
+    prepared: PreparedPhaseRun,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute cache-only bandpassed source traces and Hilbert phase in radians.
+
+    Returns float32 arrays with axes ``(site, trial, band, time)``. Entirely
+    unavailable source rows remain NaN and are never bridged by filtering.
+    """
+    shape = prepared.source_trace.shape[:2] + (
+        len(config.phase.bands),
+        prepared.source_trace.shape[2],
+    )
+    filtered = np.full(shape, np.nan, dtype=np.float32)
+    phase_rad = np.full(shape, np.nan, dtype=np.float32)
+    for site_index in range(shape[0]):
+        for trial_index in range(shape[1]):
+            source = prepared.source_trace[site_index, trial_index]
+            if not np.isfinite(source).all():
+                continue
+            notched = lfp_spectrogram.apply_optional_60_hz_notch(
+                source,
+                sample_rate_hz=_CACHE_SAMPLE_RATE_HZ,
+                enabled=config.phase.notch_enabled,
+                quality_factor=config.phase.notch_quality_factor,
+            )
+            for band_index, band in enumerate(config.phase.bands):
+                result = spike_lfp_hilbert_phase.compute_hilbert_phase_trace(
+                    prepared.relative_time_s,
+                    notched,
+                    _CACHE_SAMPLE_RATE_HZ,
+                    (band.lower_hz, band.upper_hz),
+                )
+                filtered[site_index, trial_index, band_index] = (
+                    result.bandpassed_lfp.astype(np.float32)
+                )
+                phase_rad[site_index, trial_index, band_index] = (
+                    result.phase_rad.astype(np.float32)
+                )
+    return filtered, phase_rad
 
 
 def _alignment_times(trial_table: pd.DataFrame, config: LFPSummaryConfig) -> np.ndarray:

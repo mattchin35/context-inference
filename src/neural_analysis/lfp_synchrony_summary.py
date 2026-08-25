@@ -70,6 +70,24 @@ class BootstrapBandMean:
 
 
 @dataclass(frozen=True)
+class PhaseBandBootstrapSummary:
+    """Seeded phase-clustering estimates and trial-resampling uncertainty.
+
+    ``estimate``, ``ci_low``, ``ci_high``, ``selected_trial_count``, and
+    ``unstable`` have axes ``(epoch, band)``. ``bootstrap_values`` has axes
+    ``(bootstrap, epoch, band)``. Values are dimensionless phase-clustering
+    magnitudes; trial counts and bootstrap counts are categorical integers.
+    """
+
+    estimate: np.ndarray
+    ci_low: np.ndarray
+    ci_high: np.ndarray
+    selected_trial_count: np.ndarray
+    unstable: np.ndarray
+    bootstrap_values: np.ndarray
+
+
+@dataclass(frozen=True)
 class PLVExemplarSelection:
     """Deterministic low/high illustrative trial identifiers or missing values."""
 
@@ -84,7 +102,7 @@ def _unit_phase_and_valid(phase: np.ndarray, valid: np.ndarray) -> tuple[np.ndar
     mask = np.asarray(valid, dtype=bool).copy()
     finite_nonzero = np.isfinite(array.real) & np.isfinite(array.imag) & (np.abs(array) > 0.0)
     mask &= finite_nonzero
-    normalized = np.zeros(array.shape, dtype=np.complex128)
+    normalized = np.zeros(array.shape, dtype=np.complex64)
     normalized[mask] = array[mask] / np.abs(array[mask])
     return normalized, mask
 
@@ -177,7 +195,11 @@ def compute_phase_clustering_summary(
         for site_index in range(phase.shape[0]):
             values = np.take(normalized[site_index], selected_indices, axis=1)
             mask = np.take(numerical_valid[site_index], selected_indices, axis=1)
-            vector_sum = np.sum(np.where(mask, values, 0.0j), axis=1)
+            vector_sum = np.sum(
+                np.where(mask, values, 0.0j),
+                axis=1,
+                dtype=np.complex128,
+            )
             count = np.sum(mask, axis=1, dtype=np.int32)
             itpc_count[condition_index, site_index] = count
             np.divide(
@@ -193,7 +215,11 @@ def compute_phase_clustering_summary(
             phase_a = np.take(normalized[site_a], selected_indices, axis=1)
             phase_b = np.take(normalized[site_b], selected_indices, axis=1)
             difference = phase_a * np.conjugate(phase_b)
-            vector_sum = np.sum(np.where(pair_valid, difference, 0.0j), axis=1)
+            vector_sum = np.sum(
+                np.where(pair_valid, difference, 0.0j),
+                axis=1,
+                dtype=np.complex128,
+            )
             count = np.sum(pair_valid, axis=1, dtype=np.int32)
             ispc_count[condition_index, pair_index] = count
             magnitude = np.abs(vector_sum)
@@ -255,7 +281,11 @@ def compute_trial_plv_by_frequency(
         positions = (times >= float(start_s)) & (times < float(stop_s))
         epoch_phase = normalized[..., positions]
         epoch_valid = numerical_valid[..., positions]
-        vector_sum = np.sum(np.where(epoch_valid, epoch_phase, 0.0j), axis=3)
+        vector_sum = np.sum(
+            np.where(epoch_valid, epoch_phase, 0.0j),
+            axis=3,
+            dtype=np.complex128,
+        )
         epoch_count = np.sum(epoch_valid, axis=3, dtype=np.int32)
         count[:, :, epoch_index] = epoch_count
         fraction[:, :, epoch_index] = epoch_count / float(expected_count)
@@ -302,6 +332,223 @@ def aggregate_trial_plv_bands(
             count = np.sum(finite, axis=3, dtype=np.int32)
             np.divide(total, count, out=output[..., band_index], where=count > 0)
     return output
+
+
+def bootstrap_phase_clustering_bands(
+    phase_vectors: np.ndarray,
+    valid_mask: np.ndarray,
+    trial_mask: np.ndarray,
+    frequencies_hz: np.ndarray,
+    relative_time_s: np.ndarray,
+    epoch_windows: Mapping[str, tuple[float, float]],
+    bands: Sequence[FrequencyBandConfig],
+    bootstrap_count: int,
+    seed: int,
+) -> PhaseBandBootstrapSummary:
+    """Bootstrap nonlinear phase clustering over trial positions.
+
+    Parameters
+    ----------
+    phase_vectors : numpy.ndarray
+        Complex unit vectors with axes ``(trial, frequency, time)``.
+    valid_mask : numpy.ndarray
+        Boolean numerical validity with the same axes as ``phase_vectors``.
+    trial_mask : numpy.ndarray
+        Boolean shape ``(trial,)`` condition/filter/entity selector.
+    frequencies_hz : numpy.ndarray
+        Finite increasing shape ``(frequency,)`` coordinates in Hz.
+    relative_time_s : numpy.ndarray
+        Finite increasing shape ``(time,)`` coordinates in seconds.
+    epoch_windows : Mapping[str, tuple[float, float]]
+        Ordered half-open epoch bounds in seconds.
+    bands : Sequence[FrequencyBandConfig]
+        Named inclusive outer Hz bounds with open-gap sample exclusions.
+    bootstrap_count : int
+        Positive number of with-replacement trial resamples.
+    seed : int
+        Deterministic NumPy random seed.
+
+    Returns
+    -------
+    PhaseBandBootstrapSummary
+        Dimensionless estimates/intervals on ``(epoch, band)`` axes and all
+        seeded bootstrap scalar values on ``(bootstrap, epoch, band)`` axes.
+
+    Raises
+    ------
+    ValueError
+        If any axis, coordinate, window, band, count, or seed is invalid.
+    """
+    phase = np.asarray(phase_vectors)
+    valid = np.asarray(valid_mask, dtype=bool)
+    selected = np.asarray(trial_mask, dtype=bool)
+    frequencies = np.asarray(frequencies_hz, dtype=float)
+    times = np.asarray(relative_time_s, dtype=float)
+    if phase.ndim != 3 or valid.shape != phase.shape:
+        raise ValueError("phase_vectors and valid_mask must share trial/frequency/time axes")
+    if selected.shape != (phase.shape[0],):
+        raise ValueError("trial_mask must match the phase trial axis")
+    if frequencies.shape != (phase.shape[1],) or times.shape != (phase.shape[2],):
+        raise ValueError("phase coordinates do not match frequency/time axes")
+    if (
+        not np.isfinite(frequencies).all()
+        or not np.isfinite(times).all()
+        or np.any(np.diff(frequencies) <= 0.0)
+        or np.any(np.diff(times) <= 0.0)
+    ):
+        raise ValueError("phase coordinates must be finite and strictly increasing")
+    if int(bootstrap_count) != bootstrap_count or int(bootstrap_count) < 1:
+        raise ValueError("bootstrap_count must be a positive integer")
+    if int(seed) != seed:
+        raise ValueError("seed must be an integer")
+    epoch_names = tuple(str(name) for name in epoch_windows)
+    if not epoch_names or not bands:
+        raise ValueError("epoch_windows and bands must be nonempty")
+    point_masks = _phase_band_point_masks(
+        frequencies,
+        times,
+        epoch_windows,
+        bands,
+    )
+    trial_positions = np.flatnonzero(selected)
+    shape = (len(epoch_names), len(bands))
+    estimate = np.full(shape, np.nan, dtype=float)
+    ci_low = np.full(shape, np.nan, dtype=float)
+    ci_high = np.full(shape, np.nan, dtype=float)
+    selected_count = np.zeros(shape, dtype=np.int32)
+    unstable = np.ones(shape, dtype=bool)
+    bootstrap_values = np.full((int(bootstrap_count),) + shape, np.nan, dtype=float)
+    if not trial_positions.size:
+        return PhaseBandBootstrapSummary(
+            estimate,
+            ci_low,
+            ci_high,
+            selected_count,
+            unstable,
+            bootstrap_values,
+        )
+
+    normalized, numerical_valid = _unit_phase_and_valid(phase, valid)
+    selected_phase = np.take(normalized, trial_positions, axis=0)
+    selected_valid = np.take(numerical_valid, trial_positions, axis=0)
+    observed = _weighted_phase_clustering(
+        selected_phase,
+        selected_valid,
+        np.ones((1, trial_positions.size), dtype=float),
+    )[0]
+    for epoch_index in range(shape[0]):
+        for band_index in range(shape[1]):
+            point_mask = point_masks[epoch_index][band_index]
+            estimate[epoch_index, band_index] = _finite_point_mean(
+                observed,
+                point_mask,
+            )
+            contributing = np.any(selected_valid[:, point_mask], axis=1)
+            selected_count[epoch_index, band_index] = np.count_nonzero(contributing)
+            unstable[epoch_index, band_index] = (
+                selected_count[epoch_index, band_index] < 10
+            )
+
+    generator = np.random.default_rng(int(seed))
+    chunk_size = min(8, int(bootstrap_count))
+    for start in range(0, int(bootstrap_count), chunk_size):
+        stop = min(start + chunk_size, int(bootstrap_count))
+        draw_positions = generator.integers(
+            0,
+            trial_positions.size,
+            size=(stop - start, trial_positions.size),
+        )
+        weights = np.zeros((stop - start, trial_positions.size), dtype=float)
+        for draw_index, draw in enumerate(draw_positions):
+            weights[draw_index] = np.bincount(
+                draw,
+                minlength=trial_positions.size,
+            )
+        clustering = _weighted_phase_clustering(
+            selected_phase,
+            selected_valid,
+            weights,
+        )
+        for epoch_index in range(shape[0]):
+            for band_index in range(shape[1]):
+                point_mask = point_masks[epoch_index][band_index]
+                for chunk_index in range(stop - start):
+                    bootstrap_values[start + chunk_index, epoch_index, band_index] = (
+                        _finite_point_mean(clustering[chunk_index], point_mask)
+                    )
+    for epoch_index in range(shape[0]):
+        for band_index in range(shape[1]):
+            values = bootstrap_values[:, epoch_index, band_index]
+            finite = values[np.isfinite(values)]
+            if finite.size:
+                ci_low[epoch_index, band_index] = np.percentile(finite, 2.5)
+                ci_high[epoch_index, band_index] = np.percentile(finite, 97.5)
+    return PhaseBandBootstrapSummary(
+        estimate,
+        ci_low,
+        ci_high,
+        selected_count,
+        unstable,
+        bootstrap_values,
+    )
+
+
+def _phase_band_point_masks(
+    frequencies_hz: np.ndarray,
+    relative_time_s: np.ndarray,
+    epoch_windows: Mapping[str, tuple[float, float]],
+    bands: Sequence[FrequencyBandConfig],
+) -> tuple[tuple[np.ndarray, ...], ...]:
+    """Return ``(epoch, band)`` boolean frequency-by-time point masks."""
+    masks = []
+    for start_s, stop_s in epoch_windows.values():
+        if not np.isfinite(start_s) or not np.isfinite(stop_s) or start_s >= stop_s:
+            raise ValueError("epoch windows must contain finite increasing seconds")
+        time_mask = (relative_time_s >= start_s) & (relative_time_s < stop_s)
+        if not np.any(time_mask):
+            raise ValueError("epoch window contains no phase samples")
+        epoch_masks = []
+        for band in bands:
+            frequency_mask = (frequencies_hz >= band.lower_hz) & (
+                frequencies_hz <= band.upper_hz
+            )
+            for lower_hz, upper_hz in band.excluded_intervals_hz:
+                if lower_hz >= upper_hz:
+                    raise ValueError("band exclusions must contain increasing Hz bounds")
+                frequency_mask &= ~(
+                    (frequencies_hz >= lower_hz) & (frequencies_hz <= upper_hz)
+                )
+            if not np.any(frequency_mask):
+                raise ValueError(f"band {band.name!r} contains no retained frequency")
+            epoch_masks.append(frequency_mask[:, None] & time_mask[None, :])
+        masks.append(tuple(epoch_masks))
+    return tuple(masks)
+
+
+def _weighted_phase_clustering(
+    phase: np.ndarray,
+    valid: np.ndarray,
+    weights: np.ndarray,
+) -> np.ndarray:
+    """Return weighted trial clustering maps with float64/complex128 sums."""
+    valid_phase = np.where(valid, phase, 0.0j)
+    vector_sum = np.tensordot(weights, valid_phase, axes=((1,), (0,)))
+    valid_count = np.tensordot(weights, valid, axes=((1,), (0,)))
+    output = np.full(vector_sum.shape, np.nan, dtype=float)
+    np.divide(
+        np.abs(vector_sum),
+        valid_count,
+        out=output,
+        where=valid_count > 0.0,
+    )
+    return output
+
+
+def _finite_point_mean(values: np.ndarray, point_mask: np.ndarray) -> float:
+    """Return one finite selected-point mean or NaN when no point contributes."""
+    selected = np.asarray(values, dtype=float)[point_mask]
+    finite = selected[np.isfinite(selected)]
+    return float(np.mean(finite)) if finite.size else np.nan
 
 
 def bootstrap_band_mean(
