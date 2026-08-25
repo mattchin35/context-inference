@@ -212,6 +212,29 @@ def test_presession_reference_requires_exactly_ten_seconds_before_first_trial() 
     assert np.isnan(short_reference).all()
 
 
+def test_presession_reference_accepts_native_grid_at_unix_epoch_magnitude() -> None:
+    """Floating precision at UTC Unix magnitudes must not invalidate native spacing."""
+
+    sample_rate_hz = 2500.0
+    config = _power_config()
+    first_start_time_s = 1_785_604_100.0
+    relative_time_s = -10.0 + np.arange(25_000, dtype=float) / sample_rate_hz
+    absolute_time_s = first_start_time_s + relative_time_s
+    values_uv = np.sin(2.0 * np.pi * 8.0 * relative_time_s)
+
+    frequency_hz, reference, available = compute_presession_reference_psd(
+        absolute_time_s,
+        values_uv,
+        first_start_time_s,
+        sample_rate_hz,
+        config,
+    )
+
+    assert available is True
+    assert frequency_hz.shape == reference.shape
+    assert np.isfinite(reference).all()
+
+
 def test_gamma_band_mean_uses_disjoint_intervals_and_exact_retained_bandwidth() -> None:
     """Gamma includes boundary-adjacent retained bandwidth without bridging 58-62 Hz."""
 
