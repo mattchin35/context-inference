@@ -439,3 +439,144 @@ interpretable as exemplar names rather than arbitrary latent Gaussian clusters.
   transition matrix construction, Dynamax smoothing, output-column creation,
   diagnostic plotting, loadable pickle payloads, and multisession boundary
   handling.
+
+# 2026/08/25
+
+Reached the user-approved Power inspection gate for the new cached LFP summary
+pipeline and prepared the next Synchrony implementation stage. The governing
+documents are `docs/Tasks_neural.md` and `docs/webappDesign.md`; their plan was
+approved before implementation. Work is on branch `refactor`, and the user
+pushed the branch after approving the revised CT026 Power figures.
+
+Completed implementation state:
+
+- Restored the neural-analysis baseline and removed the duplicate public
+  Hilbert plotting definition.
+- Added immutable configuration/fingerprint models, safe NPZ/JSON cache I/O,
+  component schemas, shared trial/LFP preparation, numerical Power,
+  Synchrony, and spike-phase summary functions, pure Matplotlib plotting,
+  component pipeline orchestration, and the Streamlit route boundary.
+- Added the production Power runtime and CT026 validation runner. CT026 uses
+  session `CT026_2026-08-01_130853`, PFC ProbeA channel 5, HPC1 ProbeB channel
+  222, and HPC2 ProbeB channel 14. Open Ephys trial loading preserves exact
+  fractional alignment and the cached 500 Hz source traces use anti-aliased
+  resampling.
+- The current Power cache is under the session's
+  `processed/lfp_summary_cache` directory. Its main arrays have 3 sites, 427
+  trials, 3 epochs, a canonical 2 Hz PSD grid, and exact 500 Hz `[-2, 2)`
+  source traces. Three trial rows (114, 229, and 284) are invalid because
+  `choice_time` is missing; no amplitude-based exclusion was silently applied.
+- The user requested Tukey box plots instead of median/IQR bars and separate
+  figures for the base five conditions versus omission/incorrect
+  subdivisions. This is implemented in commits `716723f`, `1d8ec4b`, and
+  `a89d245`. Box plots use 1.5-IQR whiskers and hide outlier markers. PSD and
+  band captions state that the condition masks overlap. The cached web Power
+  preview defaults to the base five conditions.
+- The approved cache-only CT026 report is
+  `analysis_runs/CT026_2026-08-01_130853_lfp_power_validation_2026-08-25T16-17-40Z`
+  beneath the session root. It contains 12 visually inspected PNGs: base and
+  subdivision PSD and band-power plots for PFC, HPC1, and HPC2. Its metadata
+  records `power_recomputed=false`; it reused the compatible cache and carried
+  forward the measured 10.494185874 second runtime and 586289152 byte peak
+  memory value.
+- The latest complete neural-analysis command was
+  `UV_CACHE_DIR=/tmp/context_inference_uv_cache MPLCONFIGDIR=/tmp/mpl uv run
+  pytest -q -p no:cacheprovider src/tests/neural_analysis`, which passed 597
+  tests with 16 pre-existing Pynapple empty-epoch/divide-by-zero warnings.
+
+The next approved gate is production Synchrony on the same CT026 session. The
+low-level numerical code and cache schema exist, but the production bridge is
+not implemented: `lfp_summary_runtime.make_power_pipeline_dependencies()`
+still installs explicit unsupported phase/Synchrony seams, and
+`lfp_summary_webapp.make_production_summary_dependencies()` still reports
+production Synchrony as unavailable. Another agent should resume with strict
+test-first work rather than running CT026 immediately:
+
+1. Add and commit RED tests for a production phase-preparation object,
+   Synchrony payload builder/factory, web action, and immutable cache-only
+   Synchrony validation report. Tests must use injected tiny loaders and must
+   prove Synchrony does not recompute Power or invoke spike-phase work.
+2. Reuse `lfp_phase_clustering.compute_site_phase_trial_tensor()` for bounded
+   continuous transforms (120 second cores with Morlet edge padding), and keep
+   the configured 2-100 Hz, 2 Hz-spaced phase frequencies. Interpolate complex
+   real/imaginary coefficients onto the exact 500 Hz grid and normalize; never
+   interpolate wrapped phase angles.
+3. Preserve the full 427-row trial axis with per-site validity. Do not use
+   `combine_phase_trial_tensors()`, because its all-site intersection would let
+   a missing HPC2 trial incorrectly remove an otherwise valid PFC-HPC1 trial.
+   ITPC is site-specific and ISPC/PLV validity is pair-specific.
+4. Assemble every array in `SYNCHRONY_ARRAY_SCHEMA`, including ITPC/ISPC maps
+   and counts, signed A-minus-B offsets, direct whole/before/after PLV and 80
+   percent coverage diagnostics, disjoint gamma handling, bootstrap summaries,
+   and cached source/band/Hilbert exemplar traces. Wavelet tensors must remain
+   temporary and must not be written to the cache.
+5. Bootstrap ITPC/ISPC by resampling selected trial positions within each
+   condition and recomputing the scalar band/window phase-clustering statistic.
+   Do not substitute a bootstrap over already-aggregated values. Use exactly
+   the configured seeded 1,000 resamples and retain under-10 instability flags.
+6. Add a timestamped Synchrony validation report outside the repository with
+   maps plus effective counts, theta/gamma summaries with confidence intervals,
+   PLV distributions/coverage, deterministic high/low exemplars, manifest and
+   configuration snapshots, log, source identifiers, runtime, peak memory,
+   cache/component sizes, exclusions, and warnings. Run it only after all
+   focused and full tests pass, then pause for user inspection before any
+   spike-phase preview.
+
+Performance needs explicit attention. A dense temporary phase tensor for 3
+sites x 50 frequencies x 427 trials x 2000 samples is about 1.0 GB as
+`complex64`, before its validity mask and temporary reductions. Keep continuous
+wavelet calculation block-bounded, avoid accidental `complex128`/`float64`
+copies of the entire tensor, and report observed memory/time rather than adding
+an arbitrary cutoff. The 1,000-resample bootstrap may dominate runtime and
+should be implemented in bounded chunks while preserving the exact statistic.
+
+Worktree caution: `docs/Tasks_neural.md` and `docs/webappDesign.md` were already
+modified by the user and must not be reverted. The repository also contains
+many unrelated untracked files. Stage only files belonging to the current LFP
+summary task. Two Terra Medium handoff attempts on 2026/08/25 ended before
+editing because their service usage limit was reached, so there are no partial
+Synchrony test or source changes to recover from those attempts.
+
+Synchrony continuation completed later on 2026/08/25:
+
+- Added and committed the production full-trial phase preparation, exact
+  Synchrony payload, Synchrony-only pipeline factory, seeded trial-resampling
+  bootstrap, and CT026 cache-backed validation/report runner. The main commits
+  are `a432aa1`, `ea542d1`, `fa19ad0`, and `f312957`; subsequent test-first
+  plotting/report fixes end at `cc2fd81`.
+- Phase preparation uses bounded continuous transforms, preserves complex64
+  storage on `(site, frequency, trial, time)`, retains the full 427-row trial
+  axis, and computes site- and pair-specific validity without an all-site
+  intersection. The cached component contains no wavelet tensor.
+- The CT026 Synchrony computation completed successfully and atomically added
+  `synchrony.npz` beside the existing Power cache. The Synchrony component is
+  153572688 bytes; the complete generic cache is 232275359 bytes. Three trials
+  are unavailable at every site because their alignment event is missing,
+  yielding site exclusion counts `[3, 3, 3]` and pair exclusion counts
+  `[3, 3, 3]`. No ITPC/ISPC band summary has fewer than 10 contributing trials.
+- Observed compute time was approximately 642.487 seconds (10.7 minutes),
+  derived from the run start and manifest completion timestamps. The process
+  peak RSS was not captured before a post-compute plotting exception, so the
+  final report explicitly marks peak memory unavailable instead of claiming a
+  zero-byte measurement. The nine-filter linear projection is about 5782.383
+  seconds and 1382154192 component bytes.
+- Real-data plotting exposed three issues that synthetic tests had missed:
+  percentile bootstrap intervals need not contain their point estimate; a
+  caption must not enumerate hundreds of per-trial sample counts; and combining
+  3 sites, 3 pairs, and 9 conditions makes a band-summary plot unreadable.
+  Corrective RED tests were committed first. Intervals are now drawn as direct
+  ranges, PLV captions show per-epoch count/min/median/max diagnostics, reports
+  publish from a hidden staging directory only after all artifacts succeed,
+  and band summaries are split into per-site ITPC and per-pair ISPC figures.
+- The final report to inspect is
+  `analysis_runs/CT026_2026-08-01_130853_lfp_synchrony_validation_2026-08-25T23-37-18Z`
+  beneath the CT026 session root. It contains 252 PNGs plus manifest,
+  configuration, source-identifier, log, and Markdown snapshots. Earlier
+  Synchrony report directories from this date are partial or superseded and
+  should not be used for approval.
+- The final full neural-analysis command passed 609 tests with the same 16
+  pre-existing Pynapple empty-epoch/divide-by-zero warnings. The next required
+  action is user inspection/approval of the final Synchrony report. Do not run
+  the Spike-phase preview until that approval. Production webapp dependency
+  wiring for Synchrony remains a later integration task; the validation runner
+  and component cache are complete and independently callable.
