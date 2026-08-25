@@ -554,7 +554,7 @@ def test_production_power_plot_delegates_cache_arrays_to_plotting_module(
     )
     normalized_psd = np.arange(24, dtype=float).reshape(1, 2, 3, 4)
     arrays = {
-        "frequency_hz": np.arange(4, dtype=float) * 2.0,
+        "frequency_hz": np.array((0.0, 40.0, 100.0, 102.0)),
         "normalized_psd_session_db": normalized_psd,
         "condition_names": np.array(("correct_rewarded", "omission")),
         "condition_membership": np.array(((True, False), (True, True))),
@@ -585,9 +585,10 @@ def test_production_power_plot_delegates_cache_arrays_to_plotting_module(
     assert figure is expected_figure
     args = captured["args"]
     assert isinstance(args, tuple)
+    assert np.array_equal(args[0], np.array((0.0, 40.0, 100.0)))
     condition_psd = args[1]
     assert isinstance(condition_psd, np.ndarray)
-    assert np.array_equal(condition_psd[0, 0], normalized_psd[0, 0, 0])
+    assert np.array_equal(condition_psd[0, 0], normalized_psd[0, 0, 0, :3])
     assert np.isnan(condition_psd[0, 1]).all()
     assert np.isnan(condition_psd[1, 0]).all()
     assert np.isnan(condition_psd[1, 1]).all()

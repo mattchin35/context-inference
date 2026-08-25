@@ -82,6 +82,7 @@ def test_condition_psd_shows_every_condition_median_iqr_count_reference_and_unit
     caption = figure.texts[-1].get_text()
     assert "correct_rewarded (n=2)" in caption and "omission (n=2)" in caption
     assert "session" in caption and "uV" in caption
+    assert "\n" in caption
 
 
 def test_band_summary_uses_required_theta_before_after_gamma_measurement_order() -> None:
@@ -100,16 +101,16 @@ def test_band_summary_uses_required_theta_before_after_gamma_measurement_order()
 
     _assert_figure_contract(figure, axes, {"band_power"})
     labels = [tick.get_text() for tick in axes["band_power"].get_xticklabels()]
-    assert labels == [
-        "correct_rewarded theta-before",
-        "correct_rewarded theta-after",
-        "correct_rewarded gamma-before",
-        "correct_rewarded gamma-after",
-        "omission theta-before",
-        "omission theta-after",
-        "omission gamma-before",
-        "omission gamma-after",
+    assert labels == ["correct_rewarded", "omission"]
+    legend = axes["band_power"].get_legend()
+    assert legend is not None
+    assert [text.get_text() for text in legend.get_texts()] == [
+        "theta-before",
+        "theta-after",
+        "gamma-before",
+        "gamma-after",
     ]
+    assert axes["band_power"].collections
     assert axes["band_power"].get_ylabel().startswith("Band power (dB")
 
 

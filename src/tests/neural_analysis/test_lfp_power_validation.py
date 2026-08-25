@@ -45,7 +45,7 @@ def _power_arrays() -> dict[str, np.ndarray]:
     -------
     dict[str, numpy.ndarray]
         Numeric/Unicode arrays with Power cache axes: site=3, trial=2, epoch=3,
-        frequency=3, band=2, condition=2, and time=2. PSD values are dB; source
+        frequency=4, band=2, condition=2, and time=2. PSD values are dB; source
         trace values are uV; identity arrays are fixed-width Unicode.
     """
     return {
@@ -53,8 +53,8 @@ def _power_arrays() -> dict[str, np.ndarray]:
         "condition_names": np.array(("correct_rewarded", "omission")),
         "epoch_names": np.array(("whole", "before", "after")),
         "band_names": np.array(("theta", "gamma")),
-        "frequency_hz": np.array((6.0, 8.0, 40.0)),
-        "normalized_psd_session_db": np.zeros((3, 2, 3, 3), dtype=float),
+        "frequency_hz": np.array((6.0, 8.0, 40.0, 120.0)),
+        "normalized_psd_session_db": np.zeros((3, 2, 3, 4), dtype=float),
         "band_power_session_db": np.zeros((3, 2, 3, 2), dtype=float),
         "condition_membership": np.array(((True, False), (False, True))),
         "filter_membership": np.array((True, False)),
@@ -221,6 +221,7 @@ def _validation_dependencies(
         """
         values = kwargs["condition_trial_psd_db"]
         assert isinstance(values, np.ndarray)
+        assert np.max(kwargs["frequency_hz"]) <= 100.0
         assert np.isnan(values[:, 1]).all()
         calls.append("plot_psd")
         return _FakeFigure([]), {}
