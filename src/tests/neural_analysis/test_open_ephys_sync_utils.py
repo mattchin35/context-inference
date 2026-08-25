@@ -220,19 +220,18 @@ def test_main_open_ephys_workflow_syncs_probe_a_and_probe_b_with_expected_paths(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
-    session_data_home = tmp_path / "CT026_20260727_alternating_latent"
+    session_data_home = tmp_path / "CT026_20260801_latent_inference"
     raw_recording_dir = (
         session_data_home
         / "ephys"
         / "raw"
-        / "2026-07-27_14-37-43"
+        / "2026-08-01_13-08-22"
         / "Record Node 101"
         / "experiment1"
         / "recording1"
     )
-    probe_name = "ProbeA"
-    for probe_name in ("ProbeA",):
-        processor_name = f"Neuropix-PXI-100.{probe_name}"
+    for probe_name in ("ProbeA", "ProbeB"):
+        processor_name = f"Neuropix-PXI-110.{probe_name}"
         (raw_recording_dir / "continuous" / processor_name).mkdir(parents=True)
         (raw_recording_dir / "events" / processor_name / "TTL").mkdir(parents=True)
         (
@@ -245,7 +244,7 @@ def test_main_open_ephys_workflow_syncs_probe_a_and_probe_b_with_expected_paths(
 
     hardcoded_session_path = (
         "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/"
-        "CT026_20260727_alternating_latent"
+        "CT026_20260801_latent_inference"
     )
 
     def fake_path(path_value: str | Path) -> Path:
@@ -269,8 +268,18 @@ def test_main_open_ephys_workflow_syncs_probe_a_and_probe_b_with_expected_paths(
     result = sync_ephys.main_open_ephys_workflow()
 
     assert inspect.signature(sync_ephys.main_open_ephys_workflow).parameters == {}
-    assert set(result.keys()) == {"ProbeA"}
-    assert [Path(call["output_file"]).name for call in calls] == ["probeA_sync.npz"]
-    assert calls[0]["ttl_dir"] == raw_recording_dir / "events" / "Neuropix-PXI-100.ProbeA" / "TTL"
-    assert calls[0]["utc_offset_hours"] == 0.0
-    assert calls[0]["probe_name"] == "ProbeA"
+    assert set(result.keys()) == {"ProbeA", "ProbeB"}
+    assert [Path(call["output_file"]).name for call in calls] == ["probeA_sync.npz", "probeB_sync.npz"]
+    for call, probe_name in zip(calls, ("ProbeA", "ProbeB"), strict=True):
+        processor_name = f"Neuropix-PXI-110.{probe_name}"
+        assert call["kilosort_dir"] == (
+            session_data_home
+            / "ephys"
+            / "derived"
+            / f"Record_Node_101_{processor_name}"
+            / "kilosort4"
+        )
+        assert call["ttl_dir"] == raw_recording_dir / "events" / processor_name / "TTL"
+        assert call["continuous_dir"] == raw_recording_dir / "continuous" / processor_name
+        assert call["utc_offset_hours"] == 0.0
+        assert call["probe_name"] == probe_name
