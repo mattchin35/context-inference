@@ -467,12 +467,14 @@ def plot_phase_band_summary(
     axis.set_xticks(x, labels, rotation=25, ha="right")
     axis.set_ylabel(metric_name)
     axis.set_title(f"{band_name} {epoch_name}")
+    figure.set_size_inches(max(10.0, 1.4 * len(labels)), 6.0)
     unstable = [labels[i] for i in np.flatnonzero(n < 10)]
     _caption(
         figure,
         context,
         f"95% bootstrap CI; counts={n.tolist()}; unstable low trial count: {unstable}",
     )
+    figure.subplots_adjust(bottom=max(figure.subplotpars.bottom, 0.35))
     return figure, axes
 
 

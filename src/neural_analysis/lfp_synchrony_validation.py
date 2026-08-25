@@ -1005,6 +1005,9 @@ def _build_report(
         + np.count_nonzero(arrays["ispc_unstable"])
     )
     warnings = list(status.differences)
+    peak_memory_available = peak_memory_bytes > 0
+    if not peak_memory_available:
+        warnings.append("peak memory unavailable for completed computation")
     if unstable_count:
         warnings.append(f"unstable low trial count summaries: {unstable_count}")
     trial_count = int(np.count_nonzero(filter_membership))
@@ -1014,6 +1017,7 @@ def _build_report(
         "cache_status": status.status,
         "wall_time_s": float(wall_time_s),
         "peak_memory_bytes": int(peak_memory_bytes),
+        "peak_memory_available": peak_memory_available,
         "cache_size_bytes": int(cache_size_bytes),
         "component_size_bytes": int(component_size_bytes),
         "trial_count": trial_count,
@@ -1103,13 +1107,18 @@ def _markdown_summary(report: Mapping[str, object]) -> str:
     str
         ASCII Markdown without cached numerical arrays.
     """
+    peak_memory = (
+        f"{report['peak_memory_bytes']} bytes"
+        if report["peak_memory_available"]
+        else "unavailable"
+    )
     return (
         "# LFP Synchrony validation\n\n"
         "Goal: inspect cache-backed ITPC, ISPC, phase offsets, counts, PLV, "
         "and exemplars before spike-phase analysis.\n\n"
         f"Session: {report['session_id']}\n\n"
         f"Wall time: {report['wall_time_s']} s\n\n"
-        f"Peak memory: {report['peak_memory_bytes']} bytes\n\n"
+        f"Peak memory: {peak_memory}\n\n"
         f"Trials: {report['trial_count']}; exclusions: {report['exclusion_count']}\n\n"
         f"Unstable summaries: {report['unstable_summary_count']}\n\n"
         f"Warnings: {report['warnings']}\n\n"
