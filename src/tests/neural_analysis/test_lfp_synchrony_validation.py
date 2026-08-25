@@ -14,6 +14,7 @@ from src.neural_analysis.lfp_summary_pipeline import ComponentRunResult
 from src.neural_analysis.lfp_synchrony_validation import (
     SynchronyValidationDependencies,
     build_ct026_synchrony_config,
+    render_cached_synchrony_validation,
     run_synchrony_validation,
 )
 
@@ -252,3 +253,31 @@ def test_synchrony_validation_does_not_publish_partial_report_on_plot_failure(
         run_synchrony_validation(config, run_parent, dependencies)
 
     assert not run_parent.exists() or not tuple(run_parent.iterdir())
+
+
+def test_cached_synchrony_validation_renders_without_recomputing(
+    tmp_path: Path,
+) -> None:
+    """A compatible cache may be rerendered with preserved performance metrics.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary generic cache and immutable report roots.
+    """
+    config = build_ct026_synchrony_config(tmp_path / "CT026")
+    calls: list[str] = []
+
+    result = render_cached_synchrony_validation(
+        config,
+        tmp_path / "runs",
+        _dependencies(calls),
+        synchrony_wall_time_s=600.5,
+        synchrony_peak_memory_bytes=8192,
+    )
+
+    assert calls[:2] == ["load_manifest", "load_synchrony"]
+    assert "compute_synchrony" not in calls
+    assert result.wall_time_s == pytest.approx(600.5)
+    assert result.peak_memory_bytes == 8192
+    assert result.run_directory.is_dir()
