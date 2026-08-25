@@ -532,10 +532,25 @@ def plot_plv_distribution(
     axes["coverage"].plot(x, np.nanmedian(q, axis=0), marker="o")
     axes["coverage"].set_xticks(x, epoch_names)
     axes["coverage"].set(ylabel="Valid sample fraction", xlabel="Epoch")
+    coverage_summaries = []
+    for epoch_index, epoch_name in enumerate(epoch_names):
+        available = np.isfinite(p[:, epoch_index]) & np.isfinite(c[:, epoch_index])
+        if not np.any(available):
+            coverage_summaries.append(f"{epoch_name}: n=0")
+            continue
+        sample_counts = c[available, epoch_index]
+        coverage_summaries.append(
+            f"{epoch_name}: n={sample_counts.size}, samples min/median/max="
+            f"{np.min(sample_counts):g}/{np.median(sample_counts):g}/"
+            f"{np.max(sample_counts):g}"
+        )
     _caption(
         figure,
         context,
-        f"PLV {pair_label}, {band_name}, {condition_name}; sample counts={c.astype(int).tolist()}",
+        (
+            f"PLV {pair_label}, {band_name}, {condition_name}; "
+            + "; ".join(coverage_summaries)
+        ),
     )
     return figure, axes
 
