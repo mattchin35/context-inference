@@ -464,7 +464,7 @@ def plot_phase_band_summary(
         raise ValueError("phase-summary confidence interval bounds are reversed")
     axis.plot(x, e, "o", linestyle="none")
     axis.vlines(x[finite_interval], lo[finite_interval], hi[finite_interval])
-    axis.set_xticks(x, labels)
+    axis.set_xticks(x, labels, rotation=25, ha="right")
     axis.set_ylabel(metric_name)
     axis.set_title(f"{band_name} {epoch_name}")
     unstable = [labels[i] for i in np.flatnonzero(n < 10)]

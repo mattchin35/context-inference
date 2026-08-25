@@ -548,7 +548,7 @@ def _render_phase_band_summaries(
     run_directory: Path,
     dependencies: SynchronyValidationDependencies,
 ) -> tuple[Path, ...]:
-    """Render one combined ITPC/ISPC bootstrap summary per epoch and band.
+    """Render separate site ITPC and pair ISPC summaries per epoch and band.
 
     Parameters
     ----------
@@ -559,105 +559,78 @@ def _render_phase_band_summaries(
     context : PlotContext
         Caption provenance with seconds, Hz, and source-voltage units.
     run_directory : pathlib.Path
-        Existing output directory receiving six phase-summary PNGs.
+        Existing output directory receiving entity-specific phase-summary PNGs.
     dependencies : SynchronyValidationDependencies
         Cache-only plot, save, and close seams.
 
     Returns
     -------
     tuple[pathlib.Path, ...]
-        One saved PNG path for every epoch-by-band combination.
+        One saved path per site/pair, epoch, band, and phase metric.
     """
     epoch_names = tuple(str(value) for value in arrays["epoch_names"])
     band_names = tuple(str(value) for value in arrays["band_names"])
     membership = np.asarray(arrays["condition_membership"], dtype=bool)
     site_valid = np.asarray(arrays["site_valid"], dtype=bool)
     pair_valid = np.asarray(arrays["pair_valid"], dtype=bool)
-    labels = tuple(
-        f"ITPC {site}:{condition}"
-        for condition in condition_names
-        for site in site_ids
-    ) + tuple(
-        f"ISPC {pair}:{condition}"
-        for condition in condition_names
-        for pair in pair_labels
-    )
     paths = []
     for epoch_index, epoch_name in enumerate(epoch_names):
         for band_index, band_name in enumerate(band_names):
-            values, lows, highs, counts = _combined_phase_summary_vectors(
-                arrays,
-                membership,
-                site_valid,
-                pair_valid,
-                epoch_index,
-                band_index,
-            )
-            figure, _ = dependencies.plot_phase_band_summary(
-                values,
-                lows,
-                highs,
-                counts,
-                labels,
-                band_name,
-                epoch_name,
-                "ITPC / ISPC",
-                context,
-            )
-            path = run_directory / f"{band_name}_{epoch_name}_phase_band_summary.png"
-            _save_and_close(figure, path, dependencies)
-            paths.append(path)
+            for site_index, site_id in enumerate(site_ids):
+                counts = np.count_nonzero(
+                    membership & site_valid[site_index, :, None],
+                    axis=0,
+                )
+                figure, _ = dependencies.plot_phase_band_summary(
+                    np.asarray(arrays["itpc_band_mean"])[
+                        :, site_index, epoch_index, band_index
+                    ],
+                    np.asarray(arrays["itpc_ci_low"])[
+                        :, site_index, epoch_index, band_index
+                    ],
+                    np.asarray(arrays["itpc_ci_high"])[
+                        :, site_index, epoch_index, band_index
+                    ],
+                    counts,
+                    condition_names,
+                    band_name,
+                    epoch_name,
+                    f"ITPC {site_id}",
+                    context,
+                )
+                path = run_directory / (
+                    f"{site_id}_{band_name}_{epoch_name}_itpc_band_summary.png"
+                )
+                _save_and_close(figure, path, dependencies)
+                paths.append(path)
+            for pair_index, pair_label in enumerate(pair_labels):
+                counts = np.count_nonzero(
+                    membership & pair_valid[pair_index, :, None],
+                    axis=0,
+                )
+                figure, _ = dependencies.plot_phase_band_summary(
+                    np.asarray(arrays["ispc_band_mean"])[
+                        :, pair_index, epoch_index, band_index
+                    ],
+                    np.asarray(arrays["ispc_ci_low"])[
+                        :, pair_index, epoch_index, band_index
+                    ],
+                    np.asarray(arrays["ispc_ci_high"])[
+                        :, pair_index, epoch_index, band_index
+                    ],
+                    counts,
+                    condition_names,
+                    band_name,
+                    epoch_name,
+                    f"ISPC {pair_label.replace('_', '-')}",
+                    context,
+                )
+                path = run_directory / (
+                    f"{pair_label}_{band_name}_{epoch_name}_ispc_band_summary.png"
+                )
+                _save_and_close(figure, path, dependencies)
+                paths.append(path)
     return tuple(paths)
-
-
-def _combined_phase_summary_vectors(
-    arrays: Mapping[str, np.ndarray],
-    membership: np.ndarray,
-    site_valid: np.ndarray,
-    pair_valid: np.ndarray,
-    epoch_index: int,
-    band_index: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Flatten ITPC then ISPC cache values and contributing trial counts.
-
-    Parameters
-    ----------
-    arrays : Mapping[str, numpy.ndarray]
-        Synchrony estimates and confidence bounds with condition first.
-    membership : numpy.ndarray
-        Boolean ``(trial, condition)`` selected-trial membership.
-    site_valid, pair_valid : numpy.ndarray
-        Boolean ``(site, trial)`` and ``(pair, trial)`` availability.
-    epoch_index, band_index : int
-        Zero-based categorical coordinates.
-
-    Returns
-    -------
-    tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray]
-        Dimensionless estimate/lower/upper vectors and integer trial counts,
-        ordered condition-by-site followed by condition-by-pair.
-    """
-    values = np.concatenate((
-        np.asarray(arrays["itpc_band_mean"])[:, :, epoch_index, band_index].ravel(),
-        np.asarray(arrays["ispc_band_mean"])[:, :, epoch_index, band_index].ravel(),
-    ))
-    lows = np.concatenate((
-        np.asarray(arrays["itpc_ci_low"])[:, :, epoch_index, band_index].ravel(),
-        np.asarray(arrays["ispc_ci_low"])[:, :, epoch_index, band_index].ravel(),
-    ))
-    highs = np.concatenate((
-        np.asarray(arrays["itpc_ci_high"])[:, :, epoch_index, band_index].ravel(),
-        np.asarray(arrays["ispc_ci_high"])[:, :, epoch_index, band_index].ravel(),
-    ))
-    site_counts = np.stack(
-        [np.count_nonzero(membership & valid[:, None], axis=0) for valid in site_valid],
-        axis=1,
-    )
-    pair_counts = np.stack(
-        [np.count_nonzero(membership & valid[:, None], axis=0) for valid in pair_valid],
-        axis=1,
-    )
-    return values, lows, highs, np.concatenate((site_counts.ravel(), pair_counts.ravel()))
 
 
 def _render_plv_figures(
