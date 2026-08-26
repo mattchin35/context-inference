@@ -117,9 +117,10 @@ def _dependencies(calls: list[str]) -> SynchronyValidationDependencies:
         calls.append("load_synchrony")
         return arrays
 
-    def plot_map(*_: object, **__: object) -> tuple[_FakeFigure, dict[str, object]]:
+    def plot_map(*_: object, **kwargs: object) -> tuple[_FakeFigure, dict[str, object]]:
         """Return an unsaved fake map figure with no numerical conversion."""
         calls.append("map")
+        calls.append(f"map_total={kwargs['total_displayed_trial_count']}")
         return _FakeFigure(), {}
 
     def plot_summary(*_: object, **__: object) -> tuple[_FakeFigure, dict[str, object]]:
@@ -198,6 +199,7 @@ def test_synchrony_validation_runs_only_synchrony_and_writes_cache_backed_report
     assert "PFC_HPC1_correct_rewarded_theta_low_plv_exemplar.png" in names
     assert "PFC_HPC1_correct_rewarded_theta_high_plv_exemplar.png" in names
     assert {"map", "summary", "distribution", "exemplar"}.issubset(calls)
+    assert "map_total=2" in calls
 
 
 def test_synchrony_validation_aborts_before_report_when_component_fails(tmp_path: Path) -> None:

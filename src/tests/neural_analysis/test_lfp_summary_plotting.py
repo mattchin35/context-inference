@@ -190,8 +190,24 @@ def test_phase_maps_and_band_summaries_expose_counts_uncertainty_and_instability
         entity_label="PFC-HPC1",
         condition_name="omission",
         context=_context(),
+        total_displayed_trial_count=6,
     )
-    _assert_figure_contract(figure, axes, {"metric", "effective_count"})
+    _assert_figure_contract(figure, axes, {"metric"})
+    assert "Effective range/total displayed: 3-5/6" in figure.texts[-1].get_text()
+
+    figure, axes = plot_phase_map(
+        metric=np.full((2, 3), 0.4),
+        effective_trial_count=np.full((2, 3), 5),
+        frequency_hz=np.array([6.0, 10.0]),
+        relative_time_s=np.array([-0.1, 0.0, 0.1]),
+        metric_name="ITPC",
+        entity_label="PFC",
+        condition_name="omission",
+        context=_context(),
+        total_displayed_trial_count=6,
+    )
+    _assert_figure_contract(figure, axes, {"metric"})
+    assert "Effective/total displayed: 5/6" in figure.texts[-1].get_text()
 
     figure, axes = plot_phase_band_summary(
         estimates=np.array([0.2, 0.4]),

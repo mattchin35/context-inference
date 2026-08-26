@@ -717,6 +717,7 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
             "PFC",
             "correct_rewarded",
             context,
+            total_displayed_trial_count=int(condition_membership[:, 0].sum()),
         ),
         plot_phase_band_summary(
             np.array((0.9, 0.8)),
