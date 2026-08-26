@@ -117,11 +117,14 @@ def test_default_population_uses_qualified_probeb_good_inside_brain_units(
         )
 
     def load_channels(path: Path) -> pd.DataFrame:
-        """Return channel labels with one outside-brain and one bad channel."""
+        """Return real CT026 column aliases with one outside-brain channel."""
         assert path.name == "kilosort4"
         return pd.DataFrame(
-            {"channel": [7, 11, 12], "channel_quality": ["good", "good", "good"],
-             "inside_brain": [True, True, False]}
+            {
+                "channel_id": ["CH7", "CH11", "CH12"],
+                "label": ["good", "good", "good"],
+                "inside_brain": [True, True, False],
+            }
         )
 
     population = build_ct026_default_active_population(
