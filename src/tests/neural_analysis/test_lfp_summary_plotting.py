@@ -194,6 +194,8 @@ def test_phase_maps_and_band_summaries_expose_counts_uncertainty_and_instability
     )
     _assert_figure_contract(figure, axes, {"metric"})
     assert "Effective range/total displayed: 3-5/6" in figure.texts[-1].get_text()
+    assert figure.get_size_inches()[1] >= 5.0
+    assert figure.subplotpars.bottom >= 0.30
 
     figure, axes = plot_phase_map(
         metric=np.full((2, 3), 0.4),
