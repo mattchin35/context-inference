@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -19,7 +19,10 @@ from src.neural_analysis import (
     lfp_loading,
     lfp_phase_clustering,
     lfp_spectrogram,
+    spike_behavior_pynapple,
+    spike_lfp_summary,
     spike_lfp_hilbert_phase,
+    unit_spike_loading,
 )
 from src.neural_analysis.lfp_power_summary import (
     compute_presession_reference_psd,
@@ -39,8 +42,10 @@ from src.neural_analysis.lfp_summary_pipeline import ComponentPayload, PipelineD
 from src.neural_analysis.lfp_summary_preparation import (
     PreparedSiteTraces,
     PreparedTrials,
+    TrialRelativeSpikeTrains,
     build_common_event_grid,
     build_prepared_trials,
+    build_trial_relative_spike_trains,
     load_site_trial_traces,
 )
 from src.neural_analysis.lfp_synchrony_summary import (
@@ -91,6 +96,9 @@ class PreparedPhaseRun:
     ----------
     trial_indices : numpy.ndarray
         Int64 shape ``(trial,)`` trial-table row positions.
+    alignment_times_s : numpy.ndarray
+        Float64 shape ``(trial,)`` absolute alignment-event seconds. Missing
+        objective alignments are NaN and own no phase or trial-local spikes.
     prepared_trials : PreparedTrials
         Condition/filter/objective/user masks plus per-site/pair validity.
     phase_tensor : numpy.ndarray
@@ -111,6 +119,7 @@ class PreparedPhaseRun:
     """
 
     trial_indices: np.ndarray
+    alignment_times_s: np.ndarray
     prepared_trials: PreparedTrials
     phase_tensor: np.ndarray
     phase_valid: np.ndarray
@@ -118,6 +127,26 @@ class PreparedPhaseRun:
     site_valid: np.ndarray
     pair_valid: np.ndarray
     source_trace: np.ndarray
+
+
+@dataclass(frozen=True)
+class PreparedSpikeRun:
+    """Trial-local spike inputs for one configured stable unit population.
+
+    Attributes
+    ----------
+    unit_ids : tuple[str, ...]
+        Stable probe-qualified unit identities in configured order.
+    population_ids : tuple[str, ...]
+        One stable population label for the cache population axis.
+    trial_spike_trains : tuple[TrialRelativeSpikeTrains, ...]
+        One entry per unit. Each entry owns one event-relative seconds array per
+        full trial-table row; invalid alignment rows contain empty arrays.
+    """
+
+    unit_ids: tuple[str, ...]
+    population_ids: tuple[str, ...]
+    trial_spike_trains: tuple[TrialRelativeSpikeTrains, ...]
 
 
 def load_configured_trial_table(config: LFPSummaryConfig) -> pd.DataFrame:
@@ -342,6 +371,7 @@ def prepare_phase_run(
         raise ValueError("phase and cached source traces require the same exact 500-Hz grid")
     return PreparedPhaseRun(
         trial_indices=trial_indices,
+        alignment_times_s=alignment_times_s.copy(),
         prepared_trials=prepared_trials,
         phase_tensor=phase_tensor,
         phase_valid=phase_valid,
@@ -349,6 +379,140 @@ def prepare_phase_run(
         site_valid=site_valid,
         pair_valid=pair_valid,
         source_trace=source_trace,
+    )
+
+
+def load_configured_unit_spikes(
+    config: LFPSummaryConfig,
+) -> dict[str, np.ndarray]:
+    """Load synchronized absolute spike times for the configured stable units.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Configuration whose unit population provides sorter and aligned-spike
+        paths plus stable ``"probe:cluster"`` identities. Times are seconds.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Configured stable ids mapped to owned finite absolute seconds
+        ``(spike_for_unit,)`` arrays, in the configured identity set.
+
+    Raises
+    ------
+    ValueError
+        If population paths, identities, aligned axes, metadata channels, or
+        requested units are inconsistent. No partial mapping is returned.
+    """
+    population = config.unit_population
+    if population is None:
+        raise ValueError("Spike phase requires config.unit_population")
+    if population.sorter_path is None or population.aligned_spike_path is None:
+        raise ValueError("Spike phase requires sorter and aligned-spike paths")
+    spike_clusters, cluster_info = spike_behavior_pynapple.load_sorter_metadata(
+        population.sorter_path
+    )
+    aligned_spikes = spike_behavior_pynapple.load_aligned_spikes(
+        population.aligned_spike_path
+    )
+    spike_behavior_pynapple.validate_aligned_spike_inputs(
+        aligned_spikes,
+        spike_clusters,
+    )
+    quality = dict(population.quality_settings)
+    labels_text = quality.get("quality_labels", "good,mua")
+    quality_labels = tuple(
+        value.strip() for value in labels_text.split(",") if value.strip()
+    )
+    filtered = unit_spike_loading.filter_cluster_metadata(
+        cluster_info,
+        population.selected_channels,
+        quality_labels=quality_labels,
+        default_group=quality.get("default_group", "mua"),
+        quality_column=quality.get("quality_column", "group"),
+    )
+    permitted_clusters = set(filtered["cluster_id"].astype(int).tolist())
+    loaded: dict[str, np.ndarray] = {}
+    for unit_id in population.stable_unit_ids:
+        probe_label, cluster_id = _split_stable_unit_id(unit_id)
+        if probe_label != population.probe_label or cluster_id not in permitted_clusters:
+            raise ValueError(f"configured unit is outside active population: {unit_id}")
+        values = np.asarray(aligned_spikes[spike_clusters == cluster_id], dtype=float)
+        if values.ndim != 1 or not np.isfinite(values).all():
+            raise ValueError(f"unit spike times must be finite seconds: {unit_id}")
+        loaded[unit_id] = values.copy()
+    return loaded
+
+
+def prepare_spike_run(
+    config: LFPSummaryConfig,
+    prepared_phase: PreparedPhaseRun,
+    unit_spike_loader: Callable[[LFPSummaryConfig], Mapping[str, np.ndarray]],
+) -> PreparedSpikeRun:
+    """Assign configured absolute unit spikes to full-axis trial windows.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Stable unit identities and half-open whole event window in seconds.
+    prepared_phase : PreparedPhaseRun
+        Full trial row axis plus absolute alignment seconds. Missing alignment
+        rows own empty spike trains and remain in the cache trial axis.
+    unit_spike_loader : callable
+        Called once with ``config`` and returns stable ids mapped to finite
+        absolute seconds ``(spike_for_unit,)`` arrays.
+
+    Returns
+    -------
+    PreparedSpikeRun
+        Configured unit order and one event-relative seconds array per unit and
+        trial. Overlapping trial windows retain independent spike ownership.
+    """
+    _validate_prepared_phase_run(config, prepared_phase)
+    population = config.unit_population
+    if population is None or not population.stable_unit_ids:
+        raise ValueError("Spike phase requires at least one configured stable unit")
+    loaded = unit_spike_loader(config)
+    if not isinstance(loaded, Mapping):
+        raise ValueError("unit_spike_loader must return a stable-id mapping")
+    if set(loaded) != set(population.stable_unit_ids):
+        raise ValueError("loaded unit identities must exactly match configuration")
+    event_times = np.asarray(prepared_phase.alignment_times_s, dtype=float)
+    finite_positions = np.flatnonzero(np.isfinite(event_times))
+    whole_window = (
+        config.analysis_windows.whole_start_s,
+        config.analysis_windows.whole_stop_s,
+    )
+    trains = []
+    for unit_id in population.stable_unit_ids:
+        probe_label, cluster_id = _split_stable_unit_id(unit_id)
+        finite_train = build_trial_relative_spike_trains(
+            probe_label=probe_label,
+            cluster_id=cluster_id,
+            unit_spike_times_s=np.asarray(loaded[unit_id], dtype=float),
+            event_times_s=event_times[finite_positions],
+            window=whole_window,
+        )
+        relative = [np.empty(0, dtype=float) for _ in event_times]
+        for position, values in zip(
+            finite_positions,
+            finite_train.relative_spike_times,
+            strict=True,
+        ):
+            relative[int(position)] = values.copy()
+        overlap = finite_positions[finite_train.overlap_trial_indices]
+        trains.append(
+            TrialRelativeSpikeTrains(
+                unit_id=unit_id,
+                relative_spike_times=tuple(relative),
+                overlap_trial_indices=overlap.astype(np.int64, copy=True),
+            )
+        )
+    return PreparedSpikeRun(
+        unit_ids=tuple(population.stable_unit_ids),
+        population_ids=(population.label,),
+        trial_spike_trains=tuple(trains),
     )
 
 
@@ -571,6 +735,231 @@ def build_synchrony_payload(
     return build_component_payload("synchrony", arrays)
 
 
+def build_spike_phase_payload(
+    config: LFPSummaryConfig,
+    prepared_phase: PreparedPhaseRun,
+    prepared_spikes: PreparedSpikeRun,
+) -> ComponentPayload:
+    """Compute the complete observed and shuffled Spike-phase cache payload.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Immutable frequency, half-open epoch, band, reliability, FDR, shuffle,
+        phase-bin, site, filter, and seed settings. Times are seconds and
+        frequencies are Hz.
+    prepared_phase : PreparedPhaseRun
+        Full-axis complex unit phase and 500-Hz source traces with explicit
+        numerical validity on ``(site, frequency, trial, time)`` axes.
+    prepared_spikes : PreparedSpikeRun
+        Stable units and one event-relative seconds array per unit/trial.
+
+    Returns
+    -------
+    ComponentPayload
+        Exact ``SPIKE_PHASE_ARRAY_SCHEMA`` arrays. PPC is dimensionless, phase
+        is radians, counts retain spike/trial/shuffle units, and no shuffle or
+        wavelet tensor is persisted.
+
+    Raises
+    ------
+    ValueError
+        If prepared phase/spike identities or axes disagree with configuration.
+    """
+    _validate_prepared_phase_run(config, prepared_phase)
+    _validate_prepared_spike_run(config, prepared_phase, prepared_spikes)
+    frequencies_hz = np.asarray(config.phase.frequency_hz, dtype=float)
+    condition_membership = _analysis_condition_membership(
+        prepared_phase.prepared_trials
+    )
+    epoch_windows = _selected_ppc_epoch_windows(config)
+    epoch_names = tuple(epoch_windows)
+    band_names = tuple(band.name for band in config.phase.bands)
+    unit_count = len(prepared_spikes.unit_ids)
+    condition_count = condition_membership.shape[1]
+    site_count = len(config.sites)
+    epoch_count = len(epoch_names)
+    frequency_count = frequencies_hz.size
+    metric_shape = (
+        unit_count,
+        condition_count,
+        site_count,
+        epoch_count,
+        frequency_count,
+    )
+    arrays = _empty_spike_metric_arrays(metric_shape)
+    histogram = np.zeros(
+        metric_shape[:-1]
+        + (len(config.phase.bands), len(config.ppc.phase_bin_edges_rad) - 1),
+        dtype=np.int64,
+    )
+    phase_bin_edges = np.asarray(config.ppc.phase_bin_edges_rad, dtype=float)
+    trial_spike_counts = np.zeros(
+        (unit_count, condition_count, site_count, epoch_count,
+         prepared_phase.trial_indices.size),
+        dtype=np.int64,
+    )
+    for condition_index in range(condition_count):
+        for site_index in range(site_count):
+            base_trial_mask = (
+                condition_membership[:, condition_index]
+                & prepared_phase.site_valid[site_index]
+            )
+            phase_by_trial = np.moveaxis(
+                prepared_phase.phase_tensor[site_index], 1, 0
+            )
+            valid_by_trial = np.moveaxis(
+                prepared_phase.phase_valid[site_index], 1, 0
+            )
+            for epoch_index, epoch_window in enumerate(epoch_windows.values()):
+                selected_positions = np.flatnonzero(base_trial_mask)
+                schedule = _shared_derangement_schedule(
+                    selected_positions.size,
+                    config.ppc.shuffle_count,
+                    _ppc_schedule_seed(config, condition_index, site_index, epoch_index),
+                )
+                for unit_index, train in enumerate(
+                    prepared_spikes.trial_spike_trains
+                ):
+                    selected_spikes = tuple(
+                        _spikes_in_epoch(
+                            train.relative_spike_times[int(position)],
+                            epoch_window,
+                        )
+                        for position in selected_positions
+                    )
+                    for position, values in zip(
+                        selected_positions,
+                        selected_spikes,
+                        strict=True,
+                    ):
+                        trial_spike_counts[
+                            unit_index,
+                            condition_index,
+                            site_index,
+                            epoch_index,
+                            position,
+                        ] = values.size
+                    sampled, sampled_valid, sampled_trial_rows = (
+                        _sample_observed_trial_phase(
+                            prepared_phase.relative_time_s,
+                            phase_by_trial[selected_positions],
+                            valid_by_trial[selected_positions],
+                            selected_spikes,
+                            prepared_phase.trial_indices[selected_positions],
+                        )
+                    )
+                    observed = spike_lfp_summary.compute_observed_ppc(
+                        probe_label=_split_stable_unit_id(train.unit_id)[0],
+                        cluster_id=_split_stable_unit_id(train.unit_id)[1],
+                        spike_phase_vectors=sampled,
+                        valid_mask=sampled_valid,
+                        frequencies_hz=frequencies_hz,
+                        spike_times_s=np.concatenate(selected_spikes)
+                        if selected_spikes
+                        else np.empty(0, dtype=float),
+                    )
+                    index = (
+                        unit_index,
+                        condition_index,
+                        site_index,
+                        epoch_index,
+                    )
+                    arrays["ppc"][index] = observed.ppc
+                    arrays["resultant_length"][index] = observed.resultant_length
+                    arrays["preferred_phase_rad"][index] = observed.preferred_phase_rad
+                    arrays["spike_count"][index] = observed.spike_count
+                    arrays["computable"][index] = observed.computable
+                    arrays["reliable"][index] = observed.reliable
+                    hist = spike_lfp_summary.build_representative_phase_histograms(
+                        frequencies_hz=frequencies_hz,
+                        spike_phase_vectors=sampled,
+                        valid_mask=sampled_valid,
+                        trial_indices=sampled_trial_rows,
+                        phase_bin_edges_rad=phase_bin_edges,
+                    )
+                    histogram[index] = hist.spike_count_by_band
+                    if schedule is not None:
+                        shuffled = spike_lfp_summary.compute_trial_shuffle_ppc(
+                            trial_relative_spike_times_s=selected_spikes,
+                            phase_time_s=prepared_phase.relative_time_s,
+                            trial_phase_vectors=np.where(
+                                valid_by_trial[selected_positions],
+                                phase_by_trial[selected_positions],
+                                0.0,
+                            ),
+                            frequencies_hz=frequencies_hz,
+                            schedule=schedule,
+                            overlap_trial_indices=train.overlap_trial_indices,
+                        )
+                        _assign_null_summary(arrays, index, shuffled.null_summary)
+    q_value = spike_lfp_summary.adjust_ppc_pvalues_bh(
+        p_value=arrays["p_value"],
+        null_eligible=arrays["null_eligible"],
+    )
+    arrays["q_value"] = q_value
+    arrays["significant"] = arrays["null_eligible"] & (
+        q_value <= config.ppc.fdr_alpha
+    )
+    arrays["ppc_band_mean"] = spike_lfp_summary.compute_band_ppc_means(
+        frequencies_hz=frequencies_hz,
+        ppc_by_frequency=arrays["ppc"],
+    ).ppc_band_mean
+    arrays["representative_phase_hist_count"] = histogram
+    selected_low, selected_high, illustrative = _select_spike_exemplars(
+        config,
+        prepared_phase,
+        prepared_spikes,
+        arrays["ppc_band_mean"],
+        trial_spike_counts,
+    )
+    packed_spikes, spike_offsets = _pack_trial_spike_trains(prepared_spikes)
+    filtered_trace, hilbert_phase_rad = _band_hilbert_traces(
+        config,
+        prepared_phase,
+    )
+    arrays.update(
+        {
+            "unit_ids": np.asarray(prepared_spikes.unit_ids, dtype="<U64"),
+            "population_ids": np.asarray(
+                prepared_spikes.population_ids, dtype="<U64"
+            ),
+            "trial_indices": prepared_phase.trial_indices.astype(
+                np.int64, copy=True
+            ),
+            "site_ids": np.asarray(
+                [site.stable_id for site in config.sites], dtype="<U64"
+            ),
+            "site_voltage_units": np.asarray(
+                [site.voltage_unit for site in config.sites], dtype="<U64"
+            ),
+            "condition_names": np.asarray(
+                prepared_phase.prepared_trials.condition_names, dtype="<U64"
+            ),
+            "condition_membership": (
+                prepared_phase.prepared_trials.condition_membership.copy()
+            ),
+            "filter_membership": (
+                prepared_phase.prepared_trials.filter_membership.copy()
+            ),
+            "epoch_names": np.asarray(epoch_names, dtype="<U16"),
+            "band_names": np.asarray(band_names, dtype="<U64"),
+            "frequency_hz": frequencies_hz.copy(),
+            "relative_time_s": prepared_phase.relative_time_s.copy(),
+            "phase_bin_edges_rad": phase_bin_edges.copy(),
+            "relative_spike_times_s": packed_spikes,
+            "relative_spike_time_offsets": spike_offsets,
+            "source_trace": prepared_phase.source_trace.copy(),
+            "band_filtered_trace": filtered_trace,
+            "hilbert_phase_rad": hilbert_phase_rad,
+            "selected_low_unit_ids": selected_low,
+            "selected_high_unit_ids": selected_high,
+            "illustrative_trial_indices": illustrative,
+        }
+    )
+    return build_component_payload("spike_phase", arrays)
+
+
 def make_power_pipeline_dependencies(
     *,
     trial_table_loader: Callable[[LFPSummaryConfig], pd.DataFrame],
@@ -730,6 +1119,109 @@ def make_synchrony_pipeline_dependencies(
         build_power_payload=unsupported_power_payload,
         build_synchrony_payload=build_synchrony_payload,
         build_spike_phase_payload=unsupported_spike_payload,
+        load_manifest=load_manifest,
+        write_component=write_component_transaction,
+    )
+
+
+def make_spike_phase_pipeline_dependencies(
+    *,
+    trial_table_loader: Callable[[LFPSummaryConfig], pd.DataFrame],
+    unit_spike_loader: Callable[
+        [LFPSummaryConfig], Mapping[str, np.ndarray]
+    ] = load_configured_unit_spikes,
+    phase_preparer: Callable[[LFPSummaryConfig], PreparedPhaseRun] | None = None,
+    site_phase_tensor_builder: Callable[..., lfp_phase_clustering.PhaseTrialTensor] = (
+        lfp_phase_clustering.compute_site_phase_trial_tensor
+    ),
+    block_loader_factory: Callable[
+        [LFPSiteConfig],
+        Callable[[float, float], tuple[np.ndarray, np.ndarray, float]],
+    ]
+    | None = None,
+    spikeglx_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None = None,
+    open_ephys_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None = None,
+) -> PipelineDependencies:
+    """Bind real phase/spike preparation, PPC payload, and atomic cache I/O.
+
+    Parameters
+    ----------
+    trial_table_loader, unit_spike_loader : callable
+        Trial-table and stable-id-to-absolute-seconds spike loader seams.
+    phase_preparer : callable or None
+        Optional complete phase seam for tests or shared upstream preparation.
+        ``None`` delegates to :func:`prepare_phase_run` with the remaining LFP
+        seams.
+    site_phase_tensor_builder, block_loader_factory : callable or None
+        Bounded continuous phase-transform seams accepted by phase preparation.
+    spikeglx_loader, open_ephys_loader : callable or None
+        Optional normalized per-trial source loaders for exemplar cache traces.
+
+    Returns
+    -------
+    PipelineDependencies
+        Spike-only production dependencies. Power and Synchrony payload seams
+        reject use rather than creating placeholder arrays.
+    """
+    active_config: LFPSummaryConfig | None = None
+
+    def prepare_phase(config: LFPSummaryConfig) -> PreparedPhaseRun:
+        """Prepare phase with the explicit seam or the production adapters."""
+        nonlocal active_config
+        active_config = config
+        if phase_preparer is not None:
+            return phase_preparer(config)
+        return prepare_phase_run(
+            config,
+            trial_table_loader,
+            site_phase_tensor_builder=site_phase_tensor_builder,
+            block_loader_factory=block_loader_factory,
+            spikeglx_loader=spikeglx_loader,
+            open_ephys_loader=open_ephys_loader,
+        )
+
+    def prepare_spike(
+        config: LFPSummaryConfig,
+        phase: object,
+    ) -> PreparedSpikeRun:
+        """Prepare configured trial-local spikes from the exact phase trial axis."""
+        if not isinstance(phase, PreparedPhaseRun):
+            raise ValueError("Spike runtime requires PreparedPhaseRun")
+        return prepare_spike_run(config, phase, unit_spike_loader)
+
+    def load_manifest(directory: Path) -> dict[str, object]:
+        """Load the active configuration's JSON-ready cache manifest."""
+        if active_config is None:
+            raise RuntimeError("Spike manifest loading requires prepared configuration")
+        return load_or_initialize_manifest(directory, active_config)
+
+    def unsupported_power(_: LFPSummaryConfig) -> object:
+        """Reject unbound Power preparation without fake arrays."""
+        raise NotImplementedError("power is unsupported by Spike-phase runtime")
+
+    def unsupported_power_payload(
+        _: LFPSummaryConfig,
+        __: object,
+    ) -> ComponentPayload:
+        """Reject unbound Power payload construction."""
+        raise NotImplementedError("power payload is unsupported by Spike-phase runtime")
+
+    def unsupported_synchrony_payload(
+        _: LFPSummaryConfig,
+        __: object,
+    ) -> ComponentPayload:
+        """Reject unbound Synchrony payload construction."""
+        raise NotImplementedError(
+            "synchrony payload is unsupported by Spike-phase runtime"
+        )
+
+    return PipelineDependencies(
+        prepare_power=unsupported_power,
+        prepare_phase=prepare_phase,
+        prepare_spike=prepare_spike,
+        build_power_payload=unsupported_power_payload,
+        build_synchrony_payload=unsupported_synchrony_payload,
+        build_spike_phase_payload=build_spike_phase_payload,
         load_manifest=load_manifest,
         write_component=write_component_transaction,
     )
@@ -979,6 +1471,291 @@ def _validate_prepared_phase_run(
         raise ValueError("prepared source trace axes are invalid")
     if not np.isfinite(prepared.relative_time_s).all():
         raise ValueError("prepared phase time must be finite seconds")
+    if prepared.alignment_times_s.shape != (trial_count,):
+        raise ValueError("prepared alignment times must share the trial axis")
+
+
+def _validate_prepared_spike_run(
+    config: LFPSummaryConfig,
+    prepared_phase: PreparedPhaseRun,
+    prepared_spikes: PreparedSpikeRun,
+) -> None:
+    """Validate stable identities and full trial-local spike axes."""
+    population = config.unit_population
+    if not isinstance(prepared_spikes, PreparedSpikeRun) or population is None:
+        raise ValueError("prepared spikes and configured population are required")
+    if prepared_spikes.unit_ids != population.stable_unit_ids:
+        raise ValueError("prepared unit order disagrees with configuration")
+    if prepared_spikes.population_ids != (population.label,):
+        raise ValueError("prepared population identity disagrees with configuration")
+    trial_count = prepared_phase.trial_indices.size
+    if len(prepared_spikes.trial_spike_trains) != len(prepared_spikes.unit_ids):
+        raise ValueError("prepared spike train count must match unit identities")
+    for unit_id, train in zip(
+        prepared_spikes.unit_ids,
+        prepared_spikes.trial_spike_trains,
+        strict=True,
+    ):
+        if train.unit_id != unit_id or len(train.relative_spike_times) != trial_count:
+            raise ValueError("prepared spike trains must share unit and trial axes")
+    if config.ppc.minimum_computable_spikes != spike_lfp_summary.MINIMUM_COMPUTABLE_SPIKES:
+        raise ValueError("runtime currently requires the established two-spike PPC threshold")
+    if config.ppc.minimum_reliable_spikes != spike_lfp_summary.MINIMUM_RELIABLE_SPIKES:
+        raise ValueError(
+            "runtime currently requires the established 50-spike reliability threshold"
+        )
+
+
+def _split_stable_unit_id(unit_id: str) -> tuple[str, int]:
+    """Parse one ``probe:cluster`` identity into categorical components."""
+    try:
+        probe_label, cluster_text = unit_id.rsplit(":", maxsplit=1)
+        cluster_id = int(cluster_text)
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValueError(f"invalid stable unit identity: {unit_id!r}") from error
+    if not probe_label or cluster_id < 0 or f"{probe_label}:{cluster_id}" != unit_id:
+        raise ValueError(f"invalid stable unit identity: {unit_id!r}")
+    return probe_label, cluster_id
+
+
+def _selected_ppc_epoch_windows(
+    config: LFPSummaryConfig,
+) -> dict[str, tuple[float, float]]:
+    """Return configured PPC epochs in declared order with seconds bounds."""
+    available = _epoch_windows(config)
+    try:
+        return {name: available[name] for name in config.ppc.epochs}
+    except KeyError as error:
+        raise ValueError("PPC epochs must name whole, before, or after") from error
+
+
+def _spikes_in_epoch(
+    relative_spike_times_s: np.ndarray,
+    epoch_window: tuple[float, float],
+) -> np.ndarray:
+    """Return an owned half-open epoch selection from one trial in seconds."""
+    spikes = np.asarray(relative_spike_times_s, dtype=float)
+    start_s, stop_s = epoch_window
+    return spikes[(spikes >= start_s) & (spikes < stop_s)].copy()
+
+
+def _shared_derangement_schedule(
+    trial_count: int,
+    shuffle_count: int,
+    seed: int,
+) -> np.ndarray | None:
+    """Return one unit-shared trial derangement or None below two trials."""
+    if trial_count < 2:
+        return None
+    return spike_lfp_summary.generate_trial_derangement_schedule(
+        trial_count,
+        shuffle_count,
+        seed=seed,
+    )
+
+
+def _ppc_schedule_seed(
+    config: LFPSummaryConfig,
+    condition_index: int,
+    site_index: int,
+    epoch_index: int,
+) -> int:
+    """Derive a deterministic condition/site/epoch seed without unit identity."""
+    return int(
+        config.ppc.seed
+        + condition_index * 1_000_000
+        + site_index * 10_000
+        + epoch_index * 100
+    )
+
+
+def _empty_spike_metric_arrays(
+    shape: tuple[int, int, int, int, int],
+) -> dict[str, np.ndarray]:
+    """Allocate PPC/null fields on unit-condition-site-epoch-frequency axes."""
+    float_fields = (
+        "ppc",
+        "resultant_length",
+        "preferred_phase_rad",
+        "p_value",
+        "q_value",
+        "null_mean",
+        "null_std",
+        "null_p025",
+        "null_p50",
+        "null_p975",
+    )
+    integer_fields = (
+        "spike_count",
+        "eligible_trial_count",
+        "null_exceedance_count",
+        "permutation_count",
+    )
+    boolean_fields = ("computable", "reliable", "null_eligible", "significant")
+    arrays = {name: np.full(shape, np.nan) for name in float_fields}
+    arrays.update({name: np.zeros(shape, dtype=np.int64) for name in integer_fields})
+    arrays.update({name: np.zeros(shape, dtype=bool) for name in boolean_fields})
+    return arrays
+
+
+def _assign_null_summary(
+    arrays: dict[str, np.ndarray],
+    index: tuple[int, int, int, int],
+    summary: spike_lfp_summary.PermutationNullSummary,
+) -> None:
+    """Copy one frequency-resolved null summary into cache metric arrays."""
+    fields = (
+        "null_eligible",
+        "eligible_trial_count",
+        "null_exceedance_count",
+        "permutation_count",
+        "p_value",
+        "null_mean",
+        "null_std",
+        "null_p025",
+        "null_p50",
+        "null_p975",
+    )
+    for field in fields:
+        arrays[field][index] = getattr(summary, field)
+
+
+def _sample_observed_trial_phase(
+    phase_time_s: np.ndarray,
+    trial_phase: np.ndarray,
+    trial_valid: np.ndarray,
+    trial_spikes: tuple[np.ndarray, ...],
+    trial_rows: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Sample complex phase without bridging invalid coordinates.
+
+    Parameters
+    ----------
+    phase_time_s : numpy.ndarray
+        Exact finite relative seconds ``(time,)`` grid.
+    trial_phase, trial_valid : numpy.ndarray
+        Complex and boolean ``(trial, frequency, time)`` arrays.
+    trial_spikes : tuple[numpy.ndarray, ...]
+        One event-relative seconds array per selected trial.
+    trial_rows : numpy.ndarray
+        Integer full-table row identity ``(trial,)``.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]
+        Complex samples and validity ``(frequency, spike)`` plus integer source
+        trial rows ``(spike,)``. Invalid samples are zero/false.
+    """
+    time_s = np.asarray(phase_time_s, dtype=float)
+    phase = np.asarray(trial_phase)
+    valid = np.asarray(trial_valid, dtype=bool)
+    rows = np.asarray(trial_rows)
+    expected = (len(trial_spikes), phase.shape[1], time_s.size)
+    if phase.ndim != 3 or phase.shape != expected or valid.shape != phase.shape:
+        raise ValueError("trial phase sampling axes are inconsistent")
+    if rows.shape != (len(trial_spikes),):
+        raise ValueError("trial rows must match sampled spike trains")
+    spike_count = sum(values.size for values in trial_spikes)
+    sampled = np.zeros((phase.shape[1], spike_count), dtype=np.complex64)
+    sampled_valid = np.zeros(sampled.shape, dtype=bool)
+    source_rows = np.empty(spike_count, dtype=np.int64)
+    offset = 0
+    for trial_index, spikes in enumerate(trial_spikes):
+        for spike in np.asarray(spikes, dtype=float):
+            source_rows[offset] = int(rows[trial_index])
+            _sample_one_phase_time(
+                time_s,
+                phase[trial_index],
+                valid[trial_index],
+                float(spike),
+                sampled[:, offset],
+                sampled_valid[:, offset],
+            )
+            offset += 1
+    return sampled, sampled_valid, source_rows
+
+
+def _sample_one_phase_time(
+    time_s: np.ndarray,
+    phase: np.ndarray,
+    valid: np.ndarray,
+    spike_time_s: float,
+    output: np.ndarray,
+    output_valid: np.ndarray,
+) -> None:
+    """Interpolate one phase column only between two valid neighboring samples."""
+    right = int(np.searchsorted(time_s, spike_time_s, side="left"))
+    if right < time_s.size and np.isclose(
+        time_s[right], spike_time_s, rtol=0.0, atol=1e-12
+    ):
+        usable = valid[:, right]
+        values = phase[:, right]
+    elif right == 0 or right == time_s.size:
+        return
+    else:
+        left = right - 1
+        usable = valid[:, left] & valid[:, right]
+        fraction = (spike_time_s - time_s[left]) / (time_s[right] - time_s[left])
+        values = phase[:, left] + fraction * (phase[:, right] - phase[:, left])
+    magnitude = np.abs(values)
+    usable &= np.isfinite(values.real) & np.isfinite(values.imag) & (magnitude > 0.0)
+    output[usable] = values[usable] / magnitude[usable]
+    output_valid[usable] = True
+
+
+def _pack_trial_spike_trains(
+    prepared: PreparedSpikeRun,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Pack unit/trial relative seconds into one vector and global offsets."""
+    trial_count = len(prepared.trial_spike_trains[0].relative_spike_times)
+    offsets = np.zeros((len(prepared.unit_ids), trial_count + 1), dtype=np.int64)
+    chunks: list[np.ndarray] = []
+    running = 0
+    for unit_index, train in enumerate(prepared.trial_spike_trains):
+        offsets[unit_index, 0] = running
+        for trial_index, values in enumerate(train.relative_spike_times):
+            chunks.append(np.asarray(values, dtype=float).copy())
+            running += values.size
+            offsets[unit_index, trial_index + 1] = running
+    packed = np.concatenate(chunks) if chunks else np.empty(0, dtype=float)
+    return packed, offsets
+
+
+def _select_spike_exemplars(
+    config: LFPSummaryConfig,
+    prepared_phase: PreparedPhaseRun,
+    prepared_spikes: PreparedSpikeRun,
+    ppc_band_mean: np.ndarray,
+    trial_spike_counts: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Select pooled low/high units and one illustrative trial per cache cell."""
+    output_shape = ppc_band_mean.shape[1:]
+    low = np.full(output_shape, "", dtype="<U64")
+    high = np.full(output_shape, "", dtype="<U64")
+    illustrative = np.full(output_shape, -1, dtype=np.int64)
+    for condition_index, site_index, epoch_index, band_index in np.ndindex(
+        output_shape
+    ):
+        selection = spike_lfp_summary.select_ppc_exemplars(
+            unit_ids=prepared_spikes.unit_ids,
+            band_ppc=ppc_band_mean[
+                :, condition_index, site_index, epoch_index, band_index
+            ],
+            trial_indices=prepared_phase.trial_indices,
+            trial_spike_counts=trial_spike_counts[
+                :, condition_index, site_index, epoch_index
+            ],
+        )
+        index = (condition_index, site_index, epoch_index, band_index)
+        if selection.low_unit_id is not None:
+            low[index] = selection.low_unit_id
+        if selection.high_unit_id is not None:
+            high[index] = selection.high_unit_id
+        for unit_id in (selection.high_unit_id, selection.low_unit_id):
+            if unit_id in selection.illustrative_trial_index_by_unit:
+                illustrative[index] = selection.illustrative_trial_index_by_unit[unit_id]
+                break
+    return low, high, illustrative
 
 
 def _analysis_condition_membership(prepared: PreparedTrials) -> np.ndarray:
