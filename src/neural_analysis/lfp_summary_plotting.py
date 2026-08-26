@@ -438,11 +438,13 @@ def plot_phase_map(
         va="top",
         bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
     )
+    figure.set_size_inches(10.0, 5.5)
     _caption(
         figure,
         context,
         f"{metric_name} {entity_label}, condition={condition_name}; {count_text}",
     )
+    figure.subplots_adjust(bottom=max(figure.subplotpars.bottom, 0.30))
     return figure, axes
 
 
