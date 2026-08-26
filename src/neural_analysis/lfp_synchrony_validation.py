@@ -476,6 +476,10 @@ def _render_cached_synchrony_pngs(
     pair_labels = _pair_labels(arrays)
     frequencies_hz = np.asarray(arrays["frequency_hz"], dtype=float)
     relative_time_s = np.asarray(arrays["relative_time_s"], dtype=float)
+    displayed_membership = (
+        np.asarray(arrays["condition_membership"], dtype=bool)
+        & np.asarray(arrays["filter_membership"], dtype=bool)[:, None]
+    )
     context = _plot_context(config)
     paths: list[Path] = []
 
@@ -493,6 +497,9 @@ def _render_cached_synchrony_pngs(
                 site_id,
                 condition_name,
                 context,
+                total_displayed_trial_count=int(
+                    np.count_nonzero(displayed_membership[:, condition_index])
+                ),
             )
             _save_and_close(figure, path, dependencies)
             paths.append(path)
@@ -509,6 +516,9 @@ def _render_cached_synchrony_pngs(
                 pair_label.replace("_", "-"),
                 condition_name,
                 context,
+                total_displayed_trial_count=int(
+                    np.count_nonzero(displayed_membership[:, condition_index])
+                ),
             )
             _save_and_close(figure, path, dependencies)
             paths.append(path)

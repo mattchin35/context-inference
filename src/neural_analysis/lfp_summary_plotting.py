@@ -359,8 +359,10 @@ def plot_phase_map(
     entity_label: str,
     condition_name: str,
     context: PlotContext,
+    *,
+    total_displayed_trial_count: int,
 ) -> tuple[plt.Figure, dict[str, plt.Axes]]:
-    """Plot a phase metric beside its effective-trial count map.
+    """Plot a phase metric with a compact effective/total trial annotation.
 
     Parameters
     ----------
@@ -374,16 +376,19 @@ def plot_phase_map(
         Display labels for the statistic, site/site-pair, and trial condition.
     context : PlotContext
         Figure provenance and analysis-window metadata.
+    total_displayed_trial_count : int
+        Nonnegative condition/filter trial count before site or pair validity.
 
     Returns
     -------
     tuple[matplotlib.figure.Figure, dict[str, matplotlib.axes.Axes]]
-        Unsaved figure with ``"metric"`` and ``"effective_count"`` axes.
+        Unsaved figure with one ``"metric"`` axis. Effective counts are text,
+        not a redundant heatmap.
 
     Raises
     ------
     ValueError
-        If either map disagrees with the frequency/time coordinates.
+        If axes/counts are invalid or an effective count exceeds the total.
     """
     f = _vector(frequency_hz, "frequency_hz")
     t = _vector(relative_time_s, "relative_time_s")
@@ -391,20 +396,52 @@ def plot_phase_map(
     c = np.asarray(effective_trial_count, float)
     if m.shape != (f.size, t.size) or c.shape != m.shape:
         raise ValueError("phase-map axes are invalid")
-    figure, axes = _figure(("metric", "effective_count"))
-    for axis, data, label in (
-        (axes["metric"], m, metric_name),
-        (axes["effective_count"], c, "Effective trials"),
+    if (
+        not isinstance(total_displayed_trial_count, (int, np.integer))
+        or total_displayed_trial_count < 0
+        or not np.isfinite(c).all()
+        or np.any(c < 0.0)
+        or not np.all(c == np.floor(c))
     ):
-        mesh = axis.pcolormesh(t, f, np.ma.masked_invalid(data), shading="auto")
-        figure.colorbar(mesh, ax=axis)
-        axis.set(ylabel="Frequency (Hz)", title=label)
-        axis.axvline(0, color="black", ls="--")
-    axes["effective_count"].set_xlabel("Time from alignment (s)")
+        raise ValueError("phase-map trial counts must be nonnegative integers")
+    minimum_count = int(np.min(c))
+    maximum_count = int(np.max(c))
+    if maximum_count > total_displayed_trial_count:
+        raise ValueError("effective phase-map count exceeds displayed total")
+    if minimum_count == maximum_count:
+        count_text = (
+            f"Effective/total displayed: {minimum_count}/"
+            f"{total_displayed_trial_count}"
+        )
+    else:
+        count_text = (
+            f"Effective range/total displayed: {minimum_count}-{maximum_count}/"
+            f"{total_displayed_trial_count}"
+        )
+
+    figure, axes = _figure(("metric",))
+    axis = axes["metric"]
+    mesh = axis.pcolormesh(t, f, np.ma.masked_invalid(m), shading="auto")
+    figure.colorbar(mesh, ax=axis)
+    axis.set(
+        ylabel="Frequency (Hz)",
+        xlabel="Time from alignment (s)",
+        title=metric_name,
+    )
+    axis.axvline(0, color="black", ls="--")
+    axis.text(
+        0.01,
+        0.98,
+        count_text,
+        transform=axis.transAxes,
+        ha="left",
+        va="top",
+        bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+    )
     _caption(
         figure,
         context,
-        f"{metric_name} {entity_label}, condition={condition_name}; effective counts shown",
+        f"{metric_name} {entity_label}, condition={condition_name}; {count_text}",
     )
     return figure, axes
 
