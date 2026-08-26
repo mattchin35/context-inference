@@ -580,3 +580,30 @@ Synchrony continuation completed later on 2026/08/25:
   the Spike-phase preview until that approval. Production webapp dependency
   wiring for Synchrony remains a later integration task; the validation runner
   and component cache are complete and independently callable.
+
+# 2026/08/26
+
+Refined the CT026 ITPC/ISPC map presentation after user inspection. The
+effective-trial heatmaps were numerically constant and therefore uninformative:
+their intended purpose was to expose frequency/time-specific missingness, but
+all retained CT026 trials contribute at every displayed bin.
+
+- Replaced the second effective-count heatmap with a compact annotation on the
+  ITPC/ISPC map. Constant coverage is shown as
+  `Effective/total displayed: effective/total`; variable coverage is shown as
+  `Effective range/total displayed: minimum-maximum/total`.
+- The denominator is the condition/filter trial count before site or pair
+  validity. The numerator remains the actual contributor count from the cached
+  frequency-by-time count array. Invalid, fractional, negative, or
+  greater-than-total counts fail clearly.
+- Added and committed RED tests for constant/ranged counts, validation-runner
+  propagation, removal of the count axis, and sufficient one-panel caption
+  spacing. Implementation commits are `3bf3938` and `811e47d`.
+- The full neural-analysis suite still passes 609 tests with the same 16
+  pre-existing Pynapple warnings. No numerical cache or phase transform was
+  recomputed.
+- The latest report for approval is
+  `analysis_runs/CT026_2026-08-01_130853_lfp_synchrony_validation_2026-08-26T16-57-33Z`
+  beneath the CT026 session root. Earlier Synchrony reports are superseded.
+  Continue to pause before the Spike-phase preview until the user approves
+  this report.
