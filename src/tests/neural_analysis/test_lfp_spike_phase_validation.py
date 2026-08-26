@@ -54,9 +54,13 @@ def test_ct026_preview_config_uses_100_shuffles_without_changing_other_component
 
     assert preview.ppc.shuffle_count == 100
     assert preview.unit_population == _population()
-    assert component_fingerprint(preview, "power") == component_fingerprint(final, "power")
-    assert component_fingerprint(preview, "synchrony") == component_fingerprint(final, "synchrony")
-    assert component_fingerprint(preview, "spike_phase") != component_fingerprint(final, "spike_phase")
+    assert component_fingerprint("power", preview) == component_fingerprint("power", final)
+    assert component_fingerprint("synchrony", preview) == component_fingerprint(
+        "synchrony", final
+    )
+    assert component_fingerprint("spike_phase", preview) != component_fingerprint(
+        "spike_phase", final
+    )
 
 
 def test_failed_preview_creates_no_immutable_report_directory(tmp_path: Path) -> None:
