@@ -19,6 +19,7 @@ from src.neural_analysis.lfp_summary_pipeline import ComponentRunResult
 from src.neural_analysis.lfp_spike_phase_validation import (
     build_ct026_default_active_population,
     build_ct026_spike_phase_preview_config,
+    make_production_spike_phase_preview_dependencies,
     render_cached_spike_phase_preview_validation,
     run_spike_phase_preview_validation,
 )
@@ -240,3 +241,17 @@ def test_successful_preview_and_cached_render_write_public_ppc_report(tmp_path: 
 
     assert "compute_spike_phase" not in cached_calls
     assert cached.run_directory.is_dir()
+
+
+def test_production_preview_dependencies_bind_real_spike_cache_boundary() -> None:
+    """The production factory must expose Spike compute, cache, plot, and clocks."""
+    dependencies = make_production_spike_phase_preview_dependencies()
+
+    assert callable(dependencies.compute_spike_phase_component)
+    assert callable(dependencies.load_spike_phase_arrays)
+    assert callable(dependencies.plot_unit_ppc_map)
+    assert callable(dependencies.plot_population_ppc_maps)
+    assert callable(dependencies.plot_ppc_band_summary)
+    assert callable(dependencies.plot_ppc_exemplar)
+    assert callable(dependencies.monotonic_seconds)
+    assert callable(dependencies.peak_memory_bytes)
