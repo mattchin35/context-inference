@@ -607,3 +607,97 @@ all retained CT026 trials contribute at every displayed bin.
   beneath the CT026 session root. Earlier Synchrony reports are superseded.
   Continue to pause before the Spike-phase preview until the user approves
   this report.
+
+# 2026/08/27
+
+Audited the complete `src/neural_analysis` module inventory, the current LFP
+summary implementation, its tests, `docs/Tasks_neural.md`, and
+`docs/webappDesign.md` before continuing experimental validation. No source or
+cache files were changed during the audit.
+
+Current verified development state:
+
+- Power remains implemented, cached, and user-approved for session
+  `CT026_2026-08-01_130853`. The approved report remains
+  `analysis_runs/CT026_2026-08-01_130853_lfp_power_validation_2026-08-25T16-17-40Z`.
+- Production Synchrony calculation and cache-backed reporting are implemented.
+  The current Synchrony cache remains compatible, and the latest report remains
+  `analysis_runs/CT026_2026-08-01_130853_lfp_synchrony_validation_2026-08-26T16-57-33Z`.
+  The development record does not yet contain an explicit user approval of
+  that report, so approval must be confirmed rather than inferred before a
+  production Spike-phase preview is executed.
+- The production Spike-phase runtime bridge, 100-shuffle CT026 preview
+  configuration, active ProbeB unit-population selection, cache-only plotting,
+  and immutable preview-report writer are now implemented in the nine local
+  commits after `origin/refactor`, ending at commit `c036d62`.
+- The Spike-phase implementation has not yet been run on CT026. The generic
+  cache currently contains only `power.npz`, `synchrony.npz`, and
+  `manifest.json`; there is no `spike_phase.npz` and no Spike-phase preview
+  analysis-run directory. The final 1,000-shuffle run has therefore not been
+  attempted.
+- The complete neural-analysis test command was rerun at current HEAD:
+  `UV_CACHE_DIR=/tmp/context_inference_uv_cache MPLCONFIGDIR=/tmp/mpl uv run
+  pytest -q -p no:cacheprovider src/tests/neural_analysis`. It passed 617 tests
+  with the same 16 pre-existing Pynapple empty-epoch/divide-by-zero warnings.
+  No neural tests were skipped or marked xfail.
+- Branch `refactor` is nine commits ahead of `origin/refactor`. The existing
+  user modifications to `docs/Tasks_neural.md` and `docs/webappDesign.md`, and
+  unrelated untracked files, remain untouched.
+
+Important incomplete integration work:
+
+- The Streamlit production dependency factory still wires only Power.
+  Synchrony, Spike phase, and Compute All deliberately return unavailable, and
+  cached plotting supports only the limited Power preview. The main webapp
+  route does not yet provide an active unit population to the summary view.
+- No composed production dependency bundle currently supports Compute All.
+  The component-specific runtime factories intentionally reject operations
+  belonging to the other components.
+- Pipeline progress callbacks are not connected to Streamlit progress output.
+- The first-pass Spike preview report renders four representative cached PPC
+  figures. It does not yet provide the complete planned high/low percentile
+  exemplar set, detailed run log, exclusion/warning summary, or nine-filter
+  performance projection.
+- Configured per-site absolute amplitude thresholds are validated and
+  fingerprinted but are not applied by production phase preparation. PPC
+  `worker_count` and `chunk_size` are also validated configuration fields but
+  are not used by the production PPC calculation.
+- Real-session Spike-phase wall time, peak memory, cache size, and unit/spike
+  reliability counts remain unknown. The passing synthetic and injected tests
+  do not substitute for the gated CT026 100-shuffle run.
+
+The next safe milestone is to confirm user approval of the latest Synchrony
+report, then run only the CT026 100-shuffle Spike-phase preview for the approved
+active ProbeB population. The resulting cache, plots, counts, exclusions,
+runtime, memory use, and storage must be inspected before authorizing the final
+1,000-shuffle calculation or broader webapp integration.
+
+# 2026/08/27 - Corrective handoff
+
+This entry appends a correction without rewriting the historical entry above.
+The earlier instruction to run the CT026 100-shuffle Spike-phase preview next is
+superseded. The user approved both the latest Synchrony report and the revised
+ordering in which WP5C is completed and benchmarked before that preview.
+
+- Current branch/HEAD is `refactor` at
+  `c036d62b9567db3bd66ce8ad84d75a089a335ad8`, nine commits ahead of
+  `origin/refactor` at `e580252`.
+- The full neural suite at this HEAD is 617 passed with no skipped or xfailed
+  tests and the same 16 known Pynapple empty-epoch/divide-by-zero warnings.
+- The user explicitly approved the final Synchrony report
+  `analysis_runs/CT026_2026-08-01_130853_lfp_synchrony_validation_2026-08-26T16-57-33Z`
+  on 2026-08-27.
+- WP5C remains unimplemented. Its scientific design and its position before the
+  preview are approved, but its proposed internal execution contracts and
+  implementation remain unauthorized.
+- The CT026 generic cache contains `power.npz`, `synchrony.npz`, and
+  `manifest.json`. It contains no `spike_phase.npz`, and no CT026 Spike-phase
+  preview report directory exists.
+- The exact next gate is user review and explicit approval of the WP5C-0
+  contracts in `docs/Tasks_neural.md` Sections 2.22-2.26. Only after that gate
+  may WP5C-1 write its test-only commit and record RED. No CT026 computation is
+  authorized by contract approval alone.
+
+This journal is historical. `docs/Tasks_neural.md` is the authoritative source
+for current execution state, contracts, gates, package ownership, and remaining
+work; later work must not recover sequencing from an older journal entry.
