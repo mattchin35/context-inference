@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -605,8 +606,11 @@ def test_edge_sufficient_statistics_reproduce_explicit_pairwise_ppc() -> None:
     expected_ppc = np.empty((2, 2), dtype=float)
     for unit_index, spike_times in enumerate((phase_time_s, phase_time_s[[0, 2]])):
         for frequency_index in range(2):
-            phases = np.angle(
-                trial_phase_vectors[1, frequency_index, spike_times.astype(int)]
+            phases = np.asarray(
+                np.angle(
+                    trial_phase_vectors[1, frequency_index, spike_times.astype(int)]
+                ),
+                dtype=float,
             )
             expected_ppc[unit_index, frequency_index] = np.mean(
                 [
@@ -616,8 +620,9 @@ def test_edge_sufficient_statistics_reproduce_explicit_pairwise_ppc() -> None:
                     if first != second
                 ]
             )
-    np.testing.assert_allclose(recovered_ppc[0], expected_ppc)
-    assert recovered_ppc[0, 0] < 0.0
+    # WP5B stores normalized samples as complex64 before complex128 reduction.
+    np.testing.assert_allclose(recovered_ppc[0], expected_ppc, rtol=0.0, atol=5e-8)
+    assert recovered_ppc[0, 0, 0] < 0.0
 
 
 def test_sufficient_statistic_reducer_handles_zero_one_two_counts_and_is_frozen() -> None:
@@ -647,14 +652,15 @@ def test_sufficient_statistic_reducer_handles_zero_one_two_counts_and_is_frozen(
     assert np.isnan(draws[0, 1, 0])
     assert draws[0, 2, 0] == pytest.approx(-1.0)
     with pytest.raises(FrozenInstanceError):
-        statistics.source_trial_position = np.array([1, 0])
+        setattr(statistics, "source_trial_position", np.array([1, 0]))
 
 
 def test_edge_sufficient_statistics_preserve_wp5b_missing_phase_validity() -> None:
-    """Interpolation must reject outside support and intervals touching NaN phase."""
+    """Interpolation rejects outside support and intervals touching invalid phase."""
     phase_time_s = np.array([0.0, 1.0, 2.0, 3.0])
-    trial_phase_vectors = np.ones((2, 1, 4), dtype=complex)
+    trial_phase_vectors = np.ones((2, 2, 4), dtype=complex)
     trial_phase_vectors[0, 0, 1] = np.nan + 1j * np.nan
+    trial_phase_vectors[0, 1, 1] = 0.0j
     spike_times_s = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5])
 
     statistics = spike_lfp_summary.compute_edge_sufficient_statistics(
@@ -663,13 +669,16 @@ def test_edge_sufficient_statistics_preserve_wp5b_missing_phase_validity() -> No
         ),
         phase_time_s=phase_time_s,
         trial_phase_vectors=trial_phase_vectors,
-        frequencies_hz=np.array([8.0]),
+        frequencies_hz=np.array([8.0, 40.0]),
         source_trial_position=np.array([0]),
         target_trial_position=np.array([0]),
     )
 
-    np.testing.assert_array_equal(statistics.valid_spike_count, [[[4]]])
-    np.testing.assert_allclose(statistics.phase_vector_sum, [[[4.0 + 0.0j]]])
+    np.testing.assert_array_equal(statistics.valid_spike_count, [[[4, 4]]])
+    np.testing.assert_allclose(
+        statistics.phase_vector_sum,
+        [[[4.0 + 0.0j, 4.0 + 0.0j]]],
+    )
 
 
 def test_scheduled_sufficient_statistics_match_wp5b_shuffle_numerics() -> None:
@@ -752,19 +761,22 @@ def test_sufficient_statistic_null_percentiles_request_explicit_linear_method(
 ) -> None:
     """Null percentiles must pin NumPy's linear method rather than inherit defaults."""
     percentile = np.percentile
-    requested_methods: list[str | None] = []
+    requested_methods: list[str] = []
 
     def recording_percentile(
         values: np.ndarray,
         quantiles: list[float],
         *,
-        method: str | None = None,
+        method: Literal["linear"] = "linear",
     ) -> np.ndarray:
         """Record the requested interpolation method and delegate unchanged values."""
         requested_methods.append(method)
         return percentile(values, quantiles, method=method)
 
-    monkeypatch.setattr(spike_lfp_summary.np, "percentile", recording_percentile)
+    monkeypatch.setattr(
+        "src.neural_analysis.spike_lfp_summary.np.percentile",
+        recording_percentile,
+    )
     spike_lfp_summary.summarize_permutation_null(
         observed_ppc=np.array([0.2]),
         null_ppc_chunks=(np.array([[0.1], [0.3], [0.5]]),),
