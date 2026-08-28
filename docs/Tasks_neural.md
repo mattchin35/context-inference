@@ -2,20 +2,20 @@
 
 ## Live handoff snapshot
 
-- **Snapshot:** 2026-08-27 on branch `refactor`.
-- **Current HEAD:** `c036d62b9567db3bd66ce8ad84d75a089a335ad8`
-  (`c036d62`, `implement spike preview report and population`).
-- **Upstream relationship:** `refactor` is nine commits ahead of
-  `origin/refactor`; the upstream tip is `e580252`.
-- **Verified neural baseline at this HEAD:** 617 passed, no skipped or xfailed
+- **Snapshot:** 2026-08-28 on branch `refactor`.
+- **Current implementation HEAD:** `2460ac39d47f00760002f803aed226a0657f54cf`
+  (`2460ac3`, `implement serial PPC sufficient statistics`).
+- **Upstream relationship at this implementation checkpoint:** `refactor` is
+  three commits ahead of `origin/refactor`; the upstream tip is `c3a72b6`.
+- **Verified neural baseline at this HEAD:** 622 passed, no skipped or xfailed
   tests, with 16 known Pynapple empty-epoch/divide-by-zero warnings from
-  `UV_CACHE_DIR=/tmp/context_inference_uv_cache MPLCONFIGDIR=/tmp/mpl uv run
+  `UV_CACHE_DIR=/tmp/context_inference_uv_cache MPLCONFIGDIR=/tmp/context_inference_mpl uv run
   pytest -q -p no:cacheprovider src/tests/neural_analysis`.
 - **Approval state:** the user approved the Synchrony report dated
   `2026-08-26T16-57-33Z` and approved completing WP5C before the CT026
-  100-shuffle Spike-phase preview. WP5C is specified but not authorized for
-  implementation. WP5C-0 contract approval is the next gate; no tests or source
-  changes may begin before that separate approval.
+  100-shuffle Spike-phase preview. The WP5C-0 contracts are approved and
+  WP5C-1 is complete. WP5C-2 is the next implementation package; no CT026
+  Spike-phase computation has been authorized or run.
 - **Do not redo completed packages:** WP0, WP1, WP2 preparation, WP3, WP4,
   WP5A, WP5B, and the Spike-phase runtime bridge are historical completed work.
   Remaining integration work must extend them through the packages below, not
@@ -48,7 +48,7 @@ Source-of-truth hierarchy:
 | WP5A observed PPC | Complete | Tests `fed9435`, `355307e`; implementation `d6c3477`; `test_spike_lfp_summary.py` | None |
 | WP5B shuffle inference | Complete | Tests `c94e152`, `7d22d6f`; implementation `01b7507`; `test_spike_lfp_summary.py` | Performance redesign only; scientific reference must remain unchanged |
 | Spike runtime bridge | Complete | Tests `453d08a`; implementation `c8e76d5`; `test_lfp_summary_runtime.py` | WP5C optimization; no CT026 Spike-phase execution has occurred |
-| WP5C optimization | Not started; design approved | Approved Sections 2.20-2.21 and packages WP5C-0 through WP5C-6 below | Freeze and approve WP5C-0 contracts, then implement test-first |
+| WP5C optimization | WP5C-0 approved; WP5C-1 complete | Tests `cec2c91`, `00794ed`; implementation `2460ac3`; focused 5 passed, Spike/LFP 25 passed, full neural suite 622 passed with 16 known warnings | Implement WP5C-2 scheduled-edge and segmented reduction test-first; WP5C-3 through WP5C-6 remain pending |
 | WP6 plotting | Partially complete | Tests `b1f51f3` and later focused plotting tests; implementation `d1c3e21`; Power and Synchrony reports above | Complete PPC exemplars and reporting in WP12 |
 | WP7 pipeline | Partially complete | Tests `b1f51f3`; implementation `067fdef`; `test_lfp_summary_pipeline.py` | Composed production dependencies and detailed progress in WP10 |
 | WP8 webapp | Partial; Power path only | Tests `c7ec7c1`, `003394a`, `f3954de`; implementations `2885ffd`, `926801b`; `test_lfp_summary_webapp.py` | Synchrony, Spike phase, Compute All, active population, progress, and complete cached views in WP11 |
@@ -868,13 +868,14 @@ A Sol medium/high orchestrator will:
 
 ## 7. Decision and authorization status
 
-The scientific estimator and the WP5C-before-preview sequence are approved.
-The proposed internal execution contracts in Sections 2.22-2.26 still require
-the explicit WP5C-0 approval gate, and WP5C implementation is not authorized.
-Implementers must escalate newly discovered ambiguity instead of choosing new
-scientific or execution defaults. Material changes to metrics, thresholds,
-cache contracts, or user-visible behavior require user approval and an update
-to this plan before implementation continues.
+The scientific estimator, WP5C-before-preview sequence, and internal execution
+contracts in Sections 2.22-2.26 are approved. WP5C-1 is complete and WP5C-2 is
+the next authorized implementation package. Implementers must escalate newly
+discovered ambiguity instead of choosing new scientific or execution defaults.
+Material changes to metrics, thresholds, cache contracts, or user-visible
+behavior require user approval and an update to this plan before implementation
+continues. No CT026 Spike-phase computation is authorized by these package
+approvals.
 
 ## 8. Exact shared data semantics
 
@@ -1489,9 +1490,10 @@ Tasks:
 - Record the existing WP5B reference functions used for every equivalence test.
 - Resolve any objection by editing this document before test work begins.
 
-Gate: the user must explicitly approve the frozen WP5C-0 contracts. Approval of
-this documentation edit, the Synchrony report, or the package ordering is not
-WP5C implementation authorization.
+Gate (satisfied before WP5C-1 began): the user must explicitly approve the
+frozen WP5C-0 contracts. Approval of the earlier documentation edit, the
+Synchrony report, or the package ordering alone was not WP5C implementation
+authorization.
 
 #### WP5C-1 - Serial sufficient-statistic kernel
 
@@ -1526,6 +1528,21 @@ RED command:
 `uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_spike_lfp_summary.py -k "sufficient or edge_statistic"`
 
 No runtime, cache, pipeline, checkpoint, or parallel code belongs in WP5C-1.
+
+Completion evidence (2026-08-28):
+
+- Test-only commits: `cec2c91` and `00794ed`.
+- Genuine RED first showed the missing numerical interfaces; the added
+  zero-magnitude adjacent-support regression then failed with count 6 instead
+  of the required count 4 before the interpolation validity fix.
+- Implementation commit: `2460ac3`.
+- Focused GREEN: 5 passed from the package RED command.
+- Complete `test_spike_lfp_summary.py`: 25 passed.
+- Complete `src/tests/neural_analysis`: 622 passed with the 16 known Pynapple
+  warnings.
+- Review confirmed that only `spike_lfp_summary.py` changed in the
+  implementation commit. No runtime, cache, pipeline, checkpoint, parallel,
+  external-library, or CT026 computation changes occurred.
 
 #### WP5C-2 - Scheduled-edge and segmented reduction engine
 
@@ -1909,10 +1926,10 @@ Sol checks:
 
 ## 14. Final verification and approval gate
 
-Documentation-only handoff verification completed on 2026-08-27:
+Original documentation-only handoff verification completed on 2026-08-27:
 
-- Every cited commit resolves in this repository, including `01b7507`,
-  `c8e76d5`, and the current/upstream tips.
+- Every cited commit resolved in this repository, including `01b7507`,
+  `c8e76d5`, and the then-current/upstream tips.
 - Every named existing source/test file and every historical test-command target
   exists. Future `lfp_summary_work_cache.py`,
   `test_lfp_summary_work_cache.py`, `lfp_summary_ppc_runtime.py`, and
@@ -1923,8 +1940,8 @@ Documentation-only handoff verification completed on 2026-08-27:
   manifest, log, summary, source identifiers, and PNG outputs.
 - The CT026 generic cache contains compatible Power/Synchrony artifacts and no
   `spike_phase.npz`; no Spike-phase preview report exists.
-- The full neural suite passed 617 tests with the 16 known warnings at the
-  current HEAD.
+- The full neural suite passed 617 tests with the 16 known warnings at that
+  handoff HEAD.
 - Package ownership is sequential for every shared numerical/runtime file;
   parallel work is permitted only for disjoint files.
 - Each remaining requirement is assigned to WP5C-0 through WP5C-6 or WP10-WP13.
@@ -1939,14 +1956,14 @@ Documentation-only handoff verification completed on 2026-08-27:
   `docs/DevJournal.md`, and `docs/webappDesign.md`; all other dirty and untracked
   worktree entries were preserved.
 
-No source-code implementation should begin until:
+WP5C-0 approval and WP5C-1 completion update (2026-08-28):
 
-- Exact test cases are listed before implementation tasks.
-- The complete Terra work packages and Sol integration checkpoints are
-  reviewed and approved by the user.
-
-The revised WP5C packages and proposed frozen contracts are recorded, but
-implementation remains paused. The exact next authorization request is approval
-of WP5C-0 Sections 2.22-2.26. Only after that gate may WP5C-1 create its
-test-only commit and record RED; no CT026 computation is authorized by that
-approval alone.
+- The user approved the frozen WP5C-0 contracts before test or implementation
+  work began.
+- WP5C-1 satisfied the required test-only commit, genuine RED, separate
+  implementation commit, focused GREEN, complete neural-suite run, and scope
+  review.
+- The exact next package is WP5C-2. It must begin with its listed tests and RED
+  evidence before implementation.
+- WP5C-3 through WP5C-6 remain pending. In particular, no CT026 computation is
+  an implicit consequence of WP5C-1 completion or WP5C-2 authorization.
