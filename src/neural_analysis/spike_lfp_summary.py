@@ -259,6 +259,66 @@ class TrialShufflePPCResult:
 
 
 @dataclass(frozen=True)
+class EdgeSufficientStatistics:
+    """Reduced spike-phase observations for stable trial-pair edges.
+
+    Attributes
+    ----------
+    source_trial_position, target_trial_position : numpy.ndarray
+        Owned int64 shape ``(edge,)`` zero-based positions on the shared trial
+        axis. Same-trial edges are permitted for observed calculations; null
+        schedules select only nonself edges.
+    phase_vector_sum : numpy.ndarray
+        Owned complex128 shape ``(edge, unit, frequency)`` sums of valid unit
+        phase vectors. Phase is dimensionless.
+    valid_spike_count : numpy.ndarray
+        Owned int64 with the same axes as ``phase_vector_sum``. Counts are
+        nonnegative valid spike-phase observations; zero has no missing sentinel.
+    """
+
+    source_trial_position: np.ndarray
+    target_trial_position: np.ndarray
+    phase_vector_sum: np.ndarray
+    valid_spike_count: np.ndarray
+
+    def __post_init__(self) -> None:
+        """Validate axes and retain owned canonical-dtype arrays.
+
+        Inputs are the four public fields documented on the class. This method
+        preserves edge, unit, and frequency order, casts coordinates/counts to
+        int64 and sums to complex128, and raises ``ValueError`` for malformed,
+        duplicate, nonfinite, or inconsistent arrays. It returns ``None``.
+        """
+        source, target = _edge_position_arrays(
+            self.source_trial_position,
+            self.target_trial_position,
+        )
+        vector_sum = np.asarray(self.phase_vector_sum, dtype=np.complex128)
+        counts = _count_array(self.valid_spike_count)
+        expected_leading_shape = (source.size,)
+        if (
+            vector_sum.ndim != 3
+            or vector_sum.shape[0:1] != expected_leading_shape
+            or vector_sum.shape[1] < 1
+            or vector_sum.shape[2] < 1
+            or counts.shape != vector_sum.shape
+        ):
+            raise ValueError(
+                "edge statistics require matching (edge, unit, frequency) arrays"
+            )
+        if not np.isfinite(vector_sum.real).all() or not np.isfinite(
+            vector_sum.imag
+        ).all():
+            raise ValueError("edge phase-vector sums must be finite")
+        if np.any((counts == 0) & (vector_sum != 0.0j)):
+            raise ValueError("zero-count edge statistics must have a zero vector sum")
+        object.__setattr__(self, "source_trial_position", source)
+        object.__setattr__(self, "target_trial_position", target)
+        object.__setattr__(self, "phase_vector_sum", vector_sum.copy())
+        object.__setattr__(self, "valid_spike_count", counts)
+
+
+@dataclass(frozen=True)
 class SignificantPrevalenceSummary:
     """FDR-significant PPC prevalence reduced over the unit axis only.
 
@@ -701,6 +761,205 @@ def generate_trial_derangement_schedule(
             permutation = generator.permutation(trial_count)
         schedule[shuffle_index] = permutation
     return schedule
+
+
+def compute_edge_sufficient_statistics(
+    *,
+    trial_relative_spike_times_s: Sequence[Sequence[np.ndarray]],
+    phase_time_s: np.ndarray,
+    trial_phase_vectors: np.ndarray,
+    frequencies_hz: np.ndarray,
+    source_trial_position: np.ndarray,
+    target_trial_position: np.ndarray,
+) -> EdgeSufficientStatistics:
+    """Sample bounded source-target edges and immediately reduce by unit.
+
+    Parameters
+    ----------
+    trial_relative_spike_times_s : Sequence[Sequence[numpy.ndarray]]
+        Nested ``(unit, trial)`` collection. Every element is a finite float64
+        ``(spike_in_unit_trial,)`` event-relative seconds array. Empty arrays
+        represent no spike, and overlapping trial membership remains separate.
+    phase_time_s : numpy.ndarray
+        Finite strictly increasing float64 shape ``(time,)`` common relative
+        seconds coordinate.
+    trial_phase_vectors : numpy.ndarray
+        Numeric complex coefficients with shape ``(trial, frequency, time)``.
+        Interpolation follows the WP5B real/imaginary adjacent-support rule;
+        nonfinite, zero-magnitude, and out-of-support samples are unavailable.
+    frequencies_hz : numpy.ndarray
+        Finite positive increasing float64 shape ``(frequency,)`` coordinates
+        in Hz. Values validate the phase frequency axis and are not transformed.
+    source_trial_position, target_trial_position : numpy.ndarray
+        Matching nonempty integer shape ``(edge,)`` zero-based positions. Edge
+        order is preserved. Same-trial edges are permitted for observed work.
+
+    Returns
+    -------
+    EdgeSufficientStatistics
+        Complex128 sums and int64 counts with axes ``(edge, unit, frequency)``.
+        No per-spike phase vector survives this function.
+
+    Raises
+    ------
+    ValueError
+        If nested spike axes, phase/time/frequency axes, or edge coordinates are
+        invalid. No partial statistics are returned.
+    """
+    phase_time = _strict_relative_seconds(phase_time_s, "phase_time_s")
+    frequencies = _frequency_vector(frequencies_hz)
+    phase = np.asarray(trial_phase_vectors)
+    if (
+        phase.ndim != 3
+        or phase.shape[1:] != (frequencies.size, phase_time.size)
+        or phase.shape[0] < 1
+        or not np.issubdtype(phase.dtype, np.number)
+    ):
+        raise ValueError(
+            "trial_phase_vectors must have numeric shape (trial, frequency, time)"
+        )
+    unit_trial_spikes = _unit_trial_local_spike_arrays(
+        trial_relative_spike_times_s,
+        phase.shape[0],
+    )
+    source_positions, target_positions = _edge_position_arrays(
+        source_trial_position,
+        target_trial_position,
+    )
+    if (
+        np.any(source_positions >= phase.shape[0])
+        or np.any(target_positions >= phase.shape[0])
+    ):
+        raise ValueError("trial-edge positions must index the phase trial axis")
+
+    statistic_shape = (
+        source_positions.size,
+        len(unit_trial_spikes),
+        frequencies.size,
+    )
+    vector_sum = np.zeros(statistic_shape, dtype=np.complex128)
+    valid_count = np.zeros(statistic_shape, dtype=np.int64)
+    for edge_index, (source_position, target_position) in enumerate(
+        zip(source_positions, target_positions, strict=True)
+    ):
+        target_phase = phase[int(target_position)]
+        for unit_index, unit_spikes in enumerate(unit_trial_spikes):
+            sampled = _interpolate_unit_phase(
+                phase_time,
+                target_phase,
+                unit_spikes[int(source_position)],
+            )
+            valid = np.isfinite(sampled.real) & np.isfinite(sampled.imag)
+            # WP5B converts normalized phase to complex64 before complex128 sums.
+            unit_phase = np.zeros(sampled.shape, dtype=np.complex64)
+            unit_phase[valid] = sampled[valid].astype(np.complex64)
+            vector_sum[edge_index, unit_index] = np.sum(
+                unit_phase,
+                axis=1,
+                dtype=np.complex128,
+            )
+            valid_count[edge_index, unit_index] = np.sum(
+                valid,
+                axis=1,
+                dtype=np.int64,
+            )
+    return EdgeSufficientStatistics(
+        source_trial_position=source_positions,
+        target_trial_position=target_positions,
+        phase_vector_sum=vector_sum,
+        valid_spike_count=valid_count,
+    )
+
+
+def reduce_scheduled_shuffle_block(
+    *,
+    edge_statistics: EdgeSufficientStatistics,
+    schedule: np.ndarray,
+    shuffle_positions: np.ndarray,
+) -> np.ndarray:
+    """Reduce selected derangements into temporary unit-by-frequency PPC draws.
+
+    Parameters
+    ----------
+    edge_statistics : EdgeSufficientStatistics
+        Stable edge sums/counts with axes ``(edge, unit, frequency)``. It must
+        contain every source-target pair requested by selected schedule rows.
+    schedule : numpy.ndarray
+        Int64 shape ``(shuffle, source_trial_position)`` derangements. Each row
+        maps every source trial position to one distinct target phase trial.
+    shuffle_positions : numpy.ndarray
+        Nonempty unique integer shape ``(shuffle_block,)`` positions selecting
+        rows from ``schedule``. Supplied order defines the output shuffle order.
+
+    Returns
+    -------
+    numpy.ndarray
+        Float64 dimensionless PPC with axes ``(shuffle_block, unit, frequency)``.
+        Counts zero or one produce NaN; negative PPC values remain unchanged.
+        The temporary draws are not stored on ``edge_statistics``.
+
+    Raises
+    ------
+    ValueError
+        If schedule/selection axes are invalid, an edge lies outside the trial
+        axis, or a selected scheduled pair is absent from ``edge_statistics``.
+    """
+    if not isinstance(edge_statistics, EdgeSufficientStatistics):
+        raise ValueError("edge_statistics must be EdgeSufficientStatistics")
+    candidate_schedule = np.asarray(schedule)
+    if candidate_schedule.ndim != 2:
+        raise ValueError("schedule must have shape (shuffle, trial)")
+    validated_schedule = _derangement_schedule(
+        candidate_schedule,
+        candidate_schedule.shape[1],
+    )
+    positions = _shuffle_position_array(
+        shuffle_positions,
+        validated_schedule.shape[0],
+    )
+    if (
+        np.any(edge_statistics.source_trial_position >= validated_schedule.shape[1])
+        or np.any(edge_statistics.target_trial_position >= validated_schedule.shape[1])
+    ):
+        raise ValueError("edge statistics lie outside the schedule trial axis")
+    edge_lookup = {
+        (int(source), int(target)): edge_index
+        for edge_index, (source, target) in enumerate(
+            zip(
+                edge_statistics.source_trial_position,
+                edge_statistics.target_trial_position,
+                strict=True,
+            )
+        )
+    }
+    selected_schedule = validated_schedule[positions]
+    edge_indices = np.empty(selected_schedule.shape, dtype=np.int64)
+    for block_position, target_row in enumerate(selected_schedule):
+        for source_position, target_position in enumerate(target_row):
+            try:
+                edge_indices[block_position, source_position] = edge_lookup[
+                    (source_position, int(target_position))
+                ]
+            except KeyError as error:
+                raise ValueError(
+                    "edge statistics lack a selected scheduled trial pair"
+                ) from error
+    pooled_sum = np.sum(
+        edge_statistics.phase_vector_sum[edge_indices],
+        axis=1,
+        dtype=np.complex128,
+    )
+    pooled_count = np.sum(
+        edge_statistics.valid_spike_count[edge_indices],
+        axis=1,
+        dtype=np.int64,
+    )
+    ppc = np.full(pooled_count.shape, np.nan, dtype=float)
+    computable = pooled_count >= MINIMUM_COMPUTABLE_SPIKES
+    numerator = np.abs(pooled_sum) ** 2 - pooled_count
+    denominator = pooled_count.astype(float) * (pooled_count - 1)
+    np.divide(numerator, denominator, out=ppc, where=computable)
+    return ppc
 
 
 def compute_trial_shuffle_ppc(
@@ -1610,6 +1869,136 @@ def _trial_local_spike_arrays(values: Sequence[np.ndarray]) -> tuple[np.ndarray,
     return tuple(copied)
 
 
+def _unit_trial_local_spike_arrays(
+    values: Sequence[Sequence[np.ndarray]],
+    trial_count: int,
+) -> tuple[tuple[np.ndarray, ...], ...]:
+    """Validate and copy nested event-relative spike arrays by unit and trial.
+
+    Parameters
+    ----------
+    values : Sequence[Sequence[numpy.ndarray]]
+        Nested ``(unit, trial)`` finite one-dimensional seconds arrays. Empty
+        arrays represent no spike and overlapping trial membership is retained.
+    trial_count : int
+        Positive required length of every unit's shared trial axis.
+
+    Returns
+    -------
+    tuple[tuple[numpy.ndarray, ...], ...]
+        Owned float64 spike arrays in supplied unit/trial order and unchanged
+        seconds units.
+
+    Raises
+    ------
+    ValueError
+        If no unit is supplied, trial axes differ, or any spike array is not
+        finite one-dimensional seconds data.
+    """
+    if not isinstance(trial_count, (int, np.integer)) or int(trial_count) < 1:
+        raise ValueError("trial_count must be a positive integer")
+    if len(values) < 1:
+        raise ValueError("edge statistics require at least one unit")
+    units: list[tuple[np.ndarray, ...]] = []
+    for unit_values in values:
+        if len(unit_values) != int(trial_count):
+            raise ValueError("every unit must share the phase trial axis")
+        trial_spikes: list[np.ndarray] = []
+        for trial_values in unit_values:
+            spikes = np.asarray(trial_values, dtype=float)
+            if spikes.ndim != 1 or not np.isfinite(spikes).all():
+                raise ValueError(
+                    "unit-trial spikes must be finite one-dimensional seconds"
+                )
+            trial_spikes.append(spikes.copy())
+        units.append(tuple(trial_spikes))
+    return tuple(units)
+
+
+def _edge_position_arrays(
+    source_trial_position: np.ndarray,
+    target_trial_position: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Validate and copy one stable nonduplicate trial-edge coordinate.
+
+    Parameters
+    ----------
+    source_trial_position, target_trial_position : numpy.ndarray
+        Matching nonempty integer shape ``(edge,)`` zero-based trial positions.
+        Same-trial edges are valid observed-statistic inputs.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray]
+        Owned int64 edge coordinates in unchanged supplied order.
+
+    Raises
+    ------
+    ValueError
+        If axes/dtypes differ, positions are negative, or an edge is duplicated.
+    """
+    source = np.asarray(source_trial_position)
+    target = np.asarray(target_trial_position)
+    if (
+        source.ndim != 1
+        or target.ndim != 1
+        or source.size < 1
+        or source.shape != target.shape
+        or not np.issubdtype(source.dtype, np.integer)
+        or not np.issubdtype(target.dtype, np.integer)
+        or np.any(source < 0)
+        or np.any(target < 0)
+    ):
+        raise ValueError(
+            "trial-edge positions must be matching nonnegative integer vectors"
+        )
+    source_int64 = source.astype(np.int64, copy=True)
+    target_int64 = target.astype(np.int64, copy=True)
+    edge_pairs = set(
+        zip(source_int64.tolist(), target_int64.tolist(), strict=True)
+    )
+    if len(edge_pairs) != source_int64.size:
+        raise ValueError("trial-edge positions must not contain duplicate pairs")
+    return source_int64, target_int64
+
+
+def _shuffle_position_array(values: np.ndarray, shuffle_count: int) -> np.ndarray:
+    """Validate a stable block of unique schedule-row positions.
+
+    Parameters
+    ----------
+    values : numpy.ndarray
+        Nonempty integer shape ``(shuffle_block,)`` schedule-row positions.
+    shuffle_count : int
+        Positive size of the available schedule shuffle axis.
+
+    Returns
+    -------
+    numpy.ndarray
+        Owned int64 positions preserving supplied block order.
+
+    Raises
+    ------
+    ValueError
+        If values are noninteger, empty, duplicated, negative, or out of range.
+    """
+    positions = np.asarray(values)
+    if (
+        positions.ndim != 1
+        or positions.size < 1
+        or not np.issubdtype(positions.dtype, np.integer)
+    ):
+        raise ValueError("shuffle_positions must be a nonempty integer vector")
+    positions_int64 = positions.astype(np.int64, copy=True)
+    if (
+        np.any(positions_int64 < 0)
+        or np.any(positions_int64 >= int(shuffle_count))
+        or np.unique(positions_int64).size != positions_int64.size
+    ):
+        raise ValueError("shuffle_positions must be unique valid schedule rows")
+    return positions_int64
+
+
 def _derangement_schedule(values: np.ndarray, trial_count: int) -> np.ndarray:
     """Validate and copy source-to-target trial derangement rows.
 
@@ -1728,25 +2117,78 @@ def _interpolate_unit_phase(
     -------
     numpy.ndarray
         Complex128 ``(frequency, spike)`` unit vectors. Nonfinite, zero-magnitude,
-        and out-of-support samples are complex NaN.
+        and out-of-support samples are complex NaN. An exact source sample uses
+        that sample's validity; an in-between sample requires two adjacent
+        finite nonzero source coefficients.
     """
-    output = np.full((coefficients.shape[0], target_time_s.size), np.nan + 1j * np.nan)
-    for frequency_index, row in enumerate(coefficients):
-        real = np.interp(target_time_s, source_time_s, row.real, left=np.nan, right=np.nan)
+    source_time = np.asarray(source_time_s, dtype=float)
+    coefficient_array = np.asarray(coefficients)
+    target_time = np.asarray(target_time_s, dtype=float)
+    if (
+        source_time.ndim != 1
+        or source_time.size < 1
+        or not np.isfinite(source_time).all()
+        or np.any(np.diff(source_time) <= 0.0)
+        or coefficient_array.ndim != 2
+        or coefficient_array.shape[1] != source_time.size
+        or not np.issubdtype(coefficient_array.dtype, np.number)
+        or target_time.ndim != 1
+        or not np.isfinite(target_time).all()
+    ):
+        raise ValueError("phase interpolation requires valid frequency/time axes")
+
+    output = np.full(
+        (coefficient_array.shape[0], target_time.size),
+        np.nan + 1j * np.nan,
+    )
+    source_valid = (
+        np.isfinite(coefficient_array.real)
+        & np.isfinite(coefficient_array.imag)
+        & (np.abs(coefficient_array) > 0.0)
+    )
+    right_position = np.searchsorted(source_time, target_time, side="left")
+    inside_right_support = right_position < source_time.size
+    exact = np.zeros(target_time.shape, dtype=bool)
+    exact[inside_right_support] = (
+        source_time[right_position[inside_right_support]]
+        == target_time[inside_right_support]
+    )
+    between = (
+        ~exact
+        & (right_position > 0)
+        & (right_position < source_time.size)
+    )
+    support_valid = np.zeros(output.shape, dtype=bool)
+    if np.any(exact):
+        support_valid[:, exact] = source_valid[:, right_position[exact]]
+    if np.any(between):
+        left_position = right_position[between] - 1
+        support_valid[:, between] = (
+            source_valid[:, left_position]
+            & source_valid[:, right_position[between]]
+        )
+
+    for frequency_index, row in enumerate(coefficient_array):
+        real = np.interp(target_time, source_time, row.real, left=np.nan, right=np.nan)
         imaginary = np.interp(
-            target_time_s,
-            source_time_s,
+            target_time,
+            source_time,
             row.imag,
             left=np.nan,
             right=np.nan,
         )
         combined = real + 1j * imaginary
         magnitude = np.abs(combined)
+        usable = (
+            support_valid[frequency_index]
+            & np.isfinite(magnitude)
+            & (magnitude > 0.0)
+        )
         output[frequency_index] = np.divide(
             combined,
             magnitude,
-            out=np.full(target_time_s.size, np.nan + 1j * np.nan),
-            where=np.isfinite(magnitude) & (magnitude > 0.0),
+            out=np.full(target_time.size, np.nan + 1j * np.nan),
+            where=usable,
         )
     return output
 
@@ -1944,6 +2386,7 @@ def _null_distribution_statistics(
             p025[index], p50[index], p975[index] = np.percentile(
                 values,
                 [2.5, 50.0, 97.5],
+                method="linear",
             )
     return mean, std, p025, p50, p975
 
