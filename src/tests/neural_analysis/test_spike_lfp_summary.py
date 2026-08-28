@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import numpy as np
 import pytest
 from scipy.stats import false_discovery_control
@@ -563,3 +565,211 @@ def test_significant_prevalence_uses_eligible_denominator_or_nan() -> None:
         alpha=0.05,
     )
     assert np.isnan(no_eligible.prevalence[0, 0, 0, 0])
+
+
+def test_edge_sufficient_statistics_reproduce_explicit_pairwise_ppc() -> None:
+    """Complex edge sums and counts must recover exact unweighted pairwise PPC."""
+    phase_time_s = np.array([0.0, 1.0, 2.0])
+    trial_phase_vectors = np.ones((2, 2, 3), dtype=complex)
+    trial_phase_vectors[1, 0] = np.exp(
+        1j * np.array([0.0, np.pi / 2.0, np.pi])
+    )
+    trial_phase_vectors[1, 1] = np.exp(
+        1j * np.array([0.0, np.pi / 3.0, 2.0 * np.pi / 3.0])
+    )
+    unit_trial_spikes = (
+        (np.array([0.0, 1.0, 2.0]), np.empty(0)),
+        (np.array([0.0, 2.0]), np.empty(0)),
+    )
+
+    statistics = spike_lfp_summary.compute_edge_sufficient_statistics(
+        trial_relative_spike_times_s=unit_trial_spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=trial_phase_vectors,
+        frequencies_hz=np.array([8.0, 40.0]),
+        source_trial_position=np.array([0]),
+        target_trial_position=np.array([1]),
+    )
+
+    np.testing.assert_array_equal(statistics.source_trial_position, [0])
+    np.testing.assert_array_equal(statistics.target_trial_position, [1])
+    assert statistics.phase_vector_sum.shape == (1, 2, 2)
+    assert statistics.phase_vector_sum.dtype == np.complex128
+    assert statistics.valid_spike_count.dtype == np.int64
+    recovered_ppc = (
+        np.abs(statistics.phase_vector_sum) ** 2
+        - statistics.valid_spike_count
+    ) / (
+        statistics.valid_spike_count * (statistics.valid_spike_count - 1)
+    )
+    expected_ppc = np.empty((2, 2), dtype=float)
+    for unit_index, spike_times in enumerate((phase_time_s, phase_time_s[[0, 2]])):
+        for frequency_index in range(2):
+            phases = np.angle(
+                trial_phase_vectors[1, frequency_index, spike_times.astype(int)]
+            )
+            expected_ppc[unit_index, frequency_index] = np.mean(
+                [
+                    np.cos(phases[first] - phases[second])
+                    for first in range(phases.size)
+                    for second in range(phases.size)
+                    if first != second
+                ]
+            )
+    np.testing.assert_allclose(recovered_ppc[0], expected_ppc)
+    assert recovered_ppc[0, 0] < 0.0
+
+
+def test_sufficient_statistic_reducer_handles_zero_one_two_counts_and_is_frozen() -> None:
+    """Counts below two are unavailable; two opposing samples retain PPC -1."""
+    phase_vector_sum = np.zeros((2, 3, 1), dtype=np.complex128)
+    valid_spike_count = np.zeros((2, 3, 1), dtype=np.int64)
+    phase_vector_sum[0, 1, 0] = 1.0
+    valid_spike_count[0, 1, 0] = 1
+    phase_vector_sum[0, 2, 0] = 1.0
+    phase_vector_sum[1, 2, 0] = -1.0
+    valid_spike_count[:, 2, 0] = 1
+    statistics = spike_lfp_summary.EdgeSufficientStatistics(
+        source_trial_position=np.array([0, 1], dtype=np.int64),
+        target_trial_position=np.array([1, 0], dtype=np.int64),
+        phase_vector_sum=phase_vector_sum,
+        valid_spike_count=valid_spike_count,
+    )
+
+    draws = spike_lfp_summary.reduce_scheduled_shuffle_block(
+        edge_statistics=statistics,
+        schedule=np.array([[1, 0]], dtype=np.int64),
+        shuffle_positions=np.array([0], dtype=np.int64),
+    )
+
+    assert draws.shape == (1, 3, 1)
+    assert np.isnan(draws[0, 0, 0])
+    assert np.isnan(draws[0, 1, 0])
+    assert draws[0, 2, 0] == pytest.approx(-1.0)
+    with pytest.raises(FrozenInstanceError):
+        statistics.source_trial_position = np.array([1, 0])
+
+
+def test_edge_sufficient_statistics_preserve_wp5b_missing_phase_validity() -> None:
+    """Interpolation must reject outside support and intervals touching NaN phase."""
+    phase_time_s = np.array([0.0, 1.0, 2.0, 3.0])
+    trial_phase_vectors = np.ones((2, 1, 4), dtype=complex)
+    trial_phase_vectors[0, 0, 1] = np.nan + 1j * np.nan
+    spike_times_s = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5])
+
+    statistics = spike_lfp_summary.compute_edge_sufficient_statistics(
+        trial_relative_spike_times_s=(
+            (spike_times_s, np.empty(0)),
+        ),
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=trial_phase_vectors,
+        frequencies_hz=np.array([8.0]),
+        source_trial_position=np.array([0]),
+        target_trial_position=np.array([0]),
+    )
+
+    np.testing.assert_array_equal(statistics.valid_spike_count, [[[4]]])
+    np.testing.assert_allclose(statistics.phase_vector_sum, [[[4.0 + 0.0j]]])
+
+
+def test_scheduled_sufficient_statistics_match_wp5b_shuffle_numerics() -> None:
+    """Reduced draws must reproduce every WP5B null statistic for each unit."""
+    phase_time_s = np.array([0.0, 1.0])
+    trial_phase_vectors = np.array(
+        [
+            [[1.0, 1.0], [1.0, 1.0j]],
+            [[1.0j, 1.0j], [-1.0, 1.0]],
+            [[-1.0, -1.0], [1.0j, -1.0j]],
+        ],
+        dtype=complex,
+    )
+    unit_trial_spikes = (
+        tuple(np.tile(phase_time_s, 10) for _ in range(3)),
+        (np.tile(phase_time_s, 13), np.tile(phase_time_s, 12), np.empty(0)),
+    )
+    schedule = spike_lfp_summary.generate_trial_derangement_schedule(
+        trial_count=3,
+        shuffle_count=9,
+        seed=23,
+    )
+    edge_pairs = sorted(
+        {
+            (source_position, int(target_position))
+            for row in schedule
+            for source_position, target_position in enumerate(row)
+        }
+    )
+    statistics = spike_lfp_summary.compute_edge_sufficient_statistics(
+        trial_relative_spike_times_s=unit_trial_spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=trial_phase_vectors,
+        frequencies_hz=np.array([8.0, 40.0]),
+        source_trial_position=np.array([pair[0] for pair in edge_pairs]),
+        target_trial_position=np.array([pair[1] for pair in edge_pairs]),
+    )
+    shuffle_positions = np.array([0, 2, 4, 7], dtype=np.int64)
+    reduced_draws = spike_lfp_summary.reduce_scheduled_shuffle_block(
+        edge_statistics=statistics,
+        schedule=schedule,
+        shuffle_positions=shuffle_positions,
+    )
+
+    for unit_index, trial_spikes in enumerate(unit_trial_spikes):
+        reference = spike_lfp_summary.compute_trial_shuffle_ppc(
+            trial_relative_spike_times_s=trial_spikes,
+            phase_time_s=phase_time_s,
+            trial_phase_vectors=trial_phase_vectors,
+            frequencies_hz=np.array([8.0, 40.0]),
+            schedule=schedule[shuffle_positions],
+        )
+        reduced_summary = spike_lfp_summary.summarize_permutation_null(
+            observed_ppc=reference.observed_ppc,
+            null_ppc_chunks=(reduced_draws[:, unit_index],),
+            spike_count=reference.spike_count,
+            eligible_trial_count=reference.null_summary.eligible_trial_count,
+        )
+        for field_name in (
+            "null_exceedance_count",
+            "permutation_count",
+            "eligible_trial_count",
+            "p_value",
+            "null_mean",
+            "null_std",
+            "null_p025",
+            "null_p50",
+            "null_p975",
+            "null_eligible",
+        ):
+            np.testing.assert_allclose(
+                getattr(reduced_summary, field_name),
+                getattr(reference.null_summary, field_name),
+                equal_nan=True,
+            )
+
+
+def test_sufficient_statistic_null_percentiles_request_explicit_linear_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Null percentiles must pin NumPy's linear method rather than inherit defaults."""
+    percentile = np.percentile
+    requested_methods: list[str | None] = []
+
+    def recording_percentile(
+        values: np.ndarray,
+        quantiles: list[float],
+        *,
+        method: str | None = None,
+    ) -> np.ndarray:
+        """Record the requested interpolation method and delegate unchanged values."""
+        requested_methods.append(method)
+        return percentile(values, quantiles, method=method)
+
+    monkeypatch.setattr(spike_lfp_summary.np, "percentile", recording_percentile)
+    spike_lfp_summary.summarize_permutation_null(
+        observed_ppc=np.array([0.2]),
+        null_ppc_chunks=(np.array([[0.1], [0.3], [0.5]]),),
+        spike_count=np.array([50]),
+        eligible_trial_count=2,
+    )
+
+    assert requested_methods == ["linear"]

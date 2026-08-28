@@ -1514,7 +1514,12 @@ Tests written first:
   schedule and seed.
 - Existing p values, `ddof=0` moments, explicit-linear percentiles, and null
   eligibility remain identical.
-- Ineligible entries never invoke permutation phase sampling.
+
+The runtime-owned assertion that inference-ineligible entries never invoke
+permutation phase sampling is tested in WP5C-4. The two WP5C-1 numerical
+interfaces intentionally receive no eligibility mask and do not own runtime
+dispatch; moving that assertion preserves their approved signatures and keeps
+`compute_trial_shuffle_ppc` unchanged as the WP5B equivalence reference.
 
 RED command:
 
@@ -1602,6 +1607,8 @@ Tests written first:
 - Progress stages and totals are monotonic.
 - ETA is absent until two timed blocks have completed.
 - Execution-only settings do not stale a valid scientific result.
+- Entries with fewer than 50 valid observed spike phases or fewer than two
+  spike-contributing trials never invoke permutation phase sampling.
 - Default post-success cleanup removes only the exact completed run while
   retained/incomplete checkpoints follow configuration.
 
