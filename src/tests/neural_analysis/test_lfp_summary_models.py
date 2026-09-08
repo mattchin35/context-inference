@@ -12,6 +12,7 @@ import pytest
 from src.neural_analysis.lfp_summary_models import (
     LFPSummaryConfig,
     FrequencyBandConfig,
+    PPCExecutionConfig,
     UnitPopulationConfig,
     canonical_config_json,
     component_fingerprint,
@@ -301,6 +302,56 @@ def test_component_fingerprints_only_include_relevant_settings() -> None:
     assert component_fingerprint("power", config) != component_fingerprint("power", changed_power)
     assert component_fingerprint("synchrony", config) == component_fingerprint("synchrony", changed_power)
     assert component_fingerprint("spike_phase", config) == component_fingerprint("spike_phase", changed_power)
+
+
+def test_ppc_execution_configuration_round_trips_without_staling_final_components() -> None:
+    """Execution settings serialize for work metadata but not scientific cache identity."""
+    config = default_lfp_summary_config()
+    changed_execution = replace(
+        config,
+        ppc_execution=PPCExecutionConfig(
+            unit_block_size=3,
+            shuffle_block_size=7,
+            trial_edge_block_size=11,
+            worker_count=1,
+            prepared_phase_cache_enabled=False,
+            checkpoint_enabled=False,
+            checkpoint_retention="retain",
+            progress_update_interval=2,
+        ),
+    )
+
+    encoded = canonical_config_json(changed_execution)
+    decoded = lfp_summary_config_from_json(encoded)
+
+    assert decoded == changed_execution
+    assert '"unit_block_size":3' in encoded
+    for component in ("power", "synchrony", "spike_phase"):
+        assert component_fingerprint(component, config) == component_fingerprint(
+            component,
+            changed_execution,
+        )
+
+
+@pytest.mark.parametrize(
+    "execution",
+    (
+        PPCExecutionConfig(unit_block_size=0),
+        PPCExecutionConfig(shuffle_block_size=0),
+        PPCExecutionConfig(trial_edge_block_size=0),
+        PPCExecutionConfig(worker_count=0),
+        PPCExecutionConfig(checkpoint_retention="forever"),
+        PPCExecutionConfig(progress_update_interval=0),
+    ),
+)
+def test_invalid_ppc_execution_configuration_is_rejected(
+    execution: PPCExecutionConfig,
+) -> None:
+    """Work-only PPC execution settings are validated before any files are opened."""
+    with pytest.raises(ValueError):
+        validate_lfp_summary_config(
+            replace(default_lfp_summary_config(), ppc_execution=execution)
+        )
 
 
 def test_transform_fingerprint_change_affects_synchrony_and_spike_phase() -> None:
