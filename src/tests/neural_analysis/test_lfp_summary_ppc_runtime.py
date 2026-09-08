@@ -29,7 +29,7 @@ def _inputs() -> tuple[object, object, np.ndarray]:
     schedule : numpy.ndarray
         Int64 `(shuffle, trial)` derangements with no fixed points.
     """
-    phase = np.ones((1, 1, 2, 2), dtype=np.complex64)
+    phase = np.ones((1, 50, 2, 2), dtype=np.complex64)
     prepared_phase = SimpleNamespace(
         phase_tensor=phase,
         phase_valid=np.ones(phase.shape, dtype=bool),
