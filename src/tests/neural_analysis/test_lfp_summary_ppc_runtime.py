@@ -403,16 +403,36 @@ def test_executor_uses_bounded_edge_reduction_not_full_shuffle_draw_helper(
     """Production execution streams scheduled edges and never calls the full-draw helper."""
     config = _config()
     phase, spikes, schedule = _inputs()
+    edge_shapes: list[tuple[int, int, int]] = []
+    edge_reducer = ppc_runtime.spike_lfp_summary.compute_edge_sufficient_statistics
+
+    def recording_edge_reducer(**kwargs: object):
+        """Record bounded unit/frequency/edge dimensions before delegating."""
+        trains = kwargs["trial_relative_spike_times_s"]
+        phase_vectors = kwargs["trial_phase_vectors"]
+        source_edges = kwargs["source_trial_position"]
+        edge_shapes.append((len(trains), phase_vectors.shape[1], source_edges.size))
+        return edge_reducer(**kwargs)
+
     monkeypatch.setattr(
-        ppc_runtime.spike_lfp_summary,
+        ppc_runtime,
         "_compute_scheduled_shuffle_draws",
         lambda **_: (_ for _ in ()).throw(AssertionError("full shuffle helper called")),
+    )
+    monkeypatch.setattr(
+        ppc_runtime.spike_lfp_summary,
+        "compute_edge_sufficient_statistics",
+        recording_edge_reducer,
     )
     result = ppc_runtime.execute_ppc_blocks(
         config=config, execution=config.ppc_execution, prepared_phase=phase,
         prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
     )
     assert result.summary_arrays["permutation_count"].max() == schedule.shape[0]
+    assert edge_shapes
+    assert all(unit <= config.ppc_execution.unit_block_size for unit, _, _ in edge_shapes)
+    assert all(edge <= config.ppc_execution.trial_edge_block_size for _, _, edge in edge_shapes)
+    assert not hasattr(result, "null_ppc")
 
 
 def test_checkpoint_disabled_and_lock_contracts_prevent_work_artifacts(
@@ -462,3 +482,30 @@ def test_progress_events_identify_each_ppc_job_and_outer_commit_is_separate(
     assert events
     assert {event.job_id for event in events} == {"PFC:correct_rewarded:-2.0:2.0"}
     assert all(event.stage != "commit_component" for event in events)
+
+
+def test_run_metadata_declares_complete_job_identity_and_execution_contract(
+    tmp_path: Path,
+) -> None:
+    """A resumable work directory records source, job, schedule, and block identities."""
+    import json
+
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    phase.site_id = "PFC"
+    phase.condition_name = "correct_rewarded"
+    phase.epoch_bounds_s = (-2.0, 2.0)
+    result = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    metadata = json.loads((result.run_directory / "metadata.json").read_text())
+    required = {
+        "job_id", "source_fingerprint", "scientific_fingerprint",
+        "representation_fingerprint", "site_id", "condition_name",
+        "epoch_bounds_s", "trial_indices", "unit_ids", "population_id",
+        "spike_fingerprint", "schedule_seed", "schedule_fingerprint",
+        "schema_version", "code_version", "axes", "shapes", "dtypes",
+        "execution_settings", "completed_block_ids",
+    }
+    assert required <= set(metadata)
