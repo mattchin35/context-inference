@@ -299,7 +299,7 @@ def test_execution_block_sizes_preserve_summarized_results(tmp_path: Path) -> No
 @pytest.mark.parametrize(
     "spike_trains",
     (
-        (np.zeros(49), np.zeros(49)),
+        (np.zeros(24), np.zeros(25)),
         (np.zeros(50), np.array([], dtype=float)),
     ),
 )
