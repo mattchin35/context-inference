@@ -350,3 +350,115 @@ def test_checkpoint_progress_counts_are_stage_monotonic_and_eta_waits_for_two_bl
     completed_blocks = [event for event in events if event.stage == "checkpoint" and event.completed_count > 0]
     assert all(event.eta_seconds is None for event in completed_blocks[:1])
     assert any(event.eta_seconds is not None for event in completed_blocks[1:])
+
+
+def test_run_identity_binds_selected_job_inputs_and_source_representation(
+    tmp_path: Path,
+) -> None:
+    """Equal schedules cannot reuse work across distinct sites, trials, units, or phase values."""
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    first = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    exact = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    assert exact.resumed_block_ids == exact.completed_block_ids
+    phase.site_id = "HPC1"
+    phase.condition_name = "omission"
+    phase.epoch_bounds_s = (-1.0, 1.0)
+    phase.trial_indices = np.array([8, 9], dtype=np.int64)
+    phase.phase_tensor[0, 0, 0, 0] = 1.0j
+    spikes.unit_ids = ("HPC1:1",)
+    changed = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    assert changed.run_fingerprint != first.run_fingerprint
+    assert changed.resumed_block_ids == ()
+
+
+def test_frequency_axis_mismatch_is_rejected_without_repeating_phase_data(
+    tmp_path: Path,
+) -> None:
+    """A one-frequency phase tensor cannot be silently broadcast to the configured grid."""
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    phase.phase_tensor = phase.phase_tensor[:, :1]
+    phase.phase_valid = phase.phase_valid[:, :1]
+    with pytest.raises(ValueError, match="frequency"):
+        ppc_runtime.execute_ppc_blocks(
+            config=config, execution=config.ppc_execution, prepared_phase=phase,
+            prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+        )
+
+
+def test_executor_uses_bounded_edge_reduction_not_full_shuffle_draw_helper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production execution streams scheduled edges and never calls the full-draw helper."""
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    monkeypatch.setattr(
+        ppc_runtime.spike_lfp_summary,
+        "_compute_scheduled_shuffle_draws",
+        lambda **_: (_ for _ in ()).throw(AssertionError("full shuffle helper called")),
+    )
+    result = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    assert result.summary_arrays["permutation_count"].max() == schedule.shape[0]
+
+
+def test_checkpoint_disabled_and_lock_contracts_prevent_work_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Disabled checkpoints create no work tree, while an active exact lock blocks mutation."""
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    disabled = replace(
+        config,
+        ppc_execution=replace(config.ppc_execution, checkpoint_enabled=False),
+    )
+    ppc_runtime.execute_ppc_blocks(
+        config=disabled, execution=disabled.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path / "disabled",
+    )
+    assert not (tmp_path / "disabled" / "ppc").exists()
+    run = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path / "locked",
+    )
+    lock = run.run_directory / "executor.lock"
+    lock.write_text("active\n", encoding="ascii")
+    with pytest.raises(FileExistsError, match="executor.lock"):
+        ppc_runtime.execute_ppc_blocks(
+            config=config, execution=config.ppc_execution, prepared_phase=phase,
+            prepared_spikes=spikes, schedule=schedule, work_root=tmp_path / "locked",
+        )
+    assert lock.exists()
+
+
+def test_progress_events_identify_each_ppc_job_and_outer_commit_is_separate(
+    tmp_path: Path,
+) -> None:
+    """Every executor event carries a stable job identity rather than a component-only label."""
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    phase.site_id = "PFC"
+    phase.condition_name = "correct_rewarded"
+    phase.epoch_bounds_s = (-2.0, 2.0)
+    events: list[object] = []
+    ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+        progress_callback=events.append,
+    )
+    assert events
+    assert {event.job_id for event in events} == {"PFC:correct_rewarded:-2.0:2.0"}
+    assert all(event.stage != "commit_component" for event in events)
