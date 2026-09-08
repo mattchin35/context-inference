@@ -996,7 +996,12 @@ def test_scheduled_edge_engine_interpolation_matches_wp5b_exact_and_invalid_supp
     phase_time_s = np.array([0.0, 1.0, 2.0])
     phase = np.ones((2, 1, 3), dtype=complex)
     phase[1, 0, 1] = 0.0j
-    spikes = ((np.array([0.0, 0.5, 1.0, 1.5, 2.0]), np.array([0.0, 2.0])),)
+    spikes = (
+        (
+            np.tile(np.array([0.0, 0.5, 1.0, 1.5, 2.0]), 10),
+            np.tile(np.array([0.0, 2.0]), 25),
+        ),
+    )
     schedule = np.array([[1, 0]], dtype=np.int64)
 
     draws = spike_lfp_summary._compute_scheduled_shuffle_draws(
@@ -1018,7 +1023,11 @@ def test_scheduled_edge_engine_interpolation_matches_wp5b_exact_and_invalid_supp
         schedule=schedule,
     )
 
-    np.testing.assert_allclose(draws[0, 0], reference.null_ppc[0], equal_nan=True)
+    np.testing.assert_allclose(
+        draws[0, 0],
+        reference.null_summary.null_mean,
+        equal_nan=True,
+    )
 
 
 def test_scheduled_edge_engine_never_calls_legacy_result_or_display_paths(
