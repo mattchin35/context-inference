@@ -294,3 +294,59 @@ def test_execution_block_sizes_preserve_summarized_results(tmp_path: Path) -> No
 
     for name in first.summary_arrays:
         np.testing.assert_allclose(first.summary_arrays[name], second.summary_arrays[name], equal_nan=True)
+
+
+@pytest.mark.parametrize(
+    "spike_trains",
+    (
+        (np.zeros(49), np.zeros(49)),
+        (np.zeros(50), np.array([], dtype=float)),
+    ),
+)
+def test_execution_ineligible_cases_bypass_permutation_sampling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    spike_trains: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """Low spike count and too-few contributing trials independently bypass null edges."""
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    spikes.trial_spike_trains[0].relative_spike_times = spike_trains
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_compute_scheduled_shuffle_draws",
+        lambda **_: (_ for _ in ()).throw(AssertionError("ineligible sampled")),
+    )
+    result = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    assert not result.summary_arrays["null_eligible"].any()
+
+
+def test_checkpoint_progress_counts_are_stage_monotonic_and_eta_waits_for_two_blocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ETA is based on two completed timed blocks, with stable totals within every stage."""
+    config = replace(_config(), ppc_execution=replace(_config().ppc_execution, shuffle_block_size=1))
+    phase, spikes, schedule = _inputs()
+    timestamps = iter(float(value) for value in range(100))
+    monkeypatch.setattr(ppc_runtime.time, "perf_counter", lambda: next(timestamps))
+    events: list[object] = []
+    ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+        progress_callback=events.append,
+    )
+    by_stage: dict[str, list[object]] = {}
+    for event in events:
+        by_stage.setdefault(event.stage, []).append(event)
+    for stage_events in by_stage.values():
+        totals = {event.total_count for event in stage_events}
+        assert len(totals) == 1
+        assert all(0 <= event.completed_count <= event.total_count for event in stage_events)
+        assert [event.completed_count for event in stage_events] == sorted(event.completed_count for event in stage_events)
+    completed_blocks = [event for event in events if event.stage == "checkpoint" and event.completed_count > 0]
+    assert all(event.eta_seconds is None for event in completed_blocks[:1])
+    assert any(event.eta_seconds is not None for event in completed_blocks[1:])

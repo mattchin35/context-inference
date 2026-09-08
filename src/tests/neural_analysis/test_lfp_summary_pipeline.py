@@ -367,3 +367,20 @@ def test_checkpoint_interruption_before_payload_never_reaches_final_writer() -> 
 
     assert result.state == "failed"
     assert "write_spike_phase" not in calls
+
+
+def test_checkpoint_cleanup_retention_and_failure_are_post_commit_warnings() -> None:
+    """Successful final writes clean incomplete-only work; retain/failure never revoke commit."""
+    config = default_lfp_summary_config()
+    calls: list[str] = []
+    dependencies = _make_dependencies(calls, [])
+    cleanup_error = RuntimeError("cleanup failed")
+    payload = lfp_summary_pipeline.ComponentPayload(
+        arrays={"value": np.array([1.0])}, manifest_entry=_component_entry("spike_phase"),
+        post_commit_cleanup=lambda: (_ for _ in ()).throw(cleanup_error),
+    )
+
+    result = lfp_summary_pipeline._commit_component("spike_phase", config, dependencies, payload, None)
+
+    assert result.state == "complete"
+    assert result.cleanup_warning == "cleanup failed"
