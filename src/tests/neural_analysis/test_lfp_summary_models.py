@@ -13,6 +13,7 @@ from src.neural_analysis.lfp_summary_models import (
     LFPSummaryConfig,
     FrequencyBandConfig,
     PPCExecutionConfig,
+    ProgressEvent,
     UnitPopulationConfig,
     canonical_config_json,
     component_fingerprint,
@@ -357,6 +358,17 @@ def test_invalid_ppc_execution_configuration_is_rejected(
         validate_lfp_summary_config(
             replace(default_lfp_summary_config(), ppc_execution=execution)
         )
+
+
+def test_progress_event_execution_fields_preserve_legacy_positional_construction() -> None:
+    """Elapsed/ETA fields are optional so existing five-position calls remain valid."""
+    legacy = ProgressEvent("spike_phase", "run", 1, 4, "legacy")
+    timed = ProgressEvent("spike_phase", "checkpoint", 2, 4, "timed", 1.5, None)
+
+    assert legacy.elapsed_seconds is None
+    assert legacy.eta_seconds is None
+    assert timed.elapsed_seconds == 1.5
+    assert timed.eta_seconds is None
 
 
 def test_transform_fingerprint_change_affects_synchrony_and_spike_phase() -> None:

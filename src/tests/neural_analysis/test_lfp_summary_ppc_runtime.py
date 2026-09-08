@@ -102,14 +102,34 @@ def test_validated_resume_equals_cold_and_corrupt_or_orphan_blocks_recompute(tmp
         config=config, execution=config.ppc_execution, prepared_phase=phase,
         prepared_spikes=spikes, schedule=schedule, work_root=tmp_path / "warm",
     )
+    original_sampler = ppc_runtime._compute_scheduled_shuffle_draws
+
+    def fail_if_resampled(*_: object, **__: object) -> None:
+        """Fail if a fully validated checkpoint is sampled again on exact resume."""
+        raise AssertionError("validated checkpoint was recomputed")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(ppc_runtime, "_compute_scheduled_shuffle_draws", fail_if_resampled)
+    resumed_exact = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path / "warm",
+    )
+    monkeypatch.undo()
+    assert resumed_exact.resumed_block_ids == resumed_exact.completed_block_ids
     (resumed.run_directory / "blocks" / f"{resumed.completed_block_ids[0]}.complete.json").unlink()
     resumed_again = ppc_runtime.execute_ppc_blocks(
         config=config, execution=config.ppc_execution, prepared_phase=phase,
         prepared_spikes=spikes, schedule=schedule, work_root=tmp_path / "warm",
     )
 
-    np.testing.assert_allclose(cold.null_ppc, resumed.null_ppc, equal_nan=True)
-    np.testing.assert_allclose(cold.null_ppc, resumed_again.null_ppc, equal_nan=True)
+    assert not hasattr(cold, "null_ppc")
+    for name in cold.summary_arrays:
+        np.testing.assert_allclose(
+            cold.summary_arrays[name], resumed.summary_arrays[name], equal_nan=True,
+        )
+        np.testing.assert_allclose(
+            cold.summary_arrays[name], resumed_again.summary_arrays[name], equal_nan=True,
+        )
     assert resumed_again.resumed_block_ids == ()
 
 
@@ -150,7 +170,7 @@ def test_inference_ineligible_entries_never_invoke_permutation_sampling(
         prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
     )
 
-    assert np.isnan(result.null_ppc).all()
+    assert np.isnan(result.summary_arrays["p_value"]).all()
 
 
 def test_execution_result_is_work_only_and_cleanup_obeys_retention_policy(tmp_path: Path) -> None:
@@ -166,3 +186,60 @@ def test_execution_result_is_work_only_and_cleanup_obeys_retention_policy(tmp_pa
     assert not (tmp_path / "spike_phase.npz").exists()
     assert result.final_payload_arrays is None
     assert result.run_directory.exists()
+
+
+def test_execution_result_contains_only_final_summary_arrays_not_shuffle_draws(tmp_path: Path) -> None:
+    """Checkpoints/results retain PPC null summaries, never a full shuffle-by-unit tensor."""
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    result = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+
+    required = {
+        "ppc", "spike_count", "reliable", "null_eligible",
+        "null_exceedance_count", "permutation_count", "p_value", "q_value",
+        "significant", "null_mean", "null_std", "null_p025", "null_p50", "null_p975",
+    }
+    assert required <= set(result.summary_arrays)
+    assert not hasattr(result, "null_ppc")
+    assert all(array.ndim <= 2 for array in result.summary_arrays.values())
+
+
+def test_schedule_mismatch_and_invalid_checkpoint_metadata_shape_dtype_recompute(tmp_path: Path) -> None:
+    """Only checkpoints matching run metadata, schedule, shape, and dtype can resume."""
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    result = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    np.savez(result.run_directory / "schedule.npz", schedule=np.array([[1, 0]], dtype=np.int64))
+    recomputed = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+
+    assert recomputed.resumed_block_ids == ()
+
+
+def test_execution_block_sizes_preserve_summarized_results(tmp_path: Path) -> None:
+    """Execution-only unit/edge/shuffle sizes do not alter any scientific summary array."""
+    phase, spikes, schedule = _inputs()
+    first_config = _config()
+    second_config = replace(
+        first_config,
+        ppc_execution=replace(first_config.ppc_execution, shuffle_block_size=3),
+    )
+    first = ppc_runtime.execute_ppc_blocks(
+        config=first_config, execution=first_config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path / "one",
+    )
+    second = ppc_runtime.execute_ppc_blocks(
+        config=second_config, execution=second_config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path / "two",
+    )
+
+    for name in first.summary_arrays:
+        np.testing.assert_allclose(first.summary_arrays[name], second.summary_arrays[name], equal_nan=True)
