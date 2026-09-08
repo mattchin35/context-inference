@@ -126,6 +126,8 @@ def write_prepared_phase_cache(
     directory.mkdir(parents=True, exist_ok=True)
     lock_path = _acquire_lock(directory)
     try:
+        # Invalidate an older transaction before replacing any of its data files.
+        (directory / "complete.json").unlink(missing_ok=True)
         _atomic_npy(directory, "phase.npy", phase_array)
         _atomic_npy(directory, "valid.npy", valid_array)
         _atomic_npz(directory, "axes.npz", normalized_axes)
@@ -227,6 +229,8 @@ def write_ppc_checkpoint(
     try:
         blocks = directory / "blocks"
         blocks.mkdir(exist_ok=True)
+        # An older marker must not certify a partially replaced block after failure.
+        (blocks / f"{safe_block_id}.complete.json").unlink(missing_ok=True)
         _atomic_json(directory, "metadata.json", normalized_metadata)
         _atomic_npz(blocks, f"{safe_block_id}.npz", normalized_arrays)
         _atomic_json(
@@ -306,7 +310,11 @@ def cleanup_ppc_run(run_directory: Path, expected_run_fingerprint: str) -> None:
     if not isinstance(expected_run_fingerprint, str) or not expected_run_fingerprint:
         raise ValueError("expected run fingerprint must be nonempty")
     stored = _load_json(directory / "metadata.json")
-    if directory.name != expected_run_fingerprint or stored.get("run_fingerprint") != expected_run_fingerprint:
+    if (
+        directory.parent.name != "ppc"
+        or directory.name != expected_run_fingerprint
+        or stored.get("run_fingerprint") != expected_run_fingerprint
+    ):
         raise ValueError("PPC cleanup requires the exact stored run fingerprint")
     shutil.rmtree(directory)
 

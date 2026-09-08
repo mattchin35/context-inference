@@ -613,7 +613,10 @@ def _validate_ppc_execution(execution: PPCExecutionConfig) -> None:
         execution.progress_update_interval,
     )
     if (
-        any(not isinstance(value, int) or value <= 0 for value in positive_values)
+        any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in positive_values
+        )
         or not isinstance(execution.prepared_phase_cache_enabled, bool)
         or not isinstance(execution.checkpoint_enabled, bool)
         or execution.checkpoint_retention not in {"incomplete_only", "retain"}
