@@ -266,6 +266,49 @@ def test_spike_factory_progress_seam_forwards_callback_to_ppc_executor(
     assert events
 
 
+def test_outer_progress_keeps_multi_job_identity_and_emits_one_final_component_commit(
+    tmp_path: Path,
+) -> None:
+    """Production assembly keeps executor job events distinct until one final pipeline commit."""
+    config = _config(tmp_path / "cache")
+    config = replace(config, ppc=PPCAnalysisConfig(shuffle_count=3, seed=72))
+    phase = _prepared_phase(config)
+    dependencies = make_spike_phase_pipeline_dependencies(
+        trial_table_loader=lambda _: _trial_table(),
+        unit_spike_loader=lambda _: _absolute_unit_spikes(),
+        phase_preparer=lambda _: phase,
+    )
+    events: list[ProgressEvent] = []
+    result = compute_spike_phase_component(
+        config,
+        dependencies,
+        progress_callback=events.append,
+    )
+
+    assert result.state == "complete"
+    job_events = [event for event in events if event.stage != "run"]
+    job_ids = {event.job_id for event in job_events}
+    assert len(job_ids) > 1
+    stage_order = (
+        "prepare_phase", "observed_reduction", "trial_edge_reduction",
+        "shuffle_aggregation", "fdr", "checkpoint", "commit",
+    )
+    for job_id in job_ids:
+        events_for_job = [event for event in job_events if event.job_id == job_id]
+        stages = [event.stage for event in events_for_job]
+        assert stages == sorted(stages, key=stage_order.index)
+        for stage in set(stages):
+            counts = [event.completed_count for event in events_for_job if event.stage == stage]
+            assert counts == sorted(counts)
+    final_commit_indices = [
+        index for index, event in enumerate(events)
+        if event.message == "complete_spike_phase"
+    ]
+    assert len(final_commit_indices) == 1
+    last_job_index = max(index for index, event in enumerate(events) if event.stage != "run")
+    assert final_commit_indices[0] > last_job_index
+
+
 def test_spike_dependencies_commit_only_spike_component(tmp_path: Path) -> None:
     """The production factory must atomically write and reload Spike phase only."""
     config = _config(tmp_path / "cache")

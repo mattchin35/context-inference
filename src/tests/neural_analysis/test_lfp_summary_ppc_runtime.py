@@ -13,6 +13,7 @@ from src.neural_analysis import lfp_summary_ppc_runtime as ppc_runtime
 from src.neural_analysis import spike_lfp_summary
 from src.neural_analysis.lfp_summary_models import (
     PPCExecutionConfig,
+    component_fingerprint,
     default_lfp_summary_config,
 )
 
@@ -634,3 +635,165 @@ def test_executor_matches_wp5b_reference_and_keeps_zero_valid_phase_nan(
         reference.null_summary.null_eligible & (reference_q <= config.ppc.fdr_alpha),
     )
     assert np.isnan(result.summary_arrays["preferred_phase_rad"][0, 1])
+
+
+def test_unit_block_checkpoints_resume_valid_siblings_after_interruption_and_corruption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unit blocks checkpoint independently, so only unfinished or corrupt blocks recompute."""
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    unit = spikes.trial_spike_trains[0]
+    spikes.unit_ids = ("PFC:1", "PFC:2", "PFC:3")
+    spikes.trial_spike_trains = (unit, unit, unit)
+    written: list[str] = []
+    original_write = ppc_runtime.write_ppc_checkpoint
+
+    def interrupt_after_first(run_directory: Path, block_id: str, *args: object, **kwargs: object):
+        """Persist the first valid block, then simulate interruption before block two."""
+        if written:
+            raise RuntimeError("interrupted after first block")
+        written.append(block_id)
+        return original_write(run_directory, block_id, *args, **kwargs)
+
+    monkeypatch.setattr(ppc_runtime, "write_ppc_checkpoint", interrupt_after_first)
+    with pytest.raises(RuntimeError, match="interrupted after first block"):
+        ppc_runtime.execute_ppc_blocks(
+            config=config, execution=config.ppc_execution, prepared_phase=phase,
+            prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+        )
+    assert written == ["unit-000000-000000"]
+    run_directories = list((tmp_path / "ppc").iterdir())
+    assert len(run_directories) == 1
+    interrupted_directory = run_directories[0]
+    assert not (interrupted_directory / "complete.json").exists()
+    assert not (tmp_path / "spike_phase.npz").exists()
+
+    monkeypatch.setattr(ppc_runtime, "write_ppc_checkpoint", original_write)
+    resumed = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    assert resumed.completed_block_ids == (
+        "unit-000000-000000", "unit-000001-000001", "unit-000002-000002",
+    )
+    assert resumed.resumed_block_ids == ("unit-000000-000000",)
+    corrupt_block = resumed.completed_block_ids[1]
+    (resumed.run_directory / "blocks" / f"{corrupt_block}.npz").write_bytes(b"corrupt")
+    repaired = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    assert corrupt_block not in repaired.resumed_block_ids
+    assert resumed.completed_block_ids[0] in repaired.resumed_block_ids
+    assert resumed.completed_block_ids[2] in repaired.resumed_block_ids
+
+
+def test_execution_settings_change_work_identity_but_not_component_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """Execution block sizes isolate resumable work without changing final science identity."""
+    config = _config()
+    changed = replace(
+        config,
+        ppc_execution=replace(
+            config.ppc_execution,
+            unit_block_size=2,
+            shuffle_block_size=2,
+            trial_edge_block_size=2,
+        ),
+    )
+    phase, spikes, schedule = _inputs()
+    first = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    second = ppc_runtime.execute_ppc_blocks(
+        config=changed, execution=changed.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    assert first.run_fingerprint != second.run_fingerprint
+    assert second.resumed_block_ids == ()
+    assert component_fingerprint("spike_phase", config) == component_fingerprint("spike_phase", changed)
+
+
+def test_executor_lock_precedes_schedule_and_preserves_external_lock_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The executor owns only its lock and cannot mutate a locked run directory."""
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    original_schedule_write = ppc_runtime._write_schedule
+    lock_seen: list[Path] = []
+
+    def recording_schedule_write(run_directory: Path, schedule_array: np.ndarray) -> None:
+        """Require an executor-owned lock before the first schedule mutation."""
+        lock = run_directory / "executor.lock"
+        assert lock.is_file()
+        lock_seen.append(lock)
+        original_schedule_write(run_directory, schedule_array)
+
+    monkeypatch.setattr(ppc_runtime, "_write_schedule", recording_schedule_write)
+    result = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path / "work",
+    )
+    assert lock_seen
+    assert not (result.run_directory / "executor.lock").exists()
+    before_schedule = (result.run_directory / "schedule.npz").read_bytes()
+    before_markers = {
+        path.name: path.read_bytes()
+        for path in (result.run_directory / "blocks").glob("*.complete.json")
+    }
+    external_lock = result.run_directory / "executor.lock"
+    external_lock.write_bytes(b"external executor lock\n")
+    with pytest.raises(FileExistsError, match="executor.lock"):
+        ppc_runtime.execute_ppc_blocks(
+            config=config, execution=config.ppc_execution, prepared_phase=phase,
+            prepared_spikes=spikes, schedule=schedule, work_root=tmp_path / "work",
+        )
+    assert external_lock.read_bytes() == b"external executor lock\n"
+    assert (result.run_directory / "schedule.npz").read_bytes() == before_schedule
+    assert {
+        path.name: path.read_bytes()
+        for path in (result.run_directory / "blocks").glob("*.complete.json")
+    } == before_markers
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_observed",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("injected computation failure")),
+    )
+    with pytest.raises(RuntimeError, match="injected computation failure"):
+        ppc_runtime.execute_ppc_blocks(
+            config=config, execution=config.ppc_execution, prepared_phase=phase,
+            prepared_spikes=spikes, schedule=schedule, work_root=tmp_path / "failure",
+        )
+    assert not list((tmp_path / "failure").rglob("executor.lock"))
+
+
+def test_run_metadata_preserves_selected_trials_and_overlap_identity(
+    tmp_path: Path,
+) -> None:
+    """Selected stable trial IDs and overlap warnings are both resumable job identity."""
+    import json
+
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    phase.trial_indices = np.array([31, 47], dtype=np.int64)
+    spikes.trial_spike_trains[0].overlap_trial_indices = np.array([31], dtype=np.int64)
+    overlapped = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    metadata = json.loads((overlapped.run_directory / "metadata.json").read_text())
+    assert metadata["trial_indices"] == [31, 47]
+    assert metadata["overlap_trial_indices"] == [[31]]
+    spikes.trial_spike_trains[0].overlap_trial_indices = np.empty(0, dtype=np.int64)
+    without_overlap = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    assert without_overlap.run_fingerprint != overlapped.run_fingerprint
