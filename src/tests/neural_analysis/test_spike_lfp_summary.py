@@ -1061,3 +1061,44 @@ def test_scheduled_edge_engine_never_calls_legacy_result_or_display_paths(
     )
 
     assert draws.shape == (schedule.shape[0], len(spikes), 2)
+
+
+def test_scheduled_edge_engine_samples_each_edge_once_per_unit_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase interpolation is performed once per edge/unit block, not per shuffle block."""
+    phase_time_s, phase, spikes, schedule = _wp5c2_inputs()
+    expected_source, expected_target = spike_lfp_summary._scheduled_trial_edges(
+        schedule,
+        complete_pair_table=False,
+    )
+    expected_edges = list(zip(expected_source.tolist(), expected_target.tolist(), strict=True))
+    sampled_edges: list[tuple[int, int]] = []
+    original = spike_lfp_summary.compute_edge_sufficient_statistics
+
+    def recording_edge_statistics(**kwargs: object) -> spike_lfp_summary.EdgeSufficientStatistics:
+        """Record every edge passed to the numerical phase-sampling kernel."""
+        source = np.asarray(kwargs["source_trial_position"])
+        target = np.asarray(kwargs["target_trial_position"])
+        sampled_edges.extend(zip(source.tolist(), target.tolist(), strict=True))
+        return original(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        spike_lfp_summary,
+        "compute_edge_sufficient_statistics",
+        recording_edge_statistics,
+    )
+    draws = spike_lfp_summary._compute_scheduled_shuffle_draws(
+        trial_relative_spike_times_s=spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=np.array([8.0, 40.0]),
+        schedule=schedule,
+        unit_block_size=2,
+        trial_edge_block_size=2,
+        shuffle_block_size=2,
+        complete_pair_table=False,
+    )
+
+    assert draws.shape == (schedule.shape[0], len(spikes), 2)
+    assert sorted(sampled_edges) == sorted(expected_edges * 2)
