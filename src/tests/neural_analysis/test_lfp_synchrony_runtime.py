@@ -257,6 +257,62 @@ def test_prepare_phase_run_preserves_full_trial_axis_and_pair_specific_missingne
         prepared.trial_indices = np.array((0,), dtype=np.int64)
 
 
+def test_prepare_phase_run_prepared_cache_cold_warm_disabled_and_mismatch_paths(
+    tmp_path: Path,
+) -> None:
+    """Warm preparation rebuilds lightweight metadata but reuses mmap phase without Morlet work."""
+    cache_root = tmp_path / "work"
+    config = _config(tmp_path / "cache")
+    cold_calls: list[dict[str, object]] = []
+    cold = prepare_phase_run(
+        config,
+        lambda _: _trial_table(),
+        site_phase_tensor_builder=_phase_tensor_builder(cold_calls),
+        block_loader_factory=_block_loader_factory([]),
+        spikeglx_loader=_trace_loader,
+        work_cache_root=cache_root,
+    )
+    warm_calls: list[dict[str, object]] = []
+    warm = prepare_phase_run(
+        config,
+        lambda _: _trial_table(),
+        site_phase_tensor_builder=_phase_tensor_builder(warm_calls),
+        block_loader_factory=_block_loader_factory([]),
+        spikeglx_loader=_trace_loader,
+        work_cache_root=cache_root,
+    )
+
+    assert cold_calls
+    assert not warm_calls
+    assert isinstance(warm.phase_tensor, np.memmap)
+    assert isinstance(warm.phase_valid, np.memmap)
+    assert warm.phase_tensor.flags.writeable is False
+    assert warm.trial_indices.tolist() == cold.trial_indices.tolist()
+    np.testing.assert_array_equal(warm.source_trace, cold.source_trace)
+
+    disabled_calls: list[dict[str, object]] = []
+    disabled_config = replace(
+        config,
+        ppc_execution=replace(config.ppc_execution, prepared_phase_cache_enabled=False),
+    )
+    prepare_phase_run(
+        disabled_config, lambda _: _trial_table(),
+        site_phase_tensor_builder=_phase_tensor_builder(disabled_calls),
+        block_loader_factory=_block_loader_factory([]), spikeglx_loader=_trace_loader,
+        work_cache_root=cache_root,
+    )
+    mismatch_calls: list[dict[str, object]] = []
+    mismatch_config = replace(config, schema_version="cache-mismatch")
+    prepare_phase_run(
+        mismatch_config, lambda _: _trial_table(),
+        site_phase_tensor_builder=_phase_tensor_builder(mismatch_calls),
+        block_loader_factory=_block_loader_factory([]), spikeglx_loader=_trace_loader,
+        work_cache_root=cache_root,
+    )
+    assert disabled_calls
+    assert mismatch_calls
+
+
 def test_phase_bootstrap_recomputes_the_nonlinear_clustering_statistic() -> None:
     """Opposite trials estimate zero ITPC rather than averaging unit magnitudes."""
     phase = np.array(
