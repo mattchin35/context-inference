@@ -199,12 +199,63 @@ def test_execution_result_contains_only_final_summary_arrays_not_shuffle_draws(t
 
     required = {
         "ppc", "spike_count", "reliable", "null_eligible",
+        "computable", "resultant_length", "preferred_phase_rad",
         "null_exceedance_count", "permutation_count", "p_value", "q_value",
         "significant", "null_mean", "null_std", "null_p025", "null_p50", "null_p975",
     }
     assert required <= set(result.summary_arrays)
     assert not hasattr(result, "null_ppc")
     assert all(array.ndim <= 2 for array in result.summary_arrays.values())
+
+
+def test_checkpoint_schedule_is_generated_once_and_blocks_store_summaries_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One job persists one schedule and checkpoint NPZs never contain raw shuffle draws."""
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    calls = 0
+    original = ppc_runtime.generate_trial_derangement_schedule
+
+    def recording_schedule(*args: object, **kwargs: object) -> np.ndarray:
+        """Count deterministic schedule creation while delegating unchanged scientific inputs."""
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(ppc_runtime, "generate_trial_derangement_schedule", recording_schedule)
+    result = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=None, work_root=tmp_path,
+    )
+
+    assert calls == 1
+    with np.load(next((result.run_directory / "blocks").glob("*.npz")), allow_pickle=False) as block:
+        assert "null_ppc" not in block.files
+        assert all("shuffle" not in name for name in block.files)
+
+
+def test_checkpoint_corrupt_and_orphan_blocks_recompute_without_losing_valid_siblings(tmp_path: Path) -> None:
+    """Marker-backed invalid shape/dtype blocks and orphan files never resume; valid blocks do."""
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    result = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    blocks = result.run_directory / "blocks"
+    block_id = result.completed_block_ids[0]
+    np.savez(blocks / f"{block_id}.npz", ppc=np.array(["wrong dtype"], dtype="<U16"))
+    np.savez(blocks / "orphan.npz", ppc=np.array([1.0]))
+    (blocks / "orphan.complete.json").write_text('{"block_id":"orphan"}', encoding="ascii")
+
+    rerun = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+
+    assert block_id not in rerun.resumed_block_ids
 
 
 def test_schedule_mismatch_and_invalid_checkpoint_metadata_shape_dtype_recompute(tmp_path: Path) -> None:

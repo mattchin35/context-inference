@@ -325,3 +325,45 @@ def test_fixed_seed_pipeline_outputs_are_reproducible_except_declared_timestamps
     assert _strip_declared_timestamps(first_manifests[-1]) == _strip_declared_timestamps(
         second_manifests[-1]
     )
+
+
+def test_checkpoint_post_commit_cleanup_runs_only_after_successful_final_writer() -> None:
+    """Pipeline cleanup is post-commit: writer/manifest first, then exact work cleanup."""
+    config = default_lfp_summary_config()
+    calls: list[str] = []
+    manifests: list[dict[str, object]] = []
+    dependencies = _make_dependencies(calls, manifests)
+    payload = lfp_summary_pipeline.ComponentPayload(
+        arrays={"value": np.array([1.0])},
+        manifest_entry=_component_entry("spike_phase"),
+        post_commit_cleanup=lambda: calls.append("cleanup_checkpoint"),
+    )
+
+    result = lfp_summary_pipeline._commit_component(
+        "spike_phase", config, dependencies, payload, None,
+    )
+
+    assert result.state == "complete"
+    assert calls.index("write_spike_phase") < calls.index("cleanup_checkpoint")
+
+
+def test_checkpoint_interruption_before_payload_never_reaches_final_writer() -> None:
+    """An interrupted checkpoint computation must fail before any manifest-last writer call."""
+    config = default_lfp_summary_config()
+    calls: list[str] = []
+    dependencies = _make_dependencies(calls, [])
+    interrupted = lfp_summary_pipeline.PipelineDependencies(
+        prepare_power=dependencies.prepare_power,
+        prepare_phase=dependencies.prepare_phase,
+        prepare_spike=dependencies.prepare_spike,
+        build_power_payload=dependencies.build_power_payload,
+        build_synchrony_payload=dependencies.build_synchrony_payload,
+        build_spike_phase_payload=lambda *_: (_ for _ in ()).throw(RuntimeError("interrupted")),
+        load_manifest=dependencies.load_manifest,
+        write_component=dependencies.write_component,
+    )
+
+    result = lfp_summary_pipeline.compute_spike_phase_component(config, interrupted)
+
+    assert result.state == "failed"
+    assert "write_spike_phase" not in calls
