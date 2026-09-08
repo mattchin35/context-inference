@@ -182,6 +182,46 @@ def test_build_spike_payload_fills_schema_axes_counts_and_preview_null(
     assert arrays["source_trace"].shape == (1, 2, 2000)
 
 
+def test_spike_payload_execution_assembly_uses_summary_runtime_not_legacy_shuffle(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Outer condition/site/epoch assembly consumes summary-only PPC jobs and preserves schema."""
+    from src.neural_analysis import lfp_summary_ppc_runtime
+
+    config = _config(tmp_path / "cache")
+    phase = _prepared_phase(config)
+    prepared = prepare_spike_run(config, phase, lambda _: _absolute_unit_spikes())
+    calls: list[dict[str, object]] = []
+
+    def summary_job(**kwargs: object):
+        """Return deterministic summary-only one-job arrays with unit/frequency axes."""
+        calls.append(kwargs)
+        frequency_count = len(config.phase.frequency_hz)
+        summary = {
+            name: np.full((1, frequency_count), np.nan)
+            for name in ("ppc", "resultant_length", "preferred_phase_rad", "p_value", "q_value", "null_mean", "null_std", "null_p025", "null_p50", "null_p975")
+        }
+        summary.update({
+            "spike_count": np.full((1, frequency_count), 104, dtype=np.int64),
+            "computable": np.ones((1, frequency_count), dtype=bool),
+            "reliable": np.ones((1, frequency_count), dtype=bool),
+            "null_eligible": np.ones((1, frequency_count), dtype=bool),
+            "null_exceedance_count": np.zeros((1, frequency_count), dtype=np.int64),
+            "permutation_count": np.full((1, frequency_count), 100, dtype=np.int64),
+            "significant": np.zeros((1, frequency_count), dtype=bool),
+        })
+        return type("Result", (), {"summary_arrays": summary, "run_directory": tmp_path / "ppc" / "run"})()
+
+    monkeypatch.setattr(lfp_summary_ppc_runtime, "execute_ppc_blocks", summary_job)
+    monkeypatch.setattr("src.neural_analysis.spike_lfp_summary.compute_trial_shuffle_ppc", lambda **_: (_ for _ in ()).throw(AssertionError("legacy shuffle")))
+    payload = build_spike_phase_payload(config, phase, prepared)
+
+    validate_component_payload("spike_phase", payload)
+    assert len(calls) == 9 * 1 * 3
+    assert payload.arrays["ppc"].shape == (1, 9, 1, 3, 50)
+
+
 def test_spike_dependencies_commit_only_spike_component(tmp_path: Path) -> None:
     """The production factory must atomically write and reload Spike phase only."""
     config = _config(tmp_path / "cache")
