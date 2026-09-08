@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from src.neural_analysis import lfp_summary_ppc_runtime as ppc_runtime
+from src.neural_analysis import spike_lfp_summary
 from src.neural_analysis.lfp_summary_models import (
     PPCExecutionConfig,
     default_lfp_summary_config,
@@ -509,3 +510,127 @@ def test_run_metadata_declares_complete_job_identity_and_execution_contract(
         "execution_settings", "completed_block_ids",
     }
     assert required <= set(metadata)
+
+
+def test_mixed_unit_frequency_eligibility_samples_only_eligible_subsets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Null reduction excludes sub-reliable frequencies and one-trial units before edge sampling."""
+    config = _config()
+    config = replace(
+        config,
+        phase=replace(config.phase, frequency_hz=tuple(config.phase.frequency_hz[:2])),
+    )
+    phase, spikes, schedule = _inputs()
+    phase.phase_tensor = phase.phase_tensor[:, :2]
+    phase.phase_valid = np.ones(phase.phase_tensor.shape, dtype=bool)
+    # Unit one has 100 valid frequency-zero phases.  Frequency one has only
+    # twenty-five valid phases, while unit two has valid spikes in one trial.
+    phase.phase_valid[0, 1, :, :] = False
+    phase.phase_valid[0, 1, 0, 0] = True
+    spikes.trial_spike_trains = (
+        SimpleNamespace(
+            relative_spike_times=(
+                np.concatenate((np.zeros(25), np.ones(25))),
+                np.concatenate((np.zeros(25), np.ones(25))),
+            ),
+            overlap_trial_indices=np.empty(0, dtype=np.int64),
+        ),
+    )
+    spikes.unit_ids = ("PFC:1", "PFC:2")
+    spikes.trial_spike_trains = (
+        spikes.trial_spike_trains[0],
+        SimpleNamespace(
+            relative_spike_times=(np.zeros(50), np.empty(0)),
+            overlap_trial_indices=np.empty(0, dtype=np.int64),
+        ),
+    )
+    sampled: list[tuple[int, tuple[float, ...]]] = []
+    original_reducer = ppc_runtime.spike_lfp_summary.compute_edge_sufficient_statistics
+
+    def recording_reducer(**kwargs: object):
+        """Record only shuffled, nonself trial edges before computing statistics."""
+        source = np.asarray(kwargs["source_trial_position"])
+        target = np.asarray(kwargs["target_trial_position"])
+        if np.any(source != target):
+            sampled.append(
+                (
+                    len(kwargs["trial_relative_spike_times_s"]),
+                    tuple(np.asarray(kwargs["frequencies_hz"], dtype=float)),
+                ),
+            )
+        return original_reducer(**kwargs)
+
+    monkeypatch.setattr(
+        ppc_runtime.spike_lfp_summary,
+        "compute_edge_sufficient_statistics",
+        recording_reducer,
+    )
+    result = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    assert sampled
+    assert all(
+        unit_count == 1 and frequencies == (config.phase.frequency_hz[0],)
+        for unit_count, frequencies in sampled
+    )
+    assert np.isnan(result.summary_arrays["p_value"][0, 1])
+    assert np.isnan(result.summary_arrays["q_value"][0, 1])
+    assert np.isnan(result.summary_arrays["null_mean"][0, 1])
+    assert result.summary_arrays["permutation_count"][0, 1] == 0
+    assert not result.summary_arrays["null_eligible"][0, 1]
+    assert not result.summary_arrays["null_eligible"][1].any()
+
+
+def test_executor_matches_wp5b_reference_and_keeps_zero_valid_phase_nan(
+    tmp_path: Path,
+) -> None:
+    """Seeded serial summaries equal the established WP5B observed/null reference numerics."""
+    config = _config()
+    config = replace(
+        config,
+        phase=replace(config.phase, frequency_hz=tuple(config.phase.frequency_hz[:2])),
+    )
+    phase, spikes, schedule = _inputs()
+    phase.phase_tensor = phase.phase_tensor[:, :2]
+    phase.phase_tensor[0, 1] = 0.0j
+    phase.phase_valid = np.ones(phase.phase_tensor.shape, dtype=bool)
+    result = ppc_runtime.execute_ppc_blocks(
+        config=config, execution=config.ppc_execution, prepared_phase=phase,
+        prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
+    )
+    reference = spike_lfp_summary.compute_trial_shuffle_ppc(
+        trial_relative_spike_times_s=spikes.trial_spike_trains[0].relative_spike_times,
+        phase_time_s=phase.relative_time_s,
+        trial_phase_vectors=phase.phase_tensor[0].transpose(1, 0, 2),
+        frequencies_hz=np.asarray(config.phase.frequency_hz[:2]),
+        schedule=schedule,
+    )
+    observed = spike_lfp_summary.compute_observed_ppc(
+        probe_label="PFC",
+        cluster_id=1,
+        spike_phase_vectors=np.vstack((np.ones(100, dtype=np.complex64), np.zeros(100, dtype=np.complex64))),
+        valid_mask=np.vstack((np.ones(100, dtype=bool), np.zeros(100, dtype=bool))),
+        frequencies_hz=np.asarray(config.phase.frequency_hz),
+        spike_times_s=np.zeros(100, dtype=float),
+    )
+    reference_q = spike_lfp_summary.adjust_ppc_pvalues_bh(
+        p_value=reference.null_summary.p_value[None, None, None, None, :],
+        null_eligible=reference.null_summary.null_eligible[None, None, None, None, :],
+    )[0, 0, 0, 0]
+    np.testing.assert_allclose(result.summary_arrays["ppc"][0], reference.observed_ppc, equal_nan=True)
+    np.testing.assert_array_equal(result.summary_arrays["spike_count"][0], reference.spike_count)
+    np.testing.assert_allclose(result.summary_arrays["resultant_length"][0], observed.resultant_length, equal_nan=True)
+    np.testing.assert_allclose(result.summary_arrays["preferred_phase_rad"][0], observed.preferred_phase_rad, equal_nan=True)
+    for field in ("p_value", "null_mean", "null_std", "null_p025", "null_p50", "null_p975"):
+        np.testing.assert_allclose(
+            result.summary_arrays[field][0], getattr(reference.null_summary, field), equal_nan=True,
+        )
+    np.testing.assert_allclose(result.summary_arrays["q_value"][0], reference_q, equal_nan=True)
+    np.testing.assert_array_equal(
+        result.summary_arrays["significant"][0],
+        reference.null_summary.null_eligible & (reference_q <= config.ppc.fdr_alpha),
+    )
+    assert np.isnan(result.summary_arrays["preferred_phase_rad"][0, 1])
