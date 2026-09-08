@@ -129,9 +129,26 @@ class PPCAnalysisConfig:
     fdr_alpha: float = 0.05
     fdr_method: str = "bh"
     phase_bin_edges_rad: tuple[float, ...] = (-3.141592653589793, 0.0, 3.141592653589793)
-    worker_count: int = 1
-    chunk_size: int = 100
     seed: int = 0
+
+
+@dataclass(frozen=True)
+class PPCExecutionConfig:
+    """Work-only execution settings for bounded PPC computation and restart.
+
+    These categorical settings control memory and progress behavior only. They
+    are serialized in work metadata but deliberately excluded from final
+    scientific component fingerprints.
+    """
+
+    unit_block_size: int = 8
+    shuffle_block_size: int = 25
+    trial_edge_block_size: int = 64
+    worker_count: int = 1
+    prepared_phase_cache_enabled: bool = True
+    checkpoint_enabled: bool = True
+    checkpoint_retention: str = "incomplete_only"
+    progress_update_interval: int = 1
 
 
 @dataclass(frozen=True)
@@ -149,6 +166,7 @@ class LFPSummaryConfig:
     power: PowerAnalysisConfig
     phase: PhaseAnalysisConfig
     ppc: PPCAnalysisConfig
+    ppc_execution: PPCExecutionConfig = PPCExecutionConfig()
     trial_table_path: Path | None = None
     schema_version: str = "1"
     random_seed: int = 0
@@ -289,6 +307,7 @@ def lfp_summary_config_from_json(encoded: str) -> LFPSummaryConfig:
     ppc["epochs"] = tuple(ppc["epochs"])
     ppc["phase_bin_edges_rad"] = tuple(ppc["phase_bin_edges_rad"])
     raw["ppc"] = _construct(PPCAnalysisConfig, ppc)
+    raw["ppc_execution"] = _construct(PPCExecutionConfig, raw["ppc_execution"])
     raw["session_path"] = Path(raw["session_path"])
     raw["output_directory"] = Path(raw["output_directory"])
     if raw["trial_table_path"] is not None:
@@ -383,6 +402,7 @@ def validate_lfp_summary_config(config: LFPSummaryConfig) -> None:
     _validate_power(config.power)
     _validate_phase(config.phase, site_ids)
     _validate_ppc(config.ppc)
+    _validate_ppc_execution(config.ppc_execution)
     if config.unit_population is not None:
         _validate_unit_population(config.unit_population)
 
@@ -563,10 +583,42 @@ def _validate_ppc(ppc: PPCAnalysisConfig) -> None:
     """
     if ppc.epochs != ("whole", "before", "after") or not isfinite(ppc.fdr_alpha) or not 0 < ppc.fdr_alpha <= 1 or ppc.fdr_method != "bh":
         raise ValueError("invalid PPC epoch or FDR settings")
-    if ppc.minimum_computable_spikes != 2 or ppc.minimum_reliable_spikes < 50 or ppc.shuffle_count <= 0 or ppc.worker_count <= 0 or ppc.chunk_size <= 0:
+    if ppc.minimum_computable_spikes != 2 or ppc.minimum_reliable_spikes < 50 or ppc.shuffle_count <= 0:
         raise ValueError("invalid PPC count settings")
     if len(ppc.phase_bin_edges_rad) < 2 or any(not isfinite(edge) for edge in ppc.phase_bin_edges_rad) or any(left >= right for left, right in zip(ppc.phase_bin_edges_rad, ppc.phase_bin_edges_rad[1:])):
         raise ValueError("phase bin edges must be finite and ascending")
+
+
+def _validate_ppc_execution(execution: PPCExecutionConfig) -> None:
+    """Validate work-only PPC block, cache, checkpoint, and progress settings.
+
+    Parameters
+    ----------
+    execution : PPCExecutionConfig
+        Categorical block sizes/counts and Boolean work-artifact policies. No
+        scientific phase, spike, time, frequency, or missing-value data occurs
+        at this configuration boundary.
+
+    Returns
+    -------
+    None
+        Validation neither changes settings nor contributes to final scientific
+        component fingerprints.
+    """
+    positive_values = (
+        execution.unit_block_size,
+        execution.shuffle_block_size,
+        execution.trial_edge_block_size,
+        execution.worker_count,
+        execution.progress_update_interval,
+    )
+    if (
+        any(not isinstance(value, int) or value <= 0 for value in positive_values)
+        or not isinstance(execution.prepared_phase_cache_enabled, bool)
+        or not isinstance(execution.checkpoint_enabled, bool)
+        or execution.checkpoint_retention not in {"incomplete_only", "retain"}
+    ):
+        raise ValueError("invalid PPC execution settings")
 
 
 def _phase_transform_payload(phase: PhaseAnalysisConfig, include_bootstrap: bool) -> dict[str, Any]:
