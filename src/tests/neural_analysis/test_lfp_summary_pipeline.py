@@ -235,6 +235,44 @@ def test_pipeline_progress_is_monotonic_and_invalid_progress_is_rejected() -> No
         )
 
 
+def test_spike_component_uses_optional_progress_aware_payload_seam() -> None:
+    """Spike execution forwards the exact callback through its optional payload seam."""
+    config = default_lfp_summary_config()
+    calls: list[str] = []
+    callback_events: list[ProgressEvent] = []
+    dependencies = _make_dependencies(calls, [])
+
+    def progress_aware_payload(
+        received_config: object,
+        phase: object,
+        spikes: object,
+        progress_callback,
+    ) -> lfp_summary_pipeline.ComponentPayload:
+        """Record the exact callback without invoking the legacy three-argument builder."""
+        assert received_config is config
+        assert progress_callback is callback_events.append
+        calls.append("payload_spike_phase_with_progress")
+        return lfp_summary_pipeline.ComponentPayload(
+            arrays={"value": np.array([2.0])},
+            manifest_entry=_component_entry("spike_phase"),
+        )
+
+    dependencies = replace(
+        dependencies,
+        build_spike_phase_payload_with_progress=progress_aware_payload,
+    )
+
+    result = lfp_summary_pipeline.compute_spike_phase_component(
+        config,
+        dependencies,
+        progress_callback=callback_events.append,
+    )
+
+    assert result.state == "complete"
+    assert "payload_spike_phase" not in calls
+    assert "payload_spike_phase_with_progress" in calls
+
+
 def test_writer_failure_preserves_existing_bytes_reports_stage_and_aborts_compute_all(
     tmp_path: Path,
 ) -> None:

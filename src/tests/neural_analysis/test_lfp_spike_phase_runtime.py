@@ -12,6 +12,7 @@ from src.neural_analysis.lfp_summary_io import load_component_arrays
 from src.neural_analysis.lfp_summary_models import (
     LFPSiteConfig,
     PPCAnalysisConfig,
+    ProgressEvent,
     UnitPopulationConfig,
     default_lfp_summary_config,
 )
@@ -220,6 +221,49 @@ def test_spike_payload_execution_assembly_uses_summary_runtime_not_legacy_shuffl
     validate_component_payload("spike_phase", payload)
     assert len(calls) == 9 * 1 * 3
     assert payload.arrays["ppc"].shape == (1, 9, 1, 3, 50)
+
+
+def test_spike_factory_progress_seam_forwards_callback_to_ppc_executor(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The production-only payload seam forwards one exact callback to every PPC job."""
+    from src.neural_analysis import lfp_summary_ppc_runtime
+
+    config = _config(tmp_path / "cache")
+    phase = _prepared_phase(config)
+    prepared = prepare_spike_run(config, phase, lambda _: _absolute_unit_spikes())
+    dependencies = make_spike_phase_pipeline_dependencies(
+        trial_table_loader=lambda _: _trial_table(),
+        unit_spike_loader=lambda _: _absolute_unit_spikes(),
+        phase_preparer=lambda _: phase,
+    )
+    received_callbacks: list[object] = []
+    executor = lfp_summary_ppc_runtime.execute_ppc_blocks
+
+    def recording_executor(**kwargs: object):
+        """Record the forwarded callback while retaining the real job numerics."""
+        received_callbacks.append(kwargs["progress_callback"])
+        return executor(**kwargs)
+
+    monkeypatch.setattr(
+        lfp_summary_ppc_runtime,
+        "execute_ppc_blocks",
+        recording_executor,
+    )
+    events: list[ProgressEvent] = []
+    callback = events.append
+
+    payload = dependencies.build_spike_phase_payload_with_progress(
+        config,
+        phase,
+        prepared,
+        callback,
+    )
+
+    validate_component_payload("spike_phase", payload)
+    assert received_callbacks == [callback] * (9 * 1 * 3)
+    assert events
 
 
 def test_spike_dependencies_commit_only_spike_component(tmp_path: Path) -> None:
