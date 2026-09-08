@@ -337,11 +337,16 @@ def test_ppc_execution_configuration_round_trips_without_staling_final_component
     "execution",
     (
         PPCExecutionConfig(unit_block_size=0),
+        PPCExecutionConfig(unit_block_size=True),
         PPCExecutionConfig(shuffle_block_size=0),
+        PPCExecutionConfig(shuffle_block_size=False),
         PPCExecutionConfig(trial_edge_block_size=0),
+        PPCExecutionConfig(trial_edge_block_size=True),
         PPCExecutionConfig(worker_count=0),
+        PPCExecutionConfig(worker_count=False),
         PPCExecutionConfig(checkpoint_retention="forever"),
         PPCExecutionConfig(progress_update_interval=0),
+        PPCExecutionConfig(progress_update_interval=True),
     ),
 )
 def test_invalid_ppc_execution_configuration_is_rejected(

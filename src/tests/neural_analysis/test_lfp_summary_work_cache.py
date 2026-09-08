@@ -189,6 +189,31 @@ def test_complete_marker_atomic_failure_never_publishes_prepared_phase_cache(
     assert not list(tmp_path.rglob("complete.json"))
 
 
+def test_failed_prepared_phase_rewrite_never_pairs_new_files_with_old_completion_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed rewrite leaves the old cache intact or explicitly unavailable, never mixed."""
+    old_phase, valid = _phase_and_valid()
+    written = work_cache.write_prepared_phase_cache(tmp_path, _metadata(), old_phase, valid, _axes())
+    new_phase = np.full(old_phase.shape, 2.0 + 0.0j, dtype=np.complex64)
+    original_replace = work_cache.os.replace
+
+    def fail_completion_replace(source: Path, destination: Path) -> None:
+        """Fail only the final completion-marker replacement of the rewrite transaction."""
+        if destination.name == "complete.json":
+            raise OSError("injected prepared rewrite completion failure")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(work_cache.os, "replace", fail_completion_replace)
+    with pytest.raises(OSError, match="prepared rewrite completion failure"):
+        work_cache.write_prepared_phase_cache(tmp_path, _metadata(), new_phase, valid, _axes())
+
+    loaded = work_cache.load_prepared_phase_cache(tmp_path, _metadata())
+    assert loaded is None or np.array_equal(loaded.phase, old_phase)
+    assert written.exists()
+
+
 def test_prepared_phase_loader_rejects_incomplete_and_pickle_bearing_axes(
     tmp_path: Path,
 ) -> None:
@@ -255,6 +280,36 @@ def test_ppc_checkpoint_rejects_metadata_mismatch_and_pickle_arrays(tmp_path: Pa
     assert work_cache.load_valid_ppc_checkpoints(run_root, metadata) == ()
 
 
+def test_failed_checkpoint_rewrite_never_pairs_new_npz_with_old_completion_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed checkpoint rewrite leaves the old block intact or unavailable, never mixed."""
+    metadata = {**_metadata("run-a"), "run_fingerprint": "run-a"}
+    run_root = tmp_path / "ppc" / "run-a"
+    old_arrays = {"ppc": np.array([[0.1]], dtype=float)}
+    work_cache.write_ppc_checkpoint(run_root, "block-000", old_arrays, metadata)
+    original_replace = work_cache.os.replace
+
+    def fail_completion_replace(source: Path, destination: Path) -> None:
+        """Fail only the block completion-marker publication for the rewrite."""
+        if destination.name == "block-000.complete.json":
+            raise OSError("injected checkpoint rewrite completion failure")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(work_cache.os, "replace", fail_completion_replace)
+    with pytest.raises(OSError, match="checkpoint rewrite completion failure"):
+        work_cache.write_ppc_checkpoint(
+            run_root,
+            "block-000",
+            {"ppc": np.array([[0.9]], dtype=float)},
+            metadata,
+        )
+
+    loaded = work_cache.load_valid_ppc_checkpoints(run_root, metadata)
+    assert not loaded or np.array_equal(loaded[0].arrays["ppc"], old_arrays["ppc"])
+
+
 def test_ppc_checkpoint_writer_lock_and_unsafe_block_ids_are_rejected(tmp_path: Path) -> None:
     """Checkpoint writers cannot share a run directory or escape its blocks directory."""
     metadata = {**_metadata("run-a"), "run_fingerprint": "run-a"}
@@ -295,6 +350,23 @@ def test_cleanup_requires_exact_fingerprint_and_preserves_siblings(tmp_path: Pat
 
     assert run_root.exists()
     assert sibling_root.exists()
+
+
+def test_cleanup_refuses_run_directory_outside_direct_ppc_parent(tmp_path: Path) -> None:
+    """Cleanup cannot remove a matching fingerprint directory outside the exact PPC root."""
+    metadata = {**_metadata("run-a"), "run_fingerprint": "run-a"}
+    unsafe_root = tmp_path / "not_ppc" / "run-a"
+    work_cache.write_ppc_checkpoint(
+        unsafe_root,
+        "block-000",
+        {"ppc": np.array([[0.1]], dtype=float)},
+        metadata,
+    )
+
+    with pytest.raises(ValueError):
+        work_cache.cleanup_ppc_run(unsafe_root, "run-a")
+
+    assert unsafe_root.exists()
 
 
 def test_work_artifacts_never_register_as_final_components(tmp_path: Path) -> None:
