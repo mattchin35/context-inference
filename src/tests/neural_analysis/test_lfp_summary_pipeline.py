@@ -240,6 +240,7 @@ def test_spike_component_uses_optional_progress_aware_payload_seam() -> None:
     config = default_lfp_summary_config()
     calls: list[str] = []
     callback_events: list[ProgressEvent] = []
+    callback = callback_events.append
     dependencies = _make_dependencies(calls, [])
 
     def progress_aware_payload(
@@ -250,7 +251,7 @@ def test_spike_component_uses_optional_progress_aware_payload_seam() -> None:
     ) -> lfp_summary_pipeline.ComponentPayload:
         """Record the exact callback without invoking the legacy three-argument builder."""
         assert received_config is config
-        assert progress_callback is callback_events.append
+        assert progress_callback is callback
         calls.append("payload_spike_phase_with_progress")
         return lfp_summary_pipeline.ComponentPayload(
             arrays={"value": np.array([2.0])},
@@ -265,7 +266,7 @@ def test_spike_component_uses_optional_progress_aware_payload_seam() -> None:
     result = lfp_summary_pipeline.compute_spike_phase_component(
         config,
         dependencies,
-        progress_callback=callback_events.append,
+        progress_callback=callback,
     )
 
     assert result.state == "complete"
