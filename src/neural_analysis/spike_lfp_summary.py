@@ -1061,8 +1061,10 @@ def _compute_scheduled_shuffle_draws(
     numpy.ndarray
         Float64 dimensionless PPC shape ``(shuffle, unit, frequency)`` in
         schedule/unit/frequency order. Entries with fewer than two valid sampled
-        spike phases are NaN. The returned test/internal draw array is owned;
-        edge sums and counts are temporary complex128/int64 block arrays.
+        spike phases are NaN. This full-return helper is an equivalence-test
+        harness and must not be used by production runtime code to retain a
+        full-session null distribution. Edge sums and counts are temporary
+        complex128/int64 block arrays.
 
     Raises
     ------
@@ -1105,44 +1107,41 @@ def _compute_scheduled_shuffle_draws(
     for unit_start in range(0, len(unit_spikes), unit_size):
         unit_stop = min(unit_start + unit_size, len(unit_spikes))
         unit_block = unit_spikes[unit_start:unit_stop]
-        for shuffle_start in range(0, validated_schedule.shape[0], shuffle_size):
-            shuffle_stop = min(
-                shuffle_start + shuffle_size,
-                validated_schedule.shape[0],
+        pooled_sum = np.zeros(
+            (validated_schedule.shape[0], unit_stop - unit_start, frequencies.size),
+            dtype=np.complex128,
+        )
+        pooled_count = np.zeros(pooled_sum.shape, dtype=np.int64)
+        for edge_start in range(0, source_edges.size, edge_size):
+            edge_stop = min(edge_start + edge_size, source_edges.size)
+            edge_statistics = compute_edge_sufficient_statistics(
+                trial_relative_spike_times_s=unit_block,
+                phase_time_s=phase_time,
+                trial_phase_vectors=phase,
+                frequencies_hz=frequencies,
+                source_trial_position=source_edges[edge_start:edge_stop],
+                target_trial_position=target_edges[edge_start:edge_stop],
             )
-            selected_schedule = validated_schedule[shuffle_start:shuffle_stop]
-            pooled_sum = np.zeros(
-                (selected_schedule.shape[0], unit_stop - unit_start, frequencies.size),
-                dtype=np.complex128,
-            )
-            pooled_count = np.zeros(pooled_sum.shape, dtype=np.int64)
-            for edge_start in range(0, source_edges.size, edge_size):
-                edge_stop = min(edge_start + edge_size, source_edges.size)
-                edge_statistics = compute_edge_sufficient_statistics(
-                    trial_relative_spike_times_s=unit_block,
-                    phase_time_s=phase_time,
-                    trial_phase_vectors=phase,
-                    frequencies_hz=frequencies,
-                    source_trial_position=source_edges[edge_start:edge_stop],
-                    target_trial_position=target_edges[edge_start:edge_stop],
+            for edge_index, (source_position, target_position) in enumerate(
+                zip(
+                    edge_statistics.source_trial_position,
+                    edge_statistics.target_trial_position,
+                    strict=True,
                 )
-                for edge_index, (source_position, target_position) in enumerate(
-                    zip(
-                        edge_statistics.source_trial_position,
-                        edge_statistics.target_trial_position,
-                        strict=True,
-                    )
-                ):
-                    rows = np.flatnonzero(
-                        selected_schedule[:, int(source_position)] == int(target_position)
-                    )
-                    if rows.size:
-                        pooled_sum[rows] += edge_statistics.phase_vector_sum[edge_index]
-                        pooled_count[rows] += edge_statistics.valid_spike_count[edge_index]
-            ppc = np.full(pooled_count.shape, np.nan, dtype=float)
-            computable = pooled_count >= MINIMUM_COMPUTABLE_SPIKES
-            numerator = np.abs(pooled_sum) ** 2 - pooled_count
-            denominator = pooled_count.astype(float) * (pooled_count - 1)
+            ):
+                rows = np.flatnonzero(
+                    validated_schedule[:, int(source_position)] == int(target_position)
+                )
+                pooled_sum[rows] += edge_statistics.phase_vector_sum[edge_index]
+                pooled_count[rows] += edge_statistics.valid_spike_count[edge_index]
+        for shuffle_start in range(0, validated_schedule.shape[0], shuffle_size):
+            shuffle_stop = min(shuffle_start + shuffle_size, validated_schedule.shape[0])
+            block_sum = pooled_sum[shuffle_start:shuffle_stop]
+            block_count = pooled_count[shuffle_start:shuffle_stop]
+            ppc = np.full(block_count.shape, np.nan, dtype=float)
+            computable = block_count >= MINIMUM_COMPUTABLE_SPIKES
+            numerator = np.abs(block_sum) ** 2 - block_count
+            denominator = block_count.astype(float) * (block_count - 1)
             np.divide(numerator, denominator, out=ppc, where=computable)
             output[shuffle_start:shuffle_stop, unit_start:unit_stop] = ppc
     return output
