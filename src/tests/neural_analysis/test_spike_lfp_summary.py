@@ -789,7 +789,22 @@ def test_sufficient_statistic_null_percentiles_request_explicit_linear_method(
 
 # WP5C-2 scheduled-edge engine contracts.
 def _wp5c2_inputs() -> tuple[np.ndarray, np.ndarray, tuple[tuple[np.ndarray, ...], ...], np.ndarray]:
-    """Return small deterministic phase/spike inputs on (trial, frequency, time)."""
+    """Return deterministic scheduled-edge inputs without missing values.
+
+    Returns
+    -------
+    phase_time_s : numpy.ndarray
+        Float64 shape ``(time,)`` strictly ascending event-relative seconds.
+    trial_phase_vectors : numpy.ndarray
+        Complex128 shape ``(trial, frequency, time)`` dimensionless unit phase
+        vectors. Every entry is finite and nonzero.
+    unit_trial_spikes : tuple[tuple[numpy.ndarray, ...], ...]
+        Nested ``(unit, trial)`` float64 arrays of event-relative seconds. Each
+        spike lies within the phase-time support; empty arrays mean no spikes.
+    schedule : numpy.ndarray
+        Int64 shape ``(shuffle, trial)`` complete derangements without missing
+        values. Frequencies supplied by each caller are Hz.
+    """
     phase_time_s = np.array([0.0, 0.5, 1.0], dtype=float)
     trial_phase_vectors = np.exp(
         1j
@@ -1019,6 +1034,8 @@ def test_scheduled_edge_engine_never_calls_legacy_result_or_display_paths(
     monkeypatch.setattr(spike_lfp_summary, "compute_trial_shuffle_ppc", fail)
     monkeypatch.setattr(spike_lfp_summary, "compute_observed_ppc", fail)
     monkeypatch.setattr(spike_lfp_summary, "build_representative_phase_histograms", fail)
+    monkeypatch.setattr(spike_lfp_phase_locking, "sample_wavelet_phase_at_spikes", fail)
+    monkeypatch.setattr(spike_lfp_phase_locking, "compute_frequency_phase_metrics", fail)
     monkeypatch.setattr(spike_lfp_phase_locking, "compute_phase_firing_rate_hz", fail)
     monkeypatch.setattr(spike_lfp_phase_locking, "compute_phase_occupancy", fail)
 
