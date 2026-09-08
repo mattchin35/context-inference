@@ -962,6 +962,192 @@ def reduce_scheduled_shuffle_block(
     return ppc
 
 
+def _scheduled_trial_edges(
+    schedule: np.ndarray,
+    *,
+    complete_pair_table: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build stable lexicographic source-target edges for a derangement schedule.
+
+    Parameters
+    ----------
+    schedule : numpy.ndarray
+        Integer shape ``(shuffle, trial)`` source-to-target derangements. The
+        trial axis contains at least two categorical trial positions and has no
+        missing values or fixed points.
+    complete_pair_table : bool
+        When false, return only the unique pairs referenced by ``schedule``.
+        When true, return every ordered nonself pair on the shared trial axis.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray]
+        Owned int64 source and target arrays, each shape ``(edge,)``. Edges are
+        lexicographically ordered by source then target, contain no duplicate,
+        negative, or same-trial pair, and have no physical units.
+
+    Raises
+    ------
+    ValueError
+        If ``schedule`` is not a valid nonempty derangement matrix. No partial
+        edge table is returned.
+    """
+    candidate = np.asarray(schedule)
+    if candidate.ndim != 2 or candidate.shape[1] < 2:
+        raise ValueError("schedule must have shape (shuffle, trial) with at least two trials")
+    validated = _derangement_schedule(candidate, candidate.shape[1])
+    trial_count = validated.shape[1]
+    if complete_pair_table:
+        pairs = [
+            (source_position, target_position)
+            for source_position in range(trial_count)
+            for target_position in range(trial_count)
+            if source_position != target_position
+        ]
+    else:
+        pairs = sorted(
+            {
+                (source_position, int(target_position))
+                for row in validated
+                for source_position, target_position in enumerate(row)
+            }
+        )
+    return (
+        np.asarray([pair[0] for pair in pairs], dtype=np.int64),
+        np.asarray([pair[1] for pair in pairs], dtype=np.int64),
+    )
+
+
+def _compute_scheduled_shuffle_draws(
+    *,
+    trial_relative_spike_times_s: Sequence[Sequence[np.ndarray]],
+    phase_time_s: np.ndarray,
+    trial_phase_vectors: np.ndarray,
+    frequencies_hz: np.ndarray,
+    schedule: np.ndarray,
+    unit_block_size: int,
+    trial_edge_block_size: int,
+    shuffle_block_size: int,
+    complete_pair_table: bool,
+) -> np.ndarray:
+    """Compute exact scheduled trial-shuffle PPC in bounded serial reductions.
+
+    Parameters
+    ----------
+    trial_relative_spike_times_s : Sequence[Sequence[numpy.ndarray]]
+        Nested ``(unit, trial)`` finite float arrays of event-relative seconds.
+        Each trial-local array is kept separate, so a physical spike in
+        overlapping windows remains present in every applicable trial.
+    phase_time_s : numpy.ndarray
+        Finite strictly increasing float64 shape ``(time,)`` event-relative
+        seconds shared by all trial phase traces.
+    trial_phase_vectors : numpy.ndarray
+        Numeric complex shape ``(trial, frequency, time)`` coefficients. Real
+        and imaginary components are interpolated by the WP5B adjacent-valid
+        support rule before normalization to dimensionless unit phase vectors.
+    frequencies_hz : numpy.ndarray
+        Finite positive increasing float64 shape ``(frequency,)`` in Hz.
+    schedule : numpy.ndarray
+        Int64 shape ``(shuffle, trial)`` deterministic derangements mapping
+        each source trial to its target phase trial.
+    unit_block_size, trial_edge_block_size, shuffle_block_size : int
+        Positive categorical execution block sizes. They alter neither schedule
+        order nor numerical result.
+    complete_pair_table : bool
+        Select all nonself trial edges or only unique schedule-referenced edges.
+
+    Returns
+    -------
+    numpy.ndarray
+        Float64 dimensionless PPC shape ``(shuffle, unit, frequency)`` in
+        schedule/unit/frequency order. Entries with fewer than two valid sampled
+        spike phases are NaN. The returned test/internal draw array is owned;
+        edge sums and counts are temporary complex128/int64 block arrays.
+
+    Raises
+    ------
+    ValueError
+        If phase, trial, frequency, schedule, or block-size contracts differ.
+        This function performs no cache writes and returns no partial result.
+    """
+    phase_time = _strict_relative_seconds(phase_time_s, "phase_time_s")
+    frequencies = _frequency_vector(frequencies_hz)
+    phase = np.asarray(trial_phase_vectors)
+    if (
+        phase.ndim != 3
+        or phase.shape[1:] != (frequencies.size, phase_time.size)
+        or not np.issubdtype(phase.dtype, np.number)
+    ):
+        raise ValueError(
+            "trial_phase_vectors must have numeric shape (trial, frequency, time)"
+        )
+    unit_spikes = _unit_trial_local_spike_arrays(
+        trial_relative_spike_times_s,
+        phase.shape[0],
+    )
+    validated_schedule = _derangement_schedule(schedule, phase.shape[0])
+    unit_size = _positive_block_size(unit_block_size, "unit_block_size")
+    edge_size = _positive_block_size(
+        trial_edge_block_size,
+        "trial_edge_block_size",
+    )
+    shuffle_size = _positive_block_size(shuffle_block_size, "shuffle_block_size")
+    source_edges, target_edges = _scheduled_trial_edges(
+        validated_schedule,
+        complete_pair_table=complete_pair_table,
+    )
+    output = np.full(
+        (validated_schedule.shape[0], len(unit_spikes), frequencies.size),
+        np.nan,
+        dtype=float,
+    )
+
+    for unit_start in range(0, len(unit_spikes), unit_size):
+        unit_stop = min(unit_start + unit_size, len(unit_spikes))
+        unit_block = unit_spikes[unit_start:unit_stop]
+        for shuffle_start in range(0, validated_schedule.shape[0], shuffle_size):
+            shuffle_stop = min(
+                shuffle_start + shuffle_size,
+                validated_schedule.shape[0],
+            )
+            selected_schedule = validated_schedule[shuffle_start:shuffle_stop]
+            pooled_sum = np.zeros(
+                (selected_schedule.shape[0], unit_stop - unit_start, frequencies.size),
+                dtype=np.complex128,
+            )
+            pooled_count = np.zeros(pooled_sum.shape, dtype=np.int64)
+            for edge_start in range(0, source_edges.size, edge_size):
+                edge_stop = min(edge_start + edge_size, source_edges.size)
+                edge_statistics = compute_edge_sufficient_statistics(
+                    trial_relative_spike_times_s=unit_block,
+                    phase_time_s=phase_time,
+                    trial_phase_vectors=phase,
+                    frequencies_hz=frequencies,
+                    source_trial_position=source_edges[edge_start:edge_stop],
+                    target_trial_position=target_edges[edge_start:edge_stop],
+                )
+                for edge_index, (source_position, target_position) in enumerate(
+                    zip(
+                        edge_statistics.source_trial_position,
+                        edge_statistics.target_trial_position,
+                        strict=True,
+                    )
+                ):
+                    rows = np.flatnonzero(
+                        selected_schedule[:, int(source_position)] == int(target_position)
+                    )
+                    if rows.size:
+                        pooled_sum[rows] += edge_statistics.phase_vector_sum[edge_index]
+                        pooled_count[rows] += edge_statistics.valid_spike_count[edge_index]
+            ppc = np.full(pooled_count.shape, np.nan, dtype=float)
+            computable = pooled_count >= MINIMUM_COMPUTABLE_SPIKES
+            numerator = np.abs(pooled_sum) ** 2 - pooled_count
+            denominator = pooled_count.astype(float) * (pooled_count - 1)
+            np.divide(numerator, denominator, out=ppc, where=computable)
+            output[shuffle_start:shuffle_stop, unit_start:unit_stop] = ppc
+    return output
+
+
 def compute_trial_shuffle_ppc(
     *,
     trial_relative_spike_times_s: Sequence[np.ndarray],
@@ -1997,6 +2183,33 @@ def _shuffle_position_array(values: np.ndarray, shuffle_count: int) -> np.ndarra
     ):
         raise ValueError("shuffle_positions must be unique valid schedule rows")
     return positions_int64
+
+
+def _positive_block_size(value: int, name: str) -> int:
+    """Validate one positive categorical execution block size.
+
+    Parameters
+    ----------
+    value : int
+        Candidate number of units, trial edges, or shuffles per serial block.
+        It has no physical units and must be a positive integer.
+    name : str
+        Parameter name used in a clear validation error.
+
+    Returns
+    -------
+    int
+        The unchanged positive block size. This helper creates no arrays and
+        has no missing-value representation.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not a positive integer.
+    """
+    if not isinstance(value, (int, np.integer)) or int(value) < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return int(value)
 
 
 def _derangement_schedule(values: np.ndarray, trial_count: int) -> np.ndarray:
