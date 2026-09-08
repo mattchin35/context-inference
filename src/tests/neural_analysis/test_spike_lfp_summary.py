@@ -785,3 +785,253 @@ def test_sufficient_statistic_null_percentiles_request_explicit_linear_method(
     )
 
     assert requested_methods == ["linear"]
+
+
+# WP5C-2 scheduled-edge engine contracts.
+def _wp5c2_inputs() -> tuple[np.ndarray, np.ndarray, tuple[tuple[np.ndarray, ...], ...], np.ndarray]:
+    """Return small deterministic phase/spike inputs on (trial, frequency, time)."""
+    phase_time_s = np.array([0.0, 0.5, 1.0], dtype=float)
+    trial_phase_vectors = np.exp(
+        1j
+        * np.array(
+            [
+                [[0.0, 0.2, 0.4], [0.1, 0.3, 0.5]],
+                [[0.5, 0.7, 0.9], [0.6, 0.8, 1.0]],
+                [[1.0, 1.2, 1.4], [1.1, 1.3, 1.5]],
+            ],
+            dtype=float,
+        )
+    )
+    unit_trial_spikes = (
+        (np.array([0.0, 0.5]), np.array([0.5]), np.array([1.0])),
+        (np.array([0.25]), np.array([0.0, 1.0]), np.array([0.5])),
+        (np.array([], dtype=float), np.array([0.5]), np.array([0.0, 0.5, 1.0])),
+    )
+    schedule = spike_lfp_summary.generate_trial_derangement_schedule(
+        trial_count=3,
+        shuffle_count=7,
+        seed=29,
+    )
+    return phase_time_s, trial_phase_vectors, unit_trial_spikes, schedule
+
+
+def test_scheduled_edge_table_is_lexicographic_and_can_use_only_schedule_edges() -> None:
+    """Scheduled edges are unique, sorted source/target pairs with no self edge."""
+    _, _, _, schedule = _wp5c2_inputs()
+
+    source, target = spike_lfp_summary._scheduled_trial_edges(
+        schedule,
+        complete_pair_table=False,
+    )
+
+    pairs = list(zip(source.tolist(), target.tolist(), strict=True))
+    assert pairs == sorted(set(pairs))
+    assert all(left != right for left, right in pairs)
+    assert set(pairs) == {
+        (source_position, int(target_position))
+        for row in schedule
+        for source_position, target_position in enumerate(row)
+    }
+
+
+def test_scheduled_edge_and_complete_modes_match_for_one_schedule() -> None:
+    """Both edge-table choices yield identical ordered shuffle PPC draws."""
+    phase_time_s, phase, spikes, schedule = _wp5c2_inputs()
+
+    scheduled = spike_lfp_summary._compute_scheduled_shuffle_draws(
+        trial_relative_spike_times_s=spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=np.array([8.0, 40.0]),
+        schedule=schedule,
+        unit_block_size=2,
+        trial_edge_block_size=2,
+        shuffle_block_size=3,
+        complete_pair_table=False,
+    )
+    complete = spike_lfp_summary._compute_scheduled_shuffle_draws(
+        trial_relative_spike_times_s=spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=np.array([8.0, 40.0]),
+        schedule=schedule,
+        unit_block_size=2,
+        trial_edge_block_size=2,
+        shuffle_block_size=3,
+        complete_pair_table=True,
+    )
+
+    np.testing.assert_allclose(scheduled, complete, equal_nan=True)
+
+
+def test_scheduled_edge_engine_unit_blocks_match_independent_units() -> None:
+    """Reducing a multi-unit block agrees with independently reduced unit blocks."""
+    phase_time_s, phase, spikes, schedule = _wp5c2_inputs()
+    together = spike_lfp_summary._compute_scheduled_shuffle_draws(
+        trial_relative_spike_times_s=spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=np.array([8.0, 40.0]),
+        schedule=schedule,
+        unit_block_size=3,
+        trial_edge_block_size=4,
+        shuffle_block_size=4,
+        complete_pair_table=False,
+    )
+    separately = [
+        spike_lfp_summary._compute_scheduled_shuffle_draws(
+            trial_relative_spike_times_s=(unit_spikes,),
+            phase_time_s=phase_time_s,
+            trial_phase_vectors=phase,
+            frequencies_hz=np.array([8.0, 40.0]),
+            schedule=schedule,
+            unit_block_size=1,
+            trial_edge_block_size=1,
+            shuffle_block_size=1,
+            complete_pair_table=False,
+        )[:, 0]
+        for unit_spikes in spikes
+    ]
+
+    np.testing.assert_allclose(together, np.stack(separately, axis=1), equal_nan=True)
+
+
+def test_scheduled_edge_engine_trial_edge_blocks_match_unblocked_reference() -> None:
+    """Bounded trial-edge reductions preserve the complete edge-table result."""
+    phase_time_s, phase, spikes, schedule = _wp5c2_inputs()
+    reference = spike_lfp_summary._compute_scheduled_shuffle_draws(
+        trial_relative_spike_times_s=spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=np.array([8.0, 40.0]),
+        schedule=schedule,
+        unit_block_size=3,
+        trial_edge_block_size=6,
+        shuffle_block_size=7,
+        complete_pair_table=False,
+    )
+    blocked = spike_lfp_summary._compute_scheduled_shuffle_draws(
+        trial_relative_spike_times_s=spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=np.array([8.0, 40.0]),
+        schedule=schedule,
+        unit_block_size=3,
+        trial_edge_block_size=1,
+        shuffle_block_size=7,
+        complete_pair_table=False,
+    )
+
+    np.testing.assert_allclose(blocked, reference, equal_nan=True)
+
+
+def test_scheduled_edge_engine_block_sizes_do_not_change_draws() -> None:
+    """Unit, edge, and shuffle block sizes are execution-only choices."""
+    phase_time_s, phase, spikes, schedule = _wp5c2_inputs()
+    first = spike_lfp_summary._compute_scheduled_shuffle_draws(
+        trial_relative_spike_times_s=spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=np.array([8.0, 40.0]),
+        schedule=schedule,
+        unit_block_size=1,
+        trial_edge_block_size=1,
+        shuffle_block_size=1,
+        complete_pair_table=False,
+    )
+    second = spike_lfp_summary._compute_scheduled_shuffle_draws(
+        trial_relative_spike_times_s=spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=np.array([8.0, 40.0]),
+        schedule=schedule,
+        unit_block_size=2,
+        trial_edge_block_size=5,
+        shuffle_block_size=4,
+        complete_pair_table=False,
+    )
+
+    np.testing.assert_allclose(first, second, equal_nan=True)
+
+
+def test_scheduled_edge_engine_preserves_overlapping_trial_membership() -> None:
+    """The same physical spike may remain in each overlapping trial-local train."""
+    phase_time_s = np.array([0.0, 1.0])
+    phase = np.ones((2, 1, 2), dtype=complex)
+    spikes = ((np.array([1.0]), np.array([0.0, 1.0])),)
+    schedule = np.array([[1, 0]], dtype=np.int64)
+
+    draws = spike_lfp_summary._compute_scheduled_shuffle_draws(
+        trial_relative_spike_times_s=spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=np.array([8.0]),
+        schedule=schedule,
+        unit_block_size=1,
+        trial_edge_block_size=1,
+        shuffle_block_size=1,
+        complete_pair_table=False,
+    )
+
+    assert draws[0, 0, 0] == pytest.approx(1.0)
+
+
+def test_scheduled_edge_engine_interpolation_matches_wp5b_exact_and_invalid_support() -> None:
+    """The engine retains exact complex interpolation and adjacent-valid support rules."""
+    phase_time_s = np.array([0.0, 1.0, 2.0])
+    phase = np.ones((2, 1, 3), dtype=complex)
+    phase[1, 0, 1] = 0.0j
+    spikes = ((np.array([0.0, 0.5, 1.0, 1.5, 2.0]), np.array([0.0, 2.0])),)
+    schedule = np.array([[1, 0]], dtype=np.int64)
+
+    draws = spike_lfp_summary._compute_scheduled_shuffle_draws(
+        trial_relative_spike_times_s=spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=np.array([8.0]),
+        schedule=schedule,
+        unit_block_size=1,
+        trial_edge_block_size=2,
+        shuffle_block_size=1,
+        complete_pair_table=False,
+    )
+    reference = spike_lfp_summary.compute_trial_shuffle_ppc(
+        trial_relative_spike_times_s=spikes[0],
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=np.array([8.0]),
+        schedule=schedule,
+    )
+
+    np.testing.assert_allclose(draws[0, 0], reference.null_ppc[0], equal_nan=True)
+
+
+def test_scheduled_edge_engine_never_calls_legacy_result_or_display_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Permutation reduction samples edges only and bypasses generic result/display work."""
+    phase_time_s, phase, spikes, schedule = _wp5c2_inputs()
+
+    def fail(*_: object, **__: object) -> None:
+        """Fail if scheduled reduction re-enters a prohibited legacy path."""
+        raise AssertionError("scheduled reduction called a prohibited legacy path")
+
+    monkeypatch.setattr(spike_lfp_summary, "compute_trial_shuffle_ppc", fail)
+    monkeypatch.setattr(spike_lfp_summary, "compute_observed_ppc", fail)
+    monkeypatch.setattr(spike_lfp_summary, "build_representative_phase_histograms", fail)
+    monkeypatch.setattr(spike_lfp_phase_locking, "compute_phase_firing_rate_hz", fail)
+    monkeypatch.setattr(spike_lfp_phase_locking, "compute_phase_occupancy", fail)
+
+    draws = spike_lfp_summary._compute_scheduled_shuffle_draws(
+        trial_relative_spike_times_s=spikes,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=np.array([8.0, 40.0]),
+        schedule=schedule,
+        unit_block_size=2,
+        trial_edge_block_size=2,
+        shuffle_block_size=3,
+        complete_pair_table=False,
+    )
+
+    assert draws.shape == (schedule.shape[0], len(spikes), 2)
