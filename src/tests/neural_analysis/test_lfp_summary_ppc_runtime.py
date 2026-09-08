@@ -184,7 +184,7 @@ def test_execution_result_is_work_only_and_cleanup_obeys_retention_policy(tmp_pa
 
     assert not (tmp_path / "manifest.json").exists()
     assert not (tmp_path / "spike_phase.npz").exists()
-    assert result.final_payload_arrays is None
+    assert not hasattr(result, "final_payload_arrays")
     assert result.run_directory.exists()
 
 
