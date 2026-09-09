@@ -8,7 +8,7 @@ instruments the existing production serial executor.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
+from math import ceil, isfinite
 from pathlib import Path
 import re
 from typing import Callable
@@ -143,6 +143,49 @@ class PPCProductionProfileResult:
     checkpoint_write_call_count: int
 
 
+@dataclass(frozen=True)
+class RepresentativePPCProfileJob:
+    """Immutable CT026 profile-job selection from prepared experimental inputs.
+
+    ``condition_name`` and ``site_id`` are configured categorical identities;
+    ``epoch_name`` is always ``"whole"`` and ``epoch_bounds_s`` gives its
+    half-open event-relative seconds interval. ``trial_indices`` is an ordered
+    tuple of exactly 249 stable trial-table row identities for the selected
+    condition. It intentionally preserves the full condition selection rather
+    than copying phase or spike arrays; ``site_valid_trial_count`` records how
+    many of those rows have usable phase at ``site_id``.
+
+    ``low_*``, ``median_*``, and ``high_*`` identify the nearest-rank 10th,
+    50th, and 90th eligible units. Counts are raw spikes in the whole epoch
+    across selected site-valid trials; rates are count divided by
+    ``site_valid_trial_count * epoch_duration_s`` in Hz. ``trial_count``,
+    ``site_valid_trial_count``, ``unit_count``, and ``frequency_count`` are
+    provenance dimensions for the caller-owned prepared inputs. This descriptor
+    runs neither a phase transform nor a PPC executor and owns no scientific
+    array payloads.
+    """
+
+    condition_name: str
+    site_id: str
+    epoch_name: str
+    epoch_bounds_s: tuple[float, float]
+    trial_indices: tuple[int, ...]
+    trial_count: int
+    site_valid_trial_count: int
+    unit_count: int
+    frequency_count: int
+    population_id: str
+    low_unit_id: str
+    median_unit_id: str
+    high_unit_id: str
+    low_spike_count: int
+    median_spike_count: int
+    high_spike_count: int
+    low_spike_rate_hz: float
+    median_spike_rate_hz: float
+    high_spike_rate_hz: float
+
+
 WorkloadRunner = Callable[[PPCProfileWorkload, Callable[[str], None], Path], None]
 
 
@@ -159,6 +202,119 @@ def representative_serial_ppc_workloads() -> tuple[PPCProfileWorkload, ...]:
         PPCProfileWorkload("low", 249, 8, 50, 1000, 2.0, 5101),
         PPCProfileWorkload("median", 249, 8, 50, 1000, 10.0, 5102),
         PPCProfileWorkload("high", 249, 8, 50, 1000, 40.0, 5103),
+    )
+
+
+def select_representative_ppc_profile_job(
+    config: LFPSummaryConfig,
+    prepared_phase: object,
+    prepared_spikes: object,
+) -> RepresentativePPCProfileJob:
+    """Select one deterministic, metadata-only CT026 PPC profiling job.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Validated analysis configuration. Its configured condition and site
+        order breaks membership ties, and its ``whole`` analysis-window bounds
+        are event-relative seconds.
+    prepared_phase : PreparedPhaseRun-like object
+        Must expose ``trial_indices`` as one-dimensional stable integer trial
+        identities, ``prepared_trials.condition_names`` and trial-by-condition
+        Boolean membership, ``site_valid`` as Boolean ``(site, trial)``, and
+        ``phase_tensor`` with ``(site, frequency, trial, time)`` axes. Phase
+        values are not transformed or copied; only the frequency-axis length is
+        retained as provenance.
+    prepared_spikes : PreparedSpikeRun-like object
+        Must expose configured-order ``unit_ids``, one or more ``population_ids``,
+        and one trial-local spike train per unit. Each train provides a float
+        seconds array for each full trial axis. Only selected site-valid trials
+        are counted in the half-open whole epoch.
+
+    Returns
+    -------
+    RepresentativePPCProfileJob
+        Frozen categorical identity, exactly 249 stable trial identities, and
+        low/median/high eligible-unit raw counts and Hz rates. No executor,
+        final artifact, phase transform, or data-array copy is invoked.
+
+    Raises
+    ------
+    ValueError
+        If prepared metadata axes/identities are inconsistent, if the largest
+        selected condition is not exactly 249 trials, if no configured site has
+        selected valid trials, or if fewer than three units satisfy the reliable
+        count and contributing-trial gates.
+    """
+    if not isinstance(config, LFPSummaryConfig):
+        raise ValueError("config must be an LFPSummaryConfig")
+
+    trial_indices = _integer_trial_indices(prepared_phase)
+    trial_count = trial_indices.size
+    condition_names, condition_membership = _prepared_condition_metadata(
+        prepared_phase,
+        trial_count,
+    )
+    selected_positions, condition_name = _largest_condition_positions(
+        prepared_phase,
+        condition_names,
+        condition_membership,
+        trial_count,
+    )
+    if len(selected_positions) != 249:
+        raise ValueError("CT026 PPC profiling requires exactly 249 selected trials")
+
+    site_valid, site_id = _selected_profile_site(
+        config,
+        prepared_phase,
+        selected_positions,
+        trial_count,
+    )
+    site_valid_positions = tuple(
+        int(position) for position in selected_positions if site_valid[position]
+    )
+    if not site_valid_positions:
+        raise ValueError("selected CT026 trials contain no site-valid phase rows")
+
+    epoch_bounds_s = _whole_epoch_bounds(config)
+    eligible_units = _eligible_profile_units(
+        config,
+        prepared_spikes,
+        trial_count,
+        site_valid_positions,
+        epoch_bounds_s,
+    )
+    if len(eligible_units) < 3:
+        raise ValueError("CT026 PPC profiling requires at least three eligible units")
+
+    ranked_units = sorted(eligible_units, key=lambda item: (item[1], item[0]))
+    low_unit = _nearest_rank_unit(ranked_units, 0.10)
+    median_unit = _nearest_rank_unit(ranked_units, 0.50)
+    high_unit = _nearest_rank_unit(ranked_units, 0.90)
+    epoch_duration_s = epoch_bounds_s[1] - epoch_bounds_s[0]
+    population_id = _profile_population_id(prepared_spikes)
+    frequency_count = _profile_frequency_count(prepared_phase, trial_count)
+    stable_trial_ids = tuple(int(trial_indices[position]) for position in selected_positions)
+    return RepresentativePPCProfileJob(
+        condition_name=condition_name,
+        site_id=site_id,
+        epoch_name="whole",
+        epoch_bounds_s=epoch_bounds_s,
+        trial_indices=stable_trial_ids,
+        trial_count=len(stable_trial_ids),
+        site_valid_trial_count=len(site_valid_positions),
+        unit_count=len(eligible_units),
+        frequency_count=frequency_count,
+        population_id=population_id,
+        low_unit_id=low_unit[0],
+        median_unit_id=median_unit[0],
+        high_unit_id=high_unit[0],
+        low_spike_count=low_unit[1],
+        median_spike_count=median_unit[1],
+        high_spike_count=high_unit[1],
+        low_spike_rate_hz=low_unit[1] / (len(site_valid_positions) * epoch_duration_s),
+        median_spike_rate_hz=median_unit[1] / (len(site_valid_positions) * epoch_duration_s),
+        high_spike_rate_hz=high_unit[1] / (len(site_valid_positions) * epoch_duration_s),
     )
 
 
@@ -437,6 +593,222 @@ def profile_production_ppc_job(
         checkpoint_block_count=len(checkpoint_ids),
         checkpoint_write_call_count=counters["checkpoint_writes"],
     )
+
+
+def _integer_trial_indices(prepared_phase: object) -> np.ndarray:
+    """Validate and return the caller-owned one-dimensional trial identity axis."""
+    trial_indices = getattr(prepared_phase, "trial_indices", None)
+    if (
+        not isinstance(trial_indices, np.ndarray)
+        or trial_indices.ndim != 1
+        or not np.issubdtype(trial_indices.dtype, np.integer)
+        or trial_indices.size == 0
+        or len({int(trial_index) for trial_index in trial_indices}) != trial_indices.size
+    ):
+        raise ValueError("prepared phase trial_indices must be unique one-dimensional integers")
+    return trial_indices
+
+
+def _prepared_condition_metadata(
+    prepared_phase: object,
+    trial_count: int,
+) -> tuple[tuple[str, ...], np.ndarray]:
+    """Validate and return configured condition identities and Boolean membership."""
+    prepared_trials = getattr(prepared_phase, "prepared_trials", None)
+    condition_names = getattr(prepared_trials, "condition_names", None)
+    membership = getattr(prepared_trials, "condition_membership", None)
+    if (
+        not isinstance(condition_names, tuple)
+        or not condition_names
+        or len(set(condition_names)) != len(condition_names)
+        or any(not isinstance(name, str) or not name for name in condition_names)
+        or not isinstance(membership, np.ndarray)
+        or membership.dtype != bool
+        or membership.shape != (trial_count, len(condition_names))
+    ):
+        raise ValueError("prepared condition identities and membership have invalid axes")
+    return condition_names, membership
+
+
+def _largest_condition_positions(
+    prepared_phase: object,
+    condition_names: tuple[str, ...],
+    membership: np.ndarray,
+    trial_count: int,
+) -> tuple[tuple[int, ...], str]:
+    """Return stable positions for the largest fully analysis-eligible condition."""
+    prepared_trials = prepared_phase.prepared_trials
+    filter_membership = getattr(prepared_trials, "filter_membership", None)
+    if (
+        not isinstance(filter_membership, np.ndarray)
+        or filter_membership.dtype != bool
+        or filter_membership.shape != (trial_count,)
+    ):
+        raise ValueError("prepared filter_membership must be Boolean on the trial axis")
+    objective_valid = _optional_trial_mask(
+        prepared_trials,
+        "objective_valid",
+        trial_count,
+    )
+    user_excluded = _optional_trial_mask(
+        prepared_trials,
+        "user_excluded",
+        trial_count,
+    )
+
+    best_positions: tuple[int, ...] = ()
+    best_condition_index = 0
+    for condition_index, _condition_name in enumerate(condition_names):
+        positions = tuple(
+            trial_index
+            for trial_index in range(trial_count)
+            if membership[trial_index, condition_index]
+            and filter_membership[trial_index]
+            and (objective_valid is None or objective_valid[trial_index])
+            and (user_excluded is None or not user_excluded[trial_index])
+        )
+        if len(positions) > len(best_positions):
+            best_positions = positions
+            best_condition_index = condition_index
+    return best_positions, condition_names[best_condition_index]
+
+
+def _optional_trial_mask(
+    prepared_trials: object,
+    attribute: str,
+    trial_count: int,
+) -> np.ndarray | None:
+    """Return one optional Boolean trial mask without creating a complement copy."""
+    value = getattr(prepared_trials, attribute, None)
+    if value is None:
+        return None
+    if not isinstance(value, np.ndarray) or value.dtype != bool or value.shape != (trial_count,):
+        raise ValueError(f"prepared {attribute} must be Boolean on the trial axis")
+    return value
+
+
+def _selected_profile_site(
+    config: LFPSummaryConfig,
+    prepared_phase: object,
+    selected_positions: tuple[int, ...],
+    trial_count: int,
+) -> tuple[np.ndarray, str]:
+    """Return the configured-first site with the most selected valid phase rows."""
+    site_valid = getattr(prepared_phase, "site_valid", None)
+    phase_tensor = getattr(prepared_phase, "phase_tensor", None)
+    if (
+        not isinstance(site_valid, np.ndarray)
+        or site_valid.dtype != bool
+        or site_valid.shape != (len(config.sites), trial_count)
+        or not isinstance(phase_tensor, np.ndarray)
+        or phase_tensor.ndim != 4
+        or phase_tensor.shape[0] != len(config.sites)
+        or phase_tensor.shape[2] != trial_count
+        or phase_tensor.shape[1] <= 0
+    ):
+        raise ValueError("prepared phase site-valid and phase-tensor axes are invalid")
+
+    best_site_index = 0
+    best_valid_count = -1
+    for site_index, _site in enumerate(config.sites):
+        valid_count = sum(bool(site_valid[site_index, position]) for position in selected_positions)
+        if valid_count > best_valid_count:
+            best_site_index = site_index
+            best_valid_count = valid_count
+    return site_valid[best_site_index], config.sites[best_site_index].stable_id
+
+
+def _whole_epoch_bounds(config: LFPSummaryConfig) -> tuple[float, float]:
+    """Return finite half-open whole-epoch event-relative seconds bounds."""
+    start_s = config.analysis_windows.whole_start_s
+    stop_s = config.analysis_windows.whole_stop_s
+    if (
+        isinstance(start_s, bool)
+        or isinstance(stop_s, bool)
+        or not isinstance(start_s, (int, float))
+        or not isinstance(stop_s, (int, float))
+        or not isfinite(float(start_s))
+        or not isfinite(float(stop_s))
+        or start_s >= stop_s
+    ):
+        raise ValueError("whole PPC epoch bounds must be finite ascending seconds")
+    return float(start_s), float(stop_s)
+
+
+def _eligible_profile_units(
+    config: LFPSummaryConfig,
+    prepared_spikes: object,
+    trial_count: int,
+    site_valid_positions: tuple[int, ...],
+    epoch_bounds_s: tuple[float, float],
+) -> list[tuple[str, int]]:
+    """Return unit IDs and raw whole-epoch counts passing PPC reliability gates."""
+    unit_ids = getattr(prepared_spikes, "unit_ids", None)
+    trains = getattr(prepared_spikes, "trial_spike_trains", None)
+    if (
+        not isinstance(unit_ids, tuple)
+        or len(set(unit_ids)) != len(unit_ids)
+        or any(not isinstance(unit_id, str) or not unit_id for unit_id in unit_ids)
+        or not isinstance(trains, tuple)
+        or len(trains) != len(unit_ids)
+    ):
+        raise ValueError("prepared spike units and trial trains must agree")
+
+    eligible_units: list[tuple[str, int]] = []
+    start_s, stop_s = epoch_bounds_s
+    for unit_id, train in zip(unit_ids, trains, strict=True):
+        if getattr(train, "unit_id", None) != unit_id:
+            raise ValueError("prepared spike train identity does not match its unit")
+        trial_times = getattr(train, "relative_spike_times", None)
+        if not isinstance(trial_times, tuple) or len(trial_times) != trial_count:
+            raise ValueError("prepared spike trains must have one array per trial")
+        count = 0
+        contributing_trials = 0
+        for trial_index in site_valid_positions:
+            times = trial_times[trial_index]
+            if not isinstance(times, np.ndarray) or times.ndim != 1:
+                raise ValueError("trial-local spike times must be one-dimensional arrays")
+            if not np.isfinite(times).all():
+                raise ValueError("trial-local spike times must be finite seconds")
+            in_epoch_count = int(np.count_nonzero((times >= start_s) & (times < stop_s)))
+            count += in_epoch_count
+            contributing_trials += int(in_epoch_count > 0)
+        if (
+            count >= config.ppc.minimum_reliable_spikes
+            and contributing_trials >= config.ppc.minimum_computable_spikes
+        ):
+            eligible_units.append((unit_id, count))
+    return eligible_units
+
+
+def _nearest_rank_unit(
+    ranked_units: list[tuple[str, int]],
+    proportion: float,
+) -> tuple[str, int]:
+    """Return a one-indexed nearest-rank unit from count/ID-sorted candidates."""
+    rank = max(1, ceil(proportion * len(ranked_units)))
+    return ranked_units[rank - 1]
+
+
+def _profile_population_id(prepared_spikes: object) -> str:
+    """Return the sole representative population identity without copying it."""
+    population_ids = getattr(prepared_spikes, "population_ids", None)
+    if (
+        not isinstance(population_ids, tuple)
+        or len(population_ids) != 1
+        or not isinstance(population_ids[0], str)
+        or not population_ids[0]
+    ):
+        raise ValueError("prepared spikes must have exactly one population identity")
+    return population_ids[0]
+
+
+def _profile_frequency_count(prepared_phase: object, trial_count: int) -> int:
+    """Return the validated positive phase-frequency provenance dimension."""
+    phase_tensor = prepared_phase.phase_tensor
+    if phase_tensor.shape[2] != trial_count:
+        raise ValueError("prepared phase tensor trial axis disagrees with trial identities")
+    return int(phase_tensor.shape[1])
 
 
 def _validate_serial_execution(execution: PPCExecutionConfig) -> None:
