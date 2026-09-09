@@ -240,8 +240,11 @@ def test_production_ppc_job_profile_wraps_one_real_serial_execution_and_restores
     aggregation, null summarization, and checkpoint writing. The result records
     seconds, peak sampled resident bytes, serial execution counts, unique
     scheduled directed edges, eligible `(unit, frequency)` entries, exact raw
-    spike/phase sample counts, and unique checkpoint block count. It must leave
-    no final component or manifest artifact and restore every wrapped callable.
+    spike counts, phase-tensor value count, edge-valid phase sample count, and
+    unique checkpoint block count. The edge-valid count sums
+    ``valid_spike_count`` from every actual reducer call, including observed,
+    eligibility re-evaluation, and null work. It must leave no final component
+    or manifest artifact and restore every wrapped callable.
     """
     config = _production_config()
     phase, spikes, schedule = _production_inputs()
@@ -284,10 +287,11 @@ def test_production_ppc_job_profile_wraps_one_real_serial_execution_and_restores
     assert result.unique_scheduled_edge_count == 2
     assert result.eligible_unit_frequency_count == 50
     assert result.spike_sample_count == 100
-    assert result.phase_sample_count == 200
+    assert result.phase_tensor_value_count == 200
+    assert result.edge_valid_phase_sample_count == 15000
     assert result.checkpoint_block_count == 1
     assert result.checkpoint_overhead_seconds >= 0.0
-    assert result.phase_preparation_seconds >= 0.0
+    assert result.phase_validation_seconds >= 0.0
     assert result.observed_reduction_seconds >= 0.0
     assert result.edge_reduction_seconds >= 0.0
     assert result.shuffle_aggregation_seconds >= 0.0
