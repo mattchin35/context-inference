@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -435,6 +436,53 @@ def test_executor_uses_bounded_edge_reduction_not_full_shuffle_draw_helper(
     assert all(unit <= config.ppc_execution.unit_block_size for unit, _, _ in edge_shapes)
     assert all(edge <= config.ppc_execution.trial_edge_block_size for _, _, edge in edge_shapes)
     assert not hasattr(result, "null_ppc")
+
+
+def test_execution_samples_each_scheduled_edge_once_per_unit_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scheduled cross-trial edges are sampled once per eligible `(unit block, edge)`.
+
+    The synthetic job has one eligible unit block, two trial positions, and four
+    shuffle rows aggregated in two shuffle blocks.  The wrapped reducer records
+    only cross-trial calls, excluding observed same-trial reductions.  Each
+    directed edge must therefore occur exactly once regardless of the number of
+    shuffle aggregation blocks.
+    """
+    config = replace(
+        _config(),
+        ppc_execution=replace(_config().ppc_execution, shuffle_block_size=2),
+    )
+    phase, spikes, _ = _inputs()
+    schedule = np.tile(np.array([[1, 0]], dtype=np.int64), (4, 1))
+    sampled_edges: Counter[tuple[int, int]] = Counter()
+    original_reducer = ppc_runtime.spike_lfp_summary.compute_edge_sufficient_statistics
+
+    def recording_reducer(**kwargs: object):
+        """Record scheduled `(source trial, target trial)` int64 edge pairs."""
+        source = np.asarray(kwargs["source_trial_position"], dtype=np.int64)
+        target = np.asarray(kwargs["target_trial_position"], dtype=np.int64)
+        for source_trial, target_trial in zip(source, target, strict=True):
+            if source_trial != target_trial:
+                sampled_edges[(int(source_trial), int(target_trial))] += 1
+        return original_reducer(**kwargs)
+
+    monkeypatch.setattr(
+        ppc_runtime.spike_lfp_summary,
+        "compute_edge_sufficient_statistics",
+        recording_reducer,
+    )
+    ppc_runtime.execute_ppc_blocks(
+        config=config,
+        execution=config.ppc_execution,
+        prepared_phase=phase,
+        prepared_spikes=spikes,
+        schedule=schedule,
+        work_root=tmp_path,
+    )
+
+    assert sampled_edges == Counter({(0, 1): 1, (1, 0): 1})
 
 
 def test_checkpoint_disabled_and_lock_contracts_prevent_work_artifacts(
