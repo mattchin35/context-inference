@@ -7,12 +7,14 @@ manifest, and never keeps a whole-session shuffle tensor in memory.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 from hashlib import sha256
 import json
 import os
 from pathlib import Path
 import time
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
 
 import numpy as np
 
@@ -21,6 +23,7 @@ from src.neural_analysis.lfp_summary_models import (
     LFPSummaryConfig,
     PPCExecutionConfig,
     ProgressEvent,
+    _validate_ppc_execution,
     component_fingerprint,
     fingerprint_source_files,
 )
@@ -77,6 +80,46 @@ class PPCExecutionResult:
     summary_arrays: dict[str, np.ndarray]
     completed_block_ids: tuple[str, ...]
     resumed_block_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _PhaseWorkDescriptor:
+    """Read-only on-disk phase inputs shared by process workers.
+
+    ``phase_path`` and ``valid_path`` name validated NPY arrays with axes
+    ``(site=1, frequency, trial, time)``. Phase is complex64 unit vectors;
+    validity is Boolean. Time remains in seconds in the lightweight task
+    because it is a one-dimensional coordinate rather than the large payload.
+    """
+
+    phase_path: Path
+    valid_path: Path
+
+
+@dataclass(frozen=True)
+class _ParallelBlockTask:
+    """Pickle-safe, phase-free description of one contiguous unit block.
+
+    ``trains`` contains finite event-relative spike-time arrays in seconds,
+    with ``(unit in block, trial)`` nesting. ``schedule`` has int64
+    ``(shuffle, trial)`` axes and ``frequencies_hz`` has shape ``(frequency,)``.
+    No phase tensor or validity mask is embedded in this task.
+    """
+
+    block_id: str
+    trains: tuple[tuple[np.ndarray, ...], ...]
+    time_s: np.ndarray
+    frequencies_hz: np.ndarray
+    schedule: np.ndarray
+    execution: PPCExecutionConfig
+
+
+@dataclass(frozen=True)
+class _ParallelBlockResult:
+    """One worker's in-memory summary arrays for its named unit block."""
+
+    block_id: str
+    arrays: dict[str, np.ndarray]
 
 
 def execute_ppc_blocks(
@@ -143,6 +186,10 @@ def execute_ppc_blocks(
         If schedule/checkpoint creation, validation, or atomic replacement
         fails. Such a failure cannot publish a final scientific component.
     """
+    # Validate execution settings before inspecting phase inputs or creating a
+    # work directory.  In particular, an invalid process count must be a
+    # side-effect-free programming error.
+    _validate_ppc_execution(execution)
     phase, valid, time_s, frequencies_hz, trial_indices = _validated_phase_inputs(
         config, prepared_phase
     )
@@ -214,10 +261,26 @@ def execute_ppc_blocks(
             block_metadata["completed_block_ids"] = list(complete_ids)
             write_ppc_checkpoint(run_directory, block_id, arrays, block_metadata)
 
-        summary = _compute_unit_blocks(
-            trains, phase, valid, time_s, frequencies_hz, schedule_array,
-            execution, progress, checkpoint, summary, set(resumed_ids),
-        )
+        if execution.worker_count == 1:
+            summary = _compute_unit_blocks(
+                trains, phase, valid, time_s, frequencies_hz, schedule_array,
+                execution, progress, checkpoint, summary, set(resumed_ids),
+            )
+        else:
+            summary = _compute_parallel_unit_blocks(
+                trains=trains,
+                phase=phase,
+                valid=valid,
+                time_s=time_s,
+                frequencies_hz=frequencies_hz,
+                schedule=schedule_array,
+                execution=execution,
+                run_directory=run_directory,
+                progress=progress,
+                checkpoint_writer=checkpoint,
+                initial_summary=summary,
+                resumed_block_ids=set(resumed_ids),
+            )
         _apply_bh_and_significance(summary, config.ppc.fdr_alpha)
         all_ids = _block_ids(len(trains), execution.unit_block_size)
         for block_id in all_ids:
@@ -413,6 +476,147 @@ def _compute_unit_blocks(
         progress.emit("trial_edge_reduction", completed, len(block_ids), "reduced scheduled edges", timed=True)
         progress.emit("shuffle_aggregation", completed, len(block_ids), "aggregated shuffled PPC", timed=True)
     return summary
+
+
+def _compute_parallel_unit_blocks(
+    *,
+    trains: tuple[tuple[np.ndarray, ...], ...],
+    phase: np.ndarray,
+    valid: np.ndarray,
+    time_s: np.ndarray,
+    frequencies_hz: np.ndarray,
+    schedule: np.ndarray,
+    execution: PPCExecutionConfig,
+    run_directory: Path,
+    progress: "_ProgressReporter",
+    checkpoint_writer: Callable[[str, Mapping[str, np.ndarray], tuple[str, ...]], None],
+    initial_summary: dict[str, np.ndarray],
+    resumed_block_ids: set[str],
+) -> dict[str, np.ndarray]:
+    """Compute pending unit blocks in processes while the parent owns output.
+
+    Inputs have the same axes and units as :func:`_compute_unit_blocks`.  The
+    parent alone emits progress and writes checkpoints.  Worker tasks contain
+    only their unit-local spike arrays and scalar/coordinate inputs; workers
+    open the common complex64/Boolean phase arrays read-only from ``.npy``.
+    """
+    block_ids = _block_ids(len(trains), execution.unit_block_size)
+    pending = tuple(block_id for block_id in block_ids if block_id not in resumed_block_ids)
+    descriptor = _materialize_phase_work_inputs(run_directory, phase, valid)
+    tasks = tuple(
+        _ParallelBlockTask(
+            block_id=block_id,
+            trains=trains[_block_bounds(block_id)[0]:_block_bounds(block_id)[1]],
+            time_s=time_s,
+            frequencies_hz=frequencies_hz,
+            schedule=schedule,
+            execution=execution,
+        )
+        for block_id in pending
+    )
+    compute_block = partial(_compute_parallel_block, phase_descriptor=descriptor)
+    results = iter(
+        _run_parallel_worker_batches(
+            phase_descriptor=descriptor,
+            block_tasks=tasks,
+            worker_count=execution.worker_count,
+            compute_block=compute_block,
+        )
+    )
+    completed_ids = set(resumed_block_ids)
+    progress.emit("observed_reduction", 0, len(block_ids), "starting observed reduction")
+    for completed, block_id in enumerate(block_ids, start=1):
+        if block_id not in resumed_block_ids:
+            result = next(results)
+            if result.block_id != block_id:
+                raise RuntimeError("parallel PPC worker returned blocks out of canonical order")
+            start, stop = _block_bounds(block_id)
+            _copy_block_into_summary(initial_summary, result.arrays, start, stop)
+            completed_ids.add(block_id)
+            # Checkpoint before requesting the next generator value. This
+            # makes every yielded block independently resumable on a failure.
+            checkpoint_writer(block_id, result.arrays, tuple(sorted(completed_ids)))
+        progress.emit("observed_reduction", completed, len(block_ids), "completed unit block", timed=True)
+        progress.emit("trial_edge_reduction", completed, len(block_ids), "reduced scheduled edges", timed=True)
+        progress.emit("shuffle_aggregation", completed, len(block_ids), "aggregated shuffled PPC", timed=True)
+    return initial_summary
+
+
+def _materialize_phase_work_inputs(
+    run_directory: Path,
+    phase: np.ndarray,
+    valid: np.ndarray,
+) -> _PhaseWorkDescriptor:
+    """Atomically materialize validated shared phase arrays for worker mmap.
+
+    Parameters are complex64 and Boolean arrays on ``(site, frequency, trial,
+    time)`` axes. The returned paths are under the exact locked run directory;
+    they are execution-only inputs, not analysis components.
+    """
+    phase_path = run_directory / "worker_phase.npy"
+    valid_path = run_directory / "worker_valid.npy"
+    _atomic_npy(phase_path, phase)
+    _atomic_npy(valid_path, valid)
+    return _PhaseWorkDescriptor(phase_path=phase_path, valid_path=valid_path)
+
+
+def _atomic_npy(path: Path, values: np.ndarray) -> None:
+    """Write and re-open one exact NPY array before atomic publication."""
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            np.save(handle, values, allow_pickle=False)
+        loaded = np.load(temporary, mmap_mode="r", allow_pickle=False)
+        if loaded.dtype != values.dtype or loaded.shape != values.shape or not np.array_equal(loaded, values):
+            raise ValueError("temporary PPC worker input validation failed")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _compute_parallel_block(
+    task: _ParallelBlockTask,
+    *,
+    phase_descriptor: _PhaseWorkDescriptor,
+) -> _ParallelBlockResult:
+    """Compute one pure worker block from read-only phase memory maps.
+
+    ``task`` has unit-local trial spike arrays in seconds and no phase payload.
+    The returned arrays have ``(unit in block, frequency)`` axes with the same
+    documented units as the serial summary arrays.
+    """
+    phase = np.load(phase_descriptor.phase_path, mmap_mode="r", allow_pickle=False)
+    valid = np.load(phase_descriptor.valid_path, mmap_mode="r", allow_pickle=False)
+    block = _empty_summary_arrays(len(task.trains), task.frequencies_hz.size)
+    _compute_observed_block(
+        block, task.trains, phase, valid, task.time_s, task.frequencies_hz,
+        task.execution.trial_edge_block_size,
+    )
+    _compute_null_block(
+        block, task.trains, phase, valid, task.time_s, task.frequencies_hz,
+        task.schedule, task.execution,
+    )
+    return _ParallelBlockResult(task.block_id, block)
+
+
+def _run_parallel_worker_batches(
+    *,
+    phase_descriptor: _PhaseWorkDescriptor,
+    block_tasks: tuple[_ParallelBlockTask, ...],
+    worker_count: int,
+    compute_block: Callable[[_ParallelBlockTask], _ParallelBlockResult],
+) -> Iterator[_ParallelBlockResult]:
+    """Yield process-worker block results in input order, one at a time.
+
+    Each task is submitted only after the preceding result was yielded, so the
+    parent can checkpoint it before this iterator asks a worker for more work.
+    ``compute_block`` is a pickle-safe top-level-function partial in production
+    and is injectable solely for deterministic executor-contract tests.
+    """
+    del phase_descriptor  # The descriptor is captured by the pickle-safe partial.
+    with ProcessPoolExecutor(max_workers=worker_count) as executor:
+        for task in block_tasks:
+            yield executor.submit(compute_block, task).result()
 
 
 def _compute_observed_block(
