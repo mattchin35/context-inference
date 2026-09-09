@@ -563,13 +563,14 @@ def production_git_fingerprint(*, repository_root: Path | None = None, head_read
     return sha256(json.dumps({"head": head, "sources": dict(sources)}, sort_keys=True).encode()).hexdigest()
 
 
-def _production_run_lock(*, analysis_root: Path, identity: Mapping[str, str], run_directory: Path | None = None) -> AbstractContextManager[None]:
+def _production_run_lock(run_directory: Path, identity: Mapping[str, str]) -> AbstractContextManager[None]:
     """Acquire the runner's exact directory lock with safe local PID checks.
 
-    ``analysis_root`` and ``run_directory`` are paths, and ``identity`` maps
-    categorical fingerprint names to strings. The returned context manager has
-    no numerical output and does not alter phase/spike array conventions.
+    ``run_directory`` is the runner-selected output path and ``identity`` maps
+    categorical fingerprint names to strings.  The returned context manager
+    has no numerical output and does not alter phase/spike array conventions.
+    The positional contract matches ``run_ct026_ppc_profile`` exactly.
     """
-    directory = Path(run_directory) if run_directory is not None else Path(analysis_root)
+    directory = Path(run_directory)
     directory.mkdir(parents=True, exist_ok=True)
     return acquire_ct026_profile_run_lock(directory, identity, pid=os.getpid(), hostname=socket.gethostname(), process_exists=_local_process_exists)
