@@ -7,7 +7,7 @@ fast and do not make wall-clock or resident-memory assertions.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +26,7 @@ from src.neural_analysis.lfp_summary_ppc_profile import (
     profile_production_ppc_job,
     profile_serial_ppc_workload,
     representative_serial_ppc_workloads,
+    select_representative_ppc_profile_job,
 )
 
 
@@ -83,6 +84,123 @@ def _production_config() -> object:
             checkpoint_enabled=True,
         ),
     )
+
+
+def _selection_inputs(
+    *,
+    largest_condition_trials: int = 249,
+    eligible_unit_count: int = 5,
+) -> tuple[object, object]:
+    """Return metadata-only inputs for deterministic 249-trial job selection.
+
+    The arrays preserve production axis meanings but contain no transformed
+    phase result or PPC execution. Stable input unit ordering is deliberately
+    non-sorted so percentile ties must use stable unit identifiers.
+    """
+    trial_count = 259
+    condition_membership = np.zeros((trial_count, 2), dtype=bool)
+    condition_membership[:largest_condition_trials, 1] = True
+    condition_membership[largest_condition_trials:, 0] = True
+    prepared_trials = SimpleNamespace(
+        condition_names=("minor", "largest"),
+        condition_membership=condition_membership,
+        filter_membership=np.ones(trial_count, dtype=bool),
+    )
+    site_valid = np.zeros((3, trial_count), dtype=bool)
+    site_valid[0, :largest_condition_trials] = True
+    site_valid[1, : largest_condition_trials - 1] = True
+    site_valid[2, :largest_condition_trials] = True
+    prepared_phase = SimpleNamespace(
+        prepared_trials=prepared_trials,
+        trial_indices=np.arange(1000, 1000 + trial_count, dtype=np.int64),
+        site_valid=site_valid,
+        phase_tensor=np.ones((3, 50, trial_count, 2), dtype=np.complex64),
+        phase_valid=np.ones((3, 50, trial_count, 2), dtype=bool),
+        relative_time_s=np.array([-2.0, 0.0], dtype=float),
+    )
+    counts_by_unit = (60, 80, 100, 100, 140)[:eligible_unit_count]
+    unit_ids = ("PFC:5", "PFC:4", "PFC:3", "PFC:2", "PFC:1")[:eligible_unit_count]
+    trains = []
+    for count_value, unit_id in zip(counts_by_unit, unit_ids, strict=True):
+        first_count = count_value // 2
+        second_count = count_value - first_count
+        trial_spikes = tuple(
+            np.zeros(first_count, dtype=float)
+            if trial_position == 0
+            else np.ones(second_count, dtype=float)
+            if trial_position == 1
+            else np.empty(0, dtype=float)
+            for trial_position in range(trial_count)
+        )
+        trains.append(
+            SimpleNamespace(
+                unit_id=unit_id,
+                relative_spike_times=trial_spikes,
+                overlap_trial_indices=np.empty(0, dtype=np.int64),
+            )
+        )
+    prepared_spikes = SimpleNamespace(
+        unit_ids=unit_ids,
+        population_ids=("ProbeB",),
+        trial_spike_trains=tuple(trains),
+    )
+    return prepared_phase, prepared_spikes
+
+
+def test_select_representative_ppc_profile_job_uses_exact_249_trials_and_stable_ranks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Selection is metadata-only and fixes the CT026 benchmark job identity.
+
+    The largest condition has exactly 249 stable trial rows. PFC and HPC2 tie
+    for most site-valid rows, so configured site order selects PFC. Candidate
+    units have raw whole-epoch counts 60, 80, 100, 100, and 140; the nearest
+    rank 10th/50th/90th selections are therefore PFC:5, PFC:2, and PFC:1.
+    The two 100-count units verify stable unit-ID tie handling.
+    """
+    config = _production_config()
+    phase, spikes = _selection_inputs()
+    monkeypatch.setattr(
+        lfp_summary_ppc_runtime,
+        "execute_ppc_blocks",
+        lambda **_: (_ for _ in ()).throw(AssertionError("selection ran PPC")),
+    )
+
+    job = select_representative_ppc_profile_job(config, phase, spikes)
+
+    assert job.condition_name == "largest"
+    assert job.site_id == "PFC"
+    assert job.epoch_name == "whole"
+    assert job.epoch_bounds_s == (-2.0, 2.0)
+    np.testing.assert_array_equal(job.trial_indices, np.arange(1000, 1249))
+    assert job.trial_count == 249
+    assert job.unit_count == 5
+    assert job.frequency_count == 50
+    assert job.low_unit_id == "PFC:5"
+    assert job.median_unit_id == "PFC:2"
+    assert job.high_unit_id == "PFC:1"
+    assert (job.low_spike_count, job.median_spike_count, job.high_spike_count) == (
+        60,
+        100,
+        140,
+    )
+    assert job.low_spike_rate_hz == pytest.approx(60.0 / (249 * 4.0))
+    assert job.median_spike_rate_hz == pytest.approx(100.0 / (249 * 4.0))
+    assert job.high_spike_rate_hz == pytest.approx(140.0 / (249 * 4.0))
+    with pytest.raises(FrozenInstanceError):
+        job.site_id = "HPC1"
+
+
+def test_select_representative_ppc_profile_job_rejects_non_249_or_insufficient_units() -> None:
+    """The benchmark requires exactly 249 trials and three eligible units."""
+    config = _production_config()
+    short_phase, short_spikes = _selection_inputs(largest_condition_trials=248)
+    with pytest.raises(ValueError, match="249"):
+        select_representative_ppc_profile_job(config, short_phase, short_spikes)
+
+    phase, sparse_spikes = _selection_inputs(eligible_unit_count=2)
+    with pytest.raises(ValueError, match="three"):
+        select_representative_ppc_profile_job(config, phase, sparse_spikes)
 
 
 def test_representative_serial_workloads_are_deterministic_249_trial_rate_levels() -> None:
