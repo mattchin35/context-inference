@@ -115,6 +115,9 @@ def test_recovery_only_targets_exact_runtime_locks_and_git_ignores_untracked(
     monkeypatch.setattr(adapter.lfp_summary_work_cache, "recover_stale_lock", lambda path, fingerprint, **_: recovered.append(path))
     (tmp_path / "ppc/run-a").mkdir(parents=True)
     (tmp_path / "ppc/run-b").mkdir()
+    for directory in (tmp_path / "ppc/run-a", tmp_path / "ppc/run-b"):
+        (directory / "executor.lock").write_text("owned", encoding="ascii")
+        (directory / "writer.lock").write_text("owned", encoding="ascii")
     adapter.recover_ct026_profile_work(work_root=tmp_path, identity={"config_fingerprint": "c", "source_fingerprint": "s", "git_fingerprint": "g"})
     assert recovered == [
         tmp_path / "ppc/run-a/executor.lock", tmp_path / "ppc/run-a/writer.lock",
