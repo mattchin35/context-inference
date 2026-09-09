@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.neural_analysis import lfp_summary_runtime
 from src.neural_analysis.lfp_phase_clustering import PhaseTrialTensor
 from src.neural_analysis.lfp_summary_io import (
     assess_component_status,
@@ -311,6 +312,34 @@ def test_prepare_phase_run_prepared_cache_cold_warm_disabled_and_mismatch_paths(
     )
     assert disabled_calls
     assert mismatch_calls
+
+
+def test_prepared_phase_cache_identity_supports_missing_alignment_times(
+    tmp_path: Path,
+) -> None:
+    """Missing objective alignments have a deterministic JSON-safe identity."""
+    config = _config(tmp_path / "cache")
+    trial_indices = np.array([0, 1, 2], dtype=np.int64)
+    alignment_times_s = np.array([10.0, np.nan, 30.0], dtype=float)
+
+    first = lfp_summary_runtime._prepared_phase_work_metadata(
+        config,
+        trial_indices,
+        alignment_times_s,
+    )
+    second = lfp_summary_runtime._prepared_phase_work_metadata(
+        config,
+        trial_indices.copy(),
+        alignment_times_s.copy(),
+    )
+    changed = lfp_summary_runtime._prepared_phase_work_metadata(
+        config,
+        trial_indices,
+        np.array([10.0, 20.0, np.nan], dtype=float),
+    )
+
+    assert first == second
+    assert first["scientific_fingerprint"] != changed["scientific_fingerprint"]
 
 
 def test_phase_bootstrap_recomputes_the_nonlinear_clustering_statistic() -> None:
