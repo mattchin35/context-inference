@@ -24,7 +24,11 @@ from src.neural_analysis.lfp_summary_models import (
     component_fingerprint,
     fingerprint_source_files,
 )
-from src.neural_analysis.lfp_summary_work_cache import write_ppc_checkpoint
+from src.neural_analysis.lfp_summary_work_cache import (
+    _ownership_record,
+    _write_lock_exclusive,
+    write_ppc_checkpoint,
+)
 
 
 _FLOAT_FIELDS = (
@@ -179,7 +183,7 @@ def execute_ppc_blocks(
         )
 
     run_directory.mkdir(parents=True, exist_ok=True)
-    lock_path = _acquire_executor_lock(run_directory)
+    lock_path = _acquire_executor_lock(run_directory, run_fingerprint)
     try:
         schedule_matches = _stored_schedule_matches(
             run_directory,
@@ -670,15 +674,17 @@ def _load_resumable_blocks(
     return valid_blocks
 
 
-def _acquire_executor_lock(run_directory: Path) -> Path:
-    """Create an exact-job lock before any schedule/checkpoint mutation."""
+def _acquire_executor_lock(
+    run_directory: Path,
+    run_fingerprint: str,
+) -> Path:
+    """Create a complete exclusive JSON lock before any exact-job mutation."""
     lock_path = run_directory / "executor.lock"
-    try:
-        descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError as error:
-        raise FileExistsError(f"PPC executor.lock already exists: {lock_path}") from error
-    with os.fdopen(descriptor, "w", encoding="ascii") as handle:
-        handle.write("active\n")
+    _write_lock_exclusive(
+        lock_path,
+        _ownership_record(run_fingerprint, "executor"),
+        f"PPC executor.lock already exists: {lock_path}",
+    )
     return lock_path
 
 

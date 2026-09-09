@@ -11,8 +11,10 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
+import stat
 import uuid
-from typing import Mapping
+from typing import Callable, Mapping
 
 import numpy as np
 
@@ -50,6 +52,85 @@ class PPCCheckpoint:
     block_id: str
     arrays: dict[str, np.ndarray]
     metadata: dict[str, object]
+
+
+def recover_stale_lock(
+    lock_path: Path,
+    expected_run_fingerprint: str,
+    *,
+    hostname: str,
+    pid_is_alive: Callable[[int], bool],
+) -> bool:
+    """Remove only a validated same-host dead-process PPC ownership lock.
+
+    Parameters
+    ----------
+    lock_path : pathlib.Path
+        Existing regular ``executor.lock`` or ``writer.lock`` at the exact
+        ``<work_root>/ppc/<run_fingerprint>/`` level. Symbolic links are never
+        followed. Lock data is a UTF-8 JSON ownership record without arrays.
+    expected_run_fingerprint : str
+        Exact categorical PPC run identity expected in both the directory name
+        and ownership record. It has no physical units.
+    hostname : str
+        Current host identity. Recovery is forbidden for locks from other hosts
+        because their process liveness cannot be established locally.
+    pid_is_alive : callable
+        Receives the positive integer owning PID and returns a Boolean. It is
+        called only after path, schema, scope, host, and fingerprint validation.
+
+    Returns
+    -------
+    bool
+        ``True`` only after the exact validated dead-process lock is unlinked.
+
+    Raises
+    ------
+    FileExistsError
+        If the validated owning PID is still alive.
+    ValueError
+        If the path, ownership schema, hostname, fingerprint, scope, PID, or
+        liveness callback result is unsafe or unverifiable. Rejected locks are
+        never altered.
+    OSError
+        If an otherwise validated exact lock cannot be read or removed.
+    """
+    path = Path(lock_path)
+    _validate_recovery_path(path, expected_run_fingerprint)
+    if not isinstance(hostname, str) or not hostname:
+        raise ValueError("hostname must be a nonempty string")
+    if not callable(pid_is_alive):
+        raise ValueError("pid_is_alive must be callable")
+
+    descriptor = _open_lock_without_following(path)
+    try:
+        descriptor_stat = os.fstat(descriptor)
+        with os.fdopen(descriptor, "r", encoding="utf-8", closefd=False) as handle:
+            try:
+                record = json.load(handle)
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError("lock ownership record is malformed") from error
+    finally:
+        os.close(descriptor)
+    _validate_lock_record(path, record, expected_run_fingerprint, hostname)
+
+    owner_pid = record["pid"]
+    assert isinstance(owner_pid, int)
+    alive = pid_is_alive(owner_pid)
+    if not isinstance(alive, bool):
+        raise ValueError("pid_is_alive must return Boolean")
+    if alive:
+        raise FileExistsError(f"live PPC lock owner still holds {path}")
+
+    current_stat = os.lstat(path)
+    if (
+        stat.S_ISLNK(current_stat.st_mode)
+        or current_stat.st_dev != descriptor_stat.st_dev
+        or current_stat.st_ino != descriptor_stat.st_ino
+    ):
+        raise ValueError("lock changed while stale ownership was validated")
+    path.unlink()
+    return True
 
 
 _PREPARED_METADATA_KEYS = frozenset(
@@ -124,7 +205,11 @@ def write_prepared_phase_cache(
         normalized_metadata["representation_fingerprint"]
     )
     directory.mkdir(parents=True, exist_ok=True)
-    lock_path = _acquire_lock(directory)
+    lock_path = _acquire_lock(
+        directory,
+        str(normalized_metadata["representation_fingerprint"]),
+        "prepared_phase",
+    )
     try:
         # Invalidate an older transaction before replacing any of its data files.
         (directory / "complete.json").unlink(missing_ok=True)
@@ -225,7 +310,11 @@ def write_ppc_checkpoint(
     normalized_arrays = _checkpoint_arrays(arrays)
     directory = Path(run_directory)
     directory.mkdir(parents=True, exist_ok=True)
-    lock_path = _acquire_lock(directory)
+    lock_path = _acquire_lock(
+        directory,
+        str(normalized_metadata["run_fingerprint"]),
+        f"checkpoint:{safe_block_id}",
+    )
     try:
         blocks = directory / "blocks"
         blocks.mkdir(exist_ok=True)
@@ -449,15 +538,19 @@ def _safe_block_id(block_id: str) -> str:
     return block_id
 
 
-def _acquire_lock(directory: Path) -> Path:
-    """Create an exact-directory exclusive writer lock or fail without sharing work."""
+def _acquire_lock(
+    directory: Path,
+    run_fingerprint: str,
+    scope: str,
+) -> Path:
+    """Create one complete exact-directory JSON writer lock exclusively."""
     lock_path = directory / "writer.lock"
-    try:
-        descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError as error:
-        raise FileExistsError(f"work cache writer already holds {lock_path}") from error
-    with os.fdopen(descriptor, "w", encoding="ascii") as handle:
-        handle.write("active\n")
+    record = _ownership_record(run_fingerprint, scope)
+    _write_lock_exclusive(
+        lock_path,
+        record,
+        f"work cache writer already holds {lock_path}",
+    )
     return lock_path
 
 
@@ -467,6 +560,122 @@ def _release_lock(lock_path: Path) -> None:
         lock_path.unlink()
     except FileNotFoundError:
         pass
+
+
+def _ownership_record(run_fingerprint: str, scope: str) -> dict[str, object]:
+    """Return one complete local-process lock record without numerical arrays."""
+    if not isinstance(run_fingerprint, str) or not run_fingerprint:
+        raise ValueError("lock run_fingerprint must be a nonempty string")
+    if not isinstance(scope, str) or not scope:
+        raise ValueError("lock scope must be a nonempty string")
+    return {
+        "schema_version": "1",
+        "pid": os.getpid(),
+        "hostname": socket.gethostname(),
+        "run_fingerprint": run_fingerprint,
+        "scope": scope,
+    }
+
+
+def _write_lock_exclusive(
+    lock_path: Path,
+    record: Mapping[str, object],
+    collision_message: str,
+) -> None:
+    """Write complete JSON bytes through an exclusive descriptor and fsync them."""
+    payload = (
+        json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        + "\n"
+    ).encode("utf-8")
+    try:
+        descriptor = os.open(
+            lock_path,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+    except FileExistsError as error:
+        raise FileExistsError(collision_message) from error
+    try:
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("failed to write complete lock ownership record")
+            offset += written
+        os.fsync(descriptor)
+    except BaseException:
+        os.close(descriptor)
+        lock_path.unlink(missing_ok=True)
+        raise
+    else:
+        os.close(descriptor)
+
+
+def _validate_recovery_path(lock_path: Path, expected_run_fingerprint: str) -> None:
+    """Require an exact nonsymlink ``ppc/<fingerprint>/<known lock>`` path."""
+    if not isinstance(expected_run_fingerprint, str) or not expected_run_fingerprint:
+        raise ValueError("expected run fingerprint must be a nonempty string")
+    if lock_path.is_symlink():
+        raise ValueError("lock path must not be a symbolic link")
+    if lock_path.name not in {"executor.lock", "writer.lock"}:
+        raise ValueError("lock path must identify executor.lock or writer.lock")
+    if lock_path.parent.parent.name != "ppc":
+        raise ValueError("lock path must be inside an exact ppc run directory")
+    if lock_path.parent.name != expected_run_fingerprint:
+        raise ValueError("lock directory fingerprint does not match expected fingerprint")
+    if not lock_path.exists() or not lock_path.is_file():
+        raise ValueError("lock path must identify an existing regular file")
+
+
+def _open_lock_without_following(lock_path: Path) -> int:
+    """Open one ownership record read-only without following a replaced symlink."""
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags)
+    except OSError as error:
+        raise ValueError("lock path could not be opened safely") from error
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise ValueError("lock path must identify a regular file")
+    return descriptor
+
+
+def _validate_lock_record(
+    lock_path: Path,
+    record: object,
+    expected_run_fingerprint: str,
+    hostname: str,
+) -> None:
+    """Validate exact lock schema, ownership, run identity, and filename scope."""
+    expected_keys = {
+        "schema_version",
+        "pid",
+        "hostname",
+        "run_fingerprint",
+        "scope",
+    }
+    if not isinstance(record, dict) or set(record) != expected_keys:
+        raise ValueError("lock ownership record has invalid fields")
+    owner_pid = record["pid"]
+    if (
+        record["schema_version"] != "1"
+        or isinstance(owner_pid, bool)
+        or not isinstance(owner_pid, int)
+        or owner_pid <= 0
+    ):
+        raise ValueError("lock ownership schema or PID is invalid")
+    if record["hostname"] != hostname:
+        raise ValueError("lock ownership hostname differs from the current host")
+    if record["run_fingerprint"] != expected_run_fingerprint:
+        raise ValueError("lock ownership fingerprint differs from the expected fingerprint")
+    scope = record["scope"]
+    valid_scope = scope == "executor" if lock_path.name == "executor.lock" else (
+        isinstance(scope, str) and scope.startswith("checkpoint:") and len(scope) > 11
+    )
+    if not valid_scope:
+        raise ValueError("lock ownership scope does not match its lock filename")
 
 
 def _atomic_npy(directory: Path, name: str, array: np.ndarray) -> None:
