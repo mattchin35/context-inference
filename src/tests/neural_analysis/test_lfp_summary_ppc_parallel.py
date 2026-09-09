@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -112,8 +113,8 @@ def test_parallel_dispatch_uses_disjoint_deterministic_block_tasks_and_shared_mm
     observed: dict[str, object] = {}
 
     def inspect_then_compute(*, phase_descriptor: object, block_tasks: tuple[object, ...],
-                             worker_count: int, compute_block: object) -> object:
-        """Assert the production-shaped shared descriptor before synchronous test work."""
+                             worker_count: int, compute_block: object) -> Iterator[object]:
+        """Yield one result at a time after checking the shared-worker contract."""
         observed["worker_count"] = worker_count
         observed["block_ids"] = tuple(task.block_id for task in block_tasks)
         observed["task_attributes"] = tuple(
@@ -127,7 +128,8 @@ def test_parallel_dispatch_uses_disjoint_deterministic_block_tasks_and_shared_mm
         assert valid.shape == phase.shape
         assert all("phase" not in attribute for attributes in observed["task_attributes"] for attribute in attributes)
         assert all("valid" not in attribute for attributes in observed["task_attributes"] for attribute in attributes)
-        return tuple(compute_block(task) for task in block_tasks)
+        for task in block_tasks:
+            yield compute_block(task)
 
     monkeypatch.setattr(ppc_runtime, "_run_parallel_worker_batches", inspect_then_compute)
     result = _execute(tmp_path, 4)
@@ -147,16 +149,14 @@ def test_parallel_failure_keeps_completed_blocks_resumable_and_never_publishes_c
     calls = 0
 
     def fail_after_first(*, phase_descriptor: object, block_tasks: tuple[object, ...],
-                         worker_count: int, compute_block: object) -> object:
-        """Produce one block, then model a worker failure before the next block."""
+                         worker_count: int, compute_block: object) -> Iterator[object]:
+        """Yield one block, then model a worker failure before its successor."""
         nonlocal calls
-        completed = []
         for task in block_tasks:
             calls += 1
             if calls == 2:
                 raise RuntimeError("injected worker failure")
-            completed.append(compute_block(task))
-        return tuple(completed)
+            yield compute_block(task)
 
     monkeypatch.setattr(ppc_runtime, "_run_parallel_worker_batches", fail_after_first)
     with pytest.raises(RuntimeError, match="injected worker failure"):
