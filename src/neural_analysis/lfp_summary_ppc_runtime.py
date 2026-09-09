@@ -11,6 +11,7 @@ from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from hashlib import sha256
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import time
@@ -608,15 +609,54 @@ def _run_parallel_worker_batches(
 ) -> Iterator[_ParallelBlockResult]:
     """Yield process-worker block results in input order, one at a time.
 
-    Each task is submitted only after the preceding result was yielded, so the
-    parent can checkpoint it before this iterator asks a worker for more work.
+    At most ``worker_count`` tasks are submitted at once.  The initial window
+    lets independent unit blocks use all requested workers, while ordered
+    yielding lets the parent checkpoint each result before a replacement task
+    is submitted.  On a worker failure, every submitted future is cancelled
+    before the executor is shut down; already-yielded results remain available
+    to the parent checkpoint writer.
+
     ``compute_block`` is a pickle-safe top-level-function partial in production
     and is injectable solely for deterministic executor-contract tests.
     """
     del phase_descriptor  # The descriptor is captured by the pickle-safe partial.
-    with ProcessPoolExecutor(max_workers=worker_count) as executor:
-        for task in block_tasks:
-            yield executor.submit(compute_block, task).result()
+    task_iterator = iter(block_tasks)
+    pending: list[object] = []
+    executor = ProcessPoolExecutor(
+        max_workers=worker_count,
+        mp_context=multiprocessing.get_context("spawn"),
+    )
+    shutdown_complete = False
+    try:
+        # Fill the bounded initial submission window before waiting on work.
+        for _ in range(worker_count):
+            try:
+                task = next(task_iterator)
+            except StopIteration:
+                break
+            pending.append(executor.submit(compute_block, task))
+
+        while pending:
+            future = pending.pop(0)
+            result = future.result()
+            yield result
+
+            # The parent has now copied and checkpointed ``result``. Submit no
+            # more than one replacement, retaining the bounded work window.
+            try:
+                task = next(task_iterator)
+            except StopIteration:
+                continue
+            pending.append(executor.submit(compute_block, task))
+    except BaseException:
+        for future in pending:
+            future.cancel()
+        executor.shutdown(wait=True, cancel_futures=True)
+        shutdown_complete = True
+        raise
+    finally:
+        if not shutdown_complete:
+            executor.shutdown(wait=True, cancel_futures=False)
 
 
 def _compute_observed_block(
