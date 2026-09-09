@@ -214,6 +214,126 @@ def test_one_worker_uses_exact_serial_path_without_phase_descriptor(
     )
 
 
+def test_parallel_workers_use_spawn_and_keep_a_bounded_ordered_submission_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Workers use ``spawn``, fill the window, then yield canonical task order.
+
+    The fake executor does not execute subprocesses.  It records the parent-side
+    executor protocol so this test remains deterministic while guarding the
+    production scheduling contract.
+    """
+    submitted: list[str] = []
+    result_waits: list[str] = []
+    executor_arguments: dict[str, object] = {}
+
+    class FakeFuture:
+        """Future whose result wait records ordering relative to submissions."""
+
+        def __init__(self, task: str) -> None:
+            self.task = task
+
+        def result(self) -> str:
+            result_waits.append(self.task)
+            if self.task == "first":
+                assert submitted == ["first", "second"]
+            return self.task
+
+    class FakeExecutor:
+        """Minimal process-executor double retaining constructor arguments."""
+
+        def __init__(self, *, max_workers: int, mp_context: object) -> None:
+            executor_arguments["max_workers"] = max_workers
+            executor_arguments["mp_context"] = mp_context
+
+        def __enter__(self) -> "FakeExecutor":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def submit(self, _compute_block: object, task: str) -> FakeFuture:
+            submitted.append(task)
+            return FakeFuture(task)
+
+    monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", FakeExecutor)
+    results = ppc_runtime._run_parallel_worker_batches(
+        phase_descriptor=object(),
+        block_tasks=("first", "second", "third"),
+        worker_count=2,
+        compute_block=lambda task: task,
+    )
+
+    assert next(results) == "first"
+    assert submitted == ["first", "second"]
+    assert result_waits == ["first"]
+    assert next(results) == "second"
+    assert submitted == ["first", "second", "third"]
+    assert list(results) == ["third"]
+    assert result_waits == ["first", "second", "third"]
+    assert executor_arguments["max_workers"] == 2
+    assert executor_arguments["mp_context"].get_start_method() == "spawn"
+
+
+def test_parallel_worker_failure_cancels_pending_work_after_prior_yield(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure cancels queued work while preserving the already-yielded block."""
+    submitted: list[str] = []
+    cancelled: list[str] = []
+    shutdown_calls: list[tuple[bool, bool]] = []
+
+    class FakeFuture:
+        """Future double with one injected failure and observable cancellation."""
+
+        def __init__(self, task: str) -> None:
+            self.task = task
+
+        def result(self) -> str:
+            if self.task == "second":
+                raise RuntimeError("injected worker failure")
+            return self.task
+
+        def cancel(self) -> bool:
+            cancelled.append(self.task)
+            return True
+
+    class FakeExecutor:
+        """Executor double that requires explicit shutdown on exceptional exit."""
+
+        def __init__(self, *, max_workers: int, mp_context: object) -> None:
+            del max_workers, mp_context
+
+        def __enter__(self) -> "FakeExecutor":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def submit(self, _compute_block: object, task: str) -> FakeFuture:
+            submitted.append(task)
+            return FakeFuture(task)
+
+        def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+            shutdown_calls.append((wait, cancel_futures))
+
+    monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", FakeExecutor)
+    results = ppc_runtime._run_parallel_worker_batches(
+        phase_descriptor=object(),
+        block_tasks=("first", "second", "third"),
+        worker_count=2,
+        compute_block=lambda task: task,
+    )
+
+    assert next(results) == "first"
+    with pytest.raises(RuntimeError, match="injected worker failure"):
+        next(results)
+
+    assert submitted == ["first", "second", "third"]
+    assert cancelled == ["second", "third"]
+    assert shutdown_calls == [(True, True)]
+
+
 @pytest.mark.parametrize("worker_count", (-1, 0, 1.5, True))
 def test_invalid_worker_counts_are_rejected_before_phase_or_work_writes(
     tmp_path: Path,
