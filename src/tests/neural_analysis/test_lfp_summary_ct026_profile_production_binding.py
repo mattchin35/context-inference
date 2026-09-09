@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -96,13 +98,18 @@ def test_slice_and_isolated_child_are_exact_scalar_work_only_seams(tmp_path: Pat
     expected_seed = adapter.lfp_summary_runtime._ppc_schedule_seed(config, 0, 0, 0)
     expected_schedule = adapter.lfp_summary_runtime._shared_derangement_schedule(2, 100, expected_seed)
     np.testing.assert_array_equal(sliced.schedule, expected_schedule)
+    for train in sliced.prepared_spikes.trial_spike_trains:
+        np.testing.assert_array_equal(
+            train.overlap_trial_indices,
+            np.array([20], dtype=np.int64),
+        )
 
     launches: list[object] = []
     metrics = adapter.run_isolated_ct026_profile_job(
         job=sliced, shuffle_count=100, work_root=tmp_path / "work",
         process_launcher=lambda target, payload: launches.append((target, payload)) or {"total_elapsed_seconds": 2.0, "ru_maxrss": 7, "ru_maxrss_unit": "KiB"},
     )
-    assert launches and metrics == {"total_elapsed_seconds": 2.0, "peak_memory_bytes": 7168, "peak_memory_source": "resource.getrusage(RUSAGE_CHILDREN).ru_maxrss_kib"}
+    assert launches and metrics == {"total_elapsed_seconds": 2.0, "peak_memory_bytes": 7168, "peak_memory_source": "resource.getrusage(RUSAGE_SELF).ru_maxrss_kib"}
     with pytest.raises(RuntimeError, match="exit 2"):
         adapter.run_isolated_ct026_profile_job(job=sliced, shuffle_count=100, work_root=tmp_path / "work", process_launcher=lambda *_: {"exit_code": 2, "error": "child failed"})
 
@@ -131,6 +138,28 @@ def test_recovery_only_targets_exact_runtime_locks_and_git_ignores_untracked(
     assert first != changed_head and first != changed_source
 
 
+def test_recovery_rejects_symlinked_fingerprint_directories(tmp_path: Path) -> None:
+    """Recovery never follows a fingerprint-directory symlink outside work."""
+    external = tmp_path / "external"
+    external.mkdir()
+    external_lock = external / "executor.lock"
+    external_lock.write_text("owned", encoding="ascii")
+    ppc_root = tmp_path / "work" / "ppc"
+    ppc_root.mkdir(parents=True)
+    (ppc_root / "linked-run").symlink_to(external, target_is_directory=True)
+
+    adapter.recover_ct026_profile_work(
+        work_root=tmp_path / "work",
+        identity={
+            "config_fingerprint": "c",
+            "source_fingerprint": "s",
+            "git_fingerprint": "g",
+        },
+    )
+
+    assert external_lock.read_text(encoding="ascii") == "owned"
+
+
 def test_slice_resolves_nonzero_condition_site_and_preserves_executor_inputs() -> None:
     """A 249-trial slice keeps resolved provenance and per-unit overlap identity."""
     config = default_lfp_summary_config()
@@ -148,9 +177,9 @@ def test_slice_resolves_nonzero_condition_site_and_preserves_executor_inputs() -
         source_identity="phase-source",
     )
     unit_overlaps = (
-        np.asarray((stable_trials[1], stable_trials[10]), dtype=np.int64),
-        np.asarray((stable_trials[1], stable_trials[20]), dtype=np.int64),
-        np.asarray((stable_trials[1], stable_trials[-1]), dtype=np.int64),
+        np.asarray((999, stable_trials[1], stable_trials[10]), dtype=np.int64),
+        np.asarray((stable_trials[1], stable_trials[20], 1_999), dtype=np.int64),
+        np.asarray((998, stable_trials[1], stable_trials[-1]), dtype=np.int64),
     )
     spikes = SimpleNamespace(unit_ids=("ProbeB:1", "ProbeB:2", "ProbeB:3"), population_ids=("ProbeB active",), trial_spike_trains=tuple(
         SimpleNamespace(
@@ -169,10 +198,14 @@ def test_slice_resolves_nonzero_condition_site_and_preserves_executor_inputs() -
     assert sliced.prepared_phase.epoch_name == "whole"
     assert sliced.prepared_phase.source_identity == "phase-source"
     assert sliced.config is config
-    for train, expected_overlap in zip(sliced.prepared_spikes.trial_spike_trains, unit_overlaps, strict=True):
+    selected_trial_array = np.asarray(stable_trials, dtype=np.int64)
+    for train, source_overlap in zip(sliced.prepared_spikes.trial_spike_trains, unit_overlaps, strict=True):
         assert len(train.relative_spike_times) == 249
         assert all(np.all((values >= -2.0) & (values < 2.0)) for values in train.relative_spike_times)
-        np.testing.assert_array_equal(train.overlap_trial_indices, expected_overlap)
+        np.testing.assert_array_equal(
+            train.overlap_trial_indices,
+            np.intersect1d(source_overlap, selected_trial_array),
+        )
 
 
 def test_default_child_launcher_runs_fresh_profile_worker_without_final_artifacts(
@@ -187,6 +220,26 @@ def test_default_child_launcher_runs_fresh_profile_worker_without_final_artifact
     assert metrics["child_pid"] != 111
     assert metrics["edge_call_count"] == 2
     assert not list(tmp_path.rglob("*.npz")) and not list(tmp_path.rglob("manifest.json"))
+
+
+def test_default_child_launcher_bounds_timeout_and_handles_pipe_eof() -> None:
+    """A hung or abruptly exited child cannot hang the resumable parent run."""
+    started = time.monotonic()
+    timed_out = adapter._default_child_launcher(
+        lambda _: (time.sleep(10.0) or {}),
+        {},
+        timeout_seconds=0.01,
+    )
+    assert time.monotonic() - started < 2.0
+    assert timed_out["exit_code"] != 0
+    assert "timeout" in timed_out["error"]
+
+    exited = adapter._default_child_launcher(
+        lambda _: os._exit(7),
+        {},
+        timeout_seconds=1.0,
+    )
+    assert exited["exit_code"] != 0
 
 
 def test_production_run_lock_does_not_steal_another_live_local_pid(
