@@ -132,36 +132,47 @@ def test_recovery_only_targets_exact_runtime_locks_and_git_ignores_untracked(
 
 
 def test_slice_resolves_nonzero_condition_site_and_preserves_executor_inputs() -> None:
-    """A slice retains per-unit trial/overlap identity and child-required provenance."""
+    """A 249-trial slice keeps resolved provenance and per-unit overlap identity."""
     config = default_lfp_summary_config()
+    stable_trials = tuple(range(1_000, 1_249))
     job = RepresentativePPCProfileJob(
-        "condition-b", "HPC1", "whole", (-2.0, 2.0), (10, 20), 2, 2, 3, 5,
+        "condition-b", "HPC1", "whole", (-2.0, 2.0), stable_trials, 249, 249, 3, 5,
         "ProbeB active", "ProbeB:1", "ProbeB:2", "ProbeB:3", 1, 2, 3, .125, .25, .375,
     )
     phase = SimpleNamespace(
-        trial_indices=np.array([10, 20, 30], dtype=np.int64),
-        site_valid=np.array([[True, True, True], [True, True, False], [True, True, True]]),
-        phase_tensor=np.ones((3, 5, 3, 2), dtype=np.complex64), phase_valid=np.ones((3, 5, 3, 2), dtype=bool),
+        trial_indices=np.asarray(stable_trials, dtype=np.int64),
+        site_valid=np.ones((3, 249), dtype=bool),
+        phase_tensor=np.ones((3, 5, 249, 2), dtype=np.complex64), phase_valid=np.ones((3, 5, 249, 2), dtype=bool),
         relative_time_s=np.array([-2.0, 0.0]),
-        prepared_trials=SimpleNamespace(condition_names=("condition-a", "condition-b"), condition_membership=np.array([[False, True], [False, True], [True, False]], dtype=bool)),
+        prepared_trials=SimpleNamespace(condition_names=("condition-a", "condition-b"), condition_membership=np.column_stack((np.zeros(249, dtype=bool), np.ones(249, dtype=bool)))),
         source_identity="phase-source",
     )
+    unit_overlaps = (
+        np.asarray((stable_trials[1], stable_trials[10]), dtype=np.int64),
+        np.asarray((stable_trials[1], stable_trials[20]), dtype=np.int64),
+        np.asarray((stable_trials[1], stable_trials[-1]), dtype=np.int64),
+    )
     spikes = SimpleNamespace(unit_ids=("ProbeB:1", "ProbeB:2", "ProbeB:3"), population_ids=("ProbeB active",), trial_spike_trains=tuple(
-        SimpleNamespace(unit_id=unit, relative_spike_times=(np.array([-2., 0., 2.]), np.array([-1., 1.]), np.array([0.])), overlap_trial_indices=np.array([20, 30], dtype=np.int64))
-        for unit in ("ProbeB:1", "ProbeB:2", "ProbeB:3")
+        SimpleNamespace(
+            unit_id=unit,
+            relative_spike_times=tuple(np.array([-2., 0., 2.]) for _ in stable_trials),
+            overlap_trial_indices=overlap_trial_indices,
+        )
+        for unit, overlap_trial_indices in zip(("ProbeB:1", "ProbeB:2", "ProbeB:3"), unit_overlaps, strict=True)
     ))
     sliced = adapter.slice_ct026_profile_job(config=config, profile_job=job, scenario="combined", unit_ids=spikes.unit_ids, phase=phase, spikes=spikes)
-    expected = adapter.lfp_summary_runtime._shared_derangement_schedule(2, 100, adapter.lfp_summary_runtime._ppc_schedule_seed(config, 1, 1, 0))
+    expected = adapter.lfp_summary_runtime._shared_derangement_schedule(249, 100, adapter.lfp_summary_runtime._ppc_schedule_seed(config, 1, 1, 0))
+    assert sliced.schedule.shape == (100, 249)
     np.testing.assert_array_equal(sliced.schedule, expected)
     assert sliced.prepared_phase.site_id == "HPC1"
     assert sliced.prepared_phase.condition_name == "condition-b"
     assert sliced.prepared_phase.epoch_name == "whole"
     assert sliced.prepared_phase.source_identity == "phase-source"
     assert sliced.config is config
-    for train in sliced.prepared_spikes.trial_spike_trains:
-        assert len(train.relative_spike_times) == 2
+    for train, expected_overlap in zip(sliced.prepared_spikes.trial_spike_trains, unit_overlaps, strict=True):
+        assert len(train.relative_spike_times) == 249
         assert all(np.all((values >= -2.0) & (values < 2.0)) for values in train.relative_spike_times)
-        np.testing.assert_array_equal(train.overlap_trial_indices, np.array([20], dtype=np.int64))
+        np.testing.assert_array_equal(train.overlap_trial_indices, expected_overlap)
 
 
 def test_default_child_launcher_runs_fresh_profile_worker_without_final_artifacts(
