@@ -100,8 +100,8 @@ def test_ct026_adapter_binds_cold_warm_selection_and_isolated_ordered_jobs(
         }
 
     @contextmanager
-    def acquire_run_lock(*, analysis_root: Path, identity: dict[str, str], run_directory: Path | None):
-        calls.append(("run-lock-enter", (analysis_root, identity, run_directory)))
+    def acquire_run_lock(run_directory: Path, identity: dict[str, str]):
+        calls.append(("run-lock-enter", (run_directory, identity)))
         try:
             yield
         finally:
@@ -109,27 +109,20 @@ def test_ct026_adapter_binds_cold_warm_selection_and_isolated_ordered_jobs(
 
     def generic_runner(**kwargs: object) -> object:
         calls.append(("generic", kwargs))
-        assert calls[-2][0] == "run-lock-enter"
         prepare = kwargs["prepare_phase"]
         profile = kwargs["profile_job"]
-        phase_cold = prepare(warm=False)
-        phase_warm = prepare(warm=True)
-        spikes = kwargs["select_spikes"](phase_warm)
-        assert phase_cold != phase_warm
-        for scenario in ("low", "median", "high", "combined"):
-            metrics = profile(
-                scenario=scenario,
-                phase=phase_warm,
-                spikes=spikes,
-                shuffle_count=100,
-                work_root=tmp_path / "generic-work" / scenario,
-            )
-            assert metrics["phase_cold_seconds"] == 3.0
-            assert metrics["phase_warm_seconds"] == 2.5
-            assert metrics["peak_memory_source"] == "resource.getrusage(RUSAGE_CHILDREN).ru_maxrss_kib"
-            assert metrics["config_fingerprint"] == "config-id"
-            assert metrics["source_fingerprint"] == "source-id"
-            assert metrics["git_fingerprint"] == "commit:abc123+dirty-tree:sha256:deadbeef"
+        run_directory = tmp_path / "ct026_ppc_profile_test"
+        phase_root = run_directory / "work" / "phase"
+        with kwargs["acquire_run_lock"](run_directory, {"config_fingerprint": "config-id", "source_fingerprint": "source-id", "git_fingerprint": "commit:abc123+dirty-tree:sha256:deadbeef"}):
+            phase_cold, cold_metrics = prepare(warm=False, phase_work_root=phase_root)
+            phase_warm, warm_metrics = prepare(warm=True, phase_work_root=phase_root)
+            assert cold_metrics["elapsed_seconds"] == 3.0
+            assert warm_metrics["elapsed_seconds"] == 2.5
+            spikes = kwargs["select_spikes"](phase_warm)
+            assert phase_cold != phase_warm
+            for scenario in ("low", "median", "high", "combined"):
+                metrics = profile(scenario=scenario, phase=phase_warm, spikes=spikes, shuffle_count=100, work_root=tmp_path / "generic-work" / scenario)
+                assert "phase_cold_seconds" not in metrics and "phase_warm_seconds" not in metrics
         return SimpleNamespace(profiles={})
 
     dependencies = CT026PPCProfileAdapterDependencies(
@@ -163,7 +156,7 @@ def test_ct026_adapter_binds_cold_warm_selection_and_isolated_ordered_jobs(
     assert calls[-1] == ("run-lock-exit", None)
     phase_paths = [value[1] for name, value in calls if name == "phase"]
     assert phase_paths[0] == phase_paths[1]
-    assert phase_paths[0].name == "phase"
+    assert phase_paths == [tmp_path / "ct026_ppc_profile_test" / "work" / "phase"] * 2
     assert [value[1] for name, value in calls if name == "slice"] == [
         "low", "median", "high", "combined",
     ]
