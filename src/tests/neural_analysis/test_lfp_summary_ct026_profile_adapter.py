@@ -242,7 +242,8 @@ def test_ct026_adapter_forwards_exact_resume_and_never_constructs_preview_artifa
     assert captured["run_directory"] == resume_directory
     assert captured["analysis_root"] == tmp_path / "analysis-runs"
     assert captured["config_fingerprint"] == "config-id"
-    assert events == ["lock-enter", "recover", "child", "lock-exit"]
+    assert captured["acquire_run_lock"] is acquire_run_lock
+    assert events == ["recover", "child"]
     assert "write_component_transaction" not in captured
     assert "build_spike_phase_payload" not in captured
 

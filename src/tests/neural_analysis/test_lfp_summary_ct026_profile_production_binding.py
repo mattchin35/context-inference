@@ -67,7 +67,7 @@ def test_production_dependencies_bind_existing_ct026_population_and_runtime_seam
     assert config.ppc.shuffle_count == 100
     assert config.ppc_execution.worker_count == 1
     assert calls[3][1][1] is adapter.lfp_summary_runtime.load_configured_trial_table
-    assert calls[3][1][2]["work_cache_root"] == tmp_path / "shared-work"
+    assert calls[3][1][2]["work_cache_root"] == tmp_path / "run-work"
     assert calls[4][1][2] is adapter.lfp_summary_runtime.load_configured_unit_spikes
 
 
