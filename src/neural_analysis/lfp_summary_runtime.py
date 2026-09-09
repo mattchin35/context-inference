@@ -8,6 +8,8 @@ decimation, and stores only the documented 500-Hz inspection traces in payloads.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+import json
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -19,6 +21,7 @@ from src.neural_analysis import (
     lfp_loading,
     lfp_phase_clustering,
     lfp_spectrogram,
+    lfp_summary_ppc_runtime,
     spike_behavior_pynapple,
     spike_lfp_summary,
     spike_lfp_hilbert_phase,
@@ -36,8 +39,20 @@ from src.neural_analysis.lfp_summary_io import (
     load_or_initialize_manifest,
     write_component_transaction,
 )
-from src.neural_analysis.lfp_summary_models import LFPSummaryConfig, LFPSiteConfig
+from src.neural_analysis.lfp_summary_models import (
+    LFPSummaryConfig,
+    LFPSiteConfig,
+    ProgressEvent,
+    canonical_config_json,
+    fingerprint_source_files,
+)
 from src.neural_analysis.lfp_summary_payloads import build_component_payload
+from src.neural_analysis.lfp_summary_work_cache import (
+    PreparedPhaseCache,
+    cleanup_ppc_run,
+    load_prepared_phase_cache,
+    write_prepared_phase_cache,
+)
 from src.neural_analysis.lfp_summary_pipeline import ComponentPayload, PipelineDependencies
 from src.neural_analysis.lfp_summary_preparation import (
     PreparedSiteTraces,
@@ -57,6 +72,135 @@ from src.neural_analysis.lfp_synchrony_summary import (
 
 
 _CACHE_SAMPLE_RATE_HZ = 500.0
+
+
+def _prepared_phase_work_metadata(
+    config: LFPSummaryConfig,
+    trial_indices: np.ndarray,
+    alignment_times_s: np.ndarray,
+) -> dict[str, object]:
+    """Build deterministic work-cache metadata for one phase representation.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Validated configuration. Only transform-relevant settings enter the
+        scientific cache identity; PPC execution block settings do not.
+    trial_indices : numpy.ndarray
+        Int64 shape ``(trial,)`` trial-table row positions on the cached phase
+        axis.
+    alignment_times_s : numpy.ndarray
+        Float64 shape ``(trial,)`` absolute event times in seconds. These
+        coordinates bind a cached trial axis to the current trial table.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-safe metadata accepted by ``write_prepared_phase_cache``. Its
+        fingerprints are stable across Python processes and reject changed
+        sources, transform settings, trial layout, axes, shapes, or dtypes.
+    """
+    canonical_config = json.loads(canonical_config_json(config))
+    scientific_inputs = {
+        key: canonical_config[key]
+        for key in (
+            "session_id",
+            "session_path",
+            "trial_table_path",
+            "sites",
+            "trial_filter",
+            "analysis_windows",
+            "phase",
+            "schema_version",
+        )
+    }
+    trial_axis = {
+        "trial_indices": np.asarray(trial_indices, dtype=np.int64).tolist(),
+        "alignment_times_s": np.asarray(alignment_times_s, dtype=float).tolist(),
+    }
+    source_fingerprint = _work_fingerprint(
+        fingerprint_source_files(config, component="synchrony")
+    )
+    scientific_fingerprint = _work_fingerprint(
+        {"transform_inputs": scientific_inputs, "trial_axis": trial_axis}
+    )
+    time_count = build_common_event_grid(
+        config.analysis_windows.whole_start_s,
+        config.analysis_windows.whole_stop_s,
+        config.phase.output_rate_hz,
+    ).size
+    phase_shape = [
+        len(config.sites),
+        len(config.phase.frequency_hz),
+        int(trial_indices.size),
+        int(time_count),
+    ]
+    representation = {
+        "generator": "prepare_phase_run",
+        "analysis_version": "prepared-phase-cache-v1",
+        "source_fingerprint": source_fingerprint,
+        "scientific_fingerprint": scientific_fingerprint,
+        "axes": ["site", "frequency", "trial", "time"],
+        "shapes": {
+            "phase": phase_shape,
+            "valid": phase_shape,
+            "site_trial_valid": [phase_shape[0], phase_shape[2]],
+            "site_trial_exclusion_reason": [phase_shape[0], phase_shape[2]],
+        },
+        "dtypes": {
+            "phase": "complex64",
+            "valid": "bool",
+            "site_trial_valid": "bool",
+            "site_trial_exclusion_reason": "<U32",
+        },
+    }
+    return {
+        **representation,
+        "schema_version": config.schema_version,
+        "representation_fingerprint": _work_fingerprint(representation),
+        "execution_settings": {"phase_storage": "complex64/bool"},
+        "units": {
+            "phase": "dimensionless",
+            "relative_time_s": "s",
+            "frequency_hz": "Hz",
+        },
+    }
+
+
+def _work_fingerprint(value: object) -> str:
+    """Return a stable SHA-256 identity for JSON-safe work-cache metadata."""
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _cached_phase_axes_match_current_run(
+    cached: PreparedPhaseCache,
+    config: LFPSummaryConfig,
+    trial_indices: np.ndarray,
+) -> bool:
+    """Return whether a validated cache has this run's exact named axes.
+
+    The work-cache loader checks array contracts and metadata. This additional
+    check prevents reuse if a manually corrupted cache has correct metadata but
+    different site, frequency, trial, or relative-time coordinates.
+    """
+    expected_time_s = build_common_event_grid(
+        config.analysis_windows.whole_start_s,
+        config.analysis_windows.whole_stop_s,
+        config.phase.output_rate_hz,
+    )
+    return (
+        np.array_equal(
+            cached.axes["site_ids"],
+            np.asarray([site.stable_id for site in config.sites], dtype="<U64"),
+        )
+        and np.array_equal(
+            cached.axes["frequency_hz"],
+            np.asarray(config.phase.frequency_hz, dtype=float),
+        )
+        and np.array_equal(cached.axes["trial_indices"], trial_indices)
+        and np.array_equal(cached.axes["relative_time_s"], expected_time_s)
+    )
 
 
 @dataclass(frozen=True)
@@ -147,6 +291,28 @@ class PreparedSpikeRun:
     unit_ids: tuple[str, ...]
     population_ids: tuple[str, ...]
     trial_spike_trains: tuple[TrialRelativeSpikeTrains, ...]
+
+
+@dataclass(frozen=True)
+class _PPCPhaseJob:
+    """One selected site/condition/epoch phase view for the PPC executor.
+
+    ``phase_tensor`` and ``phase_valid`` have axes ``(site=1, frequency,
+    selected_trial, time)``. Unit phase is complex64 and validity is Boolean;
+    ``relative_time_s`` is the shared float64 event-relative seconds axis.
+    ``trial_indices`` are stable int64 trial-table rows. The categorical job
+    identity is deliberately retained after selecting the full phase tensor so
+    work checkpoints cannot cross condition/site/epoch boundaries.
+    """
+
+    phase_tensor: np.ndarray
+    phase_valid: np.ndarray
+    relative_time_s: np.ndarray
+    trial_indices: np.ndarray
+    site_id: str
+    condition_name: str
+    epoch_bounds_s: tuple[float, float]
+    source_fingerprint: str
 
 
 def load_configured_trial_table(config: LFPSummaryConfig) -> pd.DataFrame:
@@ -257,6 +423,7 @@ def prepare_phase_run(
     | None = None,
     spikeglx_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None = None,
     open_ephys_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None = None,
+    work_cache_root: Path | None = None,
 ) -> PreparedPhaseRun:
     """Prepare bounded continuous phase tensors on one exact full trial axis.
 
@@ -276,6 +443,12 @@ def prepare_phase_run(
         values, and native sample rate in Hz. ``None`` uses production files.
     spikeglx_loader, open_ephys_loader : callable or None
         Optional normalized per-trial loaders for cache exemplar source traces.
+    work_cache_root : pathlib.Path or None, default=None
+        Optional execution-only work-cache root. When supplied and
+        ``prepared_phase_cache_enabled`` is true, the function loads an exact
+        compatible read-only phase/valid mmap cache or atomically writes a cold
+        transform. Trial, alignment, site, pair, and source-trace metadata are
+        rebuilt on both cold and warm paths.
 
     Returns
     -------
@@ -309,31 +482,51 @@ def prepare_phase_run(
         config.analysis_windows.whole_start_s,
         config.analysis_windows.whole_stop_s,
     )
-    site_tensors = []
-    for site in config.sites:
-        tensor = site_phase_tensor_builder(
-            event_times_s=alignment_times_s[transform_positions],
-            trial_indices=trial_indices[transform_positions],
-            block_loader=factory(site),
-            frequencies_hz=frequency_hz,
-            window=whole_window,
-            output_sample_rate_hz=config.phase.output_rate_hz,
-            gaussian_width=config.phase.morlet_gaussian_width,
-            window_length=config.phase.morlet_window_length,
-            precision=config.phase.morlet_precision,
-            norm=config.phase.morlet_normalization,
-            notch_60_hz=config.phase.notch_enabled,
-            notch_quality_factor=config.phase.notch_quality_factor,
-            minimum_relative_magnitude=config.phase.numerical_amplitude_threshold,
-            maximum_core_duration_s=config.phase.block_duration_s,
-        )
-        _validate_site_phase_tensor(tensor, frequency_hz.size)
-        site_tensors.append(tensor)
-    relative_time_s, phase_tensor, phase_valid, site_valid = _full_phase_axes(
-        site_tensors,
+    cache_metadata = _prepared_phase_work_metadata(
+        config,
         trial_indices,
-        frequency_hz.size,
+        alignment_times_s,
     )
+    cached: PreparedPhaseCache | None = None
+    if work_cache_root is not None and config.ppc_execution.prepared_phase_cache_enabled:
+        cached = load_prepared_phase_cache(work_cache_root, cache_metadata)
+        if cached is not None and not _cached_phase_axes_match_current_run(
+            cached,
+            config,
+            trial_indices,
+        ):
+            cached = None
+    site_tensors = []
+    if cached is None:
+        for site in config.sites:
+            tensor = site_phase_tensor_builder(
+                event_times_s=alignment_times_s[transform_positions],
+                trial_indices=trial_indices[transform_positions],
+                block_loader=factory(site),
+                frequencies_hz=frequency_hz,
+                window=whole_window,
+                output_sample_rate_hz=config.phase.output_rate_hz,
+                gaussian_width=config.phase.morlet_gaussian_width,
+                window_length=config.phase.morlet_window_length,
+                precision=config.phase.morlet_precision,
+                norm=config.phase.morlet_normalization,
+                notch_60_hz=config.phase.notch_enabled,
+                notch_quality_factor=config.phase.notch_quality_factor,
+                minimum_relative_magnitude=config.phase.numerical_amplitude_threshold,
+                maximum_core_duration_s=config.phase.block_duration_s,
+            )
+            _validate_site_phase_tensor(tensor, frequency_hz.size)
+            site_tensors.append(tensor)
+        relative_time_s, phase_tensor, phase_valid, site_valid = _full_phase_axes(
+            site_tensors,
+            trial_indices,
+            frequency_hz.size,
+        )
+    else:
+        relative_time_s = cached.axes["relative_time_s"]
+        phase_tensor = cached.phase
+        phase_valid = cached.valid
+        site_valid = cached.axes["site_trial_valid"]
     canonical_time_s = build_common_event_grid(
         whole_window[0],
         whole_window[1],
@@ -342,6 +535,32 @@ def prepare_phase_run(
     if not np.allclose(relative_time_s, canonical_time_s, rtol=0.0, atol=1e-12):
         raise ValueError("phase transform did not return the canonical output grid")
     relative_time_s = canonical_time_s
+    if (
+        cached is None
+        and work_cache_root is not None
+        and config.ppc_execution.prepared_phase_cache_enabled
+    ):
+        axes = {
+            "site_ids": np.asarray(
+                [site.stable_id for site in config.sites], dtype="<U64"
+            ),
+            "frequency_hz": frequency_hz.copy(),
+            "trial_indices": trial_indices.copy(),
+            "relative_time_s": relative_time_s.copy(),
+            "site_trial_valid": site_valid.copy(),
+            "site_trial_exclusion_reason": np.where(
+                site_valid,
+                "",
+                "phase_unavailable",
+            ).astype("<U32"),
+        }
+        write_prepared_phase_cache(
+            work_cache_root,
+            cache_metadata,
+            phase_tensor,
+            phase_valid,
+            axes,
+        )
     pair_indices = _configured_pair_indices(config)
     pair_valid = np.stack(
         [site_valid[site_a] & site_valid[site_b] for site_a, site_b in pair_indices]
@@ -740,6 +959,22 @@ def build_spike_phase_payload(
     prepared_phase: PreparedPhaseRun,
     prepared_spikes: PreparedSpikeRun,
 ) -> ComponentPayload:
+    """Build the frozen public Spike-phase payload without progress injection."""
+    return _build_spike_phase_payload(
+        config,
+        prepared_phase,
+        prepared_spikes,
+        progress_callback=None,
+    )
+
+
+def _build_spike_phase_payload(
+    config: LFPSummaryConfig,
+    prepared_phase: PreparedPhaseRun,
+    prepared_spikes: PreparedSpikeRun,
+    *,
+    progress_callback: Callable[[ProgressEvent], None] | None,
+) -> ComponentPayload:
     """Compute the complete observed and shuffled Spike-phase cache payload.
 
     Parameters
@@ -753,6 +988,9 @@ def build_spike_phase_payload(
         numerical validity on ``(site, frequency, trial, time)`` axes.
     prepared_spikes : PreparedSpikeRun
         Stable units and one event-relative seconds array per unit/trial.
+    progress_callback : callable or None
+        Internal pipeline seam receiving executor ``ProgressEvent`` objects.
+        The frozen public three-argument builder always supplies ``None``.
 
     Returns
     -------
@@ -799,6 +1037,7 @@ def build_spike_phase_payload(
          prepared_phase.trial_indices.size),
         dtype=np.int64,
     )
+    completed_ppc_runs: list[tuple[Path, str]] = []
     for condition_index in range(condition_count):
         for site_index in range(site_count):
             base_trial_mask = (
@@ -811,23 +1050,87 @@ def build_spike_phase_payload(
             valid_by_trial = np.moveaxis(
                 prepared_phase.phase_valid[site_index], 1, 0
             )
-            for epoch_index, epoch_window in enumerate(epoch_windows.values()):
+            for epoch_index, (epoch_name, epoch_window) in enumerate(
+                epoch_windows.items()
+            ):
                 selected_positions = np.flatnonzero(base_trial_mask)
                 schedule = _shared_derangement_schedule(
                     selected_positions.size,
                     config.ppc.shuffle_count,
                     _ppc_schedule_seed(config, condition_index, site_index, epoch_index),
                 )
-                for unit_index, train in enumerate(
-                    prepared_spikes.trial_spike_trains
-                ):
-                    selected_spikes = tuple(
+                selected_spikes_by_unit = tuple(
+                    tuple(
                         _spikes_in_epoch(
                             train.relative_spike_times[int(position)],
                             epoch_window,
                         )
                         for position in selected_positions
                     )
+                    for train in prepared_spikes.trial_spike_trains
+                )
+                selected_trial_indices = prepared_phase.trial_indices[selected_positions]
+                source_fingerprint = _work_fingerprint(
+                    fingerprint_source_files(config, component="spike_phase")
+                )
+                job_phase = _PPCPhaseJob(
+                    phase_tensor=prepared_phase.phase_tensor[
+                        site_index : site_index + 1, :, selected_positions, :
+                    ],
+                    phase_valid=prepared_phase.phase_valid[
+                        site_index : site_index + 1, :, selected_positions, :
+                    ],
+                    relative_time_s=prepared_phase.relative_time_s,
+                    trial_indices=selected_trial_indices.astype(np.int64, copy=True),
+                    site_id=config.sites[site_index].stable_id,
+                    condition_name=str(
+                        prepared_phase.prepared_trials.condition_names[condition_index]
+                    ),
+                    epoch_bounds_s=(float(epoch_window[0]), float(epoch_window[1])),
+                    source_fingerprint=source_fingerprint,
+                )
+                job_spikes = PreparedSpikeRun(
+                    unit_ids=prepared_spikes.unit_ids,
+                    population_ids=prepared_spikes.population_ids,
+                    trial_spike_trains=tuple(
+                        TrialRelativeSpikeTrains(
+                            unit_id=train.unit_id,
+                            relative_spike_times=selected_spikes_by_unit[unit_index],
+                            overlap_trial_indices=np.intersect1d(
+                                train.overlap_trial_indices,
+                                selected_trial_indices,
+                                assume_unique=False,
+                            ).astype(np.int64, copy=False),
+                        )
+                        for unit_index, train in enumerate(
+                            prepared_spikes.trial_spike_trains
+                        )
+                    ),
+                )
+                execution = lfp_summary_ppc_runtime.execute_ppc_blocks(
+                    config=config,
+                    execution=config.ppc_execution,
+                    prepared_phase=job_phase,
+                    prepared_spikes=job_spikes,
+                    schedule=schedule,
+                    work_root=config.output_directory.parent / "lfp_summary_work",
+                    progress_callback=progress_callback,
+                )
+                _assign_ppc_job_summary(
+                    arrays,
+                    condition_index,
+                    site_index,
+                    epoch_index,
+                    execution.summary_arrays,
+                )
+                if execution.run_directory.exists():
+                    completed_ppc_runs.append(
+                        (Path(execution.run_directory), execution.run_fingerprint)
+                    )
+                for unit_index, train in enumerate(
+                    prepared_spikes.trial_spike_trains
+                ):
+                    selected_spikes = selected_spikes_by_unit[unit_index]
                     for position, values in zip(
                         selected_positions,
                         selected_spikes,
@@ -849,28 +1152,12 @@ def build_spike_phase_payload(
                             prepared_phase.trial_indices[selected_positions],
                         )
                     )
-                    observed = spike_lfp_summary.compute_observed_ppc(
-                        probe_label=_split_stable_unit_id(train.unit_id)[0],
-                        cluster_id=_split_stable_unit_id(train.unit_id)[1],
-                        spike_phase_vectors=sampled,
-                        valid_mask=sampled_valid,
-                        frequencies_hz=frequencies_hz,
-                        spike_times_s=np.concatenate(selected_spikes)
-                        if selected_spikes
-                        else np.empty(0, dtype=float),
-                    )
                     index = (
                         unit_index,
                         condition_index,
                         site_index,
                         epoch_index,
                     )
-                    arrays["ppc"][index] = observed.ppc
-                    arrays["resultant_length"][index] = observed.resultant_length
-                    arrays["preferred_phase_rad"][index] = observed.preferred_phase_rad
-                    arrays["spike_count"][index] = observed.spike_count
-                    arrays["computable"][index] = observed.computable
-                    arrays["reliable"][index] = observed.reliable
                     hist = spike_lfp_summary.build_representative_phase_histograms(
                         frequencies_hz=frequencies_hz,
                         spike_phase_vectors=sampled,
@@ -879,20 +1166,6 @@ def build_spike_phase_payload(
                         phase_bin_edges_rad=phase_bin_edges,
                     )
                     histogram[index] = hist.spike_count_by_band
-                    if schedule is not None:
-                        shuffled = spike_lfp_summary.compute_trial_shuffle_ppc(
-                            trial_relative_spike_times_s=selected_spikes,
-                            phase_time_s=prepared_phase.relative_time_s,
-                            trial_phase_vectors=np.where(
-                                valid_by_trial[selected_positions],
-                                phase_by_trial[selected_positions],
-                                0.0,
-                            ),
-                            frequencies_hz=frequencies_hz,
-                            schedule=schedule,
-                            overlap_trial_indices=train.overlap_trial_indices,
-                        )
-                        _assign_null_summary(arrays, index, shuffled.null_summary)
     q_value = spike_lfp_summary.adjust_ppc_pvalues_bh(
         p_value=arrays["p_value"],
         null_eligible=arrays["null_eligible"],
@@ -957,7 +1230,13 @@ def build_spike_phase_payload(
             "illustrative_trial_indices": illustrative,
         }
     )
-    return build_component_payload("spike_phase", arrays)
+    payload = build_component_payload("spike_phase", arrays)
+    cleanup = _ppc_post_commit_cleanup(config, completed_ppc_runs)
+    return ComponentPayload(
+        arrays=payload.arrays,
+        manifest_entry=payload.manifest_entry,
+        post_commit_cleanup=cleanup,
+    )
 
 
 def make_power_pipeline_dependencies(
@@ -1084,6 +1363,7 @@ def make_synchrony_pipeline_dependencies(
             block_loader_factory=block_loader_factory,
             spikeglx_loader=spikeglx_loader,
             open_ephys_loader=open_ephys_loader,
+            work_cache_root=config.output_directory.parent / "lfp_summary_work",
         )
 
     def load_manifest(directory: Path) -> dict[str, object]:
@@ -1178,6 +1458,7 @@ def make_spike_phase_pipeline_dependencies(
             block_loader_factory=block_loader_factory,
             spikeglx_loader=spikeglx_loader,
             open_ephys_loader=open_ephys_loader,
+            work_cache_root=config.output_directory.parent / "lfp_summary_work",
         )
 
     def prepare_spike(
@@ -1215,6 +1496,25 @@ def make_spike_phase_pipeline_dependencies(
             "synchrony payload is unsupported by Spike-phase runtime"
         )
 
+    def build_spike_payload_with_progress(
+        config: LFPSummaryConfig,
+        phase: object,
+        spikes: object,
+        progress_callback: Callable[[ProgressEvent], None] | None,
+    ) -> ComponentPayload:
+        """Build Spike phase while forwarding pipeline progress to PPC jobs."""
+        if not isinstance(phase, PreparedPhaseRun) or not isinstance(
+            spikes,
+            PreparedSpikeRun,
+        ):
+            raise ValueError("Spike progress payload requires prepared runtime products")
+        return _build_spike_phase_payload(
+            config,
+            phase,
+            spikes,
+            progress_callback=progress_callback,
+        )
+
     return PipelineDependencies(
         prepare_power=unsupported_power,
         prepare_phase=prepare_phase,
@@ -1224,6 +1524,7 @@ def make_spike_phase_pipeline_dependencies(
         build_spike_phase_payload=build_spike_phase_payload,
         load_manifest=load_manifest,
         write_component=write_component_transaction,
+        build_spike_phase_payload_with_progress=build_spike_payload_with_progress,
     )
 
 
@@ -1618,6 +1919,83 @@ def _assign_null_summary(
     )
     for field in fields:
         arrays[field][index] = getattr(summary, field)
+
+
+def _assign_ppc_job_summary(
+    arrays: dict[str, np.ndarray],
+    condition_index: int,
+    site_index: int,
+    epoch_index: int,
+    summary_arrays: Mapping[str, np.ndarray],
+) -> None:
+    """Copy one executor's unit-frequency summaries into final cache axes.
+
+    Parameters
+    ----------
+    arrays : dict[str, numpy.ndarray]
+        Final schema arrays with axes ``(unit, condition, site, epoch,
+        frequency)``.
+    condition_index, site_index, epoch_index : int
+        Zero-based categorical positions identifying the completed PPC job.
+    summary_arrays : Mapping[str, numpy.ndarray]
+        Executor summaries, each on ``(unit, frequency)`` axes. The executor
+        deliberately retains no shuffle-by-unit arrays.
+
+    Raises
+    ------
+    ValueError
+        If a required summary is missing or has axes inconsistent with the
+        final cache's unit/frequency positions.
+    """
+    fields = (
+        "ppc",
+        "resultant_length",
+        "preferred_phase_rad",
+        "spike_count",
+        "eligible_trial_count",
+        "computable",
+        "reliable",
+        "null_eligible",
+        "null_exceedance_count",
+        "permutation_count",
+        "p_value",
+        "q_value",
+        "significant",
+        "null_mean",
+        "null_std",
+        "null_p025",
+        "null_p50",
+        "null_p975",
+    )
+    expected_shape = (arrays["ppc"].shape[0], arrays["ppc"].shape[-1])
+    for field in fields:
+        if field not in summary_arrays:
+            raise ValueError(f"PPC executor summary lacks {field}")
+        values = np.asarray(summary_arrays[field])
+        if values.shape != expected_shape:
+            raise ValueError("PPC executor summary axes disagree with final payload")
+        arrays[field][:, condition_index, site_index, epoch_index, :] = values
+
+
+def _ppc_post_commit_cleanup(
+    config: LFPSummaryConfig,
+    completed_runs: list[tuple[Path, str]],
+) -> Callable[[], None] | None:
+    """Return exact completed-run cleanup for the approved retention policy."""
+    if (
+        not config.ppc_execution.checkpoint_enabled
+        or config.ppc_execution.checkpoint_retention != "incomplete_only"
+        or not completed_runs
+    ):
+        return None
+    exact_runs = tuple(dict.fromkeys(completed_runs))
+
+    def cleanup() -> None:
+        """Remove only executor runs that produced this successfully committed payload."""
+        for run_directory, run_fingerprint in exact_runs:
+            cleanup_ppc_run(run_directory, run_fingerprint)
+
+    return cleanup
 
 
 def _sample_observed_trial_phase(

@@ -33,6 +33,9 @@ PrepareSpike = Callable[[LFPSummaryConfig, object], object]
 BuildPowerPayload = Callable[[LFPSummaryConfig, object], "ComponentPayload"]
 BuildSynchronyPayload = Callable[[LFPSummaryConfig, object], "ComponentPayload"]
 BuildSpikePayload = Callable[[LFPSummaryConfig, object, object], "ComponentPayload"]
+BuildSpikePayloadWithProgress = Callable[
+    [LFPSummaryConfig, object, object, ProgressCallback], "ComponentPayload"
+]
 LoadManifest = Callable[[Path], dict[str, object]]
 WriteComponent = Callable[[Path, str, dict[str, np.ndarray], dict[str, object]], None]
 
@@ -46,6 +49,13 @@ class PipelineDependencies:
     has the same ``(cache_directory, component, arrays, manifest)`` signature
     as :func:`lfp_summary_io.write_component_transaction` and owns validation
     plus manifest-last atomic replacement.
+
+    ``build_spike_phase_payload_with_progress`` is an optional approved
+    extension of the frozen three-argument Spike-phase builder. When present,
+    the pipeline calls it with the same validated configuration/prepared phase/
+    prepared spikes plus the framework-independent progress callback. It must
+    return the same ``ComponentPayload`` array contract and must not write a
+    final component itself.
     """
 
     prepare_power: PreparePower
@@ -56,6 +66,7 @@ class PipelineDependencies:
     build_spike_phase_payload: BuildSpikePayload
     load_manifest: LoadManifest
     write_component: WriteComponent
+    build_spike_phase_payload_with_progress: BuildSpikePayloadWithProgress | None = None
 
 
 @dataclass(frozen=True)
@@ -66,10 +77,17 @@ class ComponentPayload:
     physical units, and missing-value semantics defined by ``manifest_entry``.
     The pipeline adds transaction metadata but does not transform or validate
     numerical arrays.
+
+    ``post_commit_cleanup`` is optional work-artifact cleanup. It runs only
+    after ``write_component`` has completed the final component/manifest
+    transaction. It receives no payload arrays and may only remove exact,
+    already-committed execution artifacts; a cleanup failure is reported as a
+    warning and cannot revoke the committed scientific component.
     """
 
     arrays: dict[str, np.ndarray]
     manifest_entry: dict[str, object]
+    post_commit_cleanup: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +98,10 @@ class ComponentRunResult:
     or failed. ``stage`` identifies the completed or failed orchestration step;
     ``error`` is ``None`` on success. ``manifest`` is the proposed committed
     mapping on success and ``None`` after a pre-commit failure.
+
+    ``cleanup_warning`` is ``None`` when no post-commit cleanup was requested
+    or it succeeded. A nonempty value reports a recoverable cleanup failure
+    after a successful final commit; it does not change ``state``.
     """
 
     component: str
@@ -87,6 +109,7 @@ class ComponentRunResult:
     stage: str
     error: str | None
     manifest: dict[str, object] | None
+    cleanup_warning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -185,7 +208,15 @@ def compute_spike_phase_component(
         return _failed("spike_phase", "prepare_spike", error, progress_callback, 1)
     _emit(progress_callback, "spike_phase", 2, "payload_spike_phase")
     try:
-        payload = dependencies.build_spike_phase_payload(config, phase, spikes)
+        if dependencies.build_spike_phase_payload_with_progress is None:
+            payload = dependencies.build_spike_phase_payload(config, phase, spikes)
+        else:
+            payload = dependencies.build_spike_phase_payload_with_progress(
+                config,
+                phase,
+                spikes,
+                progress_callback,
+            )
     except _RECOVERABLE_ERRORS as error:
         return _failed("spike_phase", "payload_spike_phase", error, progress_callback, 2)
     return _commit_component("spike_phase", config, dependencies, payload, progress_callback)
@@ -265,6 +296,12 @@ def _commit_component(
         )
     except _RECOVERABLE_ERRORS as error:
         return _failed(component, f"write_{component}", error, progress_callback, 3)
+    cleanup_warning = None
+    if payload.post_commit_cleanup is not None:
+        try:
+            payload.post_commit_cleanup()
+        except _RECOVERABLE_ERRORS as error:
+            cleanup_warning = str(error)
     _emit(progress_callback, component, 4, f"complete_{component}")
     return ComponentRunResult(
         component,
@@ -272,6 +309,7 @@ def _commit_component(
         f"complete_{component}",
         None,
         updated_manifest,
+        cleanup_warning,
     )
 
 

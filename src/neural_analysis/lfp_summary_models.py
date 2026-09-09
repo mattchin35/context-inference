@@ -181,6 +181,9 @@ class ProgressEvent:
     completed_count: int
     total_count: int | None
     message: str
+    elapsed_seconds: float | None = None
+    eta_seconds: float | None = None
+    job_id: str | None = None
 
 
 def default_lfp_summary_config() -> LFPSummaryConfig:
