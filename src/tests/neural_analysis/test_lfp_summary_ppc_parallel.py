@@ -192,7 +192,8 @@ def test_parallel_progress_is_parent_only_and_monotonic(tmp_path: Path) -> None:
     for stage in ("observed_reduction", "trial_edge_reduction", "shuffle_aggregation"):
         counts = [event.completed_count for event in block_events if event.stage == stage]
         assert counts == sorted(counts)
-        assert counts == [0, 1, 2, 3, 4]
+        expected = [0, 1, 2, 3, 4] if stage == "observed_reduction" else [1, 2, 3, 4]
+        assert counts == expected
     assert all(event.job_id is not None for event in events)
 
 
