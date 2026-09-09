@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import os
 from pathlib import Path
 import time
@@ -250,6 +251,36 @@ def test_production_run_lock_does_not_steal_another_live_local_pid(
     monkeypatch.setattr(adapter.os, "kill", lambda pid, _signal: seen.append(pid))
     assert adapter._production_process_exists(4242) is True
     assert seen == [4242]
+
+
+def test_production_dependency_lock_accepts_runner_positional_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The concrete lock seam accepts the runner's two positional arguments."""
+    captured: list[tuple[Path, dict[str, str]]] = []
+    monkeypatch.setattr(
+        adapter,
+        "acquire_ct026_profile_run_lock",
+        lambda directory, identity, **_: (
+            captured.append((directory, identity)) or nullcontext()
+        ),
+    )
+    dependencies = adapter.make_production_ct026_profile_dependencies(
+        work_cache_root=tmp_path / "unused-default"
+    )
+    run_directory = tmp_path / "ct026_ppc_profile_test"
+    run_directory.mkdir()
+    identity = {
+        "config_fingerprint": "config-id",
+        "source_fingerprint": "source-id",
+        "git_fingerprint": "git-id",
+    }
+
+    with dependencies.acquire_run_lock(run_directory, identity):
+        pass
+
+    assert captured == [(run_directory, identity)]
 
 
 def test_production_phase_uses_callback_work_root_and_slice_rejects_nonexact_trials(
