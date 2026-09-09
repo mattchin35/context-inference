@@ -3,20 +3,24 @@
 ## Live handoff snapshot
 
 - **Snapshot:** 2026-09-09 on branch `refactor`.
-- **Current implementation HEAD:** `6352db4f3393bac1361bd5f1b5b541601161edda`
-  (`6352db4`, `implement restartable PPC runtime`).
+- **Current implementation HEAD:** `aadee389a26ee32e35e8977670741ddf2a47a33a`
+  (`aadee38`, `fix: encode missing phase alignment cache identity`).
 - **Upstream relationship at this implementation checkpoint:** local `refactor`
   contains the WP5C-2 through WP5C-4 commits after `origin/refactor` at
   `1f0bffa`.
-- **Verified neural baseline at this HEAD:** 700 passed, no skipped or xfailed
-  tests, with 16 known Pynapple empty-epoch/divide-by-zero warnings from
+- **Verified neural baseline before the production benchmark:** 734 passed, no
+  skipped or xfailed tests, with 16 known Pynapple warnings and three expected
+  multiprocessing-fork deprecation warnings from
   `UV_CACHE_DIR=/tmp/context_inference_uv_cache MPLCONFIGDIR=/tmp/context_inference_mpl uv run
   pytest -q -p no:cacheprovider src/tests/neural_analysis`.
 - **Approval state:** the user approved the Synchrony report dated
   `2026-08-26T16-57-33Z` and approved completing WP5C before the CT026
   100-shuffle Spike-phase preview. The WP5C-0 contracts are approved and
-  WP5C-1 through WP5C-4 are complete. WP5C-5 is the next implementation
-  package; no CT026 Spike-phase computation has been authorized or run.
+  WP5C-1 through WP5C-4 are complete. The user authorized the work-only WP5C-5
+  CT026 engineering benchmark; its serial measurement is complete and wrote no
+  scientific Spike-phase component. The measured serial projection justifies
+  WP5C-5 worker-invariance tests and 1/2/4/8-worker profiling next. WP5C-6 has
+  not started.
 - **Do not redo completed packages:** WP0, WP1, WP2 preparation, WP3, WP4,
   WP5A, WP5B, and the Spike-phase runtime bridge are historical completed work.
   Remaining integration work must extend them through the packages below, not
@@ -49,7 +53,7 @@ Source-of-truth hierarchy:
 | WP5A observed PPC | Complete | Tests `fed9435`, `355307e`; implementation `d6c3477`; `test_spike_lfp_summary.py` | None |
 | WP5B shuffle inference | Complete | Tests `c94e152`, `7d22d6f`; implementation `01b7507`; `test_spike_lfp_summary.py` | Performance redesign only; scientific reference must remain unchanged |
 | Spike runtime bridge | Complete | Tests `453d08a`; implementation `c8e76d5`; `test_lfp_summary_runtime.py` | WP5C optimization; no CT026 Spike-phase execution has occurred |
-| WP5C optimization | WP5C-0 approved; WP5C-1 through WP5C-4 complete | WP5C-4 tests `456c993`, `974321f`, `66d7ed9`, `8eddc02`, `536d190`, `c82cd8f`, `478b4fa`, `8845496`, `8cb2188`, `c34425b`, `b8162a3`, `1806dbf`, `f4641d3`, `50e8b96`, `9655d89`, `00400be`, `d19c51b`; implementation `6352db4`; PPC runtime 26 passed, affected suites 120/128 passed, full neural suite 700 passed with 16 known warnings | Profile serial WP5C-4 implementation in WP5C-5; WP5C-6 remains pending |
+| WP5C optimization | WP5C-0 approved; WP5C-1 through WP5C-4 complete; WP5C-5 serial benchmark complete | WP5C-4 implementation `6352db4`; WP5C-5 profiling/runtime commits through `aadee38`; work-only CT026 profile `analysis_runs/ct026_ppc_profile_2026-09-09T21-33-06Z`; full neural suite 734 passed | Add worker-invariance tests, then benchmark 1/2/4/8 workers because the serial projection exceeds the approved runtime thresholds; WP5C-6 remains pending |
 | WP6 plotting | Partially complete | Tests `b1f51f3` and later focused plotting tests; implementation `d1c3e21`; Power and Synchrony reports above | Complete PPC exemplars and reporting in WP12 |
 | WP7 pipeline | Partially complete | Tests `b1f51f3`; implementation `067fdef`; `test_lfp_summary_pipeline.py` | Composed production dependencies and detailed progress in WP10 |
 | WP8 webapp | Partial; Power path only | Tests `c7ec7c1`, `003394a`, `f3954de`; implementations `2885ffd`, `926801b`; `test_lfp_summary_webapp.py` | Synchrony, Spike phase, Compute All, active population, progress, and complete cached views in WP11 |
@@ -1725,6 +1729,41 @@ Steps:
 
 Parallel execution is optional. Keep `worker_count=1` if workers materially
 increase memory or provide little improvement.
+
+Serial benchmark checkpoint (2026-09-09):
+
+- The completed work-only run is
+  `analysis_runs/ct026_ppc_profile_2026-09-09T21-33-06Z` under the CT026
+  session. It contains atomic scalar state/profile/summary files and resumable
+  phase/PPC work only; it contains no manifest or `spike_phase.npz`.
+- The deterministic descriptor selected condition `incorrect`, site `PFC`, the
+  half-open whole epoch `[-2, 2)` s, all 249 site-valid trials, and 263 eligible
+  units from the 273-unit active ProbeB population. Low/median/high units were
+  `ProbeB:39` (293 spikes), `ProbeB:181` (2,325 spikes), and `ProbeB:63`
+  (15,676 spikes).
+- Cold phase preparation took 136.12 s and warm mmap reuse took 7.87 s. The
+  process-lifetime phase peak was 4,102,889,472 bytes. Work storage was 1.1 GiB.
+- Serial 100-shuffle PPC took 20.90, 21.87, and 23.83 s for the low, median,
+  and high one-unit jobs. The combined three-unit job took 66.80 s and peaked
+  at 2,329,223,168 child bytes. Its observed and inclusive shuffled-edge stages
+  took 26.57 and 39.69 s respectively; checkpoint overhead was 0.012 s.
+- A transparent linear-per-unit projection puts the largest 249-trial
+  273-unit condition/site/epoch job near 98-106 minutes at 100 shuffles. Edge
+  saturation from the exact deterministic schedules projects the corresponding
+  1,000-shuffle job near 3.6-3.9 hours. Applying the same measured edge/trial
+  scaling to the actual nine condition trial counts, three sites, and three
+  epochs gives an intentionally conservative all-eligible range of roughly
+  47-51 hours at 100 shuffles and 90-100 hours at 1,000 shuffles. These are
+  engineering projections, not measured full-component runtimes.
+- The serial projection is materially above both review thresholds. Therefore
+  WP5C-5 proceeds to test-first worker-count invariance and isolated 1/2/4/8
+  worker measurements. No WP5C-6 preview or 1,000-shuffle result is authorized
+  by this profiling checkpoint.
+- Production launch review exposed and corrected three pre-computation defects:
+  the runner-lock callback signature, JSON-safe identity for missing alignment
+  times, and unsafe child/recovery behavior. The two failed attempts stopped
+  before a phase transform or PPC scenario; their timestamped directories are
+  preserved for audit. Tests and implementations remain separate commits.
 
 #### WP5C-6 - CT026 preview validation
 
