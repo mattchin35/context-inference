@@ -92,6 +92,9 @@ def _prepared_phase_work_metadata(
     alignment_times_s : numpy.ndarray
         Float64 shape ``(trial,)`` absolute event times in seconds. These
         coordinates bind a cached trial axis to the current trial table.
+        Finite seconds remain JSON numbers in the cache identity; unavailable
+        or otherwise nonfinite entries are represented by reserved JSON
+        strings at their original trial positions.
 
     Returns
     -------
@@ -114,9 +117,22 @@ def _prepared_phase_work_metadata(
             "schema_version",
         )
     }
+    # Cache metadata is strict JSON (``allow_nan=False``). Preserve the full
+    # trial axis even when an objective alignment is unavailable, because its
+    # position is part of the phase representation identity.
+    encoded_alignment_times_s: list[float | str] = []
+    for alignment_time_s in np.asarray(alignment_times_s, dtype=float):
+        if np.isnan(alignment_time_s):
+            encoded_alignment_times_s.append("__missing_alignment_nan__")
+        elif np.isposinf(alignment_time_s):
+            encoded_alignment_times_s.append("__nonfinite_alignment_posinf__")
+        elif np.isneginf(alignment_time_s):
+            encoded_alignment_times_s.append("__nonfinite_alignment_neginf__")
+        else:
+            encoded_alignment_times_s.append(float(alignment_time_s))
     trial_axis = {
         "trial_indices": np.asarray(trial_indices, dtype=np.int64).tolist(),
-        "alignment_times_s": np.asarray(alignment_times_s, dtype=float).tolist(),
+        "alignment_times_s": encoded_alignment_times_s,
     }
     source_fingerprint = _work_fingerprint(
         fingerprint_source_files(config, component="synchrony")
