@@ -81,9 +81,16 @@ def test_ct026_adapter_binds_cold_warm_selection_and_isolated_ordered_jobs(
         calls.append(("select", (config, phase, spikes)))
         return representative
 
-    def slice_job(*, profile_job: RepresentativePPCProfileJob, scenario: str, phase: object, spikes: object) -> object:
-        calls.append(("slice", (scenario, profile_job, phase, spikes)))
-        return SimpleNamespace(scenario=scenario, trial_indices=profile_job.trial_indices)
+    def slice_job(
+        *, profile_job: RepresentativePPCProfileJob, scenario: str,
+        unit_ids: tuple[str, ...], phase: object, spikes: object,
+    ) -> object:
+        calls.append(("slice", (scenario, unit_ids, profile_job, phase, spikes)))
+        return SimpleNamespace(
+            scenario=scenario,
+            trial_indices=profile_job.trial_indices,
+            unit_ids=unit_ids,
+        )
 
     def run_child(*, job: object, shuffle_count: int, work_root: Path) -> dict[str, object]:
         calls.append(("child", (job.scenario, shuffle_count, work_root, job.trial_indices)))
@@ -115,7 +122,7 @@ def test_ct026_adapter_binds_cold_warm_selection_and_isolated_ordered_jobs(
             assert metrics["peak_memory_source"] == "resource.getrusage(RUSAGE_CHILDREN).ru_maxrss_kib"
             assert metrics["config_fingerprint"] == "config-id"
             assert metrics["source_fingerprint"] == "source-id"
-            assert metrics["git_fingerprint"] == "git-id"
+            assert metrics["git_fingerprint"] == "commit:abc123+dirty-tree:sha256:deadbeef"
         return SimpleNamespace(profiles={})
 
     dependencies = CT026PPCProfileAdapterDependencies(
@@ -129,7 +136,7 @@ def test_ct026_adapter_binds_cold_warm_selection_and_isolated_ordered_jobs(
         run_profile=generic_runner,
         config_fingerprint=lambda _: "config-id",
         source_fingerprint=lambda _: "source-id",
-        git_fingerprint=lambda: "git-id",
+        git_fingerprint=lambda: "commit:abc123+dirty-tree:sha256:deadbeef",
         monotonic_seconds=lambda: next(clock_values),
     )
     result = run_ct026_ppc_profile_adapter(
@@ -143,17 +150,24 @@ def test_ct026_adapter_binds_cold_warm_selection_and_isolated_ordered_jobs(
     assert generic_kwargs["config"] == "ct026-config"
     assert generic_kwargs["config_fingerprint"] == "config-id"
     assert generic_kwargs["source_fingerprint"] == "source-id"
-    assert generic_kwargs["git_fingerprint"] == "git-id"
+    assert generic_kwargs["git_fingerprint"] == "commit:abc123+dirty-tree:sha256:deadbeef"
     phase_paths = [value[1] for name, value in calls if name == "phase"]
     assert phase_paths[0] == phase_paths[1]
     assert phase_paths[0].name == "phase"
     assert [value[0] for name, value in calls if name == "slice"] == [
         "low", "median", "high", "combined",
     ]
+    expected_units = {
+        "low": ("ProbeB:11",),
+        "median": ("ProbeB:22",),
+        "high": ("ProbeB:33",),
+        "combined": ("ProbeB:11", "ProbeB:22", "ProbeB:33"),
+    }
     for _name, value in [call for call in calls if call[0] == "slice"]:
-        assert value[1] is representative
-        assert value[2] == "phase-2"
-        assert value[3] == "prepared-spikes"
+        assert value[1] == expected_units[value[0]]
+        assert value[2] is representative
+        assert value[3] == "phase-2"
+        assert value[4] == "prepared-spikes"
     for _name, value in [call for call in calls if call[0] == "child"]:
         assert value[1] == 100
         assert value[3] == representative.trial_indices
