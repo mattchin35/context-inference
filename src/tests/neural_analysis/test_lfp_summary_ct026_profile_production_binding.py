@@ -186,3 +186,32 @@ def test_production_run_lock_does_not_steal_another_live_local_pid(
     monkeypatch.setattr(adapter.os, "kill", lambda pid, _signal: seen.append(pid))
     assert adapter._production_process_exists(4242) is True
     assert seen == [4242]
+
+
+def test_production_phase_uses_callback_work_root_and_slice_rejects_nonexact_trials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Cold/warm cache location is runner-owned and production slice requires 249 rows."""
+    captured: list[Path] = []
+    monkeypatch.setattr(adapter, "build_ct026_default_active_population", lambda *_: "population")
+    monkeypatch.setattr(adapter, "build_ct026_spike_phase_preview_config", lambda *_: default_lfp_summary_config())
+    monkeypatch.setattr(adapter.spike_behavior_pynapple, "load_sorter_metadata", lambda *_: (None, None))
+    monkeypatch.setattr(adapter.unit_spike_loading, "load_channel_quality", lambda *_: None)
+    monkeypatch.setattr(adapter.lfp_summary_runtime, "prepare_phase_run", lambda *_args, **kwargs: captured.append(kwargs["work_cache_root"]) or "phase")
+    dependencies = adapter.make_production_ct026_profile_dependencies(work_cache_root=tmp_path / "default")
+    dependencies.prepare_phase(default_lfp_summary_config(), work_cache_root=tmp_path / "run-specific-phase")
+    assert captured == [tmp_path / "run-specific-phase"]
+
+    job = _job()
+    phase = SimpleNamespace(trial_indices=np.array([10, 20], dtype=np.int64), site_valid=np.ones((3, 2), dtype=bool), phase_tensor=np.ones((3, 5, 2, 2), dtype=np.complex64), phase_valid=np.ones((3, 5, 2, 2), dtype=bool), prepared_trials=SimpleNamespace(condition_names=("condition-a",), condition_membership=np.ones((2, 1), dtype=bool)), relative_time_s=np.array([-2., 0.]))
+    spikes = SimpleNamespace(unit_ids=("ProbeB:1",), population_ids=("ProbeB active",), trial_spike_trains=(SimpleNamespace(unit_id="ProbeB:1", relative_spike_times=(np.array([0.]), np.array([0.])), overlap_trial_indices=np.array([], dtype=np.int64)),))
+    with pytest.raises(ValueError, match="249"):
+        adapter.slice_ct026_profile_job(config=default_lfp_summary_config(), profile_job=job, scenario="low", unit_ids=("ProbeB:1",), phase=phase, spikes=spikes)
+
+
+def test_local_process_exists_handles_permission_and_dead_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OS liveness treats permission as live and ProcessLookup as dead."""
+    monkeypatch.setattr(adapter.os, "kill", lambda *_: (_ for _ in ()).throw(PermissionError()))
+    assert adapter._local_process_exists(7) is True
+    monkeypatch.setattr(adapter.os, "kill", lambda *_: (_ for _ in ()).throw(ProcessLookupError()))
+    assert adapter._local_process_exists(7) is False
