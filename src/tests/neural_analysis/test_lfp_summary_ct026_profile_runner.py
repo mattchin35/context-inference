@@ -75,12 +75,13 @@ def test_ct026_profile_runner_persists_atomic_stages_and_scalar_report_only(
 def test_ct026_profile_runner_resumes_exact_identity_and_preserves_interrupted_work(
     tmp_path: Path,
 ) -> None:
-    """An interrupted scenario leaves work/state and an exact rerun skips completed stages.
+    """Interrupted work remains, while exact resume rehydrates required inputs.
 
     The injected median scenario creates a work marker then raises. Its marker
-    must remain. An exact-identity rerun resumes only median/high/combined,
-    rather than redoing phase preparation, selection, or low. A source, config,
-    or Git fingerprint mismatch raises before invoking any injected operation.
+    must remain. An exact-identity rerun reloads only the warm prepared phase,
+    reconstructs spike selection, and resumes median/high/combined without cold
+    phase work or the completed low scenario. A source, config, or Git
+    fingerprint mismatch raises before invoking any injected operation.
     """
     first_calls: list[str] = []
 
@@ -116,15 +117,37 @@ def test_ct026_profile_runner_resumes_exact_identity_and_preserves_interrupted_w
     assert (run_directory / "work" / "median" / "checkpoint-marker").is_file()
 
     resumed_calls: list[str] = []
+    hydration_calls: list[str] = []
+
+    def rehydrate_phase(*, warm: bool) -> str:
+        """Reload the prepared phase mmap while forbidding cold recomputation."""
+        assert warm is True
+        hydration_calls.append("phase:True")
+        return "rehydrated-phase"
+
+    def reconstruct_spikes(phase: str) -> str:
+        """Rebuild deterministic spike metadata from the rehydrated phase."""
+        assert phase == "rehydrated-phase"
+        hydration_calls.append("selection")
+        return "rehydrated-spikes"
+
+    def resumed_job(*, scenario: str, phase: str, spikes: str, **_: object) -> dict[str, float]:
+        """Profile only unfinished scenarios using reconstructed inputs."""
+        assert phase == "rehydrated-phase"
+        assert spikes == "rehydrated-spikes"
+        resumed_calls.append(scenario)
+        return {"total_elapsed_seconds": 1.0, "peak_memory_bytes": 1.0}
+
     result = run_ct026_ppc_profile(
         config={"session": "CT026"}, config_fingerprint="config-a",
         source_fingerprint="source-a", git_fingerprint="git-a", analysis_root=tmp_path,
         run_directory=run_directory,
-        prepare_phase=lambda **_: (_ for _ in ()).throw(AssertionError("phase repeated")),
-        select_spikes=lambda _: (_ for _ in ()).throw(AssertionError("selection repeated")),
-        profile_job=lambda *, scenario, **_: resumed_calls.append(scenario) or {"total_elapsed_seconds": 1.0, "peak_memory_bytes": 1.0},
+        prepare_phase=rehydrate_phase,
+        select_spikes=reconstruct_spikes,
+        profile_job=resumed_job,
     )
     assert result.run_directory == run_directory
+    assert hydration_calls == ["phase:True", "selection"]
     assert resumed_calls == ["median", "high", "combined"]
 
     with pytest.raises(ValueError, match="source_fingerprint"):
