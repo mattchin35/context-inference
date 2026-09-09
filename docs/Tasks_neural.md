@@ -1764,6 +1764,16 @@ Serial benchmark checkpoint (2026-09-09):
   times, and unsafe child/recovery behavior. The two failed attempts stopped
   before a phase transform or PPC scenario; their timestamped directories are
   preserved for audit. Tests and implementations remain separate commits.
+- Interruption checkpoint: worker contract tests are committed in `d1bed17`,
+  `32aac40`, `4dfe5fc`, and fixture correction `ccbac69`. Initial implementation
+  `4cc5c83` is numerically green but is not accepted: supervisory review found
+  that its `submit(...).result()` loop serializes every block and that it uses
+  the platform default fork context. Corrective test-only commit `9fe7f1f`
+  records genuine RED (2 failed, 12 passed) for an explicit spawn context, an
+  initial bounded concurrent submission window, canonical result order, and
+  failure cancellation/shutdown. The exact next action is a source-only GREEN
+  correction to `lfp_summary_ppc_runtime.py`, followed by the focused and full
+  neural suites; do not benchmark worker counts against `4cc5c83`.
 
 #### WP5C-6 - CT026 preview validation
 
