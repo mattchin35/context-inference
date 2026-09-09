@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+import socket
 
 import numpy as np
 import pytest
@@ -333,6 +336,201 @@ def test_ppc_checkpoint_writer_lock_and_unsafe_block_ids_are_rejected(tmp_path: 
                 {"ppc": np.array([[0.1]], dtype=float)},
                 metadata,
             )
+
+
+def test_ppc_writer_lock_is_an_exact_json_ownership_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checkpoint mutation observes a complete exact-run writer ownership record."""
+    metadata = {**_metadata("run-a"), "run_fingerprint": "run-a"}
+    run_root = tmp_path / "ppc" / "run-a"
+    original_atomic_json = work_cache._atomic_json
+    observed_record: dict[str, object] = {}
+
+    def inspect_writer_lock(
+        directory: Path,
+        name: str,
+        value: dict[str, object],
+    ) -> None:
+        """Capture the writer record before the first checkpoint JSON mutation."""
+        if not observed_record:
+            observed_record.update(
+                json.loads((run_root / "writer.lock").read_text(encoding="utf-8"))
+            )
+        original_atomic_json(directory, name, value)
+
+    monkeypatch.setattr(work_cache, "_atomic_json", inspect_writer_lock)
+    work_cache.write_ppc_checkpoint(
+        run_root,
+        "block-000",
+        {"ppc": np.array([[0.1]], dtype=float)},
+        metadata,
+    )
+
+    assert observed_record == {
+        "schema_version": "1",
+        "pid": os.getpid(),
+        "hostname": socket.gethostname(),
+        "run_fingerprint": "run-a",
+        "scope": "checkpoint:block-000",
+    }
+
+
+def _lock_record(
+    *,
+    fingerprint: str = "run-a",
+    hostname: str = "profile-host",
+    pid: int = 4312,
+    scope: str = "executor",
+) -> dict[str, object]:
+    """Return one complete PPC lock ownership record without physical units."""
+    return {
+        "schema_version": "1",
+        "pid": pid,
+        "hostname": hostname,
+        "run_fingerprint": fingerprint,
+        "scope": scope,
+    }
+
+
+def _write_lock(path: Path, record: dict[str, object]) -> bytes:
+    """Write canonical test lock bytes and return them for immutability checks."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
+    path.write_bytes(payload)
+    return payload
+
+
+@pytest.mark.parametrize(
+    ("lock_name", "scope"),
+    (("executor.lock", "executor"), ("writer.lock", "checkpoint:block-000")),
+)
+def test_recover_stale_lock_removes_only_exact_same_host_dead_pid_ownership(
+    tmp_path: Path,
+    lock_name: str,
+    scope: str,
+) -> None:
+    """An explicit recovery removes validated dead ownership for the exact PPC run."""
+    lock_path = tmp_path / "ppc" / "run-a" / lock_name
+    _write_lock(lock_path, _lock_record(scope=scope))
+    checked_pids: list[int] = []
+
+    def pid_is_alive(pid: int) -> bool:
+        """Record the validated local PID and report that its process is dead."""
+        checked_pids.append(pid)
+        return False
+
+    recovered = work_cache.recover_stale_lock(
+        lock_path,
+        "run-a",
+        hostname="profile-host",
+        pid_is_alive=pid_is_alive,
+    )
+
+    assert recovered is True
+    assert checked_pids == [4312]
+    assert not lock_path.exists()
+
+
+def test_recover_stale_lock_rejects_live_or_foreign_ownership_without_mutation(
+    tmp_path: Path,
+) -> None:
+    """Live and foreign-host locks remain byte-identical and cannot be recovered."""
+    lock_path = tmp_path / "ppc" / "run-a" / "executor.lock"
+    live_bytes = _write_lock(lock_path, _lock_record())
+    with pytest.raises(FileExistsError, match="live"):
+        work_cache.recover_stale_lock(
+            lock_path,
+            "run-a",
+            hostname="profile-host",
+            pid_is_alive=lambda pid: pid == 4312,
+        )
+    assert lock_path.read_bytes() == live_bytes
+
+    foreign_bytes = _write_lock(lock_path, _lock_record(hostname="other-host"))
+    with pytest.raises(ValueError, match="hostname"):
+        work_cache.recover_stale_lock(
+            lock_path,
+            "run-a",
+            hostname="profile-host",
+            pid_is_alive=lambda _: False,
+        )
+    assert lock_path.read_bytes() == foreign_bytes
+
+
+@pytest.mark.parametrize(
+    "invalid_payload",
+    (
+        b"active\n",
+        b'{"schema_version":"1","pid":"4312"}\n',
+        b'{"schema_version":"old","pid":4312,"hostname":"profile-host",'
+        b'"run_fingerprint":"run-a","scope":"executor"}\n',
+    ),
+)
+def test_recover_stale_lock_rejects_malformed_or_legacy_records_unchanged(
+    tmp_path: Path,
+    invalid_payload: bytes,
+) -> None:
+    """Unverifiable legacy, incomplete, or wrong-schema locks require manual review."""
+    lock_path = tmp_path / "ppc" / "run-a" / "executor.lock"
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_bytes(invalid_payload)
+
+    with pytest.raises(ValueError, match="lock"):
+        work_cache.recover_stale_lock(
+            lock_path,
+            "run-a",
+            hostname="profile-host",
+            pid_is_alive=lambda _: False,
+        )
+
+    assert lock_path.read_bytes() == invalid_payload
+
+
+def test_recover_stale_lock_rejects_symlink_wrong_directory_and_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """Recovery cannot follow links, escape the PPC tree, or cross run identities."""
+    target = tmp_path / "target.lock"
+    target_bytes = _write_lock(target, _lock_record())
+    symlink = tmp_path / "ppc" / "run-a" / "executor.lock"
+    symlink.parent.mkdir(parents=True)
+    symlink.symlink_to(target)
+    with pytest.raises(ValueError, match="symbolic"):
+        work_cache.recover_stale_lock(
+            symlink,
+            "run-a",
+            hostname="profile-host",
+            pid_is_alive=lambda _: False,
+        )
+    assert symlink.is_symlink()
+    assert target.read_bytes() == target_bytes
+
+    wrong_directory = tmp_path / "not-ppc" / "run-a" / "executor.lock"
+    wrong_directory_bytes = _write_lock(wrong_directory, _lock_record())
+    with pytest.raises(ValueError, match="ppc"):
+        work_cache.recover_stale_lock(
+            wrong_directory,
+            "run-a",
+            hostname="profile-host",
+            pid_is_alive=lambda _: False,
+        )
+    assert wrong_directory.read_bytes() == wrong_directory_bytes
+
+    wrong_fingerprint = tmp_path / "ppc" / "run-b" / "writer.lock"
+    wrong_fingerprint_bytes = _write_lock(
+        wrong_fingerprint,
+        _lock_record(fingerprint="run-b", scope="checkpoint:block-000"),
+    )
+    with pytest.raises(ValueError, match="fingerprint"):
+        work_cache.recover_stale_lock(
+            wrong_fingerprint,
+            "run-a",
+            hostname="profile-host",
+            pid_is_alive=lambda _: False,
+        )
+    assert wrong_fingerprint.read_bytes() == wrong_fingerprint_bytes
 
 
 def test_cleanup_requires_exact_fingerprint_and_preserves_siblings(tmp_path: Path) -> None:

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import replace
+import json
+import os
 from pathlib import Path
+import socket
 from types import SimpleNamespace
 
 import numpy as np
@@ -820,6 +823,62 @@ def test_executor_lock_precedes_schedule_and_preserves_external_lock_bytes(
             prepared_spikes=spikes, schedule=schedule, work_root=tmp_path / "failure",
         )
     assert not list((tmp_path / "failure").rglob("executor.lock"))
+
+
+def test_executor_lock_is_an_exact_json_ownership_record_and_live_collision_is_immutable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Executor locking publishes complete ownership before mutating scheduled work.
+
+    The record binds schema, process, host, scope, and exact run fingerprint.
+    A second live owner cannot acquire the same path or alter its bytes.
+    """
+    config = _config()
+    phase, spikes, schedule = _inputs()
+    original_schedule_write = ppc_runtime._write_schedule
+    observed_record: dict[str, object] = {}
+
+    def inspect_lock_before_schedule(
+        run_directory: Path,
+        schedule_array: np.ndarray,
+    ) -> None:
+        """Read the fully published ownership record before schedule mutation."""
+        observed_record.update(
+            json.loads((run_directory / "executor.lock").read_text(encoding="utf-8"))
+        )
+        original_schedule_write(run_directory, schedule_array)
+
+    monkeypatch.setattr(ppc_runtime, "_write_schedule", inspect_lock_before_schedule)
+    result = ppc_runtime.execute_ppc_blocks(
+        config=config,
+        execution=config.ppc_execution,
+        prepared_phase=phase,
+        prepared_spikes=spikes,
+        schedule=schedule,
+        work_root=tmp_path,
+    )
+
+    assert observed_record == {
+        "schema_version": "1",
+        "pid": os.getpid(),
+        "hostname": socket.gethostname(),
+        "run_fingerprint": result.run_fingerprint,
+        "scope": "executor",
+    }
+    lock_path = result.run_directory / "executor.lock"
+    live_bytes = (json.dumps(observed_record, sort_keys=True) + "\n").encode("utf-8")
+    lock_path.write_bytes(live_bytes)
+    with pytest.raises(FileExistsError, match="executor.lock"):
+        ppc_runtime.execute_ppc_blocks(
+            config=config,
+            execution=config.ppc_execution,
+            prepared_phase=phase,
+            prepared_spikes=spikes,
+            schedule=schedule,
+            work_root=tmp_path,
+        )
+    assert lock_path.read_bytes() == live_bytes
 
 
 def test_run_metadata_preserves_selected_trials_and_overlap_identity(
