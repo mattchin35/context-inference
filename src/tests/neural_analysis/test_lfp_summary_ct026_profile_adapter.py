@@ -80,10 +80,10 @@ def test_ct026_adapter_binds_cold_warm_selection_and_isolated_ordered_jobs(
         return representative
 
     def slice_job(
-        *, profile_job: RepresentativePPCProfileJob, scenario: str,
+        *, config: object, profile_job: RepresentativePPCProfileJob, scenario: str,
         unit_ids: tuple[str, ...], phase: object, spikes: object,
     ) -> object:
-        calls.append(("slice", (scenario, unit_ids, profile_job, phase, spikes)))
+        calls.append(("slice", (config, scenario, unit_ids, profile_job, phase, spikes)))
         return SimpleNamespace(
             scenario=scenario,
             trial_indices=profile_job.trial_indices,
@@ -164,7 +164,7 @@ def test_ct026_adapter_binds_cold_warm_selection_and_isolated_ordered_jobs(
     phase_paths = [value[1] for name, value in calls if name == "phase"]
     assert phase_paths[0] == phase_paths[1]
     assert phase_paths[0].name == "phase"
-    assert [value[0] for name, value in calls if name == "slice"] == [
+    assert [value[1] for name, value in calls if name == "slice"] == [
         "low", "median", "high", "combined",
     ]
     expected_units = {
@@ -174,10 +174,11 @@ def test_ct026_adapter_binds_cold_warm_selection_and_isolated_ordered_jobs(
         "combined": ("ProbeB:11", "ProbeB:22", "ProbeB:33"),
     }
     for _name, value in [call for call in calls if call[0] == "slice"]:
-        assert value[1] == expected_units[value[0]]
-        assert value[2] is representative
-        assert value[3] == "phase-2"
-        assert value[4] == "prepared-spikes"
+        assert value[0] == "ct026-config"
+        assert value[2] == expected_units[value[1]]
+        assert value[3] is representative
+        assert value[4] == "phase-2"
+        assert value[5] == "prepared-spikes"
     for _name, value in [call for call in calls if call[0] == "child"]:
         assert value[1] == 100
         assert value[3] == representative.trial_indices
