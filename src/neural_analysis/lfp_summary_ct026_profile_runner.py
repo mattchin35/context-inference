@@ -7,6 +7,7 @@ LFP summary component, manifest, or scientific NPZ artifact.
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -23,7 +24,20 @@ _RUN_NAME = re.compile(r"^ct026_ppc_profile_[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 _SCENARIOS = ("low", "median", "high", "combined")
 _ORDERED_STAGES = ("phase_cold", "phase_warm", "selection", *_SCENARIOS)
 _SHUFFLE_COUNT = 100
-_STATE_SCHEMA_VERSION = "1"
+_STATE_SCHEMA_VERSION = "2"
+
+
+@dataclass(frozen=True)
+class PhaseProfilePreparation:
+    """Caller-owned prepared phase plus scalar preparation measurements.
+
+    ``phase`` preserves its caller-defined arrays, axes, and physical units.
+    ``metrics`` contains elapsed seconds, peak resident bytes and source, and a
+    Boolean cache-hit flag. The runner persists only those validated scalars.
+    """
+
+    phase: object
+    metrics: Mapping[str, object]
 
 
 @dataclass(frozen=True)
@@ -62,6 +76,9 @@ def run_ct026_ppc_profile(
     prepare_phase: Callable[..., object],
     select_spikes: Callable[[object], object],
     profile_job: Callable[..., Mapping[str, object]],
+    acquire_run_lock: Callable[
+        [Path, Mapping[str, str]], AbstractContextManager[None]
+    ],
     timestamp_factory: Callable[[], str] | None = None,
     run_directory: Path | None = None,
 ) -> CT026PPCProfileRunResult:
@@ -79,10 +96,13 @@ def run_ct026_ppc_profile(
         Parent directory for one timestamped run. A supplied resume directory
         must be an existing, nonsymlink direct child with the expected prefix.
     prepare_phase : callable
-        Called as ``prepare_phase(warm=False)`` once for a new cold stage and as
-        ``prepare_phase(warm=True)`` for the warm stage. An incomplete resumed
-        run skips completed cold work but calls the warm form once to rehydrate
-        its prepared mmap-backed phase object.
+        Called with ``warm`` and the exact
+        ``run_directory / 'work' / 'phase'`` path. It returns either
+        ``(phase, metrics)`` or :class:`PhaseProfilePreparation`; metrics are
+        elapsed seconds, peak resident bytes/source, and Boolean cache status.
+        A new run requires a cold miss then a warm hit. An incomplete resumed
+        run skips completed cold work, rehydrates warm phase from the same root,
+        and stores that measurement separately from the original warm profile.
     select_spikes : callable
         Receives the warm prepared phase and returns caller-owned selected spike
         metadata. It is called once on an incomplete resume even when the saved
@@ -92,6 +112,10 @@ def run_ct026_ppc_profile(
         ``shuffle_count=100``, and a scenario-specific ``work_root``. It returns
         a string-keyed mapping of finite JSON scalar metrics such as seconds and
         bytes. Interrupted work below ``work_root`` is deliberately preserved.
+    acquire_run_lock : callable
+        Receives the resolved exact run directory and identity mapping and
+        returns a context manager. State initialization/loading, callbacks, and
+        final report writes all occur while this lock is held.
     timestamp_factory : callable, optional
         Produces one filesystem-safe timestamp for a new run. It is not called
         when ``run_directory`` resumes an existing run. UTC is used by default.
@@ -103,7 +127,7 @@ def run_ct026_ppc_profile(
     -------
     CT026PPCProfileRunResult
         Completed run paths and scalar scenario metrics. State is replaced
-        atomically after every completed ordered stage.
+        atomically after every completed ordered stage and warm rehydration.
 
     Raises
     ------
@@ -125,38 +149,89 @@ def run_ct026_ppc_profile(
         git_fingerprint,
     )
     root = _validated_analysis_root(analysis_root)
-    if not callable(prepare_phase) or not callable(select_spikes) or not callable(profile_job):
-        raise ValueError("phase preparation, spike selection, and profile job must be callable")
+    if (
+        not callable(prepare_phase)
+        or not callable(select_spikes)
+        or not callable(profile_job)
+        or not callable(acquire_run_lock)
+    ):
+        raise ValueError(
+            "phase preparation, spike selection, profile job, and run lock must be callable"
+        )
 
+    new_run = run_directory is None
     if run_directory is None:
         timestamp = _profile_timestamp(timestamp_factory)
         active_directory = root / f"{_RUN_PREFIX}{timestamp}"
         _validate_new_run_path(root, active_directory)
         active_directory.mkdir(parents=True, exist_ok=False)
-        state = _new_state(identity)
-        _write_json_atomic(active_directory / "state.json", state)
     else:
         active_directory = _validated_resume_directory(root, Path(run_directory))
-        state = _load_state(active_directory / "state.json", identity)
 
+    with acquire_run_lock(active_directory, dict(identity)):
+        if new_run:
+            state = _new_state(identity)
+            _write_json_atomic(active_directory / "state.json", state)
+        else:
+            state = _load_state(active_directory / "state.json", identity)
+        return _run_locked_profile(
+            active_directory=active_directory,
+            identity=identity,
+            state=state,
+            prepare_phase=prepare_phase,
+            select_spikes=select_spikes,
+            profile_job=profile_job,
+        )
+
+
+def _run_locked_profile(
+    *,
+    active_directory: Path,
+    identity: Mapping[str, str],
+    state: dict[str, object],
+    prepare_phase: Callable[..., object],
+    select_spikes: Callable[[object], object],
+    profile_job: Callable[..., Mapping[str, object]],
+) -> CT026PPCProfileRunResult:
+    """Run unfinished stages while the caller holds the exact run lock."""
     completed = state["completed_stages"]
+    phase_profiles = state["phase_profiles"]
     assert isinstance(completed, list)
+    assert isinstance(phase_profiles, dict)
+    phase_work_root = active_directory / "work" / "phase"
+    phase_work_root.mkdir(parents=True, exist_ok=True)
+
     if "phase_cold" not in completed:
-        prepare_phase(warm=False)
+        _, cold_metrics = _prepare_phase_profile(
+            prepare_phase,
+            warm=False,
+            phase_work_root=phase_work_root,
+        )
+        phase_profiles["cold"] = cold_metrics
         _complete_stage(active_directory, state, "phase_cold")
 
-    unfinished_scenarios = [scenario for scenario in _SCENARIOS if scenario not in completed]
+    unfinished_scenarios = [
+        scenario for scenario in _SCENARIOS if scenario not in completed
+    ]
     if unfinished_scenarios:
-        phase = prepare_phase(warm=True)
+        phase, warm_metrics = _prepare_phase_profile(
+            prepare_phase,
+            warm=True,
+            phase_work_root=phase_work_root,
+        )
         if "phase_warm" not in completed:
+            phase_profiles["warm"] = warm_metrics
             _complete_stage(active_directory, state, "phase_warm")
+        else:
+            phase_profiles["resume_warm"] = warm_metrics
+            _write_json_atomic(active_directory / "state.json", state)
 
         spikes = select_spikes(phase)
         if "selection" not in completed:
             _complete_stage(active_directory, state, "selection")
 
-        profiles = state["profiles"]
-        assert isinstance(profiles, dict)
+        scenario_profiles = state["profiles"]
+        assert isinstance(scenario_profiles, dict)
         for scenario in unfinished_scenarios:
             work_root = active_directory / "work" / scenario
             work_root.mkdir(parents=True, exist_ok=True)
@@ -167,14 +242,20 @@ def run_ct026_ppc_profile(
                 shuffle_count=_SHUFFLE_COUNT,
                 work_root=work_root,
             )
-            profiles[scenario] = _validated_scalar_metrics(metrics, scenario)
+            scenario_profiles[scenario] = _validated_scalar_metrics(
+                metrics,
+                scenario,
+            )
             _complete_stage(active_directory, state, scenario)
 
     profiles = _completed_profiles(state)
     profile_path = active_directory / "profile.json"
     summary_path = active_directory / "summary.md"
     _write_json_atomic(profile_path, _profile_document(identity, state, profiles))
-    _write_text_atomic(summary_path, _markdown_summary(identity, profiles))
+    _write_text_atomic(
+        summary_path,
+        _markdown_summary(identity, phase_profiles, profiles),
+    )
     return CT026PPCProfileRunResult(
         run_directory=active_directory,
         state_path=active_directory / "state.json",
@@ -182,6 +263,26 @@ def run_ct026_ppc_profile(
         summary_path=summary_path,
         profiles=profiles,
     )
+
+
+def _prepare_phase_profile(
+    prepare_phase: Callable[..., object],
+    *,
+    warm: bool,
+    phase_work_root: Path,
+) -> tuple[object, dict[str, object]]:
+    """Invoke one phase stage and return its object plus validated scalar metrics."""
+    result = prepare_phase(warm=warm, phase_work_root=phase_work_root)
+    if isinstance(result, PhaseProfilePreparation):
+        phase = result.phase
+        metrics = result.metrics
+    elif isinstance(result, tuple) and len(result) == 2:
+        phase, metrics = result
+    else:
+        raise ValueError(
+            "prepare_phase must return (phase, metrics) or PhaseProfilePreparation"
+        )
+    return phase, _validated_phase_metrics(metrics, expected_cache_hit=warm)
 
 
 def _validated_identity(
@@ -252,6 +353,11 @@ def _new_state(identity: Mapping[str, str]) -> dict[str, object]:
         "identity": dict(identity),
         "shuffle_count": _SHUFFLE_COUNT,
         "completed_stages": [],
+        "phase_profiles": {
+            "cold": None,
+            "warm": None,
+            "resume_warm": None,
+        },
         "profiles": {},
     }
 
@@ -289,6 +395,10 @@ def _load_state(state_path: Path, expected_identity: Mapping[str, str]) -> dict[
         raise ValueError("saved CT026 PPC profile metrics disagree with completed stages")
     for scenario, metrics in profiles.items():
         profiles[scenario] = _validated_scalar_metrics(metrics, scenario)
+    state["phase_profiles"] = _validated_saved_phase_profiles(
+        state.get("phase_profiles"),
+        completed,
+    )
     return state
 
 
@@ -326,6 +436,78 @@ def _validated_scalar_metrics(
     return validated
 
 
+def _validated_phase_metrics(
+    metrics: object,
+    *,
+    expected_cache_hit: bool,
+) -> dict[str, object]:
+    """Return exact finite phase seconds/bytes/source/cache-hit scalar metrics."""
+    required_fields = {
+        "elapsed_seconds",
+        "peak_memory_bytes",
+        "peak_memory_source",
+        "cache_hit",
+    }
+    if not isinstance(metrics, Mapping) or set(metrics) != required_fields:
+        raise ValueError("phase_profiles metrics must contain the exact required fields")
+    elapsed_seconds = metrics["elapsed_seconds"]
+    peak_memory_bytes = metrics["peak_memory_bytes"]
+    peak_memory_source = metrics["peak_memory_source"]
+    cache_hit = metrics["cache_hit"]
+    if (
+        isinstance(elapsed_seconds, bool)
+        or not isinstance(elapsed_seconds, (int, float))
+        or not isfinite(float(elapsed_seconds))
+        or float(elapsed_seconds) < 0.0
+    ):
+        raise ValueError("phase_profiles elapsed_seconds must be finite and nonnegative")
+    if (
+        isinstance(peak_memory_bytes, bool)
+        or not isinstance(peak_memory_bytes, int)
+        or peak_memory_bytes < 0
+    ):
+        raise ValueError("phase_profiles peak_memory_bytes must be a nonnegative integer")
+    if not isinstance(peak_memory_source, str) or not peak_memory_source:
+        raise ValueError("phase_profiles peak_memory_source must be a nonempty string")
+    if not isinstance(cache_hit, bool) or cache_hit is not expected_cache_hit:
+        raise ValueError("phase_profiles cache_hit disagrees with cold/warm stage")
+    return {
+        "elapsed_seconds": float(elapsed_seconds),
+        "peak_memory_bytes": peak_memory_bytes,
+        "peak_memory_source": peak_memory_source,
+        "cache_hit": cache_hit,
+    }
+
+
+def _validated_saved_phase_profiles(
+    phase_profiles: object,
+    completed_stages: list[str],
+) -> dict[str, object]:
+    """Validate persisted cold, original warm, and optional latest resume metrics."""
+    required_names = {"cold", "warm", "resume_warm"}
+    if not isinstance(phase_profiles, dict) or set(phase_profiles) != required_names:
+        raise ValueError("saved phase_profiles must contain cold, warm, and resume_warm")
+    cold = phase_profiles["cold"]
+    warm = phase_profiles["warm"]
+    resume_warm = phase_profiles["resume_warm"]
+    if "phase_cold" in completed_stages:
+        cold = _validated_phase_metrics(cold, expected_cache_hit=False)
+    elif cold is not None:
+        raise ValueError("saved phase_profiles cold metrics precede phase_cold")
+    if "phase_warm" in completed_stages:
+        warm = _validated_phase_metrics(warm, expected_cache_hit=True)
+    elif warm is not None:
+        raise ValueError("saved phase_profiles warm metrics precede phase_warm")
+    if resume_warm is not None:
+        if "phase_warm" not in completed_stages:
+            raise ValueError("saved phase_profiles resume metrics precede phase_warm")
+        resume_warm = _validated_phase_metrics(
+            resume_warm,
+            expected_cache_hit=True,
+        )
+    return {"cold": cold, "warm": warm, "resume_warm": resume_warm}
+
+
 def _completed_profiles(state: Mapping[str, object]) -> dict[str, dict[str, object]]:
     """Return scenario-ordered scalar metrics only after all stages complete."""
     completed = state["completed_stages"]
@@ -347,12 +529,14 @@ def _profile_document(
         "identity": dict(identity),
         "shuffle_count": _SHUFFLE_COUNT,
         "completed_stages": list(state["completed_stages"]),
+        "phase_profiles": dict(state["phase_profiles"]),
         "profiles": {scenario: dict(metrics) for scenario, metrics in profiles.items()},
     }
 
 
 def _markdown_summary(
     identity: Mapping[str, str],
+    phase_profiles: Mapping[str, object],
     profiles: Mapping[str, Mapping[str, object]],
 ) -> str:
     """Render a compact scalar-only Markdown summary with metric units unchanged."""
@@ -364,6 +548,14 @@ def _markdown_summary(
         f"- Source fingerprint: `{identity['source_fingerprint']}`",
         f"- Git fingerprint: `{identity['git_fingerprint']}`",
     ]
+    for phase_name in ("cold", "warm", "resume_warm"):
+        metrics = phase_profiles[phase_name]
+        if metrics is None:
+            continue
+        assert isinstance(metrics, Mapping)
+        lines.extend(("", f"## phase {phase_name}", ""))
+        for metric_name, value in metrics.items():
+            lines.append(f"- {metric_name}: {value}")
     for scenario in _SCENARIOS:
         lines.extend(("", f"## {scenario}", ""))
         for metric_name, value in profiles[scenario].items():
