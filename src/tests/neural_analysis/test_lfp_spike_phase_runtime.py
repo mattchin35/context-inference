@@ -205,6 +205,7 @@ def test_spike_payload_execution_assembly_uses_summary_runtime_not_legacy_shuffl
         }
         summary.update({
             "spike_count": np.full((1, frequency_count), 104, dtype=np.int64),
+            "eligible_trial_count": np.full((1, frequency_count), 2, dtype=np.int64),
             "computable": np.ones((1, frequency_count), dtype=bool),
             "reliable": np.ones((1, frequency_count), dtype=bool),
             "null_eligible": np.ones((1, frequency_count), dtype=bool),
