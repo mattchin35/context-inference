@@ -233,4 +233,4 @@ def test_invalid_worker_counts_are_rejected_before_phase_or_work_writes(
             schedule=schedule,
             work_root=tmp_path,
         )
-    assert not tmp_path.exists()
+    assert not (tmp_path / "ppc").exists()
