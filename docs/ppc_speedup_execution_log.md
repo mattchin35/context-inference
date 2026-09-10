@@ -11,10 +11,21 @@ changing the scientific specification.
 - Pre-documentation scientific implementation HEAD: `31a5c54` on `refactor`.
 - Documentation-baseline commit: `73e2d9f` (`docs: finalize exact PPC speedup
   handoff`).
+- Plan clarification approved 2026-09-10: strict shared PPC/histogram
+  exact-sample semantics; named conservative private-peak memory accounting;
+  actual derived schedule identity; context-managed S0 normal shutdown; and a
+  Sol-`high` lead with `xhigh` reserved for S1-S4/S7 writers and reviewers. The
+  clarification also freezes `KernelAllocationEstimate`, adds a 12 GiB planned
+  aggregate-array preflight, and requires new grouped-worker RED evidence in S7
+  rather than reusing S0's single-job regressions. The clarification commit is
+  pending.
 - Expected S0 RED checkpoint: 2 failed and 12 passed in
   `src/tests/neural_analysis/test_lfp_summary_ppc_parallel.py`.
-- Implementation authorization: not yet recorded. This documentation handoff
-  does not authorize source or test changes.
+- Implementation authorization: on 2026-09-10 the user explicitly authorized
+  the S0-S7 source/test implementation sequence and its bounded Sol/Terra
+  delegation after confirming the lead Sol is set to `high`. Temporary usage-
+  window interruptions must follow the plan's recovery contract and do not
+  waive any RED/GREEN or review gate.
 - CT026 authorization: no new CT026 computation is authorized. Metadata-only
   inspection and every later work-only or scientific run remain subject to the
   gates in the plan.
@@ -30,8 +41,10 @@ not apply; write `not applicable` and explain why.
 
 ### S0 - Restore worker checkpoint to GREEN
 
-- Status: not started; implementation authorization not yet recorded.
-- Authorization:
+- Status: authorized; documentation baseline completion pending before source
+  assignment.
+- Authorization: user authorization recorded 2026-09-10; no CT026 work or
+  production worker benchmark authorized.
 - Starting HEAD and worktree inventory:
 - Lead Sol model/effort:
 - Terra worker model/effort, permissions, and file scope:

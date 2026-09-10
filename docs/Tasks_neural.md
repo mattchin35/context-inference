@@ -21,10 +21,10 @@
   CT026 engineering benchmark; its serial measurement is complete and wrote no
   scientific Spike-phase component. On 2026-09-09 the user approved the
   documentation-only exact PPC speedup plan in `docs/ppc_speedup_plan.md`,
-  including the grouped executor, a 2 GiB planned per-worker allocation limit,
-  strict inferential equivalence, and deferring 1/2/4/8-worker profiling until
-  after serial optimization. Plan approval does not authorize implementation
-  or another CT026 run. WP5C-6 has not started.
+  including the grouped executor, 2 GiB process-private and 12 GiB aggregate
+  planned-allocation limits, strict inferential equivalence, and deferring
+  1/2/4/8-worker profiling until after serial optimization. Plan approval does
+  not authorize implementation or another CT026 run. WP5C-6 has not started.
 - **Do not redo completed packages:** WP0, WP1, WP2 preparation, WP3, WP4,
   WP5A, WP5B, and the Spike-phase runtime bridge are historical completed work.
   Remaining integration work must extend them through the packages below, not
@@ -495,6 +495,11 @@ status matrix and bounded packages govern current execution:
   consumes only vector sums and counts; it must not invoke the generic phase
   histogram, occupancy, firing-rate, amplitude, or result-object paths for
   every shuffle.
+- Exact-sample classification uses equality to the canonical stored time grid
+  for both PPC and representative histograms. A merely nearby spike, including
+  one within `1e-12`, remains a between-sample case and requires both neighbors.
+  This deliberately corrects the legacy histogram helper's looser `isclose`
+  behavior so displayed counts describe the same accepted samples as PPC.
 - Preserve observed PPC for entries with at least two valid phases, but skip
   all permutation phase sampling for entries that cannot be inferentially
   eligible because they have fewer than 50 valid spikes or fewer than two
@@ -2052,8 +2057,12 @@ Sol checks:
   within-session parallelism. Only then benchmark 1, 2, 4, and 8 shared-data
   workers if the serial profile still justifies them. Select the smallest
   worker count within 10 percent of the best measured throughput, keep planned
-  private allocation at or below 2 GiB per worker, and keep measured aggregate
-  PPC working memory below 16 GiB.
+  private peak allocation at or below 2 GiB per worker, and keep measured
+  aggregate PPC working memory below 16 GiB. Before execution, require planned
+  aggregate arrays to remain at or below 12 GiB, counting shared mmap once plus
+  parent-private and all active-worker private peaks. The estimates report job
+  accumulators, kernel working arrays, geometry, parent/worker private peaks,
+  and shared mmap bytes separately.
 - Treat 25-60 minutes for a cold 100-shuffle CT026 preview and 45-120 minutes
   for a cold 1,000-shuffle run as provisional engineering estimates with about
   twofold uncertainty until the representative benchmark is complete. A valid
@@ -2156,8 +2165,8 @@ Exact PPC speedup planning update (2026-09-09):
   `docs/ppc_speedup_plan.md`: preserve a single-job reference executor, add a
   grouped production executor, retain the existing epoch-specific schedules,
   require exact inferential decisions under tight floating tolerances, use a
-  2 GiB planned private-allocation limit per worker, and defer worker profiling
-  until after serial optimization.
+  2 GiB planned private-peak allocation limit per worker, and defer worker
+  profiling until after serial optimization.
 - This approval created and reconciled documentation only. It does not
   authorize S0 source changes, synthetic implementation work, another CT026
   engineering profile, the 100-shuffle preview, or the 1,000-shuffle run.
@@ -2165,3 +2174,26 @@ Exact PPC speedup planning update (2026-09-09):
   bounded-spawn worker correction and restore the focused and full neural
   suites to GREEN. S1-S6 then optimize and profile grouped serial work; S7-S8
   rebind and benchmark parallel workers only if still justified.
+
+Exact PPC speedup plan clarification (2026-09-10):
+
+- PPC and representative histograms now share strict canonical-grid equality
+  for exact samples; tests cover adjacent representable floats and nearby but
+  nonexact values. The legacy histogram-only `isclose` behavior is not retained.
+- The 2 GiB gate now applies to a conservative named private-peak estimate,
+  including accumulators, PPC draws and scratch, segmented edge work, geometry,
+  and gather temporaries. Shared prepared phase is reported separately.
+- A frozen `KernelAllocationEstimate` interface accounts for kernel arrays.
+  Grouped preflight admits at most 12 GiB of planned arrays across shared mmap,
+  the parent, and all active workers, reserving 4 GiB below the measured 16 GiB
+  gate for runtime overhead and estimation error.
+- Grouped work identity records the base PPC seed and each job's actual derived
+  seed, derivation identities, schedule shape, and exact schedule fingerprint.
+- S0 uses context-managed normal shutdown and explicit failure cancellation of
+  both the failed current future and every submitted pending future.
+- To conserve usage, the lead Sol runs at `high`; S0, S5, S6, and S8 use
+  `high` writers/reviewers, while S1-S4 and S7 reserve `xhigh` for both the
+  Terra writer and independent Sol reviewer. No `max` or `ultra` agent is
+  assigned without a later documented revision and explicit approval.
+- Existing single-job worker tests become frozen green regressions after S0;
+  S7 must establish new grouped-worker RED failures before implementation.

@@ -5,7 +5,14 @@ is documentation-only: it does not authorize source changes, CT026 computation,
 or the 100/1,000-shuffle Spike-phase runs. The Sol-orchestrator/Terra-worker
 execution specification in Section 3.1 was added at the user's request on the
 same date, audited against the current host on 2026-09-10, and is subject to
-those same authorization boundaries.
+those same authorization boundaries. On 2026-09-10 the user approved plan-only
+clarifications that unify PPC/histogram exact-sample semantics, make planned
+private-memory accounting explicit, bind actual derived schedule identities,
+clarify S0 executor lifecycle, reserve `xhigh` reasoning for S1-S4 and S7,
+freeze the kernel allocation-estimator interface, add a 12 GiB aggregate
+preflight, and distinguish S7 grouped-worker RED tests from existing single-job
+regressions. Those clarifications do not authorize implementation or CT026
+computation.
 
 This plan turns `docs/ppc_speedup.md` into test-first work packages. It is kept
 separate from `docs/Tasks_neural.md` because the change is a substantial,
@@ -72,10 +79,12 @@ shuffle counts, amplitude policy, final cache schema, or plotting semantics.
 It will not add Numba, Cython, Zarr, HDF5, Dask, or another dependency. Cluster
 offload and path portability remain later work.
 
-## 3. Decisions requiring approval
+## 3. Approved decisions
 
-The choices below were approved on 2026-09-09. Implementation still requires a
-separate user request; approval of this plan alone is not execution authority.
+The initial choices below were approved on 2026-09-09 and the explicit
+clarifications recorded in this revision were approved on 2026-09-10.
+Implementation still requires a separate user request; approval of this plan
+alone is not execution authority.
 
 1. **Add a grouped production executor and preserve the single-job executor.**
    Keep `execute_ppc_blocks(...)` as the frozen single-condition/site/epoch
@@ -88,6 +97,9 @@ separate user request; approval of this plan alone is not execution authority.
    matching the current WP5B reference. Validate uniform spacing against
    `config.phase.output_rate_hz` (500 Hz for the approved default), but do not
    derive boundary classification solely from floating-point division by `dt`.
+   This exact canonical-grid rule also governs representative histograms. The
+   current histogram helper's `isclose(..., atol=1e-12)` behavior is an
+   inconsistency to correct, not a second sampling contract to preserve.
 3. **Preserve the existing epoch-specific schedules.** Before, after, and whole
    keep the current `_ppc_schedule_seed(...)` results. A whole schedule consumes
    the sum of before/after edge statistics for each edge in that same whole
@@ -100,10 +112,17 @@ separate user request; approval of this plan alone is not execution authority.
    automatically accepted significance change.
 5. **Use an explicit planned-allocation limit.** Add execution-only integer
    `maximum_worker_allocation_bytes = 2 * 1024**3` (2 GiB). It limits
-   planned private NumPy accumulators per worker, does not enter scientific
-   component identity, and does not claim to measure shared mmap residency.
-   Aggregate system memory remains governed by the existing 16 GiB benchmark
-   gate.
+   the conservatively estimated concurrently live private NumPy arrays per
+   worker, does not enter scientific component identity, and does not claim to
+   measure shared mmap residency. The planner reports job accumulators, kernel
+   working arrays, geometry, and their conservative private peak separately.
+   The limit applies to that private peak. Also add execution-only integer
+   `maximum_aggregate_allocation_bytes = 12 * 1024**3` (12 GiB) as a
+   conservative preflight ceiling for planned arrays across the parent,
+   active workers, and one shared prepared-phase mmap. The remaining 4 GiB of
+   the 16 GiB measured gate is reserved for Python/process overhead,
+   filesystem buffers, and estimation error. Neither execution field enters
+   scientific component identity.
 6. **Require separate CT026 authorization.** Synthetic tests and metadata-only
    schedule-union measurement are authorized by implementation approval. Any
    new work-only CT026 timing run still requires explicit execution approval;
@@ -157,7 +176,7 @@ spawn requests must use the machine value `xhigh`. Do not use `none` or
 
 #### Fixed roles and authority
 
-1. **Lead Sol orchestrator: `gpt-5.6-sol`, `xhigh`.** One primary/root agent
+1. **Lead Sol orchestrator: `gpt-5.6-sol`, `high`.** One primary/root agent
    owns requirements, package ordering, user communication, authorization
    gates, worktree inspection, worker prompts, RED/GREEN verification, and git
    commits. It is the only agent allowed to declare a package complete. It must
@@ -167,7 +186,7 @@ spawn requests must use the machine value `xhigh`. Do not use `none` or
    documentation-only package-record commits, but it does not author or repair
    package source/tests; accepted edit findings return to the Terra package
    worker.
-2. **Sol gate reviewer: `gpt-5.6-sol`, `high` or `max` as assigned in the table
+2. **Sol gate reviewer: `gpt-5.6-sol`, `high` or `xhigh` as assigned in the table
    below.** This is a fresh, read-only agent used at a test-design or completed-
    package gate. It looks for scientific drift, invalid tests, interface or data-
    contract breaks, concurrency faults, and missing verification. It reports to
@@ -187,22 +206,24 @@ spawn requests must use the machine value `xhigh`. Do not use `none` or
    a scout for work the package worker or lead can do directly with little
    context cost.
 
-The lead stays at `xhigh`; it is not necessary to restart the root thread for a
-package-specific `max` gate. Instead, the independent Sol reviewer receives
-`max` for the high-risk packages listed below. This keeps routine coordination
-responsive while adding deeper review exactly where numerical, transaction, or
-concurrency mistakes would be expensive.
+The lead stays at `high`; routine coordination, worktree checks, test execution,
+commits, and package-log updates do not require `xhigh`. The independent Sol
+reviewer receives `xhigh` only for the high-risk packages listed below. This
+adds deeper review where numerical, identity, transaction, or concurrency
+mistakes would be expensive without making it the default for the complete
+implementation.
 
 `low` is not used because even the read-only tasks require scientific-repository
 context. `medium` is restricted to optional, narrowly scoped Terra scouting.
 Terra `high` is the default for clear implementation packages, and Terra
 `xhigh` is required for numerical kernels, cross-condition identity, restart,
-or concurrency work. Sol `max` is a review/escalation setting, not the default.
-`ultra` is not assigned anywhere in this plan. Do not treat the ChatGPT Ultra
+or concurrency work. Neither `max` nor `ultra` is assigned anywhere in this
+plan. Do not treat the ChatGPT Ultra
 intelligence level, its proactive-delegation behavior, and a host-exposed
-`reasoning_effort="ultra"` value as interchangeable. If `max` cannot resolve a
-scientific or architectural discrepancy, stop and ask the user; any move to
-Ultra or change in agent topology requires a documented plan revision.
+`reasoning_effort="ultra"` value as interchangeable. If a scientific or
+architectural discrepancy cannot be resolved at the assigned level, stop and
+ask the user; any move to `max` or `ultra`, or any change in agent topology,
+requires a documented plan revision and explicit approval.
 
 #### Concurrency, workspace, and ownership rules
 
@@ -250,7 +271,7 @@ Ultra or change in agent topology requires a documented plan revision.
 
 Before source work begins, the lead must confirm from session/host metadata,
 not model self-report, that its active configuration is `gpt-5.6-sol` with
-`xhigh` reasoning and that explicit `gpt-5.6-terra`/effort overrides are
+`high` reasoning and that explicit `gpt-5.6-terra`/effort overrides are
 available for children. If the runtime does not expose enough metadata to make
 that confirmation, or either check fails, stop and ask the user whether to
 reconfigure or revise the plan. Do not silently let Terra inherit Sol, let Sol
@@ -275,7 +296,7 @@ When the agent API exposes `spawn_agent`, use explicit overrides. A Terra S1
 assignment, for example, uses `model="gpt-5.6-terra"`,
 `reasoning_effort="xhigh"`, a unique task name such as `s1_kernel_worker`, and
 a bounded context fork such as `fork_turns="3"`. The corresponding S1 gate
-uses `model="gpt-5.6-sol"`, `reasoning_effort="max"`, and a distinct task name;
+uses `model="gpt-5.6-sol"`, `reasoning_effort="xhigh"`, and a distinct task name;
 scouts always use Terra `medium`. Do not use a full-history
 `fork_turns="all"` when changing model or effort: current team runtimes require
 full-history children to inherit the parent settings. The prompt must therefore
@@ -296,14 +317,14 @@ unsafe behavior, unexpected worktree changes, or a superseding user request.
 | Package | Terra assignment | Independent Sol gate | Required emphasis |
 | --- | --- | --- | --- |
 | S0 | `high` | `high` | Narrow executor shutdown/cancellation correction; tests already provide RED. |
-| S1 | `xhigh` | `max` | Interpolation geometry, exact-sample boundaries, dtypes, axes, and segmented sums. |
-| S2 | `xhigh` | `max` | Whole-from-halves scientific equivalence, cross terms, eligibility, and histogram semantics. |
-| S3 | `xhigh` | `max` | Stable physical identities, union planning, deterministic batching, and allocation arithmetic. |
-| S4 | `xhigh` | `max` | Grouped execution, bounded memory, checkpoint fingerprints, resume, and transaction failure behavior. |
+| S1 | `xhigh` | `xhigh` | Interpolation geometry, exact-sample boundaries, dtypes, axes, and segmented sums. |
+| S2 | `xhigh` | `xhigh` | Whole-from-halves scientific equivalence, cross terms, eligibility, and histogram semantics. |
+| S3 | `xhigh` | `xhigh` | Stable physical identities, union planning, deterministic batching, and allocation arithmetic. |
+| S4 | `xhigh` | `xhigh` | Grouped execution, bounded memory, checkpoint fingerprints, resume, and transaction failure behavior. |
 | S5 | `high` | `high` | Minimal payload-loop integration while preserving schema, seeds, exemplar behavior, and public entry points. |
 | S6 | `high` | `high` | Scalar-only profiling, metadata-only CT026 inspection, and no unauthorized scientific computation. |
-| S7 | `xhigh` | `max` | Spawn/failure/cancellation semantics, shared mmap behavior, deterministic parent publication, and memory safety. |
-| S8 | `high`, command execution and evidence collection only | `max`, benchmark interpretation and recommendation | Respect separate authorization; no source edits; select worker count only from measured correctness, throughput, and memory evidence. |
+| S7 | `xhigh` | `xhigh` | Spawn/failure/cancellation semantics, shared mmap behavior, deterministic parent publication, and memory safety. |
+| S8 | `high`, command execution and evidence collection only | `high`, benchmark interpretation and recommendation | Respect separate authorization; no source edits; select worker count only from measured correctness, throughput, and memory evidence. |
 
 Every S1-S7 package receives an independent Sol review of the stable GREEN
 diff. A pre-commit test-design review is additionally mandatory for S1-S4 and
@@ -313,7 +334,7 @@ risk. The same reviewer may perform both gates if it retains no write access.
 S0 uses only the final gate because its RED tests already exist. S8 has no Terra
 package writer: its Terra assignment may execute only the explicitly authorized
 benchmark commands and collect raw outputs, with no repository edits. The lead
-and `max` Sol reviewer interpret the stable S8 evidence independently.
+and `high` Sol reviewer interpret the stable S8 evidence independently.
 
 #### Mandatory per-package agent/TDD sequence
 
@@ -360,7 +381,7 @@ and `max` Sol reviewer interpret the stable S8 evidence independently.
   fresh reviewer with the same model/effort only after the relevant diff is
   stable, and rerun that gate from the beginning.
 - If the lead/root thread is interrupted, a replacement lead must satisfy the
-  same Sol/`xhigh` requirement, re-read this plan and the package record, inspect
+  same Sol/`high` requirement, re-read this plan and the package record, inspect
   HEAD plus staged and unstaged changes, and independently establish the last
   completed gate before delegating further work. It must not infer authorization
   or RED/GREEN status from an incomplete chat.
@@ -396,6 +417,10 @@ New `lfp_summary_ppc_kernel.py`
   counts while vectorizing across frequency and concatenated units.
 - Optionally returns representative-frequency observed histogram counts for
   same-trial edges; it never retains all sampled phases.
+- Exposes pure
+  `estimate_segmented_kernel_allocation(*, source_trial_spike_count,
+  edge_source_trial_position, frequency_count) -> KernelAllocationEstimate`
+  so the runtime planner does not guess kernel temporaries.
 - Exposes internal `build_source_trial_spike_geometry(...)` and
   `compute_segmented_edge_statistics(...)` functions returning the frozen
   contracts below. Their implementation signatures may use keyword-only
@@ -410,6 +435,9 @@ New `lfp_summary_ppc_kernel.py`
 - Adds deterministic job planning, local-to-stable trial translation,
   cross-condition edge unions, bounded job accumulators, checkpoint assembly,
   and the grouped production executor.
+- Combines the kernel byte estimate with explicitly shaped job accumulators and
+  calculation scratch to return `PPCAllocationEstimate`, enforce the 2 GiB
+  process-private limit, and preflight the 12 GiB aggregate-array ceiling.
 - Exposes internal `plan_grouped_ppc_component(...)` and
   `execute_grouped_ppc_component(...) -> PPCComponentExecutionResult`. The
   planner is pure and performs no phase sampling or file I/O. The executor
@@ -431,7 +459,8 @@ New `lfp_summary_ppc_kernel.py`
 
 `lfp_summary_models.py`
 
-- Adds only the approved execution-only memory-limit field.
+- Adds only the two approved execution-only worker and aggregate memory-limit
+  fields.
 - Scientific fingerprints remain unchanged when execution settings change.
 
 `lfp_summary_work_cache.py`
@@ -476,6 +505,24 @@ returns, and failure behavior.
   independently sampled segment.
 - No per-spike phase array survives the reducer.
 
+`KernelAllocationEstimate` (frozen dataclass)
+
+- Is returned by `estimate_segmented_kernel_allocation(...)` and reports
+  nonnegative integer `geometry_bytes`, `segmented_edge_statistics_bytes`,
+  `gather_temporary_bytes`, and `planned_kernel_peak_bytes`.
+- `source_trial_spike_count` is an integer, nonnegative array with axes
+  `(source_trial, unit, segment=2)` in before/after order.
+  `edge_source_trial_position` is an integer shape `(edge_in_block,)` index
+  into its source-trial axis, and `frequency_count` is a positive integer.
+- The estimate counts geometry retained for the bounded unit block and every
+  named gather/interpolation/validity array concurrently required by the
+  supplied edge block. The kernel documents each temporary's dtype, shape, and
+  lifetime; the estimator uses `dtype.itemsize * product(shape)` rather than an
+  unexplained multiplier.
+- `planned_kernel_peak_bytes` is the maximum of documented concurrently live
+  kernel array groups. Invalid axes/counts and checked-arithmetic overflow raise
+  `ValueError`; the helper performs no allocation, sampling, or I/O.
+
 `PPCJobPlan` (frozen dataclass)
 
 - Identifies one condition/site/epoch result cell.
@@ -483,7 +530,46 @@ returns, and failure behavior.
   the unchanged local derangement schedule, its stable physical-edge mapping,
   and which segment expression (`before`, `after`, or `before + after`) it
   consumes.
+- Stores `base_ppc_seed` separately from the actual derived `schedule_seed`,
+  plus the condition/site/epoch derivation identities, schedule shape, and exact
+  schedule fingerprint. Grouped checkpoint identity binds all of these values.
 - Condition-local position zero is never used as a cross-condition edge key.
+
+`PPCAllocationEstimate` (frozen dataclass)
+
+- Reports nonnegative integer byte counts for `job_accumulator_bytes`,
+  `kernel_working_bytes`, `geometry_bytes`, `planned_parent_private_bytes`,
+  `planned_worker_private_bytes`, `shared_phase_mmap_bytes`, and
+  `planned_aggregate_array_bytes`, plus nonnegative integer
+  `active_worker_count`. `kernel_working_bytes` contains segmented-edge and
+  gather temporaries but excludes separately reported retained geometry.
+- Job-accumulator accounting includes, for every concurrently resident
+  job/shuffle/unit/frequency cell, complex128 vector sums, int64 counts, float64
+  PPC draws, and one float64 calculation scratch array: 40 bytes per cell with
+  the approved dtypes.
+- Segmented edge statistics contribute 48 bytes per
+  edge/unit/frequency cell: two segments times one complex128 sum and one int64
+  count. Geometry includes two int64 indices, one float64 weight, two Boolean
+  masks per spike, and int64 group offsets. Any additional gather temporary is
+  named and calculated from its documented dtype and shape rather than hidden
+  in a multiplier.
+- The private process peaks are maxima of explicitly documented concurrently
+  live array groups, not sums of arrays whose lifetimes cannot overlap. For a
+  serial run, the parent peak includes kernel execution and active worker count
+  is zero. For a parallel run, the parent peak covers planning, summary
+  assembly, and publication while each active worker has its own private peak.
+- `planned_worker_private_bytes` is the maximum private peak among tasks in the
+  active submission window. `active_worker_count` is the smaller of requested
+  workers and pending unit blocks; idle requested workers are neither charged
+  nor spawned.
+- `planned_aggregate_array_bytes` equals shared mmap bytes counted once plus
+  parent-private bytes plus `active_worker_count * planned_worker_private_bytes`.
+  It must not multiply shared mmap residency by worker count. Checked integer
+  arithmetic rejects overflow.
+- The executor rejects or deterministically reduces job/unit/edge batches when
+  a process would exceed 2 GiB. It rejects the requested worker count before
+  spawning when the smallest valid batches would exceed the 12 GiB aggregate
+  ceiling; it never silently lowers the user-requested worker count.
 
 `PPCComponentExecutionResult` (frozen dataclass)
 
@@ -511,8 +597,9 @@ For each site:
 4. Process the required same-trial edges first. From that single bounded pass,
    derive observed before/after sums, counts, and contributing-trial counts;
    compose whole metrics from the two segments; and build the representative
-   histograms at the configured frequencies nearest 8 and 40 Hz. A trial with
-   a positive count in either segment counts once toward whole eligibility.
+   histograms at the configured frequencies nearest 8 and 40 Hz using the same
+   exact canonical-grid classification as PPC. A trial with a positive count in
+   either segment counts once toward whole eligibility.
 5. Use those observed results to determine the exact null-eligible
    unit/frequency cells for each job. A job with no eligible cell in the current
    unit block requests no shuffled edge reduction; an inactive cell in an
@@ -563,6 +650,9 @@ its tests and records genuine RED before its source implementation.
   non-500-Hz configuration and reproduce the reference on its canonical grid.
 - Exact first/interior/last samples use one sample and do not require an
   adjacent valid neighbor.
+- PPC and representative histograms make identical exact/between/outside
+  decisions. Spikes one representable float above or below a grid point, and a
+  spike within `1e-12` but not exactly equal to it, remain between-sample cases.
 - Between-sample spikes require both neighbors valid for each target trial and
   frequency.
 - Outside-support, nonfinite, zero-magnitude, and zero-valued interpolation
@@ -575,6 +665,10 @@ its tests and records genuine RED before its source implementation.
 - Neighbor-search call count depends on source unit/trial spikes, not the
   number of target edges, conditions, schedules, or shuffle blocks.
 - Kernel output is invariant to unit and edge block sizes.
+- `estimate_segmented_kernel_allocation(...)` matches hand-calculated geometry,
+  segmented-edge, named gather-temporary, and lifetime-peak bytes without
+  allocating arrays; malformed counts/axes, Boolean integer arguments, and
+  checked-arithmetic overflow fail with `ValueError`.
 
 ### Observed and whole composition
 
@@ -604,13 +698,18 @@ its tests and records genuine RED before its source implementation.
   complete-pair reference mode agree for small seeded fixtures.
 - Planner edge counts, union counts, saturation, reuse ratio, and memory-byte
   estimates match hand-calculated examples at 100 and 1,000 shuffles. Peak
-  accumulator accounting includes simultaneously resident complex sums, int64
-  counts, float64 PPC draws, and per-job accumulator scratch.
+  allocation tests verify every named category in `KernelAllocationEstimate`
+  and `PPCAllocationEstimate`, the 40-byte job-cell accounting, the 48-byte
+  segmented-edge-cell accounting, geometry arrays, explicitly named gather
+  temporaries, lifetime-based process and aggregate peaks, shared mmap counted
+  once, and checked-overflow behavior.
 - Deterministic condition batching under the allocation limit changes neither
   output order nor values.
-- The allocation limit defaults to exactly 2 GiB, round-trips as an
-  execution-only integer, rejects Boolean/nonpositive values, and does not
-  alter any final scientific component fingerprint.
+- The worker and aggregate allocation limits default to exactly 2 GiB and
+  12 GiB, respectively; both round-trip as execution-only integers, reject
+  Boolean/nonpositive values, and do not alter any final scientific component
+  fingerprint. Deterministic batching satisfies the process limit; an unsafe
+  requested worker count fails preflight before process creation.
 - Empty/single-trial conditions retain observed semantics and do not request an
   invalid derangement.
 
@@ -620,6 +719,10 @@ its tests and records genuine RED before its source implementation.
 - Checkpoint fingerprints bind condition memberships, stable trial rows, every
   schedule, segment definitions, phase/spike identity, kernel version, and
   execution settings.
+- Every grouped job records the base PPC seed, actual derived schedule seed,
+  derivation identities, schedule shape, and exact schedule fingerprint. Jobs
+  that share a base seed but differ in derived schedule identity cannot resume
+  one another.
 - Grouped checkpoint IDs and axes bind the stable site identity as well as the
   half-open unit block; canonical resume order is site-major then unit-major.
 - Cold and resumed grouped runs are equivalent; corrupt/orphan/mismatched
@@ -631,8 +734,10 @@ its tests and records genuine RED before its source implementation.
   component.
 - Inference-ineligible unit/frequency entries do not request shuffled edge
   accumulation, including whole-eligible/half-ineligible mixed cases.
-- Representative histograms match the current payload builder without its
-  repeated 50-frequency resampling.
+- Representative histograms exactly match the current payload builder for
+  inputs unaffected by its legacy near-grid `isclose` discrepancy. Adversarial
+  near-grid inputs intentionally follow the S1 exact canonical-grid contract,
+  and PPC/histogram accepted-sample counts agree.
 - Existing final component schema, exemplar selection, post-commit cleanup, and
   pipeline entry points remain unchanged.
 - Seeded synthetic end-to-end cache and plotting integration remains green.
@@ -646,6 +751,9 @@ its tests and records genuine RED before its source implementation.
   floating fields.
 - Workers open one read-only prepared phase representation and do not serialize
   or privately copy the full tensor.
+- Planned aggregate bytes count the shared mmap once and combine it with the
+  parent and every active worker. Unsafe worker counts fail before spawn, and
+  measured aggregate RSS/PSS must still remain below 16 GiB.
 - Submission remains bounded and parent checkpoint order remains canonical.
 - Grouped profiler reports geometry, observed, union-edge reduction, shuffle
   aggregation, null summary, histogram, checkpoint, and total times.
@@ -698,9 +806,13 @@ Files:
 - existing `src/tests/neural_analysis/test_lfp_summary_ppc_parallel.py`
 
 Tests already committed first in `9fe7f1f`; current RED is 2 failed, 12 passed.
-Implement explicit normal shutdown and cancel the failed current future as well
-as still-pending futures. Run the focused file, affected PPC runtime tests, then
-the full neural suite. Do not run a production worker benchmark.
+Use the executor context manager for normal shutdown. Retain the current future
+until `result()` succeeds; on failure, cancel that failed current future and all
+submitted pending futures, request `shutdown(wait=True, cancel_futures=True)`,
+and re-raise the original exception without submitting more work. Run the
+focused file, affected PPC runtime tests, then the full neural suite. Do not run
+a production worker benchmark or change the already-committed RED tests merely
+to accommodate the current source.
 
 ### S1 - Uniform-grid geometry and segmented edge kernel
 
@@ -711,8 +823,11 @@ Files:
 - minimal shared-formula addition in `spike_lfp_summary.py` and focused tests if
   needed
 
-Write all geometry/interpolation tests first. Implement immutable geometry and
-segmented edge statistics without runtime or cache changes.
+Write all geometry/interpolation tests first, including exact, adjacent
+representable-float, and within-`1e-12` nonexact cases shared by PPC and
+representative histograms. Implement immutable geometry, segmented edge
+statistics, `KernelAllocationEstimate`, and the frozen pure allocation-estimator
+interface without runtime or cache changes.
 
 RED/GREEN command:
 
@@ -741,11 +856,14 @@ Files:
 - `lfp_summary_ppc_runtime.py`
 - `test_lfp_summary_ppc_runtime.py`
 - `lfp_summary_models.py` and `test_lfp_summary_models.py` for the approved
-  allocation limit
+  worker and aggregate allocation limits
 
 Write planner, stable-identity, union, memory-estimate, and deterministic-
-batching tests first. This package builds plans only; it does not replace the
-production component loop.
+batching tests first. Bind the base seed, actual derived schedule seed,
+derivation identities, schedule shape, and schedule fingerprint. Test every
+named allocation category and conservative lifetime peak rather than only a
+single total. This package builds plans only; it does not replace the production
+component loop.
 
 RED/GREEN command:
 
@@ -775,10 +893,12 @@ Files:
 - `test_lfp_summary_runtime.py`
 - `test_lfp_summary_synthetic_integration.py`
 
-Write final-axis/schema, histogram equivalence, unchanged seed, unchanged
-exemplar, transaction, and end-to-end synthetic tests first. Replace only the
-PPC job loop and duplicate observed histogram sampling. Preserve public builder
-signatures.
+Write final-axis/schema, histogram equivalence, shared exact-sample semantics,
+unchanged seed, unchanged exemplar, transaction, and end-to-end synthetic tests
+first. Legacy-equivalence fixtures exclude the documented near-grid discrepancy;
+adversarial near-grid fixtures require PPC and histogram counts to follow the S1
+contract. Replace only the PPC job loop and duplicate observed histogram
+sampling. Preserve public builder signatures.
 
 RED/GREEN command:
 
@@ -810,8 +930,13 @@ Files:
 
 Only after S6 shows the optimized serial stage profile, write worker-invariance,
 shared-mmap, aggregate-memory, ordered-checkpoint, and failure tests first.
-The existing spawn/bounded-window semantics remain binding. Implement workers
-across independent unit blocks, not conditions or sites.
+The existing single-job `execute_ppc_blocks(...)` worker tests are frozen green
+regressions after S0 and do not count as S7 RED evidence. S7 must add grouped-
+executor tests whose genuine RED is caused by the grouped engine lacking
+parallel dispatch, shared grouped inputs, aggregate preflight, or grouped
+checkpoint ordering. The existing spawn/bounded-window semantics remain
+binding. Implement workers across independent unit blocks, not conditions or
+sites.
 
 RED/GREEN command:
 
@@ -825,7 +950,8 @@ No source implementation belongs in this package. After explicit authorization:
    with one worker and warm prepared phase.
 2. Compare old accepted serial versus grouped serial stage timings and outputs.
 3. If parallelism remains worthwhile, run 1/2/4/8 workers on enough unit blocks
-   to occupy every requested worker.
+   to occupy every requested worker that passes the 12 GiB planned aggregate
+   preflight.
 4. Choose the smallest worker count whose median throughput is within 10% of
    the best measured throughput and whose aggregate memory stays below 16 GiB.
 5. Re-project 100- and 1,000-shuffle complete-component runtime from measured
@@ -849,8 +975,14 @@ No source implementation belongs in this package. After explicit authorization:
   `edge_block * unit_block * 2 segments * frequency`.
 - Shuffle accumulators and temporary PPC draws remain proportional to the
   current bounded unit/job batch, never the complete unit population. The
-  2 GiB allocation gate applies to their concurrently resident planned peak,
-  not to the sum/count arrays in isolation.
+  2 GiB process allocation gate applies to the parent or worker private peak,
+  covering the explicitly named concurrently live accumulator, kernel-working,
+  geometry, and gather arrays.
+- Before serial execution or worker spawn, the planner verifies that shared
+  mmap bytes counted once plus the parent-private peak plus every active worker
+  peak do not exceed 12 GiB. Failure is side-effect-free and does not silently
+  change worker count. Measured aggregate RSS/PSS must remain below 16 GiB,
+  leaving at least 4 GiB beyond planned arrays for runtime overhead and error.
 - At CT026 defaults, 27 jobs (9 conditions x 3 epochs), 1,000 shuffles, 8 units,
   and 50 frequencies require about 247 MiB for complex128 sums plus int64 counts
   for one site. This is a lower bound because it excludes float64 PPC draws and
@@ -858,7 +990,8 @@ No source implementation belongs in this package. After explicit authorization:
   on this estimate; measured aggregate RSS/PSS remains the broader safety gate.
 - Prepared phase remains read-only/memory-mapped. Aggregate RSS/PSS is measured;
   per-process high-water RSS is not multiplied or treated as shared without
-  evidence.
+  evidence. Conversely, private worker allocation is multiplied by active
+  worker count in preflight even when phase storage is shared.
 - A full off-diagonal edge-statistic table remains disallowed by default. Any
   future adaptive complete-table mode needs separate tests, a measured cost
   model, and proof that it fits the approved allocation bound.
@@ -895,17 +1028,24 @@ No source implementation belongs in this package. After explicit authorization:
 
 ## 11. Documentation handoff before implementation
 
-The corresponding `docs/Tasks_neural.md` handoff has been drafted. Before S0,
-commit it with this final plan as the committed documentation baseline required
-by Section 3.1, and create `docs/ppc_speedup_execution_log.md` with:
+The original handoff and execution-log scaffold are committed in `73e2d9f`,
+with its exact identity recorded in `a1d23f3`. Before S0:
 
-- the pre-documentation scientific implementation HEAD;
-- the documentation-baseline commit identity. Because a Git commit cannot
-  contain its own hash, the baseline scaffold may mark this as `pending (this
-  commit)`; record the exact hash in an immediate documentation-only follow-up
-  commit before S0 edits begin;
-- the implementation authorization and any separately authorized CT026 scope;
-- one S0-S8 entry containing the package record required by Section 10.
+- Commit the 2026-09-10 plan clarification, synchronized `Tasks_neural.md`, and
+  execution-log note as documentation only. Record that clarification commit's
+  exact hash in an immediate documentation-only follow-up commit; neither
+  commit may include source, tests, generated files, or unrelated worktree
+  changes.
+- Record the active HEAD and complete `git status --short` inventory in the S0
+  package record before assigning an editor. Treat the existing `src/main.py`
+  modification and untracked files as unrelated user work; do not clean, stage,
+  overwrite, or summarize them away. Stop if the inventory changes unexpectedly.
+- Confirm from session/host metadata that the lead is `gpt-5.6-sol` at `high`
+  and the exact Terra/Sol effort overrides in Section 3.1 are available.
+- Record explicit implementation authorization separately from any CT026
+  authorization. Documentation approval alone still does not authorize S0.
+- Retain one S0-S8 execution-log entry containing every package record required
+  by Section 10.
 
 Verify that the `Tasks_neural.md` handoff continues to:
 
