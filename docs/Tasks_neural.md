@@ -3,24 +3,28 @@
 ## Live handoff snapshot
 
 - **Snapshot:** 2026-09-09 on branch `refactor`.
-- **Current implementation HEAD:** `aadee389a26ee32e35e8977670741ddf2a47a33a`
-  (`aadee38`, `fix: encode missing phase alignment cache identity`).
-- **Upstream relationship at this implementation checkpoint:** local `refactor`
-  contains the WP5C-2 through WP5C-4 commits after `origin/refactor` at
-  `1f0bffa`.
-- **Verified neural baseline before the production benchmark:** 734 passed, no
+- **Current implementation HEAD:** `31a5c54` (`new specs for handling PPC
+  stuff`); local `refactor` and `origin/refactor` point to this commit.
+- **Last verified full neural baseline before worker work:** 734 passed, no
   skipped or xfailed tests, with 16 known Pynapple warnings and three expected
   multiprocessing-fork deprecation warnings from
   `UV_CACHE_DIR=/tmp/context_inference_uv_cache MPLCONFIGDIR=/tmp/context_inference_mpl uv run
   pytest -q -p no:cacheprovider src/tests/neural_analysis`.
+- **Current intentional RED checkpoint:**
+  `test_lfp_summary_ppc_parallel.py` reports 2 failed and 12 passed. The
+  remaining worker-contract failures cover normal executor shutdown and
+  cancellation of the future whose result raised.
 - **Approval state:** the user approved the Synchrony report dated
   `2026-08-26T16-57-33Z` and approved completing WP5C before the CT026
   100-shuffle Spike-phase preview. The WP5C-0 contracts are approved and
   WP5C-1 through WP5C-4 are complete. The user authorized the work-only WP5C-5
   CT026 engineering benchmark; its serial measurement is complete and wrote no
-  scientific Spike-phase component. The measured serial projection justifies
-  WP5C-5 worker-invariance tests and 1/2/4/8-worker profiling next. WP5C-6 has
-  not started.
+  scientific Spike-phase component. On 2026-09-09 the user approved the
+  documentation-only exact PPC speedup plan in `docs/ppc_speedup_plan.md`,
+  including the grouped executor, a 2 GiB planned per-worker allocation limit,
+  strict inferential equivalence, and deferring 1/2/4/8-worker profiling until
+  after serial optimization. Plan approval does not authorize implementation
+  or another CT026 run. WP5C-6 has not started.
 - **Do not redo completed packages:** WP0, WP1, WP2 preparation, WP3, WP4,
   WP5A, WP5B, and the Spike-phase runtime bridge are historical completed work.
   Remaining integration work must extend them through the packages below, not
@@ -37,8 +41,10 @@ Source-of-truth hierarchy:
 
 1. `docs/Tasks_neural.md` owns current status, frozen contracts, gates, package
    ownership, and remaining work.
-2. `docs/webappDesign.md` owns scientific and user-interface requirements.
-3. `docs/DevJournal.md` is a historical record only and is not authoritative
+2. `docs/ppc_speedup_plan.md` owns the approved detailed S0-S8 sequencing for
+   the remaining exact PPC computation upgrade.
+3. `docs/webappDesign.md` owns scientific and user-interface requirements.
+4. `docs/DevJournal.md` is a historical record only and is not authoritative
    for current gates or sequencing.
 
 ## Current implementation status
@@ -53,7 +59,7 @@ Source-of-truth hierarchy:
 | WP5A observed PPC | Complete | Tests `fed9435`, `355307e`; implementation `d6c3477`; `test_spike_lfp_summary.py` | None |
 | WP5B shuffle inference | Complete | Tests `c94e152`, `7d22d6f`; implementation `01b7507`; `test_spike_lfp_summary.py` | Performance redesign only; scientific reference must remain unchanged |
 | Spike runtime bridge | Complete | Tests `453d08a`; implementation `c8e76d5`; `test_lfp_summary_runtime.py` | WP5C optimization; no CT026 Spike-phase execution has occurred |
-| WP5C optimization | WP5C-0 approved; WP5C-1 through WP5C-4 complete; WP5C-5 serial benchmark complete | WP5C-4 implementation `6352db4`; WP5C-5 profiling/runtime commits through `aadee38`; work-only CT026 profile `analysis_runs/ct026_ppc_profile_2026-09-09T21-33-06Z`; full neural suite 734 passed | Add worker-invariance tests, then benchmark 1/2/4/8 workers because the serial projection exceeds the approved runtime thresholds; WP5C-6 remains pending |
+| WP5C optimization | WP5C-0 approved; WP5C-1 through WP5C-4 complete; WP5C-5 serial benchmark complete; detailed S0-S8 speedup plan approved for documentation only | WP5C-4 implementation `6352db4`; work-only CT026 profile `analysis_runs/ct026_ppc_profile_2026-09-09T21-33-06Z`; `docs/ppc_speedup.md`; `docs/ppc_speedup_plan.md`; last full neural suite 734 passed; current worker-focused RED 2 failed/12 passed | When implementation is separately authorized, execute S0-S8 in `ppc_speedup_plan.md`: restore GREEN, optimize/group serial work, profile it, then benchmark workers if still justified; WP5C-6 remains pending |
 | WP6 plotting | Partially complete | Tests `b1f51f3` and later focused plotting tests; implementation `d1c3e21`; Power and Synchrony reports above | Complete PPC exemplars and reporting in WP12 |
 | WP7 pipeline | Partially complete | Tests `b1f51f3`; implementation `067fdef`; `test_lfp_summary_pipeline.py` | Composed production dependencies and detailed progress in WP10 |
 | WP8 webapp | Partial; Power path only | Tests `c7ec7c1`, `003394a`, `f3954de`; implementations `2885ffd`, `926801b`; `test_lfp_summary_webapp.py` | Synchrony, Spike phase, Compute All, active population, progress, and complete cached views in WP11 |
@@ -875,7 +881,8 @@ A Sol medium/high orchestrator will:
 
 The scientific estimator, WP5C-before-preview sequence, and internal execution
 contracts in Sections 2.22-2.26 are approved. WP5C-1 through WP5C-4 are
-complete, and WP5C-5 is the next authorized implementation package.
+complete. WP5C-5 follows the approved S0-S8 plan, but S0 implementation still
+requires separate user authorization.
 Implementers must escalate newly discovered ambiguity instead of choosing new
 scientific or execution defaults.
 Material changes to metrics, thresholds, cache contracts, or user-visible
@@ -1755,10 +1762,13 @@ Serial benchmark checkpoint (2026-09-09):
   epochs gives an intentionally conservative all-eligible range of roughly
   47-51 hours at 100 shuffles and 90-100 hours at 1,000 shuffles. These are
   engineering projections, not measured full-component runtimes.
-- The serial projection is materially above both review thresholds. Therefore
-  WP5C-5 proceeds to test-first worker-count invariance and isolated 1/2/4/8
-  worker measurements. No WP5C-6 preview or 1,000-shuffle result is authorized
-  by this profiling checkpoint.
+- The serial projection is materially above both review thresholds. The later
+  review in `docs/ppc_speedup.md` identified enough redundant serial work that
+  benchmarking 1/2/4/8 workers at this point would measure a task boundary that
+  is expected to be replaced. The approved documentation plan therefore
+  defers worker measurements until after S1-S6 serial optimization and
+  profiling. No implementation, WP5C-6 preview, or 1,000-shuffle result is
+  authorized by this profiling checkpoint or plan approval.
 - Production launch review exposed and corrected three pre-computation defects:
   the runner-lock callback signature, JSON-safe identity for missing alignment
   times, and unsafe child/recovery behavior. The two failed attempts stopped
@@ -1771,9 +1781,13 @@ Serial benchmark checkpoint (2026-09-09):
   the platform default fork context. Corrective test-only commit `9fe7f1f`
   records genuine RED (2 failed, 12 passed) for an explicit spawn context, an
   initial bounded concurrent submission window, canonical result order, and
-  failure cancellation/shutdown. The exact next action is a source-only GREEN
-  correction to `lfp_summary_ppc_runtime.py`, followed by the focused and full
-  neural suites; do not benchmark worker counts against `4cc5c83`.
+  failure cancellation/shutdown. Commit `37657a5` added the spawn context and
+  bounded window, but the focused file still reports 2 failed and 12 passed:
+  normal fake-executor shutdown is missing and the future whose `result()`
+  raises is not cancelled. S0 in `docs/ppc_speedup_plan.md` is the exact first
+  implementation package if implementation is separately authorized. It must
+  restore the focused and full neural suites to GREEN; it must not launch a
+  worker benchmark.
 
 #### WP5C-6 - CT026 preview validation
 
@@ -1987,8 +2001,10 @@ or explicitly defer it with user approval; silent omission is forbidden.
    integration are disjoint from any active owner. Only one implementer at a
    time owns `lfp_summary_runtime.py` or `lfp_summary_pipeline.py`.
 5. WP5C-4 integrates the already-green serial numerical and cache work.
-6. WP5C-5 profiles the serial implementation. Parallel execution is added only
-   if profiling justifies it and only after worker-invariance tests record RED.
+6. WP5C-5 follows the approved S0-S8 sequence in
+   `docs/ppc_speedup_plan.md`: restore the current worker RED checkpoint, remove
+   redundant serial computation, profile the grouped serial executor, then
+   rebind and benchmark workers only if the new profile still justifies them.
 7. WP12 completes the preview report path; Sol then runs WP5C-6, the CT026
    100-shuffle preview, and pauses for inspection.
    No 1,000-shuffle run follows automatically.
@@ -2032,10 +2048,12 @@ Sol checks:
   null copies.
 - The initial single-session implementation does not add Numba, Cython, MEX,
   Zarr, or a niche parallel dependency.
-- Profile the serial WP5C kernel before activating within-session parallelism,
-  then benchmark 1, 2, 4, and 8 shared-data workers. Select the smallest worker
-  count near the measured throughput plateau and keep peak PPC working memory
-  below 16 GiB.
+- Profile the grouped, optimized serial WP5C kernel before activating
+  within-session parallelism. Only then benchmark 1, 2, 4, and 8 shared-data
+  workers if the serial profile still justifies them. Select the smallest
+  worker count within 10 percent of the best measured throughput, keep planned
+  private allocation at or below 2 GiB per worker, and keep measured aggregate
+  PPC working memory below 16 GiB.
 - Treat 25-60 minutes for a cold 100-shuffle CT026 preview and 45-120 minutes
   for a cold 1,000-shuffle run as provisional engineering estimates with about
   twofold uncertainty until the representative benchmark is complete. A valid
@@ -2127,3 +2145,23 @@ WP5C-4 completion update (2026-09-09):
   Spike-phase computation were introduced.
 - The exact next package is WP5C-5. WP5C-6 remains pending, and no CT026
   Spike-phase computation is authorized by this completion.
+
+Exact PPC speedup planning update (2026-09-09):
+
+- `docs/ppc_speedup.md` documents the approved exact computational redesign:
+  remove duplicate observed work, reuse source-spike interpolation geometry,
+  derive whole-epoch results from before/after sufficient statistics, and
+  reuse physical edges across overlapping conditions.
+- The user approved all recommended implementation-plan decisions in
+  `docs/ppc_speedup_plan.md`: preserve a single-job reference executor, add a
+  grouped production executor, retain the existing epoch-specific schedules,
+  require exact inferential decisions under tight floating tolerances, use a
+  2 GiB planned private-allocation limit per worker, and defer worker profiling
+  until after serial optimization.
+- This approval created and reconciled documentation only. It does not
+  authorize S0 source changes, synthetic implementation work, another CT026
+  engineering profile, the 100-shuffle preview, or the 1,000-shuffle run.
+- If implementation is requested later, S0 is first: finish the already-RED
+  bounded-spawn worker correction and restore the focused and full neural
+  suites to GREEN. S1-S6 then optimize and profile grouped serial work; S7-S8
+  rebind and benchmark parallel workers only if still justified.
