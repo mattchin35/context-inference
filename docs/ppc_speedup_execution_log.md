@@ -17,8 +17,8 @@ changing the scientific specification.
   Sol-`high` lead with `xhigh` reserved for S1-S4/S7 writers and reviewers. The
   clarification also freezes `KernelAllocationEstimate`, adds a 12 GiB planned
   aggregate-array preflight, and requires new grouped-worker RED evidence in S7
-  rather than reusing S0's single-job regressions. The clarification commit is
-  pending.
+  rather than reusing S0's single-job regressions. Clarification commit:
+  `20202a4` (`docs: clarify PPC speedup execution plan`).
 - Expected S0 RED checkpoint: 2 failed and 12 passed in
   `src/tests/neural_analysis/test_lfp_summary_ppc_parallel.py`.
 - Implementation authorization: on 2026-09-10 the user explicitly authorized
