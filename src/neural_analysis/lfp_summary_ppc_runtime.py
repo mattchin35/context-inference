@@ -622,12 +622,10 @@ def _run_parallel_worker_batches(
     del phase_descriptor  # The descriptor is captured by the pickle-safe partial.
     task_iterator = iter(block_tasks)
     pending: list[object] = []
-    executor = ProcessPoolExecutor(
+    with ProcessPoolExecutor(
         max_workers=worker_count,
         mp_context=multiprocessing.get_context("spawn"),
-    )
-    shutdown_complete = False
-    try:
+    ) as executor:
         # Fill the bounded initial submission window before waiting on work.
         for _ in range(worker_count):
             try:
@@ -637,8 +635,17 @@ def _run_parallel_worker_batches(
             pending.append(executor.submit(compute_block, task))
 
         while pending:
-            future = pending.pop(0)
-            result = future.result()
+            # Retain the current future until its result has succeeded so a
+            # failure can cancel both it and the remaining submission window.
+            future = pending[0]
+            try:
+                result = future.result()
+            except BaseException:
+                for submitted_future in pending:
+                    submitted_future.cancel()
+                executor.shutdown(wait=True, cancel_futures=True)
+                raise
+            pending.pop(0)
             yield result
 
             # The parent has now copied and checkpointed ``result``. Submit no
@@ -648,15 +655,6 @@ def _run_parallel_worker_batches(
             except StopIteration:
                 continue
             pending.append(executor.submit(compute_block, task))
-    except BaseException:
-        for future in pending:
-            future.cancel()
-        executor.shutdown(wait=True, cancel_futures=True)
-        shutdown_complete = True
-        raise
-    finally:
-        if not shutdown_complete:
-            executor.shutdown(wait=True, cancel_futures=False)
 
 
 def _compute_observed_block(
