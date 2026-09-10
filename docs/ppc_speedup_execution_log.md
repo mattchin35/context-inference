@@ -41,22 +41,46 @@ not apply; write `not applicable` and explain why.
 
 ### S0 - Restore worker checkpoint to GREEN
 
-- Status: authorized; documentation baseline completion pending before source
-  assignment.
+- Status: complete.
 - Authorization: user authorization recorded 2026-09-10; no CT026 work or
   production worker benchmark authorized.
-- Starting HEAD and worktree inventory:
-- Lead Sol model/effort:
-- Terra worker model/effort, permissions, and file scope:
-- Optional Terra scout model/effort, permissions, and findings:
-- Sol reviewer model/effort, permissions, and disposition:
-- Read-only enforcement or procedural restriction:
+- Starting HEAD and worktree inventory: `bd735acfbba8808ffd50dd9ad660d34d8b5888ef`;
+  complete `git status --short -z` inventory contained 172 entries with SHA-256
+  `58b0b546eb35ee92598775b40b93bf4984619153eafc8d07b9a353187441fc47`.
+  The only tracked pre-existing modification was `src/main.py`; all remaining
+  entries were unrelated untracked user files/directories. The lead will
+  compare the live inventory before accepting the worker diff.
+- Lead Sol model/effort: `gpt-5.6-sol`, `high`, confirmed by the user; write
+  authority restricted to review, staging, commits, and this execution log.
+- Terra worker model/effort, permissions, and file scope: `gpt-5.6-terra`,
+  `high`, write-enabled only for
+  `src/neural_analysis/lfp_summary_ppc_runtime.py`; the existing parallel test
+  file is read-only.
+- Optional Terra scout model/effort, permissions, and findings: not applicable;
+  no scout was needed.
+- Sol reviewer model/effort, permissions, and disposition: `gpt-5.6-sol`,
+  `high`, procedurally read-only; PASS with no blocking findings after an
+  independent stable-diff audit.
+- Read-only enforcement or procedural restriction: agent prompts provide
+  procedural file restrictions because spawned agents share the worktree.
 - Test-only commit and RED evidence: existing commit `9fe7f1f`; baseline 2
   failed and 12 passed.
-- Implementation commit and GREEN evidence:
-- Full neural-suite evidence:
-- Numerical/interface review:
-- Unresolved risks:
+- Implementation commit and GREEN evidence: `e28d8b5` (`fix: complete PPC
+  worker shutdown contract`). Lead-focused verification passed 14 parallel
+  tests; the combined Spike-PPC/runtime/work-cache/pipeline set passed 121.
+- Full neural-suite evidence: 750 passed with 19 known warnings (16 Pynapple
+  warnings and three multiprocessing-fork deprecation warnings).
+- Numerical/interface review: the diff changed only executor lifecycle in
+  `_run_parallel_worker_batches`; spawn context, bounded canonical submission,
+  prior-yield resumability, public interfaces, numerical code, schedules,
+  checkpoint schema, and final publication remained unchanged. The unrelated
+  worktree fingerprint remained exactly
+  `58b0b546eb35ee92598775b40b93bf4984619153eafc8d07b9a353187441fc47`.
+- Unresolved risks: no blocking risk. Early consumer-driven generator closure
+  still uses the context manager's default wait behavior, and exceptional
+  cleanup performs an idempotent second shutdown during context exit; both are
+  outside the narrow S0 result-failure contract and were accepted by the Sol
+  reviewer.
 - CT026 work performed: none permitted.
 
 ### S1 - Uniform-grid geometry and segmented edge kernel
