@@ -9,9 +9,8 @@ changing the scientific specification.
 
 - Plan: `docs/ppc_speedup_plan.md`, audited 2026-09-10.
 - Pre-documentation scientific implementation HEAD: `31a5c54` on `refactor`.
-- Documentation-baseline commit: pending (the commit that first adds this
-  file); its exact hash must be recorded by the immediate documentation-only
-  follow-up commit before S0 begins.
+- Documentation-baseline commit: `73e2d9f` (`docs: finalize exact PPC speedup
+  handoff`).
 - Expected S0 RED checkpoint: 2 failed and 12 passed in
   `src/tests/neural_analysis/test_lfp_summary_ppc_parallel.py`.
 - Implementation authorization: not yet recorded. This documentation handoff
