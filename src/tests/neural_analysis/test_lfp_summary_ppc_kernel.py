@@ -995,12 +995,14 @@ def test_kernel_allocation_estimate_matches_named_hand_accounting_without_alloca
     """The pure estimator reports each documented concurrently live kernel category.
 
     Geometry retains two int64 indices, one float64 weight, and two Boolean
-    masks per spike plus one ``unit * 2 + 1`` int64 offset array per source
-    trial.  Each gathered coefficient cell concurrently retains left/right
+    masks per spike, plus one owned int64 source identity and one
+    ``unit * 2 + 1`` int64 offset array per source trial.  Each gathered
+    coefficient cell concurrently retains left/right
     complex64 coefficients, complex128 interpolation, float64 magnitude,
     complex64 normalized phase, and three Boolean support/validity arrays:
     ``8 + 8 + 16 + 8 + 8 + 3 == 51`` bytes.  Segmented output has two segments
-    of one complex128 sum and one int64 count: 48 bytes per edge/unit/frequency.
+    of one complex128 sum and one int64 count, plus owned source/target int64
+    edge identities: ``48 * edge * unit * frequency + 16 * edge`` bytes.
     """
     source_trial_spike_count = np.array(
         [
@@ -1011,13 +1013,15 @@ def test_kernel_allocation_estimate_matches_named_hand_accounting_without_alloca
     )
     edge_source_trial_position = np.array([0, 1, 1], dtype=np.int64)
     total_spikes = int(source_trial_spike_count.sum())
-    geometry_bytes = 26 * total_spikes + 2 * (2 * 2 + 1) * 8
+    source_identity_bytes = source_trial_spike_count.shape[0] * 8
+    geometry_bytes = 26 * total_spikes + 2 * (2 * 2 + 1) * 8 + source_identity_bytes
     selected_spikes = int(
         source_trial_spike_count[edge_source_trial_position].sum()
     )
     gathered_cells = selected_spikes * 2
     gather_temporary_bytes = gathered_cells * (8 + 8 + 16 + 8 + 8 + 3)
-    segmented_edge_statistics_bytes = 3 * 2 * 2 * 48
+    edge_identity_bytes = edge_source_trial_position.size * 2 * 8
+    segmented_edge_statistics_bytes = 3 * 2 * 2 * 48 + edge_identity_bytes
     expected_peak = (
         geometry_bytes + gather_temporary_bytes + segmented_edge_statistics_bytes
     )
@@ -1035,6 +1039,8 @@ def test_kernel_allocation_estimate_matches_named_hand_accounting_without_alloca
     )
 
     assert isinstance(estimate, kernel.KernelAllocationEstimate)
+    assert source_identity_bytes == 16
+    assert edge_identity_bytes == 48
     assert estimate.geometry_bytes == geometry_bytes
     assert estimate.segmented_edge_statistics_bytes == segmented_edge_statistics_bytes
     assert estimate.gather_temporary_bytes == gather_temporary_bytes
@@ -1047,8 +1053,8 @@ def test_kernel_allocation_estimate_matches_named_hand_accounting_without_alloca
         estimate.geometry_bytes = 0
 
 
-def test_kernel_allocation_estimate_accepts_zero_spike_counts_and_charges_offsets_and_edge_statistics() -> None:
-    """An all-zero bounded block still retains each source geometry's offsets and edge outputs."""
+def test_kernel_allocation_estimate_accepts_zero_spike_counts_and_charges_offsets_identities_and_edge_statistics() -> None:
+    """An all-zero bounded block still retains source/edge identities, offsets, and outputs."""
     source_trial_spike_count = np.zeros((2, 2, 2), dtype=np.int64)
     edge_source_trial_position = np.array([0, 1, 1], dtype=np.int64)
 
@@ -1058,8 +1064,8 @@ def test_kernel_allocation_estimate_accepts_zero_spike_counts_and_charges_offset
         frequency_count=1,
     )
 
-    expected_geometry_bytes = 2 * (2 * 2 + 1) * 8
-    expected_edge_statistics_bytes = 3 * 2 * 1 * 48
+    expected_geometry_bytes = 2 * (2 * 2 + 1) * 8 + 2 * 8
+    expected_edge_statistics_bytes = 3 * 2 * 1 * 48 + 3 * 2 * 8
     assert estimate.geometry_bytes == expected_geometry_bytes
     assert estimate.segmented_edge_statistics_bytes == expected_edge_statistics_bytes
     assert estimate.gather_temporary_bytes == 0
@@ -1125,8 +1131,8 @@ def test_kernel_allocation_estimate_rejects_gathered_cell_multiplication_overflo
     """A safe geometry still rejects selected-spike times 51 gathered-cell overflow."""
     maximum = np.iinfo(np.int64).max
     spike_count = maximum // 51 + 1
-    geometry_bytes = 26 * spike_count + 3 * 8
-    segmented_edge_statistics_bytes = 48
+    geometry_bytes = 26 * spike_count + 3 * 8 + 8
+    segmented_edge_statistics_bytes = 48 + 2 * 8
     assert geometry_bytes <= maximum
     assert segmented_edge_statistics_bytes <= maximum
     assert spike_count * 51 > maximum
@@ -1142,9 +1148,9 @@ def test_kernel_allocation_estimate_rejects_planned_peak_addition_overflow() -> 
     """Individually representable geometry, gather, and edge statistics cannot wrap their peak sum."""
     maximum = np.iinfo(np.int64).max
     spike_count = maximum // 60
-    geometry_bytes = 26 * spike_count + 3 * 8
+    geometry_bytes = 26 * spike_count + 3 * 8 + 8
     gather_temporary_bytes = 51 * spike_count
-    segmented_edge_statistics_bytes = 48
+    segmented_edge_statistics_bytes = 48 + 2 * 8
     assert geometry_bytes <= maximum
     assert gather_temporary_bytes <= maximum
     assert segmented_edge_statistics_bytes <= maximum
@@ -1160,10 +1166,10 @@ def test_kernel_allocation_estimate_rejects_planned_peak_addition_overflow() -> 
 def test_kernel_allocation_estimate_rejects_selected_spike_count_addition_overflow() -> None:
     """Repeated source edges check selected-spike addition before gather-byte multiplication."""
     maximum = np.iinfo(np.int64).max
-    spike_count = (maximum - 3 * 8) // 26
+    spike_count = (maximum - 3 * 8 - 8) // 26
     repeated_edges = np.zeros(27, dtype=np.int64)
-    geometry_bytes = 26 * spike_count + 3 * 8
-    segmented_edge_statistics_bytes = repeated_edges.size * 48
+    geometry_bytes = 26 * spike_count + 3 * 8 + 8
+    segmented_edge_statistics_bytes = repeated_edges.size * (48 + 2 * 8)
     assert geometry_bytes <= maximum
     assert segmented_edge_statistics_bytes <= maximum
     assert spike_count * repeated_edges.size > maximum
