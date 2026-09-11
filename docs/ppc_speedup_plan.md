@@ -519,6 +519,14 @@ returns, and failure behavior.
   supplied edge block. The kernel documents each temporary's dtype, shape, and
   lifetime; the estimator uses `dtype.itemsize * product(shape)` rather than an
   unexplained multiplier.
+- Geometry accounting includes the owned int64 scalar physical source-trial
+  identity for every source geometry, in addition to spike interpolation arrays
+  and group offsets. Segmented-statistics accounting includes the owned int64
+  source and target identity vectors in addition to sums and counts. Therefore,
+  for `S` source geometries and `E` edges,
+  `geometry_bytes` includes `8 * S`, and
+  `segmented_edge_statistics_bytes` equals
+  `48 * E * unit_count * frequency_count + 16 * E`.
 - `planned_kernel_peak_bytes` is the maximum of documented concurrently live
   kernel array groups. Invalid axes/counts and checked-arithmetic overflow raise
   `ValueError`; the helper performs no allocation, sampling, or I/O.
@@ -548,11 +556,12 @@ returns, and failure behavior.
   PPC draws, and one float64 calculation scratch array: 40 bytes per cell with
   the approved dtypes.
 - Segmented edge statistics contribute 48 bytes per
-  edge/unit/frequency cell: two segments times one complex128 sum and one int64
-  count. Geometry includes two int64 indices, one float64 weight, two Boolean
-  masks per spike, and int64 group offsets. Any additional gather temporary is
-  named and calculated from its documented dtype and shape rather than hidden
-  in a multiplier.
+  edge/unit/frequency cell (two segments times one complex128 sum and one int64
+  count), plus 16 bytes per edge for the owned int64 source/target identities.
+  Geometry includes an owned int64 source identity per source geometry, two
+  int64 indices, one float64 weight, two Boolean masks per spike, and int64
+  group offsets. Any additional gather temporary is named and calculated from
+  its documented dtype and shape rather than hidden in a multiplier.
 - The private process peaks are maxima of explicitly documented concurrently
   live array groups, not sums of arrays whose lifetimes cannot overlap. For a
   serial run, the parent peak includes kernel execution and active worker count
@@ -668,7 +677,9 @@ its tests and records genuine RED before its source implementation.
 - `estimate_segmented_kernel_allocation(...)` matches hand-calculated geometry,
   segmented-edge, named gather-temporary, and lifetime-peak bytes without
   allocating arrays; malformed counts/axes, Boolean integer arguments, and
-  checked-arithmetic overflow fail with `ValueError`.
+  checked-arithmetic overflow fail with `ValueError`. The hand calculation
+  explicitly includes the owned int64 scalar identity for every source
+  geometry and both owned int64 edge-identity vectors.
 
 ### Observed and whole composition
 

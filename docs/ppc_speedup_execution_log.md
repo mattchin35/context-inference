@@ -85,10 +85,34 @@ not apply; write `not applicable` and explain why.
 
 ### S1 - Uniform-grid geometry and segmented edge kernel
 
-- Status: not started.
-- Authorization and starting HEAD:
-- Agent assignments, permissions, and file scopes:
-- Test-design review, test-only commit, and RED evidence:
+- Status: implementation gate corrections in progress. The original RED
+  contract and subsequent genuine-test-defect/contract additions are committed;
+  an allocation-accounting clarification is being returned through TDD before
+  the source commit.
+- Authorization and starting HEAD: user authorization recorded 2026-09-10;
+  `98e6ef6f278b77e861e58129e3d6fef6f1aef2d9`. The unrelated worktree inventory
+  remained 172 entries with SHA-256
+  `58b0b546eb35ee92598775b40b93bf4984619153eafc8d07b9a353187441fc47`.
+- Agent assignments, permissions, and file scopes: lead `gpt-5.6-sol` `high`;
+  writer `gpt-5.6-terra` `xhigh`, initially write-enabled only for
+  `src/tests/neural_analysis/test_lfp_summary_ppc_kernel.py` and, if required,
+  focused additions to `test_spike_lfp_summary.py`; independent reviewer
+  `gpt-5.6-sol` `xhigh`, procedurally read-only. No scout assigned.
+- Test-design review, test-only commit, and RED evidence: independent Sol
+  `xhigh` gate PASS after corrections for interpolation weights, adjacent-source
+  validity, empty groups, stable identities, ownership, and isolated checked
+  arithmetic. Lead reproduced the intended collection RED (`1 error`, `29
+  deselected`) because `lfp_summary_ppc_kernel` did not yet exist. Test-only
+  commit `9705200` (`test: define optimized PPC kernel contracts`).
+- Post-RED test corrections: corrected the half-open-boundary offset fixture and
+  replaced NumPy 2.4.3's unsupported array-valued `assert_allclose` tolerance
+  with an equivalent explicit per-cell bound in test-only commit `585c1e7`.
+  Added reviewed RED coverage for element-level immutability and signed-int64
+  identity range failures in test-only commit `513decf`.
+- Allocation clarification: independent source review found that the initial
+  formulas omitted retained NumPy identity arrays. The plan now charges 8 bytes
+  per source geometry and 16 bytes per edge; matching estimator tests must be
+  RED and committed before the implementation formula changes.
 - Implementation commit and GREEN evidence:
 - Full neural-suite and independent Sol gate evidence:
 - Numerical/interface review and unresolved risks:
