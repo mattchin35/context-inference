@@ -116,6 +116,16 @@ def _single_edge_statistics(
     )
 
 
+def _assert_ndarray_fields_are_elementwise_immutable(result: object) -> None:
+    """Check that every ndarray field is read-only, not merely frozen by its dataclass."""
+    for field in fields(result):
+        value = getattr(result, field.name)
+        if isinstance(value, np.ndarray):
+            assert not value.flags.writeable, f"{field.name} must be read-only"
+            with pytest.raises(ValueError, match="read-only"):
+                value.flat[0] = value.flat[0]
+
+
 def test_kernel_contracts_are_keyword_only_frozen_and_axis_explicit() -> None:
     """The new kernel exposes only the frozen, keyword-only S1 data contracts."""
     expected_geometry_fields = (
@@ -266,6 +276,42 @@ def test_geometry_owns_inputs_and_retains_safe_metadata_for_outside_support_spik
     np.testing.assert_array_equal(geometry.right_weight, np.zeros(3, dtype=np.float64))
     np.testing.assert_array_equal(geometry.inside_support, [False, True, False])
     np.testing.assert_array_equal(geometry.exact_sample, [False, True, False])
+
+
+def test_kernel_output_ndarray_fields_are_elementwise_immutable() -> None:
+    """Frozen kernel results also prohibit element-level mutation of every array field."""
+    geometry = _build_geometry(
+        source_trial_index=0,
+        unit_ids=("unit-1",),
+        unit_trial_spike_times_s=(np.array([-0.25, 0.0]),),
+    )
+    phase = np.ones((1, 1, _FOUR_HZ_TIME_S.size), dtype=np.complex64)
+    valid = np.ones(phase.shape, dtype=bool)
+    statistics = _single_edge_statistics(geometry=geometry, phase=phase, valid=valid)
+
+    _assert_ndarray_fields_are_elementwise_immutable(geometry)
+    _assert_ndarray_fields_are_elementwise_immutable(statistics)
+
+
+@pytest.mark.parametrize(
+    "source_trial_index",
+    (
+        np.iinfo(np.int64).max + 1,
+        np.iinfo(np.int64).min - 1,
+        np.uint64(np.iinfo(np.int64).max + 1),
+        np.iinfo(np.uint64).max,
+    ),
+)
+def test_geometry_rejects_source_trial_identity_outside_int64_range(
+    source_trial_index: object,
+) -> None:
+    """Oversized signed and unsigned Python/NumPy identities fail with ValueError."""
+    with pytest.raises(ValueError):
+        _build_geometry(
+            source_trial_index=source_trial_index,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(np.array([0.0]),),
+        )
 
 
 def test_geometry_rejects_malformed_unit_spikes_and_segment_bounds() -> None:
