@@ -1189,3 +1189,1157 @@ def test_kernel_allocation_estimate_rejects_edge_statistics_multiplication_overf
             edge_source_trial_position=np.array([0], dtype=np.int64),
             frequency_count=np.iinfo(np.int64).max,
         )
+
+
+# S2 contracts: observed single-pass reuse, whole-from-halves composition, and
+# representative histograms.  The S1 geometry/edge contracts above remain
+# unchanged; these are deliberately separate result types.
+_REPRESENTATIVE_PHASE_BIN_EDGES_RAD = np.array(
+    [-np.pi, -np.pi / 2.0, 0.0, np.pi / 2.0, np.pi],
+    dtype=np.float64,
+)
+
+
+def _observed_segmented_fixture() -> tuple[
+    tuple[object, ...],
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
+    """Return two same-trial sources with cancelling before/after phase sums.
+
+    The phase arrays have axes ``(trial=2, frequency=3, time=5)`` and use
+    stable, intentionally unsorted physical trial identities. Each source has
+    one unit and one exact-grid spike in each half. Before vectors are ``+1``
+    and after vectors are ``-1`` at every frequency, so a whole-window PPC
+    must retain cross-half cancellation instead of averaging the two half PPCs.
+    """
+    phase_trial_index = np.array([29, 7], dtype=np.int64)
+    frequencies_hz = np.array([8.0, 20.0, 40.0], dtype=np.float64)
+    phase = np.ones((2, 3, _FOUR_HZ_TIME_S.size), dtype=np.complex64)
+    phase[:, :, 1] = np.complex64(1.0 + 0.0j)
+    phase[:, :, 3] = np.complex64(-1.0 + 0.0j)
+    valid = np.ones(phase.shape, dtype=bool)
+    geometry_by_source = {
+        29: _build_geometry(
+            source_trial_index=29,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(np.array([-0.25, 0.25]),),
+        ),
+        7: _build_geometry(
+            source_trial_index=7,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(np.array([-0.25, 0.25]),),
+        ),
+    }
+    # Geometry order is unrelated to the prepared phase-axis order.
+    geometries = (geometry_by_source[7], geometry_by_source[29])
+    return (
+        geometries,
+        phase,
+        valid,
+        phase_trial_index,
+        frequencies_hz,
+        _REPRESENTATIVE_PHASE_BIN_EDGES_RAD.copy(),
+    )
+
+
+def _compute_observed_segmented_fixture() -> object:
+    """Run the proposed S2 observed reducer on the canonical two-trial fixture."""
+    geometries, phase, valid, phase_trial_index, frequencies_hz, phase_bins = (
+        _observed_segmented_fixture()
+    )
+    return kernel.compute_observed_segmented_ppc_statistics(
+        source_trial_geometries=geometries,
+        trial_phase_vectors=phase,
+        phase_valid_mask=valid,
+        phase_trial_index=phase_trial_index,
+        frequencies_hz=frequencies_hz,
+        phase_bin_edges_rad=phase_bins,
+    )
+
+
+def _assert_result_arrays_are_owned_and_immutable(result: object) -> None:
+    """Check frozen S2 result arrays are independent of callers and read-only."""
+    _assert_ndarray_fields_are_elementwise_immutable(result)
+
+
+def test_observed_segmented_contracts_are_frozen_keyword_only_and_axis_explicit() -> None:
+    """S2 exposes separate immutable observed statistics and composed metric contracts.
+
+    ``phase_vector_sum`` and ``valid_spike_count`` retain only before/after
+    sufficient statistics on ``(unit, segment=2, frequency)`` axes. Trial
+    contributions and histograms include the explicitly composed whole epoch on
+    ``epoch=(before, after, whole)`` axes; all values are dimensionless except
+    the stored Hz and radians coordinates. Representative frequencies are
+    positive, finite, nondecreasing float64 values: a single input frequency
+    legitimately supplies equal 8/40-Hz representatives.
+    """
+    expected_statistics_fields = (
+        "phase_vector_sum",
+        "valid_spike_count",
+        "contributing_trial_count",
+        "representative_frequency_hz",
+        "phase_bin_edges_rad",
+        "representative_phase_histogram_count",
+    )
+    expected_metrics_fields = (
+        "ppc",
+        "resultant_length",
+        "preferred_phase_rad",
+        "spike_count",
+        "computable",
+        "reliable",
+        "contributing_trial_count",
+        "shuffle_eligible",
+        "representative_frequency_hz",
+        "phase_bin_edges_rad",
+        "representative_phase_histogram_count",
+    )
+    assert tuple(
+        field.name for field in fields(kernel.ObservedSegmentedPPCStatistics)
+    ) == expected_statistics_fields
+    assert tuple(
+        field.name for field in fields(kernel.ObservedSegmentedPPCMetrics)
+    ) == expected_metrics_fields
+
+    observed_signature = inspect.signature(kernel.compute_observed_segmented_ppc_statistics)
+    assert tuple(observed_signature.parameters) == (
+        "source_trial_geometries",
+        "trial_phase_vectors",
+        "phase_valid_mask",
+        "phase_trial_index",
+        "frequencies_hz",
+        "phase_bin_edges_rad",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in observed_signature.parameters.values()
+    )
+    composition_signature = inspect.signature(
+        kernel.compose_observed_segmented_ppc_metrics
+    )
+    assert tuple(composition_signature.parameters) == ("observed_statistics",)
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in composition_signature.parameters.values()
+    )
+    shuffle_signature = inspect.signature(kernel.reduce_segmented_schedule_to_ppc)
+    assert tuple(shuffle_signature.parameters) == (
+        "edge_statistics",
+        "phase_trial_index",
+        "schedule",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in shuffle_signature.parameters.values()
+    )
+    sampler_signature = inspect.signature(kernel._sample_normalized_spike_group)
+    assert tuple(sampler_signature.parameters) == (
+        "coefficients",
+        "explicit_valid_mask",
+        "left_index",
+        "right_index",
+        "right_weight",
+        "inside_support",
+        "exact_sample",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in sampler_signature.parameters.values()
+    )
+
+
+def test_observed_single_pass_returns_owned_before_after_sums_trial_unions_and_histograms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One observed pass returns all reusable half statistics without mask copies.
+
+    The reducer may not use a full ``numpy.where(valid, phase, 0j)`` phase copy
+    and may not call the generic edge reducer and then perform a second
+    same-trial sampling pass for contributions or representative histograms.
+    """
+    geometries, phase, valid, phase_trial_index, frequencies_hz, phase_bins = (
+        _observed_segmented_fixture()
+    )
+
+    def forbidden_where(*args: object, **kwargs: object) -> object:
+        """Fail if observed reduction constructs the prohibited full mask copy."""
+        raise AssertionError("observed reduction must not construct np.where phase copies")
+
+    def forbidden_edge_reduction(*args: object, **kwargs: object) -> object:
+        """Fail if observed work is delegated to a second generic edge pass."""
+        raise AssertionError("observed reduction must sample same-trial edges only once")
+
+    original_sampler = kernel._sample_normalized_spike_group
+    sampled_group_spike_counts: list[int] = []
+
+    def counted_sampler(**kwargs: object) -> tuple[np.ndarray, np.ndarray]:
+        """Record the one shared sampler call needed for each nonempty group."""
+        sampled_group_spike_counts.append(np.asarray(kwargs["left_index"]).size)
+        return original_sampler(**kwargs)
+
+    monkeypatch.setattr(kernel.np, "where", forbidden_where)
+    monkeypatch.setattr(
+        kernel,
+        "compute_segmented_edge_statistics",
+        forbidden_edge_reduction,
+    )
+    monkeypatch.setattr(kernel, "_sample_normalized_spike_group", counted_sampler)
+    observed = kernel.compute_observed_segmented_ppc_statistics(
+        source_trial_geometries=geometries,
+        trial_phase_vectors=phase,
+        phase_valid_mask=valid,
+        phase_trial_index=phase_trial_index,
+        frequencies_hz=frequencies_hz,
+        phase_bin_edges_rad=phase_bins,
+    )
+
+    assert isinstance(observed, kernel.ObservedSegmentedPPCStatistics)
+    assert observed.phase_vector_sum.dtype == np.dtype(np.complex128)
+    assert observed.phase_vector_sum.shape == (1, 2, 3)
+    assert observed.valid_spike_count.dtype == np.dtype(np.int64)
+    assert observed.valid_spike_count.shape == (1, 2, 3)
+    assert observed.contributing_trial_count.dtype == np.dtype(np.int64)
+    assert observed.contributing_trial_count.shape == (1, 3, 3)
+    assert observed.representative_frequency_hz.dtype == np.dtype(np.float64)
+    assert observed.representative_frequency_hz.shape == (2,)
+    assert observed.phase_bin_edges_rad.dtype == np.dtype(np.float64)
+    assert observed.phase_bin_edges_rad.shape == (phase_bins.size,)
+    assert observed.representative_phase_histogram_count.dtype == np.dtype(np.int64)
+    assert observed.representative_phase_histogram_count.shape == (
+        1,
+        3,
+        2,
+        phase_bins.size - 1,
+    )
+    np.testing.assert_allclose(
+        observed.phase_vector_sum,
+        np.array([[[2.0, 2.0, 2.0], [-2.0, -2.0, -2.0]]]),
+    )
+    np.testing.assert_array_equal(observed.valid_spike_count, 2)
+    # Both physical trials contribute in both halves, but only once to whole.
+    np.testing.assert_array_equal(observed.contributing_trial_count, 2)
+    np.testing.assert_array_equal(observed.representative_frequency_hz, [8.0, 40.0])
+    # Two trials x one unit x two nonempty half groups. The same normalized
+    # vectors must feed pooled sums, trial contributors, and histogram bins.
+    assert sampled_group_spike_counts == [1, 1, 1, 1]
+
+    phase[:, :, :] = 0.0j
+    valid[:, :, :] = False
+    phase_trial_index[:] = -1
+    frequencies_hz[:] = -1.0
+    phase_bins[:] = 0.0
+    np.testing.assert_allclose(
+        observed.phase_vector_sum,
+        np.array([[[2.0, 2.0, 2.0], [-2.0, -2.0, -2.0]]]),
+    )
+    np.testing.assert_array_equal(observed.valid_spike_count, 2)
+    np.testing.assert_array_equal(observed.contributing_trial_count, 2)
+    np.testing.assert_array_equal(observed.representative_frequency_hz, [8.0, 40.0])
+    np.testing.assert_allclose(
+        observed.phase_bin_edges_rad,
+        _REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+        rtol=0.0,
+        atol=0.0,
+    )
+    _assert_result_arrays_are_owned_and_immutable(observed)
+    with pytest.raises(FrozenInstanceError):
+        observed.phase_bin_edges_rad = np.array([-np.pi, np.pi], dtype=np.float64)
+
+
+def test_observed_histograms_share_s1_exact_canonical_sample_rule() -> None:
+    """A near-grid spike rejected by S1 is also absent from its 8/40-Hz bins.
+
+    The second spike is one representable float above a stored sample and the
+    third is within ``1e-12`` but not exactly on the grid. Their right neighbor
+    is unavailable, so both must fail two-neighbor interpolation. Only the
+    exact canonical-grid spike contributes to PPC and to both histograms.
+    """
+    time_s = np.array([0.0, 0.5, 1.0], dtype=np.float64)
+    exact = 0.5
+    geometry = _build_geometry(
+        source_trial_index=17,
+        unit_ids=("unit-1",),
+        unit_trial_spike_times_s=(
+            np.array(
+                [
+                    exact,
+                    np.nextafter(exact, np.inf),
+                    exact + 5e-13,
+                ],
+                dtype=np.float64,
+            ),
+        ),
+        phase_time_s=time_s,
+        phase_sampling_rate_hz=2.0,
+        segment_bounds_s=((-0.1, 0.0), (0.0, 1.1)),
+    )
+    frequencies_hz = np.array([8.0, 40.0], dtype=np.float64)
+    phase = np.ones((1, 2, time_s.size), dtype=np.complex64)
+    valid = np.ones(phase.shape, dtype=bool)
+    # The exact sample only needs its left value; both nonexact samples require
+    # the invalid right neighbor at 1.0 seconds.
+    valid[:, :, 2] = False
+
+    observed = kernel.compute_observed_segmented_ppc_statistics(
+        source_trial_geometries=(geometry,),
+        trial_phase_vectors=phase,
+        phase_valid_mask=valid,
+        phase_trial_index=np.array([17], dtype=np.int64),
+        frequencies_hz=frequencies_hz,
+        phase_bin_edges_rad=_REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+    )
+
+    np.testing.assert_array_equal(geometry.exact_sample, [True, False, False])
+    np.testing.assert_array_equal(
+        observed.valid_spike_count,
+        np.array([[[0, 0], [1, 1]]], dtype=np.int64),
+    )
+    np.testing.assert_array_equal(
+        observed.contributing_trial_count,
+        np.array([[[0, 0], [1, 1], [1, 1]]], dtype=np.int64),
+    )
+    histogram_total = observed.representative_phase_histogram_count.sum(axis=-1)
+    np.testing.assert_array_equal(
+        histogram_total,
+        np.array([[[0, 0], [1, 1], [1, 1]]]),
+    )
+    # At each selected representative frequency, accepted histogram samples
+    # equal accepted PPC samples in each stored half. Whole is their exact sum,
+    # not a duplicate of after's count.
+    np.testing.assert_array_equal(
+        histogram_total[0, :2, 0],
+        observed.valid_spike_count[0, :, 0],
+    )
+    np.testing.assert_array_equal(
+        histogram_total[0, :2, 1],
+        observed.valid_spike_count[0, :, 1],
+    )
+    np.testing.assert_array_equal(
+        histogram_total[0, 2],
+        observed.valid_spike_count[0, 0] + observed.valid_spike_count[0, 1],
+    )
+
+
+def test_observed_histograms_use_only_8_and_40_hz_with_exact_boundary_bins() -> None:
+    """Representative histograms preserve NumPy's phase-bin boundary semantics.
+
+    Exact canonical-grid samples place left bin edges in their following bin,
+    including ``-pi``; the final ``+pi`` edge remains included in the final
+    bin. The deliberately different 20-Hz row proves the two outputs select
+    the nearest configured 8- and 40-Hz rows, not the intervening frequency.
+    """
+    phase_time_s = np.arange(-1.0, 1.25, 0.25, dtype=np.float64)
+    frequencies_hz = np.array([8.0, 20.0, 40.0], dtype=np.float64)
+    phase = np.ones((1, 3, phase_time_s.size), dtype=np.complex64)
+    negative_pi = np.complex64(complex(-1.0, -0.0))
+    positive_pi = np.complex64(complex(-1.0, 0.0))
+    phase[0, 0, :4] = [negative_pi, -1.0j, 1.0, 1.0j]
+    phase[0, 0, 4:8] = [positive_pi, 1.0j, 1.0, -1.0j]
+    # If the implementation accidentally used this 20-Hz row for gamma, the
+    # expected 40-Hz bins below would immediately differ.
+    phase[0, 1, :8] = 1.0 + 0.0j
+    phase[0, 2, :4] = [-1.0j, -1.0j, 1.0, positive_pi]
+    phase[0, 2, 4:8] = [1.0, 1.0, 1.0j, positive_pi]
+    geometry = _build_geometry(
+        source_trial_index=5,
+        unit_ids=("unit-1",),
+        unit_trial_spike_times_s=(phase_time_s[:8],),
+        phase_time_s=phase_time_s,
+        phase_sampling_rate_hz=4.0,
+        segment_bounds_s=((-1.0, 0.0), (0.0, 1.0)),
+    )
+    observed = kernel.compute_observed_segmented_ppc_statistics(
+        source_trial_geometries=(geometry,),
+        trial_phase_vectors=phase,
+        phase_valid_mask=np.ones(phase.shape, dtype=bool),
+        phase_trial_index=np.array([5], dtype=np.int64),
+        frequencies_hz=frequencies_hz,
+        phase_bin_edges_rad=_REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+    )
+
+    expected = np.array(
+        [
+            [[1, 1, 1, 1], [0, 2, 1, 1]],
+            [[0, 1, 1, 2], [0, 0, 2, 2]],
+            [[1, 2, 2, 3], [0, 2, 3, 3]],
+        ],
+        dtype=np.int64,
+    )
+    np.testing.assert_array_equal(observed.representative_frequency_hz, [8.0, 40.0])
+    np.testing.assert_array_equal(
+        observed.representative_phase_histogram_count[0],
+        expected,
+    )
+    np.testing.assert_array_equal(
+        observed.representative_phase_histogram_count[0, 2],
+        observed.representative_phase_histogram_count[0, 0]
+        + observed.representative_phase_histogram_count[0, 1],
+    )
+    twenty_hz_counts = np.array(
+        [[0, 0, 4, 0], [0, 0, 4, 0], [0, 0, 8, 0]],
+        dtype=np.int64,
+    )
+    assert not np.array_equal(
+        observed.representative_phase_histogram_count[0, :, 1],
+        twenty_hz_counts,
+    )
+
+
+def test_composed_whole_observed_metrics_add_sufficient_statistics_not_half_ppc() -> None:
+    """Whole PPC retains before/after cross terms and histogram additivity.
+
+    Both halves have PPC 1.0, while their equal and opposite vectors produce
+    whole PPC ``-1/3``. That direct-whole value proves composition adds complex
+    sums and counts before applying the PPC formula rather than averaging half
+    PPC values.
+    """
+    observed = _compute_observed_segmented_fixture()
+    metrics = kernel.compose_observed_segmented_ppc_metrics(
+        observed_statistics=observed,
+    )
+
+    assert isinstance(metrics, kernel.ObservedSegmentedPPCMetrics)
+    assert metrics.ppc.dtype == np.dtype(np.float64)
+    assert metrics.ppc.shape == (1, 3, 3)
+    assert metrics.resultant_length.dtype == np.dtype(np.float64)
+    assert metrics.preferred_phase_rad.dtype == np.dtype(np.float64)
+    assert metrics.spike_count.dtype == np.dtype(np.int64)
+    assert metrics.computable.dtype == np.dtype(bool)
+    assert metrics.reliable.dtype == np.dtype(bool)
+    assert metrics.contributing_trial_count.dtype == np.dtype(np.int64)
+    assert metrics.shuffle_eligible.dtype == np.dtype(bool)
+    assert metrics.representative_phase_histogram_count.dtype == np.dtype(np.int64)
+    np.testing.assert_allclose(metrics.ppc[0, 0], 1.0)
+    np.testing.assert_allclose(metrics.ppc[0, 1], 1.0)
+    np.testing.assert_allclose(metrics.ppc[0, 2], -1.0 / 3.0)
+    assert metrics.ppc[0, 2, 0] != np.mean(metrics.ppc[0, :2, 0])
+    np.testing.assert_allclose(metrics.resultant_length[0, :2], 1.0)
+    np.testing.assert_allclose(metrics.resultant_length[0, 2], 0.0)
+    assert np.isnan(metrics.preferred_phase_rad[0, 2]).all()
+    np.testing.assert_array_equal(metrics.spike_count, [[[2, 2, 2], [2, 2, 2], [4, 4, 4]]])
+    np.testing.assert_array_equal(metrics.computable, True)
+    np.testing.assert_array_equal(metrics.reliable, False)
+    np.testing.assert_array_equal(metrics.shuffle_eligible, False)
+    # Whole trial eligibility is the per-trial union, not 2 + 2 = 4.
+    np.testing.assert_array_equal(metrics.contributing_trial_count, 2)
+    np.testing.assert_array_equal(
+        metrics.representative_phase_histogram_count[:, 2],
+        metrics.representative_phase_histogram_count[:, 0]
+        + metrics.representative_phase_histogram_count[:, 1],
+    )
+
+    _, phase, _, _, frequencies_hz, _ = _observed_segmented_fixture()
+    direct = spike_lfp_summary.compute_trial_shuffle_ppc(
+        trial_relative_spike_times_s=(
+            np.array([-0.25, 0.25], dtype=np.float64),
+            np.array([-0.25, 0.25], dtype=np.float64),
+        ),
+        phase_time_s=_FOUR_HZ_TIME_S,
+        trial_phase_vectors=phase,
+        frequencies_hz=frequencies_hz,
+        schedule=np.array([[1, 0]], dtype=np.int64),
+    )
+    np.testing.assert_allclose(metrics.ppc[0, 2], direct.observed_ppc, rtol=0.0, atol=0.0)
+    np.testing.assert_array_equal(metrics.spike_count[0, 2], direct.spike_count)
+    direct_metrics = spike_lfp_summary.compute_observed_ppc(
+        probe_label="probe",
+        cluster_id=1,
+        spike_phase_vectors=np.array(
+            [[1.0, 1.0, -1.0, -1.0]] * frequencies_hz.size,
+            dtype=np.complex64,
+        ),
+        valid_mask=np.ones((frequencies_hz.size, 4), dtype=bool),
+        frequencies_hz=frequencies_hz,
+        spike_times_s=np.arange(4, dtype=np.float64),
+    )
+    np.testing.assert_allclose(
+        metrics.ppc[0, 2],
+        direct_metrics.ppc,
+        rtol=0.0,
+        atol=0.0,
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        metrics.resultant_length[0, 2],
+        direct_metrics.resultant_length,
+        rtol=0.0,
+        atol=0.0,
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        metrics.preferred_phase_rad[0, 2],
+        direct_metrics.preferred_phase_rad,
+        rtol=0.0,
+        atol=0.0,
+        equal_nan=True,
+    )
+    np.testing.assert_array_equal(metrics.spike_count[0, 2], direct_metrics.spike_count)
+    np.testing.assert_array_equal(metrics.computable[0, 2], direct_metrics.computable)
+    np.testing.assert_array_equal(metrics.reliable[0, 2], direct_metrics.reliable)
+    _assert_result_arrays_are_owned_and_immutable(metrics)
+    with pytest.raises(FrozenInstanceError):
+        metrics.ppc = np.zeros((1, 3, 3), dtype=np.float64)
+
+
+def test_whole_observed_eligibility_uses_combined_count_and_trial_union() -> None:
+    """Whole becomes shuffle-eligible when 49 spikes per half combine to 98.
+
+    The same two physical trials contribute in both halves. Whole eligibility
+    therefore requires the count threshold from the summed sufficient
+    statistics and two (not four) trial contributors from a per-trial union.
+    """
+    phase = np.ones((2, 2, _FOUR_HZ_TIME_S.size), dtype=np.complex64)
+    valid = np.ones(phase.shape, dtype=bool)
+    geometries = (
+        _build_geometry(
+            source_trial_index=41,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(
+                np.concatenate(
+                    (
+                        np.full(25, -0.25, dtype=np.float64),
+                        np.full(25, 0.25, dtype=np.float64),
+                    )
+                ),
+            ),
+        ),
+        _build_geometry(
+            source_trial_index=83,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(
+                np.concatenate(
+                    (
+                        np.full(24, -0.25, dtype=np.float64),
+                        np.full(24, 0.25, dtype=np.float64),
+                    )
+                ),
+            ),
+        ),
+    )
+    observed = kernel.compute_observed_segmented_ppc_statistics(
+        source_trial_geometries=geometries,
+        trial_phase_vectors=phase,
+        phase_valid_mask=valid,
+        phase_trial_index=np.array([41, 83], dtype=np.int64),
+        frequencies_hz=np.array([8.0, 40.0], dtype=np.float64),
+        phase_bin_edges_rad=_REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+    )
+    metrics = kernel.compose_observed_segmented_ppc_metrics(
+        observed_statistics=observed,
+    )
+
+    np.testing.assert_array_equal(metrics.spike_count, [[[49, 49], [49, 49], [98, 98]]])
+    np.testing.assert_array_equal(metrics.reliable, [[[False, False], [False, False], [True, True]]])
+    np.testing.assert_array_equal(
+        metrics.contributing_trial_count,
+        [[[2, 2], [2, 2], [2, 2]]],
+    )
+    np.testing.assert_array_equal(
+        metrics.shuffle_eligible,
+        [[[False, False], [False, False], [True, True]]],
+    )
+
+
+def test_composed_whole_metrics_preserve_nonzero_preferred_phase_and_zero_one_spike_behavior() -> None:
+    """Composition matches direct PPC/circular metrics at useful and degenerate counts."""
+    phase = np.ones((2, 1, _FOUR_HZ_TIME_S.size), dtype=np.complex64)
+    phase[:, 0, 1] = 1.0 + 0.0j
+    phase[:, 0, 3] = 1.0j
+    geometries = tuple(
+        _build_geometry(
+            source_trial_index=source_id,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(np.array([-0.25, 0.25]),),
+        )
+        for source_id in (101, 303)
+    )
+    observed = kernel.compute_observed_segmented_ppc_statistics(
+        source_trial_geometries=geometries,
+        trial_phase_vectors=phase,
+        phase_valid_mask=np.ones(phase.shape, dtype=bool),
+        phase_trial_index=np.array([101, 303], dtype=np.int64),
+        frequencies_hz=np.array([8.0], dtype=np.float64),
+        phase_bin_edges_rad=_REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+    )
+    metrics = kernel.compose_observed_segmented_ppc_metrics(
+        observed_statistics=observed,
+    )
+    direct = spike_lfp_summary.compute_observed_ppc(
+        probe_label="probe",
+        cluster_id=1,
+        spike_phase_vectors=np.array([[1.0, 1.0j, 1.0, 1.0j]], dtype=np.complex64),
+        valid_mask=np.ones((1, 4), dtype=bool),
+        frequencies_hz=np.array([8.0], dtype=np.float64),
+        spike_times_s=np.arange(4, dtype=np.float64),
+    )
+    np.testing.assert_allclose(metrics.ppc[0, 2], direct.ppc, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(
+        metrics.resultant_length[0, 2],
+        direct.resultant_length,
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        metrics.preferred_phase_rad[0, 2],
+        direct.preferred_phase_rad,
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_array_equal(metrics.spike_count[0, 2], direct.spike_count)
+    np.testing.assert_array_equal(metrics.computable[0, 2], direct.computable)
+    np.testing.assert_array_equal(metrics.reliable[0, 2], direct.reliable)
+    np.testing.assert_allclose(metrics.preferred_phase_rad[0, 2], np.pi / 4.0)
+
+    # A second multi-unit call binds empty and one-spike semantics without
+    # collapsing the unit axis. PPC is NaN below two samples; resultant and
+    # preferred phase are only defined for a nonzero count.
+    degenerate_geometry = _build_geometry(
+        source_trial_index=11,
+        unit_ids=("empty-unit", "one-spike-unit"),
+        unit_trial_spike_times_s=(np.empty(0, dtype=np.float64), np.array([0.25])),
+    )
+    degenerate_phase = np.ones((1, 1, _FOUR_HZ_TIME_S.size), dtype=np.complex64)
+    degenerate_phase[0, 0, 3] = 1.0j
+    degenerate_observed = kernel.compute_observed_segmented_ppc_statistics(
+        source_trial_geometries=(degenerate_geometry,),
+        trial_phase_vectors=degenerate_phase,
+        phase_valid_mask=np.ones(degenerate_phase.shape, dtype=bool),
+        phase_trial_index=np.array([11], dtype=np.int64),
+        frequencies_hz=np.array([8.0], dtype=np.float64),
+        phase_bin_edges_rad=_REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+    )
+    degenerate_metrics = kernel.compose_observed_segmented_ppc_metrics(
+        observed_statistics=degenerate_observed,
+    )
+    np.testing.assert_array_equal(
+        degenerate_observed.representative_frequency_hz,
+        [8.0, 8.0],
+    )
+    np.testing.assert_array_equal(
+        degenerate_observed.representative_phase_histogram_count[:, :, 0],
+        degenerate_observed.representative_phase_histogram_count[:, :, 1],
+    )
+    np.testing.assert_array_equal(
+        degenerate_observed.representative_phase_histogram_count[0],
+        np.zeros((3, 2, 4), dtype=np.int64),
+    )
+    np.testing.assert_array_equal(
+        degenerate_observed.representative_phase_histogram_count[1],
+        np.array(
+            [
+                [[0, 0, 0, 0], [0, 0, 0, 0]],
+                [[0, 0, 0, 1], [0, 0, 0, 1]],
+                [[0, 0, 0, 1], [0, 0, 0, 1]],
+            ],
+            dtype=np.int64,
+        ),
+    )
+    assert degenerate_metrics.ppc.shape == (2, 3, 1)
+    np.testing.assert_array_equal(degenerate_metrics.spike_count[0], [[0], [0], [0]])
+    assert np.isnan(degenerate_metrics.ppc[0]).all()
+    assert np.isnan(degenerate_metrics.resultant_length[0]).all()
+    assert np.isnan(degenerate_metrics.preferred_phase_rad[0]).all()
+    np.testing.assert_array_equal(degenerate_metrics.computable[0], False)
+    np.testing.assert_array_equal(degenerate_metrics.reliable[0], False)
+    np.testing.assert_array_equal(degenerate_metrics.shuffle_eligible[0], False)
+    np.testing.assert_array_equal(degenerate_metrics.spike_count[1], [[0], [1], [1]])
+    assert np.isnan(degenerate_metrics.ppc[1]).all()
+    assert np.isnan(degenerate_metrics.resultant_length[1, 0]).all()
+    assert np.isnan(degenerate_metrics.preferred_phase_rad[1, 0]).all()
+    np.testing.assert_allclose(degenerate_metrics.resultant_length[1, 1:], 1.0)
+    np.testing.assert_allclose(degenerate_metrics.preferred_phase_rad[1, 1:], np.pi / 2.0)
+    np.testing.assert_array_equal(degenerate_metrics.computable[1], False)
+    np.testing.assert_array_equal(degenerate_metrics.reliable[1], False)
+    np.testing.assert_array_equal(degenerate_metrics.shuffle_eligible[1], False)
+
+
+def test_whole_contributing_trial_count_uses_per_trial_union_for_partial_overlap() -> None:
+    """Before contributors {A, B} and after {B, C} compose to whole count 3."""
+    phase = np.ones((3, 1, _FOUR_HZ_TIME_S.size), dtype=np.complex64)
+    geometries = (
+        _build_geometry(
+            source_trial_index=10,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(np.array([-0.25]),),
+        ),
+        _build_geometry(
+            source_trial_index=20,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(np.array([-0.25, 0.25]),),
+        ),
+        _build_geometry(
+            source_trial_index=30,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(np.array([0.25]),),
+        ),
+    )
+    observed = kernel.compute_observed_segmented_ppc_statistics(
+        source_trial_geometries=geometries,
+        trial_phase_vectors=phase,
+        phase_valid_mask=np.ones(phase.shape, dtype=bool),
+        phase_trial_index=np.array([10, 20, 30], dtype=np.int64),
+        frequencies_hz=np.array([8.0], dtype=np.float64),
+        phase_bin_edges_rad=_REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+    )
+    metrics = kernel.compose_observed_segmented_ppc_metrics(
+        observed_statistics=observed,
+    )
+    np.testing.assert_array_equal(metrics.contributing_trial_count, [[[2], [2], [3]]])
+
+
+def test_reliable_one_trial_whole_remains_shuffle_ineligible() -> None:
+    """Fifty valid phases from one source trial are reliable but not shuffleable."""
+    geometry = _build_geometry(
+        source_trial_index=10,
+        unit_ids=("unit-1",),
+        unit_trial_spike_times_s=(
+            np.concatenate(
+                (
+                    np.full(49, -0.25, dtype=np.float64),
+                    np.full(1, 0.25, dtype=np.float64),
+                )
+            ),
+        ),
+    )
+    phase = np.ones((1, 1, _FOUR_HZ_TIME_S.size), dtype=np.complex64)
+    observed = kernel.compute_observed_segmented_ppc_statistics(
+        source_trial_geometries=(geometry,),
+        trial_phase_vectors=phase,
+        phase_valid_mask=np.ones(phase.shape, dtype=bool),
+        phase_trial_index=np.array([10], dtype=np.int64),
+        frequencies_hz=np.array([8.0], dtype=np.float64),
+        phase_bin_edges_rad=_REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+    )
+    metrics = kernel.compose_observed_segmented_ppc_metrics(
+        observed_statistics=observed,
+    )
+    np.testing.assert_array_equal(metrics.spike_count, [[[49], [1], [50]]])
+    np.testing.assert_array_equal(metrics.reliable, [[[False], [False], [True]]])
+    np.testing.assert_array_equal(metrics.contributing_trial_count, [[[1], [1], [1]]])
+    np.testing.assert_array_equal(metrics.shuffle_eligible, [[[False], [False], [False]]])
+
+
+def test_whole_segmented_shuffle_draws_match_wp5b_direct_whole_for_unchanged_schedule() -> None:
+    """Adding the two segment statistics matches WP5B whole-window draw values.
+
+    This S2 reducer receives the exact existing schedule directly. It derives no
+    seed and makes no schedule transformation, so before/after/whole schedule
+    identities remain the responsibility of the existing caller/planner.
+    """
+    phase_time_s = _FOUR_HZ_TIME_S
+    frequencies_hz = np.array([8.0, 40.0], dtype=np.float64)
+    phase_trial_index = np.array([61, 17, 88], dtype=np.int64)
+    phase = np.array(
+        [
+            [[1.0, 1.0, 1.0, -1.0, 1.0], [1.0j, 1.0j, 1.0j, -1.0j, 1.0j]],
+            [[1.0, 1.0j, 1.0, 1.0j, 1.0], [1.0, -1.0, 1.0, -1.0, 1.0]],
+            [[1.0, -1.0, 1.0, 1.0, 1.0], [-1.0j, 1.0j, -1.0j, 1.0j, -1.0j]],
+        ],
+        dtype=np.complex64,
+    )
+    valid = np.ones(phase.shape, dtype=bool)
+    trial_spikes = (
+        np.array([-0.25], dtype=np.float64),
+        np.array([0.0, 0.25], dtype=np.float64),
+        np.array([-0.5, -0.25, 0.25], dtype=np.float64),
+    )
+    geometries = tuple(
+        _build_geometry(
+            source_trial_index=source_id,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(trial_spikes[position],),
+        )
+        for source_id, position in ((88, 2), (61, 0), (17, 1))
+    )
+    schedule = np.array([[1, 2, 0], [2, 0, 1]], dtype=np.int64)
+    source_positions = np.tile(np.arange(3, dtype=np.int64), schedule.shape[0])
+    target_positions = schedule.reshape(-1)
+    source_edges = phase_trial_index[source_positions]
+    target_edges = phase_trial_index[target_positions]
+    segmented = _reduce(
+        source_trial_geometries=geometries,
+        trial_phase_vectors=phase,
+        phase_valid_mask=valid,
+        phase_trial_index=phase_trial_index,
+        frequencies_hz=frequencies_hz,
+        source_trial_index=source_edges,
+        target_trial_index=target_edges,
+    )
+
+    draws = kernel.reduce_segmented_schedule_to_ppc(
+        edge_statistics=segmented,
+        phase_trial_index=phase_trial_index,
+        schedule=schedule,
+    )
+    direct_draws = spike_lfp_summary._compute_scheduled_shuffle_draws(
+        trial_relative_spike_times_s=(trial_spikes,),
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=phase,
+        frequencies_hz=frequencies_hz,
+        schedule=schedule,
+        unit_block_size=1,
+        trial_edge_block_size=2,
+        shuffle_block_size=1,
+        complete_pair_table=False,
+    )
+    assert draws.dtype == np.dtype(np.float64)
+    assert draws.shape == (schedule.shape[0], 1, frequencies_hz.size)
+    for shuffle_position in range(schedule.shape[0]):
+        np.testing.assert_allclose(
+            draws[shuffle_position],
+            direct_draws[shuffle_position],
+            rtol=0.0,
+            atol=2e-7,
+        )
+    assert not np.allclose(draws[0], draws[1], rtol=0.0, atol=2e-7, equal_nan=True)
+    np.testing.assert_array_equal(schedule, [[1, 2, 0], [2, 0, 1]])
+
+
+@pytest.mark.parametrize(
+    ("phase", "valid", "phase_trial_index", "frequencies_hz", "phase_bins"),
+    (
+        (
+            np.ones((2, 3, 5), dtype=np.complex128),
+            np.ones((2, 3, 5), dtype=bool),
+            np.array([29, 7], dtype=np.int64),
+            np.array([8.0, 20.0, 40.0], dtype=np.float64),
+            _REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+        ),
+        (
+            np.ones((2, 3, 5), dtype=np.complex64),
+            np.ones((2, 3, 4), dtype=bool),
+            np.array([29, 7], dtype=np.int64),
+            np.array([8.0, 20.0, 40.0], dtype=np.float64),
+            _REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+        ),
+        (
+            np.ones((2, 3, 5), dtype=np.complex64),
+            np.ones((2, 3, 5), dtype=bool),
+            np.array([29, 29], dtype=np.int64),
+            np.array([8.0, 20.0, 40.0], dtype=np.float64),
+            _REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+        ),
+        (
+            np.ones((2, 3, 5), dtype=np.complex64),
+            np.ones((2, 3, 5), dtype=bool),
+            np.array([29, 7], dtype=np.int64),
+            np.array([8.0, 20.0, 40.0], dtype=np.float32),
+            _REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+        ),
+        (
+            np.ones((2, 3, 5), dtype=np.complex64),
+            np.ones((2, 3, 5), dtype=bool),
+            np.array([29, 7], dtype=np.int64),
+            np.array([8.0, 20.0, 40.0], dtype=np.float64),
+            np.array([-np.pi, 0.0, 0.0, np.pi], dtype=np.float64),
+        ),
+    ),
+)
+def test_observed_segmented_reducer_rejects_malformed_phase_and_histogram_axes(
+    phase: np.ndarray,
+    valid: np.ndarray,
+    phase_trial_index: np.ndarray,
+    frequencies_hz: np.ndarray,
+    phase_bins: np.ndarray,
+) -> None:
+    """Observed S2 inputs reject malformed dtypes, axes, stable IDs, and radians bins."""
+    geometries, _, _, _, _, _ = _observed_segmented_fixture()
+    with pytest.raises(ValueError):
+        kernel.compute_observed_segmented_ppc_statistics(
+            source_trial_geometries=geometries,
+            trial_phase_vectors=phase,
+            phase_valid_mask=valid,
+            phase_trial_index=phase_trial_index,
+            frequencies_hz=frequencies_hz,
+            phase_bin_edges_rad=phase_bins,
+        )
+
+
+def test_observed_segmented_reducer_requires_one_geometry_for_each_prepared_trial() -> None:
+    """No observed trial may be silently omitted from pooled sums or histograms."""
+    geometries, phase, valid, phase_trial_index, frequencies_hz, phase_bins = (
+        _observed_segmented_fixture()
+    )
+    with pytest.raises(ValueError):
+        kernel.compute_observed_segmented_ppc_statistics(
+            source_trial_geometries=geometries[:1],
+            trial_phase_vectors=phase,
+            phase_valid_mask=valid,
+            phase_trial_index=phase_trial_index,
+            frequencies_hz=frequencies_hz,
+            phase_bin_edges_rad=phase_bins,
+        )
+
+
+@pytest.mark.parametrize(
+    ("phase_trial_index", "schedule"),
+    (
+        (np.array([61, 17, 88], dtype=np.int64), np.array([[0, 2, 1]], dtype=np.int64)),
+        (np.array([61, 17, 88], dtype=np.int64), np.array([[1.0, 2.0, 0.0]])),
+        (np.array([61, 17, 88], dtype=np.int64), np.array([[1, 2, 0]], dtype=np.int32)),
+        (np.array([61, 61, 88], dtype=np.int64), np.array([[1, 2, 0]], dtype=np.int64)),
+    ),
+)
+def test_whole_segmented_shuffle_rejects_malformed_schedule_and_trial_identity_axes(
+    phase_trial_index: np.ndarray,
+    schedule: np.ndarray,
+) -> None:
+    """Whole schedule reduction requires exact int64 derangements and stable rows."""
+    phase = np.ones((3, 2, _FOUR_HZ_TIME_S.size), dtype=np.complex64)
+    valid = np.ones(phase.shape, dtype=bool)
+    geometries = tuple(
+        _build_geometry(
+            source_trial_index=source_id,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(np.array([-0.25, 0.25]),),
+        )
+        for source_id in (61, 17, 88)
+    )
+    segmented = _reduce(
+        source_trial_geometries=geometries,
+        trial_phase_vectors=phase,
+        phase_valid_mask=valid,
+        phase_trial_index=np.array([61, 17, 88], dtype=np.int64),
+        frequencies_hz=np.array([8.0, 40.0], dtype=np.float64),
+        source_trial_index=np.array([61, 17, 88], dtype=np.int64),
+        target_trial_index=np.array([17, 88, 61], dtype=np.int64),
+    )
+    with pytest.raises(ValueError):
+        kernel.reduce_segmented_schedule_to_ppc(
+            edge_statistics=segmented,
+            phase_trial_index=phase_trial_index,
+            schedule=schedule,
+        )
+
+
+def test_whole_segmented_shuffle_rejects_schedule_pairs_missing_from_edge_statistics() -> None:
+    """The reducer fails rather than treating an absent scheduled edge as zero."""
+    statistics = kernel.SegmentedEdgeStatistics(
+        source_trial_index=np.array([61, 17, 88], dtype=np.int64),
+        target_trial_index=np.array([17, 88, 61], dtype=np.int64),
+        phase_vector_sum=np.ones((3, 1, 2, 2), dtype=np.complex128),
+        valid_spike_count=np.ones((3, 1, 2, 2), dtype=np.int64),
+    )
+    with pytest.raises(ValueError, match="edge|schedule"):
+        kernel.reduce_segmented_schedule_to_ppc(
+            edge_statistics=statistics,
+            phase_trial_index=np.array([61, 17, 88], dtype=np.int64),
+            schedule=np.array([[2, 0, 1]], dtype=np.int64),
+        )
+
+
+def _valid_observed_segmented_statistics_arguments() -> dict[str, np.ndarray]:
+    """Return coherent direct-construction arrays for the public S2 result contract."""
+    phase_vector_sum = np.array(
+        [[[2.0 + 0.0j, 2.0 + 0.0j], [0.0j, 0.0j]]],
+        dtype=np.complex128,
+    )
+    valid_spike_count = np.array([[[2, 2], [0, 0]]], dtype=np.int64)
+    contributing_trial_count = np.array([[[1, 1], [0, 0], [1, 1]]], dtype=np.int64)
+    phase_bin_edges_rad = np.array([-np.pi, 0.0, np.pi], dtype=np.float64)
+    histogram = np.array(
+        [[[[0, 2], [0, 2]], [[0, 0], [0, 0]], [[0, 2], [0, 2]]]],
+        dtype=np.int64,
+    )
+    return {
+        "phase_vector_sum": phase_vector_sum,
+        "valid_spike_count": valid_spike_count,
+        "contributing_trial_count": contributing_trial_count,
+        "representative_frequency_hz": np.array([8.0, 40.0], dtype=np.float64),
+        "phase_bin_edges_rad": phase_bin_edges_rad,
+        "representative_phase_histogram_count": histogram,
+    }
+
+
+def _valid_observed_segmented_metric_arguments() -> dict[str, np.ndarray]:
+    """Return coherent direct-construction arrays for the composed S2 metric contract."""
+    statistics = _valid_observed_segmented_statistics_arguments()
+    return {
+        "ppc": np.array([[[1.0, 1.0], [np.nan, np.nan], [1.0, 1.0]]]),
+        "resultant_length": np.array(
+            [[[1.0, 1.0], [np.nan, np.nan], [1.0, 1.0]]],
+            dtype=np.float64,
+        ),
+        "preferred_phase_rad": np.array(
+            [[[0.0, 0.0], [np.nan, np.nan], [0.0, 0.0]]],
+            dtype=np.float64,
+        ),
+        "spike_count": np.array([[[2, 2], [0, 0], [2, 2]]], dtype=np.int64),
+        "computable": np.array([[[True, True], [False, False], [True, True]]]),
+        "reliable": np.zeros((1, 3, 2), dtype=bool),
+        "contributing_trial_count": statistics["contributing_trial_count"],
+        "shuffle_eligible": np.zeros((1, 3, 2), dtype=bool),
+        "representative_frequency_hz": statistics["representative_frequency_hz"],
+        "phase_bin_edges_rad": statistics["phase_bin_edges_rad"],
+        "representative_phase_histogram_count": statistics[
+            "representative_phase_histogram_count"
+        ],
+    }
+
+
+def test_observed_segmented_public_results_copy_and_freeze_all_array_fields() -> None:
+    """Public S2 dataclasses own and freeze every numerical and coordinate field."""
+    statistic_arguments = _valid_observed_segmented_statistics_arguments()
+    statistic_expected = {
+        name: values.copy() for name, values in statistic_arguments.items()
+    }
+    observed = kernel.ObservedSegmentedPPCStatistics(**statistic_arguments)
+    metric_arguments = _valid_observed_segmented_metric_arguments()
+    metric_expected = {
+        name: values.copy() for name, values in metric_arguments.items()
+    }
+    metrics = kernel.ObservedSegmentedPPCMetrics(**metric_arguments)
+
+    for result, arguments in (
+        (observed, statistic_arguments),
+        (metrics, metric_arguments),
+    ):
+        for field in fields(result):
+            input_values = arguments[field.name]
+            result_values = getattr(result, field.name)
+            assert input_values is not result_values
+            assert not np.shares_memory(result_values, input_values)
+
+    for arguments in (statistic_arguments, metric_arguments):
+        for values in arguments.values():
+            values[...] = 0
+    for result, expected in (
+        (observed, statistic_expected),
+        (metrics, metric_expected),
+    ):
+        for field in fields(result):
+            actual = getattr(result, field.name)
+            baseline = expected[field.name]
+            if np.issubdtype(baseline.dtype, np.inexact):
+                np.testing.assert_allclose(
+                    actual,
+                    baseline,
+                    rtol=0.0,
+                    atol=0.0,
+                    equal_nan=True,
+                )
+            else:
+                np.testing.assert_array_equal(actual, baseline)
+    np.testing.assert_array_equal(observed.representative_frequency_hz, [8.0, 40.0])
+    np.testing.assert_allclose(
+        observed.phase_bin_edges_rad,
+        [-np.pi, 0.0, np.pi],
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_array_equal(metrics.representative_frequency_hz, [8.0, 40.0])
+    np.testing.assert_allclose(
+        metrics.phase_bin_edges_rad,
+        [-np.pi, 0.0, np.pi],
+        rtol=0.0,
+        atol=0.0,
+    )
+    _assert_result_arrays_are_owned_and_immutable(observed)
+    _assert_result_arrays_are_owned_and_immutable(metrics)
+    with pytest.raises(FrozenInstanceError):
+        observed.valid_spike_count = np.zeros((1, 2, 2), dtype=np.int64)
+    with pytest.raises(FrozenInstanceError):
+        metrics.shuffle_eligible = np.zeros((1, 3, 2), dtype=bool)
+
+
+def test_observed_segmented_public_results_allow_equal_representative_frequencies() -> None:
+    """One available phase frequency legitimately supplies both 8- and 40-Hz bins.
+
+    Representative coordinates therefore require positive finite nondecreasing,
+    rather than strictly increasing, float64 values.
+    """
+    statistic_arguments = _valid_observed_segmented_statistics_arguments()
+    statistic_arguments["representative_frequency_hz"] = np.array(
+        [8.0, 8.0],
+        dtype=np.float64,
+    )
+    metric_arguments = _valid_observed_segmented_metric_arguments()
+    metric_arguments["representative_frequency_hz"] = np.array(
+        [8.0, 8.0],
+        dtype=np.float64,
+    )
+    observed = kernel.ObservedSegmentedPPCStatistics(**statistic_arguments)
+    metrics = kernel.ObservedSegmentedPPCMetrics(**metric_arguments)
+    np.testing.assert_array_equal(observed.representative_frequency_hz, [8.0, 8.0])
+    np.testing.assert_array_equal(metrics.representative_frequency_hz, [8.0, 8.0])
+
+
+@pytest.mark.parametrize(
+    ("argument_name", "malformed_value"),
+    (
+        ("phase_vector_sum", np.ones((1, 2, 2), dtype=np.complex64)),
+        ("phase_vector_sum", np.full((1, 2, 2), np.nan + 0.0j, dtype=np.complex128)),
+        ("valid_spike_count", np.ones((1, 2, 3), dtype=np.int64)),
+        ("valid_spike_count", np.array([[[2, 2], [-1, 0]]], dtype=np.int64)),
+        ("contributing_trial_count", np.ones((1, 2, 2), dtype=np.int64)),
+        (
+            "contributing_trial_count",
+            np.array([[[1, 1], [0, 0], [-1, 1]]], dtype=np.int64),
+        ),
+        ("representative_frequency_hz", np.array([40.0, 8.0], dtype=np.float64)),
+        ("representative_frequency_hz", np.array([0.0, 40.0], dtype=np.float64)),
+        ("representative_frequency_hz", np.array([8.0, np.nan], dtype=np.float64)),
+        ("phase_bin_edges_rad", np.array([-np.pi, 0.0, 0.0], dtype=np.float64)),
+        (
+            "representative_phase_histogram_count",
+            np.ones((1, 3, 2, 2), dtype=np.float64),
+        ),
+        (
+            "representative_phase_histogram_count",
+            -np.ones((1, 3, 2, 2), dtype=np.int64),
+        ),
+    ),
+)
+def test_observed_segmented_statistics_public_constructor_rejects_malformed_axes_and_coordinates(
+    argument_name: str,
+    malformed_value: np.ndarray,
+) -> None:
+    """Public statistics reject malformed axes, counts, and coordinates.
+
+    The valid representative-frequency contract is positive finite
+    nondecreasing float64, allowing equal nearest-frequency selections.
+    """
+    arguments = _valid_observed_segmented_statistics_arguments()
+    arguments[argument_name] = malformed_value
+    with pytest.raises(ValueError):
+        kernel.ObservedSegmentedPPCStatistics(**arguments)
+
+
+@pytest.mark.parametrize(
+    ("argument_name", "malformed_value"),
+    (
+        ("ppc", np.ones((1, 3, 2), dtype=np.int64)),
+        ("resultant_length", np.ones((1, 3, 2), dtype=np.int64)),
+        ("preferred_phase_rad", np.ones((1, 2, 2), dtype=np.float64)),
+        ("spike_count", np.ones((1, 2, 2), dtype=np.int64)),
+        ("spike_count", -np.ones((1, 3, 2), dtype=np.int64)),
+        ("computable", np.ones((1, 3, 2), dtype=np.int64)),
+        ("reliable", np.ones((1, 3, 2), dtype=np.int64)),
+        ("contributing_trial_count", np.ones((1, 2, 2), dtype=np.int64)),
+        ("contributing_trial_count", -np.ones((1, 3, 2), dtype=np.int64)),
+        ("shuffle_eligible", np.ones((1, 3, 2), dtype=np.int64)),
+        ("representative_frequency_hz", np.array([8.0, 40.0], dtype=np.float32)),
+        ("phase_bin_edges_rad", np.array([-np.pi, np.pi], dtype=np.float32)),
+        (
+            "representative_phase_histogram_count",
+            np.ones((1, 3, 2, 2), dtype=np.float64),
+        ),
+        (
+            "representative_phase_histogram_count",
+            -np.ones((1, 3, 2, 2), dtype=np.int64),
+        ),
+    ),
+)
+def test_observed_segmented_metrics_public_constructor_rejects_malformed_axes_and_coordinates(
+    argument_name: str,
+    malformed_value: np.ndarray,
+) -> None:
+    """Composed metric public construction enforces dtype/axis contracts too."""
+    arguments = _valid_observed_segmented_metric_arguments()
+    arguments[argument_name] = malformed_value
+    with pytest.raises(ValueError):
+        kernel.ObservedSegmentedPPCMetrics(**arguments)
