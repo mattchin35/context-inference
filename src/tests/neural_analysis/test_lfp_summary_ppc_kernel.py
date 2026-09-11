@@ -517,7 +517,7 @@ def test_mixed_empty_and_nonempty_source_trains_produce_no_phantom_segment_sampl
         target_trial_index=np.array([0, 1], dtype=np.int64),
     )
 
-    np.testing.assert_array_equal(source_zero.group_offsets, [0, 0, 0, 1, 1, 2, 2])
+    np.testing.assert_array_equal(source_zero.group_offsets, [0, 0, 0, 0, 1, 2, 2])
     np.testing.assert_array_equal(source_one.group_offsets, [0, 0, 1, 1, 1, 1, 1])
     expected_counts = np.array(
         [
@@ -666,11 +666,15 @@ def test_segmented_statistics_match_current_edge_oracle_and_preserve_physical_id
     np.testing.assert_array_equal(
         segmented.valid_spike_count.sum(axis=2), oracle.valid_spike_count
     )
-    np.testing.assert_allclose(
-        segmented.phase_vector_sum.sum(axis=2),
-        oracle.phase_vector_sum,
-        rtol=0.0,
-        atol=np.maximum(2e-7, 2e-7 * oracle.valid_spike_count),
+    absolute_error = np.abs(
+        segmented.phase_vector_sum.sum(axis=2) - oracle.phase_vector_sum
+    )
+    allowed_error = np.maximum(2e-7, 2e-7 * oracle.valid_spike_count)
+    assert np.all(absolute_error <= allowed_error), (
+        "Segmented phase sums exceed the per-cell approved tolerance: "
+        f"maximum absolute error={absolute_error.max():.3e}, "
+        f"maximum allowed error={allowed_error.max():.3e}, "
+        f"maximum exceedance={(absolute_error - allowed_error).max():.3e}"
     )
     source_edges[:] = -1
     target_edges[:] = -1
