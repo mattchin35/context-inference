@@ -85,10 +85,7 @@ not apply; write `not applicable` and explain why.
 
 ### S1 - Uniform-grid geometry and segmented edge kernel
 
-- Status: implementation gate corrections in progress. The original RED
-  contract and subsequent genuine-test-defect/contract additions are committed;
-  an allocation-accounting clarification is being returned through TDD before
-  the source commit.
+- Status: complete.
 - Authorization and starting HEAD: user authorization recorded 2026-09-10;
   `98e6ef6f278b77e861e58129e3d6fef6f1aef2d9`. The unrelated worktree inventory
   remained 172 entries with SHA-256
@@ -111,11 +108,26 @@ not apply; write `not applicable` and explain why.
   identity range failures in test-only commit `513decf`.
 - Allocation clarification: independent source review found that the initial
   formulas omitted retained NumPy identity arrays. The plan now charges 8 bytes
-  per source geometry and 16 bytes per edge; matching estimator tests must be
-  RED and committed before the implementation formula changes.
-- Implementation commit and GREEN evidence:
-- Full neural-suite and independent Sol gate evidence:
-- Numerical/interface review and unresolved risks:
+  per source geometry and 16 bytes per edge. Clarification commit `8aaff3c` and
+  matching RED test-only commit `254629a` preceded the estimator change.
+- Implementation commit and GREEN evidence: `1088dac` (`feat: add segmented
+  PPC kernel`). Complete kernel plus edge-oracle suites: `78 passed`; directly
+  affected parallel/PPC-runtime/payload-runtime suites: `46 passed`.
+- Full neural-suite and independent Sol gate evidence: `794 passed`, with the
+  same 19 known warnings (16 Pynapple zero-duration/rate warnings and three
+  multiprocessing `fork` deprecation warnings). Independent Sol `xhigh` final
+  gate PASS after memory-lifetime, ownership, immutability, checked-range, and
+  identity-accounting corrections.
+- Numerical/interface review and unresolved risks: strict canonical equality,
+  half-open before/after assignment, target-specific validity, two-neighbor
+  interpolation, complex128 interpolation, complex64 normalized samples,
+  complex128 reductions, stable unsorted identities, output axes, and checked
+  allocation contracts match the plan and oracle. The per-cell NumPy temporary
+  lifetime remains below the conservative 51-byte allowance. Python
+  edge/unit/segment loops are an explicit S6 profiling question, not an S1
+  correctness blocker; Python object overhead and bounded ufunc iterator
+  buffers remain covered by process headroom and the later measured-memory
+  gate.
 - CT026 work performed: none permitted.
 
 ### S2 - Observed reuse and whole-from-halves numerics
