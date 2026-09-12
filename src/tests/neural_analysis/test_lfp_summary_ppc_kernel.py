@@ -1261,6 +1261,559 @@ def _compute_observed_segmented_fixture() -> object:
     )
 
 
+def _observed_trial_reuse_fixture() -> tuple[
+    tuple[object, ...],
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
+    """Return three nonmonotonic stable trials for overlapping-condition reuse.
+
+    The three trials have distinct before/after spike counts and distinct phase
+    values. Geometry order differs from phase order so the frozen per-trial
+    output must bind each stable ID to its own data rather than tuple position.
+    """
+    phase_trial_index = np.array([29, 7, 61], dtype=np.int64)
+    frequencies_hz = np.array([8.0, 40.0], dtype=np.float64)
+    phase = np.ones((3, 2, _FOUR_HZ_TIME_S.size), dtype=np.complex64)
+    # These 3-4-5 vectors normalize exactly to non-boundary complex64 phases.
+    phase[0, :, 1] = [3.0 + 4.0j, -4.0 + 3.0j]
+    phase[0, :, 3] = [-3.0 - 4.0j, 4.0 - 3.0j]
+    phase[1, :, 1] = [4.0 - 3.0j, -3.0 - 4.0j]
+    phase[1, :, 3] = [3.0 + 4.0j, -4.0 + 3.0j]
+    phase[2, :, 1] = [-4.0 + 3.0j, 3.0 + 4.0j]
+    phase[2, :, 3] = [4.0 - 3.0j, -3.0 - 4.0j]
+    spike_times_by_source = {
+        29: np.array([-0.25, 0.25]),
+        7: np.array([-0.25, -0.25, 0.25]),
+        61: np.array([-0.25, 0.25, 0.25, 0.25]),
+    }
+    geometry_by_source = {
+        source_id: _build_geometry(
+            source_trial_index=source_id,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(spike_times_by_source[source_id],),
+        )
+        for source_id in phase_trial_index
+    }
+    return (
+        (
+            geometry_by_source[7],
+            geometry_by_source[61],
+            geometry_by_source[29],
+        ),
+        phase,
+        np.ones(phase.shape, dtype=bool),
+        phase_trial_index,
+        frequencies_hz,
+        _REPRESENTATIVE_PHASE_BIN_EDGES_RAD.copy(),
+    )
+
+
+def test_observed_trial_statistics_contracts_expose_stable_trial_axes_and_membership_reducer() -> None:
+    """S2 first retains each physical trial before overlapping condition pooling.
+
+    The stable trial axis is int64 and may be nonmonotonic.  Per-trial sums and
+    counts use ``(trial, unit, segment=2, frequency)`` axes.  The two int64
+    representative-frequency positions bind histogram bands to those counts;
+    histograms use ``(trial, unit, segment=2, band=2, phase_bin)`` axes, and
+    aggregation receives an explicit ordered unique stable-ID membership vector.
+    """
+    module_doc = (kernel.__doc__ or "").lower()
+    assert "segmented ppc" in module_doc
+    assert "s1 kernel only" not in module_doc
+    assert tuple(
+        field.name for field in fields(kernel.ObservedTrialSegmentedPPCStatistics)
+    ) == (
+        "phase_trial_index",
+        "phase_vector_sum",
+        "valid_spike_count",
+        "representative_frequency_index",
+        "representative_frequency_hz",
+        "phase_bin_edges_rad",
+        "representative_phase_histogram_count",
+    )
+    trial_signature = inspect.signature(
+        kernel.compute_observed_trial_segmented_ppc_statistics
+    )
+    assert tuple(trial_signature.parameters) == (
+        "source_trial_geometries",
+        "trial_phase_vectors",
+        "phase_valid_mask",
+        "phase_trial_index",
+        "frequencies_hz",
+        "phase_bin_edges_rad",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in trial_signature.parameters.values()
+    )
+    aggregate_signature = inspect.signature(
+        kernel.aggregate_observed_trial_segmented_ppc_statistics
+    )
+    assert tuple(aggregate_signature.parameters) == (
+        "observed_trial_statistics",
+        "membership_trial_index",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in aggregate_signature.parameters.values()
+    )
+
+
+def test_one_observed_trial_pass_serves_overlapping_condition_memberships(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two overlapping conditions aggregate one physical sampled-trial result.
+
+    Each nonempty source-trial/unit/segment group is sampled once for all
+    conditions.  The aggregation reducer performs no phase sampling, preserves
+    supplied nonmonotonic stable membership order, and computes whole trial
+    contributors as a before/after union.
+    """
+    geometries, phase, valid, phase_trial_index, frequencies_hz, phase_bins = (
+        _observed_trial_reuse_fixture()
+    )
+    original_sampler = kernel._sample_normalized_spike_group
+    sampled_group_sizes: list[int] = []
+
+    def counted_sampler(**kwargs: object) -> tuple[np.ndarray, np.ndarray]:
+        """Record each physical unit/segment group normalized by the shared pass."""
+        sampled_group_sizes.append(np.asarray(kwargs["left_index"]).size)
+        return original_sampler(**kwargs)
+
+    monkeypatch.setattr(kernel, "_sample_normalized_spike_group", counted_sampler)
+    observed_trials = kernel.compute_observed_trial_segmented_ppc_statistics(
+        source_trial_geometries=geometries,
+        trial_phase_vectors=phase,
+        phase_valid_mask=valid,
+        phase_trial_index=phase_trial_index,
+        frequencies_hz=frequencies_hz,
+        phase_bin_edges_rad=phase_bins,
+    )
+
+    assert isinstance(observed_trials, kernel.ObservedTrialSegmentedPPCStatistics)
+    assert observed_trials.phase_trial_index.dtype == np.dtype(np.int64)
+    assert observed_trials.phase_vector_sum.dtype == np.dtype(np.complex128)
+    assert observed_trials.phase_vector_sum.shape == (3, 1, 2, 2)
+    assert observed_trials.valid_spike_count.dtype == np.dtype(np.int64)
+    assert observed_trials.valid_spike_count.shape == (3, 1, 2, 2)
+    assert observed_trials.representative_frequency_index.dtype == np.dtype(np.int64)
+    assert observed_trials.representative_frequency_index.shape == (2,)
+    assert observed_trials.representative_phase_histogram_count.dtype == np.dtype(np.int64)
+    assert observed_trials.representative_phase_histogram_count.shape == (3, 1, 2, 2, 4)
+    np.testing.assert_array_equal(observed_trials.phase_trial_index, [29, 7, 61])
+    np.testing.assert_array_equal(observed_trials.representative_frequency_index, [0, 1])
+    np.testing.assert_array_equal(observed_trials.representative_frequency_hz, [8.0, 40.0])
+    normalized_a = np.complex64(0.6 + 0.8j)
+    normalized_b = np.complex64(-0.8 + 0.6j)
+    normalized_c = np.complex64(-0.6 - 0.8j)
+    normalized_d = np.complex64(0.8 - 0.6j)
+    normalized_a_sum = np.complex128(normalized_a)
+    normalized_b_sum = np.complex128(normalized_b)
+    normalized_c_sum = np.complex128(normalized_c)
+    normalized_d_sum = np.complex128(normalized_d)
+    expected_sums = np.array(
+        [
+            [
+                [
+                    [normalized_a_sum, normalized_b_sum],
+                    [normalized_c_sum, normalized_d_sum],
+                ]
+            ],
+            [
+                [
+                    [2 * normalized_d_sum, 2 * normalized_c_sum],
+                    [normalized_a_sum, normalized_b_sum],
+                ]
+            ],
+            [
+                [
+                    [normalized_b_sum, normalized_a_sum],
+                    [3 * normalized_d_sum, 3 * normalized_c_sum],
+                ]
+            ],
+        ],
+        dtype=np.complex128,
+    )
+    expected_counts = np.array(
+        [
+            [[[1, 1], [1, 1]]],
+            [[[2, 2], [1, 1]]],
+            [[[1, 1], [3, 3]]],
+        ],
+        dtype=np.int64,
+    )
+    expected_histogram = np.zeros((3, 1, 2, 2, 4), dtype=np.int64)
+    expected_histogram[0, 0, 0, 0, 2] = 1
+    expected_histogram[0, 0, 0, 1, 3] = 1
+    expected_histogram[0, 0, 1, 0, 0] = 1
+    expected_histogram[0, 0, 1, 1, 1] = 1
+    expected_histogram[1, 0, 0, 0, 1] = 2
+    expected_histogram[1, 0, 0, 1, 0] = 2
+    expected_histogram[1, 0, 1, 0, 2] = 1
+    expected_histogram[1, 0, 1, 1, 3] = 1
+    expected_histogram[2, 0, 0, 0, 3] = 1
+    expected_histogram[2, 0, 0, 1, 2] = 1
+    expected_histogram[2, 0, 1, 0, 1] = 3
+    expected_histogram[2, 0, 1, 1, 0] = 3
+    np.testing.assert_allclose(
+        observed_trials.phase_vector_sum,
+        expected_sums,
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_array_equal(observed_trials.valid_spike_count, expected_counts)
+    np.testing.assert_array_equal(
+        observed_trials.representative_phase_histogram_count,
+        expected_histogram,
+    )
+    assert len(sampled_group_sizes) == 6
+    assert sorted(sampled_group_sizes) == [1, 1, 1, 1, 2, 3]
+
+    first_membership = np.array([61, 7], dtype=np.int64)
+    second_membership = np.array([29, 7], dtype=np.int64)
+    first = kernel.aggregate_observed_trial_segmented_ppc_statistics(
+        observed_trial_statistics=observed_trials,
+        membership_trial_index=first_membership,
+    )
+    second = kernel.aggregate_observed_trial_segmented_ppc_statistics(
+        observed_trial_statistics=observed_trials,
+        membership_trial_index=second_membership,
+    )
+    assert isinstance(first, kernel.ObservedSegmentedPPCStatistics)
+    assert isinstance(second, kernel.ObservedSegmentedPPCStatistics)
+    # Stable membership order is explicit and affects floating reduction order.
+    first_positions = np.array([2, 1], dtype=np.int64)
+    second_positions = np.array([0, 1], dtype=np.int64)
+    np.testing.assert_allclose(
+        first.phase_vector_sum,
+        np.sum(
+            observed_trials.phase_vector_sum[first_positions],
+            axis=0,
+            dtype=np.complex128,
+        ),
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        second.phase_vector_sum,
+        np.sum(
+            observed_trials.phase_vector_sum[second_positions],
+            axis=0,
+            dtype=np.complex128,
+        ),
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_array_equal(first.valid_spike_count, [[[3, 3], [4, 4]]])
+    np.testing.assert_array_equal(second.valid_spike_count, [[[3, 3], [2, 2]]])
+    np.testing.assert_array_equal(first.contributing_trial_count, 2)
+    np.testing.assert_array_equal(second.contributing_trial_count, 2)
+    np.testing.assert_array_equal(
+        first.representative_phase_histogram_count[:, 2],
+        first.representative_phase_histogram_count[:, 0]
+        + first.representative_phase_histogram_count[:, 1],
+    )
+    expected_half_histogram = np.sum(
+        observed_trials.representative_phase_histogram_count[first_positions],
+        axis=0,
+        dtype=np.int64,
+    )
+    expected_histogram = np.empty((1, 3, 2, 4), dtype=np.int64)
+    expected_histogram[:, :2] = expected_half_histogram
+    expected_histogram[:, 2] = (
+        expected_half_histogram[:, 0] + expected_half_histogram[:, 1]
+    )
+    np.testing.assert_array_equal(
+        first.representative_phase_histogram_count,
+        expected_histogram,
+    )
+    # The physical trial with stable ID 7 is shared, but it is not resampled.
+    assert len(sampled_group_sizes) == 6
+    assert sorted(sampled_group_sizes) == [1, 1, 1, 1, 2, 3]
+
+
+def _valid_observed_trial_segmented_statistics_arguments() -> dict[str, np.ndarray]:
+    """Return coherent public-construction arrays for per-trial S2 statistics."""
+    histogram = np.zeros((2, 1, 2, 2, 2), dtype=np.int64)
+    histogram[..., 0] = 1
+    return {
+        "phase_trial_index": np.array([29, 7], dtype=np.int64),
+        "phase_vector_sum": np.ones((2, 1, 2, 2), dtype=np.complex128),
+        "valid_spike_count": np.ones((2, 1, 2, 2), dtype=np.int64),
+        "representative_frequency_index": np.array([0, 1], dtype=np.int64),
+        "representative_frequency_hz": np.array([8.0, 40.0], dtype=np.float64),
+        "phase_bin_edges_rad": np.array([-np.pi, 0.0, np.pi], dtype=np.float64),
+        "representative_phase_histogram_count": histogram,
+    }
+
+
+def test_observed_trial_statistics_public_contract_owns_arrays_and_rejects_invalid_memberships() -> None:
+    """Per-trial S2 arrays are immutable owned values before condition pooling."""
+    arguments = _valid_observed_trial_segmented_statistics_arguments()
+    expected = {name: values.copy() for name, values in arguments.items()}
+    observed_trials = kernel.ObservedTrialSegmentedPPCStatistics(**arguments)
+    for field in fields(observed_trials):
+        input_values = arguments[field.name]
+        actual = getattr(observed_trials, field.name)
+        assert actual is not input_values
+        assert not np.shares_memory(actual, input_values)
+    for values in arguments.values():
+        values[...] = 0
+    for field in fields(observed_trials):
+        np.testing.assert_array_equal(getattr(observed_trials, field.name), expected[field.name])
+    _assert_result_arrays_are_owned_and_immutable(observed_trials)
+    with pytest.raises(FrozenInstanceError):
+        observed_trials.phase_trial_index = np.array([0], dtype=np.int64)
+
+    for membership_trial_index in (
+        np.array([29, 7], dtype=np.int32),
+        np.array([29, 29], dtype=np.int64),
+        np.array([29, 123], dtype=np.int64),
+        np.array([[29, 7]], dtype=np.int64),
+        np.array([-1], dtype=np.int64),
+    ):
+        with pytest.raises(ValueError):
+            kernel.aggregate_observed_trial_segmented_ppc_statistics(
+                observed_trial_statistics=observed_trials,
+                membership_trial_index=membership_trial_index,
+            )
+
+    empty = kernel.aggregate_observed_trial_segmented_ppc_statistics(
+        observed_trial_statistics=observed_trials,
+        membership_trial_index=np.empty(0, dtype=np.int64),
+    )
+    assert empty.phase_vector_sum.shape == (1, 2, 2)
+    assert empty.valid_spike_count.shape == (1, 2, 2)
+    assert empty.contributing_trial_count.shape == (1, 3, 2)
+    assert empty.representative_phase_histogram_count.shape == (1, 3, 2, 2)
+    np.testing.assert_array_equal(empty.phase_vector_sum, 0.0j)
+    np.testing.assert_array_equal(empty.valid_spike_count, 0)
+    np.testing.assert_array_equal(empty.contributing_trial_count, 0)
+    np.testing.assert_array_equal(empty.representative_phase_histogram_count, 0)
+    np.testing.assert_array_equal(empty.representative_frequency_hz, [8.0, 40.0])
+    np.testing.assert_allclose(
+        empty.phase_bin_edges_rad,
+        [-np.pi, 0.0, np.pi],
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_membership_aggregation_counts_whole_contributors_by_per_trial_union() -> None:
+    """Per-trial before contributors {29, 7} and after {7, 61} union to three."""
+    arguments = _valid_observed_trial_segmented_statistics_arguments()
+    arguments["phase_trial_index"] = np.array([29, 7, 61], dtype=np.int64)
+    counts = np.array(
+        [
+            [[[1, 1], [0, 0]]],
+            [[[1, 1], [1, 1]]],
+            [[[0, 0], [1, 1]]],
+        ],
+        dtype=np.int64,
+    )
+    sums = np.zeros(counts.shape, dtype=np.complex128)
+    sums[counts > 0] = 1.0 + 0.0j
+    arguments["phase_vector_sum"] = sums
+    arguments["valid_spike_count"] = counts
+    histogram = np.zeros((3, 1, 2, 2, 2), dtype=np.int64)
+    histogram[:, :, :, 0, 0] = counts[:, :, :, 0]
+    histogram[:, :, :, 1, 0] = counts[:, :, :, 1]
+    arguments["representative_phase_histogram_count"] = histogram
+    observed_trials = kernel.ObservedTrialSegmentedPPCStatistics(**arguments)
+    pooled = kernel.aggregate_observed_trial_segmented_ppc_statistics(
+        observed_trial_statistics=observed_trials,
+        membership_trial_index=np.array([29, 7, 61], dtype=np.int64),
+    )
+    np.testing.assert_array_equal(
+        pooled.contributing_trial_count,
+        np.array([[[2, 2], [2, 2], [3, 3]]], dtype=np.int64),
+    )
+
+
+def test_membership_aggregation_preserves_explicit_stable_id_order() -> None:
+    """Ordered stable IDs preserve a detectable complex128 cancellation order."""
+    per_trial_count = np.array([10**16, 1, 10**16], dtype=np.int64)
+    counts = np.broadcast_to(
+        per_trial_count[:, np.newaxis, np.newaxis, np.newaxis],
+        (3, 1, 2, 2),
+    ).copy()
+    sums = np.broadcast_to(
+        np.array([1.0e16 + 0.0j, 1.0 + 0.0j, -1.0e16 + 0.0j])[
+            :, np.newaxis, np.newaxis, np.newaxis
+        ],
+        counts.shape,
+    ).astype(np.complex128, copy=True)
+    histogram = np.zeros((3, 1, 2, 2, 2), dtype=np.int64)
+    histogram[:, :, :, 0, 0] = counts[:, :, :, 0]
+    histogram[:, :, :, 1, 0] = counts[:, :, :, 1]
+    observed_trials = kernel.ObservedTrialSegmentedPPCStatistics(
+        phase_trial_index=np.array([29, 7, 61], dtype=np.int64),
+        phase_vector_sum=sums,
+        valid_spike_count=counts,
+        representative_frequency_index=np.array([0, 1], dtype=np.int64),
+        representative_frequency_hz=np.array([8.0, 40.0], dtype=np.float64),
+        phase_bin_edges_rad=np.array([-np.pi, 0.0, np.pi], dtype=np.float64),
+        representative_phase_histogram_count=histogram,
+    )
+    cancellation_first = kernel.aggregate_observed_trial_segmented_ppc_statistics(
+        observed_trial_statistics=observed_trials,
+        membership_trial_index=np.array([29, 7, 61], dtype=np.int64),
+    )
+    cancellation_last = kernel.aggregate_observed_trial_segmented_ppc_statistics(
+        observed_trial_statistics=observed_trials,
+        membership_trial_index=np.array([29, 61, 7], dtype=np.int64),
+    )
+    np.testing.assert_array_equal(cancellation_first.phase_vector_sum, 0.0j)
+    np.testing.assert_array_equal(cancellation_last.phase_vector_sum, 1.0 + 0.0j)
+
+
+def test_observed_trial_statistics_allow_one_frequency_for_both_representative_bands() -> None:
+    """One frequency supplies both bands at local index zero without ambiguity."""
+    constructor_statistics = kernel.ObservedTrialSegmentedPPCStatistics(
+        phase_trial_index=np.array([29], dtype=np.int64),
+        phase_vector_sum=np.ones((1, 1, 2, 1), dtype=np.complex128),
+        valid_spike_count=np.ones((1, 1, 2, 1), dtype=np.int64),
+        representative_frequency_index=np.array([0, 0], dtype=np.int64),
+        representative_frequency_hz=np.array([8.0, 8.0], dtype=np.float64),
+        phase_bin_edges_rad=np.array([-np.pi, 0.0, np.pi], dtype=np.float64),
+        representative_phase_histogram_count=np.array(
+            [[[[[1, 0], [1, 0]], [[1, 0], [1, 0]]]]],
+            dtype=np.int64,
+        ),
+    )
+    np.testing.assert_array_equal(
+        constructor_statistics.representative_frequency_index,
+        [0, 0],
+    )
+    np.testing.assert_array_equal(
+        constructor_statistics.representative_frequency_hz,
+        [8.0, 8.0],
+    )
+    np.testing.assert_array_equal(
+        constructor_statistics.representative_phase_histogram_count[..., 0, :],
+        constructor_statistics.representative_phase_histogram_count[..., 1, :],
+    )
+
+    geometry = _build_geometry(
+        source_trial_index=29,
+        unit_ids=("unit-1",),
+        unit_trial_spike_times_s=(np.array([-0.25, 0.25]),),
+    )
+    phase = np.ones((1, 1, _FOUR_HZ_TIME_S.size), dtype=np.complex64)
+    computed_statistics = kernel.compute_observed_trial_segmented_ppc_statistics(
+        source_trial_geometries=(geometry,),
+        trial_phase_vectors=phase,
+        phase_valid_mask=np.ones(phase.shape, dtype=bool),
+        phase_trial_index=np.array([29], dtype=np.int64),
+        frequencies_hz=np.array([8.0], dtype=np.float64),
+        phase_bin_edges_rad=np.array([-np.pi, 0.0, np.pi], dtype=np.float64),
+    )
+    np.testing.assert_array_equal(
+        computed_statistics.representative_frequency_index,
+        [0, 0],
+    )
+    np.testing.assert_array_equal(
+        computed_statistics.representative_frequency_hz,
+        [8.0, 8.0],
+    )
+    np.testing.assert_array_equal(
+        computed_statistics.representative_phase_histogram_count[..., 0, :],
+        computed_statistics.representative_phase_histogram_count[..., 1, :],
+    )
+    histogram_total = computed_statistics.representative_phase_histogram_count.sum(
+        axis=-1
+    )
+    np.testing.assert_array_equal(
+        histogram_total[:, :, :, 0],
+        computed_statistics.valid_spike_count[..., 0],
+    )
+    np.testing.assert_array_equal(
+        histogram_total[:, :, :, 1],
+        computed_statistics.valid_spike_count[..., 0],
+    )
+
+
+@pytest.mark.parametrize(
+    ("argument_name", "malformed_value"),
+    (
+        ("phase_trial_index", np.array([29, 7], dtype=np.int32)),
+        ("phase_trial_index", np.array([[29, 7]], dtype=np.int64)),
+        ("phase_trial_index", np.array([29, 29], dtype=np.int64)),
+        ("phase_trial_index", np.array([-1, 7], dtype=np.int64)),
+        ("phase_trial_index", np.array([29], dtype=np.int64)),
+        ("phase_vector_sum", np.ones((2, 1, 2, 2), dtype=np.complex64)),
+        (
+            "phase_vector_sum",
+            np.full((2, 1, 2, 2), np.nan + 0.0j, dtype=np.complex128),
+        ),
+        ("valid_spike_count", np.ones((2, 1, 2, 2), dtype=np.int32)),
+        ("valid_spike_count", np.ones((2, 1, 2, 1), dtype=np.int64)),
+        ("valid_spike_count", -np.ones((2, 1, 2, 2), dtype=np.int64)),
+        ("representative_frequency_index", np.array([0, 1], dtype=np.int32)),
+        ("representative_frequency_index", np.array([[0, 1]], dtype=np.int64)),
+        ("representative_frequency_index", np.array([-1, 0], dtype=np.int64)),
+        ("representative_frequency_index", np.array([1, 0], dtype=np.int64)),
+        ("representative_frequency_index", np.array([0, 2], dtype=np.int64)),
+        ("representative_frequency_hz", np.array([8.0, 40.0], dtype=np.float32)),
+        ("representative_frequency_hz", np.array([8.0], dtype=np.float64)),
+        ("representative_frequency_hz", np.array([8.0, np.nan], dtype=np.float64)),
+        ("representative_frequency_hz", np.array([0.0, 40.0], dtype=np.float64)),
+        ("representative_frequency_hz", np.array([40.0, 8.0], dtype=np.float64)),
+        ("phase_bin_edges_rad", np.array([-np.pi, np.pi], dtype=np.float32)),
+        ("phase_bin_edges_rad", np.array([[-np.pi, np.pi]], dtype=np.float64)),
+        ("phase_bin_edges_rad", np.array([-np.pi, np.nan], dtype=np.float64)),
+        ("phase_bin_edges_rad", np.array([-np.pi, 0.0, 0.0], dtype=np.float64)),
+        (
+            "representative_phase_histogram_count",
+            np.ones((2, 1, 2, 2, 2), dtype=np.float64),
+        ),
+        (
+            "representative_phase_histogram_count",
+            np.ones((2, 1, 2, 2, 1), dtype=np.int64),
+        ),
+        (
+            "representative_phase_histogram_count",
+            -np.ones((2, 1, 2, 2, 2), dtype=np.int64),
+        ),
+        (
+            "representative_phase_histogram_count",
+            np.zeros((2, 1, 2, 2, 2), dtype=np.int64),
+        ),
+    ),
+)
+def test_observed_trial_statistics_public_constructor_rejects_malformed_axes(
+    argument_name: str,
+    malformed_value: np.ndarray,
+) -> None:
+    """Trial-statistic construction binds IDs, axes, dtypes, and histogram coherence."""
+    arguments = _valid_observed_trial_segmented_statistics_arguments()
+    arguments[argument_name] = malformed_value
+    with pytest.raises(ValueError):
+        kernel.ObservedTrialSegmentedPPCStatistics(**arguments)
+
+
+def test_observed_trial_statistics_reject_histograms_for_zero_count_segments() -> None:
+    """A per-trial zero count requires zero counts in both representative bands."""
+    arguments = _valid_observed_trial_segmented_statistics_arguments()
+    arguments["valid_spike_count"][0, 0, 0] = 0
+    arguments["phase_vector_sum"][0, 0, 0] = 0.0j
+    with pytest.raises(ValueError):
+        kernel.ObservedTrialSegmentedPPCStatistics(**arguments)
+
+
+def test_observed_trial_statistics_reject_nonzero_sums_for_zero_count_segments() -> None:
+    """Zero selected-frequency counts also prohibit nonzero retained vector sums."""
+    arguments = _valid_observed_trial_segmented_statistics_arguments()
+    arguments["valid_spike_count"][0, 0, 0] = 0
+    arguments["representative_phase_histogram_count"][0, 0, 0, :, 0] = 0
+    with pytest.raises(ValueError):
+        kernel.ObservedTrialSegmentedPPCStatistics(**arguments)
+
+
 def _assert_result_arrays_are_owned_and_immutable(result: object) -> None:
     """Check frozen S2 result arrays are independent of callers and read-only."""
     _assert_ndarray_fields_are_elementwise_immutable(result)
@@ -1484,7 +2037,7 @@ def test_observed_histograms_share_s1_exact_canonical_sample_rule() -> None:
     # the invalid right neighbor at 1.0 seconds.
     valid[:, :, 2] = False
 
-    observed = kernel.compute_observed_segmented_ppc_statistics(
+    observed_trials = kernel.compute_observed_trial_segmented_ppc_statistics(
         source_trial_geometries=(geometry,),
         trial_phase_vectors=phase,
         phase_valid_mask=valid,
@@ -1492,11 +2045,19 @@ def test_observed_histograms_share_s1_exact_canonical_sample_rule() -> None:
         frequencies_hz=frequencies_hz,
         phase_bin_edges_rad=_REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
     )
+    observed = kernel.aggregate_observed_trial_segmented_ppc_statistics(
+        observed_trial_statistics=observed_trials,
+        membership_trial_index=np.array([17], dtype=np.int64),
+    )
 
     np.testing.assert_array_equal(geometry.exact_sample, [True, False, False])
     np.testing.assert_array_equal(
-        observed.valid_spike_count,
-        np.array([[[0, 0], [1, 1]]], dtype=np.int64),
+        observed_trials.valid_spike_count,
+        np.array([[[[0, 0], [1, 1]]]], dtype=np.int64),
+    )
+    np.testing.assert_array_equal(
+        observed_trials.representative_phase_histogram_count.sum(axis=-1),
+        np.array([[[[0, 0], [1, 1]]]], dtype=np.int64),
     )
     np.testing.assert_array_equal(
         observed.contributing_trial_count,
@@ -1524,13 +2085,15 @@ def test_observed_histograms_share_s1_exact_canonical_sample_rule() -> None:
     )
 
 
-def test_observed_histograms_use_only_8_and_40_hz_with_exact_boundary_bins() -> None:
-    """Representative histograms preserve NumPy's phase-bin boundary semantics.
+def test_observed_histograms_use_only_8_and_40_hz_with_current_boundary_bins() -> None:
+    """Representative histograms retain the current complex64-angle bin semantics.
 
-    Exact canonical-grid samples place left bin edges in their following bin,
-    including ``-pi``; the final ``+pi`` edge remains included in the final
-    bin. The deliberately different 20-Hz row proves the two outputs select
-    the nearest configured 8- and 40-Hz rows, not the intervening frequency.
+    Exact canonical-grid samples remain accepted by both PPC and histograms,
+    but ``np.angle(complex64)`` gives float32 boundary values.  NumPy therefore
+    assigns exact-looking boundary phases according to the current payload
+    builder's float32 values rather than a promoted complex128 angle. The
+    deliberately different 20-Hz row proves the two outputs select the nearest
+    configured 8- and 40-Hz rows, not the intervening frequency.
     """
     phase_time_s = np.arange(-1.0, 1.25, 0.25, dtype=np.float64)
     frequencies_hz = np.array([8.0, 20.0, 40.0], dtype=np.float64)
@@ -1552,7 +2115,7 @@ def test_observed_histograms_use_only_8_and_40_hz_with_exact_boundary_bins() -> 
         phase_sampling_rate_hz=4.0,
         segment_bounds_s=((-1.0, 0.0), (0.0, 1.0)),
     )
-    observed = kernel.compute_observed_segmented_ppc_statistics(
+    observed_trials = kernel.compute_observed_trial_segmented_ppc_statistics(
         source_trial_geometries=(geometry,),
         trial_phase_vectors=phase,
         phase_valid_mask=np.ones(phase.shape, dtype=bool),
@@ -1560,16 +2123,24 @@ def test_observed_histograms_use_only_8_and_40_hz_with_exact_boundary_bins() -> 
         frequencies_hz=frequencies_hz,
         phase_bin_edges_rad=_REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
     )
+    observed = kernel.aggregate_observed_trial_segmented_ppc_statistics(
+        observed_trial_statistics=observed_trials,
+        membership_trial_index=np.array([5], dtype=np.int64),
+    )
 
     expected = np.array(
         [
-            [[1, 1, 1, 1], [0, 2, 1, 1]],
-            [[0, 1, 1, 2], [0, 0, 2, 2]],
-            [[1, 2, 2, 3], [0, 2, 3, 3]],
+            [[1, 0, 1, 1], [2, 0, 1, 0]],
+            [[1, 0, 1, 1], [0, 0, 2, 1]],
+            [[2, 0, 2, 2], [2, 0, 3, 1]],
         ],
         dtype=np.int64,
     )
     np.testing.assert_array_equal(observed.representative_frequency_hz, [8.0, 40.0])
+    np.testing.assert_array_equal(
+        observed_trials.representative_phase_histogram_count[0, 0],
+        expected[:2],
+    )
     np.testing.assert_array_equal(
         observed.representative_phase_histogram_count[0],
         expected,
@@ -1587,6 +2158,26 @@ def test_observed_histograms_use_only_8_and_40_hz_with_exact_boundary_bins() -> 
         observed.representative_phase_histogram_count[0, :, 1],
         twenty_hz_counts,
     )
+
+    # All spikes are exact canonical-grid samples in this fixture.  The new
+    # reuse path must therefore retain the current payload helper's precise
+    # complex64-angle boundary bins; only near-grid acceptance differs by plan.
+    for segment_position, (start, stop) in enumerate(((0, 4), (4, 8))):
+        direct_histogram = spike_lfp_summary.build_representative_phase_histograms(
+            frequencies_hz=frequencies_hz,
+            spike_phase_vectors=phase[0, :, start:stop],
+            valid_mask=np.ones((3, stop - start), dtype=bool),
+            trial_indices=np.zeros(stop - start, dtype=np.int64),
+            phase_bin_edges_rad=_REPRESENTATIVE_PHASE_BIN_EDGES_RAD,
+        )
+        np.testing.assert_array_equal(
+            observed_trials.representative_phase_histogram_count[
+                0,
+                0,
+                segment_position,
+            ],
+            direct_histogram.spike_count_by_band,
+        )
 
 
 def test_composed_whole_observed_metrics_add_sufficient_statistics_not_half_ppc() -> None:
