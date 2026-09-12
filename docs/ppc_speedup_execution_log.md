@@ -132,13 +132,44 @@ not apply; write `not applicable` and explain why.
 
 ### S2 - Observed reuse and whole-from-halves numerics
 
-- Status: not started.
-- Authorization and starting HEAD:
-- Agent assignments, permissions, and file scopes:
-- Test-design review, test-only commit, and RED evidence:
-- Implementation commit and GREEN evidence:
-- Full neural-suite and independent Sol gate evidence:
-- Numerical/interface review and unresolved risks:
+- Status: complete.
+- Authorization and starting HEAD: covered by the user's 2026-09-10
+  implementation authorization; `53f81983d19e8d0d4f7f21472e6d0a36911f6fe2`.
+  During S2 the user confirmed that the newly observed
+  `docs/SoftwareDesign.md` modification was theirs; it and all other unrelated
+  changes remained untouched. The resulting unrelated-worktree inventory is
+  SHA-256
+  `888f0459d557e862e4a5a1fb6b3b8cb3bc18477c8b3ddb8de09910e0b5724bcc`.
+- Agent assignments, permissions, and file scopes: lead `gpt-5.6-sol` `high`;
+  one retained writer `gpt-5.6-terra` `xhigh`, sequentially write-enabled for
+  the focused test file and then the kernel source; independent reviewer
+  `gpt-5.6-sol` `xhigh`, procedurally read-only. No scout assigned.
+- Test-design review, test-only commit, and RED evidence: the initial API tests
+  were committed in `1b39c45`; independent review then found that pooled-only
+  observed statistics could not support cross-condition reuse and that
+  complex128 angle promotion changed legacy boundary bins. Corrected stable-
+  trial tests passed the independent design gate and were committed in
+  `fb0ba35`; the final histogram-validation correction was committed in
+  `006bb24`. Root reproduced the staged RED sequence, ending with 3 expected
+  failures, 83 passes, and 45 deselections for the scoped selection.
+- Implementation commit and GREEN evidence: `d8d1a9d`. Root obtained 86 passed
+  and 45 deselected for the focused S2 selection, 165 passed for the complete
+  kernel plus WP5B oracle files, and 46 passed for the PPC parallel, PPC
+  runtime, and payload-runtime suites.
+- Full neural-suite and independent Sol gate evidence: 881 passed with 19 known
+  warnings. The final independent `gpt-5.6-sol` `xhigh` implementation gate
+  returned PASS after verifying the stable-trial mapping, one-pass reuse,
+  ordered and empty memberships, whole contributor unions, legacy histogram
+  behavior, ownership, and the unchanged S1 51-byte temporary bound.
+- Numerical/interface review and unresolved risks: observed sums, counts, and
+  representative histograms are retained by stable physical trial before
+  condition aggregation. Whole metrics add before/after complex sums and
+  counts rather than averaging half PPC. Histogram sampling uses the S1 exact
+  canonical-grid acceptance rule but preserves current `np.angle(complex64)`
+  bin behavior; valid nominal boundary samples can therefore fall outside
+  float64 `[-pi, pi]` edges, so public validation permits histogram totals below
+  (never above) selected-frequency valid counts. S3 must include the retained
+  per-trial observed arrays in parent-memory accounting.
 - CT026 work performed: none permitted.
 
 ### S3 - Stable job planner and cross-condition edge union
