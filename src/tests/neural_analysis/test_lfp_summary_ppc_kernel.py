@@ -1318,8 +1318,11 @@ def test_observed_trial_statistics_contracts_expose_stable_trial_axes_and_member
     The stable trial axis is int64 and may be nonmonotonic.  Per-trial sums and
     counts use ``(trial, unit, segment=2, frequency)`` axes.  The two int64
     representative-frequency positions bind histogram bands to those counts;
-    histograms use ``(trial, unit, segment=2, band=2, phase_bin)`` axes, and
-    aggregation receives an explicit ordered unique stable-ID membership vector.
+    histograms use ``(trial, unit, segment=2, band=2, phase_bin)`` axes.  A
+    histogram total cannot exceed its selected-frequency valid count, although
+    legacy complex64 angle rounding can place nominal +/-pi outside float64 bin
+    edges. Aggregation receives an explicit ordered unique stable-ID membership
+    vector.
     """
     module_doc = (kernel.__doc__ or "").lower()
     assert "segmented ppc" in module_doc
@@ -1738,6 +1741,31 @@ def test_observed_trial_statistics_allow_one_frequency_for_both_representative_b
 
 
 @pytest.mark.parametrize(
+    ("representative_frequency_index", "representative_frequency_hz"),
+    (
+        (
+            np.array([0, 0], dtype=np.int64),
+            np.array([8.0, 40.0], dtype=np.float64),
+        ),
+        (
+            np.array([0, 1], dtype=np.int64),
+            np.array([8.0, 8.0], dtype=np.float64),
+        ),
+    ),
+)
+def test_observed_trial_statistics_reject_incoherent_representative_coordinates(
+    representative_frequency_index: np.ndarray,
+    representative_frequency_hz: np.ndarray,
+) -> None:
+    """Representative frequency positions and Hz coordinates have matching equality."""
+    arguments = _valid_observed_trial_segmented_statistics_arguments()
+    arguments["representative_frequency_index"] = representative_frequency_index
+    arguments["representative_frequency_hz"] = representative_frequency_hz
+    with pytest.raises(ValueError):
+        kernel.ObservedTrialSegmentedPPCStatistics(**arguments)
+
+
+@pytest.mark.parametrize(
     ("argument_name", "malformed_value"),
     (
         ("phase_trial_index", np.array([29, 7], dtype=np.int32)),
@@ -1781,7 +1809,7 @@ def test_observed_trial_statistics_allow_one_frequency_for_both_representative_b
         ),
         (
             "representative_phase_histogram_count",
-            np.zeros((2, 1, 2, 2, 2), dtype=np.int64),
+            np.full((2, 1, 2, 2, 2), 2, dtype=np.int64),
         ),
     ),
 )
@@ -1789,7 +1817,7 @@ def test_observed_trial_statistics_public_constructor_rejects_malformed_axes(
     argument_name: str,
     malformed_value: np.ndarray,
 ) -> None:
-    """Trial-statistic construction binds IDs, axes, dtypes, and histogram coherence."""
+    """Trial construction rejects incompatible IDs, axes, and histogram overcounts."""
     arguments = _valid_observed_trial_segmented_statistics_arguments()
     arguments[argument_name] = malformed_value
     with pytest.raises(ValueError):
@@ -2140,6 +2168,30 @@ def test_observed_histograms_use_only_8_and_40_hz_with_current_boundary_bins() -
     np.testing.assert_array_equal(
         observed_trials.representative_phase_histogram_count[0, 0],
         expected[:2],
+    )
+    selected_count = observed_trials.valid_spike_count[
+        ..., observed_trials.representative_frequency_index
+    ]
+    assert np.all(
+        observed_trials.representative_phase_histogram_count.sum(axis=-1)
+        <= selected_count
+    )
+    reconstructed_trial_statistics = kernel.ObservedTrialSegmentedPPCStatistics(
+        phase_trial_index=observed_trials.phase_trial_index.copy(),
+        phase_vector_sum=observed_trials.phase_vector_sum.copy(),
+        valid_spike_count=observed_trials.valid_spike_count.copy(),
+        representative_frequency_index=(
+            observed_trials.representative_frequency_index.copy()
+        ),
+        representative_frequency_hz=observed_trials.representative_frequency_hz.copy(),
+        phase_bin_edges_rad=observed_trials.phase_bin_edges_rad.copy(),
+        representative_phase_histogram_count=(
+            observed_trials.representative_phase_histogram_count.copy()
+        ),
+    )
+    np.testing.assert_array_equal(
+        reconstructed_trial_statistics.representative_phase_histogram_count,
+        observed_trials.representative_phase_histogram_count,
     )
     np.testing.assert_array_equal(
         observed.representative_phase_histogram_count[0],
