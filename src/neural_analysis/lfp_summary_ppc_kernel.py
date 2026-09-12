@@ -1,9 +1,9 @@
-"""Uniform-grid interpolation and segmented PPC edge sufficient statistics.
+"""Uniform-grid interpolation and segmented PPC sufficient statistics.
 
-This module contains the numerical S1 kernel only.  It does not perform file
-I/O, checkpointing, multiprocessing, or pipeline orchestration.  Geometry is
-built once from source-trial spikes and reused for each bounded target-edge
-reduction.
+This numerical kernel builds reusable S1 spike geometry and edge statistics,
+then derives S2 same-trial observed statistics that can be pooled repeatedly by
+stable physical trial membership.  It does not perform file I/O, checkpointing,
+multiprocessing, or pipeline orchestration.
 """
 
 from __future__ import annotations
@@ -396,6 +396,714 @@ class SegmentedEdgeStatistics:
 
 
 @dataclass(frozen=True)
+class ObservedTrialSegmentedPPCStatistics:
+    """Owned same-trial PPC sufficient statistics before condition aggregation.
+
+    Parameters
+    ----------
+    phase_trial_index : numpy.ndarray
+        Int64 ``(trial,)`` unique nonnegative stable physical trial identities
+        in the stored trial axis order.  Identities have no physical units and
+        need not be monotonic.
+    phase_vector_sum : numpy.ndarray
+        Complex128 ``(trial, unit, segment=2, frequency)`` dimensionless sums
+        of accepted normalized phase vectors.  Segment zero is before and
+        segment one is after.
+    valid_spike_count : numpy.ndarray
+        Int64 array on the same axes as ``phase_vector_sum`` containing
+        nonnegative dimensionless valid spike-phase observation counts.
+    representative_frequency_index : numpy.ndarray
+        Int64 ``(band=2,)`` nondecreasing local frequency-axis positions for
+        the representative theta then gamma histograms.  Equal positions
+        are valid exactly when both bands use the same Hz coordinate.
+    representative_frequency_hz : numpy.ndarray
+        Float64 ``(band=2,)`` positive finite nondecreasing representative
+        frequency coordinates in Hz corresponding one-to-one to the two
+        positions.  Equal coordinates are valid exactly when both bands use
+        the same frequency-axis position.
+    phase_bin_edges_rad : numpy.ndarray
+        Float64 ``(phase_bin + 1,)`` finite strictly increasing histogram edges
+        in radians.
+    representative_phase_histogram_count : numpy.ndarray
+        Int64 ``(trial, unit, segment=2, band=2, phase_bin)`` accepted-phase
+        histogram counts.  Each band/segment total does not exceed the
+        matching ``valid_spike_count`` selected by
+        ``representative_frequency_index``.  A valid complex64 phase at the
+        nominal ``-pi`` or ``pi`` boundary may fall outside float64 histogram
+        edges used by the legacy histogram contract.
+
+    Raises
+    ------
+    ValueError
+        If public fields violate their documented dtypes, axes, coordinate
+        units, finiteness, count coherence, or zero-count sum invariant.
+        Public construction copies every numerical array before freezing it.
+    """
+
+    phase_trial_index: np.ndarray
+    phase_vector_sum: np.ndarray
+    valid_spike_count: np.ndarray
+    representative_frequency_index: np.ndarray
+    representative_frequency_hz: np.ndarray
+    phase_bin_edges_rad: np.ndarray
+    representative_phase_histogram_count: np.ndarray
+
+    def __post_init__(self) -> None:
+        """Defensively validate, copy, and freeze public trial statistic arrays."""
+        self._set_validated_fields(
+            self._validated_fields(
+                phase_trial_index=self.phase_trial_index,
+                phase_vector_sum=self.phase_vector_sum,
+                valid_spike_count=self.valid_spike_count,
+                representative_frequency_index=self.representative_frequency_index,
+                representative_frequency_hz=self.representative_frequency_hz,
+                phase_bin_edges_rad=self.phase_bin_edges_rad,
+                representative_phase_histogram_count=self.representative_phase_histogram_count,
+            )
+        )
+
+    @classmethod
+    def _from_owned_arrays(
+        cls,
+        *,
+        phase_trial_index: np.ndarray,
+        phase_vector_sum: np.ndarray,
+        valid_spike_count: np.ndarray,
+        representative_frequency_index: np.ndarray,
+        representative_frequency_hz: np.ndarray,
+        phase_bin_edges_rad: np.ndarray,
+        representative_phase_histogram_count: np.ndarray,
+    ) -> "ObservedTrialSegmentedPPCStatistics":
+        """Freeze private reducer buffers with the public axes and units.
+
+        Parameters are newly allocated kernel arrays with the documented trial,
+        unit, segment, frequency, band, and radians axes.  This internal path
+        transfers ownership without copies after structural validation.
+
+        Returns
+        -------
+        ObservedTrialSegmentedPPCStatistics
+            Frozen owned same-trial sufficient statistics.
+
+        Raises
+        ------
+        ValueError
+            If an internal reducer violates the result-array structure.
+        """
+        statistics = object.__new__(cls)
+        statistics._set_validated_fields(
+            cls._trusted_owned_fields(
+                phase_trial_index=phase_trial_index,
+                phase_vector_sum=phase_vector_sum,
+                valid_spike_count=valid_spike_count,
+                representative_frequency_index=representative_frequency_index,
+                representative_frequency_hz=representative_frequency_hz,
+                phase_bin_edges_rad=phase_bin_edges_rad,
+                representative_phase_histogram_count=representative_phase_histogram_count,
+            )
+        )
+        return statistics
+
+    @staticmethod
+    def _validated_fields(
+        *,
+        phase_trial_index: np.ndarray,
+        phase_vector_sum: np.ndarray,
+        valid_spike_count: np.ndarray,
+        representative_frequency_index: np.ndarray,
+        representative_frequency_hz: np.ndarray,
+        phase_bin_edges_rad: np.ndarray,
+        representative_phase_histogram_count: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return defensive copies after full public field and coherence checks."""
+        values = ObservedTrialSegmentedPPCStatistics._checked_fields(
+            phase_trial_index=phase_trial_index,
+            phase_vector_sum=phase_vector_sum,
+            valid_spike_count=valid_spike_count,
+            representative_frequency_index=representative_frequency_index,
+            representative_frequency_hz=representative_frequency_hz,
+            phase_bin_edges_rad=phase_bin_edges_rad,
+            representative_phase_histogram_count=representative_phase_histogram_count,
+            check_contents=True,
+        )
+        return tuple(value.copy() for value in values)  # type: ignore[return-value]
+
+    @staticmethod
+    def _trusted_owned_fields(
+        *,
+        phase_trial_index: np.ndarray,
+        phase_vector_sum: np.ndarray,
+        valid_spike_count: np.ndarray,
+        representative_frequency_index: np.ndarray,
+        representative_frequency_hz: np.ndarray,
+        phase_bin_edges_rad: np.ndarray,
+        representative_phase_histogram_count: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Check private trial buffers without duplicating reducer-owned arrays."""
+        return ObservedTrialSegmentedPPCStatistics._checked_fields(
+            phase_trial_index=phase_trial_index,
+            phase_vector_sum=phase_vector_sum,
+            valid_spike_count=valid_spike_count,
+            representative_frequency_index=representative_frequency_index,
+            representative_frequency_hz=representative_frequency_hz,
+            phase_bin_edges_rad=phase_bin_edges_rad,
+            representative_phase_histogram_count=representative_phase_histogram_count,
+            check_contents=False,
+        )
+
+    @staticmethod
+    def _checked_fields(
+        *,
+        phase_trial_index: np.ndarray,
+        phase_vector_sum: np.ndarray,
+        valid_spike_count: np.ndarray,
+        representative_frequency_index: np.ndarray,
+        representative_frequency_hz: np.ndarray,
+        phase_bin_edges_rad: np.ndarray,
+        representative_phase_histogram_count: np.ndarray,
+        check_contents: bool,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Validate per-trial statistic dtypes, axes, units, and public values."""
+        trial_ids = np.asarray(phase_trial_index)
+        sums = np.asarray(phase_vector_sum)
+        counts = np.asarray(valid_spike_count)
+        representative_index = np.asarray(representative_frequency_index)
+        representative_hz = np.asarray(representative_frequency_hz)
+        bins_rad = np.asarray(phase_bin_edges_rad)
+        histogram = np.asarray(representative_phase_histogram_count)
+        if (
+            trial_ids.dtype != np.dtype(np.int64)
+            or trial_ids.ndim != 1
+            or trial_ids.size < 1
+            or sums.dtype != np.dtype(np.complex128)
+            or sums.ndim != 4
+            or sums.shape[0] != trial_ids.size
+            or sums.shape[1] < 1
+            or sums.shape[2] != 2
+            or sums.shape[3] < 1
+            or counts.dtype != np.dtype(np.int64)
+            or counts.shape != sums.shape
+            or representative_index.dtype != np.dtype(np.int64)
+            or representative_index.shape != (2,)
+            or representative_hz.dtype != np.dtype(np.float64)
+            or representative_hz.shape != (2,)
+            or bins_rad.dtype != np.dtype(np.float64)
+            or bins_rad.ndim != 1
+            or bins_rad.size < 2
+            or histogram.dtype != np.dtype(np.int64)
+            or histogram.shape
+            != (sums.shape[0], sums.shape[1], 2, 2, bins_rad.size - 1)
+        ):
+            raise ValueError("observed trial statistic arrays have incompatible axes or dtypes")
+        if check_contents and (
+            np.any(trial_ids < 0)
+            or np.unique(trial_ids).size != trial_ids.size
+            or not np.isfinite(sums.real).all()
+            or not np.isfinite(sums.imag).all()
+            or np.any(counts < 0)
+            or np.any(representative_index < 0)
+            or np.any(representative_index >= sums.shape[3])
+            or np.any(np.diff(representative_index) < 0)
+            or not np.isfinite(representative_hz).all()
+            or np.any(representative_hz <= 0.0)
+            or np.any(np.diff(representative_hz) < 0.0)
+            or (
+                (representative_index[0] == representative_index[1])
+                != (representative_hz[0] == representative_hz[1])
+            )
+            or not np.isfinite(bins_rad).all()
+            or np.any(np.diff(bins_rad) <= 0.0)
+            or np.any(histogram < 0)
+            or np.any((counts == 0) & (sums != 0.0j))
+            or np.any(
+                histogram.sum(axis=-1, dtype=np.int64)
+                > counts[..., representative_index]
+            )
+        ):
+            raise ValueError("observed trial statistic values are invalid")
+        return (
+            trial_ids,
+            sums,
+            counts,
+            representative_index,
+            representative_hz,
+            bins_rad,
+            histogram,
+        )
+
+    def _set_validated_fields(
+        self,
+        values: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ) -> None:
+        """Store owned per-trial arrays after disabling element-level writes."""
+        (
+            trial_ids,
+            sums,
+            counts,
+            representative_index,
+            representative_hz,
+            bins_rad,
+            histogram,
+        ) = values
+        object.__setattr__(self, "phase_trial_index", _freeze_array(trial_ids))
+        object.__setattr__(self, "phase_vector_sum", _freeze_array(sums))
+        object.__setattr__(self, "valid_spike_count", _freeze_array(counts))
+        object.__setattr__(
+            self,
+            "representative_frequency_index",
+            _freeze_array(representative_index),
+        )
+        object.__setattr__(self, "representative_frequency_hz", _freeze_array(representative_hz))
+        object.__setattr__(self, "phase_bin_edges_rad", _freeze_array(bins_rad))
+        object.__setattr__(self, "representative_phase_histogram_count", _freeze_array(histogram))
+
+
+@dataclass(frozen=True)
+class ObservedSegmentedPPCStatistics:
+    """Owned same-trial before/after PPC statistics and representative bins.
+
+    Parameters
+    ----------
+    phase_vector_sum : numpy.ndarray
+        Complex128 ``(unit, segment=2, frequency)`` dimensionless pooled unit
+        phase-vector sums.  Segment zero is before and segment one is after.
+    valid_spike_count : numpy.ndarray
+        Int64 array on the same axes as ``phase_vector_sum``.  Entries are
+        nonnegative dimensionless valid spike-phase observation counts.
+    contributing_trial_count : numpy.ndarray
+        Int64 ``(unit, epoch=3, frequency)`` count of physical trials with at
+        least one valid observation.  Epoch order is before, after, whole;
+        whole is a per-trial union of the two halves.
+    representative_frequency_hz : numpy.ndarray
+        Float64 ``(band=2,)`` positive finite nondecreasing representative
+        frequency coordinates in Hz, ordered nearest 8 then nearest 40 Hz.
+        Equal coordinates are valid when one input frequency supplies both.
+    phase_bin_edges_rad : numpy.ndarray
+        Float64 ``(phase_bin + 1,)`` finite strictly increasing phase-bin edges
+        in radians.
+    representative_phase_histogram_count : numpy.ndarray
+        Int64 ``(unit, epoch=3, band=2, phase_bin)`` nonnegative counts of
+        accepted normalized phases.  The whole epoch is before plus after.
+
+    Raises
+    ------
+    ValueError
+        If public fields have incompatible axes, dtypes, coordinate units, or
+        nonfinite/negative values.  Public construction copies every array.
+    """
+
+    phase_vector_sum: np.ndarray
+    valid_spike_count: np.ndarray
+    contributing_trial_count: np.ndarray
+    representative_frequency_hz: np.ndarray
+    phase_bin_edges_rad: np.ndarray
+    representative_phase_histogram_count: np.ndarray
+
+    def __post_init__(self) -> None:
+        """Defensively validate, copy, and freeze public statistic arrays."""
+        self._set_validated_fields(
+            self._validated_fields(
+                phase_vector_sum=self.phase_vector_sum,
+                valid_spike_count=self.valid_spike_count,
+                contributing_trial_count=self.contributing_trial_count,
+                representative_frequency_hz=self.representative_frequency_hz,
+                phase_bin_edges_rad=self.phase_bin_edges_rad,
+                representative_phase_histogram_count=self.representative_phase_histogram_count,
+            )
+        )
+
+    @classmethod
+    def _from_owned_arrays(
+        cls,
+        *,
+        phase_vector_sum: np.ndarray,
+        valid_spike_count: np.ndarray,
+        contributing_trial_count: np.ndarray,
+        representative_frequency_hz: np.ndarray,
+        phase_bin_edges_rad: np.ndarray,
+        representative_phase_histogram_count: np.ndarray,
+    ) -> "ObservedSegmentedPPCStatistics":
+        """Freeze privately owned reducer outputs without defensive copies.
+
+        Parameters have the public constructor's documented axes and units,
+        but are newly allocated inside this module.  Callers must use the
+        public constructor, which copies all arrays before freezing them.
+
+        Returns
+        -------
+        ObservedSegmentedPPCStatistics
+            Frozen owned statistic arrays.
+
+        Raises
+        ------
+        ValueError
+            If a private reducer violates the documented structural contract.
+        """
+        statistics = object.__new__(cls)
+        statistics._set_validated_fields(
+            cls._trusted_owned_fields(
+                phase_vector_sum=phase_vector_sum,
+                valid_spike_count=valid_spike_count,
+                contributing_trial_count=contributing_trial_count,
+                representative_frequency_hz=representative_frequency_hz,
+                phase_bin_edges_rad=phase_bin_edges_rad,
+                representative_phase_histogram_count=representative_phase_histogram_count,
+            )
+        )
+        return statistics
+
+    @staticmethod
+    def _validated_fields(
+        *,
+        phase_vector_sum: np.ndarray,
+        valid_spike_count: np.ndarray,
+        contributing_trial_count: np.ndarray,
+        representative_frequency_hz: np.ndarray,
+        phase_bin_edges_rad: np.ndarray,
+        representative_phase_histogram_count: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return defensive owned copies after complete public validation."""
+        values = ObservedSegmentedPPCStatistics._checked_fields(
+            phase_vector_sum=phase_vector_sum,
+            valid_spike_count=valid_spike_count,
+            contributing_trial_count=contributing_trial_count,
+            representative_frequency_hz=representative_frequency_hz,
+            phase_bin_edges_rad=phase_bin_edges_rad,
+            representative_phase_histogram_count=representative_phase_histogram_count,
+            check_contents=True,
+        )
+        return tuple(value.copy() for value in values)  # type: ignore[return-value]
+
+    @staticmethod
+    def _trusted_owned_fields(
+        *,
+        phase_vector_sum: np.ndarray,
+        valid_spike_count: np.ndarray,
+        contributing_trial_count: np.ndarray,
+        representative_frequency_hz: np.ndarray,
+        phase_bin_edges_rad: np.ndarray,
+        representative_phase_histogram_count: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Check privately allocated arrays without copying the reducer output."""
+        return ObservedSegmentedPPCStatistics._checked_fields(
+            phase_vector_sum=phase_vector_sum,
+            valid_spike_count=valid_spike_count,
+            contributing_trial_count=contributing_trial_count,
+            representative_frequency_hz=representative_frequency_hz,
+            phase_bin_edges_rad=phase_bin_edges_rad,
+            representative_phase_histogram_count=representative_phase_histogram_count,
+            check_contents=False,
+        )
+
+    @staticmethod
+    def _checked_fields(
+        *,
+        phase_vector_sum: np.ndarray,
+        valid_spike_count: np.ndarray,
+        contributing_trial_count: np.ndarray,
+        representative_frequency_hz: np.ndarray,
+        phase_bin_edges_rad: np.ndarray,
+        representative_phase_histogram_count: np.ndarray,
+        check_contents: bool,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Validate shared S2 statistic axes, dtypes, units, and contents."""
+        sums = np.asarray(phase_vector_sum)
+        counts = np.asarray(valid_spike_count)
+        contributors = np.asarray(contributing_trial_count)
+        representative_hz = np.asarray(representative_frequency_hz)
+        bins_rad = np.asarray(phase_bin_edges_rad)
+        histogram = np.asarray(representative_phase_histogram_count)
+        if (
+            sums.dtype != np.dtype(np.complex128)
+            or sums.ndim != 3
+            or sums.shape[0] < 1
+            or sums.shape[1] != 2
+            or sums.shape[2] < 1
+            or counts.dtype != np.dtype(np.int64)
+            or counts.shape != sums.shape
+            or contributors.dtype != np.dtype(np.int64)
+            or contributors.shape != (sums.shape[0], 3, sums.shape[2])
+            or representative_hz.dtype != np.dtype(np.float64)
+            or representative_hz.shape != (2,)
+            or bins_rad.dtype != np.dtype(np.float64)
+            or bins_rad.ndim != 1
+            or bins_rad.size < 2
+            or histogram.dtype != np.dtype(np.int64)
+            or histogram.shape != (sums.shape[0], 3, 2, bins_rad.size - 1)
+        ):
+            raise ValueError("observed segmented statistic arrays have incompatible axes or dtypes")
+        if check_contents and (
+            not np.isfinite(sums.real).all()
+            or not np.isfinite(sums.imag).all()
+            or np.any(counts < 0)
+            or np.any(contributors < 0)
+            or not np.isfinite(representative_hz).all()
+            or np.any(representative_hz <= 0.0)
+            or np.any(np.diff(representative_hz) < 0.0)
+            or not np.isfinite(bins_rad).all()
+            or np.any(np.diff(bins_rad) <= 0.0)
+            or np.any(histogram < 0)
+            or np.any((counts == 0) & (sums != 0.0j))
+        ):
+            raise ValueError("observed segmented statistic values are invalid")
+        return sums, counts, contributors, representative_hz, bins_rad, histogram
+
+    def _set_validated_fields(
+        self,
+        values: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ) -> None:
+        """Store owned S2 statistic arrays after disabling element writes."""
+        (
+            sums,
+            counts,
+            contributors,
+            representative_hz,
+            bins_rad,
+            histogram,
+        ) = values
+        object.__setattr__(self, "phase_vector_sum", _freeze_array(sums))
+        object.__setattr__(self, "valid_spike_count", _freeze_array(counts))
+        object.__setattr__(self, "contributing_trial_count", _freeze_array(contributors))
+        object.__setattr__(self, "representative_frequency_hz", _freeze_array(representative_hz))
+        object.__setattr__(self, "phase_bin_edges_rad", _freeze_array(bins_rad))
+        object.__setattr__(self, "representative_phase_histogram_count", _freeze_array(histogram))
+
+
+@dataclass(frozen=True)
+class ObservedSegmentedPPCMetrics:
+    """Owned observed PPC metrics composed from segmented sufficient statistics.
+
+    Parameters
+    ----------
+    ppc, resultant_length, preferred_phase_rad : numpy.ndarray
+        Float64 ``(unit, epoch=3, frequency)`` dimensionless PPC, mean-vector
+        magnitude, and preferred phase in radians.  Undefined metrics are NaN.
+    spike_count : numpy.ndarray
+        Int64 ``(unit, epoch=3, frequency)`` nonnegative valid observation
+        counts without physical units.
+    computable, reliable, shuffle_eligible : numpy.ndarray
+        Boolean arrays on the metric axes.  Computable requires at least two
+        spikes, reliable at least fifty, and shuffle eligibility additionally
+        requires two physical contributor trials and finite PPC.
+    contributing_trial_count : numpy.ndarray
+        Int64 array on the metric axes containing physical contributing-trial
+        counts.  Whole remains the union of before and after contributors.
+    representative_frequency_hz, phase_bin_edges_rad,
+    representative_phase_histogram_count : numpy.ndarray
+        The owned Hz, radians, and histogram coordinates/counts documented by
+        ``ObservedSegmentedPPCStatistics``.
+
+    Raises
+    ------
+    ValueError
+        If fields fail the documented dtypes, axes, units, or value bounds.
+        Public construction defensively copies every array.
+    """
+
+    ppc: np.ndarray
+    resultant_length: np.ndarray
+    preferred_phase_rad: np.ndarray
+    spike_count: np.ndarray
+    computable: np.ndarray
+    reliable: np.ndarray
+    contributing_trial_count: np.ndarray
+    shuffle_eligible: np.ndarray
+    representative_frequency_hz: np.ndarray
+    phase_bin_edges_rad: np.ndarray
+    representative_phase_histogram_count: np.ndarray
+
+    def __post_init__(self) -> None:
+        """Defensively validate, copy, and freeze public metric arrays."""
+        self._set_validated_fields(
+            self._validated_fields(
+                ppc=self.ppc,
+                resultant_length=self.resultant_length,
+                preferred_phase_rad=self.preferred_phase_rad,
+                spike_count=self.spike_count,
+                computable=self.computable,
+                reliable=self.reliable,
+                contributing_trial_count=self.contributing_trial_count,
+                shuffle_eligible=self.shuffle_eligible,
+                representative_frequency_hz=self.representative_frequency_hz,
+                phase_bin_edges_rad=self.phase_bin_edges_rad,
+                representative_phase_histogram_count=self.representative_phase_histogram_count,
+            )
+        )
+
+    @classmethod
+    def _from_owned_arrays(
+        cls,
+        *,
+        ppc: np.ndarray,
+        resultant_length: np.ndarray,
+        preferred_phase_rad: np.ndarray,
+        spike_count: np.ndarray,
+        computable: np.ndarray,
+        reliable: np.ndarray,
+        contributing_trial_count: np.ndarray,
+        shuffle_eligible: np.ndarray,
+        representative_frequency_hz: np.ndarray,
+        phase_bin_edges_rad: np.ndarray,
+        representative_phase_histogram_count: np.ndarray,
+    ) -> "ObservedSegmentedPPCMetrics":
+        """Freeze private composition arrays without copying their owned buffers.
+
+        Returns
+        -------
+        ObservedSegmentedPPCMetrics
+            Frozen owned metrics with axes and physical units documented by the
+            public constructor.
+
+        Raises
+        ------
+        ValueError
+            If an internal composition buffer has an incompatible structure.
+        """
+        metrics = object.__new__(cls)
+        metrics._set_validated_fields(
+            cls._trusted_owned_fields(
+                ppc=ppc,
+                resultant_length=resultant_length,
+                preferred_phase_rad=preferred_phase_rad,
+                spike_count=spike_count,
+                computable=computable,
+                reliable=reliable,
+                contributing_trial_count=contributing_trial_count,
+                shuffle_eligible=shuffle_eligible,
+                representative_frequency_hz=representative_frequency_hz,
+                phase_bin_edges_rad=phase_bin_edges_rad,
+                representative_phase_histogram_count=representative_phase_histogram_count,
+            )
+        )
+        return metrics
+
+    @staticmethod
+    def _validated_fields(
+        **values: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return complete defensive copies after public metric validation."""
+        checked = ObservedSegmentedPPCMetrics._checked_fields(check_contents=True, **values)
+        return tuple(value.copy() for value in checked)  # type: ignore[return-value]
+
+    @staticmethod
+    def _trusted_owned_fields(
+        **values: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Check private metric buffers without duplicating them at return."""
+        return ObservedSegmentedPPCMetrics._checked_fields(check_contents=False, **values)
+
+    @staticmethod
+    def _checked_fields(
+        *,
+        ppc: np.ndarray,
+        resultant_length: np.ndarray,
+        preferred_phase_rad: np.ndarray,
+        spike_count: np.ndarray,
+        computable: np.ndarray,
+        reliable: np.ndarray,
+        contributing_trial_count: np.ndarray,
+        shuffle_eligible: np.ndarray,
+        representative_frequency_hz: np.ndarray,
+        phase_bin_edges_rad: np.ndarray,
+        representative_phase_histogram_count: np.ndarray,
+        check_contents: bool,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Validate shared S2 metric axes, dtypes, physical units, and values."""
+        ppc_values = np.asarray(ppc)
+        resultant = np.asarray(resultant_length)
+        preferred = np.asarray(preferred_phase_rad)
+        counts = np.asarray(spike_count)
+        computable_values = np.asarray(computable)
+        reliable_values = np.asarray(reliable)
+        contributors = np.asarray(contributing_trial_count)
+        eligible = np.asarray(shuffle_eligible)
+        representative_hz = np.asarray(representative_frequency_hz)
+        bins_rad = np.asarray(phase_bin_edges_rad)
+        histogram = np.asarray(representative_phase_histogram_count)
+        metric_shape = ppc_values.shape
+        if (
+            ppc_values.dtype != np.dtype(np.float64)
+            or ppc_values.ndim != 3
+            or metric_shape[0] < 1
+            or metric_shape[1] != 3
+            or metric_shape[2] < 1
+            or resultant.dtype != np.dtype(np.float64)
+            or resultant.shape != metric_shape
+            or preferred.dtype != np.dtype(np.float64)
+            or preferred.shape != metric_shape
+            or counts.dtype != np.dtype(np.int64)
+            or counts.shape != metric_shape
+            or computable_values.dtype != np.dtype(bool)
+            or computable_values.shape != metric_shape
+            or reliable_values.dtype != np.dtype(bool)
+            or reliable_values.shape != metric_shape
+            or contributors.dtype != np.dtype(np.int64)
+            or contributors.shape != metric_shape
+            or eligible.dtype != np.dtype(bool)
+            or eligible.shape != metric_shape
+            or representative_hz.dtype != np.dtype(np.float64)
+            or representative_hz.shape != (2,)
+            or bins_rad.dtype != np.dtype(np.float64)
+            or bins_rad.ndim != 1
+            or bins_rad.size < 2
+            or histogram.dtype != np.dtype(np.int64)
+            or histogram.shape != (metric_shape[0], 3, 2, bins_rad.size - 1)
+        ):
+            raise ValueError("observed segmented metric arrays have incompatible axes or dtypes")
+        if check_contents and (
+            np.any(np.isinf(ppc_values))
+            or np.any(np.isinf(resultant))
+            or np.any(np.isinf(preferred))
+            or np.any(counts < 0)
+            or np.any(contributors < 0)
+            or not np.isfinite(representative_hz).all()
+            or np.any(representative_hz <= 0.0)
+            or np.any(np.diff(representative_hz) < 0.0)
+            or not np.isfinite(bins_rad).all()
+            or np.any(np.diff(bins_rad) <= 0.0)
+            or np.any(histogram < 0)
+        ):
+            raise ValueError("observed segmented metric values are invalid")
+        return (
+            ppc_values,
+            resultant,
+            preferred,
+            counts,
+            computable_values,
+            reliable_values,
+            contributors,
+            eligible,
+            representative_hz,
+            bins_rad,
+            histogram,
+        )
+
+    def _set_validated_fields(
+        self,
+        values: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    ) -> None:
+        """Store owned S2 metric arrays after disabling element-level writes."""
+        for field_name, value in zip(
+            (
+                "ppc",
+                "resultant_length",
+                "preferred_phase_rad",
+                "spike_count",
+                "computable",
+                "reliable",
+                "contributing_trial_count",
+                "shuffle_eligible",
+                "representative_frequency_hz",
+                "phase_bin_edges_rad",
+                "representative_phase_histogram_count",
+            ),
+            values,
+            strict=True,
+        ):
+            object.__setattr__(self, field_name, _freeze_array(value))
+
+
+@dataclass(frozen=True)
 class KernelAllocationEstimate:
     """Pure checked byte accounting for one bounded segmented-kernel call.
 
@@ -666,6 +1374,472 @@ def compute_segmented_edge_statistics(
     )
 
 
+def compute_observed_trial_segmented_ppc_statistics(
+    *,
+    source_trial_geometries: tuple[SourceTrialSpikeGeometry, ...],
+    trial_phase_vectors: np.ndarray,
+    phase_valid_mask: np.ndarray,
+    phase_trial_index: np.ndarray,
+    frequencies_hz: np.ndarray,
+    phase_bin_edges_rad: np.ndarray,
+) -> ObservedTrialSegmentedPPCStatistics:
+    """Sample each physical trial once and retain condition-reusable statistics.
+
+    Parameters
+    ----------
+    source_trial_geometries : tuple[SourceTrialSpikeGeometry, ...]
+        Exactly one geometry for every prepared physical phase trial.  All
+        geometries share one ordered unit axis; each geometry's stable source
+        identity selects its same-trial row independent of tuple order.
+    trial_phase_vectors : numpy.ndarray
+        Complex64 ``(trial, frequency, time)`` phase coefficients.  Values
+        with nonfinite or zero magnitude are unavailable even when explicitly
+        marked valid.
+    phase_valid_mask : numpy.ndarray
+        Boolean ``(trial, frequency, time)`` prepared-phase availability mask
+        with exactly the phase-vector axes.
+    phase_trial_index : numpy.ndarray
+        Int64 ``(trial,)`` unique nonnegative stable physical trial identities
+        in phase-axis order.  Identities have no physical units.
+    frequencies_hz : numpy.ndarray
+        Float64 ``(frequency,)`` finite positive strictly increasing Morlet
+        coordinates in Hz.
+    phase_bin_edges_rad : numpy.ndarray
+        Float64 ``(phase_bin + 1,)`` finite strictly increasing histogram edges
+        in radians.
+
+    Returns
+    -------
+    ObservedTrialSegmentedPPCStatistics
+        Frozen owned same-trial vector sums/counts on
+        ``(trial, unit, segment=2, frequency)`` and representative histograms
+        on ``(trial, unit, segment=2, band=2, phase_bin)``.  Stable output
+        trial order equals ``phase_trial_index``.  Each nonempty physical
+        source-trial/unit/segment group is normalized exactly once; no
+        per-spike phase array survives the call.
+
+    Raises
+    ------
+    ValueError
+        If phase axes, stable identities, geometries, frequency coordinates,
+        or radians histogram coordinates are invalid.  Every prepared trial
+        must have exactly one source geometry.
+    """
+    phase, phase_valid, phase_ids, frequencies = _validated_reduction_phase_inputs(
+        trial_phase_vectors=trial_phase_vectors,
+        phase_valid_mask=phase_valid_mask,
+        phase_trial_index=phase_trial_index,
+        frequencies_hz=frequencies_hz,
+    )
+    phase_bins = _validated_phase_bin_edges_rad(phase_bin_edges_rad)
+    geometries, geometry_by_source = _validated_geometries(
+        source_trial_geometries,
+        phase_time_count=phase.shape[2],
+    )
+    phase_position_by_id = {
+        int(identity): position for position, identity in enumerate(phase_ids)
+    }
+    if (
+        len(geometries) != phase_ids.size
+        or set(geometry_by_source) != set(phase_position_by_id)
+    ):
+        raise ValueError("observed reduction requires one geometry for every prepared phase trial")
+
+    unit_count = len(geometries[0].unit_ids)
+    frequency_count = frequencies.size
+    phase_vector_sum = np.zeros(
+        (phase_ids.size, unit_count, 2, frequency_count),
+        dtype=np.complex128,
+    )
+    valid_spike_count = np.zeros(
+        (phase_ids.size, unit_count, 2, frequency_count),
+        dtype=np.int64,
+    )
+    representative_frequency_position = np.array(
+        [
+            int(np.argmin(np.abs(frequencies - 8.0))),
+            int(np.argmin(np.abs(frequencies - 40.0))),
+        ],
+        dtype=np.int64,
+    )
+    representative_frequency_hz = frequencies[representative_frequency_position].copy()
+    representative_phase_histogram_count = np.zeros(
+        (phase_ids.size, unit_count, 2, 2, phase_bins.size - 1),
+        dtype=np.int64,
+    )
+
+    for trial_position, stable_trial_id in enumerate(phase_ids):
+        geometry = geometry_by_source[int(stable_trial_id)]
+        coefficients = phase[trial_position]
+        explicit_valid_mask = phase_valid[trial_position]
+        for unit_position in range(unit_count):
+            for segment_position in range(2):
+                group_position = unit_position * 2 + segment_position
+                start = int(geometry.group_offsets[group_position])
+                stop = int(geometry.group_offsets[group_position + 1])
+                if start == stop:
+                    continue
+                normalized_complex64, usable = _sample_normalized_spike_group(
+                    coefficients=coefficients,
+                    explicit_valid_mask=explicit_valid_mask,
+                    left_index=geometry.left_index[start:stop],
+                    right_index=geometry.right_index[start:stop],
+                    right_weight=geometry.right_weight[start:stop],
+                    inside_support=geometry.inside_support[start:stop],
+                    exact_sample=geometry.exact_sample[start:stop],
+                )
+                phase_vector_sum[trial_position, unit_position, segment_position] = np.sum(
+                    normalized_complex64,
+                    axis=1,
+                    dtype=np.complex128,
+                )
+                group_valid_count = np.sum(usable, axis=1, dtype=np.int64)
+                valid_spike_count[trial_position, unit_position, segment_position] = (
+                    group_valid_count
+                )
+                for band_position, frequency_position in enumerate(
+                    representative_frequency_position
+                ):
+                    accepted_phase_rad = np.angle(
+                        normalized_complex64[
+                            frequency_position,
+                            usable[frequency_position],
+                        ]
+                    )
+                    representative_phase_histogram_count[
+                        trial_position,
+                        unit_position,
+                        segment_position,
+                        band_position,
+                    ] += np.histogram(accepted_phase_rad, bins=phase_bins)[0]
+
+    return ObservedTrialSegmentedPPCStatistics._from_owned_arrays(
+        phase_trial_index=phase_ids,
+        phase_vector_sum=phase_vector_sum,
+        valid_spike_count=valid_spike_count,
+        representative_frequency_index=representative_frequency_position,
+        representative_frequency_hz=representative_frequency_hz,
+        phase_bin_edges_rad=phase_bins,
+        representative_phase_histogram_count=representative_phase_histogram_count,
+    )
+
+
+def aggregate_observed_trial_segmented_ppc_statistics(
+    *,
+    observed_trial_statistics: ObservedTrialSegmentedPPCStatistics,
+    membership_trial_index: np.ndarray,
+) -> ObservedSegmentedPPCStatistics:
+    """Pool reusable same-trial statistics for one ordered condition membership.
+
+    Parameters
+    ----------
+    observed_trial_statistics : ObservedTrialSegmentedPPCStatistics
+        Frozen stable trial statistics with axes and physical units documented
+        by its result contract.  This pure reducer does not access raw phase
+        coefficients or sample spikes.
+    membership_trial_index : numpy.ndarray
+        Int64 one-dimensional ordered unique stable physical trial identities.
+        The empty int64 vector is valid and returns zero pooled statistics with
+        the original unit/frequency, Hz, radians, and histogram axes retained.
+
+    Returns
+    -------
+    ObservedSegmentedPPCStatistics
+        Frozen owned before/after sums and counts on
+        ``(unit, segment=2, frequency)``, contributing physical trial counts
+        on ``(unit, epoch=3, frequency)``, and representative histograms on
+        ``(unit, epoch=3, band=2, phase_bin)``.  Whole contributors are a
+        per-trial before/after union and whole histograms add the two halves.
+
+    Raises
+    ------
+    ValueError
+        If the input result type is wrong, membership is not a one-dimensional
+        int64 unique nonnegative stable-ID vector, or a member is unknown.
+    """
+    if not isinstance(observed_trial_statistics, ObservedTrialSegmentedPPCStatistics):
+        raise ValueError("observed_trial_statistics must be ObservedTrialSegmentedPPCStatistics")
+    membership = np.asarray(membership_trial_index)
+    if (
+        membership.dtype != np.dtype(np.int64)
+        or membership.ndim != 1
+        or np.any(membership < 0)
+        or np.unique(membership).size != membership.size
+    ):
+        raise ValueError("membership_trial_index must be unique nonnegative int64 stable IDs")
+    trial_position_by_id = {
+        int(stable_id): position
+        for position, stable_id in enumerate(observed_trial_statistics.phase_trial_index)
+    }
+    if any(int(stable_id) not in trial_position_by_id for stable_id in membership):
+        raise ValueError("membership_trial_index contains an unknown stable trial ID")
+
+    _, unit_count, _, frequency_count = observed_trial_statistics.phase_vector_sum.shape
+    phase_vector_sum = np.zeros((unit_count, 2, frequency_count), dtype=np.complex128)
+    valid_spike_count = np.zeros((unit_count, 2, frequency_count), dtype=np.int64)
+    contributing_trial_count = np.zeros((unit_count, 3, frequency_count), dtype=np.int64)
+    phase_bin_count = observed_trial_statistics.phase_bin_edges_rad.size - 1
+    representative_phase_histogram_count = np.zeros(
+        (unit_count, 3, 2, phase_bin_count),
+        dtype=np.int64,
+    )
+    for stable_id in membership:
+        trial_position = trial_position_by_id[int(stable_id)]
+        trial_sums = observed_trial_statistics.phase_vector_sum[trial_position]
+        trial_counts = observed_trial_statistics.valid_spike_count[trial_position]
+        phase_vector_sum += trial_sums
+        valid_spike_count += trial_counts
+        contributing_trial_count[:, 0] += trial_counts[:, 0] > 0
+        contributing_trial_count[:, 1] += trial_counts[:, 1] > 0
+        contributing_trial_count[:, 2] += np.logical_or(
+            trial_counts[:, 0] > 0,
+            trial_counts[:, 1] > 0,
+        )
+        representative_phase_histogram_count[:, :2] += (
+            observed_trial_statistics.representative_phase_histogram_count[
+                trial_position
+            ]
+        )
+    representative_phase_histogram_count[:, 2] = (
+        representative_phase_histogram_count[:, 0]
+        + representative_phase_histogram_count[:, 1]
+    )
+    return ObservedSegmentedPPCStatistics._from_owned_arrays(
+        phase_vector_sum=phase_vector_sum,
+        valid_spike_count=valid_spike_count,
+        contributing_trial_count=contributing_trial_count,
+        representative_frequency_hz=(
+            observed_trial_statistics.representative_frequency_hz.copy()
+        ),
+        phase_bin_edges_rad=observed_trial_statistics.phase_bin_edges_rad.copy(),
+        representative_phase_histogram_count=representative_phase_histogram_count,
+    )
+
+
+def compute_observed_segmented_ppc_statistics(
+    *,
+    source_trial_geometries: tuple[SourceTrialSpikeGeometry, ...],
+    trial_phase_vectors: np.ndarray,
+    phase_valid_mask: np.ndarray,
+    phase_trial_index: np.ndarray,
+    frequencies_hz: np.ndarray,
+    phase_bin_edges_rad: np.ndarray,
+) -> ObservedSegmentedPPCStatistics:
+    """Return all-trial pooled observed statistics through the canonical S2 path.
+
+    Parameters
+    ----------
+    source_trial_geometries : tuple[SourceTrialSpikeGeometry, ...]
+        Exactly one geometry for every prepared stable physical trial, sharing
+        one ordered unit axis.  Geometry identities need not match tuple order.
+    trial_phase_vectors : numpy.ndarray
+        Complex64 ``(trial, frequency, time)`` dimensionless analytic phase
+        coefficients.  Nonfinite or zero-magnitude values are unavailable.
+    phase_valid_mask : numpy.ndarray
+        Boolean ``(trial, frequency, time)`` explicit prepared-phase
+        availability mask with axes matching ``trial_phase_vectors``.
+    phase_trial_index : numpy.ndarray
+        Int64 ``(trial,)`` unique nonnegative stable physical trial identities
+        in phase-axis order, without physical units.
+    frequencies_hz : numpy.ndarray
+        Float64 ``(frequency,)`` finite positive strictly increasing Morlet
+        frequency coordinates in Hz.
+    phase_bin_edges_rad : numpy.ndarray
+        Float64 ``(phase_bin + 1,)`` finite strictly increasing histogram-bin
+        edges in radians.
+
+    Returns
+    -------
+    ObservedSegmentedPPCStatistics
+        Frozen all-prepared-trial pooled before/after statistics, contributor
+        unions, and representative histograms.  It is exactly the membership
+        aggregation of the per-trial result in stable phase-axis order.
+
+    Raises
+    ------
+    ValueError
+        If the delegated per-trial reduction rejects the input axes, geometry,
+        stable identities, frequency coordinates, or phase-bin coordinates.
+    """
+    observed_trial_statistics = compute_observed_trial_segmented_ppc_statistics(
+        source_trial_geometries=source_trial_geometries,
+        trial_phase_vectors=trial_phase_vectors,
+        phase_valid_mask=phase_valid_mask,
+        phase_trial_index=phase_trial_index,
+        frequencies_hz=frequencies_hz,
+        phase_bin_edges_rad=phase_bin_edges_rad,
+    )
+    return aggregate_observed_trial_segmented_ppc_statistics(
+        observed_trial_statistics=observed_trial_statistics,
+        membership_trial_index=observed_trial_statistics.phase_trial_index,
+    )
+
+
+def compose_observed_segmented_ppc_metrics(
+    *,
+    observed_statistics: ObservedSegmentedPPCStatistics,
+) -> ObservedSegmentedPPCMetrics:
+    """Compose before, after, and whole PPC metrics from observed sufficient statistics.
+
+    Parameters
+    ----------
+    observed_statistics : ObservedSegmentedPPCStatistics
+        Frozen same-trial sums/counts with unit, segment, frequency, Hz, and
+        radians axes as documented by its result contract.
+
+    Returns
+    -------
+    ObservedSegmentedPPCMetrics
+        Frozen owned float64 dimensionless PPC/resultant metrics and radians
+        preferred phase on ``(unit, epoch=3, frequency)``.  Whole metrics are
+        calculated after adding before/after complex sums and counts, never by
+        averaging half-window PPC values.
+
+    Raises
+    ------
+    ValueError
+        If ``observed_statistics`` is not the frozen S2 statistic contract.
+    """
+    if not isinstance(observed_statistics, ObservedSegmentedPPCStatistics):
+        raise ValueError("observed_statistics must be ObservedSegmentedPPCStatistics")
+    unit_count, _, frequency_count = observed_statistics.phase_vector_sum.shape
+    epoch_sums = np.empty((unit_count, 3, frequency_count), dtype=np.complex128)
+    epoch_sums[:, :2] = observed_statistics.phase_vector_sum
+    epoch_sums[:, 2] = (
+        observed_statistics.phase_vector_sum[:, 0]
+        + observed_statistics.phase_vector_sum[:, 1]
+    )
+    spike_count = np.empty((unit_count, 3, frequency_count), dtype=np.int64)
+    spike_count[:, :2] = observed_statistics.valid_spike_count
+    spike_count[:, 2] = (
+        observed_statistics.valid_spike_count[:, 0]
+        + observed_statistics.valid_spike_count[:, 1]
+    )
+    ppc, resultant_length, preferred_phase_rad = _pooled_ppc_metrics(
+        phase_vector_sum=epoch_sums,
+        spike_count=spike_count,
+    )
+    computable = spike_count >= 2
+    reliable = spike_count >= 50
+    contributing_trial_count = observed_statistics.contributing_trial_count.copy()
+    shuffle_eligible = (
+        reliable
+        & (contributing_trial_count >= 2)
+        & np.isfinite(ppc)
+    )
+    return ObservedSegmentedPPCMetrics._from_owned_arrays(
+        ppc=ppc,
+        resultant_length=resultant_length,
+        preferred_phase_rad=preferred_phase_rad,
+        spike_count=spike_count,
+        computable=computable,
+        reliable=reliable,
+        contributing_trial_count=contributing_trial_count,
+        shuffle_eligible=shuffle_eligible,
+        representative_frequency_hz=observed_statistics.representative_frequency_hz.copy(),
+        phase_bin_edges_rad=observed_statistics.phase_bin_edges_rad.copy(),
+        representative_phase_histogram_count=(
+            observed_statistics.representative_phase_histogram_count.copy()
+        ),
+    )
+
+
+def reduce_segmented_schedule_to_ppc(
+    *,
+    edge_statistics: SegmentedEdgeStatistics,
+    phase_trial_index: np.ndarray,
+    schedule: np.ndarray,
+) -> np.ndarray:
+    """Reduce a supplied whole-window shuffle schedule from segmented edge statistics.
+
+    Parameters
+    ----------
+    edge_statistics : SegmentedEdgeStatistics
+        Frozen unique physical source-target edge sums/counts with axes
+        ``(edge, unit, segment=2, frequency)``.  Segment statistics are added
+        before calculating each shuffle PPC value.
+    phase_trial_index : numpy.ndarray
+        Int64 ``(trial,)`` unique nonnegative stable physical trial identities
+        in the local schedule's source/target position order.
+    schedule : numpy.ndarray
+        Int64 ``(shuffle, trial)`` local target positions.  Every row must be
+        a derangement permutation of the local trial positions.  This function
+        neither changes rows nor derives random seeds.
+
+    Returns
+    -------
+    numpy.ndarray
+        Float64 dimensionless PPC draws with shape ``(shuffle, unit,
+        frequency)``.  Draw values are NaN where fewer than two valid phases
+        were pooled.
+
+    Raises
+    ------
+    ValueError
+        If identities or schedule rows are malformed, or a scheduled physical
+        source-target pair is absent from ``edge_statistics``.
+    """
+    if not isinstance(edge_statistics, SegmentedEdgeStatistics):
+        raise ValueError("edge_statistics must be SegmentedEdgeStatistics")
+    phase_ids = _validated_phase_trial_index(phase_trial_index)
+    schedule_array = np.asarray(schedule)
+    local_positions = np.arange(phase_ids.size, dtype=np.int64)
+    if (
+        schedule_array.dtype != np.dtype(np.int64)
+        or schedule_array.ndim != 2
+        or schedule_array.shape[0] < 1
+        or schedule_array.shape[1] != phase_ids.size
+        or np.any(schedule_array < 0)
+        or np.any(schedule_array >= phase_ids.size)
+        or np.any(schedule_array == local_positions[np.newaxis, :])
+        or not np.all(np.sort(schedule_array, axis=1) == local_positions[np.newaxis, :])
+    ):
+        raise ValueError("schedule must be a nonempty int64 local-position derangement")
+
+    edge_position_by_pair = {
+        (int(source_id), int(target_id)): edge_position
+        for edge_position, (source_id, target_id) in enumerate(
+            zip(
+                edge_statistics.source_trial_index,
+                edge_statistics.target_trial_index,
+                strict=True,
+            )
+        )
+    }
+    unit_count = edge_statistics.phase_vector_sum.shape[1]
+    frequency_count = edge_statistics.phase_vector_sum.shape[3]
+    phase_vector_sum = np.zeros(
+        (schedule_array.shape[0], unit_count, frequency_count),
+        dtype=np.complex128,
+    )
+    valid_spike_count = np.zeros(
+        (schedule_array.shape[0], unit_count, frequency_count),
+        dtype=np.int64,
+    )
+    for shuffle_position, target_positions in enumerate(schedule_array):
+        for source_position, target_position in enumerate(target_positions):
+            edge_position = edge_position_by_pair.get(
+                (int(phase_ids[source_position]), int(phase_ids[target_position]))
+            )
+            if edge_position is None:
+                raise ValueError("schedule references an edge absent from edge_statistics")
+            phase_vector_sum[shuffle_position] += np.sum(
+                edge_statistics.phase_vector_sum[edge_position],
+                axis=1,
+                dtype=np.complex128,
+            )
+            valid_spike_count[shuffle_position] += np.sum(
+                edge_statistics.valid_spike_count[edge_position],
+                axis=1,
+                dtype=np.int64,
+            )
+    ppc, _, _ = _pooled_ppc_metrics(
+        phase_vector_sum=phase_vector_sum,
+        spike_count=valid_spike_count,
+    )
+    return ppc
+
+
 def estimate_segmented_kernel_allocation(
     *,
     source_trial_spike_count: np.ndarray,
@@ -802,6 +1976,71 @@ def _reduce_one_spike_group(
     ``estimate_segmented_kernel_allocation``.  One-dimensional geometry views
     and frequency-length reductions are not per-cell gather temporaries.
     """
+    normalized_complex64, usable = _sample_normalized_spike_group(
+        coefficients=coefficients,
+        explicit_valid_mask=explicit_valid_mask,
+        left_index=left_index,
+        right_index=right_index,
+        right_weight=right_weight,
+        inside_support=inside_support,
+        exact_sample=exact_sample,
+    )
+    vector_sum = np.sum(normalized_complex64, axis=1, dtype=np.complex128)
+    valid_count = np.sum(usable, axis=1, dtype=np.int64)
+    return vector_sum, valid_count
+
+
+def _sample_normalized_spike_group(
+    *,
+    coefficients: np.ndarray,
+    explicit_valid_mask: np.ndarray,
+    left_index: np.ndarray,
+    right_index: np.ndarray,
+    right_weight: np.ndarray,
+    inside_support: np.ndarray,
+    exact_sample: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return canonical normalized vectors and validity for one geometry group.
+
+    Parameters
+    ----------
+    coefficients : numpy.ndarray
+        Complex64 ``(frequency, time)`` phase coefficients for one target
+        trial.  Coefficients are dimensionless complex analytic phases.
+    explicit_valid_mask : numpy.ndarray
+        Boolean ``(frequency, time)`` prepared-phase availability mask.  It is
+        combined with finite/nonzero coefficient checks rather than replaced.
+    left_index, right_index : numpy.ndarray
+        Int64 ``(spike,)`` safe stored canonical phase-time neighbor indices.
+    right_weight : numpy.ndarray
+        Float64 ``(spike,)`` dimensionless right-neighbor interpolation weights.
+    inside_support, exact_sample : numpy.ndarray
+        Boolean ``(spike,)`` stored support/exact-grid geometry masks.  Exact
+        samples require only their left-neighbor coefficient; interpolation
+        samples require both coefficients.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray]
+        A complex64 ``(frequency, spike)`` dimensionless normalized phase array
+        with zero values at unavailable observations, and a Boolean array on
+        the same axes selecting accepted samples.  Callers may sum these arrays
+        but must not retain per-spike outputs after their bounded reduction.
+
+    Raises
+    ------
+    ValueError
+        This private helper assumes prior geometry/phase validation and does
+        not perform public input validation.  Array-index failures therefore
+        indicate an internal contract violation.
+
+    Notes
+    -----
+    Per ``(frequency, spike)`` cell, only two complex64 gathers, one complex128
+    interpolation buffer, one float64 magnitude/work buffer, one complex64
+    normalized result, and at most three Boolean masks are simultaneously live.
+    This preserves the S1 51-byte allocation accounting.
+    """
     left_coefficients = coefficients[:, left_index]
     right_coefficients = coefficients[:, right_index]
     usable = explicit_valid_mask[:, left_index]
@@ -840,6 +2079,9 @@ def _reduce_one_spike_group(
     np.multiply(interpolated.imag, magnitude, out=interpolated.imag)
     np.multiply(right_coefficients.imag, interpolation_weights, out=magnitude)
     np.add(interpolated.imag, magnitude, out=interpolated.imag)
+    # Preserve exact-grid coefficients (including the signed zero that makes
+    # -pi distinct from +pi for NumPy histogram boundary assignment).
+    np.copyto(interpolated, left_coefficients, where=exact_sample[np.newaxis, :])
     del left_coefficients, right_coefficients
 
     # The gathers are gone before normalization.  Reuse ``usable`` and
@@ -850,12 +2092,12 @@ def _reduce_one_spike_group(
     np.abs(interpolated, out=magnitude)
     np.not_equal(magnitude, 0.0, out=usable, where=usable)
     normalized_complex64 = np.zeros(interpolated.shape, dtype=np.complex64)
-    np.divide(interpolated, magnitude, out=normalized_complex64, where=usable)
+    # Normalize components separately so exact ``-1 - 0j`` retains its signed
+    # zero and therefore stays at the canonical -pi histogram boundary.
+    np.divide(interpolated.real, magnitude, out=normalized_complex64.real, where=usable)
+    np.divide(interpolated.imag, magnitude, out=normalized_complex64.imag, where=usable)
     del interpolated, magnitude
-    vector_sum = np.sum(normalized_complex64, axis=1, dtype=np.complex128)
-    del normalized_complex64
-    valid_count = np.sum(usable, axis=1, dtype=np.int64)
-    return vector_sum, valid_count
+    return normalized_complex64, usable
 
 
 def _validated_uniform_phase_time(
@@ -941,6 +2183,124 @@ def _validated_reduction_phase_inputs(
     ):
         raise ValueError("frequencies_hz must be positive increasing float64 phase coordinates")
     return phase, valid, phase_ids.copy(), frequencies.copy()
+
+
+def _validated_phase_bin_edges_rad(phase_bin_edges_rad: np.ndarray) -> np.ndarray:
+    """Return owned finite increasing float64 phase-bin edges in radians.
+
+    Parameters
+    ----------
+    phase_bin_edges_rad : numpy.ndarray
+        Float64 one-dimensional phase-coordinate edges in radians.  At least
+        two finite strictly increasing values are required.
+
+    Returns
+    -------
+    numpy.ndarray
+        Owned float64 ``(phase_bin + 1,)`` radians coordinate array.
+
+    Raises
+    ------
+    ValueError
+        If dtype, axis, finiteness, or strict ordering is invalid.
+    """
+    bins_rad = np.asarray(phase_bin_edges_rad)
+    if (
+        bins_rad.dtype != np.dtype(np.float64)
+        or bins_rad.ndim != 1
+        or bins_rad.size < 2
+        or not np.isfinite(bins_rad).all()
+        or np.any(np.diff(bins_rad) <= 0.0)
+    ):
+        raise ValueError("phase_bin_edges_rad must be finite increasing float64 radians")
+    return bins_rad.copy()
+
+
+def _validated_phase_trial_index(phase_trial_index: np.ndarray) -> np.ndarray:
+    """Return owned unique nonnegative int64 stable physical trial identities.
+
+    Parameters
+    ----------
+    phase_trial_index : numpy.ndarray
+        Int64 one-dimensional physical trial identities without physical units.
+
+    Returns
+    -------
+    numpy.ndarray
+        Owned int64 ``(trial,)`` stable identities in their supplied local order.
+
+    Raises
+    ------
+    ValueError
+        If dtype, shape, uniqueness, or nonnegative identity rules fail.
+    """
+    phase_ids = np.asarray(phase_trial_index)
+    if (
+        phase_ids.dtype != np.dtype(np.int64)
+        or phase_ids.ndim != 1
+        or phase_ids.size < 1
+        or np.any(phase_ids < 0)
+        or np.unique(phase_ids).size != phase_ids.size
+    ):
+        raise ValueError("phase_trial_index must be unique nonnegative int64 trial rows")
+    return phase_ids.copy()
+
+
+def _pooled_ppc_metrics(
+    *,
+    phase_vector_sum: np.ndarray,
+    spike_count: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Calculate PPC and circular metrics from already pooled sufficient statistics.
+
+    Parameters
+    ----------
+    phase_vector_sum : numpy.ndarray
+        Complex128 array on arbitrary leading axes containing dimensionless
+        pooled normalized phase-vector sums.
+    spike_count : numpy.ndarray
+        Int64 nonnegative array matching ``phase_vector_sum`` that contains
+        dimensionless valid observation counts.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]
+        Float64 arrays matching the input axes: unbiased dimensionless PPC,
+        dimensionless resultant length, and preferred phase in radians.  PPC
+        is NaN below two samples; resultant is NaN with zero samples; preferred
+        phase is NaN when the summed vector has no direction at the established
+        floating-point direction epsilon.
+
+    Raises
+    ------
+    ValueError
+        If private pooled arrays do not have matching complex128/int64 axes or
+        contain negative counts.
+    """
+    sums = np.asarray(phase_vector_sum)
+    counts = np.asarray(spike_count)
+    if (
+        sums.dtype != np.dtype(np.complex128)
+        or counts.dtype != np.dtype(np.int64)
+        or sums.shape != counts.shape
+        or np.any(counts < 0)
+    ):
+        raise ValueError("pooled PPC inputs must be matching complex128/int64 arrays")
+    magnitude = np.abs(sums)
+    ppc = np.full(sums.shape, np.nan, dtype=np.float64)
+    computable = counts >= 2
+    ppc[computable] = (
+        magnitude[computable] ** 2 - counts[computable]
+    ) / (counts[computable] * (counts[computable] - 1))
+    resultant_length = np.full(sums.shape, np.nan, dtype=np.float64)
+    has_spikes = counts > 0
+    resultant_length[has_spikes] = magnitude[has_spikes] / counts[has_spikes]
+    preferred_phase_rad = np.full(sums.shape, np.nan, dtype=np.float64)
+    has_direction = has_spikes & (
+        magnitude > np.finfo(float).eps * np.maximum(counts, 1)
+    )
+    preferred_phase_rad[has_direction] = np.angle(sums[has_direction])
+    return ppc, resultant_length, preferred_phase_rad
 
 
 def _validated_edge_identities(
