@@ -1254,6 +1254,51 @@ def test_plan_preserves_distinct_epoch_schedule_seeds_segments_and_schedule_iden
     assert len(set(expected_seed.values())) == 3
 
 
+def test_plan_reuses_generator_owned_schedule_buffers_in_site_major_job_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Planner jobs seal, but do not copy, their private generator schedules."""
+    config = _planner_config(shuffle_count=2, seed=41)
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([11, 29], dtype=np.int64),
+        condition_names=("all",),
+        condition_membership=np.ones((2, 1), dtype=bool),
+        site_ids=("site-a", "site-b"),
+        site_trial_valid=np.ones((2, 2), dtype=bool),
+        source_trial_spike_count=np.zeros((2, 1, 2), dtype=np.int64),
+        frequency_count=1,
+    )
+    captured: dict[int, np.ndarray] = {}
+
+    def owned_schedule(
+        trial_count: int,
+        shuffle_count: int,
+        *,
+        seed: int,
+    ) -> np.ndarray:
+        """Return one distinct owned int64 derangement buffer for each job call."""
+        assert trial_count == 2
+        schedule = np.tile(
+            np.array([1, 0], dtype=np.int64), (shuffle_count, 1)
+        )
+        captured[seed] = schedule
+        return schedule
+
+    monkeypatch.setattr(
+        ppc_runtime, "generate_trial_derangement_schedule", owned_schedule
+    )
+    plan = _plan(config, **inputs)
+    jobs = tuple(job for job in plan.job_plans if job.selected_trial_rows.size == 2)
+
+    assert len(captured) == len(jobs)
+    assert {job.schedule_seed for job in jobs} == set(captured)
+    for job in jobs:
+        generated = captured[job.schedule_seed]
+        assert np.shares_memory(job.schedule, generated)
+        assert not job.schedule.flags.writeable
+        assert not generated.flags.writeable
+
+
 def test_plan_order_is_deterministic_and_planner_does_not_execute_or_spawn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2572,6 +2617,15 @@ def test_direct_job_plan_rejects_permutation_and_provenance_incoherence(
             schedule=schedule,
             **overrides,
         )
+
+
+@pytest.mark.parametrize("schedule_shape", ((True, 2), (1.5, 2.0)))
+def test_direct_job_plan_rejects_noninteger_schedule_shape_elements(
+    schedule_shape: tuple[object, object],
+) -> None:
+    """Checkpoint schedule shapes require exact non-Boolean integer elements."""
+    with pytest.raises(ValueError):
+        _direct_job_plan(schedule_shape=schedule_shape)
 
 
 @pytest.mark.parametrize("kind", ("duplicate", "unsorted", "extra"))
