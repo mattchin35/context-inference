@@ -2384,6 +2384,273 @@ def test_direct_planner_records_own_freeze_and_validate_array_contracts() -> Non
         )
 
 
+def _direct_job_plan(
+    *,
+    selected_trial_rows: np.ndarray | None = None,
+    schedule: np.ndarray | None = None,
+    condition_index: int = 0,
+    site_index: int = 0,
+    epoch_index: int = 0,
+    **overrides: object,
+) -> ppc_runtime.PPCJobPlan:
+    """Construct one valid direct public job record before a targeted override."""
+    selected = (
+        np.array([10, 20], dtype=np.int64)
+        if selected_trial_rows is None
+        else selected_trial_rows
+    )
+    local_schedule = (
+        np.array([[1, 0]], dtype=np.int64) if schedule is None else schedule
+    )
+    epoch_name, segment_expression = (
+        ("whole", "before + after")
+        if epoch_index == 0
+        else ("before", "before")
+        if epoch_index == 1
+        else ("after", "after")
+    )
+    source = np.broadcast_to(selected[np.newaxis, :], local_schedule.shape).copy()
+    target = (
+        selected[local_schedule].copy()
+        if local_schedule.size
+        else np.empty(local_schedule.shape, dtype=np.int64)
+    )
+    values: dict[str, object] = {
+        "condition_index": condition_index,
+        "condition_name": f"condition-{condition_index}",
+        "site_index": site_index,
+        "site_id": f"site-{site_index}",
+        "epoch_index": epoch_index,
+        "epoch_name": epoch_name,
+        "selected_trial_rows": selected,
+        "schedule": local_schedule,
+        "stable_edge_source_trial_row": source,
+        "stable_edge_target_trial_row": target,
+        "edge_union_position": np.arange(local_schedule.size, dtype=np.int64).reshape(
+            local_schedule.shape
+        ),
+        "segment_expression": segment_expression,
+        "base_ppc_seed": 11,
+        "schedule_seed": 11 + condition_index * 1_000_000 + site_index * 10_000 + epoch_index * 100,
+        "condition_derivation_identity": condition_index,
+        "site_derivation_identity": site_index,
+        "epoch_derivation_identity": epoch_index,
+        "schedule_shape": local_schedule.shape,
+        "schedule_fingerprint": ppc_runtime._array_fingerprint(local_schedule),
+    }
+    values.update(overrides)
+    return ppc_runtime.PPCJobPlan(**values)
+
+
+def _direct_allocation_estimate() -> ppc_runtime.PPCAllocationEstimate:
+    """Return a zero-byte direct-record allocation placeholder."""
+    return ppc_runtime.PPCAllocationEstimate(**dict.fromkeys(
+        (field.name for field in fields(ppc_runtime.PPCAllocationEstimate)), 0
+    ))
+
+
+def _direct_component_fields(
+    job_plans: tuple[ppc_runtime.PPCJobPlan, ...],
+) -> dict[str, object]:
+    """Return exact direct component fields derived from valid public jobs."""
+    union_edges = sorted(
+        {
+            (job.site_index, int(source), int(target))
+            for job in job_plans
+            for source, target in zip(
+                job.stable_edge_source_trial_row.ravel(),
+                job.stable_edge_target_trial_row.ravel(),
+                strict=True,
+            )
+        }
+    )
+    allowed_edges = {
+        (job.site_index, int(source), int(target))
+        for job in job_plans
+        for source in job.selected_trial_rows
+        for target in job.selected_trial_rows
+        if source != target
+    }
+    scheduled_edge_count = sum(job.schedule.size for job in job_plans)
+    independent_edge_count = sum(
+        len(
+            set(
+                zip(
+                    job.stable_edge_source_trial_row.ravel(),
+                    job.stable_edge_target_trial_row.ravel(),
+                    strict=True,
+                )
+            )
+        )
+        for job in job_plans
+    )
+    site_count = 1 + max(job.site_index for job in job_plans)
+    condition_batches = tuple(
+        (
+            tuple(
+                sorted(
+                    {
+                        job.condition_index
+                        for job in job_plans
+                        if job.site_index == site_index
+                    }
+                )
+            ),
+        )
+        for site_index in range(site_count)
+    )
+    union_count = len(union_edges)
+    return {
+        "job_plans": job_plans,
+        "edge_site_index": np.asarray(
+            [site for site, _, _ in union_edges], dtype=np.int64
+        ),
+        "stable_edge_source_trial_row": np.asarray(
+            [source for _, source, _ in union_edges], dtype=np.int64
+        ),
+        "stable_edge_target_trial_row": np.asarray(
+            [target for _, _, target in union_edges], dtype=np.int64
+        ),
+        "condition_batches": condition_batches,
+        "scheduled_edge_count": scheduled_edge_count,
+        "independent_edge_count": independent_edge_count,
+        "union_edge_count": union_count,
+        "edge_union_saturation": (
+            float(union_count) / float(len(allowed_edges)) if allowed_edges else 0.0
+        ),
+        "edge_reuse_ratio": (
+            float(independent_edge_count) / float(union_count) if union_count else 0.0
+        ),
+        "allocation_estimate": _direct_allocation_estimate(),
+    }
+
+
+@pytest.mark.parametrize(
+    ("selected_trial_rows", "schedule", "overrides"),
+    (
+        (
+            np.array([10, 20, 30, 40], dtype=np.int64),
+            np.empty((0, 4), dtype=np.int64),
+            {},
+        ),
+        (
+            np.array([10, 20, 30, 40], dtype=np.int64),
+            np.array([[1, 0, 3, 1]], dtype=np.int64),
+            {},
+        ),
+        (None, None, {"base_ppc_seed": 11.5}),
+        (None, None, {"schedule_seed": 12}),
+        (
+            None,
+            None,
+            {"condition_derivation_identity": 1, "schedule_seed": 1_000_011},
+        ),
+        (None, None, {"site_derivation_identity": 1, "schedule_seed": 10_011}),
+        (None, None, {"epoch_derivation_identity": 1, "schedule_seed": 111}),
+        (
+            None,
+            None,
+            {
+                "epoch_index": 1,
+                "epoch_name": "whole",
+                "segment_expression": "before + after",
+                "epoch_derivation_identity": 1,
+                "schedule_seed": 111,
+            },
+        ),
+    ),
+)
+def test_direct_job_plan_rejects_permutation_and_provenance_incoherence(
+    selected_trial_rows: np.ndarray | None,
+    schedule: np.ndarray | None,
+    overrides: dict[str, object],
+) -> None:
+    """Public jobs require nonempty derangement permutations and exact provenance."""
+    with pytest.raises(ValueError):
+        _direct_job_plan(
+            selected_trial_rows=selected_trial_rows,
+            schedule=schedule,
+            **overrides,
+        )
+
+
+@pytest.mark.parametrize("kind", ("duplicate", "unsorted", "extra"))
+def test_direct_component_plan_requires_exact_sorted_unique_job_union(kind: str) -> None:
+    """Public unions cannot contain duplicate, reordered, or surplus job edges."""
+    job = _direct_job_plan()
+    fields_by_name = _direct_component_fields((job,))
+    if kind == "duplicate":
+        fields_by_name.update(
+            edge_site_index=np.array([0, 0, 0], dtype=np.int64),
+            stable_edge_source_trial_row=np.array([10, 20, 10], dtype=np.int64),
+            stable_edge_target_trial_row=np.array([20, 10, 20], dtype=np.int64),
+            union_edge_count=3,
+        )
+    elif kind == "unsorted":
+        reordered_job = replace(
+            job,
+            edge_union_position=np.array([[1, 0]], dtype=np.int64),
+        )
+        fields_by_name = _direct_component_fields((reordered_job,))
+        fields_by_name.update(
+            edge_site_index=np.array([0, 0], dtype=np.int64),
+            stable_edge_source_trial_row=np.array([20, 10], dtype=np.int64),
+            stable_edge_target_trial_row=np.array([10, 20], dtype=np.int64),
+        )
+    else:
+        fields_by_name.update(
+            edge_site_index=np.array([0, 0, 0], dtype=np.int64),
+            stable_edge_source_trial_row=np.array([10, 20, 30], dtype=np.int64),
+            stable_edge_target_trial_row=np.array([20, 10, 40], dtype=np.int64),
+            union_edge_count=3,
+        )
+    with pytest.raises(ValueError):
+        ppc_runtime.PPCComponentPlan(**fields_by_name)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"scheduled_edge_count": 1},
+        {"independent_edge_count": 1, "edge_reuse_ratio": 0.5},
+        {"edge_union_saturation": True},
+        {"edge_union_saturation": -0.1},
+        {"edge_union_saturation": 1.1},
+        {"edge_union_saturation": 0.5},
+        {"edge_reuse_ratio": True},
+        {"edge_reuse_ratio": -0.1},
+        {"edge_reuse_ratio": 0.5},
+    ),
+)
+def test_direct_component_plan_rejects_count_and_metric_incoherence(
+    overrides: dict[str, object],
+) -> None:
+    """Public component counts and derived dimensionless metrics are exact."""
+    fields_by_name = _direct_component_fields((_direct_job_plan(),))
+    fields_by_name.update(overrides)
+    with pytest.raises(ValueError):
+        ppc_runtime.PPCComponentPlan(**fields_by_name)
+
+
+@pytest.mark.parametrize(
+    "condition_batches",
+    (
+        (((0, 0),),),
+        (((0,),),),
+        (((1, 0),),),
+    ),
+)
+def test_direct_component_plan_requires_ordered_complete_site_condition_batches(
+    condition_batches: tuple[tuple[tuple[int, ...], ...], ...],
+) -> None:
+    """Every site's condition batches must cover each job condition exactly once."""
+    jobs = (_direct_job_plan(), _direct_job_plan(condition_index=1))
+    fields_by_name = _direct_component_fields(jobs)
+    fields_by_name["condition_batches"] = condition_batches
+    with pytest.raises(ValueError):
+        ppc_runtime.PPCComponentPlan(**fields_by_name)
+
+
 def test_plan_rejects_unsafe_aggregate_workers_before_any_process_or_computation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2440,6 +2707,7 @@ def test_plan_rejects_parent_private_peak_even_when_bounded_workers_fit(
 
     monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", forbidden)
     monkeypatch.setattr(ppc_runtime, "_compute_unit_blocks", forbidden)
+    monkeypatch.setattr(ppc_runtime.np, "broadcast_to", forbidden)
     with pytest.raises(ValueError, match="parent"):
         _plan(config, **inputs)
 
