@@ -174,13 +174,46 @@ not apply; write `not applicable` and explain why.
 
 ### S3 - Stable job planner and cross-condition edge union
 
-- Status: not started.
-- Authorization and starting HEAD:
-- Agent assignments, permissions, and file scopes:
-- Test-design review, test-only commit, and RED evidence:
-- Implementation commit and GREEN evidence:
-- Full neural-suite and independent Sol gate evidence:
-- Numerical/interface review and unresolved risks:
+- Status: complete.
+- Authorization and starting HEAD: covered by the user's 2026-09-10
+  implementation authorization and repeated instruction to continue;
+  `b5fb87748e17863b563e2f474abc0708e80d6003`.
+- Agent assignments, permissions, and file scopes: lead `gpt-5.6-sol` `high`;
+  one `gpt-5.6-terra` `xhigh` writer, initially write-enabled only for focused
+  S3 runtime/model tests; independent `gpt-5.6-sol` `xhigh` reviewer,
+  procedurally read-only. No scout assigned.
+- Test-design review, test-only commit, and RED evidence: the independently
+  reviewed base planner/allocation contract was committed in `7f54204`; a
+  genuine one-line edge-identity accounting error was corrected separately in
+  `af7b6d4`. Source-gate regressions for aggregate-aware batching, nonnegative
+  stable identities, and direct immutable construction were committed in
+  `f78ddba`; exact schedule/seed/union/count/metric/batch coherence and early
+  allocation rejection in `5ae1819`; and generator-buffer reuse plus exact
+  integer schedule-shape identity in `607ccbd`. Each test revision passed an
+  independent Sol design gate before commit. The final focused RED was three
+  expected failures with 101 passes and 83 deselections.
+- Implementation commit and GREEN evidence: `706f6b0` (`feat: plan grouped PPC
+  execution`). The final focused planner/allocation selection passed 104 tests
+  with 83 deselections; the complete PPC runtime/model files passed 187 tests.
+- Full neural-suite and independent Sol gate evidence: the writer and root each
+  obtained 985 passing tests with the same 19 known warnings after the final
+  trusted-path memory correction. The independent `gpt-5.6-sol` `xhigh` gate
+  returned PASS after verifying schedule-buffer transfer, allocation-free
+  trusted construction, full public validation, preflight ordering, metadata
+  identity, and preservation of the legacy single-job executor.
+- Numerical/interface review and unresolved risks: stable physical trial rows
+  are nonnegative and condition-local schedules translate to a sorted,
+  site-qualified edge union. Jobs are site-major then condition-major then
+  epoch-major and retain the exact legacy derived seeds and row-wise
+  derangements. Full-shuffle accumulators, retained per-trial observed arrays,
+  separate observed/null gather lifetimes, full parent summaries, site/block
+  worker summaries, planner arrays, and one shared mmap are all explicitly
+  included in checked int64 process/aggregate estimates. Both the 2 GiB
+  process limit and 12 GiB aggregate limit drive deterministic condition
+  batching, and rejection precedes final stable-map materialization. The
+  estimate intentionally covers NumPy arrays rather than Python object/process
+  overhead; the reserved headroom and later measured-memory gate remain
+  required. S3 plans but does not execute grouped work; S4 owns that boundary.
 - CT026 work performed: none permitted.
 
 ### S4 - Grouped serial executor and checkpoints

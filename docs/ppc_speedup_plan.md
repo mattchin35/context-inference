@@ -112,11 +112,12 @@ alone is not execution authority.
    automatically accepted significance change.
 5. **Use an explicit planned-allocation limit.** Add execution-only integer
    `maximum_worker_allocation_bytes = 2 * 1024**3` (2 GiB). It limits
-   the conservatively estimated concurrently live private NumPy arrays per
-   worker, does not enter scientific component identity, and does not claim to
-   measure shared mmap residency. The planner reports job accumulators, kernel
-   working arrays, geometry, and their conservative private peak separately.
-   The limit applies to that private peak. Also add execution-only integer
+   the conservatively estimated concurrently live private NumPy arrays in any
+   process: the serial or parallel parent as well as each active worker. It
+   does not enter scientific component identity and does not claim to measure
+   shared mmap residency. The planner reports retained planning and summary
+   arrays, observed and null computation stages, and their conservative
+   lifetime-based private peaks separately. Also add execution-only integer
    `maximum_aggregate_allocation_bytes = 12 * 1024**3` (12 GiB) as a
    conservative preflight ceiling for planned arrays across the parent,
    active workers, and one shared prepared-phase mmap. The remaining 4 GiB of
@@ -542,15 +543,36 @@ returns, and failure behavior.
   plus the condition/site/epoch derivation identities, schedule shape, and exact
   schedule fingerprint. Grouped checkpoint identity binds all of these values.
 - Condition-local position zero is never used as a cross-condition edge key.
+- Public construction validates exact epoch/derivation/seed provenance, true
+  row-wise derangements, stable-edge translation, union positions, schedule
+  shape, and schedule fingerprint. Public input arrays are defensively copied
+  and made read-only. The planner's trusted construction path instead transfers
+  already-owned generator/mapping buffers without schedule-sized copies or
+  validation temporaries after allocation preflight.
+
+`PPCComponentPlan` (frozen dataclass)
+
+- Stores jobs in canonical site-major, condition-major, then epoch-major order.
+- Stores the sorted unique site-qualified physical-edge union as matching
+  int64 site/source/target vectors; an edge shared across sites remains two
+  physical work items.
+- Stores deterministic per-site condition batches and exact scheduled,
+  independent, and union edge counts plus dimensionless saturation and reuse
+  metrics. Empty/singleton plans use finite zero metrics.
+- Public construction validates that the union, counts, metrics, and batch
+  coverage are derived exactly from its jobs and owns read-only array inputs.
 
 `PPCAllocationEstimate` (frozen dataclass)
 
 - Reports nonnegative integer byte counts for `job_accumulator_bytes`,
-  `kernel_working_bytes`, `geometry_bytes`, `planned_parent_private_bytes`,
+  `observed_trial_statistics_bytes`, `observed_gather_temporary_bytes`,
+  `kernel_working_bytes`, `geometry_bytes`, `planner_array_bytes`,
+  `summary_assembly_bytes`, `worker_plan_bytes`, `worker_summary_bytes`,
+  `planned_computation_private_bytes`, `planned_parent_private_bytes`,
   `planned_worker_private_bytes`, `shared_phase_mmap_bytes`, and
   `planned_aggregate_array_bytes`, plus nonnegative integer
   `active_worker_count`. `kernel_working_bytes` contains segmented-edge and
-  gather temporaries but excludes separately reported retained geometry.
+  null-gather temporaries but excludes separately reported retained geometry.
 - Job-accumulator accounting includes, for every concurrently resident
   job/shuffle/unit/frequency cell, complex128 vector sums, int64 counts, float64
   PPC draws, and one float64 calculation scratch array: 40 bytes per cell with
@@ -562,11 +584,22 @@ returns, and failure behavior.
   int64 indices, one float64 weight, two Boolean masks per spike, and int64
   group offsets. Any additional gather temporary is named and calculated from
   its documented dtype and shape rather than hidden in a multiplier.
-- The private process peaks are maxima of explicitly documented concurrently
-  live array groups, not sums of arrays whose lifetimes cannot overlap. For a
-  serial run, the parent peak includes kernel execution and active worker count
-  is zero. For a parallel run, the parent peak covers planning, summary
-  assembly, and publication while each active worker has its own private peak.
+- Observed-stage memory is retained geometry plus per-stable-trial observed
+  sums/counts/histograms and observed-source gather temporaries. Null-stage
+  memory is retained geometry plus full-shuffle job accumulators and bounded
+  kernel working arrays. `planned_computation_private_bytes` is the larger of
+  those stages, never their sum.
+- Parent summary assembly uses all component units and jobs. Worker summary
+  retention uses the current unit block and every result job at that site,
+  while active-job counts size only the current condition batch's null
+  accumulators. Parent and worker plan arrays are reported separately.
+- The private process peaks are sums of arrays whose lifetimes overlap and
+  maxima across mutually exclusive observed/null stages and bounded tasks. For
+  a serial run, the parent peak includes retained planning, full summary
+  assembly, and computation; active worker count is zero. For a parallel run,
+  the parent peak includes retained planning plus full summary assembly while
+  each active worker includes its site plan, site/unit-block result, and
+  computation peak.
 - `planned_worker_private_bytes` is the maximum private peak among tasks in the
   active submission window. `active_worker_count` is the smaller of requested
   workers and pending unit blocks; idle requested workers are neither charged
@@ -575,10 +608,12 @@ returns, and failure behavior.
   parent-private bytes plus `active_worker_count * planned_worker_private_bytes`.
   It must not multiply shared mmap residency by worker count. Checked integer
   arithmetic rejects overflow.
-- The executor rejects or deterministically reduces job/unit/edge batches when
-  a process would exceed 2 GiB. It rejects the requested worker count before
-  spawning when the smallest valid batches would exceed the 12 GiB aggregate
-  ceiling; it never silently lowers the user-requested worker count.
+- The planner rejects or deterministically reduces condition batches when a
+  process or the aggregate plan would exceed its limit. Both constraints
+  participate in batching; rejection occurs only when a singleton condition
+  batch still fails. Preflight occurs before final stable-edge maps are
+  materialized and before any process is spawned. The planner never silently
+  lowers the requested worker count.
 
 `PPCComponentExecutionResult` (frozen dataclass)
 
