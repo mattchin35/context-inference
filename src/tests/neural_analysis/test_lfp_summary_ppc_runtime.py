@@ -1547,7 +1547,7 @@ def test_plan_allocation_uses_largest_bounded_unit_block_and_active_workers() ->
 
     assert plan.allocation_estimate.job_accumulator_bytes == 3 * 1 * 2 * 1 * 40
     assert plan.allocation_estimate.geometry_bytes == 2 * (2 * 2 + 1) * 8 + 2 * 8
-    assert plan.allocation_estimate.kernel_working_bytes == 2 * 2 * 1 * 48 + 2 * 8
+    assert plan.allocation_estimate.kernel_working_bytes == 2 * 2 * 1 * 48 + 2 * 16
     assert plan.allocation_estimate.observed_trial_statistics_bytes == (
         2 * 8
         + 2 * 2 * 2 * 1 * (16 + 8)
