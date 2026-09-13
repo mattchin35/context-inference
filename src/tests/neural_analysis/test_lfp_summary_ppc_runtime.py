@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, fields, replace
+import inspect
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import numpy as np
 import pytest
 
 from src.neural_analysis import lfp_summary_ppc_runtime as ppc_runtime
+from src.neural_analysis import lfp_summary_runtime
 from src.neural_analysis import spike_lfp_summary
 from src.neural_analysis.lfp_summary_models import (
     PPCExecutionConfig,
@@ -904,3 +906,1439 @@ def test_run_metadata_preserves_selected_trials_and_overlap_identity(
         prepared_spikes=spikes, schedule=schedule, work_root=tmp_path,
     )
     assert without_overlap.run_fingerprint != overlapped.run_fingerprint
+
+
+# S3 planner and allocation contracts.  These tests intentionally exercise only
+# pure schedule/identity/byte planning; grouped execution remains an S4 task.
+
+
+def _planner_config(
+    *,
+    shuffle_count: int = 3,
+    seed: int = 17,
+    unit_block_size: int = 2,
+    shuffle_block_size: int = 2,
+    trial_edge_block_size: int = 4,
+    worker_count: int = 1,
+    maximum_worker_allocation_bytes: int = 2 * 1024**3,
+    maximum_aggregate_allocation_bytes: int = 12 * 1024**3,
+) -> object:
+    """Return small valid settings for a pure grouped-PPC planner fixture.
+
+    The selected source-trial count arrays used below have axes ``(trial,
+    unit, segment=2)`` in before/after order.  All memory values are private
+    planned NumPy bytes rather than measured process residency.
+    """
+    base = default_lfp_summary_config()
+    return replace(
+        base,
+        ppc=replace(base.ppc, shuffle_count=shuffle_count, seed=seed),
+        ppc_execution=replace(
+            base.ppc_execution,
+            unit_block_size=unit_block_size,
+            shuffle_block_size=shuffle_block_size,
+            trial_edge_block_size=trial_edge_block_size,
+            worker_count=worker_count,
+            maximum_worker_allocation_bytes=maximum_worker_allocation_bytes,
+            maximum_aggregate_allocation_bytes=maximum_aggregate_allocation_bytes,
+        ),
+    )
+
+
+def _planner_inputs(
+    *,
+    stable_trial_rows: np.ndarray | None = None,
+    condition_membership: np.ndarray | None = None,
+    site_trial_valid: np.ndarray | None = None,
+    source_trial_spike_count: np.ndarray | None = None,
+    condition_names: tuple[str, ...] | None = None,
+    site_ids: tuple[str, ...] = ("site-a",),
+    frequency_count: int = 2,
+    shared_phase_mmap_bytes: int = 4096,
+) -> dict[str, object]:
+    """Build purely categorical S3 planner inputs with documented axes.
+
+    ``condition_membership`` is Boolean ``(full trial, condition)`` and
+    ``site_trial_valid`` is Boolean ``(site, full trial)``.  Stable rows are
+    full trial-table identities and deliberately need not equal local positions.
+    """
+    rows = (
+        np.array([101, 303, 709], dtype=np.int64)
+        if stable_trial_rows is None
+        else np.asarray(stable_trial_rows, dtype=np.int64)
+    )
+    membership = (
+        np.ones((rows.size, 1), dtype=bool)
+        if condition_membership is None
+        else np.asarray(condition_membership, dtype=bool)
+    )
+    valid = (
+        np.ones((len(site_ids), rows.size), dtype=bool)
+        if site_trial_valid is None
+        else np.asarray(site_trial_valid, dtype=bool)
+    )
+    spike_counts = (
+        np.zeros((rows.size, 2, 2), dtype=np.int64)
+        if source_trial_spike_count is None
+        else np.asarray(source_trial_spike_count, dtype=np.int64)
+    )
+    names = (
+        tuple(f"condition-{index}" for index in range(membership.shape[1]))
+        if condition_names is None
+        else condition_names
+    )
+    return {
+        "condition_names": names,
+        "condition_membership": membership,
+        "site_ids": site_ids,
+        "site_trial_valid": valid,
+        "stable_trial_rows": rows,
+        "source_trial_spike_count": spike_counts,
+        "frequency_count": frequency_count,
+        "shared_phase_mmap_bytes": shared_phase_mmap_bytes,
+    }
+
+
+def _plan(config: object, **inputs: object) -> object:
+    """Call the frozen pure S3 planner with only categorical/byte inputs."""
+    return ppc_runtime.plan_grouped_ppc_component(config=config, **inputs)
+
+
+def _job_by_identity(
+    plan: object,
+    *,
+    condition_index: int,
+    site_index: int,
+    epoch_name: str,
+) -> object:
+    """Return one planned result cell without relying on incidental job order."""
+    return next(
+        job
+        for job in plan.job_plans
+        if job.condition_index == condition_index
+        and job.site_index == site_index
+        and job.epoch_name == epoch_name
+    )
+
+
+def test_grouped_plan_contracts_freeze_fields_and_pure_keyword_interfaces() -> None:
+    """S3 exposes immutable planner records with explicit stable-identity axes.
+
+    ``PPCJobPlan`` maps every schedule cell to its stable physical source/target
+    trial rows and then to the component-wide unique edge union.  Its schedule
+    itself remains the legacy local int64 derangement.  ``PPCComponentPlan`` is
+    a planner-only aggregate; it contains no phase/spike samples or work paths.
+    """
+    assert tuple(field.name for field in fields(ppc_runtime.PPCJobPlan)) == (
+        "condition_index",
+        "condition_name",
+        "site_index",
+        "site_id",
+        "epoch_index",
+        "epoch_name",
+        "selected_trial_rows",
+        "schedule",
+        "stable_edge_source_trial_row",
+        "stable_edge_target_trial_row",
+        "edge_union_position",
+        "segment_expression",
+        "base_ppc_seed",
+        "schedule_seed",
+        "condition_derivation_identity",
+        "site_derivation_identity",
+        "epoch_derivation_identity",
+        "schedule_shape",
+        "schedule_fingerprint",
+    )
+    assert tuple(field.name for field in fields(ppc_runtime.PPCAllocationEstimate)) == (
+        "job_accumulator_bytes",
+        "observed_trial_statistics_bytes",
+        "observed_gather_temporary_bytes",
+        "kernel_working_bytes",
+        "geometry_bytes",
+        "planner_array_bytes",
+        "summary_assembly_bytes",
+        "worker_plan_bytes",
+        "worker_summary_bytes",
+        "planned_computation_private_bytes",
+        "planned_parent_private_bytes",
+        "planned_worker_private_bytes",
+        "shared_phase_mmap_bytes",
+        "planned_aggregate_array_bytes",
+        "active_worker_count",
+    )
+    assert tuple(field.name for field in fields(ppc_runtime.PPCComponentPlan)) == (
+        "job_plans",
+        "edge_site_index",
+        "stable_edge_source_trial_row",
+        "stable_edge_target_trial_row",
+        "condition_batches",
+        "scheduled_edge_count",
+        "independent_edge_count",
+        "union_edge_count",
+        "edge_union_saturation",
+        "edge_reuse_ratio",
+        "allocation_estimate",
+    )
+    plan_signature = inspect.signature(ppc_runtime.plan_grouped_ppc_component)
+    assert tuple(plan_signature.parameters) == (
+        "config",
+        "condition_names",
+        "condition_membership",
+        "site_ids",
+        "site_trial_valid",
+        "stable_trial_rows",
+        "source_trial_spike_count",
+        "frequency_count",
+        "shared_phase_mmap_bytes",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in plan_signature.parameters.values()
+    )
+    allocation_signature = inspect.signature(
+        ppc_runtime.estimate_grouped_ppc_allocation
+    )
+    assert tuple(allocation_signature.parameters) == (
+        "active_job_count",
+        "worker_result_job_count",
+        "component_job_count",
+        "shuffle_count",
+        "total_unit_count",
+        "unit_block_size",
+        "source_trial_spike_count",
+        "edge_source_trial_position",
+        "observed_source_trial_position",
+        "frequency_count",
+        "representative_band_count",
+        "phase_bin_count",
+        "planner_array_bytes",
+        "worker_plan_bytes",
+        "worker_count",
+        "pending_unit_block_count",
+        "shared_phase_mmap_bytes",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in allocation_signature.parameters.values()
+    )
+
+
+def test_plan_translates_condition_local_schedule_positions_to_stable_trial_rows() -> None:
+    """Local derangement positions cannot leak into a cross-condition edge key."""
+    config = _planner_config(shuffle_count=2, seed=29)
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([17, 53, 89, 149], dtype=np.int64),
+        condition_names=("nested",),
+        condition_membership=np.array([[False], [True], [True], [True]], dtype=bool),
+        source_trial_spike_count=np.zeros((4, 1, 2), dtype=np.int64),
+    )
+
+    plan = _plan(config, **inputs)
+    job = _job_by_identity(plan, condition_index=0, site_index=0, epoch_name="before")
+    expected_source = np.broadcast_to(
+        job.selected_trial_rows,
+        job.schedule.shape,
+    )
+    expected_target = job.selected_trial_rows[job.schedule]
+
+    np.testing.assert_array_equal(job.selected_trial_rows, np.array([53, 89, 149], dtype=np.int64))
+    np.testing.assert_array_equal(job.stable_edge_source_trial_row, expected_source)
+    np.testing.assert_array_equal(job.stable_edge_target_trial_row, expected_target)
+    assert set(job.stable_edge_source_trial_row.ravel()) <= {53, 89, 149}
+    assert set(job.stable_edge_target_trial_row.ravel()) <= {53, 89, 149}
+    assert not np.any(job.stable_edge_source_trial_row == job.stable_edge_target_trial_row)
+    np.testing.assert_array_equal(
+        np.column_stack((
+            plan.stable_edge_source_trial_row[job.edge_union_position.ravel()],
+            plan.stable_edge_target_trial_row[job.edge_union_position.ravel()],
+        )),
+        np.column_stack((expected_source.ravel(), expected_target.ravel())),
+    )
+
+
+def test_edge_union_uses_nested_and_overlapping_condition_pools_without_widening() -> None:
+    """The stable union deduplicates physical edges but never admits cross-pool pairs."""
+    config = _planner_config(shuffle_count=3, seed=13)
+    membership = np.array(
+        [
+            [True, False, False],
+            [True, True, False],
+            [True, True, True],
+            [False, False, True],
+        ],
+        dtype=bool,
+    )
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([101, 303, 709, 911], dtype=np.int64),
+        condition_names=("outer", "nested", "overlap"),
+        condition_membership=membership,
+        source_trial_spike_count=np.zeros((4, 1, 2), dtype=np.int64),
+    )
+
+    plan = _plan(config, **inputs)
+    all_job_edges: list[tuple[int, int, int]] = []
+    allowed_rows = {
+        0: {101, 303, 709},
+        1: {303, 709},
+        2: {709, 911},
+    }
+    for job in plan.job_plans:
+        source = job.stable_edge_source_trial_row.ravel()
+        target = job.stable_edge_target_trial_row.ravel()
+        assert set(source) <= allowed_rows[job.condition_index]
+        assert set(target) <= allowed_rows[job.condition_index]
+        all_job_edges.extend(
+            (job.site_index, int(left), int(right))
+            for left, right in zip(source, target, strict=True)
+        )
+
+    union_edges = list(
+        zip(
+            plan.edge_site_index.tolist(),
+            plan.stable_edge_source_trial_row.tolist(),
+            plan.stable_edge_target_trial_row.tolist(),
+            strict=True,
+        )
+    )
+    assert union_edges == sorted(set(all_job_edges))
+    assert plan.union_edge_count == len(union_edges)
+    assert plan.union_edge_count < plan.independent_edge_count
+    assert (0, 101, 911) not in union_edges
+    assert (0, 911, 101) not in union_edges
+
+
+def test_plan_preserves_distinct_epoch_schedule_seeds_segments_and_schedule_identity() -> None:
+    """Whole/before/after retain their exact legacy derived seeds and schedules."""
+    config = _planner_config(shuffle_count=4, seed=31)
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([11, 23, 47], dtype=np.int64),
+        condition_names=("left", "right"),
+        condition_membership=np.array([[True, False], [True, True], [True, True]], dtype=bool),
+        site_ids=("site-a", "site-b"),
+        site_trial_valid=np.ones((2, 3), dtype=bool),
+        source_trial_spike_count=np.zeros((3, 1, 2), dtype=np.int64),
+    )
+
+    plan = _plan(config, **inputs)
+    expected_expression = {
+        "whole": "before + after",
+        "before": "before",
+        "after": "after",
+    }
+    expected_seed = {}
+    for epoch_index, epoch_name in enumerate(config.ppc.epochs):
+        seed = lfp_summary_runtime._ppc_schedule_seed(config, 1, 1, epoch_index)
+        expected_seed[epoch_name] = seed
+        job = _job_by_identity(
+            plan,
+            condition_index=1,
+            site_index=1,
+            epoch_name=epoch_name,
+        )
+        expected_schedule = spike_lfp_summary.generate_trial_derangement_schedule(
+            2,
+            config.ppc.shuffle_count,
+            seed=seed,
+        )
+        assert job.base_ppc_seed == config.ppc.seed
+        assert job.schedule_seed == seed
+        assert job.condition_derivation_identity == 1
+        assert job.site_derivation_identity == 1
+        assert job.epoch_derivation_identity == epoch_index
+        assert job.segment_expression == expected_expression[epoch_name]
+        assert job.schedule_shape == expected_schedule.shape
+        assert job.schedule_fingerprint == ppc_runtime._array_fingerprint(expected_schedule)
+        np.testing.assert_array_equal(job.schedule, expected_schedule)
+
+    assert len(set(expected_seed.values())) == 3
+
+
+def test_plan_order_is_deterministic_and_planner_does_not_execute_or_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Planning is a side-effect-free ordered description, not an executor seam."""
+    config = _planner_config(shuffle_count=2, worker_count=2)
+    inputs = _planner_inputs(
+        condition_names=("first", "second"),
+        condition_membership=np.ones((3, 2), dtype=bool),
+        site_ids=("site-a", "site-b"),
+        site_trial_valid=np.ones((2, 3), dtype=bool),
+        source_trial_spike_count=np.zeros((3, 3, 2), dtype=np.int64),
+    )
+
+    def forbidden(*_: object, **__: object) -> None:
+        """Fail if a planner attempts computation, checkpointing, or process creation."""
+        raise AssertionError("S3 planning must not execute PPC work")
+
+    monkeypatch.setattr(ppc_runtime, "execute_ppc_blocks", forbidden)
+    monkeypatch.setattr(ppc_runtime, "_compute_unit_blocks", forbidden)
+    monkeypatch.setattr(ppc_runtime, "write_ppc_checkpoint", forbidden)
+    monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", forbidden)
+    first = _plan(config, **inputs)
+    second = _plan(config, **inputs)
+
+    expected_order = [
+        (condition_index, site_index, epoch_index)
+        for site_index in range(2)
+        for condition_index in range(2)
+        for epoch_index in range(3)
+    ]
+    assert [
+        (job.condition_index, job.site_index, job.epoch_index)
+        for job in first.job_plans
+    ] == expected_order
+    assert [
+        (job.condition_index, job.site_index, job.epoch_index)
+        for job in second.job_plans
+    ] == expected_order
+    assert first.condition_batches == second.condition_batches
+    np.testing.assert_array_equal(
+        first.stable_edge_source_trial_row,
+        second.stable_edge_source_trial_row,
+    )
+    np.testing.assert_array_equal(
+        first.stable_edge_target_trial_row,
+        second.stable_edge_target_trial_row,
+    )
+
+
+def test_plan_empty_and_single_trial_conditions_do_not_request_derangements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Observed-only empty/singleton pools keep empty schedule axes and no invalid shuffle."""
+    config = _planner_config(shuffle_count=2)
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([5, 8, 13], dtype=np.int64),
+        condition_names=("empty", "single"),
+        condition_membership=np.array([[False, False], [False, True], [False, False]], dtype=bool),
+        source_trial_spike_count=np.zeros((3, 1, 2), dtype=np.int64),
+    )
+
+    def forbidden_schedule(*_: object, **__: object) -> np.ndarray:
+        """Fail if a condition with fewer than two trials requests a derangement."""
+        raise AssertionError("empty/single-trial plan requested a derangement")
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "generate_trial_derangement_schedule",
+        forbidden_schedule,
+    )
+    plan = _plan(config, **inputs)
+
+    for epoch_name in config.ppc.epochs:
+        empty = _job_by_identity(plan, condition_index=0, site_index=0, epoch_name=epoch_name)
+        single = _job_by_identity(plan, condition_index=1, site_index=0, epoch_name=epoch_name)
+        assert empty.schedule.shape == (0, 0)
+        assert single.schedule.shape == (0, 1)
+        assert empty.stable_edge_source_trial_row.shape == (0, 0)
+        assert single.stable_edge_target_trial_row.shape == (0, 1)
+        assert empty.edge_union_position.shape == (0, 0)
+        assert single.edge_union_position.shape == (0, 1)
+
+    # The site/unit result retains every final condition/epoch cell even when
+    # none has a legal null schedule. Only the batch-local null state is zero.
+    assert plan.allocation_estimate.job_accumulator_bytes == 0
+    assert plan.allocation_estimate.kernel_working_bytes == 0
+    assert plan.allocation_estimate.worker_summary_bytes == 6 * (116 * 2 + 2 * 2 * 8)
+    assert plan.scheduled_edge_count == 0
+    assert plan.independent_edge_count == 0
+    assert plan.union_edge_count == 0
+    assert plan.edge_union_saturation == 0.0
+    assert plan.edge_reuse_ratio == 0.0
+
+
+@pytest.mark.parametrize("shuffle_count", (100, 1000))
+def test_edge_union_counts_saturation_and_reuse_match_two_trial_hand_example(
+    shuffle_count: int,
+) -> None:
+    """Repeated schedules saturate the two directed physical edges without duplication.
+
+    Three epoch jobs independently need both directions, but the grouped union
+    samples each stable pair once.  Saturation is the fraction of allowed
+    condition-local physical pairs reached by the schedule union; reuse is the
+    independent unique-edge demand divided by that shared union.
+    """
+    config = _planner_config(shuffle_count=shuffle_count, seed=5)
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([41, 97], dtype=np.int64),
+        source_trial_spike_count=np.zeros((2, 1, 2), dtype=np.int64),
+        frequency_count=1,
+    )
+
+    plan = _plan(config, **inputs)
+
+    assert plan.scheduled_edge_count == 3 * shuffle_count * 2
+    assert plan.independent_edge_count == 3 * 2
+    assert plan.union_edge_count == 2
+    assert plan.edge_union_saturation == 1.0
+    assert plan.edge_reuse_ratio == 3.0
+    np.testing.assert_array_equal(plan.edge_site_index, np.array([0, 0], dtype=np.int64))
+    np.testing.assert_array_equal(plan.stable_edge_source_trial_row, np.array([41, 97], dtype=np.int64))
+    np.testing.assert_array_equal(plan.stable_edge_target_trial_row, np.array([97, 41], dtype=np.int64))
+
+
+def test_edge_union_three_trial_incomplete_schedule_has_hand_saturation_and_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A one-row three-trial schedule need not fill all six directed pairs.
+
+    With base seed one, each unchanged epoch derivation produces the same
+    derangement ``[2, 0, 1]``. The three epoch jobs therefore independently use
+    nine edge cells, while their stable union contains only three of the six
+    allowed directed physical pairs.
+    """
+    config = _planner_config(shuffle_count=1, seed=1)
+
+    def fixed_three_trial_schedule(
+        trial_count: int,
+        shuffle_count: int,
+        *,
+        seed: int,
+    ) -> np.ndarray:
+        """Keep this hand-count fixture independent of NumPy RNG implementation."""
+        assert trial_count == 3
+        assert shuffle_count == 1
+        assert isinstance(seed, int)
+        return np.array([[2, 0, 1]], dtype=np.int64)
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "generate_trial_derangement_schedule",
+        fixed_three_trial_schedule,
+    )
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([10, 20, 30], dtype=np.int64),
+        source_trial_spike_count=np.zeros((3, 1, 2), dtype=np.int64),
+        frequency_count=1,
+    )
+
+    plan = _plan(config, **inputs)
+
+    assert plan.scheduled_edge_count == 9
+    assert plan.independent_edge_count == 9
+    assert plan.union_edge_count == 3
+    assert plan.edge_union_saturation == 0.5
+    assert plan.edge_reuse_ratio == 3.0
+    np.testing.assert_array_equal(
+        plan.stable_edge_source_trial_row,
+        np.array([10, 20, 30], dtype=np.int64),
+    )
+    np.testing.assert_array_equal(
+        plan.stable_edge_target_trial_row,
+        np.array([30, 10, 20], dtype=np.int64),
+    )
+
+
+def test_edge_union_keeps_identical_trial_pairs_separate_for_each_site() -> None:
+    """A physical pair is reusable across conditions but never across sites."""
+    config = _planner_config(shuffle_count=1, seed=3)
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([41, 97], dtype=np.int64),
+        site_ids=("site-a", "site-b"),
+        site_trial_valid=np.ones((2, 2), dtype=bool),
+        source_trial_spike_count=np.zeros((2, 1, 2), dtype=np.int64),
+        frequency_count=1,
+    )
+
+    plan = _plan(config, **inputs)
+
+    assert plan.condition_batches == (((0,),), ((0,),))
+    assert plan.union_edge_count == 4
+    assert plan.independent_edge_count == 12
+    assert plan.edge_reuse_ratio == 3.0
+    np.testing.assert_array_equal(plan.edge_site_index, np.array([0, 0, 1, 1], dtype=np.int64))
+    np.testing.assert_array_equal(
+        plan.stable_edge_source_trial_row,
+        np.array([41, 97, 41, 97], dtype=np.int64),
+    )
+    np.testing.assert_array_equal(
+        plan.stable_edge_target_trial_row,
+        np.array([97, 41, 97, 41], dtype=np.int64),
+    )
+    for job in plan.job_plans:
+        np.testing.assert_array_equal(
+            plan.edge_site_index[job.edge_union_position.ravel()],
+            np.full(job.edge_union_position.size, job.site_index, dtype=np.int64),
+        )
+
+
+def test_plan_selects_condition_and_site_valid_trial_intersection_per_site() -> None:
+    """Each site's plan uses exactly its own valid rows within a condition pool."""
+    config = _planner_config(shuffle_count=1, seed=7)
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([11, 29, 47, 71], dtype=np.int64),
+        condition_names=("selected",),
+        condition_membership=np.array([[True], [True], [False], [True]], dtype=bool),
+        site_ids=("site-a", "site-b"),
+        site_trial_valid=np.array(
+            [[True, False, True, True], [False, True, True, True]],
+            dtype=bool,
+        ),
+        source_trial_spike_count=np.zeros((4, 1, 2), dtype=np.int64),
+        frequency_count=1,
+    )
+
+    plan = _plan(config, **inputs)
+
+    for epoch_name in config.ppc.epochs:
+        first_site = _job_by_identity(
+            plan, condition_index=0, site_index=0, epoch_name=epoch_name
+        )
+        second_site = _job_by_identity(
+            plan, condition_index=0, site_index=1, epoch_name=epoch_name
+        )
+        np.testing.assert_array_equal(
+            first_site.selected_trial_rows,
+            np.array([11, 71], dtype=np.int64),
+        )
+        np.testing.assert_array_equal(
+            second_site.selected_trial_rows,
+            np.array([29, 71], dtype=np.int64),
+        )
+
+
+def test_plan_batches_conditions_deterministically_under_worker_allocation_limit() -> None:
+    """Batching reduces only null accumulators, not retained site-level state."""
+    config = _planner_config(
+        shuffle_count=25,
+        unit_block_size=10,
+        shuffle_block_size=25,
+        worker_count=2,
+        maximum_worker_allocation_bytes=60_000,
+    )
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([2, 7], dtype=np.int64),
+        condition_names=("a", "b", "c"),
+        condition_membership=np.ones((2, 3), dtype=bool),
+        source_trial_spike_count=np.zeros((2, 10, 2), dtype=np.int64),
+        frequency_count=1,
+    )
+
+    plan = _plan(config, **inputs)
+
+    assert plan.condition_batches == (((0,), (1,), (2,)),)
+    assert [job.condition_index for job in plan.job_plans] == [
+        0, 0, 0, 1, 1, 1, 2, 2, 2,
+    ]
+    assert plan.allocation_estimate.worker_plan_bytes == 14_592
+    assert plan.allocation_estimate.worker_summary_bytes == 13_320
+    assert plan.allocation_estimate.planned_worker_private_bytes == 59_256
+    assert plan.allocation_estimate.planned_parent_private_bytes <= 60_000
+    assert plan.allocation_estimate.planned_worker_private_bytes <= 60_000
+
+
+def test_plan_allocation_uses_largest_bounded_unit_block_and_active_workers() -> None:
+    """Component planning charges the largest unit block, never all units at once."""
+    config = _planner_config(
+        shuffle_count=1,
+        unit_block_size=2,
+        shuffle_block_size=1,
+        worker_count=3,
+    )
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([2, 7], dtype=np.int64),
+        source_trial_spike_count=np.zeros((2, 3, 2), dtype=np.int64),
+        frequency_count=1,
+        shared_phase_mmap_bytes=4096,
+    )
+
+    plan = _plan(config, **inputs)
+
+    assert plan.allocation_estimate.job_accumulator_bytes == 3 * 1 * 2 * 1 * 40
+    assert plan.allocation_estimate.geometry_bytes == 2 * (2 * 2 + 1) * 8 + 2 * 8
+    assert plan.allocation_estimate.kernel_working_bytes == 2 * 2 * 1 * 48 + 2 * 8
+    assert plan.allocation_estimate.observed_trial_statistics_bytes == (
+        2 * 8
+        + 2 * 2 * 2 * 1 * (16 + 8)
+        + 2 * 8
+        + 2 * 8
+        + (2 + 1) * 8
+        + 2 * 2 * 2 * 2 * 2 * 8
+    )
+    assert plan.allocation_estimate.planner_array_bytes == 6 * 8 + 6 * 32 + 2 * 3 * 8
+    assert plan.allocation_estimate.summary_assembly_bytes == 3 * 3 * (116 + 2 * 2 * 8)
+    assert plan.allocation_estimate.worker_plan_bytes == 6 * 8 + 6 * 32 + 2 * 3 * 8
+    assert plan.allocation_estimate.worker_summary_bytes == 2 * 3 * (116 + 2 * 2 * 8)
+    assert plan.allocation_estimate.planned_computation_private_bytes == 616
+    assert plan.allocation_estimate.planned_parent_private_bytes == 288 + 1332
+    assert plan.allocation_estimate.planned_worker_private_bytes == 288 + 888 + 616
+    assert plan.allocation_estimate.active_worker_count == 2
+    assert plan.allocation_estimate.planned_aggregate_array_bytes == 4096 + 1620 + 2 * 1792
+
+
+def test_plan_allocation_uses_the_true_later_site_unit_and_edge_peak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Planner allocation is the true maximum, not the first site/block estimate.
+
+    Site B has the complete three-trial pool while site A has only the first
+    two trials.  The partial final unit block contains nearly all spikes, and
+    the last two-edge block has two distinct targets from that high-spike
+    source.  This makes the final site/unit/edge task unambiguously largest.
+    """
+    config = _planner_config(
+        shuffle_count=1,
+        unit_block_size=2,
+        shuffle_block_size=1,
+        trial_edge_block_size=2,
+        worker_count=2,
+    )
+
+    def fixed_schedule(
+        trial_count: int,
+        shuffle_count: int,
+        *,
+        seed: int,
+    ) -> np.ndarray:
+        """Make condition-specific unions independent of RNG-version details."""
+        assert shuffle_count == 1
+        if trial_count == 2:
+            return np.array([[1, 0]], dtype=np.int64)
+        assert trial_count == 3
+        if seed // 1_000_000 == 0:
+            return np.array([[1, 2, 0]], dtype=np.int64)
+        return np.array([[2, 0, 1]], dtype=np.int64)
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "generate_trial_derangement_schedule",
+        fixed_schedule,
+    )
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([10, 20, 30], dtype=np.int64),
+        condition_names=("first", "second"),
+        condition_membership=np.ones((3, 2), dtype=bool),
+        site_ids=("site-a", "site-b"),
+        site_trial_valid=np.array(
+            [[True, True, False], [True, True, True]],
+            dtype=bool,
+        ),
+        source_trial_spike_count=np.array(
+            [
+                [[1, 1], [1, 1], [1, 1]],
+                [[1, 1], [1, 1], [1, 1]],
+                [[1, 1], [1, 1], [1000, 1000]],
+            ],
+            dtype=np.int64,
+        ),
+        frequency_count=1,
+        shared_phase_mmap_bytes=0,
+    )
+
+    plan = _plan(config, **inputs)
+    estimate = plan.allocation_estimate
+
+    # Full-component parent arrays retain two sites, while the worker holds
+    # only the maximum site plan and current partial unit block.
+    assert estimate.planner_array_bytes == 1_392
+    assert estimate.summary_assembly_bytes == 5_328
+    assert estimate.worker_plan_bytes == 864
+    assert estimate.worker_summary_bytes == 888
+    assert estimate.job_accumulator_bytes == 240
+
+    # The selected peak is site B's final one-unit block. Its last edge block
+    # has two site-qualified high-spike source edges, unlike site A or block 0.
+    assert estimate.geometry_bytes == 52_200
+    assert estimate.observed_trial_statistics_bytes == 416
+    assert estimate.observed_gather_temporary_bytes == 102_204
+    assert estimate.kernel_working_bytes == 204_128
+    assert estimate.planned_computation_private_bytes == 256_568
+    assert estimate.planned_parent_private_bytes == 6_720
+    assert estimate.planned_worker_private_bytes == 258_320
+    assert estimate.active_worker_count == 2
+    assert estimate.planned_aggregate_array_bytes == 523_360
+
+
+def test_grouped_allocation_estimate_matches_every_named_category_and_lifetime_peak() -> None:
+    """Byte accounting uses kernel arrays, retained observed arrays, and 40-byte job cells.
+
+    The job cell is one complex128 sum, one int64 count, one float64 PPC draw,
+    and one float64 calculation scratch. The observed stage retains geometry, its per-trial statistics,
+    and gather scratch; the later null stage retains geometry, job accumulators,
+    and complete kernel working arrays.  Those stages do not overlap, so each
+    worker reports their maximum rather than their sum. The parallel parent
+    concurrently retains component-wide planner and final-summary arrays; each
+    worker retains its complete site-plan copy and site/block summaries across
+    condition batches. The shared mmap is counted exactly once.
+    """
+    source_counts = np.array(
+        [
+            [[1, 2], [3, 4]],
+            [[5, 6], [7, 8]],
+        ],
+        dtype=np.int64,
+    )
+    edge_source_position = np.array([0, 1, 1], dtype=np.int64)
+
+    estimate = ppc_runtime.estimate_grouped_ppc_allocation(
+        active_job_count=3,
+        worker_result_job_count=6,
+        component_job_count=6,
+        shuffle_count=5,
+        total_unit_count=4,
+        unit_block_size=2,
+        source_trial_spike_count=source_counts,
+        edge_source_trial_position=edge_source_position,
+        observed_source_trial_position=np.array([0, 1], dtype=np.int64),
+        frequency_count=2,
+        representative_band_count=2,
+        phase_bin_count=4,
+        planner_array_bytes=480,
+        worker_plan_bytes=480,
+        worker_count=4,
+        pending_unit_block_count=2,
+        shared_phase_mmap_bytes=1000,
+    )
+
+    geometry_bytes = 26 * 36 + 2 * (2 * 2 + 1) * 8 + 2 * 8
+    segmented_bytes = 3 * 2 * 2 * 48 + 3 * 2 * 8
+    gather_bytes = (10 + 26 + 26) * 2 * 51
+    job_bytes = 3 * 5 * 2 * 2 * 40
+    observed_bytes = (
+        2 * 8
+        + 2 * 2 * 2 * 2 * (16 + 8)
+        + 2 * 8
+        + 2 * 8
+        + (4 + 1) * 8
+        + 2 * 2 * 2 * 2 * 4 * 8
+    )
+    observed_gather_bytes = (10 + 26) * 2 * 51
+    kernel_bytes = segmented_bytes + gather_bytes
+    observed_stage_bytes = geometry_bytes + observed_bytes + observed_gather_bytes
+    null_stage_bytes = geometry_bytes + job_bytes + kernel_bytes
+    component_summary_bytes = 4 * 6 * (116 * 2 + 2 * 4 * 8)
+    worker_summary_bytes = 2 * 6 * (116 * 2 + 2 * 4 * 8)
+    computation_bytes = max(observed_stage_bytes, null_stage_bytes)
+    worker_bytes = 480 + worker_summary_bytes + computation_bytes
+    parent_bytes = 480 + component_summary_bytes
+
+    assert estimate.job_accumulator_bytes == job_bytes
+    assert estimate.observed_trial_statistics_bytes == observed_bytes
+    assert estimate.observed_gather_temporary_bytes == observed_gather_bytes
+    assert estimate.kernel_working_bytes == kernel_bytes
+    assert estimate.geometry_bytes == geometry_bytes
+    assert estimate.planner_array_bytes == 480
+    assert estimate.summary_assembly_bytes == component_summary_bytes
+    assert estimate.worker_plan_bytes == 480
+    assert estimate.worker_summary_bytes == worker_summary_bytes
+    assert estimate.planned_computation_private_bytes == computation_bytes
+    assert estimate.planned_parent_private_bytes == parent_bytes
+    assert estimate.planned_worker_private_bytes == worker_bytes
+    assert estimate.planned_computation_private_bytes == null_stage_bytes
+    assert estimate.planned_computation_private_bytes < (
+        geometry_bytes + job_bytes + observed_bytes + kernel_bytes
+    )
+    assert estimate.shared_phase_mmap_bytes == 1000
+    assert estimate.active_worker_count == 2
+    assert estimate.planned_aggregate_array_bytes == 1000 + parent_bytes + 2 * worker_bytes
+    assert all(
+        isinstance(getattr(estimate, field.name), int) and getattr(estimate, field.name) >= 0
+        for field in fields(estimate)
+    )
+    with pytest.raises(FrozenInstanceError):
+        estimate.geometry_bytes = 0
+
+
+def test_allocation_estimate_uses_serial_parent_peak_and_checked_integer_arithmetic() -> None:
+    """A serial plan charges no worker and rejects overflow instead of wrapping bytes."""
+    serial = ppc_runtime.estimate_grouped_ppc_allocation(
+        active_job_count=1,
+        worker_result_job_count=3,
+        component_job_count=3,
+        shuffle_count=1,
+        total_unit_count=1,
+        unit_block_size=1,
+        source_trial_spike_count=np.zeros((2, 1, 2), dtype=np.int64),
+        edge_source_trial_position=np.array([0, 1], dtype=np.int64),
+        observed_source_trial_position=np.array([0, 1], dtype=np.int64),
+        frequency_count=1,
+        representative_band_count=2,
+        phase_bin_count=2,
+        planner_array_bytes=100,
+        worker_plan_bytes=0,
+        worker_count=1,
+        pending_unit_block_count=2,
+        shared_phase_mmap_bytes=64,
+    )
+    assert serial.active_worker_count == 0
+    assert serial.summary_assembly_bytes == 3 * (116 + 2 * 2 * 8)
+    assert serial.planned_computation_private_bytes == 360
+    assert serial.planned_parent_private_bytes == 100 + 3 * (116 + 2 * 2 * 8) + 360
+    assert serial.planned_aggregate_array_bytes == 64 + serial.planned_parent_private_bytes
+    with pytest.raises(ValueError):
+        ppc_runtime.estimate_grouped_ppc_allocation(
+            active_job_count=np.iinfo(np.int64).max,
+            worker_result_job_count=np.iinfo(np.int64).max,
+            component_job_count=np.iinfo(np.int64).max,
+            shuffle_count=2,
+            total_unit_count=1,
+            unit_block_size=1,
+            source_trial_spike_count=np.zeros((1, 1, 2), dtype=np.int64),
+            edge_source_trial_position=np.array([0], dtype=np.int64),
+            observed_source_trial_position=np.array([0], dtype=np.int64),
+            frequency_count=1,
+            representative_band_count=2,
+            phase_bin_count=2,
+            planner_array_bytes=0,
+            worker_plan_bytes=0,
+            worker_count=1,
+            pending_unit_block_count=1,
+            shared_phase_mmap_bytes=0,
+        )
+
+
+def test_allocation_estimate_uses_observed_stage_peak_without_summing_null_stage() -> None:
+    """A histogram-heavy observed stage can be the private peak by itself.
+
+    This guards against the overly conservative and incorrect sum of observed
+    per-trial arrays with null-stage job accumulators after observed statistics
+    have been reduced and released.
+    """
+    estimate = ppc_runtime.estimate_grouped_ppc_allocation(
+        active_job_count=1,
+        worker_result_job_count=1,
+        component_job_count=1,
+        shuffle_count=1,
+        total_unit_count=1,
+        unit_block_size=1,
+        source_trial_spike_count=np.zeros((1, 1, 2), dtype=np.int64),
+        edge_source_trial_position=np.array([0], dtype=np.int64),
+        observed_source_trial_position=np.array([0], dtype=np.int64),
+        frequency_count=1,
+        representative_band_count=2,
+        phase_bin_count=10,
+        planner_array_bytes=100,
+        worker_plan_bytes=0,
+        worker_count=2,
+        pending_unit_block_count=1,
+        shared_phase_mmap_bytes=0,
+    )
+
+    geometry_bytes = 3 * 8 + 8
+    kernel_bytes = 48 + 2 * 8
+    job_bytes = 40
+    observed_bytes = 8 + 2 * (16 + 8) + 2 * 8 + 2 * 8 + 11 * 8 + 2 * 2 * 10 * 8
+    observed_stage_bytes = geometry_bytes + observed_bytes
+    null_stage_bytes = geometry_bytes + job_bytes + kernel_bytes
+
+    assert estimate.observed_trial_statistics_bytes == observed_bytes
+    assert observed_stage_bytes > null_stage_bytes
+    assert estimate.planned_computation_private_bytes == observed_stage_bytes
+    assert estimate.planned_computation_private_bytes < observed_stage_bytes + null_stage_bytes
+    assert estimate.summary_assembly_bytes > job_bytes
+    assert estimate.worker_summary_bytes == 276
+    assert estimate.planned_parent_private_bytes == 100 + 276
+    assert estimate.planned_worker_private_bytes == 276 + observed_stage_bytes
+    assert estimate.active_worker_count == 1
+    assert estimate.planned_aggregate_array_bytes == 100 + 276 + 276 + observed_stage_bytes
+
+    planning_dominant = ppc_runtime.estimate_grouped_ppc_allocation(
+        active_job_count=1,
+        worker_result_job_count=1,
+        component_job_count=1,
+        shuffle_count=1,
+        total_unit_count=1,
+        unit_block_size=1,
+        source_trial_spike_count=np.zeros((1, 1, 2), dtype=np.int64),
+        edge_source_trial_position=np.array([0], dtype=np.int64),
+        observed_source_trial_position=np.array([0], dtype=np.int64),
+        frequency_count=1,
+        representative_band_count=2,
+        phase_bin_count=10,
+        planner_array_bytes=1000,
+        worker_plan_bytes=0,
+        worker_count=2,
+        pending_unit_block_count=1,
+        shared_phase_mmap_bytes=0,
+    )
+    assert planning_dominant.planned_parent_private_bytes == 1000 + 276
+    assert planning_dominant.planned_aggregate_array_bytes == 1000 + 276 + 276 + observed_stage_bytes
+
+
+@pytest.mark.parametrize(
+    "description, mutate",
+    (
+        (
+            "non-Boolean condition membership",
+            lambda values: values | {"condition_membership": np.ones((3, 1), dtype=np.int64)},
+        ),
+        (
+            "site validity shape",
+            lambda values: values | {"site_trial_valid": np.ones((1, 2), dtype=bool)},
+        ),
+        (
+            "duplicate stable trial rows",
+            lambda values: values | {"stable_trial_rows": np.array([3, 3, 7], dtype=np.int64)},
+        ),
+        (
+            "duplicate site identifiers",
+            lambda values: values | {"site_ids": ("site-a", "site-a")},
+        ),
+        (
+            "condition name count",
+            lambda values: values | {"condition_names": ("only-one", "extra")},
+        ),
+        (
+            "Boolean source spike count",
+            lambda values: values | {"source_trial_spike_count": np.zeros((3, 2, 2), dtype=bool)},
+        ),
+        (
+            "negative source spike count",
+            lambda values: values | {"source_trial_spike_count": -np.ones((3, 2, 2), dtype=np.int64)},
+        ),
+        (
+            "source spike count segment axis",
+            lambda values: values | {"source_trial_spike_count": np.zeros((3, 2, 1), dtype=np.int64)},
+        ),
+        (
+            "Boolean frequency count",
+            lambda values: values | {"frequency_count": True},
+        ),
+        (
+            "Boolean mmap byte count",
+            lambda values: values | {"shared_phase_mmap_bytes": False},
+        ),
+    ),
+)
+def test_plan_rejects_malformed_identity_and_allocation_inputs(
+    description: str,
+    mutate: object,
+) -> None:
+    """Pure planning rejects malformed categorical axes and byte inputs before work."""
+    del description
+    config = _planner_config()
+    inputs = _planner_inputs()
+    with pytest.raises(ValueError):
+        _plan(config, **mutate(inputs))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"active_job_count": True},
+        {"worker_result_job_count": 0},
+        {"component_job_count": 0},
+        {"active_job_count": 2, "worker_result_job_count": 1},
+        {"worker_result_job_count": 2, "component_job_count": 1},
+        {"shuffle_count": 0},
+        {"total_unit_count": 0},
+        {"unit_block_size": False},
+        {"total_unit_count": 3, "source_trial_spike_count": np.zeros((2, 2, 2), dtype=np.int64)},
+        {"source_trial_spike_count": np.zeros((2, 1, 1), dtype=np.int64)},
+        {"edge_source_trial_position": np.array([2], dtype=np.int64)},
+        {"observed_source_trial_position": np.array([2], dtype=np.int64)},
+        {"observed_source_trial_position": np.array([0, 0], dtype=np.int64)},
+        {"observed_source_trial_position": np.array([True], dtype=bool)},
+        {"frequency_count": 0},
+        {"representative_band_count": 0},
+        {"phase_bin_count": False},
+        {"planner_array_bytes": True},
+        {"planner_array_bytes": np.iinfo(np.int64).max + 1},
+        {"worker_plan_bytes": -1},
+        {"worker_count": 0},
+        {"pending_unit_block_count": -1},
+        {"shared_phase_mmap_bytes": -1},
+    ),
+)
+def test_allocation_estimate_rejects_malformed_axes_counts_and_positions(
+    overrides: dict[str, object],
+) -> None:
+    """The estimator validates every array/count contract before byte arithmetic."""
+    arguments: dict[str, object] = {
+        "active_job_count": 1,
+        "worker_result_job_count": 1,
+        "component_job_count": 1,
+        "shuffle_count": 1,
+        "total_unit_count": 1,
+        "unit_block_size": 1,
+        "source_trial_spike_count": np.zeros((2, 1, 2), dtype=np.int64),
+        "edge_source_trial_position": np.array([0, 1], dtype=np.int64),
+        "observed_source_trial_position": np.array([0, 1], dtype=np.int64),
+        "frequency_count": 1,
+        "representative_band_count": 2,
+        "phase_bin_count": 2,
+        "planner_array_bytes": 0,
+        "worker_plan_bytes": 0,
+        "worker_count": 1,
+        "pending_unit_block_count": 1,
+        "shared_phase_mmap_bytes": 0,
+    }
+    with pytest.raises(ValueError):
+        ppc_runtime.estimate_grouped_ppc_allocation(**(arguments | overrides))
+
+
+def test_allocation_estimate_rejects_retained_observed_statistics_overflow() -> None:
+    """Retained S2 trial statistics use checked arithmetic before multiplying bytes."""
+    with pytest.raises(ValueError):
+        ppc_runtime.estimate_grouped_ppc_allocation(
+            active_job_count=1,
+            worker_result_job_count=1,
+            component_job_count=1,
+            shuffle_count=1,
+            total_unit_count=1,
+            unit_block_size=1,
+            source_trial_spike_count=np.zeros((1, 1, 2), dtype=np.int64),
+            edge_source_trial_position=np.array([0], dtype=np.int64),
+            observed_source_trial_position=np.array([0], dtype=np.int64),
+            frequency_count=1,
+            representative_band_count=2,
+            phase_bin_count=np.iinfo(np.int64).max,
+            planner_array_bytes=0,
+            worker_plan_bytes=0,
+            worker_count=1,
+            pending_unit_block_count=1,
+            shared_phase_mmap_bytes=0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("active_job_count", "worker_result_job_count", "component_job_count"),
+    (
+        (1, 0, 1),
+        (2, 1, 2),
+        (1, 2, 1),
+    ),
+)
+def test_allocation_estimate_rejects_incoherent_job_lifetimes(
+    active_job_count: int,
+    worker_result_job_count: int,
+    component_job_count: int,
+) -> None:
+    """Null-batch jobs are a bounded subset of retained site/block result jobs."""
+    with pytest.raises(ValueError):
+        ppc_runtime.estimate_grouped_ppc_allocation(
+            active_job_count=active_job_count,
+            worker_result_job_count=worker_result_job_count,
+            component_job_count=component_job_count,
+            shuffle_count=1,
+            total_unit_count=1,
+            unit_block_size=1,
+            source_trial_spike_count=np.zeros((1, 1, 2), dtype=np.int64),
+            edge_source_trial_position=np.empty(0, dtype=np.int64),
+            observed_source_trial_position=np.empty(0, dtype=np.int64),
+            frequency_count=1,
+            representative_band_count=2,
+            phase_bin_count=2,
+            planner_array_bytes=0,
+            worker_plan_bytes=0,
+            worker_count=1,
+            pending_unit_block_count=1,
+            shared_phase_mmap_bytes=0,
+        )
+
+
+@pytest.mark.parametrize("shuffle_count", (3, 100, 1000))
+def test_allocation_job_accumulators_use_full_schedule_not_shuffle_block(
+    shuffle_count: int,
+) -> None:
+    """Every active job retains its full null draw array for all schedule rows.
+
+    The configured shuffle block controls traversal only.  It cannot reduce the
+    accumulator needed to summarize all planned shuffles, including a three-row
+    schedule smaller than the default block size.
+    """
+    estimate = ppc_runtime.estimate_grouped_ppc_allocation(
+        active_job_count=2,
+        worker_result_job_count=2,
+        component_job_count=2,
+        shuffle_count=shuffle_count,
+        total_unit_count=1,
+        unit_block_size=1,
+        source_trial_spike_count=np.zeros((1, 1, 2), dtype=np.int64),
+        edge_source_trial_position=np.array([0], dtype=np.int64),
+        observed_source_trial_position=np.array([0], dtype=np.int64),
+        frequency_count=3,
+        representative_band_count=2,
+        phase_bin_count=2,
+        planner_array_bytes=0,
+        worker_plan_bytes=0,
+        worker_count=1,
+        pending_unit_block_count=1,
+        shared_phase_mmap_bytes=0,
+    )
+
+    assert estimate.job_accumulator_bytes == 40 * 2 * shuffle_count * 1 * 3
+
+
+def test_allocation_estimate_accepts_zero_observed_and_null_edge_sets() -> None:
+    """Empty observed and shuffled source sets are valid planned no-work states."""
+    estimate = ppc_runtime.estimate_grouped_ppc_allocation(
+        active_job_count=0,
+        worker_result_job_count=1,
+        component_job_count=1,
+        shuffle_count=100,
+        total_unit_count=1,
+        unit_block_size=1,
+        source_trial_spike_count=np.zeros((1, 1, 2), dtype=np.int64),
+        edge_source_trial_position=np.empty(0, dtype=np.int64),
+        observed_source_trial_position=np.empty(0, dtype=np.int64),
+        frequency_count=1,
+        representative_band_count=2,
+        phase_bin_count=2,
+        planner_array_bytes=0,
+        worker_plan_bytes=0,
+        worker_count=2,
+        pending_unit_block_count=1,
+        shared_phase_mmap_bytes=0,
+    )
+
+    assert estimate.observed_trial_statistics_bytes == 0
+    assert estimate.observed_gather_temporary_bytes == 0
+    assert estimate.job_accumulator_bytes == 0
+    assert estimate.kernel_working_bytes == 0
+    assert estimate.active_worker_count == 1
+
+
+def test_allocation_estimate_retains_singleton_observed_summary_without_null_edges() -> None:
+    """A singleton job has observed work and complete site summaries but no null work.
+
+    The worker result arrays span all three epoch jobs at the current site/unit
+    block even though their condition batch has no null-eligible schedule cells.
+    """
+    estimate = ppc_runtime.estimate_grouped_ppc_allocation(
+        active_job_count=0,
+        worker_result_job_count=3,
+        component_job_count=3,
+        shuffle_count=100,
+        total_unit_count=1,
+        unit_block_size=1,
+        source_trial_spike_count=np.array([[[3, 4]]], dtype=np.int64),
+        edge_source_trial_position=np.empty(0, dtype=np.int64),
+        observed_source_trial_position=np.array([0], dtype=np.int64),
+        frequency_count=1,
+        representative_band_count=2,
+        phase_bin_count=2,
+        planner_array_bytes=100,
+        worker_plan_bytes=40,
+        worker_count=2,
+        pending_unit_block_count=1,
+        shared_phase_mmap_bytes=0,
+    )
+
+    geometry_bytes = 26 * 7 + (1 * 2 + 1) * 8 + 8
+    observed_statistics_bytes = 8 + 2 * (16 + 8) + 2 * 8 + 2 * 8 + 3 * 8 + 2 * 2 * 2 * 8
+    observed_gather_bytes = 7 * 51
+    computation_bytes = geometry_bytes + observed_statistics_bytes + observed_gather_bytes
+    summary_bytes = 3 * (116 + 2 * 2 * 8)
+
+    assert estimate.job_accumulator_bytes == 0
+    assert estimate.kernel_working_bytes == 0
+    assert estimate.observed_trial_statistics_bytes == observed_statistics_bytes
+    assert estimate.observed_gather_temporary_bytes == observed_gather_bytes
+    assert estimate.planned_computation_private_bytes == computation_bytes
+    assert estimate.summary_assembly_bytes == summary_bytes
+    assert estimate.worker_summary_bytes == summary_bytes
+    assert estimate.planned_parent_private_bytes == 100 + summary_bytes
+    assert estimate.planned_worker_private_bytes == 40 + summary_bytes + computation_bytes
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"planner_array_bytes": np.iinfo(np.int64).max},
+        {"worker_plan_bytes": np.iinfo(np.int64).max},
+        {"shared_phase_mmap_bytes": np.iinfo(np.int64).max},
+        {
+            "total_unit_count": 2,
+            "worker_count": 2,
+            "pending_unit_block_count": 2,
+            "worker_plan_bytes": np.iinfo(np.int64).max // 2,
+        },
+    ),
+)
+def test_allocation_estimate_checks_parent_worker_shared_and_aggregate_overflow(
+    overrides: dict[str, object],
+) -> None:
+    """Each parent/worker/aggregate lifetime addition is checked before wrapping."""
+    arguments: dict[str, object] = {
+        "active_job_count": 1,
+        "worker_result_job_count": 1,
+        "component_job_count": 1,
+        "shuffle_count": 1,
+        "total_unit_count": 1,
+        "unit_block_size": 1,
+        "source_trial_spike_count": np.zeros((1, 1, 2), dtype=np.int64),
+        "edge_source_trial_position": np.array([0], dtype=np.int64),
+        "observed_source_trial_position": np.array([0], dtype=np.int64),
+        "frequency_count": 1,
+        "representative_band_count": 2,
+        "phase_bin_count": 2,
+        "planner_array_bytes": 0,
+        "worker_plan_bytes": 0,
+        "worker_count": 2,
+        "pending_unit_block_count": 1,
+        "shared_phase_mmap_bytes": 0,
+    }
+    with pytest.raises(ValueError):
+        ppc_runtime.estimate_grouped_ppc_allocation(**(arguments | overrides))
+
+
+def test_plan_returns_owned_immutable_schedule_and_union_arrays() -> None:
+    """Planner outputs cannot be changed through caller inputs or mutable result buffers."""
+    config = _planner_config(shuffle_count=2)
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([2, 7, 13], dtype=np.int64),
+        source_trial_spike_count=np.zeros((3, 1, 2), dtype=np.int64),
+    )
+    plan = _plan(config, **inputs)
+    job = _job_by_identity(plan, condition_index=0, site_index=0, epoch_name="before")
+    before_rows = job.selected_trial_rows.copy()
+    before_schedule = job.schedule.copy()
+    before_source = job.stable_edge_source_trial_row.copy()
+    before_target = job.stable_edge_target_trial_row.copy()
+    before_position = job.edge_union_position.copy()
+    before_edge_site = plan.edge_site_index.copy()
+    before_union_source = plan.stable_edge_source_trial_row.copy()
+    before_union_target = plan.stable_edge_target_trial_row.copy()
+
+    inputs["stable_trial_rows"][0] = 999
+    inputs["source_trial_spike_count"][0, 0, 0] = 999
+
+    np.testing.assert_array_equal(job.selected_trial_rows, before_rows)
+    np.testing.assert_array_equal(job.schedule, before_schedule)
+    np.testing.assert_array_equal(job.stable_edge_source_trial_row, before_source)
+    np.testing.assert_array_equal(job.stable_edge_target_trial_row, before_target)
+    np.testing.assert_array_equal(job.edge_union_position, before_position)
+    np.testing.assert_array_equal(plan.edge_site_index, before_edge_site)
+    np.testing.assert_array_equal(plan.stable_edge_source_trial_row, before_union_source)
+    np.testing.assert_array_equal(plan.stable_edge_target_trial_row, before_union_target)
+    assert not np.shares_memory(job.selected_trial_rows, inputs["stable_trial_rows"])
+    assert not np.shares_memory(job.stable_edge_source_trial_row, inputs["stable_trial_rows"])
+    assert not np.shares_memory(job.stable_edge_target_trial_row, inputs["stable_trial_rows"])
+    assert not np.shares_memory(plan.stable_edge_source_trial_row, inputs["stable_trial_rows"])
+    assert not np.shares_memory(plan.stable_edge_target_trial_row, inputs["stable_trial_rows"])
+    protected_arrays = (
+        job.selected_trial_rows,
+        job.schedule,
+        job.stable_edge_source_trial_row,
+        job.stable_edge_target_trial_row,
+        job.edge_union_position,
+        plan.edge_site_index,
+        plan.stable_edge_source_trial_row,
+        plan.stable_edge_target_trial_row,
+    )
+    for array in protected_arrays:
+        assert not array.flags.writeable
+        with pytest.raises(ValueError):
+            array.flat[0] = array.flat[0]
+    with pytest.raises(FrozenInstanceError):
+        job.schedule = np.empty((0, 0), dtype=np.int64)
+
+
+def test_plan_rejects_unsafe_aggregate_workers_before_any_process_or_computation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 12-GiB-style aggregate guard fails from the pure plan before spawn."""
+    config = _planner_config(
+        shuffle_count=1,
+        unit_block_size=1,
+        shuffle_block_size=1,
+        worker_count=2,
+        maximum_aggregate_allocation_bytes=1,
+    )
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([1, 4], dtype=np.int64),
+        source_trial_spike_count=np.zeros((2, 2, 2), dtype=np.int64),
+        frequency_count=1,
+    )
+
+    def forbidden(*_: object, **__: object) -> None:
+        """Fail if an aggregate preflight performs computation or process setup."""
+        raise AssertionError("unsafe worker count reached execution")
+
+    monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", forbidden)
+    monkeypatch.setattr(ppc_runtime, "_compute_unit_blocks", forbidden)
+    with pytest.raises(ValueError, match="aggregate"):
+        _plan(config, **inputs)
+
+
+def test_plan_rejects_parent_private_peak_even_when_bounded_workers_fit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 2-GiB-style per-process limit applies to parent summary ownership too.
+
+    With 20 total units, the parent retains 288 bytes of component planning
+    arrays and 8,880 bytes of final component summaries. A one-unit worker
+    task needs only 1,092 bytes, so condition batching cannot make this parent
+    allocation legal under the deliberately small 9,000-byte limit.
+    """
+    config = _planner_config(
+        shuffle_count=1,
+        unit_block_size=1,
+        shuffle_block_size=1,
+        worker_count=2,
+        maximum_worker_allocation_bytes=9_000,
+    )
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([1, 4], dtype=np.int64),
+        source_trial_spike_count=np.zeros((2, 20, 2), dtype=np.int64),
+        frequency_count=1,
+    )
+
+    def forbidden(*_: object, **__: object) -> None:
+        """A pure planning rejection must occur before execution/process setup."""
+        raise AssertionError("unsafe parent allocation reached execution")
+
+    monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", forbidden)
+    monkeypatch.setattr(ppc_runtime, "_compute_unit_blocks", forbidden)
+    with pytest.raises(ValueError, match="parent"):
+        _plan(config, **inputs)
+
+
+def test_allocation_limits_enter_existing_work_metadata_and_fingerprint(
+    tmp_path: Path,
+) -> None:
+    """Execution-only limits are recorded in resumable work identity, not final science."""
+    config = _planner_config(
+        maximum_worker_allocation_bytes=123_456,
+        maximum_aggregate_allocation_bytes=654_321,
+    )
+    changed_worker = replace(
+        config,
+        ppc_execution=replace(
+            config.ppc_execution,
+            maximum_worker_allocation_bytes=123_457,
+        ),
+    )
+    changed_aggregate = replace(
+        config,
+        ppc_execution=replace(
+            config.ppc_execution,
+            maximum_aggregate_allocation_bytes=654_322,
+        ),
+    )
+    phase, spikes, schedule = _inputs()
+    first = ppc_runtime.execute_ppc_blocks(
+        config=config,
+        execution=config.ppc_execution,
+        prepared_phase=phase,
+        prepared_spikes=spikes,
+        schedule=schedule,
+        work_root=tmp_path,
+    )
+    second = ppc_runtime.execute_ppc_blocks(
+        config=changed_worker,
+        execution=changed_worker.ppc_execution,
+        prepared_phase=phase,
+        prepared_spikes=spikes,
+        schedule=schedule,
+        work_root=tmp_path,
+    )
+    third = ppc_runtime.execute_ppc_blocks(
+        config=changed_aggregate,
+        execution=changed_aggregate.ppc_execution,
+        prepared_phase=phase,
+        prepared_spikes=spikes,
+        schedule=schedule,
+        work_root=tmp_path,
+    )
+    metadata = json.loads((first.run_directory / "metadata.json").read_text(encoding="utf-8"))
+
+    assert metadata["execution_settings"]["maximum_worker_allocation_bytes"] == 123_456
+    assert metadata["execution_settings"]["maximum_aggregate_allocation_bytes"] == 654_321
+    assert first.run_fingerprint != second.run_fingerprint
+    assert first.run_fingerprint != third.run_fingerprint
+    assert second.run_fingerprint != third.run_fingerprint
+    assert component_fingerprint("spike_phase", config) == component_fingerprint("spike_phase", changed_worker)
+    assert component_fingerprint("spike_phase", config) == component_fingerprint("spike_phase", changed_aggregate)

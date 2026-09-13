@@ -319,6 +319,8 @@ def test_ppc_execution_configuration_round_trips_without_staling_final_component
             checkpoint_enabled=False,
             checkpoint_retention="retain",
             progress_update_interval=2,
+            maximum_worker_allocation_bytes=123_456,
+            maximum_aggregate_allocation_bytes=654_321,
         ),
     )
 
@@ -327,10 +329,42 @@ def test_ppc_execution_configuration_round_trips_without_staling_final_component
 
     assert decoded == changed_execution
     assert '"unit_block_size":3' in encoded
+    assert '"maximum_worker_allocation_bytes":123456' in encoded
+    assert '"maximum_aggregate_allocation_bytes":654321' in encoded
     for component in ("power", "synchrony", "spike_phase"):
         assert component_fingerprint(component, config) == component_fingerprint(
             component,
             changed_execution,
+        )
+
+
+def test_ppc_execution_allocation_limits_default_round_trip_and_preserve_scientific_fingerprints() -> None:
+    """The approved byte limits are exact execution-only integers in JSON.
+
+    These limits constrain planned private NumPy arrays.  They deliberately
+    remain outside every final scientific component fingerprint.
+    """
+    config = default_lfp_summary_config()
+    execution = config.ppc_execution
+    encoded = canonical_config_json(config)
+    decoded = lfp_summary_config_from_json(encoded)
+    changed = replace(
+        config,
+        ppc_execution=replace(
+            execution,
+            maximum_worker_allocation_bytes=2 * 1024**3 - 1,
+            maximum_aggregate_allocation_bytes=12 * 1024**3 - 1,
+        ),
+    )
+
+    assert execution.maximum_worker_allocation_bytes == 2 * 1024**3
+    assert execution.maximum_aggregate_allocation_bytes == 12 * 1024**3
+    assert decoded.ppc_execution.maximum_worker_allocation_bytes == 2 * 1024**3
+    assert decoded.ppc_execution.maximum_aggregate_allocation_bytes == 12 * 1024**3
+    for component in ("power", "synchrony", "spike_phase"):
+        assert component_fingerprint(component, config) == component_fingerprint(
+            component,
+            changed,
         )
 
 
@@ -355,6 +389,32 @@ def test_invalid_ppc_execution_configuration_is_rejected(
 ) -> None:
     """Work-only PPC execution settings are validated before any files are opened."""
     with pytest.raises(ValueError):
+        validate_lfp_summary_config(
+            replace(default_lfp_summary_config(), ppc_execution=execution)
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    (
+        ("maximum_worker_allocation_bytes", 0),
+        ("maximum_worker_allocation_bytes", False),
+        ("maximum_worker_allocation_bytes", 1.5),
+        ("maximum_aggregate_allocation_bytes", 0),
+        ("maximum_aggregate_allocation_bytes", True),
+        ("maximum_aggregate_allocation_bytes", 1.5),
+    ),
+)
+def test_ppc_execution_allocation_limits_reject_boolean_or_nonpositive_values(
+    field_name: str,
+    invalid_value: int | bool | float,
+) -> None:
+    """Both planned-byte limits are positive integers, never Boolean flags."""
+    with pytest.raises(ValueError):
+        execution = replace(
+            PPCExecutionConfig(),
+            **{field_name: invalid_value},
+        )
         validate_lfp_summary_config(
             replace(default_lfp_summary_config(), ppc_execution=execution)
         )
