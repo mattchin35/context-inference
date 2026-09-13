@@ -1528,6 +1528,53 @@ def test_plan_batches_conditions_deterministically_under_worker_allocation_limit
     assert plan.allocation_estimate.planned_worker_private_bytes <= 60_000
 
 
+def test_plan_batches_conditions_to_satisfy_aggregate_allocation_limit() -> None:
+    """Aggregate preflight splits an otherwise valid all-condition worker batch."""
+    config = _planner_config(
+        shuffle_count=25,
+        unit_block_size=10,
+        shuffle_block_size=25,
+        worker_count=2,
+        maximum_worker_allocation_bytes=150_000,
+        maximum_aggregate_allocation_bytes=100_000,
+    )
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([2, 7], dtype=np.int64),
+        condition_names=("a", "b", "c"),
+        condition_membership=np.ones((2, 3), dtype=bool),
+        source_trial_spike_count=np.zeros((2, 10, 2), dtype=np.int64),
+        frequency_count=1,
+    )
+
+    plan = _plan(config, **inputs)
+
+    assert plan.condition_batches == (((0,), (1,), (2,)),)
+    assert plan.allocation_estimate.planned_worker_private_bytes == 59_256
+    assert plan.allocation_estimate.planned_aggregate_array_bytes == 91_264
+
+
+def test_plan_rejects_aggregate_limit_when_one_condition_batch_cannot_fit() -> None:
+    """Deterministic batching cannot rescue an aggregate-unsafe singleton batch."""
+    config = _planner_config(
+        shuffle_count=25,
+        unit_block_size=10,
+        shuffle_block_size=25,
+        worker_count=2,
+        maximum_worker_allocation_bytes=150_000,
+        maximum_aggregate_allocation_bytes=90_000,
+    )
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([2, 7], dtype=np.int64),
+        condition_names=("a", "b", "c"),
+        condition_membership=np.ones((2, 3), dtype=bool),
+        source_trial_spike_count=np.zeros((2, 10, 2), dtype=np.int64),
+        frequency_count=1,
+    )
+
+    with pytest.raises(ValueError, match="aggregate"):
+        _plan(config, **inputs)
+
+
 def test_plan_allocation_uses_largest_bounded_unit_block_and_active_workers() -> None:
     """Component planning charges the largest unit block, never all units at once."""
     config = _planner_config(
@@ -1870,6 +1917,10 @@ def test_allocation_estimate_uses_observed_stage_peak_without_summing_null_stage
         (
             "duplicate stable trial rows",
             lambda values: values | {"stable_trial_rows": np.array([3, 3, 7], dtype=np.int64)},
+        ),
+        (
+            "negative stable trial rows",
+            lambda values: values | {"stable_trial_rows": np.array([-3, 4, 7], dtype=np.int64)},
         ),
         (
             "duplicate site identifiers",
@@ -2224,6 +2275,113 @@ def test_plan_returns_owned_immutable_schedule_and_union_arrays() -> None:
             array.flat[0] = array.flat[0]
     with pytest.raises(FrozenInstanceError):
         job.schedule = np.empty((0, 0), dtype=np.int64)
+
+
+def test_direct_planner_records_own_freeze_and_validate_array_contracts() -> None:
+    """Public plan records defend their advertised immutable identity arrays."""
+    selected_rows = np.array([10, 20], dtype=np.int64)
+    schedule = np.array([[1, 0]], dtype=np.int64)
+    stable_source = np.array([[10, 20]], dtype=np.int64)
+    stable_target = np.array([[20, 10]], dtype=np.int64)
+    union_position = np.array([[0, 1]], dtype=np.int64)
+    job = ppc_runtime.PPCJobPlan(
+        condition_index=0,
+        condition_name="condition",
+        site_index=0,
+        site_id="site",
+        epoch_index=0,
+        epoch_name="whole",
+        selected_trial_rows=selected_rows,
+        schedule=schedule,
+        stable_edge_source_trial_row=stable_source,
+        stable_edge_target_trial_row=stable_target,
+        edge_union_position=union_position,
+        segment_expression="before + after",
+        base_ppc_seed=11,
+        schedule_seed=11,
+        condition_derivation_identity=0,
+        site_derivation_identity=0,
+        epoch_derivation_identity=0,
+        schedule_shape=(1, 2),
+        schedule_fingerprint=ppc_runtime._array_fingerprint(schedule),
+    )
+    allocation = ppc_runtime.PPCAllocationEstimate(
+        job_accumulator_bytes=0,
+        observed_trial_statistics_bytes=0,
+        observed_gather_temporary_bytes=0,
+        kernel_working_bytes=0,
+        geometry_bytes=0,
+        planner_array_bytes=0,
+        summary_assembly_bytes=0,
+        worker_plan_bytes=0,
+        worker_summary_bytes=0,
+        planned_computation_private_bytes=0,
+        planned_parent_private_bytes=0,
+        planned_worker_private_bytes=0,
+        shared_phase_mmap_bytes=0,
+        planned_aggregate_array_bytes=0,
+        active_worker_count=0,
+    )
+    edge_site = np.array([0, 0], dtype=np.int64)
+    edge_source = np.array([10, 20], dtype=np.int64)
+    edge_target = np.array([20, 10], dtype=np.int64)
+    component = ppc_runtime.PPCComponentPlan(
+        job_plans=(job,),
+        edge_site_index=edge_site,
+        stable_edge_source_trial_row=edge_source,
+        stable_edge_target_trial_row=edge_target,
+        condition_batches=(((0,),),),
+        scheduled_edge_count=2,
+        independent_edge_count=2,
+        union_edge_count=2,
+        edge_union_saturation=1.0,
+        edge_reuse_ratio=1.0,
+        allocation_estimate=allocation,
+    )
+
+    selected_rows[0] = 99
+    schedule[0, 0] = 0
+    stable_source[0, 0] = 99
+    stable_target[0, 0] = 99
+    union_position[0, 0] = 1
+    edge_site[0] = 1
+    edge_source[0] = 99
+    edge_target[0] = 99
+
+    np.testing.assert_array_equal(job.selected_trial_rows, np.array([10, 20], dtype=np.int64))
+    np.testing.assert_array_equal(job.schedule, np.array([[1, 0]], dtype=np.int64))
+    np.testing.assert_array_equal(job.stable_edge_source_trial_row, np.array([[10, 20]], dtype=np.int64))
+    np.testing.assert_array_equal(job.stable_edge_target_trial_row, np.array([[20, 10]], dtype=np.int64))
+    np.testing.assert_array_equal(job.edge_union_position, np.array([[0, 1]], dtype=np.int64))
+    np.testing.assert_array_equal(component.edge_site_index, np.array([0, 0], dtype=np.int64))
+    np.testing.assert_array_equal(component.stable_edge_source_trial_row, np.array([10, 20], dtype=np.int64))
+    np.testing.assert_array_equal(component.stable_edge_target_trial_row, np.array([20, 10], dtype=np.int64))
+    for array in (
+        job.selected_trial_rows,
+        job.schedule,
+        job.stable_edge_source_trial_row,
+        job.stable_edge_target_trial_row,
+        job.edge_union_position,
+        component.edge_site_index,
+        component.stable_edge_source_trial_row,
+        component.stable_edge_target_trial_row,
+    ):
+        assert not array.flags.writeable
+        with pytest.raises(ValueError):
+            array.flat[0] = array.flat[0]
+
+    with pytest.raises(ValueError):
+        replace(
+            job,
+            stable_edge_target_trial_row=np.array([[10, 20]], dtype=np.int64),
+        )
+    with pytest.raises(ValueError):
+        replace(component, edge_site_index=np.array([0], dtype=np.int64))
+    with pytest.raises(ValueError):
+        replace(
+            component,
+            stable_edge_target_trial_row=np.array([10, 20], dtype=np.int64),
+        )
 
 
 def test_plan_rejects_unsafe_aggregate_workers_before_any_process_or_computation(
