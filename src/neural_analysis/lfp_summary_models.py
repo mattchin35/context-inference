@@ -139,12 +139,50 @@ class PPCExecutionConfig:
     These categorical settings control memory and progress behavior only. They
     are serialized in work metadata but deliberately excluded from final
     scientific component fingerprints.
+
+    Parameters
+    ----------
+    unit_block_size : int
+        Positive maximum number of source-unit axis entries in one work block.
+    shuffle_block_size : int
+        Positive execution chunk size for null schedules. It does not change
+        the full configured PPC shuffle count or its scientific identity.
+    trial_edge_block_size : int
+        Positive maximum number of site-qualified trial edges in one kernel
+        gather block.
+    worker_count : int
+        Positive requested process count; ``1`` executes serially.
+    maximum_worker_allocation_bytes : int
+        Positive per-process allocation limit in bytes. It applies to the
+        serial parent computation, the parallel parent planning/publication
+        process, and every parallel worker.
+    maximum_aggregate_allocation_bytes : int
+        Positive total allocation limit in bytes: shared phase mmap counted
+        once plus parent and active worker private peaks.
+    prepared_phase_cache_enabled : bool
+        Whether execution may reuse the prepared on-disk phase cache. This
+        changes work behavior only, never scientific PPC settings.
+    checkpoint_enabled : bool
+        Whether resumable execution block checkpoints are written and read.
+    checkpoint_retention : str
+        Checkpoint cleanup policy. ``"incomplete_only"`` retains only work
+        needed to resume incomplete computations.
+    progress_update_interval : int
+        Positive number of completed work units between progress callbacks.
+
+    Notes
+    -----
+    The byte limits are execution controls, not scientific parameters. They
+    participate in work metadata/fingerprints and deterministic planner
+    batching while leaving component fingerprints unchanged.
     """
 
     unit_block_size: int = 8
     shuffle_block_size: int = 25
     trial_edge_block_size: int = 64
     worker_count: int = 1
+    maximum_worker_allocation_bytes: int = 2 * 1024**3
+    maximum_aggregate_allocation_bytes: int = 12 * 1024**3
     prepared_phase_cache_enabled: bool = True
     checkpoint_enabled: bool = True
     checkpoint_retention: str = "incomplete_only"
@@ -613,6 +651,8 @@ def _validate_ppc_execution(execution: PPCExecutionConfig) -> None:
         execution.shuffle_block_size,
         execution.trial_edge_block_size,
         execution.worker_count,
+        execution.maximum_worker_allocation_bytes,
+        execution.maximum_aggregate_allocation_bytes,
         execution.progress_update_interval,
     )
     if (
