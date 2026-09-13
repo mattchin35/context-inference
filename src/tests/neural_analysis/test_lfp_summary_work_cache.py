@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import inspect
 from pathlib import Path
 import socket
 
@@ -265,6 +266,155 @@ def test_ppc_checkpoints_validate_completion_and_cleanup_is_exact_fingerprint(
     work_cache.cleanup_ppc_run(second_root, "run-b")
     assert first_root.exists()
     assert not second_root.exists()
+
+
+def test_single_ppc_checkpoint_loader_keeps_valid_siblings_independent(
+    tmp_path: Path,
+) -> None:
+    """One block can load/reject without eagerly opening its checkpoint siblings.
+
+    The single-block API accepts only the exact completed marker, safe NPZ, and
+    run metadata.  Corrupting one sibling therefore cannot make an already
+    valid sibling unavailable to a streaming grouped executor.
+    """
+    metadata = {**_metadata("run-a"), "run_fingerprint": "run-a"}
+    run_root = tmp_path / "ppc" / "run-a"
+    first_arrays = {"ppc": np.array([[0.1]], dtype=float)}
+    second_arrays = {"ppc": np.array([[0.2]], dtype=float)}
+    work_cache.write_ppc_checkpoint(run_root, "block-a", first_arrays, metadata)
+    work_cache.write_ppc_checkpoint(run_root, "block-b", second_arrays, metadata)
+
+    first = work_cache.load_valid_ppc_checkpoint(run_root, "block-a", metadata)
+    second = work_cache.load_valid_ppc_checkpoint(run_root, "block-b", metadata)
+    assert first is not None and second is not None
+    np.testing.assert_array_equal(first.arrays["ppc"], first_arrays["ppc"])
+    np.testing.assert_array_equal(second.arrays["ppc"], second_arrays["ppc"])
+    assert not first.arrays["ppc"].flags.writeable
+    assert not second.arrays["ppc"].flags.writeable
+    assert not np.shares_memory(first.arrays["ppc"], first_arrays["ppc"])
+
+    # The streaming reader validates precisely the requested block, its marker,
+    # and the complete run metadata.  A failure in one sibling cannot poison a
+    # separate valid block.
+    marker_path = run_root / "blocks" / "block-a.complete.json"
+    marker_path.unlink()
+    assert work_cache.load_valid_ppc_checkpoint(run_root, "block-a", metadata) is None
+    work_cache.write_ppc_checkpoint(run_root, "block-a", first_arrays, metadata)
+    marker_path.write_text(
+        json.dumps({"block_id": "block-b", "run_fingerprint": "run-a"}),
+        encoding="utf-8",
+    )
+    assert work_cache.load_valid_ppc_checkpoint(run_root, "block-a", metadata) is None
+    work_cache.write_ppc_checkpoint(run_root, "block-a", first_arrays, metadata)
+    assert work_cache.load_valid_ppc_checkpoint(
+        run_root,
+        "block-a",
+        {**metadata, "scientific_fingerprint": "other-science"},
+    ) is None
+    assert work_cache.load_valid_ppc_checkpoint(run_root, "../block-a", metadata) is None
+    marker_path.write_text(
+        json.dumps({"block_id": "block-a", "run_fingerprint": "other-run"}),
+        encoding="utf-8",
+    )
+    assert work_cache.load_valid_ppc_checkpoint(run_root, "block-a", metadata) is None
+    work_cache.write_ppc_checkpoint(run_root, "block-a", first_arrays, metadata)
+
+    (run_root / "blocks" / "block-b.npz").write_bytes(b"corrupt")
+    preserved = work_cache.load_valid_ppc_checkpoint(run_root, "block-a", metadata)
+    rejected = work_cache.load_valid_ppc_checkpoint(run_root, "block-b", metadata)
+    assert preserved is not None
+    np.testing.assert_array_equal(preserved.arrays["ppc"], first_arrays["ppc"])
+    assert rejected is None
+    assert work_cache.load_valid_ppc_checkpoint(run_root, "missing", metadata) is None
+
+    work_cache.write_ppc_checkpoint(run_root, "block-b", second_arrays, metadata)
+    np.savez(
+        run_root / "blocks" / "block-b.npz",
+        unsafe=np.array([{"pickle": True}], dtype=object),
+    )
+    assert work_cache.load_valid_ppc_checkpoint(run_root, "block-b", metadata) is None
+    assert work_cache.load_valid_ppc_checkpoint(run_root, "block-a", metadata) is not None
+
+
+def test_ppc_checkpoint_writer_default_copy_and_explicit_no_copy_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default checkpoint writes retain defensive copying; bounded no-copy is explicit.
+
+    The no-copy path is reserved for grouped execution's already-owned,
+    read-only bounded summary arrays.  It does not weaken the existing public
+    defensive-copy behavior and still rejects writable or pickle-bearing input.
+    """
+    metadata = {**_metadata("run-a"), "run_fingerprint": "run-a"}
+    run_root = tmp_path / "ppc" / "run-a"
+    writer_signature = inspect.signature(work_cache.write_ppc_checkpoint)
+    assert writer_signature.parameters["copy_arrays"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert writer_signature.parameters["copy_arrays"].default is True
+    original_atomic_npz = work_cache._atomic_npz
+    published_arrays: dict[str, Mapping[str, np.ndarray]] = {}
+
+    def recording_atomic_npz(
+        directory: Path,
+        name: str,
+        arrays: Mapping[str, np.ndarray],
+    ) -> None:
+        """Capture exact arrays handed to synchronous NPZ publication."""
+        if directory.name == "blocks":
+            published_arrays[name] = dict(arrays)
+        original_atomic_npz(directory, name, arrays)
+
+    monkeypatch.setattr(work_cache, "_atomic_npz", recording_atomic_npz)
+    mutable = np.array([[0.1]], dtype=float)
+    work_cache.write_ppc_checkpoint(run_root, "default", {"ppc": mutable}, metadata)
+    assert not np.shares_memory(published_arrays["default.npz"]["ppc"], mutable)
+    mutable[0, 0] = 9.0
+    default_loaded = work_cache.load_valid_ppc_checkpoint(run_root, "default", metadata)
+    assert default_loaded is not None
+    np.testing.assert_array_equal(default_loaded.arrays["ppc"], np.array([[0.1]], dtype=float))
+
+    readonly = np.array([[0.2]], dtype=float)
+    readonly.setflags(write=False)
+    work_cache.write_ppc_checkpoint(
+        run_root,
+        "no-copy",
+        {"ppc": readonly},
+        metadata,
+        copy_arrays=False,
+    )
+    assert published_arrays["no-copy.npz"]["ppc"] is readonly
+    assert np.shares_memory(published_arrays["no-copy.npz"]["ppc"], readonly)
+    no_copy_loaded = work_cache.load_valid_ppc_checkpoint(run_root, "no-copy", metadata)
+    assert no_copy_loaded is not None
+    np.testing.assert_array_equal(no_copy_loaded.arrays["ppc"], readonly)
+    assert not no_copy_loaded.arrays["ppc"].flags.writeable
+
+    with pytest.raises(ValueError, match="read-only|copy"):
+        work_cache.write_ppc_checkpoint(
+            run_root,
+            "writable-no-copy",
+            {"ppc": np.array([[0.3]], dtype=float)},
+            metadata,
+            copy_arrays=False,
+        )
+    with pytest.raises(ValueError, match="copy"):
+        work_cache.write_ppc_checkpoint(
+            run_root,
+            "nonboolean-copy-mode",
+            {"ppc": readonly},
+            metadata,
+            copy_arrays=0,
+        )
+    unsafe = np.array([{"pickle": True}], dtype=object)
+    unsafe.setflags(write=False)
+    with pytest.raises(ValueError, match="object|pickle"):
+        work_cache.write_ppc_checkpoint(
+            run_root,
+            "object-no-copy",
+            {"unsafe": unsafe},
+            metadata,
+            copy_arrays=False,
+        )
 
 
 def test_ppc_checkpoint_rejects_metadata_mismatch_and_pickle_arrays(tmp_path: Path) -> None:
