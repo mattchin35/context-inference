@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import FrozenInstanceError, fields, replace
+import gc
 import inspect
 import json
 import os
@@ -1066,7 +1067,11 @@ def test_grouped_plan_contracts_freeze_fields_and_pure_keyword_interfaces() -> N
         "observed_gather_temporary_bytes",
         "kernel_working_bytes",
         "geometry_bytes",
+        "condition_membership_bytes",
+        "source_trial_spike_count_bytes",
+        "planning_working_bytes",
         "planner_array_bytes",
+        "planned_planning_private_bytes",
         "summary_assembly_bytes",
         "worker_plan_bytes",
         "worker_summary_bytes",
@@ -1128,11 +1133,144 @@ def test_grouped_plan_contracts_freeze_fields_and_pure_keyword_interfaces() -> N
         "worker_count",
         "pending_unit_block_count",
         "shared_phase_mmap_bytes",
+        "condition_membership_bytes",
+        "source_trial_spike_count_bytes",
+        "planning_working_bytes",
     )
     assert all(
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
         for parameter in allocation_signature.parameters.values()
     )
+
+
+@pytest.mark.parametrize("invalid_bytes", (-1, True, 1.5))
+def test_grouped_allocation_records_full_planning_masks_and_spike_counts(
+    invalid_bytes: object,
+) -> None:
+    """Planning bytes are explicit, checked, and separate from steady execution.
+
+    The executor constructs one gated Boolean ``(trial, condition)`` membership
+    and one int64 ``(trial, full_unit, before_after=2)`` source-count table
+    before it can call the pure planner.  They are released before parent
+    summary computation, so only the named planning lifetime contains them.
+    """
+    arguments = {
+        "active_job_count": 1,
+        "worker_result_job_count": 1,
+        "component_job_count": 1,
+        "shuffle_count": 1,
+        "total_unit_count": 3,
+        "unit_block_size": 1,
+        "source_trial_spike_count": np.zeros((2, 1, 2), dtype=np.int64),
+        "edge_source_trial_position": np.array([0], dtype=np.int64),
+        "observed_source_trial_position": np.array([0], dtype=np.int64),
+        "frequency_count": 1,
+        "representative_band_count": 2,
+        "phase_bin_count": 2,
+        "planner_array_bytes": 100,
+        "worker_plan_bytes": 0,
+        "worker_count": 1,
+        "pending_unit_block_count": 1,
+        "shared_phase_mmap_bytes": 0,
+        "condition_membership_bytes": 4,
+        "source_trial_spike_count_bytes": 96,
+        "planning_working_bytes": 0,
+    }
+    field_name = {
+        -1: "condition_membership_bytes",
+        True: "source_trial_spike_count_bytes",
+        1.5: "planning_working_bytes",
+    }[invalid_bytes]
+    with pytest.raises(ValueError, match="planning|bytes|integer"):
+        ppc_runtime.estimate_grouped_ppc_allocation(
+            **(arguments | {field_name: invalid_bytes})
+        )
+
+
+def test_grouped_plan_accounts_full_construction_peak_and_preflights_it() -> None:
+    """Planner centrally derives a conservative construction-stage peak.
+
+    The retained table bytes are ``M = trial * condition`` and
+    ``Q = 16 * trial * unit``.  Planner construction retains either final plan
+    arrays ``P`` or its schedule/map scratch: ``D`` for every selected-trial
+    and schedule int64 cell plus ``A`` for scalar local-position/edge lookup
+    vectors and one copied ``(trial, unit_block, segment)`` int64 count block.
+    ``A`` is a conservative worst-case bound, rather than an exact allocation
+    trace.  A sparse selection over a larger trial axis makes ``D + A`` exceed
+    ``P``. The plan derives all values from its own validated inputs; callers
+    cannot underreport them.
+    """
+    config = _planner_config(shuffle_count=2)
+    trial_count = 100
+    membership = np.zeros((trial_count, 2), dtype=bool)
+    membership[:2, 0] = True
+    membership[2:4, 1] = True
+    inputs = _planner_inputs(
+        stable_trial_rows=np.arange(11, 11 + trial_count, dtype=np.int64),
+        condition_names=("all", "late"),
+        condition_membership=membership,
+        source_trial_spike_count=np.zeros((trial_count, 1, 2), dtype=np.int64),
+    )
+    plan = _plan(config, **inputs)
+    estimate = plan.allocation_estimate
+    assert estimate.condition_membership_bytes == trial_count * 2
+    assert estimate.source_trial_spike_count_bytes == trial_count * 1 * 2 * 8
+    selected_row_cells = sum(job.selected_trial_rows.size for job in plan.job_plans)
+    schedule_cells = sum(job.schedule.size for job in plan.job_plans)
+    D = 8 * selected_row_cells + 8 * schedule_cells
+    Emax = trial_count * (trial_count - 1)
+    A = 8 * (2 * trial_count + Emax) + 16 * trial_count * 1
+    assert estimate.planning_working_bytes == D + A
+    assert estimate.planning_working_bytes > estimate.planner_array_bytes
+    assert estimate.planned_planning_private_bytes == (
+        estimate.condition_membership_bytes
+        + estimate.source_trial_spike_count_bytes
+        + max(estimate.planner_array_bytes, estimate.planning_working_bytes)
+    )
+    # Counts/membership and their construction peak are released before the
+    # serial steady stage, but must still gate the parent lifetime.
+    steady_parent = (
+        estimate.planner_array_bytes + estimate.summary_assembly_bytes
+        + max(
+            estimate.planned_computation_private_bytes,
+            estimate.checkpoint_block_bytes,
+        )
+    )
+    assert estimate.planned_parent_private_bytes == max(
+        estimate.planned_planning_private_bytes,
+        steady_parent,
+    )
+    construction_limit = (
+        estimate.condition_membership_bytes
+        + estimate.source_trial_spike_count_bytes
+        + estimate.planning_working_bytes
+        - 1
+    )
+    assert (
+        estimate.condition_membership_bytes
+        + estimate.source_trial_spike_count_bytes
+        + estimate.planner_array_bytes
+        <= construction_limit
+        < estimate.condition_membership_bytes
+        + estimate.source_trial_spike_count_bytes
+        + estimate.planning_working_bytes
+    )
+
+    def forbidden_map(*_: object, **__: object) -> None:
+        """Construction-stage preflight must precede final edge-map materialization."""
+        raise AssertionError("unsafe plan materialized final edge maps")
+
+    unsafe_config = replace(
+        config,
+        ppc_execution=replace(
+            config.ppc_execution,
+            maximum_worker_allocation_bytes=construction_limit,
+        ),
+    )
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(ppc_runtime.np, "broadcast_to", forbidden_map)
+        with pytest.raises(ValueError, match="planning|parent|allocation"):
+            _plan(unsafe_config, **inputs)
 
 
 def test_plan_translates_condition_local_schedule_positions_to_stable_trial_rows() -> None:
@@ -2051,7 +2189,7 @@ def test_allocation_estimate_uses_observed_stage_peak_without_summing_null_stage
         shuffle_count=1,
         total_unit_count=1,
         unit_block_size=1,
-        source_trial_spike_count=np.zeros((1, 1, 2), dtype=np.int64),
+        source_trial_spike_count=np.zeros((100, 1, 2), dtype=np.int64),
         edge_source_trial_position=np.array([0], dtype=np.int64),
         observed_source_trial_position=np.array([0], dtype=np.int64),
         frequency_count=1,
@@ -2062,9 +2200,90 @@ def test_allocation_estimate_uses_observed_stage_peak_without_summing_null_stage
         worker_count=2,
         pending_unit_block_count=1,
         shared_phase_mmap_bytes=0,
+        condition_membership_bytes=100,
+        source_trial_spike_count_bytes=1_600,
+        planning_working_bytes=5_000,
     )
-    assert planning_dominant.planned_parent_private_bytes == 1000 + 276 + 300
-    assert planning_dominant.planned_aggregate_array_bytes == 1000 + 276 + 300 + 276 + observed_stage_bytes
+    planning_bytes = 100 + 1_600 + max(1000, 5_000)
+    steady_parent_bytes = (
+        planning_dominant.planner_array_bytes
+        + planning_dominant.summary_assembly_bytes
+        + planning_dominant.checkpoint_block_bytes
+    )
+    steady_parallel_bytes = (
+        steady_parent_bytes
+        + planning_dominant.active_worker_count
+        * planning_dominant.planned_worker_private_bytes
+    )
+    assert planning_dominant.planning_working_bytes == 5_000
+    assert planning_dominant.planned_planning_private_bytes == planning_bytes
+    assert planning_dominant.planned_parent_private_bytes == max(
+        planning_bytes,
+        steady_parent_bytes,
+    )
+    assert planning_dominant.planned_aggregate_array_bytes == max(
+        planning_bytes,
+        steady_parallel_bytes,
+    )
+
+
+@pytest.mark.parametrize("worker_count", (1, 2))
+def test_allocation_estimate_uses_planning_peak_before_or_alongside_steady_execution(
+    worker_count: int,
+) -> None:
+    """Planning tables overlap neither summary compute nor parallel workers.
+
+    The planning lifetime contains gated membership ``M``, full source counts
+    ``Q``, and the larger of retained plan arrays ``P`` or construction scratch
+    ``D + A``.  It is an alternative peak: the parent chooses its larger
+    planning or steady stage, while aggregate memory chooses planning alone or
+    steady parent plus actually active workers.
+    """
+    estimate = ppc_runtime.estimate_grouped_ppc_allocation(
+        active_job_count=1,
+        worker_result_job_count=1,
+        component_job_count=1,
+        shuffle_count=1,
+        total_unit_count=1,
+        unit_block_size=1,
+        source_trial_spike_count=np.zeros((100, 1, 2), dtype=np.int64),
+        edge_source_trial_position=np.array([0], dtype=np.int64),
+        observed_source_trial_position=np.array([0], dtype=np.int64),
+        frequency_count=1,
+        representative_band_count=2,
+        phase_bin_count=2,
+        planner_array_bytes=100,
+        worker_plan_bytes=20,
+        worker_count=worker_count,
+        pending_unit_block_count=1,
+        shared_phase_mmap_bytes=17,
+        condition_membership_bytes=100,
+        source_trial_spike_count_bytes=1_600,
+        planning_working_bytes=5_000,
+    )
+    planning_bytes = 100 + 1_600 + max(100, 5_000)
+    steady_parent_bytes = estimate.planner_array_bytes + estimate.summary_assembly_bytes
+    if estimate.active_worker_count == 0:
+        steady_parent_bytes += max(
+            estimate.planned_computation_private_bytes,
+            estimate.checkpoint_block_bytes,
+        )
+    else:
+        steady_parent_bytes += estimate.checkpoint_block_bytes
+    steady_aggregate_bytes = (
+        steady_parent_bytes
+        + estimate.active_worker_count * estimate.planned_worker_private_bytes
+    )
+    assert estimate.planning_working_bytes == 5_000
+    assert estimate.planned_planning_private_bytes == planning_bytes
+    assert estimate.planned_parent_private_bytes == max(
+        planning_bytes,
+        steady_parent_bytes,
+    )
+    assert estimate.planned_aggregate_array_bytes == 17 + max(
+        planning_bytes,
+        steady_aggregate_bytes,
+    )
 
 
 @pytest.mark.parametrize(
@@ -2150,6 +2369,9 @@ def test_plan_rejects_malformed_identity_and_allocation_inputs(
         {"phase_bin_count": False},
         {"planner_array_bytes": True},
         {"planner_array_bytes": np.iinfo(np.int64).max + 1},
+        {"condition_membership_bytes": True},
+        {"source_trial_spike_count_bytes": -1},
+        {"planning_working_bytes": 1.5},
         {"worker_plan_bytes": -1},
         {"worker_count": 0},
         {"pending_unit_block_count": -1},
@@ -2178,6 +2400,9 @@ def test_allocation_estimate_rejects_malformed_axes_counts_and_positions(
         "worker_count": 1,
         "pending_unit_block_count": 1,
         "shared_phase_mmap_bytes": 0,
+        "condition_membership_bytes": 0,
+        "source_trial_spike_count_bytes": 0,
+        "planning_working_bytes": 0,
     }
     with pytest.raises(ValueError):
         ppc_runtime.estimate_grouped_ppc_allocation(**(arguments | overrides))
@@ -2353,6 +2578,14 @@ def test_allocation_estimate_retains_singleton_observed_summary_without_null_edg
     "overrides",
     (
         {"planner_array_bytes": np.iinfo(np.int64).max},
+        {
+            "condition_membership_bytes": np.iinfo(np.int64).max,
+            "source_trial_spike_count_bytes": 1,
+        },
+        {
+            "condition_membership_bytes": 1,
+            "planning_working_bytes": np.iinfo(np.int64).max,
+        },
         {"worker_plan_bytes": np.iinfo(np.int64).max},
         {"shared_phase_mmap_bytes": np.iinfo(np.int64).max},
         {
@@ -2360,6 +2593,10 @@ def test_allocation_estimate_retains_singleton_observed_summary_without_null_edg
             "worker_count": 2,
             "pending_unit_block_count": 2,
             "worker_plan_bytes": np.iinfo(np.int64).max // 2,
+        },
+        {
+            "shared_phase_mmap_bytes": 1,
+            "planning_working_bytes": np.iinfo(np.int64).max,
         },
     ),
 )
@@ -2385,9 +2622,41 @@ def test_allocation_estimate_checks_parent_worker_shared_and_aggregate_overflow(
         "worker_count": 2,
         "pending_unit_block_count": 1,
         "shared_phase_mmap_bytes": 0,
+        "condition_membership_bytes": 0,
+        "source_trial_spike_count_bytes": 0,
+        "planning_working_bytes": 0,
     }
     with pytest.raises(ValueError):
         ppc_runtime.estimate_grouped_ppc_allocation(**(arguments | overrides))
+
+
+def test_allocation_estimate_accepts_exact_int64_planning_boundary() -> None:
+    """An exact planning boundary is valid until a concurrent byte is added."""
+    boundary = ppc_runtime.estimate_grouped_ppc_allocation(
+        active_job_count=0,
+        worker_result_job_count=1,
+        component_job_count=1,
+        shuffle_count=1,
+        total_unit_count=1,
+        unit_block_size=1,
+        source_trial_spike_count=np.zeros((1, 1, 2), dtype=np.int64),
+        edge_source_trial_position=np.empty(0, dtype=np.int64),
+        observed_source_trial_position=np.empty(0, dtype=np.int64),
+        frequency_count=1,
+        representative_band_count=2,
+        phase_bin_count=2,
+        planner_array_bytes=0,
+        worker_plan_bytes=0,
+        worker_count=1,
+        pending_unit_block_count=1,
+        shared_phase_mmap_bytes=0,
+        condition_membership_bytes=np.iinfo(np.int64).max,
+        source_trial_spike_count_bytes=0,
+        planning_working_bytes=0,
+    )
+    assert boundary.planned_planning_private_bytes == np.iinfo(np.int64).max
+    assert boundary.planned_parent_private_bytes == np.iinfo(np.int64).max
+    assert boundary.planned_aggregate_array_bytes == np.iinfo(np.int64).max
 
 
 def test_plan_returns_owned_immutable_schedule_and_union_arrays() -> None:
@@ -2476,7 +2745,11 @@ def test_direct_planner_records_own_freeze_and_validate_array_contracts() -> Non
         observed_gather_temporary_bytes=0,
         kernel_working_bytes=0,
         geometry_bytes=0,
+        condition_membership_bytes=0,
+        source_trial_spike_count_bytes=0,
         planner_array_bytes=0,
+        planning_working_bytes=0,
+        planned_planning_private_bytes=0,
         summary_assembly_bytes=0,
         worker_plan_bytes=0,
         worker_summary_bytes=0,
@@ -3102,6 +3375,79 @@ def _grouped_inputs(config: object) -> tuple[object, object]:
     return prepared_phase, prepared_spikes
 
 
+def _sparse_large_trial_grouped_inputs(config: object) -> tuple[object, object]:
+    """Return real grouped records with a sparse 100-trial planning axis.
+
+    Returns
+    -------
+    prepared_phase : PreparedPhaseRun
+        Complex64 phase and Boolean validity with axes ``(site, frequency,
+        trial=100, time)``. Every trial and site is analysis-valid.
+    prepared_spikes : PreparedSpikeRun
+        Two units with one finite seconds spike-time vector for each of the
+        same 100 full-axis trials.
+
+    Notes
+    -----
+    Only two ``all`` rows, two ``late`` rows, no ``empty`` rows, and one
+    ``single`` row are selected. This leaves the full trial axis deliberately
+    much larger than schedule demand, so the conservative planner scratch
+    bound dominates retained plan arrays before execution allocates anything.
+    """
+    source_phase, source_spikes = _grouped_inputs(config)
+    trial_count = 100
+    stable_rows = np.arange(1_000, 1_000 + trial_count, dtype=np.int64)
+    site_count, frequency_count, _, time_count = source_phase.phase_tensor.shape
+    phase_tensor = np.repeat(source_phase.phase_tensor[:, :, :1, :], trial_count, axis=2)
+    phase_valid = np.repeat(source_phase.phase_valid[:, :, :1, :], trial_count, axis=2)
+    site_valid = np.ones((site_count, trial_count), dtype=bool)
+    condition_membership = np.zeros((trial_count, 4), dtype=bool)
+    condition_membership[:2, 0] = True
+    condition_membership[2:4, 1] = True
+    condition_membership[4, 3] = True
+    prepared_trials = PreparedTrials(
+        condition_names=("all", "late", "empty", "single"),
+        condition_membership=condition_membership,
+        filter_membership=np.ones(trial_count, dtype=bool),
+        user_excluded=np.zeros(trial_count, dtype=bool),
+        objective_valid=np.ones(trial_count, dtype=bool),
+        objective_exclusion_reason=np.full(trial_count, "", dtype="<U1"),
+        user_exclusion_reason=np.full(trial_count, "", dtype="<U1"),
+        site_validity={
+            site.stable_id: site_valid[site_index].copy()
+            for site_index, site in enumerate(config.sites)
+        },
+        pair_validity={tuple(config.site_pairs[0]): np.ones(trial_count, dtype=bool)},
+    )
+    prepared_phase = lfp_summary_runtime.PreparedPhaseRun(
+        trial_indices=stable_rows,
+        alignment_times_s=np.arange(trial_count, dtype=float),
+        prepared_trials=prepared_trials,
+        phase_tensor=phase_tensor,
+        phase_valid=phase_valid,
+        relative_time_s=source_phase.relative_time_s,
+        site_valid=site_valid,
+        pair_valid=np.ones((1, trial_count), dtype=bool),
+        source_trace=np.zeros((site_count, trial_count, time_count), dtype=float),
+    )
+    prepared_spikes = lfp_summary_runtime.PreparedSpikeRun(
+        unit_ids=source_spikes.unit_ids,
+        population_ids=source_spikes.population_ids,
+        trial_spike_trains=tuple(
+            TrialRelativeSpikeTrains(
+                unit_id=train.unit_id,
+                relative_spike_times=tuple(
+                    train.relative_spike_times[0].copy() for _ in range(trial_count)
+                ),
+                overlap_trial_indices=np.empty(0, dtype=np.int64),
+            )
+            for train in source_spikes.trial_spike_trains
+        ),
+    )
+    assert phase_tensor.shape == (site_count, frequency_count, trial_count, time_count)
+    return prepared_phase, prepared_spikes
+
+
 def _run_grouped_component(
     config: object,
     prepared_phase: object,
@@ -3326,7 +3672,9 @@ def test_grouped_component_matches_legacy_and_reduces_each_physical_edge_once(
     shuffle_sizes: list[int] = []
     previous_observed_arrays: tuple[weakref.ReferenceType[np.ndarray], ...] = ()
     previous_edge_arrays: tuple[weakref.ReferenceType[np.ndarray], ...] = ()
-    original_observed = ppc_runtime.compute_observed_trial_segmented_ppc_statistics
+    original_observed = (
+        ppc_runtime.compute_selected_observed_trial_segmented_ppc_statistics
+    )
     original_reduce = ppc_runtime.compute_segmented_edge_statistics
     original_consume = ppc_runtime._consume_grouped_edge_block
     original_writer = ppc_runtime.write_ppc_checkpoint
@@ -3335,7 +3683,9 @@ def test_grouped_component_matches_legacy_and_reduces_each_physical_edge_once(
         """Record one bounded site/unit observed reduction before delegating."""
         nonlocal previous_observed_arrays
         phase = np.asarray(kwargs["trial_phase_vectors"])
-        observed_calls.append((phase.shape[0], len(kwargs["source_trial_geometries"])))
+        geometries = tuple(kwargs["source_trial_geometries"])
+        observed_calls.append((len(geometries), len(geometries)))
+        assert phase.shape[0] >= len(geometries)
         statistics = original_observed(**kwargs)
         previous_observed_arrays = (
             weakref.ref(statistics.phase_trial_index),
@@ -3377,7 +3727,53 @@ def test_grouped_component_matches_legacy_and_reduces_each_physical_edge_once(
         assert schedule_block.shape[0] <= config.ppc_execution.shuffle_block_size
         shuffle_sizes.append(schedule_block.shape[0])
         event_order.append("consume")
-        return original_consume(*args, **kwargs)
+        job_plan = kwargs["job_plan"]
+        if job_plan.epoch_name != "whole":
+            return original_consume(*args, **kwargs)
+
+        # Whole segments are the direct before+after sufficient-statistic sum;
+        # they cannot create a temporary reduction over a segment axis or a
+        # temporary ``before + after`` array.  Four in-place adds are required:
+        # before/after for complex sums and before/after for int64 counts.
+        original_sum = ppc_runtime.np.sum
+        original_add = ppc_runtime.np.add
+        whole_add_count = 0
+
+        def forbidden_sum(*_: object, **__: object) -> object:
+            """Whole grouped consumption must not materialize an axis reduction."""
+            raise AssertionError("whole grouped consume reduced a temporary segment array")
+
+        def guarded_add(
+            left: object,
+            right: object,
+            *args: object,
+            **add_kwargs: object,
+        ) -> object:
+            """Require each whole-segment addition to write a retained accumulator."""
+            nonlocal whole_add_count
+            out = add_kwargs.get("out")
+            output = out[0] if isinstance(out, tuple) else out
+            if output is None:
+                raise AssertionError("whole grouped consume formed a before+after temporary")
+            vector_sum = np.asarray(kwargs["vector_sum"])
+            valid_count = np.asarray(kwargs["valid_count"])
+            if not (
+                np.shares_memory(np.asarray(output), vector_sum)
+                or np.shares_memory(np.asarray(output), valid_count)
+            ):
+                raise AssertionError("whole grouped consume wrote an unaccounted temporary")
+            whole_add_count += 1
+            return original_add(left, right, *args, **add_kwargs)
+
+        ppc_runtime.np.sum = forbidden_sum
+        ppc_runtime.np.add = guarded_add
+        try:
+            result = original_consume(*args, **kwargs)
+            assert whole_add_count >= 4
+            return result
+        finally:
+            ppc_runtime.np.sum = original_sum
+            ppc_runtime.np.add = original_add
 
     def recording_writer(*args: object, **kwargs: object) -> Path:
         """Require every bounded S1/S2 reducer buffer to die before publication."""
@@ -3385,7 +3781,11 @@ def test_grouped_component_matches_legacy_and_reduces_each_physical_edge_once(
         assert all(reference() is None for reference in previous_edge_arrays)
         return original_writer(*args, **kwargs)
 
-    monkeypatch.setattr(ppc_runtime, "compute_observed_trial_segmented_ppc_statistics", recording_observed)
+    monkeypatch.setattr(
+        ppc_runtime,
+        "compute_selected_observed_trial_segmented_ppc_statistics",
+        recording_observed,
+    )
     monkeypatch.setattr(ppc_runtime, "compute_segmented_edge_statistics", recording_reduce)
     monkeypatch.setattr(ppc_runtime, "_consume_grouped_edge_block", recording_consume)
     monkeypatch.setattr(ppc_runtime, "write_ppc_checkpoint", recording_writer)
@@ -3642,7 +4042,11 @@ def test_grouped_component_rejects_nonserial_or_mismatched_execution_before_side
         raise AssertionError("invalid grouped execution reached a side-effect seam")
 
     monkeypatch.setattr(ppc_runtime, "plan_grouped_ppc_component", forbidden)
-    monkeypatch.setattr(ppc_runtime, "compute_observed_trial_segmented_ppc_statistics", forbidden)
+    monkeypatch.setattr(
+        ppc_runtime,
+        "compute_selected_observed_trial_segmented_ppc_statistics",
+        forbidden,
+    )
     monkeypatch.setattr(ppc_runtime, "write_ppc_checkpoint", forbidden)
     monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", forbidden)
     with pytest.raises(ValueError, match="serial|execution"):
@@ -3669,7 +4073,11 @@ def test_grouped_component_rejects_matching_nonserial_config_before_side_effects
         raise AssertionError("nonserial S4 execution reached a side-effect seam")
 
     monkeypatch.setattr(ppc_runtime, "plan_grouped_ppc_component", forbidden)
-    monkeypatch.setattr(ppc_runtime, "compute_observed_trial_segmented_ppc_statistics", forbidden)
+    monkeypatch.setattr(
+        ppc_runtime,
+        "compute_selected_observed_trial_segmented_ppc_statistics",
+        forbidden,
+    )
     monkeypatch.setattr(ppc_runtime, "write_ppc_checkpoint", forbidden)
     monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", forbidden)
     with pytest.raises(ValueError, match="serial|worker"):
@@ -3698,7 +4106,11 @@ def test_grouped_component_preflights_unsafe_memory_before_summary_or_work(
 
     monkeypatch.setattr(ppc_runtime, "_empty_grouped_summary_arrays", forbidden)
     monkeypatch.setattr(ppc_runtime, "build_source_trial_spike_geometry", forbidden)
-    monkeypatch.setattr(ppc_runtime, "compute_observed_trial_segmented_ppc_statistics", forbidden)
+    monkeypatch.setattr(
+        ppc_runtime,
+        "compute_selected_observed_trial_segmented_ppc_statistics",
+        forbidden,
+    )
     monkeypatch.setattr(ppc_runtime, "compute_segmented_edge_statistics", forbidden)
     monkeypatch.setattr(ppc_runtime, "write_ppc_checkpoint", forbidden)
     monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", forbidden)
@@ -3896,7 +4308,9 @@ def test_grouped_component_resumes_valid_siblings_and_rejects_tampered_blocks(
     phase, spikes = _grouped_inputs(config)
     cold = _run_grouped_component(config, phase, spikes, tmp_path / "cold")
     warm = _run_grouped_component(config, phase, spikes, tmp_path / "warm")
-    original_observed = ppc_runtime.compute_observed_trial_segmented_ppc_statistics
+    original_observed = (
+        ppc_runtime.compute_selected_observed_trial_segmented_ppc_statistics
+    )
     original_single_loader = ppc_runtime.load_valid_ppc_checkpoint
     previous_checkpoint_arrays: tuple[weakref.ReferenceType[np.ndarray], ...] = ()
 
@@ -3920,14 +4334,22 @@ def test_grouped_component_resumes_valid_siblings_and_rejects_tampered_blocks(
         """Grouped resume must not eagerly load every valid checkpoint sibling."""
         raise AssertionError("grouped resume used eager checkpoint loading")
 
-    monkeypatch.setattr(ppc_runtime, "compute_observed_trial_segmented_ppc_statistics", forbidden_recompute)
+    monkeypatch.setattr(
+        ppc_runtime,
+        "compute_selected_observed_trial_segmented_ppc_statistics",
+        forbidden_recompute,
+    )
     monkeypatch.setattr(ppc_runtime, "load_valid_ppc_checkpoint", streaming_loader)
     monkeypatch.setattr(ppc_runtime, "load_valid_ppc_checkpoints", forbidden_eager_loader)
     exact = _run_grouped_component(config, phase, spikes, tmp_path / "warm")
     assert exact.resumed_block_ids == exact.completed_block_ids
     _assert_component_summaries_equal(cold, exact)
     assert all(reference() is None for reference in previous_checkpoint_arrays)
-    monkeypatch.setattr(ppc_runtime, "compute_observed_trial_segmented_ppc_statistics", original_observed)
+    monkeypatch.setattr(
+        ppc_runtime,
+        "compute_selected_observed_trial_segmented_ppc_statistics",
+        original_observed,
+    )
     monkeypatch.setattr(ppc_runtime, "load_valid_ppc_checkpoint", original_single_loader)
 
     warm_metadata = json.loads((warm.run_directory / "metadata.json").read_text(encoding="utf-8"))
@@ -4025,3 +4447,711 @@ def test_grouped_component_checkpoint_publication_is_parent_atomic_and_failure_r
     assert resumed.resumed_block_ids == tuple(written)
     _assert_component_summaries_equal(cold, resumed)
     assert not (resumed.run_directory / "executor.lock").exists()
+
+
+def test_grouped_component_passes_full_phase_views_to_selection_aware_reducers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S4 never gathers selected phase/valid trial rows before S1 or S2 reduction.
+
+    The selection-aware observed reducer receives complete site-local phase and
+    validity views plus explicit full-axis positions.  The existing S1 reducer
+    already permits a selected geometry tuple with complete phase views, so its
+    input must also share prepared storage.  No call order is prescribed.
+    """
+    config = _grouped_config()
+    phase, spikes = _grouped_inputs(config)
+    original_observed = (
+        ppc_runtime.compute_selected_observed_trial_segmented_ppc_statistics
+    )
+    original_edge = ppc_runtime.compute_segmented_edge_statistics
+    original_plan = ppc_runtime.plan_grouped_ppc_component
+    observed_calls: list[np.ndarray] = []
+    edge_calls: list[np.ndarray] = []
+    component_plans: list[object] = []
+
+    def recording_plan(**kwargs: object) -> object:
+        """Retain the immutable planner union only for source/target view checks."""
+        plan = original_plan(**kwargs)
+        component_plans.append(plan)
+        return plan
+
+    def recording_observed(**kwargs: object) -> object:
+        """Require one full site-local view and explicit selected full positions."""
+        phase_view = np.asarray(kwargs["trial_phase_vectors"])
+        valid_view = np.asarray(kwargs["phase_valid_mask"])
+        phase_trial_index = np.asarray(kwargs["phase_trial_index"])
+        geometries = tuple(kwargs["source_trial_geometries"])
+        assert np.shares_memory(phase_view, phase.phase_tensor)
+        assert np.shares_memory(valid_view, phase.phase_valid)
+        assert np.shares_memory(phase_trial_index, phase.trial_indices)
+        assert phase_view.shape == valid_view.shape == (
+            phase.phase_tensor.shape[2],
+            phase.phase_tensor.shape[1],
+            phase.phase_tensor.shape[3],
+        )
+        assert phase_trial_index.shape == (phase.trial_indices.size,)
+        assert geometries
+        observed_calls.append(
+            np.asarray(
+                [geometry.source_trial_index for geometry in geometries],
+                dtype=np.int64,
+            )
+        )
+        return original_observed(**kwargs)
+
+    def recording_edge(**kwargs: object) -> object:
+        """Require S1 target phase and validity to remain complete storage views."""
+        phase_view = np.asarray(kwargs["trial_phase_vectors"])
+        valid_view = np.asarray(kwargs["phase_valid_mask"])
+        phase_trial_index = np.asarray(kwargs["phase_trial_index"])
+        source_view = np.asarray(kwargs["source_trial_index"])
+        target_view = np.asarray(kwargs["target_trial_index"])
+        assert np.shares_memory(phase_view, phase.phase_tensor)
+        assert np.shares_memory(valid_view, phase.phase_valid)
+        assert np.shares_memory(phase_trial_index, phase.trial_indices)
+        assert phase_view.shape == valid_view.shape == (
+            phase.phase_tensor.shape[2],
+            phase.phase_tensor.shape[1],
+            phase.phase_tensor.shape[3],
+        )
+        assert phase_trial_index.shape == (phase.trial_indices.size,)
+        assert component_plans
+        assert np.shares_memory(
+            source_view,
+            component_plans[0].stable_edge_source_trial_row,
+        )
+        assert np.shares_memory(
+            target_view,
+            component_plans[0].stable_edge_target_trial_row,
+        )
+        edge_calls.append(np.asarray(kwargs["source_trial_index"], dtype=np.int64).copy())
+        return original_edge(**kwargs)
+
+    monkeypatch.setattr(ppc_runtime, "plan_grouped_ppc_component", recording_plan)
+    monkeypatch.setattr(
+        ppc_runtime,
+        "compute_selected_observed_trial_segmented_ppc_statistics",
+        recording_observed,
+    )
+    monkeypatch.setattr(ppc_runtime, "compute_segmented_edge_statistics", recording_edge)
+    _run_grouped_component(config, phase, spikes, tmp_path)
+    assert observed_calls and edge_calls
+    assert all(
+        np.all(np.isin(source_ids, phase.trial_indices))
+        for source_ids in observed_calls
+    )
+
+
+def test_grouped_component_condition_batches_bound_active_null_jobs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forced deterministic batches retain only that batch's null accumulators."""
+    config = _grouped_config()
+    phase, spikes = _grouped_inputs(config)
+    unbatched = _run_grouped_component(config, phase, spikes, tmp_path / "unbatched")
+    original_plan = ppc_runtime.plan_grouped_ppc_component
+    original_batch = ppc_runtime._execute_grouped_condition_batch
+    original_consume = ppc_runtime._consume_grouped_edge_block
+    original_finalizer = ppc_runtime._finalize_grouped_null_job
+    active_conditions: tuple[int, ...] = ()
+    batch_calls: list[tuple[int, ...]] = []
+    consumed_conditions: list[int] = []
+    finalized_conditions: list[int] = []
+    released_batch_arrays: list[weakref.ReferenceType[np.ndarray]] = []
+
+    def split_plan(**kwargs: object) -> object:
+        """Force two input-order batches for every site without changing schedules."""
+        plan = original_plan(**kwargs)
+        return replace(plan, condition_batches=tuple(((0,), (1, 2, 3)) for _ in config.sites))
+
+    def recording_batch(*args: object, **kwargs: object) -> object:
+        """Expose exactly one live planner batch around its bounded null work."""
+        nonlocal active_conditions
+        gc.collect()
+        # A completed batch cannot retain complete shuffle draw/accumulator
+        # arrays while the next condition batch begins.
+        assert all(reference() is None for reference in released_batch_arrays)
+        assert active_conditions == ()
+        active_conditions = tuple(kwargs["condition_indices"])
+        batch_calls.append(active_conditions)
+        try:
+            return original_batch(*args, **kwargs)
+        finally:
+            active_conditions = ()
+            gc.collect()
+            assert all(reference() is None for reference in released_batch_arrays)
+
+    def recording_consume(*args: object, **kwargs: object) -> object:
+        """Every edge consume must belong to the single currently live batch."""
+        job = kwargs["job_plan"]
+        assert job.condition_index in active_conditions
+        consumed_conditions.append(job.condition_index)
+        return original_consume(*args, **kwargs)
+
+    def recording_finalizer(*args: object, **kwargs: object) -> object:
+        """Capture only weak refs to arrays that must die with this batch."""
+        job = kwargs["job_plan"]
+        assert job.condition_index in active_conditions
+        finalized_conditions.append(job.condition_index)
+        accumulator = np.asarray(kwargs["vector_sum"])
+        valid_count = np.asarray(kwargs["valid_count"])
+        draw_scratch = np.asarray(kwargs["draw_scratch"])
+        released_batch_arrays.extend(
+            (weakref.ref(accumulator), weakref.ref(valid_count), weakref.ref(draw_scratch))
+        )
+        return original_finalizer(*args, **kwargs)
+
+    monkeypatch.setattr(ppc_runtime, "plan_grouped_ppc_component", split_plan)
+    monkeypatch.setattr(ppc_runtime, "_execute_grouped_condition_batch", recording_batch)
+    monkeypatch.setattr(ppc_runtime, "_consume_grouped_edge_block", recording_consume)
+    monkeypatch.setattr(ppc_runtime, "_finalize_grouped_null_job", recording_finalizer)
+    split = _run_grouped_component(config, phase, spikes, tmp_path / "split")
+    assert batch_calls == [((0,), (1, 2, 3))[index] for _ in split.completed_block_ids for index in range(2)]
+    assert consumed_conditions and finalized_conditions
+    assert set(consumed_conditions) <= {0, 1}
+    assert set(finalized_conditions) <= {0, 1}
+    _assert_component_summaries_equal(unbatched, split)
+
+
+@pytest.mark.parametrize("shuffle_count", (3, 4))
+def test_grouped_component_finalizes_nulls_without_legacy_draw_concatenation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    shuffle_count: int,
+) -> None:
+    """Grouped finalization uses one bounded scratch with mixed finite draws.
+
+    The all-condition, before-window frequency-40 Hz cell is inference eligible
+    but has two distinct finite group-compatible draws separated by an invalid
+    cross-group draw.  Odd/even schedule counts therefore exercise mixed
+    finite/NaN handling and exact linear percentile/moment decisions.
+    Finalization cannot use top-level copying, sort, partition, percentile, or
+    quantile APIs over retained full draw vectors; in-place scratch methods are
+    permitted.
+    """
+    base_config = _grouped_config()
+    config = replace(base_config, ppc=replace(base_config.ppc, shuffle_count=shuffle_count))
+    phase, spikes = _grouped_inputs(config)
+    phase_valid = phase.phase_valid.copy()
+    phase_valid[:, 1] = False
+    group_a_index = int(np.argmin(np.abs(phase.relative_time_s + 0.50)))
+    group_b_index = int(np.argmin(np.abs(phase.relative_time_s + 0.25)))
+    for trial_index in (0, 1):
+        phase_valid[:, 1, trial_index, group_a_index - 1 : group_a_index + 2] = True
+    for trial_index in (2, 3):
+        phase_valid[:, 1, trial_index, group_b_index - 1 : group_b_index + 2] = True
+    prepared_trials = replace(
+        phase.prepared_trials,
+        filter_membership=np.array([True, True, True, True, False, True], dtype=bool),
+    )
+    phase = replace(phase, phase_valid=phase_valid, prepared_trials=prepared_trials)
+    grouped_spike_times = (
+        np.full(30, -0.50, dtype=float),
+        np.full(30, -0.50, dtype=float),
+        np.full(30, -0.25, dtype=float),
+        np.full(30, -0.25, dtype=float),
+    )
+    spikes = replace(
+        spikes,
+        trial_spike_trains=tuple(
+            replace(
+                train,
+                relative_spike_times=(
+                    *grouped_spike_times,
+                    train.relative_spike_times[4],
+                    train.relative_spike_times[5],
+                ),
+            )
+            for train in spikes.trial_spike_trains
+        ),
+    )
+
+    def fixed_schedule(
+        trial_count: int,
+        shuffle_count: int,
+        *,
+        seed: int,
+    ) -> np.ndarray:
+        """Return group-preserving then cross-group derangements deterministically."""
+        del seed
+        if trial_count == 2:
+            return np.tile(np.array([[1, 0]], dtype=np.int64), (shuffle_count, 1))
+        if trial_count == 3:
+            rows = np.array([[1, 2, 0], [2, 0, 1]], dtype=np.int64)
+            return rows[np.arange(shuffle_count) % rows.shape[0]]
+        assert trial_count == 4
+        rows = np.array(
+            [[1, 0, 3, 2], [2, 3, 0, 1], [1, 2, 3, 0]],
+            dtype=np.int64,
+        )
+        return rows[np.arange(shuffle_count) % rows.shape[0]]
+
+    monkeypatch.setattr(ppc_runtime, "generate_trial_derangement_schedule", fixed_schedule)
+    baseline = _run_grouped_component(config, phase, spikes, tmp_path / "baseline")
+    legacy, _ = _legacy_grouped_reference(
+        config, phase, spikes, baseline.component_plan, tmp_path / "legacy"
+    )
+    original_finalizer = ppc_runtime._finalize_grouped_null_job
+    scratch_shapes: list[tuple[tuple[int, ...], int]] = []
+
+    def recording_finalizer(*args: object, **kwargs: object) -> object:
+        """Allow no more than one float64 scratch matching active null cells."""
+        draw_scratch = np.asarray(kwargs["draw_scratch"])
+        vector_sum = np.asarray(kwargs["vector_sum"])
+        assert draw_scratch.dtype == np.dtype(np.float64)
+        assert draw_scratch.shape == vector_sum.shape
+        assert draw_scratch.nbytes <= np.prod(vector_sum.shape, dtype=np.int64) * 8
+        scratch_shapes.append((draw_scratch.shape, draw_scratch.nbytes))
+        valid_count = np.asarray(kwargs["valid_count"])
+        job_plan = kwargs["job_plan"]
+        if job_plan.condition_index == 0 and job_plan.epoch_name == "before":
+            assert np.any(valid_count[..., 1] > 0)
+            assert np.any(valid_count[..., 1] == 0)
+        original_copy = ppc_runtime.np.copy
+        original_array = ppc_runtime.np.array
+        original_copyto = ppc_runtime.np.copyto
+        original_sort = ppc_runtime.np.sort
+        original_partition = ppc_runtime.np.partition
+        original_percentile = ppc_runtime.np.percentile
+        original_nanpercentile = ppc_runtime.np.nanpercentile
+        original_quantile = ppc_runtime.np.quantile
+        original_nanquantile = ppc_runtime.np.nanquantile
+        original_isfinite = ppc_runtime.np.isfinite
+        original_isnan = ppc_runtime.np.isnan
+        original_concatenate = ppc_runtime.np.concatenate
+        ppc_runtime.np.copy = forbidden_copy
+        ppc_runtime.np.array = forbidden_array
+        ppc_runtime.np.copyto = forbidden_copyto
+        ppc_runtime.np.sort = forbidden_sort
+        ppc_runtime.np.partition = forbidden_partition
+        ppc_runtime.np.percentile = forbidden_percentile
+        ppc_runtime.np.nanpercentile = forbidden_nanpercentile
+        ppc_runtime.np.quantile = forbidden_quantile
+        ppc_runtime.np.nanquantile = forbidden_nanquantile
+        ppc_runtime.np.isfinite = forbid_full_mask(original_isfinite)
+        ppc_runtime.np.isnan = forbid_full_mask(original_isnan)
+        ppc_runtime.np.concatenate = forbidden_concatenate
+        try:
+            result = original_finalizer(*args, **kwargs)
+            if job_plan.condition_index == 0 and job_plan.epoch_name == "before":
+                final_draws = draw_scratch[:, 0, 1]
+                finite_draws = final_draws[original_isfinite(final_draws)]
+                assert finite_draws.size == (2 if shuffle_count == 3 else 3)
+                assert np.unique(finite_draws).size >= 2
+                assert original_isnan(final_draws).any()
+            return result
+        finally:
+            ppc_runtime.np.copy = original_copy
+            ppc_runtime.np.array = original_array
+            ppc_runtime.np.copyto = original_copyto
+            ppc_runtime.np.sort = original_sort
+            ppc_runtime.np.partition = original_partition
+            ppc_runtime.np.percentile = original_percentile
+            ppc_runtime.np.nanpercentile = original_nanpercentile
+            ppc_runtime.np.quantile = original_quantile
+            ppc_runtime.np.nanquantile = original_nanquantile
+            ppc_runtime.np.isfinite = original_isfinite
+            ppc_runtime.np.isnan = original_isnan
+            ppc_runtime.np.concatenate = original_concatenate
+
+    def forbidden_legacy_summary(*_: object, **__: object) -> object:
+        """Grouped execution must not build legacy concatenated null chunks."""
+        raise AssertionError("grouped finalization called legacy null summarizer")
+
+    def forbidden_copy(*_: object, **__: object) -> object:
+        """Grouped finalization must not duplicate complete shuffle draws."""
+        raise AssertionError("grouped finalization copied null draws")
+
+    def forbidden_concatenate(*_: object, **__: object) -> object:
+        """Grouped finalization must not concatenate complete shuffle draws."""
+        raise AssertionError("grouped finalization concatenated null draws")
+
+    def forbidden_array(*_: object, **__: object) -> object:
+        """Grouped finalization must work in place without a new draw array."""
+        raise AssertionError("grouped finalization materialized a null draw array")
+
+    def forbidden_copyto(*_: object, **__: object) -> object:
+        """Grouped finalization must not clone full draw buffers by copyto."""
+        raise AssertionError("grouped finalization copied null draws with copyto")
+
+    def forbidden_sort(*_: object, **__: object) -> object:
+        """Grouped finalization cannot sort a complete retained draw vector."""
+        raise AssertionError("grouped finalization sorted retained null draws")
+
+    def forbidden_partition(*_: object, **__: object) -> object:
+        """Top-level partition returns a copied null-draw array."""
+        raise AssertionError("grouped finalization partitioned retained null draws")
+
+    def forbidden_percentile(*_: object, **__: object) -> object:
+        """Grouped finalization cannot retain complete draws for percentile APIs."""
+        raise AssertionError("grouped finalization used percentile over null draws")
+
+    def forbidden_nanpercentile(*_: object, **__: object) -> object:
+        """Grouped finalization must not use a NaN-percentile draw reduction."""
+        raise AssertionError("grouped finalization used nanpercentile over null draws")
+
+    def forbidden_quantile(*_: object, **__: object) -> object:
+        """Grouped finalization must not use a quantile draw reduction."""
+        raise AssertionError("grouped finalization used quantile over null draws")
+
+    def forbidden_nanquantile(*_: object, **__: object) -> object:
+        """Grouped finalization must not use a NaN-quantile draw reduction."""
+        raise AssertionError("grouped finalization used nanquantile over null draws")
+
+    def forbid_full_mask(function: object) -> object:
+        """Permit scalar finite checks but reject a full null-draw Boolean mask."""
+        def guarded(values: object, *args: object, **kwargs: object) -> object:
+            """Delegate scalar checks while rejecting complete-array masks."""
+            if np.asarray(values).size > 1:
+                raise AssertionError("grouped finalization materialized a full null mask")
+            return function(values, *args, **kwargs)
+
+        return guarded
+
+    monkeypatch.setattr(ppc_runtime, "_finalize_grouped_null_job", recording_finalizer)
+    monkeypatch.setattr(
+        ppc_runtime.spike_lfp_summary,
+        "summarize_permutation_null",
+        forbidden_legacy_summary,
+    )
+    grouped = _run_grouped_component(config, phase, spikes, tmp_path / "grouped")
+    assert scratch_shapes
+    for job in grouped.component_plan.job_plans:
+        expected = legacy[(job.condition_index, job.site_index, job.epoch_index)]
+        index = (slice(None), job.condition_index, job.site_index, job.epoch_index, slice(None))
+        for name, values in expected.summary_arrays.items():
+            actual = grouped.summary_arrays[name][index]
+            if name in {"null_mean", "null_std", "null_p025", "null_p50", "null_p975"}:
+                np.testing.assert_allclose(actual, values, rtol=0.0, atol=0.0, equal_nan=True)
+            elif values.dtype.kind == "f":
+                _assert_float_summary_equal(name, actual, values)
+            else:
+                np.testing.assert_array_equal(actual, values)
+    all_before_frequency_40 = (0, 0, 0, 1, 1)
+    assert grouped.summary_arrays["null_eligible"][all_before_frequency_40]
+    assert grouped.summary_arrays["permutation_count"][all_before_frequency_40] == (
+        2 if shuffle_count == 3 else 3
+    )
+    assert np.isfinite(grouped.summary_arrays["p_value"][all_before_frequency_40])
+
+
+def test_grouped_component_only_accumulates_and_finalizes_eligible_unit_frequency_cells(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mixed active job excludes ineligible unit-frequency null cells entirely."""
+    config = _grouped_config()
+    phase, spikes = _grouped_inputs(config)
+    phase_valid = phase.phase_valid.copy()
+    phase_valid[:, 1] = False
+    mixed_phase = replace(phase, phase_valid=phase_valid)
+    original_consume = ppc_runtime._consume_grouped_edge_block
+    original_finalizer = ppc_runtime._finalize_grouped_null_job
+    consumed_masks: list[np.ndarray] = []
+    finalized_masks: list[np.ndarray] = []
+
+    def recording_consume(*args: object, **kwargs: object) -> object:
+        """Use the summary-owned Boolean eligibility view, not an int64 map."""
+        cells = np.asarray(kwargs["eligible_cell_mask"])
+        vector_sum = np.asarray(kwargs["vector_sum"])
+        assert cells.dtype == np.dtype(bool)
+        assert cells.shape == (1, 2)
+        assert np.array_equal(cells, np.array([[True, False]], dtype=bool))
+        assert vector_sum.shape == (config.ppc.shuffle_count, 1, 2)
+        assert np.shares_memory(cells, result_summary_arrays["null_eligible"])
+        consumed_masks.append(cells)
+        result = original_consume(*args, **kwargs)
+        # No edge contribution may accumulate in a false eligibility cell.
+        assert np.all(vector_sum[:, ~cells] == 0.0j)
+        assert np.all(np.asarray(kwargs["valid_count"])[:, ~cells] == 0)
+        return result
+
+    def recording_finalizer(*args: object, **kwargs: object) -> object:
+        """Finalize exactly the same selected null metric cells as consumption."""
+        cells = np.asarray(kwargs["eligible_cell_mask"])
+        assert cells.dtype == np.dtype(bool)
+        assert np.array_equal(cells, np.array([[True, False]], dtype=bool))
+        assert np.shares_memory(cells, result_summary_arrays["null_eligible"])
+        finalized_masks.append(cells)
+        return original_finalizer(*args, **kwargs)
+
+    result_summary_arrays: dict[str, np.ndarray] = {}
+
+    def recording_summary(*args: object, **kwargs: object) -> dict[str, np.ndarray]:
+        """Retain only output arrays that own the Boolean eligibility storage."""
+        values = original_summary(*args, **kwargs)
+        result_summary_arrays.update(values)
+        return values
+
+    original_summary = ppc_runtime._empty_grouped_summary_arrays
+    monkeypatch.setattr(ppc_runtime, "_consume_grouped_edge_block", recording_consume)
+    monkeypatch.setattr(ppc_runtime, "_finalize_grouped_null_job", recording_finalizer)
+    monkeypatch.setattr(ppc_runtime, "_empty_grouped_summary_arrays", recording_summary)
+    result = _run_grouped_component(config, mixed_phase, spikes, tmp_path)
+    assert consumed_masks and finalized_masks
+    assert not result.summary_arrays["null_eligible"][..., 1].any()
+    assert not result.summary_arrays["permutation_count"][..., 1].any()
+    assert not result.summary_arrays["null_exceedance_count"][..., 1].any()
+    assert np.isnan(result.summary_arrays["p_value"][..., 1]).all()
+    assert np.isnan(result.summary_arrays["q_value"][..., 1]).all()
+    assert np.isnan(result.summary_arrays["null_mean"][..., 1]).all()
+
+
+def test_grouped_component_removes_complete_marker_before_failed_corrupt_block_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed repair cannot leave a stale run-level completion certification."""
+    config = _grouped_config()
+    phase, spikes = _grouped_inputs(config)
+    complete = _run_grouped_component(config, phase, spikes, tmp_path)
+    corrupt_id = complete.completed_block_ids[0]
+    corrupt_path = complete.run_directory / "blocks" / f"{corrupt_id}.npz"
+    corrupt_path.write_bytes(b"corrupt")
+    sibling_ids = complete.completed_block_ids[1:]
+    sibling_bytes = {
+        block_id: (
+            (complete.run_directory / "blocks" / f"{block_id}.npz").read_bytes(),
+            (complete.run_directory / "blocks" / f"{block_id}.complete.json").read_bytes(),
+        )
+        for block_id in sibling_ids
+    }
+    original_writer = ppc_runtime.write_ppc_checkpoint
+
+    def fail_repair(
+        run_directory: Path,
+        block_id: str,
+        *args: object,
+        **kwargs: object,
+    ) -> Path:
+        """Fail only the corrupt block's replacement publication."""
+        if block_id == corrupt_id:
+            raise RuntimeError("injected corrupt-block repair failure")
+        return original_writer(run_directory, block_id, *args, **kwargs)
+
+    monkeypatch.setattr(ppc_runtime, "write_ppc_checkpoint", fail_repair)
+    with pytest.raises(RuntimeError, match="corrupt-block repair failure"):
+        _run_grouped_component(config, phase, spikes, tmp_path)
+    assert not (complete.run_directory / "complete.json").exists()
+    assert not (complete.run_directory / "executor.lock").exists()
+    for block_id, expected in sibling_bytes.items():
+        assert (
+            (complete.run_directory / "blocks" / f"{block_id}.npz").read_bytes(),
+            (complete.run_directory / "blocks" / f"{block_id}.complete.json").read_bytes(),
+        ) == expected
+
+
+def test_grouped_component_releases_gated_membership_and_full_source_counts_after_planning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S4 deletes planner-only full tables before parent summary allocation."""
+    config = _grouped_config()
+    phase, spikes = _grouped_inputs(config)
+    original_membership = lfp_summary_runtime._analysis_condition_membership
+    original_counts = ppc_runtime._grouped_source_trial_spike_counts
+    original_summary = ppc_runtime._empty_grouped_summary_arrays
+    original_plan = ppc_runtime.plan_grouped_ppc_component
+    memberships: list[weakref.ReferenceType[np.ndarray]] = []
+    counts: list[weakref.ReferenceType[np.ndarray]] = []
+    planning_estimates: list[object] = []
+
+    def recording_membership(*args: object, **kwargs: object) -> np.ndarray:
+        """Keep only a weak reference to the executor-created gated mask."""
+        values = original_membership(*args, **kwargs)
+        memberships.append(weakref.ref(values))
+        return values
+
+    def recording_counts(*args: object, **kwargs: object) -> np.ndarray:
+        """Keep only a weak reference to the full trial/unit count table."""
+        values = original_counts(*args, **kwargs)
+        counts.append(weakref.ref(values))
+        return values
+
+    def recording_summary(*args: object, **kwargs: object) -> dict[str, np.ndarray]:
+        """Require both planning tables to be unreachable before output allocation."""
+        gc.collect()
+        assert memberships and counts
+        assert all(reference() is None for reference in memberships)
+        assert all(reference() is None for reference in counts)
+        return original_summary(*args, **kwargs)
+
+    def recording_plan(**kwargs: object) -> object:
+        """Record the planner-derived construction peak without caller input."""
+        assert "planning_working_bytes" not in kwargs
+        plan = original_plan(**kwargs)
+        planning_estimates.append(plan.allocation_estimate)
+        return plan
+
+    monkeypatch.setattr(
+        lfp_summary_runtime,
+        "_analysis_condition_membership",
+        recording_membership,
+    )
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_grouped_source_trial_spike_counts",
+        recording_counts,
+    )
+    monkeypatch.setattr(ppc_runtime, "plan_grouped_ppc_component", recording_plan)
+    monkeypatch.setattr(ppc_runtime, "_empty_grouped_summary_arrays", recording_summary)
+    _run_grouped_component(config, phase, spikes, tmp_path)
+    assert len(planning_estimates) == 1
+    estimate = planning_estimates[0]
+    selected_row_cells = 2 * 3 * (3 + 2 + 0 + 1)
+    schedule_cells = 2 * 3 * config.ppc.shuffle_count * (3 + 2)
+    D = 8 * selected_row_cells + 8 * schedule_cells
+    T = phase.trial_indices.size
+    Emax = T * (T - 1)
+    A = 8 * (2 * T + Emax) + 16 * T * config.ppc_execution.unit_block_size
+    assert estimate.planning_working_bytes == D + A
+
+
+def test_grouped_component_passes_exact_bounded_schema_to_single_checkpoint_loader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Streaming resume gives the cache loader exact block axes and byte bound."""
+    config = _grouped_config()
+    phase, spikes = _grouped_inputs(config)
+    cold = _run_grouped_component(config, phase, spikes, tmp_path)
+    original_loader = ppc_runtime.load_valid_ppc_checkpoint
+    schemas: list[Mapping[str, object]] = []
+    byte_bounds: list[int] = []
+
+    def bounded_loader(*args: object, **kwargs: object) -> object:
+        """Require every resumed site/unit block to declare its full NPZ contract."""
+        schema = kwargs["expected_array_schema"]
+        schemas.append(schema)
+        byte_bounds.append(kwargs["maximum_array_bytes"])
+        return original_loader(*args, **kwargs)
+
+    monkeypatch.setattr(ppc_runtime, "load_valid_ppc_checkpoint", bounded_loader)
+    warm = _run_grouped_component(config, phase, spikes, tmp_path)
+    expected_metric_shape = (1, 4, 3, 2)
+    expected_histogram_shape = (1, 4, 3, 2, 2)
+    expected_schema = {
+        **{
+            name: (np.dtype(float), expected_metric_shape)
+            for name in ppc_runtime._FLOAT_FIELDS
+        },
+        **{
+            name: (np.dtype(np.int64), expected_metric_shape)
+            for name in ppc_runtime._INTEGER_FIELDS
+        },
+        **{
+            name: (np.dtype(bool), expected_metric_shape)
+            for name in ppc_runtime._BOOLEAN_FIELDS
+        },
+        "representative_phase_histogram_count": (
+            np.dtype(np.int64),
+            expected_histogram_shape,
+        ),
+        "site_index": (np.dtype(np.int64), (1,)),
+        "unit_bounds": (np.dtype(np.int64), (2,)),
+    }
+    assert schemas == [expected_schema] * len(cold.completed_block_ids)
+    assert byte_bounds == [
+        cold.component_plan.allocation_estimate.checkpoint_block_bytes
+    ] * len(cold.completed_block_ids)
+    assert warm.resumed_block_ids == cold.completed_block_ids
+
+
+def test_grouped_component_recomputes_after_non_utf8_run_metadata(
+    tmp_path: Path,
+) -> None:
+    """Malformed text metadata is an invalid cache state, never an execution error."""
+    config = _grouped_config()
+    phase, spikes = _grouped_inputs(config)
+    cold = _run_grouped_component(config, phase, spikes, tmp_path / "cold")
+    warm = _run_grouped_component(config, phase, spikes, tmp_path / "warm")
+    (warm.run_directory / "metadata.json").write_bytes(b"\xff\xfe\x80")
+    repaired = _run_grouped_component(config, phase, spikes, tmp_path / "warm")
+    assert repaired.resumed_block_ids == ()
+    _assert_component_summaries_equal(cold, repaired)
+
+
+@pytest.mark.parametrize(
+    "limit_name",
+    ("maximum_worker_allocation_bytes", "maximum_aggregate_allocation_bytes"),
+)
+def test_grouped_component_preflights_full_scalar_construction_scratch_before_allocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit_name: str,
+) -> None:
+    """Scalar preflight rejects map scratch before membership/count/schedule arrays.
+
+    The complete conservative planning bound is ``M + Q + D + A``. Sparse
+    selection over the 100-trial input makes it larger than ``M + Q + P``.
+    The selected limit sits between those two values, so the executor must
+    derive selected job sizes from scalar masks before invoking the
+    array-producing membership, count, or schedule seams.
+    """
+    config = _grouped_config()
+    phase, spikes = _sparse_large_trial_grouped_inputs(config)
+    membership_bytes = phase.trial_indices.size * len(
+        phase.prepared_trials.condition_names
+    )
+    source_count_bytes = phase.trial_indices.size * len(spikes.unit_ids) * 2 * 8
+    selected_per_site_epoch = 2 + 2 + 0 + 1
+    scheduled_per_site_epoch = 2 + 2 + 0
+    selected_row_cells = len(config.sites) * 3 * selected_per_site_epoch
+    schedule_cells = (
+        len(config.sites)
+        * 3
+        * config.ppc.shuffle_count
+        * scheduled_per_site_epoch
+    )
+    D = 8 * selected_row_cells + 8 * schedule_cells
+    trial_count = phase.trial_indices.size
+    Emax = trial_count * (trial_count - 1)
+    A = (
+        8 * (2 * trial_count + Emax)
+        + 16 * trial_count * config.ppc_execution.unit_block_size
+    )
+    planning_probe = _plan(
+        config,
+        **_planner_inputs(
+            stable_trial_rows=phase.trial_indices,
+            condition_names=phase.prepared_trials.condition_names,
+            condition_membership=phase.prepared_trials.condition_membership,
+            site_ids=tuple(site.stable_id for site in config.sites),
+            site_trial_valid=phase.site_valid,
+            source_trial_spike_count=np.zeros(
+                (trial_count, len(spikes.unit_ids), 2), dtype=np.int64
+            ),
+            frequency_count=phase.phase_tensor.shape[1],
+            shared_phase_mmap_bytes=phase.phase_tensor.nbytes + phase.phase_valid.nbytes,
+        ),
+    )
+    planner_bytes = planning_probe.allocation_estimate.planner_array_bytes
+    shared_phase_bytes = phase.phase_tensor.nbytes + phase.phase_valid.nbytes
+    construction_bytes = membership_bytes + source_count_bytes + D + A
+    limit_bytes = construction_bytes - 1
+    assert membership_bytes + source_count_bytes + planner_bytes <= limit_bytes
+    assert limit_bytes < construction_bytes
+    if limit_name == "maximum_aggregate_allocation_bytes":
+        limit_bytes += shared_phase_bytes
+    unsafe_execution = replace(
+        config.ppc_execution,
+        **{limit_name: limit_bytes},
+    )
+    unsafe_config = replace(config, ppc_execution=unsafe_execution)
+
+    def forbidden(*_: object, **__: object) -> object:
+        """Construction/allocation must not occur after a dimension-only rejection."""
+        raise AssertionError("unsafe planning table was allocated")
+
+    monkeypatch.setattr(lfp_summary_runtime, "_analysis_condition_membership", forbidden)
+    monkeypatch.setattr(ppc_runtime, "_grouped_source_trial_spike_counts", forbidden)
+    monkeypatch.setattr(ppc_runtime, "generate_trial_derangement_schedule", forbidden)
+    monkeypatch.setattr(ppc_runtime, "plan_grouped_ppc_component", forbidden)
+    monkeypatch.setattr(ppc_runtime, "_empty_grouped_summary_arrays", forbidden)
+    monkeypatch.setattr(ppc_runtime, "write_ppc_checkpoint", forbidden)
+    with pytest.raises(ValueError, match="planning|membership|source.*count|allocation"):
+        _run_grouped_component(unsafe_config, phase, spikes, tmp_path)
+    assert not (tmp_path / "ppc").exists()

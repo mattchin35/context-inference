@@ -1353,6 +1353,21 @@ def test_observed_trial_statistics_contracts_expose_stable_trial_axes_and_member
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
         for parameter in trial_signature.parameters.values()
     )
+    selected_trial_signature = inspect.signature(
+        kernel.compute_selected_observed_trial_segmented_ppc_statistics
+    )
+    assert tuple(selected_trial_signature.parameters) == (
+        "source_trial_geometries",
+        "trial_phase_vectors",
+        "phase_valid_mask",
+        "phase_trial_index",
+        "frequencies_hz",
+        "phase_bin_edges_rad",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in selected_trial_signature.parameters.values()
+    )
     aggregate_signature = inspect.signature(
         kernel.aggregate_observed_trial_segmented_ppc_statistics
     )
@@ -1364,6 +1379,93 @@ def test_observed_trial_statistics_contracts_expose_stable_trial_axes_and_member
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
         for parameter in aggregate_signature.parameters.values()
     )
+
+
+@pytest.mark.parametrize(
+    "source_ids",
+    (
+        (7, 7),
+        (7, 999),
+    ),
+)
+def test_selected_observed_trial_reducer_rejects_duplicate_or_unknown_geometry_rows(
+    source_ids: tuple[int, ...],
+) -> None:
+    """Selection-aware S2 derives selected rows from unique known geometry IDs.
+
+    The new entry point is the no-copy bridge for grouped execution: phase and
+    validity retain their complete ``(trial, frequency, time)`` axes, while
+    geometries and returned statistics cover only the geometry-tuple rows.
+    The existing all-trial reducer remains unchanged for legacy callers.
+    """
+    geometries, phase, valid, phase_trial_index, frequencies_hz, phase_bins = (
+        _observed_trial_reuse_fixture()
+    )
+    by_source = {int(geometry.source_trial_index): geometry for geometry in geometries}
+    unknown_geometry = _build_geometry(
+        source_trial_index=999,
+        unit_ids=("unit-1",),
+        unit_trial_spike_times_s=(np.array([-0.25, 0.25]),),
+    )
+    selected_geometries = tuple(
+        unknown_geometry if source_id == 999 else by_source[source_id]
+        for source_id in source_ids
+    )
+    with pytest.raises(ValueError, match="duplicate|unknown|geometry|source|trial"):
+        kernel.compute_selected_observed_trial_segmented_ppc_statistics(
+            source_trial_geometries=selected_geometries,
+            trial_phase_vectors=phase,
+            phase_valid_mask=valid,
+            phase_trial_index=phase_trial_index,
+            frequencies_hz=frequencies_hz,
+            phase_bin_edges_rad=phase_bins,
+        )
+
+
+def test_selected_observed_trial_reducer_matches_selected_legacy_trial_statistics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S2 selected rows preserve order without materializing phase/valid gathers."""
+    geometries, phase, valid, phase_trial_index, frequencies_hz, phase_bins = (
+        _observed_trial_reuse_fixture()
+    )
+    by_source = {int(geometry.source_trial_index): geometry for geometry in geometries}
+    selected_geometries = (by_source[61], by_source[29])
+    positions = np.array([2, 0], dtype=np.int64)
+    expected = kernel.compute_observed_trial_segmented_ppc_statistics(
+        source_trial_geometries=selected_geometries,
+        trial_phase_vectors=phase[positions],
+        phase_valid_mask=valid[positions],
+        phase_trial_index=phase_trial_index[positions],
+        frequencies_hz=frequencies_hz,
+        phase_bin_edges_rad=phase_bins,
+    )
+    original_sampler = kernel._sample_normalized_spike_group
+    sampler_calls = 0
+
+    def recording_sampler(**kwargs: object) -> object:
+        """Selection-aware sampling must index the original full phase arrays."""
+        nonlocal sampler_calls
+        coefficients = np.asarray(kwargs["coefficients"])
+        explicit_valid = np.asarray(kwargs["explicit_valid_mask"])
+        assert np.shares_memory(coefficients, phase)
+        assert np.shares_memory(explicit_valid, valid)
+        sampler_calls += 1
+        return original_sampler(**kwargs)
+
+    monkeypatch.setattr(kernel, "_sample_normalized_spike_group", recording_sampler)
+    actual = kernel.compute_selected_observed_trial_segmented_ppc_statistics(
+        source_trial_geometries=selected_geometries,
+        trial_phase_vectors=phase,
+        phase_valid_mask=valid,
+        phase_trial_index=phase_trial_index,
+        frequencies_hz=frequencies_hz,
+        phase_bin_edges_rad=phase_bins,
+    )
+    assert sampler_calls > 0
+    np.testing.assert_array_equal(actual.phase_trial_index, np.array([61, 29], dtype=np.int64))
+    for field in fields(expected):
+        np.testing.assert_array_equal(getattr(actual, field.name), getattr(expected, field.name))
 
 
 def test_one_observed_trial_pass_serves_overlapping_condition_memberships(

@@ -336,6 +336,107 @@ def test_single_ppc_checkpoint_loader_keeps_valid_siblings_independent(
     assert work_cache.load_valid_ppc_checkpoint(run_root, "block-a", metadata) is not None
 
 
+@pytest.mark.parametrize(
+    ("replacement", "schema", "maximum_array_bytes"),
+    (
+        (
+            {"ppc": np.zeros((2, 2), dtype=np.float64)},
+            {"ppc": (np.dtype(np.float64), (1, 1))},
+            1024,
+        ),
+        (
+            {"ppc": np.zeros((1, 1), dtype=np.float32)},
+            {"ppc": (np.dtype(np.float64), (1, 1))},
+            1024,
+        ),
+        (
+            {"ppc": np.zeros((1, 1), dtype=np.float64)},
+            {
+                "ppc": (np.dtype(np.float64), (1, 1)),
+                "required_identity": (np.dtype(np.int64), (1,)),
+            },
+            1024,
+        ),
+        (
+            {"ppc": np.zeros((512, 512), dtype=np.float64)},
+            {"ppc": (np.dtype(np.float64), (512, 512))},
+            1024,
+        ),
+        (
+            {
+                "ppc": np.zeros((1, 1), dtype=np.float64),
+                "unexpected": np.zeros((1,), dtype=np.int64),
+            },
+            {"ppc": (np.dtype(np.float64), (1, 1))},
+            1024,
+        ),
+    ),
+)
+def test_single_checkpoint_loader_rejects_schema_or_compressed_size_before_member_load(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: dict[str, np.ndarray],
+    schema: dict[str, tuple[np.dtype[object], tuple[int, ...]]],
+    maximum_array_bytes: int,
+) -> None:
+    """A bounded grouped reader rejects invalid NPZ members before materializing them.
+
+    ZIP metadata/header inspection may open the archive, but an incompatible
+    dtype/shape/key set or compressed expansion beyond the exact supplied byte
+    bound must not request any NumPy member array.  The legacy three-argument
+    loader remains supported for unconstrained checkpoint callers.
+    """
+    metadata = {**_metadata("run-a"), "run_fingerprint": "run-a"}
+    run_root = tmp_path / "ppc" / "run-a"
+    work_cache.write_ppc_checkpoint(
+        run_root,
+        "block-a",
+        {"ppc": np.zeros((1, 1), dtype=np.float64)},
+        metadata,
+    )
+    np.savez_compressed(run_root / "blocks" / "block-a.npz", **replacement)
+    signature = inspect.signature(work_cache.load_valid_ppc_checkpoint)
+    assert signature.parameters["expected_array_schema"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["maximum_array_bytes"].kind is inspect.Parameter.KEYWORD_ONLY
+    original_load = work_cache.np.load
+    member_names: list[str] = []
+
+    class ArchiveWithoutMembers:
+        """Allow archive metadata but fail any attempted NumPy member materialization."""
+
+        def __init__(self, archive: object) -> None:
+            self._archive = archive
+
+        def __enter__(self) -> "ArchiveWithoutMembers":
+            self._archive.__enter__()
+            return self
+
+        def __exit__(self, *args: object) -> object:
+            return self._archive.__exit__(*args)
+
+        @property
+        def files(self) -> object:
+            return self._archive.files
+
+        def __getitem__(self, name: str) -> np.ndarray:
+            member_names.append(name)
+            raise AssertionError("bounded loader materialized invalid NPZ member")
+
+    def metadata_only_load(*args: object, **kwargs: object) -> ArchiveWithoutMembers:
+        """Wrap NumPy's archive object while retaining only its name metadata."""
+        return ArchiveWithoutMembers(original_load(*args, **kwargs))
+
+    monkeypatch.setattr(work_cache.np, "load", metadata_only_load)
+    assert work_cache.load_valid_ppc_checkpoint(
+        run_root,
+        "block-a",
+        metadata,
+        expected_array_schema=schema,
+        maximum_array_bytes=maximum_array_bytes,
+    ) is None
+    assert member_names == []
+
+
 def test_ppc_checkpoint_writer_default_copy_and_explicit_no_copy_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
