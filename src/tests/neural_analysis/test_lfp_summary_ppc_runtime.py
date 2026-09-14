@@ -4617,225 +4617,125 @@ def test_grouped_component_condition_batches_bound_active_null_jobs(
 
 
 @pytest.mark.parametrize("shuffle_count", (3, 4))
-def test_grouped_component_finalizes_nulls_without_legacy_draw_concatenation(
-    tmp_path: Path,
+def test_grouped_null_finalizer_uses_one_scratch_without_legacy_draw_copy(
     monkeypatch: pytest.MonkeyPatch,
     shuffle_count: int,
 ) -> None:
-    """Grouped finalization uses one bounded scratch with mixed finite draws.
+    """Finalize predefined mixed draws exactly without a copied draw matrix.
 
-    The all-condition, before-window frequency-40 Hz cell is inference eligible
-    but has two distinct finite group-compatible draws separated by an invalid
-    cross-group draw.  Odd/even schedule counts therefore exercise mixed
-    finite/NaN handling and exact linear percentile/moment decisions.
-    Finalization cannot use top-level copying, sort, partition, percentile, or
-    quantile APIs over retained full draw vectors; in-place scratch methods are
-    permitted.
+    The first three/four retained accumulator rows yield PPC draws
+    ``[-1, NaN, 0]``/``[-1, NaN, 0, 1]``.  This is deliberately a direct
+    finalizer contract: S1 sufficient-statistic reductions can differ from the
+    legacy concatenate-and-sum path by a few binary64 ulps, while the summary
+    operation itself must reproduce the legacy finite-draw decision exactly.
     """
-    base_config = _grouped_config()
-    config = replace(base_config, ppc=replace(base_config.ppc, shuffle_count=shuffle_count))
-    phase, spikes = _grouped_inputs(config)
-    phase_valid = phase.phase_valid.copy()
-    phase_valid[:, 1] = False
-    group_a_index = int(np.argmin(np.abs(phase.relative_time_s + 0.50)))
-    group_b_index = int(np.argmin(np.abs(phase.relative_time_s + 0.25)))
-    for trial_index in (0, 1):
-        phase_valid[:, 1, trial_index, group_a_index - 1 : group_a_index + 2] = True
-    for trial_index in (2, 3):
-        phase_valid[:, 1, trial_index, group_b_index - 1 : group_b_index + 2] = True
-    prepared_trials = replace(
-        phase.prepared_trials,
-        filter_membership=np.array([True, True, True, True, False, True], dtype=bool),
+    complete_sums = np.array([0.0j, 0.0j, 1.0 + 1.0j, 2.0 + 0.0j]).reshape(4, 1, 1)
+    complete_counts = np.array([2, 1, 2, 2], dtype=np.int64).reshape(4, 1, 1)
+    vector_sum = complete_sums[:shuffle_count].copy()
+    valid_count = complete_counts[:shuffle_count].copy()
+    observed_ppc = np.array([[0.5]], dtype=float)
+    legacy_draws = np.array([-1.0, np.nan, 0.0, 1.0], dtype=float)[:shuffle_count]
+    expected = spike_lfp_summary.summarize_permutation_null(
+        observed_ppc=observed_ppc,
+        null_ppc_chunks=(legacy_draws.reshape(shuffle_count, 1, 1),),
+        spike_count=np.array([[50]], dtype=np.int64),
+        eligible_trial_count=np.array([[2]], dtype=np.int64),
     )
-    phase = replace(phase, phase_valid=phase_valid, prepared_trials=prepared_trials)
-    grouped_spike_times = (
-        np.full(30, -0.50, dtype=float),
-        np.full(30, -0.50, dtype=float),
-        np.full(30, -0.25, dtype=float),
-        np.full(30, -0.25, dtype=float),
+    output_arrays = {
+        "null_exceedance_count": np.zeros((1, 1), dtype=np.int64),
+        "permutation_count": np.zeros((1, 1), dtype=np.int64),
+        "p_value": np.full((1, 1), np.nan, dtype=float),
+        "null_mean": np.full((1, 1), np.nan, dtype=float),
+        "null_std": np.full((1, 1), np.nan, dtype=float),
+        "null_p025": np.full((1, 1), np.nan, dtype=float),
+        "null_p50": np.full((1, 1), np.nan, dtype=float),
+        "null_p975": np.full((1, 1), np.nan, dtype=float),
+        "null_eligible": np.zeros((1, 1), dtype=bool),
+    }
+    draw_scratch = np.empty_like(valid_count, dtype=float)
+    job_plan = _direct_job_plan()
+    eligibility = np.array([[True]], dtype=bool)
+    expected_scratch = (
+        np.array([-1.0, 0.0, np.nan], dtype=float)
+        if shuffle_count == 3
+        else np.array([-1.0, 0.0, 1.0, np.nan], dtype=float)
     )
-    spikes = replace(
-        spikes,
-        trial_spike_trains=tuple(
-            replace(
-                train,
-                relative_spike_times=(
-                    *grouped_spike_times,
-                    train.relative_spike_times[4],
-                    train.relative_spike_times[5],
-                ),
-            )
-            for train in spikes.trial_spike_trains
-        ),
-    )
+    original_copy = ppc_runtime.np.copy
+    original_array = ppc_runtime.np.array
+    original_copyto = ppc_runtime.np.copyto
+    original_sort = ppc_runtime.np.sort
+    original_partition = ppc_runtime.np.partition
+    original_percentile = ppc_runtime.np.percentile
+    original_nanpercentile = ppc_runtime.np.nanpercentile
+    original_quantile = ppc_runtime.np.quantile
+    original_nanquantile = ppc_runtime.np.nanquantile
+    original_isfinite = ppc_runtime.np.isfinite
+    original_isnan = ppc_runtime.np.isnan
+    original_concatenate = ppc_runtime.np.concatenate
 
-    def fixed_schedule(
-        trial_count: int,
-        shuffle_count: int,
-        *,
-        seed: int,
-    ) -> np.ndarray:
-        """Return group-preserving then cross-group derangements deterministically."""
-        del seed
-        if trial_count == 2:
-            return np.tile(np.array([[1, 0]], dtype=np.int64), (shuffle_count, 1))
-        if trial_count == 3:
-            rows = np.array([[1, 2, 0], [2, 0, 1]], dtype=np.int64)
-            return rows[np.arange(shuffle_count) % rows.shape[0]]
-        assert trial_count == 4
-        rows = np.array(
-            [[1, 0, 3, 2], [2, 3, 0, 1], [1, 2, 3, 0]],
-            dtype=np.int64,
-        )
-        return rows[np.arange(shuffle_count) % rows.shape[0]]
-
-    monkeypatch.setattr(ppc_runtime, "generate_trial_derangement_schedule", fixed_schedule)
-    baseline = _run_grouped_component(config, phase, spikes, tmp_path / "baseline")
-    legacy, _ = _legacy_grouped_reference(
-        config, phase, spikes, baseline.component_plan, tmp_path / "legacy"
-    )
-    original_finalizer = ppc_runtime._finalize_grouped_null_job
-    scratch_shapes: list[tuple[tuple[int, ...], int]] = []
-
-    def recording_finalizer(*args: object, **kwargs: object) -> object:
-        """Allow no more than one float64 scratch matching active null cells."""
-        draw_scratch = np.asarray(kwargs["draw_scratch"])
-        vector_sum = np.asarray(kwargs["vector_sum"])
-        assert draw_scratch.dtype == np.dtype(np.float64)
-        assert draw_scratch.shape == vector_sum.shape
-        assert draw_scratch.nbytes <= np.prod(vector_sum.shape, dtype=np.int64) * 8
-        scratch_shapes.append((draw_scratch.shape, draw_scratch.nbytes))
-        valid_count = np.asarray(kwargs["valid_count"])
-        job_plan = kwargs["job_plan"]
-        if job_plan.condition_index == 0 and job_plan.epoch_name == "before":
-            assert np.any(valid_count[..., 1] > 0)
-            assert np.any(valid_count[..., 1] == 0)
-        original_copy = ppc_runtime.np.copy
-        original_array = ppc_runtime.np.array
-        original_copyto = ppc_runtime.np.copyto
-        original_sort = ppc_runtime.np.sort
-        original_partition = ppc_runtime.np.partition
-        original_percentile = ppc_runtime.np.percentile
-        original_nanpercentile = ppc_runtime.np.nanpercentile
-        original_quantile = ppc_runtime.np.quantile
-        original_nanquantile = ppc_runtime.np.nanquantile
-        original_isfinite = ppc_runtime.np.isfinite
-        original_isnan = ppc_runtime.np.isnan
-        original_concatenate = ppc_runtime.np.concatenate
-        ppc_runtime.np.copy = forbidden_copy
-        ppc_runtime.np.array = forbidden_array
-        ppc_runtime.np.copyto = forbidden_copyto
-        ppc_runtime.np.sort = forbidden_sort
-        ppc_runtime.np.partition = forbidden_partition
-        ppc_runtime.np.percentile = forbidden_percentile
-        ppc_runtime.np.nanpercentile = forbidden_nanpercentile
-        ppc_runtime.np.quantile = forbidden_quantile
-        ppc_runtime.np.nanquantile = forbidden_nanquantile
-        ppc_runtime.np.isfinite = forbid_full_mask(original_isfinite)
-        ppc_runtime.np.isnan = forbid_full_mask(original_isnan)
-        ppc_runtime.np.concatenate = forbidden_concatenate
-        try:
-            result = original_finalizer(*args, **kwargs)
-            if job_plan.condition_index == 0 and job_plan.epoch_name == "before":
-                final_draws = draw_scratch[:, 0, 1]
-                finite_draws = final_draws[original_isfinite(final_draws)]
-                assert finite_draws.size == (2 if shuffle_count == 3 else 3)
-                assert np.unique(finite_draws).size >= 2
-                assert original_isnan(final_draws).any()
-            return result
-        finally:
-            ppc_runtime.np.copy = original_copy
-            ppc_runtime.np.array = original_array
-            ppc_runtime.np.copyto = original_copyto
-            ppc_runtime.np.sort = original_sort
-            ppc_runtime.np.partition = original_partition
-            ppc_runtime.np.percentile = original_percentile
-            ppc_runtime.np.nanpercentile = original_nanpercentile
-            ppc_runtime.np.quantile = original_quantile
-            ppc_runtime.np.nanquantile = original_nanquantile
-            ppc_runtime.np.isfinite = original_isfinite
-            ppc_runtime.np.isnan = original_isnan
-            ppc_runtime.np.concatenate = original_concatenate
-
-    def forbidden_legacy_summary(*_: object, **__: object) -> object:
-        """Grouped execution must not build legacy concatenated null chunks."""
-        raise AssertionError("grouped finalization called legacy null summarizer")
-
-    def forbidden_copy(*_: object, **__: object) -> object:
-        """Grouped finalization must not duplicate complete shuffle draws."""
-        raise AssertionError("grouped finalization copied null draws")
-
-    def forbidden_concatenate(*_: object, **__: object) -> object:
-        """Grouped finalization must not concatenate complete shuffle draws."""
-        raise AssertionError("grouped finalization concatenated null draws")
-
-    def forbidden_array(*_: object, **__: object) -> object:
-        """Grouped finalization must work in place without a new draw array."""
-        raise AssertionError("grouped finalization materialized a null draw array")
-
-    def forbidden_copyto(*_: object, **__: object) -> object:
-        """Grouped finalization must not clone full draw buffers by copyto."""
-        raise AssertionError("grouped finalization copied null draws with copyto")
-
-    def forbidden_sort(*_: object, **__: object) -> object:
-        """Grouped finalization cannot sort a complete retained draw vector."""
-        raise AssertionError("grouped finalization sorted retained null draws")
-
-    def forbidden_partition(*_: object, **__: object) -> object:
-        """Top-level partition returns a copied null-draw array."""
-        raise AssertionError("grouped finalization partitioned retained null draws")
-
-    def forbidden_percentile(*_: object, **__: object) -> object:
-        """Grouped finalization cannot retain complete draws for percentile APIs."""
-        raise AssertionError("grouped finalization used percentile over null draws")
-
-    def forbidden_nanpercentile(*_: object, **__: object) -> object:
-        """Grouped finalization must not use a NaN-percentile draw reduction."""
-        raise AssertionError("grouped finalization used nanpercentile over null draws")
-
-    def forbidden_quantile(*_: object, **__: object) -> object:
-        """Grouped finalization must not use a quantile draw reduction."""
-        raise AssertionError("grouped finalization used quantile over null draws")
-
-    def forbidden_nanquantile(*_: object, **__: object) -> object:
-        """Grouped finalization must not use a NaN-quantile draw reduction."""
-        raise AssertionError("grouped finalization used nanquantile over null draws")
+    def forbidden(*_: object, **__: object) -> object:
+        """Reject a top-level full-draw copying or order-statistic helper."""
+        raise AssertionError("grouped finalization copied or materialized null draws")
 
     def forbid_full_mask(function: object) -> object:
-        """Permit scalar finite checks but reject a full null-draw Boolean mask."""
+        """Permit scalar finite checks while rejecting a full Boolean draw mask."""
         def guarded(values: object, *args: object, **kwargs: object) -> object:
-            """Delegate scalar checks while rejecting complete-array masks."""
+            """Delegate scalar checks after enforcing the direct scratch contract."""
             if np.asarray(values).size > 1:
                 raise AssertionError("grouped finalization materialized a full null mask")
             return function(values, *args, **kwargs)
 
         return guarded
 
-    monkeypatch.setattr(ppc_runtime, "_finalize_grouped_null_job", recording_finalizer)
-    monkeypatch.setattr(
-        ppc_runtime.spike_lfp_summary,
-        "summarize_permutation_null",
-        forbidden_legacy_summary,
+    monkeypatch.setattr(ppc_runtime.np, "copy", forbidden)
+    monkeypatch.setattr(ppc_runtime.np, "array", forbidden)
+    monkeypatch.setattr(ppc_runtime.np, "copyto", forbidden)
+    monkeypatch.setattr(ppc_runtime.np, "sort", forbidden)
+    monkeypatch.setattr(ppc_runtime.np, "partition", forbidden)
+    monkeypatch.setattr(ppc_runtime.np, "percentile", forbidden)
+    monkeypatch.setattr(ppc_runtime.np, "nanpercentile", forbidden)
+    monkeypatch.setattr(ppc_runtime.np, "quantile", forbidden)
+    monkeypatch.setattr(ppc_runtime.np, "nanquantile", forbidden)
+    monkeypatch.setattr(ppc_runtime.np, "isfinite", forbid_full_mask(original_isfinite))
+    monkeypatch.setattr(ppc_runtime.np, "isnan", forbid_full_mask(original_isnan))
+    monkeypatch.setattr(ppc_runtime.np, "concatenate", forbidden)
+    ppc_runtime._finalize_grouped_null_job(
+        job_plan=job_plan,
+        vector_sum=vector_sum,
+        valid_count=valid_count,
+        draw_scratch=draw_scratch,
+        eligible_cell_mask=eligibility,
+        observed_ppc=observed_ppc,
+        output_arrays=output_arrays,
     )
-    grouped = _run_grouped_component(config, phase, spikes, tmp_path / "grouped")
-    assert scratch_shapes
-    for job in grouped.component_plan.job_plans:
-        expected = legacy[(job.condition_index, job.site_index, job.epoch_index)]
-        index = (slice(None), job.condition_index, job.site_index, job.epoch_index, slice(None))
-        for name, values in expected.summary_arrays.items():
-            actual = grouped.summary_arrays[name][index]
-            if name in {"null_mean", "null_std", "null_p025", "null_p50", "null_p975"}:
-                np.testing.assert_allclose(actual, values, rtol=0.0, atol=0.0, equal_nan=True)
-            elif values.dtype.kind == "f":
-                _assert_float_summary_equal(name, actual, values)
-            else:
-                np.testing.assert_array_equal(actual, values)
-    all_before_frequency_40 = (0, 0, 0, 1, 1)
-    assert grouped.summary_arrays["null_eligible"][all_before_frequency_40]
-    assert grouped.summary_arrays["permutation_count"][all_before_frequency_40] == (
-        2 if shuffle_count == 3 else 3
+    monkeypatch.undo()
+    assert draw_scratch.dtype == np.dtype(float)
+    assert draw_scratch.shape == vector_sum.shape
+    assert draw_scratch.nbytes == vector_sum.size * 8
+    np.testing.assert_allclose(
+        draw_scratch[:, 0, 0],
+        expected_scratch,
+        rtol=0.0,
+        atol=0.0,
+        equal_nan=True,
     )
-    assert np.isfinite(grouped.summary_arrays["p_value"][all_before_frequency_40])
+    for name in (
+        "null_exceedance_count",
+        "permutation_count",
+        "p_value",
+        "null_mean",
+        "null_std",
+        "null_p025",
+        "null_p50",
+        "null_p975",
+        "null_eligible",
+    ):
+        expected_values = getattr(expected, name)
+        actual_values = output_arrays[name]
+        if actual_values.dtype.kind == "f":
+            np.testing.assert_allclose(actual_values, expected_values, rtol=0.0, atol=0.0)
+        else:
+            np.testing.assert_array_equal(actual_values, expected_values)
 
 
 def test_grouped_component_only_accumulates_and_finalizes_eligible_unit_frequency_cells(
