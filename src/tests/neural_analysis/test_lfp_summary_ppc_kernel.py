@@ -278,6 +278,153 @@ def test_geometry_owns_inputs_and_retains_safe_metadata_for_outside_support_spik
     np.testing.assert_array_equal(geometry.exact_sample, [False, True, False])
 
 
+def test_interpolation_heavy_geometry_avoids_full_spike_copy_and_selection_staging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S4's F=1 geometry charge excludes copied input and full selected groups.
+
+    The S3/S4 kernel estimate charges retained geometry at 26 bytes/spike and
+    one later F=1 gather at 51 bytes/spike. Construction may use bounded scalar
+    work, but it cannot retain a defensive copy of every input spike or
+    simultaneously materialize before/after Boolean-index selections: that
+    construction peak would escape the charged geometry-plus-gather lifetime.
+    """
+    spike_count = 8_192
+    phase_time_s = np.arange(-2.0, 2.0, 1.0 / 500.0, dtype=np.float64)
+    half_count = spike_count // 2
+    spike_times_s = np.concatenate(
+        (
+            np.linspace(-1.999, -0.001, half_count, dtype=np.float64),
+            np.linspace(0.001, 1.999, half_count, dtype=np.float64),
+        )
+    )
+    expected = _build_geometry(
+        source_trial_index=17,
+        unit_ids=("unit-1",),
+        unit_trial_spike_times_s=(spike_times_s,),
+        phase_time_s=phase_time_s,
+        phase_sampling_rate_hz=500.0,
+        segment_bounds_s=((-2.0, 0.0), (0.0, 2.0)),
+    )
+    allocation = kernel.estimate_segmented_kernel_allocation(
+        source_trial_spike_count=np.array(
+            [[[half_count, half_count]]], dtype=np.int64
+        ),
+        edge_source_trial_position=np.array([0], dtype=np.int64),
+        frequency_count=1,
+    )
+    assert allocation.geometry_bytes == 26 * spike_count + 32
+    assert allocation.gather_temporary_bytes == 51 * spike_count
+    assert allocation.planned_kernel_peak_bytes == 77 * spike_count + 96
+
+    class NoFullConstructionCopy(np.ndarray):
+        """Expose copied/staged full vectors and full Boolean/fancy selections."""
+
+        def copy(self, *args: object, **kwargs: object) -> np.ndarray:
+            """Reject copying any full construction vector."""
+            result = super().copy(*args, **kwargs)
+            if result.size >= self.size:
+                raise AssertionError("geometry copied a full construction vector")
+            return result
+
+        def astype(self, *args: object, **kwargs: object) -> np.ndarray:
+            """Reject a full conversion that does not reuse its construction vector."""
+            result = super().astype(*args, **kwargs)
+            if result.size >= self.size and not np.shares_memory(result, self):
+                raise AssertionError("geometry converted a full construction vector")
+            return result
+
+        def __getitem__(self, key: object) -> object:
+            """Reject full Boolean/fancy extraction of one source-spike vector."""
+            if isinstance(key, np.ndarray) and (
+                (key.dtype == np.dtype(bool) and key.shape == self.shape)
+                or (key.dtype.kind in "iu" and key.size >= self.size)
+            ):
+                raise AssertionError("geometry materialized a full selected spike group")
+            return super().__getitem__(key)
+
+    protected_spikes = spike_times_s.view(NoFullConstructionCopy)
+    original_asarray = kernel.np.asarray
+    original_concatenate = kernel.np.concatenate
+    original_empty = kernel.np.empty
+    original_zeros = kernel.np.zeros
+    original_searchsorted = kernel.np.searchsorted
+    original_clip = kernel.np.clip
+
+    def protect_full_vector(value: object) -> object:
+        """Mark one full one-dimensional construction buffer for selection guards."""
+        if (
+            isinstance(value, np.ndarray)
+            and value.ndim == 1
+            and value.size >= spike_count
+            and not isinstance(value, NoFullConstructionCopy)
+        ):
+            return value.view(NoFullConstructionCopy)
+        return value
+
+    def preserve_protected_spikes(
+        value: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Keep compatible source spikes visible through validation conversions."""
+        candidate = original_asarray(value, *args, **kwargs)
+        if isinstance(value, NoFullConstructionCopy):
+            if candidate.dtype == value.dtype and np.shares_memory(candidate, value):
+                return value
+            if candidate.size >= value.size and not np.shares_memory(candidate, value):
+                raise AssertionError("geometry converted the full source spike vector")
+        return candidate
+
+    def guarded_concatenate(*args: object, **kwargs: object) -> object:
+        """Protect one full flattened-spike staging vector when it is allocated."""
+        return protect_full_vector(original_concatenate(*args, **kwargs))
+
+    def guarded_empty(*args: object, **kwargs: object) -> object:
+        """Protect a full final-geometry or temporary vector after allocation."""
+        return protect_full_vector(original_empty(*args, **kwargs))
+
+    def guarded_zeros(*args: object, **kwargs: object) -> object:
+        """Protect a full Boolean/support construction vector after allocation."""
+        return protect_full_vector(original_zeros(*args, **kwargs))
+
+    def guarded_searchsorted(*args: object, **kwargs: object) -> object:
+        """Protect the full neighbor-search result before any advanced indexing."""
+        return protect_full_vector(original_searchsorted(*args, **kwargs))
+
+    def guarded_clip(*args: object, **kwargs: object) -> object:
+        """Protect the full clamped-neighbor vector before it becomes geometry."""
+        return protect_full_vector(original_clip(*args, **kwargs))
+
+    with monkeypatch.context() as geometry_guard:
+        geometry_guard.setattr(kernel.np, "asarray", preserve_protected_spikes)
+        geometry_guard.setattr(kernel.np, "concatenate", guarded_concatenate)
+        geometry_guard.setattr(kernel.np, "empty", guarded_empty)
+        geometry_guard.setattr(kernel.np, "zeros", guarded_zeros)
+        geometry_guard.setattr(kernel.np, "searchsorted", guarded_searchsorted)
+        geometry_guard.setattr(kernel.np, "clip", guarded_clip)
+        actual = _build_geometry(
+            source_trial_index=17,
+            unit_ids=("unit-1",),
+            unit_trial_spike_times_s=(protected_spikes,),
+            phase_time_s=phase_time_s,
+            phase_sampling_rate_hz=500.0,
+            segment_bounds_s=((-2.0, 0.0), (0.0, 2.0)),
+        )
+    for field_name in (
+        "group_offsets",
+        "left_index",
+        "right_index",
+        "right_weight",
+        "inside_support",
+        "exact_sample",
+    ):
+        expected_values = getattr(expected, field_name)
+        actual_values = getattr(actual, field_name)
+        np.testing.assert_array_equal(actual_values, expected_values)
+        assert not np.shares_memory(actual_values, protected_spikes)
+
+
 def test_kernel_output_ndarray_fields_are_elementwise_immutable() -> None:
     """Frozen kernel results also prohibit element-level mutation of every array field."""
     geometry = _build_geometry(

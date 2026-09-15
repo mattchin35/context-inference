@@ -4774,6 +4774,225 @@ def test_grouped_component_condition_batches_bound_active_null_jobs(
     _assert_component_summaries_equal(unbatched, split)
 
 
+def test_grouped_executor_keeps_eligibility_filtered_edges_inside_planned_union_blocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Eligibility filtering cannot shift bounded edge reductions across preflight groups.
+
+    Two inactive low-spike trials occupy the first and last positions of the
+    site union, while two null-eligible high-spike trials occupy the middle.
+    With two-edge blocks, planner gather estimates must be ``[low, high]`` and
+    ``[high, low]``. The executor must discard inactive edges within either
+    group, without compacting the remaining middle edges into one new
+    high-plus-high kernel block that escaped allocation preflight.
+    """
+    base_config = _grouped_config()
+    config = replace(
+        base_config,
+        ppc=replace(base_config.ppc, shuffle_count=1),
+        ppc_execution=replace(
+            base_config.ppc_execution,
+            unit_block_size=2,
+            trial_edge_block_size=2,
+        ),
+    )
+    source_phase, source_spikes = _grouped_inputs(config)
+    trial_count = source_phase.trial_indices.size
+    membership = np.zeros((trial_count, 2), dtype=bool)
+    membership[[0, 3], 0] = True  # Low, intentionally null-ineligible endpoints.
+    membership[[1, 2], 1] = True  # High, null-eligible middle endpoints.
+    site_valid = np.ones_like(source_phase.site_valid)
+    prepared_trials = replace(
+        source_phase.prepared_trials,
+        condition_names=("inactive", "active"),
+        condition_membership=membership,
+        filter_membership=np.ones(trial_count, dtype=bool),
+        objective_valid=np.ones(trial_count, dtype=bool),
+        user_excluded=np.zeros(trial_count, dtype=bool),
+        objective_exclusion_reason=np.full(trial_count, "", dtype="<U9"),
+        user_exclusion_reason=np.full(trial_count, "", dtype="<U4"),
+        site_validity={
+            site.stable_id: site_valid[site_index].copy()
+            for site_index, site in enumerate(config.sites)
+        },
+        pair_validity={
+            tuple(config.site_pairs[0]): np.ones(trial_count, dtype=bool),
+        },
+    )
+    phase = replace(
+        source_phase,
+        alignment_times_s=np.arange(trial_count, dtype=float),
+        prepared_trials=prepared_trials,
+        phase_valid=np.ones_like(source_phase.phase_valid),
+        site_valid=site_valid,
+        pair_valid=np.ones((1, trial_count), dtype=bool),
+        source_trace=np.zeros_like(source_phase.source_trace),
+    )
+    low_spikes = np.array([-1.0, 1.0], dtype=float)
+    high_spikes = source_spikes.trial_spike_trains[0].relative_spike_times
+    spikes = replace(
+        source_spikes,
+        trial_spike_trains=tuple(
+            TrialRelativeSpikeTrains(
+                unit_id=unit_id,
+                relative_spike_times=tuple(
+                    low_spikes.copy()
+                    if trial_index in {0, 3}
+                    else high_spikes[trial_index].copy()
+                    for trial_index in range(trial_count)
+                ),
+                overlap_trial_indices=np.empty(0, dtype=np.int64),
+            )
+            for unit_id in source_spikes.unit_ids
+        ),
+    )
+    baseline = _run_grouped_component(config, phase, spikes, tmp_path / "baseline")
+    original_estimator = ppc_runtime.estimate_grouped_ppc_allocation
+    original_kernel = ppc_runtime.compute_segmented_edge_statistics
+    planned_blocks: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
+    kernel_blocks: list[tuple[int, ...]] = []
+    position_by_row = {
+        int(row): position for position, row in enumerate(phase.trial_indices)
+    }
+
+    def recording_estimator(**kwargs: object) -> object:
+        """Record source-position blocks and their planner gather burdens."""
+        positions = tuple(
+            int(position)
+            for position in np.asarray(kwargs["edge_source_trial_position"])
+        )
+        counts = np.asarray(kwargs["source_trial_spike_count"])
+        if len(positions) == config.ppc_execution.trial_edge_block_size:
+            burdens = tuple(int(np.sum(counts[position])) for position in positions)
+            planned_blocks.add((positions, burdens))
+        return original_estimator(**kwargs)
+
+    def recording_kernel(**kwargs: object) -> object:
+        """Record each physical S1 block in full-trial union-position order."""
+        kernel_blocks.append(
+            tuple(
+                position_by_row[int(row)]
+                for row in np.asarray(kwargs["source_trial_index"])
+            )
+        )
+        return original_kernel(**kwargs)
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "estimate_grouped_ppc_allocation",
+        recording_estimator,
+    )
+    monkeypatch.setattr(
+        ppc_runtime,
+        "compute_segmented_edge_statistics",
+        recording_kernel,
+    )
+    actual = _run_grouped_component(config, phase, spikes, tmp_path / "instrumented")
+    _assert_component_summaries_equal(baseline, actual)
+    assert actual.completed_block_ids == baseline.completed_block_ids
+    expected_planned_blocks = {
+        ((0, 1), (4, 120)),
+        ((2, 3), (120, 4)),
+    }
+    assert expected_planned_blocks <= planned_blocks
+    fixed_groups = tuple(positions for positions, _ in expected_planned_blocks)
+    assert kernel_blocks
+    assert all(set(kernel_block) <= {1, 2} for kernel_block in kernel_blocks)
+    unit_block_count = (
+        len(spikes.unit_ids) + config.ppc_execution.unit_block_size - 1
+    ) // config.ppc_execution.unit_block_size
+    assert Counter(kernel_blocks) == Counter(
+        {
+            (1,): len(config.sites) * unit_block_count,
+            (2,): len(config.sites) * unit_block_count,
+        }
+    )
+    assert all(
+        any(set(kernel_block).issubset(set(group)) for group in fixed_groups)
+        for kernel_block in kernel_blocks
+    )
+
+
+def test_grouped_component_reports_interval_bounded_block_cycles_and_checkpoint_state(
+    tmp_path: Path,
+) -> None:
+    """Interval progress retains the final block and names each checkpoint state."""
+    base_config = _grouped_config()
+    config = replace(
+        base_config,
+        sites=default_lfp_summary_config().sites[:3],
+        ppc_execution=replace(
+            base_config.ppc_execution,
+            unit_block_size=2,
+            progress_update_interval=2,
+        ),
+    )
+    phase, spikes = _grouped_inputs(config)
+    per_block_stages = (
+        "observed_reduction",
+        "trial_edge_reduction",
+        "shuffle_aggregation",
+        "fdr",
+        "checkpoint",
+    )
+
+    def assert_interval_cycles(events: list[object], total_blocks: int) -> list[object]:
+        """Require whole callback cycles only at the interval and final block."""
+        block_events = [event for event in events if event.stage in per_block_stages]
+        expected_counts = list(range(2, total_blocks + 1, 2))
+        if expected_counts[-1] != total_blocks:
+            expected_counts.append(total_blocks)
+        assert [event.completed_count for event in block_events] == [
+            count for count in expected_counts for _ in per_block_stages
+        ]
+        assert [event.stage for event in block_events] == list(per_block_stages) * len(expected_counts)
+        assert {event.total_count for event in block_events} == {total_blocks}
+        return [event for event in block_events if event.stage == "checkpoint"]
+
+    cold_events: list[object] = []
+    cold = _run_grouped_component(
+        config,
+        phase,
+        spikes,
+        tmp_path / "checkpointed",
+        progress_callback=cold_events.append,
+    )
+    cold_checkpoints = assert_interval_cycles(cold_events, len(cold.completed_block_ids))
+    assert all("newly published" in event.message for event in cold_checkpoints)
+
+    warm_events: list[object] = []
+    warm = _run_grouped_component(
+        config,
+        phase,
+        spikes,
+        tmp_path / "checkpointed",
+        progress_callback=warm_events.append,
+    )
+    assert warm.resumed_block_ids == warm.completed_block_ids
+    warm_checkpoints = assert_interval_cycles(warm_events, len(warm.completed_block_ids))
+    assert all("resumed" in event.message for event in warm_checkpoints)
+
+    disabled_config = replace(
+        config,
+        ppc_execution=replace(config.ppc_execution, checkpoint_enabled=False),
+    )
+    disabled_phase, disabled_spikes = _grouped_inputs(disabled_config)
+    disabled_events: list[object] = []
+    disabled = _run_grouped_component(
+        disabled_config,
+        disabled_phase,
+        disabled_spikes,
+        tmp_path / "checkpoint-disabled",
+        progress_callback=disabled_events.append,
+    )
+    disabled_checkpoints = assert_interval_cycles(
+        disabled_events,
+        len(disabled.completed_block_ids),
+    )
+    assert all("checkpoint disabled" in event.message for event in disabled_checkpoints)
+
+
 @pytest.mark.parametrize("shuffle_count", (3, 4))
 def test_grouped_null_finalizer_uses_one_scratch_without_legacy_draw_copy(
     monkeypatch: pytest.MonkeyPatch,
@@ -4944,6 +5163,118 @@ def test_grouped_null_finalizer_rejects_wrong_observed_or_output_dtype(
             observed_ppc=observed_ppc,
             output_arrays=output_arrays,
         )
+
+
+@pytest.mark.parametrize("accumulator_shape", ((2, 1), (2, 1, 1, 1)))
+def test_grouped_null_finalizer_rejects_non_three_dimensional_accumulators(
+    accumulator_shape: tuple[int, ...],
+) -> None:
+    """Private null accumulators must have exactly shuffle/unit/frequency axes."""
+    output_shape = accumulator_shape[1:]
+    vector_sum = np.ones(accumulator_shape, dtype=np.complex128)
+    valid_count = np.full(accumulator_shape, 2, dtype=np.int64)
+    output_arrays = {
+        "null_exceedance_count": np.zeros(output_shape, dtype=np.int64),
+        "permutation_count": np.zeros(output_shape, dtype=np.int64),
+        "p_value": np.full(output_shape, np.nan, dtype=float),
+        "null_mean": np.full(output_shape, np.nan, dtype=float),
+        "null_std": np.full(output_shape, np.nan, dtype=float),
+        "null_p025": np.full(output_shape, np.nan, dtype=float),
+        "null_p50": np.full(output_shape, np.nan, dtype=float),
+        "null_p975": np.full(output_shape, np.nan, dtype=float),
+        "null_eligible": np.zeros(output_shape, dtype=bool),
+    }
+    with pytest.raises(ValueError, match="axes|dtype"):
+        ppc_runtime._finalize_grouped_null_job(
+            job_plan=_direct_job_plan(),
+            vector_sum=vector_sum,
+            valid_count=valid_count,
+            draw_scratch=np.empty(accumulator_shape, dtype=float),
+            eligible_cell_mask=np.ones(output_shape, dtype=bool),
+            observed_ppc=np.full(output_shape, 0.25, dtype=float),
+            output_arrays=output_arrays,
+        )
+
+
+def test_grouped_checkpoint_merge_scalar_validates_compact_unit_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checkpoint merge validates two compact int64 bounds without compare arrays."""
+    summary = ppc_runtime._empty_grouped_summary_arrays(
+        unit_count=1,
+        condition_count=1,
+        site_count=1,
+        epoch_count=1,
+        frequency_count=1,
+        representative_band_count=2,
+        phase_bin_count=2,
+    )
+    arrays = ppc_runtime._grouped_checkpoint_arrays(
+        summary=summary,
+        site_index=0,
+        unit_start=0,
+        unit_stop=1,
+    )
+    class ScalarOnlyBounds(np.ndarray):
+        """Permit scalar indexing but reject vector comparisons of unit bounds."""
+
+        def __array_ufunc__(
+            self,
+            ufunc: np.ufunc,
+            method: str,
+            *inputs: object,
+            **kwargs: object,
+        ) -> object:
+            """Reject compact-vector comparisons not covered by the byte estimate."""
+            if method == "__call__" and ufunc in {
+                np.equal,
+                np.not_equal,
+                np.less,
+                np.less_equal,
+                np.greater,
+                np.greater_equal,
+            }:
+                raise AssertionError("checkpoint merge vector-compared unit bounds")
+            return super().__array_ufunc__(ufunc, method, *inputs, **kwargs)
+
+    protected_bounds = arrays["unit_bounds"].view(ScalarOnlyBounds)
+    arrays = {**arrays, "unit_bounds": protected_bounds}
+    original_asarray = ppc_runtime.np.asarray
+
+    def preserve_scalar_only_bounds(
+        value: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Reject comparison arrays and retain protected bounds through ``asarray``."""
+        if isinstance(value, list) and value == [0, 1]:
+            raise AssertionError("checkpoint merge allocated a unit-bounds comparison array")
+        candidate = original_asarray(value, *args, **kwargs)
+        if isinstance(value, ScalarOnlyBounds):
+            if candidate.dtype == value.dtype and np.shares_memory(candidate, value):
+                return value
+            raise AssertionError("checkpoint merge copied protected unit bounds")
+        return candidate
+
+    def forbid_array_equal(*args: object, **kwargs: object) -> np.ndarray:
+        """Reject vectorized compact-bound comparisons in the checkpoint stage."""
+        raise AssertionError("checkpoint merge used np.array_equal for unit bounds")
+
+    monkeypatch.setattr(ppc_runtime.np, "asarray", preserve_scalar_only_bounds)
+    monkeypatch.setattr(ppc_runtime.np, "array_equal", forbid_array_equal)
+    assert ppc_runtime.np.asarray(protected_bounds) is protected_bounds
+    assert ppc_runtime._merge_grouped_checkpoint(
+        summary=summary,
+        arrays=arrays,
+        site_index=0,
+        unit_start=0,
+        unit_stop=1,
+        condition_count=1,
+        epoch_count=1,
+        frequency_count=1,
+        representative_band_count=2,
+        phase_bin_count=2,
+    )
 
 
 def test_grouped_component_only_accumulates_and_finalizes_eligible_unit_frequency_cells(
