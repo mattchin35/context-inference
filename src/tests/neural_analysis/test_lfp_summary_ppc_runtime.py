@@ -3279,7 +3279,7 @@ def _grouped_inputs(config: object) -> tuple[object, object]:
     Unit two is whole-window null eligible but each half is ineligible for the
     two-trial late condition.  Phase has complex64/Boolean
     ``(site, frequency, trial, time)`` axes on the configured 500-Hz grid;
-    spike trains have one finite seconds vector per full trial.
+    spike trains have one finite, trial-distinct seconds vector per full trial.
     """
     stable_rows = np.array([41, 59, 83, 97, 101, 113], dtype=np.int64)
     time_s = build_common_event_grid(-2.0, 2.0, float(config.phase.output_rate_hz))
@@ -3344,30 +3344,83 @@ def _grouped_inputs(config: object) -> tuple[object, object]:
             np.nan,
         ),
     )
-    dense_spikes = np.concatenate(
-        (np.linspace(-1.75, -0.25, 30), np.linspace(0.25, 1.75, 30))
+    dense_before = np.linspace(-1.75, -0.25, 30)
+    dense_after = np.linspace(0.25, 1.75, 30)
+    sparse_before = np.linspace(-1.70, -0.30, 13)
+    sparse_after = np.linspace(0.30, 1.70, 13)
+    # Source-trial-specific half-window shifts break the degenerate null in
+    # which every source train is identical.  They preserve both spike count
+    # and the half-open before/after windows for every valid trial.
+    # Each shift is an odd half-sample (1 ms) offset from the canonical 500-Hz
+    # grid. This makes interpolation intentional rather than relying on a
+    # decimal value that might accidentally compare equal to a grid sample.
+    before_shift_s = np.array([-0.181, 0.051, 0.161, -0.101, 0.001, 0.121])
+    after_shift_s = np.array([0.151, -0.081, 0.031, 0.101, 0.001, -0.141])
+
+    def shifted_trial_spikes(
+        before: np.ndarray,
+        after: np.ndarray,
+        trial_index: int,
+    ) -> np.ndarray:
+        """Return one trial-distinct train without crossing PPC half windows."""
+        return np.concatenate(
+            (
+                before + before_shift_s[trial_index],
+                after + after_shift_s[trial_index],
+            )
+        )
+
+    dense_by_trial = tuple(
+        np.empty(0, dtype=float)
+        if trial_index == 4
+        else shifted_trial_spikes(dense_before, dense_after, trial_index)
+        for trial_index in range(stable_rows.size)
     )
-    sparse_spikes = np.concatenate(
-        (np.linspace(-1.70, -0.30, 13), np.linspace(0.30, 1.70, 13))
+    sparse_by_trial = tuple(
+        np.empty(0, dtype=float)
+        if trial_index == 4
+        else shifted_trial_spikes(sparse_before, sparse_after, trial_index)
+        for trial_index in range(stable_rows.size)
     )
+    for values, half_count in (
+        (dense_by_trial, dense_before.size),
+        (sparse_by_trial, sparse_before.size),
+    ):
+        for trial_index, trial_spikes in enumerate(values):
+            if trial_index == 4:
+                assert trial_spikes.size == 0
+                continue
+            assert trial_spikes.size == 2 * half_count
+            assert np.count_nonzero(trial_spikes < 0.0) == half_count
+            assert np.count_nonzero(trial_spikes >= 0.0) == half_count
+            assert np.all(trial_spikes >= time_s[0])
+            assert np.all(trial_spikes < time_s[-1])
+            for spike_time_s in trial_spikes:
+                insertion = int(np.searchsorted(time_s, spike_time_s, side="left"))
+                for grid_index in (insertion - 1, insertion):
+                    if not 0 <= grid_index < time_s.size:
+                        continue
+                    if abs(float(spike_time_s - time_s[grid_index])) <= 1e-12:
+                        assert (
+                            np.asarray(spike_time_s, dtype=np.float64)
+                            .view(np.uint64)
+                            .item()
+                            == np.asarray(time_s[grid_index], dtype=np.float64)
+                            .view(np.uint64)
+                            .item()
+                        )
     prepared_spikes = lfp_summary_runtime.PreparedSpikeRun(
         unit_ids=("PFC:1", "PFC:2"),
         population_ids=("selected_population",),
         trial_spike_trains=(
             TrialRelativeSpikeTrains(
                 unit_id="PFC:1",
-                relative_spike_times=tuple(
-                    np.empty(0, dtype=float) if trial_index == 4 else dense_spikes.copy()
-                    for trial_index in range(stable_rows.size)
-                ),
+                relative_spike_times=tuple(values.copy() for values in dense_by_trial),
                 overlap_trial_indices=np.empty(0, dtype=np.int64),
             ),
             TrialRelativeSpikeTrains(
                 unit_id="PFC:2",
-                relative_spike_times=tuple(
-                    np.empty(0, dtype=float) if trial_index == 4 else sparse_spikes.copy()
-                    for trial_index in range(stable_rows.size)
-                ),
+                relative_spike_times=tuple(values.copy() for values in sparse_by_trial),
                 overlap_trial_indices=np.empty(0, dtype=np.int64),
             ),
         ),
@@ -3583,6 +3636,103 @@ def _legacy_grouped_reference(
     return results, histogram
 
 
+def _assert_legacy_inferential_margins(
+    config: object,
+    prepared_phase: object,
+    prepared_spikes: object,
+    plan: object,
+) -> None:
+    """Require every exact legacy p/q decision to avoid a numerical tie.
+
+    The grouped implementation reduces source-trial sufficient statistics,
+    whereas legacy execution concatenates source-trial phase samples before
+    reduction.  Exact inferential comparisons therefore use this fixture only
+    when every finite null draw contributing to an eligible decision is at
+    least ``1e-5`` from the corresponding observed PPC.
+    """
+    epoch_windows = lfp_summary_runtime._selected_ppc_epoch_windows(config)
+    row_position = {
+        int(row): position
+        for position, row in enumerate(np.asarray(prepared_phase.trial_indices))
+    }
+    frequencies_hz = np.asarray(config.phase.frequency_hz, dtype=float)
+    checked_decision_count = 0
+    for job in plan.job_plans:
+        if not job.schedule.size:
+            continue
+        full_positions = tuple(
+            row_position[int(row)] for row in job.selected_trial_rows
+        )
+        phase_by_trial = np.moveaxis(
+            prepared_phase.phase_tensor[job.site_index], 1, 0
+        )
+        epoch_window = epoch_windows[job.epoch_name]
+        for unit_index, train in enumerate(prepared_spikes.trial_spike_trains):
+            selected_spikes = tuple(
+                lfp_summary_runtime._spikes_in_epoch(
+                    train.relative_spike_times[position], epoch_window
+                )
+                for position in full_positions
+            )
+            legacy = spike_lfp_summary.compute_trial_shuffle_ppc(
+                trial_relative_spike_times_s=selected_spikes,
+                phase_time_s=prepared_phase.relative_time_s,
+                trial_phase_vectors=phase_by_trial[list(full_positions)],
+                frequencies_hz=frequencies_hz,
+                schedule=job.schedule,
+            )
+            eligible = legacy.null_summary.null_eligible
+            if not np.any(eligible):
+                continue
+            sampled = spike_lfp_summary._precompute_trial_phase_samples(
+                prepared_phase.relative_time_s,
+                phase_by_trial[list(full_positions)],
+                selected_spikes,
+            )
+            null_draws = np.empty(
+                (job.schedule.shape[0], frequencies_hz.size), dtype=float
+            )
+            for shuffle_index, schedule_row in enumerate(job.schedule):
+                null_draws[shuffle_index] = spike_lfp_summary._phase_metrics_from_vectors(
+                    spike_lfp_summary._pooled_sampled_phase_vectors(
+                        sampled, schedule_row
+                    ),
+                    frequencies_hz,
+                ).ppc
+            for frequency_index in range(frequencies_hz.size):
+                finite_draws = null_draws[
+                    np.isfinite(null_draws[:, frequency_index]), frequency_index
+                ]
+                observed_value = float(legacy.observed_ppc[frequency_index])
+                exceedance_count = int(
+                    np.count_nonzero(finite_draws >= observed_value)
+                )
+                assert finite_draws.size == int(
+                    legacy.null_summary.permutation_count[frequency_index]
+                )
+                assert exceedance_count == int(
+                    legacy.null_summary.null_exceedance_count[frequency_index]
+                )
+                if not bool(eligible[frequency_index]):
+                    assert np.isnan(legacy.null_summary.p_value[frequency_index])
+                    continue
+                assert finite_draws.size
+                expected_p_value = (1.0 + exceedance_count) / (1.0 + finite_draws.size)
+                assert expected_p_value == float(
+                    legacy.null_summary.p_value[frequency_index]
+                )
+                checked_decision_count += 1
+                margins = np.abs(finite_draws - observed_value)
+                assert np.all(margins >= 1e-5), (
+                    "exact inferential fixture is numerically tied: "
+                    f"condition={job.condition_name!r}, site={job.site_id!r}, "
+                    f"epoch={job.epoch_name!r}, unit={unit_index}, "
+                    f"frequency_hz={frequencies_hz[frequency_index]!r}, "
+                    f"minimum_margin={float(np.min(margins))!r}"
+                )
+    assert checked_decision_count > 0, "fixture did not exercise an exact inferential decision"
+
+
 def _assert_float_summary_equal(name: str, actual: np.ndarray, expected: np.ndarray) -> None:
     """Compare one PPC float field with its approved numerical policy."""
     if name == "preferred_phase_rad":
@@ -3793,6 +3943,9 @@ def test_grouped_component_matches_legacy_and_reduces_each_physical_edge_once(
     legacy, expected_histogram = _legacy_grouped_reference(
         config, prepared_phase, prepared_spikes, grouped.component_plan, tmp_path / "legacy"
     )
+    _assert_legacy_inferential_margins(
+        config, prepared_phase, prepared_spikes, grouped.component_plan
+    )
 
     assert set(grouped.summary_arrays) == _GROUPED_SUMMARY_FIELDS
     for job in grouped.component_plan.job_plans:
@@ -3983,6 +4136,9 @@ def test_grouped_component_uses_condition_intersection_and_bypasses_empty_or_ine
     # ineligible.
     legacy, _ = _legacy_grouped_reference(
         config, phase, spikes, result.component_plan, tmp_path / "late-legacy"
+    )
+    _assert_legacy_inferential_margins(
+        config, phase, spikes, result.component_plan
     )
     late_whole = legacy[(1, 1, 0)]
     late_index = (slice(None), 1, 1, 0, slice(None))
