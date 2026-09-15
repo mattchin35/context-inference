@@ -5168,6 +5168,77 @@ def test_grouped_component_passes_exact_bounded_schema_to_single_checkpoint_load
     assert warm.resumed_block_ids == cold.completed_block_ids
 
 
+def test_grouped_representative_histogram_axis_uses_fixed_s1_s2_8_40_bands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Grouped PPC keeps its two S1/S2 representative frequencies off phase bands.
+
+    A valid phase-analysis configuration may expose one display/analysis band,
+    but S1/S2 observed sufficient statistics always retain the nearest 8 and
+    40 Hz histogram pair. Planning, parent output, checkpoint serialization,
+    and the warm single-block schema must therefore all retain a two-band axis.
+    """
+    base_config = _grouped_config()
+    config = replace(
+        base_config,
+        phase=replace(base_config.phase, bands=base_config.phase.bands[:1]),
+    )
+    assert len(config.phase.bands) == 1
+    phase, spikes = _grouped_inputs(config)
+    cold = _run_grouped_component(config, phase, spikes, tmp_path)
+    phase_bin_count = len(config.ppc.phase_bin_edges_rad) - 1
+    expected_metric_shape = (2, 4, 2, 3, len(config.phase.frequency_hz))
+    expected_histogram_shape = expected_metric_shape[:-1] + (2, phase_bin_count)
+    assert cold.summary_arrays["representative_phase_histogram_count"].shape == (
+        expected_histogram_shape
+    )
+    expected_summary_cell_bytes = (
+        116 * len(config.phase.frequency_hz) + 8 * 2 * phase_bin_count
+    )
+    assert cold.component_plan.allocation_estimate.summary_assembly_bytes == (
+        len(spikes.unit_ids)
+        * len(cold.component_plan.job_plans)
+        * expected_summary_cell_bytes
+    )
+
+    schemas: list[Mapping[str, tuple[np.dtype[object], tuple[int, ...]]]] = []
+    byte_bounds: list[int] = []
+    original_loader = ppc_runtime.load_valid_ppc_checkpoint
+
+    def schema_bytes(
+        schema: Mapping[str, tuple[np.dtype[object], tuple[int, ...]]],
+    ) -> int:
+        """Return exact uncompressed numeric bytes from one checkpoint schema."""
+        total = 0
+        for dtype, shape in schema.values():
+            elements = 1
+            for axis_length in shape:
+                elements *= axis_length
+            total += np.dtype(dtype).itemsize * elements
+        return total
+
+    def recording_loader(*args: object, **kwargs: object) -> object:
+        """Record each warm checkpoint's band shape and byte cap."""
+        schema = kwargs["expected_array_schema"]
+        assert isinstance(schema, Mapping)
+        schemas.append(schema)
+        byte_bounds.append(kwargs["maximum_array_bytes"])
+        return original_loader(*args, **kwargs)
+
+    monkeypatch.setattr(ppc_runtime, "load_valid_ppc_checkpoint", recording_loader)
+    warm = _run_grouped_component(config, phase, spikes, tmp_path)
+    expected_checkpoint_histogram_shape = (1, 4, 3, 2, phase_bin_count)
+    assert schemas
+    assert all(
+        schema["representative_phase_histogram_count"]
+        == (np.dtype(np.int64), expected_checkpoint_histogram_shape)
+        for schema in schemas
+    )
+    assert byte_bounds == [schema_bytes(schema) for schema in schemas]
+    assert warm.resumed_block_ids == cold.completed_block_ids
+
+
 def test_grouped_resume_uses_each_heterogeneous_checkpoint_schema_byte_cap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
