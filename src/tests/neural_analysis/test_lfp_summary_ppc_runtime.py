@@ -4896,6 +4896,56 @@ def test_grouped_null_finalizer_uses_one_scratch_without_legacy_draw_copy(
             np.testing.assert_array_equal(actual_values, expected_values)
 
 
+@pytest.mark.parametrize(
+    ("invalid_field", "wrong_dtype"),
+    (
+        ("observed_ppc", np.float32),
+        ("p_value", np.float32),
+        ("null_mean", np.float32),
+        ("null_std", np.float32),
+        ("null_p025", np.float32),
+        ("null_p50", np.float32),
+        ("null_p975", np.float32),
+        ("null_exceedance_count", np.int32),
+        ("permutation_count", np.int32),
+        ("null_eligible", np.uint8),
+    ),
+)
+def test_grouped_null_finalizer_rejects_wrong_observed_or_output_dtype(
+    invalid_field: str,
+    wrong_dtype: type[np.generic],
+) -> None:
+    """The private no-copy finalizer requires every exact summary dtype."""
+    vector_sum = np.array([1.0 + 0.0j, 2.0 + 0.0j], dtype=np.complex128).reshape(2, 1, 1)
+    valid_count = np.array([2, 2], dtype=np.int64).reshape(2, 1, 1)
+    output_arrays = {
+        "null_exceedance_count": np.zeros((1, 1), dtype=np.int64),
+        "permutation_count": np.zeros((1, 1), dtype=np.int64),
+        "p_value": np.full((1, 1), np.nan, dtype=float),
+        "null_mean": np.full((1, 1), np.nan, dtype=float),
+        "null_std": np.full((1, 1), np.nan, dtype=float),
+        "null_p025": np.full((1, 1), np.nan, dtype=float),
+        "null_p50": np.full((1, 1), np.nan, dtype=float),
+        "null_p975": np.full((1, 1), np.nan, dtype=float),
+        "null_eligible": np.zeros((1, 1), dtype=bool),
+    }
+    observed_ppc = np.array([[0.25]], dtype=float)
+    if invalid_field == "observed_ppc":
+        observed_ppc = observed_ppc.astype(wrong_dtype)
+    else:
+        output_arrays[invalid_field] = np.zeros((1, 1), dtype=wrong_dtype)
+    with pytest.raises(ValueError, match="dtype|axes"):
+        ppc_runtime._finalize_grouped_null_job(
+            job_plan=_direct_job_plan(),
+            vector_sum=vector_sum,
+            valid_count=valid_count,
+            draw_scratch=np.empty(vector_sum.shape, dtype=float),
+            eligible_cell_mask=np.array([[True]], dtype=bool),
+            observed_ppc=observed_ppc,
+            output_arrays=output_arrays,
+        )
+
+
 def test_grouped_component_only_accumulates_and_finalizes_eligible_unit_frequency_cells(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5115,6 +5165,81 @@ def test_grouped_component_passes_exact_bounded_schema_to_single_checkpoint_load
     assert byte_bounds == [
         cold.component_plan.allocation_estimate.checkpoint_block_bytes
     ] * len(cold.completed_block_ids)
+    assert warm.resumed_block_ids == cold.completed_block_ids
+
+
+def test_grouped_resume_uses_each_heterogeneous_checkpoint_schema_byte_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A compute-dominant one-unit estimate cannot under-cap a two-unit block.
+
+    This run has two sites and three units split into ``[0, 2)`` and ``[2, 3)``
+    checkpoint blocks.  The third unit has many spikes, making its one-unit
+    computation stage select the component allocation estimate, while the
+    two-unit checkpoint has the larger serialized summary.  Warm resume must
+    validate every block against its own exact schema byte total, not reuse the
+    selected compute candidate's smaller checkpoint count.
+    """
+    base_config = _grouped_config()
+    config = replace(
+        base_config,
+        unit_population=replace(
+            base_config.unit_population,
+            stable_unit_ids=("PFC:1", "PFC:2", "PFC:3"),
+        ),
+        ppc_execution=replace(base_config.ppc_execution, unit_block_size=2),
+    )
+    phase, source_spikes = _grouped_inputs(config)
+    dense_third_unit = TrialRelativeSpikeTrains(
+        unit_id="PFC:3",
+        relative_spike_times=tuple(
+            np.tile(values, 8) if values.size else values.copy()
+            for values in source_spikes.trial_spike_trains[0].relative_spike_times
+        ),
+        overlap_trial_indices=np.empty(0, dtype=np.int64),
+    )
+    spikes = replace(
+        source_spikes,
+        unit_ids=("PFC:1", "PFC:2", "PFC:3"),
+        trial_spike_trains=(*source_spikes.trial_spike_trains, dense_third_unit),
+    )
+    cold = _run_grouped_component(config, phase, spikes, tmp_path)
+    selected = cold.component_plan.allocation_estimate
+    original_loader = ppc_runtime.load_valid_ppc_checkpoint
+    schemas: list[Mapping[str, tuple[np.dtype[object], tuple[int, ...]]]] = []
+    byte_bounds: list[int] = []
+
+    def schema_bytes(
+        schema: Mapping[str, tuple[np.dtype[object], tuple[int, ...]]],
+    ) -> int:
+        """Return the exact numeric bytes declared by one compact NPZ schema."""
+        total = 0
+        for dtype, shape in schema.values():
+            element_count = 1
+            for axis_length in shape:
+                element_count *= axis_length
+            total += np.dtype(dtype).itemsize * element_count
+        return total
+
+    def recording_loader(*args: object, **kwargs: object) -> object:
+        """Record each warm block's independently checked schema and cap."""
+        schema = kwargs["expected_array_schema"]
+        assert isinstance(schema, Mapping)
+        schemas.append(schema)
+        byte_bounds.append(kwargs["maximum_array_bytes"])
+        return original_loader(*args, **kwargs)
+
+    monkeypatch.setattr(ppc_runtime, "load_valid_ppc_checkpoint", recording_loader)
+    warm = _run_grouped_component(config, phase, spikes, tmp_path)
+    declared_bytes = [schema_bytes(schema) for schema in schemas]
+    assert len(cold.completed_block_ids) == 4
+    assert {schema["site_index"][1] for schema in schemas} == {(1,)}
+    assert {schema["unit_bounds"][1] for schema in schemas} == {(2,)}
+    assert {schema["ppc"][1][0] for schema in schemas} == {1, 2}
+    assert max(declared_bytes) > selected.checkpoint_block_bytes
+    assert selected.planned_computation_private_bytes > max(declared_bytes)
+    assert byte_bounds == declared_bytes
     assert warm.resumed_block_ids == cold.completed_block_ids
 
 
@@ -5481,7 +5606,7 @@ def test_grouped_planner_uses_one_owned_advanced_index_source_count_block(
     advanced_blocks: list[np.ndarray] = []
 
     class TrackedSourceCounts(np.ndarray):
-        """Mark fancy-indexed count blocks and reject a redundant second copy."""
+        """Mark count owners while forbidding stripping or redundant copies."""
 
         def __array_finalize__(self, source: object) -> None:
             """Carry the advanced-index marker across ndarray subclass views."""
@@ -5500,6 +5625,39 @@ def test_grouped_planner_uses_one_owned_advanced_index_source_count_block(
                 return value
             return value
 
+        def copy(self, *args: object, **kwargs: object) -> np.ndarray:
+            """Reject a second owned count block after the one fancy index."""
+            raise AssertionError("PPC planning copied a protected source-count block")
+
+        def astype(self, *args: object, **kwargs: object) -> np.ndarray:
+            """Reject dtype conversion of a protected source-count block."""
+            raise AssertionError("PPC planning converted a protected source-count block")
+
+        def view(
+            self,
+            dtype: object | None = None,
+            type: object | None = None,
+        ) -> np.ndarray:
+            """Reject an explicit view that discards protected-array tracking."""
+            if dtype is np.ndarray or type is np.ndarray:
+                raise AssertionError("PPC planning stripped protected source-count tracking")
+            return super().view(dtype=dtype, type=type)
+
+        def __array_ufunc__(
+            self,
+            ufunc: np.ufunc,
+            method: str,
+            *inputs: object,
+            **kwargs: object,
+        ) -> object:
+            """Reject full count-table comparisons at every planner/estimator layer."""
+            if ufunc in {np.less, np.less_equal, np.greater, np.greater_equal} and any(
+                isinstance(value, TrackedSourceCounts) and value.ndim > 0
+                for value in inputs
+            ):
+                raise AssertionError("PPC planning compared a full source-count table")
+            return super().__array_ufunc__(ufunc, method, *inputs, **kwargs)
+
     config = _planner_config(shuffle_count=1, unit_block_size=1)
     planner_config = replace(
         config,
@@ -5515,20 +5673,90 @@ def test_grouped_planner_uses_one_owned_advanced_index_source_count_block(
     )
     original_asarray = ppc_runtime.np.asarray
     original_estimator = ppc_runtime.estimate_grouped_ppc_allocation
+    original_array = ppc_runtime.np.array
+    original_copy = ppc_runtime.np.copy
+    original_ascontiguousarray = ppc_runtime.np.ascontiguousarray
+    estimator_blocks: list[np.ndarray] = []
 
     def preserve_source_count_subclass(value: object, *args: object, **kwargs: object) -> np.ndarray:
         """Keep the one input count owner visible to the planner's fancy index."""
+        is_protected_source = value is source_counts or isinstance(
+            value, TrackedSourceCounts
+        )
+        candidate = original_asarray(value, *args, **kwargs)
         if value is source_counts:
+            if (
+                candidate.dtype != source_counts.dtype
+                or not np.shares_memory(candidate, source_counts)
+            ):
+                raise AssertionError("PPC planning copied or converted raw source counts")
             return tracked_counts
-        return original_asarray(value, *args, **kwargs)
+        if is_protected_source:
+            if candidate.dtype != value.dtype or not np.shares_memory(candidate, value):
+                raise AssertionError("PPC planning copied or converted protected source counts")
+            return value
+        return candidate
+
+    def forbid_protected_array_copy(
+        value: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Reject public NumPy conversion paths that could own another block."""
+        is_protected_source = value is source_counts or isinstance(
+            value, TrackedSourceCounts
+        )
+        if is_protected_source:
+            raise AssertionError("PPC planning copied a protected source-count block")
+        return original_array(value, *args, **kwargs)
+
+    def forbid_protected_np_copy(
+        value: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Reject ``np.copy`` of either full or fancy-indexed count storage."""
+        is_protected_source = value is source_counts or isinstance(
+            value, TrackedSourceCounts
+        )
+        if is_protected_source:
+            raise AssertionError("PPC planning copied a protected source-count block")
+        return original_copy(value, *args, **kwargs)
+
+    def forbid_protected_contiguous_copy(
+        value: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Reject contiguity conversion of protected count storage."""
+        is_protected_source = value is source_counts or isinstance(
+            value, TrackedSourceCounts
+        )
+        if is_protected_source:
+            raise AssertionError("PPC planning copied a protected source-count block")
+        return original_ascontiguousarray(value, *args, **kwargs)
 
     monkeypatch.setattr(ppc_runtime.np, "asarray", preserve_source_count_subclass)
+    monkeypatch.setattr(ppc_runtime.np, "array", forbid_protected_array_copy)
+    monkeypatch.setattr(ppc_runtime.np, "copy", forbid_protected_np_copy)
+    monkeypatch.setattr(
+        ppc_runtime.np,
+        "ascontiguousarray",
+        forbid_protected_contiguous_copy,
+    )
 
     def recording_estimator(**kwargs: object) -> object:
         """Require each nonplaceholder allocation table to alias a captured block."""
         candidate = np.asarray(kwargs["source_trial_spike_count"])
-        if np.any(candidate):
+        if candidate.size:
             assert advanced_blocks
+            matches = [
+                captured
+                for captured in advanced_blocks
+                if np.shares_memory(candidate, captured)
+            ]
+            assert matches
+            estimator_blocks.append(matches[0])
             assert any(
                 np.shares_memory(candidate, captured)
                 for captured in advanced_blocks
@@ -5542,6 +5770,230 @@ def test_grouped_planner_uses_one_owned_advanced_index_source_count_block(
     plan = _plan(planner_config, **inputs)
     assert plan.job_plans
     assert advanced_blocks
+    assert all(
+        any(np.shares_memory(captured, passed) for passed in estimator_blocks)
+        for captured in advanced_blocks
+    )
+
+
+def test_grouped_allocation_validates_counts_and_position_axes_without_vector_masks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Planner/runtime/kernel validation scans protected int64 axes as scalars.
+
+    The full planning count table, the owned advanced-index count block, and
+    edge/observed source-position vectors are all bounded categorical/count
+    inputs. Their validation must not create full comparison masks or a full
+    ``np.unique`` output; scalar loops and Python identity sets are allowed.
+    The runtime allocator must pass the same protected count/edge inputs into
+    the delegated S1 allocation estimator.
+    """
+    class ScalarValidatedInt64(np.ndarray):
+        """Reject vector operations and stripping of protected int64 axes."""
+
+        def copy(self, *args: object, **kwargs: object) -> np.ndarray:
+            """Reject a duplicate of a full categorical/count input axis."""
+            raise AssertionError("PPC allocation copied a protected int64 axis")
+
+        def astype(self, *args: object, **kwargs: object) -> np.ndarray:
+            """Reject dtype conversion of a full categorical/count input axis."""
+            raise AssertionError("PPC allocation converted a protected int64 axis")
+
+        def view(
+            self,
+            dtype: object | None = None,
+            type: object | None = None,
+        ) -> np.ndarray:
+            """Reject an explicit view that removes protected-axis tracking."""
+            if dtype is np.ndarray or type is np.ndarray:
+                raise AssertionError("PPC allocation stripped a protected int64 axis")
+            return super().view(dtype=dtype, type=type)
+
+        def __array_ufunc__(
+            self,
+            ufunc: np.ufunc,
+            method: str,
+            *inputs: object,
+            **kwargs: object,
+        ) -> object:
+            """Forbid a comparison against an axis-bearing protected array."""
+            if ufunc in {np.less, np.less_equal, np.greater, np.greater_equal} and any(
+                isinstance(value, ScalarValidatedInt64) and value.ndim > 0
+                for value in inputs
+            ):
+                raise AssertionError("PPC allocation compared a full protected int64 axis")
+            return super().__array_ufunc__(ufunc, method, *inputs, **kwargs)
+
+    source_counts = np.ones((2, 1, 2), dtype=np.int64).view(ScalarValidatedInt64)
+    edge_positions = np.array([0, 1], dtype=np.int64).view(ScalarValidatedInt64)
+    observed_positions = np.array([0, 1], dtype=np.int64).view(ScalarValidatedInt64)
+    protected_values = (source_counts, edge_positions, observed_positions)
+    original_asarray = ppc_runtime.np.asarray
+    original_unique = ppc_runtime.np.unique
+    original_kernel_estimator = ppc_runtime.estimate_segmented_kernel_allocation
+    original_array = ppc_runtime.np.array
+    original_copy = ppc_runtime.np.copy
+    original_ascontiguousarray = ppc_runtime.np.ascontiguousarray
+    delegated_calls: list[tuple[np.ndarray, np.ndarray]] = []
+
+    def preserve_protected_axes(value: object, *args: object, **kwargs: object) -> np.ndarray:
+        """Retain protected ndarray subclasses through runtime and kernel asarray calls."""
+        candidate = original_asarray(value, *args, **kwargs)
+        if isinstance(value, ScalarValidatedInt64):
+            if candidate.dtype != value.dtype or not np.shares_memory(candidate, value):
+                raise AssertionError("PPC allocation copied or converted a protected int64 axis")
+            return value
+        return candidate
+
+    def forbid_protected_array_copy(
+        value: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Reject ``np.array`` ownership of any protected full input axis."""
+        if isinstance(value, ScalarValidatedInt64):
+            raise AssertionError("PPC allocation copied a protected int64 axis")
+        return original_array(value, *args, **kwargs)
+
+    def forbid_protected_np_copy(
+        value: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Reject ``np.copy`` ownership of any protected full input axis."""
+        if isinstance(value, ScalarValidatedInt64):
+            raise AssertionError("PPC allocation copied a protected int64 axis")
+        return original_copy(value, *args, **kwargs)
+
+    def forbid_protected_contiguous_copy(
+        value: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Reject contiguity conversion of any protected full input axis."""
+        if isinstance(value, ScalarValidatedInt64):
+            raise AssertionError("PPC allocation copied a protected int64 axis")
+        return original_ascontiguousarray(value, *args, **kwargs)
+
+    def forbid_full_unique(values: object, *args: object, **kwargs: object) -> np.ndarray:
+        """Reject a uniqueness materialization for any complete protected axis."""
+        if isinstance(values, ScalarValidatedInt64) and values.ndim > 0:
+            raise AssertionError("PPC allocation used np.unique on a protected axis")
+        return original_unique(values, *args, **kwargs)
+
+    def recording_kernel_estimator(**kwargs: object) -> object:
+        """Require delegated S1 estimation to retain count/edge input ownership."""
+        counts = np.asarray(kwargs["source_trial_spike_count"])
+        edges = np.asarray(kwargs["edge_source_trial_position"])
+        assert any(np.shares_memory(counts, values) for values in protected_values)
+        assert any(np.shares_memory(edges, values) for values in protected_values)
+        delegated_calls.append((counts, edges))
+        return original_kernel_estimator(**kwargs)
+
+    monkeypatch.setattr(ppc_runtime.np, "asarray", preserve_protected_axes)
+    monkeypatch.setattr(ppc_runtime.np, "unique", forbid_full_unique)
+    monkeypatch.setattr(ppc_runtime.np, "array", forbid_protected_array_copy)
+    monkeypatch.setattr(ppc_runtime.np, "copy", forbid_protected_np_copy)
+    monkeypatch.setattr(
+        ppc_runtime.np,
+        "ascontiguousarray",
+        forbid_protected_contiguous_copy,
+    )
+    monkeypatch.setattr(
+        ppc_runtime,
+        "estimate_segmented_kernel_allocation",
+        recording_kernel_estimator,
+    )
+    estimate = ppc_runtime.estimate_grouped_ppc_allocation(
+        active_job_count=1,
+        worker_result_job_count=1,
+        component_job_count=1,
+        shuffle_count=2,
+        total_unit_count=1,
+        unit_block_size=1,
+        source_trial_spike_count=source_counts,
+        edge_source_trial_position=edge_positions,
+        observed_source_trial_position=observed_positions,
+        frequency_count=1,
+        representative_band_count=2,
+        phase_bin_count=2,
+        planner_array_bytes=0,
+        worker_plan_bytes=0,
+        worker_count=1,
+        pending_unit_block_count=1,
+        shared_phase_mmap_bytes=0,
+    )
+    assert delegated_calls
+    assert estimate.kernel_working_bytes > 0
+
+
+def test_grouped_planner_keeps_many_empty_condition_names_as_an_unaccounted_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Condition labels remain a tuple when many empty jobs hit exact limits.
+
+    Empty condition jobs still appear in result axes and checkpoint summaries,
+    so their exact plan/summary allocation is retained. Their Python string
+    labels must not be converted to an uncharged object ndarray merely to loop
+    in axis order.
+    """
+    condition_count = 64
+    condition_names = tuple(f"empty-{index}" for index in range(condition_count))
+    config = _planner_config(shuffle_count=1, unit_block_size=1)
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([101, 303], dtype=np.int64),
+        condition_names=condition_names,
+        condition_membership=np.zeros((2, condition_count), dtype=bool),
+        source_trial_spike_count=np.zeros((2, 1, 2), dtype=np.int64),
+    )
+    validated = ppc_runtime._validate_grouped_planning_inputs(**inputs)
+    returned_condition_names = validated[4]
+    assert type(returned_condition_names) is tuple
+    assert returned_condition_names == condition_names
+    baseline = _plan(config, **inputs)
+    exact_execution = replace(
+        config.ppc_execution,
+        maximum_worker_allocation_bytes=(
+            baseline.allocation_estimate.planned_parent_private_bytes
+        ),
+        maximum_aggregate_allocation_bytes=(
+            baseline.allocation_estimate.planned_aggregate_array_bytes
+        ),
+    )
+    exact_config = replace(config, ppc_execution=exact_execution)
+    original_asarray = ppc_runtime.np.asarray
+    original_array = ppc_runtime.np.array
+
+    def forbid_condition_name_object_array(
+        value: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Reject every ndarray conversion of this retained label tuple."""
+        if isinstance(value, tuple) and value == condition_names:
+            raise AssertionError("grouped planner materialized a condition-name array")
+        return original_asarray(value, *args, **kwargs)
+
+    def forbid_condition_name_array(
+        value: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Reject any NumPy array conversion of the retained label tuple."""
+        if isinstance(value, tuple) and value == condition_names:
+            raise AssertionError("grouped planner materialized a condition-name array")
+        return original_array(value, *args, **kwargs)
+
+    monkeypatch.setattr(ppc_runtime.np, "asarray", forbid_condition_name_object_array)
+    monkeypatch.setattr(ppc_runtime.np, "array", forbid_condition_name_array)
+    exact_plan = _plan(exact_config, **inputs)
+    assert len(exact_plan.job_plans) == condition_count * 3
+    assert exact_plan.allocation_estimate.planned_parent_private_bytes == (
+        exact_execution.maximum_worker_allocation_bytes
+    )
+    assert exact_plan.allocation_estimate.planned_aggregate_array_bytes == (
+        exact_execution.maximum_aggregate_allocation_bytes
+    )
 
 
 def test_grouped_observed_stage_accounts_only_selected_statistics_and_writes_summary_in_place(

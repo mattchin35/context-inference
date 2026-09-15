@@ -437,6 +437,47 @@ def test_single_checkpoint_loader_rejects_schema_or_compressed_size_before_membe
     assert member_names == []
 
 
+@pytest.mark.parametrize(
+    "failure",
+    (
+        EOFError("truncated checkpoint member"),
+        RuntimeError("File 'block-a.npy' is encrypted, password required"),
+        NotImplementedError("unsupported checkpoint compression method"),
+    ),
+)
+def test_single_bounded_checkpoint_loader_treats_archive_read_failures_as_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+) -> None:
+    """EOF, encrypted ZIP, and unsupported compression invalidate one block safely."""
+    metadata = {**_metadata("run-a"), "run_fingerprint": "run-a"}
+    run_root = tmp_path / "ppc" / "run-a"
+    work_cache.write_ppc_checkpoint(
+        run_root,
+        "block-a",
+        {"ppc": np.zeros((1, 1), dtype=np.float64)},
+        metadata,
+    )
+
+    def failing_header_validation(*_: object, **__: object) -> bool:
+        """Model one bounded archive/header read failure before member loading."""
+        raise failure
+
+    monkeypatch.setattr(
+        work_cache,
+        "_checkpoint_npz_headers_match",
+        failing_header_validation,
+    )
+    assert work_cache.load_valid_ppc_checkpoint(
+        run_root,
+        "block-a",
+        metadata,
+        expected_array_schema={"ppc": (np.dtype(np.float64), (1, 1))},
+        maximum_array_bytes=8,
+    ) is None
+
+
 def test_ppc_checkpoint_writer_default_copy_and_explicit_no_copy_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
