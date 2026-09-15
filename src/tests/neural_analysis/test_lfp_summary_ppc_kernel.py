@@ -1468,6 +1468,129 @@ def test_selected_observed_trial_reducer_matches_selected_legacy_trial_statistic
         np.testing.assert_array_equal(getattr(actual, field.name), getattr(expected, field.name))
 
 
+def test_reducers_validate_full_phase_trial_ids_without_copying_or_vectorized_uniquing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Selected S2 and repeated S1 calls retain the caller's full trial-ID view.
+
+    The full-axis stable IDs are prepared metadata, not output ownership.  Both
+    reducers must validate them without an all-trial ``copy`` or ``unique``
+    temporary, while their public result identities remain independently owned
+    and frozen.  Repeating S1 with different bounded edge lists must preserve
+    the same rule on every call.
+    """
+    geometries, phase, valid, source_phase_trial_index, frequencies_hz, phase_bins = (
+        _observed_trial_reuse_fixture()
+    )
+    class NoFullPhaseIDCopy(np.ndarray):
+        """Reject discarding a complete prepared phase-ID axis into a copy."""
+
+        def copy(self, *args: object, **kwargs: object) -> np.ndarray:
+            """Allow bounded selected copies but reject a full metadata-axis copy."""
+            if self.size == source_phase_trial_index.size:
+                raise AssertionError("reduction copied the complete phase_trial_index axis")
+            return super().copy(*args, **kwargs)
+
+    phase_trial_index = source_phase_trial_index.view(NoFullPhaseIDCopy)
+    original_validation = kernel._validated_reduction_phase_inputs
+    returned_phase_id_views: list[np.ndarray] = []
+
+    def recording_validation(**kwargs: object) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Require validation to return a full-axis ID view, not an owned duplicate."""
+        values = original_validation(**kwargs)
+        supplied = np.asarray(kwargs["phase_trial_index"])
+        assert np.shares_memory(values[2], supplied)
+        returned_phase_id_views.append(values[2])
+        return values
+
+    original_unique = kernel.np.unique
+    original_asarray = kernel.np.asarray
+
+    def guard_full_phase_axis_unique(
+        values: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Reject only vectorized uniqueness over this complete prepared ID axis."""
+        candidate = original_asarray(values)
+        if candidate.shape == phase_trial_index.shape and candidate.size == phase_trial_index.size:
+            raise AssertionError("full-axis phase IDs used np.unique during reduction")
+        return original_unique(values, *args, **kwargs)
+
+    def preserve_full_phase_id_subclass(
+        values: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Keep the protected full phase-ID axis visible through repeated validation."""
+        candidate = original_asarray(values, *args, **kwargs)
+        if (
+            isinstance(values, NoFullPhaseIDCopy)
+            and candidate.size == source_phase_trial_index.size
+            and not np.shares_memory(candidate, values)
+        ):
+            raise AssertionError("reduction copied the complete phase_trial_index via asarray")
+        if (
+            isinstance(values, NoFullPhaseIDCopy)
+            and candidate.dtype == values.dtype
+            and np.shares_memory(candidate, values)
+        ):
+            return values
+        return candidate
+
+    monkeypatch.setattr(kernel, "_validated_reduction_phase_inputs", recording_validation)
+    monkeypatch.setattr(kernel.np, "unique", guard_full_phase_axis_unique)
+    monkeypatch.setattr(kernel.np, "asarray", preserve_full_phase_id_subclass)
+    np.testing.assert_array_equal(kernel.np.unique(np.array([7], dtype=np.int64)), np.array([7]))
+
+    selected = kernel.compute_selected_observed_trial_segmented_ppc_statistics(
+        source_trial_geometries=(geometries[0], geometries[2]),
+        trial_phase_vectors=phase,
+        phase_valid_mask=valid,
+        phase_trial_index=phase_trial_index,
+        frequencies_hz=frequencies_hz,
+        phase_bin_edges_rad=phase_bins,
+    )
+    first_source = np.array([7], dtype=np.int64)
+    first_target = np.array([29], dtype=np.int64)
+    second_source = np.array([61], dtype=np.int64)
+    second_target = np.array([7], dtype=np.int64)
+    first_edge = _reduce(
+        source_trial_geometries=geometries,
+        trial_phase_vectors=phase,
+        phase_valid_mask=valid,
+        phase_trial_index=phase_trial_index,
+        frequencies_hz=frequencies_hz,
+        source_trial_index=first_source,
+        target_trial_index=first_target,
+    )
+    second_edge = _reduce(
+        source_trial_geometries=geometries,
+        trial_phase_vectors=phase,
+        phase_valid_mask=valid,
+        phase_trial_index=phase_trial_index,
+        frequencies_hz=frequencies_hz,
+        source_trial_index=second_source,
+        target_trial_index=second_target,
+    )
+
+    assert len(returned_phase_id_views) == 3
+    assert all(np.shares_memory(values, phase_trial_index) for values in returned_phase_id_views)
+    assert not np.shares_memory(selected.phase_trial_index, phase_trial_index)
+    assert not np.shares_memory(first_edge.source_trial_index, first_source)
+    assert not np.shares_memory(first_edge.target_trial_index, first_target)
+    assert not np.shares_memory(second_edge.source_trial_index, second_source)
+    assert not np.shares_memory(second_edge.target_trial_index, second_target)
+    for values in (
+        selected.phase_trial_index,
+        first_edge.source_trial_index,
+        first_edge.target_trial_index,
+        second_edge.source_trial_index,
+        second_edge.target_trial_index,
+    ):
+        assert not values.flags.writeable
+
+
 def test_one_observed_trial_pass_serves_overlapping_condition_memberships(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

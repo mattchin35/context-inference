@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import FrozenInstanceError, fields, replace
 import gc
+from hashlib import sha256
 import inspect
 import json
 import os
@@ -18,6 +19,7 @@ import numpy as np
 import pytest
 
 from src.neural_analysis import lfp_summary_ppc_runtime as ppc_runtime
+from src.neural_analysis import lfp_summary_ppc_kernel as ppc_kernel
 from src.neural_analysis import lfp_summary_runtime
 from src.neural_analysis import lfp_summary_work_cache as work_cache
 from src.neural_analysis import spike_lfp_summary
@@ -5211,3 +5213,686 @@ def test_grouped_component_preflights_full_scalar_construction_scratch_before_al
     with pytest.raises(ValueError, match="planning|membership|source.*count|allocation"):
         _run_grouped_component(unsafe_config, phase, spikes, tmp_path)
     assert not (tmp_path / "ppc").exists()
+
+
+def test_array_fingerprint_streams_exact_c_order_content_without_bulk_copies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Content fingerprints retain exact C-order bytes without bulk byte copies.
+
+    A noncontiguous input must hash identically to an explicit C-order copy,
+    including its original dtype and shape.  The runtime may stream bounded
+    rows/chunks, but it must not materialize an all-array contiguous copy or
+    one all-array ``tobytes`` result merely to obtain a SHA-256 identity.
+    """
+    chunk_bytes = 64 * 1024
+    contiguous = np.arange(32_768, dtype=np.int64).reshape(128, 256)
+    noncontiguous = contiguous.T[:, ::2]
+
+    def expected_fingerprint(*arrays: np.ndarray) -> str:
+        """Return the established dtype/shape/C-order identity before guards."""
+        digest = sha256()
+        for array in arrays:
+            canonical = np.array(array, order="C", copy=True)
+            digest.update(str(canonical.dtype).encode("ascii"))
+            digest.update(repr(canonical.shape).encode("ascii"))
+            digest.update(canonical.tobytes())
+        return digest.hexdigest()
+
+    expected = expected_fingerprint(contiguous, noncontiguous)
+    assert ppc_runtime._array_fingerprint(contiguous, noncontiguous) == expected
+
+    original_sha256 = ppc_runtime.sha256
+    original_array = ppc_runtime.np.array
+    original_ascontiguousarray = ppc_runtime.np.ascontiguousarray
+
+    class LargeNoCopyArray(np.ndarray):
+        """Reject unbounded ndarray conversion helpers while allowing row chunks."""
+
+        def _reject_large_nonsharing_result(
+            self,
+            operation: str,
+            result: np.ndarray,
+        ) -> np.ndarray:
+            """Reject a full protected-buffer conversion only after exposing its copy."""
+            if result.nbytes > chunk_bytes and not np.shares_memory(result, self):
+                raise AssertionError(f"content hashing used full-array {operation}")
+            return result
+
+        def copy(self, *args: object, **kwargs: object) -> np.ndarray:
+            """Allow bounded chunk copies only."""
+            return self._reject_large_nonsharing_result(
+                "copy", super().copy(*args, **kwargs)
+            )
+
+        def ravel(self, *args: object, **kwargs: object) -> np.ndarray:
+            """Allow bounded chunk flattening only."""
+            return self._reject_large_nonsharing_result(
+                "ravel", super().ravel(*args, **kwargs)
+            )
+
+        def flatten(self, *args: object, **kwargs: object) -> np.ndarray:
+            """Allow bounded chunk flattening only."""
+            return self._reject_large_nonsharing_result(
+                "flatten", super().flatten(*args, **kwargs)
+            )
+
+        def astype(self, *args: object, **kwargs: object) -> np.ndarray:
+            """Allow bounded chunk casts only."""
+            return self._reject_large_nonsharing_result(
+                "astype", super().astype(*args, **kwargs)
+            )
+
+    protected_contiguous = contiguous.view(LargeNoCopyArray)
+    protected_noncontiguous = noncontiguous.view(LargeNoCopyArray)
+
+    class BoundedDigest:
+        """Forward SHA-256 updates while rejecting an unbounded byte payload."""
+
+        def __init__(self) -> None:
+            """Create the real standard-library digest behind the bounded seam."""
+            self._delegate = original_sha256()
+
+        def update(self, payload: object) -> None:
+            """Accept only bounded bytes-like chunks from content hashing."""
+            if memoryview(payload).nbytes > chunk_bytes:
+                raise AssertionError("content hashing sent one full-array digest payload")
+            self._delegate.update(payload)  # type: ignore[arg-type]
+
+        def hexdigest(self) -> str:
+            """Return the exact underlying SHA-256 hexadecimal identity."""
+            return self._delegate.hexdigest()
+
+    def bounded_sha256(*args: object, **kwargs: object) -> BoundedDigest:
+        """Return a digest whose updates expose unbounded content materialization."""
+        if len(args) > 1 or kwargs:
+            raise AssertionError("content hashing passed an invalid digest constructor payload")
+        digest = BoundedDigest()
+        if args:
+            digest.update(args[0])
+        return digest
+
+    def guarded_array(value: object, *args: object, **kwargs: object) -> np.ndarray:
+        """Allow scalar/row conversions but reject full-array allocating copies."""
+        result = original_array(value, *args, **kwargs)
+        if result.nbytes > chunk_bytes and not np.shares_memory(result, np.asarray(value)):
+            raise AssertionError("content hashing allocated a full-size np.array copy")
+        return result
+
+    def guarded_ascontiguousarray(value: object, *args: object, **kwargs: object) -> np.ndarray:
+        """Allow no-copy/bounded conversions but reject a full noncontiguous copy."""
+        result = original_ascontiguousarray(value, *args, **kwargs)
+        if result.nbytes > chunk_bytes and not np.shares_memory(result, np.asarray(value)):
+            raise AssertionError("content hashing allocated a full contiguous copy")
+        return result
+
+    original_copy = ppc_runtime.np.copy
+
+    def guarded_copy(value: object, *args: object, **kwargs: object) -> np.ndarray:
+        """Reject NumPy's full protected-array copy helper while allowing chunks."""
+        candidate = np.asarray(value)
+        if isinstance(value, LargeNoCopyArray) and candidate.nbytes > chunk_bytes:
+            raise AssertionError("content hashing used full-array np.copy")
+        return original_copy(value, *args, **kwargs)
+
+    original_asarray = ppc_runtime.np.asarray
+
+    def preserve_large_hash_array(value: object, *args: object, **kwargs: object) -> np.ndarray:
+        """Keep compatible protected inputs visible through repeated ``asarray`` calls."""
+        candidate = original_asarray(value, *args, **kwargs)
+        if (
+            isinstance(value, LargeNoCopyArray)
+            and candidate.nbytes > chunk_bytes
+            and not np.shares_memory(candidate, value)
+        ):
+            raise AssertionError("content hashing used a full-array np.asarray copy")
+        if (
+            isinstance(value, LargeNoCopyArray)
+            and candidate.dtype == value.dtype
+            and np.shares_memory(candidate, value)
+        ):
+            return value
+        return candidate
+
+    monkeypatch.setattr(ppc_runtime, "sha256", bounded_sha256)
+    monkeypatch.setattr(ppc_runtime.np, "array", guarded_array)
+    monkeypatch.setattr(ppc_runtime.np, "ascontiguousarray", guarded_ascontiguousarray)
+    monkeypatch.setattr(ppc_runtime.np, "copy", guarded_copy)
+    monkeypatch.setattr(ppc_runtime.np, "asarray", preserve_large_hash_array)
+    assert ppc_runtime._array_fingerprint(
+        protected_contiguous, protected_noncontiguous
+    ) == expected
+
+
+def test_planner_schedule_fingerprint_uses_the_same_bounded_content_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every generator-owned local schedule is sent through ``_array_fingerprint``."""
+    config = _planner_config(shuffle_count=2, unit_block_size=1)
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([17, 31, 47], dtype=np.int64),
+        condition_names=("all",),
+        condition_membership=np.ones((3, 1), dtype=bool),
+        source_trial_spike_count=np.zeros((3, 1, 2), dtype=np.int64),
+    )
+
+    original_generator = ppc_runtime.generate_trial_derangement_schedule
+    original_fingerprint = ppc_runtime._array_fingerprint
+    generated_schedules: dict[int, np.ndarray] = {}
+    fingerprint_calls: list[tuple[np.ndarray, ...]] = []
+
+    def recording_generator(
+        trial_count: int,
+        shuffle_count: int,
+        *,
+        seed: int,
+    ) -> np.ndarray:
+        """Record each exact generator-owned schedule buffer by derived seed."""
+        schedule = original_generator(trial_count, shuffle_count, seed=seed)
+        generated_schedules[seed] = schedule
+        return schedule
+
+    def recording_fingerprint(*arrays: np.ndarray) -> str:
+        """Record every bounded array routed into the shared content hash."""
+        fingerprint_calls.append(tuple(arrays))
+        return original_fingerprint(*arrays)
+
+    monkeypatch.setattr(
+        ppc_runtime, "generate_trial_derangement_schedule", recording_generator
+    )
+    monkeypatch.setattr(ppc_runtime, "_array_fingerprint", recording_fingerprint)
+    plan = _plan(config, **inputs)
+    assert generated_schedules
+    for job in plan.job_plans:
+        generated = generated_schedules[job.schedule_seed]
+        assert any(
+            any(np.shares_memory(candidate, generated) for candidate in call)
+            for call in fingerprint_calls
+        )
+
+
+def test_grouped_source_spike_counts_use_scalar_half_open_tests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Planning counts compare one spike scalar to each half-open boundary."""
+    config = _grouped_config()
+    source_spikes = np.array([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=np.float64)
+
+    class ScalarOnlySpikes(np.ndarray):
+        """Reject vector comparison ufuncs while allowing scalar iteration."""
+
+        def __array_ufunc__(
+            self,
+            ufunc: np.ufunc,
+            method: str,
+            *inputs: object,
+            **kwargs: object,
+        ) -> object:
+            """Forbid a comparison whose protected operand retains a spike axis."""
+            comparison_ufuncs = {
+                np.greater,
+                np.greater_equal,
+                np.less,
+                np.less_equal,
+            }
+            if ufunc in comparison_ufuncs and any(
+                isinstance(value, ScalarOnlySpikes) and value.ndim > 0
+                for value in inputs
+            ):
+                raise AssertionError("spike counts compared a full spike vector")
+            return super().__array_ufunc__(ufunc, method, *inputs, **kwargs)
+
+    protected_spikes = source_spikes.view(ScalarOnlySpikes)
+    prepared_spikes = SimpleNamespace(
+        unit_ids=("PFC:1",),
+        trial_spike_trains=(
+            SimpleNamespace(relative_spike_times=(source_spikes,)),
+        ),
+    )
+    original_asarray = ppc_runtime.np.asarray
+
+    def preserve_protected_spike_array(
+        value: object,
+        *args: object,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Keep this exact trial vector protected through the count helper."""
+        candidate = original_asarray(value, *args, **kwargs)
+        if (
+            candidate.dtype == source_spikes.dtype
+            and np.shares_memory(candidate, source_spikes)
+        ):
+            return candidate.view(ScalarOnlySpikes)
+        return candidate
+
+    monkeypatch.setattr(ppc_runtime.np, "asarray", preserve_protected_spike_array)
+    counts = ppc_runtime._grouped_source_trial_spike_counts(
+        config=config,
+        prepared_spikes=prepared_spikes,
+        trial_count=1,
+    )
+    np.testing.assert_array_equal(counts, np.array([[[2, 2]]], dtype=np.int64))
+
+
+def test_grouped_planner_uses_one_owned_advanced_index_source_count_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every real allocator count table aliases an advanced-indexed block only."""
+    advanced_blocks: list[np.ndarray] = []
+
+    class TrackedSourceCounts(np.ndarray):
+        """Mark fancy-indexed count blocks and reject a redundant second copy."""
+
+        def __array_finalize__(self, source: object) -> None:
+            """Carry the advanced-index marker across ndarray subclass views."""
+            self._is_advanced_source_count_block = getattr(
+                source, "_is_advanced_source_count_block", False
+            )
+
+        def __getitem__(self, index: object) -> object:
+            """Record only the planner's trial-axis advanced-index block."""
+            value = super().__getitem__(index)
+            first_index = index[0] if isinstance(index, tuple) else index
+            if isinstance(first_index, np.ndarray) and isinstance(value, np.ndarray):
+                assert isinstance(value, TrackedSourceCounts)
+                value._is_advanced_source_count_block = True
+                advanced_blocks.append(value)
+                return value
+            return value
+
+    config = _planner_config(shuffle_count=1, unit_block_size=1)
+    planner_config = replace(
+        config,
+        ppc_execution=replace(config.ppc_execution, trial_edge_block_size=2),
+    )
+    source_counts = np.ones((2, 1, 2), dtype=np.int64)
+    tracked_counts = source_counts.view(TrackedSourceCounts)
+    inputs = _planner_inputs(
+        stable_trial_rows=np.array([101, 303], dtype=np.int64),
+        condition_names=("all",),
+        condition_membership=np.ones((2, 1), dtype=bool),
+        source_trial_spike_count=source_counts,
+    )
+    original_asarray = ppc_runtime.np.asarray
+    original_estimator = ppc_runtime.estimate_grouped_ppc_allocation
+
+    def preserve_source_count_subclass(value: object, *args: object, **kwargs: object) -> np.ndarray:
+        """Keep the one input count owner visible to the planner's fancy index."""
+        if value is source_counts:
+            return tracked_counts
+        return original_asarray(value, *args, **kwargs)
+
+    monkeypatch.setattr(ppc_runtime.np, "asarray", preserve_source_count_subclass)
+
+    def recording_estimator(**kwargs: object) -> object:
+        """Require each nonplaceholder allocation table to alias a captured block."""
+        candidate = np.asarray(kwargs["source_trial_spike_count"])
+        if np.any(candidate):
+            assert advanced_blocks
+            assert any(
+                np.shares_memory(candidate, captured)
+                for captured in advanced_blocks
+            )
+            assert not np.shares_memory(candidate, tracked_counts)
+        return original_estimator(**kwargs)
+
+    monkeypatch.setattr(
+        ppc_runtime, "estimate_grouped_ppc_allocation", recording_estimator
+    )
+    plan = _plan(planner_config, **inputs)
+    assert plan.job_plans
+    assert advanced_blocks
+
+
+def test_grouped_observed_stage_accounts_only_selected_statistics_and_writes_summary_in_place(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S4 does not retain pooled/metric records beyond the observed allocation stage.
+
+    The hand case has sparse selected trials but many phase bins.  Per-trial
+    histogram statistics are charged by the allocation estimate, while an old
+    pooled record plus a separate metric record would make the real observed
+    lifetime exceed that estimate.  The grouped executor must instead write
+    summary-owned arrays directly, retaining legacy values, histogram counts,
+    and whole-window eligibility.
+    """
+    source_counts = np.ones((3, 1, 2), dtype=np.int64)
+    phase_bin_count = 257
+    estimate = ppc_runtime.estimate_grouped_ppc_allocation(
+        active_job_count=0,
+        worker_result_job_count=3,
+        component_job_count=3,
+        shuffle_count=3,
+        total_unit_count=1,
+        unit_block_size=1,
+        source_trial_spike_count=source_counts,
+        edge_source_trial_position=np.empty(0, dtype=np.int64),
+        observed_source_trial_position=np.array([0, 2], dtype=np.int64),
+        frequency_count=2,
+        representative_band_count=2,
+        phase_bin_count=phase_bin_count,
+        planner_array_bytes=0,
+        worker_plan_bytes=0,
+        worker_count=1,
+        pending_unit_block_count=1,
+        shared_phase_mmap_bytes=0,
+    )
+    selected_trial_count = 2
+    unit_count = 1
+    frequency_count = 2
+    # The old aggregate record owned before/after pooled sums/counts, whole
+    # contributor counts, its coordinates, and a three-epoch histogram.
+    pooled_record_bytes = (
+        24 * unit_count * 2 * frequency_count
+        + 8 * unit_count * 3 * frequency_count
+        + 2 * 8
+        + (phase_bin_count + 1) * 8
+        + 8 * unit_count * 3 * 2 * phase_bin_count
+    )
+    # The old metrics record additionally owned three float metrics, two int64
+    # count fields, three Boolean flags, coordinates, and another histogram.
+    metric_record_bytes = (
+        (3 * 8 + 2 * 8 + 3) * unit_count * 3 * frequency_count
+        + 2 * 8
+        + (phase_bin_count + 1) * 8
+        + 8 * unit_count * 3 * 2 * phase_bin_count
+    )
+    observed_stage = (
+        estimate.geometry_bytes
+        + estimate.observed_trial_statistics_bytes
+        + estimate.observed_gather_temporary_bytes
+    )
+    assert estimate.observed_trial_statistics_bytes == (
+        selected_trial_count * 8
+        + 24 * selected_trial_count * unit_count * 2 * frequency_count
+        + 2 * 8
+        + 2 * 8
+        + (phase_bin_count + 1) * 8
+        + 8 * selected_trial_count * unit_count * 2 * 2 * phase_bin_count
+    )
+    assert estimate.planned_computation_private_bytes == observed_stage
+    assert observed_stage < observed_stage + pooled_record_bytes + metric_record_bytes
+
+    config = _grouped_config()
+    phase, spikes = _grouped_inputs(config)
+    baseline = _run_grouped_component(config, phase, spikes, tmp_path / "baseline")
+
+    def forbidden_record(*_: object, **__: object) -> object:
+        """Grouped execution must not allocate the legacy pooled/metric records."""
+        raise AssertionError("grouped observed stage retained a pooled or metric record")
+
+    monkeypatch.setattr(
+        ppc_runtime, "aggregate_observed_trial_segmented_ppc_statistics", forbidden_record
+    )
+    monkeypatch.setattr(ppc_runtime, "compose_observed_segmented_ppc_metrics", forbidden_record)
+    actual = _run_grouped_component(config, phase, spikes, tmp_path / "in-place")
+    _assert_component_summaries_equal(baseline, actual)
+    np.testing.assert_array_equal(
+        actual.summary_arrays["representative_phase_histogram_count"],
+        baseline.summary_arrays["representative_phase_histogram_count"],
+    )
+    np.testing.assert_array_equal(
+        actual.summary_arrays["null_eligible"], baseline.summary_arrays["null_eligible"]
+    )
+
+
+def test_grouped_observed_summary_seam_writes_owned_summary_views_without_pooled_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One private reducer writes exact observed metrics into summary-owned slices.
+
+    This isolated fixture fixes the no-extra-record lifetime contract: the
+    helper returns ``None`` after mutating exact summary views and cannot route
+    through the legacy pooled/metric record constructors.  End-to-end grouped
+    execution is covered separately above; this test gives the memory-critical
+    observed-stage transformation a small deterministic reference.
+    """
+    phase_trial_index = np.array([10, 20], dtype=np.int64)
+    phase_vector_sum = np.array(
+        [
+            [[[20.0 + 20.0j, 40.0 + 0.0j], [20.0 + 0.0j, 0.0 + 40.0j]]],
+            [[[40.0 + 0.0j, 0.0 + 40.0j], [20.0 - 20.0j, 20.0 + 0.0j]]],
+        ],
+        dtype=np.complex128,
+    )
+    valid_spike_count = np.array(
+        [
+            [[[60, 60], [60, 60]]],
+            [[[60, 60], [60, 60]]],
+        ],
+        dtype=np.int64,
+    )
+    histogram = np.zeros((2, 1, 2, 2, 2), dtype=np.int64)
+    for trial_index in range(2):
+        for segment_index in range(2):
+            for band_index in range(2):
+                histogram[trial_index, 0, segment_index, band_index, 0] = (
+                    valid_spike_count[trial_index, 0, segment_index, band_index]
+                )
+    observed_trial_statistics = ppc_kernel.ObservedTrialSegmentedPPCStatistics(
+        phase_trial_index=phase_trial_index,
+        phase_vector_sum=phase_vector_sum,
+        valid_spike_count=valid_spike_count,
+        representative_frequency_index=np.array([0, 1], dtype=np.int64),
+        representative_frequency_hz=np.array([8.0, 40.0], dtype=np.float64),
+        phase_bin_edges_rad=np.array([-np.pi, 0.0, np.pi], dtype=np.float64),
+        representative_phase_histogram_count=histogram,
+    )
+    original_aggregate = ppc_kernel.aggregate_observed_trial_segmented_ppc_statistics
+    original_metrics = ppc_kernel.compose_observed_segmented_ppc_metrics
+
+    def forbidden_record(*_: object, **__: object) -> object:
+        """The private summary writer must not allocate a pooled/metric record."""
+        raise AssertionError("in-place observed writer allocated a legacy record")
+
+    for epoch_index, metric_epoch in ((0, 2), (1, 0), (2, 1)):
+        job = _direct_job_plan(epoch_index=epoch_index)
+        reference_statistics = original_aggregate(
+            observed_trial_statistics=observed_trial_statistics,
+            membership_trial_index=job.selected_trial_rows,
+        )
+        reference_metrics = original_metrics(observed_statistics=reference_statistics)
+        assert np.all(reference_metrics.reliable[:, metric_epoch])
+        assert np.all(reference_metrics.shuffle_eligible[:, metric_epoch])
+        parent_arrays = {
+            "ppc": np.full((2, 2), np.nan, dtype=np.float64),
+            "resultant_length": np.full((2, 2), np.nan, dtype=np.float64),
+            "preferred_phase_rad": np.full((2, 2), np.nan, dtype=np.float64),
+            "spike_count": np.zeros((2, 2), dtype=np.int64),
+            "computable": np.zeros((2, 2), dtype=bool),
+            "reliable": np.zeros((2, 2), dtype=bool),
+            "eligible_trial_count": np.zeros((2, 2), dtype=np.int64),
+            "null_eligible": np.zeros((2, 2), dtype=bool),
+            "representative_phase_histogram_count": np.zeros(
+                (2, 2, 2), dtype=np.int64
+            ),
+        }
+        output_arrays = {
+            name: values[1:2]
+            for name, values in parent_arrays.items()
+        }
+        monkeypatch.setattr(
+            ppc_runtime,
+            "aggregate_observed_trial_segmented_ppc_statistics",
+            forbidden_record,
+        )
+        monkeypatch.setattr(
+            ppc_runtime, "compose_observed_segmented_ppc_metrics", forbidden_record
+        )
+        assert ppc_runtime._write_grouped_observed_job_in_place(
+            observed_trial_statistics=observed_trial_statistics,
+            job_plan=job,
+            output_arrays=output_arrays,
+        ) is None
+        for name, values in output_arrays.items():
+            assert np.shares_memory(values, parent_arrays[name])
+        np.testing.assert_allclose(
+            output_arrays["ppc"],
+            reference_metrics.ppc[:, metric_epoch],
+            rtol=0.0,
+            atol=0.0,
+            equal_nan=True,
+        )
+        np.testing.assert_allclose(
+            output_arrays["resultant_length"],
+            reference_metrics.resultant_length[:, metric_epoch],
+            rtol=0.0,
+            atol=0.0,
+            equal_nan=True,
+        )
+        np.testing.assert_allclose(
+            output_arrays["preferred_phase_rad"],
+            reference_metrics.preferred_phase_rad[:, metric_epoch],
+            rtol=0.0,
+            atol=0.0,
+            equal_nan=True,
+        )
+        np.testing.assert_array_equal(
+            output_arrays["spike_count"], reference_metrics.spike_count[:, metric_epoch]
+        )
+        np.testing.assert_array_equal(
+            output_arrays["computable"], reference_metrics.computable[:, metric_epoch]
+        )
+        np.testing.assert_array_equal(
+            output_arrays["reliable"], reference_metrics.reliable[:, metric_epoch]
+        )
+        np.testing.assert_array_equal(
+            output_arrays["eligible_trial_count"],
+            reference_metrics.contributing_trial_count[:, metric_epoch],
+        )
+        np.testing.assert_array_equal(
+            output_arrays["null_eligible"],
+            reference_metrics.shuffle_eligible[:, metric_epoch],
+        )
+        assert np.all(output_arrays["reliable"])
+        assert np.all(output_arrays["null_eligible"])
+        np.testing.assert_array_equal(
+            output_arrays["representative_phase_histogram_count"],
+            reference_metrics.representative_phase_histogram_count[:, metric_epoch],
+        )
+
+
+def test_grouped_plan_fingerprint_routes_all_provenance_arrays_through_bounded_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No plan provenance array may bypass the bounded content-hash helper."""
+    job = _direct_job_plan()
+    component = ppc_runtime.PPCComponentPlan(**_direct_component_fields((job,)))
+    captured_arrays: list[np.ndarray] = []
+    original_fingerprint = ppc_runtime._array_fingerprint
+
+    class NoListArray(np.ndarray):
+        """Detect the unbounded list materialization route in JSON hashing."""
+
+        def tolist(self) -> list[object]:
+            """Reject converting a provenance array into one Python object list."""
+            raise AssertionError("plan provenance array used ndarray.tolist")
+
+    provenance_arrays = (
+        job.selected_trial_rows,
+        job.schedule,
+        job.stable_edge_source_trial_row,
+        job.stable_edge_target_trial_row,
+        job.edge_union_position,
+        component.edge_site_index,
+        component.stable_edge_source_trial_row,
+        component.stable_edge_target_trial_row,
+    )
+    for field_name, values in (
+        ("selected_trial_rows", provenance_arrays[0]),
+        ("schedule", provenance_arrays[1]),
+        ("stable_edge_source_trial_row", provenance_arrays[2]),
+        ("stable_edge_target_trial_row", provenance_arrays[3]),
+        ("edge_union_position", provenance_arrays[4]),
+    ):
+        object.__setattr__(job, field_name, values.view(NoListArray))
+    for field_name, values in (
+        ("edge_site_index", provenance_arrays[5]),
+        ("stable_edge_source_trial_row", provenance_arrays[6]),
+        ("stable_edge_target_trial_row", provenance_arrays[7]),
+    ):
+        object.__setattr__(component, field_name, values.view(NoListArray))
+
+    def recording_fingerprint(*arrays: np.ndarray) -> str:
+        """Capture every array passed to the shared bounded content helper."""
+        captured_arrays.extend(np.asarray(array) for array in arrays)
+        return original_fingerprint(*arrays)
+
+    monkeypatch.setattr(ppc_runtime, "_array_fingerprint", recording_fingerprint)
+    assert isinstance(ppc_runtime._grouped_execution_plan_fingerprint(component), str)
+    for provenance in provenance_arrays:
+        assert any(
+            np.shares_memory(candidate, provenance) for candidate in captured_arrays
+        )
+
+
+def test_grouped_plan_and_run_fingerprints_bind_every_job_identity_and_provenance_field(
+    tmp_path: Path,
+) -> None:
+    """Plan identity includes every frozen job field, including human labels.
+
+    The planner validates record coherence at construction.  This hash test
+    deliberately mutates a frozen test record through ``object.__setattr__``
+    only to prove that the execution identity serializes every field rather
+    than relying on a subset of redundant provenance fields.
+    """
+    job = _direct_job_plan()
+    component = ppc_runtime.PPCComponentPlan(**_direct_component_fields((job,)))
+    baseline_plan_fingerprint = ppc_runtime._grouped_execution_plan_fingerprint(component)
+
+    def changed_value(field_name: str, value: object) -> object:
+        """Return one representable but deliberately different field value."""
+        if isinstance(value, np.ndarray):
+            changed = value.copy()
+            if changed.size:
+                changed.flat[0] = int(changed.flat[0]) + 10_000
+            return changed
+        if isinstance(value, str):
+            return value + "-changed"
+        if isinstance(value, tuple):
+            return (int(value[0]) + 10, int(value[1]) + 10)
+        return int(value) + 10_000
+
+    for job_field in fields(ppc_runtime.PPCJobPlan):
+        original = getattr(job, job_field.name)
+        object.__setattr__(job, job_field.name, changed_value(job_field.name, original))
+        try:
+            assert ppc_runtime._grouped_execution_plan_fingerprint(component) != (
+                baseline_plan_fingerprint
+            ), job_field.name
+        finally:
+            object.__setattr__(job, job_field.name, original)
+
+    config = _grouped_config()
+    phase, spikes = _grouped_inputs(config)
+    result = _run_grouped_component(config, phase, spikes, tmp_path)
+    membership = lfp_summary_runtime._analysis_condition_membership(
+        phase.prepared_trials
+    )
+    baseline_metadata = ppc_runtime._grouped_run_metadata(
+        config=config,
+        execution=config.ppc_execution,
+        prepared_phase=phase,
+        prepared_spikes=spikes,
+        plan=result.component_plan,
+        condition_membership=membership,
+    )
+    first_job = result.component_plan.job_plans[0]
+    original_name = first_job.condition_name
+    object.__setattr__(first_job, "condition_name", original_name + "-renamed")
+    try:
+        changed_metadata = ppc_runtime._grouped_run_metadata(
+            config=config,
+            execution=config.ppc_execution,
+            prepared_phase=phase,
+            prepared_spikes=spikes,
+            plan=result.component_plan,
+            condition_membership=membership,
+        )
+    finally:
+        object.__setattr__(first_job, "condition_name", original_name)
+    assert changed_metadata["execution_plan_fingerprint"] != (
+        baseline_metadata["execution_plan_fingerprint"]
+    )
+    assert changed_metadata["run_fingerprint"] != baseline_metadata["run_fingerprint"]
