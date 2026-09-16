@@ -218,13 +218,67 @@ not apply; write `not applicable` and explain why.
 
 ### S4 - Grouped serial executor and checkpoints
 
-- Status: not started.
-- Authorization and starting HEAD:
-- Agent assignments, permissions, and file scopes:
-- Test-design review, test-only commit, and RED evidence:
-- Implementation commit and GREEN evidence:
-- Full neural-suite and independent Sol gate evidence:
+- Status: complete.
+- Authorization and starting HEAD: covered by the user's 2026-09-10
+  implementation authorization and repeated instruction to continue;
+  `8b451f3`.
+- Agent assignments, permissions, and file scopes: lead `gpt-5.6-sol` `high`;
+  one retained `gpt-5.6-terra` `xhigh` writer, initially write-enabled only for
+  focused grouped-runtime/work-cache tests; independent `gpt-5.6-sol` `xhigh`
+  reviewer, procedurally read-only. No scout assigned.
+- Test-design review, test-only commit, and RED evidence: `cf5dba6` (`test:
+  define grouped PPC serial execution`). The final tests-only diff passed the
+  independent Sol `xhigh` design gate. Root reproduced 19 expected failures,
+  27 passes, and 126 deselections in the grouped/component-plan/checkpoint
+  selection, plus 12 expected failures, 55 passes, and 136 deselections in the
+  allocation selection. Failures were confined to the intentionally absent S4
+  executor, checkpoint streaming/no-copy, and checkpoint-memory contracts.
+  The first GREEN source review exposed unaccounted phase selection, planning,
+  edge-input, batching, null-finalization, and checkpoint-repair lifetimes.
+  Corrective RED coverage passed a second independent test-design gate and was
+  committed in `3669c7d` (`test: cover grouped PPC memory safety`) before those
+  source corrections began. Subsequent independently reviewed test-only commits
+  were `1c76681` (bounded null finalization), `5cefb02` (nondegenerate
+  inferential fixtures), `c40a69e` (memory-safe identity paths), `70b4d02`
+  (per-schema resume bounds and final validation), `9e720ac` (fixed S1/S2
+  representative axis), and `4167a22` (execution-peak and progress contracts).
+  The final focused RED contained six expected failures covering fixed planned
+  edge partitions, interval-bounded progress, rank validation, scalar
+  checkpoint bounds, and interpolation-heavy geometry construction.
+- Implementation commit and GREEN evidence: `0155587` (`feat: execute grouped
+  PPC serially`). Root reproduced six passing final focused regressions and 430
+  passing tests across the PPC kernel, runtime, work cache, and models. The
+  non-CT026 LFP-summary group passed 547 tests. Compile and diff checks were
+  clean.
+- Full neural-suite and independent Sol gate evidence: root obtained 1,067
+  passing tests with 19 known warnings. The final independent `gpt-5.6-sol`
+  `xhigh` source gate returned PASS on frozen scoped source hash
+  `2ea5e02fd867bb82e9c6ded2ac643f0cc84ad3b2ff8443c118c27dcc2ac4c63e`.
+  The gate verified planner/executor edge-group coherence, eligibility bypass,
+  the geometry construction peak, exact checkpoint schemas and transaction
+  behavior, complete work identity, fixed two-band representative histograms,
+  raw comparison semantics, and preservation of the legacy single-job
+  executor.
 - Numerical/interface review and unresolved risks:
+  - On 2026-09-14, the user approved treating exact mathematical
+    observed/null PPC ties as deterministic summation-order-dependent cases.
+    The optimized implementation keeps the raw ``null >= observed`` rule and
+    adds no comparison tolerance. Inferential-equivalence fixtures will use
+    deterministic trial-distinct spike patterns with at least a ``1e-5``
+    comparison margin. This resolves the artificial identical-train fixture
+    that changed an exceedance decision by one-to-three binary64 ULPs without
+    weakening exact non-tied count, p/q, or significance checks.
+  - The serial grouped executor translates stable condition schedules into a
+    site-qualified physical-edge union, reuses one observed trial-statistics
+    pass, composes whole from before/after sufficient statistics, consumes null
+    work in planner-bounded edge groups, and publishes parent-only atomic
+    site/unit checkpoints. Every resumed block is validated against its own
+    exact schema and byte ceiling.
+  - Planned limits cover concurrently live NumPy arrays. Python objects,
+    interpreter/process overhead, and filesystem buffers remain outside the
+    exact accounting and are reserved by the documented headroom plus the S8
+    measured-memory gate. Grouped execution is intentionally serial in S4;
+    S7 owns process-worker rebinding after the S6 profile.
 - CT026 work performed: none permitted.
 
 ### S5 - Payload integration and histogram reuse

@@ -1,11 +1,13 @@
 # Exact PPC speedup implementation plan
 
-Status: implementation plan approved by the user on 2026-09-09. This approval
-is documentation-only: it does not authorize source changes, CT026 computation,
-or the 100/1,000-shuffle Spike-phase runs. The Sol-orchestrator/Terra-worker
+Status: implementation plan approved by the user on 2026-09-09. The user
+separately authorized the S0-S7 source/test implementation sequence on
+2026-09-10; S0-S4 are complete as of 2026-09-16. CT026 computation and the
+100/1,000-shuffle Spike-phase runs remain unauthorized. The
+Sol-orchestrator/Terra-worker
 execution specification in Section 3.1 was added at the user's request on the
 same date, audited against the current host on 2026-09-10, and is subject to
-those same authorization boundaries. On 2026-09-10 the user approved plan-only
+those same CT026 authorization boundaries. On 2026-09-10 the user approved plan-only
 clarifications that unify PPC/histogram exact-sample semantics, make planned
 private-memory accounting explicit, bind actual derived schedule identities,
 clarify S0 executor lifecycle, reserve `xhigh` reasoning for S1-S4 and S7,
@@ -104,12 +106,17 @@ alone is not execution authority.
    keep the current `_ppc_schedule_seed(...)` results. A whole schedule consumes
    the sum of before/after edge statistics for each edge in that same whole
    schedule. Standalone before/after schedules consume only their own segment.
-4. **Require exact inferential decisions.** Identities, schedules, validity,
-   counts, eligibility, exceedance counts, permutation counts, p-values,
-   q-values, and significance flags must match the reference. Floating metrics
-   may use the tight tolerances in Section 7. A disagreement caused by a null
-   draw tied within tolerance of observed PPC is a review failure, not an
-   automatically accepted significance change.
+4. **Require exact inferential decisions outside mathematical ties.**
+   Identities, schedules, validity, counts, eligibility, permutation counts,
+   and non-tied exceedance, p-value, q-value, and significance decisions must
+   match the reference. Floating metrics may use the tight tolerances in
+   Section 7. The optimized source-wise reduction is deterministic but need
+   not reproduce the legacy concatenate-and-sum bit pattern when observed and
+   shuffled PPC are mathematically tied. No tolerance is added to the
+   production comparison: each implementation continues to apply raw
+   ``null_ppc >= observed_ppc`` to its own deterministic values. This narrow
+   exception was approved on 2026-09-14 after an identical-spike-train fixture
+   exposed a one-to-three-ULP ordering difference.
 5. **Use an explicit planned-allocation limit.** Add execution-only integer
    `maximum_worker_allocation_bytes = 2 * 1024**3` (2 GiB). It limits
    the conservatively estimated concurrently live private NumPy arrays in any
@@ -567,7 +574,10 @@ returns, and failure behavior.
 - Reports nonnegative integer byte counts for `job_accumulator_bytes`,
   `observed_trial_statistics_bytes`, `observed_gather_temporary_bytes`,
   `kernel_working_bytes`, `geometry_bytes`, `planner_array_bytes`,
+  `condition_membership_bytes`, `source_trial_spike_count_bytes`,
+  `planning_working_bytes`, `planned_planning_private_bytes`,
   `summary_assembly_bytes`, `worker_plan_bytes`, `worker_summary_bytes`,
+  `checkpoint_block_bytes`,
   `planned_computation_private_bytes`, `planned_parent_private_bytes`,
   `planned_worker_private_bytes`, `shared_phase_mmap_bytes`, and
   `planned_aggregate_array_bytes`, plus nonnegative integer
@@ -589,25 +599,48 @@ returns, and failure behavior.
   memory is retained geometry plus full-shuffle job accumulators and bounded
   kernel working arrays. `planned_computation_private_bytes` is the larger of
   those stages, never their sum.
+- Planning has a separate lifetime from summary execution. Let `M` be the
+  Boolean `(trial, condition)` gated-membership bytes, `Q = 16 * trial * unit`
+  be the full int64 before/after source-count table, `D` be the retained int64
+  selected-row and schedule draft bytes, and `P` be final
+  `planner_array_bytes`. The planner centrally derives a conservative
+  construction bound `A = 8 * (2*T + T*(T-1)) + 16*T*B`, where `T` is the
+  full-trial count and `B` is the bounded unit-block size. Thus
+  `planning_working_bytes = D + A` and
+  `planned_planning_private_bytes = M + Q + max(P, D + A)`. Callers cannot
+  underreport this bound. Scalar preflight occurs before membership, count,
+  or schedule allocation; exact final-plan preflight occurs before stable maps
+  are materialized. Membership and count tables are released before steady
+  summary execution.
 - Parent summary assembly uses all component units and jobs. Worker summary
   retention uses the current unit block and every result job at that site,
   while active-job counts size only the current condition batch's null
   accumulators. Parent and worker plan arrays are reported separately.
+  `checkpoint_block_bytes` contains one site/unit-block summary plus the compact
+  int64 site index and half-open unit bounds stored with that checkpoint.
 - The private process peaks are sums of arrays whose lifetimes overlap and
-  maxima across mutually exclusive observed/null stages and bounded tasks. For
-  a serial run, the parent peak includes retained planning, full summary
-  assembly, and computation; active worker count is zero. For a parallel run,
-  the parent peak includes retained planning plus full summary assembly while
-  each active worker includes its site plan, site/unit-block result, and
-  computation peak.
+  maxima across mutually exclusive planning, observed/null, and checkpoint
+  stages. The serial steady-parent stage is `P + full summary +
+  max(computation, checkpoint block)`. The parallel steady-parent stage is
+  `P + full summary + checkpoint block`, while each active worker includes its
+  site plan, site/unit-block result, and computation peak. Reported parent
+  private memory is the larger of `planned_planning_private_bytes` and the
+  applicable steady-parent stage.
+- Checkpoints are published synchronously through an explicitly trusted
+  no-copy writer path that accepts only read-only, non-object arrays. The
+  existing public/default writer behavior remains defensive-copy. Resume loads
+  and merges one owned, read-only checkpoint block at a time, releasing it
+  before the next block, so neither cold publication nor warm resume retains a
+  second checkpoint-sized array set outside `checkpoint_block_bytes`.
 - `planned_worker_private_bytes` is the maximum private peak among tasks in the
   active submission window. `active_worker_count` is the smaller of requested
   workers and pending unit blocks; idle requested workers are neither charged
   nor spawned.
 - `planned_aggregate_array_bytes` equals shared mmap bytes counted once plus
-  parent-private bytes plus `active_worker_count * planned_worker_private_bytes`.
-  It must not multiply shared mmap residency by worker count. Checked integer
-  arithmetic rejects overflow.
+  the larger of the planning stage alone or the parallel/serial steady-parent
+  stage plus `active_worker_count * planned_worker_private_bytes`. Planning
+  never overlaps active workers. Shared mmap residency is not multiplied by
+  worker count. Checked integer arithmetic rejects overflow.
 - The planner rejects or deterministically reduces condition batches when a
   process or the aggregate plan would exceed its limit. Both constraints
   participate in batching; rejection occurs only when a singleton condition
@@ -828,11 +861,17 @@ Initial floating tolerances, subject to approval:
   for a changed but deterministic complex64 summation grouping.
 
 Tests must also use adversarial invalid-support and epoch-boundary fixtures so
-these tolerances cannot conceal a lost/doubled spike. If floating differences
-change an exceedance comparison or FDR decision, the package fails review even
-when each raw value falls within tolerance. The implementation must either
-restore the reference ordering or present the near-tie case for a separate
-scientific decision.
+these tolerances cannot conceal a lost/doubled spike. Inferential-equivalence
+fixtures use deterministic, trial-distinct spike-time patterns and require a
+minimum absolute null-versus-observed margin of ``1e-5`` for every comparison
+whose exact decision is asserted. If floating differences change an
+exceedance comparison or FDR decision outside that margin, the package fails
+review even when each raw value falls within tolerance. For an exact
+mathematical tie, the deterministic reduction order may select a different
+side of the raw comparison than the legacy implementation; tests must identify
+that case as a tie rather than conceal it with a production tolerance. This
+tie policy was separately approved on 2026-09-14. A future change to make ties
+canonical would be a scientific estimator change requiring separate approval.
 
 ## 8. Sequential test-first work packages
 
