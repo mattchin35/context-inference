@@ -183,11 +183,11 @@ def test_build_spike_payload_fills_schema_axes_counts_and_preview_null(
     assert arrays["source_trace"].shape == (1, 2, 2000)
 
 
-def test_spike_payload_execution_assembly_uses_summary_runtime_not_legacy_shuffle(
+def test_spike_payload_execution_assembly_uses_one_grouped_summary_runtime_not_legacy_shuffle(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """Outer condition/site/epoch assembly consumes summary-only PPC jobs and preserves schema."""
+    """Payload assembly consumes one component-axis grouped summary and preserves schema."""
     from src.neural_analysis import lfp_summary_ppc_runtime
 
     config = _config(tmp_path / "cache")
@@ -196,39 +196,46 @@ def test_spike_payload_execution_assembly_uses_summary_runtime_not_legacy_shuffl
     calls: list[dict[str, object]] = []
 
     def summary_job(**kwargs: object):
-        """Return deterministic summary-only one-job arrays with unit/frequency axes."""
+        """Return deterministic grouped arrays on every final cache axis."""
         calls.append(kwargs)
         frequency_count = len(config.phase.frequency_hz)
+        shape = (1, 9, 1, 3, frequency_count)
         summary = {
-            name: np.full((1, frequency_count), np.nan)
+            name: np.full(shape, np.nan)
             for name in ("ppc", "resultant_length", "preferred_phase_rad", "p_value", "q_value", "null_mean", "null_std", "null_p025", "null_p50", "null_p975")
         }
         summary.update({
-            "spike_count": np.full((1, frequency_count), 104, dtype=np.int64),
-            "eligible_trial_count": np.full((1, frequency_count), 2, dtype=np.int64),
-            "computable": np.ones((1, frequency_count), dtype=bool),
-            "reliable": np.ones((1, frequency_count), dtype=bool),
-            "null_eligible": np.ones((1, frequency_count), dtype=bool),
-            "null_exceedance_count": np.zeros((1, frequency_count), dtype=np.int64),
-            "permutation_count": np.full((1, frequency_count), 100, dtype=np.int64),
-            "significant": np.zeros((1, frequency_count), dtype=bool),
+            "spike_count": np.full(shape, 104, dtype=np.int64),
+            "eligible_trial_count": np.full(shape, 2, dtype=np.int64),
+            "computable": np.ones(shape, dtype=bool),
+            "reliable": np.ones(shape, dtype=bool),
+            "null_eligible": np.ones(shape, dtype=bool),
+            "null_exceedance_count": np.zeros(shape, dtype=np.int64),
+            "permutation_count": np.full(shape, 100, dtype=np.int64),
+            "significant": np.zeros(shape, dtype=bool),
+            "representative_phase_histogram_count": np.zeros((1, 9, 1, 3, 2, 2), dtype=np.int64),
         })
-        return type("Result", (), {"summary_arrays": summary, "run_directory": tmp_path / "ppc" / "run"})()
+        return type("Result", (), {
+            "summary_arrays": summary,
+            "run_directory": tmp_path / "ppc" / "run",
+            "run_fingerprint": "run",
+        })()
 
-    monkeypatch.setattr(lfp_summary_ppc_runtime, "execute_ppc_blocks", summary_job)
+    monkeypatch.setattr(lfp_summary_ppc_runtime, "execute_grouped_ppc_component", summary_job)
+    monkeypatch.setattr(lfp_summary_ppc_runtime, "execute_ppc_blocks", lambda **_: (_ for _ in ()).throw(AssertionError("legacy executor")))
     monkeypatch.setattr("src.neural_analysis.spike_lfp_summary.compute_trial_shuffle_ppc", lambda **_: (_ for _ in ()).throw(AssertionError("legacy shuffle")))
     payload = build_spike_phase_payload(config, phase, prepared)
 
     validate_component_payload("spike_phase", payload)
-    assert len(calls) == 9 * 1 * 3
+    assert len(calls) == 1
     assert payload.arrays["ppc"].shape == (1, 9, 1, 3, 50)
 
 
-def test_spike_factory_progress_seam_forwards_callback_to_ppc_executor(
+def test_spike_factory_progress_seam_forwards_callback_once_to_grouped_ppc_executor(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """The production-only payload seam forwards one exact callback to every PPC job."""
+    """The production-only payload seam forwards one exact callback to grouped work."""
     from src.neural_analysis import lfp_summary_ppc_runtime
 
     config = _config(tmp_path / "cache")
@@ -240,7 +247,7 @@ def test_spike_factory_progress_seam_forwards_callback_to_ppc_executor(
         phase_preparer=lambda _: phase,
     )
     received_callbacks: list[object] = []
-    executor = lfp_summary_ppc_runtime.execute_ppc_blocks
+    executor = lfp_summary_ppc_runtime.execute_grouped_ppc_component
 
     def recording_executor(**kwargs: object):
         """Record the forwarded callback while retaining the real job numerics."""
@@ -249,7 +256,7 @@ def test_spike_factory_progress_seam_forwards_callback_to_ppc_executor(
 
     monkeypatch.setattr(
         lfp_summary_ppc_runtime,
-        "execute_ppc_blocks",
+        "execute_grouped_ppc_component",
         recording_executor,
     )
     events: list[ProgressEvent] = []
@@ -263,14 +270,14 @@ def test_spike_factory_progress_seam_forwards_callback_to_ppc_executor(
     )
 
     validate_component_payload("spike_phase", payload)
-    assert received_callbacks == [callback] * (9 * 1 * 3)
+    assert received_callbacks == [callback]
     assert events
 
 
-def test_outer_progress_keeps_multi_job_identity_and_emits_one_final_component_commit(
+def test_outer_progress_keeps_one_grouped_job_identity_and_emits_one_final_component_commit(
     tmp_path: Path,
 ) -> None:
-    """Production assembly keeps executor job events distinct until one final pipeline commit."""
+    """Production assembly retains one grouped executor identity until final commit."""
     config = _config(tmp_path / "cache")
     config = replace(config, ppc=PPCAnalysisConfig(shuffle_count=3, seed=72))
     phase = _prepared_phase(config)
@@ -289,7 +296,7 @@ def test_outer_progress_keeps_multi_job_identity_and_emits_one_final_component_c
     assert result.state == "complete"
     job_events = [event for event in events if event.stage != "run"]
     job_ids = {event.job_id for event in job_events}
-    assert len(job_ids) > 1
+    assert job_ids == {"grouped-spike-phase"}
     stage_order = (
         "prepare_phase", "observed_reduction", "trial_edge_reduction",
         "shuffle_aggregation", "fdr", "checkpoint", "commit",

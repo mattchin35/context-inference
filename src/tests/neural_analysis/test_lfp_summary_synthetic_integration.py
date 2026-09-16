@@ -8,6 +8,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.neural_analysis.lfp_power_summary import (
     compute_session_reference_psd,
@@ -24,8 +25,10 @@ from src.neural_analysis.lfp_summary_io import (
 from src.neural_analysis.lfp_summary_models import (
     FrequencyBandConfig,
     PPCAnalysisConfig,
+    PPCExecutionConfig,
     PhaseAnalysisConfig,
     PowerAnalysisConfig,
+    UnitPopulationConfig,
     default_lfp_summary_config,
 )
 from src.neural_analysis.lfp_summary_payloads import (
@@ -35,6 +38,7 @@ from src.neural_analysis.lfp_summary_payloads import (
 from src.neural_analysis.lfp_summary_pipeline import (
     PipelineDependencies,
     compute_all_components,
+    compute_spike_phase_component,
 )
 from src.neural_analysis.lfp_summary_plotting import (
     PlotContext,
@@ -50,8 +54,14 @@ from src.neural_analysis.lfp_summary_plotting import (
     plot_unit_ppc_map,
 )
 from src.neural_analysis.lfp_summary_preparation import (
+    TrialRelativeSpikeTrains,
     build_common_event_grid,
     build_prepared_trials,
+)
+from src.neural_analysis.lfp_summary_runtime import (
+    PreparedPhaseRun,
+    PreparedSpikeRun,
+    build_spike_phase_payload,
 )
 from src.neural_analysis.lfp_synchrony_summary import (
     aggregate_trial_plv_bands,
@@ -810,3 +820,108 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
     ]
     for figure, _ in figures:
         plt.close(figure)
+
+
+def test_seeded_synthetic_spike_payload_uses_production_grouped_path_cache_reload_and_plot(
+    tmp_path: Path,
+) -> None:
+    """Run production Spike-phase payload work through final cache reload and plotting.
+
+    This is deliberately separate from the hand-built multi-component payload
+    fixture above: it supplies real prepared phase/spike records to
+    ``build_spike_phase_payload`` and verifies the final transaction output is
+    the source of the plotted representative histogram.
+    """
+    base = _synthetic_configuration(tmp_path)
+    config = replace(
+        base,
+        unit_population=UnitPopulationConfig(
+            label="synthetic_population",
+            probe_label="PFC",
+            sorter_path=None,
+            aligned_spike_path=None,
+            selected_channels=(0, 1),
+            quality_settings=(),
+            stable_unit_ids=("PFC:1", "PFC:2"),
+        ),
+        ppc=PPCAnalysisConfig(shuffle_count=3, seed=72),
+        ppc_execution=PPCExecutionConfig(
+            unit_block_size=1,
+            shuffle_block_size=1,
+            trial_edge_block_size=1,
+            worker_count=1,
+            checkpoint_enabled=True,
+        ),
+    )
+    trial_df, traces = _synthetic_trials_and_traces()
+    prepared_trials = build_prepared_trials(
+        trial_df,
+        config.trial_filter,
+        "choice_time",
+        {site.stable_id: np.ones(4, dtype=bool) for site in config.sites},
+    )
+    phase = _phase_tensor().astype(np.complex64)
+    prepared_phase = PreparedPhaseRun(
+        trial_indices=np.arange(4, dtype=np.int64),
+        alignment_times_s=trial_df["choice_time"].to_numpy(dtype=float),
+        prepared_trials=prepared_trials,
+        phase_tensor=phase,
+        phase_valid=np.ones(phase.shape, dtype=bool),
+        relative_time_s=_TIME_S,
+        site_valid=np.ones((2, 4), dtype=bool),
+        pair_valid=np.ones((1, 4), dtype=bool),
+        source_trace=traces,
+    )
+    prepared_spikes = PreparedSpikeRun(
+        unit_ids=("PFC:1", "PFC:2"),
+        population_ids=("synthetic_population",),
+        trial_spike_trains=tuple(
+            TrialRelativeSpikeTrains(
+                unit_id=unit_id,
+                relative_spike_times=spikes,
+                overlap_trial_indices=np.empty(0, dtype=np.int64),
+            )
+            for unit_id, spikes in (
+                ("PFC:1", _trial_spikes(True, 0)),
+                ("PFC:2", _trial_spikes(False, 73)),
+            )
+        ),
+    )
+    dependencies = PipelineDependencies(
+        prepare_power=lambda _: pytest.fail("Power is outside Spike payload integration"),
+        prepare_phase=lambda _: prepared_phase,
+        prepare_spike=lambda _, __: prepared_spikes,
+        build_power_payload=lambda _, __: pytest.fail("Power is outside Spike payload integration"),
+        build_synchrony_payload=lambda _, __: pytest.fail("Synchrony is outside Spike payload integration"),
+        build_spike_phase_payload=build_spike_phase_payload,
+        load_manifest=lambda directory: load_or_initialize_manifest(directory, config),
+        write_component=write_component_transaction,
+    )
+
+    result = compute_spike_phase_component(config, dependencies)
+
+    assert result.state == "complete"
+    assert result.manifest is not None
+    loaded = load_component_arrays(
+        config.output_directory / "spike_phase.npz", result.manifest, "spike_phase"
+    )
+    assert loaded["ppc"].shape == (2, len(prepared_trials.condition_names), 2, 3, 20)
+    assert loaded["representative_phase_hist_count"].dtype == np.dtype(np.int64)
+    figure, _ = plot_ppc_exemplar(
+        loaded["frequency_hz"],
+        loaded["ppc"][0, 0, 0, 0],
+        loaded["preferred_phase_rad"][0, 0, 0, 0],
+        loaded["representative_phase_hist_count"][0, 0, 0, 0, 0],
+        loaded["phase_bin_edges_rad"],
+        loaded["relative_time_s"],
+        loaded["source_trace"][0, 0],
+        loaded["band_filtered_trace"][0, 0, 0],
+        loaded["relative_spike_times_s"],
+        "PFC:1",
+        0,
+        "theta",
+        8.0,
+        "synthetic grouped payload",
+        _plot_context(),
+    )
+    plt.close(figure)
