@@ -325,9 +325,19 @@ not apply; write `not applicable` and explain why.
 
 ### S6 - Profiling and schedule-union cost model
 
-- Status: not started.
-- Authorization and starting HEAD:
-- Agent assignments, permissions, and file scopes:
+- Status: tests-only contract in progress.
+- Authorization and starting HEAD: covered by the user's 2026-09-10
+  implementation authorization and repeated instruction to continue;
+  `cb96495`. No CT026 data access, work-only timing, or scientific execution is
+  authorized in this package.
+- Agent assignments, permissions, and file scopes: lead `gpt-5.6-sol` `high`;
+  one `gpt-5.6-terra` `high` writer, initially write-enabled only for the four
+  profile/adapter/runner test modules; independent `gpt-5.6-sol` `high`
+  reviewer, procedurally read-only. Source scope includes the profile and
+  adapter/runner modules plus one narrowly bounded private histogram-timing
+  seam extraction in `lfp_summary_ppc_runtime.py`. That extraction may not
+  change scientific behavior, axes, memory ownership, or checkpoints; all
+  other grouped-runtime changes remain S7 work.
 - Test-only commit and RED evidence:
 - Implementation commit and GREEN evidence:
 - Full neural-suite and independent Sol gate evidence:

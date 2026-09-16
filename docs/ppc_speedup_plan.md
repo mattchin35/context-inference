@@ -994,6 +994,11 @@ RED/GREEN command:
 Files:
 
 - `lfp_summary_ppc_profile.py` and its tests
+- `lfp_summary_ppc_runtime.py` only for extracting a private
+  `_record_grouped_representative_histogram(...)` seam around the existing
+  representative-histogram update. The extraction must not change numerical
+  behavior, axes, allocation ownership, or checkpoint semantics; all other
+  grouped-runtime changes remain S7 scope.
 - the smallest necessary CT026 profile adapter/runner changes and their
   adapter, runner, and production-binding tests
 
