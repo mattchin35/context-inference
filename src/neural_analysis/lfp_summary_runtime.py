@@ -1041,160 +1041,35 @@ def _build_spike_phase_payload(
         epoch_count,
         frequency_count,
     )
-    arrays = _empty_spike_metric_arrays(metric_shape)
-    histogram = np.zeros(
-        metric_shape[:-1]
-        + (len(config.phase.bands), len(config.ppc.phase_bin_edges_rad) - 1),
-        dtype=np.int64,
-    )
     phase_bin_edges = np.asarray(config.ppc.phase_bin_edges_rad, dtype=float)
-    trial_spike_counts = np.zeros(
-        (unit_count, condition_count, site_count, epoch_count,
-         prepared_phase.trial_indices.size),
-        dtype=np.int64,
+    execution = lfp_summary_ppc_runtime.execute_grouped_ppc_component(
+        config=config,
+        execution=config.ppc_execution,
+        prepared_phase=prepared_phase,
+        prepared_spikes=prepared_spikes,
+        work_root=config.output_directory.parent / "lfp_summary_work",
+        progress_callback=progress_callback,
     )
-    completed_ppc_runs: list[tuple[Path, str]] = []
-    for condition_index in range(condition_count):
-        for site_index in range(site_count):
-            base_trial_mask = (
-                condition_membership[:, condition_index]
-                & prepared_phase.site_valid[site_index]
-            )
-            phase_by_trial = np.moveaxis(
-                prepared_phase.phase_tensor[site_index], 1, 0
-            )
-            valid_by_trial = np.moveaxis(
-                prepared_phase.phase_valid[site_index], 1, 0
-            )
-            for epoch_index, (epoch_name, epoch_window) in enumerate(
-                epoch_windows.items()
-            ):
-                selected_positions = np.flatnonzero(base_trial_mask)
-                schedule = _shared_derangement_schedule(
-                    selected_positions.size,
-                    config.ppc.shuffle_count,
-                    _ppc_schedule_seed(config, condition_index, site_index, epoch_index),
-                )
-                selected_spikes_by_unit = tuple(
-                    tuple(
-                        _spikes_in_epoch(
-                            train.relative_spike_times[int(position)],
-                            epoch_window,
-                        )
-                        for position in selected_positions
-                    )
-                    for train in prepared_spikes.trial_spike_trains
-                )
-                selected_trial_indices = prepared_phase.trial_indices[selected_positions]
-                source_fingerprint = _work_fingerprint(
-                    fingerprint_source_files(config, component="spike_phase")
-                )
-                job_phase = _PPCPhaseJob(
-                    phase_tensor=prepared_phase.phase_tensor[
-                        site_index : site_index + 1, :, selected_positions, :
-                    ],
-                    phase_valid=prepared_phase.phase_valid[
-                        site_index : site_index + 1, :, selected_positions, :
-                    ],
-                    relative_time_s=prepared_phase.relative_time_s,
-                    trial_indices=selected_trial_indices.astype(np.int64, copy=True),
-                    site_id=config.sites[site_index].stable_id,
-                    condition_name=str(
-                        prepared_phase.prepared_trials.condition_names[condition_index]
-                    ),
-                    epoch_bounds_s=(float(epoch_window[0]), float(epoch_window[1])),
-                    source_fingerprint=source_fingerprint,
-                )
-                job_spikes = PreparedSpikeRun(
-                    unit_ids=prepared_spikes.unit_ids,
-                    population_ids=prepared_spikes.population_ids,
-                    trial_spike_trains=tuple(
-                        TrialRelativeSpikeTrains(
-                            unit_id=train.unit_id,
-                            relative_spike_times=selected_spikes_by_unit[unit_index],
-                            overlap_trial_indices=np.intersect1d(
-                                train.overlap_trial_indices,
-                                selected_trial_indices,
-                                assume_unique=False,
-                            ).astype(np.int64, copy=False),
-                        )
-                        for unit_index, train in enumerate(
-                            prepared_spikes.trial_spike_trains
-                        )
-                    ),
-                )
-                execution = lfp_summary_ppc_runtime.execute_ppc_blocks(
-                    config=config,
-                    execution=config.ppc_execution,
-                    prepared_phase=job_phase,
-                    prepared_spikes=job_spikes,
-                    schedule=schedule,
-                    work_root=config.output_directory.parent / "lfp_summary_work",
-                    progress_callback=progress_callback,
-                )
-                _assign_ppc_job_summary(
-                    arrays,
-                    condition_index,
-                    site_index,
-                    epoch_index,
-                    execution.summary_arrays,
-                )
-                if execution.run_directory.exists():
-                    completed_ppc_runs.append(
-                        (Path(execution.run_directory), execution.run_fingerprint)
-                    )
-                for unit_index, train in enumerate(
-                    prepared_spikes.trial_spike_trains
-                ):
-                    selected_spikes = selected_spikes_by_unit[unit_index]
-                    for position, values in zip(
-                        selected_positions,
-                        selected_spikes,
-                        strict=True,
-                    ):
-                        trial_spike_counts[
-                            unit_index,
-                            condition_index,
-                            site_index,
-                            epoch_index,
-                            position,
-                        ] = values.size
-                    sampled, sampled_valid, sampled_trial_rows = (
-                        _sample_observed_trial_phase(
-                            prepared_phase.relative_time_s,
-                            phase_by_trial[selected_positions],
-                            valid_by_trial[selected_positions],
-                            selected_spikes,
-                            prepared_phase.trial_indices[selected_positions],
-                        )
-                    )
-                    index = (
-                        unit_index,
-                        condition_index,
-                        site_index,
-                        epoch_index,
-                    )
-                    hist = spike_lfp_summary.build_representative_phase_histograms(
-                        frequencies_hz=frequencies_hz,
-                        spike_phase_vectors=sampled,
-                        valid_mask=sampled_valid,
-                        trial_indices=sampled_trial_rows,
-                        phase_bin_edges_rad=phase_bin_edges,
-                    )
-                    histogram[index] = hist.spike_count_by_band
-    q_value = spike_lfp_summary.adjust_ppc_pvalues_bh(
-        p_value=arrays["p_value"],
-        null_eligible=arrays["null_eligible"],
+    arrays = _copy_grouped_ppc_component_summary(
+        execution.summary_arrays,
+        metric_shape=metric_shape,
+        phase_bin_count=len(config.ppc.phase_bin_edges_rad) - 1,
     )
-    arrays["q_value"] = q_value
-    arrays["significant"] = arrays["null_eligible"] & (
-        q_value <= config.ppc.fdr_alpha
+    trial_spike_counts = _grouped_exemplar_trial_spike_counts(
+        prepared_phase=prepared_phase,
+        prepared_spikes=prepared_spikes,
+        condition_membership=condition_membership,
+        epoch_windows=epoch_windows,
+    )
+    completed_ppc_runs = (
+        [(Path(execution.run_directory), execution.run_fingerprint)]
+        if execution.run_directory.exists()
+        else []
     )
     arrays["ppc_band_mean"] = spike_lfp_summary.compute_band_ppc_means(
         frequencies_hz=frequencies_hz,
         ppc_by_frequency=arrays["ppc"],
     ).ppc_band_mean
-    arrays["representative_phase_hist_count"] = histogram
     selected_low, selected_high, illustrative = _select_spike_exemplars(
         config,
         prepared_phase,
@@ -1886,10 +1761,41 @@ def _ppc_schedule_seed(
     )
 
 
-def _empty_spike_metric_arrays(
-    shape: tuple[int, int, int, int, int],
+def _copy_grouped_ppc_component_summary(
+    summary_arrays: Mapping[str, np.ndarray],
+    *,
+    metric_shape: tuple[int, int, int, int, int],
+    phase_bin_count: int,
 ) -> dict[str, np.ndarray]:
-    """Allocate PPC/null fields on unit-condition-site-epoch-frequency axes."""
+    """Copy grouped PPC outputs into the frozen public payload field names.
+
+    Parameters
+    ----------
+    summary_arrays : Mapping[str, numpy.ndarray]
+        Grouped executor arrays with metric axes ``(unit, condition, site,
+        epoch, frequency)`` and fixed representative histogram axes ``(unit,
+        condition, site, epoch, band=2, phase_bin)``. Float metrics are
+        dimensionless except preferred phase in radians; counts and flags
+        retain their documented public units.
+    metric_shape : tuple[int, int, int, int, int]
+        Exact final ``(unit, condition, site, epoch, frequency)`` dimensions.
+    phase_bin_count : int
+        Positive number of configured radians histogram bins.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Writable copies for final payload assembly. The histogram key is
+        renamed from the executor-private
+        ``representative_phase_histogram_count`` to the frozen public
+        ``representative_phase_hist_count`` without changing axes or dtype.
+
+    Raises
+    ------
+    ValueError
+        If the executor omits a required field or returns an incompatible
+        public axis/dtype contract.
+    """
     float_fields = (
         "ppc",
         "resultant_length",
@@ -1909,88 +1815,97 @@ def _empty_spike_metric_arrays(
         "permutation_count",
     )
     boolean_fields = ("computable", "reliable", "null_eligible", "significant")
-    arrays = {name: np.full(shape, np.nan) for name in float_fields}
-    arrays.update({name: np.zeros(shape, dtype=np.int64) for name in integer_fields})
-    arrays.update({name: np.zeros(shape, dtype=bool) for name in boolean_fields})
+    arrays: dict[str, np.ndarray] = {}
+    for name in float_fields + integer_fields + boolean_fields:
+        if name not in summary_arrays:
+            raise ValueError(f"grouped PPC summary lacks {name}")
+        values = np.asarray(summary_arrays[name])
+        if values.shape != metric_shape:
+            raise ValueError("grouped PPC summary axes disagree with final payload")
+        expected_dtype = (
+            np.dtype(float)
+            if name in float_fields
+            else np.dtype(np.int64)
+            if name in integer_fields
+            else np.dtype(bool)
+        )
+        if values.dtype != expected_dtype:
+            raise ValueError("grouped PPC summary dtype disagrees with final payload")
+        arrays[name] = values.copy()
+    histogram_name = "representative_phase_histogram_count"
+    if histogram_name not in summary_arrays:
+        raise ValueError("grouped PPC summary lacks representative histogram counts")
+    histogram = np.asarray(summary_arrays[histogram_name])
+    expected_histogram_shape = metric_shape[:-1] + (2, phase_bin_count)
+    if (
+        histogram.shape != expected_histogram_shape
+        or histogram.dtype != np.dtype(np.int64)
+    ):
+        raise ValueError("grouped representative histogram axes disagree with final payload")
+    arrays["representative_phase_hist_count"] = histogram.copy()
     return arrays
 
 
-def _assign_null_summary(
-    arrays: dict[str, np.ndarray],
-    index: tuple[int, int, int, int],
-    summary: spike_lfp_summary.PermutationNullSummary,
-) -> None:
-    """Copy one frequency-resolved null summary into cache metric arrays."""
-    fields = (
-        "null_eligible",
-        "eligible_trial_count",
-        "null_exceedance_count",
-        "permutation_count",
-        "p_value",
-        "null_mean",
-        "null_std",
-        "null_p025",
-        "null_p50",
-        "null_p975",
-    )
-    for field in fields:
-        arrays[field][index] = getattr(summary, field)
-
-
-def _assign_ppc_job_summary(
-    arrays: dict[str, np.ndarray],
-    condition_index: int,
-    site_index: int,
-    epoch_index: int,
-    summary_arrays: Mapping[str, np.ndarray],
-) -> None:
-    """Copy one executor's unit-frequency summaries into final cache axes.
+def _grouped_exemplar_trial_spike_counts(
+    *,
+    prepared_phase: PreparedPhaseRun,
+    prepared_spikes: PreparedSpikeRun,
+    condition_membership: np.ndarray,
+    epoch_windows: Mapping[str, tuple[float, float]],
+) -> np.ndarray:
+    """Count phase-free selected spikes for frozen exemplar selection.
 
     Parameters
     ----------
-    arrays : dict[str, numpy.ndarray]
-        Final schema arrays with axes ``(unit, condition, site, epoch,
-        frequency)``.
-    condition_index, site_index, epoch_index : int
-        Zero-based categorical positions identifying the completed PPC job.
-    summary_arrays : Mapping[str, numpy.ndarray]
-        Executor summaries, each on ``(unit, frequency)`` axes. The executor
-        deliberately retains no shuffle-by-unit arrays.
+    prepared_phase : PreparedPhaseRun
+        Full stable trial and Boolean site-valid axes. No phase values are
+        sampled by this helper.
+    prepared_spikes : PreparedSpikeRun
+        Full-unit ordered finite relative spike times in seconds for every
+        trial.
+    condition_membership : numpy.ndarray
+        Boolean ``(trial, condition)`` analysis membership after filter,
+        objective-validity, and user-exclusion gates.
+    epoch_windows : Mapping[str, tuple[float, float]]
+        Ordered half-open epoch seconds bounds, with keys defining the final
+        epoch axis.
 
-    Raises
-    ------
-    ValueError
-        If a required summary is missing or has axes inconsistent with the
-        final cache's unit/frequency positions.
+    Returns
+    -------
+    numpy.ndarray
+        Int64 spike counts on ``(unit, condition, site, epoch, trial)`` axes.
+        Nonselected rows remain zero. This preserves the legacy exemplar
+        selection input without phase interpolation or histogram sampling.
     """
-    fields = (
-        "ppc",
-        "resultant_length",
-        "preferred_phase_rad",
-        "spike_count",
-        "eligible_trial_count",
-        "computable",
-        "reliable",
-        "null_eligible",
-        "null_exceedance_count",
-        "permutation_count",
-        "p_value",
-        "q_value",
-        "significant",
-        "null_mean",
-        "null_std",
-        "null_p025",
-        "null_p50",
-        "null_p975",
+    counts = np.zeros(
+        (
+            len(prepared_spikes.unit_ids),
+            condition_membership.shape[1],
+            len(prepared_phase.site_valid),
+            len(epoch_windows),
+            prepared_phase.trial_indices.size,
+        ),
+        dtype=np.int64,
     )
-    expected_shape = (arrays["ppc"].shape[0], arrays["ppc"].shape[-1])
-    for field in fields:
-        if field not in summary_arrays:
-            raise ValueError(f"PPC executor summary lacks {field}")
-        values = np.asarray(summary_arrays[field])
-        if values.shape != expected_shape:
-            raise ValueError("PPC executor summary axes disagree with final payload")
-        arrays[field][:, condition_index, site_index, epoch_index, :] = values
+    for condition_index in range(condition_membership.shape[1]):
+        for site_index in range(len(prepared_phase.site_valid)):
+            selected_positions = np.flatnonzero(
+                condition_membership[:, condition_index]
+                & prepared_phase.site_valid[site_index]
+            )
+            for epoch_index, epoch_window in enumerate(epoch_windows.values()):
+                for unit_index, train in enumerate(prepared_spikes.trial_spike_trains):
+                    for position in selected_positions:
+                        counts[
+                            unit_index,
+                            condition_index,
+                            site_index,
+                            epoch_index,
+                            position,
+                        ] = _spikes_in_epoch(
+                            train.relative_spike_times[int(position)], epoch_window
+                        ).size
+    return counts
 
 
 def _ppc_post_commit_cleanup(
