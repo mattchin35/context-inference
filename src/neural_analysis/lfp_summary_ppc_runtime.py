@@ -21,7 +21,14 @@ import numpy as np
 
 from src.neural_analysis import spike_lfp_summary
 from src.neural_analysis.lfp_summary_ppc_kernel import (
+    aggregate_observed_trial_segmented_ppc_statistics,
+    build_source_trial_spike_geometry,
+    compose_observed_segmented_ppc_metrics,
+    compute_observed_trial_segmented_ppc_statistics,
+    compute_selected_observed_trial_segmented_ppc_statistics,
+    compute_segmented_edge_statistics,
     estimate_segmented_kernel_allocation,
+    reduce_segmented_schedule_to_ppc,
 )
 from src.neural_analysis.lfp_summary_models import (
     LFPSummaryConfig,
@@ -34,6 +41,8 @@ from src.neural_analysis.lfp_summary_models import (
 from src.neural_analysis.lfp_summary_work_cache import (
     _ownership_record,
     _write_lock_exclusive,
+    load_valid_ppc_checkpoint,
+    load_valid_ppc_checkpoints,
     write_ppc_checkpoint,
 )
 
@@ -48,6 +57,9 @@ _INTEGER_FIELDS = (
 )
 _BOOLEAN_FIELDS = ("computable", "reliable", "null_eligible", "significant")
 _SUMMARY_FIELDS = _FLOAT_FIELDS + _INTEGER_FIELDS + _BOOLEAN_FIELDS
+# S1/S2 retain nearest 8 and 40 Hz representative histograms independently of
+# configurable phase-analysis bands used elsewhere in the pipeline.
+_S1_S2_REPRESENTATIVE_BAND_COUNT = 2
 
 
 @dataclass(frozen=True)
@@ -218,10 +230,23 @@ class PPCAllocationEstimate:
     kernel_working_bytes, geometry_bytes : int
         Bytes for null kernel edge/gather temporaries and source geometry,
         respectively. Geometry is present in both computational stages.
-    planner_array_bytes, summary_assembly_bytes : int
-        Parent-owned retained plan and full-component publication arrays.
+    condition_membership_bytes, source_trial_spike_count_bytes : int
+        Executor-created Boolean ``(trial, condition)`` membership and int64
+        ``(trial, unit, before_after=2)`` count tables retained only during
+        planning.
+    planning_working_bytes : int
+        Conservatively bounded schedule/map construction scratch derived by the
+        planner. It excludes the two named planning tables and is not a caller
+        supplied public planner value.
+    planner_array_bytes, planned_planning_private_bytes,
+    summary_assembly_bytes : int
+        Parent-retained plan arrays, the complete planning stage peak, and
+        full-component publication arrays.
     worker_plan_bytes, worker_summary_bytes : int
         Worker-owned full-site plan and current site/unit-block result arrays.
+    checkpoint_block_bytes : int
+        One parent-owned serialized site/unit-block summary plus compact int64
+        ``site_index`` and half-open ``unit_bounds`` identity arrays.
     planned_computation_private_bytes : int
         Maximum of observed and null computational stage bytes.
     planned_parent_private_bytes, planned_worker_private_bytes : int
@@ -243,10 +268,15 @@ class PPCAllocationEstimate:
     observed_gather_temporary_bytes: int
     kernel_working_bytes: int
     geometry_bytes: int
+    condition_membership_bytes: int
+    source_trial_spike_count_bytes: int
+    planning_working_bytes: int
     planner_array_bytes: int
+    planned_planning_private_bytes: int
     summary_assembly_bytes: int
     worker_plan_bytes: int
     worker_summary_bytes: int
+    checkpoint_block_bytes: int
     planned_computation_private_bytes: int
     planned_parent_private_bytes: int
     planned_worker_private_bytes: int
@@ -1097,14 +1127,17 @@ def _validate_planning_positions(
         If dtype/axis/range is invalid or a unique position is repeated.
     """
     positions = np.asarray(value)
-    if (
-        positions.dtype != np.dtype(np.int64)
-        or positions.ndim != 1
-        or np.any(positions < 0)
-        or np.any(positions >= source_count)
-        or (unique and np.unique(positions).size != positions.size)
-    ):
+    if positions.dtype != np.dtype(np.int64) or positions.ndim != 1:
         raise ValueError(f"{name} must be valid int64 source positions")
+    seen_positions: set[int] = set()
+    for raw_position in positions:
+        position = int(raw_position)
+        if position < 0 or position >= source_count:
+            raise ValueError(f"{name} must be valid int64 source positions")
+        if unique:
+            if position in seen_positions:
+                raise ValueError(f"{name} must be valid int64 source positions")
+            seen_positions.add(position)
     return positions
 
 
@@ -1158,6 +1191,9 @@ def estimate_grouped_ppc_allocation(
     worker_count: int,
     pending_unit_block_count: int,
     shared_phase_mmap_bytes: int,
+    condition_membership_bytes: int = 0,
+    source_trial_spike_count_bytes: int = 0,
+    planning_working_bytes: int = 0,
 ) -> PPCAllocationEstimate:
     """Estimate the bounded-memory cost of one grouped PPC work candidate.
 
@@ -1212,6 +1248,17 @@ def estimate_grouped_ppc_allocation(
         ``min(worker_count, pending_unit_block_count)``; serial has zero.
     shared_phase_mmap_bytes : int
         Nonnegative shared read-only phase mmap bytes, counted exactly once.
+    condition_membership_bytes : int
+        Nonnegative bytes for the executor-created Boolean ``(trial,
+        condition)`` membership table. It is retained only for planning.
+    source_trial_spike_count_bytes : int
+        Nonnegative bytes for the executor-created int64 ``(trial, unit,
+        before_after=2)`` full spike-count table. It is retained only for
+        planning.
+    planning_working_bytes : int
+        Nonnegative conservative planner construction scratch bytes after the
+        two named planning tables. The pure planner derives this value from
+        scalar input dimensions, schedules, and worst-case edge geometry.
 
     Returns
     -------
@@ -1256,6 +1303,15 @@ def estimate_grouped_ppc_allocation(
     shared_mmap = _checked_ppc_int(
         shared_phase_mmap_bytes, "shared_phase_mmap_bytes"
     )
+    membership_bytes = _checked_ppc_int(
+        condition_membership_bytes, "condition_membership_bytes"
+    )
+    full_count_bytes = _checked_ppc_int(
+        source_trial_spike_count_bytes, "source_trial_spike_count_bytes"
+    )
+    planning_working = _checked_ppc_int(
+        planning_working_bytes, "planning_working_bytes"
+    )
     if active_jobs > worker_jobs or worker_jobs > component_jobs:
         raise ValueError("active_job_count <= worker_result_job_count <= component_job_count is required")
     if block_units > total_units:
@@ -1268,9 +1324,13 @@ def estimate_grouped_ppc_allocation(
         or counts.shape[0] < 1
         or counts.shape[1] != block_units
         or counts.shape[2] != 2
-        or np.any(counts < 0)
     ):
         raise ValueError("source_trial_spike_count must be nonnegative int64 (source, unit_block, 2)")
+    for raw_count in counts.flat:
+        if int(raw_count) < 0:
+            raise ValueError(
+                "source_trial_spike_count must be nonnegative int64 (source, unit_block, 2)"
+            )
     edge_positions = _validate_planning_positions(
         edge_source_trial_position,
         name="edge_source_trial_position",
@@ -1351,21 +1411,35 @@ def estimate_grouped_ppc_allocation(
     worker_summary_bytes = _checked_ppc_multiply(
         block_units, worker_jobs, summary_cell_bytes
     )
+    checkpoint_block_bytes = _checked_ppc_add(worker_summary_bytes, 3 * 8)
+    planning_private = _checked_ppc_add(
+        membership_bytes,
+        full_count_bytes,
+        max(planned_arrays, planning_working),
+    )
     if requested_workers == 1:
         active_workers = 0
-        parent_private = _checked_ppc_add(
-            planned_arrays, summary_assembly_bytes, computation_private
+        steady_parent_private = _checked_ppc_add(
+            planned_arrays,
+            summary_assembly_bytes,
+            max(computation_private, checkpoint_block_bytes),
         )
     else:
         active_workers = min(requested_workers, pending_blocks)
-        parent_private = _checked_ppc_add(planned_arrays, summary_assembly_bytes)
+        steady_parent_private = _checked_ppc_add(
+            planned_arrays, summary_assembly_bytes, checkpoint_block_bytes
+        )
     worker_private = _checked_ppc_add(
         worker_plan, worker_summary_bytes, computation_private
     )
+    parent_private = max(planning_private, steady_parent_private)
+    steady_aggregate_private = _checked_ppc_add(
+        steady_parent_private,
+        _checked_ppc_multiply(active_workers, worker_private),
+    )
     aggregate = _checked_ppc_add(
         shared_mmap,
-        parent_private,
-        _checked_ppc_multiply(active_workers, worker_private),
+        max(planning_private, steady_aggregate_private),
     )
     return PPCAllocationEstimate(
         job_accumulator_bytes=job_accumulator_bytes,
@@ -1373,10 +1447,15 @@ def estimate_grouped_ppc_allocation(
         observed_gather_temporary_bytes=observed_gather_temporary_bytes,
         kernel_working_bytes=kernel_working_bytes,
         geometry_bytes=geometry_bytes,
+        condition_membership_bytes=membership_bytes,
+        source_trial_spike_count_bytes=full_count_bytes,
+        planning_working_bytes=planning_working,
         planner_array_bytes=planned_arrays,
+        planned_planning_private_bytes=planning_private,
         summary_assembly_bytes=summary_assembly_bytes,
         worker_plan_bytes=worker_plan,
         worker_summary_bytes=worker_summary_bytes,
+        checkpoint_block_bytes=checkpoint_block_bytes,
         planned_computation_private_bytes=computation_private,
         planned_parent_private_bytes=parent_private,
         planned_worker_private_bytes=worker_private,
@@ -1472,6 +1551,53 @@ def _stable_edge_union(
     return sorted(edges)
 
 
+def _fixed_edge_position_groups(
+    *,
+    positions: Sequence[int],
+    maximum_group_size: int,
+) -> tuple[tuple[int, ...], ...]:
+    """Partition one batch's physical-union positions without shifting boundaries.
+
+    Parameters
+    ----------
+    positions : Sequence[int]
+        Nonnegative site-local or component-union edge positions for one
+        condition batch. Duplicate positions are allowed at input and denote
+        the same physical edge.
+    maximum_group_size : int
+        Positive maximum number of sorted unique union positions in one fixed
+        group. It is the configured ``trial_edge_block_size`` and has no
+        physical units.
+
+    Returns
+    -------
+    tuple[tuple[int, ...], ...]
+        Sorted unique positions partitioned in deterministic fixed-size groups.
+        Empty input returns an empty tuple. A later executor may discard
+        inactive positions only within these returned group boundaries.
+
+    Raises
+    ------
+    ValueError
+        If a position is negative or the requested group size is not a
+        positive non-Boolean signed-int64 integer.
+    """
+    group_size = _checked_ppc_int(
+        maximum_group_size,
+        "trial_edge_block_size",
+        minimum=1,
+    )
+    unique_positions: set[int] = set()
+    for raw_position in positions:
+        position = _checked_ppc_int(raw_position, "edge union position")
+        unique_positions.add(position)
+    ordered_positions = tuple(sorted(unique_positions))
+    return tuple(
+        ordered_positions[start : start + group_size]
+        for start in range(0, len(ordered_positions), group_size)
+    )
+
+
 def _validate_grouped_planning_inputs(
     *,
     condition_names: Sequence[str],
@@ -1482,7 +1608,15 @@ def _validate_grouped_planning_inputs(
     source_trial_spike_count: np.ndarray,
     frequency_count: int,
     shared_phase_mmap_bytes: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, int]:
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    tuple[str, ...],
+    int,
+    int,
+]:
     """Validate grouped-planner categorical axes without changing ownership.
 
     Parameters
@@ -1509,8 +1643,9 @@ def _validate_grouped_planning_inputs(
     -------
     tuple
         Original non-copying membership, validity, stable-row, and count
-        arrays; an owned object ``(condition,)`` name array; and canonical
-        Python frequency count and mmap bytes.
+        arrays; the original condition-name tuple when supplied as a tuple
+        (otherwise a tuple copy); and canonical Python frequency count and
+        mmap bytes.
 
     Raises
     ------
@@ -1540,19 +1675,27 @@ def _validate_grouped_planning_inputs(
         stable_rows.dtype != np.dtype(np.int64)
         or stable_rows.ndim != 1
         or stable_rows.size != membership.shape[0]
-        or np.any(stable_rows < 0)
-        or np.unique(stable_rows).size != stable_rows.size
     ):
         raise ValueError("stable_trial_rows must be unique int64 trial identities")
+    seen_stable_rows: set[int] = set()
+    for raw_stable_row in stable_rows:
+        stable_row = int(raw_stable_row)
+        if stable_row < 0 or stable_row in seen_stable_rows:
+            raise ValueError("stable_trial_rows must be unique int64 trial identities")
+        seen_stable_rows.add(stable_row)
     if (
         source_counts.dtype != np.dtype(np.int64)
         or source_counts.ndim != 3
         or source_counts.shape[0] != membership.shape[0]
         or source_counts.shape[1] < 1
         or source_counts.shape[2] != 2
-        or np.any(source_counts < 0)
     ):
         raise ValueError("source_trial_spike_count must be nonnegative int64 (trial, unit, 2)")
+    for raw_count in source_counts.flat:
+        if int(raw_count) < 0:
+            raise ValueError(
+                "source_trial_spike_count must be nonnegative int64 (trial, unit, 2)"
+            )
     if len(condition_names) != membership.shape[1] or (
         any(not isinstance(name, str) or not name for name in condition_names)
         or len(set(condition_names)) != len(condition_names)
@@ -1573,7 +1716,9 @@ def _validate_grouped_planning_inputs(
         valid,
         stable_rows,
         source_counts,
-        np.asarray(tuple(condition_names), dtype=object),
+        condition_names
+        if isinstance(condition_names, tuple)
+        else tuple(condition_names),
         frequencies,
         shared_mmap,
     )
@@ -1685,7 +1830,7 @@ def plan_grouped_ppc_component(
     independent_edge_count = 0
     for site_index, site_id in enumerate(site_ids):
         site_drafts: list[dict[str, object]] = []
-        for condition_index, condition_name in enumerate(names.tolist()):
+        for condition_index, condition_name in enumerate(names):
             local_positions = np.flatnonzero(
                 membership[:, condition_index] & site_valid[site_index]
             ).astype(np.int64, copy=False)
@@ -1749,17 +1894,56 @@ def plan_grouped_ppc_component(
     planner_array_bytes = _planning_array_bytes(all_drafts, len(union_edges))
     total_units = source_counts.shape[1]
     unit_block_size = config.ppc_execution.unit_block_size
+    condition_membership_bytes = _checked_ppc_multiply(
+        membership.shape[0], membership.shape[1]
+    )
+    source_trial_spike_count_bytes = _checked_ppc_multiply(
+        16, membership.shape[0], total_units
+    )
+    selected_row_cells = 0
+    schedule_cells = 0
+    for draft in all_drafts:
+        selected_row_cells = _checked_ppc_add(
+            selected_row_cells,
+            int(np.asarray(draft["selected_trial_rows"]).size),
+        )
+        schedule_cells = _checked_ppc_add(
+            schedule_cells,
+            int(np.asarray(draft["schedule"]).size),
+        )
+    draft_array_bytes = _checked_ppc_add(
+        _checked_ppc_multiply(8, selected_row_cells),
+        _checked_ppc_multiply(8, schedule_cells),
+    )
+    trial_count = membership.shape[0]
+    maximum_edge_count = _checked_ppc_multiply(trial_count, trial_count - 1)
+    largest_unit_block = min(unit_block_size, total_units)
+    planning_scratch_bytes = _checked_ppc_add(
+        _checked_ppc_multiply(8, _checked_ppc_add(2 * trial_count, maximum_edge_count)),
+        _checked_ppc_multiply(16, trial_count, largest_unit_block),
+    )
+    planning_working_bytes = _checked_ppc_add(
+        draft_array_bytes, planning_scratch_bytes
+    )
     pending_blocks = (total_units + unit_block_size - 1) // unit_block_size
     component_job_count = len(all_drafts)
-    representative_band_count = len(config.phase.bands)
+    representative_band_count = _S1_S2_REPRESENTATIVE_BAND_COUNT
     phase_bin_count = len(config.ppc.phase_bin_edges_rad) - 1
     summary_cell_bytes = _checked_ppc_add(
         _checked_ppc_multiply(116, frequencies),
         _checked_ppc_multiply(8, representative_band_count, phase_bin_count),
     )
+    largest_site_job_count = max((len(site_drafts) for site_drafts in drafts_by_site), default=0)
+    largest_checkpoint_block_bytes = _checked_ppc_add(
+        _checked_ppc_multiply(
+            largest_unit_block, largest_site_job_count, summary_cell_bytes
+        ),
+        3 * 8,
+    )
     parent_parallel_bytes = _checked_ppc_add(
         planner_array_bytes,
         _checked_ppc_multiply(total_units, component_job_count, summary_cell_bytes),
+        largest_checkpoint_block_bytes,
     )
     maximum_private = config.ppc_execution.maximum_worker_allocation_bytes
     maximum_aggregate = config.ppc_execution.maximum_aggregate_allocation_bytes
@@ -1828,6 +2012,13 @@ def plan_grouped_ppc_component(
         site_union = _stable_edge_union(site_drafts, include_site=False)
         worker_plan_bytes = _planning_array_bytes(site_drafts, len(site_union))
         batch_union = _stable_edge_union(batch_drafts, include_site=False)
+        site_union_position = {
+            edge: position for position, edge in enumerate(site_union)
+        }
+        fixed_batch_groups = _fixed_edge_position_groups(
+            positions=tuple(site_union_position[edge] for edge in batch_union),
+            maximum_group_size=config.ppc_execution.trial_edge_block_size,
+        )
         source_positions = site_source_positions(site_index)
         active_job_count = sum(
             1 for draft in batch_drafts if np.asarray(draft["schedule"]).size
@@ -1838,38 +2029,27 @@ def plan_grouped_ppc_component(
                 int(stable_rows[position]): local
                 for local, position in enumerate(source_positions)
             }
-            batch_edge_positions = np.asarray(
-                [source_row_to_position[source] for _, source, _ in batch_union],
-                dtype=np.int64,
-            )
         else:
-            batch_edge_positions = np.empty(0, dtype=np.int64)
+            source_row_to_position = {}
         estimates: list[PPCAllocationEstimate] = []
         for unit_start in range(0, total_units, unit_block_size):
             unit_stop = min(unit_start + unit_block_size, total_units)
             if source_positions.size:
                 block_counts = source_counts[
                     source_positions, unit_start:unit_stop, :
-                ].copy()
+                ]
                 observed_positions = np.arange(source_positions.size, dtype=np.int64)
             else:
                 # The allocator requires one source-axis row; no observed/null
                 # positions make this a harmless zero-work placeholder.
                 block_counts = np.zeros((1, unit_stop - unit_start, 2), dtype=np.int64)
                 observed_positions = np.empty(0, dtype=np.int64)
-            edge_blocks = (
-                tuple(
-                    batch_edge_positions[start : start + config.ppc_execution.trial_edge_block_size]
-                    for start in range(
-                        0,
-                        batch_edge_positions.size,
-                        config.ppc_execution.trial_edge_block_size,
-                    )
-                )
-                if batch_edge_positions.size
-                else (np.empty(0, dtype=np.int64),)
-            )
-            for edge_block in edge_blocks:
+            edge_groups = fixed_batch_groups if fixed_batch_groups else ((),)
+            for edge_group in edge_groups:
+                edge_block = np.empty(len(edge_group), dtype=np.int64)
+                for edge_offset, union_position in enumerate(edge_group):
+                    _, source_row, _ = site_union[union_position]
+                    edge_block[edge_offset] = source_row_to_position[source_row]
                 estimates.append(
                     estimate_grouped_ppc_allocation(
                         active_job_count=active_job_count,
@@ -1889,6 +2069,9 @@ def plan_grouped_ppc_component(
                         worker_count=config.ppc_execution.worker_count,
                         pending_unit_block_count=pending_blocks,
                         shared_phase_mmap_bytes=shared_mmap,
+                        condition_membership_bytes=condition_membership_bytes,
+                        source_trial_spike_count_bytes=source_trial_spike_count_bytes,
+                        planning_working_bytes=planning_working_bytes,
                     )
                 )
         return estimates
@@ -2056,6 +2239,1908 @@ def plan_grouped_ppc_component(
         edge_union_saturation=saturation,
         edge_reuse_ratio=reuse,
         allocation_estimate=allocation_estimate,
+    )
+
+
+_GROUPED_PPC_CODE_VERSION = "s4-grouped-serial-v1"
+_GROUPED_PPC_KERNEL_VERSION = "segmented-kernel-v1"
+
+
+@dataclass(frozen=True)
+class PPCComponentExecutionResult:
+    """Completed grouped PPC work result for one full Spike-phase component.
+
+    Parameters
+    ----------
+    run_fingerprint : str
+        SHA-256 execution identity binding full prepared phase/spike content,
+        stable trial/site/job schedules, segment settings, grouped code/kernel
+        versions, and all execution-only controls. It has no physical units.
+    run_directory : pathlib.Path
+        Exact ``<work_root>/ppc/<run_fingerprint>`` work directory containing
+        metadata and, when enabled, independently resumable bounded blocks.
+    component_plan : PPCComponentPlan
+        Immutable site-major grouped plan used for this execution. It contains
+        categorical trial/site identities and no phase or spike samples.
+    summary_arrays : dict[str, numpy.ndarray]
+        Owned read-only arrays. Metric/count/flag fields have axes
+        ``(unit, condition, site, epoch, frequency)``; PPC/resultant/null
+        values are dimensionless, preferred phase is radians, and count/flag
+        units are documented by their names. ``representative_phase_histogram_count``
+        has ``(unit, condition, site, epoch, band, phase_bin)`` axes.
+    completed_block_ids, resumed_block_ids : tuple[str, ...]
+        Safe site/unit-block checkpoint identities in stable site-major then
+        increasing half-open unit-bound order. The second tuple is the subset
+        loaded from exact valid single-block checkpoints.
+    """
+
+    run_fingerprint: str
+    run_directory: Path
+    component_plan: PPCComponentPlan
+    summary_arrays: dict[str, np.ndarray]
+    completed_block_ids: tuple[str, ...]
+    resumed_block_ids: tuple[str, ...]
+
+
+def execute_grouped_ppc_component(
+    *,
+    config: LFPSummaryConfig,
+    execution: PPCExecutionConfig,
+    prepared_phase: object,
+    prepared_spikes: object,
+    work_root: Path,
+    progress_callback: Callable[[ProgressEvent], None] | None = None,
+) -> PPCComponentExecutionResult:
+    """Execute one complete grouped PPC component serially with bounded blocks.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Validated scientific configuration. The prepared phase axes are site,
+        frequency in Hz, full trial, and relative time in seconds. Its PPC
+        epochs remain ``whole, before, after`` and scientific fingerprint is
+        unchanged by this work-only executor.
+    execution : PPCExecutionConfig
+        Must equal ``config.ppc_execution`` and have ``worker_count == 1`` in
+        S4. Unit, edge, and shuffle blocks bound transient work only; all ten
+        settings enter the execution identity.
+    prepared_phase : PreparedPhaseRun-like object
+        Production record with complex64/Boolean ``(site, frequency, trial,
+        time)`` phase/valid axes, int64 stable trial rows, per-site validity,
+        and trial condition/filter/objective/user information.
+    prepared_spikes : PreparedSpikeRun-like object
+        Production record with configured stable unit order and one finite
+        relative-seconds spike vector per full trial and unit.
+    work_root : pathlib.Path
+        Session-local parent for execution-only ``ppc/<fingerprint>`` files.
+        This function never publishes a final component, manifest, or
+        ``spike_phase.npz`` file.
+    progress_callback : callable or None, default=None
+        Receives serial ``ProgressEvent`` records only. Events carry no raw
+        phase, spike, or full schedule tensors.
+
+    Returns
+    -------
+    PPCComponentExecutionResult
+        Read-only full-component summaries and an immutable plan. Whole
+        observed statistics are before-plus-after sufficient statistics while
+        whole null schedules retain their independently derived seeds.
+
+    Raises
+    ------
+    ValueError
+        If execution is nonserial/mismatched, prepared records are malformed,
+        or planner allocation limits fail. A cached block with incompatible
+        documented axes, marker, metadata, or bounded NPZ schema is discarded
+        and recomputed rather than raising. Memory preflight occurs before
+        geometry, summary allocation, checkpoint I/O, or process construction.
+    FileExistsError
+        If another executor owns this exact run directory.
+    OSError
+        If metadata or a parent-owned checkpoint cannot be atomically written.
+    """
+    _validate_ppc_execution(execution)
+    if execution != config.ppc_execution:
+        raise ValueError("grouped PPC execution must equal config.ppc_execution")
+    if execution.worker_count != 1:
+        raise ValueError("S4 grouped PPC execution is serial and requires worker_count == 1")
+
+    # Import locally: the production runtime imports this module for legacy
+    # job execution, while this serial bridge only needs its prepared-record
+    # validation and condition intersection after execution was authorized.
+    from src.neural_analysis import lfp_summary_runtime
+
+    lfp_summary_runtime._validate_prepared_phase_run(config, prepared_phase)
+    lfp_summary_runtime._validate_prepared_spike_run(
+        config, prepared_phase, prepared_spikes
+    )
+    phase = np.asarray(prepared_phase.phase_tensor)
+    valid = np.asarray(prepared_phase.phase_valid, dtype=bool)
+    stable_rows = np.asarray(prepared_phase.trial_indices)
+    site_valid = np.asarray(prepared_phase.site_valid, dtype=bool)
+    _preflight_grouped_planning_construction(
+        config=config,
+        prepared_phase=prepared_phase,
+        prepared_spikes=prepared_spikes,
+        shared_phase_mmap_bytes=_checked_ppc_add(int(phase.nbytes), int(valid.nbytes)),
+    )
+    membership = lfp_summary_runtime._analysis_condition_membership(
+        prepared_phase.prepared_trials
+    )
+    frequencies_hz = np.asarray(config.phase.frequency_hz, dtype=float)
+    source_counts = _grouped_source_trial_spike_counts(
+        config=config,
+        prepared_spikes=prepared_spikes,
+        trial_count=stable_rows.size,
+    )
+    plan = plan_grouped_ppc_component(
+        config=config,
+        condition_names=prepared_phase.prepared_trials.condition_names,
+        condition_membership=membership,
+        site_ids=tuple(site.stable_id for site in config.sites),
+        site_trial_valid=site_valid,
+        stable_trial_rows=stable_rows,
+        source_trial_spike_count=source_counts,
+        frequency_count=frequencies_hz.size,
+        shared_phase_mmap_bytes=int(phase.nbytes + valid.nbytes),
+    )
+    metadata = _grouped_run_metadata(
+        config=config,
+        execution=execution,
+        prepared_phase=prepared_phase,
+        prepared_spikes=prepared_spikes,
+        plan=plan,
+        condition_membership=membership,
+    )
+    # The run identity has consumed planning-only masks/counts. They are not
+    # retained through full parent summary allocation or checkpoint publication.
+    condition_count = int(membership.shape[1])
+    del membership, source_counts
+    run_fingerprint = str(metadata["run_fingerprint"])
+    run_directory = Path(work_root) / "ppc" / run_fingerprint
+    reporter = _ProgressReporter(progress_callback, "grouped-spike-phase")
+    reporter.emit("prepare_phase", 1, 1, "validated grouped prepared inputs")
+
+    run_directory.mkdir(parents=True, exist_ok=True)
+    lock_path = _acquire_executor_lock(run_directory, run_fingerprint)
+    try:
+        # Any resumed/repaired run must re-earn the final completion marker.
+        (run_directory / "complete.json").unlink(missing_ok=True)
+        existing_metadata = _load_grouped_metadata(run_directory)
+        resumable = existing_metadata == metadata
+        _atomic_json(run_directory / "metadata.json", metadata)
+        summary = _empty_grouped_summary_arrays(
+            unit_count=len(prepared_spikes.unit_ids),
+            condition_count=condition_count,
+            site_count=len(config.sites),
+            epoch_count=len(config.ppc.epochs),
+            frequency_count=frequencies_hz.size,
+            representative_band_count=_S1_S2_REPRESENTATIVE_BAND_COUNT,
+            phase_bin_count=len(config.ppc.phase_bin_edges_rad) - 1,
+        )
+        block_identities = metadata["block_identities"]
+        assert isinstance(block_identities, dict)
+        completed_ids = tuple(block_identities)
+        resumed_ids: list[str] = []
+        for completed_count, block_id in enumerate(completed_ids, start=1):
+            identity = block_identities[block_id]
+            assert isinstance(identity, dict)
+            site_index = int(identity["site_index"])
+            unit_start = int(identity["unit_start"])
+            unit_stop = int(identity["unit_stop"])
+            checkpoint_schema = _grouped_checkpoint_schema(
+                unit_count=unit_stop - unit_start,
+                condition_count=condition_count,
+                epoch_count=len(config.ppc.epochs),
+                frequency_count=frequencies_hz.size,
+                representative_band_count=_S1_S2_REPRESENTATIVE_BAND_COUNT,
+                phase_bin_count=len(config.ppc.phase_bin_edges_rad) - 1,
+            )
+            checkpoint = (
+                load_valid_ppc_checkpoint(
+                    run_directory,
+                    block_id,
+                    metadata,
+                    expected_array_schema=checkpoint_schema,
+                    maximum_array_bytes=_grouped_checkpoint_schema_bytes(
+                        checkpoint_schema
+                    ),
+                )
+                if resumable and execution.checkpoint_enabled
+                else None
+            )
+            if checkpoint is not None and _merge_grouped_checkpoint(
+                summary=summary,
+                arrays=checkpoint.arrays,
+                site_index=site_index,
+                unit_start=unit_start,
+                unit_stop=unit_stop,
+                condition_count=condition_count,
+                epoch_count=len(config.ppc.epochs),
+                frequency_count=frequencies_hz.size,
+                representative_band_count=_S1_S2_REPRESENTATIVE_BAND_COUNT,
+                phase_bin_count=len(config.ppc.phase_bin_edges_rad) - 1,
+            ):
+                resumed_ids.append(block_id)
+                checkpoint_message = "resumed grouped checkpoint"
+                del checkpoint
+            else:
+                del checkpoint
+                _compute_grouped_site_unit_block(
+                    config=config,
+                    prepared_phase=prepared_phase,
+                    prepared_spikes=prepared_spikes,
+                    plan=plan,
+                    summary=summary,
+                    site_index=site_index,
+                    unit_start=unit_start,
+                    unit_stop=unit_stop,
+                )
+                _apply_grouped_bh_block(
+                    summary=summary,
+                    site_index=site_index,
+                    unit_start=unit_start,
+                    unit_stop=unit_stop,
+                    alpha=config.ppc.fdr_alpha,
+                )
+                if execution.checkpoint_enabled:
+                    block_arrays = _grouped_checkpoint_arrays(
+                        summary=summary,
+                        site_index=site_index,
+                        unit_start=unit_start,
+                        unit_stop=unit_stop,
+                    )
+                    write_ppc_checkpoint(
+                        run_directory,
+                        block_id,
+                        block_arrays,
+                        metadata,
+                        copy_arrays=False,
+                    )
+                    del block_arrays
+                    checkpoint_message = "newly published grouped checkpoint"
+                else:
+                    checkpoint_message = "checkpoint disabled"
+            # Keep the emitted cycle stable whether this block was resumed or
+            # recomputed, while suppressing intermediate cycles by the
+            # configured reporting interval.
+            total_blocks = len(completed_ids)
+            if (
+                completed_count % execution.progress_update_interval == 0
+                or completed_count == total_blocks
+            ):
+                reporter.emit("observed_reduction", completed_count, total_blocks, "completed grouped observed reduction", timed=True)
+                reporter.emit("trial_edge_reduction", completed_count, total_blocks, "completed grouped edge reduction", timed=True)
+                reporter.emit("shuffle_aggregation", completed_count, total_blocks, "completed grouped shuffle aggregation", timed=True)
+                reporter.emit("fdr", completed_count, total_blocks, "applied grouped FDR", timed=True)
+                reporter.emit("checkpoint", completed_count, total_blocks, checkpoint_message, timed=True)
+        _atomic_json(run_directory / "complete.json", {"run_fingerprint": run_fingerprint})
+        reporter.emit("commit", 1, 1, "grouped PPC summaries ready")
+        return PPCComponentExecutionResult(
+            run_fingerprint=run_fingerprint,
+            run_directory=run_directory,
+            component_plan=plan,
+            summary_arrays=_freeze_grouped_summary_arrays(summary),
+            completed_block_ids=completed_ids,
+            resumed_block_ids=tuple(resumed_ids),
+        )
+    finally:
+        _release_executor_lock(lock_path)
+
+
+def _grouped_source_trial_spike_counts(
+    *,
+    config: LFPSummaryConfig,
+    prepared_spikes: object,
+    trial_count: int,
+) -> np.ndarray:
+    """Return exact full-trial before/after spike counts for allocation planning.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Contains half-open before/after windows in relative seconds.
+    prepared_spikes : PreparedSpikeRun-like object
+        One finite relative-seconds spike vector per configured unit/full trial.
+    trial_count : int
+        Positive full-trial axis length shared by all prepared spike trains.
+
+    Returns
+    -------
+    numpy.ndarray
+        Int64 ``(trial, unit, segment=2)`` nonnegative spike counts. Segment
+        zero is before and segment one is after; counts have no physical units.
+
+    Raises
+    ------
+    ValueError
+        If a supplied spike record does not have the documented trial axis.
+    """
+    windows = config.analysis_windows
+    bounds = (
+        (float(windows.before_start_s), float(windows.before_stop_s)),
+        (float(windows.after_start_s), float(windows.after_stop_s)),
+    )
+    counts = np.zeros((trial_count, len(prepared_spikes.unit_ids), 2), dtype=np.int64)
+    for unit_index, train in enumerate(prepared_spikes.trial_spike_trains):
+        if len(train.relative_spike_times) != trial_count:
+            raise ValueError("prepared spike trial axis differs from prepared phase")
+        for trial_index, values in enumerate(train.relative_spike_times):
+            spikes = np.asarray(values, dtype=float)
+            before_count = 0
+            after_count = 0
+            # Count scalars directly so planning does not retain a full-train
+            # Boolean comparison mask alongside its int64 result table.
+            for spike_time in spikes:
+                time_s = float(spike_time)
+                if bounds[0][0] <= time_s < bounds[0][1]:
+                    before_count += 1
+                if bounds[1][0] <= time_s < bounds[1][1]:
+                    after_count += 1
+            counts[trial_index, unit_index, 0] = before_count
+            counts[trial_index, unit_index, 1] = after_count
+    return counts
+
+
+def _preflight_grouped_planning_construction(
+    *,
+    config: LFPSummaryConfig,
+    prepared_phase: object,
+    prepared_spikes: object,
+    shared_phase_mmap_bytes: int,
+) -> None:
+    """Reject unsafe grouped planner construction from scalar prepared metadata.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Validated PPC configuration. Its execution process/aggregate limits are
+        interpreted in bytes and its block sizes are categorical dimensions.
+    prepared_phase : PreparedPhaseRun-like object
+        Validated prepared phase record. Only scalar/indexed condition, filter,
+        objective, user, and site-valid values are read; no membership array is
+        constructed by this helper.
+    prepared_spikes : PreparedSpikeRun-like object
+        Validated full unit-axis spike record. Only ``unit_ids`` length is read.
+    shared_phase_mmap_bytes : int
+        Nonnegative bytes for complete read-only phase/valid prepared storage,
+        counted once in the aggregate process peak.
+
+    Returns
+    -------
+    None
+        Raises before creation of the Boolean gated membership, int64 full
+        spike-count table, schedules, planner maps, summaries, work directory,
+        or checkpoints.
+
+    Raises
+    ------
+    ValueError
+        If checked int64 arithmetic overflows or the conservative planning
+        construction peak exceeds either configured process or aggregate limit.
+
+    Notes
+    -----
+    ``M = trial * condition`` and ``Q = 16 * trial * unit`` charge the two
+    executor-created planning tables. ``D`` charges selected-row and schedule
+    int64 drafts, and ``A`` conservatively charges local positions, worst-case
+    full-trial edges, and one copied ``(trial, unit_block, segment)`` count
+    block. The final planner later computes its exact retained ``P`` and gates
+    ``M + Q + max(P, D + A)`` before final map materialization.
+    """
+    prepared_trials = prepared_phase.prepared_trials
+    trial_count = _checked_ppc_int(
+        int(np.asarray(prepared_phase.trial_indices).size),
+        "prepared trial_count",
+        minimum=1,
+    )
+    condition_count = _checked_ppc_int(
+        len(prepared_trials.condition_names), "prepared condition_count", minimum=1
+    )
+    site_count = _checked_ppc_int(len(config.sites), "configured site_count", minimum=1)
+    unit_count = _checked_ppc_int(len(prepared_spikes.unit_ids), "prepared unit_count", minimum=1)
+    shuffle_count = _checked_ppc_int(
+        config.ppc.shuffle_count, "config.ppc.shuffle_count", minimum=1
+    )
+    membership_bytes = _checked_ppc_multiply(trial_count, condition_count)
+    source_count_bytes = _checked_ppc_multiply(16, trial_count, unit_count)
+    selected_rows = 0
+    scheduled_cells = 0
+    condition_values = np.asarray(prepared_trials.condition_membership)
+    filter_values = np.asarray(prepared_trials.filter_membership)
+    objective_values = np.asarray(prepared_trials.objective_valid)
+    excluded_values = np.asarray(prepared_trials.user_excluded)
+    site_values = np.asarray(prepared_phase.site_valid)
+    # Scalar indexing avoids the executor-created trial-by-condition Boolean
+    # table until this full construction gate has accepted the workload.
+    for site_index in range(site_count):
+        for condition_index in range(condition_count):
+            selected_count = 0
+            for trial_index in range(trial_count):
+                if (
+                    bool(condition_values[trial_index, condition_index])
+                    and bool(filter_values[trial_index])
+                    and bool(objective_values[trial_index])
+                    and not bool(excluded_values[trial_index])
+                    and bool(site_values[site_index, trial_index])
+                ):
+                    selected_count += 1
+            selected_rows = _checked_ppc_add(
+                selected_rows,
+                _checked_ppc_multiply(3, selected_count),
+            )
+            if selected_count >= 2:
+                scheduled_cells = _checked_ppc_add(
+                    scheduled_cells,
+                    _checked_ppc_multiply(3, shuffle_count, selected_count),
+                )
+    draft_bytes = _checked_ppc_add(
+        _checked_ppc_multiply(8, selected_rows),
+        _checked_ppc_multiply(8, scheduled_cells),
+    )
+    maximum_edge_count = _checked_ppc_multiply(trial_count, trial_count - 1)
+    largest_unit_block = min(config.ppc_execution.unit_block_size, unit_count)
+    scratch_bytes = _checked_ppc_add(
+        _checked_ppc_multiply(
+            8,
+            _checked_ppc_add(
+                _checked_ppc_multiply(2, trial_count), maximum_edge_count
+            ),
+        ),
+        _checked_ppc_multiply(16, trial_count, largest_unit_block),
+    )
+    construction_private = _checked_ppc_add(
+        membership_bytes, source_count_bytes, draft_bytes, scratch_bytes
+    )
+    shared_bytes = _checked_ppc_int(
+        shared_phase_mmap_bytes, "shared_phase_mmap_bytes"
+    )
+    if construction_private > config.ppc_execution.maximum_worker_allocation_bytes:
+        raise ValueError("planning construction exceeds maximum_worker_allocation_bytes")
+    if _checked_ppc_add(shared_bytes, construction_private) > (
+        config.ppc_execution.maximum_aggregate_allocation_bytes
+    ):
+        raise ValueError("planning construction exceeds maximum_aggregate_allocation_bytes")
+
+
+def _grouped_execution_settings(execution: PPCExecutionConfig) -> dict[str, object]:
+    """Return all execution-only PPC settings as canonical JSON primitives.
+
+    Parameters
+    ----------
+    execution : PPCExecutionConfig
+        Validated bounded-work settings with byte limits in bytes and block
+        dimensions in categorical axis entries.
+
+    Returns
+    -------
+    dict[str, object]
+        Exact JSON-safe mapping of all ten execution fields. It carries no raw
+        phase, spike, schedule, or scientific component value.
+    """
+    return {
+        "unit_block_size": execution.unit_block_size,
+        "shuffle_block_size": execution.shuffle_block_size,
+        "trial_edge_block_size": execution.trial_edge_block_size,
+        "worker_count": execution.worker_count,
+        "maximum_worker_allocation_bytes": execution.maximum_worker_allocation_bytes,
+        "maximum_aggregate_allocation_bytes": execution.maximum_aggregate_allocation_bytes,
+        "prepared_phase_cache_enabled": execution.prepared_phase_cache_enabled,
+        "checkpoint_enabled": execution.checkpoint_enabled,
+        "checkpoint_retention": execution.checkpoint_retention,
+        "progress_update_interval": execution.progress_update_interval,
+    }
+
+
+def _grouped_execution_plan_fingerprint(plan: PPCComponentPlan) -> str:
+    """Hash immutable grouped scheduling/union state and grouped kernel version.
+
+    Parameters
+    ----------
+    plan : PPCComponentPlan
+        Immutable site-major job plans with local int64 schedules and one
+        site-qualified physical-edge union.
+
+    Returns
+    -------
+    str
+        SHA-256 identity for planned schedules, stable rows/edges, batches,
+        and the currently selected grouped numerical-kernel version.
+    """
+    job_records: list[dict[str, object]] = []
+    for job in plan.job_plans:
+        job_records.append(
+            {
+                "condition_index": job.condition_index,
+                "condition_name": job.condition_name,
+                "site_index": job.site_index,
+                "site_id": job.site_id,
+                "epoch_index": job.epoch_index,
+                "epoch_name": job.epoch_name,
+                "selected_trial_rows": _array_fingerprint(job.selected_trial_rows),
+                "schedule": _array_fingerprint(job.schedule),
+                "stable_edge_source_trial_row": _array_fingerprint(
+                    job.stable_edge_source_trial_row
+                ),
+                "stable_edge_target_trial_row": _array_fingerprint(
+                    job.stable_edge_target_trial_row
+                ),
+                "edge_union_position": _array_fingerprint(job.edge_union_position),
+                "segment_expression": job.segment_expression,
+                "base_ppc_seed": job.base_ppc_seed,
+                "schedule_seed": job.schedule_seed,
+                "condition_derivation_identity": job.condition_derivation_identity,
+                "site_derivation_identity": job.site_derivation_identity,
+                "epoch_derivation_identity": job.epoch_derivation_identity,
+                "schedule_shape": job.schedule_shape,
+                "schedule_fingerprint": job.schedule_fingerprint,
+            }
+        )
+    allocation = {
+        field_name: getattr(plan.allocation_estimate, field_name)
+        for field_name in PPCAllocationEstimate.__dataclass_fields__
+    }
+    return _hash_json(
+        {
+            "kernel_version": _GROUPED_PPC_KERNEL_VERSION,
+            "jobs": job_records,
+            "edge_site_index": _array_fingerprint(plan.edge_site_index),
+            "stable_edge_source_trial_row": _array_fingerprint(
+                plan.stable_edge_source_trial_row
+            ),
+            "stable_edge_target_trial_row": _array_fingerprint(
+                plan.stable_edge_target_trial_row
+            ),
+            "condition_batches": plan.condition_batches,
+            "scheduled_edge_count": plan.scheduled_edge_count,
+            "independent_edge_count": plan.independent_edge_count,
+            "union_edge_count": plan.union_edge_count,
+            "edge_union_saturation": plan.edge_union_saturation,
+            "edge_reuse_ratio": plan.edge_reuse_ratio,
+            "allocation_estimate": allocation,
+        }
+    )
+
+
+def _grouped_run_metadata(
+    *,
+    config: LFPSummaryConfig,
+    execution: PPCExecutionConfig,
+    prepared_phase: object,
+    prepared_spikes: object,
+    plan: PPCComponentPlan,
+    condition_membership: np.ndarray,
+) -> dict[str, object]:
+    """Build complete work metadata for serial grouped component execution.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Scientific configuration with seconds/Hz windows and component
+        settings. Its execution-independent component fingerprint is retained.
+    execution : PPCExecutionConfig
+        Exact ten-field execution setting record.
+    prepared_phase : PreparedPhaseRun-like object
+        Full complex64/Boolean phase axes, stable trial/site validity, and
+        relative-second coordinates.
+    prepared_spikes : PreparedSpikeRun-like object
+        Stable unit identities and full-trial relative-second spike vectors.
+    plan : PPCComponentPlan
+        Immutable scheduler output including derived schedule bytes.
+    condition_membership : numpy.ndarray
+        Boolean ``(trial, condition)`` mask after shared filter/objective/user
+        gates; it is categorical membership, not a physical measurement.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-safe exact run metadata, including safe block identity mapping and
+        SHA-256 ``execution_plan_fingerprint``/``run_fingerprint`` values.
+    """
+    phase = np.asarray(prepared_phase.phase_tensor)
+    valid = np.asarray(prepared_phase.phase_valid)
+    trial_rows = np.asarray(prepared_phase.trial_indices)
+    site_valid = np.asarray(prepared_phase.site_valid)
+    trains = tuple(
+        tuple(np.asarray(values, dtype=float) for values in train.relative_spike_times)
+        for train in prepared_spikes.trial_spike_trains
+    )
+    overlaps = tuple(
+        tuple(int(value) for value in np.asarray(train.overlap_trial_indices, dtype=np.int64))
+        for train in prepared_spikes.trial_spike_trains
+    )
+    block_identities: dict[str, dict[str, object]] = {}
+    for site_index, site in enumerate(config.sites):
+        for unit_start in range(0, len(prepared_spikes.unit_ids), execution.unit_block_size):
+            unit_stop = min(unit_start + execution.unit_block_size, len(prepared_spikes.unit_ids))
+            block_id = f"site-{site_index:03d}-unit-{unit_start:06d}-{unit_stop:06d}"
+            block_identities[block_id] = {
+                "site_id": site.stable_id,
+                "site_index": site_index,
+                "unit_start": unit_start,
+                "unit_stop": unit_stop,
+            }
+    execution_plan_fingerprint = _grouped_execution_plan_fingerprint(plan)
+    metadata: dict[str, object] = {
+        "generator": "execute_grouped_ppc_component",
+        "schema_version": config.schema_version,
+        "source_fingerprint": _hash_json(fingerprint_source_files(config, "spike_phase")),
+        "scientific_fingerprint": component_fingerprint("spike_phase", config),
+        "execution_settings": _grouped_execution_settings(execution),
+        "grouped_code_version": _GROUPED_PPC_CODE_VERSION,
+        "grouped_kernel_version": _GROUPED_PPC_KERNEL_VERSION,
+        "execution_plan_fingerprint": execution_plan_fingerprint,
+        "phase_content_fingerprint": _array_fingerprint(
+            phase,
+            valid,
+            np.asarray(prepared_phase.relative_time_s),
+            trial_rows,
+            site_valid,
+        ),
+        "spike_content_fingerprint": _hash_spikes(trains, overlaps),
+        "condition_membership_fingerprint": _array_fingerprint(
+            np.asarray(condition_membership, dtype=bool)
+        ),
+        "site_ids": [site.stable_id for site in config.sites],
+        "unit_ids": list(prepared_spikes.unit_ids),
+        "summary_axes": ["unit", "condition", "site", "epoch", "frequency"],
+        "histogram_axes": ["unit", "condition", "site", "epoch", "band", "phase_bin"],
+        "block_identities": block_identities,
+    }
+    metadata["run_fingerprint"] = _hash_json(metadata)
+    return metadata
+
+
+def _load_grouped_metadata(run_directory: Path) -> dict[str, object] | None:
+    """Load one existing grouped metadata mapping without accepting malformed JSON.
+
+    Parameters
+    ----------
+    run_directory : pathlib.Path
+        Exact grouped work directory containing an optional metadata JSON file.
+
+    Returns
+    -------
+    dict[str, object] or None
+        Parsed metadata mapping only when the file is JSON object data; ``None``
+        for missing, malformed, or nonmapping metadata.
+    """
+    try:
+        value = json.loads((run_directory / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _empty_grouped_summary_arrays(
+    *,
+    unit_count: int,
+    condition_count: int,
+    site_count: int,
+    epoch_count: int,
+    frequency_count: int,
+    representative_band_count: int,
+    phase_bin_count: int,
+) -> dict[str, np.ndarray]:
+    """Allocate the documented full grouped PPC summary axes.
+
+    Parameters
+    ----------
+    unit_count, condition_count, site_count, epoch_count, frequency_count : int
+        Positive categorical axis sizes for unit, condition, site, epoch, and
+        Hz frequency coordinates.
+    representative_band_count, phase_bin_count : int
+        Positive categorical histogram band/bin sizes; bins represent radians.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Writable parent arrays: metric/count/flag fields have
+        ``(unit, condition, site, epoch, frequency)`` axes and the histogram
+        has ``(unit, condition, site, epoch, band, phase_bin)`` axes.
+    """
+    metric_shape = (unit_count, condition_count, site_count, epoch_count, frequency_count)
+    arrays = {name: np.full(metric_shape, np.nan, dtype=float) for name in _FLOAT_FIELDS}
+    arrays.update({name: np.zeros(metric_shape, dtype=np.int64) for name in _INTEGER_FIELDS})
+    arrays.update({name: np.zeros(metric_shape, dtype=bool) for name in _BOOLEAN_FIELDS})
+    arrays["representative_phase_histogram_count"] = np.zeros(
+        metric_shape[:-1] + (representative_band_count, phase_bin_count),
+        dtype=np.int64,
+    )
+    return arrays
+
+
+def _freeze_grouped_summary_arrays(
+    arrays: Mapping[str, np.ndarray],
+) -> dict[str, np.ndarray]:
+    """Freeze owned grouped output arrays without altering axes or units.
+
+    Parameters
+    ----------
+    arrays : Mapping[str, numpy.ndarray]
+        Parent-owned complete grouped summary arrays with documented metric or
+        representative-histogram axes.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        New mapping to the same owned arrays after element writes are disabled.
+    """
+    frozen: dict[str, np.ndarray] = {}
+    for name, values in arrays.items():
+        array = np.asarray(values)
+        array.setflags(write=False)
+        frozen[name] = array
+    return frozen
+
+
+def _grouped_checkpoint_arrays(
+    *,
+    summary: Mapping[str, np.ndarray],
+    site_index: int,
+    unit_start: int,
+    unit_stop: int,
+) -> dict[str, np.ndarray]:
+    """Copy one bounded site/unit summary into no-copy checkpoint arrays.
+
+    Parameters
+    ----------
+    summary : Mapping[str, numpy.ndarray]
+        Full grouped parent arrays with documented component axes.
+    site_index : int
+        Nonnegative site axis position fixed for this checkpoint.
+    unit_start, unit_stop : int
+        Half-open unit bounds on the full unit axis.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Read-only copied metric arrays on ``(unit_block, condition, epoch,
+        frequency)``, histogram on ``(unit_block, condition, epoch, band,
+        phase_bin)``, plus int64 ``site_index[1]`` and ``unit_bounds[2]``.
+    """
+    arrays: dict[str, np.ndarray] = {}
+    for name in _SUMMARY_FIELDS:
+        arrays[name] = np.asarray(summary[name][unit_start:unit_stop, :, site_index]).copy()
+    arrays["representative_phase_histogram_count"] = np.asarray(
+        summary["representative_phase_histogram_count"][unit_start:unit_stop, :, site_index]
+    ).copy()
+    arrays["site_index"] = np.asarray([site_index], dtype=np.int64)
+    arrays["unit_bounds"] = np.asarray([unit_start, unit_stop], dtype=np.int64)
+    for values in arrays.values():
+        values.setflags(write=False)
+    return arrays
+
+
+def _grouped_checkpoint_schema(
+    *,
+    unit_count: int,
+    condition_count: int,
+    epoch_count: int,
+    frequency_count: int,
+    representative_band_count: int,
+    phase_bin_count: int,
+) -> dict[str, tuple[np.dtype[object], tuple[int, ...]]]:
+    """Return the exact bounded NPZ schema for one grouped site/unit block.
+
+    Parameters
+    ----------
+    unit_count, condition_count, epoch_count, frequency_count : int
+        Nonnegative/positive block axes in unit, condition, epoch, and Hz
+        frequency order. ``unit_count`` is the half-open block length.
+    representative_band_count, phase_bin_count : int
+        Positive histogram axes. Bins represent radians, while the integers
+        here are dimension counts.
+
+    Returns
+    -------
+    dict[str, tuple[numpy.dtype, tuple[int, ...]]]
+        Exact name-to-``(dtype, shape)`` mapping: all metric fields have
+        ``(unit_block, condition, epoch, frequency)`` axes; the histogram has
+        ``(unit_block, condition, epoch, band, phase_bin)``; identities are
+        compact int64 ``site_index[1]`` and ``unit_bounds[2]`` arrays.
+
+    Raises
+    ------
+    ValueError
+        If a documented axis length is invalid. This helper allocates only a
+        small mapping/tuple description, never a checkpoint member array.
+    """
+    block_units = _checked_ppc_int(unit_count, "checkpoint unit_count", minimum=1)
+    conditions = _checked_ppc_int(
+        condition_count, "checkpoint condition_count", minimum=1
+    )
+    epochs = _checked_ppc_int(epoch_count, "checkpoint epoch_count", minimum=1)
+    frequencies = _checked_ppc_int(
+        frequency_count, "checkpoint frequency_count", minimum=1
+    )
+    bands = _checked_ppc_int(
+        representative_band_count, "checkpoint representative_band_count", minimum=1
+    )
+    bins = _checked_ppc_int(phase_bin_count, "checkpoint phase_bin_count", minimum=1)
+    metric_shape = (block_units, conditions, epochs, frequencies)
+    histogram_shape = metric_shape[:-1] + (bands, bins)
+    return {
+        **{name: (np.dtype(float), metric_shape) for name in _FLOAT_FIELDS},
+        **{name: (np.dtype(np.int64), metric_shape) for name in _INTEGER_FIELDS},
+        **{name: (np.dtype(bool), metric_shape) for name in _BOOLEAN_FIELDS},
+        "representative_phase_histogram_count": (
+            np.dtype(np.int64),
+            histogram_shape,
+        ),
+        "site_index": (np.dtype(np.int64), (1,)),
+        "unit_bounds": (np.dtype(np.int64), (2,)),
+    }
+
+
+def _grouped_checkpoint_schema_bytes(
+    schema: Mapping[str, tuple[np.dtype[object], tuple[int, ...]]],
+) -> int:
+    """Return checked uncompressed numeric bytes for one checkpoint schema.
+
+    Parameters
+    ----------
+    schema : Mapping[str, tuple[numpy.dtype, tuple[int, ...]]]
+        Exact NPZ member declaration for one site/unit block. Each shape axis
+        is a nonnegative Python integer dimension, and all member dtypes are
+        numeric or Boolean.
+
+    Returns
+    -------
+    int
+        Exact nonnegative total element bytes across all declared members.
+        The value is independent of ZIP compression and is suitable for the
+        bounded single-block loader.
+
+    Raises
+    ------
+    ValueError
+        If a schema member dtype is object, an axis is invalid, or checked
+        signed-int64 byte arithmetic overflows.
+    """
+    total_bytes = 0
+    for dtype, shape in schema.values():
+        member_dtype = np.dtype(dtype)
+        if member_dtype.hasobject:
+            raise ValueError("grouped checkpoint schema cannot contain object arrays")
+        element_count = 1
+        for axis, dimension in enumerate(shape):
+            element_count = _checked_ppc_multiply(
+                element_count,
+                _checked_ppc_int(
+                    dimension,
+                    f"checkpoint schema axis {axis}",
+                ),
+            )
+        total_bytes = _checked_ppc_add(
+            total_bytes,
+            _checked_ppc_multiply(element_count, int(member_dtype.itemsize)),
+        )
+    return total_bytes
+
+
+def _merge_grouped_checkpoint(
+    *,
+    summary: dict[str, np.ndarray],
+    arrays: Mapping[str, np.ndarray],
+    site_index: int,
+    unit_start: int,
+    unit_stop: int,
+    condition_count: int,
+    epoch_count: int,
+    frequency_count: int,
+    representative_band_count: int,
+    phase_bin_count: int,
+) -> bool:
+    """Validate and merge one streaming grouped checkpoint into parent arrays.
+
+    Parameters
+    ----------
+    summary : dict[str, numpy.ndarray]
+        Writable full component arrays with documented axes.
+    arrays : Mapping[str, numpy.ndarray]
+        One frozen single-loader block mapping with scalar/compact identities.
+    site_index : int
+        Expected categorical site position.
+    unit_start, unit_stop : int
+        Expected half-open full-unit bounds.
+    condition_count, epoch_count, frequency_count : int
+        Expected block metric axis lengths; frequencies are Hz coordinates.
+    representative_band_count, phase_bin_count : int
+        Expected histogram band/radian-bin axis lengths.
+
+    Returns
+    -------
+    bool
+        ``True`` after exact dtype/shape/identity validation and parent copy;
+        ``False`` when this one block is corrupt or incompatible. It never
+        reads siblings or changes arrays on a rejected block.
+    """
+    expected_keys = set(_SUMMARY_FIELDS) | {
+        "representative_phase_histogram_count", "site_index", "unit_bounds"
+    }
+    block_units = unit_stop - unit_start
+    if set(arrays) != expected_keys:
+        return False
+    site_values = np.asarray(arrays["site_index"])
+    bounds = np.asarray(arrays["unit_bounds"])
+    if (
+        site_values.dtype != np.dtype(np.int64)
+        or site_values.shape != (1,)
+        or int(site_values[0]) != site_index
+        or bounds.dtype != np.dtype(np.int64)
+        or bounds.shape != (2,)
+        or int(bounds[0]) != unit_start
+        or int(bounds[1]) != unit_stop
+    ):
+        return False
+    metric_shape = (block_units, condition_count, epoch_count, frequency_count)
+    histogram_shape = (
+        block_units,
+        condition_count,
+        epoch_count,
+        representative_band_count,
+        phase_bin_count,
+    )
+    for name in _FLOAT_FIELDS:
+        if np.asarray(arrays[name]).dtype != np.dtype(float) or np.asarray(arrays[name]).shape != metric_shape:
+            return False
+    for name in _INTEGER_FIELDS:
+        if np.asarray(arrays[name]).dtype != np.dtype(np.int64) or np.asarray(arrays[name]).shape != metric_shape:
+            return False
+    for name in _BOOLEAN_FIELDS:
+        if np.asarray(arrays[name]).dtype != np.dtype(bool) or np.asarray(arrays[name]).shape != metric_shape:
+            return False
+    histogram = np.asarray(arrays["representative_phase_histogram_count"])
+    if histogram.dtype != np.dtype(np.int64) or histogram.shape != histogram_shape:
+        return False
+    for name in _SUMMARY_FIELDS:
+        summary[name][unit_start:unit_stop, :, site_index] = arrays[name]
+    summary["representative_phase_histogram_count"][unit_start:unit_stop, :, site_index] = histogram
+    return True
+
+
+def _grouped_job_key(job: PPCJobPlan) -> tuple[int, int, int]:
+    """Return the categorical dictionary key for one immutable grouped job.
+
+    Parameters
+    ----------
+    job : PPCJobPlan
+        Validated immutable plan record. Its condition, site, and epoch
+        indices address the component summary axes and have no physical units.
+
+    Returns
+    -------
+    tuple[int, int, int]
+        ``(condition_index, site_index, epoch_index)`` in the component's
+        documented categorical-axis order. The tuple is hashable and contains
+        no source phase, spike, schedule, or physical measurement values.
+    """
+    return job.condition_index, job.site_index, job.epoch_index
+
+
+def _write_grouped_observed_job_in_place(
+    *,
+    observed_trial_statistics: object,
+    job_plan: PPCJobPlan,
+    output_arrays: Mapping[str, np.ndarray],
+) -> None:
+    """Write one job's observed PPC metrics into already-owned summary views.
+
+    Parameters
+    ----------
+    observed_trial_statistics : ObservedTrialSegmentedPPCStatistics
+        Frozen selected-trial sufficient statistics with int64 stable IDs,
+        complex128 sums, int64 counts, and int64 representative histograms on
+        ``(trial, unit, segment=2, frequency)`` / ``(trial, unit, segment=2,
+        band=2, phase_bin)`` axes. Sums are dimensionless; histogram phase
+        coordinates are radians in the record's metadata.
+    job_plan : PPCJobPlan
+        One immutable condition/site/epoch plan. Its ordered int64
+        ``selected_trial_rows`` are stable identities in the statistic record;
+        ``epoch_name`` selects before, after, or the additive whole window.
+    output_arrays : Mapping[str, numpy.ndarray]
+        Writable summary-owned views. Metric fields have ``(unit, frequency)``
+        axes; ``representative_phase_histogram_count`` has
+        ``(unit, band=2, phase_bin)`` axes. PPC/resultant are dimensionless,
+        preferred phase is radians, count fields are spikes/trials, and flags
+        are Boolean.
+
+    Returns
+    -------
+    None
+        Mutates only the supplied summary views. It creates no pooled observed
+        statistic or metric record.
+
+    Raises
+    ------
+    ValueError
+        If statistic, job selection, epoch, or output dtypes/axes do not meet
+        the grouped observed-summary contract.
+
+    Notes
+    -----
+    The output preferred-phase, resultant, and spike-count views temporarily
+    hold real sums, imaginary sums, and counts. Segment/trial scalar loops
+    preserve the legacy aggregate-then-compose arithmetic without retaining
+    an extra full condition record.
+    """
+    import math
+
+    required = {
+        "ppc",
+        "resultant_length",
+        "preferred_phase_rad",
+        "spike_count",
+        "computable",
+        "reliable",
+        "eligible_trial_count",
+        "null_eligible",
+        "representative_phase_histogram_count",
+    }
+    if set(output_arrays) != required:
+        raise ValueError("grouped observed output fields are incomplete")
+    stable_rows = np.asarray(observed_trial_statistics.phase_trial_index)
+    sums = np.asarray(observed_trial_statistics.phase_vector_sum)
+    counts = np.asarray(observed_trial_statistics.valid_spike_count)
+    histograms = np.asarray(observed_trial_statistics.representative_phase_histogram_count)
+    selected_rows = np.asarray(job_plan.selected_trial_rows)
+    if (
+        stable_rows.dtype != np.dtype(np.int64)
+        or stable_rows.ndim != 1
+        or sums.dtype != np.dtype(np.complex128)
+        or counts.dtype != np.dtype(np.int64)
+        or sums.ndim != 4
+        or sums.shape != counts.shape
+        or sums.shape[0] != stable_rows.size
+        or sums.shape[2] != 2
+        or histograms.dtype != np.dtype(np.int64)
+        or histograms.ndim != 5
+        or histograms.shape[:3] != (sums.shape[0], sums.shape[1], 2)
+        or histograms.shape[3] != 2
+        or selected_rows.dtype != np.dtype(np.int64)
+        or selected_rows.ndim != 1
+    ):
+        raise ValueError("grouped observed statistic axes disagree")
+    metric_shape = (sums.shape[1], sums.shape[3])
+    phase_bin_count = histograms.shape[4]
+    ppc = np.asarray(output_arrays["ppc"])
+    resultant = np.asarray(output_arrays["resultant_length"])
+    preferred_phase = np.asarray(output_arrays["preferred_phase_rad"])
+    spike_count = np.asarray(output_arrays["spike_count"])
+    computable = np.asarray(output_arrays["computable"])
+    reliable = np.asarray(output_arrays["reliable"])
+    contributing = np.asarray(output_arrays["eligible_trial_count"])
+    null_eligible = np.asarray(output_arrays["null_eligible"])
+    histogram = np.asarray(output_arrays["representative_phase_histogram_count"])
+    if (
+        ppc.dtype != np.dtype(float)
+        or resultant.dtype != np.dtype(float)
+        or preferred_phase.dtype != np.dtype(float)
+        or spike_count.dtype != np.dtype(np.int64)
+        or computable.dtype != np.dtype(bool)
+        or reliable.dtype != np.dtype(bool)
+        or contributing.dtype != np.dtype(np.int64)
+        or null_eligible.dtype != np.dtype(bool)
+        or any(
+            values.shape != metric_shape
+            for values in (
+                ppc,
+                resultant,
+                preferred_phase,
+                spike_count,
+                computable,
+                reliable,
+                contributing,
+                null_eligible,
+            )
+        )
+        or histogram.dtype != np.dtype(np.int64)
+        or histogram.shape != (metric_shape[0], 2, phase_bin_count)
+    ):
+        raise ValueError("grouped observed summary axes disagree")
+    segments_by_epoch = {
+        "before": (0,),
+        "after": (1,),
+        "whole": (0, 1),
+    }
+    try:
+        segments = segments_by_epoch[job_plan.epoch_name]
+    except KeyError as error:
+        raise ValueError("grouped observed job has an unknown epoch") from error
+    position_by_stable_row = {
+        int(stable_row): position for position, stable_row in enumerate(stable_rows)
+    }
+    selected_positions: list[int] = []
+    for stable_row in selected_rows:
+        try:
+            selected_positions.append(position_by_stable_row[int(stable_row)])
+        except KeyError as error:
+            raise ValueError("grouped observed job selects an unknown stable row") from error
+
+    ppc.fill(math.nan)
+    resultant.fill(0.0)
+    preferred_phase.fill(0.0)
+    spike_count.fill(0)
+    computable.fill(False)
+    reliable.fill(False)
+    contributing.fill(0)
+    null_eligible.fill(False)
+    histogram.fill(0)
+    # Segment-major order first completes all before sums, then adds after
+    # sums for whole jobs, matching the legacy pooled whole-window expression.
+    for segment in segments:
+        for selected_position in selected_positions:
+            trial_sums = sums[selected_position, :, segment]
+            trial_counts = counts[selected_position, :, segment]
+            np.add(preferred_phase, trial_sums.real, out=preferred_phase)
+            np.add(resultant, trial_sums.imag, out=resultant)
+            np.add(spike_count, trial_counts, out=spike_count)
+            np.add(histogram, histograms[selected_position, :, segment], out=histogram)
+    for selected_position in selected_positions:
+        trial_counts = counts[selected_position]
+        for unit_index in range(metric_shape[0]):
+            for frequency_index in range(metric_shape[1]):
+                if job_plan.epoch_name == "whole":
+                    contributes = bool(
+                        int(trial_counts[unit_index, 0, frequency_index]) > 0
+                        or int(trial_counts[unit_index, 1, frequency_index]) > 0
+                    )
+                else:
+                    contributes = bool(
+                        int(
+                            trial_counts[
+                                unit_index,
+                                segments[0],
+                                frequency_index,
+                            ]
+                        )
+                        > 0
+                    )
+                if contributes:
+                    contributing[unit_index, frequency_index] += 1
+    direction_epsilon = np.finfo(float).eps
+    for unit_index in range(metric_shape[0]):
+        for frequency_index in range(metric_shape[1]):
+            count = int(spike_count[unit_index, frequency_index])
+            vector = np.complex128(
+                complex(
+                    float(preferred_phase[unit_index, frequency_index]),
+                    float(resultant[unit_index, frequency_index]),
+                )
+            )
+            magnitude = float(np.abs(vector))
+            if count >= 2:
+                ppc[unit_index, frequency_index] = (
+                    magnitude**2 - count
+                ) / float(count * (count - 1))
+                computable[unit_index, frequency_index] = True
+            if count > 0:
+                resultant[unit_index, frequency_index] = magnitude / float(count)
+                if magnitude > direction_epsilon * max(count, 1):
+                    preferred_phase[unit_index, frequency_index] = float(np.angle(vector))
+                else:
+                    preferred_phase[unit_index, frequency_index] = math.nan
+            else:
+                resultant[unit_index, frequency_index] = math.nan
+                preferred_phase[unit_index, frequency_index] = math.nan
+            reliable[unit_index, frequency_index] = count >= 50
+            null_eligible[unit_index, frequency_index] = bool(
+                reliable[unit_index, frequency_index]
+                and contributing[unit_index, frequency_index] >= 2
+                and math.isfinite(float(ppc[unit_index, frequency_index]))
+            )
+
+
+def _compute_grouped_site_unit_block(
+    *,
+    config: LFPSummaryConfig,
+    prepared_phase: object,
+    prepared_spikes: object,
+    plan: PPCComponentPlan,
+    summary: dict[str, np.ndarray],
+    site_index: int,
+    unit_start: int,
+    unit_stop: int,
+) -> None:
+    """Compute one bounded site/unit grouped block from segmented statistics.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Supplies seconds windows, Hz frequencies, PPC schedules, reliability,
+        and bounded edge/shuffle sizes.
+    prepared_phase, prepared_spikes : production prepared records
+        Full site/frequency/trial/time complex64/Boolean phase and unit/trial
+        relative-second spike inputs. Only one site/unit block is sampled.
+    plan : PPCComponentPlan
+        Immutable site-qualified schedules/edge union. It contains no sampled
+        phase or spike values.
+    summary : dict[str, numpy.ndarray]
+        Writable full output arrays. Only ``site_index`` and ``[unit_start,
+        unit_stop)`` are changed.
+    site_index : int
+        Current categorical site position.
+    unit_start, unit_stop : int
+        Half-open full-unit bounds for this bounded computation.
+    Returns
+    -------
+    None
+        Observed metrics/histograms and scheduled null summaries are copied to
+        the documented output axes. Per-trial observed and per-edge arrays are
+        released before the next execution stage/checkpoint publication.
+    """
+    site_jobs = tuple(job for job in plan.job_plans if job.site_index == site_index)
+    frequencies = np.asarray(config.phase.frequency_hz, dtype=float)
+    stable_rows = np.asarray(prepared_phase.trial_indices, dtype=np.int64)
+    selected_ids = {
+        int(stable_id)
+        for job in site_jobs
+        for stable_id in np.asarray(job.selected_trial_rows)
+    }
+    if not selected_ids:
+        return
+    source_positions = [
+        position
+        for position, stable_id in enumerate(stable_rows)
+        if int(stable_id) in selected_ids
+    ]
+    # Moving the trial axis is a view. S1/S2 index a row at a time and never
+    # gather selected phase/validity arrays into a second full-trial buffer.
+    phase_by_trial = np.moveaxis(
+        np.asarray(prepared_phase.phase_tensor)[site_index], 1, 0
+    )
+    valid_by_trial = np.moveaxis(
+        np.asarray(prepared_phase.phase_valid)[site_index], 1, 0
+    )
+    unit_ids = tuple(prepared_spikes.unit_ids[unit_start:unit_stop])
+    windows = config.analysis_windows
+    segment_bounds = (
+        (float(windows.before_start_s), float(windows.before_stop_s)),
+        (float(windows.after_start_s), float(windows.after_stop_s)),
+    )
+    geometries = tuple(
+        build_source_trial_spike_geometry(
+            phase_time_s=np.asarray(prepared_phase.relative_time_s, dtype=float),
+            phase_sampling_rate_hz=float(config.phase.output_rate_hz),
+            source_trial_index=int(stable_rows[position]),
+            unit_ids=unit_ids,
+            unit_trial_spike_times_s=tuple(
+                np.asarray(
+                    prepared_spikes.trial_spike_trains[unit_index].relative_spike_times[int(position)],
+                    dtype=float,
+                )
+                for unit_index in range(unit_start, unit_stop)
+            ),
+            segment_bounds_s=segment_bounds,
+        )
+        for position in source_positions
+    )
+    observed_trial_statistics = compute_selected_observed_trial_segmented_ppc_statistics(
+        source_trial_geometries=geometries,
+        trial_phase_vectors=phase_by_trial,
+        phase_valid_mask=valid_by_trial,
+        phase_trial_index=stable_rows,
+        frequencies_hz=frequencies,
+        phase_bin_edges_rad=np.asarray(config.ppc.phase_bin_edges_rad, dtype=float),
+    )
+    eligible_by_job: dict[tuple[int, int, int], np.ndarray] = {}
+    for job in site_jobs:
+        output_index = (
+            slice(unit_start, unit_stop),
+            job.condition_index,
+            site_index,
+            job.epoch_index,
+            slice(None),
+        )
+        _write_grouped_observed_job_in_place(
+            observed_trial_statistics=observed_trial_statistics,
+            job_plan=job,
+            output_arrays={
+                name: summary[name][output_index]
+                for name in (
+                    "ppc",
+                    "resultant_length",
+                    "preferred_phase_rad",
+                    "spike_count",
+                    "computable",
+                    "reliable",
+                    "eligible_trial_count",
+                    "null_eligible",
+                )
+            }
+            | {
+                "representative_phase_histogram_count": summary[
+                    "representative_phase_histogram_count"
+                ][
+                    slice(unit_start, unit_stop),
+                    job.condition_index,
+                    site_index,
+                    job.epoch_index,
+                ]
+            },
+        )
+        output_eligibility = summary["null_eligible"][output_index]
+        eligible_by_job[_grouped_job_key(job)] = output_eligibility
+    # No observed-trial statistic arrays remain live while S1 physical edges
+    # are reduced; aggregation above owns its compact condition summaries.
+    del observed_trial_statistics
+
+    for condition_indices in plan.condition_batches[site_index]:
+        _execute_grouped_condition_batch(
+            config=config,
+            plan=plan,
+            summary=summary,
+            site_jobs=site_jobs,
+            condition_indices=condition_indices,
+            source_trial_geometries=geometries,
+            trial_phase_vectors=phase_by_trial,
+            phase_valid_mask=valid_by_trial,
+            phase_trial_index=stable_rows,
+            site_index=site_index,
+            unit_start=unit_start,
+            unit_stop=unit_stop,
+            eligible_by_job=eligible_by_job,
+        )
+
+
+def _execute_grouped_condition_batch(
+    *,
+    config: LFPSummaryConfig,
+    plan: PPCComponentPlan,
+    summary: dict[str, np.ndarray],
+    site_jobs: tuple[PPCJobPlan, ...],
+    condition_indices: tuple[int, ...],
+    source_trial_geometries: tuple[object, ...],
+    trial_phase_vectors: np.ndarray,
+    phase_valid_mask: np.ndarray,
+    phase_trial_index: np.ndarray,
+    site_index: int,
+    unit_start: int,
+    unit_stop: int,
+    eligible_by_job: Mapping[tuple[int, int, int], np.ndarray],
+) -> None:
+    """Execute one site-local ordered condition batch and release its null work.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Validated seconds/Hz PPC configuration. Edge and shuffle blocks bound
+        only the transient work for this condition batch.
+    plan : PPCComponentPlan
+        Immutable component schedules and site-qualified union arrays.
+    summary : dict[str, numpy.ndarray]
+        Writable full parent summary arrays. Only the supplied site/unit rows
+        and batch conditions are changed.
+    site_jobs : tuple[PPCJobPlan, ...]
+        All result jobs for this site in stable condition/epoch order.
+    condition_indices : tuple[int, ...]
+        Nonempty ordered input condition positions for this active batch.
+    source_trial_geometries : tuple[SourceTrialSpikeGeometry, ...]
+        Selected source geometries for this site/unit block. Stable identities
+        select rows from the complete phase views.
+    trial_phase_vectors, phase_valid_mask : numpy.ndarray
+        Complete site-local phase/validity views with axes ``(full_trial,
+        frequency, time)``. Both share prepared input storage.
+    phase_trial_index : numpy.ndarray
+        Int64 ``(full_trial,)`` stable identities matching the phase first axis.
+    site_index : int
+        Fixed categorical site position.
+    unit_start, unit_stop : int
+        Half-open full unit-axis bounds for the block.
+    eligible_by_job : Mapping[tuple[int, int, int], numpy.ndarray]
+        Summary-owned Boolean ``(unit_block, frequency)`` null eligibility
+        views keyed by condition/site/epoch identity.
+
+    Returns
+    -------
+    None
+        Consumes every needed physical edge once per bounded union slice and
+        finalizes one batch's accumulators. Accumulator/count/draw arrays are
+        unreachable before the next batch begins.
+    """
+    active_jobs = tuple(
+        job
+        for job in site_jobs
+        if (
+            job.condition_index in condition_indices
+            and job.schedule.size
+            and bool(np.any(eligible_by_job[_grouped_job_key(job)]))
+        )
+    )
+    if not active_jobs:
+        return
+    frequency_count = trial_phase_vectors.shape[1]
+    accumulators: dict[tuple[int, int, int], tuple[np.ndarray, np.ndarray]] = {}
+    for job in active_jobs:
+        shape = (job.schedule.shape[0], unit_stop - unit_start, frequency_count)
+        accumulators[_grouped_job_key(job)] = (
+            np.zeros(shape, dtype=np.complex128),
+            np.zeros(shape, dtype=np.int64),
+        )
+    batch_positions = tuple(
+        int(position)
+        for job in site_jobs
+        if job.condition_index in condition_indices
+        for position in job.edge_union_position.ravel()
+    )
+    planned_edge_groups = _fixed_edge_position_groups(
+        positions=batch_positions,
+        maximum_group_size=config.ppc_execution.trial_edge_block_size,
+    )
+    active_positions = {
+        int(position)
+        for job in active_jobs
+        for position in job.edge_union_position.ravel()
+    }
+    for planned_group in planned_edge_groups:
+        # Allocation is based on this whole fixed group.  Filtering happens
+        # only afterwards, so discarded inactive edges cannot shift two costly
+        # active edges into a newly unplanned kernel reduction.
+        active_group = tuple(
+            position for position in planned_group if position in active_positions
+        )
+        active_cursor = 0
+        while active_cursor < len(active_group):
+            edge_start = active_group[active_cursor]
+            edge_stop = edge_start + 1
+            active_cursor += 1
+            while (
+                active_cursor < len(active_group)
+                and active_group[active_cursor] == edge_stop
+            ):
+                edge_stop += 1
+                active_cursor += 1
+            edge_statistics = compute_segmented_edge_statistics(
+                source_trial_geometries=source_trial_geometries,
+                trial_phase_vectors=trial_phase_vectors,
+                phase_valid_mask=phase_valid_mask,
+                phase_trial_index=phase_trial_index,
+                frequencies_hz=np.asarray(config.phase.frequency_hz, dtype=float),
+                source_trial_index=plan.stable_edge_source_trial_row[edge_start:edge_stop],
+                target_trial_index=plan.stable_edge_target_trial_row[edge_start:edge_stop],
+            )
+            edge_identities = {
+                (int(source), int(target))
+                for source, target in zip(
+                    plan.stable_edge_source_trial_row[edge_start:edge_stop],
+                    plan.stable_edge_target_trial_row[edge_start:edge_stop],
+                    strict=True,
+                )
+            }
+            for job in active_jobs:
+                # A condition job should consume only the physical edges it
+                # actually schedules. Apart from avoiding needless scalar
+                # work, this keeps whole-window consumption tied to retained
+                # before/after sufficient statistics.
+                if not any(
+                    edge_start <= int(position) < edge_stop
+                    for position in job.edge_union_position.ravel()
+                ):
+                    continue
+                vector_sum, valid_count = accumulators[_grouped_job_key(job)]
+                eligibility = eligible_by_job[_grouped_job_key(job)]
+                for shuffle_start in range(
+                    0, job.schedule.shape[0], config.ppc_execution.shuffle_block_size
+                ):
+                    shuffle_stop = min(
+                        shuffle_start + config.ppc_execution.shuffle_block_size,
+                        job.schedule.shape[0],
+                    )
+                    schedule_block = job.schedule[shuffle_start:shuffle_stop]
+                    # Do not invoke the immediate consumer for a schedule
+                    # chunk that cannot use this physical edge block. This is
+                    # scalar membership testing, not a retained edge map.
+                    if not any(
+                        (
+                            int(job.selected_trial_rows[source_position]),
+                            int(job.selected_trial_rows[int(target_position)]),
+                        )
+                        in edge_identities
+                        for schedule_row in schedule_block
+                        for source_position, target_position in enumerate(schedule_row)
+                    ):
+                        continue
+                    _consume_grouped_edge_block(
+                        edge_statistics=edge_statistics,
+                        job_plan=job,
+                        schedule_block=schedule_block,
+                        shuffle_start=shuffle_start,
+                        vector_sum=vector_sum,
+                        valid_count=valid_count,
+                        eligible_cell_mask=eligibility,
+                    )
+            del edge_statistics
+    for job in active_jobs:
+        vector_sum, valid_count = accumulators.pop(_grouped_job_key(job))
+        draw_scratch = np.empty(vector_sum.shape, dtype=float)
+        output_index = (
+            slice(unit_start, unit_stop),
+            job.condition_index,
+            site_index,
+            job.epoch_index,
+            slice(None),
+        )
+        _finalize_grouped_null_job(
+            job_plan=job,
+            vector_sum=vector_sum,
+            valid_count=valid_count,
+            draw_scratch=draw_scratch,
+            eligible_cell_mask=eligible_by_job[_grouped_job_key(job)],
+            observed_ppc=summary["ppc"][output_index],
+            output_arrays={
+                name: summary[name][output_index]
+                for name in (
+                    "null_exceedance_count",
+                    "permutation_count",
+                    "p_value",
+                    "null_mean",
+                    "null_std",
+                    "null_p025",
+                    "null_p50",
+                    "null_p975",
+                    "null_eligible",
+                )
+            },
+        )
+        del vector_sum, valid_count, draw_scratch
+
+
+def _consume_grouped_edge_block(
+    *,
+    edge_statistics: object,
+    job_plan: PPCJobPlan,
+    schedule_block: np.ndarray,
+    shuffle_start: int,
+    vector_sum: np.ndarray,
+    valid_count: np.ndarray,
+    eligible_cell_mask: np.ndarray,
+) -> None:
+    """Immediately accumulate one physical-edge block into one job's draws.
+
+    Parameters
+    ----------
+    edge_statistics : SegmentedEdgeStatistics
+        Bounded unique physical edge sums/counts on ``(edge, unit, segment=2,
+        frequency)`` axes. It is consumed before the next edge reduction.
+    job_plan : PPCJobPlan
+        One immutable local schedule and stable source/target edge mapping.
+    schedule_block : numpy.ndarray
+        Int64 ``(shuffle_block, selected_trial)`` contiguous local schedule
+        rows. Its first global row is ``shuffle_start``.
+    shuffle_start : int
+        Nonnegative global shuffle-row offset into ``vector_sum`` and
+        ``valid_count``.
+    vector_sum : numpy.ndarray
+        Complex128 ``(shuffle, unit, frequency)`` retained null accumulator.
+    valid_count : numpy.ndarray
+        Int64 array matching ``vector_sum`` of valid spike-phase counts.
+    eligible_cell_mask : numpy.ndarray
+        Summary-owned Boolean ``(unit, frequency)`` null-inference eligibility
+        view. False cells are never accumulated and remain zero in both
+        retained accumulator arrays.
+
+    Returns
+    -------
+    None
+        Adds only edges present in this bounded statistic block. Whole jobs add
+        before and after segments before PPC calculation; half jobs use their
+        named segment only.
+    """
+    edge_by_identity = {
+        (int(source), int(target)): index
+        for index, (source, target) in enumerate(
+            zip(
+                edge_statistics.source_trial_index,
+                edge_statistics.target_trial_index,
+                strict=True,
+            )
+        )
+    }
+    segment = {"before": 0, "after": 1, "whole": None}[job_plan.epoch_name]
+    eligibility = np.asarray(eligible_cell_mask)
+    if (
+        eligibility.dtype != np.dtype(bool)
+        or eligibility.shape != vector_sum.shape[1:]
+        or valid_count.shape != vector_sum.shape
+    ):
+        raise ValueError("grouped null eligibility/accumulator axes disagree")
+    for local_shuffle, global_targets in enumerate(np.asarray(schedule_block)):
+        global_shuffle = shuffle_start + local_shuffle
+        for source_position, target_position in enumerate(global_targets):
+            source = int(job_plan.selected_trial_rows[source_position])
+            target = int(job_plan.selected_trial_rows[int(target_position)])
+            edge_index = edge_by_identity.get((source, target))
+            if edge_index is None:
+                continue
+            for unit_index in range(eligibility.shape[0]):
+                for frequency_index in range(eligibility.shape[1]):
+                    if not bool(eligibility[unit_index, frequency_index]):
+                        continue
+                    vector_output = vector_sum[
+                        global_shuffle,
+                        unit_index : unit_index + 1,
+                        frequency_index : frequency_index + 1,
+                    ]
+                    count_output = valid_count[
+                        global_shuffle,
+                        unit_index : unit_index + 1,
+                        frequency_index : frequency_index + 1,
+                    ]
+                    if segment is None:
+                        # These four explicit retained-output additions are the
+                        # whole-window memory contract: no segment-axis sum and
+                        # no transient ``before + after`` array is created.
+                        np.add(
+                            vector_output,
+                            edge_statistics.phase_vector_sum[
+                                edge_index,
+                                unit_index : unit_index + 1,
+                                0,
+                                frequency_index : frequency_index + 1,
+                            ],
+                            out=vector_output,
+                        )
+                        np.add(
+                            vector_output,
+                            edge_statistics.phase_vector_sum[
+                                edge_index,
+                                unit_index : unit_index + 1,
+                                1,
+                                frequency_index : frequency_index + 1,
+                            ],
+                            out=vector_output,
+                        )
+                        np.add(
+                            count_output,
+                            edge_statistics.valid_spike_count[
+                                edge_index,
+                                unit_index : unit_index + 1,
+                                0,
+                                frequency_index : frequency_index + 1,
+                            ],
+                            out=count_output,
+                        )
+                        np.add(
+                            count_output,
+                            edge_statistics.valid_spike_count[
+                                edge_index,
+                                unit_index : unit_index + 1,
+                                1,
+                                frequency_index : frequency_index + 1,
+                            ],
+                            out=count_output,
+                        )
+                    else:
+                        np.add(
+                            vector_output,
+                            edge_statistics.phase_vector_sum[
+                                edge_index,
+                                unit_index : unit_index + 1,
+                                segment,
+                                frequency_index : frequency_index + 1,
+                            ],
+                            out=vector_output,
+                        )
+                        np.add(
+                            count_output,
+                            edge_statistics.valid_spike_count[
+                                edge_index,
+                                unit_index : unit_index + 1,
+                                segment,
+                                frequency_index : frequency_index + 1,
+                            ],
+                            out=count_output,
+                        )
+
+
+def _finalize_grouped_null_job(
+    *,
+    job_plan: PPCJobPlan,
+    vector_sum: np.ndarray,
+    valid_count: np.ndarray,
+    draw_scratch: np.ndarray,
+    eligible_cell_mask: np.ndarray,
+    observed_ppc: np.ndarray,
+    output_arrays: Mapping[str, np.ndarray],
+) -> None:
+    """Finalize one job's bounded null accumulators without retaining draw copies.
+
+    Parameters
+    ----------
+    job_plan : PPCJobPlan
+        Immutable condition/site/epoch identity for the accumulated schedule.
+    vector_sum : numpy.ndarray
+        Complex128 ``(shuffle, unit, frequency)`` accumulated phase vectors.
+    valid_count : numpy.ndarray
+        Int64 array matching ``vector_sum`` of valid sampled phase counts.
+    draw_scratch : numpy.ndarray
+        Float64 writable array matching ``vector_sum``. It is the sole
+        additional full-shuffle workspace beyond the required vector/count
+        accumulators; each cell is compacted and sorted in place.
+    eligible_cell_mask : numpy.ndarray
+        Summary-owned Boolean ``(unit, frequency)`` null eligibility view.
+    observed_ppc : numpy.ndarray
+        Float64 ``(unit, frequency)`` observed PPC values.
+    output_arrays : Mapping[str, numpy.ndarray]
+        Writable summary views with ``(unit, frequency)`` axes for exact
+        null counts, p values, moments, linear percentiles, and eligibility.
+
+    Returns
+    -------
+    None
+        Writes plus-one p values, finite-draw population moments (``ddof=0``),
+        and NumPy-compatible linear 2.5/50/97.5 percentiles. Ineligible cells
+        retain zero counts, false flags, and NaN floating values.
+
+    Raises
+    ------
+    ValueError
+        If private accumulator/scratch/output axes or dtypes disagree.
+
+    Notes
+    -----
+    No legacy null summarizer, copied/concatenated draw matrix, top-level
+    sort/partition, or percentile helper is used. Each one-dimensional scratch
+    view is sorted with its ndarray in-place method after finite values have
+    been compacted into its prefix.
+    """
+    import math
+
+    del job_plan  # Identity is carried by the caller's output view selection.
+    sums = np.asarray(vector_sum)
+    counts = np.asarray(valid_count)
+    scratch = np.asarray(draw_scratch)
+    eligibility = np.asarray(eligible_cell_mask)
+    observed = np.asarray(observed_ppc)
+    required = {
+        "null_exceedance_count",
+        "permutation_count",
+        "p_value",
+        "null_mean",
+        "null_std",
+        "null_p025",
+        "null_p50",
+        "null_p975",
+        "null_eligible",
+    }
+    output_dtypes = {
+        "null_exceedance_count": np.dtype(np.int64),
+        "permutation_count": np.dtype(np.int64),
+        "p_value": np.dtype(np.float64),
+        "null_mean": np.dtype(np.float64),
+        "null_std": np.dtype(np.float64),
+        "null_p025": np.dtype(np.float64),
+        "null_p50": np.dtype(np.float64),
+        "null_p975": np.dtype(np.float64),
+        "null_eligible": np.dtype(bool),
+    }
+    if set(output_arrays) != required:
+        raise ValueError("grouped null finalization output fields disagree")
+    output_views = {name: np.asarray(values) for name, values in output_arrays.items()}
+    if (
+        sums.ndim != 3
+        or sums.dtype != np.dtype(np.complex128)
+        or counts.dtype != np.dtype(np.int64)
+        or scratch.dtype != np.dtype(np.float64)
+        or sums.shape != counts.shape
+        or sums.shape != scratch.shape
+        or eligibility.dtype != np.dtype(bool)
+        or eligibility.shape != sums.shape[1:]
+        or observed.dtype != np.dtype(np.float64)
+        or observed.shape != sums.shape[1:]
+        or any(
+            output_views[name].dtype != output_dtypes[name]
+            or output_views[name].shape != sums.shape[1:]
+            for name in required
+        )
+    ):
+        raise ValueError("grouped null finalization axes disagree")
+
+    def linear_percentile(sorted_values: np.ndarray, count: int, quantile: float) -> float:
+        """Return one linear percentile from an in-place sorted finite prefix."""
+        position = (count - 1) * quantile
+        lower = int(math.floor(position))
+        upper = int(math.ceil(position))
+        if lower == upper:
+            return float(sorted_values[lower])
+        fraction = position - lower
+        return float(
+            sorted_values[lower]
+            + fraction * (sorted_values[upper] - sorted_values[lower])
+        )
+
+    for unit_index in range(sums.shape[1]):
+        for frequency_index in range(sums.shape[2]):
+            values = scratch[:, unit_index, frequency_index]
+            if not bool(eligibility[unit_index, frequency_index]):
+                for shuffle_index in range(values.size):
+                    values[shuffle_index] = math.nan
+                continue
+            finite_count = 0
+            exceedance_count = 0
+            observed_value = float(observed[unit_index, frequency_index])
+            for shuffle_index in range(values.size):
+                count = int(counts[shuffle_index, unit_index, frequency_index])
+                if count < 2:
+                    values[shuffle_index] = math.nan
+                    continue
+                vector = sums[shuffle_index, unit_index, frequency_index]
+                value = (
+                    float(vector.real * vector.real + vector.imag * vector.imag) - count
+                ) / float(count * (count - 1))
+                values[shuffle_index] = value
+                if math.isfinite(value):
+                    values[finite_count] = value
+                    finite_count += 1
+                    if value >= observed_value:
+                        exceedance_count += 1
+            for shuffle_index in range(finite_count, values.size):
+                values[shuffle_index] = math.nan
+            if finite_count == 0 or not math.isfinite(observed_value):
+                output_arrays["null_eligible"][unit_index, frequency_index] = False
+                continue
+            values[:finite_count].sort()
+            # ndarray reductions preserve the legacy NumPy pairwise floating
+            # arithmetic while operating on the existing compact scratch
+            # prefix; neither produces a retained shuffle-draw copy.
+            mean = float(values[:finite_count].mean())
+            standard_deviation = float(values[:finite_count].std())
+            output_arrays["null_exceedance_count"][unit_index, frequency_index] = exceedance_count
+            output_arrays["permutation_count"][unit_index, frequency_index] = finite_count
+            output_arrays["p_value"][unit_index, frequency_index] = (
+                (1.0 + exceedance_count) / (1.0 + finite_count)
+            )
+            output_arrays["null_mean"][unit_index, frequency_index] = mean
+            output_arrays["null_std"][unit_index, frequency_index] = standard_deviation
+            output_arrays["null_p025"][unit_index, frequency_index] = linear_percentile(
+                values, finite_count, 0.025
+            )
+            output_arrays["null_p50"][unit_index, frequency_index] = linear_percentile(
+                values, finite_count, 0.5
+            )
+            output_arrays["null_p975"][unit_index, frequency_index] = linear_percentile(
+                values, finite_count, 0.975
+            )
+            output_arrays["null_eligible"][unit_index, frequency_index] = True
+
+
+def _apply_grouped_bh_block(
+    *,
+    summary: dict[str, np.ndarray],
+    site_index: int,
+    unit_start: int,
+    unit_stop: int,
+    alpha: float,
+) -> None:
+    """Apply exact per-job frequency BH correction for one site/unit block.
+
+    Parameters
+    ----------
+    summary : dict[str, numpy.ndarray]
+        Writable full grouped arrays with five metric axes.
+    site_index : int
+        Fixed categorical site position for this block.
+    unit_start, unit_stop : int
+        Half-open full-unit bounds.
+    alpha : float
+        Dimensionless FDR significance threshold in ``[0, 1]``.
+
+    Returns
+    -------
+    None
+        Writes float64 q values and Boolean significant flags for this block;
+        unavailable/ineligible entries stay NaN/false.
+    """
+    p_values = summary["p_value"][unit_start:unit_stop, :, site_index]
+    eligibility = summary["null_eligible"][unit_start:unit_stop, :, site_index]
+    q_values = spike_lfp_summary.adjust_ppc_pvalues_bh(
+        p_value=p_values[:, :, None, :, :],
+        null_eligible=eligibility[:, :, None, :, :],
+    )[:, :, 0]
+    summary["q_value"][unit_start:unit_stop, :, site_index] = q_values
+    summary["significant"][unit_start:unit_stop, :, site_index] = (
+        eligibility & (q_values <= alpha)
     )
 
 
@@ -2938,13 +5023,46 @@ def _atomic_json(path: Path, value: Mapping[str, object]) -> None:
 
 
 def _array_fingerprint(*arrays: np.ndarray) -> str:
-    """Hash dtype, shape, and bytes for exact numerical work-input identity."""
+    """Hash exact dtype/shape/C-order content without allocating full copies.
+
+    Parameters
+    ----------
+    *arrays : numpy.ndarray
+        Production numeric or Boolean arrays with fixed non-object dtypes.
+        Their dtype, shape, and logical C-order bytes define one work-input
+        identity. Axes and units are caller-defined.
+
+    Returns
+    -------
+    str
+        SHA-256 hexadecimal digest over supplied arrays in order. Noncontiguous
+        inputs hash exactly as their logical C-order copies would hash.
+
+    Notes
+    -----
+    NumPy 2.4's buffered ``nditer`` with ``order="C"`` exposes bounded
+    C-order chunks for contiguous and noncontiguous arrays. Each temporary byte
+    payload here is at most 64 KiB; this helper never materializes a whole-array
+    contiguous copy or one whole-array byte string.
+    """
+    chunk_bytes = 64 * 1024
     digest = sha256()
     for array in arrays:
-        value = np.ascontiguousarray(array)
+        value = np.asarray(array)
         digest.update(str(value.dtype).encode("ascii"))
         digest.update(repr(value.shape).encode("ascii"))
-        digest.update(value.tobytes())
+        if value.size == 0:
+            continue
+        chunk_elements = max(1, chunk_bytes // max(1, value.dtype.itemsize))
+        iterator = np.nditer(
+            value,
+            flags=("external_loop", "buffered", "zerosize_ok", "refs_ok"),
+            op_flags=("readonly",),
+            order="C",
+            buffersize=chunk_elements,
+        )
+        for chunk in iterator:
+            digest.update(chunk.tobytes(order="C"))
     return digest.hexdigest()
 
 

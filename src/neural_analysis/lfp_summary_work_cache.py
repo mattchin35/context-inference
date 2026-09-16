@@ -15,6 +15,7 @@ import socket
 import stat
 import uuid
 from typing import Callable, Mapping
+import zipfile
 
 import numpy as np
 
@@ -278,6 +279,8 @@ def write_ppc_checkpoint(
     block_id: str,
     arrays: Mapping[str, np.ndarray],
     metadata: Mapping[str, object],
+    *,
+    copy_arrays: bool = True,
 ) -> Path:
     """Atomically write one validated PPC checkpoint and completion marker.
 
@@ -293,6 +296,12 @@ def write_ppc_checkpoint(
         metadata and no pickle-bearing array is accepted.
     metadata : Mapping[str, object]
         Complete JSON-safe run metadata containing at least ``run_fingerprint``.
+    copy_arrays : bool, default=True
+        ``True`` defensively copies every accepted input before publication,
+        preserving the established public writer behavior. ``False`` transfers
+        already-owned read-only non-object arrays directly to the synchronous
+        NPZ publication path. It is intended only for a bounded parent-owned
+        checkpoint block and never permits a writable input array.
 
     Returns
     -------
@@ -305,9 +314,11 @@ def write_ppc_checkpoint(
         For unsafe identities/arrays, concurrent writers, or I/O failure. No
         partial block is returned as valid.
     """
+    if not isinstance(copy_arrays, bool):
+        raise ValueError("copy_arrays must be Boolean")
     normalized_metadata = _checkpoint_metadata(run_directory, metadata)
     safe_block_id = _safe_block_id(block_id)
-    normalized_arrays = _checkpoint_arrays(arrays)
+    normalized_arrays = _checkpoint_arrays(arrays, copy_arrays=copy_arrays)
     directory = Path(run_directory)
     directory.mkdir(parents=True, exist_ok=True)
     lock_path = _acquire_lock(
@@ -330,6 +341,93 @@ def write_ppc_checkpoint(
     finally:
         _release_lock(lock_path)
     return directory / "blocks" / f"{safe_block_id}.npz"
+
+
+def load_valid_ppc_checkpoint(
+    run_directory: Path,
+    block_id: str,
+    expected_metadata: Mapping[str, object],
+    *,
+    expected_array_schema: Mapping[str, tuple[np.dtype[object], tuple[int, ...]]] | None = None,
+    maximum_array_bytes: int | None = None,
+) -> PPCCheckpoint | None:
+    """Load one exact completed PPC block without opening its siblings.
+
+    Parameters
+    ----------
+    run_directory : pathlib.Path
+        Exact ``ppc/<run_fingerprint>`` work directory.
+    block_id : str
+        Safe nonempty filename token for the single requested block.
+    expected_metadata : Mapping[str, object]
+        Exact JSON-safe run metadata. Its ``run_fingerprint`` must equal the
+        directory name and stored run metadata.
+    expected_array_schema : Mapping[str, tuple[numpy.dtype, tuple[int, ...]]] or None, default=None
+        Optional exact key-to-``(dtype, shape)`` schema for a bounded caller.
+        When supplied, ZIP/NPY headers are validated before NumPy is permitted
+        to materialize any member array.
+    maximum_array_bytes : int or None, default=None
+        Optional nonnegative maximum total numeric member bytes for
+        ``expected_array_schema``. It is compared to declared uncompressed NPY
+        element bytes, not ZIP compressed bytes.
+
+    Returns
+    -------
+    PPCCheckpoint or None
+        One owned frozen numeric/Boolean array mapping when its run metadata,
+        completion marker, and NPZ all match exactly; otherwise ``None``. The
+        result contains no arrays from any sibling checkpoint.
+
+    Notes
+    -----
+    NPZ members are read with ``allow_pickle=False`` and frozen in place after
+    loading. NumPy creates each member as its own loaded array, so this avoids
+    a redundant second full-block copy while keeping the returned checkpoint
+    independent of its source file and caller arrays.
+    """
+    try:
+        expected = _checkpoint_metadata(run_directory, expected_metadata)
+        safe_block_id = _safe_block_id(block_id)
+        directory = Path(run_directory)
+        if _load_json(directory / "metadata.json") != expected:
+            return None
+        marker = _load_json(directory / "blocks" / f"{safe_block_id}.complete.json")
+        if marker != {
+            "block_id": safe_block_id,
+            "run_fingerprint": expected["run_fingerprint"],
+        }:
+            return None
+        npz_path = directory / "blocks" / f"{safe_block_id}.npz"
+        if not npz_path.is_file():
+            return None
+        if not _checkpoint_npz_headers_match(
+            npz_path,
+            expected_array_schema=expected_array_schema,
+            maximum_array_bytes=maximum_array_bytes,
+        ):
+            return None
+        with np.load(npz_path, allow_pickle=False) as loaded:
+            arrays = {name: loaded[name] for name in loaded.files}
+        for value in arrays.values():
+            array = np.asarray(value)
+            if array.dtype.hasobject:
+                return None
+            array.setflags(write=False)
+        frozen = _checkpoint_arrays(arrays, copy_arrays=False)
+        return PPCCheckpoint(directory, safe_block_id, frozen, expected)
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        UnicodeDecodeError,
+        EOFError,
+        RuntimeError,
+        NotImplementedError,
+        json.JSONDecodeError,
+        zipfile.BadZipFile,
+    ):
+        return None
 
 
 def load_valid_ppc_checkpoints(
@@ -360,16 +458,18 @@ def load_valid_ppc_checkpoints(
         for marker_path in sorted((directory / "blocks").glob("*.complete.json")):
             marker = _load_json(marker_path)
             block_id = _safe_block_id(str(marker.get("block_id", "")))
-            if marker != {"block_id": block_id, "run_fingerprint": expected["run_fingerprint"]}:
-                continue
-            npz_path = directory / "blocks" / f"{block_id}.npz"
-            if not npz_path.is_file():
-                continue
-            with np.load(npz_path, allow_pickle=False) as loaded:
-                arrays = {name: loaded[name].copy() for name in loaded.files}
-            checkpoints.append(PPCCheckpoint(directory, block_id, _checkpoint_arrays(arrays), expected))
+            checkpoint = load_valid_ppc_checkpoint(directory, block_id, expected)
+            if checkpoint is not None:
+                checkpoints.append(checkpoint)
         return tuple(checkpoints)
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ):
         return ()
 
 
@@ -509,8 +609,37 @@ def _checkpoint_metadata(run_directory: Path, metadata: Mapping[str, object]) ->
     return value
 
 
-def _checkpoint_arrays(arrays: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
-    """Validate/copy safe checkpoint arrays without changing named axes or units."""
+def _checkpoint_arrays(
+    arrays: Mapping[str, np.ndarray],
+    *,
+    copy_arrays: bool = True,
+) -> dict[str, np.ndarray]:
+    """Validate checkpoint arrays and optionally retain their existing storage.
+
+    Parameters
+    ----------
+    arrays : Mapping[str, numpy.ndarray]
+        Nonempty named numeric/Boolean arrays with caller-defined documented
+        axes and units. Object dtype is never accepted.
+    copy_arrays : bool, default=True
+        ``True`` returns defensive writable copies for public writer inputs.
+        ``False`` requires every supplied array to be read-only and returns
+        the exact same ndarray objects for synchronous ownership transfer.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Validated named arrays. In no-copy mode each value is identical to the
+        matching supplied ndarray.
+
+    Raises
+    ------
+    ValueError
+        If arrays are empty, names are invalid, an array is object dtype, the
+        mode is not Boolean, or no-copy input is writable.
+    """
+    if not isinstance(copy_arrays, bool):
+        raise ValueError("copy_arrays must be Boolean")
     if not arrays:
         raise ValueError("checkpoint arrays must be nonempty")
     copied: dict[str, np.ndarray] = {}
@@ -520,8 +649,118 @@ def _checkpoint_arrays(arrays: Mapping[str, np.ndarray]) -> dict[str, np.ndarray
         array = np.asarray(value)
         if array.dtype.hasobject:
             raise ValueError("checkpoint arrays cannot contain pickle-bearing objects")
-        copied[name] = array.copy()
+        if not copy_arrays and array.flags.writeable:
+            raise ValueError("copy_arrays=False requires read-only checkpoint arrays")
+        copied[name] = array.copy() if copy_arrays else array
     return copied
+
+
+def _checkpoint_npz_headers_match(
+    npz_path: Path,
+    *,
+    expected_array_schema: Mapping[str, tuple[np.dtype[object], tuple[int, ...]]] | None,
+    maximum_array_bytes: int | None,
+) -> bool:
+    """Validate optional exact NPZ member headers before member materialization.
+
+    Parameters
+    ----------
+    npz_path : pathlib.Path
+        Existing single checkpoint ZIP archive containing only ``.npy``
+        members. The archive is read only through ZIP streams in this helper.
+    expected_array_schema : mapping or None
+        Optional exact mapping from array key to a NumPy dtype and tuple of
+        nonnegative axis lengths. ``None`` preserves legacy loader behavior.
+    maximum_array_bytes : int or None
+        Optional nonnegative upper bound in uncompressed numeric element bytes
+        across all declared members. It is only meaningful with a schema.
+
+    Returns
+    -------
+    bool
+        ``True`` for legacy no-schema loads, or when the archive has exactly
+        the declared non-object numeric keys/dtypes/shapes within the byte
+        bound. ``False`` rejects a malformed or oversized archive before
+        ``numpy.load`` can request a member.
+
+    Raises
+    ------
+    ValueError
+        If optional schema/byte-bound arguments are malformed. Archive format
+        errors are allowed to propagate to the public loader's safe rejection
+        boundary.
+    """
+    if expected_array_schema is None:
+        if maximum_array_bytes is not None:
+            raise ValueError("maximum_array_bytes requires expected_array_schema")
+        return True
+    if not isinstance(expected_array_schema, Mapping) or not expected_array_schema:
+        raise ValueError("expected_array_schema must be a nonempty mapping")
+    if (
+        maximum_array_bytes is None
+        or isinstance(maximum_array_bytes, (bool, np.bool_))
+        or not isinstance(maximum_array_bytes, (int, np.integer))
+        or int(maximum_array_bytes) < 0
+    ):
+        raise ValueError("maximum_array_bytes must be a nonnegative integer")
+
+    normalized_schema: dict[str, tuple[np.dtype[object], tuple[int, ...]]] = {}
+    for name, value in expected_array_schema.items():
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(value, tuple)
+            or len(value) != 2
+            or not isinstance(value[1], tuple)
+        ):
+            raise ValueError("expected_array_schema must map names to (dtype, shape) tuples")
+        dtype = np.dtype(value[0])
+        shape = value[1]
+        if dtype.hasobject or any(
+            isinstance(length, (bool, np.bool_))
+            or not isinstance(length, (int, np.integer))
+            or int(length) < 0
+            for length in shape
+        ):
+            raise ValueError("expected checkpoint schema must have numeric dtype and nonnegative shape")
+        normalized_schema[name] = (dtype, tuple(int(length) for length in shape))
+
+    with zipfile.ZipFile(npz_path, "r") as archive:
+        infos = [info for info in archive.infolist() if not info.is_dir()]
+        archive_keys: list[str] = []
+        for info in infos:
+            if not info.filename.endswith(".npy") or "/" in info.filename:
+                return False
+            archive_keys.append(info.filename[:-4])
+        if len(archive_keys) != len(set(archive_keys)) or set(archive_keys) != set(normalized_schema):
+            return False
+        total_bytes = 0
+        for name, (expected_dtype, expected_shape) in normalized_schema.items():
+            with archive.open(f"{name}.npy", "r") as member:
+                version = np.lib.format.read_magic(member)
+                if version == (1, 0):
+                    shape, fortran_order, dtype = np.lib.format.read_array_header_1_0(member)
+                elif version in {(2, 0), (3, 0)}:
+                    shape, fortran_order, dtype = np.lib.format.read_array_header_2_0(member)
+                else:
+                    return False
+            if (
+                bool(fortran_order)
+                or np.dtype(dtype) != expected_dtype
+                or tuple(int(length) for length in shape) != expected_shape
+                or np.dtype(dtype).hasobject
+            ):
+                return False
+            element_count = 1
+            for length in expected_shape:
+                if length and element_count > np.iinfo(np.int64).max // length:
+                    return False
+                element_count *= length
+            member_bytes = element_count * expected_dtype.itemsize
+            if member_bytes > int(maximum_array_bytes) - total_bytes:
+                return False
+            total_bytes += member_bytes
+    return True
 
 
 def _safe_block_id(block_id: str) -> str:

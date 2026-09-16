@@ -1207,53 +1207,75 @@ def build_source_trial_spike_geometry(
         raise ValueError("unit ids and source-trial spike arrays must have matching lengths")
     bounds = _validated_segment_bounds(segment_bounds_s)
 
-    grouped_spikes: list[np.ndarray] = []
+    spike_vectors = tuple(
+        _finite_float64_vector(spike_values, "unit_trial_spike_times_s")
+        for spike_values in unit_trial_spike_times_s
+    )
     offsets = [0]
-    for spike_values in unit_trial_spike_times_s:
-        spikes = _finite_float64_vector(spike_values, "unit_trial_spike_times_s")
-        before = spikes[(spikes >= bounds[0, 0]) & (spikes < bounds[0, 1])]
-        grouped_spikes.append(before)
-        offsets.append(offsets[-1] + before.size)
-        after = spikes[(spikes >= bounds[1, 0]) & (spikes < bounds[1, 1])]
-        grouped_spikes.append(after)
-        offsets.append(offsets[-1] + after.size)
-    if grouped_spikes:
-        flattened_spikes = np.concatenate(grouped_spikes)
-    else:
-        flattened_spikes = np.empty(0, dtype=np.float64)
+    for spikes in spike_vectors:
+        for segment_index in range(2):
+            lower = bounds[segment_index, 0]
+            upper = bounds[segment_index, 1]
+            count = 0
+            for raw_spike in spikes:
+                spike = float(raw_spike)
+                if lower <= spike < upper:
+                    count += 1
+            offsets.append(offsets[-1] + count)
 
-    spike_count = flattened_spikes.size
-    # This is the only neighbor search.  Reduction consumes these stored indices.
+    spike_count = offsets[-1]
+    # Retain one flat scalar-filled staging vector only long enough for the
+    # single vectorized neighbor search. Final geometry arrays are filled
+    # directly below, avoiding full Boolean/fancy-index selection staging.
+    flattened_spikes = np.empty(spike_count, dtype=np.float64)
+    write_index = 0
+    for spikes in spike_vectors:
+        for segment_index in range(2):
+            lower = bounds[segment_index, 0]
+            upper = bounds[segment_index, 1]
+            for raw_spike in spikes:
+                spike = float(raw_spike)
+                if lower <= spike < upper:
+                    flattened_spikes[write_index] = spike
+                    write_index += 1
     raw_right_index = np.searchsorted(phase_time, flattened_spikes, side="left")
-    clamped_index = np.clip(raw_right_index, 0, phase_time.size - 1).astype(
-        np.int64,
-        copy=False,
-    )
-    left_index = clamped_index.copy()
-    right_index = clamped_index.copy()
-    exact_sample = np.zeros(spike_count, dtype=bool)
-    within_right_axis = raw_right_index < phase_time.size
-    if np.any(within_right_axis):
-        exact_sample[within_right_axis] = (
-            phase_time[raw_right_index[within_right_axis]]
-            == flattened_spikes[within_right_axis]
-        )
-    between = (
-        ~exact_sample
-        & (raw_right_index > 0)
-        & (raw_right_index < phase_time.size)
-    )
-    if np.any(between):
-        left_index[between] = raw_right_index[between] - 1
-        right_index[between] = raw_right_index[between]
-    right_weight = np.zeros(spike_count, dtype=np.float64)
-    if np.any(between):
-        left_time = phase_time[left_index[between]]
-        right_time = phase_time[right_index[between]]
-        right_weight[between] = (
-            (flattened_spikes[between] - left_time) / (right_time - left_time)
-        )
-    inside_support = exact_sample | between
+    left_index = np.empty(spike_count, dtype=np.int64)
+    right_index = np.empty(spike_count, dtype=np.int64)
+    right_weight = np.empty(spike_count, dtype=np.float64)
+    inside_support = np.empty(spike_count, dtype=bool)
+    exact_sample = np.empty(spike_count, dtype=bool)
+    for spike_index in range(spike_count):
+        spike = flattened_spikes[spike_index]
+        raw_right = int(raw_right_index[spike_index])
+        if raw_right >= phase_time.size:
+            clamped = phase_time.size - 1
+            left_index[spike_index] = clamped
+            right_index[spike_index] = clamped
+            right_weight[spike_index] = 0.0
+            inside_support[spike_index] = False
+            exact_sample[spike_index] = False
+        elif phase_time[raw_right] == spike:
+            left_index[spike_index] = raw_right
+            right_index[spike_index] = raw_right
+            right_weight[spike_index] = 0.0
+            inside_support[spike_index] = True
+            exact_sample[spike_index] = True
+        elif raw_right == 0:
+            left_index[spike_index] = 0
+            right_index[spike_index] = 0
+            right_weight[spike_index] = 0.0
+            inside_support[spike_index] = False
+            exact_sample[spike_index] = False
+        else:
+            left = raw_right - 1
+            left_time = phase_time[left]
+            right_time = phase_time[raw_right]
+            left_index[spike_index] = left
+            right_index[spike_index] = raw_right
+            right_weight[spike_index] = (spike - left_time) / (right_time - left_time)
+            inside_support[spike_index] = True
+            exact_sample[spike_index] = False
+    del flattened_spikes, raw_right_index, spike_vectors
     return SourceTrialSpikeGeometry._from_owned_arrays(
         source_trial_index=stable_source,
         unit_ids=canonical_unit_ids,
@@ -1514,7 +1536,163 @@ def compute_observed_trial_segmented_ppc_statistics(
                     ] += np.histogram(accepted_phase_rad, bins=phase_bins)[0]
 
     return ObservedTrialSegmentedPPCStatistics._from_owned_arrays(
-        phase_trial_index=phase_ids,
+        # Validation retains the caller's full axis as a view; this public
+        # result is the ownership boundary and therefore needs its own ID copy.
+        phase_trial_index=phase_ids.copy(),
+        phase_vector_sum=phase_vector_sum,
+        valid_spike_count=valid_spike_count,
+        representative_frequency_index=representative_frequency_position,
+        representative_frequency_hz=representative_frequency_hz,
+        phase_bin_edges_rad=phase_bins,
+        representative_phase_histogram_count=representative_phase_histogram_count,
+    )
+
+
+def compute_selected_observed_trial_segmented_ppc_statistics(
+    *,
+    source_trial_geometries: tuple[SourceTrialSpikeGeometry, ...],
+    trial_phase_vectors: np.ndarray,
+    phase_valid_mask: np.ndarray,
+    phase_trial_index: np.ndarray,
+    frequencies_hz: np.ndarray,
+    phase_bin_edges_rad: np.ndarray,
+) -> ObservedTrialSegmentedPPCStatistics:
+    """Reduce selected source geometries against complete prepared phase views.
+
+    Parameters
+    ----------
+    source_trial_geometries : tuple[SourceTrialSpikeGeometry, ...]
+        Ordered selected source-trial geometries. Each stable geometry identity
+        must occur exactly once and must be present on the complete
+        ``phase_trial_index`` axis. All geometries share one ordered unit axis.
+    trial_phase_vectors : numpy.ndarray
+        Complex64 ``(full_trial, frequency, time)`` analytic phase
+        coefficients for the complete site-local prepared trial axis. Values
+        have no physical units.
+    phase_valid_mask : numpy.ndarray
+        Boolean array with the same ``(full_trial, frequency, time)`` axes as
+        ``trial_phase_vectors``.
+    phase_trial_index : numpy.ndarray
+        Unique nonnegative int64 ``(full_trial,)`` stable trial identities in
+        the complete phase-array order.
+    frequencies_hz : numpy.ndarray
+        Float64 strictly increasing ``(frequency,)`` phase coordinates in Hz.
+    phase_bin_edges_rad : numpy.ndarray
+        Float64 strictly increasing ``(phase_bin + 1,)`` histogram edges in
+        radians.
+
+    Returns
+    -------
+    ObservedTrialSegmentedPPCStatistics
+        Frozen owned selected-trial statistics in the exact geometry tuple
+        order. Sums/counts have axes ``(selected_trial, unit, segment=2,
+        frequency)``; histogram counts have axes ``(selected_trial, unit,
+        segment=2, band=2, phase_bin)``.
+
+    Raises
+    ------
+    ValueError
+        If complete phase axes/identities or geometry identities are invalid,
+        a selected geometry is duplicated or unknown, or the selected
+        geometries disagree on their unit/time axes.
+
+    Notes
+    -----
+    This selection-aware entry point intentionally indexes one full-axis phase
+    row at a time. It does not gather/copy selected phase or validity rows, so
+    the sampler receives views sharing the caller's prepared arrays. The older
+    all-trial function above retains its exact public API and semantics.
+    """
+    phase, phase_valid, phase_ids, frequencies = _validated_reduction_phase_inputs(
+        trial_phase_vectors=trial_phase_vectors,
+        phase_valid_mask=phase_valid_mask,
+        phase_trial_index=phase_trial_index,
+        frequencies_hz=frequencies_hz,
+    )
+    phase_bins = _validated_phase_bin_edges_rad(phase_bin_edges_rad)
+    geometries, geometry_by_source = _validated_geometries(
+        source_trial_geometries,
+        phase_time_count=phase.shape[2],
+    )
+    phase_position_by_id = {
+        int(identity): position for position, identity in enumerate(phase_ids)
+    }
+    if len(geometry_by_source) != len(geometries):
+        raise ValueError("selected observed geometries must have unique source trial identities")
+    if any(source_id not in phase_position_by_id for source_id in geometry_by_source):
+        raise ValueError("selected observed geometry source trial is unknown to phase_trial_index")
+
+    selected_trial_count = len(geometries)
+    unit_count = len(geometries[0].unit_ids) if geometries else 0
+    frequency_count = frequencies.size
+    phase_vector_sum = np.zeros(
+        (selected_trial_count, unit_count, 2, frequency_count), dtype=np.complex128
+    )
+    valid_spike_count = np.zeros(
+        (selected_trial_count, unit_count, 2, frequency_count), dtype=np.int64
+    )
+    representative_frequency_position = np.array(
+        [
+            int(np.argmin(np.abs(frequencies - 8.0))),
+            int(np.argmin(np.abs(frequencies - 40.0))),
+        ],
+        dtype=np.int64,
+    )
+    representative_frequency_hz = frequencies[representative_frequency_position].copy()
+    representative_phase_histogram_count = np.zeros(
+        (selected_trial_count, unit_count, 2, 2, phase_bins.size - 1),
+        dtype=np.int64,
+    )
+    selected_ids = np.empty(selected_trial_count, dtype=np.int64)
+
+    for selected_position, geometry in enumerate(geometries):
+        stable_trial_id = int(geometry.source_trial_index)
+        selected_ids[selected_position] = stable_trial_id
+        full_position = phase_position_by_id[stable_trial_id]
+        # Basic indexing yields row views, preserving the complete-array owner.
+        coefficients = phase[full_position]
+        explicit_valid_mask = phase_valid[full_position]
+        for unit_position in range(unit_count):
+            for segment_position in range(2):
+                group_position = unit_position * 2 + segment_position
+                start = int(geometry.group_offsets[group_position])
+                stop = int(geometry.group_offsets[group_position + 1])
+                if start == stop:
+                    continue
+                normalized_complex64, usable = _sample_normalized_spike_group(
+                    coefficients=coefficients,
+                    explicit_valid_mask=explicit_valid_mask,
+                    left_index=geometry.left_index[start:stop],
+                    right_index=geometry.right_index[start:stop],
+                    right_weight=geometry.right_weight[start:stop],
+                    inside_support=geometry.inside_support[start:stop],
+                    exact_sample=geometry.exact_sample[start:stop],
+                )
+                phase_vector_sum[selected_position, unit_position, segment_position] = np.sum(
+                    normalized_complex64, axis=1, dtype=np.complex128
+                )
+                group_valid_count = np.sum(usable, axis=1, dtype=np.int64)
+                valid_spike_count[selected_position, unit_position, segment_position] = (
+                    group_valid_count
+                )
+                for band_position, frequency_position in enumerate(
+                    representative_frequency_position
+                ):
+                    accepted_phase_rad = np.angle(
+                        normalized_complex64[
+                            frequency_position,
+                            usable[frequency_position],
+                        ]
+                    )
+                    representative_phase_histogram_count[
+                        selected_position,
+                        unit_position,
+                        segment_position,
+                        band_position,
+                    ] += np.histogram(accepted_phase_rad, bins=phase_bins)[0]
+
+    return ObservedTrialSegmentedPPCStatistics._from_owned_arrays(
+        phase_trial_index=selected_ids,
         phase_vector_sum=phase_vector_sum,
         valid_spike_count=valid_spike_count,
         representative_frequency_index=representative_frequency_position,
@@ -1882,17 +2060,23 @@ def estimate_segmented_kernel_allocation(
         or counts.shape[0] < 1
         or counts.shape[1] < 1
         or counts.shape[2] != 2
-        or np.any(counts < 0)
     ):
         raise ValueError("source_trial_spike_count must be nonnegative int64 (source, unit, 2)")
+    for raw_count in counts.flat:
+        if int(raw_count) < 0:
+            raise ValueError(
+                "source_trial_spike_count must be nonnegative int64 (source, unit, 2)"
+            )
     if (
         positions.dtype != np.dtype(np.int64)
         or positions.ndim != 1
         or positions.size < 1
-        or np.any(positions < 0)
-        or np.any(positions >= counts.shape[0])
     ):
         raise ValueError("edge_source_trial_position must be int64 positions in source axis")
+    for raw_position in positions:
+        position = int(raw_position)
+        if position < 0 or position >= counts.shape[0]:
+            raise ValueError("edge_source_trial_position must be int64 positions in source axis")
     if (
         isinstance(frequency_count, (bool, np.bool_))
         or not isinstance(frequency_count, (int, np.integer))
@@ -2104,7 +2288,7 @@ def _validated_uniform_phase_time(
     phase_time_s: np.ndarray,
     phase_sampling_rate_hz: float,
 ) -> np.ndarray:
-    """Return an owned uniform float64 relative-seconds grid after rate validation."""
+    """Validate and return one non-retained uniform float64 seconds grid."""
     if (
         isinstance(phase_sampling_rate_hz, (bool, np.bool_))
         or not isinstance(phase_sampling_rate_hz, (int, float, np.integer, np.floating))
@@ -2125,7 +2309,7 @@ def _validated_uniform_phase_time(
     grid_tolerance_s = np.finfo(np.float64).eps * max(1.0, float(np.max(np.abs(phase_time)))) * 16.0
     if not np.all(np.abs(np.diff(phase_time) - interval_s) <= grid_tolerance_s):
         raise ValueError("phase_time_s must match the configured uniform sampling rate")
-    return phase_time.copy()
+    return phase_time
 
 
 def _validated_segment_bounds(
@@ -2150,7 +2334,40 @@ def _validated_reduction_phase_inputs(
     phase_trial_index: np.ndarray,
     frequencies_hz: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Validate phase tensors, explicit masks, stable trial rows, and frequency Hz axis."""
+    """Validate full prepared phase inputs without copying the trial-ID axis.
+
+    Parameters
+    ----------
+    trial_phase_vectors : numpy.ndarray
+        Complex64 ``(trial, frequency, time)`` dimensionless prepared phase
+        coefficients.
+    phase_valid_mask : numpy.ndarray
+        Boolean array with exactly the same axes as ``trial_phase_vectors``.
+    phase_trial_index : numpy.ndarray
+        Int64 ``(trial,)`` nonnegative, unique stable trial identities without
+        physical units. The returned value shares this caller-owned storage.
+    frequencies_hz : numpy.ndarray
+        Float64 positive, strictly increasing ``(frequency,)`` coordinates in
+        Hz.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray]
+        Validated views of phase coefficients, validity, stable trial IDs, and
+        frequency coordinates. No returned full-axis value is copied.
+
+    Raises
+    ------
+    ValueError
+        If phase/mask axes or dtypes, stable-ID dtype/axis/identity rules, or
+        frequency coordinates are invalid.
+
+    Notes
+    -----
+    Stable IDs are checked one scalar at a time. This deliberately avoids a
+    full-axis Boolean comparison, ``numpy.unique`` output, or ID copy before
+    selected/public reducers construct their required owned result identities.
+    """
     phase = np.asarray(trial_phase_vectors)
     valid = np.asarray(phase_valid_mask)
     phase_ids = np.asarray(phase_trial_index)
@@ -2169,10 +2386,14 @@ def _validated_reduction_phase_inputs(
         phase_ids.dtype != np.dtype(np.int64)
         or phase_ids.ndim != 1
         or phase_ids.size != phase.shape[0]
-        or np.any(phase_ids < 0)
-        or np.unique(phase_ids).size != phase_ids.size
     ):
         raise ValueError("phase_trial_index must be unique nonnegative int64 trial rows")
+    stable_identity_set: set[int] = set()
+    for stable_identity in phase_ids:
+        identity = int(stable_identity)
+        if identity < 0 or identity in stable_identity_set:
+            raise ValueError("phase_trial_index must be unique nonnegative int64 trial rows")
+        stable_identity_set.add(identity)
     if (
         frequencies.dtype != np.dtype(np.float64)
         or frequencies.ndim != 1
@@ -2182,7 +2403,7 @@ def _validated_reduction_phase_inputs(
         or np.any(np.diff(frequencies) <= 0.0)
     ):
         raise ValueError("frequencies_hz must be positive increasing float64 phase coordinates")
-    return phase, valid, phase_ids.copy(), frequencies.copy()
+    return phase, valid, phase_ids, frequencies
 
 
 def _validated_phase_bin_edges_rad(phase_bin_edges_rad: np.ndarray) -> np.ndarray:
@@ -2363,11 +2584,11 @@ def _unit_id_tuple(values: Sequence[str]) -> tuple[str, ...]:
 
 
 def _finite_float64_vector(values: np.ndarray, name: str) -> np.ndarray:
-    """Return an owned finite float64 one-dimensional relative-seconds vector."""
+    """Validate one finite float64 relative-seconds vector without copying it."""
     vector = np.asarray(values, dtype=np.float64)
     if vector.ndim != 1 or not np.isfinite(vector).all():
         raise ValueError(f"{name} must contain finite one-dimensional seconds arrays")
-    return vector.copy()
+    return vector
 
 
 def _owned_int64_scalar(value: object, name: str) -> np.ndarray:
@@ -2440,9 +2661,10 @@ def _trusted_bool_vector(values: object, name: str) -> np.ndarray:
 
 
 def _freeze_array(array: np.ndarray) -> np.ndarray:
-    """Return an owned kernel result array after disabling element-level writes."""
-    array.setflags(write=False)
-    return array
+    """Return an owned base-ndarray result after disabling element-level writes."""
+    frozen = array if type(array) is np.ndarray else array.view(np.ndarray)
+    frozen.setflags(write=False)
+    return frozen
 
 
 def _checked_add(left: int, right: int) -> int:
