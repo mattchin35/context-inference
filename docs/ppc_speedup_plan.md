@@ -2,7 +2,7 @@
 
 Status: implementation plan approved by the user on 2026-09-09. The user
 separately authorized the S0-S7 source/test implementation sequence on
-2026-09-10; S0-S4 are complete as of 2026-09-16. CT026 computation and the
+2026-09-10; S0-S5 are complete as of 2026-09-16. CT026 computation and the
 100/1,000-shuffle Spike-phase runs remain unauthorized. The
 Sol-orchestrator/Terra-worker
 execution specification in Section 3.1 was added at the user's request on the

@@ -283,13 +283,44 @@ not apply; write `not applicable` and explain why.
 
 ### S5 - Payload integration and histogram reuse
 
-- Status: not started.
-- Authorization and starting HEAD:
-- Agent assignments, permissions, and file scopes:
-- Test-only commit and RED evidence:
-- Implementation commit and GREEN evidence:
-- Full neural-suite and independent Sol gate evidence:
-- Numerical/interface review and unresolved risks:
+- Status: complete.
+- Authorization and starting HEAD: covered by the user's 2026-09-10
+  implementation authorization and repeated instruction to continue;
+  `3aa8e37`.
+- Agent assignments, permissions, and file scopes: lead `gpt-5.6-sol` `high`;
+  one `gpt-5.6-terra` `high` writer, sequentially write-enabled for the three
+  focused S5 test files and then `lfp_summary_runtime.py`; independent
+  `gpt-5.6-sol` `high` reviewer, procedurally read-only. No scout assigned.
+- Test-only commit and RED evidence: `569dfad` (`test: define grouped PPC
+  payload integration`). Independent review required replacing conflicting
+  legacy-call expectations, adding a production cache/reload/plot path,
+  adversarial exact-grid sampling, nontrivial two-unit exemplars, real
+  cold/failure/resume behavior, and two-site seed/order coverage before PASS.
+  Root reproduced five expected failures, four passes, and seven deselections;
+  every failure was confined to the old legacy executor/per-job progress path.
+  A compact sparse-frequency fixture was then identified as violating the
+  canonical contiguous 2-Hz band-mean contract; the independently reviewed
+  correction was committed as `9881f91` (`test: use canonical PPC payload
+  frequency grid`).
+- Implementation commit and GREEN evidence: `87ba842` (`feat: integrate
+  grouped PPC payload`). The final focused S5 selection passed nine tests with
+  seven deselections, and the affected runtime/spike/synthetic/pipeline files
+  passed 27 tests. Compile and diff checks were clean.
+- Full neural-suite and independent Sol gate evidence: root obtained 1,071
+  passing tests with 19 known warnings. The final independent `gpt-5.6-sol`
+  `high` gate returned PASS on scoped source hash
+  `df4163e7375940e8ccc60e64aa6471af0d583eedb4639cb6bfd107fea67a36f1`.
+- Numerical/interface review and unresolved risks: the payload makes exactly
+  one grouped executor call, validates and owns every full summary array,
+  renames the fixed two-representative histogram without resampling phase, and
+  derives exemplar trial counts from spike times only. Stable seeds, schedule
+  identity, public axes/schema/dtypes, q/significance, traces, packed spikes,
+  exemplars, progress, and manifest-last transaction behavior are preserved.
+  Exact-grid/near-grid behavior now comes solely from the S1/S2 grouped kernel.
+  Failed final writes retain resumable grouped work; successful commit cleanup
+  targets only the exact completed grouped run. The payload continues to use
+  the canonical contiguous 2-Hz band-mean helper; no sparse-grid semantics were
+  added. Three dead legacy per-job assembly helpers were removed.
 - CT026 work performed: none permitted.
 
 ### S6 - Profiling and schedule-union cost model
