@@ -116,7 +116,8 @@ def _spike_phase_payload_config(output_directory: Path):
     Returns
     -------
     LFPSummaryConfig
-        Two-site, two-unit configuration with two phase frequencies, three
+        Two-site, two-unit configuration with a compact 8--40-Hz 2-Hz phase
+        grid, three
         declared PPC epochs, three deterministic shuffles, and the unchanged
         two representative 8/40-Hz histogram bands.
     """
@@ -138,7 +139,7 @@ def _spike_phase_payload_config(output_directory: Path):
             quality_settings=(),
             stable_unit_ids=("PFC:1", "PFC:2"),
         ),
-        phase=replace(base.phase, frequency_hz=(8.0, 40.0)),
+        phase=replace(base.phase, frequency_hz=tuple(np.arange(8.0, 42.0, 2.0))),
         ppc=replace(base.ppc, shuffle_count=3, seed=211),
         ppc_execution=PPCExecutionConfig(
             unit_block_size=1,
@@ -161,7 +162,7 @@ def _spike_phase_payload_inputs(config: object) -> tuple[object, object]:
     Returns
     -------
     tuple[PreparedPhaseRun, PreparedSpikeRun]
-        Two-site complex64/Boolean phase with axes ``(site=2, frequency=2,
+        Two-site complex64/Boolean phase with axes ``(site=2, frequency=17,
         trial=3, time=2000)`` and two units' finite event-relative seconds
         spikes for every trial. The stable unit order is ``("PFC:1",
         "PFC:2")``. Conditions retain ordered overlapping members
@@ -530,7 +531,7 @@ def test_spike_phase_payload_uses_one_grouped_executor_without_legacy_or_histogr
     assert payload.arrays["condition_names"].tolist() == ["all", "late"]
     assert payload.arrays["site_ids"].tolist() == ["PFC", "HPC1"]
     assert payload.arrays["epoch_names"].tolist() == ["whole", "before", "after"]
-    assert payload.arrays["ppc"].shape == (2, 2, 2, 3, 2)
+    assert payload.arrays["ppc"].shape == (2, 2, 2, 3, 17)
     assert payload.arrays["representative_phase_hist_count"].shape == (2, 2, 2, 3, 2, 2)
     assert payload.arrays["spike_count"].dtype == np.dtype(np.int64)
     assert payload.arrays["representative_phase_hist_count"].dtype == np.dtype(np.int64)
@@ -646,8 +647,19 @@ def test_grouped_payload_histograms_follow_exact_grid_and_match_safe_legacy_refe
             histogram = grouped.summary_arrays["representative_phase_histogram_count"][
                 unit_index, 0, site_index, 0
             ]
-            np.testing.assert_array_equal(counts, np.array([1, 1], dtype=np.int64))
-            np.testing.assert_array_equal(histogram.sum(axis=1), counts)
+            representative_indices = np.array(
+                [
+                    int(np.flatnonzero(np.asarray(config.phase.frequency_hz) == 8.0)[0]),
+                    int(np.flatnonzero(np.asarray(config.phase.frequency_hz) == 40.0)[0]),
+                ],
+                dtype=np.int64,
+            )
+            np.testing.assert_array_equal(
+                counts[representative_indices], np.array([1, 1], dtype=np.int64)
+            )
+            np.testing.assert_array_equal(
+                histogram.sum(axis=1), counts[representative_indices]
+            )
 
     safe = replace(constrained_phase, phase_valid=np.ones_like(constrained_phase.phase_valid))
     safe_grouped = lfp_summary_ppc_runtime.execute_grouped_ppc_component(
