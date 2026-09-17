@@ -3376,7 +3376,10 @@ def _write_grouped_observed_job_in_place(
             np.add(preferred_phase, trial_sums.real, out=preferred_phase)
             np.add(resultant, trial_sums.imag, out=resultant)
             np.add(spike_count, trial_counts, out=spike_count)
-            np.add(histogram, histograms[selected_position, :, segment], out=histogram)
+            _record_grouped_representative_histogram(
+                histogram=histogram,
+                trial_histogram=histograms[selected_position, :, segment],
+            )
     for selected_position in selected_positions:
         trial_counts = counts[selected_position]
         for unit_index in range(metric_shape[0]):
@@ -3430,6 +3433,35 @@ def _write_grouped_observed_job_in_place(
                 and contributing[unit_index, frequency_index] >= 2
                 and math.isfinite(float(ppc[unit_index, frequency_index]))
             )
+
+
+def _record_grouped_representative_histogram(
+    *,
+    histogram: np.ndarray,
+    trial_histogram: np.ndarray,
+) -> None:
+    """Accumulate one selected-trial representative histogram in place.
+
+    Parameters
+    ----------
+    histogram, trial_histogram : numpy.ndarray
+        Int64 arrays with matching ``(unit, band=2, phase_bin)`` axes. Counts
+        are observations in phase bins; phase coordinates themselves remain
+        radians in the configuration metadata.
+
+    Returns
+    -------
+    None
+        Adds ``trial_histogram`` to the existing ``histogram`` buffer without
+        allocating or changing any grouped observed-summary behavior.
+
+    Notes
+    -----
+    This narrow private seam exists so the work-only S6 profiler can time the
+    representative-histogram count separately from the inclusive observed
+    reduction. It deliberately preserves the prior in-place ``numpy.add``.
+    """
+    np.add(histogram, trial_histogram, out=histogram)
 
 
 def _compute_grouped_site_unit_block(

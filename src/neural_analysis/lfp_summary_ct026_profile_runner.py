@@ -25,6 +25,39 @@ _SCENARIOS = ("low", "median", "high", "combined")
 _ORDERED_STAGES = ("phase_cold", "phase_warm", "selection", *_SCENARIOS)
 _SHUFFLE_COUNT = 100
 _STATE_SCHEMA_VERSION = "2"
+_GROUPED_PROFILE_SCHEMA_VERSION = "grouped_ppc_profile_result.v1"
+_GROUPED_PROFILE_DOCUMENT_SCHEMA_VERSION = "ct026_grouped_ppc_profile.v1"
+_GROUPED_PROFILE_KIND = "grouped_serial_ppc"
+_GROUPED_PUBLIC_FIELDS = frozenset(
+    {
+        "schema_version", "profile_kind", "run_fingerprint",
+        "geometry_build_seconds", "observed_reduction_seconds",
+        "union_edge_reduction_seconds", "shuffle_aggregation_seconds",
+        "null_summarization_seconds", "representative_histogram_seconds",
+        "checkpoint_overhead_seconds", "total_elapsed_seconds",
+        "throughput_scheduled_edge_per_second", "scheduled_edge_count",
+        "independent_edge_count", "unique_site_qualified_union_edge_count",
+        "edge_union_saturation", "edge_reuse_ratio",
+        "planned_parent_private_bytes", "planned_worker_private_bytes",
+        "shared_phase_mmap_bytes", "planned_aggregate_array_bytes",
+        "measured_peak_process_rss_bytes", "measured_peak_aggregate_rss_bytes",
+        "measured_peak_aggregate_pss_bytes", "measured_memory_source",
+        "projection_100_scheduled_edge_count",
+        "projection_100_independent_edge_count",
+        "projection_100_unique_site_qualified_union_edge_count",
+        "projection_100_edge_union_saturation", "projection_100_edge_reuse_ratio",
+        "projection_1000_scheduled_edge_count",
+        "projection_1000_independent_edge_count",
+        "projection_1000_unique_site_qualified_union_edge_count",
+        "projection_1000_edge_union_saturation", "projection_1000_edge_reuse_ratio",
+    }
+)
+_POST_ISOLATION_PROVENANCE_FIELDS = frozenset(
+    {"peak_memory_bytes", "peak_memory_source", "child_pid"}
+)
+_ADAPTER_IDENTITY_FIELDS = frozenset(
+    {"config_fingerprint", "source_fingerprint", "git_fingerprint"}
+)
 
 
 @dataclass(frozen=True)
@@ -433,7 +466,172 @@ def _validated_scalar_metrics(
         if isinstance(value, float) and not isfinite(value):
             raise ValueError(f"{scenario} profile metric {key!r} must be finite")
         validated[key] = value
+    if "schema_version" in validated or "profile_kind" in validated:
+        return _validated_grouped_profile_metrics(validated, scenario)
     return validated
+
+
+def _validated_grouped_profile_metrics(
+    metrics: Mapping[str, object],
+    scenario: str,
+) -> dict[str, object]:
+    """Validate the exact scalar S6 grouped-profile public contract.
+
+    The runner persists the full scalar map supplied after child isolation.
+    Raw ``ru_maxrss`` fields are intentionally not part of this contract: the
+    adapter transforms them to ``peak_memory_*`` before this boundary.
+    """
+    names = set(metrics)
+    optional = names.intersection(_POST_ISOLATION_PROVENANCE_FIELDS)
+    adapter_identity = names.intersection(_ADAPTER_IDENTITY_FIELDS)
+    if optional and optional != _POST_ISOLATION_PROVENANCE_FIELDS:
+        raise ValueError(f"{scenario} grouped profile provenance fields are incomplete")
+    if adapter_identity and adapter_identity != _ADAPTER_IDENTITY_FIELDS:
+        raise ValueError(f"{scenario} grouped profile adapter identity fields are incomplete")
+    expected = _GROUPED_PUBLIC_FIELDS | optional | adapter_identity
+    if names != expected:
+        unexpected = sorted(names.symmetric_difference(expected))
+        raise ValueError(f"{scenario} grouped profile public fields disagree: {unexpected}")
+    if metrics["schema_version"] != _GROUPED_PROFILE_SCHEMA_VERSION:
+        raise ValueError(f"{scenario} profile metric schema_version is unsupported")
+    if metrics["profile_kind"] != _GROUPED_PROFILE_KIND:
+        raise ValueError(f"{scenario} profile metric profile_kind is unsupported")
+    if (
+        not isinstance(metrics["run_fingerprint"], str)
+        or re.fullmatch(r"[0-9a-f]{64}", metrics["run_fingerprint"]) is None
+    ):
+        raise ValueError(
+            f"{scenario} profile metric run_fingerprint must be 64 lowercase hexadecimal characters"
+        )
+    for name in (
+        "geometry_build_seconds", "observed_reduction_seconds",
+        "union_edge_reduction_seconds", "shuffle_aggregation_seconds",
+        "null_summarization_seconds", "representative_histogram_seconds",
+        "checkpoint_overhead_seconds", "total_elapsed_seconds",
+        "throughput_scheduled_edge_per_second", "edge_union_saturation",
+        "edge_reuse_ratio", "projection_100_edge_union_saturation",
+        "projection_100_edge_reuse_ratio", "projection_1000_edge_union_saturation",
+        "projection_1000_edge_reuse_ratio",
+    ):
+        _nonnegative_finite_grouped_float(metrics[name], name, scenario)
+    if float(metrics["total_elapsed_seconds"]) <= 0.0:
+        raise ValueError(f"{scenario} profile metric total_elapsed_seconds must be positive")
+    for name in (
+        "scheduled_edge_count", "independent_edge_count",
+        "unique_site_qualified_union_edge_count", "planned_parent_private_bytes",
+        "planned_worker_private_bytes", "shared_phase_mmap_bytes",
+        "planned_aggregate_array_bytes", "measured_peak_process_rss_bytes",
+        "projection_100_scheduled_edge_count",
+        "projection_100_independent_edge_count",
+        "projection_100_unique_site_qualified_union_edge_count",
+        "projection_1000_scheduled_edge_count",
+        "projection_1000_independent_edge_count",
+        "projection_1000_unique_site_qualified_union_edge_count",
+    ):
+        _nonnegative_grouped_int(metrics[name], name, scenario)
+    _validate_optional_grouped_memory(metrics, scenario)
+    if not isinstance(metrics["measured_memory_source"], str) or not metrics["measured_memory_source"]:
+        raise ValueError(f"{scenario} profile metric measured_memory_source must be nonempty")
+    _validate_grouped_projection_relations(metrics, scenario)
+    if optional:
+        _nonnegative_grouped_int(metrics["peak_memory_bytes"], "peak_memory_bytes", scenario)
+        if not isinstance(metrics["peak_memory_source"], str) or not metrics["peak_memory_source"]:
+            raise ValueError(f"{scenario} profile metric peak_memory_source must be nonempty")
+        child_pid = metrics["child_pid"]
+        if isinstance(child_pid, bool) or not isinstance(child_pid, int) or child_pid <= 0:
+            raise ValueError(f"{scenario} profile metric child_pid must be a positive integer")
+    for name in adapter_identity:
+        if not isinstance(metrics[name], str) or not metrics[name]:
+            raise ValueError(f"{scenario} profile metric {name} must be nonempty")
+    return dict(metrics)
+
+
+def _nonnegative_finite_grouped_float(value: object, name: str, scenario: str) -> None:
+    """Reject Boolean, nonnumeric, negative, or nonfinite grouped scalars."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not isfinite(float(value))
+        or float(value) < 0.0
+    ):
+        raise ValueError(f"{scenario} profile metric {name} must be finite and nonnegative")
+
+
+def _nonnegative_grouped_int(value: object, name: str, scenario: str) -> None:
+    """Reject non-Python integer grouped counts and byte values."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{scenario} profile metric {name} must be a nonnegative integer")
+
+
+def _validate_optional_grouped_memory(metrics: Mapping[str, object], scenario: str) -> None:
+    """Validate ordered measured process RSS, aggregate PSS, and aggregate RSS."""
+    process = metrics["measured_peak_process_rss_bytes"]
+    aggregate_rss = metrics["measured_peak_aggregate_rss_bytes"]
+    aggregate_pss = metrics["measured_peak_aggregate_pss_bytes"]
+    if aggregate_rss is None and aggregate_pss is None:
+        return
+    _nonnegative_grouped_int(aggregate_rss, "measured_peak_aggregate_rss_bytes", scenario)
+    _nonnegative_grouped_int(aggregate_pss, "measured_peak_aggregate_pss_bytes", scenario)
+    if process > aggregate_pss or aggregate_pss > aggregate_rss:
+        raise ValueError(f"{scenario} grouped measured memory ordering is invalid")
+
+
+def _validate_grouped_projection_relations(metrics: Mapping[str, object], scenario: str) -> None:
+    """Validate each projection and base/100 plus scheduled-count relations."""
+    for name in (
+        "scheduled_edge_count", "independent_edge_count",
+        "unique_site_qualified_union_edge_count", "edge_union_saturation",
+        "edge_reuse_ratio",
+    ):
+        if metrics[name] != metrics[f"projection_100_{name}"]:
+            raise ValueError(f"{scenario} profile metric projection_100_{name} disagrees with base")
+    if (
+        metrics["projection_1000_scheduled_edge_count"]
+        != 10 * metrics["projection_100_scheduled_edge_count"]
+    ):
+        raise ValueError(
+            f"{scenario} profile metric projection_1000_scheduled_edge_count disagrees with 100-shuffle plan"
+        )
+    _validate_grouped_edge_metrics(metrics, "", scenario)
+    _validate_grouped_edge_metrics(metrics, "projection_100_", scenario)
+    _validate_grouped_edge_metrics(metrics, "projection_1000_", scenario)
+    expected_throughput = (
+        metrics["scheduled_edge_count"] / metrics["total_elapsed_seconds"]
+    )
+    if metrics["throughput_scheduled_edge_per_second"] != expected_throughput:
+        raise ValueError(
+            f"{scenario} profile metric throughput_scheduled_edge_per_second disagrees with scheduled edges and elapsed time"
+        )
+
+
+def _validate_grouped_edge_metrics(
+    metrics: Mapping[str, object],
+    prefix: str,
+    scenario: str,
+) -> None:
+    """Validate count order and internally derived reuse scalars for one plan."""
+    scheduled = metrics[f"{prefix}scheduled_edge_count"]
+    independent = metrics[f"{prefix}independent_edge_count"]
+    union = metrics[f"{prefix}unique_site_qualified_union_edge_count"]
+    saturation = metrics[f"{prefix}edge_union_saturation"]
+    reuse = metrics[f"{prefix}edge_reuse_ratio"]
+    if union > independent:
+        raise ValueError(
+            f"{scenario} profile metric {prefix}unique_site_qualified_union_edge_count exceeds independent_edge_count"
+        )
+    if independent > scheduled:
+        raise ValueError(
+            f"{scenario} profile metric {prefix}independent_edge_count exceeds scheduled_edge_count"
+        )
+    if saturation > 1.0:
+        raise ValueError(
+            f"{scenario} profile metric {prefix}edge_union_saturation must not exceed one"
+        )
+    expected_reuse = 0.0 if union == 0 else independent / union
+    if reuse != expected_reuse:
+        raise ValueError(
+            f"{scenario} profile metric {prefix}edge_reuse_ratio disagrees with independent_edge_count and unique_site_qualified_union_edge_count"
+        )
 
 
 def _validated_phase_metrics(
@@ -524,7 +722,7 @@ def _profile_document(
     profiles: Mapping[str, Mapping[str, object]],
 ) -> dict[str, object]:
     """Return the final JSON-safe scalar profile document."""
-    return {
+    document = {
         "schema_version": _STATE_SCHEMA_VERSION,
         "identity": dict(identity),
         "shuffle_count": _SHUFFLE_COUNT,
@@ -532,6 +730,22 @@ def _profile_document(
         "phase_profiles": dict(state["phase_profiles"]),
         "profiles": {scenario: dict(metrics) for scenario, metrics in profiles.items()},
     }
+    if all(_is_grouped_profile_metrics(metrics) for metrics in profiles.values()):
+        document["profile_schema_version"] = _GROUPED_PROFILE_DOCUMENT_SCHEMA_VERSION
+        document["profile_provenance"] = {
+            "profile_kind": _GROUPED_PROFILE_KIND,
+            "scenario_metric_schema_version": _GROUPED_PROFILE_SCHEMA_VERSION,
+            "projection_shuffle_counts": "100,1000",
+        }
+    return document
+
+
+def _is_grouped_profile_metrics(metrics: Mapping[str, object]) -> bool:
+    """Return whether one validated scenario map uses the S6 grouped schema."""
+    return (
+        metrics.get("schema_version") == _GROUPED_PROFILE_SCHEMA_VERSION
+        and metrics.get("profile_kind") == _GROUPED_PROFILE_KIND
+    )
 
 
 def _markdown_summary(

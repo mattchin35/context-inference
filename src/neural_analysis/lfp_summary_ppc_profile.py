@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from math import ceil, isfinite
 from pathlib import Path
 import re
-from typing import Callable
+from typing import Callable, Mapping
 
 import numpy as np
 
@@ -141,6 +141,90 @@ class PPCProductionProfileResult:
     edge_valid_phase_sample_count: int
     checkpoint_block_count: int
     checkpoint_write_call_count: int
+
+
+@dataclass(frozen=True)
+class GroupedPPCProfileMetadata:
+    """Scalar-only cost and memory metadata for one grouped PPC plan.
+
+    Every count is dimensionless, byte field is bytes, and memory samples are
+    resident bytes. Projection fields report the supplied same-workload
+    100- and 1,000-shuffle plans; no plan, schedule, phase, spike, null, or
+    histogram array is retained in this public profiling product.
+    """
+
+    schema_version: str
+    profile_kind: str
+    run_fingerprint: str
+    scheduled_edge_count: int
+    independent_edge_count: int
+    unique_site_qualified_union_edge_count: int
+    edge_union_saturation: float
+    edge_reuse_ratio: float
+    planned_parent_private_bytes: int
+    planned_worker_private_bytes: int
+    shared_phase_mmap_bytes: int
+    planned_aggregate_array_bytes: int
+    measured_peak_process_rss_bytes: int
+    measured_peak_aggregate_rss_bytes: int | None
+    measured_peak_aggregate_pss_bytes: int | None
+    measured_memory_source: str
+    projection_100_scheduled_edge_count: int
+    projection_100_independent_edge_count: int
+    projection_100_unique_site_qualified_union_edge_count: int
+    projection_100_edge_union_saturation: float
+    projection_100_edge_reuse_ratio: float
+    projection_1000_scheduled_edge_count: int
+    projection_1000_independent_edge_count: int
+    projection_1000_unique_site_qualified_union_edge_count: int
+    projection_1000_edge_union_saturation: float
+    projection_1000_edge_reuse_ratio: float
+
+
+@dataclass(frozen=True)
+class GroupedPPCProfileResult:
+    """Scalar serial timing plus grouped plan metadata for one component.
+
+    Stage fields are seconds. Observed, shuffle, null, and representative
+    histogram durations are inclusive and therefore deliberately nonadditive.
+    Throughput divides scheduled physical edges by total elapsed seconds.
+    """
+
+    schema_version: str
+    profile_kind: str
+    run_fingerprint: str
+    geometry_build_seconds: float
+    observed_reduction_seconds: float
+    union_edge_reduction_seconds: float
+    shuffle_aggregation_seconds: float
+    null_summarization_seconds: float
+    representative_histogram_seconds: float
+    checkpoint_overhead_seconds: float
+    total_elapsed_seconds: float
+    throughput_scheduled_edge_per_second: float
+    scheduled_edge_count: int
+    independent_edge_count: int
+    unique_site_qualified_union_edge_count: int
+    edge_union_saturation: float
+    edge_reuse_ratio: float
+    planned_parent_private_bytes: int
+    planned_worker_private_bytes: int
+    shared_phase_mmap_bytes: int
+    planned_aggregate_array_bytes: int
+    measured_peak_process_rss_bytes: int
+    measured_peak_aggregate_rss_bytes: int | None
+    measured_peak_aggregate_pss_bytes: int | None
+    measured_memory_source: str
+    projection_100_scheduled_edge_count: int
+    projection_100_independent_edge_count: int
+    projection_100_unique_site_qualified_union_edge_count: int
+    projection_100_edge_union_saturation: float
+    projection_100_edge_reuse_ratio: float
+    projection_1000_scheduled_edge_count: int
+    projection_1000_independent_edge_count: int
+    projection_1000_unique_site_qualified_union_edge_count: int
+    projection_1000_edge_union_saturation: float
+    projection_1000_edge_reuse_ratio: float
 
 
 @dataclass(frozen=True)
@@ -593,6 +677,415 @@ def profile_production_ppc_job(
         checkpoint_block_count=len(checkpoint_ids),
         checkpoint_write_call_count=counters["checkpoint_writes"],
     )
+
+
+def summarize_grouped_ppc_profile_metadata(
+    *,
+    component_plan: object,
+    run_fingerprint: str,
+    measured_memory: Mapping[str, object],
+    projection_plans: tuple[tuple[int, object], ...],
+) -> GroupedPPCProfileMetadata:
+    """Return pure scalar cost metadata for one grouped component plan.
+
+    Parameters
+    ----------
+    component_plan : PPCComponentPlan
+        Immutable same-workload base plan. Its categorical jobs, stable trial
+        rows, site-qualified union, allocation estimates, and schedules are
+        inspected only to derive scalar cost metadata.
+    run_fingerprint : str
+        Exact 64-character hexadecimal grouped execution identity.
+    measured_memory : mapping
+        Exact scalar process/aggregate RSS/PSS byte fields and a nonempty
+        source string. Aggregate RSS/PSS may both be ``None`` when unavailable.
+    projection_plans : tuple[(int, PPCComponentPlan), ...]
+        Ordered 100- and 1,000-shuffle plans for the exact same workload.
+        No schedule rows are copied into the result.
+
+    Returns
+    -------
+    GroupedPPCProfileMetadata
+        Scalar edge, allocation, measured-memory, and 100/1,000 projection
+        accounting. The function is pure and performs no executor, file, or
+        scientific-array work.
+    """
+    _validate_grouped_fingerprint(run_fingerprint)
+    memory = _validated_grouped_memory(measured_memory)
+    base = _validated_grouped_plan(component_plan, "component_plan")
+    projections = _validated_projection_plans(base, projection_plans)
+    plan_100 = projections[100]
+    plan_1000 = projections[1000]
+    allocation = base.allocation_estimate
+    return GroupedPPCProfileMetadata(
+        schema_version="grouped_ppc_profile_metadata.v1",
+        profile_kind="grouped_serial_ppc",
+        run_fingerprint=run_fingerprint,
+        scheduled_edge_count=int(base.scheduled_edge_count),
+        independent_edge_count=int(base.independent_edge_count),
+        unique_site_qualified_union_edge_count=int(base.union_edge_count),
+        edge_union_saturation=float(base.edge_union_saturation),
+        edge_reuse_ratio=float(base.edge_reuse_ratio),
+        planned_parent_private_bytes=int(allocation.planned_parent_private_bytes),
+        planned_worker_private_bytes=int(allocation.planned_worker_private_bytes),
+        shared_phase_mmap_bytes=int(allocation.shared_phase_mmap_bytes),
+        planned_aggregate_array_bytes=int(allocation.planned_aggregate_array_bytes),
+        measured_peak_process_rss_bytes=memory["peak_process_rss_bytes"],
+        measured_peak_aggregate_rss_bytes=memory["peak_aggregate_rss_bytes"],
+        measured_peak_aggregate_pss_bytes=memory["peak_aggregate_pss_bytes"],
+        measured_memory_source=memory["memory_source"],
+        **_projection_metric_fields(100, plan_100),
+        **_projection_metric_fields(1000, plan_1000),
+    )
+
+
+def profile_grouped_ppc_component(
+    *,
+    config: LFPSummaryConfig,
+    execution: PPCExecutionConfig,
+    prepared_phase: object,
+    prepared_spikes: object,
+    work_root: Path,
+    clock: Callable[[], float],
+    memory_sampler: Callable[[], Mapping[str, object]],
+    projection_plans: tuple[tuple[int, object], ...],
+    component_plan: object | None = None,
+) -> GroupedPPCProfileResult:
+    """Profile one production grouped component without retaining scientific data.
+
+    ``prepared_phase`` and ``prepared_spikes`` retain the production axes and
+    seconds units accepted by :func:`execute_grouped_ppc_component`. The grouped
+    executor is invoked exactly once. Seven narrow runtime seams are restored
+    after success or failure; inclusive stage timings intentionally overlap.
+    ``projection_plans`` are pure same-workload planner products used only for
+    scalar 100/1,000 shuffle estimates.
+    """
+    _validate_serial_execution(execution)
+    if not callable(clock) or not callable(memory_sampler):
+        raise ValueError("clock and memory_sampler must be callable")
+
+    # Read and validate the start time before replacing any production seam.
+    # A bad profiling clock must not leave the runtime partially instrumented.
+    start = _read_clock(clock, "start")
+
+    durations = {
+        "geometry": 0.0,
+        "observed": 0.0,
+        "union": 0.0,
+        "shuffle": 0.0,
+        "null": 0.0,
+        "histogram": 0.0,
+        "checkpoint": 0.0,
+    }
+
+    def measure(name: str, function: Callable[..., object], *args: object, **kwargs: object) -> object:
+        """Time one direct seam inclusively using the caller's monotonic clock."""
+        before = _read_clock(clock, name)
+        try:
+            return function(*args, **kwargs)
+        finally:
+            after = _read_clock(clock, name)
+            if after < before:
+                raise ValueError("PPC profile clock must be monotonic")
+            durations[name] += after - before
+
+    originals = {
+        "geometry": lfp_summary_ppc_runtime.build_source_trial_spike_geometry,
+        "observed": lfp_summary_ppc_runtime.compute_selected_observed_trial_segmented_ppc_statistics,
+        "union": lfp_summary_ppc_runtime.compute_segmented_edge_statistics,
+        "shuffle": lfp_summary_ppc_runtime._execute_grouped_condition_batch,
+        "null": lfp_summary_ppc_runtime.spike_lfp_summary.summarize_permutation_null,
+        "histogram": lfp_summary_ppc_runtime._record_grouped_representative_histogram,
+        "checkpoint": lfp_summary_ppc_runtime.write_ppc_checkpoint,
+    }
+
+    lfp_summary_ppc_runtime.build_source_trial_spike_geometry = (
+        lambda *args, **kwargs: measure("geometry", originals["geometry"], *args, **kwargs)
+    )
+    lfp_summary_ppc_runtime.compute_selected_observed_trial_segmented_ppc_statistics = (
+        lambda *args, **kwargs: measure("observed", originals["observed"], *args, **kwargs)
+    )
+    lfp_summary_ppc_runtime.compute_segmented_edge_statistics = (
+        lambda *args, **kwargs: measure("union", originals["union"], *args, **kwargs)
+    )
+    lfp_summary_ppc_runtime._execute_grouped_condition_batch = (
+        lambda *args, **kwargs: measure("shuffle", originals["shuffle"], *args, **kwargs)
+    )
+    lfp_summary_ppc_runtime.spike_lfp_summary.summarize_permutation_null = (
+        lambda *args, **kwargs: measure("null", originals["null"], *args, **kwargs)
+    )
+    lfp_summary_ppc_runtime._record_grouped_representative_histogram = (
+        lambda *args, **kwargs: measure("histogram", originals["histogram"], *args, **kwargs)
+    )
+    lfp_summary_ppc_runtime.write_ppc_checkpoint = (
+        lambda *args, **kwargs: measure("checkpoint", originals["checkpoint"], *args, **kwargs)
+    )
+
+    try:
+        execution_result = lfp_summary_ppc_runtime.execute_grouped_ppc_component(
+            config=config,
+            execution=execution,
+            prepared_phase=prepared_phase,
+            prepared_spikes=prepared_spikes,
+            work_root=Path(work_root),
+        )
+    finally:
+        lfp_summary_ppc_runtime.build_source_trial_spike_geometry = originals["geometry"]
+        lfp_summary_ppc_runtime.compute_selected_observed_trial_segmented_ppc_statistics = originals["observed"]
+        lfp_summary_ppc_runtime.compute_segmented_edge_statistics = originals["union"]
+        lfp_summary_ppc_runtime._execute_grouped_condition_batch = originals["shuffle"]
+        lfp_summary_ppc_runtime.spike_lfp_summary.summarize_permutation_null = originals["null"]
+        lfp_summary_ppc_runtime._record_grouped_representative_histogram = originals["histogram"]
+        lfp_summary_ppc_runtime.write_ppc_checkpoint = originals["checkpoint"]
+    end = _read_clock(clock, "end")
+    if end < start:
+        raise ValueError("PPC profile clock must be monotonic")
+    total = end - start
+    if total <= 0.0:
+        raise ValueError("PPC profile total elapsed time must be positive")
+
+    result_fingerprint = getattr(execution_result, "run_fingerprint", None)
+    result_plan = getattr(execution_result, "component_plan", None)
+    _validated_grouped_plan(result_plan, "execution_result.component_plan")
+    if component_plan is not None and not _grouped_plans_are_equivalent(
+        component_plan,
+        result_plan,
+    ):
+        raise ValueError("component_plan does not match the executed grouped plan")
+    metadata = summarize_grouped_ppc_profile_metadata(
+        component_plan=result_plan,
+        run_fingerprint=result_fingerprint,
+        measured_memory=memory_sampler(),
+        projection_plans=projection_plans,
+    )
+    return GroupedPPCProfileResult(
+        schema_version="grouped_ppc_profile_result.v1",
+        profile_kind="grouped_serial_ppc",
+        run_fingerprint=metadata.run_fingerprint,
+        geometry_build_seconds=durations["geometry"],
+        observed_reduction_seconds=durations["observed"],
+        union_edge_reduction_seconds=durations["union"],
+        shuffle_aggregation_seconds=durations["shuffle"],
+        null_summarization_seconds=durations["null"],
+        representative_histogram_seconds=durations["histogram"],
+        checkpoint_overhead_seconds=durations["checkpoint"],
+        total_elapsed_seconds=total,
+        throughput_scheduled_edge_per_second=(
+            metadata.scheduled_edge_count / total
+        ),
+        **{
+            name: value
+            for name, value in vars(metadata).items()
+            if name not in {"schema_version", "profile_kind", "run_fingerprint"}
+        },
+    )
+
+
+def _validated_grouped_plan(value: object, name: str) -> object:
+    """Return a runtime grouped plan after its public immutable type is checked."""
+    if not isinstance(value, lfp_summary_ppc_runtime.PPCComponentPlan):
+        raise ValueError(f"{name} must be a PPCComponentPlan")
+    return value
+
+
+def _validate_grouped_fingerprint(value: object) -> None:
+    """Reject noncanonical grouped run identities before any scalar reporting."""
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise ValueError("grouped profile fingerprint must be 64 lowercase hexadecimal characters")
+
+
+def _validated_grouped_memory(value: Mapping[str, object]) -> dict[str, int | str | None]:
+    """Validate measured process/aggregate RSS/PSS scalar memory boundaries."""
+    required = {
+        "peak_process_rss_bytes",
+        "peak_aggregate_rss_bytes",
+        "peak_aggregate_pss_bytes",
+        "memory_source",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("grouped profile memory fields are incomplete")
+    process = _nonnegative_memory_scalar(value["peak_process_rss_bytes"], "process")
+    aggregate_rss = _optional_memory_scalar(value["peak_aggregate_rss_bytes"], "aggregate RSS")
+    aggregate_pss = _optional_memory_scalar(value["peak_aggregate_pss_bytes"], "aggregate PSS")
+    source = value["memory_source"]
+    if not isinstance(source, str) or not source:
+        raise ValueError("grouped profile memory source must be a nonempty string")
+    if (aggregate_rss is None) != (aggregate_pss is None):
+        raise ValueError("grouped profile memory aggregate RSS/PSS availability must agree")
+    if aggregate_rss is not None and (process > aggregate_pss or aggregate_pss > aggregate_rss):
+        raise ValueError("grouped profile memory must satisfy process RSS <= aggregate PSS <= aggregate RSS")
+    return {
+        "peak_process_rss_bytes": process,
+        "peak_aggregate_rss_bytes": aggregate_rss,
+        "peak_aggregate_pss_bytes": aggregate_pss,
+        "memory_source": source,
+    }
+
+
+def _nonnegative_memory_scalar(value: object, name: str) -> int:
+    """Return one nonnegative byte scalar and reject arrays or Boolean values."""
+    if isinstance(value, np.ndarray):
+        raise ValueError("grouped profile memory values must be scalar")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"grouped profile memory {name} must be a nonnegative integer")
+    return value
+
+
+def _optional_memory_scalar(value: object, name: str) -> int | None:
+    """Return one optional nonnegative byte scalar without coercing floats."""
+    if value is None:
+        return None
+    return _nonnegative_memory_scalar(value, name)
+
+
+def _validated_projection_plans(
+    base: object,
+    value: tuple[tuple[int, object], ...],
+) -> dict[int, object]:
+    """Return ordered same-workload 100/1,000-shuffle plans keyed by label."""
+    if not isinstance(value, tuple) or not value:
+        raise ValueError("projection plans must be a nonempty ordered tuple")
+    projections: dict[int, object] = {}
+    previous = 0
+    for item in value:
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise ValueError("projection plans must contain (shuffle_count, plan) pairs")
+        label, candidate = item
+        if isinstance(label, bool) or not isinstance(label, int) or label <= 0:
+            raise ValueError("projection shuffle labels must be positive integers")
+        if label <= previous:
+            raise ValueError("projection shuffle labels must be ordered and unique")
+        previous = label
+        plan = _validated_grouped_plan(candidate, "projection plan")
+        _validate_projection_workload(base, plan, label)
+        projections[label] = plan
+    if tuple(projections) != (100, 1000):
+        raise ValueError("projection plans must be ordered 100 and 1000 shuffle plans")
+    return projections
+
+
+def _validate_projection_workload(base: object, candidate: object, label: int) -> None:
+    """Reject a projection whose categorical workload differs from the base plan."""
+    positive_rows = {
+        int(job.schedule_shape[0])
+        for job in candidate.job_plans
+        if int(job.schedule_shape[0]) > 0
+    }
+    if positive_rows and positive_rows != {label}:
+        raise ValueError("projection shuffle label does not match its plan schedule")
+    if _plan_workload_identity(base) != _plan_workload_identity(candidate):
+        raise ValueError("projection plan must describe the same grouped workload")
+
+
+def _plan_workload_identity(plan: object) -> tuple[object, ...]:
+    """Return the shuffle-independent identity of a grouped workload.
+
+    Realized derangements and their site-qualified union are intentionally not
+    part of this identity: 100- and 1,000-shuffle plans can legitimately
+    realize different reusable physical edges while still profiling the same
+    selected trials, sites, conditions, epochs, units, frequencies, and mmap.
+    """
+    allocation = plan.allocation_estimate
+    jobs = tuple(
+        (
+            job.condition_index,
+            job.condition_name,
+            job.site_index,
+            job.site_id,
+            job.epoch_index,
+            job.epoch_name,
+            job.segment_expression,
+            tuple(int(row) for row in job.selected_trial_rows),
+            job.base_ppc_seed,
+            job.schedule_seed,
+            job.condition_derivation_identity,
+            job.site_derivation_identity,
+            job.epoch_derivation_identity,
+        )
+        for job in plan.job_plans
+    )
+    allocation_identity = tuple(
+        int(getattr(allocation, name))
+        for name in (
+            "observed_trial_statistics_bytes",
+            "source_trial_spike_count_bytes",
+            "worker_summary_bytes",
+            "shared_phase_mmap_bytes",
+        )
+    )
+    return (
+        jobs,
+        allocation_identity,
+    )
+
+
+def _grouped_plans_are_equivalent(left: object, right: object) -> bool:
+    """Return whether two plans are exact products of the same grouped planner.
+
+    This comparison is stricter than same-workload projection validation: it
+    includes realized schedules, unions, batching, and every allocation field
+    because the executor result is authoritative for measured profiling.
+    """
+    if not isinstance(left, lfp_summary_ppc_runtime.PPCComponentPlan):
+        return False
+    if not isinstance(right, lfp_summary_ppc_runtime.PPCComponentPlan):
+        return False
+    scalar_names = (
+        "condition_batches",
+        "scheduled_edge_count",
+        "independent_edge_count",
+        "union_edge_count",
+        "edge_union_saturation",
+        "edge_reuse_ratio",
+    )
+    if any(getattr(left, name) != getattr(right, name) for name in scalar_names):
+        return False
+    if vars(left.allocation_estimate) != vars(right.allocation_estimate):
+        return False
+    for name in (
+        "edge_site_index",
+        "stable_edge_source_trial_row",
+        "stable_edge_target_trial_row",
+    ):
+        if not np.array_equal(getattr(left, name), getattr(right, name)):
+            return False
+    if len(left.job_plans) != len(right.job_plans):
+        return False
+    scalar_job_names = (
+        "condition_index", "condition_name", "site_index", "site_id",
+        "epoch_index", "epoch_name", "segment_expression", "base_ppc_seed",
+        "schedule_seed", "condition_derivation_identity",
+        "site_derivation_identity", "epoch_derivation_identity", "schedule_shape",
+        "schedule_fingerprint",
+    )
+    array_job_names = (
+        "selected_trial_rows", "schedule", "stable_edge_source_trial_row",
+        "stable_edge_target_trial_row", "edge_union_position",
+    )
+    for left_job, right_job in zip(left.job_plans, right.job_plans, strict=True):
+        if any(
+            getattr(left_job, name) != getattr(right_job, name)
+            for name in scalar_job_names
+        ):
+            return False
+        if any(
+            not np.array_equal(getattr(left_job, name), getattr(right_job, name))
+            for name in array_job_names
+        ):
+            return False
+    return True
+
+
+def _projection_metric_fields(label: int, plan: object) -> dict[str, int | float]:
+    """Return five flat scalar fields for one validated projection plan."""
+    prefix = f"projection_{label}"
+    return {
+        f"{prefix}_scheduled_edge_count": int(plan.scheduled_edge_count),
+        f"{prefix}_independent_edge_count": int(plan.independent_edge_count),
+        f"{prefix}_unique_site_qualified_union_edge_count": int(plan.union_edge_count),
+        f"{prefix}_edge_union_saturation": float(plan.edge_union_saturation),
+        f"{prefix}_edge_reuse_ratio": float(plan.edge_reuse_ratio),
+    }
 
 
 def _integer_trial_indices(prepared_phase: object) -> np.ndarray:

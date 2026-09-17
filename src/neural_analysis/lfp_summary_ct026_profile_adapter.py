@@ -13,17 +13,17 @@ import resource
 import socket
 import subprocess
 import time
-from types import SimpleNamespace
 from typing import Callable, Mapping
 
 import numpy as np
 
-from src.neural_analysis import lfp_summary_runtime, lfp_summary_work_cache, spike_behavior_pynapple, unit_spike_loading
+from src.neural_analysis import lfp_summary_ppc_runtime, lfp_summary_runtime, lfp_summary_work_cache, spike_behavior_pynapple, unit_spike_loading
 from src.neural_analysis.lfp_spike_phase_validation import build_ct026_default_active_population, build_ct026_spike_phase_preview_config
 from src.neural_analysis.lfp_summary_ct026_profile_locks import acquire_ct026_profile_run_lock
 from src.neural_analysis.lfp_summary_ct026_profile_runner import run_ct026_ppc_profile
 from src.neural_analysis.lfp_summary_models import PPCExecutionConfig, canonical_config_json, fingerprint_source_files
-from src.neural_analysis.lfp_summary_ppc_profile import RepresentativePPCProfileJob, profile_production_ppc_job, select_representative_ppc_profile_job
+from src.neural_analysis.lfp_summary_ppc_profile import RepresentativePPCProfileJob, profile_grouped_ppc_component, profile_production_ppc_job, select_representative_ppc_profile_job
+from src.neural_analysis.lfp_summary_preparation import PreparedTrials, TrialRelativeSpikeTrains
 
 _SCENARIO_UNITS = {"low": lambda job: (job.low_unit_id,), "median": lambda job: (job.median_unit_id,), "high": lambda job: (job.high_unit_id,), "combined": lambda job: (job.low_unit_id, job.median_unit_id, job.high_unit_id)}
 _RSS_SOURCE = "resource.getrusage(RUSAGE_SELF).ru_maxrss_kib"
@@ -33,13 +33,13 @@ _RSS_SOURCE = "resource.getrusage(RUSAGE_SELF).ru_maxrss_kib"
 class CT026PPCProfileSlice:
     """Immutable input for one isolated CT026 PPC profiler invocation.
 
-    Parameters are scalar categorical metadata except ``phase_tensor`` and
-    ``phase_valid``.  Those arrays have axes ``(site=1, frequency, trial,
-    time)``; phase values are unitless complex angles and validity is Boolean.
-    ``epoch_bounds_s`` and each spike train's relative times are seconds.
-    ``schedule`` has axes ``(shuffle=100, trial)`` and stores integer trial
-    positions.  This data class carries no output arrays; child profiling
-    returns only scalar metrics.
+    ``prepared_phase`` is a complete, validator-compatible selected-trial
+    :class:`PreparedPhaseRun`: its axes remain ``(site, frequency, trial,
+    time)`` for every configured site. ``prepared_spikes`` has exactly the
+    scenario unit subset on the same selected trial axis. Relative spike times
+    and epoch bounds are seconds. The child constructs one complete grouped
+    component plan; no legacy singleton-site phase view or standalone schedule
+    is carried across this boundary.
     """
     scenario: str
     unit_ids: tuple[str, ...]
@@ -47,11 +47,8 @@ class CT026PPCProfileSlice:
     site_id: str
     epoch_bounds_s: tuple[float, float]
     overlap_trial_indices: tuple[int, ...]
-    phase_tensor: np.ndarray
-    phase_valid: np.ndarray
     prepared_phase: object
     prepared_spikes: object
-    schedule: np.ndarray
     config: object
     execution: PPCExecutionConfig
 
@@ -156,7 +153,7 @@ def run_ct026_ppc_profile_adapter(*, session_path: Path, analysis_root: Path, de
         metrics = dependencies.run_isolated_profile_job(job=job, shuffle_count=shuffle_count, work_root=root)
         if not isinstance(metrics, Mapping):
             raise ValueError("isolated profile child must return scalar metrics")
-        return {**dict(metrics), **identity}
+        return {**_validated_child_scalar_metrics(metrics), **identity}
 
     return dependencies.run_profile(
         config=config,
@@ -179,6 +176,27 @@ def _identity(value: object, name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a nonempty string")
     return value
+
+
+def _validated_child_scalar_metrics(metrics: Mapping[str, object]) -> dict[str, object]:
+    """Copy one child IPC mapping after rejecting every non-JSON scalar value.
+
+    Child metrics are persisted by the generic runner, so arrays, plans,
+    schedules, and other private objects must fail at this adapter boundary
+    rather than being silently dropped before state or report serialization.
+    """
+    validated: dict[str, object] = {}
+    for name, value in metrics.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError("isolated profile child metric names must be nonempty strings")
+        if value is not None and not isinstance(value, (str, bool, int, float)):
+            raise ValueError("isolated profile child metrics must be scalar")
+        if isinstance(value, float) and not isfinite(value):
+            raise ValueError("isolated profile child metrics must be finite scalars")
+        if isinstance(value, np.generic):
+            raise ValueError("isolated profile child metrics must be Python scalars")
+        validated[name] = value
+    return validated
 
 
 def _clock(clock: Callable[[], float]) -> float:
@@ -292,36 +310,38 @@ def make_production_ct026_profile_dependencies(*, work_cache_root: Path) -> CT02
 
 
 def slice_ct026_profile_job(*, config: object, profile_job: RepresentativePPCProfileJob, scenario: str, unit_ids: tuple[str, ...], phase: object, spikes: object) -> CT026PPCProfileSlice:
-    """Create one exact site/condition/whole-epoch executor job.
+    """Create one full-site, selected-trial grouped profiler input.
 
-    ``profile_job`` supplies 249 integer stable trial IDs and one site/condition
-    identity. ``phase`` carries ``(site, frequency, trial, time)`` complex phase
-    values and Boolean validity; ``spikes`` carries one relative-spike vector
-    per unit and trial in seconds.  The returned slice has a singleton site
-    axis, preserves frequency/time axes, restricts every selected spike vector
-    to ``[-2, 2)`` seconds, and returns a ``(100, 249)`` integer schedule.
-    Each selected train retains its own overlap IDs after intersection with the
-    selected trials; the scenario-wide intersection is also recorded.
+    ``profile_job`` supplies exactly 249 stable trial rows and the selected
+    condition/site identities. The returned prepared records retain all
+    configured sites, conditions, frequency/time axes, and selected trial
+    metadata required by the production grouped validators. Only the scenario
+    unit population is narrowed; relative spikes remain half-open ``[-2, 2)``
+    seconds. No legacy single-job schedule is constructed.
     """
     if profile_job.epoch_name != "whole" or profile_job.epoch_bounds_s != (-2.0, 2.0):
         raise ValueError("CT026 profile requires the whole [-2, 2) second epoch")
     requested = tuple(int(x) for x in profile_job.trial_indices)
+    if len(requested) != 249:
+        raise ValueError("CT026 profile requires exactly 249 selected trials")
     trial_axis = np.asarray(phase.trial_indices, dtype=np.int64)
-    positions = tuple(int(np.flatnonzero(trial_axis == trial)[0]) for trial in requested if np.any(trial_axis == trial))
+    positions = tuple(
+        int(np.flatnonzero(trial_axis == trial)[0])
+        for trial in requested
+        if np.any(trial_axis == trial)
+    )
     if len(positions) != len(requested):
         raise ValueError("representative trial identity is absent from prepared phase")
+    position_array = np.asarray(positions, dtype=np.intp)
     sites = tuple(site.stable_id for site in config.sites)
     if profile_job.site_id not in sites:
         raise ValueError("representative site is absent from configuration")
     site_index = sites.index(profile_job.site_id)
-    valid_positions = tuple(p for p in positions if bool(np.asarray(phase.site_valid)[site_index, p]))
-    if len(requested) != 249 and hasattr(phase, "prepared_trials"):
-        raise ValueError("CT026 profile requires exactly 249 selected trials")
-    if len(valid_positions) != len(requested):
+    if not np.asarray(phase.site_valid, dtype=bool)[site_index, position_array].all():
         raise ValueError("representative CT026 trial slice must be site-valid")
-    trials = tuple(int(trial_axis[p]) for p in valid_positions)
+    trials = tuple(int(trial_axis[p]) for p in positions)
     selected_trial_array = np.asarray(trials, dtype=np.int64)
-    trains: list[SimpleNamespace] = []
+    trains: list[TrialRelativeSpikeTrains] = []
     for unit in unit_ids:
         try:
             unit_index = tuple(spikes.unit_ids).index(unit)
@@ -330,32 +350,51 @@ def slice_ct026_profile_job(*, config: object, profile_job: RepresentativePPCPro
         source = spikes.trial_spike_trains[unit_index]
         times = tuple(
             _half_open(np.asarray(source.relative_spike_times[position], dtype=float))
-            for position in valid_positions
+            for position in positions
         )
-        # The executor sees only selected trials, including each unit's own
-        # overlap identity; the scenario-wide intersection remains descriptive.
         unit_overlap = np.intersect1d(
             np.asarray(source.overlap_trial_indices, dtype=np.int64),
             selected_trial_array,
         )
         trains.append(
-            SimpleNamespace(
+            TrialRelativeSpikeTrains(
                 unit_id=unit,
                 relative_spike_times=times,
                 overlap_trial_indices=unit_overlap,
             )
-        )
+    )
     overlap_sets = [set(map(int, train.overlap_trial_indices)) for train in trains]
     overlap = tuple(sorted(set(trials).intersection(*overlap_sets))) if overlap_sets else ()
-    tensor = np.asarray(phase.phase_tensor)[site_index:site_index + 1, :, valid_positions, :].astype(np.complex64, copy=False)
-    valid = np.asarray(phase.phase_valid, dtype=bool)[site_index:site_index + 1, :, valid_positions, :]
-    source_id = getattr(phase, "source_identity", None) or getattr(phase, "source_fingerprint", None)
-    relative_time_s = np.asarray(getattr(phase, "relative_time_s", np.array([-2.0, 2.0])), dtype=float)
-    prepared_phase = SimpleNamespace(phase_tensor=tensor, phase_valid=valid, relative_time_s=relative_time_s, trial_indices=np.asarray(trials, dtype=np.int64), site_id=profile_job.site_id, condition_name=profile_job.condition_name, epoch_name="whole", epoch_bounds_s=(-2.0, 2.0), source_fingerprint=source_id, source_identity=source_id)
-    prepared_spikes = SimpleNamespace(unit_ids=tuple(unit_ids), population_ids=(profile_job.population_id,), trial_spike_trains=tuple(trains))
-    names = tuple(getattr(getattr(phase, "prepared_trials", None), "condition_names", ()))
-    condition_index = names.index(profile_job.condition_name) if profile_job.condition_name in names else 0
-    schedule = lfp_summary_runtime._shared_derangement_schedule(len(trials), 100, lfp_summary_runtime._ppc_schedule_seed(config, condition_index, site_index, 0))
+    prepared_trials = _slice_prepared_trials(phase.prepared_trials, positions)
+    prepared_phase = lfp_summary_runtime.PreparedPhaseRun(
+        trial_indices=np.asarray(trials, dtype=np.int64),
+        alignment_times_s=np.asarray(phase.alignment_times_s)[position_array],
+        prepared_trials=prepared_trials,
+        phase_tensor=np.asarray(phase.phase_tensor)[:, :, position_array, :].astype(
+            np.complex64, copy=False
+        ),
+        phase_valid=np.asarray(phase.phase_valid, dtype=bool)[:, :, position_array, :],
+        relative_time_s=np.asarray(phase.relative_time_s, dtype=float),
+        site_valid=np.asarray(phase.site_valid, dtype=bool)[:, position_array],
+        pair_valid=np.asarray(phase.pair_valid, dtype=bool)[:, position_array],
+        source_trace=np.asarray(phase.source_trace)[:, position_array, :],
+    )
+    population = config.unit_population
+    if population is None:
+        raise ValueError("CT026 grouped profile requires a configured unit population")
+    grouped_config = replace(
+        config,
+        unit_population=replace(population, stable_unit_ids=tuple(unit_ids)),
+    )
+    prepared_spikes = lfp_summary_runtime.PreparedSpikeRun(
+        unit_ids=tuple(unit_ids),
+        population_ids=(grouped_config.unit_population.label,),
+        trial_spike_trains=tuple(trains),
+    )
+    lfp_summary_runtime._validate_prepared_phase_run(grouped_config, prepared_phase)
+    lfp_summary_runtime._validate_prepared_spike_run(
+        grouped_config, prepared_phase, prepared_spikes
+    )
     return CT026PPCProfileSlice(
         scenario,
         tuple(unit_ids),
@@ -363,13 +402,41 @@ def slice_ct026_profile_job(*, config: object, profile_job: RepresentativePPCPro
         profile_job.site_id,
         (-2.0, 2.0),
         overlap,
-        tensor,
-        valid,
         prepared_phase,
         prepared_spikes,
-        schedule,
-        config,
-        config.ppc_execution,
+        grouped_config,
+        grouped_config.ppc_execution,
+    )
+
+
+def _slice_prepared_trials(
+    prepared_trials: PreparedTrials,
+    positions: tuple[int, ...],
+) -> PreparedTrials:
+    """Return one selected-trial copy of categorical masks for all sites/pairs."""
+    if not isinstance(prepared_trials, PreparedTrials):
+        raise ValueError("prepared phase must carry PreparedTrials metadata")
+    position_array = np.asarray(positions, dtype=np.intp)
+    return PreparedTrials(
+        condition_names=prepared_trials.condition_names,
+        condition_membership=np.asarray(prepared_trials.condition_membership, dtype=bool)[
+            position_array
+        ],
+        filter_membership=np.asarray(prepared_trials.filter_membership, dtype=bool)[position_array],
+        user_excluded=np.asarray(prepared_trials.user_excluded, dtype=bool)[position_array],
+        objective_valid=np.asarray(prepared_trials.objective_valid, dtype=bool)[position_array],
+        objective_exclusion_reason=np.asarray(
+            prepared_trials.objective_exclusion_reason
+        )[position_array],
+        user_exclusion_reason=np.asarray(prepared_trials.user_exclusion_reason)[position_array],
+        site_validity={
+            name: np.asarray(mask, dtype=bool)[position_array]
+            for name, mask in prepared_trials.site_validity.items()
+        },
+        pair_validity={
+            pair: np.asarray(mask, dtype=bool)[position_array]
+            for pair, mask in prepared_trials.pair_validity.items()
+        },
     )
 
 
@@ -384,12 +451,14 @@ def _half_open(values: np.ndarray) -> np.ndarray:
 
 
 def run_isolated_ct026_profile_job(*, job: CT026PPCProfileSlice, shuffle_count: int, work_root: Path, process_launcher: Callable[..., Mapping[str, object]] | None = None) -> dict[str, object]:
-    """Run exactly one PPC job in a child and return scalar profiling metrics.
+    """Run exactly one grouped PPC component in a child and return scalar metrics.
 
-    ``job`` contains phase arrays with ``(1, frequency, trial, time)`` axes and
-    spike times in seconds. ``shuffle_count`` must be 100 and ``work_root`` is
-    a directory. Returned values are scalar counts, seconds, and bytes; no
-    scientific tensor or output artifact is returned or written.
+    ``job`` contains one complete full-site grouped component: phase arrays
+    have ``(site, frequency, selected_trial, time)`` axes and scenario spike
+    records share the selected-trial axis with relative times in seconds.
+    ``shuffle_count`` must be 100 and ``work_root`` is a work directory.
+    Returned values are scalar counts, seconds, bytes, and child provenance;
+    no scientific tensor or output artifact is returned or written.
     """
     if shuffle_count != 100:
         raise ValueError("CT026 PPC profiling requires exactly 100 shuffles")
@@ -410,36 +479,121 @@ def run_isolated_ct026_profile_job(*, job: CT026PPCProfileSlice, shuffle_count: 
 
 
 def _profile_child_worker(payload: Mapping[str, object]) -> Mapping[str, object]:
-    """Execute one production PPC call and return only child scalar metrics.
+    """Profile one complete grouped component and return only IPC scalars.
 
-    ``payload`` must contain a ``CT026PPCProfileSlice`` whose phase array axes
-    are ``(site=1, frequency, trial, time)`` and relative spikes are seconds.
-    The returned mapping contains scalar durations, counts, KiB RSS, and PID;
-    it contains no scientific result array.
+    ``payload`` carries a validated full-site selected-trial slice. The child
+    derives independent base, 100-, and 1,000-shuffle plans from that same
+    workload, invokes the grouped serial profiler once, and returns its public
+    scalar fields plus child-local KiB RSS/PID provenance. No schedule, plan,
+    phase, spike, null, histogram, component, or manifest crosses IPC.
     """
     job = payload["job"]
     if not isinstance(job, CT026PPCProfileSlice):
         raise ValueError("child payload job must be CT026PPCProfileSlice")
-    result = profile_production_ppc_job(
+    if payload.get("shuffle_count") != 100:
+        raise ValueError("CT026 grouped profile child requires exactly 100 shuffles")
+    lfp_summary_runtime._validate_prepared_phase_run(job.config, job.prepared_phase)
+    lfp_summary_runtime._validate_prepared_spike_run(
+        job.config, job.prepared_phase, job.prepared_spikes
+    )
+    component_plan = _grouped_component_plan(job.config, job.prepared_phase, job.prepared_spikes)
+    projection_plans = tuple(
+        (
+            shuffle_count,
+            _grouped_component_plan(
+                replace(job.config, ppc=replace(job.config.ppc, shuffle_count=shuffle_count)),
+                job.prepared_phase,
+                job.prepared_spikes,
+            ),
+        )
+        for shuffle_count in (100, 1000)
+    )
+    result = profile_grouped_ppc_component(
         config=job.config,
         execution=job.execution,
         prepared_phase=job.prepared_phase,
         prepared_spikes=job.prepared_spikes,
-        schedule=job.schedule,
         work_root=Path(payload["work_root"]),
         clock=time.monotonic,
-        rss_sampler=_self_rss_bytes,
+        memory_sampler=_child_memory_sample,
+        component_plan=component_plan,
+        projection_plans=projection_plans,
     )
-    scalars = {
-        name: value
-        for name, value in vars(result).items()
-        if isinstance(value, (str, int, float, bool)) and not isinstance(value, np.generic)
-    }
+    scalars = _validated_child_scalar_metrics(vars(result))
     return {
         **scalars,
         "ru_maxrss": int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss),
         "ru_maxrss_unit": "KiB",
         "child_pid": os.getpid(),
+    }
+
+
+def _grouped_component_plan(
+    config: object,
+    prepared_phase: object,
+    prepared_spikes: object,
+) -> object:
+    """Build the executor-equivalent plan for one complete grouped component.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Validated configuration whose analysis windows are half-open seconds.
+    prepared_phase : PreparedPhaseRun
+        Validated phase record with phase/valid axes ``(site, frequency,
+        selected_trial, time)`` and stable ``(selected_trial,)`` row IDs.
+    prepared_spikes : PreparedSpikeRun
+        Validated scenario-unit records. Each unit retains one relative-second
+        spike array per selected trial.
+
+    Returns
+    -------
+    PPCComponentPlan
+        Immutable scalar/metadata plan whose source count table has integer
+        ``(selected_trial, unit, before_after=2)`` axes. Membership uses the
+        runtime's shared filter/objective/user gates, and segment counts use
+        the configured before/after half-open window boundaries.
+
+    Raises
+    ------
+    ValueError
+        Propagated when the canonical runtime planner rejects malformed axes,
+        categorical membership, counts, or bounded allocation inputs.
+    """
+    phase = prepared_phase
+    spikes = prepared_spikes
+    membership = lfp_summary_runtime._analysis_condition_membership(
+        phase.prepared_trials
+    )
+    source_counts = lfp_summary_ppc_runtime._grouped_source_trial_spike_counts(
+        config=config,
+        prepared_spikes=spikes,
+        trial_count=len(phase.trial_indices),
+    )
+    return lfp_summary_ppc_runtime.plan_grouped_ppc_component(
+        config=config,
+        condition_names=phase.prepared_trials.condition_names,
+        condition_membership=membership,
+        site_ids=tuple(site.stable_id for site in config.sites),
+        site_trial_valid=np.asarray(phase.site_valid, dtype=bool),
+        stable_trial_rows=np.asarray(phase.trial_indices, dtype=np.int64),
+        source_trial_spike_count=source_counts,
+        frequency_count=len(config.phase.frequency_hz),
+        shared_phase_mmap_bytes=(
+            int(np.asarray(phase.phase_tensor).nbytes)
+            + int(np.asarray(phase.phase_valid).nbytes)
+        ),
+    )
+
+
+def _child_memory_sample() -> dict[str, object]:
+    """Return the child-local RSS scalar when aggregate process sampling is absent."""
+    rss = _self_rss_bytes()
+    return {
+        "peak_process_rss_bytes": rss,
+        "peak_aggregate_rss_bytes": None,
+        "peak_aggregate_pss_bytes": None,
+        "memory_source": f"{_RSS_SOURCE}; aggregate_rss_pss_unavailable",
     }
 
 
