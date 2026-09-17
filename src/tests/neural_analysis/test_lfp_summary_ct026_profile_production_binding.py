@@ -155,6 +155,157 @@ def test_child_memory_sample_reports_process_rss_without_inventing_aggregate_mem
     }
 
 
+def test_grouped_profile_plan_uses_executor_membership_and_epoch_count_derivations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adapter planning must exactly bind the executor's filtered inputs.
+
+    The prepared records retain raw condition membership for all six trials,
+    but separate filter, objective, and user gates remove three rows.  A
+    nonzero before/after boundary also makes the two segment counts observably
+    different from the historical hard-coded zero split.  The adapter plan
+    must therefore be the same immutable plan and allocation that the grouped
+    executor would construct from its canonical private helpers.
+    """
+    defaults = default_lfp_summary_config()
+    config = replace(
+        defaults,
+        unit_population=UnitPopulationConfig(
+            label="synthetic-profile-population",
+            probe_label="PFC",
+            sorter_path=None,
+            aligned_spike_path=None,
+            selected_channels=(0,),
+            quality_settings=(),
+            stable_unit_ids=("PFC:1", "PFC:2", "PFC:3"),
+        ),
+        analysis_windows=replace(
+            defaults.analysis_windows,
+            before_stop_s=-0.5,
+            after_start_s=-0.5,
+        ),
+        phase=replace(defaults.phase, frequency_hz=(8.0, 40.0)),
+        ppc=replace(defaults.ppc, shuffle_count=2),
+        ppc_execution=replace(defaults.ppc_execution, worker_count=1),
+    )
+    trial_indices = np.arange(100, 106, dtype=np.int64)
+    trial_count = trial_indices.size
+    prepared_trials = PreparedTrials(
+        condition_names=("condition-a",),
+        condition_membership=np.ones((trial_count, 1), dtype=bool),
+        filter_membership=np.array((True, False, True, True, True, True)),
+        user_excluded=np.array((False, False, False, True, False, False)),
+        objective_valid=np.array((True, True, False, True, True, True)),
+        objective_exclusion_reason=np.full(trial_count, "", dtype="<U1"),
+        user_exclusion_reason=np.full(trial_count, "", dtype="<U1"),
+        site_validity={site.stable_id: np.ones(trial_count, dtype=bool) for site in config.sites},
+        pair_validity={pair: np.ones(trial_count, dtype=bool) for pair in config.site_pairs},
+    )
+    prepared_phase = adapter.lfp_summary_runtime.PreparedPhaseRun(
+        trial_indices=trial_indices,
+        alignment_times_s=np.arange(trial_count, dtype=float),
+        prepared_trials=prepared_trials,
+        phase_tensor=np.ones((len(config.sites), 2, trial_count, 2), dtype=np.complex64),
+        phase_valid=np.ones((len(config.sites), 2, trial_count, 2), dtype=bool),
+        relative_time_s=np.array((-2.0, 1.0), dtype=float),
+        site_valid=np.ones((len(config.sites), trial_count), dtype=bool),
+        pair_valid=np.ones((len(config.site_pairs), trial_count), dtype=bool),
+        source_trace=np.zeros((len(config.sites), trial_count, 2), dtype=float),
+    )
+    spike_times = tuple(
+        np.array((-1.0, -0.75, -0.5, -0.25, 0.25, 1.0), dtype=float)
+        for _ in range(trial_count)
+    )
+    prepared_spikes = adapter.lfp_summary_runtime.PreparedSpikeRun(
+        unit_ids=("PFC:1", "PFC:2", "PFC:3"),
+        population_ids=("synthetic-profile-population",),
+        trial_spike_trains=tuple(
+            TrialRelativeSpikeTrains(
+                unit_id=unit_id,
+                relative_spike_times=spike_times,
+                overlap_trial_indices=np.empty(0, dtype=np.int64),
+            )
+            for unit_id in ("PFC:1", "PFC:2", "PFC:3")
+        ),
+    )
+    adapter.lfp_summary_runtime._validate_prepared_phase_run(config, prepared_phase)
+    adapter.lfp_summary_runtime._validate_prepared_spike_run(
+        config, prepared_phase, prepared_spikes
+    )
+    expected_membership = adapter.lfp_summary_runtime._analysis_condition_membership(
+        prepared_trials
+    )
+    expected_counts = adapter.lfp_summary_ppc_runtime._grouped_source_trial_spike_counts(
+        config=config,
+        prepared_spikes=prepared_spikes,
+        trial_count=trial_count,
+    )
+    assert expected_membership[:, 0].tolist() == [True, False, False, False, True, True]
+    assert expected_counts[0, 0].tolist() == [2, 4]
+
+    original_planner = adapter.lfp_summary_ppc_runtime.plan_grouped_ppc_component
+    captured: dict[str, object] = {}
+
+    def capture_planner(**kwargs: object) -> object:
+        """Record the adapter's planner inputs while retaining real planning."""
+        captured.update(kwargs)
+        return original_planner(**kwargs)
+
+    monkeypatch.setattr(
+        adapter.lfp_summary_ppc_runtime,
+        "plan_grouped_ppc_component",
+        capture_planner,
+    )
+    actual = adapter._grouped_component_plan(config, prepared_phase, prepared_spikes)
+    expected = original_planner(
+        config=config,
+        condition_names=prepared_trials.condition_names,
+        condition_membership=expected_membership,
+        site_ids=tuple(site.stable_id for site in config.sites),
+        site_trial_valid=prepared_phase.site_valid,
+        stable_trial_rows=prepared_phase.trial_indices,
+        source_trial_spike_count=expected_counts,
+        frequency_count=len(config.phase.frequency_hz),
+        shared_phase_mmap_bytes=(
+            prepared_phase.phase_tensor.nbytes + prepared_phase.phase_valid.nbytes
+        ),
+    )
+
+    assert np.array_equal(captured["condition_membership"], expected_membership)
+    assert np.array_equal(captured["source_trial_spike_count"], expected_counts)
+    assert actual.allocation_estimate == expected.allocation_estimate
+    assert actual.condition_batches == expected.condition_batches
+    assert (
+        actual.scheduled_edge_count,
+        actual.independent_edge_count,
+        actual.union_edge_count,
+        actual.edge_union_saturation,
+        actual.edge_reuse_ratio,
+    ) == (
+        expected.scheduled_edge_count,
+        expected.independent_edge_count,
+        expected.union_edge_count,
+        expected.edge_union_saturation,
+        expected.edge_reuse_ratio,
+    )
+    for name in (
+        "edge_site_index",
+        "stable_edge_source_trial_row",
+        "stable_edge_target_trial_row",
+    ):
+        assert np.array_equal(getattr(actual, name), getattr(expected, name))
+    for actual_job, expected_job in zip(actual.job_plans, expected.job_plans, strict=True):
+        assert actual_job.schedule_fingerprint == expected_job.schedule_fingerprint
+        for name in (
+            "selected_trial_rows",
+            "schedule",
+            "stable_edge_source_trial_row",
+            "stable_edge_target_trial_row",
+            "edge_union_position",
+        ):
+            assert np.array_equal(getattr(actual_job, name), getattr(expected_job, name))
+
+
 def test_profile_child_binds_grouped_serial_profiler_and_forwards_only_scalars(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
