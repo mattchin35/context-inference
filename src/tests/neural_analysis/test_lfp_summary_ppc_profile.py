@@ -590,6 +590,74 @@ def test_grouped_profile_metadata_reports_scalar_union_cost_memory_and_projectio
     )
 
 
+def test_grouped_profile_metadata_accepts_real_249_trial_projection_union_growth() -> None:
+    """Same-workload validation ignores realized shuffle rows and edge unions.
+
+    A 249-trial component has the same site/condition/epoch identities,
+    selected stable rows, unit/frequency dimensions, and phase-mmap accounting
+    at 100 and 1,000 shuffles. Its independently seeded schedules legitimately
+    realize different site-qualified physical unions, so requiring those arrays
+    to match would reject the very projections the profiler is meant to report.
+    """
+    defaults = default_lfp_summary_config()
+    config = replace(
+        defaults,
+        ppc=replace(defaults.ppc, shuffle_count=100, seed=313),
+        ppc_execution=replace(
+            defaults.ppc_execution,
+            worker_count=1,
+            unit_block_size=1,
+            shuffle_block_size=1,
+            trial_edge_block_size=1,
+        ),
+    )
+
+    def plan(shuffle_count: int) -> object:
+        """Build one deterministic nondegenerate plan without sampled inputs."""
+        return lfp_summary_ppc_runtime.plan_grouped_ppc_component(
+            config=replace(config, ppc=replace(config.ppc, shuffle_count=shuffle_count)),
+            condition_names=("condition-a",),
+            condition_membership=np.ones((249, 1), dtype=bool),
+            site_ids=("PFC",),
+            site_trial_valid=np.ones((1, 249), dtype=bool),
+            stable_trial_rows=np.arange(1000, 1249, dtype=np.int64),
+            source_trial_spike_count=np.zeros((249, 1, 2), dtype=np.int64),
+            frequency_count=2,
+            shared_phase_mmap_bytes=4096,
+        )
+
+    plan_100 = plan(100)
+    plan_1000 = plan(1000)
+    assert not np.array_equal(
+        plan_100.stable_edge_target_trial_row,
+        plan_1000.stable_edge_target_trial_row,
+    )
+    assert plan_100.union_edge_count != plan_1000.union_edge_count
+
+    metadata = ppc_profile.summarize_grouped_ppc_profile_metadata(
+        component_plan=plan_100,
+        run_fingerprint="1" * 64,
+        measured_memory={
+            "peak_process_rss_bytes": 1,
+            "peak_aggregate_rss_bytes": None,
+            "peak_aggregate_pss_bytes": None,
+            "memory_source": "aggregate_rss_pss_unavailable",
+        },
+        projection_plans=((100, plan_100), (1000, plan_1000)),
+    )
+
+    assert metadata.scheduled_edge_count == plan_100.scheduled_edge_count
+    assert metadata.projection_1000_scheduled_edge_count == plan_1000.scheduled_edge_count
+    assert (
+        metadata.projection_1000_unique_site_qualified_union_edge_count
+        == plan_1000.union_edge_count
+    )
+    assert (
+        metadata.projection_1000_unique_site_qualified_union_edge_count
+        != metadata.projection_100_unique_site_qualified_union_edge_count
+    )
+
+
 def test_grouped_profile_metadata_rejects_empty_singleton_malformed_and_overflow_cases() -> None:
     """Metadata-only accounting rejects ambiguous projections before any execution.
 
@@ -954,3 +1022,92 @@ def test_grouped_profile_binds_one_grouped_executor_and_returns_scalar_product(
     assert lfp_summary_ppc_runtime.spike_lfp_summary.summarize_permutation_null is failing_null_summary
     assert lfp_summary_ppc_runtime._record_grouped_representative_histogram is originals["histogram"]
     assert lfp_summary_ppc_runtime.write_ppc_checkpoint is originals["checkpoint"]
+
+    caller_plan = _grouped_plan_for_profile_metadata(seed=91)
+    authoritative_plan = _grouped_plan_for_profile_metadata(seed=92)
+    monkeypatch.setattr(
+        lfp_summary_ppc_runtime,
+        "execute_grouped_ppc_component",
+        lambda **_: SimpleNamespace(
+            run_fingerprint="e" * 64,
+            component_plan=authoritative_plan,
+            summary_arrays={},
+        ),
+    )
+    mismatch_clock = iter((0.0, 1.0))
+    with pytest.raises(ValueError, match="component_plan"):
+        ppc_profile.profile_grouped_ppc_component(
+            config=config,
+            execution=config.ppc_execution,
+            prepared_phase=SimpleNamespace(),
+            prepared_spikes=SimpleNamespace(),
+            work_root=tmp_path,
+            clock=lambda: next(mismatch_clock),
+            memory_sampler=lambda: {
+                "peak_process_rss_bytes": 1,
+                "peak_aggregate_rss_bytes": None,
+                "peak_aggregate_pss_bytes": None,
+                "memory_source": "aggregate_rss_pss_unavailable",
+            },
+            component_plan=caller_plan,
+            projection_plans=(
+                (100, _grouped_plan_for_profile_metadata(seed=91, shuffle_count=100)),
+                (1000, _grouped_plan_for_profile_metadata(seed=91, shuffle_count=1000)),
+            ),
+        )
+
+
+def test_grouped_profile_restores_every_wrapper_when_start_clock_is_invalid(
+    tmp_path: Path,
+) -> None:
+    """A nonfinite start sample cannot leave process-global runtime seams wrapped."""
+    config = _production_config()
+    before = {
+        "geometry": lfp_summary_ppc_runtime.build_source_trial_spike_geometry,
+        "observed": lfp_summary_ppc_runtime.compute_selected_observed_trial_segmented_ppc_statistics,
+        "union": lfp_summary_ppc_runtime.compute_segmented_edge_statistics,
+        "shuffle": lfp_summary_ppc_runtime._execute_grouped_condition_batch,
+        "null": lfp_summary_ppc_runtime.spike_lfp_summary.summarize_permutation_null,
+        "histogram": lfp_summary_ppc_runtime._record_grouped_representative_histogram,
+        "checkpoint": lfp_summary_ppc_runtime.write_ppc_checkpoint,
+    }
+
+    try:
+        with pytest.raises(ValueError, match="clock"):
+            ppc_profile.profile_grouped_ppc_component(
+                config=config,
+                execution=config.ppc_execution,
+                prepared_phase=SimpleNamespace(),
+                prepared_spikes=SimpleNamespace(),
+                work_root=tmp_path,
+                clock=lambda: float("nan"),
+                memory_sampler=lambda: {
+                    "peak_process_rss_bytes": 1,
+                    "peak_aggregate_rss_bytes": None,
+                    "peak_aggregate_pss_bytes": None,
+                    "memory_source": "aggregate_rss_pss_unavailable",
+                },
+                projection_plans=(
+                    (100, _grouped_plan_for_profile_metadata(shuffle_count=100)),
+                    (1000, _grouped_plan_for_profile_metadata(shuffle_count=1000)),
+                ),
+            )
+        after = {
+            "geometry": lfp_summary_ppc_runtime.build_source_trial_spike_geometry,
+            "observed": lfp_summary_ppc_runtime.compute_selected_observed_trial_segmented_ppc_statistics,
+            "union": lfp_summary_ppc_runtime.compute_segmented_edge_statistics,
+            "shuffle": lfp_summary_ppc_runtime._execute_grouped_condition_batch,
+            "null": lfp_summary_ppc_runtime.spike_lfp_summary.summarize_permutation_null,
+            "histogram": lfp_summary_ppc_runtime._record_grouped_representative_histogram,
+            "checkpoint": lfp_summary_ppc_runtime.write_ppc_checkpoint,
+        }
+    finally:
+        lfp_summary_ppc_runtime.build_source_trial_spike_geometry = before["geometry"]
+        lfp_summary_ppc_runtime.compute_selected_observed_trial_segmented_ppc_statistics = before["observed"]
+        lfp_summary_ppc_runtime.compute_segmented_edge_statistics = before["union"]
+        lfp_summary_ppc_runtime._execute_grouped_condition_batch = before["shuffle"]
+        lfp_summary_ppc_runtime.spike_lfp_summary.summarize_permutation_null = before["null"]
+        lfp_summary_ppc_runtime._record_grouped_representative_histogram = before["histogram"]
+        lfp_summary_ppc_runtime.write_ppc_checkpoint = before["checkpoint"]
+
+    assert after == before

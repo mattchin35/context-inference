@@ -136,6 +136,25 @@ def test_default_child_launcher_runs_fresh_profile_worker_without_final_artifact
     assert not list(tmp_path.rglob("*.npz")) and not list(tmp_path.rglob("manifest.json"))
 
 
+def test_child_memory_sample_reports_process_rss_without_inventing_aggregate_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Linux ``ru_maxrss`` is child-process RSS, not an aggregate measurement."""
+    monkeypatch.setattr(adapter, "_self_rss_bytes", lambda: 4096)
+
+    sample = adapter._child_memory_sample()
+
+    assert sample == {
+        "peak_process_rss_bytes": 4096,
+        "peak_aggregate_rss_bytes": None,
+        "peak_aggregate_pss_bytes": None,
+        "memory_source": (
+            "resource.getrusage(RUSAGE_SELF).ru_maxrss_kib; "
+            "aggregate_rss_pss_unavailable"
+        ),
+    }
+
+
 def test_profile_child_binds_grouped_serial_profiler_and_forwards_only_scalars(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -260,6 +279,10 @@ def test_profile_child_binds_grouped_serial_profiler_and_forwards_only_scalars(
     adapter.lfp_summary_runtime._validate_prepared_spike_run(
         job.config, job.prepared_phase, job.prepared_spikes
     )
+    expected_shared_phase_mmap_bytes = (
+        job.prepared_phase.phase_tensor.nbytes
+        + job.prepared_phase.phase_valid.nbytes
+    )
     calls: list[dict[str, object]] = []
 
     def grouped_profile(**kwargs: object) -> object:
@@ -287,14 +310,14 @@ def test_profile_child_binds_grouped_serial_profiler_and_forwards_only_scalars(
             unique_site_qualified_union_edge_count=base_plan.union_edge_count,
             edge_union_saturation=base_plan.edge_union_saturation,
             edge_reuse_ratio=base_plan.edge_reuse_ratio,
-            planned_parent_private_bytes=4096,
-            planned_worker_private_bytes=2048,
-            shared_phase_mmap_bytes=4096,
-            planned_aggregate_array_bytes=8192,
+            planned_parent_private_bytes=base_plan.allocation_estimate.planned_parent_private_bytes,
+            planned_worker_private_bytes=base_plan.allocation_estimate.planned_worker_private_bytes,
+            shared_phase_mmap_bytes=base_plan.allocation_estimate.shared_phase_mmap_bytes,
+            planned_aggregate_array_bytes=base_plan.allocation_estimate.planned_aggregate_array_bytes,
             measured_peak_process_rss_bytes=6144,
-            measured_peak_aggregate_rss_bytes=7168,
-            measured_peak_aggregate_pss_bytes=6656,
-            measured_memory_source="injected_rss_pss_sampler",
+            measured_peak_aggregate_rss_bytes=None,
+            measured_peak_aggregate_pss_bytes=None,
+            measured_memory_source="resource.getrusage(RUSAGE_SELF).ru_maxrss_kib; aggregate_rss_pss_unavailable",
             projection_100_scheduled_edge_count=plan_100.scheduled_edge_count,
             projection_100_independent_edge_count=plan_100.independent_edge_count,
             projection_100_unique_site_qualified_union_edge_count=plan_100.union_edge_count,
@@ -327,6 +350,8 @@ def test_profile_child_binds_grouped_serial_profiler_and_forwards_only_scalars(
     assert "schedule" not in calls[0]
     base_plan = calls[0]["component_plan"]
     assert tuple(count for count, _plan in calls[0]["projection_plans"]) == (100, 1000)
+    assert base_plan.allocation_estimate.shared_phase_mmap_bytes == expected_shared_phase_mmap_bytes
+    assert calls[0]["projection_plans"][0][1].allocation_estimate.shared_phase_mmap_bytes == expected_shared_phase_mmap_bytes
     assert metrics["schema_version"] == "grouped_ppc_profile_result.v1"
     assert metrics["profile_kind"] == "grouped_serial_ppc"
     assert metrics["run_fingerprint"] == "e" * 64
@@ -335,6 +360,8 @@ def test_profile_child_binds_grouped_serial_profiler_and_forwards_only_scalars(
     assert metrics["unique_site_qualified_union_edge_count"] == base_plan.union_edge_count
     assert metrics["projection_100_scheduled_edge_count"] == calls[0]["projection_plans"][0][1].scheduled_edge_count
     assert metrics["projection_1000_scheduled_edge_count"] == calls[0]["projection_plans"][1][1].scheduled_edge_count
+    assert metrics["measured_peak_aggregate_rss_bytes"] is None
+    assert metrics["measured_peak_aggregate_pss_bytes"] is None
     assert metrics["scheduled_edge_count"] == metrics["projection_100_scheduled_edge_count"]
     assert metrics["projection_1000_scheduled_edge_count"] == 10 * metrics["scheduled_edge_count"]
     assert set(metrics) == {

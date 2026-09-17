@@ -309,7 +309,7 @@ def test_ct026_grouped_profile_document_records_schema_and_scalar_provenance(
         return {
             "schema_version": "grouped_ppc_profile_result.v1",
             "profile_kind": "grouped_serial_ppc",
-            "run_fingerprint": f"{scenario[0]}" * 64,
+            "run_fingerprint": "a" * 64,
             "geometry_build_seconds": 0.1,
             "observed_reduction_seconds": 0.2,
             "union_edge_reduction_seconds": 0.3,
@@ -322,7 +322,7 @@ def test_ct026_grouped_profile_document_records_schema_and_scalar_provenance(
             "scheduled_edge_count": 2400,
             "independent_edge_count": 24,
             "unique_site_qualified_union_edge_count": 8,
-            "edge_union_saturation": 1.0,
+            "edge_union_saturation": 0.5,
             "edge_reuse_ratio": 3.0,
             "planned_parent_private_bytes": 4096,
             "planned_worker_private_bytes": 2048,
@@ -335,11 +335,11 @@ def test_ct026_grouped_profile_document_records_schema_and_scalar_provenance(
             "projection_100_scheduled_edge_count": 2400,
             "projection_100_independent_edge_count": 24,
             "projection_100_unique_site_qualified_union_edge_count": 8,
-            "projection_100_edge_union_saturation": 1.0,
+            "projection_100_edge_union_saturation": 0.5,
             "projection_100_edge_reuse_ratio": 3.0,
             "projection_1000_scheduled_edge_count": 24000,
-            "projection_1000_independent_edge_count": 24,
-            "projection_1000_unique_site_qualified_union_edge_count": 8,
+            "projection_1000_independent_edge_count": 48,
+            "projection_1000_unique_site_qualified_union_edge_count": 16,
             "projection_1000_edge_union_saturation": 1.0,
             "projection_1000_edge_reuse_ratio": 3.0,
         }
@@ -382,12 +382,19 @@ def test_ct026_grouped_profile_document_records_schema_and_scalar_provenance(
         document["profiles"]["low"]["projection_1000_scheduled_edge_count"]
         == 10 * document["profiles"]["low"]["projection_100_scheduled_edge_count"]
     )
+    assert document["profiles"]["low"]["projection_1000_independent_edge_count"] == 48
+    assert document["profiles"]["low"]["projection_1000_unique_site_qualified_union_edge_count"] == 16
 
-    for field_name, invalid_value in (
+    for case_index, (field_name, invalid_value) in enumerate((
         ("schema_version", "other-schema"),
         ("profile_kind", "legacy_serial_ppc"),
+        ("run_fingerprint", "g" * 64),
+        ("run_fingerprint", "A" * 64),
         ("projection_1000_scheduled_edge_count", 999),
-    ):
+        ("projection_1000_edge_union_saturation", 1.1),
+        ("projection_1000_edge_reuse_ratio", 2.0),
+        ("throughput_scheduled_edge_per_second", 1.0),
+    )):
         def mismatched_profile_job(*, scenario: str, **_: object) -> dict[str, object]:
             """Return one otherwise-valid grouped metric map with one mismatch."""
             metrics = grouped_profile_job(scenario=scenario)
@@ -400,10 +407,38 @@ def test_ct026_grouped_profile_document_records_schema_and_scalar_provenance(
                 config_fingerprint="config-s6",
                 source_fingerprint="source-s6",
                 git_fingerprint="git-s6",
-                analysis_root=tmp_path / f"invalid-{field_name}",
+                analysis_root=tmp_path / f"invalid-{case_index}-{field_name}",
                 prepare_phase=prepare_phase,
                 select_spikes=lambda _: "spikes",
                 profile_job=mismatched_profile_job,
+                acquire_run_lock=lambda *_: nullcontext(),
+                timestamp_factory=lambda: "2026-09-16T12-00-00Z",
+            )
+
+    for field_name, invalid_value in (
+        ("edge_union_saturation", 1.1),
+        ("edge_reuse_ratio", 2.0),
+        ("unique_site_qualified_union_edge_count", 25),
+    ):
+        def paired_base_projection_corruption(
+            *, scenario: str, **_: object
+        ) -> dict[str, object]:
+            """Corrupt matching base/100 fields so equality alone cannot reject it."""
+            metrics = grouped_profile_job(scenario=scenario)
+            metrics[field_name] = invalid_value
+            metrics[f"projection_100_{field_name}"] = invalid_value
+            return metrics
+
+        with pytest.raises(ValueError, match=field_name):
+            run_ct026_ppc_profile(
+                config={"session": "synthetic"},
+                config_fingerprint="config-s6",
+                source_fingerprint="source-s6",
+                git_fingerprint="git-s6",
+                analysis_root=tmp_path / f"paired-invalid-{field_name}",
+                prepare_phase=prepare_phase,
+                select_spikes=lambda _: "spikes",
+                profile_job=paired_base_projection_corruption,
                 acquire_run_lock=lambda *_: nullcontext(),
                 timestamp_factory=lambda: "2026-09-16T12-00-00Z",
             )

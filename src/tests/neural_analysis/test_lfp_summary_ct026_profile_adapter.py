@@ -342,9 +342,12 @@ def test_ct026_adapter_real_runner_persists_post_child_scalar_provenance(
         "shared_phase_mmap_bytes": 4096,
         "planned_aggregate_array_bytes": 8192,
         "measured_peak_process_rss_bytes": 6144,
-        "measured_peak_aggregate_rss_bytes": 7168,
-        "measured_peak_aggregate_pss_bytes": 6656,
-        "measured_memory_source": "injected_rss_pss_sampler",
+        "measured_peak_aggregate_rss_bytes": None,
+        "measured_peak_aggregate_pss_bytes": None,
+        "measured_memory_source": (
+            "resource.getrusage(RUSAGE_SELF).ru_maxrss_kib; "
+            "aggregate_rss_pss_unavailable"
+        ),
         "projection_100_scheduled_edge_count": 2400,
         "projection_100_independent_edge_count": 24,
         "projection_100_unique_site_qualified_union_edge_count": 8,
