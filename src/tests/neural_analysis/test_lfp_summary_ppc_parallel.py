@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import replace
+from dataclasses import fields, replace
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -354,3 +355,201 @@ def test_invalid_worker_counts_are_rejected_before_phase_or_work_writes(
             work_root=tmp_path,
         )
     assert not (tmp_path / "ppc").exists()
+
+
+# S7 grouped-worker contracts.  The legacy ``execute_ppc_blocks`` cases above
+# intentionally remain frozen S0 regressions; these tests name the new grouped
+# executor seam rather than extending its single-job task contract.
+
+
+def test_grouped_parallel_worker_task_and_initializer_are_spawn_safe_top_level() -> None:
+    """Grouped workers use phase-free site/unit tasks and top-level callables.
+
+    ``_GroupedParallelBlockTask`` describes exactly one stable site and one
+    half-open unit block.  It deliberately does not own prepared phase or
+    validity arrays: the worker initializer opens those arrays once from the
+    shared mmap descriptor.  The private names are frozen because process
+    targets must remain importable under the ``spawn`` start method.
+    """
+    task_type = ppc_runtime._GroupedParallelBlockTask
+    task_fields = {field.name for field in fields(task_type)}
+    assert {
+        "block_id",
+        "site_index",
+        "unit_start",
+        "unit_stop",
+        "site_jobs",
+        "site_condition_batches",
+        "site_union_source_trial_row",
+        "site_union_target_trial_row",
+        "unit_spike_trains",
+    } <= task_fields
+    assert not {
+        "phase",
+        "valid",
+        "prepared_phase",
+        "component_plan",
+        "prepared_spikes",
+        "progress_callback",
+        "run_directory",
+        "checkpoint_writer",
+    } & task_fields
+    for callable_name in (
+        "_initialize_grouped_parallel_worker",
+        "_compute_grouped_parallel_block",
+    ):
+        callable_value = getattr(ppc_runtime, callable_name)
+        assert inspect.isfunction(callable_value)
+        assert callable_value.__module__ == ppc_runtime.__name__
+        assert callable_value.__qualname__ == callable_name
+
+
+def test_grouped_parallel_runner_uses_spawn_initializer_and_cancels_failed_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The grouped runner bounds work, preserves yields, and cleans up failure.
+
+    This pure executor double avoids process creation while binding the parent
+    protocol: fill a two-task window, yield a completed first block, then on
+    the second block's failure cancel the current and queued work before a
+    wait-for-workers shutdown.  The shared mmap descriptor is supplied once as
+    the process initializer argument rather than copied into every task.
+    """
+    submitted: list[str] = []
+    cancelled: list[str] = []
+    shutdown_calls: list[tuple[bool, bool]] = []
+    executor_arguments: dict[str, object] = {}
+    descriptor = object()
+    worker = object()
+
+    class FakeFuture:
+        """Future double with deterministic first success and second failure."""
+
+        def __init__(self, task: str) -> None:
+            self.task = task
+
+        def result(self) -> str:
+            if self.task == "second":
+                raise RuntimeError("injected grouped worker failure")
+            return self.task
+
+        def cancel(self) -> bool:
+            cancelled.append(self.task)
+            return True
+
+    class FakeExecutor:
+        """Process-pool double retaining spawn and initializer arguments."""
+
+        def __init__(
+            self,
+            *,
+            max_workers: int,
+            mp_context: object,
+            initializer: object,
+            initargs: tuple[object, ...],
+        ) -> None:
+            executor_arguments.update(
+                {
+                    "max_workers": max_workers,
+                    "mp_context": mp_context,
+                    "initializer": initializer,
+                    "initargs": initargs,
+                }
+            )
+
+        def __enter__(self) -> "FakeExecutor":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def submit(self, submitted_worker: object, task: str) -> FakeFuture:
+            assert submitted_worker is worker
+            submitted.append(task)
+            return FakeFuture(task)
+
+        def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+            shutdown_calls.append((wait, cancel_futures))
+
+    monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", FakeExecutor)
+    results = ppc_runtime._run_grouped_parallel_block_batches(
+        phase_descriptor=descriptor,
+        block_tasks=("first", "second", "third"),
+        worker_count=2,
+        compute_block=worker,
+    )
+
+    assert next(results) == "first"
+    # The parent owns the first result until it asks for another one, which is
+    # its opportunity to copy/checkpoint before the runner submits a replacement.
+    assert submitted == ["first", "second"]
+    with pytest.raises(RuntimeError, match="injected grouped worker failure"):
+        next(results)
+    assert submitted == ["first", "second", "third"]
+    assert cancelled == ["second", "third"]
+    assert shutdown_calls == [(True, True)]
+    assert executor_arguments["max_workers"] == 2
+    assert executor_arguments["mp_context"].get_start_method() == "spawn"
+    assert executor_arguments["initializer"] is ppc_runtime._initialize_grouped_parallel_worker
+    assert executor_arguments["initargs"] == (descriptor,)
+
+
+def test_grouped_parallel_runner_yields_canonical_tasks_despite_out_of_order_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The runner, rather than the parent, hides out-of-order worker readiness.
+
+    The second submitted future is marked ready before the first.  The runner
+    still waits/yields in task order, so a parent holding one yielded result can
+    merge and checkpoint it before requesting the next canonical block.
+    """
+    readiness_order: list[str] = []
+    result_waits: list[str] = []
+    descriptor = object()
+    worker = object()
+
+    class FakeFuture:
+        """Future with an externally recorded readiness order."""
+
+        def __init__(self, task: str) -> None:
+            self.task = task
+
+        def result(self) -> str:
+            assert readiness_order.index("second") < readiness_order.index("first")
+            result_waits.append(self.task)
+            return self.task
+
+    class FakeExecutor:
+        """Process-pool double that makes task two ready before task one."""
+
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def __enter__(self) -> "FakeExecutor":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def submit(self, submitted_worker: object, task: str) -> FakeFuture:
+            assert submitted_worker is worker
+            if task == "second":
+                readiness_order.extend(("second", "first"))
+            elif task == "third":
+                readiness_order.append("third")
+            return FakeFuture(task)
+
+    monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", FakeExecutor)
+    results = ppc_runtime._run_grouped_parallel_block_batches(
+        phase_descriptor=descriptor,
+        block_tasks=("first", "second", "third"),
+        worker_count=2,
+        compute_block=worker,
+    )
+
+    assert next(results) == "first"
+    assert result_waits == ["first"]
+    assert next(results) == "second"
+    assert result_waits == ["first", "second"]
+    assert list(results) == ["third"]
+    assert result_waits == ["first", "second", "third"]

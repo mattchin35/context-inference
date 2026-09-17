@@ -6750,3 +6750,1038 @@ def test_grouped_plan_and_run_fingerprints_bind_every_job_identity_and_provenanc
         baseline_metadata["execution_plan_fingerprint"]
     )
     assert changed_metadata["run_fingerprint"] != baseline_metadata["run_fingerprint"]
+
+
+# S7 grouped process-executor contracts.  S4 above fixes the serial grouped
+# reference and checkpoint schema; these cases require a separate phase-shared
+# site/unit-block dispatcher without changing those serial reductions.
+
+
+def _grouped_parallel_plan(
+    config: object,
+    prepared_phase: object,
+    prepared_spikes: object,
+) -> object:
+    """Return the pure grouped plan used to compare execution-only settings.
+
+    Inputs are the production prepared records used by the S4/S7 fixture.  The
+    returned plan owns categorical IDs, unchanged schedules, and allocation
+    estimates but performs no phase sampling, checkpoint I/O, or process work.
+    """
+    membership = lfp_summary_runtime._analysis_condition_membership(
+        prepared_phase.prepared_trials
+    )
+    source_counts = ppc_runtime._grouped_source_trial_spike_counts(
+        config=config,
+        prepared_spikes=prepared_spikes,
+        trial_count=prepared_phase.trial_indices.size,
+    )
+    return ppc_runtime.plan_grouped_ppc_component(
+        config=config,
+        condition_names=prepared_phase.prepared_trials.condition_names,
+        condition_membership=membership,
+        site_ids=tuple(site.stable_id for site in config.sites),
+        site_trial_valid=prepared_phase.site_valid,
+        stable_trial_rows=prepared_phase.trial_indices,
+        source_trial_spike_count=source_counts,
+        frequency_count=len(config.phase.frequency_hz),
+        shared_phase_mmap_bytes=(
+            prepared_phase.phase_tensor.nbytes + prepared_phase.phase_valid.nbytes
+        ),
+    )
+
+
+def _assert_parallel_plan_science_is_identical(first: object, second: object) -> None:
+    """Require execution-only worker counts to leave the scientific plan unchanged."""
+    assert first.condition_batches == second.condition_batches
+    for name in (
+        "scheduled_edge_count",
+        "independent_edge_count",
+        "union_edge_count",
+        "edge_union_saturation",
+        "edge_reuse_ratio",
+    ):
+        assert getattr(first, name) == getattr(second, name)
+    for name in (
+        "edge_site_index",
+        "stable_edge_source_trial_row",
+        "stable_edge_target_trial_row",
+    ):
+        np.testing.assert_array_equal(getattr(first, name), getattr(second, name))
+    assert len(first.job_plans) == len(second.job_plans)
+    for first_job, second_job in zip(first.job_plans, second.job_plans, strict=True):
+        for name in (
+            "condition_index",
+            "condition_name",
+            "site_index",
+            "site_id",
+            "epoch_index",
+            "epoch_name",
+            "segment_expression",
+            "base_ppc_seed",
+            "schedule_seed",
+            "condition_derivation_identity",
+            "site_derivation_identity",
+            "epoch_derivation_identity",
+            "schedule_shape",
+            "schedule_fingerprint",
+        ):
+            assert getattr(first_job, name) == getattr(second_job, name)
+        for name in (
+            "selected_trial_rows",
+            "schedule",
+            "stable_edge_source_trial_row",
+            "stable_edge_target_trial_row",
+            "edge_union_position",
+        ):
+            np.testing.assert_array_equal(
+                getattr(first_job, name),
+                getattr(second_job, name),
+            )
+
+
+@pytest.mark.parametrize("worker_count", (2, 4, 8))
+def test_grouped_parallel_worker_counts_preserve_serial_component_axes_and_values(
+    tmp_path: Path,
+    worker_count: int,
+) -> None:
+    """Grouped process counts preserve the one-worker component result.
+
+    The production fixture has two stable sites and two one-unit blocks per
+    site.  Each site is completed before the next begins, while its two unit
+    blocks may run in parallel.  Jobs, conditions, site order, epochs, stable
+    trial rows, and every summary axis remain owned by the grouped serial
+    algorithm.
+    """
+    serial_config = _grouped_config(worker_count=1)
+    serial_phase, serial_spikes = _grouped_inputs(serial_config)
+    serial = _run_grouped_component(
+        serial_config,
+        serial_phase,
+        serial_spikes,
+        tmp_path / "serial",
+    )
+    parallel_config = _grouped_config(worker_count=worker_count)
+    parallel_phase, parallel_spikes = _grouped_inputs(parallel_config)
+    parallel = _run_grouped_component(
+        parallel_config,
+        parallel_phase,
+        parallel_spikes,
+        tmp_path / f"workers-{worker_count}",
+    )
+
+    # The execution result, rather than a separately rebuilt planner object,
+    # is the public proof that parallel work did not perturb scientific plan
+    # identity while selecting a different active-worker allocation.
+    _assert_parallel_plan_science_is_identical(
+        serial.component_plan,
+        parallel.component_plan,
+    )
+    assert parallel.completed_block_ids == serial.completed_block_ids
+    assert parallel.resumed_block_ids == ()
+    assert parallel.component_plan.allocation_estimate.active_worker_count == min(
+        worker_count,
+        2,
+    )
+    _assert_component_summaries_equal(serial, parallel)
+    for name, serial_values in serial.summary_arrays.items():
+        candidate = parallel.summary_arrays[name]
+        assert candidate.shape == serial_values.shape
+        assert candidate.dtype == serial_values.dtype
+        assert not candidate.flags.writeable
+
+
+def test_grouped_parallel_dispatches_phase_free_site_unit_blocks_through_one_mmap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Workers receive phase-free site/unit tasks and share one read-only mmap.
+
+    The parent passes one complete prepared phase/validity representation to a
+    bounded group of unit blocks for the current site.  A task includes one
+    site plus half-open unit bounds, never a condition, a whole site, or a
+    private phase copy.  The injected runner executes locally only to inspect
+    the process boundary deterministically.
+    """
+    config = _grouped_config(worker_count=8)
+    phase, spikes = _grouped_inputs(config)
+    observed: dict[str, object] = {}
+    materialize_calls: list[object] = []
+    reduction_calls: list[tuple[str, int, int, int]] = []
+    reduction_timeline: list[tuple[str, str]] = []
+    active_task: object | None = None
+    active_worker_mmaps: tuple[np.ndarray, np.ndarray] | None = None
+    original_materialize = ppc_runtime._materialize_grouped_phase_work_inputs
+    original_grouped_reduction = ppc_runtime._compute_grouped_site_unit_block
+
+    def record_materialize(*args: object, **kwargs: object) -> object:
+        """Record the one parent-owned full phase/valid mmap publication."""
+        materialize_calls.append((args, kwargs))
+        return original_materialize(*args, **kwargs)
+
+    def record_grouped_reduction(*args: object, **kwargs: object) -> None:
+        """Require each real site/unit reduction to occur inside a worker task."""
+        assert active_task is not None
+        assert active_worker_mmaps is not None
+        task = active_task
+        worker_phase, worker_valid = active_worker_mmaps
+        worker_prepared_phase = kwargs["prepared_phase"]
+        reduced_phase = np.asarray(worker_prepared_phase.phase_tensor)
+        reduced_valid = np.asarray(worker_prepared_phase.phase_valid)
+        assert not reduced_phase.flags.writeable
+        assert not reduced_valid.flags.writeable
+        assert np.shares_memory(reduced_phase, worker_phase)
+        assert np.shares_memory(reduced_valid, worker_valid)
+        assert kwargs["site_index"] == task.site_index
+        assert kwargs["unit_start"] == task.unit_start
+        assert kwargs["unit_stop"] == task.unit_stop
+        reduction_calls.append(
+            (task.block_id, task.site_index, task.unit_start, task.unit_stop)
+        )
+        reduction_timeline.append(("reduction", task.block_id))
+        original_grouped_reduction(*args, **kwargs)
+
+    def nested_values(value: object, seen: set[int] | None = None) -> list[object]:
+        """Return nested task values without treating array elements as objects."""
+        active = set() if seen is None else seen
+        identifier = id(value)
+        if identifier in active:
+            return []
+        active.add(identifier)
+        values = [value]
+        if isinstance(value, np.ndarray):
+            return values
+        if isinstance(value, Mapping):
+            for nested in value.values():
+                values.extend(nested_values(nested, active))
+        elif isinstance(value, (tuple, list)):
+            for nested in value:
+                values.extend(nested_values(nested, active))
+        elif hasattr(value, "__dataclass_fields__"):
+            for field in fields(value):
+                values.extend(nested_values(getattr(value, field.name), active))
+        elif hasattr(value, "__dict__"):
+            for nested in vars(value).values():
+                values.extend(nested_values(nested, active))
+        return values
+
+    def inspect_then_compute(
+        *,
+        phase_descriptor: object,
+        block_tasks: tuple[object, ...],
+        worker_count: int,
+        compute_block: object,
+    ) -> object:
+        """Assert the mmap/task boundary before returning local worker results."""
+        nonlocal active_task, active_worker_mmaps
+        dispatches = observed.setdefault("dispatches", [])
+        assert isinstance(dispatches, list)
+        task_attributes = tuple(
+            tuple(field.name for field in fields(task)) for task in block_tasks
+        )
+        site_unit_bounds = tuple(
+            (task.site_index, task.unit_start, task.unit_stop)
+            for task in block_tasks
+        )
+        dispatches.append(
+            {
+                "worker_count": worker_count,
+                "block_ids": tuple(task.block_id for task in block_tasks),
+                "task_attributes": task_attributes,
+                "site_unit_bounds": site_unit_bounds,
+                "descriptor_paths": (
+                    phase_descriptor.phase_path,
+                    phase_descriptor.valid_path,
+                ),
+            }
+        )
+        task_dispatches = observed.setdefault("task_dispatches", [])
+        assert isinstance(task_dispatches, list)
+        task_dispatches.append(block_tasks)
+        shared_phase = np.load(phase_descriptor.phase_path, mmap_mode="r")
+        shared_valid = np.load(phase_descriptor.valid_path, mmap_mode="r")
+        assert not shared_phase.flags.writeable
+        assert not shared_valid.flags.writeable
+        assert shared_phase.shape == phase.phase_tensor.shape
+        assert shared_valid.shape == phase.phase_valid.shape
+        assert shared_phase.dtype == np.dtype(np.complex64)
+        assert shared_valid.dtype == np.dtype(bool)
+        assert all(
+            not {
+                "phase",
+                "valid",
+                "prepared_phase",
+                "component_plan",
+                "prepared_spikes",
+                "condition_index",
+                "progress_callback",
+                "run_directory",
+                "checkpoint_writer",
+            }
+            & set(attributes)
+            for attributes in task_attributes
+        )
+        for task in block_tasks:
+            nested = nested_values(task)
+            nested_arrays = [value for value in nested if isinstance(value, np.ndarray)]
+            assert not any(
+                array.shape in {phase.phase_tensor.shape, phase.phase_valid.shape}
+                or np.shares_memory(array, phase.phase_tensor)
+                or np.shares_memory(array, phase.phase_valid)
+                for array in nested_arrays
+            )
+            assert not any(
+                isinstance(value, ppc_runtime.PPCComponentPlan)
+                or isinstance(value, lfp_summary_runtime.PreparedSpikeRun)
+                for value in nested
+            )
+            assert not any(
+                callable(value)
+                for value in nested
+                if not isinstance(value, type)
+            )
+            assert tuple(job.site_index for job in task.site_jobs) == (
+                task.site_index,
+            ) * len(task.site_jobs)
+            assert task.site_condition_batches
+            assert all(batch for batch in task.site_condition_batches)
+            assert tuple(
+                sorted(
+                    condition_index
+                    for batch in task.site_condition_batches
+                    for condition_index in batch
+                )
+            ) == tuple(range(len(phase.prepared_trials.condition_names)))
+            assert task.site_union_source_trial_row.dtype == np.dtype(np.int64)
+            assert task.site_union_target_trial_row.dtype == np.dtype(np.int64)
+            assert task.site_union_source_trial_row.ndim == 1
+            assert task.site_union_target_trial_row.ndim == 1
+            assert task.site_union_source_trial_row.shape == (
+                task.site_union_target_trial_row.shape
+            )
+            expected_site_edges = {
+                (int(source), int(target))
+                for job in task.site_jobs
+                for source, target in zip(
+                    job.stable_edge_source_trial_row.ravel(),
+                    job.stable_edge_target_trial_row.ravel(),
+                    strict=True,
+                )
+            }
+            actual_site_edges = tuple(
+                zip(
+                    task.site_union_source_trial_row,
+                    task.site_union_target_trial_row,
+                    strict=True,
+                )
+            )
+            assert len(actual_site_edges) == len(expected_site_edges)
+            assert {
+                (int(source), int(target)) for source, target in actual_site_edges
+            } == expected_site_edges
+            assert len(task.unit_spike_trains) == task.unit_stop - task.unit_start
+            expected_trains = spikes.trial_spike_trains[
+                task.unit_start:task.unit_stop
+            ]
+            assert all(
+                actual is expected
+                for actual, expected in zip(
+                    task.unit_spike_trains,
+                    expected_trains,
+                    strict=True,
+                )
+            )
+            assert all(
+                len(train.relative_spike_times) == phase.trial_indices.size
+                for train in task.unit_spike_trains
+            )
+            nested_jobs = [
+                value for value in nested if isinstance(value, ppc_runtime.PPCJobPlan)
+            ]
+            nested_trains = [
+                value for value in nested if isinstance(value, TrialRelativeSpikeTrains)
+            ]
+            assert {id(job) for job in nested_jobs} == {
+                id(job) for job in task.site_jobs
+            }
+            assert {id(train) for train in nested_trains} == {
+                id(train) for train in task.unit_spike_trains
+            }
+
+        # Each site owns one compact set of plan/batch/union objects which its
+        # unit tasks borrow by identity; task construction must not deep-copy
+        # them once per unit block.
+        for first_task, second_task in zip(block_tasks, block_tasks[1:], strict=False):
+            assert first_task.site_index == second_task.site_index
+            assert first_task.site_jobs is second_task.site_jobs
+            assert first_task.site_condition_batches is second_task.site_condition_batches
+            assert (
+                first_task.site_union_source_trial_row
+                is second_task.site_union_source_trial_row
+            )
+            assert (
+                first_task.site_union_target_trial_row
+                is second_task.site_union_target_trial_row
+            )
+
+        original_load = ppc_runtime.np.load
+        original_copy = ppc_runtime.np.copy
+        original_array = ppc_runtime.np.array
+        original_memmap_copy = np.memmap.copy
+        load_calls: list[tuple[Path, str | None]] = []
+        opened_mmaps: dict[Path, np.ndarray] = {}
+
+        def is_full_shared_phase_array(value: object) -> bool:
+            """Return whether a value aliases either complete mmap input tensor."""
+            candidate = np.asarray(value)
+            return (
+                candidate.shape in {phase.phase_tensor.shape, phase.phase_valid.shape}
+                and (
+                    np.shares_memory(candidate, shared_phase)
+                    or np.shares_memory(candidate, shared_valid)
+                )
+            )
+
+        def record_worker_load(
+            path: Path,
+            *args: object,
+            **kwargs: object,
+        ) -> np.ndarray:
+            """Record only the full phase/valid mmap openings in one worker."""
+            load_calls.append((Path(path), kwargs.get("mmap_mode")))
+            values = original_load(path, *args, **kwargs)
+            if kwargs.get("mmap_mode") == "r":
+                opened_mmaps[Path(path)] = values
+            return values
+
+        def forbid_full_phase_copy(value: object, *args: object, **kwargs: object) -> np.ndarray:
+            """Reject allocating a private full prepared phase/valid tensor."""
+            if is_full_shared_phase_array(value):
+                raise AssertionError("grouped worker copied a complete prepared tensor")
+            return original_copy(value, *args, **kwargs)
+
+        def forbid_full_phase_array(value: object, *args: object, **kwargs: object) -> np.ndarray:
+            """Reject ``np.array`` materialization of a complete mmap input."""
+            if is_full_shared_phase_array(value):
+                raise AssertionError("grouped worker copied a complete prepared tensor")
+            return original_array(value, *args, **kwargs)
+
+        def forbid_full_memmap_copy(
+            values: np.memmap,
+            *args: object,
+            **kwargs: object,
+        ) -> np.ndarray:
+            """Reject the ndarray-method copy path for either complete mmap input."""
+            if is_full_shared_phase_array(values):
+                raise AssertionError("grouped worker copied a complete prepared tensor")
+            return original_memmap_copy(values, *args, **kwargs)
+
+        monkeypatch.setattr(ppc_runtime.np, "load", record_worker_load)
+        monkeypatch.setattr(ppc_runtime.np, "copy", forbid_full_phase_copy)
+        monkeypatch.setattr(ppc_runtime.np, "array", forbid_full_phase_array)
+        monkeypatch.setattr(np.memmap, "copy", forbid_full_memmap_copy)
+        try:
+            ppc_runtime._initialize_grouped_parallel_worker(phase_descriptor)
+            assert load_calls == [
+                (phase_descriptor.phase_path, "r"),
+                (phase_descriptor.valid_path, "r"),
+            ]
+            active_worker_mmaps = (
+                opened_mmaps[phase_descriptor.phase_path],
+                opened_mmaps[phase_descriptor.valid_path],
+            )
+            for task in block_tasks:
+                active_task = task
+                reduction_timeline.append(("compute_block", task.block_id))
+                result = compute_block(task)
+                active_task = None
+                assert load_calls == [
+                    (phase_descriptor.phase_path, "r"),
+                    (phase_descriptor.valid_path, "r"),
+                ]
+                yield result
+                del result
+        finally:
+            active_task = None
+            active_worker_mmaps = None
+            monkeypatch.setattr(ppc_runtime.np, "load", original_load)
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_run_grouped_parallel_block_batches",
+        inspect_then_compute,
+    )
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_materialize_grouped_phase_work_inputs",
+        record_materialize,
+    )
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_compute_grouped_site_unit_block",
+        record_grouped_reduction,
+    )
+    monkeypatch.setattr(
+        ppc_runtime,
+        "execute_ppc_blocks",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("grouped parallel execution delegated to execute_ppc_blocks")
+        ),
+    )
+    result = _run_grouped_component(config, phase, spikes, tmp_path)
+
+    dispatches = observed["dispatches"]
+    task_dispatches = observed["task_dispatches"]
+    assert isinstance(task_dispatches, list)
+    assert len(dispatches) == 2
+    assert len(task_dispatches) == 2
+    assert [dispatch["worker_count"] for dispatch in dispatches] == [2, 2]
+    assert [dispatch["block_ids"] for dispatch in dispatches] == [
+        result.completed_block_ids[:2],
+        result.completed_block_ids[2:],
+    ]
+    assert [dispatch["site_unit_bounds"] for dispatch in dispatches] == [
+        ((0, 0, 1), (0, 1, 2)),
+        ((1, 0, 1), (1, 1, 2)),
+    ]
+    assert dispatches[0]["descriptor_paths"] == dispatches[1]["descriptor_paths"]
+    assert all(
+        len(set(dispatch["block_ids"])) == 2
+        for dispatch in dispatches
+    )
+    for block_tasks in task_dispatches:
+        for task in block_tasks:
+            expected_site_jobs = tuple(
+                job
+                for job in result.component_plan.job_plans
+                if job.site_index == task.site_index
+            )
+            assert len(task.site_jobs) == len(expected_site_jobs)
+            assert all(
+                actual is expected
+                for actual, expected in zip(
+                    task.site_jobs,
+                    expected_site_jobs,
+                    strict=True,
+                )
+            )
+            assert (
+                task.site_condition_batches
+                is result.component_plan.condition_batches[task.site_index]
+            )
+            site_positions = np.flatnonzero(
+                result.component_plan.edge_site_index == task.site_index
+            )
+            assert site_positions.size
+            assert np.array_equal(
+                site_positions,
+                np.arange(site_positions[0], site_positions[-1] + 1),
+            )
+            site_slice = slice(int(site_positions[0]), int(site_positions[-1]) + 1)
+            expected_source = result.component_plan.stable_edge_source_trial_row[
+                site_slice
+            ]
+            expected_target = result.component_plan.stable_edge_target_trial_row[
+                site_slice
+            ]
+            assert not task.site_union_source_trial_row.flags.writeable
+            assert not task.site_union_target_trial_row.flags.writeable
+            assert task.site_union_source_trial_row.shape == expected_source.shape
+            assert task.site_union_target_trial_row.shape == expected_target.shape
+            assert np.shares_memory(task.site_union_source_trial_row, expected_source)
+            assert np.shares_memory(task.site_union_target_trial_row, expected_target)
+            np.testing.assert_array_equal(
+                task.site_union_source_trial_row,
+                expected_source,
+            )
+            np.testing.assert_array_equal(
+                task.site_union_target_trial_row,
+                expected_target,
+            )
+    assert len(materialize_calls) == 1
+    assert reduction_calls == [
+        (block_id, site_index, unit_start, unit_stop)
+        for block_id, (site_index, unit_start, unit_stop) in zip(
+            result.completed_block_ids,
+            ((0, 0, 1), (0, 1, 2), (1, 0, 1), (1, 1, 2)),
+            strict=True,
+        )
+    ]
+    assert reduction_timeline == [
+        entry
+        for block_id in result.completed_block_ids
+        for entry in (("compute_block", block_id), ("reduction", block_id))
+    ]
+    assert result.run_directory.joinpath("complete.json").is_file()
+    assert not list(result.run_directory.rglob("manifest.*"))
+
+
+def test_grouped_parallel_parent_publishes_one_canonical_result_at_a_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parent checkpoints one runner-ordered result before requesting another.
+
+    Worker-future readiness is normalized inside the runner (covered by its
+    focused executor contract).  The parent therefore receives one canonical
+    site/unit result at a time, copies and checkpoints it, emits truthful
+    progress, and only then advances the iterator for the next result.
+    """
+    config = _grouped_config(worker_count=4)
+    phase, spikes = _grouped_inputs(config)
+    serial_config = _grouped_config(worker_count=1)
+    serial_phase, serial_spikes = _grouped_inputs(serial_config)
+    serial = _run_grouped_component(
+        serial_config,
+        serial_phase,
+        serial_spikes,
+        tmp_path / "serial",
+    )
+    checkpoint_ids: list[str] = []
+    timeline: list[tuple[str, object]] = []
+    original_write = ppc_runtime.write_ppc_checkpoint
+
+    def canonical_completion(
+        *,
+        phase_descriptor: object,
+        block_tasks: tuple[object, ...],
+        worker_count: int,
+        compute_block: object,
+    ) -> object:
+        """Yield one canonical local result and release it before the next."""
+        del worker_count
+        ppc_runtime._initialize_grouped_parallel_worker(phase_descriptor)
+        for task in block_tasks:
+            result = compute_block(task)
+            timeline.append(("runner_yield", task.block_id))
+            yield result
+            # A list/eager parent would resume this generator before it has
+            # copied and checkpointed the current result.
+            timeline.append(("runner_resumed", task.block_id))
+            del result
+
+    def recording_write(
+        run_directory: Path,
+        block_id: str,
+        *args: object,
+        **kwargs: object,
+    ) -> Path:
+        """Record the parent-only publication order without changing writes."""
+        checkpoint_ids.append(block_id)
+        timeline.append(("checkpoint_write", block_id))
+        return original_write(run_directory, block_id, *args, **kwargs)
+
+    def record_progress(event: object) -> None:
+        """Retain only parent callback stage/count metadata."""
+        if event.stage == "checkpoint":
+            timeline.append(("checkpoint_event", event.completed_count))
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_run_grouped_parallel_block_batches",
+        canonical_completion,
+    )
+    monkeypatch.setattr(ppc_runtime, "write_ppc_checkpoint", recording_write)
+    result = _run_grouped_component(
+        config,
+        phase,
+        spikes,
+        tmp_path,
+        progress_callback=record_progress,
+    )
+
+    _assert_component_summaries_equal(serial, result)
+    assert checkpoint_ids == list(result.completed_block_ids)
+    expected_checkpoint_events = list(range(1, len(result.completed_block_ids) + 1))
+    assert [value for kind, value in timeline if kind == "checkpoint_event"] == (
+        expected_checkpoint_events
+    )
+    for completed_count in expected_checkpoint_events:
+        event_position = timeline.index(("checkpoint_event", completed_count))
+        assert timeline.index(
+            ("checkpoint_write", result.completed_block_ids[completed_count - 1])
+        ) < event_position
+    # The final yielded result need not be followed by another ``next`` call,
+    # but every replacement request must occur only after its predecessor was
+    # checkpointed. Eager ``list(results)`` buffering violates this ordering.
+    for block_id in result.completed_block_ids[:-1]:
+        yield_position = timeline.index(("runner_yield", block_id))
+        checkpoint_position = timeline.index(("checkpoint_write", block_id))
+        resumed_position = timeline.index(("runner_resumed", block_id))
+        assert yield_position < checkpoint_position < resumed_position
+
+
+def test_grouped_parallel_worker_failure_keeps_canonical_sibling_resumable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worker error publishes no completion marker and preserves prior blocks.
+
+    One valid parent-published block remains eligible for the exact same
+    parallel retry.  The worker exception propagates, the run lock is cleaned
+    up, no final component/manifest is written, and the warm retry recomputes
+    only the unfinished site/unit blocks.
+    """
+    config = _grouped_config(worker_count=2)
+    phase, spikes = _grouped_inputs(config)
+    yielded = 0
+
+    def fail_after_first(
+        *,
+        phase_descriptor: object,
+        block_tasks: tuple[object, ...],
+        worker_count: int,
+        compute_block: object,
+    ) -> object:
+        """Yield one valid worker result then surface a worker failure."""
+        del worker_count
+        ppc_runtime._initialize_grouped_parallel_worker(phase_descriptor)
+        nonlocal yielded
+        for task in block_tasks:
+            if yielded:
+                raise RuntimeError("injected grouped worker failure")
+            yielded += 1
+            yield compute_block(task)
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_run_grouped_parallel_block_batches",
+        fail_after_first,
+    )
+    with pytest.raises(RuntimeError, match="injected grouped worker failure"):
+        _run_grouped_component(config, phase, spikes, tmp_path)
+
+    run_directory = next((tmp_path / "ppc").iterdir())
+    metadata = json.loads((run_directory / "metadata.json").read_text(encoding="utf-8"))
+    canonical_ids = tuple(metadata["block_identities"])
+    completed_before_retry = tuple(
+        path.stem.replace(".complete", "")
+        for path in sorted((run_directory / "blocks").glob("*.complete.json"))
+    )
+    assert completed_before_retry == canonical_ids[:1]
+    assert not (run_directory / "complete.json").exists()
+    assert not (run_directory / "executor.lock").exists()
+    assert not list(run_directory.rglob("manifest.*"))
+    assert not (tmp_path / "spike_phase.npz").exists()
+
+    monkeypatch.undo()
+    serial_config = _grouped_config(worker_count=1)
+    serial_phase, serial_spikes = _grouped_inputs(serial_config)
+    serial = _run_grouped_component(
+        serial_config,
+        serial_phase,
+        serial_spikes,
+        tmp_path / "serial",
+    )
+    resumed = _run_grouped_component(config, phase, spikes, tmp_path)
+    assert resumed.resumed_block_ids == canonical_ids[:1]
+    assert resumed.completed_block_ids == canonical_ids
+    _assert_component_summaries_equal(serial, resumed)
+
+
+def test_grouped_parallel_warm_resume_does_not_dispatch_completed_blocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A warm grouped run reuses every valid block without mmap/worker startup."""
+    config = _grouped_config(worker_count=4)
+    phase, spikes = _grouped_inputs(config)
+    cold = _run_grouped_component(config, phase, spikes, tmp_path)
+
+    def forbidden(*_: object, **__: object) -> object:
+        """Fail if a fully resumed run prepares or dispatches a worker block."""
+        raise AssertionError("warm grouped run dispatched an already completed block")
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_run_grouped_parallel_block_batches",
+        forbidden,
+    )
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_materialize_grouped_phase_work_inputs",
+        forbidden,
+    )
+    warm = _run_grouped_component(config, phase, spikes, tmp_path)
+    assert warm.resumed_block_ids == cold.completed_block_ids
+    assert warm.completed_block_ids == cold.completed_block_ids
+    _assert_component_summaries_equal(cold, warm)
+
+
+def test_grouped_parallel_partial_resume_suppresses_idle_site_workers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resumed site starts only its pending unit-block workers.
+
+    The interrupted first site has one of its two canonical unit blocks safely
+    checkpointed.  Its retry therefore dispatches one task with one worker;
+    the untouched second site still dispatches its two unit blocks with two
+    workers.  Sites remain sequential even while each current-site pool uses
+    its available independent unit work.
+    """
+    config = _grouped_config(worker_count=4)
+    phase, spikes = _grouped_inputs(config)
+    yielded = False
+
+    def stop_after_first(
+        *,
+        phase_descriptor: object,
+        block_tasks: tuple[object, ...],
+        worker_count: int,
+        compute_block: object,
+    ) -> object:
+        """Checkpoint exactly one first-site task before an injected failure."""
+        del worker_count
+        nonlocal yielded
+        ppc_runtime._initialize_grouped_parallel_worker(phase_descriptor)
+        for task in block_tasks:
+            if yielded:
+                raise RuntimeError("injected partial-resume grouped worker failure")
+            yielded = True
+            yield compute_block(task)
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_run_grouped_parallel_block_batches",
+        stop_after_first,
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="injected partial-resume grouped worker failure",
+    ):
+        _run_grouped_component(config, phase, spikes, tmp_path)
+
+    dispatches: list[tuple[int, int, tuple[str, ...]]] = []
+
+    def inspect_pending_site_dispatch(
+        *,
+        phase_descriptor: object,
+        block_tasks: tuple[object, ...],
+        worker_count: int,
+        compute_block: object,
+    ) -> object:
+        """Record the current site and active worker bound before local work."""
+        assert block_tasks
+        assert {task.site_index for task in block_tasks} == {block_tasks[0].site_index}
+        dispatches.append(
+            (
+                block_tasks[0].site_index,
+                worker_count,
+                tuple(task.block_id for task in block_tasks),
+            )
+        )
+        ppc_runtime._initialize_grouped_parallel_worker(phase_descriptor)
+        for task in block_tasks:
+            yield compute_block(task)
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_run_grouped_parallel_block_batches",
+        inspect_pending_site_dispatch,
+    )
+    resumed = _run_grouped_component(config, phase, spikes, tmp_path)
+
+    assert [site_index for site_index, _, _ in dispatches] == [0, 1]
+    assert [worker_count for _, worker_count, _ in dispatches] == [1, 2]
+    assert [len(block_ids) for _, _, block_ids in dispatches] == [1, 2]
+    assert resumed.resumed_block_ids == resumed.completed_block_ids[:1]
+
+
+def test_grouped_parallel_unit_tasks_honor_forced_site_condition_batches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each site/unit task consumes its site's bounded condition batches.
+
+    A forced split proves that condition batching remains an inner reduction
+    loop of every current-site unit task.  It must neither change scientific
+    output nor create condition-indexed process tasks.
+    """
+    serial_config = _grouped_config(worker_count=1)
+    serial_phase, serial_spikes = _grouped_inputs(serial_config)
+    forced_batches = tuple(((0,), (1, 2, 3)) for _ in serial_config.sites)
+    original_planner = ppc_runtime.plan_grouped_ppc_component
+
+    def force_site_batches(*args: object, **kwargs: object) -> object:
+        """Return the production plan with a valid deterministic batch split."""
+        return replace(
+            original_planner(*args, **kwargs),
+            condition_batches=forced_batches,
+        )
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "plan_grouped_ppc_component",
+        force_site_batches,
+    )
+    serial = _run_grouped_component(
+        serial_config,
+        serial_phase,
+        serial_spikes,
+        tmp_path / "serial",
+    )
+
+    parallel_config = _grouped_config(worker_count=4)
+    parallel_phase, parallel_spikes = _grouped_inputs(parallel_config)
+    active_task: object | None = None
+    dispatched_tasks: list[object] = []
+    batch_calls: list[tuple[int, int, int, tuple[int, ...]]] = []
+    original_batch = ppc_runtime._execute_grouped_condition_batch
+
+    def record_condition_batch(*args: object, **kwargs: object) -> None:
+        """Record only batch reductions performed from a dispatched task."""
+        if active_task is not None:
+            task = active_task
+            assert kwargs["site_index"] == task.site_index
+            assert kwargs["unit_start"] == task.unit_start
+            assert kwargs["unit_stop"] == task.unit_stop
+            batch_calls.append(
+                (
+                    task.site_index,
+                    task.unit_start,
+                    task.unit_stop,
+                    kwargs["condition_indices"],
+                )
+            )
+        original_batch(*args, **kwargs)
+
+    def inspect_site_tasks(
+        *,
+        phase_descriptor: object,
+        block_tasks: tuple[object, ...],
+        worker_count: int,
+        compute_block: object,
+    ) -> object:
+        """Run each phase-free task locally while exposing its inner batches."""
+        nonlocal active_task
+        assert worker_count == len(block_tasks)
+        assert {task.site_index for task in block_tasks} == {block_tasks[0].site_index}
+        ppc_runtime._initialize_grouped_parallel_worker(phase_descriptor)
+        for task in block_tasks:
+            assert task.site_condition_batches == forced_batches[task.site_index]
+            assert "condition_index" not in {field.name for field in fields(task)}
+            dispatched_tasks.append(task)
+            active_task = task
+            result = compute_block(task)
+            active_task = None
+            yield result
+
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_execute_grouped_condition_batch",
+        record_condition_batch,
+    )
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_run_grouped_parallel_block_batches",
+        inspect_site_tasks,
+    )
+    parallel = _run_grouped_component(
+        parallel_config,
+        parallel_phase,
+        parallel_spikes,
+        tmp_path / "parallel",
+    )
+
+    _assert_component_summaries_equal(serial, parallel)
+    assert len(dispatched_tasks) == 4
+    assert Counter(task.site_index for task in dispatched_tasks) == {0: 2, 1: 2}
+    assert Counter(batch_calls) == Counter(
+        (site_index, unit_start, unit_stop, condition_batch)
+        for site_index in range(2)
+        for unit_start, unit_stop in ((0, 1), (1, 2))
+        for condition_batch in forced_batches[site_index]
+    )
+
+
+def test_grouped_parallel_aggregate_preflight_rejects_before_mmap_or_spawn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A two-worker aggregate fails even though the matching serial plan fits.
+
+    The execution limit is the exact aggregate estimate for planning plus one
+    current-site worker.  It also admits the serial plan for the same inputs,
+    but excludes the additional active worker private peak.  The shared phase
+    mmap is added once, not once per worker.
+    """
+    serial_config = _grouped_config(worker_count=1)
+    serial_phase, serial_spikes = _grouped_inputs(serial_config)
+    serial_plan = _grouped_parallel_plan(
+        serial_config,
+        serial_phase,
+        serial_spikes,
+    )
+    parallel_unlimited_config = _grouped_config(worker_count=2)
+    parallel_phase, parallel_spikes = _grouped_inputs(parallel_unlimited_config)
+    parallel_plan = _grouped_parallel_plan(
+        parallel_unlimited_config,
+        parallel_phase,
+        parallel_spikes,
+    )
+    serial_allocation = serial_plan.allocation_estimate
+    parallel_allocation = parallel_plan.allocation_estimate
+
+    serial_steady_parent = (
+        serial_allocation.planner_array_bytes
+        + serial_allocation.summary_assembly_bytes
+        + max(
+            serial_allocation.planned_computation_private_bytes,
+            serial_allocation.checkpoint_block_bytes,
+        )
+    )
+    expected_serial_aggregate = serial_allocation.shared_phase_mmap_bytes + max(
+        serial_allocation.planned_planning_private_bytes,
+        serial_steady_parent,
+    )
+    parallel_steady_parent = (
+        parallel_allocation.planner_array_bytes
+        + parallel_allocation.summary_assembly_bytes
+        + parallel_allocation.checkpoint_block_bytes
+    )
+    expected_parallel_aggregate = parallel_allocation.shared_phase_mmap_bytes + max(
+        parallel_allocation.planned_planning_private_bytes,
+        parallel_steady_parent
+        + parallel_allocation.active_worker_count
+        * parallel_allocation.planned_worker_private_bytes,
+    )
+    expected_one_worker_aggregate = parallel_allocation.shared_phase_mmap_bytes + max(
+        parallel_allocation.planned_planning_private_bytes,
+        parallel_steady_parent + parallel_allocation.planned_worker_private_bytes,
+    )
+    assert serial_allocation.active_worker_count == 0
+    assert parallel_allocation.active_worker_count == 2
+    assert serial_allocation.planned_aggregate_array_bytes == expected_serial_aggregate
+    assert parallel_allocation.planned_aggregate_array_bytes == expected_parallel_aggregate
+    assert parallel_allocation.shared_phase_mmap_bytes == (
+        parallel_phase.phase_tensor.nbytes + parallel_phase.phase_valid.nbytes
+    )
+    assert expected_serial_aggregate <= expected_one_worker_aggregate
+    assert expected_one_worker_aggregate < expected_parallel_aggregate
+
+    execution = replace(
+        parallel_unlimited_config.ppc_execution,
+        maximum_aggregate_allocation_bytes=expected_one_worker_aggregate,
+    )
+    config = replace(parallel_unlimited_config, ppc_execution=execution)
+    phase, spikes = _grouped_inputs(config)
+
+    def forbidden(*_: object, **__: object) -> object:
+        """Reject phase materialization, process startup, and summary allocation."""
+        raise AssertionError("unsafe grouped parallel plan reached execution")
+
+    monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", forbidden)
+    monkeypatch.setattr(
+        ppc_runtime,
+        "_materialize_grouped_phase_work_inputs",
+        forbidden,
+        raising=False,
+    )
+    monkeypatch.setattr(ppc_runtime, "_empty_grouped_summary_arrays", forbidden)
+    with pytest.raises(
+        ValueError,
+        match=r"^aggregate planned allocation exceeds its configured limit$",
+    ):
+        _run_grouped_component(config, phase, spikes, tmp_path)
+    assert not (tmp_path / "ppc").exists()
