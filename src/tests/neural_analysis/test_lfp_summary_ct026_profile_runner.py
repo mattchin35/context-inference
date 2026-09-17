@@ -286,3 +286,124 @@ def test_ct026_profile_runner_rejects_invalid_persisted_phase_profiles(
             profile_job=lambda **_: (_ for _ in ()).throw(AssertionError("called")),
             acquire_run_lock=lambda *_: nullcontext(),
         )
+
+
+def test_ct026_grouped_profile_document_records_schema_and_scalar_provenance(
+    tmp_path: Path,
+) -> None:
+    """S6 persists an explicit grouped-profile schema without retaining arrays.
+
+    The injected scenarios supply only scalar grouped-profile accounting and a
+    deterministic grouped run fingerprint. The final report must state the
+    profile-product schema/version and provenance separately from the runner
+    identity, preserving the existing scalar state/resume contract while
+    making grouped 100/1000-shuffle cost reports self-describing.
+    """
+    def prepare_phase(*, warm: bool, phase_work_root: Path) -> tuple[str, dict[str, object]]:
+        """Return a caller token and complete scalar cold/warm metrics."""
+        del phase_work_root
+        return "phase", _phase_metrics(cache_hit=warm, elapsed_seconds=1.0)
+
+    def grouped_profile_job(*, scenario: str, **_: object) -> dict[str, object]:
+        """Return scalar-only grouped accounting for one runner scenario."""
+        return {
+            "schema_version": "grouped_ppc_profile_result.v1",
+            "profile_kind": "grouped_serial_ppc",
+            "run_fingerprint": f"{scenario[0]}" * 64,
+            "geometry_build_seconds": 0.1,
+            "observed_reduction_seconds": 0.2,
+            "union_edge_reduction_seconds": 0.3,
+            "shuffle_aggregation_seconds": 0.4,
+            "null_summarization_seconds": 0.5,
+            "representative_histogram_seconds": 0.6,
+            "checkpoint_overhead_seconds": 0.7,
+            "total_elapsed_seconds": 1.0,
+            "throughput_scheduled_edge_per_second": 2400.0,
+            "scheduled_edge_count": 2400,
+            "independent_edge_count": 24,
+            "unique_site_qualified_union_edge_count": 8,
+            "edge_union_saturation": 1.0,
+            "edge_reuse_ratio": 3.0,
+            "planned_parent_private_bytes": 4096,
+            "planned_worker_private_bytes": 2048,
+            "shared_phase_mmap_bytes": 4096,
+            "planned_aggregate_array_bytes": 8192,
+            "measured_peak_process_rss_bytes": 6144,
+            "measured_peak_aggregate_rss_bytes": 7168,
+            "measured_peak_aggregate_pss_bytes": 6656,
+            "measured_memory_source": "injected_rss_pss_sampler",
+            "projection_100_scheduled_edge_count": 2400,
+            "projection_100_independent_edge_count": 24,
+            "projection_100_unique_site_qualified_union_edge_count": 8,
+            "projection_100_edge_union_saturation": 1.0,
+            "projection_100_edge_reuse_ratio": 3.0,
+            "projection_1000_scheduled_edge_count": 24000,
+            "projection_1000_independent_edge_count": 24,
+            "projection_1000_unique_site_qualified_union_edge_count": 8,
+            "projection_1000_edge_union_saturation": 1.0,
+            "projection_1000_edge_reuse_ratio": 3.0,
+        }
+
+    result = run_ct026_ppc_profile(
+        config={"session": "synthetic"},
+        config_fingerprint="config-s6",
+        source_fingerprint="source-s6",
+        git_fingerprint="git-s6",
+        analysis_root=tmp_path,
+        prepare_phase=prepare_phase,
+        select_spikes=lambda _: "spikes",
+        profile_job=grouped_profile_job,
+        acquire_run_lock=lambda *_: nullcontext(),
+        timestamp_factory=lambda: "2026-09-16T12-00-00Z",
+    )
+
+    document = json.loads(result.profile_path.read_text(encoding="utf-8"))
+    assert document["profile_schema_version"] == "ct026_grouped_ppc_profile.v1"
+    assert document["profile_provenance"] == {
+        "profile_kind": "grouped_serial_ppc",
+        "scenario_metric_schema_version": "grouped_ppc_profile_result.v1",
+        "projection_shuffle_counts": "100,1000",
+    }
+    assert document["identity"] == {
+        "config_fingerprint": "config-s6",
+        "source_fingerprint": "source-s6",
+        "git_fingerprint": "git-s6",
+    }
+    assert all(
+        not isinstance(value, (dict, list))
+        for metrics in document["profiles"].values()
+        for value in metrics.values()
+    )
+    assert set(document["profiles"]["low"]) == set(grouped_profile_job(scenario="low"))
+    assert document["profiles"]["low"]["projection_100_scheduled_edge_count"] == 2400
+    assert document["profiles"]["low"]["projection_1000_scheduled_edge_count"] == 24000
+    assert document["profiles"]["low"]["scheduled_edge_count"] == document["profiles"]["low"]["projection_100_scheduled_edge_count"]
+    assert (
+        document["profiles"]["low"]["projection_1000_scheduled_edge_count"]
+        == 10 * document["profiles"]["low"]["projection_100_scheduled_edge_count"]
+    )
+
+    for field_name, invalid_value in (
+        ("schema_version", "other-schema"),
+        ("profile_kind", "legacy_serial_ppc"),
+        ("projection_1000_scheduled_edge_count", 999),
+    ):
+        def mismatched_profile_job(*, scenario: str, **_: object) -> dict[str, object]:
+            """Return one otherwise-valid grouped metric map with one mismatch."""
+            metrics = grouped_profile_job(scenario=scenario)
+            metrics[field_name] = invalid_value
+            return metrics
+
+        with pytest.raises(ValueError, match=field_name):
+            run_ct026_ppc_profile(
+                config={"session": "synthetic"},
+                config_fingerprint="config-s6",
+                source_fingerprint="source-s6",
+                git_fingerprint="git-s6",
+                analysis_root=tmp_path / f"invalid-{field_name}",
+                prepare_phase=prepare_phase,
+                select_spikes=lambda _: "spikes",
+                profile_job=mismatched_profile_job,
+                acquire_run_lock=lambda *_: nullcontext(),
+                timestamp_factory=lambda: "2026-09-16T12-00-00Z",
+            )

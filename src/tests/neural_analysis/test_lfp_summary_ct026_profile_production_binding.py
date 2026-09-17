@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import replace
 import os
 from pathlib import Path
 import time
@@ -12,7 +13,8 @@ import numpy as np
 import pytest
 
 from src.neural_analysis import lfp_summary_ct026_profile_adapter as adapter
-from src.neural_analysis.lfp_summary_models import default_lfp_summary_config
+from src.neural_analysis.lfp_summary_models import UnitPopulationConfig, default_lfp_summary_config
+from src.neural_analysis.lfp_summary_preparation import PreparedTrials, TrialRelativeSpikeTrains
 from src.neural_analysis.lfp_summary_ppc_profile import RepresentativePPCProfileJob
 
 
@@ -74,47 +76,6 @@ def test_production_dependencies_bind_existing_ct026_population_and_runtime_seam
     assert calls[4][1][2] is adapter.lfp_summary_runtime.load_configured_unit_spikes
 
 
-def test_slice_and_isolated_child_are_exact_scalar_work_only_seams(tmp_path: Path) -> None:
-    """Slices preserve trials/site/whole epoch/overlap and child returns scalars only."""
-    job = _job()
-    phase = SimpleNamespace(
-        trial_indices=np.array([10, 20, 30], dtype=np.int64),
-        site_valid=np.array([[True, True, False]]),
-        phase_tensor=np.ones((1, 5, 3, 2), dtype=np.complex64),
-        phase_valid=np.ones((1, 5, 3, 2), dtype=bool),
-    )
-    spikes = SimpleNamespace(
-        unit_ids=("ProbeB:1", "ProbeB:2", "ProbeB:3"),
-        trial_spike_trains=tuple(
-            SimpleNamespace(unit_id=unit, relative_spike_times=(np.array([-2., 0., 2.]),) * 3, overlap_trial_indices=np.array([20, 30], dtype=np.int64))
-            for unit in ("ProbeB:1", "ProbeB:2", "ProbeB:3")
-        ),
-    )
-    config = default_lfp_summary_config()
-    sliced = adapter.slice_ct026_profile_job(config=config, profile_job=job, scenario="combined", unit_ids=("ProbeB:1", "ProbeB:2", "ProbeB:3"), phase=phase, spikes=spikes)
-    assert sliced.scenario == "combined" and sliced.unit_ids == ("ProbeB:1", "ProbeB:2", "ProbeB:3")
-    assert sliced.trial_indices == (10, 20) and sliced.site_id == "PFC" and sliced.epoch_bounds_s == (-2.0, 2.0)
-    assert sliced.overlap_trial_indices == (20,)
-    assert sliced.phase_tensor.shape == (1, 5, 2, 2)
-    expected_seed = adapter.lfp_summary_runtime._ppc_schedule_seed(config, 0, 0, 0)
-    expected_schedule = adapter.lfp_summary_runtime._shared_derangement_schedule(2, 100, expected_seed)
-    np.testing.assert_array_equal(sliced.schedule, expected_schedule)
-    for train in sliced.prepared_spikes.trial_spike_trains:
-        np.testing.assert_array_equal(
-            train.overlap_trial_indices,
-            np.array([20], dtype=np.int64),
-        )
-
-    launches: list[object] = []
-    metrics = adapter.run_isolated_ct026_profile_job(
-        job=sliced, shuffle_count=100, work_root=tmp_path / "work",
-        process_launcher=lambda target, payload: launches.append((target, payload)) or {"total_elapsed_seconds": 2.0, "ru_maxrss": 7, "ru_maxrss_unit": "KiB"},
-    )
-    assert launches and metrics == {"total_elapsed_seconds": 2.0, "peak_memory_bytes": 7168, "peak_memory_source": "resource.getrusage(RUSAGE_SELF).ru_maxrss_kib"}
-    with pytest.raises(RuntimeError, match="exit 2"):
-        adapter.run_isolated_ct026_profile_job(job=sliced, shuffle_count=100, work_root=tmp_path / "work", process_launcher=lambda *_: {"exit_code": 2, "error": "child failed"})
-
-
 def test_recovery_only_targets_exact_runtime_locks_and_git_ignores_untracked(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
@@ -161,59 +122,11 @@ def test_recovery_rejects_symlinked_fingerprint_directories(tmp_path: Path) -> N
     assert external_lock.read_text(encoding="ascii") == "owned"
 
 
-def test_slice_resolves_nonzero_condition_site_and_preserves_executor_inputs() -> None:
-    """A 249-trial slice keeps resolved provenance and per-unit overlap identity."""
-    config = default_lfp_summary_config()
-    stable_trials = tuple(range(1_000, 1_249))
-    job = RepresentativePPCProfileJob(
-        "condition-b", "HPC1", "whole", (-2.0, 2.0), stable_trials, 249, 249, 3, 5,
-        "ProbeB active", "ProbeB:1", "ProbeB:2", "ProbeB:3", 1, 2, 3, .125, .25, .375,
-    )
-    phase = SimpleNamespace(
-        trial_indices=np.asarray(stable_trials, dtype=np.int64),
-        site_valid=np.ones((3, 249), dtype=bool),
-        phase_tensor=np.ones((3, 5, 249, 2), dtype=np.complex64), phase_valid=np.ones((3, 5, 249, 2), dtype=bool),
-        relative_time_s=np.array([-2.0, 0.0]),
-        prepared_trials=SimpleNamespace(condition_names=("condition-a", "condition-b"), condition_membership=np.column_stack((np.zeros(249, dtype=bool), np.ones(249, dtype=bool)))),
-        source_identity="phase-source",
-    )
-    unit_overlaps = (
-        np.asarray((999, stable_trials[1], stable_trials[10]), dtype=np.int64),
-        np.asarray((stable_trials[1], stable_trials[20], 1_999), dtype=np.int64),
-        np.asarray((998, stable_trials[1], stable_trials[-1]), dtype=np.int64),
-    )
-    spikes = SimpleNamespace(unit_ids=("ProbeB:1", "ProbeB:2", "ProbeB:3"), population_ids=("ProbeB active",), trial_spike_trains=tuple(
-        SimpleNamespace(
-            unit_id=unit,
-            relative_spike_times=tuple(np.array([-2., 0., 2.]) for _ in stable_trials),
-            overlap_trial_indices=overlap_trial_indices,
-        )
-        for unit, overlap_trial_indices in zip(("ProbeB:1", "ProbeB:2", "ProbeB:3"), unit_overlaps, strict=True)
-    ))
-    sliced = adapter.slice_ct026_profile_job(config=config, profile_job=job, scenario="combined", unit_ids=spikes.unit_ids, phase=phase, spikes=spikes)
-    expected = adapter.lfp_summary_runtime._shared_derangement_schedule(249, 100, adapter.lfp_summary_runtime._ppc_schedule_seed(config, 1, 1, 0))
-    assert sliced.schedule.shape == (100, 249)
-    np.testing.assert_array_equal(sliced.schedule, expected)
-    assert sliced.prepared_phase.site_id == "HPC1"
-    assert sliced.prepared_phase.condition_name == "condition-b"
-    assert sliced.prepared_phase.epoch_name == "whole"
-    assert sliced.prepared_phase.source_identity == "phase-source"
-    assert sliced.config is config
-    selected_trial_array = np.asarray(stable_trials, dtype=np.int64)
-    for train, source_overlap in zip(sliced.prepared_spikes.trial_spike_trains, unit_overlaps, strict=True):
-        assert len(train.relative_spike_times) == 249
-        assert all(np.all((values >= -2.0) & (values < 2.0)) for values in train.relative_spike_times)
-        np.testing.assert_array_equal(
-            train.overlap_trial_indices,
-            np.intersect1d(source_overlap, selected_trial_array),
-        )
-
-
 def test_default_child_launcher_runs_fresh_profile_worker_without_final_artifacts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     """The default child path is fresh-process scalar profiling, not a raising stub."""
-    job = SimpleNamespace(config="config", prepared_phase="phase", prepared_spikes="spikes", schedule=np.array([[1, 0]], dtype=np.int64))
+    job = SimpleNamespace(config="config", prepared_phase="phase", prepared_spikes="spikes")
     monkeypatch.setattr(adapter, "_profile_child_worker", lambda payload: {"total_elapsed_seconds": 1.0, "ru_maxrss": 4, "ru_maxrss_unit": "KiB", "child_pid": 999, "edge_call_count": 2})
     monkeypatch.setattr(adapter.os, "getpid", lambda: 111)
     metrics = adapter.run_isolated_ct026_profile_job(job=job, shuffle_count=100, work_root=tmp_path / "work")
@@ -221,6 +134,241 @@ def test_default_child_launcher_runs_fresh_profile_worker_without_final_artifact
     assert metrics["child_pid"] != 111
     assert metrics["edge_call_count"] == 2
     assert not list(tmp_path.rglob("*.npz")) and not list(tmp_path.rglob("manifest.json"))
+
+
+def test_profile_child_binds_grouped_serial_profiler_and_forwards_only_scalars(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The S6 child uses the production grouped profiler, never the legacy job path.
+
+    This is a fully injected child boundary: real runtime validators accept the
+    tiny complete prepared phase/spike records, while no CT026 path is opened.
+    The grouped profiler returns every public scalar field; a second invocation
+    proves that a private plan is rejected rather than silently filtered.
+    """
+    defaults = default_lfp_summary_config()
+    config = replace(
+        defaults,
+        unit_population=UnitPopulationConfig(
+            label="synthetic-profile-population",
+            probe_label="PFC",
+            sorter_path=None,
+            aligned_spike_path=None,
+            selected_channels=(0,),
+            quality_settings=(),
+            stable_unit_ids=("PFC:1", "PFC:2", "PFC:3"),
+        ),
+        phase=replace(defaults.phase, frequency_hz=(8.0, 40.0)),
+        ppc=replace(defaults.ppc, shuffle_count=100),
+        ppc_execution=replace(defaults.ppc_execution, worker_count=1),
+    )
+    trial_indices = np.arange(1000, 1260, dtype=np.int64)
+    trial_count = trial_indices.size
+    selected_trial_indices = trial_indices[:249]
+    time_s = np.array([-2.0, 0.0], dtype=float)
+    prepared_trials = PreparedTrials(
+        condition_names=("condition-a", "condition-b"),
+        condition_membership=np.column_stack(
+            (
+                np.arange(trial_count) < 249,
+                np.arange(trial_count) >= 249,
+            )
+        ),
+        filter_membership=np.ones(trial_count, dtype=bool),
+        user_excluded=np.zeros(trial_count, dtype=bool),
+        objective_valid=np.ones(trial_count, dtype=bool),
+        objective_exclusion_reason=np.full(trial_count, "", dtype="<U1"),
+        user_exclusion_reason=np.full(trial_count, "", dtype="<U1"),
+        site_validity={
+            site.stable_id: (
+                np.arange(trial_count) < 255 if site.stable_id == "PFC" else np.ones(trial_count, dtype=bool)
+            )
+            for site in config.sites
+        },
+        pair_validity={pair: np.ones(trial_count, dtype=bool) for pair in config.site_pairs},
+    )
+    prepared_phase = adapter.lfp_summary_runtime.PreparedPhaseRun(
+        trial_indices=trial_indices,
+        alignment_times_s=np.arange(trial_count, dtype=float),
+        prepared_trials=prepared_trials,
+        phase_tensor=np.ones((len(config.sites), 2, trial_count, 2), dtype=np.complex64),
+        phase_valid=np.ones((len(config.sites), 2, trial_count, 2), dtype=bool),
+        relative_time_s=time_s,
+        site_valid=np.vstack(
+            (
+                np.arange(trial_count) < 255,
+                np.ones(trial_count, dtype=bool),
+                np.ones(trial_count, dtype=bool),
+            )
+        ),
+        pair_valid=np.ones((len(config.site_pairs), trial_count), dtype=bool),
+        source_trace=np.zeros((len(config.sites), trial_count, 2), dtype=float),
+    )
+    prepared_spikes = adapter.lfp_summary_runtime.PreparedSpikeRun(
+        unit_ids=("PFC:1", "PFC:2", "PFC:3"),
+        population_ids=("synthetic-profile-population",),
+        trial_spike_trains=tuple(
+            TrialRelativeSpikeTrains(
+                unit_id=unit_id,
+                relative_spike_times=tuple(
+                    np.array([-1.0, 1.0]) for _ in range(trial_count)
+                ),
+                overlap_trial_indices=np.empty(0, dtype=np.int64),
+            )
+            for unit_id in ("PFC:1", "PFC:2", "PFC:3")
+        ),
+    )
+    adapter.lfp_summary_runtime._validate_prepared_phase_run(config, prepared_phase)
+    adapter.lfp_summary_runtime._validate_prepared_spike_run(
+        config, prepared_phase, prepared_spikes
+    )
+    profile_job = RepresentativePPCProfileJob(
+        condition_name="condition-a",
+        site_id="PFC",
+        epoch_name="whole",
+        epoch_bounds_s=(-2.0, 2.0),
+        trial_indices=tuple(int(value) for value in selected_trial_indices),
+        trial_count=249,
+        site_valid_trial_count=249,
+        unit_count=3,
+        frequency_count=2,
+        population_id="synthetic-profile-population",
+        low_unit_id="PFC:1",
+        median_unit_id="PFC:2",
+        high_unit_id="PFC:3",
+        low_spike_count=498,
+        median_spike_count=498,
+        high_spike_count=498,
+        low_spike_rate_hz=0.5,
+        median_spike_rate_hz=0.5,
+        high_spike_rate_hz=0.5,
+    )
+    job = adapter.slice_ct026_profile_job(
+        config=config,
+        profile_job=profile_job,
+        scenario="median",
+        unit_ids=("PFC:2",),
+        phase=prepared_phase,
+        spikes=prepared_spikes,
+    )
+    assert job.prepared_phase.trial_indices.tolist() == selected_trial_indices.tolist()
+    assert job.prepared_phase.phase_tensor.shape == (len(config.sites), 2, 249, 2)
+    assert job.prepared_spikes.unit_ids == ("PFC:2",)
+    assert job.config.unit_population.stable_unit_ids == ("PFC:2",)
+    adapter.lfp_summary_runtime._validate_prepared_phase_run(job.config, job.prepared_phase)
+    adapter.lfp_summary_runtime._validate_prepared_spike_run(
+        job.config, job.prepared_phase, job.prepared_spikes
+    )
+    calls: list[dict[str, object]] = []
+
+    def grouped_profile(**kwargs: object) -> object:
+        """Derive every union scalar from the supplied real base/projection plans."""
+        calls.append(kwargs)
+        base_plan = kwargs["component_plan"]
+        projections = dict(kwargs["projection_plans"])
+        plan_100 = projections[100]
+        plan_1000 = projections[1000]
+        return SimpleNamespace(
+            schema_version="grouped_ppc_profile_result.v1",
+            profile_kind="grouped_serial_ppc",
+            run_fingerprint="e" * 64,
+            geometry_build_seconds=0.1,
+            observed_reduction_seconds=0.2,
+            union_edge_reduction_seconds=0.3,
+            shuffle_aggregation_seconds=0.4,
+            null_summarization_seconds=0.5,
+            representative_histogram_seconds=0.6,
+            checkpoint_overhead_seconds=0.7,
+            total_elapsed_seconds=1.5,
+            throughput_scheduled_edge_per_second=base_plan.scheduled_edge_count / 1.5,
+            scheduled_edge_count=base_plan.scheduled_edge_count,
+            independent_edge_count=base_plan.independent_edge_count,
+            unique_site_qualified_union_edge_count=base_plan.union_edge_count,
+            edge_union_saturation=base_plan.edge_union_saturation,
+            edge_reuse_ratio=base_plan.edge_reuse_ratio,
+            planned_parent_private_bytes=4096,
+            planned_worker_private_bytes=2048,
+            shared_phase_mmap_bytes=4096,
+            planned_aggregate_array_bytes=8192,
+            measured_peak_process_rss_bytes=6144,
+            measured_peak_aggregate_rss_bytes=7168,
+            measured_peak_aggregate_pss_bytes=6656,
+            measured_memory_source="injected_rss_pss_sampler",
+            projection_100_scheduled_edge_count=plan_100.scheduled_edge_count,
+            projection_100_independent_edge_count=plan_100.independent_edge_count,
+            projection_100_unique_site_qualified_union_edge_count=plan_100.union_edge_count,
+            projection_100_edge_union_saturation=plan_100.edge_union_saturation,
+            projection_100_edge_reuse_ratio=plan_100.edge_reuse_ratio,
+            projection_1000_scheduled_edge_count=plan_1000.scheduled_edge_count,
+            projection_1000_independent_edge_count=plan_1000.independent_edge_count,
+            projection_1000_unique_site_qualified_union_edge_count=plan_1000.union_edge_count,
+            projection_1000_edge_union_saturation=plan_1000.edge_union_saturation,
+            projection_1000_edge_reuse_ratio=plan_1000.edge_reuse_ratio,
+        )
+
+    monkeypatch.setattr(adapter, "profile_grouped_ppc_component", grouped_profile)
+    monkeypatch.setattr(
+        adapter,
+        "profile_production_ppc_job",
+        lambda **_: (_ for _ in ()).throw(AssertionError("legacy profiler called")),
+    )
+
+    metrics = adapter._profile_child_worker(
+        {"job": job, "shuffle_count": 100, "work_root": tmp_path / "work"}
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["config"] is job.config
+    assert calls[0]["execution"] is job.execution
+    assert calls[0]["prepared_phase"] is job.prepared_phase
+    assert calls[0]["prepared_spikes"] is job.prepared_spikes
+    assert calls[0]["work_root"] == tmp_path / "work"
+    assert "schedule" not in calls[0]
+    base_plan = calls[0]["component_plan"]
+    assert tuple(count for count, _plan in calls[0]["projection_plans"]) == (100, 1000)
+    assert metrics["schema_version"] == "grouped_ppc_profile_result.v1"
+    assert metrics["profile_kind"] == "grouped_serial_ppc"
+    assert metrics["run_fingerprint"] == "e" * 64
+    assert metrics["scheduled_edge_count"] == base_plan.scheduled_edge_count
+    assert metrics["independent_edge_count"] == base_plan.independent_edge_count
+    assert metrics["unique_site_qualified_union_edge_count"] == base_plan.union_edge_count
+    assert metrics["projection_100_scheduled_edge_count"] == calls[0]["projection_plans"][0][1].scheduled_edge_count
+    assert metrics["projection_1000_scheduled_edge_count"] == calls[0]["projection_plans"][1][1].scheduled_edge_count
+    assert metrics["scheduled_edge_count"] == metrics["projection_100_scheduled_edge_count"]
+    assert metrics["projection_1000_scheduled_edge_count"] == 10 * metrics["scheduled_edge_count"]
+    assert set(metrics) == {
+        "schema_version", "profile_kind", "run_fingerprint",
+        "geometry_build_seconds", "observed_reduction_seconds",
+        "union_edge_reduction_seconds", "shuffle_aggregation_seconds",
+        "null_summarization_seconds", "representative_histogram_seconds",
+        "checkpoint_overhead_seconds", "total_elapsed_seconds",
+        "throughput_scheduled_edge_per_second", "scheduled_edge_count",
+        "independent_edge_count", "unique_site_qualified_union_edge_count",
+        "edge_union_saturation", "edge_reuse_ratio",
+        "planned_parent_private_bytes", "planned_worker_private_bytes",
+        "shared_phase_mmap_bytes", "planned_aggregate_array_bytes",
+        "measured_peak_process_rss_bytes", "measured_peak_aggregate_rss_bytes",
+        "measured_peak_aggregate_pss_bytes", "measured_memory_source",
+        "projection_100_scheduled_edge_count", "projection_100_independent_edge_count",
+        "projection_100_unique_site_qualified_union_edge_count",
+        "projection_100_edge_union_saturation", "projection_100_edge_reuse_ratio",
+        "projection_1000_scheduled_edge_count", "projection_1000_independent_edge_count",
+        "projection_1000_unique_site_qualified_union_edge_count",
+        "projection_1000_edge_union_saturation", "projection_1000_edge_reuse_ratio",
+        "ru_maxrss", "ru_maxrss_unit", "child_pid",
+    }
+    assert all(not isinstance(value, np.ndarray) for value in metrics.values())
+
+    def grouped_profile_with_private_plan(**kwargs: object) -> object:
+        """Attempt to cross the child boundary with a private plan object."""
+        return SimpleNamespace(**vars(grouped_profile(**kwargs)), private_plan=object())
+
+    monkeypatch.setattr(adapter, "profile_grouped_ppc_component", grouped_profile_with_private_plan)
+    with pytest.raises(ValueError, match="scalar"):
+        adapter._profile_child_worker(
+            {"job": job, "shuffle_count": 100, "work_root": tmp_path / "work"}
+        )
 
 
 def test_default_child_launcher_bounds_timeout_and_handles_pipe_eof() -> None:

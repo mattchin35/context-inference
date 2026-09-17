@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from src.neural_analysis.lfp_summary_ct026_profile_adapter import (
@@ -14,6 +15,7 @@ from src.neural_analysis.lfp_summary_ct026_profile_adapter import (
     run_ct026_ppc_profile_adapter,
 )
 from src.neural_analysis.lfp_summary_ct026_profile_locks import acquire_ct026_profile_run_lock
+from src.neural_analysis.lfp_summary_ct026_profile_runner import run_ct026_ppc_profile
 from src.neural_analysis.lfp_summary_ppc_profile import RepresentativePPCProfileJob
 
 
@@ -246,6 +248,148 @@ def test_ct026_adapter_forwards_exact_resume_and_never_constructs_preview_artifa
     assert events == ["recover", "child"]
     assert "write_component_transaction" not in captured
     assert "build_spike_phase_payload" not in captured
+
+
+def test_ct026_adapter_rejects_non_scalar_child_profile_metrics_before_runner(
+    tmp_path: Path,
+) -> None:
+    """The adapter enforces S6's scalar-only boundary before runner persistence.
+
+    All dependencies are injected and no CT026 data path is opened. A child
+    that attempts to return a phase-like ndarray must be rejected in the
+    adapter callback itself, so generic runners cannot accidentally retain it
+    in state, JSON, Markdown, or process-to-process metrics.
+    """
+    def generic_runner(**kwargs: object) -> object:
+        """Call only one adapter profile callback under a synthetic runner."""
+        with pytest.raises(ValueError, match="scalar"):
+            kwargs["profile_job"](
+                scenario="low",
+                phase="phase",
+                spikes="spikes",
+                shuffle_count=100,
+                work_root=tmp_path / "work" / "low",
+            )
+        return SimpleNamespace(profiles={})
+
+    @contextmanager
+    def run_lock(**_: object):
+        """Supply the adapter's required synthetic lock context."""
+        yield
+
+    dependencies = CT026PPCProfileAdapterDependencies(
+        build_config=lambda _session, _population: "config",
+        load_active_population=lambda _session: "population",
+        prepare_phase=lambda _config, **_: "phase",
+        prepare_spikes=lambda _config, _phase: "spikes",
+        select_profile_job=lambda _config, _phase, _spikes: _representative_job(),
+        slice_profile_job=lambda **_: "slice",
+        run_isolated_profile_job=lambda **_: {
+            "total_elapsed_seconds": 1.0,
+            "forbidden_phase_tensor": np.ones((1,), dtype=np.complex64),
+        },
+        run_profile=generic_runner,
+        config_fingerprint=lambda _: "config-id",
+        source_fingerprint=lambda _: "source-id",
+        git_fingerprint=lambda: "git-id",
+        monotonic_seconds=lambda: 0.0,
+        acquire_run_lock=run_lock,
+        recover_profile_work=lambda **_: None,
+    )
+
+    result = run_ct026_ppc_profile_adapter(
+        session_path=tmp_path / "synthetic-session",
+        analysis_root=tmp_path / "analysis-runs",
+        dependencies=dependencies,
+    )
+
+    assert result.profiles == {}
+
+
+def test_ct026_adapter_real_runner_persists_post_child_scalar_provenance(
+    tmp_path: Path,
+) -> None:
+    """Adapter-to-runner integration preserves the post-child scalar profile map.
+
+    The injected child returns the exact scalar shape produced after
+    ``run_isolated_ct026_profile_job``: RSS has been renamed to
+    ``peak_memory_bytes``, its source is explicit, child PID is retained, and
+    the transient ``ru_maxrss`` fields are absent. No subprocess, CT026 path,
+    phase tensor, spike tensor, schedule, final artifact, or manifest is used.
+    The versioned runner document deliberately accepts and persists these
+    provenance scalars beside the complete grouped metrics.
+    """
+    grouped_metrics = {
+        "schema_version": "grouped_ppc_profile_result.v1",
+        "profile_kind": "grouped_serial_ppc",
+        "run_fingerprint": "a" * 64,
+        "geometry_build_seconds": 0.1,
+        "observed_reduction_seconds": 0.2,
+        "union_edge_reduction_seconds": 0.3,
+        "shuffle_aggregation_seconds": 0.4,
+        "null_summarization_seconds": 0.5,
+        "representative_histogram_seconds": 0.6,
+        "checkpoint_overhead_seconds": 0.7,
+        "total_elapsed_seconds": 1.0,
+        "throughput_scheduled_edge_per_second": 2400.0,
+        "scheduled_edge_count": 2400,
+        "independent_edge_count": 24,
+        "unique_site_qualified_union_edge_count": 8,
+        "edge_union_saturation": 1.0,
+        "edge_reuse_ratio": 3.0,
+        "planned_parent_private_bytes": 4096,
+        "planned_worker_private_bytes": 2048,
+        "shared_phase_mmap_bytes": 4096,
+        "planned_aggregate_array_bytes": 8192,
+        "measured_peak_process_rss_bytes": 6144,
+        "measured_peak_aggregate_rss_bytes": 7168,
+        "measured_peak_aggregate_pss_bytes": 6656,
+        "measured_memory_source": "injected_rss_pss_sampler",
+        "projection_100_scheduled_edge_count": 2400,
+        "projection_100_independent_edge_count": 24,
+        "projection_100_unique_site_qualified_union_edge_count": 8,
+        "projection_100_edge_union_saturation": 1.0,
+        "projection_100_edge_reuse_ratio": 3.0,
+        "projection_1000_scheduled_edge_count": 24000,
+        "projection_1000_independent_edge_count": 24,
+        "projection_1000_unique_site_qualified_union_edge_count": 8,
+        "projection_1000_edge_union_saturation": 1.0,
+        "projection_1000_edge_reuse_ratio": 3.0,
+        "peak_memory_bytes": 7168,
+        "peak_memory_source": "resource.getrusage(RUSAGE_SELF).ru_maxrss_kib",
+        "child_pid": 12345,
+    }
+    dependencies = CT026PPCProfileAdapterDependencies(
+        build_config=lambda _session, _population: "config",
+        load_active_population=lambda _session: "population",
+        prepare_phase=lambda _config, **_: "phase",
+        prepare_spikes=lambda _config, _phase: "spikes",
+        select_profile_job=lambda _config, _phase, _spikes: _representative_job(),
+        slice_profile_job=lambda **_: "complete-grouped-job",
+        run_isolated_profile_job=lambda **_: dict(grouped_metrics),
+        run_profile=run_ct026_ppc_profile,
+        config_fingerprint=lambda _: "config-id",
+        source_fingerprint=lambda _: "source-id",
+        git_fingerprint=lambda: "git-id",
+        monotonic_seconds=lambda: 0.0,
+        acquire_run_lock=lambda *_: nullcontext(),
+        recover_profile_work=lambda **_: None,
+    )
+
+    result = run_ct026_ppc_profile_adapter(
+        session_path=tmp_path / "synthetic-session",
+        analysis_root=tmp_path / "analysis-runs",
+        dependencies=dependencies,
+    )
+
+    persisted = result.profiles["low"]
+    assert persisted["peak_memory_bytes"] == 7168
+    assert persisted["peak_memory_source"] == "resource.getrusage(RUSAGE_SELF).ru_maxrss_kib"
+    assert persisted["child_pid"] == 12345
+    assert "ru_maxrss" not in persisted and "ru_maxrss_unit" not in persisted
+    document = json.loads(result.profile_path.read_text(encoding="utf-8"))
+    assert document["profile_schema_version"] == "ct026_grouped_ppc_profile.v1"
+    assert set(grouped_metrics).issubset(persisted)
 
 
 def test_ct026_profile_run_lock_preserves_live_foreign_and_mismatched_locks(

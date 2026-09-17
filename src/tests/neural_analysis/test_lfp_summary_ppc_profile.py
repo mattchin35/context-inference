@@ -28,6 +28,7 @@ from src.neural_analysis.lfp_summary_ppc_profile import (
     representative_serial_ppc_workloads,
     select_representative_ppc_profile_job,
 )
+from src.neural_analysis import lfp_summary_ppc_profile as ppc_profile
 
 
 def _serial_execution(*, checkpoints: bool = True) -> PPCExecutionConfig:
@@ -459,3 +460,497 @@ def test_production_ppc_job_profile_restores_wrappers_after_executor_failure(
     assert lfp_summary_ppc_runtime._compute_observed_block is fail_observed
     assert not list(tmp_path.rglob("manifest.json"))
     assert not list(tmp_path.rglob("component.json"))
+
+
+def _grouped_plan_for_profile_metadata(
+    *,
+    selected_trial_count: int = 3,
+    shuffle_count: int = 3,
+    seed: int = 19,
+    site_ids: tuple[str, ...] = ("PFC", "HPC"),
+    stable_row_start: int = 101,
+    unit_count: int = 1,
+    frequency_count: int = 2,
+    shared_phase_mmap_bytes: int = 4096,
+) -> object:
+    """Return a pure two-site grouped plan with no phase or spike payloads.
+
+    The returned plan has categorical trial/site identities, a Boolean
+    ``(trial, condition)`` membership matrix, and int64
+    ``(trial, unit, before_after)`` source counts only.  It is intentionally
+    sufficient for schedule-union accounting while containing no CT026 or
+    scientific input arrays.
+    """
+    defaults = default_lfp_summary_config()
+    config = replace(
+        defaults,
+        ppc=replace(defaults.ppc, shuffle_count=shuffle_count, seed=seed),
+        ppc_execution=replace(
+            defaults.ppc_execution,
+            worker_count=1,
+            unit_block_size=1,
+            shuffle_block_size=1,
+            trial_edge_block_size=1,
+        ),
+    )
+    membership = np.zeros((selected_trial_count, 2), dtype=bool)
+    if selected_trial_count >= 1:
+        membership[0, 0] = True
+    if selected_trial_count >= 2:
+        membership[1, :] = True
+    if selected_trial_count >= 3:
+        membership[2, 1] = True
+    return lfp_summary_ppc_runtime.plan_grouped_ppc_component(
+        config=config,
+        condition_names=("condition-a", "condition-b"),
+        condition_membership=membership,
+        site_ids=site_ids,
+        site_trial_valid=np.ones((len(site_ids), selected_trial_count), dtype=bool),
+        stable_trial_rows=np.arange(
+            stable_row_start,
+            stable_row_start + selected_trial_count,
+            dtype=np.int64,
+        ),
+        source_trial_spike_count=np.zeros(
+            (selected_trial_count, unit_count, 2), dtype=np.int64
+        ),
+        frequency_count=frequency_count,
+        shared_phase_mmap_bytes=shared_phase_mmap_bytes,
+    )
+
+
+def test_grouped_profile_metadata_reports_scalar_union_cost_memory_and_projections() -> None:
+    """Grouped profile metadata is scalar-only and derives plan cost exactly.
+
+    The supplied pure plan has 12 result jobs (two sites, two conditions, and
+    three epochs), three scheduled derangements per job, 24 independently
+    requested physical edges, and eight unique site-qualified union edges.
+    The 100/1000-shuffle projections use separately supplied real planner
+    outputs rather than linearly scaling the three-shuffle union. Planned
+    private bytes remain planner estimates, while measured RSS/PSS is a
+    separate observed boundary with its source.
+    """
+    plan = _grouped_plan_for_profile_metadata()
+    plan_100 = _grouped_plan_for_profile_metadata(shuffle_count=100)
+    plan_1000 = _grouped_plan_for_profile_metadata(shuffle_count=1000)
+
+    first = ppc_profile.summarize_grouped_ppc_profile_metadata(
+        component_plan=plan,
+        run_fingerprint="a" * 64,
+        measured_memory={
+            "peak_process_rss_bytes": 8192,
+            "peak_aggregate_rss_bytes": 12288,
+            "peak_aggregate_pss_bytes": 10240,
+            "memory_source": "injected_rss_pss_sampler",
+        },
+        projection_plans=((100, plan_100), (1000, plan_1000)),
+    )
+    second = ppc_profile.summarize_grouped_ppc_profile_metadata(
+        component_plan=plan,
+        run_fingerprint="a" * 64,
+        measured_memory={
+            "peak_process_rss_bytes": 8192,
+            "peak_aggregate_rss_bytes": 12288,
+            "peak_aggregate_pss_bytes": 10240,
+            "memory_source": "injected_rss_pss_sampler",
+        },
+        projection_plans=((100, plan_100), (1000, plan_1000)),
+    )
+
+    assert first == second
+    assert first.schema_version == "grouped_ppc_profile_metadata.v1"
+    assert first.profile_kind == "grouped_serial_ppc"
+    assert first.run_fingerprint == "a" * 64
+    assert first.scheduled_edge_count == 72
+    assert first.independent_edge_count == 24
+    assert first.unique_site_qualified_union_edge_count == 8
+    assert first.edge_union_saturation == 1.0
+    assert first.edge_reuse_ratio == 3.0
+    assert first.planned_parent_private_bytes == plan.allocation_estimate.planned_parent_private_bytes
+    assert first.planned_worker_private_bytes == plan.allocation_estimate.planned_worker_private_bytes
+    assert first.shared_phase_mmap_bytes == 4096
+    assert first.planned_aggregate_array_bytes == plan.allocation_estimate.planned_aggregate_array_bytes
+    assert first.measured_peak_process_rss_bytes == 8192
+    assert first.measured_peak_aggregate_rss_bytes == 12288
+    assert first.measured_peak_aggregate_pss_bytes == 10240
+    assert first.measured_memory_source == "injected_rss_pss_sampler"
+    assert first.projection_100_scheduled_edge_count == 2400
+    assert first.projection_100_independent_edge_count == 24
+    assert first.projection_100_unique_site_qualified_union_edge_count == 8
+    assert first.projection_100_edge_union_saturation == 1.0
+    assert first.projection_100_edge_reuse_ratio == 3.0
+    assert first.projection_1000_scheduled_edge_count == 24000
+    assert first.projection_1000_independent_edge_count == 24
+    assert first.projection_1000_unique_site_qualified_union_edge_count == 8
+    assert first.projection_1000_edge_union_saturation == 1.0
+    assert first.projection_1000_edge_reuse_ratio == 3.0
+    assert all(
+        not isinstance(value, (np.ndarray, dict, list, tuple))
+        for value in vars(first).values()
+    )
+
+
+def test_grouped_profile_metadata_rejects_empty_singleton_malformed_and_overflow_cases() -> None:
+    """Metadata-only accounting rejects ambiguous projections before any execution.
+
+    Empty/singleton plans report zero demand and reuse. Malformed fingerprints,
+    unordered projection requests, raw arrays in measured-memory metadata, and
+    mismatched projection labels fail before any grouped executor or artifact
+    operation is possible.
+    """
+    singleton_plan = _grouped_plan_for_profile_metadata(selected_trial_count=1)
+    empty = ppc_profile.summarize_grouped_ppc_profile_metadata(
+        component_plan=singleton_plan,
+        run_fingerprint="b" * 64,
+        measured_memory={
+            "peak_process_rss_bytes": 0,
+            "peak_aggregate_rss_bytes": 0,
+            "peak_aggregate_pss_bytes": 0,
+            "memory_source": "not_sampled",
+        },
+        projection_plans=(
+            (100, _grouped_plan_for_profile_metadata(selected_trial_count=1, shuffle_count=100)),
+            (1000, _grouped_plan_for_profile_metadata(selected_trial_count=1, shuffle_count=1000)),
+        ),
+    )
+    assert empty.scheduled_edge_count == 0
+    assert empty.independent_edge_count == 0
+    assert empty.unique_site_qualified_union_edge_count == 0
+    assert empty.edge_union_saturation == 0.0
+    assert empty.edge_reuse_ratio == 0.0
+    for prefix in ("projection_100", "projection_1000"):
+        assert getattr(empty, f"{prefix}_scheduled_edge_count") == 0
+        assert getattr(empty, f"{prefix}_independent_edge_count") == 0
+        assert getattr(empty, f"{prefix}_unique_site_qualified_union_edge_count") == 0
+        assert getattr(empty, f"{prefix}_edge_union_saturation") == 0.0
+        assert getattr(empty, f"{prefix}_edge_reuse_ratio") == 0.0
+    unavailable = ppc_profile.summarize_grouped_ppc_profile_metadata(
+        component_plan=_grouped_plan_for_profile_metadata(),
+        run_fingerprint="f" * 64,
+        measured_memory={
+            "peak_process_rss_bytes": 1,
+            "peak_aggregate_rss_bytes": None,
+            "peak_aggregate_pss_bytes": None,
+            "memory_source": "aggregate_rss_pss_unavailable",
+        },
+        projection_plans=(
+            (100, _grouped_plan_for_profile_metadata(shuffle_count=100)),
+            (1000, _grouped_plan_for_profile_metadata(shuffle_count=1000)),
+        ),
+    )
+    assert unavailable.measured_peak_aggregate_rss_bytes is None
+    assert unavailable.measured_peak_aggregate_pss_bytes is None
+
+    common = {
+        "component_plan": _grouped_plan_for_profile_metadata(),
+        "run_fingerprint": "c" * 64,
+        "measured_memory": {
+            "peak_process_rss_bytes": 1,
+            "peak_aggregate_rss_bytes": 1,
+            "peak_aggregate_pss_bytes": 1,
+            "memory_source": "sampler",
+        },
+    }
+    with pytest.raises(ValueError, match="fingerprint"):
+        ppc_profile.summarize_grouped_ppc_profile_metadata(
+            **{**common, "run_fingerprint": "not-a-fingerprint"},
+            projection_plans=((100, _grouped_plan_for_profile_metadata(shuffle_count=100)),),
+        )
+    with pytest.raises(ValueError, match="ordered"):
+        ppc_profile.summarize_grouped_ppc_profile_metadata(
+            **common,
+            projection_plans=(
+                (1000, _grouped_plan_for_profile_metadata(shuffle_count=1000)),
+                (100, _grouped_plan_for_profile_metadata(shuffle_count=100)),
+            ),
+        )
+    with pytest.raises(ValueError, match="scalar"):
+        ppc_profile.summarize_grouped_ppc_profile_metadata(
+            **{
+                **common,
+                "measured_memory": {
+                    "peak_process_rss_bytes": np.array([1], dtype=np.int64),
+                    "peak_aggregate_rss_bytes": 1,
+                    "peak_aggregate_pss_bytes": 1,
+                    "memory_source": "sampler",
+                },
+            },
+            projection_plans=((100, _grouped_plan_for_profile_metadata(shuffle_count=100)),),
+        )
+    for invalid_memory in (
+        {
+            "peak_process_rss_bytes": True,
+            "peak_aggregate_rss_bytes": 1,
+            "peak_aggregate_pss_bytes": 1,
+            "memory_source": "sampler",
+        },
+        {
+            "peak_process_rss_bytes": -1,
+            "peak_aggregate_rss_bytes": 1,
+            "peak_aggregate_pss_bytes": 1,
+            "memory_source": "sampler",
+        },
+        {
+            "peak_process_rss_bytes": 1,
+            "peak_aggregate_rss_bytes": float("inf"),
+            "peak_aggregate_pss_bytes": 1,
+            "memory_source": "sampler",
+        },
+        {
+            "peak_process_rss_bytes": 1,
+            "peak_aggregate_rss_bytes": 1,
+            "memory_source": "sampler",
+        },
+        {
+            "peak_process_rss_bytes": 1,
+            "peak_aggregate_rss_bytes": 1,
+            "peak_aggregate_pss_bytes": 1,
+            "memory_source": "sampler",
+            "unexpected": 1,
+        },
+        {
+            "peak_process_rss_bytes": 1,
+            "peak_aggregate_rss_bytes": 4,
+            "peak_aggregate_pss_bytes": 5,
+            "memory_source": "sampler",
+        },
+    ):
+        with pytest.raises(ValueError, match="memory"):
+            ppc_profile.summarize_grouped_ppc_profile_metadata(
+                **{**common, "measured_memory": invalid_memory},
+                projection_plans=(
+                    (100, _grouped_plan_for_profile_metadata(shuffle_count=100)),
+                ),
+            )
+    for invalid_projections in (
+        ((True, _grouped_plan_for_profile_metadata(shuffle_count=100)),),
+        ((0, _grouped_plan_for_profile_metadata(shuffle_count=100)),),
+        (
+            (100, _grouped_plan_for_profile_metadata(shuffle_count=100)),
+            (100, _grouped_plan_for_profile_metadata(shuffle_count=100)),
+        ),
+    ):
+        with pytest.raises(ValueError, match="projection"):
+            ppc_profile.summarize_grouped_ppc_profile_metadata(
+                **common, projection_plans=invalid_projections
+            )
+    for mismatched_plan in (
+        _grouped_plan_for_profile_metadata(shuffle_count=100, selected_trial_count=1),
+        _grouped_plan_for_profile_metadata(shuffle_count=100, site_ids=("PFC",)),
+        _grouped_plan_for_profile_metadata(shuffle_count=100, stable_row_start=901),
+        _grouped_plan_for_profile_metadata(shuffle_count=100, seed=99),
+        _grouped_plan_for_profile_metadata(shuffle_count=100, unit_count=2),
+        _grouped_plan_for_profile_metadata(shuffle_count=100, frequency_count=3),
+        _grouped_plan_for_profile_metadata(shuffle_count=100, shared_phase_mmap_bytes=8192),
+    ):
+        with pytest.raises(ValueError, match="projection"):
+            ppc_profile.summarize_grouped_ppc_profile_metadata(
+                **common, projection_plans=((100, mismatched_plan),)
+            )
+    with pytest.raises(ValueError, match="shuffle"):
+        ppc_profile.summarize_grouped_ppc_profile_metadata(
+            **common,
+            projection_plans=((1000, _grouped_plan_for_profile_metadata(shuffle_count=100)),),
+        )
+
+
+def test_grouped_profile_binds_one_grouped_executor_and_returns_scalar_product(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The grouped serial profiler invokes only the grouped production seam.
+
+    The injected grouped result deliberately contains a scientific summary
+    array. The profiler may inspect its immutable plan and run fingerprint but
+    must return scalar stage, union, planned-memory, and measured-memory
+    fields only; it cannot leak phase, spike, schedule, null, histogram, or
+    final-artifact tensors into the profile product. The legacy single-job
+    executor is forbidden on this grouped path.
+
+    S6 source scope is deliberately limited to extracting the narrow private
+    ``_record_grouped_representative_histogram`` seam in
+    ``lfp_summary_ppc_runtime.py``. It exists only to time histogram counting;
+    no broader grouped-runtime behavior or science is changed.
+    """
+    config = _production_config()
+    plan = _grouped_plan_for_profile_metadata()
+    grouped_calls: list[dict[str, object]] = []
+
+    def geometry(*_: object, **__: object) -> None:
+        """Act as the production geometry seam without creating sampled arrays."""
+
+    def histogram(*_: object, **__: object) -> None:
+        """Act as the histogram-only count seam nested in observation."""
+
+    def observed(*_: object, **__: object) -> None:
+        """Invoke the nested histogram seam to prove inclusive stage timing."""
+        lfp_summary_ppc_runtime._record_grouped_representative_histogram()
+
+    def union_edge(*_: object, **__: object) -> None:
+        """Act as one grouped site-qualified edge-union reducer call."""
+
+    def null_summary(*_: object, **__: object) -> None:
+        """Act as a null-summary reduction nested in shuffle aggregation."""
+
+    def shuffle(*_: object, **__: object) -> None:
+        """Invoke the nested null-summary seam for inclusive timing semantics."""
+        lfp_summary_ppc_runtime.spike_lfp_summary.summarize_permutation_null()
+
+    def checkpoint(*_: object, **__: object) -> None:
+        """Act as one grouped checkpoint-publication seam."""
+
+    originals = {
+        "geometry": geometry,
+        "observed": observed,
+        "union_edge": union_edge,
+        "shuffle": shuffle,
+        "null": null_summary,
+        "histogram": histogram,
+        "checkpoint": checkpoint,
+    }
+    monkeypatch.setattr(lfp_summary_ppc_runtime, "build_source_trial_spike_geometry", geometry)
+    monkeypatch.setattr(
+        lfp_summary_ppc_runtime,
+        "compute_selected_observed_trial_segmented_ppc_statistics",
+        observed,
+    )
+    monkeypatch.setattr(lfp_summary_ppc_runtime, "compute_segmented_edge_statistics", union_edge)
+    monkeypatch.setattr(lfp_summary_ppc_runtime, "_execute_grouped_condition_batch", shuffle)
+    monkeypatch.setattr(
+        lfp_summary_ppc_runtime.spike_lfp_summary,
+        "summarize_permutation_null",
+        null_summary,
+    )
+    monkeypatch.setattr(
+        lfp_summary_ppc_runtime,
+        "_record_grouped_representative_histogram",
+        histogram,
+        raising=False,
+    )
+    monkeypatch.setattr(lfp_summary_ppc_runtime, "write_ppc_checkpoint", checkpoint)
+
+    def grouped_executor(**kwargs: object) -> object:
+        """Record the one production grouped invocation and return test metadata."""
+        grouped_calls.append(kwargs)
+        lfp_summary_ppc_runtime.build_source_trial_spike_geometry()
+        lfp_summary_ppc_runtime.compute_selected_observed_trial_segmented_ppc_statistics()
+        lfp_summary_ppc_runtime.compute_segmented_edge_statistics()
+        lfp_summary_ppc_runtime._execute_grouped_condition_batch()
+        lfp_summary_ppc_runtime.write_ppc_checkpoint()
+        return SimpleNamespace(
+            run_fingerprint="d" * 64,
+            component_plan=plan,
+            summary_arrays={"ppc": np.ones((1, 1, 1, 1, 1), dtype=float)},
+        )
+
+    monkeypatch.setattr(
+        lfp_summary_ppc_runtime,
+        "execute_grouped_ppc_component",
+        grouped_executor,
+    )
+    monkeypatch.setattr(
+        lfp_summary_ppc_runtime,
+        "execute_ppc_blocks",
+        lambda **_: (_ for _ in ()).throw(AssertionError("legacy executor called")),
+    )
+    clock_values = count(start=0)
+
+    result = ppc_profile.profile_grouped_ppc_component(
+        config=config,
+        execution=config.ppc_execution,
+        prepared_phase=SimpleNamespace(phase_tensor=np.ones((1,), dtype=np.complex64)),
+        prepared_spikes=SimpleNamespace(trial_spike_trains=()),
+        work_root=tmp_path,
+        clock=lambda: float(next(clock_values)),
+        memory_sampler=lambda: {
+            "peak_process_rss_bytes": 4096,
+            "peak_aggregate_rss_bytes": 6144,
+            "peak_aggregate_pss_bytes": 5120,
+            "memory_source": "injected_rss_pss_sampler",
+        },
+        projection_plans=(
+            (100, _grouped_plan_for_profile_metadata(shuffle_count=100)),
+            (1000, _grouped_plan_for_profile_metadata(shuffle_count=1000)),
+        ),
+    )
+
+    assert len(grouped_calls) == 1
+    assert grouped_calls[0]["config"] is config
+    assert grouped_calls[0]["execution"] is config.ppc_execution
+    assert grouped_calls[0]["work_root"] == tmp_path
+    assert result.schema_version == "grouped_ppc_profile_result.v1"
+    assert result.run_fingerprint == "d" * 64
+    assert result.total_elapsed_seconds == pytest.approx(15.0)
+    assert result.measured_peak_process_rss_bytes == 4096
+    assert result.measured_peak_aggregate_rss_bytes == 6144
+    assert result.measured_peak_aggregate_pss_bytes == 5120
+    assert result.geometry_build_seconds == pytest.approx(1.0)
+    assert result.observed_reduction_seconds == pytest.approx(3.0)
+    assert result.union_edge_reduction_seconds == pytest.approx(1.0)
+    assert result.shuffle_aggregation_seconds == pytest.approx(3.0)
+    assert result.null_summarization_seconds == pytest.approx(1.0)
+    assert result.representative_histogram_seconds == pytest.approx(1.0)
+    assert result.checkpoint_overhead_seconds == pytest.approx(1.0)
+    assert (
+        result.observed_reduction_seconds
+        + result.representative_histogram_seconds
+        + result.shuffle_aggregation_seconds
+        + result.null_summarization_seconds
+        > 2 * result.total_elapsed_seconds / 5
+    )
+    assert result.throughput_scheduled_edge_per_second == pytest.approx(
+        result.scheduled_edge_count / result.total_elapsed_seconds
+    )
+    for name, value in vars(result).items():
+        assert not isinstance(value, np.ndarray), name
+        assert name not in {"execution_result", "summary_arrays", "component_plan"}
+    assert lfp_summary_ppc_runtime.build_source_trial_spike_geometry is originals["geometry"]
+    assert lfp_summary_ppc_runtime.compute_selected_observed_trial_segmented_ppc_statistics is originals["observed"]
+    assert lfp_summary_ppc_runtime.compute_segmented_edge_statistics is originals["union_edge"]
+    assert lfp_summary_ppc_runtime._execute_grouped_condition_batch is originals["shuffle"]
+    assert lfp_summary_ppc_runtime.spike_lfp_summary.summarize_permutation_null is originals["null"]
+    assert lfp_summary_ppc_runtime._record_grouped_representative_histogram is originals["histogram"]
+    assert lfp_summary_ppc_runtime.write_ppc_checkpoint is originals["checkpoint"]
+
+    def failing_null_summary(*_: object, **__: object) -> None:
+        """Raise from the nested wrapped null-summary seam, not the executor shell."""
+        raise RuntimeError("injected grouped failure")
+
+    def failing_grouped_executor(**_: object) -> object:
+        """Reach the wrapped shuffle/null nesting before propagating its failure."""
+        lfp_summary_ppc_runtime._execute_grouped_condition_batch()
+        raise AssertionError("nested null failure did not propagate")
+
+    monkeypatch.setattr(
+        lfp_summary_ppc_runtime.spike_lfp_summary,
+        "summarize_permutation_null",
+        failing_null_summary,
+    )
+    monkeypatch.setattr(
+        lfp_summary_ppc_runtime,
+        "execute_grouped_ppc_component",
+        failing_grouped_executor,
+    )
+    with pytest.raises(RuntimeError, match="injected grouped failure"):
+        ppc_profile.profile_grouped_ppc_component(
+            config=config,
+            execution=config.ppc_execution,
+            prepared_phase=SimpleNamespace(phase_tensor=np.ones((1,), dtype=np.complex64)),
+            prepared_spikes=SimpleNamespace(trial_spike_trains=()),
+            work_root=tmp_path,
+            clock=lambda: float(next(count(start=0))),
+            memory_sampler=lambda: {
+                "peak_process_rss_bytes": 1,
+                "peak_aggregate_rss_bytes": 1,
+                "peak_aggregate_pss_bytes": 1,
+                "memory_source": "sampler",
+            },
+            projection_plans=((100, _grouped_plan_for_profile_metadata(shuffle_count=100)),),
+        )
+    assert lfp_summary_ppc_runtime.build_source_trial_spike_geometry is originals["geometry"]
+    assert lfp_summary_ppc_runtime.compute_selected_observed_trial_segmented_ppc_statistics is originals["observed"]
+    assert lfp_summary_ppc_runtime.compute_segmented_edge_statistics is originals["union_edge"]
+    assert lfp_summary_ppc_runtime._execute_grouped_condition_batch is originals["shuffle"]
+    assert lfp_summary_ppc_runtime.spike_lfp_summary.summarize_permutation_null is failing_null_summary
+    assert lfp_summary_ppc_runtime._record_grouped_representative_histogram is originals["histogram"]
+    assert lfp_summary_ppc_runtime.write_ppc_checkpoint is originals["checkpoint"]
