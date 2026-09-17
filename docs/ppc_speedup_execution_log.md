@@ -325,7 +325,7 @@ not apply; write `not applicable` and explain why.
 
 ### S6 - Profiling and schedule-union cost model
 
-- Status: tests-only contract in progress.
+- Status: complete.
 - Authorization and starting HEAD: covered by the user's 2026-09-10
   implementation authorization and repeated instruction to continue;
   `cb96495`. No CT026 data access, work-only timing, or scientific execution is
@@ -338,12 +338,54 @@ not apply; write `not applicable` and explain why.
   seam extraction in `lfp_summary_ppc_runtime.py`. That extraction may not
   change scientific behavior, axes, memory ownership, or checkpoints; all
   other grouped-runtime changes remain S7 work.
-- Test-only commit and RED evidence:
-- Implementation commit and GREEN evidence:
-- Full neural-suite and independent Sol gate evidence:
-- Synthetic and metadata-only evidence:
-- Numerical/interface review and unresolved risks:
-- CT026 work performed: metadata-only inspection unless separately authorized.
+- Test-only commit and RED evidence: `9cab653` defined the initial grouped
+  profiling contract; `b6fd124` hardened scalar projection, timing, memory,
+  adapter, IPC, and runner invariants; `9760738` bound the adapter planner to
+  the executor's canonical gated membership and configured half-open spike
+  windows. Each package was frozen after genuine RED and passed an independent
+  Sol-high design gate. The narrowly bounded runtime timing seam was authorized
+  by plan clarification commit `81dd059`.
+- Implementation commit and GREEN evidence: `94bf046` (`feat: profile grouped
+  PPC execution`). The final scoped source diff hash before commit was
+  `b486e546e46e73740a9338130f82f5ccd56710d8ad0db013aa5c9f9fe83dda24`.
+  The focused four-file S6 suite passed 35 tests with three expected fork
+  warnings; the affected grouped/runtime suite passed 349 tests; and the
+  non-CT026 LFP-summary group passed 556 tests.
+- Full neural-suite and independent Sol gate evidence: the lead reran
+  `src/tests/neural_analysis` after the final source gate: 1,080 tests passed
+  with 19 pre-existing dependency/runtime warnings. The independent Sol-high
+  source gate verified the final hash and reported PASS. Scoped compilation
+  and `git diff --check` also passed.
+- Synthetic and metadata-only evidence: synthetic tests cover exact scalar
+  base/100/1,000 projections, nondegenerate union growth, timing-boundary
+  restoration, measured/planned memory provenance, full Prepared-record
+  slicing, scalar-only IPC, and versioned runner persistence. The approved
+  read-only CT026 calculation then loaded only sorter/channel metadata, the
+  trial CSV, cached `axes.npz`, and the prior profile's 249 selected trial IDs.
+  It did not open `phase.npy`, `valid.npy`, raw LFP, or spike trains; invoke a
+  PPC executor; or write an artifact. For 3 sites, 9 conditions, 81 jobs, and
+  249 trials, 100 shuffles produced 666,900 scheduled rows, 497,016
+  independent edge demands, and a 163,525-edge site-qualified union
+  (0.8826974564926372 saturation; 3.039388472710595 reuse). At 1,000 shuffles,
+  those values were 6,669,000 scheduled rows, 1,240,061 independent demands,
+  and a fully saturated 185,256-edge union (1.0 saturation;
+  6.693769702465777 reuse). The selected phase/valid mmap shape accounts for
+  672,300,000 shared bytes. Allocation projections were deliberately not
+  reported because spike trains were not read and the placeholder source-count
+  table was zero; schedule/union metrics do not depend on those counts.
+- Numerical/interface review and unresolved risks: the profiler uses the exact
+  executed component plan as authoritative, validates 100/1,000 projections as
+  the same shuffle-independent workload while allowing realized unions to
+  grow, separates process RSS from unavailable aggregate RSS/PSS, and restores
+  all seven instrumentation seams on success and failure. The metadata result
+  shows that the 1,000-shuffle site-qualified edge union is saturated; further
+  speedup must therefore come from grouped reuse and bounded unit-block
+  parallelism rather than assuming linear union growth. Production timing and
+  scientific equivalence on CT026 remain unmeasured under the current
+  authorization boundary.
+- CT026 work performed: one approved metadata-only schedule/union calculation;
+  no phase transform, PPC kernel, work-only timing, scientific component,
+  manifest, or final artifact was executed or written.
 
 ### S7 - Rebind parallel workers to the grouped engine
 
