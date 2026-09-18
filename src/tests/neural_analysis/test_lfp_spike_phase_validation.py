@@ -143,6 +143,54 @@ def test_default_population_uses_qualified_probeb_good_inside_brain_units(
     }
 
 
+@pytest.mark.parametrize("probe_label", ("ProbeA", "ProbeB"))
+def test_explicit_ct026_population_supports_one_probe_with_identical_defaults(
+    tmp_path: Path,
+    probe_label: str,
+) -> None:
+    """Probe choice changes paths/ids only, never quality-selection defaults."""
+    clusters = pd.DataFrame(
+        {
+            "cluster_id": [9, 2, 5],
+            "ch": [12, 7, 11],
+            "group": ["noise", "good", "mua"],
+        }
+    )
+    channels = pd.DataFrame(
+        {
+            "channel_id": ["CH7", "CH11", "CH12"],
+            "label": ["good", "good", "good"],
+            "inside_brain": [True, True, False],
+        }
+    )
+
+    population = lfp_spike_phase_validation.build_ct026_active_population(
+        tmp_path / "CT026",
+        probe_label,
+        lambda _: clusters,
+        lambda _: channels,
+    )
+
+    assert population.probe_label == probe_label
+    assert population.sorter_path.as_posix().endswith(f"{probe_label}/kilosort4")
+    assert population.aligned_spike_path.name == f"probe{probe_label[-1]}_sync.npz"
+    assert population.selected_channels == (7, 11)
+    assert population.stable_unit_ids == (f"{probe_label}:2", f"{probe_label}:5")
+    assert dict(population.quality_settings) == {
+        "channel_quality": "good",
+        "inside_brain": "true",
+        "unit_quality": "good,mua",
+    }
+
+    with pytest.raises(ValueError, match="ProbeA or ProbeB"):
+        lfp_spike_phase_validation.build_ct026_active_population(
+            tmp_path / "CT026",
+            "combined",
+            lambda _: clusters,
+            lambda _: channels,
+        )
+
+
 def _cache_arrays() -> dict[str, np.ndarray]:
     """Return a complete three-site Spike cache for bounded report tests.
 
@@ -391,6 +439,30 @@ def test_detailed_report_publishes_bounded_plan_and_then_exposes_cleanup(
     assert "unavailable" in result.summary_path.read_text(encoding="ascii")
     result.deferred_cleanup()
     assert cleanup_calls == ["cleanup"]
+
+
+def test_general_cached_report_supports_separate_1000_shuffle_final_run(
+    tmp_path: Path,
+) -> None:
+    """The launcher report uses actual shuffles without changing preview schema."""
+    config = build_ct026_spike_phase_preview_config(tmp_path / "CT026", _population())
+    config = replace(config, ppc=replace(config.ppc, shuffle_count=1000))
+    calls: list[str] = []
+
+    result = lfp_spike_phase_validation.render_cached_spike_phase_report(
+        config,
+        tmp_path / "runs",
+        _successful_dependencies(calls),
+        run_kind="final",
+        component_wall_time_s=12.0,
+        component_peak_memory_bytes=4096,
+    )
+
+    report = json.loads(result.report_path.read_text(encoding="ascii"))
+    assert report["schema_version"] == "spike_phase_report.v1"
+    assert report["run_kind"] == "final"
+    assert report["shuffle_count"] == 1000
+    assert "compute_spike_phase" not in calls
 
 
 @pytest.mark.parametrize(

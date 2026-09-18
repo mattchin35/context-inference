@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from src.neural_analysis import (
+    lfp_summary_pipeline,
     lfp_summary_ppc_kernel,
     lfp_summary_ppc_runtime,
     lfp_summary_runtime,
@@ -823,6 +824,20 @@ def test_spike_phase_payload_uses_one_grouped_executor_without_legacy_or_histogr
         assert payload.arrays["illustrative_trial_indices"][index] == expected_trial
     validate_component_payload("spike_phase", payload)
     assert payload.post_commit_cleanup is not None
+    assert payload.post_commit_cleanup_targets == (
+        lfp_summary_pipeline.PPCWorkCleanupTarget(
+            grouped.run_directory,
+            grouped.run_fingerprint,
+        ),
+    )
+    assert payload.execution_metadata["ppc_planning_seconds"] == grouped.planning_seconds
+    assert (
+        payload.execution_metadata["grouped_execution_seconds"]
+        == grouped.grouped_execution_seconds
+    )
+    assert payload.execution_metadata["requested_worker_count"] == 1
+    assert payload.execution_metadata["run_fingerprint"] == grouped.run_fingerprint
+    assert payload.execution_metadata["run_directory"] == str(grouped.run_directory)
     assert grouped.run_directory.exists()
     payload.post_commit_cleanup()
     assert not grouped.run_directory.exists()

@@ -282,6 +282,8 @@ def test_prepare_phase_run_prepared_cache_cold_warm_disabled_and_mismatch_paths(
         spikeglx_loader=_trace_loader,
         work_cache_root=cache_root,
     )
+    assert cold.prepared_phase_cache_state == "cold"
+    assert warm.prepared_phase_cache_state == "warm"
 
     assert cold_calls
     assert not warm_calls

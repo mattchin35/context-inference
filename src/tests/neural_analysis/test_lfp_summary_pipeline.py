@@ -469,6 +469,84 @@ def test_spike_cleanup_can_be_deferred_for_report_publication() -> None:
     assert cleanup_calls == ["cleanup"]
 
 
+def test_deferred_cleanup_targets_are_observed_before_writer_and_propagated(
+    tmp_path: Path,
+) -> None:
+    """Launcher-persistable targets must exist before commit and match the result."""
+    config = default_lfp_summary_config()
+    calls: list[str] = []
+    dependencies = _make_dependencies(calls, [])
+    target = lfp_summary_pipeline.PPCWorkCleanupTarget(
+        tmp_path / "lfp_summary_work" / "ppc" / ("a" * 64),
+        "a" * 64,
+    )
+
+    def spike_payload(*_: object) -> lfp_summary_pipeline.ComponentPayload:
+        """Return structured cleanup and scalar execution metadata."""
+        return lfp_summary_pipeline.ComponentPayload(
+            arrays={"value": np.array([1.0])},
+            manifest_entry=_component_entry("spike_phase"),
+            post_commit_cleanup=lambda: calls.append("cleanup"),
+            post_commit_cleanup_targets=(target,),
+            execution_metadata={"ppc_planning_seconds": 1.5},
+        )
+
+    dependencies = replace(dependencies, build_spike_phase_payload=spike_payload)
+
+    def observe(targets: tuple[object, ...]) -> None:
+        """Record the exact request and prove the writer has not yet run."""
+        assert "write_spike_phase" not in calls
+        assert targets == (target,)
+        calls.append("observe_cleanup")
+
+    result = lfp_summary_pipeline.compute_spike_phase_component(
+        config,
+        dependencies,
+        defer_post_commit_cleanup=True,
+        cleanup_preparation_observer=observe,
+    )
+
+    assert result.state == "complete"
+    assert calls.index("observe_cleanup") < calls.index("write_spike_phase")
+    assert result.deferred_cleanup_targets == (target,)
+    assert result.execution_metadata == {"ppc_planning_seconds": 1.5}
+
+
+def test_cleanup_observer_failure_prevents_final_component_write(tmp_path: Path) -> None:
+    """Failure to persist cleanup identity must fail before manifest-last commit."""
+    config = default_lfp_summary_config()
+    calls: list[str] = []
+    dependencies = _make_dependencies(calls, [])
+    target = lfp_summary_pipeline.PPCWorkCleanupTarget(
+        tmp_path / "lfp_summary_work" / "ppc" / ("c" * 64),
+        "c" * 64,
+    )
+    dependencies = replace(
+        dependencies,
+        build_spike_phase_payload=lambda *_: lfp_summary_pipeline.ComponentPayload(
+            arrays={"value": np.array([1.0])},
+            manifest_entry=_component_entry("spike_phase"),
+            post_commit_cleanup=lambda: None,
+            post_commit_cleanup_targets=(target,),
+        ),
+    )
+
+    result = lfp_summary_pipeline.compute_spike_phase_component(
+        config,
+        dependencies,
+        defer_post_commit_cleanup=True,
+        cleanup_preparation_observer=lambda _: (_ for _ in ()).throw(
+            OSError("state write failed")
+        ),
+    )
+
+    assert result.state == "failed"
+    assert result.stage == "prepare_cleanup_spike_phase"
+    assert "write_spike_phase" not in calls
+    assert result.deferred_cleanup is None
+    assert result.deferred_cleanup_targets == ()
+
+
 def test_compute_all_defers_only_successful_spike_cleanup() -> None:
     """Compute All exposes no cleanup request when the Spike writer fails."""
     config = default_lfp_summary_config()

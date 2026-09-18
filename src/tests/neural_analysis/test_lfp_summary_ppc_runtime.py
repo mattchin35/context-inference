@@ -3776,6 +3776,8 @@ def test_grouped_component_contract_is_keyword_only_serial_and_work_only() -> No
         "summary_arrays",
         "completed_block_ids",
         "resumed_block_ids",
+        "planning_seconds",
+        "grouped_execution_seconds",
     )
     signature = inspect.signature(ppc_runtime.execute_grouped_ppc_component)
     assert tuple(signature.parameters) == (
@@ -3792,6 +3794,27 @@ def test_grouped_component_contract_is_keyword_only_serial_and_work_only() -> No
     )
     assert signature.parameters["progress_callback"].default is None
     assert ppc_runtime.execute_ppc_blocks is not ppc_runtime.execute_grouped_ppc_component
+
+
+def test_grouped_component_reports_separate_planning_and_execution_seconds(
+    tmp_path: Path,
+) -> None:
+    """Scalar timings expose exact planner versus post-plan grouped work."""
+    config = _grouped_config()
+    prepared_phase, prepared_spikes = _grouped_inputs(config)
+
+    result = _run_grouped_component(
+        config,
+        prepared_phase,
+        prepared_spikes,
+        tmp_path,
+    )
+
+    assert np.isfinite(result.planning_seconds) and result.planning_seconds >= 0.0
+    assert (
+        np.isfinite(result.grouped_execution_seconds)
+        and result.grouped_execution_seconds >= 0.0
+    )
 
 
 def test_grouped_component_matches_legacy_and_reduces_each_physical_edge_once(
