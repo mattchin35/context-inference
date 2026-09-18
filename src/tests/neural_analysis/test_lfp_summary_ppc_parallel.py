@@ -366,9 +366,9 @@ def test_grouped_parallel_worker_task_and_initializer_are_spawn_safe_top_level()
     """Grouped workers use phase-free site/unit tasks and top-level callables.
 
     ``_GroupedParallelBlockTask`` describes exactly one stable site and one
-    half-open unit block.  It deliberately does not own prepared phase or
-    validity arrays: the worker initializer opens those arrays once from the
-    shared mmap descriptor.  The private names are frozen because process
+    half-open unit block.  It deliberately owns neither prepared tensors nor
+    compact common axes/ragged spike arrays: workers open those once from the
+    shared input descriptor.  The private names are frozen because process
     targets must remain importable under the ``spawn`` start method.
     """
     task_type = ppc_runtime._GroupedParallelBlockTask
@@ -382,7 +382,7 @@ def test_grouped_parallel_worker_task_and_initializer_are_spawn_safe_top_level()
         "site_condition_batches",
         "site_union_source_trial_row",
         "site_union_target_trial_row",
-        "unit_spike_trains",
+        "staged_result_path",
     } <= task_fields
     assert not {
         "phase",
@@ -390,10 +390,31 @@ def test_grouped_parallel_worker_task_and_initializer_are_spawn_safe_top_level()
         "prepared_phase",
         "component_plan",
         "prepared_spikes",
+        "relative_time_s",
+        "stable_trial_rows",
+        "unit_spike_trains",
+        "worker_input_descriptor",
         "progress_callback",
         "run_directory",
         "checkpoint_writer",
     } & task_fields
+    descriptor_fields = {field.name for field in fields(ppc_runtime._PhaseWorkDescriptor)}
+    assert descriptor_fields == {
+        "phase_path",
+        "valid_path",
+        "relative_time_s_path",
+        "stable_trial_rows_path",
+        "spike_times_s_path",
+        "spike_offsets_path",
+    }
+    result_fields = {field.name for field in fields(ppc_runtime._GroupedParallelBlockResult)}
+    assert {
+        "block_id",
+        "site_index",
+        "unit_start",
+        "unit_stop",
+        "staged_result_path",
+    } == result_fields
     for callable_name in (
         "_initialize_grouped_parallel_worker",
         "_compute_grouped_parallel_block",
@@ -553,3 +574,197 @@ def test_grouped_parallel_runner_yields_canonical_tasks_despite_out_of_order_rea
     assert result_waits == ["first", "second"]
     assert list(results) == ["third"]
     assert result_waits == ["first", "second", "third"]
+
+
+def test_component_site_union_views_scalar_scan_sorted_site_positions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One site union is found without component-length index temporaries.
+
+    The component union is already site-sorted.  The private helper must scan
+    its scalar categorical positions and return borrowed source/target slices,
+    rather than construct Boolean masks or position arrays proportional to all
+    component edges.
+    """
+    plan = SimpleNamespace(
+        edge_site_index=np.array([0, 0, 1, 1, 2], dtype=np.int64),
+        stable_edge_source_trial_row=np.array([4, 5, 8, 9, 12], dtype=np.int64),
+        stable_edge_target_trial_row=np.array([6, 7, 10, 11, 13], dtype=np.int64),
+    )
+
+    def reject_vector_temporary(*_: object, **__: object) -> object:
+        raise AssertionError("site-union lookup allocated a component-length temporary")
+
+    monkeypatch.setattr(ppc_runtime.np, "flatnonzero", reject_vector_temporary)
+    monkeypatch.setattr(ppc_runtime.np, "arange", reject_vector_temporary)
+    monkeypatch.setattr(ppc_runtime.np, "array_equal", reject_vector_temporary)
+
+    source, target, offset = ppc_runtime._component_site_union_views(plan, 1)
+
+    assert offset == 2
+    assert source.tolist() == [8, 9]
+    assert target.tolist() == [10, 11]
+    assert np.shares_memory(source, plan.stable_edge_source_trial_row)
+    assert np.shares_memory(target, plan.stable_edge_target_trial_row)
+
+
+def test_component_site_union_views_empty_middle_and_end_borrow_insertion_slices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty sites borrow zero-edge slices at their sorted insertion positions.
+
+    A component may have no physical edges for an interior or trailing site.
+    The helper must retain a non-owning empty slice of the component arrays
+    and report the number of preceding union edges, so later job positions
+    remain correctly rebased without allocating a component-length mask.
+    """
+    source_rows = np.array([4, 5, 12, 13], dtype=np.int64)
+    target_rows = np.array([6, 7, 14, 15], dtype=np.int64)
+    source_rows.setflags(write=False)
+    target_rows.setflags(write=False)
+    plan = SimpleNamespace(
+        edge_site_index=np.array([0, 0, 2, 2], dtype=np.int64),
+        stable_edge_source_trial_row=source_rows,
+        stable_edge_target_trial_row=target_rows,
+    )
+
+    def reject_vector_temporary(*_: object, **__: object) -> object:
+        raise AssertionError("site-union lookup allocated a component-length temporary")
+
+    monkeypatch.setattr(ppc_runtime.np, "flatnonzero", reject_vector_temporary)
+    monkeypatch.setattr(ppc_runtime.np, "arange", reject_vector_temporary)
+    monkeypatch.setattr(ppc_runtime.np, "array_equal", reject_vector_temporary)
+
+    middle_source, middle_target, middle_offset = ppc_runtime._component_site_union_views(
+        plan,
+        1,
+    )
+    end_source, end_target, end_offset = ppc_runtime._component_site_union_views(plan, 3)
+
+    for values, parent in (
+        (middle_source, source_rows),
+        (middle_target, target_rows),
+        (end_source, source_rows),
+        (end_target, target_rows),
+    ):
+        assert values.dtype == np.dtype(np.int64)
+        assert values.shape == (0,)
+        assert not values.flags.writeable
+        assert not values.flags.owndata
+        base_chain: list[object] = []
+        candidate: object | None = values
+        while candidate is not None:
+            base_chain.append(candidate)
+            candidate = getattr(candidate, "base", None)
+        assert any(candidate is parent for candidate in base_chain)
+
+    assert middle_offset == 2
+    assert end_offset == 4
+
+
+@pytest.mark.parametrize("empty_site", (1, 2))
+def test_planned_zero_edge_middle_and_end_sites_keep_scalar_union_offsets(
+    empty_site: int,
+) -> None:
+    """Real planner output preserves insertion offsets for zero-edge sites.
+
+    This integrates the scalar view contract with a valid three-site component
+    plan, rather than relying only on a hand-built union.  The empty middle
+    site must rebase after site zero; the empty final site must rebase after
+    every preceding physical edge.
+    """
+    config = _config(worker_count=2)
+    trial_count = 3
+    site_valid = np.ones((len(config.sites), trial_count), dtype=bool)
+    site_valid[empty_site] = False
+    plan = ppc_runtime.plan_grouped_ppc_component(
+        config=config,
+        condition_names=("all",),
+        condition_membership=np.ones((trial_count, 1), dtype=bool),
+        site_ids=tuple(site.stable_id for site in config.sites),
+        site_trial_valid=site_valid,
+        stable_trial_rows=np.arange(10, 10 + trial_count, dtype=np.int64),
+        source_trial_spike_count=np.zeros((trial_count, 1, 2), dtype=np.int64),
+        frequency_count=2,
+        shared_phase_mmap_bytes=0,
+    )
+
+    source, target, offset = ppc_runtime._component_site_union_views(plan, empty_site)
+
+    assert source.shape == target.shape == (0,)
+    for values, parent in (
+        (source, plan.stable_edge_source_trial_row),
+        (target, plan.stable_edge_target_trial_row),
+    ):
+        # ``shares_memory`` reports false for zero-length views, so follow the
+        # base chain to prove that the empty result still borrows its union.
+        assert not values.flags.owndata
+        base_chain: list[object] = []
+        candidate: object | None = values
+        while candidate is not None:
+            base_chain.append(candidate)
+            candidate = getattr(candidate, "base", None)
+        assert any(candidate is parent for candidate in base_chain)
+    assert offset == int(np.count_nonzero(plan.edge_site_index < empty_site))
+
+
+def test_grouped_parallel_runner_cancels_pending_window_when_generator_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closing after one publication cancels the remaining current-site work.
+
+    A parent merge/checkpoint/progress failure closes the runner while it is
+    paused at ``yield``.  The runner itself must cancel the pending future and
+    wait for worker cleanup; relying on executor context-manager exit leaves
+    queued work alive and risks a false later publication.
+    """
+    submitted: list[str] = []
+    cancelled: list[str] = []
+    shutdown_calls: list[tuple[bool, bool]] = []
+
+    class FakeFuture:
+        """Future double that records cancellation without holding an array."""
+
+        def __init__(self, task: str) -> None:
+            self.task = task
+
+        def result(self) -> str:
+            return self.task
+
+        def cancel(self) -> bool:
+            cancelled.append(self.task)
+            return True
+
+    class FakeExecutor:
+        """Executor double whose context exit does not provide cleanup."""
+
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def __enter__(self) -> "FakeExecutor":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def submit(self, _worker: object, task: str) -> FakeFuture:
+            submitted.append(task)
+            return FakeFuture(task)
+
+        def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+            shutdown_calls.append((wait, cancel_futures))
+
+    monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", FakeExecutor)
+    results = ppc_runtime._run_grouped_parallel_block_batches(
+        phase_descriptor=object(),
+        block_tasks=("first", "second", "third"),
+        worker_count=2,
+        compute_block=object(),
+    )
+
+    assert next(results) == "first"
+    assert submitted == ["first", "second"]
+    results.close()
+
+    assert cancelled == ["second"]
+    assert shutdown_calls == [(True, True)]
