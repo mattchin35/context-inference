@@ -647,6 +647,8 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
         hilbert_phase_rad=phase_rad,
         selected_low_unit_ids=np.full((3, 2, 3, 2), "PFC:2", dtype="<U32"),
         selected_high_unit_ids=np.full((3, 2, 3, 2), "PFC:1", dtype="<U32"),
+        illustrative_low_trial_indices=np.zeros((3, 2, 3, 2), dtype=np.int64),
+        illustrative_high_trial_indices=np.zeros((3, 2, 3, 2), dtype=np.int64),
         illustrative_trial_indices=np.zeros((3, 2, 3, 2), dtype=np.int64),
     )
     payloads = {
