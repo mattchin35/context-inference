@@ -1,4 +1,4 @@
-"""Serial, restartable sufficient-statistic PPC execution for one job.
+"""Restartable PPC execution with serial and site-sequential worker paths.
 
 This module owns work-only checkpoints. It never writes a final component or
 manifest, and never keeps a whole-session shuffle tensor in memory.
@@ -16,6 +16,8 @@ import os
 from pathlib import Path
 import time
 from typing import Callable, Iterator, Mapping, Sequence
+from types import SimpleNamespace
+import zipfile
 
 import numpy as np
 
@@ -1429,8 +1431,14 @@ def estimate_grouped_ppc_allocation(
         steady_parent_private = _checked_ppc_add(
             planned_arrays, summary_assembly_bytes, checkpoint_block_bytes
         )
+    # The local summary remains live while compute scratch is used, then its
+    # bounded staged checkpoint replaces scratch before the scalar handoff.
     worker_private = _checked_ppc_add(
-        worker_plan, worker_summary_bytes, computation_private
+        worker_plan,
+        max(
+            _checked_ppc_add(worker_summary_bytes, computation_private),
+            checkpoint_block_bytes,
+        ),
     )
     parent_private = max(planning_private, steady_parent_private)
     steady_aggregate_private = _checked_ppc_add(
@@ -2291,7 +2299,7 @@ def execute_grouped_ppc_component(
     work_root: Path,
     progress_callback: Callable[[ProgressEvent], None] | None = None,
 ) -> PPCComponentExecutionResult:
-    """Execute one complete grouped PPC component serially with bounded blocks.
+    """Execute one grouped PPC component with serial or site-local workers.
 
     Parameters
     ----------
@@ -2301,9 +2309,11 @@ def execute_grouped_ppc_component(
         epochs remain ``whole, before, after`` and scientific fingerprint is
         unchanged by this work-only executor.
     execution : PPCExecutionConfig
-        Must equal ``config.ppc_execution`` and have ``worker_count == 1`` in
-        S4. Unit, edge, and shuffle blocks bound transient work only; all ten
-        settings enter the execution identity.
+        Must equal ``config.ppc_execution``. Unit, edge, and shuffle blocks
+        bound transient work only; all settings enter the execution identity.
+        ``worker_count == 1`` preserves the serial path. Larger counts create
+        a spawned pool for one current site at a time, capped by that site's
+        pending unit blocks; sites and conditions never co-reside as tasks.
     prepared_phase : PreparedPhaseRun-like object
         Production record with complex64/Boolean ``(site, frequency, trial,
         time)`` phase/valid axes, int64 stable trial rows, per-site validity,
@@ -2316,8 +2326,8 @@ def execute_grouped_ppc_component(
         This function never publishes a final component, manifest, or
         ``spike_phase.npz`` file.
     progress_callback : callable or None, default=None
-        Receives serial ``ProgressEvent`` records only. Events carry no raw
-        phase, spike, or full schedule tensors.
+        Receives parent-owned canonical ``ProgressEvent`` records only. Events
+        carry no raw phase, spike, or full schedule tensors.
 
     Returns
     -------
@@ -2329,8 +2339,8 @@ def execute_grouped_ppc_component(
     Raises
     ------
     ValueError
-        If execution is nonserial/mismatched, prepared records are malformed,
-        or planner allocation limits fail. A cached block with incompatible
+        If execution is mismatched, prepared records are malformed, or planner
+        allocation limits fail. A cached block with incompatible
         documented axes, marker, metadata, or bounded NPZ schema is discarded
         and recomputed rather than raising. Memory preflight occurs before
         geometry, summary allocation, checkpoint I/O, or process construction.
@@ -2342,8 +2352,6 @@ def execute_grouped_ppc_component(
     _validate_ppc_execution(execution)
     if execution != config.ppc_execution:
         raise ValueError("grouped PPC execution must equal config.ppc_execution")
-    if execution.worker_count != 1:
-        raise ValueError("S4 grouped PPC execution is serial and requires worker_count == 1")
 
     # Import locally: the production runtime imports this module for legacy
     # job execution, while this serial bridge only needs its prepared-record
@@ -2358,11 +2366,29 @@ def execute_grouped_ppc_component(
     valid = np.asarray(prepared_phase.phase_valid, dtype=bool)
     stable_rows = np.asarray(prepared_phase.trial_indices)
     site_valid = np.asarray(prepared_phase.site_valid, dtype=bool)
+    parallel_shared_worker_input_bytes = _checked_ppc_add(
+        int(phase.nbytes), int(valid.nbytes),
+        int(np.asarray(prepared_phase.relative_time_s).nbytes), int(stable_rows.nbytes),
+        _checked_ppc_multiply(
+            8,
+            sum(
+                int(np.asarray(times).size)
+                for train in prepared_spikes.trial_spike_trains
+                for times in train.relative_spike_times
+            ),
+        ),
+        _checked_ppc_multiply(8, len(prepared_spikes.unit_ids), stable_rows.size + 1),
+    )
+    shared_worker_input_bytes = (
+        parallel_shared_worker_input_bytes
+        if execution.worker_count > 1
+        else _checked_ppc_add(int(phase.nbytes), int(valid.nbytes))
+    )
     _preflight_grouped_planning_construction(
         config=config,
         prepared_phase=prepared_phase,
         prepared_spikes=prepared_spikes,
-        shared_phase_mmap_bytes=_checked_ppc_add(int(phase.nbytes), int(valid.nbytes)),
+        shared_phase_mmap_bytes=shared_worker_input_bytes,
     )
     membership = lfp_summary_runtime._analysis_condition_membership(
         prepared_phase.prepared_trials
@@ -2382,7 +2408,7 @@ def execute_grouped_ppc_component(
         stable_trial_rows=stable_rows,
         source_trial_spike_count=source_counts,
         frequency_count=frequencies_hz.size,
-        shared_phase_mmap_bytes=int(phase.nbytes + valid.nbytes),
+        shared_phase_mmap_bytes=shared_worker_input_bytes,
     )
     metadata = _grouped_run_metadata(
         config=config,
@@ -2403,6 +2429,7 @@ def execute_grouped_ppc_component(
 
     run_directory.mkdir(parents=True, exist_ok=True)
     lock_path = _acquire_executor_lock(run_directory, run_fingerprint)
+    active_parallel_runners: list[object] = []
     try:
         # Any resumed/repaired run must re-earn the final completion marker.
         (run_directory / "complete.json").unlink(missing_ok=True)
@@ -2421,13 +2448,16 @@ def execute_grouped_ppc_component(
         block_identities = metadata["block_identities"]
         assert isinstance(block_identities, dict)
         completed_ids = tuple(block_identities)
+        block_records: list[tuple[str, int, int, int]] = []
         resumed_ids: list[str] = []
-        for completed_count, block_id in enumerate(completed_ids, start=1):
+        resumed_id_set: set[str] = set()
+        for block_id in completed_ids:
             identity = block_identities[block_id]
             assert isinstance(identity, dict)
             site_index = int(identity["site_index"])
             unit_start = int(identity["unit_start"])
             unit_stop = int(identity["unit_stop"])
+            block_records.append((block_id, site_index, unit_start, unit_stop))
             checkpoint_schema = _grouped_checkpoint_schema(
                 unit_count=unit_stop - unit_start,
                 condition_count=condition_count,
@@ -2462,48 +2492,21 @@ def execute_grouped_ppc_component(
                 phase_bin_count=len(config.ppc.phase_bin_edges_rad) - 1,
             ):
                 resumed_ids.append(block_id)
-                checkpoint_message = "resumed grouped checkpoint"
+                resumed_id_set.add(block_id)
                 del checkpoint
             else:
                 del checkpoint
-                _compute_grouped_site_unit_block(
-                    config=config,
-                    prepared_phase=prepared_phase,
-                    prepared_spikes=prepared_spikes,
-                    plan=plan,
-                    summary=summary,
-                    site_index=site_index,
-                    unit_start=unit_start,
-                    unit_stop=unit_stop,
-                )
-                _apply_grouped_bh_block(
-                    summary=summary,
-                    site_index=site_index,
-                    unit_start=unit_start,
-                    unit_stop=unit_stop,
-                    alpha=config.ppc.fdr_alpha,
-                )
-                if execution.checkpoint_enabled:
-                    block_arrays = _grouped_checkpoint_arrays(
-                        summary=summary,
-                        site_index=site_index,
-                        unit_start=unit_start,
-                        unit_stop=unit_stop,
-                    )
-                    write_ppc_checkpoint(
-                        run_directory,
-                        block_id,
-                        block_arrays,
-                        metadata,
-                        copy_arrays=False,
-                    )
-                    del block_arrays
-                    checkpoint_message = "newly published grouped checkpoint"
-                else:
-                    checkpoint_message = "checkpoint disabled"
-            # Keep the emitted cycle stable whether this block was resumed or
-            # recomputed, while suppressing intermediate cycles by the
-            # configured reporting interval.
+
+        def emit_completed_block(
+            completed_count: int,
+            checkpoint_message: str,
+        ) -> None:
+            """Emit parent-owned progress for one canonical completed block.
+
+            ``completed_count`` is a one-based scalar in stable block order;
+            ``checkpoint_message`` is metadata only. Returns ``None`` and
+            never receives worker arrays or publishes checkpoints.
+            """
             total_blocks = len(completed_ids)
             if (
                 completed_count % execution.progress_update_interval == 0
@@ -2514,6 +2517,181 @@ def execute_grouped_ppc_component(
                 reporter.emit("shuffle_aggregation", completed_count, total_blocks, "completed grouped shuffle aggregation", timed=True)
                 reporter.emit("fdr", completed_count, total_blocks, "applied grouped FDR", timed=True)
                 reporter.emit("checkpoint", completed_count, total_blocks, checkpoint_message, timed=True)
+
+        if execution.worker_count == 1:
+            for completed_count, (block_id, site_index, unit_start, unit_stop) in enumerate(
+                block_records,
+                start=1,
+            ):
+                if block_id in resumed_id_set:
+                    checkpoint_message = "resumed grouped checkpoint"
+                else:
+                    _compute_grouped_site_unit_block(
+                        config=config,
+                        prepared_phase=prepared_phase,
+                        prepared_spikes=prepared_spikes,
+                        plan=plan,
+                        summary=summary,
+                        site_index=site_index,
+                        unit_start=unit_start,
+                        unit_stop=unit_stop,
+                    )
+                    _apply_grouped_bh_block(
+                        summary=summary,
+                        site_index=site_index,
+                        unit_start=unit_start,
+                        unit_stop=unit_stop,
+                        alpha=config.ppc.fdr_alpha,
+                    )
+                    if execution.checkpoint_enabled:
+                        block_arrays = _grouped_checkpoint_arrays(
+                            summary=summary,
+                            site_index=site_index,
+                            unit_start=unit_start,
+                            unit_stop=unit_stop,
+                        )
+                        write_ppc_checkpoint(
+                            run_directory,
+                            block_id,
+                            block_arrays,
+                            metadata,
+                            copy_arrays=False,
+                        )
+                        del block_arrays
+                        checkpoint_message = "newly published grouped checkpoint"
+                    else:
+                        checkpoint_message = "checkpoint disabled"
+                emit_completed_block(completed_count, checkpoint_message)
+        else:
+            pending_records = tuple(
+                record for record in block_records if record[0] not in resumed_id_set
+            )
+            phase_descriptor = (
+                _materialize_grouped_phase_work_inputs(
+                    run_directory, phase, valid,
+                    np.asarray(prepared_phase.relative_time_s, dtype=np.float64),
+                    stable_rows, prepared_spikes,
+                )
+                if pending_records
+                else None
+            )
+            _clear_grouped_parallel_staging_directory(run_directory / "worker-staging")
+            completed_count = 0
+            for site_index in range(len(config.sites)):
+                site_records = tuple(
+                    record for record in block_records if record[1] == site_index
+                )
+                site_pending = tuple(
+                    record for record in site_records if record[0] not in resumed_id_set
+                )
+                results: Iterator[_GroupedParallelBlockResult] | None = None
+                if site_pending:
+                    assert phase_descriptor is not None
+                    site_jobs = tuple(
+                        job for job in plan.job_plans if job.site_index == site_index
+                    )
+                    (
+                        site_union_source_trial_row,
+                        site_union_target_trial_row,
+                        site_union_position_offset,
+                    ) = _component_site_union_views(plan, site_index)
+                    tasks = tuple(
+                        _GroupedParallelBlockTask(
+                            block_id=block_id,
+                            site_index=site_index,
+                            unit_start=unit_start,
+                            unit_stop=unit_stop,
+                            site_jobs=site_jobs,
+                            site_condition_batches=plan.condition_batches[site_index],
+                            site_union_source_trial_row=site_union_source_trial_row,
+                            site_union_target_trial_row=site_union_target_trial_row,
+                            site_union_position_offset=site_union_position_offset,
+                            staged_result_path=(
+                                run_directory / "worker-staging" / f"{block_id}.npz"
+                            ),
+                            config=config,
+                        )
+                        for block_id, _, unit_start, unit_stop in site_pending
+                    )
+                    results = iter(
+                        _run_grouped_parallel_block_batches(
+                            phase_descriptor=phase_descriptor,
+                            block_tasks=tasks,
+                            worker_count=min(execution.worker_count, len(tasks)),
+                            compute_block=_compute_grouped_parallel_block,
+                        )
+                    )
+                    active_parallel_runners.append(results)
+                for block_id, record_site_index, unit_start, unit_stop in site_records:
+                    completed_count += 1
+                    if block_id in resumed_id_set:
+                        checkpoint_message = "resumed grouped checkpoint"
+                    else:
+                        assert results is not None
+                        result = next(results)
+                        if (
+                            result.block_id != block_id
+                            or result.site_index != record_site_index
+                            or result.unit_start != unit_start
+                            or result.unit_stop != unit_stop
+                        ):
+                            raise RuntimeError("grouped worker returned a noncanonical block")
+                        expected_stage_path = (
+                            run_directory / "worker-staging" / f"{block_id}.npz"
+                        )
+                        if result.staged_result_path != expected_stage_path:
+                            raise RuntimeError("grouped worker returned a noncanonical staged path")
+                        checkpoint_schema = _grouped_checkpoint_schema(
+                            unit_count=unit_stop - unit_start,
+                            condition_count=condition_count,
+                            epoch_count=len(config.ppc.epochs),
+                            frequency_count=frequencies_hz.size,
+                            representative_band_count=_S1_S2_REPRESENTATIVE_BAND_COUNT,
+                            phase_bin_count=len(config.ppc.phase_bin_edges_rad) - 1,
+                        )
+                        arrays = _load_grouped_staged_result(
+                            staged_result_path=result.staged_result_path,
+                            expected_array_schema=checkpoint_schema,
+                            maximum_array_bytes=_grouped_checkpoint_schema_bytes(
+                                checkpoint_schema
+                            ),
+                        )
+                        try:
+                            if not _merge_grouped_checkpoint(
+                                summary=summary, arrays=arrays,
+                                site_index=record_site_index, unit_start=unit_start,
+                                unit_stop=unit_stop, condition_count=condition_count,
+                                epoch_count=len(config.ppc.epochs),
+                                frequency_count=frequencies_hz.size,
+                                representative_band_count=_S1_S2_REPRESENTATIVE_BAND_COUNT,
+                                phase_bin_count=len(config.ppc.phase_bin_edges_rad) - 1,
+                            ):
+                                raise RuntimeError("grouped worker block arrays are invalid")
+                            if execution.checkpoint_enabled:
+                                write_ppc_checkpoint(
+                                    run_directory, block_id, arrays, metadata,
+                                    copy_arrays=False,
+                                )
+                                checkpoint_message = "newly published grouped checkpoint"
+                            else:
+                                checkpoint_message = "checkpoint disabled"
+                        finally:
+                            del arrays
+                            result.staged_result_path.unlink(missing_ok=True)
+                            del result
+                    emit_completed_block(completed_count, checkpoint_message)
+                if results is not None:
+                    # Resume the site-local generator after its last yielded
+                    # block only after parent checkpoint publication. This
+                    # releases the pool before the next site begins and keeps
+                    # the yield/checkpoint protocol observable at site edges.
+                    try:
+                        unexpected = next(results)
+                    except StopIteration:
+                        pass
+                    else:
+                        del unexpected
+                        raise RuntimeError("grouped worker yielded an extra block")
         _atomic_json(run_directory / "complete.json", {"run_fingerprint": run_fingerprint})
         reporter.emit("commit", 1, 1, "grouped PPC summaries ready")
         return PPCComponentExecutionResult(
@@ -2525,7 +2703,18 @@ def execute_grouped_ppc_component(
             resumed_block_ids=tuple(resumed_ids),
         )
     finally:
-        _release_executor_lock(lock_path)
+        try:
+            for runner in active_parallel_runners:
+                close = getattr(runner, "close", None)
+                if callable(close):
+                    close()
+        finally:
+            try:
+                _clear_grouped_parallel_staging_directory(
+                    run_directory / "worker-staging"
+                )
+            finally:
+                _release_executor_lock(lock_path)
 
 
 def _grouped_source_trial_spike_counts(
@@ -3119,6 +3308,113 @@ def _grouped_checkpoint_schema_bytes(
     return total_bytes
 
 
+def _clear_grouped_parallel_staging_directory(staging_directory: Path) -> None:
+    """Remove disposable worker stages owned by one execution run.
+
+    ``staging_directory`` contains only uncheckpointed worker handoffs.  It is
+    cleared by the executor while holding its run lock, so no file here has
+    resume semantics.
+
+    Parameters
+    ----------
+    staging_directory : pathlib.Path
+        Run-owned directory containing only scalar worker handoffs and partial
+        files; it must never be a final cache or checkpoint directory.
+
+    Returns
+    -------
+    None
+        Leaves an existing empty directory. I/O failures propagate so the
+        caller can still release its executor lock in an outer ``finally``.
+    """
+    staging_directory.mkdir(parents=True, exist_ok=True)
+    for path in staging_directory.iterdir():
+        if path.is_file():
+            path.unlink(missing_ok=True)
+
+
+def _load_grouped_staged_result(
+    *,
+    staged_result_path: Path,
+    expected_array_schema: Mapping[str, tuple[np.dtype[object], tuple[int, ...]]],
+    maximum_array_bytes: int,
+) -> dict[str, np.ndarray]:
+    """Load one exact bounded worker stage after validating ZIP NPY headers.
+
+    The header pass rejects wrong keys, dtype, shape, or cap before
+    ``numpy.load`` can materialize any member.  Every invalid/disposable stage
+    is unlinked before its exception is raised.
+
+    Parameters
+    ----------
+    staged_result_path : pathlib.Path
+        Canonical run-owned NPZ path for one worker block.
+    expected_array_schema : Mapping[str, tuple[numpy.dtype, tuple[int, ...]]]
+        Exact flat member names, numeric dtypes, and checkpoint axes.
+    maximum_array_bytes : int
+        Exact uncompressed schema byte total, not a compression-size limit.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Read-only owned arrays matching the schema exactly.
+
+    Raises
+    ------
+    ValueError
+        If ZIP/NPY headers, members, dtype, shape, or byte cap are invalid;
+        the disposable stage is removed first.
+    """
+    try:
+        if maximum_array_bytes != _grouped_checkpoint_schema_bytes(expected_array_schema):
+            raise ValueError("staged grouped worker result exceeds exact schema cap")
+        with zipfile.ZipFile(staged_result_path) as archive:
+            member_names = archive.namelist()
+            if (
+                any("/" in name or not name.endswith(".npy") for name in member_names)
+                or len(member_names) != len(set(member_names))
+            ):
+                raise ValueError("staged grouped worker result schema is invalid")
+            names = {name[:-4] for name in member_names}
+            if names != set(expected_array_schema):
+                raise ValueError("staged grouped worker result schema is invalid")
+            declared_bytes = 0
+            for name, (expected_dtype, expected_shape) in expected_array_schema.items():
+                with archive.open(f"{name}.npy") as member:
+                    version = np.lib.format.read_magic(member)
+                    if version == (1, 0):
+                        shape, fortran_order, dtype = np.lib.format.read_array_header_1_0(member)
+                    elif version in {(2, 0), (3, 0)}:
+                        shape, fortran_order, dtype = np.lib.format.read_array_header_2_0(member)
+                    else:
+                        raise ValueError("staged grouped worker result has unsupported NPY header")
+                if (
+                    fortran_order
+                    or np.dtype(dtype) != np.dtype(expected_dtype)
+                    or tuple(shape) != tuple(expected_shape)
+                ):
+                    raise ValueError("staged grouped worker result schema is invalid")
+                declared_bytes = _checked_ppc_add(
+                    declared_bytes,
+                    _checked_ppc_multiply(int(np.prod(shape, dtype=np.int64)), int(np.dtype(dtype).itemsize)),
+                )
+            if declared_bytes != maximum_array_bytes:
+                raise ValueError("staged grouped worker result exceeds exact schema cap")
+        with np.load(staged_result_path, allow_pickle=False) as archive:
+            arrays = {name: np.asarray(archive[name]) for name in expected_array_schema}
+        for values in arrays.values():
+            values.setflags(write=False)
+        return arrays
+    except (
+        OSError, ValueError, TypeError, EOFError, RuntimeError,
+        NotImplementedError, zipfile.BadZipFile, KeyError,
+    ) as error:
+        staged_result_path.unlink(missing_ok=True)
+        if isinstance(error, ValueError) and str(error).startswith("staged grouped worker result"):
+            raise
+        raise ValueError("staged grouped worker result is invalid") from error
+
+
 def _merge_grouped_checkpoint(
     *,
     summary: dict[str, np.ndarray],
@@ -3464,16 +3760,68 @@ def _record_grouped_representative_histogram(
     np.add(histogram, trial_histogram, out=histogram)
 
 
+def _component_site_union_views(
+    plan: PPCComponentPlan,
+    site_index: int,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Return one site's borrowed contiguous physical-edge union views.
+
+    Parameters
+    ----------
+    plan : PPCComponentPlan
+        Immutable component plan whose site-qualified union arrays have
+        matching int64 ``(union_edge,)`` axes.
+    site_index : int
+        Valid nonnegative categorical site position.
+
+    Returns
+    -------
+    source_trial_row, target_trial_row, position_offset : tuple
+        Read-only int64 views of this site's contiguous component-union slice
+        and its first global union position. Empty sites return non-owning
+        empty views at their sorted insertion position. Stable row IDs are
+        categorical, not physical times.
+
+    Raises
+    ------
+    ValueError
+        If the immutable component union is not site-contiguous, which would
+        make the task's borrowed local edge map ambiguous.
+    """
+    site_positions = np.asarray(plan.edge_site_index, dtype=np.int64)
+    start = 0
+    while start < site_positions.size and int(site_positions[start]) < site_index:
+        start += 1
+    stop = start
+    while stop < site_positions.size and int(site_positions[stop]) == site_index:
+        stop += 1
+    if stop < site_positions.size and int(site_positions[stop]) < site_index:
+        raise ValueError("grouped component site union must be site-sorted")
+    return (
+        plan.stable_edge_source_trial_row[start:stop],
+        plan.stable_edge_target_trial_row[start:stop],
+        start,
+    )
+
+
 def _compute_grouped_site_unit_block(
     *,
     config: LFPSummaryConfig,
     prepared_phase: object,
     prepared_spikes: object,
-    plan: PPCComponentPlan,
+    plan: PPCComponentPlan | None,
     summary: dict[str, np.ndarray],
     site_index: int,
     unit_start: int,
     unit_stop: int,
+    site_jobs: tuple[PPCJobPlan, ...] | None = None,
+    site_condition_batches: tuple[tuple[int, ...], ...] | None = None,
+    site_union_source_trial_row: np.ndarray | None = None,
+    site_union_target_trial_row: np.ndarray | None = None,
+    site_union_position_offset: int | None = None,
+    unit_spike_trains: tuple[object, ...] | None = None,
+    summary_unit_start: int | None = None,
+    summary_site_index: int | None = None,
 ) -> None:
     """Compute one bounded site/unit grouped block from segmented statistics.
 
@@ -3485,9 +3833,10 @@ def _compute_grouped_site_unit_block(
     prepared_phase, prepared_spikes : production prepared records
         Full site/frequency/trial/time complex64/Boolean phase and unit/trial
         relative-second spike inputs. Only one site/unit block is sampled.
-    plan : PPCComponentPlan
-        Immutable site-qualified schedules/edge union. It contains no sampled
-        phase or spike values.
+    plan : PPCComponentPlan or None
+        Full immutable scheduler output for serial work. Parallel workers pass
+        ``None`` and supply borrowed current-site plan fields instead, never a
+        full component plan.
     summary : dict[str, numpy.ndarray]
         Writable full output arrays. Only ``site_index`` and ``[unit_start,
         unit_stop)`` are changed.
@@ -3495,6 +3844,21 @@ def _compute_grouped_site_unit_block(
         Current categorical site position.
     unit_start, unit_stop : int
         Half-open full-unit bounds for this bounded computation.
+    site_jobs, site_condition_batches : tuple or None
+        Borrowed current-site jobs and ordered condition batches. Both are
+        required when ``plan`` is ``None``; batches bound only null work.
+    site_union_source_trial_row, site_union_target_trial_row : numpy.ndarray or None
+        Borrowed read-only int64 ``(site_union_edge,)`` current-site union
+        views. They share immutable component-plan storage in worker tasks.
+    site_union_position_offset : int or None
+        First global component-union position represented by the local union
+        views. Job edge positions are rebased by this categorical offset.
+    unit_spike_trains : tuple or None
+        Exact bounded original spike records for a worker. ``None`` retains
+        serial use of the full prepared record slice.
+    summary_unit_start, summary_site_index : int or None
+        Full coordinates represented by summary axis zero. ``None`` preserves
+        full-component serial indexing; workers use local output axes.
     Returns
     -------
     None
@@ -3502,7 +3866,46 @@ def _compute_grouped_site_unit_block(
         the documented output axes. Per-trial observed and per-edge arrays are
         released before the next execution stage/checkpoint publication.
     """
-    site_jobs = tuple(job for job in plan.job_plans if job.site_index == site_index)
+    if site_jobs is None:
+        if plan is None:
+            raise ValueError("grouped worker requires current-site jobs")
+        site_jobs = tuple(job for job in plan.job_plans if job.site_index == site_index)
+    if site_condition_batches is None:
+        if plan is None:
+            raise ValueError("grouped worker requires current-site condition batches")
+        site_condition_batches = plan.condition_batches[site_index]
+    if (
+        site_union_source_trial_row is None
+        or site_union_target_trial_row is None
+        or site_union_position_offset is None
+    ):
+        if plan is None:
+            raise ValueError("grouped worker requires a current-site edge union")
+        (
+            site_union_source_trial_row,
+            site_union_target_trial_row,
+            site_union_position_offset,
+        ) = _component_site_union_views(plan, site_index)
+    if (
+        site_union_source_trial_row.dtype != np.dtype(np.int64)
+        or site_union_target_trial_row.dtype != np.dtype(np.int64)
+        or site_union_source_trial_row.ndim != 1
+        or site_union_target_trial_row.ndim != 1
+        or site_union_source_trial_row.shape != site_union_target_trial_row.shape
+    ):
+        raise ValueError("grouped current-site union arrays are invalid")
+    output_unit_start = (
+        unit_start if summary_unit_start is None else unit_start - summary_unit_start
+    )
+    output_unit_stop = output_unit_start + (unit_stop - unit_start)
+    output_site_index = site_index if summary_site_index is None else summary_site_index
+    if (
+        output_unit_start < 0
+        or output_unit_stop > summary["ppc"].shape[0]
+        or output_site_index < 0
+        or output_site_index >= summary["ppc"].shape[2]
+    ):
+        raise ValueError("grouped worker summary/local block coordinates disagree")
     frequencies = np.asarray(config.phase.frequency_hz, dtype=float)
     stable_rows = np.asarray(prepared_phase.trial_indices, dtype=np.int64)
     selected_ids = {
@@ -3525,7 +3928,25 @@ def _compute_grouped_site_unit_block(
     valid_by_trial = np.moveaxis(
         np.asarray(prepared_phase.phase_valid)[site_index], 1, 0
     )
-    unit_ids = tuple(prepared_spikes.unit_ids[unit_start:unit_stop])
+    selected_trains = (
+        tuple(prepared_spikes.trial_spike_trains[unit_start:unit_stop])
+        if unit_spike_trains is None
+        else unit_spike_trains
+    )
+    if len(selected_trains) != unit_stop - unit_start:
+        raise ValueError("grouped worker unit spike bounds disagree")
+    unit_ids = tuple(
+        str(
+            getattr(
+                train,
+                "unit_id",
+                prepared_spikes.unit_ids[unit_start + offset]
+                if unit_spike_trains is None
+                else unit_start + offset,
+            )
+        )
+        for offset, train in enumerate(selected_trains)
+    )
     windows = config.analysis_windows
     segment_bounds = (
         (float(windows.before_start_s), float(windows.before_stop_s)),
@@ -3538,11 +3959,8 @@ def _compute_grouped_site_unit_block(
             source_trial_index=int(stable_rows[position]),
             unit_ids=unit_ids,
             unit_trial_spike_times_s=tuple(
-                np.asarray(
-                    prepared_spikes.trial_spike_trains[unit_index].relative_spike_times[int(position)],
-                    dtype=float,
-                )
-                for unit_index in range(unit_start, unit_stop)
+                np.asarray(train.relative_spike_times[int(position)], dtype=float)
+                for train in selected_trains
             ),
             segment_bounds_s=segment_bounds,
         )
@@ -3559,9 +3977,9 @@ def _compute_grouped_site_unit_block(
     eligible_by_job: dict[tuple[int, int, int], np.ndarray] = {}
     for job in site_jobs:
         output_index = (
-            slice(unit_start, unit_stop),
+            slice(output_unit_start, output_unit_stop),
             job.condition_index,
-            site_index,
+            output_site_index,
             job.epoch_index,
             slice(None),
         )
@@ -3585,9 +4003,9 @@ def _compute_grouped_site_unit_block(
                 "representative_phase_histogram_count": summary[
                     "representative_phase_histogram_count"
                 ][
-                    slice(unit_start, unit_stop),
+                    slice(output_unit_start, output_unit_stop),
                     job.condition_index,
-                    site_index,
+                    output_site_index,
                     job.epoch_index,
                 ]
             },
@@ -3598,10 +4016,9 @@ def _compute_grouped_site_unit_block(
     # are reduced; aggregation above owns its compact condition summaries.
     del observed_trial_statistics
 
-    for condition_indices in plan.condition_batches[site_index]:
+    for condition_indices in site_condition_batches:
         _execute_grouped_condition_batch(
             config=config,
-            plan=plan,
             summary=summary,
             site_jobs=site_jobs,
             condition_indices=condition_indices,
@@ -3612,6 +4029,11 @@ def _compute_grouped_site_unit_block(
             site_index=site_index,
             unit_start=unit_start,
             unit_stop=unit_stop,
+            site_union_source_trial_row=site_union_source_trial_row,
+            site_union_target_trial_row=site_union_target_trial_row,
+            site_union_position_offset=site_union_position_offset,
+            summary_unit_start=summary_unit_start,
+            summary_site_index=summary_site_index,
             eligible_by_job=eligible_by_job,
         )
 
@@ -3619,7 +4041,6 @@ def _compute_grouped_site_unit_block(
 def _execute_grouped_condition_batch(
     *,
     config: LFPSummaryConfig,
-    plan: PPCComponentPlan,
     summary: dict[str, np.ndarray],
     site_jobs: tuple[PPCJobPlan, ...],
     condition_indices: tuple[int, ...],
@@ -3630,6 +4051,11 @@ def _execute_grouped_condition_batch(
     site_index: int,
     unit_start: int,
     unit_stop: int,
+    site_union_source_trial_row: np.ndarray,
+    site_union_target_trial_row: np.ndarray,
+    site_union_position_offset: int,
+    summary_unit_start: int | None,
+    summary_site_index: int | None,
     eligible_by_job: Mapping[tuple[int, int, int], np.ndarray],
 ) -> None:
     """Execute one site-local ordered condition batch and release its null work.
@@ -3639,11 +4065,9 @@ def _execute_grouped_condition_batch(
     config : LFPSummaryConfig
         Validated seconds/Hz PPC configuration. Edge and shuffle blocks bound
         only the transient work for this condition batch.
-    plan : PPCComponentPlan
-        Immutable component schedules and site-qualified union arrays.
     summary : dict[str, numpy.ndarray]
-        Writable full parent summary arrays. Only the supplied site/unit rows
-        and batch conditions are changed.
+        Writable serial full-component or worker-local summary arrays. Only the
+        supplied site/unit rows and batch conditions are changed.
     site_jobs : tuple[PPCJobPlan, ...]
         All result jobs for this site in stable condition/epoch order.
     condition_indices : tuple[int, ...]
@@ -3660,6 +4084,17 @@ def _execute_grouped_condition_batch(
         Fixed categorical site position.
     unit_start, unit_stop : int
         Half-open full unit-axis bounds for the block.
+    site_union_source_trial_row, site_union_target_trial_row : numpy.ndarray
+        Borrowed read-only int64 ``(site_union_edge,)`` stable source/target
+        identities for this one site. They are a current-site view, not a full
+        component union.
+    site_union_position_offset : int
+        First global component-union position represented by the local union
+        views. Job positions are rebased before edge reduction.
+    summary_unit_start, summary_site_index : int or None
+        Full coordinates represented by summary axis zero. ``None`` selects
+        serial full-component output coordinates; worker summaries use local
+        unit axis zero and site axis zero.
     eligible_by_job : Mapping[tuple[int, int, int], numpy.ndarray]
         Summary-owned Boolean ``(unit_block, frequency)`` null eligibility
         views keyed by condition/site/epoch identity.
@@ -3691,17 +4126,22 @@ def _execute_grouped_condition_batch(
             np.zeros(shape, dtype=np.int64),
         )
     batch_positions = tuple(
-        int(position)
+        int(position) - site_union_position_offset
         for job in site_jobs
         if job.condition_index in condition_indices
         for position in job.edge_union_position.ravel()
     )
+    if any(
+        position < 0 or position >= site_union_source_trial_row.size
+        for position in batch_positions
+    ):
+        raise ValueError("grouped job edge positions disagree with current-site union")
     planned_edge_groups = _fixed_edge_position_groups(
         positions=batch_positions,
         maximum_group_size=config.ppc_execution.trial_edge_block_size,
     )
     active_positions = {
-        int(position)
+        int(position) - site_union_position_offset
         for job in active_jobs
         for position in job.edge_union_position.ravel()
     }
@@ -3729,14 +4169,14 @@ def _execute_grouped_condition_batch(
                 phase_valid_mask=phase_valid_mask,
                 phase_trial_index=phase_trial_index,
                 frequencies_hz=np.asarray(config.phase.frequency_hz, dtype=float),
-                source_trial_index=plan.stable_edge_source_trial_row[edge_start:edge_stop],
-                target_trial_index=plan.stable_edge_target_trial_row[edge_start:edge_stop],
+                source_trial_index=site_union_source_trial_row[edge_start:edge_stop],
+                target_trial_index=site_union_target_trial_row[edge_start:edge_stop],
             )
             edge_identities = {
                 (int(source), int(target))
                 for source, target in zip(
-                    plan.stable_edge_source_trial_row[edge_start:edge_stop],
-                    plan.stable_edge_target_trial_row[edge_start:edge_stop],
+                    site_union_source_trial_row[edge_start:edge_stop],
+                    site_union_target_trial_row[edge_start:edge_stop],
                     strict=True,
                 )
             }
@@ -3746,7 +4186,9 @@ def _execute_grouped_condition_batch(
                 # work, this keeps whole-window consumption tied to retained
                 # before/after sufficient statistics.
                 if not any(
-                    edge_start <= int(position) < edge_stop
+                    edge_start
+                    <= int(position) - site_union_position_offset
+                    < edge_stop
                     for position in job.edge_union_position.ravel()
                 ):
                     continue
@@ -3787,9 +4229,12 @@ def _execute_grouped_condition_batch(
         vector_sum, valid_count = accumulators.pop(_grouped_job_key(job))
         draw_scratch = np.empty(vector_sum.shape, dtype=float)
         output_index = (
-            slice(unit_start, unit_stop),
+            slice(
+                unit_start if summary_unit_start is None else unit_start - summary_unit_start,
+                unit_stop if summary_unit_start is None else unit_stop - summary_unit_start,
+            ),
             job.condition_index,
-            site_index,
+            site_index if summary_site_index is None else summary_site_index,
             job.epoch_index,
             slice(None),
         )
@@ -4164,30 +4609,524 @@ def _apply_grouped_bh_block(
         Writes float64 q values and Boolean significant flags for this block;
         unavailable/ineligible entries stay NaN/false.
     """
-    p_values = summary["p_value"][unit_start:unit_stop, :, site_index]
-    eligibility = summary["null_eligible"][unit_start:unit_stop, :, site_index]
-    q_values = spike_lfp_summary.adjust_ppc_pvalues_bh(
-        p_value=p_values[:, :, None, :, :],
-        null_eligible=eligibility[:, :, None, :, :],
-    )[:, :, 0]
-    summary["q_value"][unit_start:unit_stop, :, site_index] = q_values
-    summary["significant"][unit_start:unit_stop, :, site_index] = (
-        eligibility & (q_values <= alpha)
-    )
+    for unit_index in range(unit_start, unit_stop):
+        for condition_index in range(summary["p_value"].shape[1]):
+            for epoch_index in range(summary["p_value"].shape[3]):
+                _apply_grouped_bh_frequency_family_in_place(
+                    p_value=summary["p_value"][unit_index, condition_index, site_index, epoch_index],
+                    null_eligible=summary["null_eligible"][unit_index, condition_index, site_index, epoch_index],
+                    q_value=summary["q_value"][unit_index, condition_index, site_index, epoch_index],
+                    significant=summary["significant"][unit_index, condition_index, site_index, epoch_index],
+                    alpha=alpha,
+                )
+
+
+def _apply_grouped_bh_frequency_family_in_place(
+    *, p_value: np.ndarray, null_eligible: np.ndarray, q_value: np.ndarray,
+    significant: np.ndarray, alpha: float,
+) -> None:
+    """Apply BH to one bounded frequency family without a block-sized scratch.
+
+    Parameters are float64 ``p_value``/``q_value`` and Boolean
+    ``null_eligible``/``significant`` arrays with matching ``(frequency,)``
+    axes; p and q values plus ``alpha`` are dimensionless. This mutates only
+    the supplied q/significance views and returns ``None``.
+    """
+    q_value.fill(np.nan)
+    significant.fill(False)
+    eligible_indices = [
+        index for index in range(p_value.size)
+        if bool(null_eligible[index]) and np.isfinite(p_value[index])
+    ]
+    if not eligible_indices:
+        return
+    ordered = sorted(eligible_indices, key=lambda index: float(p_value[index]))
+    running = 1.0
+    family_size = len(ordered)
+    for rank in range(family_size, 0, -1):
+        index = ordered[rank - 1]
+        running = min(running, float(p_value[index]) * family_size / rank)
+        q_value[index] = running
+        significant[index] = running <= alpha
 
 
 @dataclass(frozen=True)
 class _PhaseWorkDescriptor:
     """Read-only on-disk phase inputs shared by process workers.
 
-    ``phase_path`` and ``valid_path`` name validated NPY arrays with axes
-    ``(site=1, frequency, trial, time)``. Phase is complex64 unit vectors;
-    validity is Boolean. Time remains in seconds in the lightweight task
-    because it is a one-dimensional coordinate rather than the large payload.
+    The six paths name read-only NPY arrays shared by all spawned workers:
+    complex64/Boolean phase and validity with ``(site, frequency, trial,
+    time)`` axes, float64 event-relative seconds ``(time,)``, int64 stable
+    trial rows ``(trial,)``, packed float64 spike times ``(spike,)``, and
+    int64 spike offsets ``(unit, trial + 1)``.  Tasks contain only scalar
+    coordinates and immutable plan views, never any input payload.
+
+    The four auxiliary paths are optional only for the frozen legacy two-array
+    executor; grouped workers require the complete six-path descriptor.
     """
 
     phase_path: Path
     valid_path: Path
+    relative_time_s_path: Path | None = None
+    stable_trial_rows_path: Path | None = None
+    spike_times_s_path: Path | None = None
+    spike_offsets_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class _GroupedParallelBlockTask:
+    """Pickle-safe description of one current-site grouped unit block.
+
+    Parameters
+    ----------
+    block_id : str
+        Stable checkpoint identity for one site and half-open unit block.
+    site_index, unit_start, unit_stop : int
+        Categorical site position and half-open full-unit bounds. They have no
+        physical units.
+    site_jobs : tuple[PPCJobPlan, ...]
+        Borrowed immutable result-cell plans for this site only, in canonical
+        condition/epoch order. These are not a full component plan.
+    site_condition_batches : tuple[tuple[int, ...], ...]
+        Borrowed ordered condition batches for the current site. They bound
+        null accumulation inside this one unit task.
+    site_union_source_trial_row, site_union_target_trial_row : numpy.ndarray
+        Borrowed read-only int64 views of the current contiguous site slice of
+        the component physical-edge union. Both have ``(site_union_edge,)``
+        axes of stable trial-row IDs.
+    site_union_position_offset : int
+        First global component-union position represented by the two site
+        union views. Job union positions are rebased by this categorical
+        offset before worker reduction.
+    staged_result_path : pathlib.Path
+        Unique disposable worker NPZ path. The worker publishes this exact
+        bounded schema atomically; only the parent validates, merges, and
+        writes durable checkpoints.
+    config : LFPSummaryConfig
+        Immutable settings metadata only. Numerical phase, coordinate, and
+        spike payloads remain initializer-owned mmap arrays.
+    """
+
+    block_id: str
+    site_index: int
+    unit_start: int
+    unit_stop: int
+    site_jobs: tuple[PPCJobPlan, ...]
+    site_condition_batches: tuple[tuple[int, ...], ...]
+    site_union_source_trial_row: np.ndarray
+    site_union_target_trial_row: np.ndarray
+    site_union_position_offset: int
+    staged_result_path: Path
+    config: LFPSummaryConfig
+
+
+@dataclass(frozen=True)
+class _GroupedParallelBlockResult:
+    """One bounded worker result awaiting parent merge/checkpoint publication.
+
+    The result owns only scalar identity coordinates and the staged NPZ path.
+    Numerical arrays remain in the worker staging file until the parent loads
+    exactly one validated bounded block.
+    """
+
+    block_id: str
+    site_index: int
+    unit_start: int
+    unit_stop: int
+    staged_result_path: Path
+
+
+_GROUPED_WORKER_PHASE: np.ndarray | None = None
+_GROUPED_WORKER_VALID: np.ndarray | None = None
+_GROUPED_WORKER_RELATIVE_TIME_S: np.ndarray | None = None
+_GROUPED_WORKER_STABLE_TRIAL_ROWS: np.ndarray | None = None
+_GROUPED_WORKER_SPIKE_TIMES_S: np.ndarray | None = None
+_GROUPED_WORKER_SPIKE_OFFSETS: np.ndarray | None = None
+
+
+def _materialize_grouped_phase_work_inputs(
+    run_directory: Path,
+    phase: np.ndarray,
+    valid: np.ndarray,
+    relative_time_s: np.ndarray,
+    stable_trial_rows: np.ndarray,
+    prepared_spikes: object,
+) -> _PhaseWorkDescriptor:
+    """Stream six shared grouped worker inputs into one mmap descriptor.
+
+    Parameters
+    ----------
+    run_directory : pathlib.Path
+        Locked grouped PPC work directory. All NPY files are disposable
+        execution-only artifacts below this directory.
+    phase, valid : numpy.ndarray
+        Validated complex64 and Boolean ``(site, frequency, trial, time)``
+        arrays.
+    relative_time_s, stable_trial_rows : numpy.ndarray
+        Float64 seconds ``(time,)`` and int64 stable IDs ``(trial,)``.
+    prepared_spikes : PreparedSpikeRun-like
+        Trial-local finite float seconds vectors for every unit/trial. Values
+        are streamed directly into packed mmap storage, never concatenated.
+
+    Returns
+    -------
+    _PhaseWorkDescriptor
+        Paths to one shared six-array set. Files are direct execution work
+        artifacts; worker initialization validates their on-disk contracts. The caller invokes
+        this only when at least one grouped unit block remains pending, so warm
+        resume has no mmap materialization side effect.
+    """
+    directory = run_directory / "worker-inputs"
+    directory.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "phase": directory / "phase.npy",
+        "valid": directory / "valid.npy",
+        "relative_time_s": directory / "relative_time_s.npy",
+        "stable_trial_rows": directory / "stable_trial_rows.npy",
+        "spike_times_s": directory / "spike_times_s.npy",
+        "spike_offsets": directory / "spike_offsets.npy",
+    }
+
+    def write_direct(path: Path, values: np.ndarray) -> None:
+        """Stream one validated numeric array into ``path`` without a copy.
+
+        ``values`` retains its documented dtype/axes; the returned value is
+        ``None`` and ownership of the transient writable mmap ends here.
+        """
+        mapped = np.lib.format.open_memmap(
+            path, mode="w+", dtype=values.dtype, shape=values.shape
+        )
+        mapped[...] = values
+        mapped.flush()
+        del mapped
+
+    write_direct(paths["phase"], phase)
+    write_direct(paths["valid"], valid)
+    write_direct(paths["relative_time_s"], relative_time_s)
+    write_direct(paths["stable_trial_rows"], stable_trial_rows)
+    trial_count = stable_trial_rows.size
+    trains = tuple(prepared_spikes.trial_spike_trains)
+    total_spikes = sum(
+        int(np.asarray(times).size)
+        for train in trains
+        for times in train.relative_spike_times
+    )
+    offsets = np.lib.format.open_memmap(
+        paths["spike_offsets"], mode="w+", dtype=np.int64,
+        shape=(len(trains), trial_count + 1),
+    )
+    packed = np.lib.format.open_memmap(
+        paths["spike_times_s"], mode="w+", dtype=np.float64,
+        shape=(total_spikes,),
+    )
+    cursor = 0
+    for unit_index, train in enumerate(trains):
+        offsets[unit_index, 0] = cursor
+        for trial_index, times in enumerate(train.relative_spike_times):
+            values = np.asarray(times, dtype=np.float64)
+            stop = cursor + values.size
+            packed[cursor:stop] = values
+            cursor = stop
+            offsets[unit_index, trial_index + 1] = cursor
+    packed.flush()
+    offsets.flush()
+    del packed, offsets
+    return _PhaseWorkDescriptor(
+        phase_path=paths["phase"], valid_path=paths["valid"],
+        relative_time_s_path=paths["relative_time_s"],
+        stable_trial_rows_path=paths["stable_trial_rows"],
+        spike_times_s_path=paths["spike_times_s"],
+        spike_offsets_path=paths["spike_offsets"],
+    )
+
+
+def _initialize_grouped_parallel_worker(
+    phase_descriptor: _PhaseWorkDescriptor,
+) -> None:
+    """Open six grouped shared input maps once in one spawned worker.
+
+    Parameters
+    ----------
+    phase_descriptor : _PhaseWorkDescriptor
+        Existing NPY paths for complex64 phase/Boolean validity ``(site,
+        frequency, full_trial, time)``, float64 seconds ``(time,)``, int64
+        stable rows ``(trial,)``, packed float64 spikes ``(spike,)``, and int64
+        offsets ``(unit, trial + 1)``. All are opened ``mmap_mode="r"``.
+
+    Returns
+    -------
+    None
+        Stores all six read-only maps in module-private worker globals.
+        Subsequent tasks reconstruct bounded spike views without reopening or
+        copying any complete shared input.
+
+    Raises
+    ------
+    ValueError
+        If any of six mmap dtypes, axes, read-only flags, offsets, or the
+        float64 ``(time,)`` length disagrees with phase ``time``. I/O failures
+        propagate unchanged.
+    """
+    global _GROUPED_WORKER_PHASE, _GROUPED_WORKER_VALID
+    global _GROUPED_WORKER_RELATIVE_TIME_S, _GROUPED_WORKER_STABLE_TRIAL_ROWS
+    global _GROUPED_WORKER_SPIKE_TIMES_S, _GROUPED_WORKER_SPIKE_OFFSETS
+    if any(path is None for path in (
+        phase_descriptor.relative_time_s_path,
+        phase_descriptor.stable_trial_rows_path,
+        phase_descriptor.spike_times_s_path,
+        phase_descriptor.spike_offsets_path,
+    )):
+        raise ValueError("grouped worker descriptor lacks shared input paths")
+    phase = np.load(phase_descriptor.phase_path, mmap_mode="r", allow_pickle=False)
+    valid = np.load(phase_descriptor.valid_path, mmap_mode="r", allow_pickle=False)
+    relative_time_s = np.load(
+        phase_descriptor.relative_time_s_path, mmap_mode="r", allow_pickle=False
+    )
+    stable_trial_rows = np.load(
+        phase_descriptor.stable_trial_rows_path, mmap_mode="r", allow_pickle=False
+    )
+    spike_times_s = np.load(
+        phase_descriptor.spike_times_s_path, mmap_mode="r", allow_pickle=False
+    )
+    spike_offsets = np.load(
+        phase_descriptor.spike_offsets_path, mmap_mode="r", allow_pickle=False
+    )
+    if (
+        phase.dtype != np.dtype(np.complex64)
+        or valid.dtype != np.dtype(bool)
+        or phase.shape != valid.shape
+        or phase.ndim != 4
+        or relative_time_s.dtype != np.dtype(np.float64)
+        or stable_trial_rows.dtype != np.dtype(np.int64)
+        or spike_times_s.dtype != np.dtype(np.float64)
+        or spike_offsets.dtype != np.dtype(np.int64)
+        or relative_time_s.shape != (phase.shape[3],)
+        or stable_trial_rows.shape != (phase.shape[2],)
+        or spike_offsets.shape[1:] != (phase.shape[2] + 1,)
+        or spike_offsets.shape[0] < 1
+        or int(spike_offsets[-1, -1]) != spike_times_s.size
+        or phase.flags.writeable
+        or valid.flags.writeable
+        or relative_time_s.flags.writeable
+        or stable_trial_rows.flags.writeable
+        or spike_times_s.flags.writeable
+        or spike_offsets.flags.writeable
+    ):
+        raise ValueError("grouped worker phase mmap contract is invalid")
+    _GROUPED_WORKER_PHASE = phase
+    _GROUPED_WORKER_VALID = valid
+    _GROUPED_WORKER_RELATIVE_TIME_S = relative_time_s
+    _GROUPED_WORKER_STABLE_TRIAL_ROWS = stable_trial_rows
+    _GROUPED_WORKER_SPIKE_TIMES_S = spike_times_s
+    _GROUPED_WORKER_SPIKE_OFFSETS = spike_offsets
+
+
+def _compute_grouped_parallel_block(
+    task: _GroupedParallelBlockTask,
+) -> _GroupedParallelBlockResult:
+    """Compute one grouped site/unit block from initializer-owned phase mmaps.
+
+    Parameters
+    ----------
+    task : _GroupedParallelBlockTask
+        Pickle-safe site-local plan, scalar unit coordinates, staging path,
+        and immutable configuration. It owns no phase, time, stable-row, or
+        spike payload; those six arrays are initializer-owned mmaps.
+
+    Returns
+    -------
+    _GroupedParallelBlockResult
+        Scalar identity/path record for the atomically staged exact
+        checkpoint-schema NPZ. The parent is the only checkpoint publisher.
+
+    Raises
+    ------
+    RuntimeError
+        If the spawned-worker initializer has not opened all six shared maps.
+    ValueError
+        If bounded task coordinates or grouped reduction contracts disagree.
+    """
+    phase = _GROUPED_WORKER_PHASE
+    valid = _GROUPED_WORKER_VALID
+    relative_time_s = _GROUPED_WORKER_RELATIVE_TIME_S
+    stable_trial_rows = _GROUPED_WORKER_STABLE_TRIAL_ROWS
+    spike_times_s = _GROUPED_WORKER_SPIKE_TIMES_S
+    spike_offsets = _GROUPED_WORKER_SPIKE_OFFSETS
+    if any(values is None for values in (
+        phase, valid, relative_time_s, stable_trial_rows, spike_times_s, spike_offsets,
+    )):
+        raise RuntimeError("grouped parallel worker was not initialized")
+    assert phase is not None and valid is not None
+    assert relative_time_s is not None and stable_trial_rows is not None
+    assert spike_times_s is not None and spike_offsets is not None
+    if any(values.flags.writeable for values in (
+        phase, valid, relative_time_s, stable_trial_rows, spike_times_s, spike_offsets,
+    )):
+        raise RuntimeError("grouped parallel worker mmap inputs must be read-only")
+    block_units = task.unit_stop - task.unit_start
+    if block_units <= 0 or task.unit_stop > spike_offsets.shape[0]:
+        raise ValueError("grouped parallel task unit bounds/spike offsets disagree")
+    if not task.site_jobs or not task.site_condition_batches:
+        raise ValueError("grouped parallel task requires current-site jobs and batches")
+    if any(job.site_index != task.site_index for job in task.site_jobs):
+        raise ValueError("grouped parallel task includes a foreign-site job")
+    condition_count = max(job.condition_index for job in task.site_jobs) + 1
+    prepared_phase = SimpleNamespace(
+        phase_tensor=phase,
+        phase_valid=valid,
+        relative_time_s=relative_time_s,
+        trial_indices=stable_trial_rows,
+    )
+    trial_spike_trains = []
+    for unit_index in range(task.unit_start, task.unit_stop):
+        relative_spikes = tuple(
+            spike_times_s[
+                int(spike_offsets[unit_index, trial_index]):int(
+                    spike_offsets[unit_index, trial_index + 1]
+                )
+            ]
+            for trial_index in range(stable_trial_rows.size)
+        )
+        trial_spike_trains.append(
+            SimpleNamespace(
+                unit_id=str(task.config.unit_population.stable_unit_ids[unit_index]),
+                relative_spike_times=relative_spikes,
+            )
+        )
+    prepared_spikes = SimpleNamespace(
+        unit_ids=tuple(train.unit_id for train in trial_spike_trains),
+        trial_spike_trains=tuple(trial_spike_trains),
+    )
+    summary = _empty_grouped_summary_arrays(
+        unit_count=block_units,
+        condition_count=condition_count,
+        site_count=1,
+        epoch_count=len(task.config.ppc.epochs),
+        frequency_count=len(task.config.phase.frequency_hz),
+        representative_band_count=_S1_S2_REPRESENTATIVE_BAND_COUNT,
+        phase_bin_count=len(task.config.ppc.phase_bin_edges_rad) - 1,
+    )
+    _compute_grouped_site_unit_block(
+        config=task.config,
+        prepared_phase=prepared_phase,
+        prepared_spikes=prepared_spikes,
+        plan=None,
+        summary=summary,
+        site_index=task.site_index,
+        unit_start=task.unit_start,
+        unit_stop=task.unit_stop,
+        site_jobs=task.site_jobs,
+        site_condition_batches=task.site_condition_batches,
+        site_union_source_trial_row=task.site_union_source_trial_row,
+        site_union_target_trial_row=task.site_union_target_trial_row,
+        site_union_position_offset=task.site_union_position_offset,
+        unit_spike_trains=tuple(trial_spike_trains),
+        summary_unit_start=task.unit_start,
+        summary_site_index=0,
+    )
+    _apply_grouped_bh_block(
+        summary=summary,
+        site_index=0,
+        unit_start=0,
+        unit_stop=block_units,
+        alpha=task.config.ppc.fdr_alpha,
+    )
+    # The worker summary has exactly one site, so dropping that singleton axis
+    # yields C-contiguous borrowed checkpoint views rather than a second block.
+    arrays = {name: values[:, :, 0] for name, values in summary.items()}
+    arrays["site_index"] = np.asarray([task.site_index], dtype=np.int64)
+    arrays["unit_bounds"] = np.asarray([task.unit_start, task.unit_stop], dtype=np.int64)
+    task.staged_result_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = task.staged_result_path.with_suffix(".npz.tmp")
+    with temporary_path.open("wb") as stream:
+        np.savez(stream, **arrays)
+    os.replace(temporary_path, task.staged_result_path)
+    del arrays, summary
+    return _GroupedParallelBlockResult(
+        block_id=task.block_id,
+        site_index=task.site_index,
+        unit_start=task.unit_start,
+        unit_stop=task.unit_stop,
+        staged_result_path=task.staged_result_path,
+    )
+
+
+def _run_grouped_parallel_block_batches(
+    *,
+    phase_descriptor: _PhaseWorkDescriptor,
+    block_tasks: tuple[_GroupedParallelBlockTask, ...],
+    worker_count: int,
+    compute_block: Callable[[_GroupedParallelBlockTask], _GroupedParallelBlockResult],
+) -> Iterator[_GroupedParallelBlockResult]:
+    """Yield one current-site worker pool's results in canonical task order.
+
+    Parameters
+    ----------
+    phase_descriptor : _PhaseWorkDescriptor
+        One shared read-only six-input mmap descriptor supplied once to each
+        spawned worker initializer.
+    block_tasks : tuple[_GroupedParallelBlockTask, ...]
+        Canonically ordered, nonempty current-site unit blocks only. Conditions
+        never become process tasks.
+    worker_count : int
+        Positive current-site active-worker bound, no greater than
+        ``len(block_tasks)``; invalid values raise ``ValueError``.
+    compute_block : callable
+        Top-level spawn-safe worker function. Production uses
+        :func:`_compute_grouped_parallel_block`; tests inject a deterministic
+        callable.
+
+    Yields
+    ------
+    _GroupedParallelBlockResult
+        One completed result in input task order. The generator pauses after
+        each yield so the parent can validate scalar identity, merge/checkpoint
+        its staged arrays, and then submit a replacement.
+
+    Raises
+    ------
+    ValueError
+        If ``worker_count`` is outside ``[1, len(block_tasks)]``.
+    Exception
+        Worker exceptions propagate after current and queued futures are
+        cancelled and the pool performs a wait-for-workers shutdown. The
+        parent validates task/result identity after each yield.
+    """
+    if not block_tasks:
+        return
+    if worker_count < 1 or worker_count > len(block_tasks):
+        raise ValueError("grouped parallel worker_count must fit pending site blocks")
+    task_iterator = iter(block_tasks)
+    pending: list[object] = []
+    executor: object | None = None
+    with ProcessPoolExecutor(
+        max_workers=worker_count,
+        mp_context=multiprocessing.get_context("spawn"),
+        initializer=_initialize_grouped_parallel_worker,
+        initargs=(phase_descriptor,),
+    ) as executor:
+        try:
+            for _ in range(worker_count):
+                try:
+                    task = next(task_iterator)
+                except StopIteration:
+                    break
+                pending.append(executor.submit(compute_block, task))
+            while pending:
+                future = pending[0]
+                result = future.result()
+                pending.pop(0)
+                yield result
+                try:
+                    task = next(task_iterator)
+                except StopIteration:
+                    continue
+                pending.append(executor.submit(compute_block, task))
+        finally:
+            if pending:
+                for submitted_future in pending:
+                    submitted_future.cancel()
+                executor.shutdown(wait=True, cancel_futures=True)
 
 
 @dataclass(frozen=True)
