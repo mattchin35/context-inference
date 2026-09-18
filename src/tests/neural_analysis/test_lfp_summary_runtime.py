@@ -28,7 +28,9 @@ from src.neural_analysis.lfp_summary_models import (
     default_lfp_summary_config,
 )
 from src.neural_analysis.lfp_summary_pipeline import (
+    ComponentPayload,
     PipelineDependencies,
+    compute_all_components,
     compute_power_component,
     compute_spike_phase_component,
 )
@@ -397,6 +399,234 @@ def test_power_dependencies_commit_reload_and_report_unsupported_components(
         dependencies.prepare_phase(config)
     with pytest.raises((NotImplementedError, RuntimeError), match="synchrony|spike|unsupported"):
         dependencies.prepare_spike(config, object())
+
+
+def _minimal_component_payload(component: str) -> ComponentPayload:
+    """Return a writer-ready scalar payload for composed-factory tests.
+
+    Parameters
+    ----------
+    component : str
+        One of ``power``, ``synchrony``, or ``spike_phase``.
+
+    Returns
+    -------
+    ComponentPayload
+        One dimensionless float64 value on an ``item`` axis. No LFP, phase,
+        spike, or physical-unit data is represented by this test payload.
+    """
+    return ComponentPayload(
+        arrays={"value": np.array([1.0], dtype=np.float64)},
+        manifest_entry={
+            "file_name": f"{component}.npz",
+            "state": "complete",
+            "array_schema": {
+                "value": {"axes": ["item"], "units": "dimensionless"}
+            },
+            "configuration_snapshot": {},
+            "source_fingerprints": {},
+        },
+    )
+
+
+def test_composed_dependencies_run_all_components_with_one_shared_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One production bundle must run all components and share phase identity.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-owned cache parent; no raw recording is opened.
+    monkeypatch : pytest.MonkeyPatch
+        Replaces numerical preparation/payload seams with identity-recording
+        fakes while retaining the real pipeline order and callback boundary.
+    """
+    config = _spike_phase_payload_config(tmp_path / "cache")
+    prepared_phase, prepared_spikes = _spike_phase_payload_inputs(config)
+    prepared_power = object()
+    calls: list[str] = []
+    writes: list[str] = []
+    progress_events: list[object] = []
+    grouped_event = lfp_summary_runtime.ProgressEvent(
+        component="grouped-spike-phase",
+        stage="trial_edge_reduction",
+        completed_count=3,
+        total_count=8,
+        message="grouped block",
+        elapsed_seconds=2.5,
+        eta_seconds=4.0,
+        job_id="site-0-units-0-8",
+    )
+
+    def fake_prepare_power(*args: object, **kwargs: object) -> object:
+        """Return one opaque Power preparation after recording delegation."""
+        del args, kwargs
+        calls.append("prepare_power")
+        return prepared_power
+
+    def fake_phase_preparer(received_config: object) -> object:
+        """Return the exact prepared phase object used by both consumers."""
+        assert received_config is config
+        calls.append("prepare_phase")
+        return prepared_phase
+
+    def fake_prepare_spike(
+        received_config: object,
+        received_phase: object,
+        unit_spike_loader: object,
+    ) -> object:
+        """Require the shared phase identity and return prepared trial spikes."""
+        assert received_config is config
+        assert received_phase is prepared_phase
+        assert callable(unit_spike_loader)
+        calls.append("prepare_spike")
+        return prepared_spikes
+
+    def fake_power_payload(received_config: object, prepared: object) -> ComponentPayload:
+        """Build a scalar Power payload from the exact opaque preparation."""
+        assert received_config is config
+        assert prepared is prepared_power
+        calls.append("payload_power")
+        return _minimal_component_payload("power")
+
+    def fake_synchrony_payload(
+        received_config: object,
+        received_phase: object,
+    ) -> ComponentPayload:
+        """Build a scalar Synchrony payload from the shared phase identity."""
+        assert received_config is config
+        assert received_phase is prepared_phase
+        calls.append("payload_synchrony")
+        return _minimal_component_payload("synchrony")
+
+    def fake_spike_payload(
+        received_config: object,
+        received_phase: object,
+        received_spikes: object,
+        *,
+        progress_callback: object,
+    ) -> ComponentPayload:
+        """Forward one detailed grouped event without translating its fields."""
+        assert received_config is config
+        assert received_phase is prepared_phase
+        assert received_spikes is prepared_spikes
+        assert callable(progress_callback)
+        progress_callback(grouped_event)
+        calls.append("payload_spike_phase")
+        return _minimal_component_payload("spike_phase")
+
+    def fake_manifest_loader(directory: Path, received_config: object) -> dict[str, object]:
+        """Require the exact active configuration retained by the factory."""
+        assert directory == config.output_directory
+        assert received_config is config
+        calls.append("load_manifest")
+        return {"session_id": config.session_id, "components": {}}
+
+    def fake_writer(
+        directory: Path,
+        component: str,
+        arrays: dict[str, np.ndarray],
+        manifest: dict[str, object],
+    ) -> None:
+        """Record component commits without writing files."""
+        assert directory == config.output_directory
+        assert arrays["value"].shape == (1,)
+        assert manifest["components"][component]["state"] == "complete"
+        calls.append(f"write_{component}")
+        writes.append(component)
+
+    monkeypatch.setattr(lfp_summary_runtime, "prepare_power_run", fake_prepare_power)
+    monkeypatch.setattr(lfp_summary_runtime, "prepare_spike_run", fake_prepare_spike)
+    monkeypatch.setattr(lfp_summary_runtime, "build_power_payload", fake_power_payload)
+    monkeypatch.setattr(
+        lfp_summary_runtime,
+        "build_synchrony_payload",
+        fake_synchrony_payload,
+    )
+    monkeypatch.setattr(
+        lfp_summary_runtime,
+        "_build_spike_phase_payload",
+        fake_spike_payload,
+    )
+    monkeypatch.setattr(
+        lfp_summary_runtime,
+        "load_or_initialize_manifest",
+        fake_manifest_loader,
+    )
+    monkeypatch.setattr(
+        lfp_summary_runtime,
+        "write_component_transaction",
+        fake_writer,
+    )
+    dependencies = lfp_summary_runtime.make_lfp_summary_pipeline_dependencies(
+        trial_table_loader=lambda _: _trial_table(),
+        unit_spike_loader=lambda _: {},
+        phase_preparer=fake_phase_preparer,
+    )
+
+    with pytest.raises(RuntimeError, match="preparation"):
+        dependencies.load_manifest(config.output_directory)
+    result = compute_all_components(
+        config,
+        dependencies,
+        progress_callback=progress_events.append,
+    )
+
+    assert [item.state for item in result.component_results] == [
+        "complete",
+        "complete",
+        "complete",
+    ]
+    assert writes == ["power", "synchrony", "spike_phase"]
+    assert calls.count("prepare_phase") == 1
+    assert calls.index("payload_synchrony") < calls.index("prepare_spike")
+    assert calls.index("prepare_spike") < calls.index("payload_spike_phase")
+    forwarded = [event for event in progress_events if event is grouped_event]
+    assert forwarded == [grouped_event]
+
+
+def test_composed_dependencies_reject_nonempty_amplitude_thresholds_before_all_work(
+    tmp_path: Path,
+) -> None:
+    """Unsupported absolute masking must fail before every production seam.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-owned output path used only in immutable configuration metadata.
+    """
+    base = _spike_phase_payload_config(tmp_path / "cache")
+    config = replace(
+        base,
+        phase=replace(
+            base.phase,
+            absolute_amplitude_thresholds=((base.sites[0].stable_id, 4.0),),
+        ),
+    )
+    loader_calls: list[str] = []
+
+    def forbidden_loader(*_: object, **__: object) -> object:
+        """Fail if an unsupported request reaches any preparation dependency."""
+        loader_calls.append("called")
+        raise AssertionError("unsupported threshold reached a loader")
+
+    dependencies = lfp_summary_runtime.make_lfp_summary_pipeline_dependencies(
+        trial_table_loader=forbidden_loader,
+        unit_spike_loader=forbidden_loader,
+        phase_preparer=forbidden_loader,
+        spikeglx_loader=forbidden_loader,
+        open_ephys_loader=forbidden_loader,
+    )
+
+    with pytest.raises(ValueError, match="absolute amplitude|WP13"):
+        dependencies.prepare_power(config)
+    with pytest.raises(ValueError, match="absolute amplitude|WP13"):
+        dependencies.prepare_phase(config)
+    with pytest.raises(ValueError, match="absolute amplitude|WP13"):
+        dependencies.prepare_spike(config, object())
+    assert loader_calls == []
 
 
 def test_cached_500_hz_trace_uses_antialias_filter_before_decimation(tmp_path: Path) -> None:

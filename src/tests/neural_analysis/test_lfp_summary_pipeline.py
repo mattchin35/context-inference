@@ -274,6 +274,57 @@ def test_spike_component_uses_optional_progress_aware_payload_seam() -> None:
     assert "payload_spike_phase_with_progress" in calls
 
 
+def test_spike_progress_seam_preserves_detailed_grouped_event_fields() -> None:
+    """The pipeline must not translate or replace grouped PPC progress records."""
+    config = default_lfp_summary_config()
+    calls: list[str] = []
+    received_events: list[ProgressEvent] = []
+    dependencies = _make_dependencies(calls, [])
+    grouped_event = ProgressEvent(
+        component="grouped-spike-phase",
+        stage="shuffle_aggregation",
+        completed_count=4,
+        total_count=9,
+        message="completed grouped shuffle block",
+        elapsed_seconds=3.25,
+        eta_seconds=5.5,
+        job_id="site-1-units-8-16",
+    )
+
+    def progress_aware_payload(
+        received_config: object,
+        phase: object,
+        spikes: object,
+        progress_callback,
+    ) -> lfp_summary_pipeline.ComponentPayload:
+        """Emit the exact detailed record supplied by the grouped runtime."""
+        del received_config, phase, spikes
+        progress_callback(grouped_event)
+        return lfp_summary_pipeline.ComponentPayload(
+            arrays={"value": np.array([2.0])},
+            manifest_entry=_component_entry("spike_phase"),
+        )
+
+    dependencies = replace(
+        dependencies,
+        build_spike_phase_payload_with_progress=progress_aware_payload,
+    )
+
+    result = lfp_summary_pipeline.compute_spike_phase_component(
+        config,
+        dependencies,
+        progress_callback=received_events.append,
+    )
+
+    assert result.state == "complete"
+    assert [event for event in received_events if event is grouped_event] == [
+        grouped_event
+    ]
+    assert grouped_event.elapsed_seconds == 3.25
+    assert grouped_event.eta_seconds == 5.5
+    assert grouped_event.job_id == "site-1-units-8-16"
+
+
 def test_writer_failure_preserves_existing_bytes_reports_stage_and_aborts_compute_all(
     tmp_path: Path,
 ) -> None:
