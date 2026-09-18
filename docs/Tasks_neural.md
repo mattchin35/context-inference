@@ -2680,3 +2680,45 @@ WP10 test-only RED checkpoint (2026-09-18):
 - The next allowed action is the minimal `lfp_summary_runtime.py`
   implementation specified in WP10. `lfp_summary_pipeline.py` must remain
   unchanged unless a subsequent source run exposes a demonstrated contract gap.
+
+WP10 implementation completion and GREEN handoff (2026-09-18):
+
+- Implementation commit: `98ac2ed` (`feat: compose LFP summary production
+  runtime`). It changes only `src/neural_analysis/lfp_summary_runtime.py`;
+  `lfp_summary_pipeline.py`, the component-specific dependency factories, all
+  numerical kernels, cache schemas, fingerprints, and execution defaults are
+  unchanged.
+- The new `make_lfp_summary_pipeline_dependencies` factory delegates to the
+  existing Power, phase, Spike, payload, manifest, and transaction seams. In a
+  Compute All call, Power remains independent while one exact
+  `PreparedPhaseRun` object is passed to both Synchrony and Spike phase. The
+  progress-aware Spike adapter passes the original callback into the grouped
+  PPC payload builder without translating `ProgressEvent` fields or copying
+  payload arrays.
+- Every composed preparation callable first validates the full configuration
+  and rejects nonempty `absolute_amplitude_thresholds` with a WP13-specific
+  `ValueError`. The guard runs before trial, LFP, unit, cache, or PPC seams.
+  The manifest loader rejects use before preparation and afterward delegates
+  with the exact most recently accepted configuration.
+- The first source run exposed one local missing import of the existing
+  `validate_lfp_summary_config` function. Adding that import was the only
+  correction; no test was changed after the test-only commit.
+- Focused GREEN command selected the same seven tests: 7 passed and 15 were
+  deselected. The complete two-file runtime/pipeline run passed 22 tests. The
+  affected Power/Synchrony/Spike/PPC runtime set passed 248 tests with one
+  expected duplicate-member ZIP warning.
+- The complete `src/tests/neural_analysis` suite passed 1,116 tests with 20
+  warning instances in 128.17 seconds. The warnings are the existing fork,
+  duplicate test-ZIP member, and Pynapple empty-epoch/divide-by-zero warnings;
+  no new warning category appeared. `py_compile`, `git diff --check`, and the
+  tracked-worktree scope review also passed.
+- WP10 did not open CT026 recordings, run a production-sized profile, create a
+  scientific cache, or execute either the 100- or 1,000-shuffle analysis. Its
+  remaining integration dependencies are intentionally assigned to WP12, the
+  standalone launcher, and WP11. Absolute-amplitude masking remains deferred
+  to WP13 and is fail-closed meanwhile.
+- WP10 is complete. The next implementation gate is WP12. Before WP12 tests or
+  source changes, update this document with its exact report/cleanup interface,
+  first-written tests, RED command, performance constraints, and interruption
+  recovery checkpoint. The later launcher remains the first authorized
+  boundary for a user-invoked 100-shuffle CT026 preview.
