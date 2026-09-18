@@ -389,7 +389,7 @@ not apply; write `not applicable` and explain why.
 
 ### S7 - Rebind parallel workers to the grouped engine
 
-- Status: tests frozen and committed; implementation in progress.
+- Status: complete.
 - Authorization and starting HEAD: the user repeatedly authorized continued
   implementation after S6; S7 began from `ddcf8f5`.
 - Agent assignments, permissions, and file scopes: one implementation/test
@@ -405,7 +405,9 @@ not apply; write `not applicable` and explain why.
   `59e958c45b3c16d27d3bc5f35f6f07f1a61b3b6142919a0f7719ded4c077784c`.
   The lead reproduced 20 intended RED failures with 8 passes and 205
   deselections; compilation and diff checks passed; the independent reviewer
-  reported PASS.
+  reported PASS. Source-gate findings were bound in follow-up tests-only commit
+  `66965ab`; the lead reproduced seven expected failures across the full two-
+  file S7 suite before the final source correction.
 - Memory-contract clarification: the compatibility field
   `shared_phase_mmap_bytes` remains phase plus validity for serial execution.
   In grouped parallel execution it counts, exactly once, the six read-only
@@ -413,11 +415,34 @@ not apply; write `not applicable` and explain why.
   packed spike times, and int64 unit-by-trial spike offsets. Auxiliary arrays
   are materialized by bounded direct mmap writes only after scalar preflight;
   tasks do not serialize private copies.
-- Implementation commit and GREEN evidence:
-- Full neural-suite and independent Sol gate evidence:
-- Worker invariance, memory, and failure review:
-- Unresolved risks:
-- CT026 work performed: none unless separately authorized.
+- Implementation commit and GREEN evidence: `e89a0ee` (`feat: parallelize
+  grouped PPC unit blocks`). The final scoped runtime diff hash before commit
+  was `e3e57ab46d9fd8ae7e3a044c0cfdeb76ff63553cb0d02b0cbba82993cb76d1cc`.
+  The focused S7 selection passed 33 tests with 205 deselections; the affected
+  runtime/parallel/kernel/cache/model suite passed 477 tests with one expected
+  duplicate-ZIP warning from an adversarial archive fixture. Scoped
+  compilation and `git diff --check` passed.
+- Full neural-suite and independent Sol gate evidence: the lead reran
+  `src/tests/neural_analysis` after the functional correction: 1,113 tests
+  passed with 20 warnings (19 pre-existing dependency/runtime warnings plus
+  the intentional duplicate-ZIP fixture warning). The final doc-only source
+  correction did not change behavior; the focused S7 suite remained green.
+  The independent Sol-high reviewer verified the final hash and reported PASS.
+- Worker invariance, memory, and failure review: serial and 2/4/8-worker runs
+  preserve plan identities, schedules, union maps, axes, exact decision fields,
+  and tolerance-governed floating outputs. Sites remain sequential while unit
+  blocks use bounded spawn pools. Workers reconstruct six read-only shared
+  mmap inputs, stage borrowed single-site summary views, and return only scalar
+  identities through futures. The parent validates one bounded staged archive,
+  merges/checkpoints in canonical order, then unlinks it. Early aggregate
+  preflight, zero-edge sites, per-frequency in-place BH, cancellation before
+  shutdown, archive/path validation, immediate failure cleanup, full resume,
+  partial resume, and parent-only marker publication are covered.
+- Unresolved risks: production CT026 speedup, aggregate RSS/PSS, filesystem
+  staging throughput, and the final 1,000-shuffle worker choice remain
+  unmeasured. Those are S8 decision-gate work, not inferred from synthetic
+  GREEN tests.
+- CT026 work performed: none. S8 still requires separate authorization.
 
 ### S8 - Authorized representative benchmark and decision gate
 

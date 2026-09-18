@@ -2,7 +2,7 @@
 
 Status: implementation plan approved by the user on 2026-09-09. The user
 separately authorized the S0-S7 source/test implementation sequence on
-2026-09-10; S0-S6 are complete as of 2026-09-17. CT026 scientific/work-only
+2026-09-10; S0-S7 are complete as of 2026-09-18. CT026 scientific/work-only
 execution and the 100/1,000-shuffle Spike-phase runs remain unauthorized. The
 approved S6 metadata-only 100/1,000-shuffle schedule-union calculation was
 completed without reading phase values or spike trains. The
