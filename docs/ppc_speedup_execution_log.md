@@ -389,10 +389,30 @@ not apply; write `not applicable` and explain why.
 
 ### S7 - Rebind parallel workers to the grouped engine
 
-- Status: not started.
-- Authorization and starting HEAD:
-- Agent assignments, permissions, and file scopes:
-- Test-design review, test-only commit, and RED evidence:
+- Status: tests frozen and committed; implementation in progress.
+- Authorization and starting HEAD: the user repeatedly authorized continued
+  implementation after S6; S7 began from `ddcf8f5`.
+- Agent assignments, permissions, and file scopes: one implementation/test
+  writer and one independent read-only source/test reviewer, both at the
+  approved xhigh effort. Scope remains the grouped PPC runtime, its allocation
+  data contract, parallel runner, and the two S7 test modules. No CT026 work is
+  authorized.
+- Test-design review, test-only commit, and RED evidence: `240a37e` defined the
+  initial grouped-parallel contract, `33f3048` corrected two superseded S4/test
+  assumptions, and `3b0f993` hardened exact shared-input, staged-result,
+  cancellation, FDR, zero-edge-site, and memory-lifetime behavior. The final
+  tests-only diff hash was
+  `59e958c45b3c16d27d3bc5f35f6f07f1a61b3b6142919a0f7719ded4c077784c`.
+  The lead reproduced 20 intended RED failures with 8 passes and 205
+  deselections; compilation and diff checks passed; the independent reviewer
+  reported PASS.
+- Memory-contract clarification: the compatibility field
+  `shared_phase_mmap_bytes` remains phase plus validity for serial execution.
+  In grouped parallel execution it counts, exactly once, the six read-only
+  shared worker inputs: phase, validity, relative time, stable trial rows,
+  packed spike times, and int64 unit-by-trial spike offsets. Auxiliary arrays
+  are materialized by bounded direct mmap writes only after scalar preflight;
+  tasks do not serialize private copies.
 - Implementation commit and GREEN evidence:
 - Full neural-suite and independent Sol gate evidence:
 - Worker invariance, memory, and failure review:

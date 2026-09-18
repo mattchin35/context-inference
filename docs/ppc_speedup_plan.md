@@ -129,10 +129,15 @@ alone is not execution authority.
    lifetime-based private peaks separately. Also add execution-only integer
    `maximum_aggregate_allocation_bytes = 12 * 1024**3` (12 GiB) as a
    conservative preflight ceiling for planned arrays across the parent,
-   active workers, and one shared prepared-phase mmap. The remaining 4 GiB of
-   the 16 GiB measured gate is reserved for Python/process overhead,
-   filesystem buffers, and estimation error. Neither execution field enters
-   scientific component identity.
+   active workers, and one shared prepared-worker input mmap set. For serial
+   execution, the existing `shared_phase_mmap_bytes` field remains the phase
+   tensor plus validity tensor. For grouped parallel execution, that legacy-
+   named field is the exact sum of six read-only arrays counted once: phase,
+   phase validity, relative time, stable trial rows, packed spike times, and
+   int64 unit-by-trial spike offsets. The remaining 4 GiB of the 16 GiB
+   measured gate is reserved for Python/process overhead, filesystem buffers,
+   and estimation error. Neither execution field enters scientific component
+   identity.
 6. **Require separate CT026 authorization.** Synthetic tests and metadata-only
    schedule-union measurement are authorized by implementation approval. Any
    new work-only CT026 timing run still requires explicit execution approval;
@@ -455,8 +460,10 @@ New `lfp_summary_ppc_kernel.py`
   `work_root`, and an optional progress callback; it constructs the unchanged
   schedules internally rather than accepting a replacement schedule.
 - Processes one site and one unit block at a time.
-- Workers, when re-enabled, receive unit-local spikes and open one shared,
-  read-only prepared-phase representation.
+- Workers, when re-enabled, open one shared, read-only prepared-worker input
+  set: phase, validity, relative time, stable trial rows, packed spike times,
+  and unit-by-trial spike offsets. Tasks carry only bounded site/unit identity
+  and plan data, not private copies of those arrays.
 
 `lfp_summary_runtime.py`
 
@@ -585,6 +592,10 @@ returns, and failure behavior.
   `planned_aggregate_array_bytes`, plus nonnegative integer
   `active_worker_count`. `kernel_working_bytes` contains segmented-edge and
   null-gather temporaries but excludes separately reported retained geometry.
+  `shared_phase_mmap_bytes` retains its public name for compatibility. It is
+  phase plus validity for serial execution; for grouped parallel execution it
+  is the exact six-array shared worker-input set defined in Section 3, counted
+  once in the aggregate rather than once per worker.
 - Job-accumulator accounting includes, for every concurrently resident
   job/shuffle/unit/frequency cell, complex128 vector sums, int64 counts, float64
   PPC draws, and one float64 calculation scratch array: 40 bytes per cell with
@@ -830,10 +841,13 @@ its tests and records genuine RED before its source implementation.
   prior yields.
 - Worker counts 1/2/4/8 preserve all exact fields and tolerance-governed
   floating fields.
-- Workers open one read-only prepared phase representation and do not serialize
-  or privately copy the full tensor.
-- Planned aggregate bytes count the shared mmap once and combine it with the
-  parent and every active worker. Unsafe worker counts fail before spawn, and
+- Workers open one read-only prepared worker-input set and do not serialize or
+  privately copy its six full arrays. The auxiliary parallel arrays are
+  materialized by bounded direct mmap writes only after scalar preflight; they
+  are not created for serial execution.
+- Planned aggregate bytes count that shared mmap set once and combine it with
+  the parent and every active worker. Unsafe worker counts fail before planner
+  arrays, mmap materialization, or spawn, and
   measured aggregate RSS/PSS must still remain below 16 GiB.
 - Submission remains bounded and parent checkpoint order remains canonical.
 - Grouped profiler reports geometry, observed, union-edge reduction, shuffle
