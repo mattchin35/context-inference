@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import replace
+import fcntl
 import importlib
 import json
 from pathlib import Path
@@ -433,3 +434,80 @@ def test_dirty_tracked_checkout_fails_before_run_directory(tmp_path: Path) -> No
     assert result.exit_code == 2 and result.run_directory is None
     assert not (tmp_path / "runs").exists()
     assert calls == []
+
+
+def test_resume_rejects_tampered_source_artifact_before_component_access(
+    tmp_path: Path,
+) -> None:
+    """Saved source evidence is part of resume identity, not decorative output."""
+    launcher = _launcher()
+    first_calls: list[str] = []
+    terminal: list[str] = []
+    failed = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            [
+                "new", "--session-path", str(tmp_path / "CT026"),
+                "--analysis-root", str(tmp_path / "runs"),
+                "--probe", "ProbeB", "--shuffles", "100",
+            ]
+        ),
+        _dependencies(
+            tmp_path,
+            first_calls,
+            terminal,
+            cleanup=lambda _target: (_ for _ in ()).throw(OSError("keep work")),
+        ),
+    )
+    source_path = failed.run_directory / "source_identity.json"
+    source = json.loads(source_path.read_text(encoding="ascii"))
+    source["repository"]["git_commit"] = "c" * 40
+    source_path.write_text(json.dumps(source) + "\n", encoding="ascii")
+    resume_calls: list[str] = []
+
+    resumed = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["resume", "--run-directory", str(failed.run_directory)]
+        ),
+        _dependencies(tmp_path, resume_calls, terminal, component_compatible=True),
+    )
+
+    assert resumed.exit_code != 0
+    assert resume_calls == []
+
+
+def test_live_launcher_lock_fails_without_mutating_owner_state(tmp_path: Path) -> None:
+    """A competing resume cannot relabel or append to the lock owner's run."""
+    launcher = _launcher()
+    first_calls: list[str] = []
+    terminal: list[str] = []
+    failed = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            [
+                "new", "--session-path", str(tmp_path / "CT026"),
+                "--analysis-root", str(tmp_path / "runs"),
+                "--probe", "ProbeB", "--shuffles", "100",
+            ]
+        ),
+        _dependencies(
+            tmp_path,
+            first_calls,
+            terminal,
+            cleanup=lambda _target: (_ for _ in ()).throw(OSError("keep work")),
+        ),
+    )
+    state_path = failed.run_directory / "launcher_state.json"
+    log_path = failed.run_directory / "run.log"
+    before_state = state_path.read_bytes()
+    before_log = log_path.read_bytes()
+    with (failed.run_directory / "launcher.lock").open("a+") as lock_stream:
+        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        competing = launcher.run_launcher(
+            launcher.parse_launcher_command(
+                ["resume", "--run-directory", str(failed.run_directory)]
+            ),
+            _dependencies(tmp_path, [], terminal, component_compatible=True),
+        )
+
+    assert competing.exit_code == 1
+    assert state_path.read_bytes() == before_state
+    assert log_path.read_bytes() == before_log
