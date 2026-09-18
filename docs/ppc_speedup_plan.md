@@ -1225,18 +1225,30 @@ grouped executor rather than reopen its scientific or worker architecture.
 - CT026 production configuration should request eight workers. The general
   `PPCExecutionConfig` default remains conservative, and exact preflight may
   reject an unsafe requested count but must not silently substitute another.
-- WP10 composes Power, Synchrony, and Spike-phase production dependencies;
-  WP11 connects that boundary to Streamlit; WP12 completes PPC plots and
-  reporting. WP12 may proceed independently when file ownership is disjoint.
+- The approved post-S8 sequence is WP10 composed production dependencies, WP12
+  complete PPC plots/reporting, the standalone launcher, and then the
+  user-invoked 100-shuffle preview. WP11 follows the preview infrastructure and
+  is not required for that standalone preview.
+- WP11 supports exactly one active ProbeA or ProbeB population per run. Both
+  choices use good/MUA units on good inside-brain channels; a combined
+  cross-probe population is out of scope.
 - WP13 is an optional absolute-amplitude feature, not a PPC optimization. The
   current CT026 preview has an empty absolute-threshold list, so deferring WP13
-  leaves that default result unchanged. A nonempty request must be rejected or
-  visibly reported as unsupported until WP13 is implemented.
+  leaves that default result unchanged. Every nonempty request must be rejected
+  before computation until WP13 is implemented; warning and continuing is not
+  permitted.
 - WP5C-6 and the later 1,000-shuffle run require a tested standalone resumable
   command-line launcher. The launcher runs outside Codex, records a timestamped
   run directory and log, supports dry-run/new/resume modes, prints its exact
   resume command, and preserves work without publishing a false final marker
   after interruption.
+- The launcher creates its analysis-run identity and resume command before full
+  planning. Deterministic planning is not checkpointed and may repeat after an
+  interruption. Compatible prepared-phase and PPC work still resumes by exact
+  identity after it exists.
+- Retain exact PPC work through component, manifest, plot, detailed report,
+  log, and summary validation. Exact-fingerprint cleanup is the last successful
+  step; a report failure preserves resumable work.
 - The launcher must run 100 and 1,000 shuffles as separate explicit commands
   and directories. It must never promote a completed preview automatically;
   1,000-shuffle execution requires an additional explicit final-run flag.

@@ -18,12 +18,14 @@
   approved documenting the remaining integration sequence. WP5C-6, the actual
   100-shuffle Spike-phase preview, has not run. The 1,000-shuffle final run
   remains a separate later launch after preview inspection.
-- **Immediate handoff:** complete WP12 reporting, prepare WP10 composed
-  dependencies and WP11 webapp integration, and prepare a standalone resumable
-  launcher for WP5C-6 and the separately invoked 1,000-shuffle run. WP13 is an
-  optional absolute-amplitude feature: the current CT026 preview inherits an
-  empty threshold list, so WP13 is not a blocker unless nonempty thresholds are
-  requested.
+- **Approved immediate sequence:** complete WP10 composed dependencies, then
+  WP12 reporting, then the standalone resumable launcher, and then run the
+  separately invoked 100-shuffle preview. WP11 webapp integration follows the
+  preview infrastructure and is not a prerequisite for the standalone preview.
+  The 1,000-shuffle run remains a separate later launch after preview inspection
+  and explicit approval. WP13 is deferred: the current CT026 preview inherits
+  an empty threshold list, and every nonempty absolute-amplitude request must be
+  rejected before computation until WP13 is implemented.
 - **Do not redo completed packages:** WP0, WP1, WP2 preparation, WP3, WP4,
   WP5A, WP5B, and the Spike-phase runtime bridge are historical completed work.
   Remaining integration work must extend them through the packages below, not
@@ -60,11 +62,11 @@ Source-of-truth hierarchy:
 | WP6 plotting | Partially complete | Tests `b1f51f3` and later focused plotting tests; implementation `d1c3e21`; Power and Synchrony reports above | Complete PPC exemplars and reporting in WP12 |
 | WP7 pipeline | Partially complete | Tests `b1f51f3`; implementation `067fdef`; `test_lfp_summary_pipeline.py` | Composed production dependencies and detailed progress in WP10 |
 | WP8 webapp | Partial; Power path only | Tests `c7ec7c1`, `003394a`, `f3954de`; implementations `2885ffd`, `926801b`; `test_lfp_summary_webapp.py` | Synchrony, Spike phase, Compute All, active population, progress, and complete cached views in WP11 |
-| WP9 validation | Partial | Approved Power and Synchrony reports above; S8 work-only benchmark accepted; Spike preview runner tests `7223072`, `0dfc1a8`, `1c2fb61`, `b9aecbe`; implementation `c3f6d41`, `c036d62` | Standalone 100-shuffle preview, user inspection, then separately launched 1,000-shuffle run |
-| WP10 composed dependencies | Planned and unblocked | Package below; PPC contracts and worker decision are now stable | Build composed Power/Synchrony/Spike-phase dependencies and progress boundary |
-| WP11 Streamlit integration | Planned | Package below | Build after WP10 |
-| WP12 PPC plotting/reporting | Planned | Package below | Complete before final CT026 interpretation |
-| WP13 optional absolute-amplitude thresholds | Decision pending; not a blocker for the default CT026 preview | Package below; validation/fingerprint support exists; current CT026 threshold list is empty | Implement before supporting nonempty thresholds; reject or visibly warn on a nonempty request until then |
+| WP9 validation | Partial | Approved Power and Synchrony reports above; S8 work-only benchmark accepted; existing fixed preview helper tests `7223072`, `0dfc1a8`, `1c2fb61`, `b9aecbe`; implementation `c3f6d41`, `c036d62` | After WP10 and WP12, add the standalone launcher; run the 100-shuffle preview; inspect it; then separately approve and launch 1,000 shuffles |
+| WP10 composed dependencies | Next; approved for planning | Package below; PPC contracts and worker decision are stable | Build one Power/Synchrony/Spike-phase/Compute-All production boundary with progress and unsupported-threshold rejection |
+| WP11 Streamlit integration | Planned after preview infrastructure | Package below | After WP10, support one explicitly selected ProbeA or ProbeB population per run; complete actions, progress, states, and cached views |
+| WP12 PPC plotting/reporting | Planned immediately after WP10 | Package below | Complete before the standalone preview launcher and CT026 interpretation |
+| WP13 optional absolute-amplitude thresholds | Explicitly deferred; not a blocker while thresholds are empty | Package below; validation/fingerprint support exists; current CT026 threshold list is empty | Reject every nonempty request before computation until WP13 is separately implemented |
 
 This document replaces the older decoding task list. It translates the scientific
 requirements in `docs/webappDesign.md` into an implementation plan for offline LFP
@@ -365,7 +367,9 @@ status matrix and bounded packages govern current execution:
 - They do not use condition-specific percentile amplitude masks.
 - Optional absolute amplitude thresholds can be configured per site and must be
   applied identically across conditions. Effective samples and spikes after
-  masking are saved.
+  masking are saved. This describes WP13's eventual scientific behavior. Until
+  WP13 is complete, only the empty threshold tuple is supported and every
+  nonempty production request is rejected before computation.
 - Cache event-aligned source traces decimated to 500 Hz, theta/gamma filtered
   traces, and corresponding Hilbert phase needed for exemplar plots.
 - Do not include the complete site-by-frequency-by-trial-by-time wavelet tensor
@@ -703,6 +707,45 @@ at least two completed timed blocks exist. Resumed blocks count as completed
 only after validation, and final commit remains the only event that makes the
 scientific component compatible.
 
+### 2.27 Approved post-speedup integration decisions
+
+The following decisions were approved on 2026-09-18 before any post-speedup
+source implementation began:
+
+- The implementation sequence is WP10 composed production dependencies, WP12
+  PPC plotting/reporting, the standalone WP5C-6 launcher, and then the
+  user-invoked 100-shuffle preview. WP11 follows the preview infrastructure; it
+  is not a prerequisite for the standalone preview.
+- The webapp supports ProbeA and ProbeB, but exactly one probe-qualified unit
+  population is active in a component run. A combined cross-probe population
+  is out of scope. Both choices use the same defaults: good or MUA units on
+  channels labeled good and inside brain. Stable unit identifiers remain
+  `probe_label:cluster_id`, and the selected sorter path, aligned-spike path,
+  channels, quality rules, and unit ids are explicit fingerprinted inputs.
+- WP13 is deferred. An empty `absolute_amplitude_thresholds` tuple is the only
+  supported production configuration until WP13 is complete. Any nonempty
+  value must fail validation at the production boundary before phase
+  preparation, checkpoint creation, or final-component writes. A warning that
+  continues computation is insufficient because it would knowingly publish a
+  result that did not apply the requested mask.
+- The launcher creates and records its timestamped analysis-run directory and
+  exact resume command before full PPC planning begins. Planning remains
+  deterministic but is not checkpointed. If interrupted during planning,
+  resume may repeat planning from the beginning; once compatible phase or PPC
+  checkpoints exist, resume reuses them under their existing exact identities.
+- Default `incomplete_only` PPC cleanup must not run before the launcher has
+  successfully written and validated the scientific component, manifest,
+  plots, detailed report, run log, and summary. The launcher may use retained
+  checkpoints during computation and then invoke exact-fingerprint cleanup as
+  its final successful step. Report failure leaves compatible resumable work
+  and must not delete a sibling run.
+- The preview uses exactly 100 shuffles and a CT026-specific request for eight
+  workers, subject to planned active-worker and allocation preflight. The
+  portable `PPCExecutionConfig.worker_count` default remains one. A 1,000-
+  shuffle run requires a different timestamped run, a different scientific
+  fingerprint, an explicit final-run flag, and separate user approval after
+  preview inspection.
+
 ## 3. Target architecture
 
 The implementation uses the following module boundaries. Implementing agents
@@ -886,6 +929,10 @@ contracts in Sections 2.22-2.26 are approved. WP5C-1 through WP5C-5 and the
 complete S0-S8 exact-speedup plan are complete. Eight workers are preferred for
 the CT026 production configuration, without changing the portable library
 default or bypassing preflight.
+The post-speedup decisions in Section 2.27 are approved documentation contracts.
+They establish WP10 as the next implementation package but do not authorize
+source/test edits until the user separately approves WP10's test-first
+implementation plan. They do not authorize a CT026 scientific run.
 Implementers must escalate newly discovered ambiguity instead of choosing new
 scientific or execution defaults.
 Material changes to metrics, thresholds, cache contracts, or user-visible
@@ -1828,6 +1875,20 @@ Owner: one implementer prepares the standalone launcher after WP10's production
 dependency boundary and WP12's complete preview report path are green. The
 actual CT026 execution remains a separate user-invoked run.
 
+Files:
+
+- New `src/neural_analysis/lfp_spike_phase_launcher.py`.
+- New `src/tests/neural_analysis/test_lfp_spike_phase_launcher.py`.
+- Minimal reuse/integration changes in `lfp_spike_phase_validation.py`,
+  `lfp_summary_runtime.py`, or their focused tests only when the launcher cannot
+  consume an existing public seam. Do not move CLI parsing or terminal logging
+  into numerical runtime modules.
+
+The existing `lfp_spike_phase_validation.py` is a fixed 100-shuffle validation
+helper, not this launcher. WP5C-6 may reuse its cache-only plotting/report
+adapters, but it must not treat that helper's current API or report contents as
+satisfying the launcher contract.
+
 Launcher requirements:
 
 - Provide a normal command-line entry point runnable with `uv run python -m ...`
@@ -1839,15 +1900,25 @@ Launcher requirements:
 - Require explicit mutually exclusive new-run and resume modes. A new run
   creates a timestamped analysis directory; resume requires that exact run
   directory and exact source/config/code identity.
+- Create the analysis-run directory, initial identity/state record, log, and
+  exact resume command before full PPC planning begins. The PPC work
+  fingerprint may still be derived by the existing exact planner afterward.
+- Planning is deterministic and deliberately not checkpointed. Resume after a
+  planning-stage interruption repeats planning from the beginning. This is an
+  accepted limitation, must be stated in the log/summary, and must not be
+  mislabeled as reused planner work.
 - Support a preflight/dry-run mode that loads metadata, resolves the active
   population, computes the plan, reports requested/planned workers and memory,
   and writes no scientific result.
 - Stream progress to both the terminal and a run-local log. Record the command,
   environment, git/source/config fingerprints, session and unit identities,
   worker counts, timing, memory, cache sizes, warnings, and final status.
-- Interruption or failure must leave resumable PPC work and no false final
-  component/manifest. A successful final transaction writes the scientific
-  component and report before cleaning only the exact completed work.
+- Interruption or failure after work publication must leave compatible
+  resumable phase/PPC work and no false final component/manifest. Interruption
+  during planning may leave only the analysis-run identity/log and repeats
+  planning on resume. A successful run validates the scientific component,
+  manifest, plots, detailed report, run log, and summary before cleaning only
+  its exact completed PPC work.
 - The 100-shuffle preview and 1,000-shuffle final run use the same tested
   launcher but different timestamped run directories and configuration
   fingerprints. The launcher must never continue from 100 to 1,000 shuffles
@@ -1858,6 +1929,10 @@ Launcher requirements:
 - At startup and after interruption, print the exact resume command and run
   directory. Long execution is expected; lack of Codex tool-session lifetime
   must not be treated as a computational failure.
+- Run PPC with checkpoint retention set to retain through report generation,
+  or provide an equivalent orchestration seam that prevents pipeline
+  post-commit cleanup from running early. Exact `incomplete_only` cleanup is the
+  final success step after every required human-readable artifact validates.
 
 Tests written first:
 
@@ -1865,14 +1940,36 @@ Tests written first:
   count, shuffle count, and run-directory identity.
 - Dry-run performs preflight without transforms, checkpoints, final arrays, or
   manifests.
+- New-run state and the exact resume command exist before a fake long planner
+  starts; interrupting planning causes resume to repeat deterministic planning
+  without claiming a planner-cache hit.
 - New 100-shuffle and new 1,000-shuffle invocations cannot share or overwrite a
   run directory; 1,000 requires explicit final-run confirmation.
 - Interrupted synthetic execution leaves resumable work, prints the exact
   resume command, and publishes no final component.
 - Resume reuses compatible phase/PPC work, rejects every identity mismatch,
   and produces the same final result as an uninterrupted run.
-- A successful synthetic run atomically publishes the component, manifest,
-  plots/report, log, and summary, then removes only its exact completed work.
+- A report or plot failure after component commit retains exact PPC work and
+  reports an incomplete launcher run; it must not perform success cleanup.
+- A successful synthetic run atomically publishes and validates the component,
+  manifest, plots/report, log, and summary, then removes only its exact
+  completed PPC work.
+
+RED command:
+
+`uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_lfp_spike_phase_launcher.py`
+
+Performance considerations:
+
+- Dry-run and new-run planning use the exact grouped planner. They must report
+  planner wall time separately and must not use the 64-unit S8 estimate as a
+  substitute for a complete plan.
+- Planning may repeat after interruption, but phase transforms, completed PPC
+  blocks, and final component computation must not repeat when their exact
+  compatible artifacts already exist. An incomplete staged report may be
+  regenerated from the compatible final component.
+- Logging/progress output is scalar metadata and must not serialize phase,
+  spike, schedule, or component tensors.
 
 Execution gate:
 
@@ -1996,12 +2093,38 @@ overwriteable numerical inspection cache remains at the generic processed path.
 
 ### WP10 - Composed production dependencies
 
-Owner: one implementer after WP5C-5's serial/parallel decision; exclusive owner of runtime/pipeline
-integration files while active.
+Owner: one implementer; this is the next implementation package. The
+implementer exclusively owns runtime/pipeline integration files while active.
 
 Files:
 
-- `lfp_summary_runtime.py`, `lfp_summary_pipeline.py`, and focused tests
+- `src/neural_analysis/lfp_summary_runtime.py`
+- `src/neural_analysis/lfp_summary_pipeline.py`
+- `src/tests/neural_analysis/test_lfp_summary_runtime.py`
+- `src/tests/neural_analysis/test_lfp_summary_pipeline.py`
+
+Architecture:
+
+- Add one composed production dependency factory that binds the existing Power,
+  Synchrony, and grouped Spike-phase preparation/payload seams. Keep the
+  component-specific factories as compatible focused entry points unless a
+  test-first change proves they can be removed without breaking callers.
+- The composed bundle is the only production boundary used by Compute All,
+  the later webapp, and the launcher. It must not route a requested component
+  through a component-specific factory that silently rejects the other
+  components.
+- Compute All prepares Power independently, prepares compatible phase once,
+  and passes that same prepared phase object to Synchrony and Spike phase.
+  Existing component and manifest transactions remain independent.
+- Preserve framework-independent `ProgressEvent` records from both the
+  component pipeline and grouped PPC executor. The production boundary accepts
+  a callback; it does not import Streamlit or format terminal output.
+- Reject a nonempty `config.phase.absolute_amplitude_thresholds` before any raw
+  source is opened or work artifact is created. Empty thresholds reproduce the
+  accepted current result. This guard is temporary and must be removed only by
+  WP13's tested implementation.
+- Do not alter scientific fingerprints, PPC numerics, worker defaults, final
+  component schemas, or the existing exact grouped preflight.
 
 Tests written first:
 
@@ -2013,15 +2136,69 @@ Tests written first:
 - No component-specific factory silently handles unsupported work.
 - Progress remains component/stage specific and final manifests remain the
   component commit points.
+- Power-only, Synchrony-only, and Spike-only calls through the composed bundle
+  invoke only their required preparation and payload paths.
+- Compute All preserves Power, Synchrony, Spike-phase order and reuses one
+  compatible phase preparation for the latter two components.
+- Grouped PPC progress fields pass through unchanged, including elapsed time,
+  optional ETA, and job identity.
+- A nonempty absolute-amplitude threshold fails before trial/LFP/unit loaders,
+  prepared-phase cache access, PPC planning, or manifest writes. The empty
+  tuple remains bitwise/numerically identical to the current tested path.
+- Existing component-specific factory tests remain green.
+
+Performance considerations:
+
+- Composition adds no transform or source reload. Compute All must not duplicate
+  the approximately 1 GiB prepared-phase representation.
+- Progress forwarding must not copy payload arrays. Eight workers remain a
+  caller-supplied CT026 execution setting, not a factory default.
+- Run focused runtime/pipeline tests first, then the complete neural suite. No
+  CT026 computation is part of WP10 verification.
+
+RED command:
+
+`uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_lfp_summary_runtime.py src/tests/neural_analysis/test_lfp_summary_pipeline.py -k "composed or threshold or progress or compute_all"`
 
 ### WP11 - Full Streamlit integration
 
-Owner: one implementer after WP10; exclusive owner of
+Owner: one implementer after the standalone preview infrastructure is ready;
+exclusive owner of
 `lfp_summary_webapp.py`, `psth_webapp.py`, and their focused tests.
+
+Files:
+
+- `src/neural_analysis/lfp_summary_webapp.py`
+- `src/neural_analysis/psth_webapp.py`
+- `src/tests/neural_analysis/test_lfp_summary_webapp.py`
+- `src/tests/neural_analysis/test_psth_webapp.py`
+
+Architecture:
+
+- The summary route receives both existing sorter paths and aligned-spike paths
+  from `psth_webapp.py`. It exposes an active-population selector with exactly
+  `ProbeA` and `ProbeB`; exactly one is selected per run.
+- Construct one `UnitPopulationConfig` from the selected probe. Both probes use
+  the same defaults: good or MUA clusters restricted to channels labeled good
+  and inside brain. Preserve the selected probe label, sorter/aligned source,
+  selected channels, quality settings, and stable `probe:cluster` unit ids.
+- A combined ProbeA-plus-ProbeB population is out of scope. Switching probes
+  changes Spike-phase compatibility and requires an explicit separate run; it
+  must not merge units into an existing component.
+- All compute actions call only the WP10 composed production boundary. Progress
+  rendering adapts `ProgressEvent` metadata and never performs numerical work.
+- Cached plotting loads only the selected compatible final component. Work
+  caches, checkpoints, launcher state, and incomplete reports remain invisible
+  as scientific results.
 
 Tests written first:
 
-- The active unit population is selected and passed explicitly.
+- ProbeA and ProbeB each build the expected single active population with the
+  same good/MUA and good-inside-brain defaults.
+- Sorter and aligned-spike paths from the existing page controls are passed to
+  the selected population without substituting the other probe's paths.
+- Stable ids are probe-qualified, and switching the selector changes the
+  Spike-phase fingerprint. No control creates a combined population.
 - Synchrony and Spike-phase actions and Compute All call only the composed
   production boundary.
 - Progress stages, counts, elapsed time, and optional ETA render without
@@ -2031,11 +2208,52 @@ Tests written first:
 - All cached selectors/plots load only final compatible component files.
 - Prepared-phase caches, checkpoints, and other work artifacts never appear as
   compatible scientific components.
+- A nonempty unsupported amplitude-threshold request is blocked before action
+  dispatch and is never presented as applied.
+
+Performance considerations:
+
+- Population metadata may be loaded for selector construction, but Streamlit
+  rerenders must not reopen raw LFP or recompute phase/PPC data.
+- Figure rendering closes every Matplotlib figure and loads only the selected
+  component NPZ.
+
+RED command:
+
+`uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_lfp_summary_webapp.py src/tests/neural_analysis/test_psth_webapp.py -k "population or synchrony or spike_phase or compute_all or progress"`
 
 ### WP12 - Complete PPC plotting and reporting
 
-Owner: one implementer; plotting/report files only and no ownership overlap with
-WP11.
+Owner: one implementer immediately after WP10. Scope is plotting/report files
+and the smallest report-orchestration seam required to defer PPC cleanup until
+the report transaction completes. There is no WP11 ownership overlap.
+
+Files:
+
+- `src/neural_analysis/lfp_summary_plotting.py`
+- `src/neural_analysis/lfp_spike_phase_validation.py`
+- `src/tests/neural_analysis/test_lfp_summary_plotting.py`
+- `src/tests/neural_analysis/test_lfp_spike_phase_validation.py`
+- The smallest focused pipeline/runtime test change needed to prove that
+  cleanup is requested only after report success; no production UI files.
+
+Architecture:
+
+- Extend the existing cache-only plotting/report path; never reopen raw LFP or
+  recompute PPC for a figure.
+- Render matched low/high exemplars selected by the frozen 5th/95th percentile
+  rule for every report selection required by the preview. Each exemplar pairs
+  pooled unit metrics with a separately labeled median-spike-count illustrative
+  trial.
+- Write the report through a staging directory and publish it atomically only
+  after every required artifact validates. Include a machine-readable report
+  document and an ASCII Markdown summary.
+- Accept stage timing, process-tree memory, planner/executor provenance, cache
+  sizes, warnings, exclusions, and benchmark projections from explicit inputs;
+  do not infer unavailable measurements as zero.
+- Expose a success/failure result that lets the launcher clean exact completed
+  PPC work only after report publication. Report failure must preserve retained
+  resumable work.
 
 Tests written first:
 
@@ -2048,6 +2266,27 @@ Tests written first:
   representative benchmark.
 - Every figure has readable labels, an opaque selected background, and a
   caption summarizing scientific content and any statistical test.
+- Reports distinguish unavailable measurements from measured zero and identify
+  cold versus warm prepared-phase behavior.
+- Report metadata records requested/planned/active workers, planner time,
+  grouped execution time, process-tree RSS/PSS provenance, final/intermediate
+  cache sizes, units/trials/spikes, exclusions, and warnings.
+- Injected figure, serialization, validation, or atomic-publication failures
+  leave no valid-looking report and do not request PPC work cleanup.
+- A fully successful staged report requests cleanup only after all plots, log,
+  machine-readable report, configuration/manifest snapshots, source ids, and
+  Markdown summary validate.
+
+Performance considerations:
+
+- Plot/report work consumes final cached arrays only and must not retain a
+  second full PPC component copy beyond one bounded view's needs.
+- Report timing is recorded separately from planning, transforms, and grouped
+  PPC execution.
+
+RED command:
+
+`uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_lfp_summary_plotting.py src/tests/neural_analysis/test_lfp_spike_phase_validation.py -k "ppc or exemplar or report or cleanup or projection"`
 
 ### WP13 - Apply configured absolute amplitude thresholds
 
@@ -2077,11 +2316,10 @@ Tests written first:
 - Empty threshold configuration reproduces the current production result.
 
 Until WP13 is complete, an empty threshold configuration proceeds without a
-warning because it requests no absolute masking. Any nonempty production
-request must be rejected or display a visible warning that the configured
-thresholds are validated and fingerprinted but not applied; it must never be
-silently treated as active. Implement WP13 before advertising nonempty
-absolute thresholds as a supported production feature.
+warning because it requests no absolute masking. Every nonempty production
+request must be rejected before preparation or work publication; warning and
+continuing is no longer an approved alternative. Implement WP13 before
+advertising nonempty absolute thresholds as a supported production feature.
 
 ## 13. Sol orchestration and merge gates
 
@@ -2098,18 +2336,23 @@ absolute thresholds as a supported production feature.
 5. WP5C-4 integrates the already-green serial numerical and cache work.
 6. WP5C-5 and its approved S0-S8 sequence are complete. Eight workers are the
    preferred CT026 production setting; the universal default remains unchanged.
-7. WP12 may proceed independently of WP10/WP13 because its plotting/report
-   files are disjoint. Synchronous execution is not required if sequential
-   ownership makes changes easier to review.
-8. WP10 builds the composed production dependency boundary. WP11 follows WP10.
-   WP13 may remain deferred while absolute thresholds are empty; WP10 and the
-   launcher must reject or visibly warn on any nonempty unsupported request.
-9. After WP10 and WP12 are green, prepare the standalone resumable launcher.
-   The user then runs WP5C-6 at 100 shuffles outside Codex and pauses for
-   inspection. The 1,000-shuffle run is a separate later launcher invocation
-   and never follows automatically.
-10. No CT026 computation is an implicit consequence of a merge, test run, or
-    completed package.
+7. WP10 is the next package and builds the composed production dependency
+   boundary. WP12 follows and completes cache-only PPC plots, detailed reports,
+   and the report-before-cleanup seam.
+8. After WP10 and WP12 are green, prepare the standalone resumable launcher.
+   Planning may repeat after interruption; compatible prepared-phase/PPC work
+   resumes by exact identity. The user then runs WP5C-6 at 100 shuffles outside
+   Codex and pauses for inspection. The 1,000-shuffle run is a separate later
+   launcher invocation and never follows automatically.
+9. WP11 follows the preview infrastructure and supports one explicitly selected
+   ProbeA or ProbeB population per run, never a combined population. It may be
+   scheduled after the preview because the standalone launcher is the approved
+   first scientific execution boundary.
+10. WP13 remains deferred while absolute thresholds are empty. WP10, the
+   launcher, and WP11 must reject every nonempty unsupported request before
+   computation; warning and continuing is forbidden.
+11. No CT026 computation is an implicit consequence of a merge, test run, or
+   completed package.
 
 ### 13.2 Review gates after every package
 
@@ -2300,8 +2543,15 @@ Exact PPC speedup completion and handoff (2026-09-18):
 - No 100-shuffle scientific preview or 1,000-shuffle final component has run.
   Both remain explicit standalone launcher invocations, with inspection and
   approval between them.
-- Next implementation handoff: WP12 reporting may proceed independently; WP10
-  composes production dependencies; WP11 follows WP10; and the standalone
-  preview/final launcher follows WP10 plus WP12. WP13 may be deferred while the
-  absolute-threshold list is empty and becomes mandatory before supporting a
-  nonempty threshold request.
+- The user approved the post-speedup sequence on 2026-09-18: WP10, WP12, the
+  standalone launcher, and then the 100-shuffle preview. WP11 follows the
+  preview infrastructure. The UI will support either ProbeA or ProbeB as one
+  active population per run with the same good/MUA and good-inside-brain
+  defaults; combined populations are out of scope.
+- WP13 is deferred. Empty thresholds preserve the current result; every
+  nonempty request must be rejected before computation until WP13 is complete.
+  Deterministic PPC planning may rerun after interruption and need not be
+  checkpointed, while compatible phase/PPC work retains exact resume behavior.
+- This documentation decision does not itself authorize source changes or a
+  CT026 scientific run. Each package still requires its test-first plan/RED
+  gate, and the preview remains a separate user-invoked launcher execution.

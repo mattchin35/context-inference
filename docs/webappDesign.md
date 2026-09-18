@@ -599,16 +599,118 @@ The main outputs answer complementary questions:
 | --- | --- | --- |
 | Power compute/cache inspection | Implemented | Preserve compatible Power computation and limited cached plotting |
 | Synchrony numerical computation/reporting | Implemented outside Streamlit | Add the production Streamlit action and complete cached selectors |
-| Spike-phase numerical bridge/preview runner | Implemented outside Streamlit | Optimize through approved WP5C gates before CT026 preview; then add the production action |
+| Spike-phase grouped numerical bridge | Implemented outside Streamlit | Bind it through the composed production boundary without changing PPC numerics or the one-worker library default |
+| Standalone Spike-phase launcher | Planned before the preview | Add explicit new/resume/dry-run modes; request eight workers for CT026; keep preview and final runs separate |
 | Synchrony and Spike-phase Streamlit controls | Planned | Use the composed production dependency boundary; do not calculate numerics in Streamlit |
 | Compute All | Planned | Run Power, Synchrony, and Spike phase sequentially with isolated component failures |
-| Active unit-population selection | Planned and required | The selected population, stable unit identities, channels, and quality settings must be passed explicitly into Spike-phase configuration |
+| Active unit-population selection | Planned and required | Select exactly one ProbeA or ProbeB population per run, using the same good/MUA and good-inside-brain defaults; combined populations are out of scope |
 | Progress display | Planned and required | Display stage, completed/total work, elapsed time, and ETA only when available |
 | Cached Power selectors/plots | Partially implemented | Expand from the limited Power preview to the complete approved cached views |
 | Cached Synchrony/PPC selectors and plots | Planned | Load only compatible final component files and expose counts, warnings, exclusions, and stale differences |
+| Absolute amplitude thresholds | Deferred | Empty thresholds are supported; reject every nonempty request before computation until masking is implemented |
 
 Prepared-phase tensors, schedules, PPC block checkpoints, incomplete work, and
 other intermediate files are execution artifacts. They must never be listed,
 loaded, or displayed by the webapp as compatible scientific components. Only a
 validated final component committed through `manifest.json` is eligible for
 scientific inspection.
+
+### 4.1 Composed production boundary
+
+Power, Synchrony, Spike phase, and Compute All must use one composed production
+dependency boundary. The webapp may select an action and adapt progress events,
+but it must not choose component-specific numerical factories, load raw data for
+a cached plot, or implement scientific calculations in a Streamlit callback.
+
+Compute All runs Power, Synchrony, and Spike phase in that order. Synchrony and
+Spike phase share one compatible prepared-phase product. Each component keeps
+its independent manifest-last transaction, so a later failure cannot invalidate
+an earlier compatible component. Component status and stale-configuration
+differences remain visible independently.
+
+The production boundary must reject nonempty absolute wavelet-amplitude
+thresholds before opening raw sources or creating work artifacts. An empty
+threshold tuple requests no masking and proceeds without a warning. This guard
+remains until the separately planned amplitude-masking implementation exists.
+
+### 4.2 Active unit population
+
+The existing page-level ProbeA and ProbeB sorter and aligned-spike path controls
+must be passed into the LFP-summary route. The route provides an active
+population selector with exactly two choices:
+
+- ProbeA
+- ProbeB
+
+Exactly one population is active in a run. Both choices use identical defaults:
+
+- include clusters labeled `good` or `mua`;
+- restrict them to channels labeled `good` and `inside_brain`;
+- order units stably by cluster identity;
+- identify every unit as `probe_label:cluster_id`.
+
+The selected probe label, sorter path, aligned-spike path, selected channels,
+quality rules, and stable unit ids are explicit configuration and fingerprint
+inputs. Switching the active probe makes the Spike-phase component incompatible
+and requires an explicit separate computation. The first implementation does
+not combine ProbeA and ProbeB units into one population or one PPC component.
+
+Power and Synchrony do not require a unit population. Spike phase and Compute
+All require a valid selected population before dispatch. A missing or invalid
+population produces a visible pre-dispatch error rather than silently omitting
+Spike phase.
+
+### 4.3 Progress and execution state
+
+Streamlit displays framework-independent progress records emitted by the
+production boundary. When supplied, display:
+
+- component and stage;
+- completed and total work units;
+- elapsed time;
+- estimated remaining time;
+- concise status text.
+
+Do not fabricate an ETA before the numerical layer provides one. Rerenders must
+not restart a completed action or duplicate phase/PPC preparation. Cancellation
+remains out of scope for the first milestone.
+
+The webapp recognizes `missing`, `compatible`, `stale`, `running`, and `failed`
+states. Stale differences are inspectable, stale plots require an explicit
+override, and incomplete launcher reports or intermediate PPC artifacts never
+qualify as compatible components.
+
+### 4.4 Cached views and reporting boundary
+
+Each view loads only its required compatible component file. PPC cached views
+include unit maps, reliable population summaries, eligible-unit prevalence,
+band summaries, and matched low/high exemplars. Counts, instability,
+eligibility, warnings, exclusions, selected population identity, and reference
+provenance must remain visible.
+
+The standalone preview report, rather than Streamlit, is the first required
+scientific Spike-phase execution boundary. It is built from compatible cached
+arrays and includes the detailed timings, memory/cache provenance, warnings,
+exclusions, reliability/eligibility counts, and benchmark-based filter
+projection required by `Tasks_neural.md`. Webapp completion follows this
+preview infrastructure and reuses its cache-only plotting contracts.
+
+### 4.5 Standalone preview and final-run separation
+
+The launcher creates its timestamped analysis-run identity, initial log, and
+exact resume command before PPC planning. Planning is deterministic but is not
+checkpointed; resume after a planning interruption repeats planning and reports
+that fact. Compatible prepared-phase and PPC checkpoints remain reusable under
+their exact identities once created.
+
+The CT026 preview uses exactly 100 shuffles and requests eight workers subject
+to exact allocation preflight. The portable library default remains one worker.
+The 1,000-shuffle result requires a different timestamped run and fingerprint,
+an explicit final-run confirmation, and separate approval after preview
+inspection. Neither the webapp nor launcher may automatically promote or
+continue a preview into a final run.
+
+Completed PPC work is retained until the component, manifest, plots, detailed
+report, log, and summary have all been written and validated. Cleanup is the
+last successful step and is scoped to the exact run fingerprint. A reporting
+failure preserves resumable work and cannot remove a sibling run.

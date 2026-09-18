@@ -514,3 +514,30 @@ not apply; write `not applicable` and explain why.
   1,000-shuffle scientific run remains separately authorized after preview
   inspection. Both should use a standalone resumable launcher rather than a
   Codex-held execution session.
+
+## Post-S8 documentation decision
+
+On 2026-09-18 the user approved documentation of the remaining integration
+sequence before any post-speedup source implementation:
+
+- WP10 composed production dependencies is next, followed by WP12 complete PPC
+  reporting, the standalone launcher, and the separately invoked 100-shuffle
+  preview. WP11 follows the preview infrastructure.
+- WP11 will select exactly one ProbeA or ProbeB population per run. Both use
+  good/MUA units on good inside-brain channels; combined populations are out of
+  scope.
+- WP13 is deferred. Empty absolute-amplitude thresholds preserve the accepted
+  computation; every nonempty production request must be rejected before work
+  begins until WP13 is implemented.
+- The launcher records its timestamped analysis-run identity and exact resume
+  command before full planning. Deterministic planning is not checkpointed and
+  may repeat after interruption. Existing compatible phase/PPC checkpoints
+  retain exact resume behavior after they are created.
+- Exact PPC work remains retained until the component, manifest, plots,
+  detailed report, log, and summary have all validated. Cleanup is the final
+  successful exact-fingerprint operation. Preview and final runs remain
+  separate commands, directories, fingerprints, and authorization gates.
+
+This decision changes documentation only. It does not authorize a CT026
+scientific run or waive the test-first approval gate for any implementation
+package.
