@@ -2,40 +2,37 @@
 
 ## Live handoff snapshot
 
-- **Snapshot:** 2026-09-09 on branch `refactor`.
-- **Current implementation HEAD:** `31a5c54` (`new specs for handling PPC
-  stuff`); local `refactor` and `origin/refactor` point to this commit.
-- **Last verified full neural baseline before worker work:** 734 passed, no
-  skipped or xfailed tests, with 16 known Pynapple warnings and three expected
-  multiprocessing-fork deprecation warnings from
-  `UV_CACHE_DIR=/tmp/context_inference_uv_cache MPLCONFIGDIR=/tmp/context_inference_mpl uv run
-  pytest -q -p no:cacheprovider src/tests/neural_analysis`.
-- **Current intentional RED checkpoint:**
-  `test_lfp_summary_ppc_parallel.py` reports 2 failed and 12 passed. The
-  remaining worker-contract failures cover normal executor shutdown and
-  cancellation of the future whose result raised.
-- **Approval state:** the user approved the Synchrony report dated
-  `2026-08-26T16-57-33Z` and approved completing WP5C before the CT026
-  100-shuffle Spike-phase preview. The WP5C-0 contracts are approved and
-  WP5C-1 through WP5C-4 are complete. The user authorized the work-only WP5C-5
-  CT026 engineering benchmark; its serial measurement is complete and wrote no
-  scientific Spike-phase component. On 2026-09-09 the user approved the
-  documentation-only exact PPC speedup plan in `docs/ppc_speedup_plan.md`,
-  including the grouped executor, 2 GiB process-private and 12 GiB aggregate
-  planned-allocation limits, strict inferential equivalence, and deferring
-  1/2/4/8-worker profiling until after serial optimization. Plan approval does
-  not authorize implementation or another CT026 run. WP5C-6 has not started.
+- **Snapshot:** 2026-09-18 on branch `refactor`.
+- **Current accepted implementation HEAD before this documentation update:**
+  `8741d71` (`docs: record PPC speedup S7 completion`), with grouped-parallel
+  implementation `e89a0ee`.
+- **Last verified S7 neural baseline:** 1,113 passed with 20 warnings. The S8
+  package changed no source or tests.
+- **WP5C state:** the exact PPC speedup S0-S8 sequence is complete. The accepted
+  work-only S8 run is
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_ppc_s8_2026-09-18T15-06-33Z`.
+  It selected eight workers for the benchmarked CT026 production workload and
+  published no scientific component, manifest, preview, or `spike_phase.npz`.
+- **Approval state:** Power and Synchrony reports remain approved. The user
+  approved eight workers as the preferred CT026 production setting and
+  approved documenting the remaining integration sequence. WP5C-6, the actual
+  100-shuffle Spike-phase preview, has not run. The 1,000-shuffle final run
+  remains a separate later launch after preview inspection.
+- **Immediate handoff:** complete WP12 reporting, prepare WP10 composed
+  dependencies and WP11 webapp integration, and prepare a standalone resumable
+  launcher for WP5C-6 and the separately invoked 1,000-shuffle run. WP13 is an
+  optional absolute-amplitude feature: the current CT026 preview inherits an
+  empty threshold list, so WP13 is not a blocker unless nonempty thresholds are
+  requested.
 - **Do not redo completed packages:** WP0, WP1, WP2 preparation, WP3, WP4,
   WP5A, WP5B, and the Spike-phase runtime bridge are historical completed work.
   Remaining integration work must extend them through the packages below, not
   reassign or reimplement them.
 
-Worktree warning at the snapshot: preserve the user's existing modifications to
-`docs/Tasks_neural.md`, `docs/DevJournal.md`, and `docs/webappDesign.md`; the
-added `docs/spec_neural_regression.md`; and the staged deletion of
-`docs/DevLog.md`. Preserve all unrelated untracked files and directories. Agents
-must stage only files assigned to their package and must stop on unexpected
-changes.
+Worktree warning at the snapshot: preserve the user's existing modification to
+`docs/SoftwareDesign.md`, the modification to `src/main.py`, and every unrelated
+untracked file and directory. Agents must stage only files assigned to their
+package and must stop on unexpected changes.
 
 Source-of-truth hierarchy:
 
@@ -58,16 +55,16 @@ Source-of-truth hierarchy:
 | WP4 Synchrony | Numerics, runtime, report, and user approval complete | Numerical implementation `d6c3477`; production runtime `ea542d1`; report tests/implementation `fa19ad0`, `f312957`; approved report `analysis_runs/CT026_2026-08-01_130853_lfp_synchrony_validation_2026-08-26T16-57-33Z` | Full composed webapp integration in WP10-WP11 |
 | WP5A observed PPC | Complete | Tests `fed9435`, `355307e`; implementation `d6c3477`; `test_spike_lfp_summary.py` | None |
 | WP5B shuffle inference | Complete | Tests `c94e152`, `7d22d6f`; implementation `01b7507`; `test_spike_lfp_summary.py` | Performance redesign only; scientific reference must remain unchanged |
-| Spike runtime bridge | Complete | Tests `453d08a`; implementation `c8e76d5`; `test_lfp_summary_runtime.py` | WP5C optimization; no CT026 Spike-phase execution has occurred |
-| WP5C optimization | WP5C-0 approved; WP5C-1 through WP5C-4 complete; WP5C-5 serial benchmark complete; detailed S0-S8 speedup plan approved for documentation only | WP5C-4 implementation `6352db4`; work-only CT026 profile `analysis_runs/ct026_ppc_profile_2026-09-09T21-33-06Z`; `docs/ppc_speedup.md`; `docs/ppc_speedup_plan.md`; last full neural suite 734 passed; current worker-focused RED 2 failed/12 passed | When implementation is separately authorized, execute S0-S8 in `ppc_speedup_plan.md`: restore GREEN, optimize/group serial work, profile it, then benchmark workers if still justified; WP5C-6 remains pending |
+| Spike runtime bridge | Complete, including grouped payload integration | Original bridge `c8e76d5`; grouped payload integration completed in S5; `test_lfp_summary_runtime.py` and synthetic cache/reload/plot coverage | Composed production dependency and UI integration in WP10-WP11 |
+| WP5C optimization | Complete through S8 | Grouped-parallel implementation `e89a0ee`; S7 documentation `8741d71`; full S7 neural suite 1,113 passed; accepted work-only S8 run `ct026_ppc_s8_2026-09-18T15-06-33Z`; `docs/ppc_speedup.md`; `docs/ppc_speedup_plan.md`; `docs/ppc_speedup_execution_log.md` | Use eight workers in CT026 production configuration; retain exact preflight; prepare and separately launch WP5C-6 and the later 1,000-shuffle run |
 | WP6 plotting | Partially complete | Tests `b1f51f3` and later focused plotting tests; implementation `d1c3e21`; Power and Synchrony reports above | Complete PPC exemplars and reporting in WP12 |
 | WP7 pipeline | Partially complete | Tests `b1f51f3`; implementation `067fdef`; `test_lfp_summary_pipeline.py` | Composed production dependencies and detailed progress in WP10 |
 | WP8 webapp | Partial; Power path only | Tests `c7ec7c1`, `003394a`, `f3954de`; implementations `2885ffd`, `926801b`; `test_lfp_summary_webapp.py` | Synchrony, Spike phase, Compute All, active population, progress, and complete cached views in WP11 |
-| WP9 validation | Partial | Approved Power and Synchrony reports above; Spike preview runner tests `7223072`, `0dfc1a8`, `1c2fb61`, `b9aecbe`; implementation `c3f6d41`, `c036d62` | WP5C benchmark, 100-shuffle preview, user approval, then separately authorized 1,000-shuffle run |
-| WP10 composed dependencies | Planned | Package below | Build after WP5C contracts and serial runtime stabilize |
+| WP9 validation | Partial | Approved Power and Synchrony reports above; S8 work-only benchmark accepted; Spike preview runner tests `7223072`, `0dfc1a8`, `1c2fb61`, `b9aecbe`; implementation `c3f6d41`, `c036d62` | Standalone 100-shuffle preview, user inspection, then separately launched 1,000-shuffle run |
+| WP10 composed dependencies | Planned and unblocked | Package below; PPC contracts and worker decision are now stable | Build composed Power/Synchrony/Spike-phase dependencies and progress boundary |
 | WP11 Streamlit integration | Planned | Package below | Build after WP10 |
 | WP12 PPC plotting/reporting | Planned | Package below | Complete before final CT026 interpretation |
-| WP13 amplitude thresholds | Planned | Package below; current validation/fingerprint support exists but production application does not | Implement test-first or explicitly defer before broader production use |
+| WP13 optional absolute-amplitude thresholds | Decision pending; not a blocker for the default CT026 preview | Package below; validation/fingerprint support exists; current CT026 threshold list is empty | Implement before supporting nonempty thresholds; reject or visibly warn on a nonempty request until then |
 
 This document replaces the older decoding task list. It translates the scientific
 requirements in `docs/webappDesign.md` into an implementation plan for offline LFP
@@ -885,15 +882,17 @@ A Sol medium/high orchestrator will:
 ## 7. Decision and authorization status
 
 The scientific estimator, WP5C-before-preview sequence, and internal execution
-contracts in Sections 2.22-2.26 are approved. WP5C-1 through WP5C-4 are
-complete. WP5C-5 follows the approved S0-S8 plan, but S0 implementation still
-requires separate user authorization.
+contracts in Sections 2.22-2.26 are approved. WP5C-1 through WP5C-5 and the
+complete S0-S8 exact-speedup plan are complete. Eight workers are preferred for
+the CT026 production configuration, without changing the portable library
+default or bypassing preflight.
 Implementers must escalate newly discovered ambiguity instead of choosing new
 scientific or execution defaults.
 Material changes to metrics, thresholds, cache contracts, or user-visible
 behavior require user approval and an update to this plan before implementation
-continues. No CT026 Spike-phase computation is authorized by these package
-approvals.
+continues. The work-only benchmark did not authorize or produce a scientific
+Spike-phase component. The 100-shuffle preview and 1,000-shuffle final result
+remain separate, explicitly launched runs.
 
 ## 8. Exact shared data semantics
 
@@ -1794,17 +1793,98 @@ Serial benchmark checkpoint (2026-09-09):
   restore the focused and full neural suites to GREEN; it must not launch a
   worker benchmark.
 
+Completion checkpoint (2026-09-18):
+
+- S0-S7 replaced the redundant per-job production path with the exact grouped
+  executor, connected that executor once at the payload boundary, added bounded
+  restartable checkpoints and shared-input workers, and preserved the public
+  `spike_phase.npz` schema.
+- The accepted S8 work-only benchmark used 64 rate-stratified units in eight
+  blocks, 249 trials, `incorrect/PFC`, all three epochs, 50 frequencies, and
+  100 shuffles. It measured three fresh repetitions each at 1/2/4/8 workers.
+- Median wall times were 820.833/471.556/293.419/211.397 seconds; median
+  scheduled-edge throughputs were 91.005/158.412/254.585/353.363 edges/s; and
+  median aggregate PSS values were 1.718/2.291/2.646/3.352 GiB.
+- Eight workers are preferred for CT026 production. This setting belongs in
+  the CT026 production configuration rather than the universal library default
+  and remains subject to exact per-run allocation preflight.
+- Legacy overlap and 1/2/4/8-worker correctness passed. The 51 exact q-value
+  differences were at most one binary64 rounding step
+  (`1.1102230246251565e-16` absolute), passed the frozen tolerance, and changed
+  no significance decision.
+- Exact benchmark plans contained 74,700/61,586/43,301
+  scheduled/independent/union edges at 100 shuffles and
+  747,000/182,056/61,752 at 1,000. The 26.4-35.2 minute 1,000-shuffle estimate
+  applies only to that 64-unit workload. Full 427-trial/273-unit planner
+  attempts were stopped after 10 and 30 minutes, so full-component planning
+  time remains a preview risk rather than a resolved projection.
+- The accepted directory is
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_ppc_s8_2026-09-18T15-06-33Z`.
+  It contains work/evidence only and no scientific component or manifest.
+
 #### WP5C-6 - CT026 preview validation
 
-Owner: Sol after WP5C-5's serial/parallel decision and WP12's complete preview
-report path are green.
+Owner: one implementer prepares the standalone launcher after WP10's production
+dependency boundary and WP12's complete preview report path are green. The
+actual CT026 execution remains a separate user-invoked run.
 
-- Run only the approved active ProbeB population with exactly 100 shuffles.
-- Record cold and warm runs, stage timing, peak memory, throughput, final and
-  intermediate cache sizes, unit/trial/spike counts, warnings, and exclusions.
-- Generate the complete preview plots/report required by WP12.
-- Pause for user inspection and approval.
-- Do not run 1,000 shuffles automatically or as an implicit merge consequence.
+Launcher requirements:
+
+- Provide a normal command-line entry point runnable with `uv run python -m ...`
+  from a shell, `tmux`, `screen`, or another long-lived process supervisor. It
+  must have no dependency on a live Codex task.
+- Default the CT026 production configuration to eight requested workers while
+  retaining exact planned active-worker and allocation preflight. Do not change
+  the universal `PPCExecutionConfig` default.
+- Require explicit mutually exclusive new-run and resume modes. A new run
+  creates a timestamped analysis directory; resume requires that exact run
+  directory and exact source/config/code identity.
+- Support a preflight/dry-run mode that loads metadata, resolves the active
+  population, computes the plan, reports requested/planned workers and memory,
+  and writes no scientific result.
+- Stream progress to both the terminal and a run-local log. Record the command,
+  environment, git/source/config fingerprints, session and unit identities,
+  worker counts, timing, memory, cache sizes, warnings, and final status.
+- Interruption or failure must leave resumable PPC work and no false final
+  component/manifest. A successful final transaction writes the scientific
+  component and report before cleaning only the exact completed work.
+- The 100-shuffle preview and 1,000-shuffle final run use the same tested
+  launcher but different timestamped run directories and configuration
+  fingerprints. The launcher must never continue from 100 to 1,000 shuffles
+  automatically.
+- The 1,000-shuffle mode requires an explicit final-run flag in addition to the
+  shuffle count, so an unattended command cannot accidentally promote a
+  preview invocation.
+- At startup and after interruption, print the exact resume command and run
+  directory. Long execution is expected; lack of Codex tool-session lifetime
+  must not be treated as a computational failure.
+
+Tests written first:
+
+- CLI parsing preserves the exact CT026 session, active population, worker
+  count, shuffle count, and run-directory identity.
+- Dry-run performs preflight without transforms, checkpoints, final arrays, or
+  manifests.
+- New 100-shuffle and new 1,000-shuffle invocations cannot share or overwrite a
+  run directory; 1,000 requires explicit final-run confirmation.
+- Interrupted synthetic execution leaves resumable work, prints the exact
+  resume command, and publishes no final component.
+- Resume reuses compatible phase/PPC work, rejects every identity mismatch,
+  and produces the same final result as an uninterrupted run.
+- A successful synthetic run atomically publishes the component, manifest,
+  plots/report, log, and summary, then removes only its exact completed work.
+
+Execution gate:
+
+1. The user launches the active ProbeB preview with exactly 100 shuffles.
+2. Record cold and warm behavior, planning and execution time, process-tree
+   memory, throughput, cache sizes, unit/trial/spike counts, warnings, and
+   exclusions. Full-component planner time is reported separately because S8
+   could not complete the 273-unit plan within its bounded attempt.
+3. Generate the complete plots/report required by WP12 and pause for user
+   inspection.
+4. Do not launch 1,000 shuffles automatically. After separate approval, the
+   user invokes a new 1,000-shuffle run through the same standalone launcher.
 
 ### WP6 - Plotting
 
@@ -1973,6 +2053,14 @@ Tests written first:
 
 Owner: one implementer after WP5C prepared-phase contracts are frozen.
 
+This package concerns only the optional per-site absolute wavelet-amplitude
+cutoff in source voltage units. It is distinct from the numerical
+relative-magnitude validity threshold and from PPC's 50-spike/two-trial
+reliability gates, which are already implemented. The current CT026 preview
+configuration inherits `absolute_amplitude_thresholds=()`, so WP13 has no
+effect on that default computation and may be deferred without changing its
+scientific result.
+
 Files:
 
 - `lfp_summary_preparation.py`, the smallest required phase-runtime adapter,
@@ -1988,10 +2076,12 @@ Tests written first:
 - Threshold changes stale affected scientific phase-derived components.
 - Empty threshold configuration reproduces the current production result.
 
-Until WP13 is complete, production controls and reports must display a visible
-warning that configured absolute amplitude thresholds are validated and
-fingerprinted but not applied. Broader production use must either complete WP13
-or explicitly defer it with user approval; silent omission is forbidden.
+Until WP13 is complete, an empty threshold configuration proceeds without a
+warning because it requests no absolute masking. Any nonempty production
+request must be rejected or display a visible warning that the configured
+thresholds are validated and fingerprinted but not applied; it must never be
+silently treated as active. Implement WP13 before advertising nonempty
+absolute thresholds as a supported production feature.
 
 ## 13. Sol orchestration and merge gates
 
@@ -2006,18 +2096,20 @@ or explicitly defer it with user approval; silent omission is forbidden.
    integration are disjoint from any active owner. Only one implementer at a
    time owns `lfp_summary_runtime.py` or `lfp_summary_pipeline.py`.
 5. WP5C-4 integrates the already-green serial numerical and cache work.
-6. WP5C-5 follows the approved S0-S8 sequence in
-   `docs/ppc_speedup_plan.md`: restore the current worker RED checkpoint, remove
-   redundant serial computation, profile the grouped serial executor, then
-   rebind and benchmark workers only if the new profile still justifies them.
-7. WP12 completes the preview report path; Sol then runs WP5C-6, the CT026
-   100-shuffle preview, and pauses for inspection.
-   No 1,000-shuffle run follows automatically.
-8. WP10-WP13 proceed only under the file ownership declared by each package.
-   Parallel work is allowed only for disjoint files after shared interfaces are
-   frozen.
-9. No CT026 computation is an implicit consequence of a merge, test run, or
-   completed package.
+6. WP5C-5 and its approved S0-S8 sequence are complete. Eight workers are the
+   preferred CT026 production setting; the universal default remains unchanged.
+7. WP12 may proceed independently of WP10/WP13 because its plotting/report
+   files are disjoint. Synchronous execution is not required if sequential
+   ownership makes changes easier to review.
+8. WP10 builds the composed production dependency boundary. WP11 follows WP10.
+   WP13 may remain deferred while absolute thresholds are empty; WP10 and the
+   launcher must reject or visibly warn on any nonempty unsupported request.
+9. After WP10 and WP12 are green, prepare the standalone resumable launcher.
+   The user then runs WP5C-6 at 100 shuffles outside Codex and pauses for
+   inspection. The 1,000-shuffle run is a separate later launcher invocation
+   and never follows automatically.
+10. No CT026 computation is an implicit consequence of a merge, test run, or
+    completed package.
 
 ### 13.2 Review gates after every package
 
@@ -2053,22 +2145,22 @@ Sol checks:
   null copies.
 - The initial single-session implementation does not add Numba, Cython, MEX,
   Zarr, or a niche parallel dependency.
-- Profile the grouped, optimized serial WP5C kernel before activating
-  within-session parallelism. Only then benchmark 1, 2, 4, and 8 shared-data
-  workers if the serial profile still justifies them. Select the smallest
-  worker count within 10 percent of the best measured throughput, keep planned
-  private peak allocation at or below 2 GiB per worker, and keep measured
-  aggregate PPC working memory below 16 GiB. Before execution, require planned
-  aggregate arrays to remain at or below 12 GiB, counting shared mmap once plus
-  parent-private and all active-worker private peaks. The estimates report job
-  accumulators, kernel working arrays, geometry, parent/worker private peaks,
-  and shared mmap bytes separately.
-- Treat 25-60 minutes for a cold 100-shuffle CT026 preview and 45-120 minutes
-  for a cold 1,000-shuffle run as provisional engineering estimates with about
-  twofold uncertainty until the representative benchmark is complete. A valid
-  prepared-phase cache is expected to remove approximately 8-10 minutes from a
-  repeat run, but the actual measured saving must replace this estimate in the
-  validation report.
+- The grouped benchmark is complete. Request eight workers for CT026 production
+  because they delivered the only median throughput within 10 percent of the
+  best measured value. Keep planned private peak allocation at or below 2 GiB
+  per process, planned aggregate arrays at or below 12 GiB, and measured
+  aggregate PPC working memory below 16 GiB. Continue to report job
+  accumulators, kernel work, geometry, parent/worker private peaks, six-input
+  shared mmap bytes, and measured process-tree RSS/PSS separately.
+- The measured 26.4-35.2 minute 1,000-shuffle range applies only to the
+  64-unit/one-condition/one-site/three-epoch S8 workload. Do not relabel it as a
+  full-session estimate. Treat 25-60 minutes for the cold 100-shuffle complete
+  preview and 45-120 minutes for the cold 1,000-shuffle complete run as
+  provisional until the standalone launcher measures the actual 273-unit
+  plan and execution. Report phase preparation, planner time, and grouped
+  execution separately. A valid prepared-phase cache removed about 101 seconds
+  in the serial profile (108.93 seconds cold versus 8.12 seconds warm), not the
+  earlier estimated 8-10 minutes.
 - Batch parallelism across sessions is deferred until more than one session is
   approved for processing.
 
@@ -2197,3 +2289,19 @@ Exact PPC speedup plan clarification (2026-09-10):
   assigned without a later documented revision and explicit approval.
 - Existing single-job worker tests become frozen green regressions after S0;
   S7 must establish new grouped-worker RED failures before implementation.
+
+Exact PPC speedup completion and handoff (2026-09-18):
+
+- S0-S8 are complete. S7 implementation is `e89a0ee`; documentation checkpoint
+  `8741d71` records the final source gate and 1,113-test neural-suite result.
+- The work-only S8 benchmark selected eight workers and preserved scientific
+  equivalence under the approved policy. Its accepted evidence directory is
+  `ct026_ppc_s8_2026-09-18T15-06-33Z` under the CT026 `analysis_runs` root.
+- No 100-shuffle scientific preview or 1,000-shuffle final component has run.
+  Both remain explicit standalone launcher invocations, with inspection and
+  approval between them.
+- Next implementation handoff: WP12 reporting may proceed independently; WP10
+  composes production dependencies; WP11 follows WP10; and the standalone
+  preview/final launcher follows WP10 plus WP12. WP13 may be deferred while the
+  absolute-threshold list is empty and becomes mandatory before supporting a
+  nonempty threshold request.

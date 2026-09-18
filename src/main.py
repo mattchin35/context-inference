@@ -4348,8 +4348,8 @@ def run_single_session_batch(
 def main_mouse():
     """Analyze a single behavior session from start to finish."""
     mouse = "CT026"
-    date = "2026-08-01"
-    behavior_timestamp = 130853  # Set to "HHMMSS" to choose one session on ambiguous dates.
+    date = "2026-08-03"
+    behavior_timestamp = 111938  # Set to "HHMMSS" to choose one session on ambiguous dates.
     task_tag = "latent_inference"
     session_data_root = Path(f"/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}")
     multi_session_save_path = session_data_root / "cross_session_analysis"

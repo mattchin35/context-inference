@@ -582,19 +582,17 @@ RSS.
 
 Unit blocks are scientifically independent after the deterministic schedule
 and read-only phase data are fixed. They are therefore suitable for process
-parallelism. The current workstation has enough units to provide approximately
-33 default eight-unit blocks for the 263 eligible CT026 units.
+parallelism. The S8 benchmark used 64 rate-stratified units in eight default
+blocks so every requested 1/2/4/8-worker configuration had useful work. This
+superseded the earlier three-unit profile, which fit in one block and could not
+measure worker scaling.
 
-The completed representative profile used only three units, which fit inside
-one default unit block. It cannot measure scaling to two, four, or eight
-workers. A future parallel benchmark must contain at least one realistic block
-per requested worker and should preserve the low-, median-, and high-rate unit
-mixture of the production population.
-
-Parallelism should be evaluated after eliminating known redundant serial work.
-Otherwise additional cores merely execute avoidable phase copies and generic
-interpolation calls faster, consume more memory bandwidth, and obscure the
-benefit of the algorithmic changes.
+Parallelism was activated only after the redundant serial work was removed.
+Measured speedup versus one grouped worker was 1.741x, 2.797x, and 3.883x for
+2, 4, and 8 workers. Eight workers were selected under the predeclared
+near-best-throughput and memory rule. Lower parallel efficiency at eight
+workers is accepted because it still produced the best wall time within the
+memory budget.
 
 Worker-count invariance remains required. The same scientific configuration,
 schedule, and inputs must produce exact discrete outputs and numerically
@@ -625,6 +623,44 @@ about whether the full component requires a cluster. No numerical speedup
 factor should be promised before representative measurements. In particular,
 the existing 47-51 and 90-100 hour projections should not be reused after the
 kernel changes without remeasurement.
+
+### 12.1 Measured completion evidence
+
+The redesign was implemented in S0-S7 and measured on CT026 in the authorized
+work-only S8 benchmark on 2026-09-18. The benchmark used 64 rate-stratified
+units in eight default blocks, 249 trials, condition `incorrect`, site `PFC`,
+all three epochs, 50 frequencies, and 100 shuffles. It created no scientific
+component or manifest.
+
+Median 1/2/4/8-worker wall times were 820.833, 471.556, 293.419, and 211.397
+seconds. Corresponding median scheduled-edge throughputs were 91.005, 158.412,
+254.585, and 353.363 edges/s, and median aggregate PSS values were 1.718,
+2.291, 2.646, and 3.352 GiB. Eight workers were selected under the approved
+near-best-throughput and less-than-16-GiB rule. This makes eight workers the
+preferred CT026 production configuration, while the portable library default
+and exact allocation preflight remain unchanged.
+
+Legacy overlap and worker-count invariance passed. Exact identities, schedules,
+counts, masks, p-values, decisions, and representative histograms were
+preserved. The only noteworthy binary difference was 51 legacy q-value cells
+at at most `1.1102230246251565e-16` absolute error, with no tolerance-level
+mismatch or changed significance decision.
+
+The benchmark workload has exact scheduled/independent/site-qualified-union
+edge counts of 74,700/61,586/43,301 at 100 shuffles and
+747,000/182,056/61,752 at 1,000 shuffles. Combining those plans with inclusive
+100-shuffle timing gives a 26.4-35.2 minute engineering range for the same
+64-unit workload at 1,000 shuffles. It is not a complete-session forecast.
+Exact full 427-trial/273-unit plan construction did not finish within the
+bounded 10-minute 100-shuffle or 30-minute 1,000-shuffle attempts, so no linear
+edge extrapolation was substituted. Full-component planning time remains an
+operational risk to measure during the separate 100-shuffle preview.
+
+The accepted evidence is retained at
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_ppc_s8_2026-09-18T15-06-33Z`.
+The historical 66.80-second three-unit result remains a reference for the old
+single-job workload and is not a direct speedup denominator for the new
+three-epoch grouped benchmark.
 
 ## 13. Later single-node cluster execution
 

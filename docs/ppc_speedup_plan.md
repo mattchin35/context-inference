@@ -1,11 +1,14 @@
 # Exact PPC speedup implementation plan
 
-Status: implementation plan approved by the user on 2026-09-09. The user
-separately authorized the S0-S7 source/test implementation sequence on
-2026-09-10; S0-S7 are complete as of 2026-09-18. CT026 scientific/work-only
-execution and the 100/1,000-shuffle Spike-phase runs remain unauthorized. The
-approved S6 metadata-only 100/1,000-shuffle schedule-union calculation was
-completed without reading phase values or spike trains. The
+Status: complete. The implementation plan was approved by the user on
+2026-09-09, S0-S7 were completed by 2026-09-18, and the separately authorized
+work-only S8 CT026 benchmark completed on 2026-09-18. S8 selected eight workers
+for the benchmarked CT026 production workload. It did not publish a scientific
+component, manifest, preview, or `spike_phase.npz`. The separate 100-shuffle
+preview and 1,000-shuffle final scientific runs remain unstarted and require
+their own launch decisions. The approved S6 metadata-only 100/1,000-shuffle
+schedule-union calculation was completed without reading phase values or spike
+trains. The
 Sol-orchestrator/Terra-worker
 execution specification in Section 3.1 was added at the user's request on the
 same date, audited against the current host on 2026-09-10, and is subject to
@@ -15,8 +18,9 @@ private-memory accounting explicit, bind actual derived schedule identities,
 clarify S0 executor lifecycle, reserve `xhigh` reasoning for S1-S4 and S7,
 freeze the kernel allocation-estimator interface, add a 12 GiB aggregate
 preflight, and distinguish S7 grouped-worker RED tests from existing single-job
-regressions. Those clarifications do not authorize implementation or CT026
-computation.
+regressions. At that time those clarifications did not authorize implementation
+or CT026 computation; the later S0-S8 authorizations and completion records
+supersede that historical gate.
 
 This plan turns `docs/ppc_speedup.md` into test-first work packages. It is kept
 separate from `docs/Tasks_neural.md` because the change is a substantial,
@@ -26,7 +30,7 @@ broader LFP-summary roadmap.
 
 ## 1. Current state and recommendation
 
-Repository state re-inspected on 2026-09-10:
+Historical starting state, inspected on 2026-09-10:
 
 - HEAD is `31a5c54` on `refactor`.
 - The accepted serial sufficient-statistic, prepared-phase cache, restart, and
@@ -60,6 +64,32 @@ redundancy. The grouped algorithm changes the useful worker task boundary, so
 benchmarking the old task boundary would spend CT026 time on an implementation
 that is expected to be replaced.
 
+Completion update, 2026-09-18:
+
+- S0-S7 implemented the grouped exact executor, one-pass payload integration,
+  bounded resumable checkpoints, and invariant 1/2/4/8-worker execution.
+- S8 benchmarked 64 rate-stratified units in eight unit blocks for condition
+  `incorrect`, site `PFC`, all three epochs, 249 trials, 50 frequencies, and
+  100 shuffles. Twelve fresh runs were measured without checkpoint resumes.
+- Median wall times for 1/2/4/8 workers were 820.833, 471.556, 293.419, and
+  211.397 seconds. Median scheduled-edge throughput was 91.005, 158.412,
+  254.585, and 353.363 edges/s. Median aggregate PSS was 1.718, 2.291, 2.646,
+  and 3.352 GiB.
+- Eight workers were the smallest count within 90 percent of the best measured
+  throughput while remaining well below the 16 GiB aggregate-memory gate. The
+  library-wide default remains conservative; eight workers are the preferred
+  CT026 production configuration, subject to the existing exact preflight.
+- Exact benchmark-workload plans contain 74,700 scheduled, 61,586 independent,
+  and 43,301 site-qualified union edges at 100 shuffles; at 1,000 shuffles the
+  counts are 747,000, 182,056, and 61,752.
+- The selected eight-worker 1,000-shuffle engineering estimate is 26.4-35.2
+  minutes for this representative benchmark only. Full 427-trial/273-unit plan
+  attempts were stopped after 10 minutes at 100 shuffles and 30 minutes at
+  1,000 shuffles. No complete-component runtime is claimed from the
+  representative estimate.
+- The retained evidence is under
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_ppc_s8_2026-09-18T15-06-33Z`.
+
 ## 2. Scope and non-goals
 
 The implementation will preserve:
@@ -87,8 +117,9 @@ offload and path portability remain later work.
 
 The initial choices below were approved on 2026-09-09 and the explicit
 clarifications recorded in this revision were approved on 2026-09-10.
-Implementation still requires a separate user request; approval of this plan
-alone is not execution authority.
+At approval time, implementation required a separate user request. Those
+requests were subsequently granted for S0-S8; the rule remains that a plan
+alone is not execution authority for the pending preview or final run.
 
 1. **Add a grouped production executor and preserve the single-job executor.**
    Keep `execute_ppc_blocks(...)` as the frozen single-condition/site/epoch
@@ -1050,7 +1081,8 @@ RED/GREEN command:
 
 ### S8 - Authorized representative benchmark and decision gate
 
-No source implementation belongs in this package. After explicit authorization:
+Status: complete on 2026-09-18. No source implementation belonged to this
+package. After explicit authorization, S8:
 
 1. Run the work-only low/median/high representative CT026 job at 100 shuffles
    with one worker and warm prepared phase.
@@ -1062,7 +1094,23 @@ No source implementation belongs in this package. After explicit authorization:
    the best measured throughput and whose aggregate memory stays below 16 GiB.
 5. Re-project 100- and 1,000-shuffle complete-component runtime from measured
    union edges; do not reuse the old 47-51/90-100 hour projections.
-6. Present results for review. WP5C-6 preview remains separately gated.
+6. Presented the results for review. WP5C-6 preview remains separately gated.
+
+The benchmark used a realistic eight-block, 64-unit rate-stratified workload.
+Scientific comparison against the accepted legacy overlap passed. Worker-count
+plans and outputs were invariant: identities, schedules, counts, masks,
+decisions, p-values, significance, and representative histograms agreed
+exactly; tolerance-governed floating outputs agreed under the frozen policy.
+The legacy q-value comparison contained 51 binary64 differences no larger than
+`1.1102230246251565e-16` absolute and caused no tolerance-level mismatch or
+decision change.
+
+Eight workers are the preferred CT026 production setting because they were the
+only measured count within 10 percent of the best throughput and their maximum
+sampled aggregate PSS remained below 16 GiB. This does not change the universal
+library default and does not bypass exact runtime preflight. The 100-shuffle
+preview and 1,000-shuffle final run must be launched separately; neither is an
+implicit continuation of S8.
 
 ## 9. Performance and memory acceptance gates
 
@@ -1132,9 +1180,10 @@ No source implementation belongs in this package. After explicit authorization:
 12. The package's `docs/ppc_speedup_execution_log.md` entry is complete and its
     documentation-only commit is recorded before the next package starts.
 
-## 11. Documentation handoff before implementation
+## 11. Historical documentation handoff before implementation
 
-The original handoff and execution-log scaffold are committed in `73e2d9f`,
+This pre-S0 handoff is complete and retained for audit. The original handoff
+and execution-log scaffold are committed in `73e2d9f`,
 with its exact identity recorded in `a1d23f3`. Before S0:
 
 - Commit the 2026-09-10 plan clarification, synchronized `Tasks_neural.md`, and
@@ -1167,3 +1216,30 @@ Verify that the `Tasks_neural.md` handoff continues to:
 Completion of S8 should append measured timings, union ratios, selected worker
 count, memory evidence, and revised projections to both documents. Historical
 measurements remain labeled as measurements of the prior kernel.
+
+## 12. Post-S8 integration handoff
+
+S8 closes the PPC performance redesign. Subsequent packages must consume the
+grouped executor rather than reopen its scientific or worker architecture.
+
+- CT026 production configuration should request eight workers. The general
+  `PPCExecutionConfig` default remains conservative, and exact preflight may
+  reject an unsafe requested count but must not silently substitute another.
+- WP10 composes Power, Synchrony, and Spike-phase production dependencies;
+  WP11 connects that boundary to Streamlit; WP12 completes PPC plots and
+  reporting. WP12 may proceed independently when file ownership is disjoint.
+- WP13 is an optional absolute-amplitude feature, not a PPC optimization. The
+  current CT026 preview has an empty absolute-threshold list, so deferring WP13
+  leaves that default result unchanged. A nonempty request must be rejected or
+  visibly reported as unsupported until WP13 is implemented.
+- WP5C-6 and the later 1,000-shuffle run require a tested standalone resumable
+  command-line launcher. The launcher runs outside Codex, records a timestamped
+  run directory and log, supports dry-run/new/resume modes, prints its exact
+  resume command, and preserves work without publishing a false final marker
+  after interruption.
+- The launcher must run 100 and 1,000 shuffles as separate explicit commands
+  and directories. It must never promote a completed preview automatically;
+  1,000-shuffle execution requires an additional explicit final-run flag.
+- Full-component planner time is an unresolved operational measurement. Record
+  it separately during the 100-shuffle preview and do not substitute the S8
+  64-unit 26.4-35.2 minute estimate for the complete 273-unit run.

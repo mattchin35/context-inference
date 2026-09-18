@@ -446,14 +446,71 @@ not apply; write `not applicable` and explain why.
 
 ### S8 - Authorized representative benchmark and decision gate
 
-- Status: not started; requires separate CT026 authorization.
-- Authorization and starting HEAD:
-- Lead Sol, Terra command runner, and Sol reviewer assignments:
-- Exact authorized commands and data scope:
-- Correctness comparison:
-- Stage timings, union ratios, and throughput:
-- Planned allocation and measured RSS/PSS:
-- Selected worker count and rationale:
-- Revised 100- and 1,000-shuffle projections:
-- Independent Sol gate disposition and unresolved risks:
-- Source or test changes: none permitted.
+- Status: complete on 2026-09-18.
+- Authorization and starting HEAD: the user explicitly approved S8 after S7.
+  The benchmark ran from documentation HEAD `8741d71` with S7 implementation
+  `e89a0ee`. S8 made no repository source, test, or scientific-cache changes.
+- Data scope and output boundary: the work-only benchmark used session
+  `CT026_20260801_latent_inference`, condition `incorrect`, site `PFC`, all
+  three epochs, 249 stable trials, the fixed 50-frequency grid, 100 shuffles,
+  and 64 rate-stratified units forming eight default unit blocks. It wrote only
+  the timestamped analysis-run evidence and resumable work artifacts. It did
+  not publish a component, manifest, preview, or `spike_phase.npz`.
+- Retained run directory:
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_ppc_s8_2026-09-18T15-06-33Z`.
+  Its primary evidence is `summary.md`, `benchmark_results.json`,
+  `projection_summary.md`, `projection_summary.json`, `benchmark.py`, and the
+  captured logs/work directories. The final benchmark script SHA-256 was
+  `f252e3b1c5bc341120e16e6ee753b1973c77ae59c3b95ed36fa136e6fc827000`;
+  the projection JSON SHA-256 was
+  `5dc08c6488c8c77bd110a560dc12740b0540c04bdcc535408b6c89050fb0fb94`.
+  The run retained
+  approximately 2.06 GB of work artifacts for audit and resume inspection.
+- Audit-only attempts: two earlier timestamped S8 directories are preserved.
+  The first exposed a legacy-axis comparison bug; the second exposed strict
+  binary q-value equality at one-ULP scale. Neither is the accepted benchmark.
+- Correctness: the legacy overlap comparison passed and all 1/2/4/8-worker
+  comparisons passed. Plan identities and schedules were invariant. Integer,
+  Boolean, p-value, significance, and representative-histogram fields agreed
+  exactly. Tolerance-governed floats passed the frozen `rtol=1e-6`,
+  `atol=1e-7` policy. Legacy q-values had 51 exact binary mismatches, maximum
+  absolute delta `1.1102230246251565e-16` and maximum relative delta
+  `2.18035466224996e-16`; there were no tolerance-level mismatches or changed
+  decisions.
+- Scaling evidence from three fresh, non-resumed repetitions per count:
+
+  | workers | median seconds | scheduled edges/s | median aggregate PSS GiB | speedup | efficiency |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 1 | 820.833 | 91.005 | 1.718 | 1.000 | 1.000 |
+  | 2 | 471.556 | 158.412 | 2.291 | 1.741 | 0.870 |
+  | 4 | 293.419 | 254.585 | 2.646 | 2.797 | 0.699 |
+  | 8 | 211.397 | 353.363 | 3.352 | 3.883 | 0.485 |
+
+- Selected worker count: eight. It is the smallest correctness-passing count
+  with median throughput at least 90 percent of the best measured throughput;
+  maximum sampled aggregate PSS was approximately 3.606 GB, below the 16 GiB
+  measured-memory gate. Eight is therefore preferred in the CT026 production
+  configuration, not made a universal library default, and remains subject to
+  exact preflight.
+- Exact benchmark-workload plans: at 100 shuffles, scheduled/independent/union
+  edge counts were 74,700/61,586/43,301, giving union saturation `0.701208`
+  and reuse `1.42228`. At 1,000 shuffles the counts were
+  747,000/182,056/61,752, giving saturation `1.0` and reuse `2.94818`.
+- Projection: the selected eight-worker benchmark workload has an engineering
+  1,000-shuffle range of 26.4-35.2 minutes. No 1,000-shuffle execution was
+  performed. Exact full 427-trial/273-unit planner attempts were stopped at 10
+  minutes for 100 shuffles and 30 minutes for 1,000 shuffles; no linear union
+  extrapolation replaced them. Consequently the representative range is not a
+  complete-component runtime claim. The existing three-unit complete grouped
+  serial slice had exact 100-shuffle counts 666,900/497,016/163,525 and exact
+  1,000-shuffle counts 6,669,000/1,240,061/185,256; its inclusive engineering
+  1,000-shuffle estimate was approximately 49.3 minutes.
+- Measurement limitations: grouped null finalization is not timed by the old
+  legacy summarizer wrapper and is recorded as unavailable rather than zero.
+  Parallel worker-side stage timers do not cross spawn, so parallel evidence is
+  total wall time, throughput, and externally sampled process-tree memory.
+- Decision gate: S8 is accepted and WP5C-5 is complete. The full 100-shuffle
+  preview remains a separate run after the reporting path is ready. The
+  1,000-shuffle scientific run remains separately authorized after preview
+  inspection. Both should use a standalone resumable launcher rather than a
+  Codex-held execution session.
