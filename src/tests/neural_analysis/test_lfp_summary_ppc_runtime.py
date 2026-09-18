@@ -4186,12 +4186,12 @@ def test_grouped_component_uses_condition_intersection_and_bypasses_empty_or_ine
     lambda config: replace(config.ppc_execution, worker_count=2),
     lambda config: replace(config.ppc_execution, unit_block_size=2),
 ])
-def test_grouped_component_rejects_nonserial_or_mismatched_execution_before_side_effects(
+def test_grouped_component_rejects_mismatched_execution_before_side_effects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     rejected_execution: object,
 ) -> None:
-    """S4 accepts only the exact serial config execution before planning or I/O."""
+    """Grouped execution must exactly equal its configuration before planning or I/O."""
     config = _grouped_config()
     phase, spikes = _grouped_inputs(config)
 
@@ -4215,31 +4215,6 @@ def test_grouped_component_rejects_nonserial_or_mismatched_execution_before_side
             tmp_path,
             execution=rejected_execution(config),
         )
-    assert not (tmp_path / "ppc").exists()
-
-
-def test_grouped_component_rejects_matching_nonserial_config_before_side_effects(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """S4 rejects an otherwise matching multi-worker configuration before any work."""
-    config = _grouped_config(worker_count=2)
-    phase, spikes = _grouped_inputs(config)
-
-    def forbidden(*_: object, **__: object) -> object:
-        """Reject a planning, sampling, checkpoint, or process side effect."""
-        raise AssertionError("nonserial S4 execution reached a side-effect seam")
-
-    monkeypatch.setattr(ppc_runtime, "plan_grouped_ppc_component", forbidden)
-    monkeypatch.setattr(
-        ppc_runtime,
-        "compute_selected_observed_trial_segmented_ppc_statistics",
-        forbidden,
-    )
-    monkeypatch.setattr(ppc_runtime, "write_ppc_checkpoint", forbidden)
-    monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", forbidden)
-    with pytest.raises(ValueError, match="serial|worker"):
-        _run_grouped_component(config, phase, spikes, tmp_path)
     assert not (tmp_path / "ppc").exists()
 
 
@@ -7147,11 +7122,16 @@ def test_grouped_parallel_dispatches_phase_free_site_unit_blocks_through_one_mma
             *args: object,
             **kwargs: object,
         ) -> np.ndarray:
-            """Record only the full phase/valid mmap openings in one worker."""
-            load_calls.append((Path(path), kwargs.get("mmap_mode")))
+            """Record only worker openings of the two shared phase mmap paths."""
+            candidate_path = Path(path)
             values = original_load(path, *args, **kwargs)
-            if kwargs.get("mmap_mode") == "r":
-                opened_mmaps[Path(path)] = values
+            if candidate_path in {
+                phase_descriptor.phase_path,
+                phase_descriptor.valid_path,
+            }:
+                load_calls.append((candidate_path, kwargs.get("mmap_mode")))
+                if kwargs.get("mmap_mode") == "r":
+                    opened_mmaps[candidate_path] = values
             return values
 
         def forbid_full_phase_copy(value: object, *args: object, **kwargs: object) -> np.ndarray:
