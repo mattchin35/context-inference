@@ -2269,6 +2269,72 @@ Interruption recovery:
   are green is a separately user-invoked 100-shuffle ProbeB preview. The
   1,000-shuffle run remains separately gated by inspection and approval.
 
+#### WP5C-6 implementation handoff (completed 2026-09-18)
+
+Status and commits:
+
+- The frozen documentation contract is commit `9139a58` (`docs: freeze Spike
+  launcher contract`). The initial tests-only checkpoint is `696d823` (`test:
+  define resumable Spike launcher contract`). Two omissions found during the
+  implementation audit were handled with their own RED tests before their
+  fixes: phase-preparation timing in `9bda3cd` and resume source/lock hardening
+  in `d916bc3`.
+- The implementation checkpoint is `814f253` (`feat: add resumable Spike phase
+  launcher`). It adds only `lfp_spike_phase_launcher.py` and localized additive
+  changes to `lfp_spike_phase_validation.py`, `lfp_summary_pipeline.py`,
+  `lfp_summary_ppc_runtime.py`, and `lfp_summary_runtime.py`. No dependency,
+  UI, SLURM script, data result, or unrelated refactor was added.
+- The launcher now supports exactly one explicit ProbeA or ProbeB population
+  per new run, 100-shuffle preview and separately acknowledged 1,000-shuffle
+  final modes, metadata-only evidence dry runs, exact-identity resume,
+  manifest-last computation, cache-only report publication, persistent
+  fingerprint-qualified cleanup handoff, cleanup-only recovery, process-tree
+  memory sampling, and first-signal orderly interruption.
+
+RED evidence:
+
+- The initial launcher command produced 6 expected failures because the module
+  did not exist. The directly affected auxiliary selection produced 6 expected
+  failures with 254 deselected, and the cache-state selection produced 1
+  expected failure with 5 deselected.
+- The later phase-timing contract produced 1 expected failure with 15
+  deselected (`phase_preparation_seconds` absent). The source-evidence/live-lock
+  hardening selection produced 2 expected failures with 6 deselected (tampered
+  source evidence accepted and a competing lock owner state mutated). Each was
+  committed before the corresponding source fix.
+
+GREEN evidence:
+
+- The standalone launcher suite passes: 8 passed in 1.20 seconds.
+- The directly affected launcher/pipeline/runtime compatibility rerun passes:
+  35 passed in 1.63 seconds. The earlier six-file focused run passed 266 tests
+  with one deliberate duplicate-NPZ warning.
+- The complete command
+  `uv run pytest -q -p no:cacheprovider src/tests/neural_analysis` passes 1,139
+  tests in 150.29 seconds with 20 warnings. The warnings are pre-existing test
+  fixture/runtime warnings: three multiprocessing fork deprecations, one
+  deliberate duplicate ZIP member warning, and sixteen Pynapple empty-epoch or
+  zero-duration rate warnings.
+- `python -m py_compile` passed for all five changed production modules,
+  `git diff --check` passed, and the module `--help` entry point loaded without
+  data access. No CT026 dry run, phase preparation, PPC execution, report, or
+  cleanup was invoked during implementation or verification.
+
+Residual execution risks and next gate:
+
+- Synthetic seams cover interruption, cleanup-only resume, source tampering,
+  live locking, and measurement propagation, but the production filesystem
+  layout, real sorter/channel metadata, Linux `/proc` process tree, and report
+  plotting stack have not yet been exercised together for CT026. The first
+  operational step should therefore be the metadata-only ProbeB 100-shuffle
+  dry run using the real session path, followed by inspection of its identity,
+  population count, paths, and conservative memory bounds.
+- A dry run does not authorize scientific execution. After its evidence is
+  reviewed, the 100-shuffle ProbeB preview remains a separate explicit user
+  invocation. The 1,000-shuffle final run remains blocked until that preview
+  report is inspected and separately approved. ProbeA uses the same defaults
+  only when explicitly selected in a distinct run.
+
 ### WP6 - Plotting
 
 Files:
