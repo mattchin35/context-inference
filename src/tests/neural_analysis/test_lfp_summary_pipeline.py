@@ -509,7 +509,9 @@ def test_deferred_cleanup_targets_are_observed_before_writer_and_propagated(
     assert result.state == "complete"
     assert calls.index("observe_cleanup") < calls.index("write_spike_phase")
     assert result.deferred_cleanup_targets == (target,)
-    assert result.execution_metadata == {"ppc_planning_seconds": 1.5}
+    assert result.execution_metadata["ppc_planning_seconds"] == 1.5
+    assert np.isfinite(result.execution_metadata["phase_preparation_seconds"])
+    assert result.execution_metadata["phase_preparation_seconds"] >= 0.0
 
 
 def test_cleanup_observer_failure_prevents_final_component_write(tmp_path: Path) -> None:
