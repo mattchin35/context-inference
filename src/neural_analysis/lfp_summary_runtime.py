@@ -45,6 +45,7 @@ from src.neural_analysis.lfp_summary_models import (
     ProgressEvent,
     canonical_config_json,
     fingerprint_source_files,
+    validate_lfp_summary_config,
 )
 from src.neural_analysis.lfp_summary_payloads import build_component_payload
 from src.neural_analysis.lfp_summary_work_cache import (
@@ -1127,6 +1128,187 @@ def _build_spike_phase_payload(
         arrays=payload.arrays,
         manifest_entry=payload.manifest_entry,
         post_commit_cleanup=cleanup,
+    )
+
+
+def _validate_composed_phase_amplitude_policy(config: LFPSummaryConfig) -> None:
+    """Reject unsupported absolute phase-amplitude masking before production work.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Immutable production configuration. Threshold values, when eventually
+        supported by WP13, are expressed in each configured site's source
+        voltage unit. No phase, spike, trial, or signal array is accepted here.
+
+    Returns
+    -------
+    None
+        Returns only when the complete configuration is valid and its absolute
+        amplitude-threshold tuple is empty. The function does not open source
+        files, create work caches, or transform data.
+
+    Raises
+    ------
+    ValueError
+        If general configuration validation fails or a nonempty absolute
+        amplitude threshold requests the deferred WP13 masking behavior.
+    """
+    validate_lfp_summary_config(config)
+    if config.phase.absolute_amplitude_thresholds:
+        raise ValueError(
+            "absolute amplitude thresholds are unsupported until WP13 is implemented"
+        )
+
+
+def make_lfp_summary_pipeline_dependencies(
+    *,
+    trial_table_loader: Callable[[LFPSummaryConfig], pd.DataFrame],
+    unit_spike_loader: Callable[
+        [LFPSummaryConfig], Mapping[str, np.ndarray]
+    ] = load_configured_unit_spikes,
+    phase_preparer: Callable[[LFPSummaryConfig], PreparedPhaseRun] | None = None,
+    site_phase_tensor_builder: Callable[..., lfp_phase_clustering.PhaseTrialTensor] = (
+        lfp_phase_clustering.compute_site_phase_trial_tensor
+    ),
+    block_loader_factory: Callable[
+        [LFPSiteConfig],
+        Callable[[float, float], tuple[np.ndarray, np.ndarray, float]],
+    ]
+    | None = None,
+    spikeglx_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None = None,
+    open_ephys_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None = None,
+) -> PipelineDependencies:
+    """Bind one production dependency bundle for every LFP-summary component.
+
+    Parameters
+    ----------
+    trial_table_loader : callable
+        Accepts one :class:`LFPSummaryConfig` and returns a trial table with one
+        row per stable trial. Absolute event timestamps are seconds.
+    unit_spike_loader : callable
+        Accepts the same configuration and returns probe-qualified unit ids
+        mapped to finite one-dimensional absolute spike-time arrays in seconds.
+    phase_preparer : callable or None
+        Optional complete configuration-to-:class:`PreparedPhaseRun` seam. Its
+        phase and validity arrays have ``(site, frequency, trial, time)`` axes;
+        frequency is Hz and event-relative time is seconds. ``None`` uses the
+        production phase-preparation path and its validated work cache.
+    site_phase_tensor_builder : callable
+        Continuous-block Morlet seam used only when ``phase_preparer`` is
+        ``None``. It preserves the configured site/frequency/trial/time axes.
+    block_loader_factory : callable or None
+        Optional site-specific continuous source loader factory. Returned
+        traces retain their configured source voltage unit and time in seconds.
+    spikeglx_loader, open_ephys_loader : callable or None
+        Optional normalized per-trial LFP loaders. Each returns relative seconds,
+        a one-dimensional source-voltage trace, and sample rate in Hz.
+
+    Returns
+    -------
+    PipelineDependencies
+        A single bundle supporting Power, Synchrony, Spike phase, and Compute
+        All. Synchrony and Spike phase share the exact phase object supplied by
+        the pipeline. Spike progress events retain all grouped-runtime fields.
+
+    Raises
+    ------
+    ValueError
+        Before any production work if absolute amplitude thresholds are
+        nonempty, or if prepared phase/spike identities violate their contracts.
+    RuntimeError
+        If manifest loading is requested before a composed preparation call.
+
+    Notes
+    -----
+    The bundle introduces no numerical transformations. It delegates to the
+    established preparation, payload, and manifest-last transaction functions.
+    """
+    active_config: LFPSummaryConfig | None = None
+
+    def bind_config(config: LFPSummaryConfig) -> None:
+        """Validate supported settings and retain the exact active config."""
+        nonlocal active_config
+        _validate_composed_phase_amplitude_policy(config)
+        active_config = config
+
+    def prepare_power(config: LFPSummaryConfig) -> PreparedPowerRun:
+        """Prepare Power inputs after fail-before-work policy validation."""
+        bind_config(config)
+        return prepare_power_run(
+            config,
+            trial_table_loader,
+            spikeglx_loader,
+            open_ephys_loader,
+        )
+
+    def prepare_phase(config: LFPSummaryConfig) -> PreparedPhaseRun:
+        """Prepare or inject one full-axis phase record for shared reuse."""
+        bind_config(config)
+        prepared = (
+            phase_preparer(config)
+            if phase_preparer is not None
+            else prepare_phase_run(
+                config,
+                trial_table_loader,
+                site_phase_tensor_builder=site_phase_tensor_builder,
+                block_loader_factory=block_loader_factory,
+                spikeglx_loader=spikeglx_loader,
+                open_ephys_loader=open_ephys_loader,
+                work_cache_root=config.output_directory.parent / "lfp_summary_work",
+            )
+        )
+        if not isinstance(prepared, PreparedPhaseRun):
+            raise ValueError("composed phase preparation requires PreparedPhaseRun")
+        return prepared
+
+    def prepare_spike(
+        config: LFPSummaryConfig,
+        phase: object,
+    ) -> PreparedSpikeRun:
+        """Prepare trial-local unit spikes from the exact shared phase axis."""
+        bind_config(config)
+        if not isinstance(phase, PreparedPhaseRun):
+            raise ValueError("composed Spike phase requires PreparedPhaseRun")
+        return prepare_spike_run(config, phase, unit_spike_loader)
+
+    def load_manifest(directory: Path) -> dict[str, object]:
+        """Load metadata for the exact config accepted by preparation."""
+        if active_config is None:
+            raise RuntimeError("composed manifest loading requires preparation")
+        return load_or_initialize_manifest(directory, active_config)
+
+    def build_spike_payload_with_progress(
+        config: LFPSummaryConfig,
+        phase: object,
+        spikes: object,
+        progress_callback: Callable[[ProgressEvent], None] | None,
+    ) -> ComponentPayload:
+        """Forward grouped PPC progress without translating record fields."""
+        if not isinstance(phase, PreparedPhaseRun) or not isinstance(
+            spikes,
+            PreparedSpikeRun,
+        ):
+            raise ValueError(
+                "composed Spike payload requires prepared phase and spike records"
+            )
+        return _build_spike_phase_payload(
+            config,
+            phase,
+            spikes,
+            progress_callback=progress_callback,
+        )
+
+    return PipelineDependencies(
+        prepare_power=prepare_power,
+        prepare_phase=prepare_phase,
+        prepare_spike=prepare_spike,
+        build_power_payload=build_power_payload,
+        build_synchrony_payload=build_synchrony_payload,
+        build_spike_phase_payload=build_spike_phase_payload,
+        load_manifest=load_manifest,
+        write_component=write_component_transaction,
+        build_spike_phase_payload_with_progress=build_spike_payload_with_progress,
     )
 
 
