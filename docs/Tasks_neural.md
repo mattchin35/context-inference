@@ -2908,3 +2908,25 @@ WP12 documentation-first authorization (2026-09-18):
 - The next allowed action after the documentation commit is the WP12 tests-only
   edit and commit. It must reproduce the documented RED before implementation.
   No CT026 scientific computation or launcher implementation is authorized.
+
+WP12 tests-only RED checkpoint (2026-09-18):
+
+- Documentation-first contract commit: `5dfd439` (`docs: freeze WP12 report
+  and cleanup contract`). It changed only this task document.
+- Tests-only commit: `2c80a9b` (`test: define WP12 report publication
+  contract`). It changed only the five listed plotting, validation, payload,
+  runtime, and pipeline test files; production source remained unchanged.
+- The documented focused RED command selected 12 tests: six existing contracts
+  passed and six new contracts failed. Failures were the absent
+  `PPCExemplarPanel`, `SpikePhaseFilterBenchmark`, detailed report transaction
+  helpers, and `ComponentRunResult.deferred_cleanup`; there was no collection,
+  fixture, syntax, or environment failure.
+- The auxiliary payload/runtime/pipeline RED command selected four new or
+  directly extended tests. All four failed for the intended missing additive
+  trial arrays and missing `defer_post_commit_cleanup` /
+  `defer_spike_phase_cleanup` keywords. Thirty-four unrelated tests were
+  deselected.
+- The next allowed action is the minimal WP12 source implementation recorded
+  above. Tests must not change unless an approved requirement changes or a
+  demonstrated test defect is documented first. No CT026 computation or
+  launcher work is authorized.
