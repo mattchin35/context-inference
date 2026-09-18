@@ -930,9 +930,11 @@ complete S0-S8 exact-speedup plan are complete. Eight workers are preferred for
 the CT026 production configuration, without changing the portable library
 default or bypassing preflight.
 The post-speedup decisions in Section 2.27 are approved documentation contracts.
-They establish WP10 as the next implementation package but do not authorize
-source/test edits until the user separately approves WP10's test-first
-implementation plan. They do not authorize a CT026 scientific run.
+On 2026-09-18 the user approved the WP10 test-first implementation plan and
+separate test/implementation commits, conditional on recording the complete
+implementation contract in this document and committing that documentation
+before any test or source edit. That documentation-first gate does not authorize
+a CT026 scientific run.
 Implementers must escalate newly discovered ambiguity instead of choosing new
 scientific or execution defaults.
 Material changes to metrics, thresholds, cache contracts, or user-visible
@@ -2105,10 +2107,39 @@ Files:
 
 Architecture:
 
-- Add one composed production dependency factory that binds the existing Power,
-  Synchrony, and grouped Spike-phase preparation/payload seams. Keep the
-  component-specific factories as compatible focused entry points unless a
-  test-first change proves they can be removed without breaking callers.
+- Add this project-internal factory to `lfp_summary_runtime.py`:
+
+  ```python
+  make_lfp_summary_pipeline_dependencies(
+      *,
+      trial_table_loader,
+      unit_spike_loader=load_configured_unit_spikes,
+      phase_preparer=None,
+      site_phase_tensor_builder=lfp_phase_clustering.compute_site_phase_trial_tensor,
+      block_loader_factory=None,
+      spikeglx_loader=None,
+      open_ephys_loader=None,
+  ) -> PipelineDependencies
+  ```
+
+  Its docstring must specify callable inputs, prepared record types, axes,
+  seconds/Hz/source-voltage units, returned dependency bundle, and failure
+  behavior. Do not add a second configuration or component-payload type.
+- The composed factory binds the existing `prepare_power_run`,
+  `prepare_phase_run`, `prepare_spike_run`, `build_power_payload`,
+  `build_synchrony_payload`, `_build_spike_phase_payload`,
+  `load_or_initialize_manifest`, and `write_component_transaction` seams. It
+  must not copy their numerical implementations.
+- `phase_preparer` is an optional complete `LFPSummaryConfig ->
+  PreparedPhaseRun` seam for focused tests or an already-composed upstream
+  caller. When it is `None`, phase preparation delegates to
+  `prepare_phase_run` with the configured transform/load seams and the existing
+  sibling `lfp_summary_work` directory.
+- Keep `make_power_pipeline_dependencies`,
+  `make_synchrony_pipeline_dependencies`, and
+  `make_spike_phase_pipeline_dependencies` unchanged as compatible focused
+  entry points. WP10 does not remove, redirect, or broaden their unsupported
+  component behavior.
 - The composed bundle is the only production boundary used by Compute All,
   the later webapp, and the launcher. It must not route a requested component
   through a component-specific factory that silently rejects the other
@@ -2119,10 +2150,24 @@ Architecture:
 - Preserve framework-independent `ProgressEvent` records from both the
   component pipeline and grouped PPC executor. The production boundary accepts
   a callback; it does not import Streamlit or format terminal output.
-- Reject a nonempty `config.phase.absolute_amplitude_thresholds` before any raw
-  source is opened or work artifact is created. Empty thresholds reproduce the
-  accepted current result. This guard is temporary and must be removed only by
-  WP13's tested implementation.
+- Add one small runtime validator for the currently supported phase-amplitude
+  policy. Each composed `prepare_power`, `prepare_phase`, and `prepare_spike`
+  callable invokes it before its first loader, cache, planner, or writer-capable
+  seam. It rejects a nonempty
+  `config.phase.absolute_amplitude_thresholds` with a clear WP13-oriented
+  `ValueError`. Calling it in `prepare_power` is deliberate: a composed
+  production request must not partially run under an unsupported configuration.
+  Empty thresholds reproduce the accepted current result. This guard is
+  temporary and must be removed only by WP13's tested implementation.
+- The composed manifest loader retains the same active validated configuration
+  supplied to the preceding preparation call and delegates to
+  `load_or_initialize_manifest`. Calling it before any composed preparation
+  fails clearly rather than inventing a default configuration.
+- The progress-aware Spike payload adapter forwards the exact callback to
+  `_build_spike_phase_payload`. It must not translate, reorder, strip, or copy
+  grouped PPC progress fields. The frozen three-argument
+  `build_spike_phase_payload` remains the non-progress fallback stored in the
+  bundle.
 - Do not alter scientific fingerprints, PPC numerics, worker defaults, final
   component schemas, or the existing exact grouped preflight.
 
@@ -2146,6 +2191,15 @@ Tests written first:
   prepared-phase cache access, PPC planning, or manifest writes. The empty
   tuple remains bitwise/numerically identical to the current tested path.
 - Existing component-specific factory tests remain green.
+- The composed factory's manifest loader rejects use before preparation and
+  uses the exact most recently prepared configuration afterward.
+- The optional injected `phase_preparer` is used once by Compute All and its
+  exact returned `PreparedPhaseRun` object reaches both Synchrony and Spike
+  payload paths.
+- Spike preparation rejects a non-`PreparedPhaseRun` object and preserves the
+  existing `PreparedSpikeRun` axes and trial-local spike semantics.
+- No new imports of Streamlit, CLI parsing, plotting, or external dependencies
+  appear in runtime or pipeline modules.
 
 Performance considerations:
 
@@ -2159,6 +2213,39 @@ Performance considerations:
 RED command:
 
 `uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_lfp_summary_runtime.py src/tests/neural_analysis/test_lfp_summary_pipeline.py -k "composed or threshold or progress or compute_all"`
+
+Implementation and verification sequence:
+
+1. Modify only the two focused test files and commit the tests before source.
+2. Run the RED command and record failures caused by the absent composed
+   factory/guard behavior, not fixture or import mistakes.
+3. Implement the smallest clear runtime change. Change
+   `lfp_summary_pipeline.py` only if a new RED test demonstrates that its
+   existing Compute All or callback seam cannot satisfy the frozen contract.
+4. Run the RED command to GREEN, then complete runtime/pipeline files, affected
+   Power/Synchrony/Spike runtime tests, grouped PPC progress regressions, and
+   the complete `src/tests/neural_analysis` suite.
+5. Review the source diff for public-interface preservation, exact prepared
+   object reuse, absence of numerical duplication, data contracts, no
+   Streamlit import, and unchanged scientific/execution defaults.
+6. Commit implementation separately from tests. Append exact commits, RED/GREEN
+   counts, full-suite counts/warnings, changed-file scope, and unresolved risks
+   to the final handoff section before WP12 begins.
+
+Interruption recovery:
+
+- Documentation-only baseline: commit `8286d15` plus the forthcoming WP10
+  contract commit, on branch `refactor` tracking the same `origin/refactor`
+  commit before this documentation edit.
+- Pre-WP10 worktree inventory contains 171 pre-existing untracked entries and
+  no tracked modifications, with `git status --short -z` SHA-256
+  `140fe2baeec9985753c89efe0fe2d68eb341c625065868e0437ce333e0c6a1a0`.
+  Preserve every entry; stop if unrelated tracked changes appear or the
+  inventory changes unexpectedly.
+- Before tests exist, resume at the documentation-only commit and write the
+  listed tests. After the test-only commit, reproduce RED before source. After
+  an implementation commit, rerun focused and complete neural suites before
+  declaring WP10 complete. No partial state authorizes WP12 or CT026 execution.
 
 ### WP11 - Full Streamlit integration
 
@@ -2555,3 +2642,24 @@ Exact PPC speedup completion and handoff (2026-09-18):
 - This documentation decision does not itself authorize source changes or a
   CT026 scientific run. Each package still requires its test-first plan/RED
   gate, and the preview remains a separate user-invoked launcher execution.
+
+WP10 documentation-first authorization (2026-09-18):
+
+- The user confirmed the Sol orchestrator is running at high effort and
+  approved the bounded WP10 plan, including separate test-only and
+  implementation commits, on the condition that all implementation needs be
+  durable in documentation before tests or source change.
+- The exact composed factory contract, amplitude-threshold guard, progress
+  behavior, files, test cases, RED command, performance constraints,
+  verification order, and interruption-recovery instructions are recorded in
+  the WP10 package above.
+- Baseline HEAD before this documentation edit was `8286d15` on `refactor`,
+  equal to `origin/refactor`. The tracked worktree was clean. The 171
+  pre-existing untracked entries had status-inventory SHA-256
+  `140fe2baeec9985753c89efe0fe2d68eb341c625065868e0437ce333e0c6a1a0` and
+  remain out of scope.
+- The next allowed action after committing this documentation-only checkpoint
+  is the WP10 test-only edit. The lead must commit those tests, reproduce the
+  intended RED, and record it before touching runtime or pipeline source.
+- WP10 authorization does not authorize WP12, the launcher, WP11, WP13, a
+  synthetic production-sized profile, or any CT026 computation.
