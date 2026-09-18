@@ -437,6 +437,68 @@ def test_checkpoint_post_commit_cleanup_runs_only_after_successful_final_writer(
     assert calls.index("write_spike_phase") < calls.index("cleanup_checkpoint")
 
 
+def test_spike_cleanup_can_be_deferred_for_report_publication() -> None:
+    """Opt-in deferral returns the exact action without changing default cleanup."""
+    config = default_lfp_summary_config()
+    calls: list[str] = []
+    cleanup_calls: list[str] = []
+    dependencies = _make_dependencies(calls, [])
+
+    def spike_payload(*_: object) -> lfp_summary_pipeline.ComponentPayload:
+        """Return one committed payload with an identity-observable cleanup."""
+        return lfp_summary_pipeline.ComponentPayload(
+            arrays={"value": np.array([1.0])},
+            manifest_entry=_component_entry("spike_phase"),
+            post_commit_cleanup=lambda: cleanup_calls.append("cleanup"),
+        )
+
+    dependencies = replace(
+        dependencies,
+        build_spike_phase_payload=spike_payload,
+    )
+    result = lfp_summary_pipeline.compute_spike_phase_component(
+        config,
+        dependencies,
+        defer_post_commit_cleanup=True,
+    )
+
+    assert result.state == "complete"
+    assert cleanup_calls == []
+    assert callable(result.deferred_cleanup)
+    result.deferred_cleanup()
+    assert cleanup_calls == ["cleanup"]
+
+
+def test_compute_all_defers_only_successful_spike_cleanup() -> None:
+    """Compute All exposes no cleanup request when the Spike writer fails."""
+    config = default_lfp_summary_config()
+    calls: list[str] = []
+    cleanup_calls: list[str] = []
+    dependencies = _make_dependencies(calls, [], fail_component="spike_phase")
+
+    def spike_payload(*_: object) -> lfp_summary_pipeline.ComponentPayload:
+        """Return a cleanup-capable payload whose final writer will fail."""
+        return lfp_summary_pipeline.ComponentPayload(
+            arrays={"value": np.array([1.0])},
+            manifest_entry=_component_entry("spike_phase"),
+            post_commit_cleanup=lambda: cleanup_calls.append("cleanup"),
+        )
+
+    dependencies = replace(
+        dependencies,
+        build_spike_phase_payload=spike_payload,
+    )
+    result = lfp_summary_pipeline.compute_all_components(
+        config,
+        dependencies,
+        defer_spike_phase_cleanup=True,
+    )
+
+    assert result.component_results[-1].state == "failed"
+    assert result.component_results[-1].deferred_cleanup is None
+    assert cleanup_calls == []
+
+
 def test_checkpoint_interruption_before_payload_never_reaches_final_writer() -> None:
     """An interrupted checkpoint computation must fail before any manifest-last writer call."""
     config = default_lfp_summary_config()

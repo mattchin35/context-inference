@@ -796,6 +796,22 @@ def test_spike_phase_payload_uses_one_grouped_executor_without_legacy_or_histogr
         )
         assert payload.arrays["selected_low_unit_ids"][index] == selection.low_unit_id
         assert payload.arrays["selected_high_unit_ids"][index] == selection.high_unit_id
+        expected_low_trial = selection.illustrative_trial_index_by_unit.get(
+            selection.low_unit_id,
+            -1,
+        )
+        expected_high_trial = selection.illustrative_trial_index_by_unit.get(
+            selection.high_unit_id,
+            -1,
+        )
+        assert (
+            payload.arrays["illustrative_low_trial_indices"][index]
+            == expected_low_trial
+        )
+        assert (
+            payload.arrays["illustrative_high_trial_indices"][index]
+            == expected_high_trial
+        )
         expected_trial = next(
             (
                 selection.illustrative_trial_index_by_unit[unit_id]

@@ -7,6 +7,7 @@ from matplotlib.axes import Axes
 import numpy as np
 import pytest
 
+from src.neural_analysis import lfp_summary_plotting
 from src.neural_analysis.lfp_summary_plotting import (
     PlotContext,
     build_summary_figure_filename,
@@ -406,6 +407,65 @@ def test_ppc_band_summary_and_exemplar_include_counts_polar_frequency_and_pooled
     _assert_figure_contract(figure, axes, {"ppc", "polar", "trace"})
     caption = figure.texts[-1].get_text().lower()
     assert "pooled" in caption and "illustrative" in caption and "8 hz" in caption
+
+
+def test_paired_ppc_exemplar_keeps_pooled_low_high_and_trials_distinct() -> None:
+    """Matched percentile panels must identify two pooled units and two trials."""
+    low = lfp_summary_plotting.PPCExemplarPanel(
+        unit_id="ProbeB:2",
+        percentile_label="5th percentile",
+        pooled_ppc=np.array([0.1, 0.2]),
+        preferred_phase_rad=np.array([0.0, 0.2]),
+        representative_phase_hist_count=np.array([2, 5, 3, 1]),
+        trial_index=3,
+        source_trace=np.array([1.0, 2.0, 1.0]),
+        filtered_trace=np.array([0.0, 1.0, 0.0]),
+        hilbert_phase_rad=np.array([-0.2, 0.0, 0.2]),
+        spike_times_relative_s=np.array([-0.05]),
+    )
+    high = lfp_summary_plotting.PPCExemplarPanel(
+        unit_id="ProbeB:9",
+        percentile_label="95th percentile",
+        pooled_ppc=np.array([0.7, 0.8]),
+        preferred_phase_rad=np.array([0.4, 0.6]),
+        representative_phase_hist_count=np.array([1, 2, 6, 4]),
+        trial_index=11,
+        source_trace=np.array([2.0, 3.0, 2.0]),
+        filtered_trace=np.array([0.0, -1.0, 0.0]),
+        hilbert_phase_rad=np.array([0.3, 0.5, 0.7]),
+        spike_times_relative_s=np.array([0.05]),
+    )
+
+    figure, axes = lfp_summary_plotting.plot_ppc_exemplar_pair(
+        frequency_hz=np.array([7.5, 39.5]),
+        phase_bin_edges_rad=np.linspace(-np.pi, np.pi, 5),
+        relative_time_s=np.array([-0.1, 0.0, 0.1]),
+        low=low,
+        high=high,
+        condition_name="correct_rewarded",
+        site_label="PFC",
+        epoch_name="before",
+        band_name="theta",
+        representative_frequency_hz=8.0,
+        context=_context(),
+    )
+
+    expected_axes = {
+        "low_ppc",
+        "low_polar",
+        "low_trace",
+        "low_phase",
+        "high_ppc",
+        "high_polar",
+        "high_trace",
+        "high_phase",
+    }
+    _assert_figure_contract(figure, axes, expected_axes)
+    caption = figure.texts[-1].get_text().lower()
+    assert "pooled" in caption and "illustrative" in caption
+    assert "probeb:2" in caption and "trial 3" in caption
+    assert "probeb:9" in caption and "trial 11" in caption
+    assert "7.5 hz" in caption
 
 
 def test_summary_filename_is_deterministic_selection_specific_and_collision_safe() -> None:

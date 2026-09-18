@@ -183,6 +183,14 @@ _SPIKE_PHASE = _schema(
         "hilbert_phase_rad": (("site", "trial", "band", "time"), "rad"),
         "selected_low_unit_ids": (("condition", "site", "epoch", "band"), "stable-unit-id"),
         "selected_high_unit_ids": (("condition", "site", "epoch", "band"), "stable-unit-id"),
+        "illustrative_low_trial_indices": (
+            ("condition", "site", "epoch", "band"),
+            "trial-table-row",
+        ),
+        "illustrative_high_trial_indices": (
+            ("condition", "site", "epoch", "band"),
+            "trial-table-row",
+        ),
         "illustrative_trial_indices": (("condition", "site", "epoch", "band"), "trial-table-row"),
     }
 )
@@ -368,6 +376,28 @@ def test_spike_payload_offsets_index_each_unit_trial_and_bound_packed_spikes() -
     assert np.all(np.diff(offsets, axis=1) >= 0)
     assert np.array_equal(offsets[:-1, -1], offsets[1:, 0])
     assert offsets[-1, -1] == packed_times.size
+
+
+def test_spike_payload_requires_distinct_low_and_high_illustrative_trials() -> None:
+    """Matched exemplars must not silently reuse one unit's trial for both panels."""
+    arrays = _arrays_for("spike_phase")
+    arrays["illustrative_low_trial_indices"][:] = 3
+    arrays["illustrative_high_trial_indices"][:] = 9
+    arrays["illustrative_trial_indices"][:] = 9
+
+    payload = build_component_payload("spike_phase", arrays)
+
+    assert payload.arrays["illustrative_low_trial_indices"].dtype == np.dtype(np.int64)
+    assert payload.arrays["illustrative_high_trial_indices"].dtype == np.dtype(np.int64)
+    assert payload.arrays["illustrative_low_trial_indices"].shape == (1, 1, 1, 1)
+    assert payload.arrays["illustrative_high_trial_indices"].shape == (1, 1, 1, 1)
+    assert payload.arrays["illustrative_trial_indices"][0, 0, 0, 0] == 9
+
+    legacy_only = dict(arrays)
+    legacy_only.pop("illustrative_low_trial_indices")
+    legacy_only.pop("illustrative_high_trial_indices")
+    with pytest.raises(ValueError, match="illustrative_(low|high)_trial_indices"):
+        build_component_payload("spike_phase", legacy_only)
 
 
 def test_payload_validation_rejects_forged_schema_or_component_filename() -> None:

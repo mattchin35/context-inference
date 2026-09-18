@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.neural_analysis import lfp_spike_phase_validation
 from src.neural_analysis.lfp_summary_io import ComponentStatus
 from src.neural_analysis.lfp_summary_models import (
     UnitPopulationConfig,
@@ -142,28 +144,79 @@ def test_default_population_uses_qualified_probeb_good_inside_brain_units(
 
 
 def _cache_arrays() -> dict[str, np.ndarray]:
-    """Return a minimal cache-shaped Spike-phase result for report-only tests.
+    """Return a complete three-site Spike cache for bounded report tests.
 
     Returns
     -------
     dict[str, numpy.ndarray]
-        Cache arrays with trial=2, unit=1, site=1, condition=1, epoch=1, and
-        frequency=2. Spike counts are samples and PPC values are dimensionless.
+        Cache arrays with trial=4, unit=2, site=3, condition=9, epoch=3,
+        band=2, and frequency=2. Spike counts are samples and PPC values are
+        dimensionless; illustrative trial indices are trial-table row ids.
     """
-    shape = (1, 1, 1, 1, 2)
+    condition_names = (
+        "correct_rewarded",
+        "omission",
+        "incorrect",
+        "switch",
+        "stay",
+        "omission_switch",
+        "omission_stay",
+        "incorrect_switch",
+        "incorrect_stay",
+    )
+    metric_shape = (2, 9, 3, 3, 2)
+    cell_shape = (9, 3, 3, 2)
+    trial_indices = np.array((3, 5, 7, 11), dtype=np.int64)
+    offsets = np.array(
+        ((0, 1, 2, 3, 4), (4, 5, 6, 7, 8)),
+        dtype=np.int64,
+    )
     return {
-        "trial_indices": np.array((3, 9), dtype=np.int64),
-        "unit_ids": np.array(("ProbeB:2",)),
-        "site_ids": np.array(("PFC",)),
-        "condition_names": np.array(("correct_rewarded",)),
-        "epoch_names": np.array(("whole",)),
-        "band_names": np.array(("theta",)),
+        "trial_indices": trial_indices,
+        "unit_ids": np.array(("ProbeB:2", "ProbeB:9")),
+        "population_ids": np.array(("CT026 ProbeB active",)),
+        "site_ids": np.array(("PFC", "HPC1", "HPC2")),
+        "site_voltage_units": np.array(("uV", "uV", "uV")),
+        "condition_names": np.array(condition_names),
+        "condition_membership": np.ones((4, 9), dtype=bool),
+        "filter_membership": np.ones(4, dtype=bool),
+        "epoch_names": np.array(("whole", "before", "after")),
+        "band_names": np.array(("theta", "gamma")),
         "frequency_hz": np.array((8.0, 40.0)),
-        "ppc": np.full(shape, 0.2),
-        "computable": np.ones(shape, dtype=bool),
-        "reliable": np.array([[[[[True, False]]]]]),
-        "spike_count": np.array([[[[[51, 40]]]]]),
-        "null_eligible": np.array([[[[[True, False]]]]]),
+        "relative_time_s": np.array((-0.1, 0.0, 0.1)),
+        "phase_bin_edges_rad": np.linspace(-np.pi, np.pi, 5),
+        "ppc": np.broadcast_to(
+            np.array((0.2, 0.4)),
+            metric_shape,
+        ).copy(),
+        "preferred_phase_rad": np.full(metric_shape, 0.25),
+        "computable": np.ones(metric_shape, dtype=bool),
+        "reliable": np.ones(metric_shape, dtype=bool),
+        "spike_count": np.full(metric_shape, 51, dtype=np.int64),
+        "null_eligible": np.ones(metric_shape, dtype=bool),
+        "significant": np.zeros(metric_shape, dtype=bool),
+        "ppc_band_mean": np.stack(
+            (
+                np.full((9, 3, 3, 2), 0.2),
+                np.full((9, 3, 3, 2), 0.8),
+            )
+        ),
+        "representative_phase_hist_count": np.ones(
+            (2, 9, 3, 3, 2, 4),
+            dtype=np.int64,
+        ),
+        "relative_spike_times_s": np.array(
+            (-0.05, -0.04, -0.03, -0.02, 0.02, 0.03, 0.04, 0.05)
+        ),
+        "relative_spike_time_offsets": offsets,
+        "source_trace": np.ones((3, 4, 3)),
+        "band_filtered_trace": np.ones((3, 4, 2, 3)),
+        "hilbert_phase_rad": np.zeros((3, 4, 2, 3)),
+        "selected_low_unit_ids": np.full(cell_shape, "ProbeB:2", dtype="<U64"),
+        "selected_high_unit_ids": np.full(cell_shape, "ProbeB:9", dtype="<U64"),
+        "illustrative_low_trial_indices": np.full(cell_shape, 3, dtype=np.int64),
+        "illustrative_high_trial_indices": np.full(cell_shape, 11, dtype=np.int64),
+        "illustrative_trial_indices": np.full(cell_shape, 11, dtype=np.int64),
     }
 
 
@@ -190,7 +243,7 @@ def _successful_dependencies(calls: list[str]) -> SimpleNamespace:
 
     def save_png(_: object, path: Path) -> None:
         """Create a PNG marker only after a cache-only plot seam is called."""
-        path.write_bytes(b"png")
+        path.write_bytes(b"\x89PNG\r\n\x1a\nreport-test")
 
     return SimpleNamespace(
         pipeline_dependencies=object(),
@@ -199,12 +252,13 @@ def _successful_dependencies(calls: list[str]) -> SimpleNamespace:
         assess_component_status=lambda *_: ComponentStatus("compatible", ()),
         load_spike_phase_arrays=lambda *_: _cache_arrays(),
         now_utc=lambda: "2026-08-26T18-00-00Z",
-        monotonic_seconds=iter((10.0, 13.5)).__next__,
+        monotonic_seconds=iter((10.0, 13.5, 14.0, 14.75)).__next__,
         peak_memory_bytes=lambda: 4096,
         plot_unit_ppc_map=plot("unit_map"),
         plot_population_ppc_maps=plot("population_map"),
         plot_ppc_band_summary=plot("band_summary"),
         plot_ppc_exemplar=plot("exemplar"),
+        plot_ppc_exemplar_pair=plot("exemplar_pair"),
         save_png=save_png,
         close_figure=lambda _: None,
         source_identifiers=lambda _: {"source": "fake"},
@@ -230,11 +284,11 @@ def test_successful_preview_and_cached_render_write_public_ppc_report(tmp_path: 
     assert all(path.is_file() for path in result.png_paths)
     assert result.report["wall_time_s"] == 3.5
     assert result.report["peak_memory_bytes"] == 4096
-    assert result.report["trial_count"] == 2
-    assert result.report["unit_count"] == 1
-    assert result.report["spike_count"] == 91
-    assert result.report["reliable_cell_count"] == 1
-    assert result.report["null_eligible_cell_count"] == 1
+    assert result.report["trial_count"] == 4
+    assert result.report["unit_count"] == 2
+    assert result.report["spike_count"] == 8
+    assert result.report["reliable_cell_count"] == 324
+    assert result.report["null_eligible_cell_count"] == 324
 
     cached_calls: list[str] = []
     cached = render_cached_spike_phase_preview_validation(
@@ -244,6 +298,154 @@ def test_successful_preview_and_cached_render_write_public_ppc_report(tmp_path: 
 
     assert "compute_spike_phase" not in cached_calls
     assert cached.run_directory.is_dir()
+
+
+def test_detailed_report_publishes_bounded_plan_and_then_exposes_cleanup(
+    tmp_path: Path,
+) -> None:
+    """The 27-figure report must validate before launcher-owned cleanup is exposed."""
+    config = build_ct026_spike_phase_preview_config(tmp_path / "CT026", _population())
+    config = replace(
+        config,
+        ppc_execution=replace(config.ppc_execution, worker_count=8),
+    )
+    calls: list[str] = []
+    cleanup_calls: list[str] = []
+    dependencies = _successful_dependencies(calls)
+
+    def compute(*_: object) -> ComponentRunResult:
+        """Return a committed component plus its exact still-deferred cleanup."""
+        calls.append("compute_spike_phase")
+        return ComponentRunResult(
+            "spike_phase",
+            "complete",
+            "complete_spike_phase",
+            None,
+            {},
+            deferred_cleanup=lambda: cleanup_calls.append("cleanup"),
+        )
+
+    dependencies.compute_spike_phase_component = compute
+    benchmark = lfp_spike_phase_validation.SpikePhaseFilterBenchmark(
+        source_label="accepted representative filter",
+        wall_time_s=12.0,
+        final_cache_size_bytes=100,
+        intermediate_cache_size_bytes=None,
+    )
+    measurements = lfp_spike_phase_validation.SpikePhaseReportMeasurements(
+        phase_preparation_seconds=None,
+        ppc_planning_seconds=0.0,
+        grouped_execution_seconds=2.0,
+        component_total_seconds=None,
+        requested_worker_count=8,
+        planned_worker_count=8,
+        active_worker_count=4,
+        prepared_phase_cache_state="warm",
+        peak_process_rss_bytes=1024,
+        peak_process_tree_rss_bytes=0,
+        peak_process_tree_pss_bytes=None,
+        memory_provenance="measured process tree",
+        final_component_size_bytes=100,
+        final_cache_size_bytes=200,
+        intermediate_work_size_bytes=None,
+        warnings=("synthetic warning",),
+        exclusions=("synthetic exclusion",),
+        benchmark=benchmark,
+    )
+
+    result = run_spike_phase_preview_validation(
+        config,
+        tmp_path / "runs",
+        dependencies,
+        report_measurements=measurements,
+    )
+
+    assert calls.count("unit_map") == 6
+    assert calls.count("population_map") == 6
+    assert calls.count("band_summary") == 3
+    assert calls.count("exemplar_pair") == 12
+    assert len(result.png_paths) == 27
+    assert cleanup_calls == []
+    assert callable(result.deferred_cleanup)
+    assert result.run_directory.is_dir()
+    report = json.loads(result.report_path.read_text(encoding="ascii"))
+    assert report["schema_version"] == "spike_phase_preview_report.v1"
+    assert report["workers"] == {"requested": 8, "planned": 8, "active": 4}
+    assert report["timing_seconds"]["phase_preparation"] is None
+    assert report["timing_seconds"]["ppc_planning"] == 0.0
+    assert report["memory_bytes"]["process_tree_rss"] == 0
+    assert report["memory_bytes"]["process_tree_pss"] is None
+    assert report["sizes_bytes"]["intermediate_work"] is None
+    assert report["prepared_phase_cache_state"] == "warm"
+    assert report["warnings"] == ["synthetic warning"]
+    assert report["exclusions"] == ["synthetic exclusion"]
+    projection = report["nine_filter_projection"]
+    assert projection["benchmark_source"] == "accepted representative filter"
+    assert projection["projected_wall_time_s"] == 108.0
+    assert projection["projected_final_cache_size_bytes"] == 900
+    assert projection["projected_intermediate_cache_size_bytes"] is None
+    assert result.log_path.is_file()
+    assert result.source_identifiers_path.is_file()
+    assert "unavailable" in result.summary_path.read_text(encoding="ascii")
+    result.deferred_cleanup()
+    assert cleanup_calls == ["cleanup"]
+
+
+@pytest.mark.parametrize(
+    "failure_seam",
+    (
+        "_render_cached_pngs",
+        "_write_report_artifacts",
+        "_validate_staged_report",
+        "_publish_staged_report",
+    ),
+)
+def test_report_failures_publish_nothing_and_never_expose_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_seam: str,
+) -> None:
+    """Serialization, validation, and publication failures retain PPC work."""
+    config = build_ct026_spike_phase_preview_config(tmp_path / "CT026", _population())
+    calls: list[str] = []
+    cleanup_calls: list[str] = []
+    dependencies = _successful_dependencies(calls)
+
+    def compute(*_: object) -> ComponentRunResult:
+        """Return a cleanup-capable completed component for failure injection."""
+        return ComponentRunResult(
+            "spike_phase",
+            "complete",
+            "complete_spike_phase",
+            None,
+            {},
+            deferred_cleanup=lambda: cleanup_calls.append("cleanup"),
+        )
+
+    def fail(*_: object, **__: object) -> object:
+        """Raise at one report-transaction seam before cleanup can escape."""
+        raise OSError(f"injected {failure_seam} failure")
+
+    dependencies.compute_spike_phase_component = compute
+    monkeypatch.setattr(lfp_spike_phase_validation, failure_seam, fail)
+
+    with pytest.raises(OSError, match=failure_seam):
+        run_spike_phase_preview_validation(
+            config,
+            tmp_path / "runs",
+            dependencies,
+        )
+
+    final = (
+        tmp_path
+        / "runs"
+        / (
+            f"{config.session_id}_lfp_spike_phase_preview_validation_"
+            "2026-08-26T18-00-00Z"
+        )
+    )
+    assert not final.exists()
+    assert cleanup_calls == []
 
 
 def test_production_preview_dependencies_bind_real_spike_cache_boundary() -> None:
@@ -256,5 +458,6 @@ def test_production_preview_dependencies_bind_real_spike_cache_boundary() -> Non
     assert callable(dependencies.plot_population_ppc_maps)
     assert callable(dependencies.plot_ppc_band_summary)
     assert callable(dependencies.plot_ppc_exemplar)
+    assert callable(dependencies.plot_ppc_exemplar_pair)
     assert callable(dependencies.monotonic_seconds)
     assert callable(dependencies.peak_memory_bytes)
