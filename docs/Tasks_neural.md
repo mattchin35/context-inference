@@ -1913,8 +1913,11 @@ Launcher requirements:
   accepted limitation, must be stated in the log/summary, and must not be
   mislabeled as reused planner work.
 - Support a preflight/dry-run mode that loads metadata, resolves the active
-  population, computes the plan, reports requested/planned workers and memory,
-  and writes no scientific result.
+  population, and reports the conservative metadata-only worker/phase-memory
+  bounds described below without phase transforms, PPC schedules, checkpoints,
+  final arrays, or manifests. It must not call this an exact grouped plan:
+  exact schedules, site-valid trial membership, planner time, and allocation
+  require prepared phase and are measured only by a real new/resumed run.
 - Stream progress to both the terminal and a run-local log. Record the command,
   environment, git/source/config fingerprints, session and unit identities,
   worker counts, timing, memory, cache sizes, warnings, and final status.
@@ -1943,8 +1946,9 @@ Tests written first:
 
 - CLI parsing preserves the exact CT026 session, active population, worker
   count, shuffle count, and run-directory identity.
-- Dry-run performs preflight without transforms, checkpoints, final arrays, or
-  manifests.
+- Dry-run performs metadata-only preflight without transforms, PPC schedule
+  construction, checkpoints, final arrays, or manifests; exact-plan fields are
+  explicitly unavailable rather than fabricated from the S8 slice.
 - New-run state and the exact resume command exist before a fake long planner
   starts; interrupting planning causes resume to repeat deterministic planning
   without claiming a planner-cache hit.
@@ -1966,9 +1970,11 @@ RED command:
 
 Performance considerations:
 
-- Dry-run and new-run planning use the exact grouped planner. They must report
-  planner wall time separately and must not use the 64-unit S8 estimate as a
-  substitute for a complete plan.
+- New/resumed scientific execution uses the exact grouped planner and reports
+  planner wall time separately. Dry-run reports only its documented
+  conservative metadata bounds, with exact planner/allocation fields
+  unavailable. Neither path may use the 64-unit S8 estimate as a substitute
+  for the complete active-population plan.
 - Planning may repeat after interruption, but phase transforms, completed PPC
   blocks, and final component computation must not repeat when their exact
   compatible artifacts already exist. An incomplete staged report may be
@@ -1987,6 +1993,281 @@ Execution gate:
    inspection.
 4. Do not launch 1,000 shuffles automatically. After separate approval, the
    user invokes a new 1,000-shuffle run through the same standalone launcher.
+
+#### WP5C-6 frozen launcher implementation contract (approved 2026-09-18)
+
+This subsection supersedes any less-specific launcher wording above. The user
+approved the explicit-probe, evidence-producing dry-run, clean-tracked-checkout,
+and cleanup-failure recommendations before launcher tests or source edits. The
+baseline is pushed commit `a8c4f3f` on `refactor`, equal to
+`origin/refactor`; the tracked worktree is clean. The 171-entry normal
+untracked inventory remains out of scope with NUL-delimited status SHA-256
+`140fe2baeec9985753c89efe0fe2d68eb341c625065868e0437ce333e0c6a1a0`.
+
+CLI and exit contract:
+
+- The module entry point is
+  `uv run python -m src.neural_analysis.lfp_spike_phase_launcher` and has
+  required, mutually exclusive `new` and `resume` subcommands. `main(argv=None)
+  -> int` performs parsing and returns an exit code; the module guard raises
+  `SystemExit(main())`. Importing the module performs no filesystem, Git, data,
+  plotting, signal, or process action.
+- `new` requires `--session-path PATH`, `--probe ProbeA|ProbeB`, and
+  `--shuffles 100|1000`. It accepts `--workers N` with CT026 default eight,
+  `--analysis-root PATH` defaulting to `<session>/analysis_runs`, optional
+  `--dry-run`, and `--final-run`. Probe selection is always explicit; there is
+  no silent ProbeB default and no combined population.
+- `--final-run` is required exactly when `--shuffles 1000` and is rejected for
+  100 shuffles. Dry-run accepts either reviewed configuration but never makes
+  the 1,000-shuffle mode executable without `--final-run`. Worker counts are
+  positive integers and never change the universal library default.
+- `resume` requires only `--run-directory PATH`. Session, probe, shuffle count,
+  worker request, final-run acknowledgement, cache/report paths, and exact
+  identities are loaded from validated state rather than repeated on the
+  command line. Resume rejects dry-run evidence directories and completed runs;
+  it never converts a 100-shuffle run into 1,000 shuffles.
+- Exit zero means either terminal metadata-only `preflight_complete` for a
+  dry-run or fully validated `complete` for a scientific run. CLI/config/source/
+  identity errors return 2, other execution/report/cleanup failures return 1,
+  SIGINT returns 130, and SIGTERM returns 143. Every nonzero path atomically
+  records the status when the run directory already exists and flushes the log.
+
+CT026 configuration and population contract:
+
+- Add a general `build_ct026_active_population(session_path, probe_label,
+  cluster_metadata_loader, channel_metadata_loader)` cache-free metadata helper
+  in `lfp_spike_phase_validation.py`. Preserve
+  `build_ct026_default_active_population(...)` as the unchanged ProbeB wrapper.
+  ProbeA uses `Record_Node_101_Neuropix-PXI-110.ProbeA/kilosort4` and
+  `probeA_sync.npz`; ProbeB uses the existing ProbeB paths. Both select good or
+  MUA clusters only on channels labeled good and inside brain, sort by cluster
+  id, and retain stable `ProbeA:<cluster>` or `ProbeB:<cluster>` identities.
+- Build from the existing CT026 three-site configuration, set the explicitly
+  selected population, requested shuffle count, eight-worker CT026 default or
+  explicit worker override, checkpointing enabled, and
+  `checkpoint_retention="incomplete_only"`. Every other scientific/default
+  value remains unchanged. Nonempty absolute-amplitude thresholds fail before
+  run-directory creation, phase preparation, or work publication.
+- A new scientific run requires a clean tracked checkout. The check is
+  `git status --porcelain --untracked-files=no`; unrelated untracked files do
+  not make the checkout dirty and are never added, removed, hashed recursively,
+  or copied. State records the exact lowercase commit. Resume requires the same
+  commit and a still-clean tracked checkout.
+
+Run-directory and artifact contract:
+
+- A new run is a nonsymlink direct child of its resolved analysis root named
+  `<session_id>_spike_phase_<probe>_<preview|final|dry_run>_<UTC timestamp>`.
+  Creation uses `exist_ok=False`. Resume accepts only that existing naming and
+  parent relationship; no arbitrary path, symlink, or collision is followed.
+- Before exact PPC planning, a scientific new run atomically writes
+  `launcher_state.json`, `configuration.json`, `source_identity.json`,
+  `preflight.json`, creates `run.log`, and prints plus logs the shell-quoted
+  absolute resume command. `run.log` is ASCII JSON Lines, one mapping per line,
+  flushed after every event. JSON artifacts use sorted keys, `allow_nan=False`,
+  ASCII encoding, and a trailing newline. `run_summary.md` is nonempty ASCII
+  Markdown and is atomically refreshed at every terminal/incomplete status.
+- Reports are published beneath `<run>/report/` by the generalized WP12
+  cache-only report seam; the returned report directory is recorded in state.
+  The generic numerical component and manifest remain in the configuration's
+  `processed/lfp_summary_cache` output directory. The launcher neither copies
+  numerical arrays into the analysis directory nor treats the report as the
+  scientific commit point.
+- `launcher.lock` is an advisory exclusive local-process lock held across state
+  validation and execution. Its scalar owner record contains run id, hostname,
+  pid, and acquisition UTC. A live lock fails closed; kernel lock release after
+  process death permits explicit resume. The launcher never deletes another
+  run's lock or any sibling work directory.
+- A dry-run creates the same timestamped evidence directory and writes validated
+  identity/configuration/source/preflight/log/summary artifacts, then ends in
+  `preflight_complete`. It writes no resume command, report directory, prepared
+  phase cache, PPC work directory, component, or manifest and is not resumable.
+
+Identity and state schema:
+
+- `launcher_state.json` has schema `spike_phase_launcher_state.v1`. Its fixed
+  top-level keys are schema version, run id, created/updated UTC, run kind,
+  dry-run Boolean, terminal/active status, ordered completed stages, resume
+  command, identity, paths, measurements, cleanup request, report directory,
+  warnings, and error. Optional unavailable values are JSON null, never zero or
+  an empty string.
+- Identity contains resolved session and repository paths; session id; probe;
+  ordered stable units and their SHA-256; shuffle count; final-run Boolean;
+  requested workers; canonical configuration and Spike-component fingerprints;
+  the existing `fingerprint_source_files(config, "spike_phase")` mapping and
+  its canonical SHA-256; Git commit; and tracked-clean Boolean. Paths contain
+  the analysis root/run directory, numerical output directory, phase/PPC work
+  root, and report parent. Resume rebuilds all derivable values and requires
+  exact equality before any phase, spike, planner, writer, or plot call.
+- Ordered completed stages are an exact prefix of `initialized`,
+  `preflight_complete`, `cleanup_prepared`, `component_complete`,
+  `report_complete`, `launcher_artifacts_validated`, `cleanup_complete`, and
+  `complete`. `active_status` may additionally be `preparing_phase`,
+  `planning`, `executing`, `reporting`, `cleaning`, `interrupted`, `failed`, or
+  `cleanup_failed`. State replacement is atomic after every durable boundary.
+  Deterministic planning has no completed-stage marker and is repeated when
+  interrupted before `component_complete`; logs explicitly say it repeated.
+- Source/config mismatch, malformed state, missing committed artifacts, an
+  invalid stage prefix, or changed population/source/Git identity fails before
+  numerical callbacks. A compatible committed component may be reused on
+  resume to regenerate an absent/failed report without recomputation. A new run
+  that finds a compatible component records `component_reused=true`, validates
+  it, and renders from cache rather than silently overwriting it.
+
+Persistent cleanup handoff:
+
+- WP12's in-memory callback is insufficient by itself because a process can
+  stop after component commit but before report publication. Add an immutable,
+  JSON-safe cleanup-target record containing only the exact resolved PPC run
+  directory and 64-lowercase-hex run fingerprint. The Spike payload carries
+  both its existing callable and the ordered target tuple. Defaults remain empty
+  for every existing caller and non-Spike payload.
+- Add an optional cleanup-preparation observer to Spike component execution.
+  When deferral is requested, the pipeline validates and sends the targets to
+  that observer after payload construction but before the final component
+  writer. The launcher atomically persists them and completes
+  `cleanup_prepared`; observer failure prevents component commit. A failed
+  writer never exposes the in-memory callback but may leave the saved exact
+  request for later validated retry/recomputation.
+- A successful deferred `ComponentRunResult` retains the callable and also
+  exposes the same immutable targets. Default nondeferred execution still calls
+  cleanup immediately and returns neither. Resume reconstructs cleanup only by
+  validating that each target is a nonsymlink direct child of the configured
+  `lfp_summary_work/ppc` parent, basename equals fingerprint, and its metadata
+  matches that fingerprint, then calls the existing `cleanup_ppc_run` API.
+- Cleanup occurs only after component/manifest reload, WP12 report validation,
+  launcher JSON/log/summary reload, source identity recheck, and atomic
+  `launcher_artifacts_validated` state. Cleanup failure records
+  `cleanup_failed`, returns nonzero, preserves the component/report/work, and
+  is resumable. Resume revalidates all outputs and retries only exact cleanup;
+  it does not recompute. `complete` is written only after every target is absent
+  and `cleanup_complete` is durable.
+
+Measurements and reporting contract:
+
+- Additive JSON-scalar execution metadata flows from the grouped runtime through
+  `ComponentPayload` and `ComponentRunResult`; existing callers receive an
+  empty mapping by default. The Spike runtime records exact PPC planning and
+  grouped-execution seconds, requested and planner-active worker counts,
+  planned parent/worker/aggregate/shared-phase bytes, scheduled/independent/
+  union edge counts, completed/resumed block counts, run fingerprint, and run
+  directory. It retains no plan/schedule/phase/spike arrays in this mapping.
+- Phase preparation reports `cold` or `warm` on `PreparedPhaseRun` through an
+  additive default-`None` categorical field. The launcher measures phase,
+  overall component, and report wall time with a monotonic clock. It measures
+  final component/cache and exact intermediate-work bytes from persisted files.
+- A standard-library Linux process-tree sampler periodically reads the parent
+  and recursively discovered children under `/proc`, deduplicates pids, and
+  records peak process RSS, process-tree RSS, and process-tree PSS in bytes with
+  its sampling interval/provenance. If `/proc` values are unavailable, affected
+  fields remain null and a warning is recorded; unavailable never becomes zero.
+  The sampler is injected in tests and adds no package dependency.
+- Dry-run `preflight.json` has schema `spike_phase_preflight.v1` and records the
+  population/unit/trial metadata counts, requested workers, conservative
+  maximum active workers from unit-block count, configured allocation limits,
+  estimated phase tensor/validity bytes from documented axes, and source/cache/
+  report paths. Exact site-valid membership, schedules, planner seconds,
+  planned PPC allocation, active processes, and runtime/cache-hit fields are
+  null with a categorical explanation. The 64-unit S8 timings are never copied
+  into this file.
+- Generalize the cache-only WP12 publication internals into a public report seam
+  usable by both 100- and 1,000-shuffle launcher runs. Existing fixed preview
+  entry points and `spike_phase_preview_report.v1` remain backward compatible.
+  Launcher reports use `spike_phase_report.v1`, include `run_kind` and the
+  actual configured shuffle count, and otherwise preserve the WP12 bounded
+  selections, artifacts, strict staged validation, and null-versus-zero rules.
+
+Progress, interruption, and resume contract:
+
+- One launcher progress adapter timestamps each framework-independent event,
+  validates nondecreasing counts within a stage, appends it to `run.log`, and
+  prints a concise flushed terminal line containing UTC, run id, component,
+  stage, completed/total, elapsed, ETA when available, and message. Logs contain
+  no arrays, schedules, spike trains, or phase values.
+- Install SIGINT/SIGTERM handlers only while `main` owns a scientific run. The
+  first signal records its number and raises one launcher interruption through
+  the main thread so existing executor/finally logic stops new submission,
+  releases locks, and preserves atomic checkpoints. The launcher then writes
+  `interrupted`, the exact resume command, and signal-specific exit code. A
+  second signal restores/immediately invokes the default behavior rather than
+  pretending orderly shutdown succeeded.
+- Any interruption before a run directory exists simply returns the signal exit
+  code. Any interruption after initialization preserves state/log/work and no
+  false complete marker. Report failure after component commit preserves exact
+  work and resumes at reporting. Interruption or failure after
+  `launcher_artifacts_validated` but before cleanup completion resumes at exact
+  cleanup. No resume path reruns a compatible component.
+
+Tests written before implementation:
+
+- Parser tests cover required subcommands/probe, CT026 eight-worker default,
+  100/1,000/final-run matrix, positive overrides, dry-run restrictions, and a
+  resume command that accepts only the exact run directory.
+- ProbeA/ProbeB metadata tests prove identical quality rules, qualified stable
+  ids, correct sorter/aligned-spike paths, no combined population, and backward
+  compatibility of the ProbeB helper.
+- New-run tests prove all identity/state/log/config/preflight files and the
+  printed exact resume command exist before an injected blocking planner.
+- Dry-run tests prove the evidence directory and unavailable exact-plan fields,
+  and prove zero phase/plan/checkpoint/component/manifest/report calls.
+- Clean-Git, threshold, symlink/path, collision, state-schema, stage-prefix,
+  source/config/population/commit, and live-lock mismatches fail before work.
+- Planning interruption and SIGINT/SIGTERM tests prove nonzero exit, flushed
+  state/log/resume command, preserved work, and repeated deterministic planning
+  without a false cache-hit claim.
+- Structured cleanup tests prove targets persist before the writer, writer
+  failure exposes no callback, successful default execution remains immediate,
+  and deferred result/observer targets are exact and identical.
+- Synthetic interrupted execution resumes valid phase/PPC checkpoints and
+  matches uninterrupted output. Compatible committed components skip compute
+  and regenerate missing reports cache-only.
+- Report/plot/launcher-artifact failures retain targets and never clean. Success
+  validates component, manifest, bounded report, state, every JSON log line,
+  summary, and source identity before exact cleanup and final completion.
+- Cleanup failure produces `cleanup_failed`; resume performs no phase/planner/
+  executor/writer/report work, revalidates, retries cleanup, and reaches
+  complete. Sibling/fingerprint/path substitution is rejected.
+- Measurement tests distinguish null from measured zero, cold from warm,
+  planner from grouped/component/report time, requested/planner-active/measured
+  workers, process from process-tree RSS/PSS, final from intermediate bytes,
+  and preview from final report schema/shuffle count.
+- CLI/module tests prove no Streamlit import, no import-time side effects, no
+  external dependency, terminal/log progress flushing, and documented exit
+  codes. Existing WP12 preview, immediate-cleanup, composed-runtime, synthetic
+  integration, and full neural tests remain green.
+
+Implementation order and verification:
+
+1. Commit this documentation-only contract before any launcher test or source
+   edit.
+2. Add and commit tests only; run the launcher RED command and record only
+   failures attributable to the absent launcher/general population/report and
+   additive metadata/cleanup seams.
+3. Implement the smallest launcher plus the explicitly documented additive
+   validation/runtime/pipeline/report seams. Do not add a dependency, UI, SLURM
+   script, CT026 result, or unrelated refactor.
+4. Run launcher tests, directly affected runtime/pipeline/report tests,
+   synthetic interruption/resume, synthetic LFP integration, and the complete
+   `src/tests/neural_analysis` suite. Review every write/cleanup target and run
+   `git diff --check`.
+5. Commit implementation separately. Append exact commits, RED/GREEN counts,
+   warnings, changed-file scope, and residual execution risks here before any
+   CT026 command is proposed.
+
+RED command:
+
+`uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_lfp_spike_phase_launcher.py`
+
+Interruption recovery:
+
+- Before the documentation commit, no launcher test/source file exists and no
+  CT026 run has been started. Resume from pushed `a8c4f3f`, verify the tracked
+  worktree and NUL-delimited untracked hash above, then continue with the
+  tests-only commit.
+- No partial launcher implementation authorizes a dry-run or scientific CT026
+  invocation. The first authorized execution after all launcher code/tests/docs
+  are green is a separately user-invoked 100-shuffle ProbeB preview. The
+  1,000-shuffle run remains separately gated by inspection and approval.
 
 ### WP6 - Plotting
 
