@@ -102,6 +102,11 @@ class ComponentRunResult:
     ``cleanup_warning`` is ``None`` when no post-commit cleanup was requested
     or it succeeded. A nonempty value reports a recoverable cleanup failure
     after a successful final commit; it does not change ``state``.
+
+    ``deferred_cleanup`` is normally ``None``. An explicitly deferred,
+    successfully committed Spike-phase run returns the exact no-argument work
+    cleanup callable without invoking it. Callers must not expose or run it
+    until their own required report transaction has completed.
     """
 
     component: str
@@ -110,6 +115,7 @@ class ComponentRunResult:
     error: str | None
     manifest: dict[str, object] | None
     cleanup_warning: str | None = None
+    deferred_cleanup: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -185,12 +191,17 @@ def compute_spike_phase_component(
     progress_callback: ProgressCallback | None = None,
     *,
     prepared_phase: object | None = None,
+    defer_post_commit_cleanup: bool = False,
 ) -> ComponentRunResult:
     """Prepare or reuse phase and spikes, then commit only Spike phase.
 
     The optional opaque ``prepared_phase`` is passed unchanged to both spike
     preparation and payload construction. Spike arrays and phase axes are not
     reshaped, filtered, or otherwise changed by this orchestration layer.
+    ``defer_post_commit_cleanup`` is a Boolean execution policy with no
+    scientific units. Its default preserves immediate cleanup after the final
+    writer. When true, a successful result carries the exact cleanup callable
+    instead; failed writes never expose it.
     """
 
     validate_lfp_summary_config(config)
@@ -219,13 +230,22 @@ def compute_spike_phase_component(
             )
     except _RECOVERABLE_ERRORS as error:
         return _failed("spike_phase", "payload_spike_phase", error, progress_callback, 2)
-    return _commit_component("spike_phase", config, dependencies, payload, progress_callback)
+    return _commit_component(
+        "spike_phase",
+        config,
+        dependencies,
+        payload,
+        progress_callback,
+        defer_post_commit_cleanup=defer_post_commit_cleanup,
+    )
 
 
 def compute_all_components(
     config: LFPSummaryConfig,
     dependencies: PipelineDependencies,
     progress_callback: ProgressCallback | None = None,
+    *,
+    defer_spike_phase_cleanup: bool = False,
 ) -> ComputeAllResult:
     """Compute Power, Synchrony, then Spike phase with one shared phase product.
 
@@ -233,6 +253,10 @@ def compute_all_components(
     :class:`PipelineDependencies`. Results preserve component order. On a
     recoverable failure, later components are not started and prior successful
     manifest-last component transactions remain intact.
+    ``defer_spike_phase_cleanup`` affects only the final Spike-phase result and
+    has the same no-unit execution semantics as
+    :func:`compute_spike_phase_component`; Power and Synchrony have no deferred
+    cleanup action.
     """
 
     validate_lfp_summary_config(config)
@@ -261,6 +285,7 @@ def compute_all_components(
         dependencies,
         progress_callback,
         prepared_phase=phase,
+        defer_post_commit_cleanup=defer_spike_phase_cleanup,
     )
     results.append(spike_phase)
     return ComputeAllResult(tuple(results))
@@ -272,8 +297,34 @@ def _commit_component(
     dependencies: PipelineDependencies,
     payload: ComponentPayload,
     progress_callback: ProgressCallback | None,
+    *,
+    defer_post_commit_cleanup: bool = False,
 ) -> ComponentRunResult:
-    """Load, immutably merge, and delegate one manifest-last component write."""
+    """Commit one component and either run or return its exact cleanup action.
+
+    Parameters
+    ----------
+    component : str
+        Stable component name without physical units.
+    config : LFPSummaryConfig
+        Immutable output-directory and scientific identity.
+    dependencies : PipelineDependencies
+        Manifest and final component writer seams.
+    payload : ComponentPayload
+        Named arrays in their component-defined axes/units, manifest metadata,
+        and optional no-argument work cleanup.
+    progress_callback : callable or None
+        Receives scalar :class:`ProgressEvent` records and no arrays.
+    defer_post_commit_cleanup : bool, default=False
+        If true, return the cleanup callable after a successful writer instead
+        of invoking it. This does not alter arrays or manifest content.
+
+    Returns
+    -------
+    ComponentRunResult
+        Complete/failed transaction outcome. Only a successful deferred result
+        may contain ``deferred_cleanup``.
+    """
 
     _emit(progress_callback, component, 2, f"load_manifest_{component}")
     try:
@@ -297,11 +348,15 @@ def _commit_component(
     except _RECOVERABLE_ERRORS as error:
         return _failed(component, f"write_{component}", error, progress_callback, 3)
     cleanup_warning = None
+    deferred_cleanup = None
     if payload.post_commit_cleanup is not None:
-        try:
-            payload.post_commit_cleanup()
-        except _RECOVERABLE_ERRORS as error:
-            cleanup_warning = str(error)
+        if defer_post_commit_cleanup:
+            deferred_cleanup = payload.post_commit_cleanup
+        else:
+            try:
+                payload.post_commit_cleanup()
+            except _RECOVERABLE_ERRORS as error:
+                cleanup_warning = str(error)
     _emit(progress_callback, component, 4, f"complete_{component}")
     return ComponentRunResult(
         component,
@@ -310,6 +365,7 @@ def _commit_component(
         None,
         updated_manifest,
         cleanup_warning,
+        deferred_cleanup,
     )
 
 

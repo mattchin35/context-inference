@@ -1071,7 +1071,13 @@ def _build_spike_phase_payload(
         frequencies_hz=frequencies_hz,
         ppc_by_frequency=arrays["ppc"],
     ).ppc_band_mean
-    selected_low, selected_high, illustrative = _select_spike_exemplars(
+    (
+        selected_low,
+        selected_high,
+        illustrative,
+        illustrative_low,
+        illustrative_high,
+    ) = _select_spike_exemplars(
         config,
         prepared_phase,
         prepared_spikes,
@@ -1119,6 +1125,8 @@ def _build_spike_phase_payload(
             "hilbert_phase_rad": hilbert_phase_rad,
             "selected_low_unit_ids": selected_low,
             "selected_high_unit_ids": selected_high,
+            "illustrative_low_trial_indices": illustrative_low,
+            "illustrative_high_trial_indices": illustrative_high,
             "illustrative_trial_indices": illustrative,
         }
     )
@@ -2218,12 +2226,38 @@ def _select_spike_exemplars(
     prepared_spikes: PreparedSpikeRun,
     ppc_band_mean: np.ndarray,
     trial_spike_counts: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Select pooled low/high units and one illustrative trial per cache cell."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Select pooled low/high units and their exact illustrative trials.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Immutable condition, site, epoch, and band axis definitions.
+    prepared_phase : PreparedPhaseRun
+        Full int64 trial-table row axis shared by cached phase/traces.
+    prepared_spikes : PreparedSpikeRun
+        Stable unit identities and event-relative spike seconds per trial.
+    ppc_band_mean : numpy.ndarray
+        Dimensionless float array with axes
+        ``(unit, condition, site, epoch, band)``.
+    trial_spike_counts : numpy.ndarray
+        Nonnegative int64 array with axes
+        ``(unit, condition, site, epoch, trial)`` in spike units.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray]
+        Low/high stable-unit-id arrays followed by the legacy high-first trial,
+        exact low-unit trial, and exact high-unit trial arrays. Every output has
+        ``(condition, site, epoch, band)`` axes. Trial values are table-row ids;
+        unavailable ids use ``""`` and unavailable trials use ``-1``.
+    """
     output_shape = ppc_band_mean.shape[1:]
     low = np.full(output_shape, "", dtype="<U64")
     high = np.full(output_shape, "", dtype="<U64")
     illustrative = np.full(output_shape, -1, dtype=np.int64)
+    illustrative_low = np.full(output_shape, -1, dtype=np.int64)
+    illustrative_high = np.full(output_shape, -1, dtype=np.int64)
     for condition_index, site_index, epoch_index, band_index in np.ndindex(
         output_shape
     ):
@@ -2242,11 +2276,19 @@ def _select_spike_exemplars(
             low[index] = selection.low_unit_id
         if selection.high_unit_id is not None:
             high[index] = selection.high_unit_id
+        if selection.low_unit_id in selection.illustrative_trial_index_by_unit:
+            illustrative_low[index] = selection.illustrative_trial_index_by_unit[
+                selection.low_unit_id
+            ]
+        if selection.high_unit_id in selection.illustrative_trial_index_by_unit:
+            illustrative_high[index] = selection.illustrative_trial_index_by_unit[
+                selection.high_unit_id
+            ]
         for unit_id in (selection.high_unit_id, selection.low_unit_id):
             if unit_id in selection.illustrative_trial_index_by_unit:
                 illustrative[index] = selection.illustrative_trial_index_by_unit[unit_id]
                 break
-    return low, high, illustrative
+    return low, high, illustrative, illustrative_low, illustrative_high
 
 
 def _analysis_condition_membership(prepared: PreparedTrials) -> np.ndarray:

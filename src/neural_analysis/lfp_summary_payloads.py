@@ -174,6 +174,12 @@ SPIKE_PHASE_ARRAY_SCHEMA = _contracts(
         "hilbert_phase_rad": (("site", "trial", "band", "time"), "rad"),
         "selected_low_unit_ids": (("condition", "site", "epoch", "band"), "stable-unit-id"),
         "selected_high_unit_ids": (("condition", "site", "epoch", "band"), "stable-unit-id"),
+        "illustrative_low_trial_indices": (
+            (("condition", "site", "epoch", "band"), "trial-table-row")
+        ),
+        "illustrative_high_trial_indices": (
+            (("condition", "site", "epoch", "band"), "trial-table-row")
+        ),
         "illustrative_trial_indices": (("condition", "site", "epoch", "band"), "trial-table-row"),
     }
 )

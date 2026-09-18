@@ -55,6 +55,45 @@ class PlotContext:
     source_voltage_unit: str
 
 
+@dataclass(frozen=True)
+class PPCExemplarPanel:
+    """One pooled unit metric plus its separately labeled illustrative trial.
+
+    Attributes
+    ----------
+    unit_id, percentile_label : str
+        Probe-qualified stable unit identity and categorical 5th/95th label.
+    pooled_ppc : numpy.ndarray
+        Dimensionless float shape ``(frequency,)`` pooled across eligible
+        trials.
+    preferred_phase_rad : numpy.ndarray
+        Float shape ``(frequency,)`` pooled circular phase in radians.
+    representative_phase_hist_count : numpy.ndarray
+        Nonnegative integer shape ``(phase_bin,)`` pooled valid spike counts at
+        the representative cached frequency.
+    trial_index : int
+        Nonnegative stable trial-table row for the illustrative single trial.
+    source_trace, filtered_trace : numpy.ndarray
+        Float shape ``(time,)`` cached traces in the source voltage unit.
+    hilbert_phase_rad : numpy.ndarray
+        Float shape ``(time,)`` cached illustrative phase in radians.
+    spike_times_relative_s : numpy.ndarray
+        Finite float shape ``(spike,)`` event-relative illustrative spike times
+        in seconds.
+    """
+
+    unit_id: str
+    percentile_label: str
+    pooled_ppc: np.ndarray
+    preferred_phase_rad: np.ndarray
+    representative_phase_hist_count: np.ndarray
+    trial_index: int
+    source_trace: np.ndarray
+    filtered_trace: np.ndarray
+    hilbert_phase_rad: np.ndarray
+    spike_times_relative_s: np.ndarray
+
+
 def _figure(names: tuple[str, ...]) -> tuple[plt.Figure, dict[str, plt.Axes]]:
     """Create opaque-white axes keyed by unique display names.
 
@@ -1009,6 +1048,232 @@ def plot_ppc_exemplar(
         ),
     )
     return figure, axes
+
+
+def plot_ppc_exemplar_pair(
+    *,
+    frequency_hz: np.ndarray,
+    phase_bin_edges_rad: np.ndarray,
+    relative_time_s: np.ndarray,
+    low: PPCExemplarPanel,
+    high: PPCExemplarPanel,
+    condition_name: str,
+    site_label: str,
+    epoch_name: str,
+    band_name: str,
+    representative_frequency_hz: float,
+    context: PlotContext,
+) -> tuple[plt.Figure, dict[str, plt.Axes]]:
+    """Plot matched low/high pooled PPC and distinct illustrative trials.
+
+    Parameters
+    ----------
+    frequency_hz : numpy.ndarray
+        Finite shape ``(frequency,)`` cached coordinates in Hz.
+    phase_bin_edges_rad : numpy.ndarray
+        Strictly increasing finite shape ``(phase_bin + 1,)`` edges in radians.
+    relative_time_s : numpy.ndarray
+        Strictly increasing finite shape ``(time,)`` event-relative seconds.
+    low, high : PPCExemplarPanel
+        Independently selected pooled unit metrics and unit-specific
+        median-positive-spike illustrative trials. Panel arrays retain the
+        axes and physical units documented by :class:`PPCExemplarPanel`.
+    condition_name, site_label, epoch_name, band_name : str
+        Categorical cache selection labels.
+    representative_frequency_hz : float
+        Requested theta/gamma display frequency in Hz. The nearest actual
+        cached coordinate is displayed and returned only through figure text.
+    context : PlotContext
+        Session, alignment, window, reference, and source-unit provenance.
+
+    Returns
+    -------
+    tuple[matplotlib.figure.Figure, dict[str, matplotlib.axes.Axes]]
+        Unsaved opaque-white figure and eight named low/high axes. Source and
+        filtered traces use ``context.source_voltage_unit``; phase uses radians
+        and spikes use event-relative seconds.
+
+    Raises
+    ------
+    ValueError
+        If shared coordinates, panel axes/counts, identities, or selection
+        labels are invalid.
+    """
+    frequencies = _vector(frequency_hz, "frequency_hz")
+    edges = _vector(phase_bin_edges_rad, "phase_bin_edges_rad")
+    relative_time = _vector(relative_time_s, "relative_time_s")
+    if np.any(np.diff(edges) <= 0.0):
+        raise ValueError("phase_bin_edges_rad must be strictly increasing")
+    if np.any(np.diff(relative_time) <= 0.0):
+        raise ValueError("relative_time_s must be strictly increasing")
+    if not np.isfinite(representative_frequency_hz):
+        raise ValueError("representative_frequency_hz must be finite")
+    if not all((condition_name, site_label, epoch_name, band_name)):
+        raise ValueError("PPC exemplar selection labels must be nonempty")
+
+    validated = {
+        "low": _validated_ppc_exemplar_panel(
+            low,
+            frequencies.size,
+            edges.size - 1,
+            relative_time.size,
+        ),
+        "high": _validated_ppc_exemplar_panel(
+            high,
+            frequencies.size,
+            edges.size - 1,
+            relative_time.size,
+        ),
+    }
+    frequency_index = int(
+        np.argmin(np.abs(frequencies - float(representative_frequency_hz)))
+    )
+    actual_frequency_hz = float(frequencies[frequency_index])
+    centers = (edges[:-1] + edges[1:]) / 2.0
+
+    figure = plt.figure(figsize=(14, 12))
+    figure.patch.set_facecolor("white")
+    grid = figure.add_gridspec(4, 2)
+    axes: dict[str, plt.Axes] = {}
+    for column, percentile in enumerate(("low", "high")):
+        panel, values = validated[percentile]
+        axes[f"{percentile}_ppc"] = figure.add_subplot(grid[0, column])
+        axes[f"{percentile}_polar"] = figure.add_subplot(
+            grid[1, column],
+            projection="polar",
+        )
+        axes[f"{percentile}_trace"] = figure.add_subplot(grid[2, column])
+        axes[f"{percentile}_phase"] = figure.add_subplot(grid[3, column])
+
+        ppc_axis = axes[f"{percentile}_ppc"]
+        ppc_axis.plot(frequencies, values["pooled_ppc"])
+        ppc_axis.set(
+            xlabel="Frequency (Hz)",
+            ylabel="PPC",
+            title=f"{panel.percentile_label} pooled PPC: {panel.unit_id}",
+        )
+
+        polar_axis = axes[f"{percentile}_polar"]
+        polar_axis.bar(
+            centers,
+            values["histogram"],
+            width=np.diff(edges),
+        )
+        preferred_phase = values["preferred_phase_rad"][frequency_index]
+        polar_axis.set_title(
+            f"Pooled {band_name}, {actual_frequency_hz:g} Hz; "
+            f"preferred phase={preferred_phase:.2f} rad"
+        )
+
+        trace_axis = axes[f"{percentile}_trace"]
+        trace_axis.plot(relative_time, values["source_trace"], label="source")
+        trace_axis.plot(relative_time, values["filtered_trace"], label="filtered")
+        trace_axis.vlines(
+            values["spike_times_relative_s"],
+            *trace_axis.get_ylim(),
+            color="black",
+            label="spikes",
+        )
+        trace_axis.set(
+            xlabel="Time from alignment (s)",
+            ylabel=context.source_voltage_unit,
+            title=f"Illustrative trial {panel.trial_index}",
+        )
+        trace_axis.legend(fontsize=8)
+
+        phase_axis = axes[f"{percentile}_phase"]
+        phase_axis.plot(relative_time, values["hilbert_phase_rad"])
+        phase_axis.vlines(
+            values["spike_times_relative_s"],
+            -np.pi,
+            np.pi,
+            color="black",
+        )
+        phase_axis.set(
+            xlabel="Time from alignment (s)",
+            ylabel="Hilbert phase (rad)",
+            title=f"{band_name} phase with illustrative spikes",
+            ylim=(-np.pi, np.pi),
+        )
+
+    for axis in axes.values():
+        axis.set_facecolor("white")
+        axis.tick_params(colors="black", labelsize=10)
+    _caption(
+        figure,
+        context,
+        (
+            f"Matched pooled PPC exemplars for {condition_name}, {site_label}, "
+            f"{epoch_name}, {band_name}, actual representative frequency "
+            f"{actual_frequency_hz:g} Hz; low={low.unit_id} with separately "
+            f"illustrative trial {low.trial_index}; high={high.unit_id} with "
+            f"separately illustrative trial {high.trial_index}; polar counts "
+            "and preferred phase are pooled eligible-trial statistics"
+        ),
+    )
+    return figure, axes
+
+
+def _validated_ppc_exemplar_panel(
+    panel: PPCExemplarPanel,
+    frequency_count: int,
+    phase_bin_count: int,
+    time_count: int,
+) -> tuple[PPCExemplarPanel, dict[str, np.ndarray]]:
+    """Validate one panel and return normalized array views without full copies.
+
+    Parameters
+    ----------
+    panel : PPCExemplarPanel
+        Pooled and illustrative values with units documented by the record.
+    frequency_count, phase_bin_count, time_count : int
+        Positive shared axis lengths without physical units.
+
+    Returns
+    -------
+    tuple[PPCExemplarPanel, dict[str, numpy.ndarray]]
+        Original immutable record plus NumPy views keyed by semantic field.
+
+    Raises
+    ------
+    ValueError
+        If identities, trial row, axes, counts, or spike seconds are invalid.
+    """
+    if not isinstance(panel, PPCExemplarPanel):
+        raise ValueError("low/high values must be PPCExemplarPanel records")
+    if not panel.unit_id or not panel.percentile_label:
+        raise ValueError("PPC exemplar unit and percentile labels must be nonempty")
+    if not isinstance(panel.trial_index, (int, np.integer)) or panel.trial_index < 0:
+        raise ValueError("PPC exemplar trial_index must be a nonnegative integer")
+    values = {
+        "pooled_ppc": np.asarray(panel.pooled_ppc, dtype=float),
+        "preferred_phase_rad": np.asarray(panel.preferred_phase_rad, dtype=float),
+        "histogram": np.asarray(panel.representative_phase_hist_count),
+        "source_trace": np.asarray(panel.source_trace, dtype=float),
+        "filtered_trace": np.asarray(panel.filtered_trace, dtype=float),
+        "hilbert_phase_rad": np.asarray(panel.hilbert_phase_rad, dtype=float),
+        "spike_times_relative_s": np.asarray(
+            panel.spike_times_relative_s,
+            dtype=float,
+        ),
+    }
+    if (
+        values["pooled_ppc"].shape != (frequency_count,)
+        or values["preferred_phase_rad"].shape != (frequency_count,)
+        or values["histogram"].shape != (phase_bin_count,)
+        or values["source_trace"].shape != (time_count,)
+        or values["filtered_trace"].shape != (time_count,)
+        or values["hilbert_phase_rad"].shape != (time_count,)
+        or values["spike_times_relative_s"].ndim != 1
+    ):
+        raise ValueError("PPC exemplar panel axes are invalid")
+    if not np.issubdtype(values["histogram"].dtype, np.integer) or np.any(
+        values["histogram"] < 0
+    ):
+        raise ValueError("PPC exemplar histogram must contain nonnegative integers")
+    if not np.all(np.isfinite(values["spike_times_relative_s"])):
+        raise ValueError("PPC exemplar spike times must be finite seconds")
+    return panel, values
 
 
 def build_summary_figure_filename(
