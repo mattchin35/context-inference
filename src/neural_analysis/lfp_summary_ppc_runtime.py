@@ -2280,6 +2280,9 @@ class PPCComponentExecutionResult:
         Safe site/unit-block checkpoint identities in stable site-major then
         increasing half-open unit-bound order. The second tuple is the subset
         loaded from exact valid single-block checkpoints.
+    planning_seconds, grouped_execution_seconds : float
+        Finite nonnegative wall-clock seconds spent before versus after the
+        immutable grouped component plan was created.
     """
 
     run_fingerprint: str
@@ -2288,6 +2291,8 @@ class PPCComponentExecutionResult:
     summary_arrays: dict[str, np.ndarray]
     completed_block_ids: tuple[str, ...]
     resumed_block_ids: tuple[str, ...]
+    planning_seconds: float
+    grouped_execution_seconds: float
 
 
 def execute_grouped_ppc_component(
@@ -2352,6 +2357,7 @@ def execute_grouped_ppc_component(
     _validate_ppc_execution(execution)
     if execution != config.ppc_execution:
         raise ValueError("grouped PPC execution must equal config.ppc_execution")
+    planning_started = time.perf_counter()
 
     # Import locally: the production runtime imports this module for legacy
     # job execution, while this serial bridge only needs its prepared-record
@@ -2424,6 +2430,8 @@ def execute_grouped_ppc_component(
     del membership, source_counts
     run_fingerprint = str(metadata["run_fingerprint"])
     run_directory = Path(work_root) / "ppc" / run_fingerprint
+    planning_seconds = max(0.0, time.perf_counter() - planning_started)
+    execution_started = time.perf_counter()
     reporter = _ProgressReporter(progress_callback, "grouped-spike-phase")
     reporter.emit("prepare_phase", 1, 1, "validated grouped prepared inputs")
 
@@ -2701,6 +2709,11 @@ def execute_grouped_ppc_component(
             summary_arrays=_freeze_grouped_summary_arrays(summary),
             completed_block_ids=completed_ids,
             resumed_block_ids=tuple(resumed_ids),
+            planning_seconds=planning_seconds,
+            grouped_execution_seconds=max(
+                0.0,
+                time.perf_counter() - execution_started,
+            ),
         )
     finally:
         try:

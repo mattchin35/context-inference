@@ -8,10 +8,12 @@ framework-independent progress reporting. It never imports Streamlit.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
+import time
 from typing import Any, Callable, Mapping
 
 import numpy as np
@@ -70,6 +72,33 @@ class PipelineDependencies:
 
 
 @dataclass(frozen=True)
+class PPCWorkCleanupTarget:
+    """One exact resumable PPC work directory authorized for later cleanup.
+
+    Attributes
+    ----------
+    run_directory : pathlib.Path
+        Exact execution-only ``lfp_summary_work/ppc/<fingerprint>`` directory.
+        The launcher performs parent/symlink/metadata checks before cleanup.
+    run_fingerprint : str
+        Lowercase 64-character SHA-256 execution identity. It has no physical
+        units and must equal the work-directory basename.
+    """
+
+    run_directory: Path
+    run_fingerprint: str
+
+    def __post_init__(self) -> None:
+        """Normalize the path and reject malformed target identities."""
+        directory = Path(self.run_directory)
+        if re.fullmatch(r"[0-9a-f]{64}", self.run_fingerprint) is None:
+            raise ValueError("PPC cleanup fingerprint must be 64 lowercase hexadecimal")
+        if directory.name != self.run_fingerprint:
+            raise ValueError("PPC cleanup directory basename must equal its fingerprint")
+        object.__setattr__(self, "run_directory", directory)
+
+
+@dataclass(frozen=True)
 class ComponentPayload:
     """Numerical arrays and one component-specific manifest entry.
 
@@ -83,11 +112,19 @@ class ComponentPayload:
     transaction. It receives no payload arrays and may only remove exact,
     already-committed execution artifacts; a cleanup failure is reported as a
     warning and cannot revoke the committed scientific component.
+
+    ``post_commit_cleanup_targets`` is the ordered tuple of exact path/SHA-256
+    identities represented by that callable; it is empty when no persistent
+    cleanup handoff exists. ``execution_metadata`` contains JSON-safe scalar
+    counts, categorical values, byte sizes, and seconds only, with unavailable
+    values represented by ``None``.
     """
 
     arrays: dict[str, np.ndarray]
     manifest_entry: dict[str, object]
     post_commit_cleanup: Callable[[], None] | None = None
+    post_commit_cleanup_targets: tuple[PPCWorkCleanupTarget, ...] = ()
+    execution_metadata: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -107,6 +144,11 @@ class ComponentRunResult:
     successfully committed Spike-phase run returns the exact no-argument work
     cleanup callable without invoking it. Callers must not expose or run it
     until their own required report transaction has completed.
+
+    ``deferred_cleanup_targets`` contains the same ordered path/SHA-256
+    identities as the successful deferred payload and is empty otherwise.
+    ``execution_metadata`` preserves JSON-safe scalar counts, byte sizes,
+    categories, and seconds without numerical analysis arrays.
     """
 
     component: str
@@ -116,6 +158,8 @@ class ComponentRunResult:
     manifest: dict[str, object] | None
     cleanup_warning: str | None = None
     deferred_cleanup: Callable[[], None] | None = None
+    deferred_cleanup_targets: tuple[PPCWorkCleanupTarget, ...] = ()
+    execution_metadata: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -192,6 +236,10 @@ def compute_spike_phase_component(
     *,
     prepared_phase: object | None = None,
     defer_post_commit_cleanup: bool = False,
+    cleanup_preparation_observer: Callable[
+        [tuple[PPCWorkCleanupTarget, ...]], None
+    ]
+    | None = None,
 ) -> ComponentRunResult:
     """Prepare or reuse phase and spikes, then commit only Spike phase.
 
@@ -202,16 +250,23 @@ def compute_spike_phase_component(
     scientific units. Its default preserves immediate cleanup after the final
     writer. When true, a successful result carries the exact cleanup callable
     instead; failed writes never expose it.
+    ``cleanup_preparation_observer`` receives the immutable cleanup-target
+    tuple after payload construction and before the manifest-last writer. It
+    returns ``None`` and must persist the request atomically; any recoverable
+    observer failure prevents component commit.
     """
 
     validate_lfp_summary_config(config)
     phase = prepared_phase
+    phase_preparation_seconds: float | None = None
     if phase is None:
         _emit(progress_callback, "spike_phase", 0, "prepare_phase")
+        phase_started = time.perf_counter()
         try:
             phase = dependencies.prepare_phase(config)
         except _RECOVERABLE_ERRORS as error:
             return _failed("spike_phase", "prepare_phase", error, progress_callback, 0)
+        phase_preparation_seconds = max(0.0, time.perf_counter() - phase_started)
     _emit(progress_callback, "spike_phase", 1, "prepare_spike")
     try:
         spikes = dependencies.prepare_spike(config, phase)
@@ -230,6 +285,16 @@ def compute_spike_phase_component(
             )
     except _RECOVERABLE_ERRORS as error:
         return _failed("spike_phase", "payload_spike_phase", error, progress_callback, 2)
+    payload = ComponentPayload(
+        arrays=payload.arrays,
+        manifest_entry=payload.manifest_entry,
+        post_commit_cleanup=payload.post_commit_cleanup,
+        post_commit_cleanup_targets=payload.post_commit_cleanup_targets,
+        execution_metadata={
+            **dict(payload.execution_metadata),
+            "phase_preparation_seconds": phase_preparation_seconds,
+        },
+    )
     return _commit_component(
         "spike_phase",
         config,
@@ -237,6 +302,7 @@ def compute_spike_phase_component(
         payload,
         progress_callback,
         defer_post_commit_cleanup=defer_post_commit_cleanup,
+        cleanup_preparation_observer=cleanup_preparation_observer,
     )
 
 
@@ -299,6 +365,10 @@ def _commit_component(
     progress_callback: ProgressCallback | None,
     *,
     defer_post_commit_cleanup: bool = False,
+    cleanup_preparation_observer: Callable[
+        [tuple[PPCWorkCleanupTarget, ...]], None
+    ]
+    | None = None,
 ) -> ComponentRunResult:
     """Commit one component and either run or return its exact cleanup action.
 
@@ -318,6 +388,10 @@ def _commit_component(
     defer_post_commit_cleanup : bool, default=False
         If true, return the cleanup callable after a successful writer instead
         of invoking it. This does not alter arrays or manifest content.
+    cleanup_preparation_observer : callable or None, default=None
+        Receives one tuple of exact path/SHA-256 cleanup identities before the
+        writer when deferral is enabled. It returns ``None`` and receives no
+        numerical arrays.
 
     Returns
     -------
@@ -325,6 +399,26 @@ def _commit_component(
         Complete/failed transaction outcome. Only a successful deferred result
         may contain ``deferred_cleanup``.
     """
+
+    if cleanup_preparation_observer is not None and not defer_post_commit_cleanup:
+        return _failed(
+            component,
+            f"prepare_cleanup_{component}",
+            ValueError("cleanup observer requires deferred post-commit cleanup"),
+            progress_callback,
+            2,
+        )
+    if defer_post_commit_cleanup and cleanup_preparation_observer is not None:
+        try:
+            cleanup_preparation_observer(tuple(payload.post_commit_cleanup_targets))
+        except _RECOVERABLE_ERRORS as error:
+            return _failed(
+                component,
+                f"prepare_cleanup_{component}",
+                error,
+                progress_callback,
+                2,
+            )
 
     _emit(progress_callback, component, 2, f"load_manifest_{component}")
     try:
@@ -349,9 +443,11 @@ def _commit_component(
         return _failed(component, f"write_{component}", error, progress_callback, 3)
     cleanup_warning = None
     deferred_cleanup = None
+    deferred_cleanup_targets: tuple[PPCWorkCleanupTarget, ...] = ()
     if payload.post_commit_cleanup is not None:
         if defer_post_commit_cleanup:
             deferred_cleanup = payload.post_commit_cleanup
+            deferred_cleanup_targets = tuple(payload.post_commit_cleanup_targets)
         else:
             try:
                 payload.post_commit_cleanup()
@@ -366,6 +462,8 @@ def _commit_component(
         updated_manifest,
         cleanup_warning,
         deferred_cleanup,
+        deferred_cleanup_targets,
+        dict(payload.execution_metadata),
     )
 
 

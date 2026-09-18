@@ -41,6 +41,7 @@ from src.neural_analysis.lfp_summary_plotting import (
 _PREVIEW_SHUFFLE_COUNT = 100
 _RUN_LABEL = "lfp_spike_phase_preview_validation"
 _REPORT_SCHEMA_VERSION = "spike_phase_preview_report.v1"
+_GENERAL_REPORT_SCHEMA_VERSION = "spike_phase_report.v1"
 _PRIMARY_CONDITION = "correct_rewarded"
 _PRIMARY_EPOCHS = ("before", "after")
 _PRIMARY_BANDS = ("theta", "gamma")
@@ -257,13 +258,56 @@ def build_ct026_default_active_population(
     UnitPopulationConfig
         ProbeB good/mua units on good inside-brain channels, ordered by cluster.
     """
+    return build_ct026_active_population(
+        session_path,
+        "ProbeB",
+        cluster_metadata_loader,
+        channel_metadata_loader,
+    )
+
+
+def build_ct026_active_population(
+    session_path: Path,
+    probe_label: str,
+    cluster_metadata_loader: Callable[[Path], pd.DataFrame],
+    channel_metadata_loader: Callable[[Path], pd.DataFrame],
+) -> UnitPopulationConfig:
+    """Load one explicit CT026 ProbeA or ProbeB active population.
+
+    Parameters
+    ----------
+    session_path : pathlib.Path
+        CT026 root used only to form sorter and aligned-spike paths.
+    probe_label : str
+        Exact categorical value ``"ProbeA"`` or ``"ProbeB"``. Combined
+        populations are rejected.
+    cluster_metadata_loader, channel_metadata_loader : callable
+        Loaders accepting the selected sorter path and returning cluster and
+        channel tables. Cluster ids/channels are categorical integer values.
+
+    Returns
+    -------
+    UnitPopulationConfig
+        Good/MUA units on good inside-brain channels for exactly one probe,
+        ordered by cluster id with probe-qualified stable identities.
+    """
+    if probe_label not in {"ProbeA", "ProbeB"}:
+        raise ValueError("probe_label must be ProbeA or ProbeB")
     root = Path(session_path)
-    sorter = root / "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeB/kilosort4"
+    sorter = (
+        root
+        / "ephys"
+        / "derived"
+        / f"Record_Node_101_Neuropix-PXI-110.{probe_label}"
+        / "kilosort4"
+    )
     clusters = cluster_metadata_loader(sorter)
     channels = channel_metadata_loader(sorter)
     required_clusters = {"cluster_id", "ch", "group"}
     if not required_clusters.issubset(clusters) or "inside_brain" not in channels:
-        raise ValueError("CT026 ProbeB metadata is missing required quality columns")
+        raise ValueError(
+            f"CT026 {probe_label} metadata is missing required quality columns"
+        )
     if {"channel_id", "label"}.issubset(channels):
         channel_numbers = pd.to_numeric(
             channels["channel_id"].astype(str).str.replace("CH", "", regex=False),
@@ -274,7 +318,9 @@ def build_ct026_default_active_population(
         channel_numbers = pd.to_numeric(channels["channel"], errors="coerce")
         channel_labels = channels["channel_quality"]
     else:
-        raise ValueError("CT026 ProbeB metadata lacks channel id or label columns")
+        raise ValueError(
+            f"CT026 {probe_label} metadata lacks channel id or label columns"
+        )
     good_channels = channels.loc[
         channel_labels.astype(str).str.lower().eq("good")
         & channels["inside_brain"].astype(bool)
@@ -286,10 +332,13 @@ def build_ct026_default_active_population(
         clusters["ch"].isin(selected_channels)
         & clusters["group"].astype(str).str.lower().isin(("good", "mua"))
     ].sort_values("cluster_id")
-    unit_ids = tuple(f"ProbeB:{int(value)}" for value in selected["cluster_id"])
+    unit_ids = tuple(
+        f"{probe_label}:{int(value)}" for value in selected["cluster_id"]
+    )
+    aligned_name = f"probe{probe_label[-1]}_sync.npz"
     return UnitPopulationConfig(
-        "CT026 ProbeB active", "ProbeB", sorter,
-        root / "ephys/aligned/aligned_open_ephys/probeB_sync.npz",
+        f"CT026 {probe_label} active", probe_label, sorter,
+        root / "ephys/aligned/aligned_open_ephys" / aligned_name,
         selected_channels,
         (("channel_quality", "good"), ("inside_brain", "true"), ("unit_quality", "good,mua")),
         unit_ids,
@@ -383,6 +432,8 @@ def run_spike_phase_preview_validation(
         int(getattr(dependencies, "peak_memory_bytes", lambda: 0)()), dependencies,
         report_measurements=report_measurements,
         deferred_cleanup=getattr(result, "deferred_cleanup", None),
+        schema_version=_REPORT_SCHEMA_VERSION,
+        run_kind="preview",
     )
 
 
@@ -428,6 +479,88 @@ def render_cached_spike_phase_preview_validation(
         float(spike_phase_wall_time_s), int(spike_phase_peak_memory_bytes), dependencies,
         report_measurements=report_measurements,
         deferred_cleanup=None,
+        schema_version=_REPORT_SCHEMA_VERSION,
+        run_kind="preview",
+    )
+
+
+def render_cached_spike_phase_report(
+    config: LFPSummaryConfig,
+    run_parent: Path,
+    dependencies: SpikePhasePreviewValidationDependencies,
+    *,
+    run_kind: str,
+    component_wall_time_s: float,
+    component_peak_memory_bytes: int,
+    report_measurements: SpikePhaseReportMeasurements | None = None,
+    deferred_cleanup: Callable[[], None] | None = None,
+) -> SpikePhasePreviewValidationResult:
+    """Publish a cache-only launcher report for preview or final shuffles.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Immutable active-population configuration using exactly 100 preview or
+        1,000 final shuffles. Cached numerical axes/units remain unchanged.
+    run_parent : pathlib.Path
+        Parent for one immutable timestamped report directory.
+    dependencies : SpikePhasePreviewValidationDependencies
+        Cache compatibility/loading, bounded plotting, clock, and writer seams.
+        Its compute callable is never invoked.
+    run_kind : str
+        Exact categorical value ``"preview"`` or ``"final"`` matching 100 or
+        1,000 configured shuffles respectively.
+    component_wall_time_s : float
+        Finite nonnegative complete component duration in seconds.
+    component_peak_memory_bytes : int
+        Nonnegative current-process peak RSS bytes; zero means unavailable.
+    report_measurements : SpikePhaseReportMeasurements or None
+        Optional detailed scalar timing/worker/memory/storage measurements.
+    deferred_cleanup : callable or None
+        Exact in-memory cleanup action returned only after report publication;
+        this function never invokes it.
+
+    Returns
+    -------
+    SpikePhasePreviewValidationResult
+        Validated immutable report paths using schema
+        ``spike_phase_report.v1`` and the actual configured shuffle count.
+    """
+    validate_lfp_summary_config(config)
+    if config.unit_population is None:
+        raise ValueError("Spike-phase report requires an active unit population")
+    expected_shuffles = {"preview": 100, "final": 1000}
+    if run_kind not in expected_shuffles:
+        raise ValueError("run_kind must be preview or final")
+    if config.ppc.shuffle_count != expected_shuffles[run_kind]:
+        raise ValueError("run_kind does not match the configured shuffle count")
+    _optional_nonnegative_float(component_wall_time_s, "component_wall_time_s")
+    _optional_nonnegative_int(
+        component_peak_memory_bytes,
+        "component_peak_memory_bytes",
+    )
+    timestamp = dependencies.now_utc()
+    label = f"lfp_spike_phase_{run_kind}_report"
+    run_directory = _planned_run_directory(
+        config,
+        Path(run_parent),
+        timestamp,
+        run_label=label,
+    )
+    manifest, arrays = _load_compatible_spike_phase(config, dependencies)
+    return _write_report(
+        config,
+        Path(run_parent),
+        run_directory,
+        manifest,
+        arrays,
+        float(component_wall_time_s),
+        int(component_peak_memory_bytes),
+        dependencies,
+        report_measurements=report_measurements,
+        deferred_cleanup=deferred_cleanup,
+        schema_version=_GENERAL_REPORT_SCHEMA_VERSION,
+        run_kind=run_kind,
     )
 
 
@@ -451,7 +584,13 @@ def _validate_preview_config(config: LFPSummaryConfig) -> None:
         raise ValueError("Spike-phase preview requires exactly 100 shuffles")
 
 
-def _planned_run_directory(config: LFPSummaryConfig, run_parent: Path, timestamp: str) -> Path:
+def _planned_run_directory(
+    config: LFPSummaryConfig,
+    run_parent: Path,
+    timestamp: str,
+    *,
+    run_label: str = _RUN_LABEL,
+) -> Path:
     """Return an unused immutable report path without creating it.
 
     Parameters
@@ -468,7 +607,7 @@ def _planned_run_directory(config: LFPSummaryConfig, run_parent: Path, timestamp
     pathlib.Path
         Uncreated directory beneath ``run_parent``.
     """
-    path = run_parent / f"{config.session_id}_{_RUN_LABEL}_{timestamp}"
+    path = run_parent / f"{config.session_id}_{run_label}_{timestamp}"
     if path.exists():
         raise FileExistsError(f"validation run already exists: {path}")
     return path
@@ -514,6 +653,8 @@ def _write_report(
     *,
     report_measurements: SpikePhaseReportMeasurements | None,
     deferred_cleanup: Callable[[], None] | None,
+    schema_version: str,
+    run_kind: str,
 ) -> SpikePhasePreviewValidationResult:
     """Atomically write scalar report artifacts from already-cached arrays.
 
@@ -574,6 +715,8 @@ def _write_report(
             rendered,
             unavailable,
             cleanup_ready=deferred_cleanup is not None,
+            schema_version=schema_version,
+            run_kind=run_kind,
         )
         staged_paths = _write_report_artifacts(
             staging,
@@ -623,6 +766,8 @@ def _scalar_report(
     unavailable_selections: tuple[dict[str, object], ...],
     *,
     cleanup_ready: bool,
+    schema_version: str,
+    run_kind: str,
 ) -> dict[str, object]:
     """Build one JSON-safe detailed report without retaining numerical arrays.
 
@@ -675,7 +820,8 @@ def _scalar_report(
     population = config.unit_population
     assert population is not None
     return {
-        "schema_version": _REPORT_SCHEMA_VERSION,
+        "schema_version": schema_version,
+        "run_kind": run_kind,
         "session_id": config.session_id,
         "component": "spike_phase",
         "population_label": population.label,
@@ -696,7 +842,7 @@ def _scalar_report(
             np.count_nonzero(np.asarray(arrays["significant"], dtype=bool))
         ),
         "spike_count": _unique_cached_spike_count(arrays),
-        "shuffle_count": _PREVIEW_SHUFFLE_COUNT,
+        "shuffle_count": int(config.ppc.shuffle_count),
         "wall_time_s": measurements.component_total_seconds,
         "peak_memory_bytes": measurements.peak_process_rss_bytes,
         "cache_size_bytes": measurements.final_cache_size_bytes,
@@ -1735,7 +1881,10 @@ def _validate_staged_report(directory: Path, png_paths: tuple[Path, ...]) -> Non
         decoded[name] = value
     report = decoded["report.json"]
     assert isinstance(report, dict)
-    if report.get("schema_version") != _REPORT_SCHEMA_VERSION:
+    if report.get("schema_version") not in {
+        _REPORT_SCHEMA_VERSION,
+        _GENERAL_REPORT_SCHEMA_VERSION,
+    }:
         raise ValueError("report schema_version is incompatible")
 
     rendered = report.get("rendered_selections")

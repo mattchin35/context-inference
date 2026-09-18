@@ -54,7 +54,11 @@ from src.neural_analysis.lfp_summary_work_cache import (
     load_prepared_phase_cache,
     write_prepared_phase_cache,
 )
-from src.neural_analysis.lfp_summary_pipeline import ComponentPayload, PipelineDependencies
+from src.neural_analysis.lfp_summary_pipeline import (
+    ComponentPayload,
+    PPCWorkCleanupTarget,
+    PipelineDependencies,
+)
 from src.neural_analysis.lfp_summary_preparation import (
     PreparedSiteTraces,
     PreparedTrials,
@@ -277,6 +281,10 @@ class PreparedPhaseRun:
     source_trace : numpy.ndarray
         Float shape ``(site, trial, time)`` unprocessed source-voltage samples
         anti-aliased onto the exact 500-Hz cache grid. Invalid rows are NaN.
+    prepared_phase_cache_state : str or None
+        ``"cold"`` when this invocation computed phase, ``"warm"`` when it
+        loaded the exact prepared-phase cache, or ``None`` for injected legacy
+        records that do not expose cache provenance. This field has no units.
     """
 
     trial_indices: np.ndarray
@@ -288,6 +296,7 @@ class PreparedPhaseRun:
     site_valid: np.ndarray
     pair_valid: np.ndarray
     source_trace: np.ndarray
+    prepared_phase_cache_state: str | None = None
 
 
 @dataclass(frozen=True)
@@ -615,6 +624,7 @@ def prepare_phase_run(
         site_valid=site_valid,
         pair_valid=pair_valid,
         source_trace=source_trace,
+        prepared_phase_cache_state="warm" if cached is not None else "cold",
     )
 
 
@@ -1131,11 +1141,58 @@ def _build_spike_phase_payload(
         }
     )
     payload = build_component_payload("spike_phase", arrays)
+    cleanup_targets = _ppc_cleanup_targets(config, completed_ppc_runs)
     cleanup = _ppc_post_commit_cleanup(config, completed_ppc_runs)
+    component_plan = getattr(execution, "component_plan", None)
+    allocation = getattr(component_plan, "allocation_estimate", None)
+    execution_metadata = {
+        "ppc_planning_seconds": getattr(execution, "planning_seconds", None),
+        "grouped_execution_seconds": getattr(
+            execution,
+            "grouped_execution_seconds",
+            None,
+        ),
+        "requested_worker_count": int(config.ppc_execution.worker_count),
+        "planner_active_worker_count": getattr(allocation, "active_worker_count", None),
+        "planned_parent_private_bytes": getattr(
+            allocation,
+            "planned_parent_private_bytes",
+            None,
+        ),
+        "planned_worker_private_bytes": getattr(
+            allocation,
+            "planned_worker_private_bytes",
+            None,
+        ),
+        "planned_aggregate_array_bytes": getattr(
+            allocation,
+            "planned_aggregate_array_bytes",
+            None,
+        ),
+        "shared_phase_mmap_bytes": getattr(
+            allocation,
+            "shared_phase_mmap_bytes",
+            None,
+        ),
+        "scheduled_edge_count": getattr(component_plan, "scheduled_edge_count", None),
+        "independent_edge_count": getattr(
+            component_plan,
+            "independent_edge_count",
+            None,
+        ),
+        "union_edge_count": getattr(component_plan, "union_edge_count", None),
+        "completed_block_count": len(getattr(execution, "completed_block_ids", ())),
+        "resumed_block_count": len(getattr(execution, "resumed_block_ids", ())),
+        "prepared_phase_cache_state": prepared_phase.prepared_phase_cache_state,
+        "run_fingerprint": execution.run_fingerprint,
+        "run_directory": str(execution.run_directory),
+    }
     return ComponentPayload(
         arrays=payload.arrays,
         manifest_entry=payload.manifest_entry,
         post_commit_cleanup=cleanup,
+        post_commit_cleanup_targets=cleanup_targets,
+        execution_metadata=execution_metadata,
     )
 
 
@@ -2117,6 +2174,36 @@ def _ppc_post_commit_cleanup(
             cleanup_ppc_run(run_directory, run_fingerprint)
 
     return cleanup
+
+
+def _ppc_cleanup_targets(
+    config: LFPSummaryConfig,
+    completed_runs: list[tuple[Path, str]],
+) -> tuple[PPCWorkCleanupTarget, ...]:
+    """Return exact JSON-safe work identities for deferred launcher cleanup.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Immutable execution policy; no numerical arrays are inspected.
+    completed_runs : list[tuple[pathlib.Path, str]]
+        PPC work directories and exact SHA-256 run fingerprints that produced
+        the committed payload.
+
+    Returns
+    -------
+    tuple[PPCWorkCleanupTarget, ...]
+        Stable de-duplicated targets, or empty when cleanup is disabled/retained.
+    """
+    if (
+        not config.ppc_execution.checkpoint_enabled
+        or config.ppc_execution.checkpoint_retention != "incomplete_only"
+    ):
+        return ()
+    return tuple(
+        PPCWorkCleanupTarget(Path(run_directory), run_fingerprint)
+        for run_directory, run_fingerprint in dict.fromkeys(completed_runs)
+    )
 
 
 def _sample_observed_trial_phase(
