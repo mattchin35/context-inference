@@ -4,10 +4,12 @@
 
 - **Snapshot:** 2026-09-18 on branch `refactor`.
 - **Current accepted implementation HEAD before this documentation update:**
-  `8741d71` (`docs: record PPC speedup S7 completion`), with grouped-parallel
-  implementation `e89a0ee`.
-- **Last verified S7 neural baseline:** 1,113 passed with 20 warnings. The S8
-  package changed no source or tests.
+  `bd6fa50` (`feat: complete WP12 PPC reporting`), with WP10 production
+  composition `98ac2ed` and grouped-parallel implementation `e89a0ee`.
+- **Last verified neural baseline:** 1,125 passed with 20 warning instances after
+  WP12. The warnings are the existing multiprocessing-fork, intentional
+  duplicate-ZIP-member, and Pynapple zero-duration fixture warnings recorded in
+  the WP12 handoff below.
 - **WP5C state:** the exact PPC speedup S0-S8 sequence is complete. The accepted
   work-only S8 run is
   `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_ppc_s8_2026-09-18T15-06-33Z`.
@@ -18,10 +20,10 @@
   approved documenting the remaining integration sequence. WP5C-6, the actual
   100-shuffle Spike-phase preview, has not run. The 1,000-shuffle final run
   remains a separate later launch after preview inspection.
-- **Approved immediate sequence:** complete WP10 composed dependencies, then
-  WP12 reporting, then the standalone resumable launcher, and then run the
-  separately invoked 100-shuffle preview. WP11 webapp integration follows the
-  preview infrastructure and is not a prerequisite for the standalone preview.
+- **Approved immediate sequence:** WP10 composed dependencies and WP12 reporting
+  are complete. The next package is the standalone resumable launcher, followed
+  by the separately invoked 100-shuffle preview. WP11 webapp integration follows
+  the preview infrastructure and is not a prerequisite for the standalone preview.
   The 1,000-shuffle run remains a separate later launch after preview inspection
   and explicit approval. WP13 is deferred: the current CT026 preview inherits
   an empty threshold list, and every nonempty absolute-amplitude request must be
@@ -31,10 +33,11 @@
   Remaining integration work must extend them through the packages below, not
   reassign or reimplement them.
 
-Worktree warning at the snapshot: preserve the user's existing modification to
-`docs/SoftwareDesign.md`, the modification to `src/main.py`, and every unrelated
-untracked file and directory. Agents must stage only files assigned to their
-package and must stop on unexpected changes.
+Worktree warning at the snapshot: preserve all unrelated untracked files and
+directories. The 171-entry normal untracked inventory retains NUL-delimited
+status SHA-256 `140fe2baeec9985753c89efe0fe2d68eb341c625065868e0437ce333e0c6a1a0`.
+Agents must stage only files assigned to their package and must stop on
+unexpected tracked changes.
 
 Source-of-truth hierarchy:
 
@@ -57,15 +60,15 @@ Source-of-truth hierarchy:
 | WP4 Synchrony | Numerics, runtime, report, and user approval complete | Numerical implementation `d6c3477`; production runtime `ea542d1`; report tests/implementation `fa19ad0`, `f312957`; approved report `analysis_runs/CT026_2026-08-01_130853_lfp_synchrony_validation_2026-08-26T16-57-33Z` | Full composed webapp integration in WP10-WP11 |
 | WP5A observed PPC | Complete | Tests `fed9435`, `355307e`; implementation `d6c3477`; `test_spike_lfp_summary.py` | None |
 | WP5B shuffle inference | Complete | Tests `c94e152`, `7d22d6f`; implementation `01b7507`; `test_spike_lfp_summary.py` | Performance redesign only; scientific reference must remain unchanged |
-| Spike runtime bridge | Complete, including grouped payload integration | Original bridge `c8e76d5`; grouped payload integration completed in S5; `test_lfp_summary_runtime.py` and synthetic cache/reload/plot coverage | Composed production dependency and UI integration in WP10-WP11 |
+| Spike runtime bridge | Complete, including grouped payload and exact exemplar-trial integration | Original bridge `c8e76d5`; grouped payload integration completed in S5; WP12 implementation `bd6fa50`; `test_lfp_summary_runtime.py` and synthetic cache/reload/plot coverage | UI integration in WP11 |
 | WP5C optimization | Complete through S8 | Grouped-parallel implementation `e89a0ee`; S7 documentation `8741d71`; full S7 neural suite 1,113 passed; accepted work-only S8 run `ct026_ppc_s8_2026-09-18T15-06-33Z`; `docs/ppc_speedup.md`; `docs/ppc_speedup_plan.md`; `docs/ppc_speedup_execution_log.md` | Use eight workers in CT026 production configuration; retain exact preflight; prepare and separately launch WP5C-6 and the later 1,000-shuffle run |
-| WP6 plotting | Partially complete | Tests `b1f51f3` and later focused plotting tests; implementation `d1c3e21`; Power and Synchrony reports above | Complete PPC exemplars and reporting in WP12 |
-| WP7 pipeline | Partially complete | Tests `b1f51f3`; implementation `067fdef`; `test_lfp_summary_pipeline.py` | Composed production dependencies and detailed progress in WP10 |
+| WP6 plotting | Complete for Power, Synchrony, and bounded PPC reports | Original tests `b1f51f3`; implementation `d1c3e21`; paired PPC/report tests `2c80a9b`; WP12 implementation `bd6fa50`; Power and Synchrony reports above | Cached webapp presentation remains in WP11 |
+| WP7 pipeline | Complete for component, Compute All, composition, and report-before-cleanup seams | Original tests `b1f51f3`; implementation `067fdef`; WP10 `98ac2ed`; WP12 deferred-cleanup implementation `bd6fa50`; `test_lfp_summary_pipeline.py` | UI progress/state integration remains in WP11 |
 | WP8 webapp | Partial; Power path only | Tests `c7ec7c1`, `003394a`, `f3954de`; implementations `2885ffd`, `926801b`; `test_lfp_summary_webapp.py` | Synchrony, Spike phase, Compute All, active population, progress, and complete cached views in WP11 |
-| WP9 validation | Partial | Approved Power and Synchrony reports above; S8 work-only benchmark accepted; existing fixed preview helper tests `7223072`, `0dfc1a8`, `1c2fb61`, `b9aecbe`; implementation `c3f6d41`, `c036d62` | After WP10 and WP12, add the standalone launcher; run the 100-shuffle preview; inspect it; then separately approve and launch 1,000 shuffles |
-| WP10 composed dependencies | Next; approved for planning | Package below; PPC contracts and worker decision are stable | Build one Power/Synchrony/Spike-phase/Compute-All production boundary with progress and unsupported-threshold rejection |
+| WP9 validation | Partial | Approved Power and Synchrony reports above; S8 work-only benchmark accepted; fixed preview helper plus WP12 report tests `2c80a9b`; WP12 implementation `bd6fa50` | Add the standalone launcher; run and inspect the 100-shuffle preview; then separately approve and launch 1,000 shuffles |
+| WP10 composed dependencies | Complete | Tests and implementation through `98ac2ed`; completion handoff `3aebba8`; PPC contracts and worker decision are stable | None; consume the composed boundary from the forthcoming launcher and WP11 |
 | WP11 Streamlit integration | Planned after preview infrastructure | Package below | After WP10, support one explicitly selected ProbeA or ProbeB population per run; complete actions, progress, states, and cached views |
-| WP12 PPC plotting/reporting | Planned immediately after WP10 | Package below | Complete before the standalone preview launcher and CT026 interpretation |
+| WP12 PPC plotting/reporting | Complete | Contract `5dfd439`; tests `2c80a9b`, corrections `7d9c322` and `220f5b0`; implementation `bd6fa50`; 1,125-test neural suite green | Launcher must supply its observable measurements, publish its own state/log, then own exact final cleanup |
 | WP13 optional absolute-amplitude thresholds | Explicitly deferred; not a blocker while thresholds are empty | Package below; validation/fingerprint support exists; current CT026 threshold list is empty | Reject every nonempty request before computation until WP13 is separately implemented |
 
 This document replaces the older decoding task list. It translates the scientific
@@ -2930,3 +2933,60 @@ WP12 tests-only RED checkpoint (2026-09-18):
   above. Tests must not change unless an approved requirement changes or a
   demonstrated test defect is documented first. No CT026 computation or
   launcher work is authorized.
+
+WP12 completion handoff (2026-09-18):
+
+- The focused GREEN run exposed one stale pre-WP12 assertion that still
+  required the legacy single-exemplar report seam even though the frozen WP12
+  contract replaced that report selection with paired exemplars. Correction
+  commit `7d9c322` changes only that assertion to require
+  `exemplar_pair`; the existing public single-exemplar plot and its independent
+  tests remain unchanged. The synthetic integration fixture also manually
+  constructed the old one-trial-only payload despite the approved additive
+  schema. Correction commit `220f5b0` adds both exact trial arrays to that
+  fixture and changes no production behavior.
+- Implementation commit `bd6fa50` (`feat: complete WP12 PPC reporting`) changes
+  exactly the five authorized source files. It adds the exact low/high cached
+  trial-table rows while retaining the legacy high-first alias, the frozen
+  low/high plotting record and paired figure, the fixed 27-PNG maximum report
+  planner, detailed scalar measurement/projection records, strict staged
+  JSON/log/Markdown/PNG validation and atomic publication, and opt-in exact
+  post-commit cleanup deferral. Default pipeline callers still clean
+  immediately; WP12 never invokes a deferred callback.
+- The computed production preview adapter opts into cleanup deferral. A callback
+  becomes accessible only after both staged and published artifact validation.
+  Serialization, plotting, validation, publication, or post-publication
+  validation failure exposes no callback. A post-publication validation failure
+  moves the newly created final directory back under the known staging path so
+  the report transaction is removed rather than left partially accepted.
+- Report rendering loads the validated component once, passes the original
+  cache mapping to plot seams, forms only site/epoch or exemplar-sized views,
+  and saves/closes each figure before continuing. The population map no longer
+  requests a dtype conversion of the full PPC tensor. Reporting imports no UI
+  or launcher module and opens no raw LFP, sorter, or trial source.
+- The documented focused command is GREEN at 12 passed and 11 deselected. The
+  auxiliary schema/runtime/pipeline command is GREEN at 4 passed and 34
+  deselected. All five directly affected test modules are GREEN at 61 passed,
+  and synthetic cache/write/reload integration is GREEN at 2 passed.
+- The complete `src/tests/neural_analysis` suite is GREEN at 1,125 passed with
+  20 warning instances in 192.95 seconds. Those are three existing
+  multi-threaded-fork deprecation warnings, one intentional duplicate-NPZ-member
+  warning, and 16 existing Pynapple warnings from zero-duration synthetic
+  epochs. There were no WP12 failures, xfails, skips, network requests, raw
+  CT026 reads, or production-sized computations.
+- `git diff --check` was clean before the implementation commit. The tracked
+  file scope was the five authorized source files plus the two documented test
+  fixture/assertion corrections. The 171-entry normal untracked inventory is
+  unchanged at NUL-delimited status SHA-256
+  `140fe2baeec9985753c89efe0fe2d68eb341c625065868e0437ce333e0c6a1a0`.
+- Remaining launcher risks are intentionally unresolved here. The launcher must
+  record its timestamped run identity and resume command before planning,
+  supply real planner/grouped/process-tree/intermediate-size measurements when
+  observable rather than replacing `None`, reject nonempty amplitude thresholds,
+  support exactly one ProbeA or ProbeB population per run, validate its own
+  state/log in addition to the WP12 report, and only then invoke the returned
+  exact-fingerprint cleanup callback. Rerunning deterministic planning after an
+  interruption remains approved. No combined-probe run is requested.
+- WP12 completion authorizes planning the standalone launcher as a new
+  documentation-first, test-first package. It does not authorize a CT026 dry
+  run, the 100-shuffle preview, the 1,000-shuffle final run, WP11, or WP13.
