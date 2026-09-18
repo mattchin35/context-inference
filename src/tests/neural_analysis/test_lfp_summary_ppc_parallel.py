@@ -425,6 +425,27 @@ def test_grouped_parallel_worker_task_and_initializer_are_spawn_safe_top_level()
         assert callable_value.__qualname__ == callable_name
 
 
+def test_grouped_parallel_initializer_rejects_time_length_mismatch(tmp_path: Path) -> None:
+    """The mmap time coordinate must exactly match the phase time axis."""
+    paths = {name: tmp_path / f"{name}.npy" for name in (
+        "phase", "valid", "time", "rows", "spikes", "offsets",
+    )}
+    np.save(paths["phase"], np.ones((1, 1, 2, 3), dtype=np.complex64))
+    np.save(paths["valid"], np.ones((1, 1, 2, 3), dtype=bool))
+    np.save(paths["time"], np.array([0.0, 0.1], dtype=np.float64))
+    np.save(paths["rows"], np.array([4, 5], dtype=np.int64))
+    np.save(paths["spikes"], np.empty(0, dtype=np.float64))
+    np.save(paths["offsets"], np.zeros((1, 3), dtype=np.int64))
+    descriptor = ppc_runtime._PhaseWorkDescriptor(
+        phase_path=paths["phase"], valid_path=paths["valid"],
+        relative_time_s_path=paths["time"], stable_trial_rows_path=paths["rows"],
+        spike_times_s_path=paths["spikes"], spike_offsets_path=paths["offsets"],
+    )
+
+    with pytest.raises(ValueError, match="grouped worker phase mmap contract"):
+        ppc_runtime._initialize_grouped_parallel_worker(descriptor)
+
+
 def test_grouped_parallel_runner_uses_spawn_initializer_and_cancels_failed_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -721,6 +742,7 @@ def test_grouped_parallel_runner_cancels_pending_window_when_generator_closes(
     submitted: list[str] = []
     cancelled: list[str] = []
     shutdown_calls: list[tuple[bool, bool]] = []
+    timeline: list[str] = []
 
     class FakeFuture:
         """Future double that records cancellation without holding an array."""
@@ -733,6 +755,7 @@ def test_grouped_parallel_runner_cancels_pending_window_when_generator_closes(
 
         def cancel(self) -> bool:
             cancelled.append(self.task)
+            timeline.append("cancel")
             return True
 
     class FakeExecutor:
@@ -745,6 +768,7 @@ def test_grouped_parallel_runner_cancels_pending_window_when_generator_closes(
             return self
 
         def __exit__(self, *_: object) -> None:
+            timeline.append("exit")
             return None
 
         def submit(self, _worker: object, task: str) -> FakeFuture:
@@ -753,6 +777,7 @@ def test_grouped_parallel_runner_cancels_pending_window_when_generator_closes(
 
         def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
             shutdown_calls.append((wait, cancel_futures))
+            timeline.append("shutdown")
 
     monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", FakeExecutor)
     results = ppc_runtime._run_grouped_parallel_block_batches(
@@ -768,3 +793,53 @@ def test_grouped_parallel_runner_cancels_pending_window_when_generator_closes(
 
     assert cancelled == ["second"]
     assert shutdown_calls == [(True, True)]
+    assert timeline.index("cancel") < timeline.index("shutdown")
+    if "exit" in timeline:
+        assert timeline.index("cancel") < timeline.index("exit")
+
+
+def test_grouped_parallel_runner_cancels_before_executor_context_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed future must cancel its window before executor context exit."""
+    timeline: list[str] = []
+
+    class Future:
+        """One failed future with visible cancellation ordering."""
+
+        def result(self) -> object:
+            raise RuntimeError("worker failed")
+
+        def cancel(self) -> bool:
+            timeline.append("cancel")
+            return True
+
+    class Executor:
+        """Executor double that records shutdown and context teardown."""
+
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def __enter__(self) -> "Executor":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            timeline.append("exit")
+
+        def submit(self, *_: object) -> Future:
+            return Future()
+
+        def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+            assert wait and cancel_futures
+            timeline.append("shutdown")
+
+    monkeypatch.setattr(ppc_runtime, "ProcessPoolExecutor", Executor)
+    results = ppc_runtime._run_grouped_parallel_block_batches(
+        phase_descriptor=object(), block_tasks=(object(),), worker_count=1,
+        compute_block=object(),
+    )
+    with pytest.raises(RuntimeError, match="worker failed"):
+        next(results)
+    assert timeline.index("cancel") < timeline.index("shutdown")
+    if "exit" in timeline:
+        assert timeline.index("cancel") < timeline.index("exit")

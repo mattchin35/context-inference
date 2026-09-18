@@ -14,6 +14,7 @@ import socket
 from types import SimpleNamespace
 from typing import Callable, Mapping
 import weakref
+import zipfile
 
 import numpy as np
 import pytest
@@ -8012,6 +8013,12 @@ def test_grouped_parallel_parent_rejects_corrupt_stage_without_checkpoint_or_mar
         task = block_tasks[0]
         task.staged_result_path.parent.mkdir(parents=True, exist_ok=True)
         task.staged_result_path.write_bytes(b"corrupt staged worker result")
+        (task.staged_result_path.parent / "unconsumed-sibling.npz").write_bytes(
+            b"sibling staged worker result"
+        )
+        (task.staged_result_path.parent / "unconsumed.tmp").write_bytes(
+            b"partial staged worker result"
+        )
         yield ppc_runtime._GroupedParallelBlockResult(
             block_id=task.block_id,
             site_index=task.site_index,
@@ -8032,7 +8039,7 @@ def test_grouped_parallel_parent_rejects_corrupt_stage_without_checkpoint_or_mar
     run_directory = next((tmp_path / "ppc").iterdir())
     assert not (run_directory / "complete.json").exists()
     assert not list((run_directory / "blocks").glob("*.complete.json"))
-    assert not list((run_directory / "worker-staging").glob("*.npz"))
+    assert not list((run_directory / "worker-staging").iterdir())
 
 
 def test_grouped_parallel_worker_transfers_local_summary_without_checkpoint_clone(
@@ -8081,6 +8088,137 @@ def test_grouped_parallel_worker_transfers_local_summary_without_checkpoint_clon
     result = _run_grouped_component(config, phase, spikes, tmp_path)
 
     assert result.run_directory.joinpath("complete.json").is_file()
+
+
+def test_grouped_parallel_staging_uses_local_summary_views_without_direct_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each staged summary member must borrow worker-local summary storage.
+
+    Saving an NPZ necessarily serializes bytes, but the worker must not first
+    create a second complete checkpoint-sized ndarray through ``.copy()``.
+    The save seam therefore receives non-owning views of its one local summary.
+    """
+    config = _grouped_config(worker_count=2)
+    phase, spikes = _grouped_inputs(config)
+    local_summaries: list[dict[str, np.ndarray]] = []
+    original_empty = ppc_runtime._empty_grouped_summary_arrays
+    original_savez = ppc_runtime.np.savez
+    active_worker = False
+    active_stage_path: Path | None = None
+
+    def record_empty(*args: object, **kwargs: object) -> dict[str, np.ndarray]:
+        """Retain each summary allocation for the stage ownership assertion."""
+        summary = original_empty(*args, **kwargs)
+        local_summaries.append(summary)
+        return summary
+
+    def require_borrowed_stage(stream: object, **arrays: np.ndarray) -> None:
+        """Reject a staged metric that owns bytes instead of borrowing a summary."""
+        if (
+            not active_worker
+            or active_stage_path is None
+            or Path(getattr(stream, "name")) != active_stage_path
+        ):
+            original_savez(stream, **arrays)
+            return
+        for name, values in arrays.items():
+            if name in {"site_index", "unit_bounds"}:
+                continue
+            assert not values.flags.owndata
+            assert np.shares_memory(values, local_summaries[-1][name])
+        original_savez(stream, **arrays)
+
+    def local_runner(**kwargs: object) -> Iterator[object]:
+        """Exercise the real worker body without spawning a process."""
+        nonlocal active_worker, active_stage_path
+        ppc_runtime._initialize_grouped_parallel_worker(kwargs["phase_descriptor"])
+        for task in kwargs["block_tasks"]:
+            active_stage_path = task.staged_result_path.with_suffix(".npz.tmp")
+            active_worker = True
+            try:
+                result = kwargs["compute_block"](task)
+            finally:
+                active_worker = False
+                active_stage_path = None
+            yield result
+
+    monkeypatch.setattr(ppc_runtime, "_empty_grouped_summary_arrays", record_empty)
+    monkeypatch.setattr(ppc_runtime.np, "savez", require_borrowed_stage)
+    monkeypatch.setattr(ppc_runtime, "_run_grouped_parallel_block_batches", local_runner)
+
+    _run_grouped_component(config, phase, spikes, tmp_path)
+
+
+def test_grouped_parallel_staged_loader_rejects_extra_duplicate_and_normalizes_reader_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disposable stages reject every archive ambiguity before materialization."""
+    schema = ppc_runtime._grouped_checkpoint_schema(
+        unit_count=1, condition_count=1, epoch_count=3, frequency_count=2,
+        representative_band_count=2, phase_bin_count=4,
+    )
+    base = tmp_path / "base.npz"
+    np.savez(base, **{name: np.zeros(shape, dtype=dtype) for name, (dtype, shape) in schema.items()})
+    for name, duplicate in (("extra", False), ("duplicate", True)):
+        path = tmp_path / f"{name}.npz"
+        with zipfile.ZipFile(base) as source, zipfile.ZipFile(path, "w") as target:
+            for info in source.infolist():
+                target.writestr(info, source.read(info.filename))
+            if duplicate:
+                member = next(iter(schema)) + ".npy"
+                target.writestr(member, source.read(member))
+            else:
+                target.writestr("extra.txt", b"not an array")
+        with pytest.raises(ValueError, match="staged grouped worker result"):
+            ppc_runtime._load_grouped_staged_result(
+                staged_result_path=path, expected_array_schema=schema,
+                maximum_array_bytes=ppc_runtime._grouped_checkpoint_schema_bytes(schema),
+            )
+        assert not path.exists()
+
+    for error_type in (EOFError, RuntimeError, NotImplementedError, TypeError):
+        path = tmp_path / f"reader-error-{error_type.__name__}.npz"
+        path.write_bytes(b"irrelevant")
+        monkeypatch.setattr(ppc_runtime.zipfile, "ZipFile", lambda *_args, **_kwargs: (_ for _ in ()).throw(error_type("bad")))
+        with pytest.raises(ValueError, match="staged grouped worker result"):
+            ppc_runtime._load_grouped_staged_result(
+                staged_result_path=path, expected_array_schema=schema,
+                maximum_array_bytes=ppc_runtime._grouped_checkpoint_schema_bytes(schema),
+            )
+        assert not path.exists()
+
+
+def test_grouped_parallel_parent_rejects_foreign_stage_before_load_or_unlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A scalar worker result may name only its own run staging directory."""
+    config = _grouped_config(worker_count=2)
+    phase, spikes = _grouped_inputs(config)
+    foreign_stage = tmp_path / "foreign.npz"
+    foreign_stage.write_bytes(b"foreign worker artifact")
+
+    def foreign_runner(**kwargs: object) -> Iterator[object]:
+        """Yield a canonical identity with an unauthorized staging path."""
+        task = kwargs["block_tasks"][0]
+        yield ppc_runtime._GroupedParallelBlockResult(
+            block_id=task.block_id, site_index=task.site_index,
+            unit_start=task.unit_start, unit_stop=task.unit_stop,
+            staged_result_path=foreign_stage,
+        )
+
+    def forbid_foreign_load(**_: object) -> dict[str, np.ndarray]:
+        """Foreign paths must fail before any staged archive inspection."""
+        raise AssertionError("parent loaded a foreign staged result")
+
+    monkeypatch.setattr(ppc_runtime, "_run_grouped_parallel_block_batches", foreign_runner)
+    monkeypatch.setattr(ppc_runtime, "_load_grouped_staged_result", forbid_foreign_load)
+    with pytest.raises(RuntimeError, match="noncanonical"):
+        _run_grouped_component(config, phase, spikes, tmp_path / "work")
+    assert foreign_stage.exists()
 
 
 def test_grouped_parallel_worker_uses_in_place_frequency_bh_without_full_scratch(
