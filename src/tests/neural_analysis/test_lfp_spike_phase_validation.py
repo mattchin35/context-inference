@@ -280,7 +280,9 @@ def test_successful_preview_and_cached_render_write_public_ppc_report(tmp_path: 
     )
 
     assert calls[0] == "compute_spike_phase"
-    assert {"unit_map", "population_map", "band_summary", "exemplar"}.issubset(calls)
+    assert {"unit_map", "population_map", "band_summary", "exemplar_pair"}.issubset(
+        calls
+    )
     assert all(path.is_file() for path in result.png_paths)
     assert result.report["wall_time_s"] == 3.5
     assert result.report["peak_memory_bytes"] == 4096
