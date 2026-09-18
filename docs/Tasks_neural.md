@@ -2319,61 +2319,218 @@ Files:
 
 - `src/neural_analysis/lfp_summary_plotting.py`
 - `src/neural_analysis/lfp_spike_phase_validation.py`
+- `src/neural_analysis/lfp_summary_payloads.py`
+- `src/neural_analysis/lfp_summary_runtime.py`
+- `src/neural_analysis/lfp_summary_pipeline.py`
 - `src/tests/neural_analysis/test_lfp_summary_plotting.py`
 - `src/tests/neural_analysis/test_lfp_spike_phase_validation.py`
-- The smallest focused pipeline/runtime test change needed to prove that
-  cleanup is requested only after report success; no production UI files.
+- `src/tests/neural_analysis/test_lfp_summary_payloads.py`
+- The smallest focused additions to `test_lfp_summary_runtime.py` and
+  `test_lfp_summary_pipeline.py` needed to prove exact exemplar identities and
+  report-before-cleanup behavior. No production UI or launcher file is in
+  scope.
 
 Architecture:
 
-- Extend the existing cache-only plotting/report path; never reopen raw LFP or
-  recompute PPC for a figure.
-- Render matched low/high exemplars selected by the frozen 5th/95th percentile
-  rule for every report selection required by the preview. Each exemplar pairs
-  pooled unit metrics with a separately labeled median-spike-count illustrative
-  trial.
-- Write the report through a staging directory and publish it atomically only
-  after every required artifact validates. Include a machine-readable report
-  document and an ASCII Markdown summary.
-- Accept stage timing, process-tree memory, planner/executor provenance, cache
-  sizes, warnings, exclusions, and benchmark projections from explicit inputs;
-  do not infer unavailable measurements as zero.
-- Expose a success/failure result that lets the launcher clean exact completed
-  PPC work only after report publication. Report failure must preserve retained
-  resumable work.
+- Extend the existing cache-only plotting/report path. Figures receive only
+  validated `spike_phase.npz` arrays and immutable configuration metadata; they
+  never reopen raw LFP/spike sources, prepare phase, plan PPC, or recompute a
+  numerical result.
+- Correct the additive exemplar cache contract. The frozen cache already stores
+  `selected_low_unit_ids` and `selected_high_unit_ids` on
+  `(condition, site, epoch, band)` axes, but its one
+  `illustrative_trial_indices` field records the high unit's median-spike-count
+  trial when available and therefore cannot faithfully illustrate both units.
+  Add required int64 arrays `illustrative_low_trial_indices` and
+  `illustrative_high_trial_indices` with the same axes and trial-table-row
+  units; `-1` means unavailable. Retain `illustrative_trial_indices` unchanged
+  as the legacy high-first/fallback-low alias so existing callers do not change
+  meaning. No raw-data reconstruction or approximate trial re-selection is
+  allowed in plotting.
+- `_select_spike_exemplars` continues to call the established deterministic
+  `select_ppc_exemplars` function. It returns both exact per-unit trial arrays
+  in addition to the existing unit-id and legacy arrays. The 5th/95th
+  percentile rule, smallest-stable-id unit tie break, positive-spike median,
+  and earliest-trial tie break remain unchanged. This additive schema makes an
+  older Spike-phase NPZ fail closed during payload validation; there is no
+  migration or silent default, and no completed CT026 Spike-phase cache exists
+  to preserve.
+- Add a frozen `PPCExemplarPanel` plotting record containing one unit id,
+  percentile label, dimensionless pooled frequency PPC, preferred phase in
+  radians, pooled representative-frequency histogram counts, illustrative
+  trial-table row, source and band-filtered trace in the configured source
+  voltage unit, Hilbert phase in radians, and event-relative spike seconds.
+  Add `plot_ppc_exemplar_pair(...)`, which accepts the shared Hz/radian/seconds
+  coordinates plus low/high panel records and returns one unsaved Matplotlib
+  figure with explicitly separate low/high pooled PPC, polar histogram, trace,
+  Hilbert-phase, and spike panels. The existing single-exemplar public function
+  remains unchanged.
+- The approved bounded preview plan is fixed rather than inferred from whichever
+  cache cell happens to contain the most reliable values. It uses condition
+  `correct_rewarded`, every configured site, epochs `before` and `after`, and
+  bands `theta` and `gamma`. For three CT026 sites this produces 12 paired
+  low/high exemplar figures. It also produces six corresponding unit maps, six
+  population maps, and one all-condition/all-epoch band summary per site, for
+  at most 27 PNGs. A scientifically unavailable exemplar cell is recorded with
+  its reason and produces no fake PNG; it does not invalidate otherwise valid
+  report publication.
+- Add frozen `SpikePhaseFilterBenchmark` and
+  `SpikePhaseReportMeasurements` records. Their explicit scalar fields cover
+  phase-preparation, PPC-planner, grouped-execution, component-total, and report
+  seconds; requested/planned/active worker counts; cold/warm prepared-phase
+  state; process and process-tree peak RSS, process-tree peak PSS, and memory
+  provenance; final component/cache and intermediate-work bytes; warning and
+  exclusion strings; and the representative one-filter benchmark used for the
+  nine-filter projection. Every optional unavailable measurement is Python
+  `None`, JSON `null`, and Markdown `unavailable`; measured zero remains numeric
+  zero. Nonnegative/finite units and categorical states are validated before
+  staging writes.
+- Preserve the current public preview entry points and add optional keyword
+  `report_measurements` inputs. A direct computed preview supplies its measured
+  component-total seconds, requested workers, current-process peak RSS when
+  genuinely available, final persisted sizes, and a traceable current-filter
+  benchmark. Measurements that this helper cannot observe, especially
+  planner/grouped splits and process-tree RSS/PSS, remain unavailable unless
+  the future launcher explicitly supplies them. Cached rendering never invents
+  compute measurements.
+- The machine report has schema `spike_phase_preview_report.v1`. It records the
+  active population/probe, requested/planned/active workers, stage and report
+  timings, cold/warm state, memory values plus provenance, final/intermediate
+  sizes, total/selected trials, units, unique packed spikes, computable/reliable/
+  null-eligible/significant cell counts, warnings, exclusions, rendered and
+  unavailable selection records, and a nine-filter projection containing its
+  representative benchmark label and inputs. Projection fields are present but
+  null when an input is unavailable.
+- Stage the exact artifact set beneath a temporary sibling directory:
+  `report.json`, `run.log`, `manifest_snapshot.json`, `configuration.json`,
+  `source_identifiers.json`, ASCII `run_summary.md`, and the deterministic PNG
+  set. JSON uses sorted keys, `allow_nan=False`, and a trailing newline. Before
+  publication, reload every JSON mapping, validate the report schema and
+  selection/file agreement, parse each JSON log line, verify nonempty ASCII
+  Markdown, verify each required PNG signature/nonempty file, and reject
+  unexpected or missing artifacts. Only then atomically rename the staging
+  directory to the final timestamped path.
+- Extend `ComponentRunResult` with a default-`None` exact deferred-cleanup
+  callable. Add keyword `defer_post_commit_cleanup=False` to
+  `compute_spike_phase_component` and the internal commit seam, plus
+  `defer_spike_phase_cleanup=False` to Compute All. Defaults preserve all
+  existing immediate post-commit cleanup behavior. When explicitly deferred,
+  the final component and manifest are committed, cleanup is not invoked, and
+  the exact callback is returned in the successful component result.
+- Production Spike preview computation opts into deferral. A successful report
+  result exposes that same callback only after staged validation and atomic
+  publication. WP12 never calls it. The forthcoming standalone launcher owns
+  the last success step and invokes it only after it validates its own log and
+  state artifacts as well. Compute, cache, figure, serialization, validation,
+  or publication failure returns/exposes no cleanup request and leaves exact
+  resumable PPC work intact.
+- Preserve all scientific PPC arrays, seeds, shuffle semantics, worker/allocation
+  defaults, component fingerprints, existing component-specific factories, and
+  the WP10 composed boundary. The only final payload change is the two additive
+  illustrative-trial arrays.
 
 Tests written first:
 
-- The high/low 5th/95th percentile exemplar set is deterministic.
-- Pooled PPC and the illustrative median-spike-count trial are visually and
-  textually distinct.
-- Reports contain a detailed run log, warning/exclusion summary, reliability
-  and eligibility counts, and stage performance/cache measurements.
-- The nine-filter runtime/storage projection is present and traceable to the
-  representative benchmark.
-- Every figure has readable labels, an opaque selected background, and a
-  caption summarizing scientific content and any statistical test.
-- Reports distinguish unavailable measurements from measured zero and identify
-  cold versus warm prepared-phase behavior.
-- Report metadata records requested/planned/active workers, planner time,
-  grouped execution time, process-tree RSS/PSS provenance, final/intermediate
-  cache sizes, units/trials/spikes, exclusions, and warnings.
-- Injected figure, serialization, validation, or atomic-publication failures
-  leave no valid-looking report and do not request PPC work cleanup.
-- A fully successful staged report requests cleanup only after all plots, log,
-  machine-readable report, configuration/manifest snapshots, source ids, and
-  Markdown summary validate.
+- The payload schema requires both low/high illustrative-trial arrays, validates
+  their exact axes/dtypes/units, rejects an older one-trial-only payload, and
+  retains the legacy high-first/fallback-low field unchanged.
+- Deterministic ties yield the established low/high unit ids and each unit's own
+  median-positive-spike trial. The two trial ids may differ and survive the
+  complete runtime payload round trip without changing PPC values.
+- The paired figure uses separate low/high pooled curves, polar histograms,
+  source/filtered/Hilbert traces, and trial spikes; labels and caption cannot
+  confuse pooled statistics with either single illustrative trial. The actual
+  nearest cached 8/40-Hz coordinate is displayed.
+- The fixed report planner produces exactly 12 CT026 exemplar selections, six
+  unit maps, six population maps, and three band summaries. Missing low/high
+  scientific exemplars become explicit unavailable records rather than dummy
+  figures or selection substitution.
+- Every figure has readable labels, opaque white background, black axes/text,
+  and a caption with session, alignment, epoch, band/frequency, unit/trial,
+  reliability/count interpretation, and statistical-test meaning where
+  applicable.
+- Reports contain the complete detailed run log, warning/exclusion summary,
+  population/probe identity, computable/reliable/null-eligible/significant
+  counts, and stage performance/cache measurements.
+- The nine-filter runtime/final/intermediate-storage projection is present and
+  names the exact representative benchmark and scalar inputs. Missing
+  intermediate storage stays null rather than becoming zero.
+- Unavailable measurements and measured zero round-trip distinctly through
+  report JSON, log, and Markdown. Cold, warm, and unavailable prepared-phase
+  states remain distinct.
+- Requested/planned/active workers, planner and grouped time, process/process-
+  tree RSS/PSS provenance, final/intermediate sizes, units/trials/spikes,
+  exclusions, and warnings all appear with their documented units.
+- Default component execution still runs cleanup after a successful final
+  writer. Opt-in deferred execution commits first, returns the exact callable,
+  does not call it, and never returns it after a failed writer.
+- Injected plot, JSON serialization, staged validation, or atomic-publication
+  failures leave no final report directory and do not invoke or expose the PPC
+  cleanup request.
+- A fully successful staged report exposes the exact cleanup request only after
+  all PNGs, report/log, configuration/manifest snapshots, source ids, and
+  Markdown summary reload and validate from the published directory.
+- Cache-only report rendering calls no raw loader, phase preparation, PPC
+  planner/executor, or compute seam and does not create a second full component
+  array copy.
+- Existing single-exemplar plotting, pipeline immediate-cleanup, runtime PPC,
+  component schema, synthetic integration, and WP10 composition tests remain
+  green.
 
 Performance considerations:
 
-- Plot/report work consumes final cached arrays only and must not retain a
-  second full PPC component copy beyond one bounded view's needs.
-- Report timing is recorded separately from planning, transforms, and grouped
-  PPC execution.
+- Load the validated final component once. Build bounded NumPy views for one
+  selection at a time, save and close each figure immediately, and never retain
+  a second full PPC component or all figures concurrently.
+- The approved 27-PNG upper bound replaces an exhaustive 162 paired-exemplar
+  expansion. Deterministic filenames encode component, condition, site, epoch,
+  band, and paired percentile identity without collisions.
+- Report JSON/log/summaries contain scalar or short categorical data only.
+  Report timing is measured separately from phase preparation, planning,
+  grouped execution, and final component time.
+- Add no dependency. Use the existing NumPy, Matplotlib, JSON, temporary-
+  directory, and filesystem primitives. No CT026 data or production-sized work
+  is part of WP12 verification.
 
 RED command:
 
 `uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_lfp_summary_plotting.py src/tests/neural_analysis/test_lfp_spike_phase_validation.py -k "ppc or exemplar or report or cleanup or projection"`
+
+Implementation and verification sequence:
+
+1. Commit this exact documentation-only contract before any WP12 test or source
+   edit.
+2. Add and commit tests only in the listed test files. Run the RED command and
+   record failures caused by absent paired plotting, two-trial schema, detailed
+   report publication, or cleanup deferral behavior.
+3. Implement the additive payload/runtime contract, paired plotting, report
+   records/staging validation, and opt-in pipeline deferral with the smallest
+   localized changes. Do not change tests merely to reach GREEN.
+4. Run the RED command, complete focused files, affected payload/runtime/
+   pipeline/report tests, synthetic LFP-summary integration, and the complete
+   `src/tests/neural_analysis` suite.
+5. Review diffs for cache-only plotting, exact low/high trial identities,
+   absence of full-array copies, unavailable-versus-zero semantics, artifact
+   atomicity, deferred-cleanup ownership, no Streamlit/CLI imports, unchanged
+   scientific defaults, and no raw CT026 access.
+6. Commit implementation separately from tests. Append exact commits, RED/GREEN
+   counts, suite warnings, changed-file scope, and unresolved launcher risks to
+   the handoff section before WP5C-6 begins.
+
+Interruption recovery:
+
+- WP12 starts from pushed commit `3aebba8` on `refactor`, equal to
+  `origin/refactor`. The tracked worktree is clean. The 171 pre-existing
+  untracked entries retain status-inventory SHA-256
+  `140fe2baeec9985753c89efe0fe2d68eb341c625065868e0437ce333e0c6a1a0` and
+  remain out of scope.
+- Before this contract commit, the two existing focused files pass 17 tests.
+  After the documentation commit, resume with the tests-only commit and RED.
+  After the implementation commit, rerun focused/affected/full verification and
+  record it here.
+- No partial WP12 state authorizes WP5C-6, WP11, WP13, a CT026 dry run, or the
+  100-/1,000-shuffle scientific computation. The launcher remains a separate
+  documentation-first, test-first package after WP12 is fully green.
 
 ### WP13 - Apply configured absolute amplitude thresholds
 
@@ -2722,3 +2879,32 @@ WP10 implementation completion and GREEN handoff (2026-09-18):
   first-written tests, RED command, performance constraints, and interruption
   recovery checkpoint. The later launcher remains the first authorized
   boundary for a user-invoked 100-shuffle CT026 preview.
+
+WP12 documentation-first authorization (2026-09-18):
+
+- The user confirmed that all WP10 commits were pushed and authorized continued
+  WP12 planning. Baseline commit `3aebba8` equals `origin/refactor`; the tracked
+  worktree is clean and the pre-existing untracked inventory hash is unchanged.
+- Inspection found that `selected_low_unit_ids` and
+  `selected_high_unit_ids` are independently cached, but the single
+  `illustrative_trial_indices` array stores the high unit's trial first. The
+  user approved adding exact low/high trial-index arrays instead of displaying
+  a mismatched trial, reopening raw data, or approximately reconstructing an
+  excluded-trial set from incomplete cache masks.
+- The user approved a bounded primary report rather than 162 exhaustive paired
+  exemplar figures: `correct_rewarded`, all three configured sites,
+  before/after epochs, and theta/gamma bands produce 12 paired figures. Together
+  with six unit maps, six population maps, and three per-site band summaries,
+  the report has an upper bound of 27 PNGs.
+- The user approved launcher-owned final cleanup. WP12 adds opt-in cleanup
+  deferral and returns the exact action only after report publication; WP12 does
+  not execute it. Existing pipeline callers retain immediate cleanup by
+  default.
+- The exact additive schema, plotting records, measurement fields, report
+  schema/artifacts, staged validation, cleanup interface, first-written tests,
+  performance constraints, RED command, verification order, and recovery
+  instructions are recorded in the WP12 package above. This documentation must
+  be committed before a WP12 test or source file changes.
+- The next allowed action after the documentation commit is the WP12 tests-only
+  edit and commit. It must reproduce the documented RED before implementation.
+  No CT026 scientific computation or launcher implementation is authorized.
