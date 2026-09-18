@@ -2663,3 +2663,20 @@ WP10 documentation-first authorization (2026-09-18):
   intended RED, and record it before touching runtime or pipeline source.
 - WP10 authorization does not authorize WP12, the launcher, WP11, WP13, a
   synthetic production-sized profile, or any CT026 computation.
+
+WP10 test-only RED checkpoint (2026-09-18):
+
+- Documentation-first contract commit: `4c88f9a` (`docs: freeze WP10 composed
+  runtime contract`). No test or source file changed before this commit.
+- Test-only commit: `e3a6757` (`test: define WP10 composed runtime boundary`).
+  It changed only `test_lfp_summary_runtime.py` and
+  `test_lfp_summary_pipeline.py`; runtime and pipeline source remained
+  unchanged.
+- The approved RED command selected seven tests. Five existing/new pipeline
+  contracts passed. Two composed-runtime tests failed because
+  `lfp_summary_runtime.make_lfp_summary_pipeline_dependencies` did not exist.
+  The failures were the intended missing-interface RED, not fixture, syntax,
+  import-collection, or environment failures.
+- The next allowed action is the minimal `lfp_summary_runtime.py`
+  implementation specified in WP10. `lfp_summary_pipeline.py` must remain
+  unchanged unless a subsequent source run exposes a demonstrated contract gap.
