@@ -2475,6 +2475,22 @@ RED and verification commands:
 
 `uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_lfp_summary_plotting.py src/tests/neural_analysis/test_lfp_spike_phase_validation.py src/tests/neural_analysis/test_lfp_spike_phase_launcher.py -k "population_ppc or report or recover"`
 
+R1 tests-only RED checkpoint (2026-09-20):
+
+- Test-only commit `b77f4a5` adds the approved population-layout, realistic
+  full-report, explicit recovery, provenance, failure-retention, locking, and
+  recovered cleanup-only resume contracts in exactly the three test files
+  listed above. No production or numerical source changed in that commit.
+- The exact focused command above selected 19 tests and produced the intended
+  genuine RED: 11 failed, 8 passed, and 25 were deselected in 5.74 seconds.
+  The failures are attributable to the absent `eligible_count` panel, the
+  reproduced real-size `bottom cannot be >= top` layout failure, and the
+  absent `recover-report` command. Collection, fixtures, and the eight
+  pre-existing compatible contracts succeeded.
+- Production implementation remains unstarted at this checkpoint. The next
+  permissible edit is the smallest change within the three R1 production
+  files, followed by the focused GREEN and broader verification below.
+
 After focused GREEN, run the complete three files, directly affected
 pipeline/runtime/report tests, and then:
 
