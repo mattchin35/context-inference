@@ -466,7 +466,7 @@ def test_general_cached_report_supports_separate_1000_shuffle_final_run(
     assert "compute_spike_phase" not in calls
 
 
-def test_real_dimension_population_maps_publish_inside_cache_backed_report(
+def test_real_dimension_summary_maps_publish_readably_inside_cache_backed_report(
     tmp_path: Path,
 ) -> None:
     """A 273-unit, nine-condition, 50-frequency report must render atomically."""
@@ -487,6 +487,7 @@ def test_real_dimension_population_maps_publish_inside_cache_backed_report(
             "spike_count": np.full(metric_shape, 51, dtype=np.int64),
             "null_eligible": np.ones(metric_shape, dtype=bool),
             "significant": np.zeros(metric_shape, dtype=bool),
+            "ppc_band_mean": np.full((unit_count, 9, 3, 3, 2), 0.1),
         }
     )
     calls: list[str] = []
@@ -494,6 +495,10 @@ def test_real_dimension_population_maps_publish_inside_cache_backed_report(
     dependencies.load_spike_phase_arrays = lambda *_: arrays
     dependencies.plot_population_ppc_maps = (
         lfp_spike_phase_validation._plot_cached_population_map
+    )
+    dependencies.plot_unit_ppc_map = lfp_spike_phase_validation._plot_cached_unit_map
+    dependencies.plot_ppc_band_summary = (
+        lfp_spike_phase_validation._plot_cached_band_summary
     )
 
     def save_png(figure: object, path: Path) -> None:
@@ -518,8 +523,34 @@ def test_real_dimension_population_maps_publish_inside_cache_backed_report(
 
     assert result.report["unit_count"] == 273
     assert calls.count("population_map") == 0
+    assert calls.count("unit_map") == 0
+    assert calls.count("band_summary") == 0
     assert len(result.png_paths) == 27
     assert all(path.is_file() for path in result.png_paths)
+
+
+def test_cached_band_summary_selects_only_frozen_before_after_measurements(
+    tmp_path: Path,
+) -> None:
+    """Cache adapter excludes whole-window bands from the four-item report view."""
+    config = build_ct026_spike_phase_preview_config(tmp_path / "CT026", _population())
+
+    figure, axes = lfp_spike_phase_validation._plot_cached_band_summary(
+        _cache_arrays(),
+        config,
+        site_index=0,
+    )
+
+    legend = axes["band_ppc"].get_legend()
+    assert legend is not None
+    assert [text.get_text() for text in legend.get_texts()] == [
+        "theta-before",
+        "theta-after",
+        "gamma-before",
+        "gamma-after",
+    ]
+    assert len(axes["band_ppc"].patches) == 9 * 4
+    plt.close(figure)
 
 
 @pytest.mark.parametrize(

@@ -226,6 +226,11 @@ def test_parser_requires_explicit_probe_and_final_confirmation() -> None:
     )
     assert recovery.mode == "recover-report"
     assert recovery.run_directory == Path("/runs/failed-report")
+    rerender = launcher.parse_launcher_command(
+        ["rerender-report", "--run-directory", "/runs/completed-report"]
+    )
+    assert rerender.mode == "rerender-report"
+    assert rerender.run_directory == Path("/runs/completed-report")
 
     invalid = (
         ["new", "--session-path", "/data/CT026", "--shuffles", "100"],
@@ -865,3 +870,298 @@ def test_report_recovery_rejects_changed_sources_and_incompatible_component(
     assert component_result.exit_code == 2
     assert component_calls == ["validate_component"]
     assert target.is_dir()
+
+
+def _completed_launcher_run(
+    tmp_path: Path,
+    terminal: list[str],
+) -> tuple[object, object, Path]:
+    """Create one fully completed original-commit run and immutable report."""
+    launcher = _launcher()
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            [
+                "new",
+                "--session-path",
+                str(tmp_path / "CT026"),
+                "--analysis-root",
+                str(tmp_path / "runs"),
+                "--probe",
+                "ProbeB",
+                "--shuffles",
+                "100",
+            ]
+        ),
+        _dependencies(tmp_path, [], terminal),
+    )
+    state = json.loads((result.run_directory / "launcher_state.json").read_text())
+    report_directory = Path(state["report_directory"])
+    assert result.status == "complete"
+    assert report_directory.is_dir()
+    return launcher, result, report_directory
+
+
+def _rerender_dependencies(
+    tmp_path: Path,
+    calls: list[str],
+    terminal: list[str],
+    *,
+    report: Callable[..., object] | None = None,
+    tracked_clean: bool = True,
+    is_ancestor: bool = True,
+) -> object:
+    """Return later-commit report seams that forbid compute and cleanup."""
+
+    def publish_rerender(**kwargs: object) -> object:
+        """Publish one distinct synthetic report and capture its measurements."""
+        calls.append("report")
+        calls.append(
+            f"active={kwargs['report_measurements'].active_worker_count}"
+        )
+        parent = Path(kwargs["run_parent"])
+        report_directory = parent / "synthetic_rerendered_report"
+        report_directory.mkdir(parents=True, exist_ok=False)
+        report_path = report_directory / "report.json"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "spike_phase_report.v1",
+                    "run_kind": kwargs["run_kind"],
+                    "shuffle_count": kwargs["config"].ppc.shuffle_count,
+                }
+            )
+            + "\n",
+            encoding="ascii",
+        )
+        return SimpleNamespace(
+            run_directory=report_directory,
+            report_path=report_path,
+            deferred_cleanup=None,
+        )
+
+    base = _dependencies(
+        tmp_path,
+        calls,
+        terminal,
+        compute=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("report rerender reached numerical computation")
+        ),
+        component_compatible=True,
+        cleanup=lambda _target: (_ for _ in ()).throw(
+            AssertionError("report rerender reached cleanup")
+        ),
+        report=report or publish_rerender,
+    )
+    values = {name: getattr(base, name) for name in base.__dataclass_fields__}
+    values.update(
+        repository_state=lambda: _launcher().RepositoryState(
+            tmp_path / "repo",
+            "c" * 40,
+            tracked_clean,
+        ),
+        repository_commit_is_ancestor=lambda original, current: (
+            is_ancestor and original == "b" * 40 and current == "c" * 40
+        ),
+    )
+    return SimpleNamespace(**values)
+
+
+def test_completed_report_rerender_preserves_prior_report_and_never_computes_or_cleans(
+    tmp_path: Path,
+) -> None:
+    """A clean descendant publishes and validates one new immutable report."""
+    terminal: list[str] = []
+    launcher, completed, original_report = _completed_launcher_run(tmp_path, terminal)
+    calls: list[str] = []
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["rerender-report", "--run-directory", str(completed.run_directory)]
+        ),
+        _rerender_dependencies(tmp_path, calls, terminal),
+    )
+
+    assert result.exit_code == 0 and result.status == "complete"
+    assert calls == ["validate_component", "report", "active=None"]
+    assert original_report.is_dir()
+    state = json.loads((completed.run_directory / "launcher_state.json").read_text())
+    new_report = Path(state["report_directory"])
+    assert new_report.is_dir() and new_report != original_report
+    assert state["completed_stages"][-1] == "complete"
+    assert state["active_status"] == "complete" and state["error"] is None
+    assert state["measurements"]["maximum_child_process_count"] == 3
+    assert "measured_active_worker_count" not in state["measurements"]
+    audit = json.loads(
+        (completed.run_directory / "report_rerender.json").read_text()
+    )
+    assert audit["schema_version"] == "spike_phase_report_rerender.v1"
+    assert audit["status"] == "complete"
+    assert audit["computation_git_commit"] == "b" * 40
+    assert audit["previous_report_git_commit"] == "b" * 40
+    assert audit["rerender_git_commit"] == "c" * 40
+    assert audit["previous_report_directory"] == str(original_report)
+    assert audit["new_report_directory"] == str(new_report)
+
+
+def test_completed_report_rerender_failure_preserves_state_and_prior_report(
+    tmp_path: Path,
+) -> None:
+    """A failed new publication records its audit without damaging completion."""
+    terminal: list[str] = []
+    launcher, completed, original_report = _completed_launcher_run(tmp_path, terminal)
+    state_path = completed.run_directory / "launcher_state.json"
+    before_state = state_path.read_bytes()
+    calls: list[str] = []
+
+    def fail_report(**_: object) -> object:
+        """Fail the new immutable report before publication."""
+        calls.append("report_failed")
+        raise RuntimeError("synthetic rerender failure")
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["rerender-report", "--run-directory", str(completed.run_directory)]
+        ),
+        _rerender_dependencies(tmp_path, calls, terminal, report=fail_report),
+    )
+
+    assert result.exit_code == 1 and result.status == "failed"
+    assert calls == ["validate_component", "report_failed"]
+    assert state_path.read_bytes() == before_state
+    assert original_report.is_dir()
+    audit = json.loads(
+        (completed.run_directory / "report_rerender.json").read_text()
+    )
+    assert audit["status"] == "failed"
+    assert audit["error"] == "synthetic rerender failure"
+
+
+@pytest.mark.parametrize(
+    ("tracked_clean", "is_ancestor", "message"),
+    (
+        (False, True, "clean"),
+        (True, False, "descend"),
+    ),
+)
+def test_completed_report_rerender_rejects_untrusted_checkout_without_mutation(
+    tmp_path: Path,
+    tracked_clean: bool,
+    is_ancestor: bool,
+    message: str,
+) -> None:
+    """Dirty or unrelated report code cannot alter a completed launcher run."""
+    terminal: list[str] = []
+    launcher, completed, original_report = _completed_launcher_run(tmp_path, terminal)
+    state_path = completed.run_directory / "launcher_state.json"
+    before_state = state_path.read_bytes()
+    calls: list[str] = []
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["rerender-report", "--run-directory", str(completed.run_directory)]
+        ),
+        _rerender_dependencies(
+            tmp_path,
+            calls,
+            terminal,
+            tracked_clean=tracked_clean,
+            is_ancestor=is_ancestor,
+        ),
+    )
+
+    assert result.exit_code == 2
+    assert message in terminal[-1]
+    assert calls == []
+    assert state_path.read_bytes() == before_state
+    assert original_report.is_dir()
+
+
+def test_completed_report_rerender_rejects_same_commit_incomplete_run_and_lock(
+    tmp_path: Path,
+) -> None:
+    """Rerender is neither an identical-report alias nor an incomplete resume."""
+    terminal: list[str] = []
+    launcher, completed, _ = _completed_launcher_run(tmp_path, terminal)
+    state_path = completed.run_directory / "launcher_state.json"
+    before_state = state_path.read_bytes()
+    same = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["rerender-report", "--run-directory", str(completed.run_directory)]
+        ),
+        _dependencies(tmp_path, [], terminal, component_compatible=True),
+    )
+    assert same.exit_code == 2 and "newer" in terminal[-1]
+    assert state_path.read_bytes() == before_state
+
+    with (completed.run_directory / "launcher.lock").open("a+") as lock_stream:
+        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        locked = launcher.run_launcher(
+            launcher.parse_launcher_command(
+                ["rerender-report", "--run-directory", str(completed.run_directory)]
+            ),
+            _rerender_dependencies(tmp_path, [], terminal),
+        )
+    assert locked.exit_code == 1
+    assert state_path.read_bytes() == before_state
+
+    _, incomplete, _ = _component_complete_report_failure(
+        tmp_path / "incomplete",
+        terminal,
+    )
+    incomplete_state = incomplete.run_directory / "launcher_state.json"
+    before_incomplete = incomplete_state.read_bytes()
+    rejected = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["rerender-report", "--run-directory", str(incomplete.run_directory)]
+        ),
+        _rerender_dependencies(tmp_path, [], terminal),
+    )
+    assert rejected.exit_code == 2 and "completed" in terminal[-1]
+    assert incomplete_state.read_bytes() == before_incomplete
+
+
+def test_completed_report_rerender_rejects_changed_sources_and_component(
+    tmp_path: Path,
+) -> None:
+    """Rerender fails closed before publication when immutable inputs differ."""
+    terminal: list[str] = []
+    launcher, completed, original_report = _completed_launcher_run(tmp_path, terminal)
+    state_path = completed.run_directory / "launcher_state.json"
+    before_state = state_path.read_bytes()
+    changed_calls: list[str] = []
+    changed = _rerender_dependencies(tmp_path, changed_calls, terminal)
+    changed.source_fingerprints = lambda _config: {
+        "trial_table": {"size_bytes": 11}
+    }
+
+    changed_result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["rerender-report", "--run-directory", str(completed.run_directory)]
+        ),
+        changed,
+    )
+
+    assert changed_result.exit_code == 2
+    assert changed_calls == []
+    assert state_path.read_bytes() == before_state
+    assert original_report.is_dir()
+
+    component_calls: list[str] = []
+    incompatible = _rerender_dependencies(tmp_path, component_calls, terminal)
+
+    def reject_component(_: object) -> None:
+        """Reject a stale component before any new report publication."""
+        component_calls.append("validate_component")
+        raise ValueError("incompatible committed component")
+
+    incompatible.validate_component = reject_component
+    component_result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["rerender-report", "--run-directory", str(completed.run_directory)]
+        ),
+        incompatible,
+    )
+    assert component_result.exit_code == 2
+    assert component_calls == ["validate_component"]
+    assert state_path.read_bytes() == before_state
+    assert original_report.is_dir()

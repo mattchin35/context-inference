@@ -350,6 +350,36 @@ def test_ppc_maps_preserve_reference_unit_order_and_reliability_inspection() -> 
     assert "unreliable" in figure.texts[-1].get_text().lower()
 
 
+def test_real_size_unit_ppc_map_uses_sparse_shared_stable_labels() -> None:
+    """A 273-row heatmap keeps every row without rendering 273 tick labels."""
+    unit_count = 273
+    unit_ids = tuple(f"ProbeB:{index}" for index in range(unit_count))
+    shape = (unit_count, 50)
+    figure, axes = plot_unit_ppc_map(
+        ppc=np.zeros(shape),
+        computable=np.ones(shape, dtype=bool),
+        reliable=np.ones(shape, dtype=bool),
+        spike_count=np.full(shape, 51, dtype=np.int64),
+        frequency_hz=np.arange(2.0, 102.0, 2.0),
+        unit_ids=unit_ids,
+        condition_name="correct_rewarded",
+        site_label="PFC",
+        epoch_name="before",
+        context=_context(),
+    )
+
+    expected_positions = axes["ppc"].get_yticks()
+    expected_labels = [tick.get_text() for tick in axes["ppc"].get_yticklabels()]
+    assert 2 <= len(expected_labels) <= 12
+    assert expected_labels[0] == unit_ids[0]
+    assert expected_labels[-1] == unit_ids[-1]
+    for axis in axes.values():
+        np.testing.assert_array_equal(axis.get_yticks(), expected_positions)
+        assert [tick.get_text() for tick in axis.get_yticklabels()] == expected_labels
+        assert np.asarray(axis.collections[0].get_array()).size == unit_count * 50
+    plt.close(figure)
+
+
 def test_population_ppc_prevalence_uses_eligible_denominator_and_nan_when_none() -> None:
     """Population maps distinguish reliable-unit median PPC from eligible-unit prevalence."""
 
@@ -457,6 +487,108 @@ def test_ppc_band_summary_and_exemplar_include_counts_polar_frequency_and_pooled
     _assert_figure_contract(figure, axes, {"ppc", "polar", "trace"})
     caption = figure.texts[-1].get_text().lower()
     assert "pooled" in caption and "illustrative" in caption and "8 hz" in caption
+
+
+def test_ppc_band_summary_groups_four_median_iqr_measurements_by_condition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Band bars use reliable-unit median/IQR in the frozen four-item order."""
+    original_bar = Axes.bar
+    calls: list[dict[str, object]] = []
+
+    def capture_bar(axis: Axes, x: object, height: object, **kwargs: object) -> object:
+        """Capture numeric bar inputs while retaining normal Matplotlib output."""
+        calls.append(
+            {
+                "x": np.asarray(x, dtype=float),
+                "height": np.asarray(height, dtype=float),
+                "yerr": np.asarray(kwargs["yerr"], dtype=float),
+                "label": kwargs["label"],
+            }
+        )
+        return original_bar(axis, x, height, **kwargs)
+
+    monkeypatch.setattr(Axes, "bar", capture_bar)
+    values = np.arange(2 * 3 * 2 * 2, dtype=float).reshape(2, 3, 2, 2) / 100.0
+    reliable = np.ones(values.shape, dtype=bool)
+    reliable[1, :, 1, 1] = False
+    figure, axes = plot_ppc_band_summary(
+        condition_unit_band_ppc=values,
+        reliable=reliable,
+        condition_names=("correct_rewarded", "omission_switch"),
+        epoch_names=("before", "after"),
+        band_names=("theta", "gamma"),
+        unit_count=3,
+        site_label="PFC",
+        context=_context(),
+    )
+
+    measurement_indices = ((0, 0), (1, 0), (0, 1), (1, 1))
+    assert [call["label"] for call in calls] == [
+        "theta-before",
+        "theta-after",
+        "gamma-before",
+        "gamma-after",
+    ]
+    assert [tick.get_text() for tick in axes["band_ppc"].get_xticklabels()] == [
+        "correct_rewarded",
+        "omission_switch",
+    ]
+    for call, (epoch_index, band_index) in zip(
+        calls,
+        measurement_indices,
+        strict=True,
+    ):
+        expected = np.where(
+            reliable[:, :, epoch_index, band_index],
+            values[:, :, epoch_index, band_index],
+            np.nan,
+        )
+        median = np.nanmedian(expected, axis=1)
+        quartiles = np.nanpercentile(expected, (25.0, 75.0), axis=1)
+        np.testing.assert_allclose(call["height"], median, equal_nan=True)
+        np.testing.assert_allclose(
+            call["yerr"],
+            np.vstack((median - quartiles[0], quartiles[1] - median)),
+            equal_nan=True,
+        )
+    assert figure.subplotpars.bottom >= 0.35
+    assert len(axes["band_ppc"].get_legend().get_texts()) == 4
+    plt.close(figure)
+
+
+def test_real_size_ppc_band_summary_keeps_nine_conditions_clear_of_caption() -> None:
+    """Nine condition groups remain bounded and replace 36 long bar labels."""
+    condition_names = (
+        "correct_rewarded",
+        "omission",
+        "incorrect",
+        "switch",
+        "stay",
+        "omission_switch",
+        "omission_stay",
+        "incorrect_switch",
+        "incorrect_stay",
+    )
+    values = np.ones((9, 273, 2, 2), dtype=float)
+    figure, axes = plot_ppc_band_summary(
+        condition_unit_band_ppc=values,
+        reliable=np.ones(values.shape, dtype=bool),
+        condition_names=condition_names,
+        epoch_names=("before", "after"),
+        band_names=("theta", "gamma"),
+        unit_count=273,
+        site_label="HPC1",
+        context=_context(),
+    )
+
+    assert len(axes["band_ppc"].patches) == 36
+    assert [tick.get_text() for tick in axes["band_ppc"].get_xticklabels()] == list(
+        condition_names
+    )
+    assert figure.get_size_inches()[0] >= 12.0
+    assert 0.35 <= figure.subplotpars.bottom < figure.subplotpars.top < 1.0
+    plt.close(figure)
 
 
 def test_paired_ppc_exemplar_keeps_pooled_low_high_and_trials_distinct() -> None:
