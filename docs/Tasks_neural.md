@@ -4,10 +4,11 @@
 
 - **Snapshot:** 2026-09-20 on branch `refactor`.
 - **Current accepted implementation HEAD before this documentation update:**
-  `ce37409` (`adding uv to git tracking`), equal to `origin/refactor`. The
-  launcher implementation is `814f253`; the launcher handoff is `ed350ff`.
-- **Last verified neural baseline:** 1,139 passed with 20 warning instances after
-  the launcher implementation. The warnings are the existing
+  `0589fa7` (`docs: record R1 recovery implementation`). R1 tests are
+  `b77f4a5` and implementation is `97fbf3b`; the computation remains identified
+  by launcher handoff commit `ed350ff`.
+- **Last verified neural baseline:** 1,149 passed with 20 warning instances after
+  the R1 implementation. The warnings are the existing
   multiprocessing-fork, intentional duplicate-ZIP-member, and Pynapple
   zero-duration fixture warnings recorded in the launcher handoff below.
 - **WP5C state:** the exact PPC speedup S0-S8 sequence is complete. The accepted
@@ -16,19 +17,20 @@
   It selected eight workers for the benchmarked CT026 production workload and
   published no scientific component, manifest, preview, or `spike_phase.npz`.
 - **Approval and execution state:** Power and Synchrony reports remain approved.
-  The local ProbeB 100-shuffle Spike-phase computation completed all 105 blocks
-  and committed a compatible final component, but its launcher stopped during
-  report rendering with `bottom cannot be >= top`. The failure is a bounded
-  caption/layout defect, not a numerical failure. Its work directory remains
-  intact and no report or success cleanup was published.
-- **Approved immediate sequence:** finish a documentation-first, test-first
-  report-recovery package; recover and inspect the local 100-shuffle report
-  without recomputation; then implement the simple SLURM/uv execution wrapper
-  and cluster-side cache inspection path before WP11. The separately approved
-  ProbeB 1,000-shuffle final run will use the cluster after wrapper/dry-run
-  validation. Future 100-shuffle runs should use the same cluster path. WP13
-  remains deferred and every nonempty absolute-amplitude request remains
-  rejected before computation.
+  R1 recovered the local ProbeB 100-shuffle report without recomputation at
+  report commit `0589fa7`; all launcher stages completed and the exact retained
+  work target was removed after validation. Visual QA found three previously
+  hidden report defects: unreadable 273-unit y labels, unreadable band-summary
+  labels with no displayed IQR, and a process-child count mislabeled as active
+  workers. The numerical cache and corrected population maps are intact, but
+  the preview is not yet approved as a human-readable report.
+- **Immediate sequence awaiting approval:** complete the documentation-first,
+  test-first local R2 plotting/metadata repair proposed below, republish and
+  inspect the report without numerical recomputation, and only then consider
+  C1. No cluster implementation is authorized by the current instruction. The
+  separately approved ProbeB 1,000-shuffle final run remains designated for
+  the cluster after wrapper/dry-run validation. WP13 remains deferred and every
+  nonempty absolute-amplitude request remains rejected before computation.
 - **Do not redo completed packages:** WP0, WP1, WP2 preparation, WP3, WP4,
   WP5A, WP5B, and the Spike-phase runtime bridge are historical completed work.
   Remaining integration work must extend them through the packages below, not
@@ -64,15 +66,16 @@ Source-of-truth hierarchy:
 | WP5B shuffle inference | Complete | Tests `c94e152`, `7d22d6f`; implementation `01b7507`; `test_spike_lfp_summary.py` | Performance redesign only; scientific reference must remain unchanged |
 | Spike runtime bridge | Complete, including grouped payload and exact exemplar-trial integration | Original bridge `c8e76d5`; grouped payload integration completed in S5; WP12 implementation `bd6fa50`; `test_lfp_summary_runtime.py` and synthetic cache/reload/plot coverage | UI integration in WP11 |
 | WP5C optimization | Complete through S8 | Grouped-parallel implementation `e89a0ee`; S7 documentation `8741d71`; full S7 neural suite 1,113 passed; accepted work-only S8 run `ct026_ppc_s8_2026-09-18T15-06-33Z`; `docs/ppc_speedup.md`; `docs/ppc_speedup_plan.md`; `docs/ppc_speedup_execution_log.md` | Preserve eight-worker production configuration and exact preflight; use R1/C1 for report recovery and later cluster execution |
-| WP6 plotting | Numerically complete; one real-data PPC report layout defect open | Original tests `b1f51f3`; implementation `d1c3e21`; paired PPC/report tests `2c80a9b`; local 100-shuffle failure evidence below | Replace the unbounded prevalence caption with the approved three-panel population map in recovery package R1 |
+| WP6 plotting | Numerically complete; real-data PPC report readability defects open | Original tests `b1f51f3`; implementation `d1c3e21`; R1 `b77f4a5`, `97fbf3b`; recovered report evidence below | R2 must sparsify unit labels and replace the 54-label band plot with the required four-measurement median/IQR grouping |
 | WP7 pipeline | Complete for component, Compute All, composition, and report-before-cleanup seams | Original tests `b1f51f3`; implementation `067fdef`; WP10 `98ac2ed`; WP12 deferred-cleanup implementation `bd6fa50`; `test_lfp_summary_pipeline.py` | UI progress/state integration remains in WP11 |
 | WP8 webapp | Partial; Power path only | Tests `c7ec7c1`, `003394a`, `f3954de`; implementations `2885ffd`, `926801b`; `test_lfp_summary_webapp.py` | After cluster package C1, add remote cluster-side cache inspection, Synchrony/Spike views, active population, and progress in WP11 |
-| WP9 validation | Partial; 100-shuffle numerics complete, report incomplete | Approved Power and Synchrony reports; S8 benchmark; committed ProbeB cache completed 2026-09-18; exact evidence below | Complete R1 report recovery and inspect it; validate C1; then separately authorize the ProbeB 1,000-shuffle cluster run |
+| WP9 validation | Partial; 100-shuffle report recovered but not visually approved | Approved Power and Synchrony reports; recovered ProbeB report at report commit `0589fa7`; exact evidence below | Complete and inspect local R2 report-only repair; C1 remains blocked pending approval |
 | WP10 composed dependencies | Complete | Tests and implementation through `98ac2ed`; completion handoff `3aebba8`; PPC contracts and worker decision are stable | None; consume the composed boundary from the forthcoming launcher and WP11 |
-| R1 local preview recovery | Implementation verified; exact real-run recovery pending | Tests `b77f4a5`; implementation `97fbf3b`; failed launcher run and compatible `spike_phase.npz` identified 2026-09-20 | Recover the exact run from the next documented clean descendant commit, inspect every artifact, and record the result before C1 |
-| C1 cluster execution | Planned after R1 inspection | Tracked `hpc_ppc.sh`, `pyproject.toml`, and `uv.lock` at `ce37409`; uv installed on cluster access; contract below | Verify uv hello world, implement/test the thin 72-hour SLURM wrapper, run metadata-only cluster checks, then request final-run approval |
+| R1 local preview recovery | Complete; transaction and population-map fix verified on real cache | Tests `b77f4a5`; implementation `97fbf3b`; recovery/report commit `0589fa7`; recovered report path below | No further R1 work; visual QA findings are isolated into proposed R2 |
+| R2 local preview readability | Proposed; not yet approved | R1 visual QA evidence below | Approve or revise the plotting, worker-metadata, and immutable rerender plan before tests or source changes |
+| C1 cluster execution | Planned but explicitly blocked pending user approval after local R2 | Tracked `hpc_ppc.sh`, `pyproject.toml`, and `uv.lock` at `ce37409`; uv installed on cluster access; contract below | Do not begin; after R2 approval/completion, verify uv hello world, implement/test the thin 72-hour SLURM wrapper, and run metadata-only cluster checks |
 | WP11 Streamlit integration | Planned after R1 and C1 infrastructure | Package below; remote topology frozen below | Inspect numerical caches using cluster-side Streamlit over an SSH tunnel; support one explicitly selected ProbeA or ProbeB and complete cached views |
-| WP12 PPC plotting/reporting | Complete except the R1 real-data layout correction | Contract `5dfd439`; tests `2c80a9b`, corrections `7d9c322` and `220f5b0`; implementation `bd6fa50`; launcher integration `814f253` | R1 adds the approved count panel and bounded caption without changing numerical/report transactions |
+| WP12 PPC plotting/reporting | Transaction complete; real-size display contract incomplete | Contract `5dfd439`; implementation `bd6fa50`; R1 population repair `b77f4a5`, `97fbf3b`; recovered report below | R2 must make unit/band figures readable and report worker metadata accurately before preview approval |
 | WP13 optional absolute-amplitude thresholds | Explicitly deferred; not a blocker while thresholds are empty | Package below; validation/fingerprint support exists; current CT026 threshold list is empty | Reject every nonempty request before computation until WP13 is separately implemented |
 
 This document replaces the older decoding task list. It translates the scientific
@@ -2532,6 +2535,128 @@ Implementation and execution gates:
    user approval of the local preview.
 6. Do not launch 1,000 shuffles locally. Completion of R1 authorizes C1 cluster
    work, not the final scientific run by itself.
+
+R1 real-run completion and visual QA (2026-09-20):
+
+- `recover-report` ran from clean descendant commit
+  `0589fa7b394e294be762c57a0c651d41d565cb03`. It reused the component computed
+  at `ed350ffb4ecfcd4cae01c6e093714c2e6705eb92`; no phase preparation,
+  planning, worker, shuffle, spike-loading, or component-write callback ran.
+- The launcher reached the complete eight-stage prefix. Atomic
+  `report_recovery.json` has schema `spike_phase_report_recovery.v1`, status
+  `complete`, the two commits above, `component_reused=true`, original error
+  `bottom cannot be >= top`, and no recovery error. Report rendering took
+  18.259 launcher seconds. The final component remains 211876438 bytes with
+  SHA-256 `9338e65371ae94e033a26dcffda6a1c12529833e5cb20ab87fd95a74e967032f`.
+- The published report is
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/CT026_2026-08-01_130853_spike_phase_ProbeB_preview_2026-09-18T20-36-32Z/report/CT026_2026-08-01_130853_lfp_spike_phase_preview_report_2026-09-20T22-42-33Z`.
+  It contains 27 nonempty PNGs and the six required report/evidence files.
+  `report.json` records 273 ProbeB units, 427 selected trials, 2492490 unique
+  packed spikes, 1080900 computable cells, 914700 reliable/null-eligible cells,
+  167860 significant cells, no unavailable selections, no warnings, and the
+  original measured timing/memory/storage values.
+- Report and launcher JSON/log/summary/state artifacts reload successfully.
+  The exact saved PPC work target
+  `7907af72dfd2ff884b04dd26d6f2ae8a41de9d936073e04d6efd68fd5469e930`
+  is absent only after `report_complete`, launcher-artifact validation, and the
+  recovery-audit validation gate. This cleanup is final and recoverable only by
+  recomputation; the compatible final component remains intact.
+- Visual inspection covered all six population maps, six unit maps, three band
+  summaries, and twelve paired exemplar figures. All six R1 population maps
+  are readable: the median, plain-language FDR prevalence, and exact eligible
+  count panels render without overlap and record `total=273`. All twelve
+  exemplar files are structurally complete and retain distinct low/high pooled
+  curves, polar plots, traces, phases, spikes, captions, sites, bands, and
+  before/after selections.
+- Three real-data QA failures prevent final preview approval. First, every
+  273-row unit map labels every stable unit on every panel, producing an opaque
+  y-axis block even though the heatmap data remain visible. Second, every band
+  summary renders 54 long tick labels over its caption; labels and provenance
+  are unreadable. It also displays only medians, despite the frozen requirement
+  for reliable-unit median/IQR and only the four theta-before, theta-after,
+  gamma-before, gamma-after measurements. Third, the report says active
+  workers=9 although requested/planned workers=8 because the launcher maps the
+  process sampler's maximum child-process count, which includes support
+  processes, onto the scientific active-worker field. This value must not be
+  interpreted as nine PPC workers.
+- These are visualization/provenance defects, not evidence of numerical-cache
+  corruption. Nevertheless, they are material for human review and would be
+  inherited by cluster reports. C1 therefore remains blocked pending an
+  approved local R2 repair and a new cache-only report publication.
+
+#### R2 - Local preview readability and immutable rerender (proposed 2026-09-20; approval required)
+
+Purpose and scope:
+
+- Repair only the real-size human-readable views and worker-count provenance
+  exposed by R1 visual QA. Reuse the exact compatible `spike_phase.npz`; do not
+  recompute, rewrite, migrate, or clean any numerical artifact.
+- Keep the successful R1 report immutable. Add an explicit report-only
+  `rerender-report --run-directory PATH` launcher mode for a completed run. It
+  must repeat the clean-descendant repository, saved configuration/population/
+  source/path, and compatible-component checks; publish a new sibling report;
+  validate it; preserve the old report path in an atomic scalar audit; and
+  have no reachable compute or cleanup callback.
+
+Proposed architecture and files:
+
+- `lfp_summary_plotting.py`: make `plot_unit_ppc_map` retain all 273 ordered
+  rows while labeling at most 12 deterministic, evenly spaced rows including
+  first and last. Redesign `plot_ppc_band_summary` as nine readable condition
+  groups containing exactly theta-before, theta-after, gamma-before, and
+  gamma-after. Each bar is the reliable-unit median with explicit asymmetric
+  25th/75th-percentile whiskers; a compact four-entry legend replaces per-bar
+  long labels.
+- `lfp_spike_phase_validation.py`: select the saved before/after epoch indices
+  explicitly for the band report and continue to pass the full reliable-unit
+  values required to calculate median/IQR. Filename/report selection identity
+  remains one all-condition summary per site.
+- `lfp_spike_phase_launcher.py`: preserve
+  `maximum_child_process_count` under that exact operational name and leave
+  scientific `active_worker_count` unavailable unless the PPC executor itself
+  supplies it. Add completed-run immutable rerender validation/audit without
+  changing the computation identity or stage sequence.
+- Tests only in the three corresponding existing R1 test files. No new
+  dependency, cache schema, numerical function, runtime worker implementation,
+  or cluster file is proposed.
+
+Tests to commit and run RED before implementation:
+
+- A 273-unit map has all 273 data rows, no more than 12 y tick labels, includes
+  the first/last stable ids, uses identical tick positions on all three panels,
+  and has no label/caption collision at the saved PNG dimensions. Small unit
+  populations continue to label every row.
+- A realistic nine-condition band summary uses exactly four ordered
+  measurements per condition, calculates finite medians and 25th/75th
+  percentiles from reliable units only, shows IQR whiskers and one compact
+  legend, and keeps condition labels and caption geometrically separated.
+  Zero-reliable cells remain NaN rather than zero.
+- The cache-backed report requests only before/after band epochs and closes all
+  27 figures. Real-size geometry assertions cover unit and band figures in
+  addition to the already-fixed population maps.
+- Launcher measurements no longer claim process children are scientific
+  workers. Existing historical state rerenders with active workers unavailable
+  and retains maximum child count as distinct provenance.
+- `rerender-report` rejects dirty/same/unrelated commits, incomplete or
+  malformed runs, changed identity/source/component, path escape, and a live
+  lock. Success preserves the original report, performs one report publication
+  and validation, writes both report commits/paths to an atomic audit, updates
+  the current report pointer only after publication, and calls no compute or
+  cleanup seam. Failure preserves both the completed launcher state and the
+  prior report.
+
+Dependencies and performance:
+
+- Reuse NumPy percentile/median routines, Matplotlib, the current cache loader,
+  launcher identity validators, atomic JSON writer, and report transaction.
+  Introduce no package dependency and do not modify external libraries.
+- Work is cache-only and linear in already-loaded report arrays. The recovered
+  report rendered in about 18 seconds; R2 should remain within one minute and
+  must not open raw LFP, sorter spike trains, phase work, or PPC checkpoints.
+- Required TDD order remains documentation commit, tests-only commit, genuine
+  RED, production commit, focused/full neural GREEN, clean-checkout rerender,
+  and complete artifact/image inspection. C1 remains blocked until the user
+  accepts the R2 report.
 
 #### C1 - Simple uv/SLURM execution and remote inspection (approved plan 2026-09-20)
 
