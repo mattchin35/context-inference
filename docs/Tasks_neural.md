@@ -2746,6 +2746,39 @@ R2 full-suite compatibility correction (2026-09-20):
   independent all-NaN expected-value calculation. There are no failures,
   skips, or xfails. The clean-checkout real rerender is now the next step.
 
+R2 real-data rerender and QA (2026-09-20):
+
+- The cache-only command ran from tracked-clean commit
+  `8ca0e2b0ce7fe369765f97c00e5b7cf1cceeecab` against completed launcher run
+  `CT026_2026-08-01_130853_spike_phase_ProbeB_preview_2026-09-18T20-36-32Z`.
+  It completed successfully in about 13.3 seconds and published the new sibling
+  report `report/CT026_2026-08-01_130853_lfp_spike_phase_preview_report_2026-09-20T23-19-37Z`.
+- `report_rerender.json` has schema `spike_phase_report_rerender.v1`, status
+  `complete`, computation commit `ed350ffb`, prior report commit `0589fa7`, and
+  rerender commit `8ca0e2b`. It retains the prior R1 report directory ending
+  `2026-09-20T22-42-33Z`; that directory remains present. Launcher status and
+  all eight completed stages remain complete.
+- The rerender created and validated exactly 27 nonempty PNGs plus the expected
+  report JSON, configuration, manifest/source snapshots, log, and Markdown
+  summary. The six unit maps retain all 273 heatmap rows and now show 12 shared
+  stable-unit labels, including first and last, with readable captions. Visual
+  inspection of all six found no y-label blocks or caption collisions.
+- The three band summaries are 1,652 by 840 pixels and visibly contain nine
+  condition groups, four ordered theta/gamma before/after series, asymmetric
+  IQR whiskers, a compact legend, and separated captions. Visual inspection of
+  PFC, HPC1, and HPC2 found no label/caption collision. The other 18 population
+  and exemplar PNGs are nonempty with their expected dimensions; those views
+  were unchanged from the previously inspected R1 rendering code.
+- Report workers are now `requested=8`, `planned=8`, and `active=null`. The
+  launcher state contains `maximum_child_process_count=9` and no
+  `measured_active_worker_count` key, so support processes are no longer
+  misreported as scientific PPC workers. The numerical summary remains 273
+  units, 427 selected trials, 100 shuffles, 914,700 reliable/null-eligible PPC
+  cells, and 167,860 FDR-significant cells.
+- R2 is technically complete with no serious finding. This checkpoint does not
+  begin C1: cluster wrapper implementation and the 1,000-shuffle final run still
+  require the user's next approval.
+
 Dependencies and performance:
 
 - Reuse NumPy percentile/median routines, Matplotlib, the current cache loader,
