@@ -2656,6 +2656,25 @@ Tests to commit and run RED before implementation:
   cleanup seam. Failure preserves both the completed launcher state and the
   prior report.
 
+R2 tests-only RED checkpoint (2026-09-20):
+
+- Test-only commit `2aed50b` adds the approved real-size sparse-unit-label,
+  four-measurement median/IQR, before/after cache-adapter, worker-provenance,
+  immutable rerender, failure-retention, identity, component, and locking
+  contracts in exactly the three listed test files. No production source
+  changed in that commit.
+- The focused command
+  `uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_lfp_summary_plotting.py src/tests/neural_analysis/test_lfp_spike_phase_validation.py src/tests/neural_analysis/test_lfp_spike_phase_launcher.py -k "unit_ppc or band_summary or rerender"`
+  selected 15 tests and produced genuine RED: 10 failed, 5 passed, and 39 were
+  deselected in 2.44 seconds. One expected all-NaN test-data warning was
+  emitted.
+- The failures are attributable to all 273 unit tick labels still rendering,
+  the absent grouped median/IQR interface and legend, the cache adapter still
+  passing the whole epoch, and the absent `rerender-report` parser/transaction.
+  Collection, fixtures, and the five compatible existing contracts succeeded.
+- Production implementation remains unstarted at this checkpoint. The next
+  permissible edits are confined to the three approved R2 production files.
+
 Dependencies and performance:
 
 - Reuse NumPy percentile/median routines, Matplotlib, the current cache loader,
