@@ -69,7 +69,7 @@ Source-of-truth hierarchy:
 | WP8 webapp | Partial; Power path only | Tests `c7ec7c1`, `003394a`, `f3954de`; implementations `2885ffd`, `926801b`; `test_lfp_summary_webapp.py` | After cluster package C1, add remote cluster-side cache inspection, Synchrony/Spike views, active population, and progress in WP11 |
 | WP9 validation | Partial; 100-shuffle numerics complete, report incomplete | Approved Power and Synchrony reports; S8 benchmark; committed ProbeB cache completed 2026-09-18; exact evidence below | Complete R1 report recovery and inspect it; validate C1; then separately authorize the ProbeB 1,000-shuffle cluster run |
 | WP10 composed dependencies | Complete | Tests and implementation through `98ac2ed`; completion handoff `3aebba8`; PPC contracts and worker decision are stable | None; consume the composed boundary from the forthcoming launcher and WP11 |
-| R1 local preview recovery | Documentation-first plan frozen below | Failed launcher run and compatible `spike_phase.npz` identified 2026-09-20 | Write/commit RED tests, implement three-panel map plus explicit report-only recovery, verify, then recover the exact run |
+| R1 local preview recovery | Implementation verified; exact real-run recovery pending | Tests `b77f4a5`; implementation `97fbf3b`; failed launcher run and compatible `spike_phase.npz` identified 2026-09-20 | Recover the exact run from the next documented clean descendant commit, inspect every artifact, and record the result before C1 |
 | C1 cluster execution | Planned after R1 inspection | Tracked `hpc_ppc.sh`, `pyproject.toml`, and `uv.lock` at `ce37409`; uv installed on cluster access; contract below | Verify uv hello world, implement/test the thin 72-hour SLURM wrapper, run metadata-only cluster checks, then request final-run approval |
 | WP11 Streamlit integration | Planned after R1 and C1 infrastructure | Package below; remote topology frozen below | Inspect numerical caches using cluster-side Streamlit over an SSH tunnel; support one explicitly selected ProbeA or ProbeB and complete cached views |
 | WP12 PPC plotting/reporting | Complete except the R1 real-data layout correction | Contract `5dfd439`; tests `2c80a9b`, corrections `7d9c322` and `220f5b0`; implementation `bd6fa50`; launcher integration `814f253` | R1 adds the approved count panel and bounded caption without changing numerical/report transactions |
@@ -2490,6 +2490,27 @@ R1 tests-only RED checkpoint (2026-09-20):
 - Production implementation remains unstarted at this checkpoint. The next
   permissible edit is the smallest change within the three R1 production
   files, followed by the focused GREEN and broader verification below.
+
+R1 implementation checkpoint (2026-09-20):
+
+- Implementation commit `97fbf3b` adds the bounded three-panel population map
+  and explicit report-only recovery transaction. Only
+  `lfp_summary_plotting.py` and `lfp_spike_phase_launcher.py` changed; the
+  numerical kernel, runtime, payload, configuration, cache schema, and report
+  compositor required no edits.
+- The focused command is GREEN: 19 passed and 25 deselected in 2.11 seconds.
+  The complete three-file R1 set passed 44 tests in 2.47 seconds. Directly
+  affected synthetic integration, pipeline, runtime, and grouped-PPC tests
+  passed 243 tests in 24.68 seconds with one deliberate duplicate-NPZ warning.
+- The complete neural suite passed 1,149 tests in 128.45 seconds with 20 known
+  warnings: three multiprocessing fork deprecations, one deliberate duplicate
+  ZIP member warning, and sixteen Pynapple empty-epoch or zero-duration rate
+  warnings. `python -m py_compile` passed for all three R1 production files,
+  and `git diff --check` passed.
+- No experimental component, report, or cleanup callback was invoked during
+  implementation verification. The remaining R1 action is the explicit
+  report recovery of the exact run named above from a clean descendant commit,
+  followed by artifact and image inspection. C1 remains blocked.
 
 After focused GREEN, run the complete three files, directly affected
 pipeline/runtime/report tests, and then:
