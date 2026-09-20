@@ -24,8 +24,8 @@
   labels with no displayed IQR, and a process-child count mislabeled as active
   workers. The numerical cache and corrected population maps are intact, but
   the preview is not yet approved as a human-readable report.
-- **Immediate sequence awaiting approval:** complete the documentation-first,
-  test-first local R2 plotting/metadata repair proposed below, republish and
+- **Approved immediate sequence:** complete the documentation-first,
+  test-first local R2 plotting/metadata repair below, republish and
   inspect the report without numerical recomputation, and only then consider
   C1. No cluster implementation is authorized by the current instruction. The
   separately approved ProbeB 1,000-shuffle final run remains designated for
@@ -72,7 +72,7 @@ Source-of-truth hierarchy:
 | WP9 validation | Partial; 100-shuffle report recovered but not visually approved | Approved Power and Synchrony reports; recovered ProbeB report at report commit `0589fa7`; exact evidence below | Complete and inspect local R2 report-only repair; C1 remains blocked pending approval |
 | WP10 composed dependencies | Complete | Tests and implementation through `98ac2ed`; completion handoff `3aebba8`; PPC contracts and worker decision are stable | None; consume the composed boundary from the forthcoming launcher and WP11 |
 | R1 local preview recovery | Complete; transaction and population-map fix verified on real cache | Tests `b77f4a5`; implementation `97fbf3b`; recovery/report commit `0589fa7`; recovered report path below | No further R1 work; visual QA findings are isolated into proposed R2 |
-| R2 local preview readability | Proposed; not yet approved | R1 visual QA evidence below | Approve or revise the plotting, worker-metadata, and immutable rerender plan before tests or source changes |
+| R2 local preview readability | Approved 2026-09-20; implementation not started | R1 visual QA evidence and frozen R2 contract below | Commit tests only, record genuine RED, implement, verify, and rerender the exact cache without computation or cleanup |
 | C1 cluster execution | Planned but explicitly blocked pending user approval after local R2 | Tracked `hpc_ppc.sh`, `pyproject.toml`, and `uv.lock` at `ce37409`; uv installed on cluster access; contract below | Do not begin; after R2 approval/completion, verify uv hello world, implement/test the thin 72-hour SLURM wrapper, and run metadata-only cluster checks |
 | WP11 Streamlit integration | Planned after R1 and C1 infrastructure | Package below; remote topology frozen below | Inspect numerical caches using cluster-side Streamlit over an SSH tunnel; support one explicitly selected ProbeA or ProbeB and complete cached views |
 | WP12 PPC plotting/reporting | Transaction complete; real-size display contract incomplete | Contract `5dfd439`; implementation `bd6fa50`; R1 population repair `b77f4a5`, `97fbf3b`; recovered report below | R2 must make unit/band figures readable and report worker metadata accurately before preview approval |
@@ -2584,7 +2584,18 @@ R1 real-run completion and visual QA (2026-09-20):
   inherited by cluster reports. C1 therefore remains blocked pending an
   approved local R2 repair and a new cache-only report publication.
 
-#### R2 - Local preview readability and immutable rerender (proposed 2026-09-20; approval required)
+#### R2 - Local preview readability and immutable rerender (approved 2026-09-20)
+
+Approval record:
+
+- The user approved the complete R2 plan on 2026-09-20 after receiving direct
+  paths to the three flawed band summaries and six flawed unit maps. The frozen
+  choices are at most 12 deterministic unit labels, four grouped before/after
+  theta/gamma measurements with reliable-unit median/IQR, distinct child-
+  process versus scientific-worker provenance, immutable prior-report
+  retention, and explicit cache-only `rerender-report` publication.
+- This approval authorizes R2 only. It does not authorize C1 cluster work or a
+  1,000-shuffle run.
 
 Purpose and scope:
 
