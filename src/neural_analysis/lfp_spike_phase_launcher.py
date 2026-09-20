@@ -45,6 +45,7 @@ from src.neural_analysis.lfp_summary_pipeline import (
 _MODULE = "src.neural_analysis.lfp_spike_phase_launcher"
 _STATE_SCHEMA = "spike_phase_launcher_state.v1"
 _PREFLIGHT_SCHEMA = "spike_phase_preflight.v1"
+_REPORT_RECOVERY_SCHEMA = "spike_phase_report_recovery.v1"
 _RUN_NAME = re.compile(
     r"^[A-Za-z0-9_.-]+_spike_phase_(ProbeA|ProbeB)_"
     r"(preview|final|dry_run)_[A-Za-z0-9_.:-]+$"
@@ -115,6 +116,7 @@ class LauncherDependencies:
     monotonic_seconds: Callable[[], float]
     process_tree_sampler: Callable[[], AbstractContextManager[object]]
     terminal_write: Callable[[str], None]
+    repository_commit_is_ancestor: Callable[[str, str], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -140,7 +142,7 @@ class _LauncherLockError(RuntimeError):
 
 
 def parse_launcher_command(argv: Sequence[str] | None = None) -> LauncherCommand:
-    """Parse one explicit new/resume launcher request.
+    """Parse one explicit new, resume, or report-recovery request.
 
     Parameters
     ----------
@@ -165,9 +167,11 @@ def parse_launcher_command(argv: Sequence[str] | None = None) -> LauncherCommand
     new.add_argument("--final-run", action="store_true")
     resume = subparsers.add_parser("resume")
     resume.add_argument("--run-directory", type=Path, required=True)
+    recover_report = subparsers.add_parser("recover-report")
+    recover_report.add_argument("--run-directory", type=Path, required=True)
     values = parser.parse_args(list(argv) if argv is not None else None)
-    if values.mode == "resume":
-        return LauncherCommand(mode="resume", run_directory=values.run_directory)
+    if values.mode in {"resume", "recover-report"}:
+        return LauncherCommand(mode=values.mode, run_directory=values.run_directory)
     if values.worker_count < 1:
         parser.error("--workers must be a positive integer")
     if values.shuffle_count == 1000 and not values.final_run:
@@ -226,8 +230,26 @@ def run_launcher(
                     state,
                 )
                 return _execute_locked_run(config, run_directory, state, dependencies)
+        elif command.mode == "recover-report":
+            run_directory, state = _load_resume_state(command)
+            with _launcher_lock(run_directory, state, dependencies):
+                config, run_directory, state = _prepare_report_recovery(
+                    dependencies,
+                    run_directory,
+                    state,
+                )
+                result = _execute_locked_run(
+                    config,
+                    run_directory,
+                    state,
+                    dependencies,
+                    component_already_validated=True,
+                    report_recovery=True,
+                )
+                _complete_report_recovery(run_directory, state, dependencies)
+                return result
         else:
-            raise ValueError("launcher mode must be new or resume")
+            raise ValueError("launcher mode must be new, resume, or recover-report")
     except _LauncherLockError as error:
         _terminal(dependencies, f"Launcher failed: {error}")
         return LauncherRunResult(
@@ -239,6 +261,13 @@ def run_launcher(
     except _LauncherSignal as error:
         exit_code = 128 + error.signum
         if run_directory is not None and state is not None:
+            _record_report_recovery_failure(
+                command,
+                run_directory,
+                state,
+                str(error),
+                dependencies,
+            )
             _record_terminal_failure(
                 run_directory,
                 state,
@@ -254,6 +283,13 @@ def run_launcher(
         )
     except KeyboardInterrupt as error:
         if run_directory is not None and state is not None:
+            _record_report_recovery_failure(
+                command,
+                run_directory,
+                state,
+                str(error) or "keyboard interrupt",
+                dependencies,
+            )
             _record_terminal_failure(
                 run_directory,
                 state,
@@ -269,6 +305,13 @@ def run_launcher(
         )
     except (ValueError, FileExistsError) as error:
         if run_directory is not None and state is not None:
+            _record_report_recovery_failure(
+                command,
+                run_directory,
+                state,
+                str(error),
+                dependencies,
+            )
             _record_terminal_failure(
                 run_directory,
                 state,
@@ -282,17 +325,32 @@ def run_launcher(
     except (ArithmeticError, KeyError, OSError, RuntimeError) as error:
         status = "cleanup_failed" if state is not None and state.get("active_status") == "cleaning" else "failed"
         if run_directory is not None and state is not None:
+            _record_report_recovery_failure(
+                command,
+                run_directory,
+                state,
+                str(error),
+                dependencies,
+            )
             _record_terminal_failure(run_directory, state, status, str(error), dependencies)
         else:
             _terminal(dependencies, f"Launcher {status}: {error}")
         return LauncherRunResult(1, status, run_directory, _resume_from_state(state))
     except Exception as error:
         if run_directory is not None and state is not None:
+            message = f"{type(error).__name__}: {error}"
+            _record_report_recovery_failure(
+                command,
+                run_directory,
+                state,
+                message,
+                dependencies,
+            )
             _record_terminal_failure(
                 run_directory,
                 state,
                 "failed",
-                f"{type(error).__name__}: {error}",
+                message,
                 dependencies,
             )
         else:
@@ -402,8 +460,51 @@ def _prepare_resume(
     identity = state["identity"]
     assert isinstance(identity, dict)
     repository = dependencies.repository_state()
-    if not repository.tracked_clean or repository.git_commit != identity["git_commit"]:
+    required_commit = _required_resume_git_commit(state)
+    if not repository.tracked_clean or repository.git_commit != required_commit:
         raise ValueError("resume Git identity does not match saved clean checkout")
+    config = _rebuild_saved_config(
+        dependencies,
+        run_directory,
+        state,
+        repository,
+    )
+    _terminal(dependencies, f"Run directory: {run_directory}")
+    _terminal(dependencies, f"Resume command: {state['resume_command']}")
+    _append_log(
+        run_directory,
+        _log_event(state, "resume", "validated exact resume identity"),
+    )
+    return config, run_directory, state
+
+
+def _rebuild_saved_config(
+    dependencies: LauncherDependencies,
+    run_directory: Path,
+    state: Mapping[str, object],
+    repository: RepositoryState,
+) -> LFPSummaryConfig:
+    """Rebuild and validate the saved configuration and source identity.
+
+    Parameters
+    ----------
+    dependencies : LauncherDependencies
+        Metadata-only configuration and fingerprint seams.
+    run_directory : pathlib.Path
+        Absolute launcher directory containing immutable identity artifacts.
+    state : Mapping[str, object]
+        Validated scalar launcher state; no numerical arrays are accepted.
+    repository : RepositoryState
+        Current clean checkout. Its path must match the computation checkout;
+        its commit may be a separately authorized report commit.
+
+    Returns
+    -------
+    LFPSummaryConfig
+        Rebuilt configuration exactly matching the saved computation identity.
+    """
+    identity = state["identity"]
+    assert isinstance(identity, dict)
     session_path = Path(str(identity["session_path"]))
     probe_label = str(identity["probe_label"])
     population = dependencies.load_active_population(session_path, probe_label)
@@ -425,10 +526,15 @@ def _prepare_resume(
     )
     _validate_launcher_config(config, rebuilt_command)
     sources = dict(dependencies.source_fingerprints(config))
+    computation_repository = RepositoryState(
+        repository.repository_root,
+        str(identity["git_commit"]),
+        True,
+    )
     rebuilt_identity = _identity_mapping(
         config,
         rebuilt_command,
-        repository,
+        computation_repository,
         sources,
     )
     if rebuilt_identity != identity:
@@ -438,9 +544,116 @@ def _prepare_resume(
     if state["paths"] != expected_paths:
         raise ValueError("resume path identity does not match saved run")
     _validate_launcher_identity_artifacts(run_directory, state)
+    return config
+
+
+def _required_resume_git_commit(state: Mapping[str, object]) -> str:
+    """Return the exact commit required for the unfinished launcher stage."""
+    identity = state.get("identity")
+    measurements = state.get("measurements")
+    completed = state.get("completed_stages")
+    if not isinstance(identity, Mapping) or not isinstance(measurements, Mapping):
+        raise ValueError("launcher identity/measurements are unavailable")
+    report_commit = measurements.get("report_git_commit")
+    if (
+        isinstance(completed, list)
+        and "report_complete" in completed
+        and isinstance(report_commit, str)
+        and re.fullmatch(r"[0-9a-f]{40}", report_commit) is not None
+    ):
+        return report_commit
+    computation_commit = identity.get("git_commit")
+    if not isinstance(computation_commit, str):
+        raise ValueError("launcher computation Git identity is unavailable")
+    return computation_commit
+
+
+def _prepare_report_recovery(
+    dependencies: LauncherDependencies,
+    run_directory: Path,
+    state: dict[str, object],
+) -> tuple[LFPSummaryConfig, Path, dict[str, object]]:
+    """Authorize report-only reuse of one exact completed component.
+
+    All configuration, population, source, path, and component checks finish
+    before report state is changed. Numerical preparation and PPC callbacks are
+    not reachable from this function.
+    """
+    completed = state["completed_stages"]
+    assert isinstance(completed, list)
+    if completed != list(_STAGES[:4]):
+        raise ValueError(
+            "recover-report requires an incomplete run ending at component_complete"
+        )
+    if state.get("report_directory") is not None:
+        raise ValueError("recover-report requires an absent published report")
+    cleanup_request = state.get("cleanup_request")
+    if not isinstance(cleanup_request, list) or not cleanup_request:
+        raise ValueError("recover-report requires a saved cleanup target")
+    identity = state["identity"]
+    assert isinstance(identity, dict)
+    repository = dependencies.repository_state()
+    computation_commit = str(identity["git_commit"])
+    if not repository.tracked_clean:
+        raise ValueError("recover-report requires a clean tracked Git checkout")
+    if repository.git_commit == computation_commit:
+        raise ValueError("use ordinary resume at the saved computation commit")
+    is_ancestor = dependencies.repository_commit_is_ancestor
+    if is_ancestor is None or not is_ancestor(
+        computation_commit,
+        repository.git_commit,
+    ):
+        raise ValueError("report checkout must descend from the computation commit")
+    config = _rebuild_saved_config(
+        dependencies,
+        run_directory,
+        state,
+        repository,
+    )
+    dependencies.validate_component(config)
+
+    audit_path = run_directory / "report_recovery.json"
+    original_error = state.get("error")
+    if audit_path.is_file():
+        prior = _load_report_recovery_audit(audit_path, state)
+        original_error = prior["original_error"]
+    if not isinstance(original_error, str) or not original_error:
+        raise ValueError("recover-report requires the original report error")
+    now = dependencies.now_utc()
+    audit = {
+        "schema_version": _REPORT_RECOVERY_SCHEMA,
+        "run_id": state["run_id"],
+        "status": "initialized",
+        "computation_git_commit": computation_commit,
+        "report_git_commit": repository.git_commit,
+        "original_error": original_error,
+        "recovery_utc": now,
+        "updated_utc": now,
+        "component_reused": True,
+        "error": None,
+    }
+    measurements = state["measurements"]
+    assert isinstance(measurements, dict)
+    measurements.update(
+        {
+            "component_reused": True,
+            "computation_git_commit": computation_commit,
+            "report_git_commit": repository.git_commit,
+            "report_recovery_utc": now,
+            "report_recovery_status": "initialized",
+        }
+    )
+    state["active_status"] = "report_recovery"
+    state["error"] = None
+    _write_json_atomic(audit_path, audit)
+    _persist_state(run_directory, state, dependencies)
+    _append_log(
+        run_directory,
+        _log_event(state, "report_recovery", "validated report-only recovery identity"),
+    )
+    _write_summary(run_directory, state)
     _terminal(dependencies, f"Run directory: {run_directory}")
     _terminal(dependencies, f"Resume command: {state['resume_command']}")
-    _append_log(run_directory, _log_event(state, "resume", "validated exact resume identity"))
     return config, run_directory, state
 
 
@@ -593,8 +806,16 @@ def _execute_locked_run(
     run_directory: Path,
     state: dict[str, object],
     dependencies: LauncherDependencies,
+    *,
+    component_already_validated: bool = False,
+    report_recovery: bool = False,
 ) -> LauncherRunResult:
-    """Complete unfinished component/report/cleanup stages under one run lock."""
+    """Complete unfinished component/report/cleanup stages under one run lock.
+
+    ``component_already_validated`` is true only after explicit report recovery
+    has validated the immutable component. ``report_recovery`` adds the audit
+    validation gate immediately before cleanup; neither flag changes numerics.
+    """
     completed = state["completed_stages"]
     assert isinstance(completed, list)
     if "launcher_artifacts_validated" in completed:
@@ -649,7 +870,7 @@ def _execute_locked_run(
             )
             dependencies.validate_component(config)
         _complete_stage(run_directory, state, "component_complete", dependencies)
-    else:
+    elif not component_already_validated:
         dependencies.validate_component(config)
 
     if "report_complete" not in completed:
@@ -692,6 +913,9 @@ def _execute_locked_run(
     _write_summary(run_directory, state)
     _validate_launcher_artifacts(run_directory, state)
     _complete_stage(run_directory, state, "launcher_artifacts_validated", dependencies)
+    if report_recovery:
+        _mark_report_recovery_validated(run_directory, state, dependencies)
+        _validate_launcher_artifacts(run_directory, state)
     return _cleanup_and_complete(config, run_directory, state, dependencies)
 
 
@@ -920,6 +1144,140 @@ def _persist_state(
     _write_json_atomic(run_directory / "launcher_state.json", state)
 
 
+def _load_report_recovery_audit(
+    path: Path,
+    state: Mapping[str, object],
+) -> dict[str, object]:
+    """Load and validate scalar report-recovery provenance.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Audit JSON path inside the launcher run directory.
+    state : Mapping[str, object]
+        Validated launcher state used for run and computation identities.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-safe scalar audit mapping. No numerical arrays are permitted.
+    """
+    try:
+        audit = json.loads(path.read_text(encoding="ascii"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("report_recovery.json is unavailable") from error
+    required = {
+        "schema_version",
+        "run_id",
+        "status",
+        "computation_git_commit",
+        "report_git_commit",
+        "original_error",
+        "recovery_utc",
+        "updated_utc",
+        "component_reused",
+        "error",
+    }
+    identity = state.get("identity")
+    measurements = state.get("measurements")
+    if (
+        not isinstance(audit, dict)
+        or set(audit) != required
+        or audit.get("schema_version") != _REPORT_RECOVERY_SCHEMA
+        or audit.get("run_id") != state.get("run_id")
+        or not isinstance(identity, Mapping)
+        or audit.get("computation_git_commit") != identity.get("git_commit")
+        or audit.get("component_reused") is not True
+        or audit.get("status")
+        not in {"initialized", "validated", "failed", "complete"}
+        or not isinstance(audit.get("original_error"), str)
+        or not audit.get("original_error")
+        or re.fullmatch(r"[0-9a-f]{40}", str(audit.get("report_git_commit"))) is None
+    ):
+        raise ValueError("report_recovery.json is incompatible with launcher state")
+    if (
+        isinstance(measurements, Mapping)
+        and measurements.get("report_git_commit") is not None
+    ):
+        if audit["report_git_commit"] != measurements["report_git_commit"]:
+            raise ValueError("report recovery commit disagrees with launcher state")
+    error = audit.get("error")
+    if error is not None and (not isinstance(error, str) or not error):
+        raise ValueError("report recovery error must be null or nonempty text")
+    return audit
+
+
+def _mark_report_recovery_validated(
+    run_directory: Path,
+    state: dict[str, object],
+    dependencies: LauncherDependencies,
+) -> None:
+    """Record validated report publication before exact work cleanup."""
+    path = run_directory / "report_recovery.json"
+    audit = _load_report_recovery_audit(path, state)
+    audit["status"] = "validated"
+    audit["error"] = None
+    audit["updated_utc"] = dependencies.now_utc()
+    measurements = state["measurements"]
+    assert isinstance(measurements, dict)
+    measurements["report_recovery_status"] = "validated"
+    _write_json_atomic(path, audit)
+    _persist_state(run_directory, state, dependencies)
+    _append_log(
+        run_directory,
+        _log_event(
+            state,
+            "report_recovery_validated",
+            "report artifacts validated before cleanup",
+        ),
+    )
+    _write_summary(run_directory, state)
+
+
+def _complete_report_recovery(
+    run_directory: Path,
+    state: dict[str, object],
+    dependencies: LauncherDependencies,
+) -> None:
+    """Finalize report-recovery provenance after launcher completion."""
+    path = run_directory / "report_recovery.json"
+    audit = _load_report_recovery_audit(path, state)
+    audit["status"] = "complete"
+    audit["error"] = None
+    audit["updated_utc"] = dependencies.now_utc()
+    measurements = state["measurements"]
+    assert isinstance(measurements, dict)
+    measurements["report_recovery_status"] = "complete"
+    _write_json_atomic(path, audit)
+    _persist_state(run_directory, state, dependencies)
+    _append_log(
+        run_directory,
+        _log_event(state, "report_recovery_complete", "report-only recovery complete"),
+    )
+    _write_summary(run_directory, state)
+
+
+def _record_report_recovery_failure(
+    command: LauncherCommand,
+    run_directory: Path,
+    state: dict[str, object],
+    message: str,
+    dependencies: LauncherDependencies,
+) -> None:
+    """Record a failed started recovery while preserving its original error."""
+    path = run_directory / "report_recovery.json"
+    if command.mode != "recover-report" or not path.is_file():
+        return
+    audit = _load_report_recovery_audit(path, state)
+    audit["status"] = "failed"
+    audit["error"] = message or "report recovery failed"
+    audit["updated_utc"] = dependencies.now_utc()
+    measurements = state["measurements"]
+    assert isinstance(measurements, dict)
+    measurements["report_recovery_status"] = "failed"
+    _write_json_atomic(path, audit)
+
+
 def _record_terminal_failure(
     run_directory: Path,
     state: dict[str, object],
@@ -1032,6 +1390,11 @@ def _validate_launcher_artifacts(
     saved = _load_state(run_directory / "launcher_state.json")
     if saved != dict(state):
         raise ValueError("in-memory and persisted launcher state disagree")
+    measurements = state.get("measurements")
+    assert isinstance(measurements, Mapping)
+    recovery_path = run_directory / "report_recovery.json"
+    if "report_git_commit" in measurements or recovery_path.exists():
+        _load_report_recovery_audit(recovery_path, state)
     _validate_existing_report(state)
 
 
@@ -1483,6 +1846,30 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         ).stdout
         return RepositoryState(repository_root, commit, not tracked.strip())
 
+    def repository_commit_is_ancestor(original: str, current: str) -> bool:
+        """Return whether ``original`` is a Git ancestor of ``current``."""
+        repository_root = Path(__file__).resolve().parents[2]
+        result = subprocess.run(
+            (
+                "git",
+                "-C",
+                str(repository_root),
+                "merge-base",
+                "--is-ancestor",
+                original,
+                current,
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode not in (0, 1):
+            raise RuntimeError(
+                "unable to establish report checkout ancestry: "
+                + result.stderr.strip()
+            )
+        return result.returncode == 0
+
     def component_is_compatible(config: LFPSummaryConfig) -> bool:
         """Return whether the exact Spike component is complete and compatible."""
         manifest = load_or_initialize_manifest(config.output_directory, config)
@@ -1557,6 +1944,7 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         monotonic_seconds=time.monotonic,
         process_tree_sampler=_LinuxProcessTreeSampler,
         terminal_write=lambda message: print(message, flush=True),
+        repository_commit_is_ancestor=repository_commit_is_ancestor,
     )
 
 

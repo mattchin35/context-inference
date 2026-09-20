@@ -807,7 +807,7 @@ def plot_population_ppc_maps(
     epoch_name: str,
     context: PlotContext,
 ) -> tuple[plt.Figure, dict[str, plt.Axes]]:
-    """Plot population PPC medians and FDR-significant prevalence.
+    """Plot PPC medians, FDR-significant prevalence, and eligible counts.
 
     Parameters
     ----------
@@ -829,7 +829,8 @@ def plot_population_ppc_maps(
     Returns
     -------
     tuple[matplotlib.figure.Figure, dict[str, matplotlib.axes.Axes]]
-        Unsaved figure with ``"median_ppc"`` and ``"prevalence"`` axes.
+        Unsaved figure with ``"median_ppc"``, ``"prevalence"``, and
+        ``"eligible_count"`` axes.
 
     Raises
     ------
@@ -848,10 +849,29 @@ def plot_population_ppc_maps(
         or total.shape != m.shape
     ):
         raise ValueError("population PPC axes are invalid")
-    figure, axes = _figure(("median_ppc", "prevalence"))
+    if (
+        not np.issubdtype(e.dtype, np.integer)
+        or not np.issubdtype(total.dtype, np.integer)
+        or np.any(e < 0)
+        or np.any(total < 0)
+        or np.any(e > total)
+    ):
+        raise ValueError(
+            "population PPC counts must be nonnegative integers with eligible <= total"
+        )
+    unique_totals = np.unique(total)
+    if unique_totals.size != 1:
+        raise ValueError("total_unit_count must identify one configured population size")
+    configured_unit_count = int(unique_totals[0])
+    figure, axes = _figure(("median_ppc", "prevalence", "eligible_count"))
     for key, data, title in (
         ("median_ppc", m, "Median PPC"),
-        ("prevalence", q, "Significant fraction"),
+        ("prevalence", q, "Fraction of eligible units passing FDR"),
+        (
+            "eligible_count",
+            e,
+            f"Eligible unit count (total={configured_unit_count})",
+        ),
     ):
         mesh = axes[key].pcolormesh(
             f,
@@ -862,13 +882,13 @@ def plot_population_ppc_maps(
         figure.colorbar(mesh, ax=axes[key])
         axes[key].set(ylabel="Condition", title=title)
         axes[key].set_yticks(np.arange(len(condition_names)), condition_names)
-    axes["prevalence"].set_xlabel("Frequency (Hz)")
+    axes["eligible_count"].set_xlabel("Frequency (Hz)")
     _caption(
         figure,
         context,
         (
-            f"{site_label} {epoch_name}; eligible/total="
-            f"{e.tolist()}/{total.tolist()}; NaN means no eligible units"
+            f"{site_label} {epoch_name}; prevalence denominator is eligible "
+            "units; NaN means no eligible units"
         ),
     )
     return figure, axes
