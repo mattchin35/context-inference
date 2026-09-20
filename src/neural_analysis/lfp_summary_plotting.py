@@ -951,7 +951,9 @@ def plot_ppc_band_summary(
     reliable : numpy.ndarray
         Boolean array with the same axes; false entries do not contribute.
     condition_names, epoch_names, band_names : tuple[str, ...]
-        Labels for the corresponding axes.
+        Labels for the corresponding axes. Epochs must contain unique
+        ``before`` and ``after`` entries; bands must contain unique ``theta``
+        and ``gamma`` entries. Other labeled positions are not displayed.
     unit_count : int
         Expected size of the reference unit axis.
     site_label : str
@@ -978,20 +980,28 @@ def plot_ppc_band_summary(
         != (len(condition_names), unit_count, len(epoch_names), len(band_names))
     ):
         raise ValueError("PPC band axes are invalid")
-    if epoch_names != ("before", "after") or band_names != ("theta", "gamma"):
-        raise ValueError(
-            "PPC band summary requires before/after epochs and theta/gamma bands"
-        )
+    required_epochs = ("before", "after")
+    required_bands = ("theta", "gamma")
+    if any(epoch_names.count(name) != 1 for name in required_epochs) or any(
+        band_names.count(name) != 1 for name in required_bands
+    ):
+        raise ValueError("PPC band summary requires unique before/after and theta/gamma labels")
+    before_index, after_index = (
+        epoch_names.index(name) for name in required_epochs
+    )
+    theta_index, gamma_index = (
+        band_names.index(name) for name in required_bands
+    )
     figure, axes = _figure(("band_ppc",))
     figure.set_size_inches(max(12.0, 1.35 * len(condition_names)), 6.0)
     axis = axes["band_ppc"]
     condition_positions = np.arange(len(condition_names), dtype=float)
     bar_width = 0.19
     measurements = (
-        (0, 0, "theta-before"),
-        (1, 0, "theta-after"),
-        (0, 1, "gamma-before"),
-        (1, 1, "gamma-after"),
+        (before_index, theta_index, "theta-before"),
+        (after_index, theta_index, "theta-after"),
+        (before_index, gamma_index, "gamma-before"),
+        (after_index, gamma_index, "gamma-after"),
     )
     for offset_index, (epoch_index, band_index, label) in enumerate(measurements):
         medians = np.full(len(condition_names), np.nan)
