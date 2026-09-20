@@ -365,10 +365,60 @@ def test_population_ppc_prevalence_uses_eligible_denominator_and_nan_when_none()
         context=_context(),
     )
 
-    _assert_figure_contract(figure, axes, {"median_ppc", "prevalence"})
+    _assert_figure_contract(
+        figure,
+        axes,
+        {"median_ppc", "prevalence", "eligible_count"},
+    )
     prevalence_array = axes["prevalence"].collections[0].get_array()
     assert np.isnan(np.asarray(prevalence_array)).any()
-    assert "eligible" in figure.texts[-1].get_text().lower()
+    eligible_array = axes["eligible_count"].collections[0].get_array()
+    np.testing.assert_array_equal(np.asarray(eligible_array).reshape(2, 2), [[4, 0], [4, 0]])
+    assert "total=6" in axes["eligible_count"].get_title().lower()
+    assert "fraction of eligible units passing fdr" in axes["prevalence"].get_title().lower()
+
+
+def test_population_ppc_real_dimensions_keep_exact_counts_and_bounded_caption() -> None:
+    """Nine by fifty PPC maps must not serialize count matrices into captions."""
+    condition_names = (
+        "correct_rewarded",
+        "omission",
+        "incorrect",
+        "switch",
+        "stay",
+        "omission_switch",
+        "omission_stay",
+        "incorrect_switch",
+        "incorrect_stay",
+    )
+    frequency_hz = np.arange(2.0, 102.0, 2.0)
+    eligible = np.arange(200, 200 + 9 * 50, dtype=np.int64).reshape(9, 50) % 74 + 200
+    total = np.full((9, 50), 273, dtype=np.int64)
+    prevalence = np.full((9, 50), 0.25)
+    prevalence[5, 7] = np.nan
+
+    figure, axes = plot_population_ppc_maps(
+        median_ppc=np.full((9, 50), 0.1),
+        significant_fraction=prevalence,
+        eligible_unit_count=eligible,
+        total_unit_count=total,
+        condition_names=condition_names,
+        frequency_hz=frequency_hz,
+        site_label="HPC1",
+        epoch_name="whole",
+        context=_context(),
+    )
+
+    assert set(axes) == {"median_ppc", "prevalence", "eligible_count"}
+    np.testing.assert_array_equal(
+        np.asarray(axes["eligible_count"].collections[0].get_array()).reshape(9, 50),
+        eligible,
+    )
+    caption = figure.texts[-1].get_text()
+    assert len(caption) < 1000
+    assert "[[" not in caption
+    assert 0.0 < figure.subplotpars.bottom < figure.subplotpars.top < 1.0
+    plt.close(figure)
 
 
 def test_ppc_band_summary_and_exemplar_include_counts_polar_frequency_and_pooled_caption() -> None:

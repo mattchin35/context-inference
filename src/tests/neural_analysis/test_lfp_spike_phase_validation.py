@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
@@ -463,6 +464,62 @@ def test_general_cached_report_supports_separate_1000_shuffle_final_run(
     assert report["run_kind"] == "final"
     assert report["shuffle_count"] == 1000
     assert "compute_spike_phase" not in calls
+
+
+def test_real_dimension_population_maps_publish_inside_cache_backed_report(
+    tmp_path: Path,
+) -> None:
+    """A 273-unit, nine-condition, 50-frequency report must render atomically."""
+    config = build_ct026_spike_phase_preview_config(tmp_path / "CT026", _population())
+    arrays = _cache_arrays()
+    unit_count = 273
+    frequency_count = 50
+    metric_shape = (unit_count, 9, 3, 3, frequency_count)
+    arrays.update(
+        {
+            "unit_ids": np.array(
+                tuple(f"ProbeB:{cluster_id}" for cluster_id in range(unit_count))
+            ),
+            "frequency_hz": np.arange(2.0, 102.0, 2.0),
+            "ppc": np.full(metric_shape, 0.1),
+            "computable": np.ones(metric_shape, dtype=bool),
+            "reliable": np.ones(metric_shape, dtype=bool),
+            "spike_count": np.full(metric_shape, 51, dtype=np.int64),
+            "null_eligible": np.ones(metric_shape, dtype=bool),
+            "significant": np.zeros(metric_shape, dtype=bool),
+        }
+    )
+    calls: list[str] = []
+    dependencies = _successful_dependencies(calls)
+    dependencies.load_spike_phase_arrays = lambda *_: arrays
+    dependencies.plot_population_ppc_maps = (
+        lfp_spike_phase_validation._plot_cached_population_map
+    )
+
+    def save_png(figure: object, path: Path) -> None:
+        """Save real population figures and marker files for injected stubs."""
+        if hasattr(figure, "savefig"):
+            figure.savefig(path)
+        else:
+            path.write_bytes(b"\x89PNG\r\n\x1a\nreport-test")
+
+    dependencies.save_png = save_png
+    dependencies.close_figure = lambda figure: (
+        plt.close(figure) if hasattr(figure, "savefig") else None
+    )
+
+    result = render_cached_spike_phase_preview_validation(
+        config,
+        tmp_path / "runs",
+        dependencies,
+        spike_phase_wall_time_s=12.0,
+        spike_phase_peak_memory_bytes=4096,
+    )
+
+    assert result.report["unit_count"] == 273
+    assert calls.count("population_map") == 0
+    assert len(result.png_paths) == 27
+    assert all(path.is_file() for path in result.png_paths)
 
 
 @pytest.mark.parametrize(

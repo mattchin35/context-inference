@@ -61,6 +61,7 @@ def _dependencies(
     compute: Callable[..., ComponentRunResult] | None = None,
     component_compatible: bool = False,
     cleanup: Callable[[object], None] | None = None,
+    report: Callable[..., object] | None = None,
 ) -> object:
     """Return deterministic high-level launcher seams with no raw-data access."""
     launcher = _launcher()
@@ -167,7 +168,7 @@ def _dependencies(
         component_is_compatible=lambda config: component_compatible,
         compute_component=compute or default_compute,
         validate_component=lambda config: calls.append("validate_component"),
-        publish_report=publish_report,
+        publish_report=report or publish_report,
         cleanup_target=cleanup or default_cleanup,
         now_utc=iter(
             (
@@ -220,6 +221,11 @@ def test_parser_requires_explicit_probe_and_final_confirmation() -> None:
         ["resume", "--run-directory", "/runs/exact"]
     )
     assert resume.mode == "resume" and resume.run_directory == Path("/runs/exact")
+    recovery = launcher.parse_launcher_command(
+        ["recover-report", "--run-directory", "/runs/failed-report"]
+    )
+    assert recovery.mode == "recover-report"
+    assert recovery.run_directory == Path("/runs/failed-report")
 
     invalid = (
         ["new", "--session-path", "/data/CT026", "--shuffles", "100"],
@@ -511,3 +517,351 @@ def test_live_launcher_lock_fails_without_mutating_owner_state(tmp_path: Path) -
     assert competing.exit_code == 1
     assert state_path.read_bytes() == before_state
     assert log_path.read_bytes() == before_log
+
+
+def _component_complete_report_failure(
+    tmp_path: Path,
+    terminal: list[str],
+) -> tuple[object, object, Path]:
+    """Create one original-commit run that fails only during report rendering."""
+    launcher = _launcher()
+    calls: list[str] = []
+
+    def fail_report(**_: object) -> object:
+        """Fail after component publication and before report publication."""
+        calls.append("report_failed")
+        raise RuntimeError("synthetic report layout failure")
+
+    dependencies = _dependencies(
+        tmp_path,
+        calls,
+        terminal,
+        report=fail_report,
+    )
+    command = launcher.parse_launcher_command(
+        [
+            "new", "--session-path", str(tmp_path / "CT026"),
+            "--analysis-root", str(tmp_path / "runs"),
+            "--probe", "ProbeB", "--shuffles", "100",
+        ]
+    )
+    failed = launcher.run_launcher(command, dependencies)
+    state = json.loads((failed.run_directory / "launcher_state.json").read_text())
+    target = Path(state["cleanup_request"][0]["run_directory"])
+
+    assert failed.exit_code == 1 and failed.status == "failed"
+    assert state["completed_stages"][-1] == "component_complete"
+    assert state["report_directory"] is None
+    assert target.is_dir()
+    return launcher, failed, target
+
+
+def _report_recovery_dependencies(
+    tmp_path: Path,
+    calls: list[str],
+    terminal: list[str],
+    *,
+    report: Callable[..., object] | None = None,
+    cleanup: Callable[[object], None] | None = None,
+    tracked_clean: bool = True,
+    is_ancestor: bool = True,
+) -> object:
+    """Return later-commit seams that make every computation call fail."""
+    base = _dependencies(
+        tmp_path,
+        calls,
+        terminal,
+        compute=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("report recovery reached numerical computation")
+        ),
+        component_compatible=True,
+        cleanup=cleanup,
+        report=report,
+    )
+    values = {
+        name: getattr(base, name)
+        for name in base.__dataclass_fields__
+    }
+    values.update(
+        repository_state=lambda: _launcher().RepositoryState(
+            tmp_path / "repo",
+            "c" * 40,
+            tracked_clean,
+        ),
+        repository_commit_is_ancestor=lambda original, current: (
+            is_ancestor and original == "b" * 40 and current == "c" * 40
+        ),
+    )
+    return SimpleNamespace(**values)
+
+
+def test_report_recovery_reuses_component_records_code_and_cleans_last(
+    tmp_path: Path,
+) -> None:
+    """Explicit recovery renders under a descendant commit without recomputing."""
+    terminal: list[str] = []
+    launcher, failed, target = _component_complete_report_failure(tmp_path, terminal)
+    calls: list[str] = []
+    dependencies = _report_recovery_dependencies(tmp_path, calls, terminal)
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["recover-report", "--run-directory", str(failed.run_directory)]
+        ),
+        dependencies,
+    )
+
+    assert result.exit_code == 0 and result.status == "complete"
+    assert calls == ["validate_component", "report", "cleanup_target"]
+    assert not target.exists()
+    state = json.loads((failed.run_directory / "launcher_state.json").read_text())
+    recovery = json.loads((failed.run_directory / "report_recovery.json").read_text())
+    assert state["identity"]["git_commit"] == "b" * 40
+    assert state["measurements"]["component_reused"] is True
+    assert state["measurements"]["report_git_commit"] == "c" * 40
+    assert recovery["schema_version"] == "spike_phase_report_recovery.v1"
+    assert recovery["status"] == "complete"
+    assert recovery["computation_git_commit"] == "b" * 40
+    assert recovery["report_git_commit"] == "c" * 40
+    assert recovery["original_error"] == "synthetic report layout failure"
+
+
+def test_report_recovery_failure_retains_exact_work_and_component_stage(
+    tmp_path: Path,
+) -> None:
+    """A second report failure must remain retryable and preserve PPC work."""
+    terminal: list[str] = []
+    launcher, failed, target = _component_complete_report_failure(tmp_path, terminal)
+    calls: list[str] = []
+
+    def fail_again(**_: object) -> object:
+        """Fail the later report implementation before publication."""
+        calls.append("report_failed_again")
+        raise RuntimeError("second synthetic report failure")
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["recover-report", "--run-directory", str(failed.run_directory)]
+        ),
+        _report_recovery_dependencies(
+            tmp_path,
+            calls,
+            terminal,
+            report=fail_again,
+        ),
+    )
+
+    assert result.exit_code == 1 and result.status == "failed"
+    assert calls == ["validate_component", "report_failed_again"]
+    assert target.is_dir()
+    state = json.loads((failed.run_directory / "launcher_state.json").read_text())
+    recovery = json.loads((failed.run_directory / "report_recovery.json").read_text())
+    assert state["completed_stages"][-1] == "component_complete"
+    assert state["report_directory"] is None
+    assert recovery["status"] == "failed"
+    assert recovery["error"] == "second synthetic report failure"
+
+
+def test_recovered_cleanup_resume_requires_exact_report_commit(
+    tmp_path: Path,
+) -> None:
+    """Cleanup-only resume binds to report code while preserving compute identity."""
+    terminal: list[str] = []
+    launcher, failed, target = _component_complete_report_failure(tmp_path, terminal)
+    recovery_calls: list[str] = []
+
+    def fail_cleanup(_: object) -> None:
+        """Leave the exact target after a successfully recovered report."""
+        recovery_calls.append("cleanup_failed")
+        raise OSError("synthetic recovered cleanup failure")
+
+    recovered = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["recover-report", "--run-directory", str(failed.run_directory)]
+        ),
+        _report_recovery_dependencies(
+            tmp_path,
+            recovery_calls,
+            terminal,
+            cleanup=fail_cleanup,
+        ),
+    )
+    assert recovered.status == "cleanup_failed" and target.is_dir()
+
+    wrong_calls: list[str] = []
+    wrong_commit = _dependencies(
+        tmp_path,
+        wrong_calls,
+        terminal,
+        component_compatible=True,
+    )
+    rejected = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["resume", "--run-directory", str(failed.run_directory)]
+        ),
+        wrong_commit,
+    )
+    assert rejected.exit_code == 2
+    assert wrong_calls == []
+
+    resume_calls: list[str] = []
+    completed = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["resume", "--run-directory", str(failed.run_directory)]
+        ),
+        _report_recovery_dependencies(tmp_path, resume_calls, terminal),
+    )
+    assert completed.exit_code == 0 and completed.status == "complete"
+    assert resume_calls == ["validate_component", "cleanup_target"]
+    assert not target.exists()
+
+
+@pytest.mark.parametrize(
+    ("tracked_clean", "is_ancestor", "message"),
+    (
+        (False, True, "clean"),
+        (True, False, "descend"),
+    ),
+)
+def test_report_recovery_rejects_untrusted_report_checkout_before_component_access(
+    tmp_path: Path,
+    tracked_clean: bool,
+    is_ancestor: bool,
+    message: str,
+) -> None:
+    """Dirty or unrelated report code cannot inspect or mutate a completed component."""
+    terminal: list[str] = []
+    launcher, failed, target = _component_complete_report_failure(tmp_path, terminal)
+    calls: list[str] = []
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["recover-report", "--run-directory", str(failed.run_directory)]
+        ),
+        _report_recovery_dependencies(
+            tmp_path,
+            calls,
+            terminal,
+            tracked_clean=tracked_clean,
+            is_ancestor=is_ancestor,
+        ),
+    )
+
+    assert result.exit_code == 2
+    assert message in json.loads(
+        (failed.run_directory / "launcher_state.json").read_text()
+    )["error"]
+    assert calls == []
+    assert target.is_dir()
+
+
+def test_report_recovery_honors_existing_launcher_lock(tmp_path: Path) -> None:
+    """A competing recovery cannot mutate the failed run owner's artifacts."""
+    terminal: list[str] = []
+    launcher, failed, _ = _component_complete_report_failure(tmp_path, terminal)
+    state_path = failed.run_directory / "launcher_state.json"
+    log_path = failed.run_directory / "run.log"
+    before_state = state_path.read_bytes()
+    before_log = log_path.read_bytes()
+    with (failed.run_directory / "launcher.lock").open("a+") as lock_stream:
+        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        competing = launcher.run_launcher(
+            launcher.parse_launcher_command(
+                ["recover-report", "--run-directory", str(failed.run_directory)]
+            ),
+            _report_recovery_dependencies(tmp_path, [], terminal),
+        )
+
+    assert competing.exit_code == 1
+    assert state_path.read_bytes() == before_state
+    assert log_path.read_bytes() == before_log
+
+
+def test_report_recovery_rejects_same_commit_and_precomponent_stage(
+    tmp_path: Path,
+) -> None:
+    """Recovery is not an alias for ordinary resume or interrupted computation."""
+    terminal: list[str] = []
+    launcher, failed, _ = _component_complete_report_failure(tmp_path, terminal)
+    same_commit = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["recover-report", "--run-directory", str(failed.run_directory)]
+        ),
+        _dependencies(tmp_path, [], terminal, component_compatible=True),
+    )
+    assert same_commit.exit_code == 2
+    assert "ordinary resume" in json.loads(
+        (failed.run_directory / "launcher_state.json").read_text()
+    )["error"]
+
+    def interrupt(*_: object, **__: object) -> ComponentRunResult:
+        """Leave a second run before component completion."""
+        raise KeyboardInterrupt("synthetic interruption")
+
+    interrupted = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            [
+                "new", "--session-path", str(tmp_path / "CT026"),
+                "--analysis-root", str(tmp_path / "other-runs"),
+                "--probe", "ProbeB", "--shuffles", "100",
+            ]
+        ),
+        _dependencies(tmp_path, [], terminal, compute=interrupt),
+    )
+    rejected = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["recover-report", "--run-directory", str(interrupted.run_directory)]
+        ),
+        _report_recovery_dependencies(tmp_path, [], terminal),
+    )
+    assert rejected.exit_code == 2
+    assert "component_complete" in json.loads(
+        (interrupted.run_directory / "launcher_state.json").read_text()
+    )["error"]
+
+
+def test_report_recovery_rejects_changed_sources_and_incompatible_component(
+    tmp_path: Path,
+) -> None:
+    """Recovery fails closed before plotting when data or cache identity changes."""
+    terminal: list[str] = []
+    launcher, failed, target = _component_complete_report_failure(tmp_path, terminal)
+    source_calls: list[str] = []
+    changed_sources = _report_recovery_dependencies(
+        tmp_path,
+        source_calls,
+        terminal,
+    )
+    changed_sources.source_fingerprints = lambda _config: {
+        "trial_table": {"size_bytes": 11}
+    }
+    source_result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["recover-report", "--run-directory", str(failed.run_directory)]
+        ),
+        changed_sources,
+    )
+    assert source_result.exit_code == 2
+    assert source_calls == [] and target.is_dir()
+
+    component_calls: list[str] = []
+    incompatible = _report_recovery_dependencies(
+        tmp_path,
+        component_calls,
+        terminal,
+    )
+
+    def reject_component(_: object) -> None:
+        """Reject a missing or stale committed component before reporting."""
+        component_calls.append("validate_component")
+        raise ValueError("incompatible committed component")
+
+    incompatible.validate_component = reject_component
+    component_result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            ["recover-report", "--run-directory", str(failed.run_directory)]
+        ),
+        incompatible,
+    )
+    assert component_result.exit_code == 2
+    assert component_calls == ["validate_component"]
+    assert target.is_dir()
