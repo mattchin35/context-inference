@@ -2921,6 +2921,24 @@ Wrapper tests written before implementation:
 - `bash -n src/shell_scripts/hpc_ppc.sh` passes. Tests never submit `sbatch`,
   open CT026 data, or perform package/network operations.
 
+C1 tests-only RED checkpoint (2026-09-20):
+
+- Test-only commit `80a2ead` adds
+  `src/tests/neural_analysis/test_hpc_ppc_shell.py` and changes no production
+  or shell source. Its temporary Git repositories and fake `uv` executable
+  exercise only wrapper boundaries; no Slurm command, network access, project
+  environment, or CT026 path is used.
+- The focused command
+  `uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_hpc_ppc_shell.py`
+  produced genuine RED at 13 failed in 2.69 seconds. The current placeholder
+  passes Bash syntax but fails every reviewed resource, repository/CPU/worker,
+  exact uv invocation, thread environment, exit-code, and TERM-forwarding
+  contract. Failures occur because it still contains the sample Conda and
+  `<code_name>.py` placeholders, not because of collection or fixture errors.
+- The next permitted production edit is confined to
+  `src/shell_scripts/hpc_ppc.sh`. Tests must not change unless a documented
+  requirement change or genuine test defect is demonstrated.
+
 Cluster validation before a scientific run:
 
 1. Commit documentation, then wrapper RED tests, then implementation in
