@@ -599,14 +599,15 @@ The main outputs answer complementary questions:
 | --- | --- | --- |
 | Power compute/cache inspection | Implemented | Preserve compatible Power computation and limited cached plotting |
 | Synchrony numerical computation/reporting | Implemented outside Streamlit | Add the production Streamlit action and complete cached selectors |
-| Spike-phase grouped numerical bridge | Implemented outside Streamlit | Bind it through the composed production boundary without changing PPC numerics or the one-worker library default |
-| Standalone Spike-phase launcher | Planned before the preview | Add explicit new/resume/dry-run modes; request eight workers for CT026; keep preview and final runs separate |
-| Synchrony and Spike-phase Streamlit controls | Planned | Use the composed production dependency boundary; do not calculate numerics in Streamlit |
-| Compute All | Planned | Run Power, Synchrony, and Spike phase sequentially with isolated component failures |
+| Spike-phase grouped numerical bridge | Implemented outside Streamlit | Preserve its numerics and explicit eight-worker launcher request |
+| Standalone Spike-phase launcher | Implemented; local preview report recovery pending | Preserve new/resume/dry-run identity; add only explicit report-only recovery after the real 100-shuffle plotting failure |
+| SLURM execution | Planned before the final run | Use the tracked thin uv wrapper on `unlimited`, initially 8 CPUs, 32 GB, and 72 hours; keep preview/final commands explicit |
+| Synchrony and Spike-phase Streamlit controls | Planned after cluster infrastructure | Inspect compatible cluster-resident caches through tunneled cluster-side Streamlit; do not run multi-hour Spike computation in a render callback |
+| Compute All | Numerical boundary implemented; interactive launch deferred | Do not synchronously dispatch long Spike/Compute All work from Streamlit; expose copyable launcher/SLURM handoff instead |
 | Active unit-population selection | Planned and required | Select exactly one ProbeA or ProbeB population per run, using the same good/MUA and good-inside-brain defaults; combined populations are out of scope |
 | Progress display | Planned and required | Display stage, completed/total work, elapsed time, and ETA only when available |
 | Cached Power selectors/plots | Partially implemented | Expand from the limited Power preview to the complete approved cached views |
-| Cached Synchrony/PPC selectors and plots | Planned | Load only compatible final component files and expose counts, warnings, exclusions, and stale differences |
+| Cached Synchrony/PPC selectors and plots | Planned | Load only compatible final cluster-resident component files server-side and expose counts, warnings, exclusions, and stale differences |
 | Absolute amplitude thresholds | Deferred | Empty thresholds are supported; reject every nonempty request before computation until masking is implemented |
 
 Prepared-phase tensors, schedules, PPC block checkpoints, incomplete work, and
@@ -617,10 +618,13 @@ scientific inspection.
 
 ### 4.1 Composed production boundary
 
-Power, Synchrony, Spike phase, and Compute All must use one composed production
-dependency boundary. The webapp may select an action and adapt progress events,
-but it must not choose component-specific numerical factories, load raw data for
-a cached plot, or implement scientific calculations in a Streamlit callback.
+Power, Synchrony, Spike phase, and Compute All retain one composed production
+dependency boundary. The webapp must not choose component-specific numerical
+factories, load raw data for a cached plot, or implement scientific calculations
+in a Streamlit callback. The first cluster-integrated UI may use that boundary
+for bounded Power/Synchrony work, but it must not synchronously execute the
+multi-hour Spike-phase or Compute All paths. Those controls provide copyable
+launcher/SLURM new or resume commands and inspect saved state instead.
 
 Compute All runs Power, Synchrony, and Spike phase in that order. Synchrony and
 Spike phase share one compatible prepared-phase product. Each component keeps
@@ -656,14 +660,14 @@ and requires an explicit separate computation. The first implementation does
 not combine ProbeA and ProbeB units into one population or one PPC component.
 
 Power and Synchrony do not require a unit population. Spike phase and Compute
-All require a valid selected population before dispatch. A missing or invalid
-population produces a visible pre-dispatch error rather than silently omitting
-Spike phase.
+All require a valid selected population before launcher-command generation or
+any future dispatch. A missing or invalid population produces a visible error
+rather than silently omitting Spike phase.
 
 ### 4.3 Progress and execution state
 
-Streamlit displays framework-independent progress records emitted by the
-production boundary. When supplied, display:
+Streamlit displays framework-independent progress records emitted by a bounded
+production call or reloaded from a saved launcher log. When supplied, display:
 
 - component and stage;
 - completed and total work units;
@@ -672,8 +676,9 @@ production boundary. When supplied, display:
 - concise status text.
 
 Do not fabricate an ETA before the numerical layer provides one. Rerenders must
-not restart a completed action or duplicate phase/PPC preparation. Cancellation
-remains out of scope for the first milestone.
+not restart an action, submit another Slurm job, or duplicate phase/PPC
+preparation. Cancellation and scheduler control remain out of scope for the
+first milestone.
 
 The webapp recognizes `missing`, `compatible`, `stale`, `running`, and `failed`
 states. Stale differences are inspectable, stale plots require an explicit
@@ -683,17 +688,28 @@ qualify as compatible components.
 ### 4.4 Cached views and reporting boundary
 
 Each view loads only its required compatible component file. PPC cached views
-include unit maps, reliable population summaries, eligible-unit prevalence,
-band summaries, and matched low/high exemplars. Counts, instability,
-eligibility, warnings, exclusions, selected population identity, and reference
-provenance must remain visible.
+include unit maps, reliable population summaries, the fraction of eligible
+units passing FDR, a separate exact eligible-unit-count heatmap, band summaries,
+and matched low/high exemplars. Counts, instability, eligibility, warnings,
+exclusions, selected population identity, and reference provenance must remain
+visible. The prevalence denominator is the number of null-eligible units in the
+same condition/site/epoch/frequency cell; a zero denominator displays NaN.
 
 The standalone preview report, rather than Streamlit, is the first required
 scientific Spike-phase execution boundary. It is built from compatible cached
 arrays and includes the detailed timings, memory/cache provenance, warnings,
 exclusions, reliability/eligibility counts, and benchmark-based filter
-projection required by `Tasks_neural.md`. Webapp completion follows this
-preview infrastructure and reuses its cache-only plotting contracts.
+projection required by `Tasks_neural.md`. Webapp completion follows the
+recovered preview and cluster infrastructure and reuses its cache-only plotting
+contracts.
+
+The numerical component and manifest remain on the cluster. Streamlit runs on
+the cluster filesystem, binds only to loopback, and is reached from a local
+browser through SSH port forwarding. Cache identity is validated against the
+cluster paths. Only rendered figures and scalar UI data cross the tunnel. The
+selected component is cached server-side by manifest and file identity so an
+ordinary Streamlit rerun does not reopen or decompress it. SSHFS and local
+absolute-path remapping are not the primary inspection design.
 
 ### 4.5 Standalone preview and final-run separation
 
@@ -714,3 +730,17 @@ Completed PPC work is retained until the component, manifest, plots, detailed
 report, log, and summary have all been written and validated. Cleanup is the
 last successful step and is scoped to the exact run fingerprint. A reporting
 failure preserves resumable work and cannot remove a sibling run.
+
+The first real ProbeB 100-shuffle computation reached component completion but
+exposed a report-only population-caption layout failure. Ordinary resume keeps
+its exact Git identity. A separate explicit `recover-report` command may use a
+later clean descendant commit only after revalidating the saved configuration,
+population, sources, component, and exact cleanup target. It cannot reach any
+scientific compute seam, records computation and report commits separately,
+publishes and validates the report first, and performs cleanup last.
+
+After that local report is inspected, the 1,000-shuffle final run moves to a
+thin uv/Slurm wrapper. The initial request is partition `unlimited`, one task,
+eight CPUs, 32 GB, and 72 hours with a five-minute termination signal. The same
+wrapper supports future 100-shuffle runs; it never supplies an implicit probe,
+shuffle count, final acknowledgement, or latest-run selection.

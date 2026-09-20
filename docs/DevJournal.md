@@ -701,3 +701,60 @@ ordering in which WP5C is completed and benchmarked before that preview.
 This journal is historical. `docs/Tasks_neural.md` is the authoritative source
 for current execution state, contracts, gates, package ownership, and remaining
 work; later work must not recover sequencing from an older journal entry.
+
+# 2026/09/20 - ProbeB preview result and recovery/cluster handoff
+
+The first local CT026 ProbeB 100-shuffle launcher run ended after successful
+numerical publication but before report publication. No source or numerical
+parameter was changed during diagnosis.
+
+- Run directory:
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/CT026_2026-08-01_130853_spike_phase_ProbeB_preview_2026-09-18T20-36-32Z`.
+- All 105 grouped blocks completed. The launcher reached
+  `component_complete`, and the generic manifest marks `spike_phase.npz`
+  complete. The component is 211876438 bytes and represents 273 ProbeB units,
+  427 trials, nine overlapping conditions, three sites, three epochs, and 50
+  frequencies.
+- The launcher then failed with `bottom cannot be >= top`. The population plot
+  caption serialized complete `9 x 50` eligible and total count matrices. It
+  produced 4789 characters, 36 wrapped lines, and a requested subplot bottom
+  margin of 1.71. This is a deterministic report-layout failure rather than a
+  PPC or cache failure.
+- The report parent contains no published report. Success cleanup did not run,
+  and the exact 1.3 GB PPC work directory remains available. The supplied
+  ordinary resume command would repeat the same error at the original code
+  commit; a new plotting commit would be rejected by ordinary exact-commit
+  resume.
+- Measured component time was 11719.959 seconds: 115.086 seconds phase
+  preparation, 3653.792 seconds planning, and 7940.727 seconds grouped
+  execution. Peak process-tree PSS was 4146417664 bytes and RSS was 7690588160
+  bytes. The earlier 45-120 minute projection for 1,000 shuffles is retired.
+- Preview diagnostics include 1080900 computable cells, 914700 reliable/null-
+  eligible cells, and 167860 significant eligible cells. With 100 shuffles the
+  smallest attainable p/q value is `1/101`; these counts are validation
+  evidence rather than the final scientific result.
+
+The user approved a documentation-first R1 package. The population view will
+show three heatmaps: reliable-unit median PPC, fraction of eligible units
+passing FDR, and exact eligible-unit count. An explicit `recover-report`
+launcher command will preserve strict ordinary resume identity while allowing
+only report generation under a later clean descendant commit. It must validate
+the original component/configuration/population/sources, record computation and
+report commits separately, make every numerical seam unreachable, validate the
+report, and clean only the saved exact target last.
+
+After R1 report inspection, work moves directly to C1 cluster execution before
+WP11. The pushed baseline is `ce37409`, which tracks `pyproject.toml`, `uv.lock`,
+and the sample `src/shell_scripts/hpc_ppc.sh`; uv is installed on cluster
+access. The user selected Slurm partition `unlimited` and an initial 72-hour
+request. The production wrapper will use one task, eight CPUs, 32 GB, a
+five-minute SIGTERM warning, offline/no-sync/frozen uv execution, and the
+existing launcher. A harmless uv/Python hello-world check precedes project
+imports, wrapper implementation, or scientific access.
+
+Numerical caches will remain on the cluster. The approved inspection topology
+runs Streamlit beside the cache and binds it to loopback; a local browser uses
+SSH port forwarding. This avoids SSHFS latency and absolute-path remapping,
+while transferring only figures and scalar UI output. Immutable reports may be
+copied locally. `docs/Tasks_neural.md` contains the authoritative R1/C1 tests,
+state rules, commands, resource policy, and execution gates.
