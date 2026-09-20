@@ -46,6 +46,7 @@ _MODULE = "src.neural_analysis.lfp_spike_phase_launcher"
 _STATE_SCHEMA = "spike_phase_launcher_state.v1"
 _PREFLIGHT_SCHEMA = "spike_phase_preflight.v1"
 _REPORT_RECOVERY_SCHEMA = "spike_phase_report_recovery.v1"
+_REPORT_RERENDER_SCHEMA = "spike_phase_report_rerender.v1"
 _RUN_NAME = re.compile(
     r"^[A-Za-z0-9_.-]+_spike_phase_(ProbeA|ProbeB)_"
     r"(preview|final|dry_run)_[A-Za-z0-9_.:-]+$"
@@ -142,7 +143,7 @@ class _LauncherLockError(RuntimeError):
 
 
 def parse_launcher_command(argv: Sequence[str] | None = None) -> LauncherCommand:
-    """Parse one explicit new, resume, or report-recovery request.
+    """Parse one explicit new, resume, recovery, or rerender request.
 
     Parameters
     ----------
@@ -169,8 +170,10 @@ def parse_launcher_command(argv: Sequence[str] | None = None) -> LauncherCommand
     resume.add_argument("--run-directory", type=Path, required=True)
     recover_report = subparsers.add_parser("recover-report")
     recover_report.add_argument("--run-directory", type=Path, required=True)
+    rerender_report = subparsers.add_parser("rerender-report")
+    rerender_report.add_argument("--run-directory", type=Path, required=True)
     values = parser.parse_args(list(argv) if argv is not None else None)
-    if values.mode in {"resume", "recover-report"}:
+    if values.mode in {"resume", "recover-report", "rerender-report"}:
         return LauncherCommand(mode=values.mode, run_directory=values.run_directory)
     if values.worker_count < 1:
         parser.error("--workers must be a positive integer")
@@ -248,8 +251,18 @@ def run_launcher(
                 )
                 _complete_report_recovery(run_directory, state, dependencies)
                 return result
+        elif command.mode == "rerender-report":
+            run_directory, state = _load_completed_state(command)
+            with _launcher_lock(run_directory, state, dependencies):
+                return _rerender_completed_report(
+                    dependencies,
+                    run_directory,
+                    state,
+                )
         else:
-            raise ValueError("launcher mode must be new, resume, or recover-report")
+            raise ValueError(
+                "launcher mode must be new, resume, recover-report, or rerender-report"
+            )
     except _LauncherLockError as error:
         _terminal(dependencies, f"Launcher failed: {error}")
         return LauncherRunResult(
@@ -261,20 +274,29 @@ def run_launcher(
     except _LauncherSignal as error:
         exit_code = 128 + error.signum
         if run_directory is not None and state is not None:
-            _record_report_recovery_failure(
-                command,
-                run_directory,
-                state,
-                str(error),
-                dependencies,
-            )
-            _record_terminal_failure(
-                run_directory,
-                state,
-                "interrupted",
-                str(error),
-                dependencies,
-            )
+            if command.mode == "rerender-report":
+                _record_report_rerender_failure(
+                    run_directory,
+                    state,
+                    str(error),
+                    dependencies,
+                )
+                _terminal(dependencies, f"Launcher interrupted: {error}")
+            else:
+                _record_report_recovery_failure(
+                    command,
+                    run_directory,
+                    state,
+                    str(error),
+                    dependencies,
+                )
+                _record_terminal_failure(
+                    run_directory,
+                    state,
+                    "interrupted",
+                    str(error),
+                    dependencies,
+                )
         return LauncherRunResult(
             exit_code,
             "interrupted",
@@ -283,20 +305,30 @@ def run_launcher(
         )
     except KeyboardInterrupt as error:
         if run_directory is not None and state is not None:
-            _record_report_recovery_failure(
-                command,
-                run_directory,
-                state,
-                str(error) or "keyboard interrupt",
-                dependencies,
-            )
-            _record_terminal_failure(
-                run_directory,
-                state,
-                "interrupted",
-                str(error) or "keyboard interrupt",
-                dependencies,
-            )
+            message = str(error) or "keyboard interrupt"
+            if command.mode == "rerender-report":
+                _record_report_rerender_failure(
+                    run_directory,
+                    state,
+                    message,
+                    dependencies,
+                )
+                _terminal(dependencies, f"Launcher interrupted: {message}")
+            else:
+                _record_report_recovery_failure(
+                    command,
+                    run_directory,
+                    state,
+                    message,
+                    dependencies,
+                )
+                _record_terminal_failure(
+                    run_directory,
+                    state,
+                    "interrupted",
+                    message,
+                    dependencies,
+                )
         return LauncherRunResult(
             130,
             "interrupted",
@@ -305,54 +337,81 @@ def run_launcher(
         )
     except (ValueError, FileExistsError) as error:
         if run_directory is not None and state is not None:
-            _record_report_recovery_failure(
-                command,
-                run_directory,
-                state,
-                str(error),
-                dependencies,
-            )
-            _record_terminal_failure(
-                run_directory,
-                state,
-                "failed",
-                str(error),
-                dependencies,
-            )
+            if command.mode == "rerender-report":
+                _record_report_rerender_failure(
+                    run_directory,
+                    state,
+                    str(error),
+                    dependencies,
+                )
+                _terminal(dependencies, f"Launcher rejected request: {error}")
+            else:
+                _record_report_recovery_failure(
+                    command,
+                    run_directory,
+                    state,
+                    str(error),
+                    dependencies,
+                )
+                _record_terminal_failure(
+                    run_directory,
+                    state,
+                    "failed",
+                    str(error),
+                    dependencies,
+                )
         else:
             _terminal(dependencies, f"Launcher rejected request: {error}")
         return LauncherRunResult(2, "failed", run_directory, _resume_from_state(state))
     except (ArithmeticError, KeyError, OSError, RuntimeError) as error:
         status = "cleanup_failed" if state is not None and state.get("active_status") == "cleaning" else "failed"
         if run_directory is not None and state is not None:
-            _record_report_recovery_failure(
-                command,
-                run_directory,
-                state,
-                str(error),
-                dependencies,
-            )
-            _record_terminal_failure(run_directory, state, status, str(error), dependencies)
+            if command.mode == "rerender-report":
+                _record_report_rerender_failure(
+                    run_directory,
+                    state,
+                    str(error),
+                    dependencies,
+                )
+                _terminal(dependencies, f"Launcher failed: {error}")
+            else:
+                _record_report_recovery_failure(
+                    command,
+                    run_directory,
+                    state,
+                    str(error),
+                    dependencies,
+                )
+                _record_terminal_failure(run_directory, state, status, str(error), dependencies)
         else:
             _terminal(dependencies, f"Launcher {status}: {error}")
         return LauncherRunResult(1, status, run_directory, _resume_from_state(state))
     except Exception as error:
         if run_directory is not None and state is not None:
             message = f"{type(error).__name__}: {error}"
-            _record_report_recovery_failure(
-                command,
-                run_directory,
-                state,
-                message,
-                dependencies,
-            )
-            _record_terminal_failure(
-                run_directory,
-                state,
-                "failed",
-                message,
-                dependencies,
-            )
+            if command.mode == "rerender-report":
+                _record_report_rerender_failure(
+                    run_directory,
+                    state,
+                    message,
+                    dependencies,
+                )
+                _terminal(dependencies, f"Launcher failed: {message}")
+            else:
+                _record_report_recovery_failure(
+                    command,
+                    run_directory,
+                    state,
+                    message,
+                    dependencies,
+                )
+                _record_terminal_failure(
+                    run_directory,
+                    state,
+                    "failed",
+                    message,
+                    dependencies,
+                )
         else:
             _terminal(dependencies, f"Launcher failed: {type(error).__name__}: {error}")
         return LauncherRunResult(1, "failed", run_directory, _resume_from_state(state))
@@ -681,6 +740,224 @@ def _load_resume_state(
     return run_directory, state
 
 
+def _load_completed_state(
+    command: LauncherCommand,
+) -> tuple[Path, dict[str, object]]:
+    """Load one path-bound completed launcher state for report rerendering.
+
+    Parameters
+    ----------
+    command : LauncherCommand
+        A ``rerender-report`` command with one existing launcher directory.
+
+    Returns
+    -------
+    tuple[pathlib.Path, dict[str, object]]
+        Resolved launcher directory and validated scalar state mapping.
+
+    Raises
+    ------
+    ValueError
+        If the path is unsafe or the run is not exactly complete.
+    """
+    if command.run_directory is None:
+        raise ValueError("rerender-report requires run_directory")
+    requested = Path(command.run_directory)
+    if requested.is_symlink() or not requested.is_dir():
+        raise ValueError("rerender run_directory is not a valid launcher directory")
+    run_directory = requested.resolve(strict=True)
+    if _RUN_NAME.fullmatch(run_directory.name) is None:
+        raise ValueError("rerender run_directory is not a valid launcher directory")
+    state = _load_state(run_directory / "launcher_state.json")
+    if (
+        bool(state["dry_run"])
+        or state["active_status"] != "complete"
+        or state["completed_stages"] != list(_STAGES)
+    ):
+        raise ValueError("rerender-report requires a completed launcher run")
+    paths = state["paths"]
+    assert isinstance(paths, dict)
+    if paths.get("run_directory") != str(run_directory):
+        raise ValueError("rerender directory does not match saved path identity")
+    return run_directory, state
+
+
+def _rerender_completed_report(
+    dependencies: LauncherDependencies,
+    run_directory: Path,
+    state: dict[str, object],
+) -> LauncherRunResult:
+    """Publish a new report from one immutable completed numerical cache.
+
+    Parameters
+    ----------
+    dependencies : LauncherDependencies
+        Metadata, component-validation, report, Git, clock, and terminal seams.
+        Compute and cleanup seams are intentionally unreachable.
+    run_directory : pathlib.Path
+        Resolved completed launcher directory containing scalar provenance.
+    state : dict[str, object]
+        Validated completed launcher state. It is not persisted until the new
+        report has been published and validated.
+
+    Returns
+    -------
+    LauncherRunResult
+        Complete result pointing to the unchanged launcher run directory.
+
+    Raises
+    ------
+    ValueError
+        If Git, saved identity, component, prior report, or new report fails
+        closed validation.
+    """
+    repository = dependencies.repository_state()
+    previous_report_commit = _previous_report_git_commit(state)
+    if not repository.tracked_clean:
+        raise ValueError("rerender-report requires a clean tracked Git checkout")
+    if repository.git_commit == previous_report_commit:
+        raise ValueError("rerender-report requires a newer report commit")
+    is_ancestor = dependencies.repository_commit_is_ancestor
+    if is_ancestor is None or not is_ancestor(
+        previous_report_commit,
+        repository.git_commit,
+    ):
+        raise ValueError("rerender report checkout must descend from the prior report commit")
+
+    config = _rebuild_saved_config(
+        dependencies,
+        run_directory,
+        state,
+        repository,
+    )
+    _validate_launcher_artifacts(run_directory, state)
+    dependencies.validate_component(config)
+
+    identity = state["identity"]
+    paths = state["paths"]
+    assert isinstance(identity, dict)
+    assert isinstance(paths, dict)
+    previous_report_directory = str(state["report_directory"])
+    now = dependencies.now_utc()
+    audit: dict[str, object] = {
+        "schema_version": _REPORT_RERENDER_SCHEMA,
+        "run_id": state["run_id"],
+        "status": "initialized",
+        "computation_git_commit": identity["git_commit"],
+        "previous_report_git_commit": previous_report_commit,
+        "rerender_git_commit": repository.git_commit,
+        "previous_report_directory": previous_report_directory,
+        "new_report_directory": None,
+        "rerender_utc": now,
+        "updated_utc": now,
+        "component_reused": True,
+        "error": None,
+    }
+    audit_path = run_directory / "report_rerender.json"
+    _write_json_atomic(audit_path, audit)
+
+    report_started = _clock(dependencies.monotonic_seconds)
+    report_parent = Path(str(paths["report_parent"]))
+    report_parent.mkdir(parents=True, exist_ok=True)
+    report_result = dependencies.publish_report(
+        config=config,
+        run_parent=report_parent,
+        run_kind=str(state["run_kind"]),
+        component_wall_time_s=float(
+            _measurement(state, "component_total_seconds", 0.0)
+        ),
+        component_peak_memory_bytes=int(
+            _measurement(state, "process_rss_bytes", 0)
+        ),
+        report_measurements=_report_measurements(config, state),
+        deferred_cleanup=None,
+    )
+    new_report_directory = str(
+        Path(report_result.run_directory).resolve(strict=False)
+    )
+
+    candidate_state = json.loads(json.dumps(state, allow_nan=False))
+    candidate_state["report_directory"] = new_report_directory
+    candidate_state["active_status"] = "complete"
+    candidate_state["error"] = None
+    measurements = candidate_state["measurements"]
+    assert isinstance(measurements, dict)
+    legacy_child_count = measurements.pop("measured_active_worker_count", None)
+    if (
+        "maximum_child_process_count" not in measurements
+        and legacy_child_count is not None
+    ):
+        measurements["maximum_child_process_count"] = legacy_child_count
+    measurements.update(
+        {
+            "report_rerender_git_commit": repository.git_commit,
+            "report_rerender_utc": now,
+            "report_rerender_seconds": max(
+                0.0,
+                _clock(dependencies.monotonic_seconds) - report_started,
+            ),
+        }
+    )
+    _validate_existing_report(candidate_state)
+
+    audit["status"] = "validated"
+    audit["new_report_directory"] = new_report_directory
+    audit["updated_utc"] = dependencies.now_utc()
+    _validate_report_rerender_audit(audit, candidate_state)
+    _write_json_atomic(audit_path, audit)
+    _persist_state(run_directory, candidate_state, dependencies)
+
+    audit["status"] = "complete"
+    audit["updated_utc"] = dependencies.now_utc()
+    _validate_report_rerender_audit(audit, candidate_state)
+    _write_json_atomic(audit_path, audit)
+    _append_log(
+        run_directory,
+        _log_event(
+            candidate_state,
+            "report_rerender_complete",
+            "completed cache-only immutable report rerender",
+        ),
+    )
+    _write_summary(run_directory, candidate_state)
+    _validate_launcher_artifacts(run_directory, candidate_state)
+    _terminal(dependencies, f"Run directory: {run_directory}")
+    _terminal(dependencies, f"New report directory: {new_report_directory}")
+    return LauncherRunResult(
+        0,
+        "complete",
+        run_directory,
+        _resume_from_state(candidate_state),
+    )
+
+
+def _previous_report_git_commit(state: Mapping[str, object]) -> str:
+    """Return the commit that produced the completed run's current report.
+
+    Parameters
+    ----------
+    state : Mapping[str, object]
+        Validated completed launcher state with scalar measurement provenance.
+
+    Returns
+    -------
+    str
+        Forty-character lowercase Git commit for the current report.
+    """
+    identity = state.get("identity")
+    measurements = state.get("measurements")
+    if not isinstance(identity, Mapping) or not isinstance(measurements, Mapping):
+        raise ValueError("launcher report Git provenance is unavailable")
+    value = (
+        measurements.get("report_rerender_git_commit")
+        or measurements.get("report_git_commit")
+        or identity.get("git_commit")
+    )
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise ValueError("launcher report Git provenance is invalid")
+    return value
+
+
 def _validate_launcher_config(config: LFPSummaryConfig, command: LauncherCommand) -> None:
     """Validate fixed CT026 launcher scientific and execution policies."""
     validate_lfp_summary_config(config)
@@ -795,7 +1072,7 @@ def _preflight_mapping(
         "exact_plan_unavailable_reason": "phase-derived site validity and schedules require scientific execution",
         "ppc_planning_seconds": None,
         "planned_ppc_allocation_bytes": None,
-        "measured_active_worker_count": None,
+        "maximum_child_process_count": None,
         "prepared_phase_cache_state": None,
         "paths": paths,
     }
@@ -969,7 +1246,7 @@ def _merge_execution_measurements(
         ("process_tree_pss_bytes", "process_tree_pss_bytes"),
         ("provenance", "memory_provenance"),
         ("sampling_interval_seconds", "memory_sampling_interval_seconds"),
-        ("maximum_child_process_count", "measured_active_worker_count"),
+        ("maximum_child_process_count", "maximum_child_process_count"),
     ):
         measurements[target_name] = getattr(memory_sample, source_name, None)
     if any(
@@ -1022,7 +1299,7 @@ def _report_measurements(
         grouped_execution_seconds=_optional_float(values.get("grouped_execution_seconds")),
         component_total_seconds=component_seconds,
         planned_worker_count=_optional_int(values.get("planner_active_worker_count")),
-        active_worker_count=_optional_int(values.get("measured_active_worker_count")),
+        active_worker_count=_optional_int(values.get("scientific_active_worker_count")),
         prepared_phase_cache_state=_optional_string(values.get("prepared_phase_cache_state")),
         peak_process_rss_bytes=_optional_int(values.get("process_rss_bytes")),
         peak_process_tree_rss_bytes=_optional_int(values.get("process_tree_rss_bytes")),
@@ -1278,6 +1555,157 @@ def _record_report_recovery_failure(
     _write_json_atomic(path, audit)
 
 
+def _validate_report_rerender_audit(
+    audit: Mapping[str, object],
+    state: Mapping[str, object],
+) -> None:
+    """Validate one scalar completed-report rerender audit mapping.
+
+    Parameters
+    ----------
+    audit : Mapping[str, object]
+        JSON-safe rerender audit with Git commits and immutable report paths.
+    state : Mapping[str, object]
+        Validated launcher state supplying run and computation identity.
+
+    Returns
+    -------
+    None
+        The mappings are validated without mutation.
+
+    Raises
+    ------
+    ValueError
+        If fields, identities, paths, status, or error semantics disagree.
+    """
+    required = {
+        "schema_version",
+        "run_id",
+        "status",
+        "computation_git_commit",
+        "previous_report_git_commit",
+        "rerender_git_commit",
+        "previous_report_directory",
+        "new_report_directory",
+        "rerender_utc",
+        "updated_utc",
+        "component_reused",
+        "error",
+    }
+    identity = state.get("identity")
+    status = audit.get("status")
+    if (
+        set(audit) != required
+        or audit.get("schema_version") != _REPORT_RERENDER_SCHEMA
+        or audit.get("run_id") != state.get("run_id")
+        or not isinstance(identity, Mapping)
+        or audit.get("computation_git_commit") != identity.get("git_commit")
+        or audit.get("component_reused") is not True
+        or status not in {"initialized", "validated", "failed", "complete"}
+    ):
+        raise ValueError("report_rerender.json is incompatible with launcher state")
+    for name in (
+        "computation_git_commit",
+        "previous_report_git_commit",
+        "rerender_git_commit",
+    ):
+        if re.fullmatch(r"[0-9a-f]{40}", str(audit.get(name))) is None:
+            raise ValueError("report rerender Git commit is invalid")
+    if not isinstance(audit.get("previous_report_directory"), str):
+        raise ValueError("report rerender previous report path is invalid")
+    new_report = audit.get("new_report_directory")
+    if status in {"validated", "complete"}:
+        if not isinstance(new_report, str) or state.get("report_directory") != new_report:
+            raise ValueError("report rerender new report path disagrees with launcher state")
+    elif new_report is not None and not isinstance(new_report, str):
+        raise ValueError("report rerender new report path is invalid")
+    error = audit.get("error")
+    if status == "failed":
+        if not isinstance(error, str) or not error:
+            raise ValueError("failed report rerender requires a nonempty error")
+    elif error is not None:
+        raise ValueError("successful report rerender error must be null")
+
+
+def _load_report_rerender_audit(
+    path: Path,
+    state: Mapping[str, object],
+) -> dict[str, object]:
+    """Load and validate one completed-report rerender audit.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Audit JSON path inside the launcher run directory.
+    state : Mapping[str, object]
+        Validated launcher state supplying scalar identity.
+
+    Returns
+    -------
+    dict[str, object]
+        Validated JSON-safe audit mapping.
+    """
+    try:
+        audit = json.loads(path.read_text(encoding="ascii"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("report_rerender.json is unavailable") from error
+    if not isinstance(audit, dict):
+        raise ValueError("report_rerender.json must contain one mapping")
+    _validate_report_rerender_audit(audit, state)
+    measurements = state.get("measurements")
+    if isinstance(measurements, Mapping):
+        rerender_commit = measurements.get("report_rerender_git_commit")
+        if (
+            rerender_commit is not None
+            and audit.get("rerender_git_commit") != rerender_commit
+        ):
+            raise ValueError("report rerender commit disagrees with launcher state")
+    return audit
+
+
+def _record_report_rerender_failure(
+    run_directory: Path,
+    state: Mapping[str, object],
+    message: str,
+    dependencies: LauncherDependencies,
+) -> None:
+    """Record a started rerender failure without changing completed state.
+
+    Parameters
+    ----------
+    run_directory : pathlib.Path
+        Completed launcher directory containing an optional initialized audit.
+    state : Mapping[str, object]
+        Original completed launcher state, retained byte-for-byte on disk.
+    message : str
+        Nonempty failure description.
+    dependencies : LauncherDependencies
+        Clock seam used for the audit timestamp.
+
+    Returns
+    -------
+    None
+        Only an already-created rerender audit may be atomically updated.
+    """
+    path = run_directory / "report_rerender.json"
+    if not path.is_file():
+        return
+    try:
+        audit = json.loads(path.read_text(encoding="ascii"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return
+    if (
+        not isinstance(audit, dict)
+        or audit.get("status") not in {"initialized", "validated"}
+    ):
+        return
+    audit["status"] = "failed"
+    audit["error"] = message or "report rerender failed"
+    audit["updated_utc"] = dependencies.now_utc()
+    _validate_report_rerender_audit(audit, state)
+    _write_json_atomic(path, audit)
+
+
 def _record_terminal_failure(
     run_directory: Path,
     state: dict[str, object],
@@ -1395,6 +1823,9 @@ def _validate_launcher_artifacts(
     recovery_path = run_directory / "report_recovery.json"
     if "report_git_commit" in measurements or recovery_path.exists():
         _load_report_recovery_audit(recovery_path, state)
+    rerender_path = run_directory / "report_rerender.json"
+    if "report_rerender_git_commit" in measurements or rerender_path.exists():
+        _load_report_rerender_audit(rerender_path, state)
     _validate_existing_report(state)
 
 

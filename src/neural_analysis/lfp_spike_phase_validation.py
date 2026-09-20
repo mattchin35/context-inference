@@ -1347,12 +1347,30 @@ def _plot_cached_band_summary(
         _, site_index, _ = _representative_metric_cell(arrays)
     ppc_band = np.asarray(arrays["ppc_band_mean"], dtype=float)[:, :, site_index]
     reliability = _band_reliability(arrays, config)[:, :, site_index]
+    epoch_names = tuple(np.asarray(arrays["epoch_names"]).astype(str))
+    band_names = tuple(np.asarray(arrays["band_names"]).astype(str))
+    epoch_indices = tuple(
+        _required_label_index(epoch_names, name, "epoch") for name in _PRIMARY_EPOCHS
+    )
+    band_indices = tuple(
+        _required_label_index(band_names, name, "band") for name in _PRIMARY_BANDS
+    )
+    ppc_band = np.take(
+        np.take(ppc_band, epoch_indices, axis=2),
+        band_indices,
+        axis=3,
+    )
+    reliability = np.take(
+        np.take(reliability, epoch_indices, axis=2),
+        band_indices,
+        axis=3,
+    )
     return plot_ppc_band_summary(
         np.moveaxis(ppc_band, 0, 1),
         np.moveaxis(reliability, 0, 1),
         tuple(np.asarray(arrays["condition_names"]).astype(str)),
-        tuple(np.asarray(arrays["epoch_names"]).astype(str)),
-        tuple(np.asarray(arrays["band_names"]).astype(str)),
+        _PRIMARY_EPOCHS,
+        _PRIMARY_BANDS,
         ppc_band.shape[0],
         str(np.asarray(arrays["site_ids"])[site_index]),
         _plot_context(config, arrays),

@@ -189,6 +189,42 @@ def _vector(values: np.ndarray, name: str) -> np.ndarray:
     return array
 
 
+def _sparse_tick_indices(
+    item_count: int,
+    maximum_label_count: int = 12,
+) -> np.ndarray:
+    """Return deterministic item indices for a bounded categorical axis.
+
+    Parameters
+    ----------
+    item_count : int
+        Positive number of ordered categorical rows.
+    maximum_label_count : int, default=12
+        Positive maximum number of displayed labels.
+
+    Returns
+    -------
+    numpy.ndarray
+        Int64 shape ``(min(item_count, maximum_label_count),)``. Small axes
+        contain every index; large axes include the first and last indices.
+
+    Raises
+    ------
+    ValueError
+        If either count is not positive.
+    """
+    if item_count < 1 or maximum_label_count < 1:
+        raise ValueError("categorical tick counts must be positive")
+    if item_count <= maximum_label_count:
+        return np.arange(item_count, dtype=np.int64)
+    return np.linspace(
+        0,
+        item_count - 1,
+        num=maximum_label_count,
+        dtype=np.int64,
+    )
+
+
 def plot_condition_psd(
     frequency_hz: np.ndarray,
     condition_trial_psd_db: np.ndarray,
@@ -773,6 +809,8 @@ def plot_unit_ppc_map(
         raise ValueError("reliable PPC entries must also be computable")
     figure, axes = _figure(("ppc", "reliability", "spike_count"))
     reliability_state = c.astype(np.int8) + r.astype(np.int8)
+    tick_indices = _sparse_tick_indices(len(unit_ids))
+    tick_labels = tuple(unit_ids[index] for index in tick_indices)
     for key, data, title in (
         ("ppc", p, "PPC"),
         ("reliability", reliability_state, "0 unavailable, 1 computable, 2 reliable"),
@@ -786,7 +824,7 @@ def plot_unit_ppc_map(
         )
         figure.colorbar(mesh, ax=axes[key])
         axes[key].set(ylabel="Unit", title=title)
-        axes[key].set_yticks(np.arange(len(unit_ids)), unit_ids)
+        axes[key].set_yticks(tick_indices, tick_labels)
     axes["spike_count"].set_xlabel("Frequency (Hz)")
     _caption(
         figure,
@@ -940,21 +978,51 @@ def plot_ppc_band_summary(
         != (len(condition_names), unit_count, len(epoch_names), len(band_names))
     ):
         raise ValueError("PPC band axes are invalid")
+    if epoch_names != ("before", "after") or band_names != ("theta", "gamma"):
+        raise ValueError(
+            "PPC band summary requires before/after epochs and theta/gamma bands"
+        )
     figure, axes = _figure(("band_ppc",))
+    figure.set_size_inches(max(12.0, 1.35 * len(condition_names)), 6.0)
     axis = axes["band_ppc"]
-    labels = []
-    values = []
-    for ci, name in enumerate(condition_names):
-        for bi, band in enumerate(band_names):
-            for ei, epoch in enumerate(epoch_names):
-                labels.append(f"{name} {band}-{epoch}")
-                values.append(
-                    np.nanmedian(np.where(r[ci, :, ei, bi], p[ci, :, ei, bi], np.nan))
+    condition_positions = np.arange(len(condition_names), dtype=float)
+    bar_width = 0.19
+    measurements = (
+        (0, 0, "theta-before"),
+        (1, 0, "theta-after"),
+        (0, 1, "gamma-before"),
+        (1, 1, "gamma-after"),
+    )
+    for offset_index, (epoch_index, band_index, label) in enumerate(measurements):
+        medians = np.full(len(condition_names), np.nan)
+        lower_quartiles = np.full(len(condition_names), np.nan)
+        upper_quartiles = np.full(len(condition_names), np.nan)
+        for condition_index in range(len(condition_names)):
+            include = r[condition_index, :, epoch_index, band_index]
+            values = p[condition_index, include, epoch_index, band_index]
+            values = values[np.isfinite(values)]
+            if values.size:
+                medians[condition_index] = np.median(values)
+                lower_quartiles[condition_index], upper_quartiles[condition_index] = (
+                    np.percentile(values, (25.0, 75.0))
                 )
-    axis.bar(np.arange(len(values)), values)
-    axis.set_xticks(np.arange(len(values)), labels, rotation=35, ha="right")
+        offset = bar_width * (offset_index - 1.5)
+        axis.bar(
+            condition_positions + offset,
+            medians,
+            width=bar_width,
+            yerr=np.vstack(
+                (medians - lower_quartiles, upper_quartiles - medians)
+            ),
+            capsize=2.5,
+            label=label,
+        )
+    axis.set_xticks(condition_positions, condition_names, rotation=25, ha="right")
     axis.set_ylabel("PPC")
+    axis.set_title("Reliable-unit median PPC with interquartile range")
+    axis.legend(ncol=2, fontsize=9)
     _caption(figure, context, f"{site_label}; reliable units only (total={unit_count})")
+    figure.subplots_adjust(bottom=max(0.35, figure.subplotpars.bottom))
     return figure, axes
 
 
