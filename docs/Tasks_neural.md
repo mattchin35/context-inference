@@ -2675,6 +2675,50 @@ R2 tests-only RED checkpoint (2026-09-20):
 - Production implementation remains unstarted at this checkpoint. The next
   permissible edits are confined to the three approved R2 production files.
 
+R2 implementation GREEN checkpoint (2026-09-20):
+
+- Production commit `575deee` (`feat: rerender completed spike phase reports`)
+  changes only `lfp_summary_plotting.py`, `lfp_spike_phase_validation.py`, and
+  `lfp_spike_phase_launcher.py`. It follows the separately committed RED tests
+  and does not modify the numerical cache, shuffle computation, or cluster
+  execution path.
+- Unit PPC maps retain every ordered data row but share at most 12
+  deterministic, evenly spaced stable-unit labels across all three panels.
+  The first and last unit are always labeled; populations of 12 or fewer still
+  label every unit.
+- Each site band summary now contains four grouped condition measurements in
+  the frozen order theta-before, theta-after, gamma-before, gamma-after. Bars
+  are reliable-unit medians with asymmetric 25th/75th-percentile whiskers;
+  all-unreliable cells remain NaN. A compact legend and widened figure replace
+  the former 54 overlapping labels. The cache adapter explicitly selects only
+  saved before/after epochs and theta/gamma bands.
+- Launcher process-tree sampling now stores
+  `maximum_child_process_count` under its operational meaning. Report
+  `active_worker_count` is populated only from a future executor-supplied
+  `scientific_active_worker_count`; it is otherwise null. Completed historical
+  runs migrate the former mislabeled scalar to the child-process field only
+  after a new report has published and validated.
+- The explicit `rerender-report --run-directory PATH` mode accepts only an
+  exactly completed, nondry launcher run from a clean newer descendant of the
+  commit that produced its current report. It revalidates saved configuration,
+  source, population, paths, prior report, launcher artifacts, and the
+  compatible component before creating its audit. It exposes no compute or
+  cleanup path, passes no deferred cleanup callback, validates the new sibling
+  report before switching the current report pointer, and records computation,
+  prior-report, and rerender commits plus both report directories in
+  `report_rerender.json`. A started failure updates only that audit and leaves
+  completed launcher state and the prior report intact.
+- The focused RED command is now GREEN at 15 passed and 39 deselected in 1.39
+  seconds. The complete three-file plotting/report/launcher suite is GREEN at
+  54 passed in 3.74 seconds. Two warnings arise only in the test's independent
+  expected-value calculation for an intentional all-NaN cell; production code
+  avoids the all-NaN reduction. `git diff --check` was clean before the
+  production commit.
+- The next permitted step is a clean-checkout cache-only rerender of the exact
+  completed ProbeB 100-shuffle launcher run, followed by report artifact and
+  image inspection. The original R1 report must remain present. C1 and any
+  1,000-shuffle work remain unauthorized until the user reviews the R2 result.
+
 Dependencies and performance:
 
 - Reuse NumPy percentile/median routines, Matplotlib, the current cache loader,
