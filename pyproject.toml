@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "context-inference"
+version = "0.1.0"
+description = "Analysis and modeling code for latent-context inference behavior experiments."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn",
+    "marimo",
+    "pynapple>=0.11.0",
+    "icecream>=2.1.10",
+    "streamlit>=1.58.0",
+    "dynamax>=1.0.2",
+    "formulaic>=1.2.2",
+    "statsmodels>=0.15.0",
+    "seaborn>=0.13.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+exclude = [
+    "src.state_space_modeling.ssm*",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["src/tests"]
+norecursedirs = [
+    ".git",
+    ".idea",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "src/state_space_modeling/ssm",
+]
+addopts = "-ra"
