@@ -2845,6 +2845,26 @@ C1 verified cluster environment (2026-09-20):
   `.bashrc` or activate Conda and must log the effective runtime environment so
   the smoke job can confirm this warning does not alter the uv environment.
 
+C1 implementation boundary:
+
+- Modify only `src/shell_scripts/hpc_ppc.sh` and add
+  `src/tests/neural_analysis/test_hpc_ppc_shell.py`. Do not change launcher,
+  numerical, cache, report, or plotting code and do not add a dependency.
+- The wrapper derives the repository root from its own tracked location and
+  changes to that exact root after validating it. This avoids duplicating the
+  `/gs/gsfs0/users` symlink spelling in executable code, prevents accidentally
+  launching a different checkout, and remains testable in a temporary Git
+  repository. It does not search for a checkout or accept an environment
+  override that could silently change scientific code identity.
+- Python tests create a temporary tracked repository and fake `uv`; they never
+  invoke the real environment, Slurm, network, or CT026 paths. They assert the
+  fixed `#SBATCH` resources, script-relative root resolution, tracked-clean
+  gate, required `SLURM_CPUS_PER_TASK=8`, optional `--workers 8` parsing,
+  exact NUL-safe argument preservation including spaces, fixed offline uv
+  command, thread limits, working directory, stdout/stderr and exit status,
+  and TERM delivery after the wrapper replaces itself with `uv`. The test file
+  also runs `bash -n` against the tracked wrapper.
+
 Harmless uv gates before wrapper implementation or scientific access:
 
 1. On cluster access run `uv --version`.
