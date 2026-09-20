@@ -2809,6 +2809,42 @@ Purpose, ordering, and dependencies:
   cluster data filesystem are the only operational dependencies. No new Python
   dependency is planned.
 
+C1 verified cluster environment (2026-09-20):
+
+- SSH login is `ssh mchin1@mchin1.hpc.einsteinmed.edu`; a noninteractive
+  BatchMode connection succeeds and reports login host `mchin1`. These checks
+  were read-only: no pull, sync, Slurm submission, or scientific file read was
+  performed.
+- The user-facing checkout path is
+  `/gs/gsfs0/users/mchin1/context-inference`, canonically resolved by the
+  filesystem to `/gs/gsfs0/home/mchin1/context-inference`. The checkout is on
+  `refactor`, tracked-clean, synchronized with `origin/refactor`, and at the
+  same R2 completion commit as local,
+  `49a7e6dbf8364ffb8bcbd1369acfd637c6913b83`. Launcher/source identity will
+  therefore record the canonical `/gs/gsfs0/home/...` spelling; the wrapper may
+  accept the documented user-facing symlink but must not assume two repositories.
+- The session path is
+  `/gs/gsfs0/users/mchin1/contextProjectData/CT026/CT026_20260801_latent_inference`,
+  canonically `/gs/gsfs0/home/mchin1/contextProjectData/CT026/CT026_20260801_latent_inference`.
+  Its existing `analysis_runs` and `processed/lfp_summary_cache` directories
+  are accessible. The cluster cache currently contains `power.npz`,
+  `synchrony.npz`, and `manifest.json`; it contains no `spike_phase.npz`.
+  There is no `processed/lfp_summary_work` directory, so the first cluster
+  Spike-phase run is cold with respect to both prepared-phase and PPC work.
+- `uv 0.12.17` succeeds. The exact offline no-project hello-world gate prints
+  `uv cluster check: OK`. The synchronized environment passes the exact
+  frozen/no-sync/offline NumPy, SciPy, and launcher import gate and uses
+  `/gs/gsfs0/home/mchin1/context-inference/.venv/bin/python`, Python 3.14.7.
+  The project and lock permit Python 3.11 or newer, but local R2 validation used
+  Python 3.12; focused and complete cluster tests are therefore mandatory
+  before scientific submission rather than assuming cross-version equivalence.
+- Slurm 25.05.4 is installed, `sbatch` is available, partition `unlimited` is
+  up with an infinite partition limit, and the existing private log directory
+  `/gs/gsfs0/users/mchin1/logs` is present. Remote shell startup repeatedly
+  warns that it is overwriting `LD_LIBRARY_PATH`; the wrapper must not source
+  `.bashrc` or activate Conda and must log the effective runtime environment so
+  the smoke job can confirm this warning does not alter the uv environment.
+
 Harmless uv gates before wrapper implementation or scientific access:
 
 1. On cluster access run `uv --version`.
