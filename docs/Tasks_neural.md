@@ -2719,6 +2719,22 @@ R2 implementation GREEN checkpoint (2026-09-20):
   image inspection. The original R1 report must remain present. C1 and any
   1,000-shuffle work remain unauthorized until the user reviews the R2 result.
 
+R2 full-suite compatibility correction (2026-09-20):
+
+- The first complete `src/tests/neural_analysis` regression run reached 1,158
+  passed with one failure in the seeded synthetic cache/write/reload/plot
+  integration test. The failure is a public plotting compatibility regression:
+  `plot_ppc_band_summary` unnecessarily required its input epoch labels to be
+  exactly `("before", "after")`, while valid cache callers may supply the
+  frozen `("whole", "before", "after")` superset.
+- The approved R2 scientific display remains exactly four named measurements.
+  The minimal correction is for the public plot to locate unique before/after
+  and theta/gamma labels within supplied axes and render only those four. The
+  report cache adapter continues to pass its explicitly reduced two-by-two
+  view. No test, cache payload, statistic, or report selection requirement
+  changes. The already-failing integration test is the RED regression gate for
+  this correction; the full neural suite must be rerun before real-data use.
+
 Dependencies and performance:
 
 - Reuse NumPy percentile/median routines, Matplotlib, the current cache loader,
