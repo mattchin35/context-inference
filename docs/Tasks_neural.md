@@ -2734,6 +2734,17 @@ R2 full-suite compatibility correction (2026-09-20):
   view. No test, cache payload, statistic, or report selection requirement
   changes. The already-failing integration test is the RED regression gate for
   this correction; the full neural suite must be rerun before real-data use.
+- Documentation-first correction commit `bb756fa` records that compatibility
+  decision. Source commit `767544a` (`fix: preserve band summary axis
+  compatibility`) implements only the named-axis selection. The formerly
+  failing seeded synthetic integration test is GREEN at 1 passed, and the
+  complete three-file R2 suite remains GREEN at 54 passed.
+- The repeated complete `src/tests/neural_analysis` gate is GREEN at 1,159
+  passed with 22 warning instances in 131.37 seconds. Warnings are the existing
+  multi-threaded-fork notices, intentional duplicate-NPZ-member warning,
+  zero-duration synthetic Pynapple epoch warnings, and the R2 test's deliberate
+  independent all-NaN expected-value calculation. There are no failures,
+  skips, or xfails. The clean-checkout real rerender is now the next step.
 
 Dependencies and performance:
 
