@@ -2939,6 +2939,25 @@ C1 tests-only RED checkpoint (2026-09-20):
   `src/shell_scripts/hpc_ppc.sh`. Tests must not change unless a documented
   requirement change or genuine test defect is demonstrated.
 
+C1 local implementation GREEN checkpoint (2026-09-20):
+
+- Implementation commit `71d98b3` (`feat: add tested SLURM spike phase
+  wrapper`) changes only `src/shell_scripts/hpc_ppc.sh`. It replaces the sample
+  Conda/placeholder invocation with the fixed reviewed Slurm resources, derives
+  and validates its own tracked-clean repository, requires the eight-CPU Slurm
+  allocation, validates an optional `--workers` spelling, exports three
+  one-thread backend limits, logs execution identity, and `exec`s the existing
+  launcher through frozen/no-sync/offline uv with exact argument forwarding.
+- The focused wrapper suite is GREEN at 13 passed in 0.85 seconds. Independent
+  `bash -n src/shell_scripts/hpc_ppc.sh` and `git diff --check` gates pass. The
+  complete local `src/tests/neural_analysis` suite is GREEN at 1,172 passed
+  with 22 known warning instances in 132.24 seconds; there are no failures,
+  skips, or xfails.
+- No cluster checkout update, remote test, Slurm submission, or CT026 action
+  occurred during implementation. The next gate is to push/pull this exact
+  documented commit, rerun focused and complete tests under cluster Python
+  3.14.7, and only then submit the non-scientific wrapper smoke job.
+
 Cluster validation before a scientific run:
 
 1. Commit documentation, then wrapper RED tests, then implementation in
