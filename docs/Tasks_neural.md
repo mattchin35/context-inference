@@ -2850,20 +2850,22 @@ C1 implementation boundary:
 - Modify only `src/shell_scripts/hpc_ppc.sh` and add
   `src/tests/neural_analysis/test_hpc_ppc_shell.py`. Do not change launcher,
   numerical, cache, report, or plotting code and do not add a dependency.
-- The wrapper derives the repository root from its own tracked location and
-  changes to that exact root after validating it. This avoids duplicating the
-  `/gs/gsfs0/users` symlink spelling in executable code, prevents accidentally
-  launching a different checkout, and remains testable in a temporary Git
-  repository. It does not search for a checkout or accept an environment
-  override that could silently change scientific code identity.
+- The wrapper requires Slurm's `SLURM_SUBMIT_DIR` to identify the repository
+  root, resolves it canonically, requires that directory to equal Git's
+  top-level path, and changes to that exact validated root. This avoids
+  duplicating the `/gs/gsfs0/users` symlink spelling in executable code and
+  prevents accidentally launching a different checkout. Submission commands
+  must first change to `/gs/gsfs0/users/mchin1/context-inference`; the wrapper
+  does not search for a checkout or accept a user-defined root override.
 - Python tests create a temporary tracked repository and fake `uv`; they never
   invoke the real environment, Slurm, network, or CT026 paths. They assert the
-  fixed `#SBATCH` resources, script-relative root resolution, tracked-clean
+  fixed `#SBATCH` resources, submit-directory root resolution, tracked-clean
   gate, required `SLURM_CPUS_PER_TASK=8`, optional `--workers 8` parsing,
   exact NUL-safe argument preservation including spaces, fixed offline uv
   command, thread limits, working directory, stdout/stderr and exit status,
-  and TERM delivery after the wrapper replaces itself with `uv`. The test file
-  also runs `bash -n` against the tracked wrapper.
+  TERM delivery after the wrapper replaces itself with `uv`, and execution
+  from a Slurm-like spooled copy outside the repository. The test file also
+  runs `bash -n` against the tracked wrapper.
 
 Harmless uv gates before wrapper implementation or scientific access:
 
@@ -2957,6 +2959,27 @@ C1 local implementation GREEN checkpoint (2026-09-20):
   occurred during implementation. The next gate is to push/pull this exact
   documented commit, rerun focused and complete tests under cluster Python
   3.14.7, and only then submit the non-scientific wrapper smoke job.
+
+C1 pre-smoke cluster validation and design correction (2026-09-20):
+
+- The cluster checkout was verified tracked-clean at exact local implementation
+  commit `9e36c1d`; remote `bash -n` passed. The focused fake-uv wrapper suite
+  is GREEN at 13 passed in 0.90 seconds under cluster Python 3.14.7. The remote
+  complete tracked neural suite is GREEN at 981 passed with 12 known warning
+  instances in 466.44 seconds. It has no failures, skips, or xfails.
+- The remote total is smaller than the local 1,172-test result because Git
+  contains 45 neural test files while the local working tree has 59. The 14
+  additional longstanding local test files are untracked and therefore are
+  intentionally absent from a clean clone; local validation covered them,
+  while the cluster covered every tracked neural test. This is repository
+  provenance, not a Python 3.14 collection failure.
+- Pre-submission review found that commit `71d98b3` incorrectly derives the
+  repository from `BASH_SOURCE[0]`. Slurm normally runs a spooled copy, so that
+  path need not remain inside the checkout. No job was submitted. The approved
+  correction is the `SLURM_SUBMIT_DIR` root contract above, plus a test that
+  executes a copied wrapper outside the repository. Tests must demonstrate RED
+  against `71d98b3` before the shell source changes; cluster smoke remains
+  blocked until the correction is committed, pushed, and remotely retested.
 
 Cluster validation before a scientific run:
 
