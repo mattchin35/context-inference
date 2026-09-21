@@ -2980,6 +2980,11 @@ C1 pre-smoke cluster validation and design correction (2026-09-20):
   executes a copied wrapper outside the repository. Tests must demonstrate RED
   against `71d98b3` before the shell source changes; cluster smoke remains
   blocked until the correction is committed, pushed, and remotely retested.
+- Tests-only correction commit `7c204f2` adds the missing-submit-directory and
+  spooled-copy cases without changing shell source. The focused run produced
+  genuine RED at 2 failed and 13 passed in 0.59 seconds: the old wrapper accepts
+  an absent `SLURM_SUBMIT_DIR` and rejects a valid spooled copy outside Git.
+  The next permitted edit is again only `src/shell_scripts/hpc_ppc.sh`.
 
 Cluster validation before a scientific run:
 
