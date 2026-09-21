@@ -28,13 +28,22 @@ if [[ "$SLURM_CPUS_PER_TASK" -ne 8 ]]; then
     fail "this reviewed wrapper requires exactly eight Slurm CPUs per task"
 fi
 
-# Resolve the checkout containing this tracked script rather than relying on
-# the caller's directory or duplicating a cluster symlink path.
-script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# Slurm executes a spooled copy of this file, so the script location cannot
+# identify the submitted checkout. Require submission from the repository root.
+if [[ -z "${SLURM_SUBMIT_DIR-}" ]]; then
+    fail "SLURM_SUBMIT_DIR must identify the submitted repository"
+fi
+if [[ ! -d "$SLURM_SUBMIT_DIR" ]]; then
+    fail "SLURM_SUBMIT_DIR is not an existing repository directory"
+fi
+submit_directory="$(cd -- "$SLURM_SUBMIT_DIR" && pwd -P)"
 repository_root="$(
-    git -C "$script_directory" rev-parse --show-toplevel 2>/dev/null
-)" || fail "wrapper is not inside a Git repository"
+    git -C "$submit_directory" rev-parse --show-toplevel 2>/dev/null
+)" || fail "SLURM_SUBMIT_DIR is not inside a Git repository"
 repository_root="$(cd -- "$repository_root" && pwd -P)"
+if [[ "$submit_directory" != "$repository_root" ]]; then
+    fail "SLURM_SUBMIT_DIR must be the repository root"
+fi
 if [[ ! -f "$repository_root/pyproject.toml" ]] || \
     [[ ! -f "$repository_root/src/neural_analysis/lfp_spike_phase_launcher.py" ]]; then
     fail "repository does not contain the Spike-phase launcher"
