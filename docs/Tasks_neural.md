@@ -2984,7 +2984,28 @@ C1 pre-smoke cluster validation and design correction (2026-09-20):
   spooled-copy cases without changing shell source. The focused run produced
   genuine RED at 2 failed and 13 passed in 0.59 seconds: the old wrapper accepts
   an absent `SLURM_SUBMIT_DIR` and rejects a valid spooled copy outside Git.
-  The next permitted edit is again only `src/shell_scripts/hpc_ppc.sh`.
+  The next permitted edit was therefore confined again to
+  `src/shell_scripts/hpc_ppc.sh`.
+- Documentation commit `6441b71` preserves that correction RED result before
+  implementation. Implementation commit `debfdaa` (`fix: resolve Slurm
+  checkout from submit directory`) removes all checkout discovery through
+  `BASH_SOURCE[0]`. The wrapper now requires `SLURM_SUBMIT_DIR`, resolves it
+  through physical paths, requires that exact directory to equal the Git
+  top-level, and then applies the existing launcher-file and tracked-clean
+  checks. Submission from a repository subdirectory, a missing directory, or
+  a non-Git directory therefore fails before uv or Python starts.
+- The corrected focused suite is GREEN at 15 passed in 1.11 seconds, including
+  execution of a wrapper copy outside Git with the repository supplied only by
+  synthetic Slurm metadata. Independent Bash syntax and whitespace checks
+  pass. The complete local neural suite is GREEN at 1,174 passed with 22 known
+  warning instances in 152.95 seconds; there are no failures, skips, or xfails.
+  The two-test increase over the earlier 1,172 result is exactly the two new
+  correction contracts, not a change in analysis coverage.
+- No Slurm job or CT026 computation was submitted during this correction. The
+  next gate is to push the exact documented correction, update the tracked-clean
+  cluster checkout, rerun the corrected focused tests there, and verify the
+  exact commit before the non-scientific `--help` smoke submission. The
+  1,000-shuffle scientific run remains separately approval-gated.
 
 Cluster validation before a scientific run:
 
