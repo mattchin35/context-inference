@@ -3007,6 +3007,34 @@ C1 pre-smoke cluster validation and design correction (2026-09-20):
   exact commit before the non-scientific `--help` smoke submission. The
   1,000-shuffle scientific run remains separately approval-gated.
 
+C1 corrected cluster smoke GREEN checkpoint (2026-09-20):
+
+- The cluster checkout was verified at exact commit
+  `63b87ebdb489096283e2e13e953814e29c6e12be` with no tracked changes. Remote
+  Bash syntax passed and the corrected focused wrapper suite was GREEN at 15
+  passed in 0.94 seconds. This revalidates the spooled-copy behavior under the
+  cluster's installed uv/Python environment rather than only locally.
+- Non-scientific Slurm job `30744000` submitted only `--help` from the canonical
+  repository root. `scontrol` records `COMPLETED`, `ExitCode=0:0`, runtime five
+  seconds, partition `unlimited`, one task, eight CPUs, 32 GB, compute node
+  `cpu-734`, and the expected repository-root working directory. The job log is
+  `/gs/gsfs0/users/mchin1/logs/ppc_cluster_30744000.log`.
+- The job log independently records canonical repository root
+  `/gs/gsfs0/home/mchin1/context-inference`, exact commit `63b87eb`,
+  tracked-clean state, eight Slurm CPUs, `OMP_NUM_THREADS=1`,
+  `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, uv 0.12.17, the sole launcher
+  argument `--help`, and successful launcher usage output. No session path was
+  supplied, no run directory was created, and no CT026 data or numerical cache
+  was opened. `sacct` had not yet exposed a record, so terminal state and exit
+  code were read directly from `scontrol`.
+- The next permitted cluster actions are the already approved metadata-only
+  ProbeA and ProbeB dry runs, each with 100 shuffles, eight workers, the same
+  scientific defaults, and no `--final-run`. They may create only their
+  documented dry-run evidence directories beneath the cluster session's
+  `analysis_runs`; they must not create phase/PPC work, a numerical component,
+  or a report. The 1,000-shuffle scientific submission remains prohibited until
+  both dry-run artifacts are inspected and the user separately approves it.
+
 Cluster validation before a scientific run:
 
 1. Commit documentation, then wrapper RED tests, then implementation in
