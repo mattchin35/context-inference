@@ -3035,6 +3035,64 @@ C1 corrected cluster smoke GREEN checkpoint (2026-09-20):
   or a report. The 1,000-shuffle scientific submission remains prohibited until
   both dry-run artifacts are inspected and the user separately approves it.
 
+C1 metadata-only dry-run GREEN checkpoint (2026-09-20):
+
+- Slurm jobs `30744003` (ProbeA) and `30744004` (ProbeB) ran from exact clean
+  implementation commit `63b87ebdb489096283e2e13e953814e29c6e12be` with the
+  fixed wrapper resources. `scontrol` records both as `COMPLETED` with
+  `ExitCode=0:0`, one task, eight CPUs, 32 GB, and runtimes of 26 and 24
+  seconds, respectively. Their wrapper logs are
+  `/gs/gsfs0/users/mchin1/logs/ppc_cluster_30744003.log` and
+  `/gs/gsfs0/users/mchin1/logs/ppc_cluster_30744004.log`.
+- The immutable evidence directories are:
+  `/gs/gsfs0/home/mchin1/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/CT026_2026-08-01_130853_spike_phase_ProbeA_dry_run_2026-09-21T00-24-30Z`
+  and
+  `/gs/gsfs0/home/mchin1/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/CT026_2026-08-01_130853_spike_phase_ProbeB_dry_run_2026-09-21T00-24-30Z`.
+  Each contains exactly `configuration.json`, `launcher_state.json`,
+  `preflight.json`, `run.log`, `run_summary.md`, and `source_identity.json`.
+  Neither contains a report, phase/PPC work, numerical component, manifest, or
+  resume command.
+- Both states use schema `spike_phase_launcher_state.v1`, are terminal
+  `preflight_complete`, record exactly `initialized` then
+  `preflight_complete`, have `dry_run=true`, `final_run=false`, 100 shuffles,
+  eight requested workers, clean tracked identity, no warning, and no error.
+  ProbeA contains 160 ordered `ProbeA:<cluster>` units with SHA-256
+  `d47ec2af76ef7a020b6e753bcef6b424c04ed01920515aca2ce8f4044058bd22`;
+  ProbeB contains 273 ordered `ProbeB:<cluster>` units with SHA-256
+  `eb3a9cc6cacb9dbbc4fc4f82b195ebbc64b0870f89e47c1065ca1535e55902ff`.
+  The populations are separate; no combined population was requested or
+  constructed.
+- Both preflights record 427 trials, three sites, 50 frequencies, 2,000 time
+  samples, eight as the conservative maximum active-worker count, 1,152,900,000
+  estimated phase/validity bytes, 2 GiB per-worker and 12 GiB aggregate bounds.
+  Exact PPC planning/allocation is correctly unavailable because it requires
+  scientific phase-derived validity and schedules. This is not a dry-run
+  failure and does not replace runtime monitoring of the final job.
+- Configuration inspection confirms the approved common scientific defaults:
+  choice alignment over -2 to +2 seconds with whole/before/after epochs; three
+  PFC/HPC site pairs; 2-100 Hz in 2-Hz steps; theta 6-10 Hz; gamma 30-80 Hz
+  excluding 58-62 Hz; 500-Hz phase output; empty absolute-amplitude thresholds;
+  seeds zero; minimum 2 computable and 50 reliable spikes; BH FDR alpha 0.05;
+  checkpointing and prepared-phase caching enabled; incomplete-only checkpoint
+  retention; shuffle blocks 25, trial-edge blocks 64, and unit blocks 8. ProbeA
+  and ProbeB use their respective aligned spike and kilosort4 paths with the
+  same good-channel, inside-brain, good-or-MUA selection rules.
+- No serious dry-run finding blocks final execution. The exact proposed final
+  command below remains unexecuted and requires a separately explicit user
+  approval after the latest documentation commit is pushed and the cluster is
+  again verified at that exact clean commit:
+
+  ```bash
+  cd /gs/gsfs0/users/mchin1/context-inference
+  sbatch src/shell_scripts/hpc_ppc.sh new \
+    --session-path /gs/gsfs0/users/mchin1/contextProjectData/CT026/CT026_20260801_latent_inference \
+    --analysis-root /gs/gsfs0/users/mchin1/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs \
+    --probe ProbeB \
+    --shuffles 1000 \
+    --workers 8 \
+    --final-run
+  ```
+
 Cluster validation before a scientific run:
 
 1. Commit documentation, then wrapper RED tests, then implementation in
