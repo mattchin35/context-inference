@@ -109,13 +109,18 @@ exit "${PPC_TEST_EXIT_CODE:-0}"
     return fake_bin, capture
 
 
-def _environment(fake_bin: Path, capture: Path) -> dict[str, str]:
+def _environment(
+    fake_bin: Path,
+    capture: Path,
+    repository: Path,
+) -> dict[str, str]:
     """Return a synthetic eight-CPU Slurm environment using only fake uv.
 
     Parameters
     ----------
-    fake_bin, capture : pathlib.Path
-        Fake executable directory and NUL-delimited output path.
+    fake_bin, capture, repository : pathlib.Path
+        Fake executable directory, NUL-delimited output path, and exact
+        repository represented by Slurm's submission-directory metadata.
 
     Returns
     -------
@@ -131,6 +136,7 @@ def _environment(fake_bin: Path, capture: Path) -> dict[str, str]:
             "SLURM_CPUS_PER_TASK": "8",
             "SLURM_JOB_ID": "12345",
             "SLURM_JOB_NAME": "ppc_cluster",
+            "SLURM_SUBMIT_DIR": str(repository),
         }
     )
     return environment
@@ -221,7 +227,7 @@ def test_hpc_ppc_forwards_exact_arguments_and_fixed_uv_environment(
     """Spaces, flags, cwd, thread limits, and offline uv invocation are exact."""
     repository, wrapper = _temporary_repository(tmp_path)
     fake_bin, capture = _fake_uv(tmp_path)
-    environment = _environment(fake_bin, capture)
+    environment = _environment(fake_bin, capture, repository)
     launcher_arguments = (
         "new",
         "--session-path",
@@ -290,9 +296,9 @@ def test_hpc_ppc_rejects_missing_or_mismatched_cpu_worker_contract(
     expected_message: str,
 ) -> None:
     """Allocation metadata and explicit launcher workers must both equal eight."""
-    _, wrapper = _temporary_repository(tmp_path)
+    repository, wrapper = _temporary_repository(tmp_path)
     fake_bin, capture = _fake_uv(tmp_path)
-    environment = _environment(fake_bin, capture)
+    environment = _environment(fake_bin, capture, repository)
     if cpu_value is None:
         environment.pop("SLURM_CPUS_PER_TASK")
     else:
@@ -313,10 +319,10 @@ def test_hpc_ppc_rejects_missing_or_mismatched_cpu_worker_contract(
 
 
 def test_hpc_ppc_rejects_missing_or_dirty_repository_before_uv(tmp_path: Path) -> None:
-    """The script's own absent or tracked-dirty checkout fails before Python."""
+    """An absent or tracked-dirty submission checkout fails before Python."""
     repository, wrapper = _temporary_repository(tmp_path)
     fake_bin, capture = _fake_uv(tmp_path)
-    environment = _environment(fake_bin, capture)
+    environment = _environment(fake_bin, capture, repository)
     (repository / "pyproject.toml").write_text("dirty\n", encoding="ascii")
 
     dirty = _run_wrapper(wrapper, environment, "resume", "--run-directory", "/run")
@@ -328,17 +334,56 @@ def test_hpc_ppc_rejects_missing_or_dirty_repository_before_uv(tmp_path: Path) -
     orphan = tmp_path / "orphan" / "src" / "shell_scripts" / "hpc_ppc.sh"
     orphan.parent.mkdir(parents=True)
     shutil.copy2(_TRACKED_WRAPPER, orphan)
+    environment["SLURM_SUBMIT_DIR"] = str(tmp_path / "not-a-repository")
     missing = _run_wrapper(orphan, environment, "resume", "--run-directory", "/run")
     assert missing.returncode != 0
     assert "repository" in missing.stderr.lower()
     assert not capture.exists()
 
 
+def test_hpc_ppc_requires_slurm_submit_directory(tmp_path: Path) -> None:
+    """An otherwise valid direct invocation cannot invent a repository root."""
+    repository, wrapper = _temporary_repository(tmp_path)
+    fake_bin, capture = _fake_uv(tmp_path)
+    environment = _environment(fake_bin, capture, repository)
+    environment.pop("SLURM_SUBMIT_DIR")
+
+    result = _run_wrapper(wrapper, environment, "resume", "--run-directory", "/run")
+
+    assert result.returncode != 0
+    assert "SLURM_SUBMIT_DIR" in result.stderr
+    assert not capture.exists()
+
+
+def test_hpc_ppc_runs_from_slurm_spool_using_exact_submit_repository(
+    tmp_path: Path,
+) -> None:
+    """A spooled script validates and enters Slurm's exact submission root."""
+    repository, wrapper = _temporary_repository(tmp_path)
+    fake_bin, capture = _fake_uv(tmp_path)
+    environment = _environment(fake_bin, capture, repository)
+    spooled_wrapper = tmp_path / "slurm-spool" / "slurm_script"
+    spooled_wrapper.parent.mkdir()
+    shutil.copy2(wrapper, spooled_wrapper)
+
+    result = _run_wrapper(
+        spooled_wrapper,
+        environment,
+        "resume",
+        "--run-directory",
+        "/cluster/exact-run",
+    )
+
+    assert result.returncode == 0, result.stderr
+    fields = _capture_fields(capture)
+    assert fields[:2] == ["cwd", str(repository.resolve())]
+
+
 def test_hpc_ppc_propagates_uv_exit_status(tmp_path: Path) -> None:
     """The wrapper's process status is the existing Python launcher's status."""
-    _, wrapper = _temporary_repository(tmp_path)
+    repository, wrapper = _temporary_repository(tmp_path)
     fake_bin, capture = _fake_uv(tmp_path)
-    environment = _environment(fake_bin, capture)
+    environment = _environment(fake_bin, capture, repository)
     environment["PPC_TEST_EXIT_CODE"] = "37"
 
     result = _run_wrapper(
@@ -355,9 +400,9 @@ def test_hpc_ppc_propagates_uv_exit_status(tmp_path: Path) -> None:
 
 def test_hpc_ppc_exec_forwards_term_to_uv(tmp_path: Path) -> None:
     """TERM reaches the exec-replaced uv process for launcher persistence."""
-    _, wrapper = _temporary_repository(tmp_path)
+    repository, wrapper = _temporary_repository(tmp_path)
     fake_bin, capture = _fake_uv(tmp_path)
-    environment = _environment(fake_bin, capture)
+    environment = _environment(fake_bin, capture, repository)
     ready = tmp_path / "uv-ready"
     signal_record = tmp_path / "uv-signal"
     environment.update(
