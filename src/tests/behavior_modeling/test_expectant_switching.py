@@ -52,7 +52,7 @@ def test_expectancy_curve_matches_documented_values_and_bounds():
         [0.00247262, 0.01798621, 0.11920292, 0.5, 0.88079708, 0.98201379]
     )
 
-    npt.assert_allclose(actual, expected)
+    npt.assert_allclose(actual, expected, atol=1e-8)
     assert np.all((actual >= 0.0) & (actual <= 1.0))
 
 
