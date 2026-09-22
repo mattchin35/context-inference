@@ -2317,6 +2317,113 @@ def test_snapshot_plot_uses_selected_saved_configuration_and_cluster_provenance(
     plt.close(figure)
 
 
+def test_power_snapshot_legacy_missing_ppc_execution_uses_saved_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A legacy Power snapshot may omit only execution-only PPC settings.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the established Power plotter to capture its immutable saved
+        context without opening raw LFP, Spike, or cache-source files.
+    tmp_path : pathlib.Path
+        Temporary root used for a receipt-valid synthetic snapshot with a
+        complete saved Power configuration except ``ppc_execution``.
+
+    Returns
+    -------
+    None
+        Requires cache-only Power delegation and verifies the plot context keeps
+        saved session/alignment/provenance values rather than divergent local
+        fallback configuration values. Cached PSD values remain dB on their
+        original ``(site, trial, epoch, frequency)`` axes.
+    """
+
+    saved = _full_saved_component_configuration(tmp_path)
+    saved.pop("ppc_execution")
+    snapshot = _write_snapshot_fixture(
+        tmp_path,
+        component_configuration_snapshots={"power": saved},
+    )
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+    captured: dict[str, object] = {}
+
+    def plot_condition_psd(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture one Power context and return an unsaved cache-only figure."""
+
+        del kwargs
+        captured["context"] = args[-1]
+        return plt.figure(), {}
+
+    monkeypatch.setattr(lfp_summary_webapp.lfp_summary_plotting, "plot_condition_psd", plot_condition_psd)
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "power",
+        _small_power_snapshot_arrays(),
+        replace(default_lfp_summary_config(), session_id="divergent-local-session"),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="condition_psd",
+            site_id="PFC",
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+        inspection=inspection,
+    )
+
+    context = captured["context"]
+    assert context.session_id == "cluster-produced-session"
+    assert context.alignment_event == saved["analysis_windows"]["alignment_event"]
+    assert inspection.source_cluster_directory in context.reference_description
+    plt.close(figure)
+
+
+def test_power_snapshot_missing_saved_scientific_field_remains_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """Saved scientific/provenance fields cannot be filled from local defaults.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root used for a receipt-valid synthetic Power snapshot whose
+        saved ``session_id`` provenance field is deliberately absent.
+
+    Returns
+    -------
+    None
+        Requires public cache-only plot dispatch to reject the malformed saved
+        configuration before delegating a figure. Current deserialization may
+        surface ``KeyError`` or the adapter's ``ValueError`` wrapper; both are
+        fail-closed public outcomes. Cached PSD values remain unmodified.
+    """
+
+    saved = _full_saved_component_configuration(tmp_path)
+    saved.pop("session_id")
+    inspection = lfp_summary_webapp.validate_cache_snapshot(
+        _write_snapshot_fixture(
+            tmp_path,
+            component_configuration_snapshots={"power": saved},
+        )
+    )
+
+    with pytest.raises((KeyError, ValueError)):
+        lfp_summary_webapp.plot_cached_snapshot_component(
+            "power",
+            _small_power_snapshot_arrays(),
+            replace(default_lfp_summary_config(), session_id="local-fallback-session"),
+            lfp_summary_webapp.SnapshotPlotSelection(
+                view="condition_psd",
+                site_id="PFC",
+                condition_name="left",
+                epoch_name="after",
+                band_name="gamma",
+            ),
+            inspection=inspection,
+        )
+
+
 @pytest.mark.parametrize(
     ("component", "view", "plotter_name", "site_or_pair", "required_selectors"),
     (
