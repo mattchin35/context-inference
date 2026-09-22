@@ -3829,7 +3829,10 @@ WP11-1 tests-only and WP11-2 RED checkpoint (2026-09-22):
   must change manifest/file identity at the same resolved path, not merely use
   a second path; and (4) resume-command construction must receive an explicit
   run directory and must never fabricate or discover one from configuration.
-  These corrections clarify the approved contract; they do not weaken it.
+  Absence of a resume directory omits resume commands but must leave local and
+  Slurm new-run commands available; new-run construction itself requires an
+  explicit Probe-qualified population rather than guessing a probe. These
+  corrections clarify the approved contract; they do not weaken it.
 - The same Terra high writer must make one separate correction commit limited
   to the two authorized test modules. Sol then reruns both RED commands and
   records the corrected evidence. Production implementation remains forbidden
