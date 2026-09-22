@@ -4163,6 +4163,18 @@ WP11-3 completion and WP11-4 parent-loader gate (2026-09-22):
   text fields from `main`. Preserve every other route. Run both complete focused
   modules to GREEN, compile/diff checks, commit only the parent source file, and
   stop for Sol's WP11-5 integration gate.
+- Parent tests-only commit `6b4eb54` (`test: add WP11 parent loader contracts`)
+  changes only `test_psth_webapp.py`. Sol reviewed the lazy callback/path
+  assertions and independently ran the complete parent module: two intended
+  failures and 31 passes in 1.75 seconds. The failures are the missing additive
+  sorter arguments and missing metadata helpers; no loader was called eagerly
+  and there is no collection, fixture, syntax, import, or environment failure.
+  The WP11-4 RED gate is accepted.
+- The same Terra high writer is now authorized to change only
+  `psth_webapp.py` according to the frozen helper and forwarding contracts
+  above. Tests, child source, documentation, numerical code, and all other files
+  remain frozen. Commit the one parent source file only after both complete
+  focused modules are GREEN, then stop for WP11-5.
 
 ### WP12 - Complete PPC plotting and reporting
 
