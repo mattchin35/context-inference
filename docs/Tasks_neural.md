@@ -3205,6 +3205,25 @@ Cluster preservation and local snapshot inspection (revised 2026-09-22):
 - The existing local `processed/lfp_summary_cache` contains the 100-shuffle
   preview and must not be overwritten, merged, renamed, or treated as the final
   snapshot. The final snapshot is a separate read-only inspection source.
+- The one-time copy completed and was verified on 2026-09-22. The local
+  snapshot is
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/CT026_2026-08-01_130853_spike_phase_ProbeB_final_2026-09-21T00-34-20Z/cache_snapshot`.
+  It contains the four expected cache files plus
+  `cache_snapshot_identity.json`; no preview-cache file was changed. Remote and
+  local byte sizes and SHA-256 values match exactly: `manifest.json` is 38,551
+  bytes with SHA-256
+  `8ceefe2988d2ca9fcc256bcf890f70c62dcf9704cf6246dc03c679cd564bfe53`,
+  `power.npz` is 78,680,638 bytes with SHA-256
+  `b178c5c765d9f248b42095779714dfa5aab727809c225e3a7fa0f42bed6d2f89`,
+  `synchrony.npz` is 153,572,688 bytes with SHA-256
+  `7b4aa270f1cebe52a941fbbb4aa298ff50b500745956f6db3678127ba8937400`,
+  and `spike_phase.npz` is 211,876,438 bytes with SHA-256
+  `928ad252578bff020a3cd70e317dc52deb3f5bf0a5e40d25eeca4fef193675da`.
+  The four files total 444,168,315 bytes. The receipt defines its aggregate as
+  SHA-256 over ordered ASCII
+  `filename<TAB>size_bytes<TAB>sha256<LF>` records in manifest, Power,
+  Synchrony, Spike-phase order; the verified aggregate is
+  `42379d6e654d59d468503b58c4b3eeb81a325a86eb5e4df4b3aaf3104c684ec7`.
 - Streamlit runs locally and only while the user is actively inspecting data.
   No Slurm allocation, remote server process, public listener, SSH tunnel, or
   persistent service is part of WP11. The local process caches one selected
@@ -3606,9 +3625,9 @@ RED command:
 
 Implementation sequence:
 
-1. Complete visual review of the already copied final PNG report and record any
-   presentation-only findings without recomputation.
-2. Copy the four final cache files into the local final run's
+1. **Complete 2026-09-22:** visually review the already copied final PNG report
+   and record any presentation-only findings without recomputation.
+2. **Complete 2026-09-22:** copy the four final cache files into the local final run's
    `cache_snapshot/`, compare remote/local counts, sizes, and ordered SHA-256,
    and write the immutable `cache_snapshot_identity.json` receipt. Do not touch
    the existing local preview cache.
