@@ -4200,6 +4200,36 @@ WP11-4 completion and WP11-5 verification start (2026-09-22):
   Streamlit launch is on demand and requires user visual approval; automated
   GREEN alone does not complete WP11.
 
+WP11-5 automated GREEN and production-loader smoke gate (2026-09-22):
+
+- The complete affected LFP summary/Power/Synchrony/Spike/PPC/launcher/webapp
+  set passed 887 tests with six established warnings in 127.02 seconds. The
+  complete `src/tests/neural_analysis` suite passed 1,243 tests with 22
+  established warning instances in 139.17 seconds. Warning categories remain
+  multiprocessing fork deprecation, synthetic all-NaN reductions, intentional
+  duplicate ZIP member, and Pynapple empty-epoch/divide-by-zero behavior. No new
+  category or test failure appeared.
+- The read-only real-snapshot smoke was stopped before component loading because
+  inspection found a production interface mismatch. `SnapshotComponentCache`
+  correctly supplies the exact receipt-validated component NPZ path, as its
+  tests require. `make_production_summary_dependencies` currently implements
+  `load_selected_component` as a live-cache-directory adapter and appends
+  `component.npz` unconditionally, which would form
+  `.../power.npz/power.npz` in snapshot mode. The receipt validation itself did
+  not write or alter the copied snapshot.
+- Before source repair, add one focused test in
+  `test_lfp_summary_webapp.py` that combines a validated snapshot,
+  `SnapshotComponentCache`, and the production dependency loader while
+  monkeypatching only the final array decoder. It must prove the decoder receives
+  the exact selected NPZ path. Retain the existing live-loader test proving a
+  live cache directory becomes `output_directory/component.npz`.
+- After genuine RED, change only `lfp_summary_webapp.py` so the production loader
+  explicitly accepts either a cache directory or the exact selected NPZ path;
+  an exact path must have the expected component filename and is passed through
+  unchanged. Do not weaken snapshot identity validation or infer any other
+  location. Rerun focused, affected, and complete neural suites as warranted,
+  then repeat the read-only real-snapshot smoke. WP11-6 remains blocked.
+
 ### WP12 - Complete PPC plotting and reporting
 
 Owner: one implementer immediately after WP10. Scope is plotting/report files
