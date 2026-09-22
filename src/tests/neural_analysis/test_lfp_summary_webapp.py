@@ -10,6 +10,7 @@ from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import pytest
 
 from src.neural_analysis import lfp_summary_webapp
@@ -17,6 +18,7 @@ from src.neural_analysis.lfp_summary_io import ComponentStatus
 from src.neural_analysis.lfp_summary_models import (
     LFPSiteConfig,
     UnitPopulationConfig,
+    canonical_config_json,
     default_lfp_summary_config,
 )
 
@@ -236,6 +238,7 @@ def _write_snapshot_fixture(
     *,
     component_states: dict[str, str] | None = None,
     component_population_labels: dict[str, str] | None = None,
+    component_configuration_snapshots: dict[str, dict[str, object]] | None = None,
     receipt_transform: Callable[[dict[str, object]], None] | None = None,
 ) -> Path:
     """Create a tiny immutable-cache topology for receipt-only UI contracts.
@@ -252,6 +255,10 @@ def _write_snapshot_fixture(
     component_population_labels : dict[str, str] | None
         Optional stable selected-population label for a component. Labels are
         categorical provenance values such as ``"ProbeB"`` and have no units.
+    component_configuration_snapshots : dict[str, dict[str, object]] | None
+        Optional complete JSON-compatible saved ``LFPSummaryConfig`` mappings
+        for selected components. They retain source paths, seconds, Hz, and
+        source-voltage-unit provenance without containing raw arrays.
     receipt_transform : callable or None
         Optional in-place mutation of the JSON-compatible receipt after its
         correct file identity has been recorded. It receives and returns no
@@ -268,6 +275,7 @@ def _write_snapshot_fixture(
     snapshot.mkdir()
     states = component_states or {}
     population_labels = component_population_labels or {}
+    configuration_snapshots = component_configuration_snapshots or {}
     manifest = {
         "schema_version": "1",
         "session_id": "synthetic-session",
@@ -275,7 +283,10 @@ def _write_snapshot_fixture(
             component: {
                 "state": states.get(component, "complete"),
                 **(
-                    {
+                    {"configuration_snapshot": configuration_snapshots[component]}
+                    if component in configuration_snapshots
+                    else (
+                        {
                         "configuration_snapshot": {
                             "unit_population": {
                                 "label": f"{population_labels[component]} active",
@@ -295,9 +306,10 @@ def _write_snapshot_fixture(
                                 "stable_unit_ids": [f"{population_labels[component]}:7"],
                             }
                         }
-                    }
-                    if component in population_labels
-                    else {}
+                        }
+                        if component in population_labels
+                        else {}
+                    )
                 ),
             }
             for component in lfp_summary_webapp.SUMMARY_COMPONENTS
@@ -500,6 +512,308 @@ def _synthetic_slurm_command(action: str, config: object) -> str:
 
     del config
     return f"sbatch {action}"
+
+
+def _full_saved_component_configuration(root: Path, probe_label: str = "ProbeB") -> dict[str, object]:
+    """Return one complete JSON saved configuration for immutable-plot tests.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Temporary local root used only for synthetic source/output path values.
+        It contains no experimental recording and all saved time/frequency units
+        are inherited from ``default_lfp_summary_config``.
+    probe_label : str
+        Exact ``"ProbeA"`` or ``"ProbeB"`` population label stored with the
+        snapshot component.
+
+    Returns
+    -------
+    dict[str, object]
+        Complete JSON-compatible ``LFPSummaryConfig`` mapping retaining session,
+        window, notch, band, source-unit, and selected-population provenance.
+    """
+
+    population = UnitPopulationConfig(
+        f"{probe_label} saved active",
+        probe_label,
+        root / "cluster_sorter",
+        root / "cluster_aligned_spikes.npz",
+        (1,),
+        (("channel_quality", "good"), ("inside_brain", "true"), ("unit_quality", "good,mua")),
+        (f"{probe_label}:7",),
+    )
+    configuration = replace(
+        default_lfp_summary_config(),
+        session_id="cluster-produced-session",
+        session_path=root / "cluster_session",
+        output_directory=root / "cluster_cache",
+        sites=_summary_sites(root),
+        unit_population=population,
+    )
+    return json.loads(canonical_config_json(configuration))
+
+
+def _rewrite_snapshot_manifest(
+    snapshot: Path,
+    update: Callable[[dict[str, object]], None],
+) -> None:
+    """Apply one JSON-only manifest mutation and refresh its synthetic receipt.
+
+    Parameters
+    ----------
+    snapshot : pathlib.Path
+        Existing temporary synthetic final snapshot. Only its manifest and
+        receipt are rewritten; component marker arrays and external data are
+        untouched.
+    update : callable
+        In-place mutator accepting the decoded JSON manifest mapping. It receives
+        metadata only, not numerical arrays, physical units, or source files.
+
+    Returns
+    -------
+    None
+        Leaves a receipt whose ordered component identities match the modified
+        temporary manifest.
+    """
+
+    manifest_path = snapshot / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert isinstance(manifest, dict)
+    update(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    _write_snapshot_receipt(snapshot)
+
+
+def _small_power_snapshot_arrays() -> dict[str, np.ndarray]:
+    """Return small cached Power arrays with ``(site, trial, epoch, frequency)`` axes.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Dimensionless dB PSD/band arrays, Hz frequency coordinates, categorical
+        condition/site/epoch/band axes, and trial-count metadata. No raw LFP
+        trace is present.
+    """
+
+    return {
+        "frequency_hz": np.array((8.0, 40.0)),
+        "normalized_psd_session_db": np.arange(24, dtype=float).reshape(2, 2, 3, 2),
+        "band_power_session_db": np.arange(24, dtype=float).reshape(2, 2, 3, 2),
+        "condition_names": np.array(("all", "left")),
+        "condition_membership": np.array(((True, False), (True, True))),
+        "filter_membership": np.array((True, True)),
+        "condition_effective_trial_count": np.array(((2, 2), (1, 1)), dtype=np.int64),
+        "site_ids": np.array(("PFC", "HPC1")),
+        "site_voltage_units": np.array(("uV", "uV")),
+        "epoch_names": np.array(("whole", "before", "after")),
+        "band_names": np.array(("theta", "gamma")),
+    }
+
+
+def _small_synchrony_snapshot_arrays() -> dict[str, np.ndarray]:
+    """Return small committed Synchrony arrays using their saved public axes.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Dimensionless ITPC/ISPC/PLV arrays with condition/site-or-pair/epoch/band
+        axes, Hz/seconds coordinates, trial/sample counts, and tiny cached trace
+        provenance. The arrays contain no raw recording access seam.
+    """
+
+    return {
+        "trial_indices": np.array((10, 11), dtype=np.int64),
+        "site_ids": np.array(("PFC", "HPC1")),
+        "site_voltage_units": np.array(("uV", "uV")),
+        "condition_names": np.array(("all", "left")),
+        "condition_membership": np.array(((True, False), (True, True))),
+        "filter_membership": np.array((True, True)),
+        "frequency_hz": np.array((8.0, 40.0)),
+        "epoch_names": np.array(("whole", "before", "after")),
+        "band_names": np.array(("theta", "gamma")),
+        "relative_time_s": np.array((-0.1, 0.1)),
+        "pair_site_a_ids": np.array(("PFC",)),
+        "pair_site_b_ids": np.array(("HPC1",)),
+        "itpc": np.full((2, 2, 2, 2), 0.11),
+        "itpc_effective_trial_count": np.full((2, 2, 2, 2), 2, dtype=np.int64),
+        "ispc": np.full((2, 1, 2, 2), 0.22),
+        "ispc_effective_trial_count": np.full((2, 1, 2, 2), 2, dtype=np.int64),
+        "itpc_band_mean": np.full((2, 2, 3, 2), 0.33),
+        "itpc_ci_low": np.full((2, 2, 3, 2), 0.30),
+        "itpc_ci_high": np.full((2, 2, 3, 2), 0.36),
+        "itpc_unstable": np.zeros((2, 2, 3, 2), dtype=bool),
+        "ispc_band_mean": np.full((2, 1, 3, 2), 0.44),
+        "ispc_ci_low": np.full((2, 1, 3, 2), 0.40),
+        "ispc_ci_high": np.full((2, 1, 3, 2), 0.48),
+        "ispc_unstable": np.zeros((2, 1, 3, 2), dtype=bool),
+        "plv_by_frequency": np.full((2, 1, 3, 2), 0.55),
+        "plv_valid_sample_count": np.full((2, 1, 3, 2), 7, dtype=np.int64),
+        "plv_valid_sample_fraction": np.full((2, 1, 3, 2), 0.75),
+        "plv_computable": np.ones((2, 1, 3, 2), dtype=bool),
+        "plv_band_mean": np.full((2, 1, 3, 2), 0.55),
+        "source_trace": np.ones((2, 2, 2), dtype=float),
+        "band_filtered_trace": np.ones((2, 2, 2, 2), dtype=float),
+        "hilbert_phase_rad": np.zeros((2, 2, 2, 2), dtype=float),
+    }
+
+
+def _small_spike_snapshot_arrays() -> dict[str, np.ndarray]:
+    """Return small committed Spike arrays with ``(unit, condition, site, epoch, frequency)`` axes.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        Dimensionless PPC statistics, boolean eligibility/reliability/FDR masks,
+        count arrays, Hz/seconds coordinates, and cached exemplar metadata. No
+        raw spikes, source recordings, or numerical computation is performed.
+    """
+
+    metric_shape = (2, 2, 2, 3, 2)
+    band_shape = (2, 2, 2, 3, 2)
+    arrays: dict[str, np.ndarray] = {
+        "unit_ids": np.array(("ProbeB:7", "ProbeB:8")),
+        "trial_indices": np.array((10, 11), dtype=np.int64),
+        "site_ids": np.array(("PFC", "HPC1")),
+        "site_voltage_units": np.array(("uV", "uV")),
+        "condition_names": np.array(("all", "left")),
+        "condition_membership": np.array(((True, False), (True, True))),
+        "filter_membership": np.array((True, True)),
+        "epoch_names": np.array(("whole", "before", "after")),
+        "band_names": np.array(("theta", "gamma")),
+        "frequency_hz": np.array((8.0, 40.0)),
+        "relative_time_s": np.array((-0.1, 0.1)),
+        "phase_bin_edges_rad": np.array((-np.pi, 0.0, np.pi)),
+        "ppc": np.full(metric_shape, 0.2),
+        "computable": np.ones(metric_shape, dtype=bool),
+        "reliable": np.ones(metric_shape, dtype=bool),
+        "null_eligible": np.ones(metric_shape, dtype=bool),
+        "significant": np.zeros(metric_shape, dtype=bool),
+        "spike_count": np.full(metric_shape, 7, dtype=np.int64),
+        "eligible_trial_count": np.full(metric_shape, 2, dtype=np.int64),
+        "preferred_phase_rad": np.zeros(metric_shape),
+        "representative_phase_hist_count": np.ones(metric_shape + (2,), dtype=np.int64),
+        "ppc_band_mean": np.full(band_shape, 0.2),
+        "source_trace": np.ones((2, 2, 2), dtype=float),
+        "band_filtered_trace": np.ones((2, 2, 2, 2), dtype=float),
+        "hilbert_phase_rad": np.zeros((2, 2, 2, 2), dtype=float),
+        "selected_low_unit_ids": np.full((2, 2, 3, 2), "ProbeB:7"),
+        "selected_high_unit_ids": np.full((2, 2, 3, 2), "ProbeB:8"),
+        "illustrative_low_trial_indices": np.zeros((2, 2, 3, 2), dtype=np.int64),
+        "illustrative_high_trial_indices": np.ones((2, 2, 3, 2), dtype=np.int64),
+    }
+    return arrays
+
+
+class RouteSidebar:
+    """Small deterministic sidebar with explicit source, probe, and action values.
+
+    The stored controls are categorical UI labels, text paths, booleans, and
+    scalar values only; this fake never stores arrays or opens files.
+    ``snapshot_text`` is returned only for a text input whose label clearly
+    requests a snapshot path/directory, preserving the route's explicit-input
+    contract.
+    """
+
+    def __init__(
+        self,
+        *,
+        source_mode: str,
+        snapshot_text: str,
+        action: str = "power",
+        view: str = "synchrony",
+    ) -> None:
+        """Store deterministic categorical controls with no I/O side effects."""
+
+        self.source_mode = source_mode
+        self.snapshot_text = snapshot_text
+        self.action = action
+        self.view = view
+        self.labels: list[str] = []
+
+    def header(self, label: str) -> None:
+        """Record a visible categorical sidebar heading."""
+
+        self.labels.append(label)
+
+    def selectbox(self, label: str, *, options: tuple[str, ...], **kwargs: object) -> str:
+        """Return a requested source/probe/action selector without filesystem access."""
+
+        del kwargs
+        self.labels.append(label)
+        option_set = set(options)
+        if option_set == {"snapshot", "live"}:
+            return self.source_mode
+        if option_set == {"ProbeA", "ProbeB"}:
+            return "ProbeB"
+        if "view" in label.lower() and self.view in option_set:
+            return self.view
+        if self.action in option_set:
+            return self.action
+        return options[0]
+
+    def radio(self, label: str, *, options: tuple[str, ...], **kwargs: object) -> str:
+        """Mirror selectbox for source-mode implementations using radio controls."""
+
+        return self.selectbox(label, options=options, **kwargs)
+
+    def text_input(self, label: str, *, value: str, **kwargs: object) -> str:
+        """Return the explicit snapshot text only for a snapshot path control."""
+
+        del kwargs
+        self.labels.append(label)
+        lowered = label.lower()
+        if "snapshot" in lowered and ("path" in lowered or "directory" in lowered):
+            return self.snapshot_text
+        return value
+
+    def checkbox(self, label: str, *, value: bool, **kwargs: object) -> bool:
+        """Return existing boolean defaults without adding a compute action."""
+
+        del kwargs
+        self.labels.append(label)
+        return value
+
+    def number_input(self, label: str, *, value: float | int, **kwargs: object) -> float | int:
+        """Return existing scalar defaults without altering saved units."""
+
+        del kwargs
+        self.labels.append(label)
+        return value
+
+    def button(self, label: str) -> bool:
+        """Click only the action control for explicit live-mode route tests."""
+
+        self.labels.append(label)
+        return self.source_mode == "live" and ("compute" in label.lower() or "run" in label.lower())
+
+
+class RouteFakeStreamlit(FakeStreamlit):
+    """Fake Streamlit route host retaining session state between deterministic rerenders."""
+
+    def __init__(
+        self,
+        *,
+        source_mode: str,
+        snapshot_text: str,
+        action: str = "power",
+        view: str = "synchrony",
+    ) -> None:
+        """Create a no-I/O output host with persistent JSON-like session state."""
+
+        super().__init__()
+        self.sidebar = RouteSidebar(
+            source_mode=source_mode,
+            snapshot_text=snapshot_text,
+            action=action,
+            view=view,
+        )
+        self.session_state: dict[str, object] = {}
+
+    def caption(self, message: str) -> None:
+        """Record one noncomputational provenance/status caption."""
+
+        self.messages.append(("caption", message))
 
 
 def test_summary_defaults_match_approved_ct026_channels_and_analysis_settings() -> None:
@@ -1693,3 +2007,583 @@ def test_production_dependencies_report_unavailable_nonpower_actions(action: str
     assert result.manifest is None
     assert result.error is not None
     assert "unavailable" in result.error.lower()
+
+
+def test_snapshot_component_cache_reuses_inspection_identities_without_rehash_or_reopen(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A retained inspection must make identical component rerenders memory-only.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the private SHA-256 helper after receipt validation. A cache hit
+        must not call it or reopen the tiny selected NPZ.
+    tmp_path : pathlib.Path
+        Temporary root containing only a synthetic final snapshot and no raw
+        LFP, spike, network, or CT026 data.
+    """
+
+    inspection = lfp_summary_webapp.validate_cache_snapshot(_write_snapshot_fixture(tmp_path))
+    cache = lfp_summary_webapp.SnapshotComponentCache()
+    opened: list[Path] = []
+
+    def load_component(path: Path, manifest: dict[str, object], component: str) -> dict[str, np.ndarray]:
+        """Open one selected synthetic NPZ and return its dimensionless marker."""
+
+        del manifest, component
+        opened.append(path)
+        with np.load(path) as cached:
+            return {"marker": cached["marker"].copy()}
+
+    def fail_rehash(path: Path) -> str:
+        """Fail when a post-inspection rerender attempts a file-content hash."""
+
+        raise AssertionError(f"component cache rehashed {path}")
+
+    monkeypatch.setattr(lfp_summary_webapp, "_sha256_file", fail_rehash)
+
+    first = cache.load(inspection, "synchrony", load_component)
+    second = cache.load(inspection, "synchrony", load_component)
+
+    assert first is second
+    assert opened == [inspection.component_paths["synchrony"]]  # type: ignore[index]
+
+
+def test_production_live_loader_passes_the_exact_selected_component_npz_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Live cache loading must give the IO boundary ``output_directory/component.npz``.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the production array loader and records its filesystem input
+        without opening a real cache or source recording.
+    tmp_path : pathlib.Path
+        Temporary output root used only to form the exact expected NPZ path.
+    """
+
+    config = replace(default_lfp_summary_config(), output_directory=tmp_path / "cache")
+    paths: list[Path] = []
+
+    def load_component_arrays(path: Path, manifest: dict[str, object], component: str) -> dict[str, np.ndarray]:
+        """Record the selected component file and return one marker array."""
+
+        del manifest, component
+        paths.append(path)
+        return {"marker": np.array((1,), dtype=np.int64)}
+
+    monkeypatch.setattr(lfp_summary_webapp, "load_component_arrays", load_component_arrays)
+    dependencies = lfp_summary_webapp.make_production_summary_dependencies()
+
+    arrays = lfp_summary_webapp.load_summary_view_arrays(
+        "synchrony",
+        config,
+        {"components": {"synchrony": {}}},
+        dependencies,
+    )
+
+    assert paths == [config.output_directory / "synchrony.npz"]
+    assert arrays["synchrony"]["marker"].tolist() == [1]
+
+
+def test_spike_snapshot_population_provenance_fails_closed_but_nonspike_components_remain_irrelevant(
+    tmp_path: Path,
+) -> None:
+    """Only a complete valid Spike population provenance can authorize Spike plots.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root for two receipt-coherent synthetic snapshots. Manifest
+        mutations contain categorical provenance only, not scientific arrays.
+    """
+
+    population = UnitPopulationConfig(
+        "ProbeB active",
+        "ProbeB",
+        tmp_path / "sorter",
+        tmp_path / "aligned.npz",
+        (1,),
+        (("channel_quality", "good"), ("inside_brain", "true"), ("unit_quality", "good,mua")),
+        ("ProbeB:7",),
+    )
+    missing_root = tmp_path / "missing"
+    malformed_root = tmp_path / "malformed"
+    missing_root.mkdir()
+    malformed_root.mkdir()
+    missing_snapshot = _write_snapshot_fixture(missing_root)
+    malformed_snapshot = _write_snapshot_fixture(malformed_root)
+
+    def make_probe_malformed(manifest: dict[str, object]) -> None:
+        """Replace only Spike population provenance with an invalid probe label."""
+
+        components = manifest["components"]
+        assert isinstance(components, dict)
+        spike = components["spike_phase"]
+        assert isinstance(spike, dict)
+        spike["configuration_snapshot"] = {"unit_population": {"probe_label": "ProbeZ"}}
+
+    _rewrite_snapshot_manifest(malformed_snapshot, make_probe_malformed)
+    missing_inspection = lfp_summary_webapp.validate_cache_snapshot(missing_snapshot)
+    malformed_inspection = lfp_summary_webapp.validate_cache_snapshot(malformed_snapshot)
+
+    for inspection in (missing_inspection, malformed_inspection):
+        spike = lfp_summary_webapp.snapshot_component_population_status(
+            inspection,
+            "spike_phase",
+            population,
+        )
+        assert not spike.can_plot
+        assert "population" in spike.message.lower() or "provenance" in spike.message.lower()
+    for component in ("power", "synchrony"):
+        status = lfp_summary_webapp.snapshot_component_population_status(
+            missing_inspection,
+            component,
+            population,
+        )
+        assert status.can_plot
+
+
+def test_active_population_ignores_nonnumeric_channel_ids_and_keeps_exact_quality_selection(
+    tmp_path: Path,
+) -> None:
+    """One probe keeps only good/MUA units on good inside-brain numeric channels.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root used only for explicit sorter/aligned path identities.
+        Metadata frames are synthetic categorical labels and zero-based channels.
+    """
+
+    clusters = pd.DataFrame(
+        {
+            "cluster_id": (9, 2, 3, 4),
+            "ch": (1, 2, 3, 2),
+            "group": ("mua", "good", "noise", "good"),
+        }
+    )
+    channels = pd.DataFrame(
+        {
+            "channel_id": ("CH001", "not-a-channel", "CH003", "CH002"),
+            "label": ("GOOD", "good", "bad", "good"),
+            "inside_brain": (True, True, True, False),
+        }
+    )
+
+    population = lfp_summary_webapp.build_active_summary_population(
+        probe_label="ProbeB",
+        sorter_path=tmp_path / "explicit_sorter",
+        aligned_spike_path=tmp_path / "explicit_aligned.npz",
+        cluster_metadata=clusters,
+        channel_metadata=channels,
+    )
+
+    assert population.selected_channels == (1,)
+    assert population.stable_unit_ids == ("ProbeB:9",)
+    assert population.sorter_path == tmp_path / "explicit_sorter"
+    assert population.aligned_spike_path == tmp_path / "explicit_aligned.npz"
+
+
+def test_snapshot_rejects_symlinked_final_entries_even_when_bytes_match(tmp_path: Path) -> None:
+    """Receipt-valid bytes must still be regular immediate snapshot children.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root holding a small copied component outside the entered
+        snapshot and a symlink with matching bytes. No source/session data is
+        accessed.
+    """
+
+    snapshot = _write_snapshot_fixture(tmp_path)
+    component = snapshot / "power.npz"
+    copied_component = tmp_path / "outside_power.npz"
+    copied_component.write_bytes(component.read_bytes())
+    component.unlink()
+    component.symlink_to(copied_component)
+
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+
+    assert not inspection.is_scientific_result
+    assert inspection.state in {"malformed", "incomplete"}
+    assert "symlink" in inspection.message.lower()
+
+
+def test_snapshot_plot_uses_selected_saved_configuration_and_cluster_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Immutable snapshot figures must not inherit labels from local live configuration.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the established ITPC plotter and captures only selected cached
+        arrays and the immutable plot context.
+    tmp_path : pathlib.Path
+        Temporary root used for one complete saved configuration and tiny
+        Synchrony arrays; no CT026 or raw source file is read.
+    """
+
+    saved = _full_saved_component_configuration(tmp_path)
+    snapshot = _write_snapshot_fixture(
+        tmp_path,
+        component_configuration_snapshots={"synchrony": saved},
+    )
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+    captured: dict[str, object] = {}
+
+    def plot_phase_map(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture one cache-only ITPC plot request and return an unsaved figure."""
+
+        del kwargs
+        captured["context"] = args[-1]
+        return plt.figure(), {}
+
+    monkeypatch.setattr(lfp_summary_webapp.lfp_summary_plotting, "plot_phase_map", plot_phase_map)
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "synchrony",
+        _small_synchrony_snapshot_arrays(),
+        replace(default_lfp_summary_config(), session_id="local-live-drift"),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="itpc_map",
+            site_id="HPC1",
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+        inspection=inspection,
+    )
+
+    context = captured["context"]
+    assert context.session_id == "cluster-produced-session"
+    assert context.alignment_event == saved["analysis_windows"]["alignment_event"]
+    assert inspection.source_cluster_directory in context.reference_description
+    plt.close(figure)
+
+
+@pytest.mark.parametrize(
+    ("component", "view", "plotter_name", "site_or_pair"),
+    (
+        ("power", "condition_psd", "plot_condition_psd", "HPC1"),
+        ("power", "band_power_summary", "plot_band_power_summary", "HPC1"),
+        ("synchrony", "itpc_map", "plot_phase_map", "HPC1"),
+        ("synchrony", "ispc_map", "plot_phase_map", "PFC-HPC1"),
+        ("synchrony", "itpc_band_summary", "plot_phase_band_summary", "HPC1"),
+        ("synchrony", "ispc_band_summary", "plot_phase_band_summary", "PFC-HPC1"),
+        ("synchrony", "plv_distribution", "plot_plv_distribution", "PFC-HPC1"),
+        ("synchrony", "plv_exemplar", "plot_plv_exemplar", "PFC-HPC1"),
+        ("spike_phase", "unit_ppc_map", "plot_unit_ppc_map", "HPC1"),
+        ("spike_phase", "population_ppc_maps", "plot_population_ppc_maps", "HPC1"),
+        ("spike_phase", "ppc_band_summary", "plot_ppc_band_summary", "HPC1"),
+        ("spike_phase", "ppc_exemplar_pair", "plot_ppc_exemplar_pair", "HPC1"),
+    ),
+)
+def test_each_authoritative_snapshot_view_delegates_its_selected_cached_axes(
+    monkeypatch: pytest.MonkeyPatch,
+    component: str,
+    view: str,
+    plotter_name: str,
+    site_or_pair: str,
+) -> None:
+    """Every approved cached view must select arrays then delegate to its plotter.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces all existing pure plotters. The selected plotter returns one
+        unsaved figure; any different plotter call is an adapter-routing error.
+    component, view, plotter_name, site_or_pair : str
+        Parametrized committed component, cached-view family, existing plotting
+        function name, and relevant site or site-pair selector. They are
+        categorical labels with no numerical units.
+    """
+
+    arrays = {
+        "power": _small_power_snapshot_arrays,
+        "synchrony": _small_synchrony_snapshot_arrays,
+        "spike_phase": _small_spike_snapshot_arrays,
+    }[component]()
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    def selected_plotter(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Record the delegated cache-only arguments and return one blank figure."""
+
+        calls.append((plotter_name, args, kwargs))
+        return plt.figure(), {}
+
+    def unexpected_plotter(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Fail when an adapter routes a cached view to the wrong plot family."""
+
+        del args, kwargs
+        raise AssertionError("cached view delegated to an unrelated plotting function")
+
+    for candidate in (
+        "plot_condition_psd",
+        "plot_band_power_summary",
+        "plot_phase_map",
+        "plot_phase_band_summary",
+        "plot_plv_distribution",
+        "plot_plv_exemplar",
+        "plot_unit_ppc_map",
+        "plot_population_ppc_maps",
+        "plot_ppc_band_summary",
+        "plot_ppc_exemplar_pair",
+    ):
+        monkeypatch.setattr(
+            lfp_summary_webapp.lfp_summary_plotting,
+            candidate,
+            selected_plotter if candidate == plotter_name else unexpected_plotter,
+        )
+    selection = lfp_summary_webapp.SnapshotPlotSelection(
+        view=view,
+        site_id=site_or_pair,
+        condition_name="left",
+        epoch_name="after",
+        band_name="gamma",
+    )
+
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        component,
+        arrays,
+        default_lfp_summary_config(),
+        selection,
+    )
+
+    assert [call[0] for call in calls] == [plotter_name]
+    delegated_text = repr(calls[0][1]) + repr(calls[0][2])
+    assert site_or_pair in delegated_text
+    assert "left" in delegated_text
+    if "band" in view or "exemplar" in view:
+        assert "gamma" in delegated_text
+    if "band" in view or "exemplar" in view or view == "unit_ppc_map":
+        assert "after" in delegated_text
+    plt.close(figure)
+
+
+@pytest.mark.parametrize("snapshot_text", ("", "{invalid}"))
+def test_child_renderer_defaults_to_noncomputational_snapshot_and_defers_population_metadata(
+    tmp_path: Path,
+    snapshot_text: str,
+) -> None:
+    """Blank/invalid snapshot input must not load metadata, cache, raw data, or compute.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty local root used only to construct explicit missing paths and probe
+        path identities. It contains no snapshot, CT026, raw LFP, or network data.
+    snapshot_text : str
+        Blank widget text or the ``"{invalid}"`` placeholder replaced with one
+        explicit absent local directory. It is never treated as a live fallback.
+    """
+
+    entered = "" if not snapshot_text else str(tmp_path / "absent_snapshot")
+    streamlit = RouteFakeStreamlit(source_mode="snapshot", snapshot_text=entered)
+    calls: list[str] = []
+    metadata_paths: list[Path] = []
+
+    def cluster_metadata_loader(sorter_path: Path) -> pd.DataFrame:
+        """Fail if a blank/invalid snapshot triggers selected-probe metadata I/O."""
+
+        metadata_paths.append(sorter_path)
+        raise AssertionError("blank or invalid snapshot loaded cluster metadata")
+
+    def channel_metadata_loader(sorter_path: Path) -> pd.DataFrame:
+        """Fail if a blank/invalid snapshot triggers selected-probe channel I/O."""
+
+        metadata_paths.append(sorter_path)
+        raise AssertionError("blank or invalid snapshot loaded channel metadata")
+
+    lfp_summary_webapp.render_lfp_summary_view(
+        streamlit,
+        session_id="synthetic-session",
+        session_path=tmp_path,
+        output_directory=tmp_path / "live_cache",
+        sites=_summary_sites(tmp_path),
+        site_pairs=(("PFC", "HPC1"),),
+        sorter_paths={"ProbeA": tmp_path / "sorter_a", "ProbeB": tmp_path / "sorter_b"},
+        aligned_spike_paths={"ProbeA": tmp_path / "aligned_a.npz", "ProbeB": tmp_path / "aligned_b.npz"},
+        cluster_metadata_loader=cluster_metadata_loader,
+        channel_metadata_loader=channel_metadata_loader,
+        dependencies=_fake_dependencies(calls, []),
+    )
+
+    assert metadata_paths == []
+    assert calls == []
+    message_text = " ".join(message for _kind, message in streamlit.messages).lower()
+    assert "snapshot" in message_text
+    assert "live" not in message_text
+
+
+def test_child_renderer_reuses_valid_snapshot_inspection_and_selected_probe_cache_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An unchanged snapshot rerender must reuse inspection, load ProbeB once, and display provenance.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Wraps validation and replaces only the cache-only plotting adapter. No
+        raw source, numerical pipeline, or component write seam is enabled.
+    tmp_path : pathlib.Path
+        Temporary root for one receipt-valid final snapshot, explicit ProbeA/B
+        paths, and tiny cached Spike arrays with count/eligibility metadata.
+    """
+
+    saved = _full_saved_component_configuration(tmp_path)
+    snapshot = _write_snapshot_fixture(
+        tmp_path,
+        component_configuration_snapshots={"spike_phase": saved},
+    )
+
+    def add_spike_warning(manifest: dict[str, object]) -> None:
+        """Add one selected-component warning without changing cache arrays."""
+
+        components = manifest["components"]
+        assert isinstance(components, dict)
+        spike = components["spike_phase"]
+        assert isinstance(spike, dict)
+        spike["warnings"] = ["synthetic instability warning"]
+
+    _rewrite_snapshot_manifest(snapshot, add_spike_warning)
+    streamlit = RouteFakeStreamlit(
+        source_mode="snapshot",
+        snapshot_text=str(snapshot),
+        view="spike_phase",
+    )
+    dependency_calls: list[str] = []
+    metadata_paths: list[Path] = []
+    plot_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    validation_calls: list[Path | str] = []
+    original_validate = lfp_summary_webapp.validate_cache_snapshot
+
+    def validate_snapshot(path: Path | str) -> lfp_summary_webapp.SnapshotInspection:
+        """Record validation entry while preserving receipt validation behavior."""
+
+        validation_calls.append(path)
+        return original_validate(path)
+
+    def cluster_metadata_loader(sorter_path: Path) -> pd.DataFrame:
+        """Return selected-ProbeB cluster metadata and record its exact sorter path."""
+
+        metadata_paths.append(sorter_path)
+        return pd.DataFrame({"cluster_id": (7,), "ch": (1,), "group": ("good",)})
+
+    def channel_metadata_loader(sorter_path: Path) -> pd.DataFrame:
+        """Return selected-ProbeB good inside-brain metadata for one channel."""
+
+        metadata_paths.append(sorter_path)
+        return pd.DataFrame({"channel": (1,), "channel_quality": ("good",), "inside_brain": (True,)})
+
+    def plot_cached(*args: object, **kwargs: object) -> plt.Figure:
+        """Record one cache-only Spike adapter request and return an unsaved figure."""
+
+        plot_calls.append((args, kwargs))
+        return plt.figure()
+
+    def load_component(path: Path, manifest: dict[str, object], component: str) -> dict[str, np.ndarray]:
+        """Return only selected tiny Spike arrays without opening a raw source file."""
+
+        del path, manifest
+        dependency_calls.append(f"load_{component}")
+        return _small_spike_snapshot_arrays()
+
+    dependencies = replace(_fake_dependencies(dependency_calls, []), load_component=load_component)
+    monkeypatch.setattr(lfp_summary_webapp, "validate_cache_snapshot", validate_snapshot)
+    monkeypatch.setattr(lfp_summary_webapp, "plot_cached_snapshot_component", plot_cached)
+    route_kwargs = {
+        "session_id": "synthetic-session",
+        "session_path": tmp_path,
+        "output_directory": tmp_path / "live_cache",
+        "sites": _summary_sites(tmp_path),
+        "site_pairs": (("PFC", "HPC1"),),
+        "sorter_paths": {"ProbeA": tmp_path / "sorter_a", "ProbeB": tmp_path / "sorter_b"},
+        "aligned_spike_paths": {"ProbeA": tmp_path / "aligned_a.npz", "ProbeB": tmp_path / "aligned_b.npz"},
+        "cluster_metadata_loader": cluster_metadata_loader,
+        "channel_metadata_loader": channel_metadata_loader,
+        "dependencies": dependencies,
+    }
+
+    lfp_summary_webapp.render_lfp_summary_view(streamlit, **route_kwargs)
+    lfp_summary_webapp.render_lfp_summary_view(streamlit, **route_kwargs)
+
+    assert validation_calls == [snapshot]
+    assert metadata_paths == [tmp_path / "sorter_b", tmp_path / "sorter_b"]
+    assert dependency_calls == ["load_spike_phase"]
+    assert len(plot_calls) == 2
+    display_text = " ".join(message for _kind, message in streamlit.messages)
+    assert "/cluster/final/cache" in display_text
+    assert "synthetic instability warning" in display_text
+    assert "ProbeB" in display_text
+    assert "7" in display_text
+    assert "eligible" in display_text.lower()
+    assert "unstable" in display_text.lower()
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_compute"),
+    (("power", "compute_power"), ("synchrony", "compute_synchrony"), ("spike_phase", None), ("all", None)),
+)
+def test_child_renderer_live_mode_limits_compute_to_power_synchrony_and_handoffs_spike_actions(
+    tmp_path: Path,
+    action: str,
+    expected_compute: str | None,
+) -> None:
+    """Explicit live mode exposes bounded actions or launcher text, never synchronous Spike work.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root used only for explicit selected-probe paths and a live
+        cache path. No data file is created or opened.
+    action : str
+        Requested categorical Power, Synchrony, Spike-phase, or Compute-All UI
+        action.
+    expected_compute : str or None
+        The sole bounded injected compute call expected for Power/Synchrony;
+        ``None`` requires a launcher-only result for Spike/All.
+    """
+
+    streamlit = RouteFakeStreamlit(source_mode="live", snapshot_text="", action=action, view="power")
+    calls: list[str] = []
+
+    def cluster_metadata_loader(sorter_path: Path) -> pd.DataFrame:
+        """Return one selected-probe unit without touching an unselected sorter."""
+
+        assert sorter_path == tmp_path / "sorter_b"
+        return pd.DataFrame({"cluster_id": (7,), "ch": (1,), "group": ("good",)})
+
+    def channel_metadata_loader(sorter_path: Path) -> pd.DataFrame:
+        """Return one selected-probe good inside-brain channel."""
+
+        assert sorter_path == tmp_path / "sorter_b"
+        return pd.DataFrame({"channel": (1,), "channel_quality": ("good",), "inside_brain": (True,)})
+
+    lfp_summary_webapp.render_lfp_summary_view(
+        streamlit,
+        session_id="synthetic-session",
+        session_path=tmp_path,
+        output_directory=tmp_path / "live_cache",
+        sites=_summary_sites(tmp_path),
+        site_pairs=(("PFC", "HPC1"),),
+        sorter_paths={"ProbeA": tmp_path / "sorter_a", "ProbeB": tmp_path / "sorter_b"},
+        aligned_spike_paths={"ProbeA": tmp_path / "aligned_a.npz", "ProbeB": tmp_path / "aligned_b.npz"},
+        cluster_metadata_loader=cluster_metadata_loader,
+        channel_metadata_loader=channel_metadata_loader,
+        dependencies=_fake_dependencies(calls, []),
+    )
+
+    compute_calls = [call for call in calls if call.startswith("compute_")]
+    if expected_compute is None:
+        assert compute_calls == []
+        display_text = " ".join(message for _kind, message in streamlit.messages).lower()
+        assert "launcher" in display_text or "sbatch" in display_text or "uv run" in display_text
+    else:
+        assert compute_calls == [expected_compute]
