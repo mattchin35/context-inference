@@ -3911,6 +3911,34 @@ WP11-3 provisional implementation and Sol review repair gate (2026-09-22):
   all existing ownership, no-compute, no-network, no-write, and no-new-
   dependency rules remain unchanged.
 
+WP11-3R tests-only review checkpoint (2026-09-22):
+
+- Terra high tests-only commit `51bc6e0` (`test: add WP11 snapshot repair
+  contracts`) changed only `test_lfp_summary_webapp.py`. Sol reproduced its
+  exact focused command with 23 intended failures, two already-supported view
+  passes, and 38 deselections in 2.12 seconds. The failures identify the
+  provisional core gaps rather than import, syntax, collection, or environment
+  problems.
+- Sol review found four fixture/assertion corrections required before source is
+  returned to the writer. The tiny Synchrony fixture must include saved
+  `site_valid` and `pair_valid` masks used for counts and PLV selection. The
+  Spike exemplar fixture must include coherent packed spike times/offsets and
+  illustrative trial ids matching its saved trial axis. Blank/invalid snapshot
+  tests must prove absence of fallback and compute controls without forbidding
+  a helpful status sentence from containing the word `live`. View assertions
+  must explicitly check each selector relevant to that view rather than infer
+  relevance from a substring in the view name.
+- The tests-only correction must also cover the other half of the retained-
+  inspection contract: after one successful unchanged rerender, changing a
+  snapshot file and its receipt at the same explicit path changes the cheap
+  stat identity, triggers full revalidation, and reloads the changed selected
+  component. Snapshot-mode tests must assert that no compute/run button is
+  exposed, not merely that a fake unclicked button caused no compute call.
+- The same Terra high writer makes a separate correction commit limited to
+  `test_lfp_summary_webapp.py`, reruns the exact focused RED command, and stops.
+  Corrective production work remains forbidden until Sol reviews that commit
+  and records final RED evidence.
+
 ### WP12 - Complete PPC plotting and reporting
 
 Owner: one implementer immediately after WP10. Scope is plotting/report files
