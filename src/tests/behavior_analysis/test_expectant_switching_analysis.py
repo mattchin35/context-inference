@@ -58,7 +58,7 @@ def test_incorrect_runs_and_return_intervals_count_valid_trials():
 
 
 def test_recurrence_requires_return_and_no_context_change():
-    actions = np.array([1, 0, 1, 0, 1, 0, 0, 1])
+    actions = np.array([1, 0, 1, 0, 0, 0, 0, 1])
     correct_choices = np.array([1, 1, 1, 1, 0, 0, 0, 0])
     valid = np.ones(actions.shape, dtype=bool)
 
