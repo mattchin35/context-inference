@@ -3945,6 +3945,19 @@ WP11-3R tests-only review checkpoint (2026-09-22):
   valid-snapshot route must also assert that no compute/run button is exposed,
   just as the blank/invalid cases do. Make these last tests-only clarifications
   before the final RED gate.
+- Final tests-only clarification `5e4e185` adds the distinct left-condition,
+  gamma-band PLV exemplar selection and the valid-snapshot no-compute-control
+  assertion. Sol reviewed the diff and independently reran the exact repair
+  command with the added PLV selector term: 24 intended failures, two existing
+  adapter passes, and 38 deselections in 2.04 seconds. All failures are missing
+  WP11-3R behavior; there is no collection, import, fixture, syntax, or
+  environment failure. The final RED gate is accepted.
+- The same Terra high writer is now authorized to correct only
+  `lfp_summary_webapp.py`. Tests, parent route, documentation, dependencies, and
+  every other source file are frozen. The source change must satisfy the full
+  original WP11-3 suite plus WP11-3R without raw-data access, snapshot writes,
+  network I/O, hidden computation, or repeated snapshot hashing. It must commit
+  only the authorized source file and stop before WP11-4.
 
 ### WP12 - Complete PPC plotting and reporting
 
