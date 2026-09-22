@@ -4083,6 +4083,39 @@ WP11-3R2 tests-only review and correction gate (2026-09-22):
   test focused GREEN selection, both complete relevant modules, compile/diff
   checks, commit only the two authorized source files, and stop before WP11-4.
 
+WP11-3R2 provisional source review and final adapter gate (2026-09-22):
+
+- Terra high source commit `4c76b88` (`fix: complete WP11 cache view repair`)
+  changed only `lfp_summary_webapp.py` and the narrowly authorized optional-
+  exclusion lines in `lfp_summary_plotting.py`. The 15-test repair gate passed;
+  the complete child/plotting modules passed 96 tests with two existing all-NaN
+  warnings; and the child/parent pair passed 109 tests with only the expected
+  untouched WP11-4 parent-forwarding failure. WP11-4 nevertheless remains
+  blocked pending two source-review repairs.
+- The new retained-frequency helper uses strict interior comparisons and
+  therefore retains frequencies exactly equal to exclusion endpoints. Existing
+  Power, Synchrony, and Spike report helpers consistently remove both endpoints
+  (for the default gamma exclusion, every saved frequency from 58 through 62 Hz
+  is excluded). The cache inspector must reproduce those established scientific
+  semantics with inclusive endpoint removal, despite the older configuration
+  docstring's ambiguous use of the word `open`.
+- Power `band_power_summary` is an all-condition saved-cache view, which is why
+  the UI correctly exposes only its site selector. The provisional adapter
+  nevertheless selects the deterministic first condition and passes a one-row
+  plot, silently discarding the remaining saved condition axis. It must instead
+  construct the existing condition-by-trial view for every saved condition and
+  pass all saved condition labels and their exact counts, matching the report
+  adapter. `condition_psd` remains a selected-condition/site/epoch view.
+- Before source correction, add two focused tests in
+  `test_lfp_summary_webapp.py`: one distinguishes inclusive 58/62-Hz removal in
+  both PPC reliability and PLV coverage, and one proves Power band summary
+  forwards every saved condition with its correct condition-by-trial shape and
+  count rows. Commit tests only and reproduce RED. Then the same writer may
+  correct only `lfp_summary_webapp.py`, rerun the complete child/plotting and
+  parent-focused suites, commit that one source file, and stop. Plotting source,
+  parent routing, documentation, numerical code, caches, reports, dependencies,
+  and all other files are frozen.
+
 ### WP12 - Complete PPC plotting and reporting
 
 Owner: one implementer immediately after WP10. Scope is plotting/report files
