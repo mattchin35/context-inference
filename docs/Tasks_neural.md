@@ -4115,6 +4115,19 @@ WP11-3R2 provisional source review and final adapter gate (2026-09-22):
   parent-focused suites, commit that one source file, and stop. Plotting source,
   parent routing, documentation, numerical code, caches, reports, dependencies,
   and all other files are frozen.
+- Tests-only commit `9be84d6` (`test: add final WP11 adapter contracts`) changes
+  only `test_lfp_summary_webapp.py`. Sol reviewed the exact saved-array
+  assertions and independently ran the complete child module: the two new tests
+  fail because exclusion endpoints are retained and only one Power condition is
+  forwarded, while the other 78 tests pass in 1.61 seconds. This is the intended
+  adapter-contract RED with no collection, fixture, syntax, import, or
+  environment failure.
+- The same Terra high writer is now authorized to correct only
+  `lfp_summary_webapp.py`: exclude configured interval endpoints in the shared
+  retained-frequency selector and construct Power band-summary values/counts
+  for the complete saved condition axis. Tests, plotting source, parent route,
+  documentation, numerical code, and every other file remain frozen. Commit
+  that one source file after focused and complete child GREEN, then stop.
 
 ### WP12 - Complete PPC plotting and reporting
 
