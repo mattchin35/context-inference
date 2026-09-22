@@ -447,6 +447,9 @@ the following actions straightforward:
   the initial design.
 - Paths beneath the session home should be session-relative. Local and cluster
   roots are deployment concerns and must not be encoded as scientific identity.
+  In the initial design, relative paths resolve from the directory containing
+  `neural_session.json`, so matching workstation and cluster session layouts do
+  not require a separate root-mapping system.
 - Cache references must be fully descriptive: analysis, probe, population, and
   shuffle tier where applicable. There is one user-approved result per such
   identity rather than an in-file history of candidate runs.
@@ -457,6 +460,16 @@ the following actions straightforward:
   cluster fields later, but they are not required for routine use.
 - Optional unavailable values use JSON `null`. A probe that does not exist is
   omitted rather than represented by a dummy or all-null probe entry.
+- Probe identifiers are arbitrary stable strings. Names such as `ProbeA`,
+  `ProbeB`, and `Probe1` are all valid and carry no anatomical meaning.
+- Each probe records one selected LFP source and one selected sorter generation
+  in the initial schema. Retaining alternative source histories is out of scope.
+- Each LFP site records a stable site ID, display label, probe ID, saved-channel
+  index, and optional region.
+- Sample rate and voltage units are extracted by the acquisition adapter from
+  the designated reference file. The metadata creator must not require the user
+  to look up or transcribe them. Extracted values should still be saved with
+  validated configurations and results for provenance.
 - The metadata creator is a straightforward Python file with clearly labeled,
   hardcoded variables for the user to edit and a `main` function that validates
   them and writes the JSON. It is not an interactive wizard and does not launch
@@ -467,6 +480,11 @@ the following actions straightforward:
 - The webapp is launched through a short Python wrapper accepting
   `--session-metadata PATH`. A concise how-to document must include the exact
   invocation.
+- A valid but incomplete metadata file opens normally in the webapp. Only the
+  views and actions whose required inputs are unavailable should be disabled.
+- Metadata creation always validates schema and internal relationships. Checking
+  whether non-null paths currently exist is an optional validation mode, so a
+  session description may be prepared before every referenced file is copied.
 - Power and Synchrony have independent approved cache references. Shuffle tiers
   apply only to analyses, such as Spike phase, whose scientific configuration
   actually includes shuffle count.
@@ -484,35 +502,27 @@ opt-in edit, not an automatic side effect of computation or transfer.
 1. Which values belong in every session JSON, and which should come from a
    versioned project-level defaults file? Hidden code defaults should not regain
    control through the back door.
-2. Should probe identifiers be arbitrary stable strings such as `ProbeA` and
-   `Probe1`, or should the project enforce one naming convention?
-3. Can one probe have more than one LFP source or sorter generation, and if so,
-   does the metadata select one active source or retain named alternatives?
-4. Are sample rate and voltage unit always read from acquisition metadata, or
-   must the JSON also record explicitly confirmed values?
-5. Before channel-region grouping is implemented, what minimum site information
-   must be entered for LFP analyses? The current proposal is stable site ID,
-   display label, probe, saved-channel index, and optional region.
-6. How consistent are sorter, aligned-spike, synchronization, channel-quality,
+2. Which acquisition reference file is authoritative for extracting sample
+   rate, voltage units, and any required raw-value scaling for Open Ephys and
+   SpikeGLX sessions?
+3. How consistent are sorter, aligned-spike, synchronization, channel-quality,
    and augmented-trial-table layouts across mice and recording generations?
 
-### Cache and incomplete-session behavior
+### Cache and creation behavior
 
-7. When the JSON is valid but incomplete, should the webapp open every available
-   feature and disable only unsupported actions, or require the user to choose
-   an explicitly partial mode? Enabling available features is the current
-   recommendation.
-8. Should the initial metadata creator perform filesystem checks when writing
-   non-null paths, or only validate JSON structure so metadata can be prepared
-   before files are copied into place?
+4. Should optional filesystem validation merely report missing paths, or fail
+   metadata creation when explicitly requested? Failing the requested check is
+   the current recommendation.
 
 ### Portability, compatibility, and future scope
 
-9. Should local/cluster root mappings live in user-specific environment files,
-   command-line arguments, or another explicit deployment description?
-10. How should legacy CT026 snapshots whose saved schema predates newer
-    execution-only fields be represented after migration?
-11. When channel-to-region grouping becomes a priority, will its authoritative
+5. If a required source lies outside the session directory, should the initial
+   schema permit an absolute machine-specific path, or require it to be placed
+   or linked beneath the session directory? Absolute paths are simpler but make
+   one JSON file less portable.
+6. How should legacy CT026 snapshots whose saved schema predates newer
+   execution-only fields be represented after migration?
+7. When channel-to-region grouping becomes a priority, will its authoritative
     source be manually selected channel ranges, channel-quality metadata, or a
     separate anatomical registration artifact?
 
@@ -523,7 +533,7 @@ As decisions are made, this document should record the rationale for:
 - metadata granularity and ownership;
 - stable identifiers and display labels;
 - storage format and schema-version policy;
-- path-root mapping and portability rules;
+- relative-path resolution and portability rules;
 - validation and dry-run behavior;
 - local versus Slurm execution profiles;
 - migration and backward-compatibility policy;
