@@ -4057,6 +4057,15 @@ WP11-3R2 tests-only review and correction gate (2026-09-22):
   `lfp_summary_webapp.py` plus the narrowly authorized PlotContext/caption lines
   in `lfp_summary_plotting.py`. All numerical kernels, caches, reports, parent
   routing, dependencies, and other files remain frozen.
+- Tests-only correction `9a0a344` fixes the selector, selected-count, dual-
+  action resume, and shared-caption coverage, but review found that it removed
+  the complementary webapp-side empty-exclusion contract. Retain both seams:
+  the webapp test must prove an empty saved gamma exclusion is translated to
+  `PlotContext.gamma_exclusion_hz is None` without indexing failure, and the
+  plotting test must prove that `None` renders an honest no-exclusion caption.
+  Make this last tests-only correction in `test_lfp_summary_webapp.py`, rename
+  the launcher test to identify both Spike and All if touched, rerun RED, and
+  stop. Corrective source remains forbidden until Sol accepts that result.
 
 ### WP12 - Complete PPC plotting and reporting
 
