@@ -2657,3 +2657,653 @@ def test_child_renderer_live_mode_limits_compute_to_power_synchrony_and_handoffs
         assert "launcher" in display_text or "sbatch" in display_text or "uv run" in display_text
     else:
         assert compute_calls == [expected_compute]
+
+
+def test_snapshot_population_ppc_keeps_reliable_median_separate_from_eligible_fdr_denominator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Population PPC plots must keep reliable and null-eligible masks distinct.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the pure population plotter and records only cached
+        dimensionless summary arrays. No numerical pipeline or source loading is
+        available to the adapter.
+
+    Returns
+    -------
+    None
+        Verifies reliable PPC median, eligible FDR prevalence/count, and total
+        configured units use their separate documented masks.
+    """
+
+    arrays = _small_spike_snapshot_arrays()
+    selected = (slice(None), 1, 1, 2, slice(None))
+    arrays["ppc"][selected] = np.array(((1.0, 2.0), (50.0, 60.0)))
+    arrays["reliable"][selected] = np.array(((True, True), (False, False)))
+    arrays["null_eligible"][selected] = np.array(((False, False), (True, True)))
+    arrays["significant"][selected] = np.array(((False, False), (True, True)))
+    captured: dict[str, tuple[object, ...]] = {}
+
+    def plot_population_ppc_maps(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture population cache summaries without calculating PPC."""
+
+        del kwargs
+        captured["args"] = args
+        return plt.figure(), {}
+
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_plotting,
+        "plot_population_ppc_maps",
+        plot_population_ppc_maps,
+    )
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "spike_phase",
+        arrays,
+        default_lfp_summary_config(),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="population_ppc_maps",
+            site_id="HPC1",
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+    )
+
+    median, prevalence, eligible_count, total_count = captured["args"][:4]
+    assert np.array_equal(median[1], np.array((1.0, 2.0)))
+    assert np.array_equal(prevalence[1], np.array((1.0, 1.0)))
+    assert np.array_equal(eligible_count[1], np.array((1, 1)))
+    assert np.array_equal(total_count[1], np.array((2, 2)))
+    plt.close(figure)
+
+
+def test_snapshot_ppc_band_summary_requires_all_retained_band_frequencies_and_excludes_gamma_line_noise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Band PPC reliability must aggregate retained Hz bins rather than reuse one bin.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the pure band-summary plotter and captures only dimensionless
+        cached reliability masks. The synthetic 59-Hz bin lies in the configured
+        open gamma line-noise exclusion.
+
+    Returns
+    -------
+    None
+        Requires all retained theta/gamma bins for each unit while ignoring the
+        excluded 59-Hz reliability value.
+    """
+
+    arrays = _small_spike_snapshot_arrays()
+    arrays["frequency_hz"] = np.array((8.0, 40.0, 59.0))
+    for name in (
+        "ppc", "computable", "reliable", "null_eligible", "significant",
+        "spike_count", "eligible_trial_count", "preferred_phase_rad",
+    ):
+        arrays[name] = np.pad(arrays[name], [(0, 0)] * 4 + [(0, 1)])
+    arrays["reliable"][:] = True
+    arrays["reliable"][0, :, :, :, 2] = False
+    arrays["reliable"][1, :, :, :, 1] = False
+    captured: dict[str, tuple[object, ...]] = {}
+
+    def plot_ppc_band_summary(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture band-reliability axes without plotting or recomputing."""
+
+        del kwargs
+        captured["args"] = args
+        return plt.figure(), {}
+
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_plotting,
+        "plot_ppc_band_summary",
+        plot_ppc_band_summary,
+    )
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "spike_phase",
+        arrays,
+        default_lfp_summary_config(),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="ppc_band_summary",
+            site_id="HPC1",
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+    )
+
+    reliability = captured["args"][1]
+    assert reliability.shape == (2, 2, 3, 2)
+    assert np.all(reliability[:, 0, :, 0])
+    assert np.all(reliability[:, 0, :, 1])
+    assert not np.any(reliability[:, 1, :, 1])
+    plt.close(figure)
+
+
+def test_snapshot_plv_distribution_uses_conservative_retained_band_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PLV coverage must be the retained-band minimum, excluding 59-Hz gamma.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the cache-only PLV plotter and records selected saved coverage
+        arrays. No trace/source/phase computation is enabled.
+
+    Returns
+    -------
+    None
+        Confirms gamma coverage is the minimum across 40 and 50 Hz, not the
+        band ordinal's single bin or excluded 59-Hz bin.
+    """
+
+    arrays = _small_synchrony_snapshot_arrays()
+    arrays["frequency_hz"] = np.array((8.0, 40.0, 50.0, 59.0))
+    for name in (
+        "itpc", "itpc_effective_trial_count", "ispc", "ispc_effective_trial_count",
+        "plv_by_frequency", "plv_valid_sample_count", "plv_valid_sample_fraction",
+        "plv_computable",
+    ):
+        axis = 2 if name.startswith(("itpc", "ispc")) else -1
+        padding = [(0, 0)] * arrays[name].ndim
+        padding[axis] = (0, 2)
+        arrays[name] = np.pad(arrays[name], padding)
+    arrays["plv_valid_sample_count"][1, 0, :, :] = np.array((99, 8, 3, 1))
+    arrays["plv_valid_sample_fraction"][1, 0, :, :] = np.array((0.99, 0.8, 0.3, 0.1))
+    captured: dict[str, tuple[object, ...]] = {}
+
+    def plot_plv_distribution(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture cached PLV coverage matrices without drawing a figure."""
+
+        del kwargs
+        captured["args"] = args
+        return plt.figure(), {}
+
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_plotting,
+        "plot_plv_distribution",
+        plot_plv_distribution,
+    )
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "synchrony",
+        arrays,
+        default_lfp_summary_config(),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="plv_distribution",
+            site_id="PFC-HPC1",
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+    )
+
+    assert np.array_equal(captured["args"][1], np.full((1, 3), 3))
+    assert np.array_equal(captured["args"][2], np.full((1, 3), 0.3))
+    plt.close(figure)
+
+
+@pytest.mark.parametrize(
+    ("band_name", "band_index", "low_histogram", "high_histogram", "representative_hz"),
+    (
+        ("theta", 0, np.array((1, 2)), np.array((3, 4)), 8.0),
+        ("gamma", 1, np.array((11, 12)), np.array((21, 22)), 40.0),
+    ),
+)
+def test_snapshot_spike_exemplar_pair_uses_saved_band_panels_and_established_labels(
+    monkeypatch: pytest.MonkeyPatch,
+    band_name: str,
+    band_index: int,
+    low_histogram: np.ndarray,
+    high_histogram: np.ndarray,
+    representative_hz: float,
+) -> None:
+    """Paired Spike exemplars must preserve selected cache identities and band axes.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the pure paired plotter and captures its immutable panel
+        records. The synthetic arrays contain only saved cached values.
+    band_name : str
+        Selected saved ``theta`` or ``gamma`` categorical band label.
+    band_index : int
+        Corresponding zero-based cached band-axis position.
+    low_histogram, high_histogram : numpy.ndarray
+        Integer saved phase-bin counts with shape ``(phase_bin,)`` for the two
+        saved exemplar unit identities.
+    representative_hz : float
+        Established display frequency in Hz: 8 for theta or 40 for gamma.
+
+    Returns
+    -------
+    None
+        Requires selected theta/gamma histograms, saved low/high unit/trial
+        identities, 5th/95th percentile labels, and 8/40-Hz representatives.
+    """
+
+    arrays = _small_spike_snapshot_arrays()
+    arrays["representative_phase_hist_count"] = np.zeros((2, 2, 2, 3, 2, 2), dtype=np.int64)
+    arrays["representative_phase_hist_count"][0, 1, 1, 2, 0] = np.array((1, 2))
+    arrays["representative_phase_hist_count"][1, 1, 1, 2, 0] = np.array((3, 4))
+    arrays["representative_phase_hist_count"][0, 1, 1, 2, 1] = np.array((11, 12))
+    arrays["representative_phase_hist_count"][1, 1, 1, 2, 1] = np.array((21, 22))
+    captured: dict[str, object] = {}
+
+    def plot_ppc_exemplar_pair(**kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture exact selected panels without plotting or source access."""
+
+        captured.update(kwargs)
+        return plt.figure(), {}
+
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_plotting,
+        "plot_ppc_exemplar_pair",
+        plot_ppc_exemplar_pair,
+    )
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "spike_phase",
+        arrays,
+        default_lfp_summary_config(),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="ppc_exemplar_pair",
+            site_id="HPC1",
+            condition_name="left",
+            epoch_name="after",
+            band_name=band_name,
+        ),
+    )
+
+    low = captured["low"]
+    high = captured["high"]
+    assert low.unit_id == "ProbeB:7"
+    assert low.trial_index == 10
+    assert low.percentile_label == "5th percentile"
+    assert np.array_equal(low.representative_phase_hist_count, low_histogram)
+    assert high.unit_id == "ProbeB:8"
+    assert high.trial_index == 11
+    assert high.percentile_label == "95th percentile"
+    assert np.array_equal(high.representative_phase_hist_count, high_histogram)
+    assert captured["representative_frequency_hz"] == representative_hz
+    plt.close(figure)
+
+
+def test_snapshot_phase_map_uses_exact_selected_displayed_trial_denominator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Synchrony maps must not inflate selected trial totals to match metric counts.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the map plotter and captures its scalar display denominator.
+
+    Returns
+    -------
+    None
+        Requires the one saved left-condition trial, even though synthetic ITPC
+        effective-count entries deliberately contain two.
+    """
+
+    captured: dict[str, object] = {}
+
+    def plot_phase_map(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture map display count without inspecting raw data."""
+
+        del args
+        captured.update(kwargs)
+        return plt.figure(), {}
+
+    monkeypatch.setattr(lfp_summary_webapp.lfp_summary_plotting, "plot_phase_map", plot_phase_map)
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "synchrony",
+        _small_synchrony_snapshot_arrays(),
+        default_lfp_summary_config(),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="itpc_map",
+            site_id="HPC1",
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+    )
+
+    assert captured["total_displayed_trial_count"] == 1
+    plt.close(figure)
+
+
+def test_snapshot_context_allows_gamma_without_an_excluded_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Saved configurations may define gamma without a line-noise exclusion.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the pure map plotter so the test observes context creation only.
+
+    Returns
+    -------
+    None
+        The cache adapter renders normally instead of indexing a nonexistent
+        excluded-interval record.
+    """
+
+    captured: dict[str, object] = {}
+
+    def plot_phase_map(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture the resulting context without numerical plotting."""
+
+        del kwargs
+        captured["context"] = args[-1]
+        return plt.figure(), {}
+
+    config = default_lfp_summary_config()
+    gamma = replace(config.phase.bands[1], excluded_intervals_hz=())
+    config = replace(config, phase=replace(config.phase, bands=(config.phase.bands[0], gamma)))
+    monkeypatch.setattr(lfp_summary_webapp.lfp_summary_plotting, "plot_phase_map", plot_phase_map)
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "synchrony",
+        _small_synchrony_snapshot_arrays(),
+        config,
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="itpc_map",
+            site_id="HPC1",
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+    )
+
+    assert captured["context"].session_id == config.session_id
+    plt.close(figure)
+
+
+class CachedAxisRouteSidebar(RouteSidebar):
+    """Route fake that chooses supplied cached-axis labels and records options.
+
+    The values are categorical labels copied from synthetic component arrays;
+    this fake does not read files, mutate arrays, or call Streamlit.
+    """
+
+    def __init__(self, *, snapshot_text: str, selections: tuple[str, ...]) -> None:
+        """Store explicit cached labels for one snapshot-only route invocation."""
+
+        super().__init__(source_mode="snapshot", snapshot_text=snapshot_text, view="power")
+        self.selections = selections
+        self.option_sets: list[tuple[str, ...]] = []
+
+    def selectbox(self, label: str, *, options: tuple[str, ...], **kwargs: object) -> str:
+        """Return the requested cached value whenever it is one offered option."""
+
+        self.option_sets.append(options)
+        for selection in self.selections:
+            if selection in options:
+                self.labels.append(label)
+                return selection
+        return super().selectbox(label, options=options, **kwargs)
+
+
+class CachedAxisRouteStreamlit(RouteFakeStreamlit):
+    """Snapshot-only fake host whose sidebar selects non-hardcoded cached axes."""
+
+    def __init__(self, *, snapshot_text: str, selections: tuple[str, ...]) -> None:
+        """Create retained session state and one cached-axis sidebar fake."""
+
+        super().__init__(source_mode="snapshot", snapshot_text=snapshot_text, view="power")
+        self.sidebar = CachedAxisRouteSidebar(snapshot_text=snapshot_text, selections=selections)
+
+
+@pytest.mark.parametrize("component_name", ("power", "synchrony"))
+def test_child_snapshot_route_derives_and_forwards_nonhardcoded_cached_axes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    component_name: str,
+) -> None:
+    """Snapshot child controls must use named cached axes rather than CT026 labels.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces only the final cache-only adapter and component loader. No raw
+        source, numerical pipeline, or report writer is available.
+    tmp_path : pathlib.Path
+        Temporary root for a receipt-valid Power snapshot and synthetic explicit
+        ProbeA/ProbeB source identities.
+
+    Returns
+    -------
+    None
+        Verifies visible option sets and forwarded selection use Power's saved
+        real-style condition label plus its own site/epoch/band axes.
+    """
+
+    saved = _full_saved_component_configuration(tmp_path)
+    snapshot = _write_snapshot_fixture(tmp_path, component_configuration_snapshots={component_name: saved})
+    if component_name == "power":
+        arrays = _small_power_snapshot_arrays()
+        arrays["site_ids"] = np.array(("Orbitofrontal", "Retrosplenial"))
+        selections = ("power", "condition_psd", "Retrosplenial", "correct_rewarded", "post-event", "fast")
+        selected_entity = "Retrosplenial"
+    else:
+        arrays = _small_synchrony_snapshot_arrays()
+        arrays["site_ids"] = np.array(("Frontal", "Temporal"))
+        arrays["pair_site_a_ids"] = np.array(("Frontal",))
+        arrays["pair_site_b_ids"] = np.array(("Temporal",))
+        selections = ("synchrony", "ispc_map", "Frontal-Temporal", "correct_rewarded", "post-event", "fast")
+        selected_entity = "Frontal-Temporal"
+    arrays["condition_names"] = np.array(("correct_rewarded", "omission"))
+    arrays["epoch_names"] = np.array(("whole", "pre-event", "post-event"))
+    arrays["band_names"] = np.array(("slow", "fast"))
+    streamlit = CachedAxisRouteStreamlit(snapshot_text=str(snapshot), selections=selections)
+    captured: dict[str, object] = {}
+
+    def load_component(path: Path, manifest: dict[str, object], component: str) -> dict[str, np.ndarray]:
+        """Return one cached Power-only synthetic component without NPZ access."""
+
+        del path, manifest
+        assert component == component_name
+        return arrays
+
+    def plot_cached(*args: object, **kwargs: object) -> plt.Figure:
+        """Capture the exact categorical selection passed to the cache adapter."""
+
+        captured["selection"] = args[3]
+        captured["inspection"] = kwargs["inspection"]
+        return plt.figure()
+
+    def cluster_metadata_loader(sorter_path: Path) -> pd.DataFrame:
+        """Return one selected-probe cluster row with no external I/O."""
+
+        del sorter_path
+        return pd.DataFrame({"cluster_id": (7,), "ch": (1,), "group": ("good",)})
+
+    def channel_metadata_loader(sorter_path: Path) -> pd.DataFrame:
+        """Return one good inside-brain channel with no external I/O."""
+
+        del sorter_path
+        return pd.DataFrame({"channel": (1,), "channel_quality": ("good",), "inside_brain": (True,)})
+
+    monkeypatch.setattr(lfp_summary_webapp, "plot_cached_snapshot_component", plot_cached)
+    dependencies = replace(_fake_dependencies([], []), load_component=load_component)
+    lfp_summary_webapp.render_lfp_summary_view(
+        streamlit,
+        session_id="synthetic-session",
+        session_path=tmp_path,
+        output_directory=tmp_path / "live_cache",
+        sites=_summary_sites(tmp_path),
+        site_pairs=(("PFC", "HPC1"),),
+        sorter_paths={"ProbeA": tmp_path / "sorter_a", "ProbeB": tmp_path / "sorter_b"},
+        aligned_spike_paths={"ProbeA": tmp_path / "aligned_a.npz", "ProbeB": tmp_path / "aligned_b.npz"},
+        cluster_metadata_loader=cluster_metadata_loader,
+        channel_metadata_loader=channel_metadata_loader,
+        dependencies=dependencies,
+    )
+
+    selection = captured["selection"]
+    assert selection.view == selections[1]
+    assert selection.site_id == selected_entity
+    assert selection.condition_name == "correct_rewarded"
+    assert selection.epoch_name == "post-event"
+    assert selection.band_name == "fast"
+    offered = {value for options in streamlit.sidebar.option_sets for value in options}
+    assert set(selections[1:]) <= offered
+    assert captured["inspection"].source_cluster_directory == "/cluster/final/cache"
+
+
+def test_child_snapshot_route_reports_saved_counts_without_fabricating_instability(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An all-reliable selected Spike slice must not receive an invented warning.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the final adapter only; cached arrays still supply all visible
+        count/eligibility state and no source/numerical work is possible.
+    tmp_path : pathlib.Path
+        Temporary receipt-valid snapshot and explicit selected-probe identities.
+
+    Returns
+    -------
+    None
+        Requires meaningful saved counts/eligibility text with no instability
+        warning when the selected cache masks and manifest warnings are clean.
+    """
+
+    snapshot = _write_snapshot_fixture(
+        tmp_path,
+        component_configuration_snapshots={"spike_phase": _full_saved_component_configuration(tmp_path)},
+    )
+    streamlit = RouteFakeStreamlit(source_mode="snapshot", snapshot_text=str(snapshot), view="spike_phase")
+
+    def load_component(path: Path, manifest: dict[str, object], component: str) -> dict[str, np.ndarray]:
+        """Return an all-reliable cached Spike component without opening source data."""
+
+        del path, manifest
+        assert component == "spike_phase"
+        return _small_spike_snapshot_arrays()
+
+    def plot_cached(*args: object, **kwargs: object) -> plt.Figure:
+        """Return one blank cache-only figure without calculating a metric."""
+
+        del args, kwargs
+        return plt.figure()
+
+    def cluster_metadata_loader(sorter_path: Path) -> pd.DataFrame:
+        """Return one good selected-ProbeB cluster row without external I/O."""
+
+        del sorter_path
+        return pd.DataFrame({"cluster_id": (7,), "ch": (1,), "group": ("good",)})
+
+    def channel_metadata_loader(sorter_path: Path) -> pd.DataFrame:
+        """Return one good inside-brain selected-ProbeB channel."""
+
+        del sorter_path
+        return pd.DataFrame({"channel": (1,), "channel_quality": ("good",), "inside_brain": (True,)})
+
+    monkeypatch.setattr(lfp_summary_webapp, "plot_cached_snapshot_component", plot_cached)
+    lfp_summary_webapp.render_lfp_summary_view(
+        streamlit,
+        session_id="synthetic-session",
+        session_path=tmp_path,
+        output_directory=tmp_path / "live_cache",
+        sites=_summary_sites(tmp_path),
+        site_pairs=(("PFC", "HPC1"),),
+        sorter_paths={"ProbeA": tmp_path / "sorter_a", "ProbeB": tmp_path / "sorter_b"},
+        aligned_spike_paths={"ProbeA": tmp_path / "aligned_a.npz", "ProbeB": tmp_path / "aligned_b.npz"},
+        cluster_metadata_loader=cluster_metadata_loader,
+        channel_metadata_loader=channel_metadata_loader,
+        dependencies=replace(_fake_dependencies([], []), load_component=load_component),
+    )
+
+    messages = " ".join(message for _kind, message in streamlit.messages).lower()
+    assert "trials:" in messages
+    assert "units:" in messages
+    assert "spikes:" in messages
+    assert "eligible" in messages
+    assert "unstable" not in messages
+
+
+class ResumeRouteSidebar(RouteSidebar):
+    """Live fake sidebar returning one explicit optional resume directory text."""
+
+    def __init__(self, *, resume_directory: str) -> None:
+        """Store a categorical Spike action and explicit resume text only."""
+
+        super().__init__(source_mode="live", snapshot_text="", action="spike_phase", view="power")
+        self.resume_directory = resume_directory
+
+    def text_input(self, label: str, *, value: str, **kwargs: object) -> str:
+        """Return resume text only for an explicitly visible resume control."""
+
+        if "resume" in label.lower():
+            self.labels.append(label)
+            return self.resume_directory
+        return super().text_input(label, value=value, **kwargs)
+
+
+@pytest.mark.parametrize("resume_text", ("", "/saved/launcher/run_2026-09-22"))
+def test_live_spike_handoff_adds_resume_commands_only_for_an_explicit_run_directory(
+    tmp_path: Path,
+    resume_text: str,
+) -> None:
+    """Live Spike handoff may resume only an exact nonblank saved run identity.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary explicit live session/probe paths with no created run/cache.
+    resume_text : str
+        Blank text or one exact saved-run directory string. It is never inferred
+        from session/cache paths or a latest-run search.
+
+    Returns
+    -------
+    None
+        Requires new local/Slurm commands always, and local/Slurm resume commands
+        only when the exact nonblank supplied directory is visible to the route.
+    """
+
+    streamlit = RouteFakeStreamlit(source_mode="live", snapshot_text="", action="spike_phase", view="power")
+    streamlit.sidebar = ResumeRouteSidebar(resume_directory=resume_text)
+
+    def cluster_metadata_loader(sorter_path: Path) -> pd.DataFrame:
+        """Return one selected-ProbeB unit without loading a sorter file."""
+
+        del sorter_path
+        return pd.DataFrame({"cluster_id": (7,), "ch": (1,), "group": ("good",)})
+
+    def channel_metadata_loader(sorter_path: Path) -> pd.DataFrame:
+        """Return one selected-ProbeB good inside-brain channel."""
+
+        del sorter_path
+        return pd.DataFrame({"channel": (1,), "channel_quality": ("good",), "inside_brain": (True,)})
+
+    lfp_summary_webapp.render_lfp_summary_view(
+        streamlit,
+        session_id="synthetic-session",
+        session_path=tmp_path,
+        output_directory=tmp_path / "live_cache",
+        sites=_summary_sites(tmp_path),
+        site_pairs=(("PFC", "HPC1"),),
+        sorter_paths={"ProbeA": tmp_path / "sorter_a", "ProbeB": tmp_path / "sorter_b"},
+        aligned_spike_paths={"ProbeA": tmp_path / "aligned_a.npz", "ProbeB": tmp_path / "aligned_b.npz"},
+        cluster_metadata_loader=cluster_metadata_loader,
+        channel_metadata_loader=channel_metadata_loader,
+        dependencies=_fake_dependencies([], []),
+    )
+
+    handoff = " ".join(message for _kind, message in streamlit.messages)
+    assert "uv run" in handoff
+    assert "sbatch" in handoff
+    assert any("resume" in label.lower() for label in streamlit.sidebar.labels)
+    if resume_text:
+        assert handoff.count(resume_text) == 2
+        assert handoff.count("resume --run-directory") == 2
+    else:
+        assert "resume --run-directory" not in handoff
