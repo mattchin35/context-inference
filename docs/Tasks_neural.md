@@ -3938,6 +3938,13 @@ WP11-3R tests-only review checkpoint (2026-09-22):
   `test_lfp_summary_webapp.py`, reruns the exact focused RED command, and stops.
   Corrective production work remains forbidden until Sol reviews that commit
   and records final RED evidence.
+- Review of correction `f75735c` confirms those fixture repairs, but the PLV
+  exemplar case must still prove that its condition and band selectors change
+  the chosen cached trial/filtered trace; the plotter signature does not repeat
+  those selector labels, so string-presence assertions are insufficient. The
+  valid-snapshot route must also assert that no compute/run button is exposed,
+  just as the blank/invalid cases do. Make these last tests-only clarifications
+  before the final RED gate.
 
 ### WP12 - Complete PPC plotting and reporting
 
