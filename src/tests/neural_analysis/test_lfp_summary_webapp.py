@@ -2975,53 +2975,6 @@ def test_snapshot_phase_map_uses_exact_selected_displayed_trial_denominator(
     plt.close(figure)
 
 
-def test_snapshot_context_allows_gamma_without_an_excluded_interval(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Saved configurations may define gamma without a line-noise exclusion.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Replaces the pure map plotter so the test observes context creation only.
-
-    Returns
-    -------
-    None
-        The cache adapter renders normally instead of indexing a nonexistent
-        excluded-interval record.
-    """
-
-    captured: dict[str, object] = {}
-
-    def plot_phase_map(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
-        """Capture the resulting context without numerical plotting."""
-
-        del kwargs
-        captured["context"] = args[-1]
-        return plt.figure(), {}
-
-    config = default_lfp_summary_config()
-    gamma = replace(config.phase.bands[1], excluded_intervals_hz=())
-    config = replace(config, phase=replace(config.phase, bands=(config.phase.bands[0], gamma)))
-    monkeypatch.setattr(lfp_summary_webapp.lfp_summary_plotting, "plot_phase_map", plot_phase_map)
-    figure = lfp_summary_webapp.plot_cached_snapshot_component(
-        "synchrony",
-        _small_synchrony_snapshot_arrays(),
-        config,
-        lfp_summary_webapp.SnapshotPlotSelection(
-            view="itpc_map",
-            site_id="HPC1",
-            condition_name="left",
-            epoch_name="after",
-            band_name="gamma",
-        ),
-    )
-
-    assert captured["context"].session_id == config.session_id
-    plt.close(figure)
-
-
 class CachedAxisRouteSidebar(RouteSidebar):
     """Route fake that chooses supplied cached-axis labels and records options.
 
@@ -3071,14 +3024,17 @@ def test_child_snapshot_route_derives_and_forwards_nonhardcoded_cached_axes(
         Replaces only the final cache-only adapter and component loader. No raw
         source, numerical pipeline, or report writer is available.
     tmp_path : pathlib.Path
-        Temporary root for a receipt-valid Power snapshot and synthetic explicit
-        ProbeA/ProbeB source identities.
+        Temporary root for a receipt-valid Power or Synchrony snapshot and
+        synthetic explicit ProbeA/ProbeB source identities.
+    component_name : str
+        Parametrized selected component; Power exercises a site selector and
+        Synchrony ISPC exercises a saved site-pair selector.
 
     Returns
     -------
     None
-        Verifies visible option sets and forwarded selection use Power's saved
-        real-style condition label plus its own site/epoch/band axes.
+        Verifies only view-relevant visible option sets and forwarded selection
+        use cached non-CT026 labels; irrelevant immutable fields use first axes.
     """
 
     saved = _full_saved_component_configuration(tmp_path)
@@ -3086,15 +3042,21 @@ def test_child_snapshot_route_derives_and_forwards_nonhardcoded_cached_axes(
     if component_name == "power":
         arrays = _small_power_snapshot_arrays()
         arrays["site_ids"] = np.array(("Orbitofrontal", "Retrosplenial"))
-        selections = ("power", "condition_psd", "Retrosplenial", "correct_rewarded", "post-event", "fast")
+        selections = ("power", "condition_psd", "Retrosplenial", "correct_rewarded", "post-event")
         selected_entity = "Retrosplenial"
+        expected_epoch = "post-event"
+        expected_band = "slow"
+        irrelevant_values = {"slow", "fast"}
     else:
         arrays = _small_synchrony_snapshot_arrays()
         arrays["site_ids"] = np.array(("Frontal", "Temporal"))
         arrays["pair_site_a_ids"] = np.array(("Frontal",))
         arrays["pair_site_b_ids"] = np.array(("Temporal",))
-        selections = ("synchrony", "ispc_map", "Frontal-Temporal", "correct_rewarded", "post-event", "fast")
+        selections = ("synchrony", "ispc_map", "Frontal-Temporal", "correct_rewarded")
         selected_entity = "Frontal-Temporal"
+        expected_epoch = "whole"
+        expected_band = "slow"
+        irrelevant_values = {"whole", "pre-event", "post-event", "slow", "fast"}
     arrays["condition_names"] = np.array(("correct_rewarded", "omission"))
     arrays["epoch_names"] = np.array(("whole", "pre-event", "post-event"))
     arrays["band_names"] = np.array(("slow", "fast"))
@@ -3147,10 +3109,11 @@ def test_child_snapshot_route_derives_and_forwards_nonhardcoded_cached_axes(
     assert selection.view == selections[1]
     assert selection.site_id == selected_entity
     assert selection.condition_name == "correct_rewarded"
-    assert selection.epoch_name == "post-event"
-    assert selection.band_name == "fast"
+    assert selection.epoch_name == expected_epoch
+    assert selection.band_name == expected_band
     offered = {value for options in streamlit.sidebar.option_sets for value in options}
     assert set(selections[1:]) <= offered
+    assert not (irrelevant_values & offered)
     assert captured["inspection"].source_cluster_directory == "/cluster/final/cache"
 
 
@@ -3179,19 +3142,32 @@ def test_child_snapshot_route_reports_saved_counts_without_fabricating_instabili
         tmp_path,
         component_configuration_snapshots={"spike_phase": _full_saved_component_configuration(tmp_path)},
     )
-    streamlit = RouteFakeStreamlit(source_mode="snapshot", snapshot_text=str(snapshot), view="spike_phase")
+    arrays = _small_spike_snapshot_arrays()
+    arrays["site_ids"] = np.array(("Orbitofrontal", "Occipital"))
+    arrays["condition_names"] = np.array(("correct_rewarded", "omission"))
+    arrays["epoch_names"] = np.array(("whole", "pre-event", "post-event"))
+    arrays["band_names"] = np.array(("slow", "fast"))
+    arrays["condition_membership"] = np.array(((True, False), (False, True)))
+    selected = (slice(None), 0, 1, 2, slice(None))
+    arrays["spike_count"][selected] = np.array(((4, 9), (6, 12)))
+    arrays["null_eligible"][selected] = np.array(((True, False), (True, False)))
+    arrays["reliable"][selected] = True
+    selections = ("spike_phase", "unit_ppc_map", "Occipital", "correct_rewarded", "post-event")
+    streamlit = CachedAxisRouteStreamlit(snapshot_text=str(snapshot), selections=selections)
+    captured: dict[str, object] = {}
 
     def load_component(path: Path, manifest: dict[str, object], component: str) -> dict[str, np.ndarray]:
         """Return an all-reliable cached Spike component without opening source data."""
 
         del path, manifest
         assert component == "spike_phase"
-        return _small_spike_snapshot_arrays()
+        return arrays
 
     def plot_cached(*args: object, **kwargs: object) -> plt.Figure:
         """Return one blank cache-only figure without calculating a metric."""
 
-        del args, kwargs
+        captured["selection"] = args[3]
+        captured["inspection"] = kwargs["inspection"]
         return plt.figure()
 
     def cluster_metadata_loader(sorter_path: Path) -> pd.DataFrame:
@@ -3221,21 +3197,31 @@ def test_child_snapshot_route_reports_saved_counts_without_fabricating_instabili
         dependencies=replace(_fake_dependencies([], []), load_component=load_component),
     )
 
+    selection = captured["selection"]
+    assert selection.view == "unit_ppc_map"
+    assert selection.site_id == "Occipital"
+    assert selection.condition_name == "correct_rewarded"
+    assert selection.epoch_name == "post-event"
+    assert selection.band_name == "slow"
+    offered = {value for options in streamlit.sidebar.option_sets for value in options}
+    assert {"unit_ppc_map", "Occipital", "correct_rewarded", "post-event"} <= offered
+    assert not ({"slow", "fast"} & offered)
     messages = " ".join(message for _kind, message in streamlit.messages).lower()
-    assert "trials:" in messages
-    assert "units:" in messages
-    assert "spikes:" in messages
-    assert "eligible" in messages
+    assert "trials: 1" in messages
+    assert "units: 2" in messages
+    assert "spikes: 4-12" in messages
+    assert "eligible cached unit-frequency entries: 2" in messages
+    assert "reliable cached unit-frequency entries: 4" in messages
     assert "unstable" not in messages
 
 
 class ResumeRouteSidebar(RouteSidebar):
     """Live fake sidebar returning one explicit optional resume directory text."""
 
-    def __init__(self, *, resume_directory: str) -> None:
-        """Store a categorical Spike action and explicit resume text only."""
+    def __init__(self, *, action: str, resume_directory: str) -> None:
+        """Store one Spike/All action and explicit resume text only."""
 
-        super().__init__(source_mode="live", snapshot_text="", action="spike_phase", view="power")
+        super().__init__(source_mode="live", snapshot_text="", action=action, view="power")
         self.resume_directory = resume_directory
 
     def text_input(self, label: str, *, value: str, **kwargs: object) -> str:
@@ -3247,9 +3233,11 @@ class ResumeRouteSidebar(RouteSidebar):
         return super().text_input(label, value=value, **kwargs)
 
 
+@pytest.mark.parametrize("action", ("spike_phase", "all"))
 @pytest.mark.parametrize("resume_text", ("", "/saved/launcher/run_2026-09-22"))
 def test_live_spike_handoff_adds_resume_commands_only_for_an_explicit_run_directory(
     tmp_path: Path,
+    action: str,
     resume_text: str,
 ) -> None:
     """Live Spike handoff may resume only an exact nonblank saved run identity.
@@ -3258,6 +3246,8 @@ def test_live_spike_handoff_adds_resume_commands_only_for_an_explicit_run_direct
     ----------
     tmp_path : pathlib.Path
         Temporary explicit live session/probe paths with no created run/cache.
+    action : str
+        ``spike_phase`` or ``all`` launcher-only action category.
     resume_text : str
         Blank text or one exact saved-run directory string. It is never inferred
         from session/cache paths or a latest-run search.
@@ -3269,8 +3259,8 @@ def test_live_spike_handoff_adds_resume_commands_only_for_an_explicit_run_direct
         only when the exact nonblank supplied directory is visible to the route.
     """
 
-    streamlit = RouteFakeStreamlit(source_mode="live", snapshot_text="", action="spike_phase", view="power")
-    streamlit.sidebar = ResumeRouteSidebar(resume_directory=resume_text)
+    streamlit = RouteFakeStreamlit(source_mode="live", snapshot_text="", action=action, view="power")
+    streamlit.sidebar = ResumeRouteSidebar(action=action, resume_directory=resume_text)
 
     def cluster_metadata_loader(sorter_path: Path) -> pd.DataFrame:
         """Return one selected-ProbeB unit without loading a sorter file."""

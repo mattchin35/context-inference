@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 import numpy as np
@@ -86,6 +87,35 @@ def test_condition_psd_shows_every_condition_median_iqr_count_reference_and_unit
     assert "correct_rewarded (n=2)" in caption and "omission (n=2)" in caption
     assert "session" in caption and "uV" in caption
     assert "\n" in caption
+
+
+def test_plot_context_without_gamma_exclusion_renders_an_honest_caption() -> None:
+    """No saved gamma exclusion must render without invented frequency bounds.
+
+    Returns
+    -------
+    None
+        A cache-only PSD figure whose immutable plot context has
+        ``gamma_exclusion_hz=None`` displays an explicit no-exclusion caption and
+        retains its normal cached frequency/dB axes.
+    """
+
+    context = replace(_context(), gamma_exclusion_hz=None)
+    figure, axes = plot_condition_psd(
+        frequency_hz=np.array((8.0, 40.0)),
+        condition_trial_psd_db=np.array((((1.0, 2.0),),)),
+        condition_names=("correct_rewarded",),
+        contributing_trial_counts=np.array((1,), dtype=np.int64),
+        site_label="PFC",
+        epoch_name="whole",
+        normalization="session_median",
+        context=context,
+    )
+
+    caption = figure.texts[-1].get_text().lower()
+    assert "no gamma exclusion" in caption
+    assert "58" not in caption and "62" not in caption
+    _assert_figure_contract(figure, axes, {"spectrum"})
 
 
 def test_condition_psd_preserves_nine_cache_groups_and_states_masks_overlap() -> None:
