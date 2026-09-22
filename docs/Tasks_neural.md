@@ -4229,6 +4229,17 @@ WP11-5 automated GREEN and production-loader smoke gate (2026-09-22):
   unchanged. Do not weaken snapshot identity validation or infer any other
   location. Rerun focused, affected, and complete neural suites as warranted,
   then repeat the read-only real-snapshot smoke. WP11-6 remains blocked.
+- Sol independently accepted tests-only commit `1631d93` (`test: cover WP11
+  snapshot production loader path`). The exact
+  `src/tests/neural_analysis/test_lfp_summary_webapp.py -q` RED was 1 failed,
+  80 passed in 1.59 seconds: the expected failure records
+  `.../synchrony.npz/synchrony.npz` instead of the exact receipt-validated
+  component path. There were no collection, fixture, import, syntax, or
+  environment failures.
+- The same writer is authorized to make only the already documented minimal
+  `lfp_summary_webapp.py` loader repair. Tests, parent source, documentation,
+  dependencies, and every other file remain frozen. WP11-6 remains blocked
+  pending the required GREEN evidence and repeated read-only snapshot smoke.
 
 ### WP12 - Complete PPC plotting and reporting
 
