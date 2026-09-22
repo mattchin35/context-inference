@@ -4269,6 +4269,28 @@ WP11-5 automated GREEN and production-loader smoke gate (2026-09-22):
   adapter in `lfp_summary_webapp.py`. Tests, documentation, parent source,
   dependencies, and all other files remain frozen. Do not change models or the
   global configuration deserializer; WP11-6 remains blocked.
+- Source repair `68dc138` (`fix: support legacy WP11 cache config`) was
+  reviewed. The child and parent webapp modules passed 116 tests in 1.79
+  seconds. The affected command
+  `uv run pytest src/tests/neural_analysis/test_lfp_*.py src/tests/neural_analysis/test_psth_webapp.py -q`
+  passed 856 tests with six established warnings in 127.05 seconds. The
+  complete neural suite passed 1,246 tests with 22 established warnings in
+  136.01 seconds. Warning categories remain multiprocessing fork deprecation,
+  synthetic all-NaN reductions, intentional duplicate ZIP member, and
+  Pynapple empty-epoch/divide-by-zero behavior; no new failure or warning
+  category appeared.
+- The repeated real read-only Power smoke succeeded against the valid exact
+  copied snapshot. It selected PFC/incorrect/whole `condition_psd` with 249
+  trials, loaded 30 arrays totaling 78,672,596 bytes, and reused the same
+  in-process cache object. One-axis cache-only figure rendering completed and
+  the figure closed. Snapshot identities remained unchanged; its retained
+  source cluster directory is recorded above. Timings were initial validation
+  0.236 s, load 0.033 s, cached reload 0.000006 s, render 0.039 s,
+  revalidation 0.239 s, and 0.547 s total. The aggregate receipt remains
+  `42379d6e654d59d468503b58c4b3eeb81a325a86eb5e4df4b3aaf3104c684ec7`.
+- WP11-5 is complete. WP11-6 is unblocked but not complete: next is local
+  Streamlit startup and a mechanical UI smoke followed by explicit user visual
+  approval. That step must not compute analysis data or write caches.
 
 ### WP12 - Complete PPC plotting and reporting
 
