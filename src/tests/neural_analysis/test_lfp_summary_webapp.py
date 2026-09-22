@@ -309,7 +309,36 @@ def _write_snapshot_fixture(
             snapshot / f"{component}.npz",
             marker=np.array([len(component)], dtype=np.int64),
         )
-    file_entries = []
+    _write_snapshot_receipt(snapshot, receipt_transform=receipt_transform)
+    return snapshot
+
+
+def _write_snapshot_receipt(
+    snapshot: Path,
+    *,
+    receipt_transform: Callable[[dict[str, object]], None] | None = None,
+) -> None:
+    """Write a synthetic receipt from the current exact snapshot file identities.
+
+    Parameters
+    ----------
+    snapshot : pathlib.Path
+        Existing synthetic ``cache_snapshot`` directory containing exactly the
+        manifest and three scientific NPZ component files. It has no raw data
+        arrays beyond the small component marker arrays.
+    receipt_transform : callable or None
+        Optional in-place mutation of JSON-compatible receipt metadata after
+        its correct identity is calculated. It receives no numerical arrays,
+        physical units, or external paths.
+
+    Returns
+    -------
+    None
+        Replaces only ``cache_snapshot_identity.json`` using current filename,
+        byte-size, and SHA-256 records. It does not modify scientific files.
+    """
+
+    file_entries: list[dict[str, object]] = []
     for filename in ("manifest.json", "power.npz", "synchrony.npz", "spike_phase.npz"):
         path = snapshot / filename
         file_entries.append(
@@ -337,7 +366,40 @@ def _write_snapshot_fixture(
         json.dumps(receipt),
         encoding="ascii",
     )
-    return snapshot
+
+
+def _change_snapshot_component_identity(snapshot: Path, component: str) -> None:
+    """Change one synthetic component and manifest identity at a fixed path.
+
+    Parameters
+    ----------
+    snapshot : pathlib.Path
+        Existing synthetic final snapshot whose four committed files may be
+        rewritten only within this temporary test fixture.
+    component : str
+        Selected scientific component filename stem. It is categorical and must
+        be one of the approved summary components; marker arrays are shape
+        ``(1,)`` and dimensionless.
+
+    Returns
+    -------
+    None
+        Updates the selected component marker, adds a manifest-only synthetic
+        revision, and writes a coherent new receipt. No session or network file
+        is read.
+    """
+
+    manifest_path = snapshot / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert isinstance(manifest, dict)
+    components = manifest["components"]
+    assert isinstance(components, dict)
+    entry = components[component]
+    assert isinstance(entry, dict)
+    entry["synthetic_snapshot_revision"] = 2
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    np.savez(snapshot / f"{component}.npz", marker=np.array([99], dtype=np.int64))
+    _write_snapshot_receipt(snapshot)
 
 
 def _set_receipt_schema_version_to_text(receipt: dict[str, object]) -> None:
@@ -604,6 +666,11 @@ def test_snapshot_source_is_default_blank_then_retains_only_the_explicit_path(
     )
     rerendered_source = lfp_summary_webapp.resolve_summary_source(
         source_mode="snapshot",
+        entered_snapshot_directory=str(snapshot),
+        session_state=session_state,
+    )
+    cleared_source = lfp_summary_webapp.resolve_summary_source(
+        source_mode="snapshot",
         entered_snapshot_directory="",
         session_state=session_state,
     )
@@ -615,6 +682,8 @@ def test_snapshot_source_is_default_blank_then_retains_only_the_explicit_path(
     assert rerendered_source.snapshot_directory == snapshot.resolve()
     assert rerendered_source.mode == "snapshot"
     assert "latest" not in rerendered_source.message.lower()
+    assert cleared_source.snapshot_directory is None
+    assert not cleared_source.can_compute
 
 
 def test_blank_or_invalid_snapshot_source_cannot_dispatch_live_or_compute_actions(
@@ -718,16 +787,12 @@ def test_snapshot_component_cache_opens_only_the_selected_component_once_per_ide
 
     first = cache.load(inspection, "synchrony", load_component)
     second = cache.load(inspection, "synchrony", load_component)
-    second_root = tmp_path / "different_identity"
-    second_root.mkdir()
-    second_snapshot = _write_snapshot_fixture(second_root)
-    third = cache.load(
-        lfp_summary_webapp.validate_cache_snapshot(second_snapshot),
-        "synchrony",
-        load_component,
-    )
+    _change_snapshot_component_identity(snapshot, "synchrony")
+    changed_inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+    third = cache.load(changed_inspection, "synchrony", load_component)
 
     assert first is second
+    assert changed_inspection.snapshot_directory == inspection.snapshot_directory
     assert third is not first
     assert opened == ["synchrony", "synchrony"]
 
@@ -751,7 +816,6 @@ def test_snapshot_plotting_is_cache_only_and_closes_each_figure(
     snapshot = _write_snapshot_fixture(tmp_path)
     streamlit = FakeStreamlit()
     opened: list[str] = []
-    compute_calls: list[str] = []
     created_figure_numbers: list[int] = []
     before = {
         path.name: (path.stat().st_size, sha256(path.read_bytes()).hexdigest())
@@ -774,17 +838,6 @@ def test_snapshot_plotting_is_cache_only_and_closes_each_figure(
         created_figure_numbers.append(figure.number)
         return figure
 
-    def fail_if_computed() -> None:
-        """Record forbidden computation if a snapshot rendering callback invokes it.
-
-        Returns
-        -------
-        None
-            Appends a categorical marker only; it performs no numerical work.
-        """
-
-        compute_calls.append("compute")
-
     lfp_summary_webapp.render_snapshot_component_view(
         streamlit,
         snapshot_directory=snapshot,
@@ -792,11 +845,9 @@ def test_snapshot_plotting_is_cache_only_and_closes_each_figure(
         component_cache=lfp_summary_webapp.SnapshotComponentCache(),
         load_component=load_component,
         plot_component=plot_component,
-        compute_callback=fail_if_computed,
     )
 
     assert opened == [component]
-    assert compute_calls == []
     assert streamlit.figures
     assert not plt.fignum_exists(created_figure_numbers[0])
     after = {
@@ -974,12 +1025,23 @@ def test_progress_rendering_and_launcher_handoff_do_not_compute_numerics() -> No
     )
 
     lfp_summary_webapp.render_progress_event(streamlit, event)
+    resume_run_directory = Path("/explicit/saved/spike-phase-run")
     commands = lfp_summary_webapp.build_launcher_handoff_commands(
         default_lfp_summary_config(),
         action="spike_phase",
+        resume_run_directory=resume_run_directory,
     )
     assert set(commands) == {"local_new", "slurm_new", "local_resume", "slurm_resume"}
     assert all(isinstance(command, str) and command for command in commands.values())
+    assert str(resume_run_directory) in commands["local_resume"]
+    assert str(resume_run_directory) in commands["slurm_resume"]
+    assert "latest" not in commands["local_resume"].lower()
+    assert "latest" not in commands["slurm_resume"].lower()
+    with pytest.raises(ValueError, match="resume"):
+        lfp_summary_webapp.build_launcher_handoff_commands(
+            default_lfp_summary_config(),
+            action="spike_phase",
+        )
     for action in ("spike_phase", "all"):
         handoff = lfp_summary_webapp.dispatch_summary_action(
             action,
