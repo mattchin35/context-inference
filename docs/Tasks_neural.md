@@ -4259,6 +4259,16 @@ WP11-5 automated GREEN and production-loader smoke gate (2026-09-22):
   malformed field may be supplied, guessed, rewritten, or silently accepted.
   WP11-6 remains blocked pending the repair, GREEN evidence, and repeated
   read-only smoke.
+- Sol reviewed tests-only commit `67e9c97` (`test: cover WP11 legacy saved
+  config compatibility`) and independently reproduced the full child RED: 1
+  failed, 82 passed in 1.62 seconds. The sole failure is the expected
+  deserialization `KeyError: ppc_execution`; the missing scientific-field test
+  passes by failing closed. There were no unrelated test, collection, fixture,
+  import, syntax, or environment failures.
+- The same writer is authorized to repair only the documented cache-only
+  adapter in `lfp_summary_webapp.py`. Tests, documentation, parent source,
+  dependencies, and all other files remain frozen. Do not change models or the
+  global configuration deserializer; WP11-6 remains blocked.
 
 ### WP12 - Complete PPC plotting and reporting
 
