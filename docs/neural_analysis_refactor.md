@@ -53,21 +53,27 @@ entries when the selected metadata contains two probes.
 
 Further design direction:
 
-- Each probe/LFP source should explicitly declare its acquisition family, such
-  as Open Ephys or SpikeGLX. The system should not infer this scientific I/O
-  contract from a filename.
+- Each session should explicitly declare one acquisition family, such as Open
+  Ephys or SpikeGLX. The system should not infer this scientific I/O contract
+  from a filename. Mixed-acquisition sessions are outside the initial design;
+  they must fail clearly rather than silently choosing a loader.
 - Each session should normally have its own JSON metadata file. Pointing a
   restarted webapp at that file should restore the session inputs and known
   result locations quickly without re-entering paths.
-- The metadata may contain optional references to copied/local cache snapshots
-  and cluster cache or run locations, including the approved 100-shuffle
-  preview and 1,000-shuffle final results when they exist.
+- The metadata may contain optional references to approved copied/local cache
+  snapshots, including the approved 100-shuffle preview and 1,000-shuffle final
+  Spike results when they exist. Producing cluster paths and transfer checksums
+  may remain in the snapshot manifest and receipt instead of being duplicated
+  in the routine session JSON.
 - Missing results are valid metadata state. A new session, a one-probe session,
   or a session whose cache has not yet been computed must still have a useful
   metadata description.
 - A separate simple Python entry point should create a new session metadata
-  file. It may record incomplete or unavailable values explicitly rather than
-  inventing paths, probes, sites, or results.
+  file. Its first design should expose clearly labeled path and metadata
+  variables near the top of the Python file for the user to edit, with its
+  `main` function validating those values and writing the JSON. It may record
+  incomplete or unavailable values explicitly rather than inventing paths,
+  probes, sites, or results.
 - Channel-to-region groupings may be added to the metadata model later, but a
   general channel-grouping system is not a priority for the first refactor.
 
@@ -128,7 +134,8 @@ sufficient compatibility evidence.
 - The description should support one or more probes without assuming exactly
   ProbeA and ProbeB.
 - Each probe should be able to declare its LFP source, synchronization source,
-  sorter, aligned-spike file, acquisition format, and relevant metadata files.
+  sorter, aligned-spike file, and relevant metadata files. The initial schema
+  declares acquisition format once for the session.
 - Each site should declare a stable ID, display label, probe ID, saved-channel
   index, voltage unit, sample rate, and optional anatomical annotations.
 - Synchrony pairs should reference stable site IDs explicitly. They should not
@@ -199,6 +206,9 @@ sufficient compatibility evidence.
   available probes, sites, source paths, and cache choices from it. Missing
   optional fields should produce actionable unavailable states rather than
   preventing unrelated cached views from opening.
+- A small Python launcher should accept `--session-metadata PATH` and start the
+  webapp with that explicit file. Short how-to documentation must show the
+  exact command and the expected startup behavior.
 
 ### 9. Preserve reproducibility and cache integrity
 
@@ -427,79 +437,82 @@ the following actions straightforward:
 - Do not make Streamlit the sole configuration store or the process responsible
   for long-running computation.
 
+## Settled design decisions
+
+- The canonical session metadata file normally lives at
+  `<session_home>/neural_session.json`. An explicit external metadata path may
+  be used when the session directory is read-only or otherwise unsuitable.
+- Session metadata is explicitly maintained by the user. Analysis and copy
+  commands must not silently rewrite it. Manual JSON editing is acceptable for
+  the initial design.
+- Paths beneath the session home should be session-relative. Local and cluster
+  roots are deployment concerns and must not be encoded as scientific identity.
+- Cache references must be fully descriptive: analysis, probe, population, and
+  shuffle tier where applicable. There is one user-approved result per such
+  identity rather than an in-file history of candidate runs.
+- To keep the common file simple, the session JSON should normally point only
+  to the approved local snapshot. The snapshot manifest and copy receipt remain
+  authoritative for the producing cluster path, resolved configuration,
+  checksum, and transfer provenance. The session schema may permit optional
+  cluster fields later, but they are not required for routine use.
+- Optional unavailable values use JSON `null`. A probe that does not exist is
+  omitted rather than represented by a dummy or all-null probe entry.
+- The metadata creator is a straightforward Python file with clearly labeled,
+  hardcoded variables for the user to edit and a `main` function that validates
+  them and writes the JSON. It is not an interactive wizard and does not launch
+  numerical work.
+- Acquisition family is session-wide in the initial schema. It explicitly
+  selects Open Ephys or SpikeGLX. Supporting mixed-acquisition sessions would
+  require a later schema decision.
+- The webapp is launched through a short Python wrapper accepting
+  `--session-metadata PATH`. A concise how-to document must include the exact
+  invocation.
+- Power and Synchrony have independent approved cache references. Shuffle tiers
+  apply only to analyses, such as Spike phase, whose scientific configuration
+  actually includes shuffle count.
+
+Manual metadata maintenance is the simplest initial workflow, but it has one
+predictable failure mode: a mistyped or stale snapshot path. A possible later
+quality-of-life addition is an explicit `register-cache` command that validates
+one copied snapshot and prints or applies the exact JSON change. It should be an
+opt-in edit, not an automatic side effect of computation or transfer.
+
 ## Open design questions
 
-### Metadata ownership and location
+### Metadata content
 
-1. Where should each session JSON live, and what filename convention should it
-   use? Should it reside inside the session directory, in a separate metadata
-   index, or support both with one canonical location?
-2. Is the JSON primarily user-authored configuration, or may launch/copy tools
-   update its cache references automatically? Automatically mutating the same
-   file on the workstation and cluster risks divergent copies; a generated run
-   registry or explicit metadata-update command may be safer.
-3. Should unavailable values be represented as explicit JSON `null`, omitted
-   keys, or typed status objects? The choice affects validation, human editing,
-   and backward-compatible schema migration.
-4. Which values belong in every session JSON, and which should come from a
+1. Which values belong in every session JSON, and which should come from a
    versioned project-level defaults file? Hidden code defaults should not regain
    control through the back door.
-
-### Probe, source, and site identity
-
-5. Should probe identifiers be arbitrary stable strings such as `ProbeA` and
+2. Should probe identifiers be arbitrary stable strings such as `ProbeA` and
    `Probe1`, or should the project enforce one naming convention?
-6. Can one probe have more than one LFP source or sorter generation, and if so,
+3. Can one probe have more than one LFP source or sorter generation, and if so,
    does the metadata select one active source or retain named alternatives?
-7. Are sample rate and voltage unit always available from acquisition metadata,
-   or must the JSON record explicitly confirmed values?
-8. Before channel-region grouping is implemented, what minimum site information
-   must be entered for LFP analyses: stable site ID, display label, probe,
-   channel, and optional region?
-9. How consistent are sorter, aligned-spike, synchronization, channel-quality,
+4. Are sample rate and voltage unit always read from acquisition metadata, or
+   must the JSON also record explicitly confirmed values?
+5. Before channel-region grouping is implemented, what minimum site information
+   must be entered for LFP analyses? The current proposal is stable site ID,
+   display label, probe, saved-channel index, and optional region.
+6. How consistent are sorter, aligned-spike, synchronization, channel-quality,
    and augmented-trial-table layouts across mice and recording generations?
 
-### Cache and run references
+### Cache and incomplete-session behavior
 
-10. Are the 100- and 1,000-shuffle references stored per probe/population? A
-    ProbeA preview and ProbeB preview cannot safely share one undifferentiated
-    `preview_cache` property.
-11. Should metadata point to the immutable copied `cache_snapshot`, the original
-    cluster cache, the timestamped launcher run directory, or all three as
-    separately typed references?
-12. May there be multiple valid 100- or 1,000-shuffle runs for one session and
-    probe? If so, should metadata retain a history, a user-selected active run,
-    or only one canonical approved result?
-13. Power and Synchrony are not defined by shuffle count, even when their files
-    are copied beside a 1,000-shuffle Spike result. Should they have independent
-    cache references or be referenced through a complete summary snapshot?
-14. After a user copies a result from the cluster, should a tool verify the
-    receipt and update the local cache reference, or should metadata editing and
-    transfer remain separate explicit actions?
-
-### Entrypoints and webapp behavior
-
-15. Should the metadata-creation entry point be interactive prompts, command-
-    line flags, a template generator followed by manual editing, or a combination
-    with `--non-interactive` support for reproducibility?
-16. May the creator inspect a session directory and propose paths, provided the
-    user explicitly confirms them, or should the first version accept only
-    entered values?
-17. How should the webapp receive its metadata path: a command-line argument
-    after `streamlit run`, an environment variable, or a small startup chooser?
-18. When the JSON is valid but incomplete, should the webapp open every available
-    feature and disable only unsupported actions, or require the user to choose
-    an explicitly partial mode?
+7. When the JSON is valid but incomplete, should the webapp open every available
+   feature and disable only unsupported actions, or require the user to choose
+   an explicitly partial mode? Enabling available features is the current
+   recommendation.
+8. Should the initial metadata creator perform filesystem checks when writing
+   non-null paths, or only validate JSON structure so metadata can be prepared
+   before files are copied into place?
 
 ### Portability, compatibility, and future scope
 
-19. Should local/cluster root mappings live in user-specific environment files,
-    command-line arguments, or another explicit deployment description?
-20. How should legacy CT026 snapshots whose saved schema predates newer
+9. Should local/cluster root mappings live in user-specific environment files,
+   command-line arguments, or another explicit deployment description?
+10. How should legacy CT026 snapshots whose saved schema predates newer
     execution-only fields be represented after migration?
-21. Which pieces of metadata may be proposed by a discovery tool, and which must
-    always receive explicit human confirmation?
-22. When channel-to-region grouping becomes a priority, will its authoritative
+11. When channel-to-region grouping becomes a priority, will its authoritative
     source be manually selected channel ranges, channel-quality metadata, or a
     separate anatomical registration artifact?
 
