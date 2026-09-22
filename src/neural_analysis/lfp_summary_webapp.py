@@ -1861,24 +1861,44 @@ def make_production_summary_dependencies() -> SummaryWebDependencies:
         manifest: dict[str, object],
         component: str,
     ) -> dict[str, np.ndarray]:
-        """Load one live component from its exact final ``component.npz`` path.
+        """Load one live directory component or one exact snapshot NPZ path.
 
         Parameters
         ----------
         output_directory : pathlib.Path
-            Configured cache directory containing final component NPZ files.
+            Either a configured live cache directory containing final component
+            NPZ files, or an exact selected final ``.npz`` path supplied by a
+            receipt-validated snapshot inspection. Filesystem path units are
+            preserved; the path is neither resolved nor rewritten.
         manifest : dict[str, object]
             Current cache metadata; numerical arrays retain its saved axes.
         component : str
-            One summary component whose file is ``output_directory/component.npz``.
+            One summary component. A directory input selects
+            ``output_directory/component.npz``. An NPZ input must have exactly
+            that filename and is passed through unchanged.
 
         Returns
         -------
         dict[str, numpy.ndarray]
             Loader-validated cached arrays with unchanged shapes and units.
+
+        Raises
+        ------
+        ValueError
+            If an explicit NPZ path does not have the expected selected
+            component filename.
         """
 
-        return load_component_arrays(output_directory / f"{component}.npz", manifest, component)
+        expected_filename = f"{component}.npz"
+        if output_directory.suffix == ".npz":
+            if output_directory.name != expected_filename:
+                raise ValueError(
+                    f"Selected component path must be {expected_filename}: {output_directory}"
+                )
+            component_path = output_directory
+        else:
+            component_path = output_directory / expected_filename
+        return load_component_arrays(component_path, manifest, component)
 
     def plot_view(
         view: str,
