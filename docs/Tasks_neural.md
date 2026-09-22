@@ -3837,6 +3837,19 @@ WP11-1 tests-only and WP11-2 RED checkpoint (2026-09-22):
   to the two authorized test modules. Sol then reruns both RED commands and
   records the corrected evidence. Production implementation remains forbidden
   until that correction is committed and reviewed.
+- Tests-only correction commits `bd437b1` (`test: correct WP11 webapp
+  contracts`) and `6aafc75` (`test: clarify WP11 launcher handoff`) changed
+  only `test_lfp_summary_webapp.py`. They implement the four documented
+  corrections and ensure new-run commands remain available without a prior run
+  while resume commands require one exact supplied directory.
+- After correction, the exact focused RED command again selected 25 tests: 22
+  intended missing-feature failures, three passes, and 45 deselections in 1.85
+  seconds. The complete two-module command produced 25 intended WP11 failures
+  and preserved all 45 existing tests in 1.88 seconds. There were no collection,
+  import, syntax, fixture, environment, or pre-WP11 regression failures.
+- WP11-2 is complete. Tests are now frozen. The next authorized mutation is
+  WP11-3 in `lfp_summary_webapp.py` by the same Terra high writer; no parent
+  route, test, documentation, or other source file is in that package.
 
 ### WP12 - Complete PPC plotting and reporting
 
