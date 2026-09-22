@@ -4176,6 +4176,30 @@ WP11-3 completion and WP11-4 parent-loader gate (2026-09-22):
   remain frozen. Commit the one parent source file only after both complete
   focused modules are GREEN, then stop for WP11-5.
 
+WP11-4 completion and WP11-5 verification start (2026-09-22):
+
+- Parent source commit `d6c684b` (`feat: wire WP11 summary metadata loaders`)
+  changes only `psth_webapp.py`. It adds the cluster-info-only cached reader,
+  the two explicit lazy callback adapters, optional backward-compatible sorter
+  arguments, exact ProbeA/PFC and ProbeB/HPC path forwarding, and main-page
+  sorter forwarding. Sol reviewed the diff and independently ran both complete
+  focused modules: 113 passed in 1.80 seconds. WP11-4 is complete.
+- WP11-5 now owns verification only. Run the complete affected LFP summary,
+  Power, Synchrony, Spike/PPC, launcher, plotting, runtime, pipeline, cache-I/O,
+  synthetic-integration, child-webapp, and parent-webapp test set, followed by
+  the complete `src/tests/neural_analysis` suite. No production-sized numerical
+  computation, cluster job, snapshot write, or network access is authorized.
+- After automated GREEN, perform a read-only smoke test against the exact copied
+  final ProbeB snapshot recorded above. Validate its receipt and manifest,
+  confirm the selected component cache reuses one in-process object, load only
+  one explicitly selected final component at a time, render and close a bounded
+  cache-only figure, and compare file stat/hash identities before and after to
+  prove no snapshot mutation. Do not reopen raw LFP, sorter, aligned spikes, or
+  any cluster path. Record elapsed time and selected component memory size.
+- WP11-6 remains blocked until WP11-5 evidence is recorded. The later local
+  Streamlit launch is on demand and requires user visual approval; automated
+  GREEN alone does not complete WP11.
+
 ### WP12 - Complete PPC plotting and reporting
 
 Owner: one implementer immediately after WP10. Scope is plotting/report files
