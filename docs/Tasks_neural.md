@@ -4129,6 +4129,41 @@ WP11-3R2 provisional source review and final adapter gate (2026-09-22):
   documentation, numerical code, and every other file remain frozen. Commit
   that one source file after focused and complete child GREEN, then stop.
 
+WP11-3 completion and WP11-4 parent-loader gate (2026-09-22):
+
+- Final child correction `82f0f80` (`fix: finalize WP11 cache adapters`) changes
+  only `lfp_summary_webapp.py`. Sol reviewed the diff and independently ran the
+  complete child plus plotting modules: 98 passed with the two existing all-NaN
+  NumPy warnings in 1.91 seconds. The child/parent focused run has 111 passes and
+  exactly one expected WP11-4 failure: `psth_webapp.render_lfp_summary_view`
+  does not yet accept the two sorter paths. WP11-3 is complete.
+- WP11-4 must forward more than the four paths. The child additive route also
+  requires two lazy metadata callbacks; the existing parent test does not yet
+  assert them and could therefore pass a wiring change that only reaches the
+  child's explicit integration-error branch. Before parent source changes,
+  extend `test_psth_webapp.py` to require the exact cluster/channel callback
+  objects and their path semantics.
+- Add parent helpers with explicit contracts. The cluster helper receives the
+  selected `kilosort4` directory and lazily reads only its `cluster_info.tsv` as
+  a DataFrame; it must not load `spike_clusters.npy`, aligned spikes, or raw LFP.
+  The channel helper receives that same selected sorter directory, resolves its
+  probe-derived parent with the existing `infer_probe_derived_dir` helper, and
+  delegates to the existing cached normalized channel-quality loader. Both are
+  passed as callbacks and therefore remain uncalled for the default blank or an
+  invalid snapshot.
+- Preserve the existing wrapper's positional arguments. Add optional sorter
+  arguments after `dependencies`; calls that omit both retain the legacy child
+  invocation, while the main page passes both page-entered sorter strings and
+  activates the additive WP11 route even when the user has not yet filled them.
+  The child continues to fail clearly if a selected valid/live population lacks
+  usable explicit paths; it must not infer a sorter or aligned-spike source.
+- Commit the parent tests-only clarification and reproduce RED before changing
+  source. Then change only `psth_webapp.py`: forward ProbeA=PFC and ProbeB=HPC
+  sorter/aligned paths, forward both exact lazy callbacks, and pass both sorter
+  text fields from `main`. Preserve every other route. Run both complete focused
+  modules to GREEN, compile/diff checks, commit only the parent source file, and
+  stop for Sol's WP11-5 integration gate.
+
 ### WP12 - Complete PPC plotting and reporting
 
 Owner: one implementer immediately after WP10. Scope is plotting/report files
