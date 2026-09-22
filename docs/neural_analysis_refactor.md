@@ -307,6 +307,230 @@ sufficient compatibility evidence.
 - Common conventions must not force unrelated analyses into one oversized base
   class or erase meaningful differences in their data shapes and units.
 
+## Proposed target package organization
+
+The target should organize code first by responsibility and then, for
+scientific code and figures, by analysis domain. Moving today's files into new
+directories without splitting their responsibilities would preserve the main
+problem, so the proposal below describes ownership rather than a mechanical
+rename map.
+
+```text
+src/neural_analysis/
+  session/
+    models.py
+    json_io.py
+    validation.py
+    paths.py
+
+  sources/
+    contracts.py
+    open_ephys/
+      lfp.py
+      synchronization.py
+    spikeglx/
+      lfp.py
+      synchronization.py
+    spikes/
+      kilosort.py
+      aligned.py
+      channel_quality.py
+    behavior/
+      trials.py
+      events.py
+      treadmill.py
+
+  synchronization/
+    alignment.py
+    irig.py
+    manual.py
+
+  analyses/
+    lfp_lfp/
+      power.py
+      spectrogram.py
+      wavelet_phase.py
+      relative_phase.py
+      synchrony.py
+    spike_lfp/
+      phase_sampling.py
+      phase_locking.py
+      ppc.py
+      ppc_kernel.py
+    spike_behavior/
+      binning.py
+      psth.py
+      decoding.py
+    population/
+      pca.py
+      decoding.py
+      switch_trajectories.py
+    cross_session/
+      decoding.py
+
+  artifacts/
+    manifests.py
+    component_cache.py
+    work_cache.py
+    snapshots.py
+
+  workflows/
+    lfp_summary/
+      models.py
+      preparation.py
+      pipeline.py
+      power.py
+      synchrony.py
+      spike_phase.py
+
+  execution/
+    launcher.py
+    run_state.py
+    resources.py
+    slurm.py
+
+  visualization/
+    common.py
+    lfp_lfp/
+      power.py
+      phase.py
+      synchrony.py
+    spike_lfp/
+      phase.py
+      ppc.py
+    units/
+      raster.py
+      psth.py
+    population/
+      pca.py
+      decoding.py
+    cross_session/
+      decoding.py
+
+  reports/
+    common.py
+    power.py
+    synchrony.py
+    spike_phase.py
+
+  webapp/
+    app.py
+    state.py
+    controls.py
+    data_access.py
+    views/
+      cached_summary.py
+      unit_activity.py
+      trial_activity.py
+      lfp_lfp.py
+      spike_lfp.py
+      population.py
+
+  cli/
+    create_session_metadata.py
+    run_cache.py
+    launch_webapp.py
+
+  compatibility/
+    ct026.py
+
+  profiling/
+    ppc.py
+    ct026.py
+```
+
+The exact filenames are provisional. The important boundaries are:
+
+- `session` owns the versioned session description, JSON translation,
+  action-specific validation, and relative-path resolution. It performs no
+  scientific computation.
+- `sources` translates native Open Ephys, SpikeGLX, Kilosort, aligned-spike,
+  and behavioral files into documented internal data contracts. It does not
+  select analyses or render figures.
+- `synchronization` owns time-coordinate transformations and alignment logic
+  shared across acquisition adapters. Acquisition-specific digital I/O remains
+  in `sources`.
+- `analyses` contains numerical methods over explicit arrays and tables. These
+  modules do not read session paths, write caches, launch processes, or import
+  Streamlit.
+- `artifacts` owns reusable manifest, cache, checkpoint, snapshot, and receipt
+  mechanics. It must not know CT026 paths or implement scientific formulas.
+- `workflows` joins validated session metadata, source adapters, numerical
+  analyses, artifacts, and progress reporting for a scientific pipeline.
+- `execution` owns generic restartable launcher state, process/resource
+  measurement, and Slurm submission rather than embedding those concerns in
+  numerical or analysis-specific modules.
+- `visualization` contains reusable Matplotlib figure construction. It accepts
+  explicit results and plot context, performs no source discovery, and has no
+  Streamlit dependency.
+- `reports` selects figures, captions, summaries, and immutable report outputs.
+  It may call `visualization` but must not recalculate numerical results.
+- `webapp` owns Streamlit state, controls, routing, cached artifact selection,
+  and view composition. A view calls `visualization` or reads a validated
+  artifact; it does not become a second implementation of an analysis.
+- `cli` contains thin user entry points. Argument parsing should delegate
+  immediately to `session`, `workflows`, or the webapp launcher.
+- `compatibility` temporarily isolates CT026 builders and old import paths.
+  Dataset-specific defaults must not leak back into generic packages.
+- `profiling` contains developer performance harnesses and representative
+  fixtures, not production numerical definitions.
+
+### Dependency direction
+
+`session`, `sources`, `analyses`, and `artifacts` form the foundational layer.
+Source adapters and numerical analyses are peers: workflows pass adapter output
+into numerical functions, but an analysis must not import an Open Ephys or
+SpikeGLX reader. `workflows` may depend on all four foundational packages, and
+`execution` invokes workflows through narrow run contracts.
+
+`visualization` consumes documented analysis-result or artifact contracts and
+is used by both `reports` and `webapp`. `reports` may depend on `artifacts` and
+`visualization`. `webapp` may depend on session metadata, validated artifacts,
+visualization, and narrow workflow command interfaces. Finally, `cli` delegates
+to session creation, workflows, or the webapp launcher.
+
+Dependency arrows must not point back upward: foundational modules must not
+import workflows, reports, Streamlit views, or command-line modules. A generic
+`utils.py` package should be avoided; genuinely shared code should be named for
+its responsibility and kept near the lowest layer that owns it.
+
+### Current-module disposition
+
+The largest current modules need responsibility splits rather than single-file
+moves:
+
+| Current area | Proposed ownership |
+| --- | --- |
+| `psth_webapp.py` | `webapp/app.py`, domain view modules, `webapp/data_access.py`, and thin calls into analysis/visualization packages |
+| `lfp_summary_webapp.py` | cached-summary view state in `webapp/views/cached_summary.py`; snapshot validation in `artifacts/snapshots.py`; command construction in workflow/CLI code |
+| `unit_spike_plotting.py` | pure figures split across the `visualization/units`, `visualization/lfp_lfp`, `visualization/spike_lfp`, and `visualization/population` domain packages |
+| `lfp_summary_runtime.py` | component-specific Power, Synchrony, and Spike workflow modules plus shared preparation |
+| `lfp_summary_ppc_runtime.py` | restartable execution under `workflows/lfp_summary/spike_phase.py`; numerical operations remain under `analyses/spike_lfp` |
+| `lfp_spike_phase_launcher.py` | generic launcher lifecycle, persisted run state, resource measurement, and a thin CLI entry point |
+| validation/report modules | action validation stays with workflows; report construction moves to `reports`; pure figures move to `visualization` |
+| `lfp_loading.py` and sync modules | acquisition adapters in `sources` plus shared time alignment in `synchronization` |
+| PCA modules | `analyses/population`; their figures move to `visualization/population.py` |
+| spike/behavior modules | source-table loading under `sources`; numerical binning/decoding/PSTH under `analyses/spike_behavior` |
+| CT026 profile modules | temporary `profiling/ct026.py` and `compatibility/ct026.py`, with no generic production defaults |
+
+### Migration constraints
+
+- Reorganization should proceed as a series of behavior-preserving moves and
+  splits, not a repository-wide rename followed by simultaneous rewrites.
+- Existing public imports and `python -m` commands should have temporary thin
+  compatibility modules while callers and tests migrate.
+- Tests should mirror the target packages and compare approved CT026 arrays,
+  manifests, reports, and figures before obsolete imports are removed.
+- Pure analysis and visualization splits should occur before workflow and
+  launcher decomposition, so orchestration can target stable lower-level
+  interfaces.
+- Performance-sensitive PPC kernels should move only after characterization
+  tests capture numerical equality, deterministic seeds, checkpoint identity,
+  and representative runtime/memory behavior.
+- A module should normally have one primary reason to change. File-size targets
+  may guide review, but should not cause arbitrary splits of cohesive numerical
+  code.
+
 ## Conceptual metadata relationships
 
 The following is illustrative vocabulary, not a frozen file schema:
@@ -375,10 +599,12 @@ Synchrony request.
 
 ### Separate environment-specific locations from scientific metadata
 
-The logical session description should be portable, while local and cluster
-root mappings are deployment concerns. This avoids duplicating nearly identical
-JSON files solely because `/home/...` and `/gs/...` prefixes differ. Any
-resolved execution configuration should still record exact absolute paths.
+The logical session description should remain portable by storing source paths
+relative to the session metadata location. Because the current local and
+cluster session trees share the same internal layout, the initial design should
+not add a root-mapping system. Any resolved execution configuration should
+still record exact absolute paths for provenance. External data roots can be
+designed later if a real session requires them.
 
 ### Consolidate launcher and execution behavior
 
@@ -450,6 +676,9 @@ the following actions straightforward:
   In the initial design, relative paths resolve from the directory containing
   `neural_session.json`, so matching workstation and cluster session layouts do
   not require a separate root-mapping system.
+- Initial source paths are required to remain within the session tree. Support
+  for external data roots, absolute source paths, or root remapping is deferred
+  until a real session requires it.
 - Cache references must be fully descriptive: analysis, probe, population, and
   shuffle tier where applicable. There is one user-approved result per such
   identity rather than an in-file history of candidate runs.
@@ -516,15 +745,11 @@ opt-in edit, not an automatic side effect of computation or transfer.
 
 ### Portability, compatibility, and future scope
 
-5. If a required source lies outside the session directory, should the initial
-   schema permit an absolute machine-specific path, or require it to be placed
-   or linked beneath the session directory? Absolute paths are simpler but make
-   one JSON file less portable.
-6. How should legacy CT026 snapshots whose saved schema predates newer
+5. How should legacy CT026 snapshots whose saved schema predates newer
    execution-only fields be represented after migration?
-7. When channel-to-region grouping becomes a priority, will its authoritative
-    source be manually selected channel ranges, channel-quality metadata, or a
-    separate anatomical registration artifact?
+6. When channel-to-region grouping becomes a priority, will its authoritative
+   source be manually selected channel ranges, channel-quality metadata, or a
+   separate anatomical registration artifact?
 
 ## Design decisions to record later
 
