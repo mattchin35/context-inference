@@ -2846,6 +2846,174 @@ def test_snapshot_plv_distribution_uses_conservative_retained_band_coverage(
     plt.close(figure)
 
 
+def test_snapshot_gamma_exclusion_removes_both_endpoint_bins_for_ppc_and_plv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Saved 58-62 Hz gamma exclusions remove both endpoints in every adapter.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces cache-only PPC/PLV plotters and captures their already-saved
+        summary arrays. It does not load raw recordings or recompute metrics.
+
+    Returns
+    -------
+    None
+        Requires PPC all-bin reliability and PLV conservative coverage to ignore
+        58, 59, and 62 Hz, leaving the saved 40-Hz gamma value as the sole
+        retained gamma-bin contribution.
+    """
+
+    spike_arrays = _small_spike_snapshot_arrays()
+    spike_arrays["frequency_hz"] = np.array((8.0, 40.0, 58.0, 59.0, 62.0))
+    for name in (
+        "ppc", "computable", "reliable", "null_eligible", "significant",
+        "spike_count", "eligible_trial_count", "preferred_phase_rad",
+    ):
+        spike_arrays[name] = np.pad(spike_arrays[name], [(0, 0)] * 4 + [(0, 3)])
+    spike_arrays["reliable"][:] = True
+    spike_arrays["reliable"][0, :, :, :, 2:] = False
+    spike_arrays["reliable"][1, :, :, :, 1] = False
+
+    synchrony_arrays = _small_synchrony_snapshot_arrays()
+    synchrony_arrays["frequency_hz"] = np.array((8.0, 40.0, 58.0, 59.0, 62.0))
+    for name in (
+        "itpc", "itpc_effective_trial_count", "ispc", "ispc_effective_trial_count",
+        "plv_by_frequency", "plv_valid_sample_count", "plv_valid_sample_fraction",
+        "plv_computable",
+    ):
+        axis = 2 if name.startswith(("itpc", "ispc")) else -1
+        padding = [(0, 0)] * synchrony_arrays[name].ndim
+        padding[axis] = (0, 3)
+        synchrony_arrays[name] = np.pad(synchrony_arrays[name], padding)
+    synchrony_arrays["plv_valid_sample_count"][1, 0, :, :] = np.array((99, 8, 1, 2, 3))
+    synchrony_arrays["plv_valid_sample_fraction"][1, 0, :, :] = np.array((0.99, 0.8, 0.1, 0.2, 0.3))
+
+    captured: dict[str, tuple[object, ...]] = {}
+
+    def plot_ppc_band_summary(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture saved band reliability without recalculating PPC."""
+
+        del kwargs
+        captured["ppc"] = args
+        return plt.figure(), {}
+
+    def plot_plv_distribution(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture retained-band coverage without loading raw source traces."""
+
+        del kwargs
+        captured["plv"] = args
+        return plt.figure(), {}
+
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_plotting,
+        "plot_ppc_band_summary",
+        plot_ppc_band_summary,
+    )
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_plotting,
+        "plot_plv_distribution",
+        plot_plv_distribution,
+    )
+    spike_figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "spike_phase",
+        spike_arrays,
+        default_lfp_summary_config(),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="ppc_band_summary",
+            site_id="HPC1",
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+    )
+    synchrony_figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "synchrony",
+        synchrony_arrays,
+        default_lfp_summary_config(),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="plv_distribution",
+            site_id="PFC-HPC1",
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+    )
+
+    reliability = captured["ppc"][1]
+    assert np.all(reliability[:, 0, :, 1])
+    assert not np.any(reliability[:, 1, :, 1])
+    assert np.array_equal(captured["plv"][1], np.full((1, 3), 8))
+    assert np.array_equal(captured["plv"][2], np.full((1, 3), 0.8))
+    plt.close(spike_figure)
+    plt.close(synchrony_figure)
+
+
+def test_snapshot_power_band_summary_forwards_every_saved_condition_and_count_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Power band summaries preserve the complete saved condition-by-trial cache axis.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces only the pure band-summary plotter and captures its dB arrays,
+        categorical labels, and integer count rows without accessing raw LFP.
+
+    Returns
+    -------
+    None
+        Requires one ``(condition, trial, epoch, band)`` dB array for every
+        saved condition, with each condition's selected trials and effective
+        count repeated across the saved epoch axis.
+    """
+
+    arrays = _small_power_snapshot_arrays()
+    arrays["condition_names"] = np.array(("correct_rewarded", "omission"))
+    arrays["condition_membership"] = np.array(((True, False), (False, True)))
+    arrays["filter_membership"] = np.array((True, True))
+    arrays["condition_effective_trial_count"] = np.array(((4, 40), (8, 80)), dtype=np.int64)
+    captured: dict[str, tuple[object, ...]] = {}
+
+    def plot_band_power_summary(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture the complete saved Power condition axis without plotting."""
+
+        del kwargs
+        captured["args"] = args
+        return plt.figure(), {}
+
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_plotting,
+        "plot_band_power_summary",
+        plot_band_power_summary,
+    )
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "power",
+        arrays,
+        default_lfp_summary_config(),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="band_power_summary",
+            site_id="PFC",
+            condition_name="correct_rewarded",
+            epoch_name="whole",
+            band_name="theta",
+        ),
+    )
+
+    condition_band_power, condition_names, epoch_names, band_names, count_rows = captured["args"][:5]
+    assert condition_names == ("correct_rewarded", "omission")
+    assert condition_band_power.shape == (2, 2, 3, 2)
+    assert np.array_equal(condition_band_power[0, 0], arrays["band_power_session_db"][0, 0])
+    assert np.isnan(condition_band_power[0, 1]).all()
+    assert np.isnan(condition_band_power[1, 0]).all()
+    assert np.array_equal(condition_band_power[1, 1], arrays["band_power_session_db"][0, 1])
+    assert epoch_names == ("whole", "before", "after")
+    assert band_names == ("theta", "gamma")
+    assert np.array_equal(count_rows, np.array(((4, 4, 4), (8, 8, 8)), dtype=np.int64))
+    plt.close(figure)
+
+
 @pytest.mark.parametrize(
     ("band_name", "band_index", "low_histogram", "high_histogram", "representative_hz"),
     (
