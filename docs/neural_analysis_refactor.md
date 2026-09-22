@@ -518,6 +518,10 @@ moves:
 
 - Reorganization should proceed as a series of behavior-preserving moves and
   splits, not a repository-wide rename followed by simultaneous rewrites.
+- The intended migration sequence is: session metadata and acquisition
+  adapters; generic cache/webapp entry points; webapp and visualization
+  decomposition; scientific analysis package moves; launcher/runtime
+  decomposition; then legacy cleanup and final documentation consolidation.
 - Existing public imports and `python -m` commands should have temporary thin
   compatibility modules while callers and tests migrate.
 - Tests should mirror the target packages and compare approved CT026 arrays,
@@ -531,6 +535,13 @@ moves:
 - A module should normally have one primary reason to change. File-size targets
   may guide review, but should not cause arbitrary splits of cohesive numerical
   code.
+
+Before work packages are frozen, the repository inventory must classify every
+current neural-analysis module and inspect representative Open Ephys and
+SpikeGLX session layouts. The inventory should include repository imports,
+tests, documented commands, notebooks where searchable, likely external entry
+points, source metadata files, sorter layouts, aligned-spike files,
+synchronization inputs, channel-quality files, and augmented trial tables.
 
 ### Organization decisions
 
@@ -585,6 +596,27 @@ The current scan suggests that `behavior_pynap.py`,
 decision. In contrast, `analog_treadmill_decode.py` is exercised by manual
 synchronization tests and should initially be treated as supporting
 infrastructure even if its final ownership changes.
+
+### Documentation contract for new packages
+
+Every newly created subfolder must contain a short README. Documentation is a
+two-stage responsibility rather than a final cleanup-only task:
+
+1. When the folder is introduced, its README records the package purpose,
+   dependency boundary, public entry points, and a one-line responsibility for
+   every file initially placed there.
+2. After migrations and responsibility splits stabilize, a documentation pass
+   verifies the inventory and expands computationally intensive entries with
+   the algorithmic stages, major array shapes and units, determinism/seed
+   behavior, cache/checkpoint strategy, parallelization, and expected runtime
+   or memory characteristics where known.
+
+READMEs should explain module-level ownership and computational flow without
+duplicating function contracts. Function inputs, outputs, shapes, axes, and
+physical units remain authoritative in Python docstrings. A README change is
+part of the same migration that adds, removes, or substantially changes a file
+in its folder; the final cleanup verifies completeness rather than reconstructing
+all documentation from scratch.
 
 ## Conceptual metadata relationships
 
@@ -734,6 +766,11 @@ the following actions straightforward:
 - Initial source paths are required to remain within the session tree. Support
   for external data roots, absolute source paths, or root remapping is deferred
   until a real session requires it.
+- Session JSON contains session identity, acquisition family, session-relative
+  source paths, probes, sites, populations, and approved cache references.
+  Versioned code presets own analysis defaults such as bands, windows, filters,
+  shuffle defaults, and plot defaults. Every saved run records the fully
+  resolved combination so defaults never become invisible provenance.
 - Cache references must be fully descriptive: analysis, probe, population, and
   shuffle tier where applicable. There is one user-approved result per such
   identity rather than an in-file history of candidate runs.
@@ -761,6 +798,9 @@ the following actions straightforward:
 - Acquisition family is session-wide in the initial schema. It explicitly
   selects Open Ephys or SpikeGLX. Supporting mixed-acquisition sessions would
   require a later schema decision.
+- The authoritative Open Ephys and SpikeGLX metadata files and their exact
+  extraction rules must be chosen from representative real session layouts
+  before acquisition-adapter implementation begins.
 - The webapp is launched through a short Python wrapper accepting
   `--session-metadata PATH`. A concise how-to document must include the exact
   invocation.
@@ -769,9 +809,22 @@ the following actions straightforward:
 - Metadata creation always validates schema and internal relationships. Checking
   whether non-null paths currently exist is an optional validation mode, so a
   session description may be prepared before every referenced file is copied.
+  When the user explicitly requests the filesystem check, any missing required
+  non-null path fails that check rather than producing only a warning.
 - Power and Synchrony have independent approved cache references. Shuffle tiers
   apply only to analyses, such as Spike phase, whose scientific configuration
   actually includes shuffle count.
+- Existing CT026 snapshots remain readable through compatibility readers and do
+  not need to be rewritten into the new session schema. New runs use new
+  metadata/artifact contracts, while existing resume operations retain their
+  saved run configuration. Removing a compatibility reader requires explicit
+  approval after its consumers are retired.
+- Behavior-preserving migration requires exact equality for deterministic
+  arrays, identities, seeds, manifests, and selection logic. Tight numerical
+  tolerances are acceptable only where exact equality is genuinely unstable;
+  reports receive structural/content tests, figures receive rendering smoke
+  tests, and performance-sensitive PPC paths retain representative runtime and
+  peak-memory regression checks.
 
 Manual metadata maintenance is the simplest initial workflow, but it has one
 predictable failure mode: a mistyped or stale snapshot path. A possible later
@@ -781,28 +834,17 @@ opt-in edit, not an automatic side effect of computation or transfer.
 
 ## Open design questions
 
-### Metadata content
+### Required pre-planning investigations
 
-1. Which values belong in every session JSON, and which should come from a
-   versioned project-level defaults file? Hidden code defaults should not regain
-   control through the back door.
-2. Which acquisition reference file is authoritative for extracting sample
+1. Which acquisition reference file is authoritative for extracting sample
    rate, voltage units, and any required raw-value scaling for Open Ephys and
    SpikeGLX sessions?
-3. How consistent are sorter, aligned-spike, synchronization, channel-quality,
+2. How consistent are sorter, aligned-spike, synchronization, channel-quality,
    and augmented-trial-table layouts across mice and recording generations?
 
-### Cache and creation behavior
+### Explicitly deferred design
 
-4. Should optional filesystem validation merely report missing paths, or fail
-   metadata creation when explicitly requested? Failing the requested check is
-   the current recommendation.
-
-### Portability, compatibility, and future scope
-
-5. How should legacy CT026 snapshots whose saved schema predates newer
-   execution-only fields be represented after migration?
-6. When channel-to-region grouping becomes a priority, will its authoritative
+3. When channel-to-region grouping becomes a priority, will its authoritative
    source be manually selected channel ranges, channel-quality metadata, or a
    separate anatomical registration artifact?
 
