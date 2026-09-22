@@ -4066,6 +4066,22 @@ WP11-3R2 tests-only review and correction gate (2026-09-22):
   Make this last tests-only correction in `test_lfp_summary_webapp.py`, rename
   the launcher test to identify both Spike and All if touched, rerun RED, and
   stop. Corrective source remains forbidden until Sol accepts that result.
+- Final tests-only correction `567b374` restores the webapp adapter contract
+  and retains the separate plotting-caption contract. Sol reviewed the diff and
+  independently ran both complete relevant modules: 15 intended failures, 81
+  passes, and two existing all-NaN NumPy warnings in 2.29 seconds. Every failure
+  is an approved missing adapter, selector, count/status, resume, or optional-
+  exclusion behavior; there is no import, collection, fixture, syntax, or
+  environment failure. The WP11-3R2 RED gate is accepted.
+- The same Terra high writer is now authorized to change
+  `lfp_summary_webapp.py` and only the PlotContext annotation/docstring plus
+  `_caption` optional-exclusion formatting in `lfp_summary_plotting.py`. The
+  cached-view dispatcher must be split into short view-specific helpers with
+  explicit type/shape/unit contracts while retaining its public signature.
+  Tests, documentation, parent routing, numerical kernels, caches, reports,
+  dependencies, and every other file are frozen. The writer must run the 15-
+  test focused GREEN selection, both complete relevant modules, compile/diff
+  checks, commit only the two authorized source files, and stop before WP11-4.
 
 ### WP12 - Complete PPC plotting and reporting
 
