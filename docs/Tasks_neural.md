@@ -4240,6 +4240,25 @@ WP11-5 automated GREEN and production-loader smoke gate (2026-09-22):
   `lfp_summary_webapp.py` loader repair. Tests, parent source, documentation,
   dependencies, and every other file remain frozen. WP11-6 remains blocked
   pending the required GREEN evidence and repeated read-only snapshot smoke.
+- Loader repair `d017995` (`fix: preserve WP11 snapshot component paths`) was
+  lead-reviewed. The child and parent webapp modules passed 114 tests in 1.79
+  seconds. The repeated read-only smoke validated the copied snapshot, loaded
+  only Power, reused its in-process cache object, and reached cache-only
+  plotting before stopping with `KeyError: ppc_execution` while deserializing
+  Power's saved `configuration_snapshot`. The snapshot remains unchanged.
+- The copied production snapshot confirms this is a narrow legacy-schema
+  compatibility case: saved Power and Synchrony configurations omit
+  `ppc_execution`, while Spike includes it. Tests must first prove that a
+  complete saved Power configuration with only that execution-only field
+  removed still renders/delegates using its saved context, while any missing or
+  malformed scientific/provenance field still fails closed.
+- After accepted RED, source scope is only `lfp_summary_webapp.py`. Its
+  cache-only adapter may fill only a missing execution-only `ppc_execution`
+  field with current default values for a legacy saved configuration. Every
+  saved scientific/provenance field remains authoritative; no other missing or
+  malformed field may be supplied, guessed, rewritten, or silently accepted.
+  WP11-6 remains blocked pending the repair, GREEN evidence, and repeated
+  read-only smoke.
 
 ### WP12 - Complete PPC plotting and reporting
 
