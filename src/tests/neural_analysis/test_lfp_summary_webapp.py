@@ -2097,6 +2097,49 @@ def test_production_live_loader_passes_the_exact_selected_component_npz_path(
     assert arrays["synchrony"]["marker"].tolist() == [1]
 
 
+def test_production_snapshot_loader_passes_the_receipt_validated_component_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Snapshot cache loading must preserve the receipt-validated NPZ path.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces only the final component-array decoder and records its input
+        without opening a real cache, source recording, or cluster path.
+    tmp_path : pathlib.Path
+        Temporary root for a valid synthetic snapshot containing final component
+        NPZ files and its exact transfer receipt.
+
+    Returns
+    -------
+    None
+        Requires the production dependency decoder to receive the selected
+        ``SnapshotInspection.component_paths`` entry unchanged. The cache
+        result is a dimensionless one-element marker array with shape ``(1,)``.
+    """
+
+    inspection = lfp_summary_webapp.validate_cache_snapshot(_write_snapshot_fixture(tmp_path))
+    cache = lfp_summary_webapp.SnapshotComponentCache()
+    paths: list[Path] = []
+
+    def load_component_arrays(path: Path, manifest: dict[str, object], component: str) -> dict[str, np.ndarray]:
+        """Record the selected final NPZ path and return one marker array."""
+
+        del manifest, component
+        paths.append(path)
+        return {"marker": np.array((1,), dtype=np.int64)}
+
+    monkeypatch.setattr(lfp_summary_webapp, "load_component_arrays", load_component_arrays)
+    dependencies = lfp_summary_webapp.make_production_summary_dependencies()
+
+    arrays = cache.load(inspection, "synchrony", dependencies.load_component)
+
+    assert paths == [inspection.component_paths["synchrony"]]  # type: ignore[index]
+    assert arrays["marker"].tolist() == [1]
+
+
 def test_spike_snapshot_population_provenance_fails_closed_but_nonspike_components_remain_irrelevant(
     tmp_path: Path,
 ) -> None:
