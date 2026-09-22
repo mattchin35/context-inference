@@ -2373,6 +2373,66 @@ def test_each_authoritative_snapshot_view_delegates_its_selected_cached_axes(
     plt.close(figure)
 
 
+def test_each_authoritative_snapshot_view_plv_exemplar_uses_left_condition_gamma_band_and_matching_cached_trial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PLV exemplar selection must use cached left/gamma axes, not a generic pair preview.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the existing PLV exemplar plotter and rejects an ITPC fallback.
+        No numerical pipeline, source trace loading, or cache write is enabled.
+
+    Returns
+    -------
+    None
+        Asserts that the left-only saved trial id and gamma-filtered cached trace
+        reach the plotting adapter unchanged.
+    """
+
+    arrays = _small_synchrony_snapshot_arrays()
+    arrays["plv_band_mean"][:] = 0.1
+    arrays["plv_band_mean"][1, 0, 2, 1] = 0.9
+    arrays["band_filtered_trace"][:] = 0.0
+    arrays["band_filtered_trace"][:, 1, 1] = np.array(((31.0, 32.0), (41.0, 42.0)))
+    captured: dict[str, tuple[object, ...]] = {}
+
+    def plot_plv_exemplar(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture the selected cached PLV exemplar arrays without transforming them."""
+
+        del kwargs
+        captured["args"] = args
+        return plt.figure(), {}
+
+    def reject_phase_map(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Fail if a PLV view is incorrectly routed through an ITPC map adapter."""
+
+        del args, kwargs
+        raise AssertionError("PLV exemplar used an ITPC map adapter")
+
+    monkeypatch.setattr(lfp_summary_webapp.lfp_summary_plotting, "plot_plv_exemplar", plot_plv_exemplar)
+    monkeypatch.setattr(lfp_summary_webapp.lfp_summary_plotting, "plot_phase_map", reject_phase_map)
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "synchrony",
+        arrays,
+        default_lfp_summary_config(),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="plv_exemplar",
+            site_id="PFC-HPC1",
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+    )
+
+    args = captured["args"]
+    assert args[5] == "PFC-HPC1"
+    assert args[6] == 11
+    assert np.array_equal(args[2], np.array(((31.0, 32.0), (41.0, 42.0))))
+    plt.close(figure)
+
+
 @pytest.mark.parametrize("snapshot_text", ("", "{invalid}"))
 def test_child_renderer_defaults_to_noncomputational_snapshot_and_defers_population_metadata(
     tmp_path: Path,
@@ -2527,6 +2587,7 @@ def test_child_renderer_reuses_valid_snapshot_inspection_and_selected_probe_cach
     assert metadata_paths == [tmp_path / "sorter_b", tmp_path / "sorter_b"]
     assert dependency_calls == ["load_spike_phase", "load_spike_phase"]
     assert len(plot_calls) == 3
+    assert streamlit.sidebar.button_labels == []
     display_text = " ".join(message for _kind, message in streamlit.messages)
     assert "/cluster/final/cache" in display_text
     assert "synthetic instability warning" in display_text
