@@ -733,6 +733,25 @@ relabeling or plotting ProbeB units. Bounded Power/Synchrony computation remains
 available only in a separate live-cache mode with normal active local-session
 compatibility checks.
 
+The validated inspection record retains the receipt's manifest and per-file
+SHA-256 identities. Component-memory cache lookup uses those retained strings;
+it must not hash an NPZ again merely to find an already loaded component. The
+Streamlit route retains the inspection while the explicit path and cheap local
+file stat identities are unchanged. A changed path or stat identity forces full
+receipt validation before reuse. Snapshot entries must be regular immediate
+children of the entered directory, not symlinks. This preserves tamper/change
+detection without rereading approximately 444 MB on every widget rerender.
+
+Snapshot figures use the selected component's saved configuration snapshot for
+session, window, notch, band, unit, and source provenance. The currently active
+local configuration may determine whether a live cache is compatible, but it
+must not relabel an immutable cluster-produced snapshot. The cached-view menu
+delegates to the existing plotting module and includes Power condition PSD and
+band summary; Synchrony ITPC/ISPC maps, phase-band summaries, PLV distributions,
+and saved exemplars; and Spike unit maps, reliable-population/FDR/eligible-count
+maps, band summaries, and saved low/high exemplar pairs. Only selectors relevant
+to the chosen view are applied.
+
 ### 4.5 Standalone preview and final-run separation
 
 The launcher creates its timestamped analysis-run identity, initial log, and

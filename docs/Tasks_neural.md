@@ -2,35 +2,32 @@
 
 ## Live handoff snapshot
 
-- **Snapshot:** 2026-09-20 on branch `refactor`.
-- **Current accepted implementation HEAD before this documentation update:**
-  `0589fa7` (`docs: record R1 recovery implementation`). R1 tests are
-  `b77f4a5` and implementation is `97fbf3b`; the computation remains identified
-  by launcher handoff commit `ed350ff`.
-- **Last verified neural baseline:** 1,149 passed with 20 warning instances after
-  the R1 implementation. The warnings are the existing
-  multiprocessing-fork, intentional duplicate-ZIP-member, and Pynapple
-  zero-duration fixture warnings recorded in the launcher handoff below.
+- **Snapshot:** 2026-09-22 on branch `refactor`.
+- **Current implementation HEAD before this documentation update:** `e8f8dca`
+  (`feat: add WP11 snapshot inspector core`). This WP11-3 commit is under Sol
+  review and is not yet accepted: its focused core tests pass, but the review
+  repair gate recorded below must complete before WP11-4 begins.
+- **Last verified WP11 focused state:** 69 passed and one expected WP11-4
+  parent-route failure in 1.83 seconds for the complete
+  `test_lfp_summary_webapp.py` plus `test_psth_webapp.py` command. The broader
+  neural baseline remains the previously recorded 1,149 passed with the known
+  warning categories until WP11-5 reruns it.
 - **WP5C state:** the exact PPC speedup S0-S8 sequence is complete. The accepted
   work-only S8 run is
   `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_ppc_s8_2026-09-18T15-06-33Z`.
   It selected eight workers for the benchmarked CT026 production workload and
   published no scientific component, manifest, preview, or `spike_phase.npz`.
-- **Approval and execution state:** Power and Synchrony reports remain approved.
-  R1 recovered the local ProbeB 100-shuffle report without recomputation at
-  report commit `0589fa7`; all launcher stages completed and the exact retained
-  work target was removed after validation. Visual QA found three previously
-  hidden report defects: unreadable 273-unit y labels, unreadable band-summary
-  labels with no displayed IQR, and a process-child count mislabeled as active
-  workers. The numerical cache and corrected population maps are intact, but
-  the preview is not yet approved as a human-readable report.
-- **Approved immediate sequence:** complete the documentation-first,
-  test-first local R2 plotting/metadata repair below, republish and
-  inspect the report without numerical recomputation, and only then consider
-  C1. No cluster implementation is authorized by the current instruction. The
-  separately approved ProbeB 1,000-shuffle final run remains designated for
-  the cluster after wrapper/dry-run validation. WP13 remains deferred and every
-  nonempty absolute-amplitude request remains rejected before computation.
+- **Approval and execution state:** Power, Synchrony, the repaired ProbeB
+  100-shuffle report, and the ProbeB 1,000-shuffle final report are approved.
+  The final four-file cache was copied locally and its ordered SHA-256 receipt
+  was verified. WP11 is active under the approved Sol-high/Terra-high sequence;
+  WP13 remains deferred and every nonempty absolute-amplitude request remains
+  rejected before computation.
+- **Approved immediate sequence:** finish the documentation-first WP11-3 review
+  repair below, retain a genuine RED before its corrective source edit, then
+  continue WP11-4 parent-route integration, WP11-5 integration/performance
+  verification, and WP11-6 local visual review. No scientific recomputation,
+  cluster submission, or WP13 work is authorized by WP11.
 - **Do not redo completed packages:** WP0, WP1, WP2 preparation, WP3, WP4,
   WP5A, WP5B, and the Spike-phase runtime bridge are historical completed work.
   Remaining integration work must extend them through the packages below, not
@@ -74,7 +71,7 @@ Source-of-truth hierarchy:
 | R1 local preview recovery | Complete; transaction and population-map fix verified on real cache | Tests `b77f4a5`; implementation `97fbf3b`; recovery/report commit `0589fa7`; recovered report path below | No further R1 work; visual QA findings are isolated into proposed R2 |
 | R2 local preview readability | Complete | Contract/tests `7ba6fe6`, `2aed50b`; implementation `575deee`, `767544a`; full-suite and real-report QA `8ca0e2b`, `49a7e6d` | None; consume the repaired plots in final-report inspection and WP11 |
 | C1 cluster execution | Complete through the ProbeB 1,000-shuffle final run | Wrapper/tests through `63b87eb`; dry-run evidence `02b0f2c`; Slurm job `30744006`; terminal launcher evidence below | Preserve cluster cache/report; use measured runtime and memory before changing future requests |
-| WP11 Streamlit integration | Authorized documentation-first package; implementation not started | Package below; local immutable-snapshot topology and Sol/Terra sequence approved 2026-09-22; final cache copied locally with verified identity | Execute WP11-1 tests-only work under the frozen sequential worker plan after the WP11-0 documentation commit |
+| WP11 Streamlit integration | In progress; WP11-0 through WP11-2 complete, WP11-3 implementation committed but held at Sol review | Docs `0b1e14b`; tests `98990a0`, `bd437b1`, `6aafc75`; RED docs through `344be25`; provisional core `e8f8dca`; final cache copied locally with verified identity | Complete the documented WP11-3 review repair before WP11-4; then run WP11-5 and WP11-6 gates |
 | WP12 PPC plotting/reporting | Complete for transaction, R2 real-size display contract, and visually approved final report | Contract `5dfd439`; implementation `bd6fa50`; R1 population repair `b77f4a5`, `97fbf3b`; R2 `575deee`, `767544a`; final report and approval below | None; preserve the immutable report and consume its cache-only plotting contracts in WP11 |
 | WP13 optional absolute-amplitude thresholds | Explicitly deferred; not a blocker while thresholds are empty | Package below; validation/fingerprint support exists; current CT026 threshold list is empty | Reject every nonempty request before computation until WP13 is separately implemented |
 
@@ -3850,6 +3847,60 @@ WP11-1 tests-only and WP11-2 RED checkpoint (2026-09-22):
 - WP11-2 is complete. Tests are now frozen. The next authorized mutation is
   WP11-3 in `lfp_summary_webapp.py` by the same Terra high writer; no parent
   route, test, documentation, or other source file is in that package.
+
+WP11-3 provisional implementation and Sol review repair gate (2026-09-22):
+
+- Terra high committed provisional core `e8f8dca` (`feat: add WP11 snapshot
+  inspector core`), changing only `lfp_summary_webapp.py`. The worker reported
+  38/38 passing in the LFP-summary module and 69 passes plus the one expected
+  WP11-4 parent-route failure across both focused modules. Sol independently
+  reproduced 69 passed and one expected failure in 1.83 seconds. No unrelated
+  tracked change appeared.
+- WP11-3 is not accepted yet. Source review found requirements that the frozen
+  tests did not enforce strongly enough. This is a genuine tests-only contract
+  repair, not permission to weaken an existing assertion or add a feature:
+  (1) `SnapshotComponentCache.load` recomputes SHA-256 for the manifest and the
+  selected NPZ on every call, so an ordinary Spike rerender rereads roughly
+  212 MB despite returning the retained decompressed arrays; (2) the production
+  live loader passes a cache directory where `load_component_arrays` requires
+  the exact component NPZ path; (3) absent Spike population provenance is
+  accepted instead of failing closed; (4) active-population channel parsing can
+  raise on a nonnumeric channel value and partially duplicates the established
+  metadata-filter semantics; and (5) snapshot files may currently be symlinks,
+  contradicting the exact-entered-directory read boundary.
+- The review also found an under-specified plotting test. The authoritative
+  cached-view requirement is the complete list in Section 3.6 and
+  `webappDesign.md` Section 4.4, not merely one ITPC map and one unit-PPC map.
+  WP11 must expose, through cache-only adapters, Power condition PSD and band
+  summary; Synchrony ITPC/ISPC maps, phase-band summaries, PLV distributions,
+  and cached exemplars; and Spike unit maps, reliable-population/FDR/eligible
+  count maps, band summaries, and the saved low/high exemplar pair. Each view
+  uses explicit categorical selectors relevant to its axes and delegates to
+  the existing plotting module. No numerical pipeline, raw source, or report
+  writer may be called.
+- Before corrective source work, the same Terra high writer receives a bounded
+  WP11-3R tests-only package limited to `test_lfp_summary_webapp.py`. It adds:
+  receipt-identity reuse proving cache hits perform no hash or NPZ open; exact
+  component-path coverage for the live loader; missing-probe fail-closed
+  behavior; robust established channel-metadata selection; symlink rejection;
+  saved component-configuration use for snapshot labels/provenance; and one
+  delegation/axis-selection test for every cached view listed above. The commit
+  must contain tests only, and Sol must record genuine RED before returning
+  `lfp_summary_webapp.py` to the writer.
+- The corrective WP11-3R source package is limited to
+  `lfp_summary_webapp.py`. A valid `SnapshotInspection` retains the receipt's
+  manifest and per-component SHA-256 identities so `SnapshotComponentCache`
+  keys them without reopening files. The parent route may later retain that
+  inspection in Streamlit session state; an unchanged ordinary rerender must
+  not rehash the 444-MB snapshot. A path/file stat-identity change or explicit
+  path change invalidates the retained inspection and reruns full receipt
+  validation. Regular immediate children only are accepted; symlinks are
+  rejected. Snapshot plot context is reconstructed from the selected
+  component's saved configuration snapshot, preserving cluster provenance.
+- WP11-4 remains blocked until the repaired core tests and the original WP11-3
+  tests are green and the repair is committed. The single sequential writer and
+  all existing ownership, no-compute, no-network, no-write, and no-new-
+  dependency rules remain unchanged.
 
 ### WP12 - Complete PPC plotting and reporting
 
