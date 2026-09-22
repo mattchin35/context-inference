@@ -205,18 +205,19 @@ def test_summary_route_forwards_sorter_and_aligned_paths_for_both_probes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """The parent route must preserve every page-entered probe source identity.
+    """The parent route must preserve paths and lazy metadata callbacks.
 
     Parameters
     ----------
     monkeypatch : pytest.MonkeyPatch
-        Replaces the child renderer so no Streamlit controls, files, or numerical
-        computations are executed.
+        Replaces the child renderer and lazy loaders so the test can distinguish
+        callback forwarding from eager metadata I/O.
     tmp_path : pathlib.Path
         Temporary root used to construct distinct ProbeA and ProbeB source paths.
     """
 
     received: dict[str, object] = {}
+    loader_calls: list[Path] = []
 
     def fake_render(*args: object, **kwargs: object) -> None:
         """Record child-route inputs without loading metadata or cache files."""
@@ -224,12 +225,36 @@ def test_summary_route_forwards_sorter_and_aligned_paths_for_both_probes(
         del args
         received.update(kwargs)
 
+    def fail_cluster_loader(sorter_path: Path) -> pd.DataFrame:
+        """Fail if parent delegation eagerly opens selected sorter metadata."""
+
+        loader_calls.append(sorter_path)
+        raise AssertionError("parent delegation eagerly loaded cluster metadata")
+
+    def fail_channel_loader(sorter_path: Path) -> pd.DataFrame:
+        """Fail if parent delegation eagerly opens selected channel metadata."""
+
+        loader_calls.append(sorter_path)
+        raise AssertionError("parent delegation eagerly loaded channel metadata")
+
     monkeypatch.setattr(
         psth_webapp.lfp_summary_webapp,
         "make_production_summary_dependencies",
         lambda: object(),
     )
     monkeypatch.setattr(psth_webapp.lfp_summary_webapp, "render_lfp_summary_view", fake_render)
+    monkeypatch.setattr(
+        psth_webapp,
+        "load_summary_cluster_metadata",
+        fail_cluster_loader,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        psth_webapp,
+        "load_summary_channel_metadata",
+        fail_channel_loader,
+        raising=False,
+    )
     hpc_sorter = tmp_path / "probe_b" / "kilosort4"
     pfc_sorter = tmp_path / "probe_a" / "kilosort4"
     hpc_aligned = tmp_path / "probe_b" / "aligned_spikes.npz"
@@ -248,6 +273,84 @@ def test_summary_route_forwards_sorter_and_aligned_paths_for_both_probes(
 
     assert received["sorter_paths"] == {"ProbeA": pfc_sorter, "ProbeB": hpc_sorter}
     assert received["aligned_spike_paths"] == {"ProbeA": pfc_aligned, "ProbeB": hpc_aligned}
+    assert received["cluster_metadata_loader"] is fail_cluster_loader
+    assert received["channel_metadata_loader"] is fail_channel_loader
+    assert loader_calls == []
+
+
+def test_summary_metadata_helpers_use_selected_sorter_and_existing_cached_readers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Lazy summary metadata helpers read only one selected probe's cached tables.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces cached table readers and probe-directory inference. No sorter
+        arrays, aligned spikes, raw LFP, or external filesystem are opened.
+    tmp_path : pathlib.Path
+        Temporary root used only to construct one explicit ``kilosort4`` path
+        and its distinct Probe-derived parent directory.
+
+    Returns
+    -------
+    None
+        Requires the cluster helper to delegate the exact selected sorter path
+        to a cluster-info-only cached reader, and the channel helper to resolve
+        the same sorter path through ``infer_probe_derived_dir`` before calling
+        the existing cached channel-quality loader for that Probe parent.
+    """
+
+    sorter_path = tmp_path / "ProbeB" / "kilosort4"
+    probe_parent = sorter_path.parent
+    cluster_calls: list[str] = []
+    infer_calls: list[tuple[Path | str | None, Path | str | None]] = []
+    channel_calls: list[str] = []
+    expected_clusters = pd.DataFrame({"cluster_id": (7,), "ch": (1,), "group": ("good",)})
+    expected_channels = pd.DataFrame({"channel": (1,), "channel_quality": ("good",), "inside_brain": (True,)})
+
+    def load_cluster_info_cached(sorter_directory: str) -> pd.DataFrame:
+        """Record the selected sorter directory and return only cluster metadata."""
+
+        cluster_calls.append(sorter_directory)
+        return expected_clusters
+
+    def infer_probe_derived_dir(
+        sorter_output_path: Path | str | None,
+        lfp_path: Path | str | None,
+    ) -> Path:
+        """Record source identities and return the selected Probe parent."""
+
+        infer_calls.append((sorter_output_path, lfp_path))
+        return probe_parent
+
+    def load_channel_quality_cached(probe_directory: str) -> pd.DataFrame:
+        """Record the resolved Probe parent and return normalized channel metadata."""
+
+        channel_calls.append(probe_directory)
+        return expected_channels
+
+    monkeypatch.setattr(psth_webapp, "load_cluster_info_cached", load_cluster_info_cached, raising=False)
+    monkeypatch.setattr(
+        psth_webapp.unit_spike_loading,
+        "infer_probe_derived_dir",
+        infer_probe_derived_dir,
+    )
+    monkeypatch.setattr(
+        psth_webapp,
+        "load_channel_quality_cached",
+        load_channel_quality_cached,
+    )
+
+    clusters = psth_webapp.load_summary_cluster_metadata(sorter_path)
+    channels = psth_webapp.load_summary_channel_metadata(sorter_path)
+
+    assert clusters is expected_clusters
+    assert channels is expected_channels
+    assert cluster_calls == [str(sorter_path)]
+    assert infer_calls == [(sorter_path, None)]
+    assert channel_calls == [str(probe_parent)]
 
 
 def test_derived_open_ephys_lfp_paths_use_aligned_sync_adapters(
