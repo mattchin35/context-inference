@@ -796,7 +796,9 @@ def _snapshot_plot_context(
             "after": (config.analysis_windows.after_start_s, config.analysis_windows.after_stop_s),
         },
         notch_enabled=config.phase.notch_enabled,
-        gamma_exclusion_hz=gamma.excluded_intervals_hz[0],
+        gamma_exclusion_hz=(
+            gamma.excluded_intervals_hz[0] if gamma.excluded_intervals_hz else None
+        ),
         reference_description=(
             "Cached snapshot provenance is retained in the manifest."
             if source_cluster_directory is None
@@ -970,6 +972,562 @@ def select_spike_snapshot_slice(
     return SpikeSnapshotSlice(selection.view, condition_index, site_index, epoch_index, band_index)
 
 
+def _require_cached_arrays(arrays: Mapping[str, np.ndarray], names: set[str], component: str) -> None:
+    """Require named arrays before a cache-only component adapter indexes them.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        One selected decoded NPZ component with saved shapes, axes, and units.
+    names : set[str]
+        Required stored array names; this helper does not alter their contents.
+    component : str
+        Categorical cache component name used only in an error message.
+
+    Returns
+    -------
+    None
+        Raises ``ValueError`` when a required saved array is absent.
+    """
+
+    missing = names - set(arrays)
+    if missing:
+        raise ValueError(f"cached {component} arrays lack required array: {sorted(missing)[0]}")
+
+
+def _cached_axis_values(arrays: Mapping[str, np.ndarray], name: str) -> tuple[str, ...]:
+    """Return one nonempty saved categorical axis without transforming cache values.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Selected component arrays with named categorical axes.
+    name : str
+        Saved one-dimensional axis key, such as ``"condition_names"``.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Ordered string labels copied from the saved axis. Labels have no units.
+    """
+
+    values = np.asarray(arrays.get(name, ()))
+    if values.ndim != 1 or values.size == 0:
+        raise ValueError(f"cached {name} must be a nonempty one-dimensional axis")
+    return tuple(str(value) for value in values)
+
+
+def _retained_band_frequency_indices(
+    frequency_hz: np.ndarray,
+    config: LFPSummaryConfig,
+    band_name: str,
+) -> np.ndarray:
+    """Select saved Hz bins within one band and outside its open exclusions.
+
+    Parameters
+    ----------
+    frequency_hz : numpy.ndarray
+        Finite one-dimensional saved frequency coordinates in Hz.
+    config : LFPSummaryConfig
+        Immutable saved phase-band bounds and open excluded intervals in Hz.
+    band_name : str
+        Categorical saved band label.
+
+    Returns
+    -------
+    numpy.ndarray
+        Nonempty integer positions into ``frequency_hz``. The outer bounds are
+        inclusive and each configured exclusion interval is open.
+    """
+
+    frequency = np.asarray(frequency_hz, dtype=float)
+    if frequency.ndim != 1 or not np.all(np.isfinite(frequency)):
+        raise ValueError("cached frequency_hz must be a finite one-dimensional axis")
+    band = next((item for item in config.phase.bands if item.name == band_name), None)
+    if band is None:
+        raise ValueError(f"saved phase configuration lacks band {band_name!r}")
+    retained = (frequency >= band.lower_hz) & (frequency <= band.upper_hz)
+    for low_hz, high_hz in band.excluded_intervals_hz:
+        retained &= ~((frequency > low_hz) & (frequency < high_hz))
+    indices = np.flatnonzero(retained)
+    if not indices.size:
+        raise ValueError(f"cached frequency axis has no retained {band_name} bins")
+    return indices
+
+
+def _plot_cached_power_component(
+    arrays: Mapping[str, np.ndarray],
+    selection: SnapshotPlotSelection,
+    context: lfp_summary_plotting.PlotContext,
+) -> plt.Figure:
+    """Delegate one saved Power view using only selected categorical cache axes.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Power arrays with PSD axes ``(site, trial, epoch, frequency)`` in dB
+        and band-power axes ``(site, trial, epoch, band)`` in dB.
+    selection : SnapshotPlotSelection
+        Saved site/condition/epoch labels; the band-summary view displays its
+        complete saved epoch and band axes.
+    context : lfp_summary_plotting.PlotContext
+        Immutable saved provenance and physical-unit labels.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        Unsaved cache-only Power figure delegated to the plotting module.
+    """
+
+    _require_cached_arrays(
+        arrays,
+        {
+            "frequency_hz", "normalized_psd_session_db", "band_power_session_db",
+            "condition_names", "condition_membership", "filter_membership",
+            "condition_effective_trial_count", "site_ids", "epoch_names", "band_names",
+        },
+        "Power",
+    )
+    condition_index = _named_index(arrays["condition_names"], selection.condition_name, "condition_names")
+    site_index = _named_index(arrays["site_ids"], selection.site_id, "site_ids")
+    epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
+    selected_trials = _condition_trials(arrays, condition_index)
+    condition_names = _cached_axis_values(arrays, "condition_names")
+    epoch_names = _cached_axis_values(arrays, "epoch_names")
+    band_names = _cached_axis_values(arrays, "band_names")
+    if selection.view == "condition_psd":
+        psd = np.asarray(arrays["normalized_psd_session_db"])
+        if psd.ndim != 4:
+            raise ValueError("cached Power PSD axes are invalid")
+        figure, _ = lfp_summary_plotting.plot_condition_psd(
+            np.asarray(arrays["frequency_hz"]),
+            psd[site_index, selected_trials, epoch_index, :][np.newaxis, :, :],
+            (selection.condition_name,),
+            np.array((np.count_nonzero(selected_trials),), dtype=np.int64),
+            selection.site_id,
+            selection.epoch_name,
+            "session-normalized dB",
+            context,
+        )
+        return figure
+    if selection.view == "band_power_summary":
+        values = np.asarray(arrays["band_power_session_db"])
+        if values.ndim != 4:
+            raise ValueError("cached Power band axes are invalid")
+        selected_values = np.full((1, values.shape[1], values.shape[2], values.shape[3]), np.nan)
+        selected_values[0, selected_trials] = values[site_index, selected_trials]
+        counts = np.asarray(arrays["condition_effective_trial_count"])[condition_index, site_index]
+        figure, _ = lfp_summary_plotting.plot_band_power_summary(
+            selected_values,
+            (condition_names[condition_index],),
+            epoch_names,
+            band_names,
+            np.full((1, len(epoch_names)), int(counts), dtype=np.int64),
+            selection.site_id,
+            "session-normalized dB",
+            context,
+        )
+        return figure
+    raise ValueError(f"unknown cached Power view: {selection.view!r}")
+
+
+def _synchrony_entity(
+    arrays: Mapping[str, np.ndarray],
+    selection: SnapshotPlotSelection,
+) -> tuple[int, np.ndarray, str, str, str]:
+    """Resolve one saved Synchrony site or pair and its display validity mask.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Synchrony arrays with site/pair labels and validity axes ``(entity, trial)``.
+    selection : SnapshotPlotSelection
+        Selected site or ``site_a-site_b`` pair plus view family.
+
+    Returns
+    -------
+    tuple[int, numpy.ndarray, str, str, str]
+        Entity index, boolean validity mask, metric-array prefix, metric label,
+        and selected saved entity label. The mask has shape ``(trial,)``.
+    """
+
+    pair_views = {"ispc_map", "ispc_band_summary", "plv_distribution", "plv_exemplar"}
+    trial_count = np.asarray(arrays["filter_membership"]).size
+    if selection.view not in pair_views:
+        index = _named_index(arrays["site_ids"], selection.site_id, "site_ids")
+        validity = np.asarray(
+            arrays.get("site_valid", np.ones((len(arrays["site_ids"]), trial_count), dtype=bool)),
+            dtype=bool,
+        )[index]
+        return index, validity, "itpc", "ITPC", selection.site_id
+    labels = _pair_labels(arrays)
+    if selection.site_id not in labels:
+        raise ValueError(f"cached pair labels lack selected value {selection.site_id!r}")
+    index = labels.index(selection.site_id)
+    validity = np.asarray(
+        arrays.get("pair_valid", np.ones((len(labels), trial_count), dtype=bool)),
+        dtype=bool,
+    )[index]
+    return index, validity, "ispc", "ISPC", selection.site_id
+
+
+def _plot_cached_synchrony_component(
+    arrays: Mapping[str, np.ndarray],
+    config: LFPSummaryConfig,
+    selection: SnapshotPlotSelection,
+    context: lfp_summary_plotting.PlotContext,
+) -> plt.Figure:
+    """Delegate one saved Synchrony view without recomputing phase statistics.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Synchrony arrays with Hz/time coordinates and documented saved trial,
+        site/pair, epoch, and band axes.
+    config : LFPSummaryConfig
+        Saved band bounds/exclusions used only to select already-cached bins.
+    selection : SnapshotPlotSelection
+        Categorical saved view/site-or-pair/condition/epoch/band selection.
+    context : lfp_summary_plotting.PlotContext
+        Immutable saved plot provenance.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        Unsaved cache-only Synchrony figure delegated to the plotting module.
+    """
+
+    _require_cached_arrays(
+        arrays,
+        {"condition_names", "site_ids", "frequency_hz", "relative_time_s", "condition_membership", "filter_membership"},
+        "Synchrony",
+    )
+    condition_index = _named_index(arrays["condition_names"], selection.condition_name, "condition_names")
+    entity_index, validity, metric_prefix, metric_name, entity_label = _synchrony_entity(arrays, selection)
+    selected_trials = _condition_trials(arrays, condition_index, validity)
+    if selection.view not in {"itpc_band_summary", "ispc_band_summary", "plv_distribution", "plv_exemplar"}:
+        metric = np.asarray(arrays[metric_prefix])
+        count = np.asarray(arrays[f"{metric_prefix}_effective_trial_count"])
+        figure, _ = lfp_summary_plotting.plot_phase_map(
+            metric[condition_index, entity_index],
+            count[condition_index, entity_index],
+            np.asarray(arrays["frequency_hz"]),
+            np.asarray(arrays["relative_time_s"]),
+            metric_name,
+            entity_label,
+            selection.condition_name,
+            context,
+            total_displayed_trial_count=int(np.count_nonzero(selected_trials)),
+        )
+        return figure
+    if selection.view in {"itpc_band_summary", "ispc_band_summary"}:
+        epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
+        band_index = _named_index(arrays["band_names"], selection.band_name, "band_names")
+        figure, _ = lfp_summary_plotting.plot_phase_band_summary(
+            np.array((np.asarray(arrays[f"{metric_prefix}_band_mean"])[condition_index, entity_index, epoch_index, band_index],)),
+            np.array((np.asarray(arrays[f"{metric_prefix}_ci_low"])[condition_index, entity_index, epoch_index, band_index],)),
+            np.array((np.asarray(arrays[f"{metric_prefix}_ci_high"])[condition_index, entity_index, epoch_index, band_index],)),
+            np.array((np.count_nonzero(selected_trials),), dtype=np.int64),
+            (f"{entity_label} {selection.condition_name}",),
+            selection.band_name,
+            selection.epoch_name,
+            metric_name,
+            context,
+        )
+        return figure
+    if selection.view not in {"plv_distribution", "plv_exemplar"}:
+        raise ValueError(f"unknown cached Synchrony view: {selection.view!r}")
+    band_index = _named_index(arrays["band_names"], selection.band_name, "band_names")
+    retained_frequency = _retained_band_frequency_indices(
+        np.asarray(arrays["frequency_hz"]), config, selection.band_name
+    )
+    band_plv = np.asarray(arrays["plv_band_mean"])[selected_trials, entity_index, :, band_index]
+    sample_counts = np.asarray(arrays["plv_valid_sample_count"])[selected_trials, entity_index, :, :]
+    sample_fractions = np.asarray(arrays["plv_valid_sample_fraction"])[selected_trials, entity_index, :, :]
+    conservative_counts = np.min(sample_counts[..., retained_frequency], axis=-1)
+    conservative_fractions = np.min(sample_fractions[..., retained_frequency], axis=-1)
+    if selection.view == "plv_distribution":
+        epoch_names = _cached_axis_values(arrays, "epoch_names")
+        figure, _ = lfp_summary_plotting.plot_plv_distribution(
+            band_plv,
+            conservative_counts,
+            conservative_fractions,
+            epoch_names,
+            entity_label,
+            selection.band_name,
+            selection.condition_name,
+            context,
+        )
+        return figure
+    epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
+    candidate_rows = np.flatnonzero(selected_trials)
+    if not candidate_rows.size:
+        raise ValueError("selected PLV cache has no valid trial")
+    local_values = np.asarray(arrays["plv_band_mean"])[candidate_rows, entity_index, epoch_index, band_index]
+    local_index = int(np.nanargmax(local_values))
+    trial_row = int(candidate_rows[local_index])
+    trial_id = int(np.asarray(arrays["trial_indices"])[trial_row])
+    site_a, site_b = entity_label.split("-", 1)
+    site_labels = _cached_axis_values(arrays, "site_ids")
+    site_rows = (site_labels.index(site_a), site_labels.index(site_b))
+    figure, _ = lfp_summary_plotting.plot_plv_exemplar(
+        np.asarray(arrays["relative_time_s"]),
+        np.asarray(arrays["source_trace"])[list(site_rows), trial_row],
+        np.asarray(arrays["band_filtered_trace"])[list(site_rows), trial_row, band_index],
+        np.asarray(arrays["hilbert_phase_rad"])[list(site_rows), trial_row, band_index],
+        (site_a, site_b),
+        entity_label,
+        trial_id,
+        "high",
+        float(np.nanmean(local_values)),
+        float(local_values[local_index]),
+        context,
+    )
+    return figure
+
+
+def _plot_population_ppc_maps(
+    arrays: Mapping[str, np.ndarray],
+    selected: SpikeSnapshotSlice,
+    condition_names: tuple[str, ...],
+    context: lfp_summary_plotting.PlotContext,
+    site_label: str,
+    epoch_name: str,
+) -> plt.Figure:
+    """Plot saved population PPC using distinct reliable and eligible masks.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Spike PPC/mask arrays with axes ``(unit, condition, site, epoch, frequency)``.
+    selected : SpikeSnapshotSlice
+        Selected site and epoch positions; population maps retain all conditions.
+    condition_names : tuple[str, ...]
+        Saved labels for the population-map condition axis.
+    context : lfp_summary_plotting.PlotContext
+        Immutable saved provenance.
+    site_label, epoch_name : str
+        Selected categorical labels used only for figure text.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        Unsaved reliable-median and eligible-FDR cache-only figure.
+    """
+
+    ppc = np.asarray(arrays["ppc"])[:, :, selected.site_index, selected.epoch_index, :]
+    reliable = np.asarray(arrays["reliable"], dtype=bool)[:, :, selected.site_index, selected.epoch_index, :]
+    eligible = np.asarray(arrays["null_eligible"], dtype=bool)[:, :, selected.site_index, selected.epoch_index, :]
+    significant = np.asarray(arrays["significant"], dtype=bool)[:, :, selected.site_index, selected.epoch_index, :]
+    median = np.full(ppc.shape[1:], np.nan)
+    fraction = np.full(ppc.shape[1:], np.nan)
+    eligible_count = np.sum(eligible, axis=0, dtype=np.int64)
+    for condition_index in range(ppc.shape[1]):
+        for frequency_index in range(ppc.shape[2]):
+            reliable_values = ppc[:, condition_index, frequency_index][reliable[:, condition_index, frequency_index]]
+            if reliable_values.size:
+                median[condition_index, frequency_index] = np.nanmedian(reliable_values)
+            eligible_values = significant[:, condition_index, frequency_index][eligible[:, condition_index, frequency_index]]
+            if eligible_values.size:
+                fraction[condition_index, frequency_index] = np.mean(eligible_values)
+    figure, _ = lfp_summary_plotting.plot_population_ppc_maps(
+        median,
+        fraction,
+        eligible_count,
+        np.full_like(eligible_count, ppc.shape[0]),
+        condition_names,
+        np.asarray(arrays["frequency_hz"]),
+        site_label,
+        epoch_name,
+        context,
+    )
+    return figure
+
+
+def _spike_band_reliability(
+    arrays: Mapping[str, np.ndarray],
+    config: LFPSummaryConfig,
+    site_index: int,
+    band_names: tuple[str, ...],
+) -> np.ndarray:
+    """Reduce saved frequency reliability to all-retained-bin band reliability.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Spike reliability mask with axes ``(unit, condition, site, epoch, frequency)``.
+    config : LFPSummaryConfig
+        Saved phase-band bounds and open exclusions in Hz.
+    site_index : int
+        Selected saved site-axis position.
+    band_names : tuple[str, ...]
+        Ordered saved output band labels.
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean shape ``(unit, condition, epoch, band)``. A true value means
+        every retained frequency in that saved band is reliable.
+    """
+
+    reliability = np.asarray(arrays["reliable"], dtype=bool)[:, :, site_index, :, :]
+    output = np.empty(reliability.shape[:3] + (len(band_names),), dtype=bool)
+    for band_index, band_name in enumerate(band_names):
+        frequency_indices = _retained_band_frequency_indices(
+            np.asarray(arrays["frequency_hz"]), config, band_name
+        )
+        output[..., band_index] = np.all(reliability[..., frequency_indices], axis=-1)
+    return output
+
+
+def _spike_exemplar_panel(
+    arrays: Mapping[str, np.ndarray],
+    selected: SpikeSnapshotSlice,
+    unit_ids: tuple[str, ...],
+    percentile: str,
+) -> lfp_summary_plotting.PPCExemplarPanel:
+    """Build one saved low/high Spike panel without selecting a new trial.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Cached Spike arrays with saved unit/trial exemplar identities and packed
+        relative spike times in seconds.
+    selected : SpikeSnapshotSlice
+        Selected condition/site/epoch/band positions.
+    unit_ids : tuple[str, ...]
+        Saved probe-qualified unit axis labels.
+    percentile : str
+        Exact ``"low"`` or ``"high"`` saved exemplar identity.
+
+    Returns
+    -------
+    lfp_summary_plotting.PPCExemplarPanel
+        One pooled unit metric and its separately saved illustrative trial.
+    """
+
+    if percentile not in {"low", "high"}:
+        raise ValueError("Spike exemplar percentile must be low or high")
+    index = (selected.condition_index, selected.site_index, selected.epoch_index, selected.band_index)
+    unit_name = str(np.asarray(arrays[f"selected_{percentile}_unit_ids"])[index])
+    if unit_name not in unit_ids:
+        raise ValueError("cached Spike exemplar unit is unavailable")
+    unit_index = unit_ids.index(unit_name)
+    trial_id = int(np.asarray(arrays[f"illustrative_{percentile}_trial_indices"])[index])
+    trial_rows = np.flatnonzero(np.asarray(arrays["trial_indices"]) == trial_id)
+    if trial_rows.size != 1:
+        raise ValueError("cached Spike exemplar trial is unavailable")
+    trial_row = int(trial_rows[0])
+    offsets = np.asarray(arrays["relative_spike_time_offsets"])[unit_index]
+    times = np.asarray(arrays["relative_spike_times_s"])[offsets[trial_row]:offsets[trial_row + 1]]
+    label = "5th percentile" if percentile == "low" else "95th percentile"
+    return lfp_summary_plotting.PPCExemplarPanel(
+        unit_name,
+        label,
+        np.asarray(arrays["ppc"])[unit_index, selected.condition_index, selected.site_index, selected.epoch_index],
+        np.asarray(arrays["preferred_phase_rad"])[unit_index, selected.condition_index, selected.site_index, selected.epoch_index],
+        np.asarray(arrays["representative_phase_hist_count"])[unit_index, selected.condition_index, selected.site_index, selected.epoch_index, selected.band_index],
+        trial_id,
+        np.asarray(arrays["source_trace"])[selected.site_index, trial_row],
+        np.asarray(arrays["band_filtered_trace"])[selected.site_index, trial_row, selected.band_index],
+        np.asarray(arrays["hilbert_phase_rad"])[selected.site_index, trial_row, selected.band_index],
+        times,
+    )
+
+
+def _plot_cached_spike_component(
+    arrays: Mapping[str, np.ndarray],
+    config: LFPSummaryConfig,
+    selection: SnapshotPlotSelection,
+    context: lfp_summary_plotting.PlotContext,
+) -> plt.Figure:
+    """Delegate one saved Spike view while preserving all saved identities.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Spike arrays with documented unit/condition/site/epoch/frequency axes
+        and cached exemplar paths; PPC is dimensionless and frequency is Hz.
+    config : LFPSummaryConfig
+        Saved phase-band metadata used only for retained bins/display labels.
+    selection : SnapshotPlotSelection
+        Categorical saved view/site/condition/epoch/band selection.
+    context : lfp_summary_plotting.PlotContext
+        Immutable saved plot provenance.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        Unsaved cache-only Spike figure delegated to the plotting module.
+    """
+
+    _require_cached_arrays(arrays, {"unit_ids", "frequency_hz", "ppc", "computable", "reliable", "spike_count"}, "Spike")
+    selected = select_spike_snapshot_slice(arrays, selection)
+    unit_ids = _cached_axis_values(arrays, "unit_ids")
+    condition_names = _cached_axis_values(arrays, "condition_names")
+    epoch_names = _cached_axis_values(arrays, "epoch_names")
+    band_names = _cached_axis_values(arrays, "band_names")
+    ppc = np.asarray(arrays["ppc"])[:, selected.condition_index, selected.site_index, selected.epoch_index, :]
+    computable = np.asarray(arrays["computable"])[:, selected.condition_index, selected.site_index, selected.epoch_index, :]
+    reliable = np.asarray(arrays["reliable"])[:, selected.condition_index, selected.site_index, selected.epoch_index, :]
+    spike_count = np.asarray(arrays["spike_count"])[:, selected.condition_index, selected.site_index, selected.epoch_index, :]
+    if selection.view == "unit_ppc_map":
+        figure, _ = lfp_summary_plotting.plot_unit_ppc_map(
+            ppc, computable, reliable, spike_count, np.asarray(arrays["frequency_hz"]), unit_ids,
+            selection.condition_name, selection.site_id, selection.epoch_name, context,
+        )
+        return figure
+    if selection.view == "population_ppc_maps":
+        _require_cached_arrays(arrays, {"null_eligible", "significant"}, "Spike")
+        return _plot_population_ppc_maps(
+            arrays, selected, condition_names, context, selection.site_id, selection.epoch_name
+        )
+    if selection.view == "ppc_band_summary":
+        _require_cached_arrays(arrays, {"ppc_band_mean"}, "Spike")
+        band_values = np.asarray(arrays["ppc_band_mean"])[:, :, selected.site_index, :, :]
+        reliable_band = _spike_band_reliability(arrays, config, selected.site_index, band_names)
+        figure, _ = lfp_summary_plotting.plot_ppc_band_summary(
+            np.moveaxis(band_values, 0, 1),
+            np.moveaxis(reliable_band, 0, 1),
+            condition_names,
+            epoch_names,
+            band_names,
+            len(unit_ids),
+            selection.site_id,
+            context,
+        )
+        return figure
+    if selection.view == "ppc_exemplar_pair":
+        _require_cached_arrays(
+            arrays,
+            {
+                "phase_bin_edges_rad", "relative_time_s", "selected_low_unit_ids",
+                "selected_high_unit_ids", "illustrative_low_trial_indices",
+                "illustrative_high_trial_indices", "relative_spike_time_offsets",
+                "relative_spike_times_s", "preferred_phase_rad",
+                "representative_phase_hist_count", "source_trace", "band_filtered_trace",
+                "hilbert_phase_rad", "trial_indices",
+            },
+            "Spike",
+        )
+        representative_frequency_hz = 8.0 if selection.band_name == "theta" else 40.0
+        figure, _ = lfp_summary_plotting.plot_ppc_exemplar_pair(
+            frequency_hz=np.asarray(arrays["frequency_hz"]),
+            phase_bin_edges_rad=np.asarray(arrays["phase_bin_edges_rad"]),
+            relative_time_s=np.asarray(arrays["relative_time_s"]),
+            low=_spike_exemplar_panel(arrays, selected, unit_ids, "low"),
+            high=_spike_exemplar_panel(arrays, selected, unit_ids, "high"),
+            condition_name=selection.condition_name,
+            site_label=selection.site_id,
+            epoch_name=selection.epoch_name,
+            band_name=selection.band_name,
+            representative_frequency_hz=representative_frequency_hz,
+            context=context,
+        )
+        return figure
+    raise ValueError(f"unknown cached Spike view: {selection.view!r}")
+
+
 def plot_cached_snapshot_component(
     component: str,
     arrays: Mapping[str, np.ndarray],
@@ -1004,201 +1562,12 @@ def plot_cached_snapshot_component(
 
     saved_config, cluster_directory = _saved_snapshot_config(inspection, component, config)
     context = _snapshot_plot_context(saved_config, cluster_directory)
-    condition_names = tuple(str(value) for value in arrays.get("condition_names", np.array(())))
-    epoch_names = tuple(str(value) for value in arrays.get("epoch_names", np.array(())))
-    band_names = tuple(str(value) for value in arrays.get("band_names", np.array(())))
     if component == "power":
-        required = {
-            "frequency_hz", "normalized_psd_session_db", "band_power_session_db",
-            "condition_names", "condition_membership", "filter_membership",
-            "condition_effective_trial_count", "site_ids", "epoch_names", "band_names",
-        }
-        missing = required - set(arrays)
-        if missing:
-            raise ValueError(f"cached Power arrays lack required array: {sorted(missing)[0]}")
-        condition_index = _named_index(arrays["condition_names"], selection.condition_name, "condition_names")
-        site_index = _named_index(arrays["site_ids"], selection.site_id, "site_ids")
-        epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
-        selected_trials = _condition_trials(arrays, condition_index)
-        if selection.view == "condition_psd":
-            psd = np.asarray(arrays["normalized_psd_session_db"])
-            if psd.ndim != 4:
-                raise ValueError("cached Power PSD axes are invalid")
-            values = psd[site_index, selected_trials, epoch_index, :][np.newaxis, :, :]
-            figure, _ = lfp_summary_plotting.plot_condition_psd(
-                np.asarray(arrays["frequency_hz"]), values, (selection.condition_name,),
-                np.array((np.count_nonzero(selected_trials),), dtype=np.int64),
-                selection.site_id, selection.epoch_name, "session-normalized dB", context,
-            )
-            return figure
-        if selection.view == "band_power_summary":
-            values = np.asarray(arrays["band_power_session_db"])
-            if values.ndim != 4:
-                raise ValueError("cached Power band axes are invalid")
-            condition_values = np.full((1, values.shape[1], values.shape[2], values.shape[3]), np.nan)
-            condition_values[0, selected_trials] = values[site_index, selected_trials]
-            counts = np.asarray(arrays["condition_effective_trial_count"])[condition_index, site_index]
-            figure, _ = lfp_summary_plotting.plot_band_power_summary(
-                condition_values, (selection.condition_name,), epoch_names, band_names,
-                np.full((1, len(epoch_names)), int(counts), dtype=np.int64), selection.site_id,
-                "session-normalized dB", context,
-            )
-            return figure
-        raise ValueError(f"unknown cached Power view: {selection.view!r}")
+        return _plot_cached_power_component(arrays, selection, context)
     if component == "synchrony":
-        required = {"condition_names", "site_ids", "frequency_hz", "relative_time_s", "condition_membership", "filter_membership"}
-        missing = required - set(arrays)
-        if missing:
-            raise ValueError(f"cached Synchrony arrays lack required array: {sorted(missing)[0]}")
-        condition_index = _named_index(arrays["condition_names"], selection.condition_name, "condition_names")
-        if selection.view not in {"ispc_map", "ispc_band_summary", "plv_distribution", "plv_exemplar"}:
-            entity_index = _named_index(arrays["site_ids"], selection.site_id, "site_ids")
-            validity = np.asarray(arrays.get("site_valid", np.ones((len(arrays["site_ids"]), len(arrays["filter_membership"])), dtype=bool)))[entity_index]
-            metric_prefix, metric_name, entity_label = "itpc", "ITPC", selection.site_id
-        else:
-            labels = _pair_labels(arrays)
-            entity_index = labels.index(selection.site_id) if selection.site_id in labels else -1
-            if entity_index < 0:
-                raise ValueError(f"cached pair labels lack selected value {selection.site_id!r}")
-            validity = np.asarray(arrays.get("pair_valid", np.ones((len(labels), len(arrays["filter_membership"])), dtype=bool)))[entity_index]
-            metric_prefix, metric_name, entity_label = "ispc", "ISPC", selection.site_id
-        selected_trials = _condition_trials(arrays, condition_index, validity)
-        if selection.view not in {"itpc_band_summary", "ispc_band_summary", "plv_distribution", "plv_exemplar"}:
-            metric = np.asarray(arrays[metric_prefix])
-            count = np.asarray(arrays[f"{metric_prefix}_effective_trial_count"])
-            figure, _ = lfp_summary_plotting.plot_phase_map(
-                metric[condition_index, entity_index], count[condition_index, entity_index],
-                np.asarray(arrays["frequency_hz"]), np.asarray(arrays["relative_time_s"]),
-                metric_name, entity_label, selection.condition_name, context,
-                total_displayed_trial_count=max(int(np.count_nonzero(selected_trials)), int(np.max(count[condition_index, entity_index]))),
-            )
-            return figure
-        if selection.view in {"itpc_band_summary", "ispc_band_summary"}:
-            epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
-            band_index = _named_index(arrays["band_names"], selection.band_name, "band_names")
-            mean = np.asarray(arrays[f"{metric_prefix}_band_mean"])[condition_index, entity_index, epoch_index, band_index]
-            low = np.asarray(arrays[f"{metric_prefix}_ci_low"])[condition_index, entity_index, epoch_index, band_index]
-            high = np.asarray(arrays[f"{metric_prefix}_ci_high"])[condition_index, entity_index, epoch_index, band_index]
-            figure, _ = lfp_summary_plotting.plot_phase_band_summary(
-                np.array((mean,)), np.array((low,)), np.array((high,)),
-                np.array((np.count_nonzero(selected_trials),), dtype=np.int64),
-                (f"{entity_label} {selection.condition_name}",), selection.band_name,
-                selection.epoch_name, metric_name, context,
-            )
-            return figure
-        if selection.view in {"plv_distribution", "plv_exemplar"}:
-            pair_labels = _pair_labels(arrays)
-            pair_index = pair_labels.index(selection.site_id)
-            band_index = _named_index(arrays["band_names"], selection.band_name, "band_names")
-            selected_trials = _condition_trials(arrays, condition_index, np.asarray(arrays["pair_valid"])[pair_index])
-            plv = np.asarray(arrays["plv_band_mean"])[selected_trials, pair_index, :, band_index]
-            counts = np.asarray(arrays["plv_valid_sample_count"])[selected_trials, pair_index, :, band_index]
-            fractions = np.asarray(arrays["plv_valid_sample_fraction"])[selected_trials, pair_index, :, band_index]
-            if selection.view == "plv_distribution":
-                figure, _ = lfp_summary_plotting.plot_plv_distribution(
-                    plv, counts, fractions, epoch_names, selection.site_id, selection.band_name,
-                    selection.condition_name, context,
-                )
-                return figure
-            epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
-            candidate_rows = np.flatnonzero(selected_trials)
-            if not candidate_rows.size:
-                raise ValueError("selected PLV cache has no valid trial")
-            local_values = np.asarray(arrays["plv_band_mean"])[candidate_rows, pair_index, epoch_index, band_index]
-            local_index = int(np.nanargmax(local_values))
-            trial_row = int(candidate_rows[local_index])
-            trial_id = int(np.asarray(arrays["trial_indices"])[trial_row])
-            pair_a, pair_b = selection.site_id.split("-", 1)
-            site_ids = tuple(str(value) for value in arrays["site_ids"])
-            site_rows = (site_ids.index(pair_a), site_ids.index(pair_b))
-            figure, _ = lfp_summary_plotting.plot_plv_exemplar(
-                np.asarray(arrays["relative_time_s"]), np.asarray(arrays["source_trace"])[list(site_rows), trial_row],
-                np.asarray(arrays["band_filtered_trace"])[list(site_rows), trial_row, band_index],
-                np.asarray(arrays["hilbert_phase_rad"])[list(site_rows), trial_row, band_index],
-                (pair_a, pair_b), selection.site_id, trial_id, "high", float(np.nanmean(local_values)),
-                float(local_values[local_index]), context,
-            )
-            return figure
-        raise ValueError(f"unknown cached Synchrony view: {selection.view!r}")
+        return _plot_cached_synchrony_component(arrays, saved_config, selection, context)
     if component == "spike_phase":
-        required = {"unit_ids", "frequency_hz", "ppc", "computable", "reliable", "spike_count"}
-        missing = required - set(arrays)
-        if missing:
-            raise ValueError(f"cached Spike arrays lack required array: {sorted(missing)[0]}")
-        selected = select_spike_snapshot_slice(arrays, selection)
-        ppc = arrays["ppc"][:, selected.condition_index, selected.site_index, selected.epoch_index, :]
-        computable = arrays["computable"][:, selected.condition_index, selected.site_index, selected.epoch_index, :]
-        reliable = arrays["reliable"][:, selected.condition_index, selected.site_index, selected.epoch_index, :]
-        spike_count = arrays["spike_count"][:, selected.condition_index, selected.site_index, selected.epoch_index, :]
-        unit_ids = tuple(str(value) for value in arrays["unit_ids"])
-        if selection.view == "unit_ppc_map":
-            figure, _ = lfp_summary_plotting.plot_unit_ppc_map(
-                ppc, computable, reliable, spike_count, arrays["frequency_hz"], unit_ids,
-                selection.condition_name, selection.site_id, selection.epoch_name, context,
-            )
-            return figure
-        if selection.view == "population_ppc_maps":
-            eligible = np.asarray(arrays["null_eligible"])[:, :, selected.site_index, selected.epoch_index, :]
-            significant = np.asarray(arrays["significant"])[:, :, selected.site_index, selected.epoch_index, :]
-            all_ppc = np.asarray(arrays["ppc"])[:, :, selected.site_index, selected.epoch_index, :]
-            reliable_all = np.asarray(arrays["reliable"])[:, :, selected.site_index, selected.epoch_index, :]
-            mask = eligible & reliable_all
-            median = np.full(mask.shape[1:], np.nan)
-            fraction = np.full(mask.shape[1:], np.nan)
-            eligible_count = np.sum(mask, axis=0, dtype=np.int64)
-            for c in range(mask.shape[1]):
-                for f in range(mask.shape[2]):
-                    values = all_ppc[:, c, f][mask[:, c, f]]
-                    if values.size:
-                        median[c, f] = np.nanmedian(values)
-                        fraction[c, f] = np.mean(significant[:, c, f][mask[:, c, f]])
-            figure, _ = lfp_summary_plotting.plot_population_ppc_maps(
-                median, fraction, eligible_count, np.full_like(eligible_count, len(unit_ids)),
-                condition_names, np.asarray(arrays["frequency_hz"]), selection.site_id,
-                selection.epoch_name, context,
-            )
-            return figure
-        if selection.view == "ppc_band_summary":
-            band_values = np.asarray(arrays["ppc_band_mean"])[:, :, selected.site_index, :, :]
-            reliable_band = np.asarray(arrays["reliable"])[:, :, selected.site_index, :, :]
-            figure, _ = lfp_summary_plotting.plot_ppc_band_summary(
-                np.moveaxis(band_values, 0, 1), np.moveaxis(reliable_band, 0, 1),
-                condition_names, epoch_names, band_names, len(unit_ids), selection.site_id, context,
-            )
-            return figure
-        if selection.view == "ppc_exemplar_pair":
-            def make_panel(kind: str) -> lfp_summary_plotting.PPCExemplarPanel:
-                unit_names = np.asarray(arrays[f"selected_{kind}_unit_ids"])
-                selected_name = str(unit_names[selected.condition_index, selected.site_index, selected.epoch_index, selected.band_index])
-                unit_index = unit_ids.index(selected_name)
-                trial_ids = np.asarray(arrays[f"illustrative_{kind}_trial_indices"])
-                trial_id = int(trial_ids[selected.condition_index, selected.site_index, selected.epoch_index, selected.band_index])
-                trial_rows = np.flatnonzero(np.asarray(arrays["trial_indices"]) == trial_id)
-                if trial_rows.size != 1:
-                    raise ValueError("cached Spike exemplar trial is unavailable")
-                trial_row = int(trial_rows[0])
-                offsets = np.asarray(arrays["relative_spike_time_offsets"])[unit_index]
-                spikes = np.asarray(arrays["relative_spike_times_s"])[offsets[trial_row]:offsets[trial_row + 1]]
-                return lfp_summary_plotting.PPCExemplarPanel(
-                    selected_name, kind, np.asarray(arrays["ppc"])[unit_index, selected.condition_index, selected.site_index, selected.epoch_index],
-                    np.asarray(arrays["preferred_phase_rad"])[unit_index, selected.condition_index, selected.site_index, selected.epoch_index],
-                    np.asarray(arrays["representative_phase_hist_count"])[unit_index, selected.condition_index, selected.site_index, selected.epoch_index, 0],
-                    trial_id, np.asarray(arrays["source_trace"])[selected.site_index, trial_row],
-                    np.asarray(arrays["band_filtered_trace"])[selected.site_index, trial_row, selected.band_index],
-                    np.asarray(arrays["hilbert_phase_rad"])[selected.site_index, trial_row, selected.band_index], spikes,
-                )
-            band = next((item for item in saved_config.phase.bands if item.name == selection.band_name), None)
-            if band is None:
-                raise ValueError("selected Spike band lacks saved configuration")
-            figure, _ = lfp_summary_plotting.plot_ppc_exemplar_pair(
-                frequency_hz=np.asarray(arrays["frequency_hz"]), phase_bin_edges_rad=np.asarray(arrays["phase_bin_edges_rad"]),
-                relative_time_s=np.asarray(arrays["relative_time_s"]), low=make_panel("low"), high=make_panel("high"),
-                condition_name=selection.condition_name, site_label=selection.site_id, epoch_name=selection.epoch_name,
-                band_name=selection.band_name, representative_frequency_hz=(band.lower_hz + band.upper_hz) / 2.0,
-                context=context,
-            )
-            return figure
-        raise ValueError(f"unknown cached Spike view: {selection.view!r}")
+        return _plot_cached_spike_component(arrays, saved_config, selection, context)
     raise ValueError(f"snapshot plotting is unavailable for {component!r}")
 
 
@@ -1643,7 +2012,11 @@ def _plot_cached_power(
             whole_epoch_index,
         ][:, display_frequency]
     gamma_band = next(band for band in config.power.bands if band.name == "gamma")
-    gamma_exclusion_hz = gamma_band.excluded_intervals_hz[0]
+    gamma_exclusion_hz = (
+        gamma_band.excluded_intervals_hz[0]
+        if gamma_band.excluded_intervals_hz
+        else None
+    )
     context = lfp_summary_plotting.PlotContext(
         session_id=config.session_id,
         alignment_event=config.analysis_windows.alignment_event,
@@ -1933,10 +2306,105 @@ def _selected_population(
     return population
 
 
+def _snapshot_view_options(component: str) -> tuple[str, ...]:
+    """Return the approved cache-only views for one scientific component.
+
+    Parameters
+    ----------
+    component : str
+        ``"power"``, ``"synchrony"``, or ``"spike_phase"`` cache identity.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Ordered categorical view labels. They have no numerical units and do
+        not cause cache loading or computation.
+    """
+
+    views = {
+        "power": ("condition_psd", "band_power_summary"),
+        "synchrony": (
+            "itpc_map", "ispc_map", "itpc_band_summary", "ispc_band_summary",
+            "plv_distribution", "plv_exemplar",
+        ),
+        "spike_phase": (
+            "unit_ppc_map", "population_ppc_maps", "ppc_band_summary", "ppc_exemplar_pair",
+        ),
+    }
+    try:
+        return views[component]
+    except KeyError as error:
+        raise ValueError(f"unknown snapshot component: {component!r}") from error
+
+
+def _snapshot_selection_controls(
+    sidebar: object,
+    component: str,
+    arrays: Mapping[str, np.ndarray],
+) -> SnapshotPlotSelection:
+    """Collect only the saved categorical controls relevant to one cached view.
+
+    Parameters
+    ----------
+    sidebar : object
+        Streamlit-compatible sidebar exposing ``selectbox`` only; it receives
+        labels and categorical cached axes, never numerical array values.
+    component : str
+        Selected scientific cache component.
+    arrays : mapping[str, numpy.ndarray]
+        Already-loaded selected component with saved named categorical axes.
+
+    Returns
+    -------
+    SnapshotPlotSelection
+        One complete immutable selection. Fields irrelevant to the chosen view
+        use the first saved axis value without presenting an extra UI control.
+    """
+
+    view = sidebar.selectbox("Cached view", options=_snapshot_view_options(component))
+    site_ids = _cached_axis_values(arrays, "site_ids")
+    condition_names = _cached_axis_values(arrays, "condition_names")
+    epoch_names = _cached_axis_values(arrays, "epoch_names")
+    band_names = _cached_axis_values(arrays, "band_names")
+    site_id = site_ids[0]
+    condition_name = condition_names[0]
+    epoch_name = epoch_names[0]
+    band_name = band_names[0]
+    pair_views = {"ispc_map", "ispc_band_summary", "plv_distribution", "plv_exemplar"}
+    if component == "power":
+        site_id = sidebar.selectbox("Site", options=site_ids)
+        if view == "condition_psd":
+            condition_name = sidebar.selectbox("Condition", options=condition_names)
+            epoch_name = sidebar.selectbox("Epoch", options=epoch_names)
+        return SnapshotPlotSelection(view, site_id, condition_name, epoch_name, band_name)
+    if component == "synchrony":
+        if view in pair_views:
+            site_id = sidebar.selectbox("Site pair", options=_pair_labels(arrays))
+        else:
+            site_id = sidebar.selectbox("Site", options=site_ids)
+        condition_name = sidebar.selectbox("Condition", options=condition_names)
+        if view in {"itpc_band_summary", "ispc_band_summary", "plv_exemplar"}:
+            epoch_name = sidebar.selectbox("Epoch", options=epoch_names)
+        if view in {"itpc_band_summary", "ispc_band_summary", "plv_distribution", "plv_exemplar"}:
+            band_name = sidebar.selectbox("Band", options=band_names)
+        return SnapshotPlotSelection(view, site_id, condition_name, epoch_name, band_name)
+    if component == "spike_phase":
+        site_id = sidebar.selectbox("Site", options=site_ids)
+        if view in {"unit_ppc_map", "ppc_exemplar_pair"}:
+            condition_name = sidebar.selectbox("Condition", options=condition_names)
+        if view in {"unit_ppc_map", "population_ppc_maps", "ppc_exemplar_pair"}:
+            epoch_name = sidebar.selectbox("Epoch", options=epoch_names)
+        if view == "ppc_exemplar_pair":
+            band_name = sidebar.selectbox("Band", options=band_names)
+        return SnapshotPlotSelection(view, site_id, condition_name, epoch_name, band_name)
+    raise ValueError(f"unknown snapshot component: {component!r}")
+
+
 def _snapshot_component_counts(
     streamlit: StreamlitOutput,
     component: str,
     arrays: Mapping[str, np.ndarray],
+    selection: SnapshotPlotSelection,
 ) -> None:
     """Display saved counts/eligibility warnings without recalculating metrics.
 
@@ -1949,6 +2417,9 @@ def _snapshot_component_counts(
     arrays : mapping[str, numpy.ndarray]
         Already-loaded cache arrays whose counts/masks keep their documented
         axes; no numerical reduction changes a scientific result.
+    selection : SnapshotPlotSelection
+        Selected saved categorical axes. Counts are limited to this exact Spike
+        condition/site/epoch slice, not the full component.
 
     Returns
     -------
@@ -1958,12 +2429,31 @@ def _snapshot_component_counts(
 
     if component != "spike_phase":
         return
-    trial_count = int(np.count_nonzero(np.asarray(arrays.get("filter_membership", ()), dtype=bool)))
-    unit_count = int(np.asarray(arrays.get("unit_ids", ())).size)
-    spike_count = int(np.nanmax(np.asarray(arrays.get("spike_count", (0,)))))
-    render_summary_counts(streamlit, trial_count=trial_count, unit_count=unit_count, spike_count=spike_count, unstable=True)
-    eligible = int(np.count_nonzero(np.asarray(arrays.get("null_eligible", ()), dtype=bool)))
-    streamlit.info(f"Eligible cached unit-frequency entries: {eligible}.")
+    _require_cached_arrays(
+        arrays,
+        {"filter_membership", "condition_membership", "unit_ids", "spike_count", "null_eligible", "reliable"},
+        "Spike",
+    )
+    selected = select_spike_snapshot_slice(arrays, selection)
+    selected_trials = _condition_trials(arrays, selected.condition_index)
+    spike_counts = np.asarray(arrays["spike_count"])[
+        :, selected.condition_index, selected.site_index, selected.epoch_index, :
+    ]
+    eligible = np.asarray(arrays["null_eligible"], dtype=bool)[
+        :, selected.condition_index, selected.site_index, selected.epoch_index, :
+    ]
+    reliable = np.asarray(arrays["reliable"], dtype=bool)[
+        :, selected.condition_index, selected.site_index, selected.epoch_index, :
+    ]
+    streamlit.info(
+        "Trials: "
+        f"{int(np.count_nonzero(selected_trials))}; units: {np.asarray(arrays['unit_ids']).size}; "
+        f"spikes: {int(np.nanmin(spike_counts))}-{int(np.nanmax(spike_counts))}"
+    )
+    streamlit.info(f"Eligible cached unit-frequency entries: {int(np.count_nonzero(eligible))}.")
+    streamlit.info(f"Reliable cached unit-frequency entries: {int(np.count_nonzero(reliable))}.")
+    if np.any(~reliable):
+        streamlit.warning("Unstable saved Spike reliability entries: inspect this result cautiously.")
 
 
 def _render_source_enabled_summary_view(
@@ -2039,13 +2529,15 @@ def _render_source_enabled_summary_view(
                 cache = SnapshotComponentCache()
                 streamlit.session_state["lfp_summary_snapshot_component_cache"] = cache
             arrays = cache.load(inspection, component, dependencies.load_component)
+            selection = _snapshot_selection_controls(sidebar, component, arrays)
             entry = inspection.manifest["components"][component]  # type: ignore[index]
             if isinstance(entry, Mapping):
-                for warning in entry.get("warnings", ()):  # type: ignore[union-attr]
+                warnings = tuple(str(warning) for warning in entry.get("warnings", ()))  # type: ignore[union-attr]
+                for warning in warnings:
                     streamlit.warning(str(warning))
-            _snapshot_component_counts(streamlit, component, arrays)
-            adapter_view = {"power": "condition_psd", "synchrony": "itpc_map", "spike_phase": "unit_ppc_map"}[component]
-            selection = SnapshotPlotSelection(adapter_view, "HPC1", "left", "after", "gamma")
+                if warnings:
+                    streamlit.warning("Unstable status is reported by saved component warnings.")
+            _snapshot_component_counts(streamlit, component, arrays, selection)
             saved_config, _ = _saved_snapshot_config(inspection, component, default_lfp_summary_config())
             figure = plot_cached_snapshot_component(component, arrays, saved_config, selection, inspection=inspection)
         except (KeyError, OSError, ValueError) as error:
@@ -2074,6 +2566,21 @@ def _render_source_enabled_summary_view(
         streamlit.error(str(error))
         return
     action = sidebar.selectbox("Summary action", options=SUMMARY_ACTIONS)
+    if action in {"spike_phase", "all"}:
+        resume_text = sidebar.text_input("Resume run directory (optional)", value="")
+        resume_directory = Path(resume_text.strip()) if resume_text.strip() else None
+        try:
+            commands = build_launcher_handoff_commands(
+                config,
+                action=action,
+                resume_run_directory=resume_directory,
+            )
+        except ValueError as error:
+            streamlit.error(str(error))
+            return
+        command_text = "\n".join(commands.values())
+        streamlit.info(f"Launcher handoff:\n{command_text}")
+        return
     if not sidebar.button("Run summary action"):
         return
     outcome = dispatch_summary_action(

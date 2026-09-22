@@ -38,8 +38,9 @@ class PlotContext:
         Half-open epoch bounds in seconds relative to ``alignment_event``.
     notch_enabled : bool
         Whether the cached analysis applied the configured 60 Hz notch.
-    gamma_exclusion_hz : tuple[float, float]
-        Open interval in Hz omitted from gamma integration.
+    gamma_exclusion_hz : tuple[float, float] or None
+        Open interval in Hz omitted from gamma integration, or ``None`` when
+        the saved gamma band has no excluded interval.
     reference_description : str
         LFP reference and preprocessing provenance shown verbatim.
     source_voltage_unit : str
@@ -50,7 +51,7 @@ class PlotContext:
     alignment_event: str
     epoch_bounds_s: dict[str, tuple[float, float]]
     notch_enabled: bool
-    gamma_exclusion_hz: tuple[float, float]
+    gamma_exclusion_hz: tuple[float, float] | None
     reference_description: str
     source_voltage_unit: str
 
@@ -138,12 +139,18 @@ def _caption(figure: plt.Figure, context: PlotContext, text: str) -> None:
     bounds = ", ".join(
         f"{key}={value}" for key, value in context.epoch_bounds_s.items()
     )
+    gamma_description = (
+        "no gamma exclusion"
+        if context.gamma_exclusion_hz is None
+        else (
+            f"gamma excludes {context.gamma_exclusion_hz[0]:g}-"
+            f"{context.gamma_exclusion_hz[1]:g} Hz"
+        )
+    )
     caption = textwrap.fill(
         (
             f"{text}. Alignment={context.alignment_event}; windows={bounds}; "
-            f"60-Hz notch {notch}; gamma excludes "
-            f"{context.gamma_exclusion_hz[0]:g}-"
-            f"{context.gamma_exclusion_hz[1]:g} Hz; "
+            f"60-Hz notch {notch}; {gamma_description}; "
             f"{context.reference_description}; "
             f"source unit={context.source_voltage_unit}."
         ),
