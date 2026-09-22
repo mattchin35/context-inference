@@ -3806,6 +3806,35 @@ WP11-0 preflight checkpoint (2026-09-22):
   tests-only commit and genuine RED evidence. No Terra worker may begin until
   the documentation commit exists.
 
+WP11-1 tests-only and WP11-2 RED checkpoint (2026-09-22):
+
+- Documentation-first commit `0b1e14b` (`docs: freeze WP11 worker
+  orchestration`) changed only `Tasks_neural.md` and `webappDesign.md`.
+- Terra high tests-only commit `98990a0` (`test: add WP11 webapp contracts`)
+  changed only `test_lfp_summary_webapp.py` and `test_psth_webapp.py`.
+  Production source and documentation were untouched by the worker.
+- The exact focused RED command selected 25 tests: 22 failed for absent WP11
+  snapshot, source-mode, population, progress/handoff, plot-adapter, and
+  composed-runtime behavior; three already-green contracts passed; 45 tests
+  were deselected. Runtime was 1.80 seconds. There was no collection, import,
+  syntax, fixture, or environment failure.
+- The complete two-module run preserved all 45 pre-WP11 tests and produced 25
+  intended new failures in 1.86 seconds. This separates feature RED from the
+  clean baseline.
+- Sol review found four genuine tests-only contract defects before source work:
+  (1) a user who explicitly clears the snapshot input must get a blank source,
+  rather than an older hidden session-state value; Streamlit itself retains an
+  uncleared widget value across ordinary rerenders; (2) a read-only snapshot
+  renderer must not accept a compute callback at all; (3) component-cache tests
+  must change manifest/file identity at the same resolved path, not merely use
+  a second path; and (4) resume-command construction must receive an explicit
+  run directory and must never fabricate or discover one from configuration.
+  These corrections clarify the approved contract; they do not weaken it.
+- The same Terra high writer must make one separate correction commit limited
+  to the two authorized test modules. Sol then reruns both RED commands and
+  records the corrected evidence. Production implementation remains forbidden
+  until that correction is committed and reviewed.
+
 ### WP12 - Complete PPC plotting and reporting
 
 Owner: one implementer immediately after WP10. Scope is plotting/report files
