@@ -522,6 +522,8 @@ moves:
   adapters; generic cache/webapp entry points; webapp and visualization
   decomposition; scientific analysis package moves; launcher/runtime
   decomposition; then legacy cleanup and final documentation consolidation.
+  A separately planned and versioned Open Ephys scaling correction occurs
+  before this structural sequence establishes its scientific baseline.
 - Existing public imports and `python -m` commands should have temporary thin
   compatibility modules while callers and tests migrate.
 - Tests should mirror the target packages and compare approved CT026 arrays,
@@ -747,13 +749,14 @@ deviation of about 611 stored units versus about 119 microvolts after the
 documented scale factor.
 
 This is a pre-existing units/scale mismatch, not a refactor behavior to change
-silently. Before implementation planning is frozen, it needs an explicit
-scientific decision: preserve current numerical behavior through the structural
-refactor and correct scaling in a separately versioned change, or correct the
-loader during adapter introduction with new cache identity and regression
-expectations. Phase-only quantities may be invariant to a positive constant
-scale, but traces, absolute amplitudes, thresholds, PSD values, labels, and
-possibly downstream selections must be audited rather than assumed unaffected.
+silently. The approved resolution is a separate, versioned correction work
+package before structural migration. That work package must apply and test the
+documented conversion, choose and record the affected cache-version/identity
+change, measure effects on CT026 Power, Synchrony, Spike phase, and plots, and
+establish the corrected outputs as the refactor regression baseline. Phase-only
+quantities may be invariant to a positive constant scale, but traces, absolute
+amplitudes, thresholds, PSD values, labels, and downstream selections must be
+audited rather than assumed unaffected.
 
 ## Conceptual metadata relationships
 
@@ -971,13 +974,6 @@ opt-in edit, not an automatic side effect of computation or transfer.
 
 ## Open design questions
 
-### Required pre-planning decision
-
-1. Should the pre-existing CT026 Open Ephys `lfp_binary_scaling` mismatch be
-   preserved during the structural refactor and corrected in a separately
-   versioned scientific change, or corrected when the Open Ephys adapter is
-   introduced with new cache identity and regression expectations?
-
 The first adapters target the inspected CT026 Open Ephys and CT014 SpikeGLX
 layouts. Other recording generations may require later adapter extensions; the
 initial implementation must fail clearly on an unsupported layout rather than
@@ -985,7 +981,7 @@ guess from similar filenames.
 
 ### Explicitly deferred design
 
-2. When channel-to-region grouping becomes a priority, will its authoritative
+1. When channel-to-region grouping becomes a priority, will its authoritative
    source be manually selected channel ranges, channel-quality metadata, or a
    separate anatomical registration artifact?
 
