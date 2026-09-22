@@ -27,6 +27,30 @@ anatomical annotation, synchronization source, or unit population. Allowing a
 path to change while silently retaining CT026 metadata would create plausible
 but scientifically mislabeled output.
 
+## Initial user direction
+
+The first design direction is intentionally simple:
+
+- Use a small JSON metadata file to select the session data home, session ID,
+  and probe-specific sorter, aligned-spike, and LFP paths.
+- Direct the webapp launcher to one explicit metadata file rather than entering
+  subject-specific paths in fixed PFC/HPC controls.
+- Retain dropdowns that select the active plot, cached component, population,
+  and computation; those are useful runtime choices rather than session
+  identity.
+- Provide a simple entry point for running cache-producing analyses on the
+  cluster from the same metadata.
+- Reorganize the codebase substantially while retaining the exact approved
+  computations. Webapp visualization, LFP-LFP analyses, Spike-LFP analyses,
+  regression, and dimensionality analyses should have clear package homes.
+
+JSON is the current preferred representation because it is simple, portable,
+and already compatible with saved configuration metadata. The exact JSON schema
+is not frozen by this document. Although the first recordings have two probes,
+the schema should use a keyed or ordered probe collection instead of baking in
+exactly `probe_1` and `probe_2` fields. The first UI may still present two probe
+entries when the selected metadata contains two probes.
+
 ## Design goals
 
 ### 1. Remove subject- and recording-specific assumptions from shared code
@@ -177,6 +201,64 @@ but scientifically mislabeled output.
 - Existing completed snapshots and reports should remain inspectable even after
   the live configuration interface changes.
 
+### 12. Organize the package by responsibility and scientific domain
+
+- Webapp composition and visualization controls should live in a dedicated
+  package rather than one large multipurpose module.
+- Scientific computation should be grouped into recognizable domains such as
+  LFP-LFP, Spike-LFP, population/dimensionality, regression/decoding, and basic
+  spike/behavior analyses.
+- Shared configuration, validation, cache I/O, plotting primitives, source
+  loading, synchronization, execution, and reporting should have separate
+  package boundaries where they are genuinely shared.
+- File placement should communicate whether code is a pure numerical method, a
+  source-format adapter, a workflow/orchestrator, a report writer, or a user
+  interface.
+- Dataset-specific code such as CT026 builders and profiling fixtures should be
+  isolated from generic analysis packages.
+- Reorganization must not be combined casually with numerical changes. Import
+  moves and responsibility splits should retain behavior through regression
+  tests and temporary compatibility imports where needed.
+
+### 13. Separate reusable kernels from loading and orchestration
+
+- Pure numerical functions should accept explicit arrays and metadata contracts
+  rather than discover files or construct session paths.
+- Source loaders should translate acquisition-specific files into documented
+  internal structures without choosing scientific analyses.
+- Workflows should connect validated metadata, loaders, numerical functions,
+  caches, reports, and progress reporting without duplicating calculations.
+- Plotting should consume cached result structures and should not trigger source
+  loading or computation.
+- Local execution, Slurm submission, resume, recovery, and rerender should be
+  orchestration concerns layered above the scientific kernels.
+
+### 14. Make analyses discoverable without central UI branching
+
+- Each supported analysis family should expose a small, consistent description
+  of its required inputs, configuration, runnable components, result artifacts,
+  and available cached views.
+- The launcher and webapp should use those descriptions to populate appropriate
+  choices rather than accumulating large chains of analysis-specific branches.
+- This does not require a dynamic plugin framework. A simple explicit registry
+  may be preferable if it keeps behavior reviewable and type contracts clear.
+- Adding a new analysis should not require editing an unrelated monolithic
+  webapp function in many locations.
+
+### 15. Standardize result and workflow behavior across analysis families
+
+- Analyses should share conventions for validated configuration, dry run,
+  progress events, logs, cache status, atomic publication, report directories,
+  warnings, and failure states where those concepts apply.
+- Result artifacts should distinguish numerical caches from human-readable
+  reports and temporary execution/checkpoint state.
+- Cache readers and plotters should have explicit versioned contracts rather
+  than depending on incidental filenames or module globals.
+- Cross-session analyses should consume documented single-session artifacts
+  instead of reopening raw sources when cached sufficient statistics exist.
+- Common conventions must not force unrelated analyses into one oversized base
+  class or erase meaningful differences in their data shapes and units.
+
 ## Conceptual metadata relationships
 
 The following is illustrative vocabulary, not a frozen file schema:
@@ -208,6 +290,67 @@ This separation is important: the probe describes the physical/data source;
 the site describes the analyzed LFP location; the population describes selected
 units; and the execution profile describes how the work runs.
 
+## Additional refactor opportunities
+
+The current module inventory suggests several supporting improvements that fit
+the goals above:
+
+### Decompose oversized integration modules
+
+`psth_webapp.py`, `lfp_summary_ppc_runtime.py`, `unit_spike_plotting.py`,
+`lfp_summary_runtime.py`, `lfp_summary_webapp.py`, and the launcher/validation
+modules currently contain multiple responsibilities. They are candidates for
+separation by route, scientific method, I/O boundary, execution concern, or
+report concern. Line count alone is not a reason to split a file; the split
+should follow stable data contracts and reduce unrelated reasons to change.
+
+### Introduce acquisition adapters behind one source contract
+
+Open Ephys-derived and SpikeGLX loading, synchronization, sample-rate metadata,
+and voltage-unit handling should meet one validated source interface. Analysis
+code should not infer the acquisition family repeatedly from filenames. The
+adapter boundary should preserve native units and explicit timing conventions.
+
+### Centralize metadata validation and schema migration
+
+JSON decoding, schema validation, default handling, path resolution, and legacy
+schema migration should have one owner. The webapp and command-line tools should
+not implement separate interpretations of the same metadata. Migration must be
+versioned and conservative: absent execution-only fields may be defaultable,
+while absent scientific or provenance fields should fail closed.
+
+### Separate environment-specific locations from scientific metadata
+
+The logical session description should be portable, while local and cluster
+root mappings are deployment concerns. This avoids duplicating nearly identical
+JSON files solely because `/home/...` and `/gs/...` prefixes differ. Any
+resolved execution configuration should still record exact absolute paths.
+
+### Consolidate launcher and execution behavior
+
+Local commands and Slurm scripts should call the same Python entry point with
+the same validated metadata and scientific options. Shell scripts should supply
+cluster resources and environment setup, not reconstruct scientific settings.
+Launcher output, dry-run summaries, resume receipts, and failure messages should
+follow one convention across analysis families.
+
+### Mirror package boundaries in tests
+
+Tests should be organized around the same public contracts as the refactored
+packages: metadata/configuration, source adapters, pure computation, cache I/O,
+workflows, reports, and webapp views. CT026 end-to-end regression tests should
+remain as scientific equivalence gates, while smaller synthetic tests protect
+generic behavior for arbitrary probe and site names.
+
+### Define a compatibility and deprecation boundary
+
+Existing import paths, saved snapshots, run directories, and cluster resume
+commands may outlive the reorganization. The refactor should identify which
+interfaces need temporary forwarding wrappers, which artifacts require readers,
+and which CT026-only helpers can be retired after equivalence is demonstrated.
+Compatibility code should be isolated and time-bounded rather than becoming the
+new permanent architecture.
+
 ## Desired operator experience
 
 Without prescribing implementation order, the eventual workflow should make
@@ -226,8 +369,9 @@ the following actions straightforward:
 
 ## Non-goals for the design-intake phase
 
-- Do not choose YAML, JSON, TOML, a database, or a Python-only configuration as
-  the final storage format yet.
+- Do not freeze the exact JSON schema, field names, or migration policy yet.
+- Do not introduce a database or service merely to replace the intended simple
+  file-based session metadata.
 - Do not freeze exact field names, command-line syntax, class boundaries, or
   module ownership yet.
 - Do not redesign the approved numerical methods as part of generalization.
