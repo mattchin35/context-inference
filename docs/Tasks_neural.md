@@ -66,10 +66,10 @@ Source-of-truth hierarchy:
 | WP5B shuffle inference | Complete | Tests `c94e152`, `7d22d6f`; implementation `01b7507`; `test_spike_lfp_summary.py` | Performance redesign only; scientific reference must remain unchanged |
 | Spike runtime bridge | Complete, including grouped payload and exact exemplar-trial integration | Original bridge `c8e76d5`; grouped payload integration completed in S5; WP12 implementation `bd6fa50`; `test_lfp_summary_runtime.py` and synthetic cache/reload/plot coverage | UI integration in WP11 |
 | WP5C optimization | Complete through S8 | Grouped-parallel implementation `e89a0ee`; S7 documentation `8741d71`; full S7 neural suite 1,113 passed; accepted work-only S8 run `ct026_ppc_s8_2026-09-18T15-06-33Z`; `docs/ppc_speedup.md`; `docs/ppc_speedup_plan.md`; `docs/ppc_speedup_execution_log.md` | Preserve eight-worker production configuration and exact preflight; use R1/C1 for report recovery and later cluster execution |
-| WP6 plotting | Numerically complete; R2 readability repair complete | Original tests `b1f51f3`; implementation `d1c3e21`; R1 `b77f4a5`, `97fbf3b`; R2 tests/implementation `2aed50b`, `575deee`, `767544a`; real-report QA `49a7e6d` | Visually inspect and approve the completed 1,000-shuffle cluster report |
+| WP6 plotting | Complete and visually approved on the ProbeB final report | Original tests `b1f51f3`; implementation `d1c3e21`; R1 `b77f4a5`, `97fbf3b`; R2 tests/implementation `2aed50b`, `575deee`, `767544a`; real-report QA `49a7e6d`; final visual approval below | None |
 | WP7 pipeline | Complete for component, Compute All, composition, and report-before-cleanup seams | Original tests `b1f51f3`; implementation `067fdef`; WP10 `98ac2ed`; WP12 deferred-cleanup implementation `bd6fa50`; `test_lfp_summary_pipeline.py` | UI progress/state integration remains in WP11 |
 | WP8 webapp | Partial; Power path only | Tests `c7ec7c1`, `003394a`, `f3954de`; implementations `2885ffd`, `926801b`; `test_lfp_summary_webapp.py` | Add local immutable-snapshot inspection, Synchrony/Spike views, active population, and progress in WP11 |
-| WP9 validation | ProbeB 1,000-shuffle final run complete; visual approval pending | Final cluster run and report paths below; 273 units, 427 trials, 1,000 shuffles, 105/105 blocks, no warnings/errors; 27 PNGs copied locally with matching checksum | Visually inspect the local immutable report; do not recompute |
+| WP9 validation | ProbeB 1,000-shuffle final run and visual review complete | Final cluster run and report paths below; 273 units, 427 trials, 1,000 shuffles, 105/105 blocks, no warnings/errors; 27 checksum-matched PNGs approved 2026-09-22 | None; preserve the immutable artifacts and continue WP11 |
 | WP10 composed dependencies | Complete | Tests and implementation through `98ac2ed`; completion handoff `3aebba8`; PPC contracts and worker decision are stable | None; consume the composed boundary from the forthcoming launcher and WP11 |
 | R1 local preview recovery | Complete; transaction and population-map fix verified on real cache | Tests `b77f4a5`; implementation `97fbf3b`; recovery/report commit `0589fa7`; recovered report path below | No further R1 work; visual QA findings are isolated into proposed R2 |
 | R2 local preview readability | Complete | Contract/tests `7ba6fe6`, `2aed50b`; implementation `575deee`, `767544a`; full-suite and real-report QA `8ca0e2b`, `49a7e6d` | None; consume the repaired plots in final-report inspection and WP11 |
@@ -3146,8 +3146,13 @@ C1 ProbeB 1,000-shuffle final-run completion (submitted 2026-09-20; completed
   copied to the matching local analysis-run/report directory. The local and
   cluster sets both contain 27 files and have aggregate ordered SHA-256
   `7deb2180f7638131cc9d6f851d7fb3979b22b45527a6213acb67f5e432f0c2a6`.
-  Visual content has not yet been reviewed. That review is the remaining WP9
-  validation action and does not authorize recomputation.
+  On 2026-09-22 the user reviewed the copied figure set, reported that it looked
+  good, and approved continuation. This closes the WP9 visual-review gate. The
+  report is a directory transaction rather than a separate PDF/HTML document:
+  the 27 PNGs are its human-facing scientific content, while `report.json`,
+  configuration/source/manifest snapshots, `run_summary.md`, and `run.log`
+  preserve machine-readable and concise human-readable provenance. No
+  recomputation is authorized or needed.
 
 Cluster validation before a scientific run:
 
