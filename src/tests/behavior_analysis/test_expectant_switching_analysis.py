@@ -94,6 +94,9 @@ def test_reward_count_summary_has_stable_columns_and_counts():
         "mean_incorrect_run_length",
         "completed_return_count",
         "mean_return_interval",
+        "eligible_completed_excursions",
+        "recurrences",
+        "recurrence_fraction",
     ]
     assert summary["expectancy_reward_count"].tolist() == [0, 1, 2, 3]
     assert summary["post_reward_opportunities"].sum() == 3

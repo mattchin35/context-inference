@@ -156,6 +156,37 @@ def test_plot_session_correct_skips_missing_percent_correct_values(monkeypatch, 
     assert plot_calls[0]["y"] == [1.0, 0.5]
 
 
+def test_plot_expectant_switching_diagnostics_saves_light_mode_png(tmp_path: Path):
+    """Expectant-switching diagnostics should save the documented light figure."""
+    performance_plots = _import_performance_plots()
+    trial_df = pd.DataFrame(
+        {
+            "action": [1, 1, 0, 1],
+            "reward": [1, 1, 0, 1],
+            "state": ["left", "left", "left", "left"],
+            "simple_probe_persistence_prob_left": [0.5, 0.5, 0.5, 0.12],
+            "expectancy_persistence_doubt_prob_left": [0.5, 0.49, 0.42, 0.21],
+            "previous_choice": [0, 1, 1, -1],
+            "reward_triggered_probe": [0, -1, -1, 0],
+            "expectant_switch": [0, -0.02, -0.12, 0],
+            "doubt_choice_signal": [0, 0, 0, 0.39],
+            "expectancy_reward_count": [0, 1, 2, 2],
+            "expectancy_strength": [0.002, 0.018, 0.119, 0.119],
+        }
+    )
+
+    save_path = performance_plots.plot_expectant_switching_diagnostics(
+        trial_df,
+        plot_path=tmp_path,
+        sess_id_full="CT999_2026-09-21_120000",
+    )
+
+    assert save_path == tmp_path / "CT999_2026-09-21_120000_expectant_switching.png"
+    assert save_path.exists()
+    image = plt.imread(save_path)
+    assert np.allclose(image[0, 0, :3], 1.0)
+
+
 def test_plot_session_agent_mouse_agreement_saves_overall_lines(monkeypatch, tmp_path: Path):
     """Agent-agreement plot should draw one overall block line per short agent label."""
     performance_plots = _import_performance_plots()
