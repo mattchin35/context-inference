@@ -12,10 +12,12 @@ from hashlib import sha256
 import json
 from pathlib import Path
 from shlex import quote
+import stat
 from typing import Callable, Mapping, MutableMapping, Protocol
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from src.neural_analysis import (
     lfp_summary_pipeline,
@@ -34,6 +36,7 @@ from src.neural_analysis.lfp_summary_models import (
     UnitPopulationConfig,
     ProgressEvent,
     default_lfp_summary_config,
+    lfp_summary_config_from_json,
     validate_lfp_summary_config,
 )
 
@@ -82,8 +85,11 @@ class SummaryActionResult:
     """UI-level compute outcome with optional current cache manifest.
 
     ``component`` is one summary component or ``"all"``. ``state`` is
-    ``"complete"`` or ``"failed"``. The manifest contains JSON-compatible
-    cache metadata only; numerical arrays remain in component NPZ files.
+    ``"complete"``, ``"failed"``, ``"blocked"``, or ``"handoff"``.
+    Blocked results are explicit snapshot/threshold gates; handoff results carry
+    copyable launcher text and have no manifest. The manifest contains
+    JSON-compatible cache metadata only; numerical arrays remain in component
+    NPZ files.
     """
 
     component: str
@@ -98,7 +104,11 @@ class SnapshotInspection:
     """Read-only local snapshot validation state and immutable provenance.
 
     ``manifest`` is JSON metadata and ``component_paths`` point only inside the
-    entered directory. Component arrays retain their cached axes and units; this
+    entered directory. ``file_digests`` are the receipt-validated SHA-256
+    identities for the manifest and final component files. ``stat_identity``
+    is the cheap ``(name, device, inode, size, mtime_ns)`` identity for every
+    immediate final entry, used only to decide whether a retained inspection
+    is still current. Component arrays retain their cached axes and units; this
     object contains no numerical arrays. ``state`` is one of ``valid``,
     ``missing``, ``malformed``, ``tampered``, or ``incomplete``.
     """
@@ -109,6 +119,8 @@ class SnapshotInspection:
     manifest: dict[str, object] | None = None
     component_paths: dict[str, Path] | None = None
     source_cluster_directory: str | None = None
+    file_digests: dict[str, str] | None = None
+    stat_identity: tuple[tuple[str, int, int, int, int], ...] | None = None
 
     @property
     def is_scientific_result(self) -> bool:
@@ -179,8 +191,9 @@ class SummaryWebDependencies:
     """Injected pipeline/cache/plot seams used by the summary webapp.
 
     Compute functions synchronously run the corresponding injected pipeline
-    entry point. Cache loaders return validated numeric arrays with their axes
-    and units defined by the manifest. ``plot_view`` consumes only those arrays
+    entry point. Cache loaders receive an exact component NPZ ``Path`` plus a
+    JSON manifest and component name, then return validated numeric arrays with
+    manifest-defined axes and units. ``plot_view`` consumes only those arrays
     plus immutable configuration metadata and returns an unsaved Matplotlib
     figure.
     """
@@ -254,6 +267,40 @@ def _snapshot_failure(state: str, message: str, directory: Path | None) -> Snaps
     return SnapshotInspection(state, message, directory)
 
 
+def _snapshot_stat_identity(
+    directory: Path,
+) -> tuple[tuple[str, int, int, int, int], ...] | None:
+    """Return cheap identities for exactly the final immediate snapshot files.
+
+    Parameters
+    ----------
+    directory : pathlib.Path
+        Explicit snapshot directory. Only its named immediate children are
+        inspected with ``lstat``; no component bytes or source files are read.
+
+    Returns
+    -------
+    tuple[tuple[str, int, int, int, int], ...] or None
+        Ordered ``(filename, device, inode, size_bytes, mtime_ns)`` identities,
+        or ``None`` when an entry is missing, symlinked, non-regular, or cannot
+        be inspected. Values have no scientific units.
+    """
+
+    identities: list[tuple[str, int, int, int, int]] = []
+    try:
+        for name in _SNAPSHOT_FILENAMES:
+            entry = directory / name
+            entry_stat = entry.lstat()
+            if entry.is_symlink() or not stat.S_ISREG(entry_stat.st_mode):
+                return None
+            identities.append(
+                (name, entry_stat.st_dev, entry_stat.st_ino, entry_stat.st_size, entry_stat.st_mtime_ns)
+            )
+    except OSError:
+        return None
+    return tuple(identities)
+
+
 def validate_cache_snapshot(snapshot_directory: Path | str) -> SnapshotInspection:
     """Validate one exact immutable local final-cache snapshot directory.
 
@@ -286,8 +333,13 @@ def validate_cache_snapshot(snapshot_directory: Path | str) -> SnapshotInspectio
     if names != expected_names:
         return _snapshot_failure("incomplete", "Snapshot contains checkpoint or nonfinal work artifacts.", directory)
     paths = {name: directory / name for name in _SNAPSHOT_FILENAMES}
-    if not all(path.is_file() for path in paths.values()):
-        return _snapshot_failure("incomplete", "Snapshot final entries must be files.", directory)
+    stat_identity = _snapshot_stat_identity(directory)
+    if stat_identity is None:
+        return _snapshot_failure(
+            "incomplete",
+            "Snapshot final entries must be non-symlink regular files.",
+            directory,
+        )
     try:
         receipt = json.loads(paths["cache_snapshot_identity.json"].read_text(encoding="ascii"))
         manifest = json.loads(paths["manifest.json"].read_text(encoding="utf-8"))
@@ -313,6 +365,7 @@ def validate_cache_snapshot(snapshot_directory: Path | str) -> SnapshotInspectio
     ):
         return _snapshot_failure("malformed", "Snapshot aggregate format is invalid.", directory)
     records: list[str] = []
+    file_digests: dict[str, str] = {}
     for expected_name, entry in zip(expected_order, files, strict=True):
         if not isinstance(entry, dict):
             return _snapshot_failure("malformed", "Snapshot file record is invalid.", directory)
@@ -336,6 +389,7 @@ def validate_cache_snapshot(snapshot_directory: Path | str) -> SnapshotInspectio
         if actual_size != size_bytes or actual_digest != expected_digest:
             return _snapshot_failure("tampered", f"Snapshot identity differs for {expected_name}.", directory)
         records.append(f"{filename}\t{size_bytes}\t{expected_digest}\n")
+        file_digests[expected_name] = expected_digest
     if sha256("".join(records).encode("ascii")).hexdigest() != aggregate["sha256"]:
         return _snapshot_failure("tampered", "Snapshot aggregate identity differs.", directory)
     components = manifest["components"]
@@ -355,6 +409,8 @@ def validate_cache_snapshot(snapshot_directory: Path | str) -> SnapshotInspectio
         manifest,
         component_paths,
         receipt["source_cluster_directory"],
+        file_digests,
+        stat_identity,
     )
 
 
@@ -439,13 +495,21 @@ class SnapshotComponentCache:
             Exact loader result retained only in process memory for this identity.
         """
 
-        if not inspection.is_scientific_result or inspection.manifest is None or inspection.component_paths is None or inspection.snapshot_directory is None:
+        if (
+            not inspection.is_scientific_result
+            or inspection.manifest is None
+            or inspection.component_paths is None
+            or inspection.snapshot_directory is None
+            or inspection.file_digests is None
+        ):
             raise ValueError("snapshot is not a valid committed inspection source")
         if component not in SUMMARY_COMPONENTS:
             raise ValueError(f"Unknown summary component: {component!r}")
-        manifest_digest = _sha256_file(inspection.snapshot_directory / "manifest.json")
         component_path = inspection.component_paths[component]
-        component_digest = _sha256_file(component_path)
+        manifest_digest = inspection.file_digests.get("manifest.json")
+        component_digest = inspection.file_digests.get(_SNAPSHOT_COMPONENT_FILENAMES[component])
+        if not isinstance(manifest_digest, str) or not isinstance(component_digest, str):
+            raise ValueError("snapshot inspection lacks retained file identities")
         key = (str(inspection.snapshot_directory), component, manifest_digest, component_digest)
         if key not in self._entries:
             self._entries[key] = loader(component_path, inspection.manifest, component)
@@ -497,13 +561,17 @@ def build_active_summary_population(
         channel_labels = channel_metadata["label"]
     else:
         raise ValueError("channel metadata lacks channel labels")
-    numeric_channels = channel_numbers.astype(float)
+    # Coercion follows the metadata loader's established table semantics: a
+    # descriptive/non-numeric channel label is not a selected hardware channel.
+    numeric_channels = pd.to_numeric(channel_numbers, errors="coerce")
     good_channels = channel_metadata.loc[
         channel_labels.astype(str).str.lower().eq("good")
         & channel_metadata["inside_brain"].astype(bool)
         & numeric_channels.notna()
     ]
-    selected_channels = tuple(sorted({int(numeric_channels[index]) for index in good_channels.index}))
+    selected_channels = tuple(
+        sorted({int(numeric_channels[index]) for index in good_channels.index})
+    )
     selected = cluster_metadata.loc[
         cluster_metadata["ch"].isin(selected_channels)
         & cluster_metadata["group"].astype(str).str.lower().isin(("good", "mua"))
@@ -556,15 +624,27 @@ def snapshot_component_population_status(
     if not isinstance(entry, Mapping):
         return SnapshotPopulationStatus("unavailable", "Snapshot component is unavailable.", False)
     configuration = entry.get("configuration_snapshot")
+    if component != "spike_phase":
+        return SnapshotPopulationStatus("compatible", "Population is not required for this component.", True)
     cached_population = configuration.get("unit_population") if isinstance(configuration, Mapping) else None
     cached_probe = cached_population.get("probe_label") if isinstance(cached_population, Mapping) else None
-    if component == "spike_phase" and isinstance(cached_probe, str) and cached_probe != population.probe_label:
+    if cached_probe not in {"ProbeA", "ProbeB"}:
+        return SnapshotPopulationStatus(
+            "population_unavailable",
+            "Spike snapshot population provenance is missing or malformed.",
+            False,
+        )
+    if cached_probe != population.probe_label:
         return SnapshotPopulationStatus(
             "population_mismatch",
             f"Spike phase is committed for {cached_probe}, not {population.probe_label}.",
             False,
         )
-    return SnapshotPopulationStatus("compatible", "Population is compatible.", True)
+    return SnapshotPopulationStatus(
+        "compatible",
+        f"Population is compatible: {population.probe_label}.",
+        True,
+    )
 
 
 def dispatch_summary_action(
@@ -688,7 +768,10 @@ def render_progress_event(streamlit: StreamlitOutput, event: ProgressEvent) -> N
     streamlit.info(f"{event.component} {event.stage}: {event.completed_count}/{total}; {event.message}{timing}")
 
 
-def _snapshot_plot_context(config: LFPSummaryConfig) -> lfp_summary_plotting.PlotContext:
+def _snapshot_plot_context(
+    config: LFPSummaryConfig,
+    source_cluster_directory: str | None = None,
+) -> lfp_summary_plotting.PlotContext:
     """Create cache-plot provenance from immutable configuration metadata only.
 
     Parameters
@@ -714,9 +797,106 @@ def _snapshot_plot_context(config: LFPSummaryConfig) -> lfp_summary_plotting.Plo
         },
         notch_enabled=config.phase.notch_enabled,
         gamma_exclusion_hz=gamma.excluded_intervals_hz[0],
-        reference_description="Cached snapshot provenance is retained in the manifest.",
+        reference_description=(
+            "Cached snapshot provenance is retained in the manifest."
+            if source_cluster_directory is None
+            else f"Cached snapshot copied from {source_cluster_directory}."
+        ),
         source_voltage_unit=config.sites[0].voltage_unit,
     )
+
+
+def _saved_snapshot_config(
+    inspection: SnapshotInspection | None,
+    component: str,
+    fallback: LFPSummaryConfig,
+) -> tuple[LFPSummaryConfig, str | None]:
+    """Return one component's complete saved configuration for cache labels.
+
+    Parameters
+    ----------
+    inspection : SnapshotInspection or None
+        Receipt-validated manifest provenance. ``None`` preserves the legacy
+        adapter path using ``fallback`` only.
+    component : str
+        Final cached component whose configuration snapshot is required.
+    fallback : LFPSummaryConfig
+        Existing live configuration used solely by old callers without a
+        snapshot inspection; it does not open files or transform arrays.
+
+    Returns
+    -------
+    tuple[LFPSummaryConfig, str or None]
+        Deserialized saved config and the retained cluster-directory provenance.
+    """
+
+    if inspection is None:
+        return fallback, None
+    if not inspection.is_scientific_result or not isinstance(inspection.manifest, Mapping):
+        raise ValueError("snapshot plot requires a valid inspection")
+    components = inspection.manifest.get("components")
+    entry = components.get(component) if isinstance(components, Mapping) else None
+    saved = entry.get("configuration_snapshot") if isinstance(entry, Mapping) else None
+    if not isinstance(saved, Mapping):
+        raise ValueError("snapshot component lacks a saved configuration")
+    try:
+        return lfp_summary_config_from_json(json.dumps(dict(saved))), inspection.source_cluster_directory
+    except (TypeError, ValueError) as error:
+        raise ValueError("snapshot component saved configuration is malformed") from error
+
+
+def _pair_labels(arrays: Mapping[str, np.ndarray]) -> tuple[str, ...]:
+    """Return ordered ``site_a-site_b`` labels from cached pair axes.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Synchrony cache mapping with one-dimensional categorical pair-site axes.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Pair labels with no array value, shape, or unit transformation.
+    """
+
+    first = arrays.get("pair_site_a_ids")
+    second = arrays.get("pair_site_b_ids")
+    if not isinstance(first, np.ndarray) or not isinstance(second, np.ndarray) or first.shape != second.shape or first.ndim != 1:
+        raise ValueError("cached Synchrony pair axes are invalid")
+    return tuple(f"{a}-{b}" for a, b in zip(first.astype(str), second.astype(str), strict=True))
+
+
+def _condition_trials(
+    arrays: Mapping[str, np.ndarray], condition_index: int, validity: np.ndarray | None = None
+) -> np.ndarray:
+    """Return cached filter/condition rows optionally intersected with validity.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Cached condition membership ``(trial, condition)`` and filter ``(trial,)``.
+    condition_index : int
+        Selected categorical condition position.
+    validity : numpy.ndarray or None
+        Optional boolean ``(trial,)`` saved site/pair validity mask.
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean ``(trial,)`` selection mask; no numerical signal values change.
+    """
+
+    membership = np.asarray(arrays["condition_membership"], dtype=bool)
+    filtered = np.asarray(arrays["filter_membership"], dtype=bool)
+    if membership.ndim != 2 or filtered.shape != (membership.shape[0],):
+        raise ValueError("cached condition membership axes are invalid")
+    selected = membership[:, condition_index] & filtered
+    if validity is not None:
+        valid = np.asarray(validity, dtype=bool)
+        if valid.shape != selected.shape:
+            raise ValueError("cached validity mask axes are invalid")
+        selected &= valid
+    return selected
 
 
 def _named_index(names: np.ndarray, selected: str, name: str) -> int:
@@ -795,13 +975,15 @@ def plot_cached_snapshot_component(
     arrays: Mapping[str, np.ndarray],
     config: LFPSummaryConfig,
     selection: SnapshotPlotSelection,
+    *,
+    inspection: SnapshotInspection | None = None,
 ) -> plt.Figure:
-    """Delegate selected Synchrony or Spike cached slices to existing plotters.
+    """Delegate every approved cached view to the existing pure plotters.
 
     Parameters
     ----------
     component : str
-        ``"synchrony"`` or ``"spike_phase"`` cached component identity.
+        ``"power"``, ``"synchrony"``, or ``"spike_phase"`` cache identity.
     arrays : mapping[str, numpy.ndarray]
         Validated selected component arrays with their stored axes/units. This
         function opens no source recording and applies no numerical transform.
@@ -809,6 +991,10 @@ def plot_cached_snapshot_component(
         Immutable provenance and time/frequency units for labels only.
     selection : SnapshotPlotSelection
         Categorical cached axes selecting one plot slice.
+    inspection : SnapshotInspection or None
+        Optional validated snapshot used to deserialize the selected component's
+        saved configuration and retained cluster provenance. No component bytes
+        are opened here.
 
     Returns
     -------
@@ -816,39 +1002,124 @@ def plot_cached_snapshot_component(
         Unsaved cache-only figure delegated to ``lfp_summary_plotting``.
     """
 
-    context = _snapshot_plot_context(config)
+    saved_config, cluster_directory = _saved_snapshot_config(inspection, component, config)
+    context = _snapshot_plot_context(saved_config, cluster_directory)
+    condition_names = tuple(str(value) for value in arrays.get("condition_names", np.array(())))
+    epoch_names = tuple(str(value) for value in arrays.get("epoch_names", np.array(())))
+    band_names = tuple(str(value) for value in arrays.get("band_names", np.array(())))
+    if component == "power":
+        required = {
+            "frequency_hz", "normalized_psd_session_db", "band_power_session_db",
+            "condition_names", "condition_membership", "filter_membership",
+            "condition_effective_trial_count", "site_ids", "epoch_names", "band_names",
+        }
+        missing = required - set(arrays)
+        if missing:
+            raise ValueError(f"cached Power arrays lack required array: {sorted(missing)[0]}")
+        condition_index = _named_index(arrays["condition_names"], selection.condition_name, "condition_names")
+        site_index = _named_index(arrays["site_ids"], selection.site_id, "site_ids")
+        epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
+        selected_trials = _condition_trials(arrays, condition_index)
+        if selection.view == "condition_psd":
+            psd = np.asarray(arrays["normalized_psd_session_db"])
+            if psd.ndim != 4:
+                raise ValueError("cached Power PSD axes are invalid")
+            values = psd[site_index, selected_trials, epoch_index, :][np.newaxis, :, :]
+            figure, _ = lfp_summary_plotting.plot_condition_psd(
+                np.asarray(arrays["frequency_hz"]), values, (selection.condition_name,),
+                np.array((np.count_nonzero(selected_trials),), dtype=np.int64),
+                selection.site_id, selection.epoch_name, "session-normalized dB", context,
+            )
+            return figure
+        if selection.view == "band_power_summary":
+            values = np.asarray(arrays["band_power_session_db"])
+            if values.ndim != 4:
+                raise ValueError("cached Power band axes are invalid")
+            condition_values = np.full((1, values.shape[1], values.shape[2], values.shape[3]), np.nan)
+            condition_values[0, selected_trials] = values[site_index, selected_trials]
+            counts = np.asarray(arrays["condition_effective_trial_count"])[condition_index, site_index]
+            figure, _ = lfp_summary_plotting.plot_band_power_summary(
+                condition_values, (selection.condition_name,), epoch_names, band_names,
+                np.full((1, len(epoch_names)), int(counts), dtype=np.int64), selection.site_id,
+                "session-normalized dB", context,
+            )
+            return figure
+        raise ValueError(f"unknown cached Power view: {selection.view!r}")
     if component == "synchrony":
-        required = {"condition_names", "site_ids", "frequency_hz", "relative_time_s", "condition_membership", "filter_membership", "itpc", "itpc_effective_trial_count"}
+        required = {"condition_names", "site_ids", "frequency_hz", "relative_time_s", "condition_membership", "filter_membership"}
         missing = required - set(arrays)
         if missing:
             raise ValueError(f"cached Synchrony arrays lack required array: {sorted(missing)[0]}")
         condition_index = _named_index(arrays["condition_names"], selection.condition_name, "condition_names")
-        site_index = _named_index(arrays["site_ids"], selection.site_id, "site_ids")
-        itpc = arrays["itpc"]
-        counts = arrays["itpc_effective_trial_count"]
-        if itpc.ndim != 4 or counts.shape != itpc.shape:
-            raise ValueError("cached Synchrony ITPC axes are incompatible")
-        frequency_hz = arrays["frequency_hz"]
-        relative_time_s = arrays["relative_time_s"]
-        if itpc.shape != (arrays["condition_names"].size, arrays["site_ids"].size, frequency_hz.size, relative_time_s.size):
-            raise ValueError("cached Synchrony named axes disagree")
-        membership = arrays["condition_membership"]
-        filtered = arrays["filter_membership"]
-        if membership.ndim != 2 or filtered.ndim != 1 or membership.shape != (filtered.size, arrays["condition_names"].size):
-            raise ValueError("cached Synchrony condition axes are incompatible")
-        total = int(np.count_nonzero(membership[:, condition_index] & filtered))
-        figure, _axes = lfp_summary_plotting.plot_phase_map(
-            itpc[condition_index, site_index],
-            counts[condition_index, site_index],
-            frequency_hz,
-            relative_time_s,
-            "ITPC",
-            selection.site_id,
-            selection.condition_name,
-            context,
-            total_displayed_trial_count=total,
-        )
-        return figure
+        if selection.view not in {"ispc_map", "ispc_band_summary", "plv_distribution", "plv_exemplar"}:
+            entity_index = _named_index(arrays["site_ids"], selection.site_id, "site_ids")
+            validity = np.asarray(arrays.get("site_valid", np.ones((len(arrays["site_ids"]), len(arrays["filter_membership"])), dtype=bool)))[entity_index]
+            metric_prefix, metric_name, entity_label = "itpc", "ITPC", selection.site_id
+        else:
+            labels = _pair_labels(arrays)
+            entity_index = labels.index(selection.site_id) if selection.site_id in labels else -1
+            if entity_index < 0:
+                raise ValueError(f"cached pair labels lack selected value {selection.site_id!r}")
+            validity = np.asarray(arrays.get("pair_valid", np.ones((len(labels), len(arrays["filter_membership"])), dtype=bool)))[entity_index]
+            metric_prefix, metric_name, entity_label = "ispc", "ISPC", selection.site_id
+        selected_trials = _condition_trials(arrays, condition_index, validity)
+        if selection.view not in {"itpc_band_summary", "ispc_band_summary", "plv_distribution", "plv_exemplar"}:
+            metric = np.asarray(arrays[metric_prefix])
+            count = np.asarray(arrays[f"{metric_prefix}_effective_trial_count"])
+            figure, _ = lfp_summary_plotting.plot_phase_map(
+                metric[condition_index, entity_index], count[condition_index, entity_index],
+                np.asarray(arrays["frequency_hz"]), np.asarray(arrays["relative_time_s"]),
+                metric_name, entity_label, selection.condition_name, context,
+                total_displayed_trial_count=max(int(np.count_nonzero(selected_trials)), int(np.max(count[condition_index, entity_index]))),
+            )
+            return figure
+        if selection.view in {"itpc_band_summary", "ispc_band_summary"}:
+            epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
+            band_index = _named_index(arrays["band_names"], selection.band_name, "band_names")
+            mean = np.asarray(arrays[f"{metric_prefix}_band_mean"])[condition_index, entity_index, epoch_index, band_index]
+            low = np.asarray(arrays[f"{metric_prefix}_ci_low"])[condition_index, entity_index, epoch_index, band_index]
+            high = np.asarray(arrays[f"{metric_prefix}_ci_high"])[condition_index, entity_index, epoch_index, band_index]
+            figure, _ = lfp_summary_plotting.plot_phase_band_summary(
+                np.array((mean,)), np.array((low,)), np.array((high,)),
+                np.array((np.count_nonzero(selected_trials),), dtype=np.int64),
+                (f"{entity_label} {selection.condition_name}",), selection.band_name,
+                selection.epoch_name, metric_name, context,
+            )
+            return figure
+        if selection.view in {"plv_distribution", "plv_exemplar"}:
+            pair_labels = _pair_labels(arrays)
+            pair_index = pair_labels.index(selection.site_id)
+            band_index = _named_index(arrays["band_names"], selection.band_name, "band_names")
+            selected_trials = _condition_trials(arrays, condition_index, np.asarray(arrays["pair_valid"])[pair_index])
+            plv = np.asarray(arrays["plv_band_mean"])[selected_trials, pair_index, :, band_index]
+            counts = np.asarray(arrays["plv_valid_sample_count"])[selected_trials, pair_index, :, band_index]
+            fractions = np.asarray(arrays["plv_valid_sample_fraction"])[selected_trials, pair_index, :, band_index]
+            if selection.view == "plv_distribution":
+                figure, _ = lfp_summary_plotting.plot_plv_distribution(
+                    plv, counts, fractions, epoch_names, selection.site_id, selection.band_name,
+                    selection.condition_name, context,
+                )
+                return figure
+            epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
+            candidate_rows = np.flatnonzero(selected_trials)
+            if not candidate_rows.size:
+                raise ValueError("selected PLV cache has no valid trial")
+            local_values = np.asarray(arrays["plv_band_mean"])[candidate_rows, pair_index, epoch_index, band_index]
+            local_index = int(np.nanargmax(local_values))
+            trial_row = int(candidate_rows[local_index])
+            trial_id = int(np.asarray(arrays["trial_indices"])[trial_row])
+            pair_a, pair_b = selection.site_id.split("-", 1)
+            site_ids = tuple(str(value) for value in arrays["site_ids"])
+            site_rows = (site_ids.index(pair_a), site_ids.index(pair_b))
+            figure, _ = lfp_summary_plotting.plot_plv_exemplar(
+                np.asarray(arrays["relative_time_s"]), np.asarray(arrays["source_trace"])[list(site_rows), trial_row],
+                np.asarray(arrays["band_filtered_trace"])[list(site_rows), trial_row, band_index],
+                np.asarray(arrays["hilbert_phase_rad"])[list(site_rows), trial_row, band_index],
+                (pair_a, pair_b), selection.site_id, trial_id, "high", float(np.nanmean(local_values)),
+                float(local_values[local_index]), context,
+            )
+            return figure
+        raise ValueError(f"unknown cached Synchrony view: {selection.view!r}")
     if component == "spike_phase":
         required = {"unit_ids", "frequency_hz", "ppc", "computable", "reliable", "spike_count"}
         missing = required - set(arrays)
@@ -860,19 +1131,74 @@ def plot_cached_snapshot_component(
         reliable = arrays["reliable"][:, selected.condition_index, selected.site_index, selected.epoch_index, :]
         spike_count = arrays["spike_count"][:, selected.condition_index, selected.site_index, selected.epoch_index, :]
         unit_ids = tuple(str(value) for value in arrays["unit_ids"])
-        figure, _axes = lfp_summary_plotting.plot_unit_ppc_map(
-            ppc,
-            computable,
-            reliable,
-            spike_count,
-            arrays["frequency_hz"],
-            unit_ids,
-            selection.condition_name,
-            selection.site_id,
-            selection.epoch_name,
-            context,
-        )
-        return figure
+        if selection.view == "unit_ppc_map":
+            figure, _ = lfp_summary_plotting.plot_unit_ppc_map(
+                ppc, computable, reliable, spike_count, arrays["frequency_hz"], unit_ids,
+                selection.condition_name, selection.site_id, selection.epoch_name, context,
+            )
+            return figure
+        if selection.view == "population_ppc_maps":
+            eligible = np.asarray(arrays["null_eligible"])[:, :, selected.site_index, selected.epoch_index, :]
+            significant = np.asarray(arrays["significant"])[:, :, selected.site_index, selected.epoch_index, :]
+            all_ppc = np.asarray(arrays["ppc"])[:, :, selected.site_index, selected.epoch_index, :]
+            reliable_all = np.asarray(arrays["reliable"])[:, :, selected.site_index, selected.epoch_index, :]
+            mask = eligible & reliable_all
+            median = np.full(mask.shape[1:], np.nan)
+            fraction = np.full(mask.shape[1:], np.nan)
+            eligible_count = np.sum(mask, axis=0, dtype=np.int64)
+            for c in range(mask.shape[1]):
+                for f in range(mask.shape[2]):
+                    values = all_ppc[:, c, f][mask[:, c, f]]
+                    if values.size:
+                        median[c, f] = np.nanmedian(values)
+                        fraction[c, f] = np.mean(significant[:, c, f][mask[:, c, f]])
+            figure, _ = lfp_summary_plotting.plot_population_ppc_maps(
+                median, fraction, eligible_count, np.full_like(eligible_count, len(unit_ids)),
+                condition_names, np.asarray(arrays["frequency_hz"]), selection.site_id,
+                selection.epoch_name, context,
+            )
+            return figure
+        if selection.view == "ppc_band_summary":
+            band_values = np.asarray(arrays["ppc_band_mean"])[:, :, selected.site_index, :, :]
+            reliable_band = np.asarray(arrays["reliable"])[:, :, selected.site_index, :, :]
+            figure, _ = lfp_summary_plotting.plot_ppc_band_summary(
+                np.moveaxis(band_values, 0, 1), np.moveaxis(reliable_band, 0, 1),
+                condition_names, epoch_names, band_names, len(unit_ids), selection.site_id, context,
+            )
+            return figure
+        if selection.view == "ppc_exemplar_pair":
+            def make_panel(kind: str) -> lfp_summary_plotting.PPCExemplarPanel:
+                unit_names = np.asarray(arrays[f"selected_{kind}_unit_ids"])
+                selected_name = str(unit_names[selected.condition_index, selected.site_index, selected.epoch_index, selected.band_index])
+                unit_index = unit_ids.index(selected_name)
+                trial_ids = np.asarray(arrays[f"illustrative_{kind}_trial_indices"])
+                trial_id = int(trial_ids[selected.condition_index, selected.site_index, selected.epoch_index, selected.band_index])
+                trial_rows = np.flatnonzero(np.asarray(arrays["trial_indices"]) == trial_id)
+                if trial_rows.size != 1:
+                    raise ValueError("cached Spike exemplar trial is unavailable")
+                trial_row = int(trial_rows[0])
+                offsets = np.asarray(arrays["relative_spike_time_offsets"])[unit_index]
+                spikes = np.asarray(arrays["relative_spike_times_s"])[offsets[trial_row]:offsets[trial_row + 1]]
+                return lfp_summary_plotting.PPCExemplarPanel(
+                    selected_name, kind, np.asarray(arrays["ppc"])[unit_index, selected.condition_index, selected.site_index, selected.epoch_index],
+                    np.asarray(arrays["preferred_phase_rad"])[unit_index, selected.condition_index, selected.site_index, selected.epoch_index],
+                    np.asarray(arrays["representative_phase_hist_count"])[unit_index, selected.condition_index, selected.site_index, selected.epoch_index, 0],
+                    trial_id, np.asarray(arrays["source_trace"])[selected.site_index, trial_row],
+                    np.asarray(arrays["band_filtered_trace"])[selected.site_index, trial_row, selected.band_index],
+                    np.asarray(arrays["hilbert_phase_rad"])[selected.site_index, trial_row, selected.band_index], spikes,
+                )
+            band = next((item for item in saved_config.phase.bands if item.name == selection.band_name), None)
+            if band is None:
+                raise ValueError("selected Spike band lacks saved configuration")
+            figure, _ = lfp_summary_plotting.plot_ppc_exemplar_pair(
+                frequency_hz=np.asarray(arrays["frequency_hz"]), phase_bin_edges_rad=np.asarray(arrays["phase_bin_edges_rad"]),
+                relative_time_s=np.asarray(arrays["relative_time_s"]), low=make_panel("low"), high=make_panel("high"),
+                condition_name=selection.condition_name, site_label=selection.site_id, epoch_name=selection.epoch_name,
+                band_name=selection.band_name, representative_frequency_hz=(band.lower_hz + band.upper_hz) / 2.0,
+                context=context,
+            )
+            return figure
+        raise ValueError(f"unknown cached Spike view: {selection.view!r}")
     raise ValueError(f"snapshot plotting is unavailable for {component!r}")
 
 
@@ -1148,6 +1474,30 @@ def make_production_summary_dependencies() -> SummaryWebDependencies:
             raise ValueError("no readable LFP summary manifest")
         return decoded
 
+    def load_selected_component(
+        output_directory: Path,
+        manifest: dict[str, object],
+        component: str,
+    ) -> dict[str, np.ndarray]:
+        """Load one live component from its exact final ``component.npz`` path.
+
+        Parameters
+        ----------
+        output_directory : pathlib.Path
+            Configured cache directory containing final component NPZ files.
+        manifest : dict[str, object]
+            Current cache metadata; numerical arrays retain its saved axes.
+        component : str
+            One summary component whose file is ``output_directory/component.npz``.
+
+        Returns
+        -------
+        dict[str, numpy.ndarray]
+            Loader-validated cached arrays with unchanged shapes and units.
+        """
+
+        return load_component_arrays(output_directory / f"{component}.npz", manifest, component)
+
     def plot_view(
         view: str,
         arrays: dict[str, dict[str, np.ndarray]],
@@ -1180,7 +1530,7 @@ def make_production_summary_dependencies() -> SummaryWebDependencies:
         compute_spike_phase=unavailable("spike_phase"),
         compute_all=unavailable("all"),
         load_manifest=load_manifest,
-        load_component=load_component_arrays,
+        load_component=load_selected_component,
         plot_view=plot_view,
     )
 
@@ -1422,11 +1772,25 @@ def load_summary_view_arrays(
     manifest: dict[str, object],
     dependencies: SummaryWebDependencies,
 ) -> dict[str, dict[str, np.ndarray]]:
-    """Load only the component NPZ file required for one selected summary view.
+    """Load only the selected live ``output_directory/component.npz`` file.
 
-    ``view`` selects power, synchrony, or spike_phase. Returned arrays preserve
-    their cache-defined axes and physical units; no raw LFP or wavelet data is
-    opened or reconstructed by this helper.
+    Parameters
+    ----------
+    view : str
+        ``power``, ``synchrony``, or ``spike_phase`` component identity.
+    config : LFPSummaryConfig
+        Validated live configuration whose ``output_directory`` identifies the
+        parent of the selected final NPZ file.
+    manifest : dict[str, object]
+        Current JSON cache metadata defining the returned array axes and units.
+    dependencies : SummaryWebDependencies
+        Loader seam receiving the exact component NPZ path, manifest, and name.
+
+    Returns
+    -------
+    dict[str, dict[str, numpy.ndarray]]
+        One named component mapping. Arrays preserve cache-defined shapes,
+        physical units, and NaN meaning; no raw LFP/wavelet data is opened.
     """
 
     validate_lfp_summary_config(config)
@@ -1470,6 +1834,261 @@ def render_summary_figure(streamlit: StreamlitOutput, figure: plt.Figure) -> Non
         plt.close(figure)
 
 
+def _retained_snapshot_inspection(
+    session_state: MutableMapping[str, object],
+    entered_path: str,
+) -> SnapshotInspection | None:
+    """Reuse a valid inspection only while its explicit path/stat identity matches.
+
+    Parameters
+    ----------
+    session_state : mutable mapping
+        Streamlit session state holding only prior read-only inspection metadata.
+    entered_path : str
+        Current explicit snapshot widget text. Blank clears retained state and
+        never falls back to a previous directory.
+
+    Returns
+    -------
+    SnapshotInspection or None
+        A valid retained inspection or a newly validated inspection. ``None``
+        represents the explicit blank state; no component bytes are opened.
+    """
+
+    text = entered_path.strip()
+    if not text:
+        for key in ("lfp_summary_snapshot_inspection", "lfp_summary_snapshot_path"):
+            session_state.pop(key, None)
+        return None
+    requested = Path(text)
+    try:
+        resolved = requested.resolve()
+    except OSError:
+        resolved = requested
+    retained = session_state.get("lfp_summary_snapshot_inspection")
+    if (
+        isinstance(retained, SnapshotInspection)
+        and retained.is_scientific_result
+        and retained.snapshot_directory == resolved
+        and retained.stat_identity == _snapshot_stat_identity(resolved)
+    ):
+        return retained
+    inspection = validate_cache_snapshot(requested)
+    session_state["lfp_summary_snapshot_path"] = text
+    if inspection.is_scientific_result:
+        session_state["lfp_summary_snapshot_inspection"] = inspection
+    else:
+        session_state.pop("lfp_summary_snapshot_inspection", None)
+    return inspection
+
+
+def _selected_population(
+    *,
+    session_state: MutableMapping[str, object],
+    probe_label: str,
+    sorter_paths: Mapping[str, Path],
+    aligned_spike_paths: Mapping[str, Path],
+    cluster_metadata_loader: Callable[[Path], object],
+    channel_metadata_loader: Callable[[Path], object],
+) -> UnitPopulationConfig:
+    """Load and retain metadata for exactly the currently selected probe.
+
+    Parameters
+    ----------
+    session_state : mutable mapping
+        Streamlit state used only to retain one immutable selected population.
+    probe_label : str
+        Exact ``ProbeA`` or ``ProbeB`` UI choice.
+    sorter_paths, aligned_spike_paths : mapping[str, pathlib.Path]
+        Explicit parent-route source identities for both probes. Only the
+        selected mapping entry is handed to lazy metadata loaders.
+    cluster_metadata_loader, channel_metadata_loader : callable
+        Lazy selected-sorter seams returning table-like categorical metadata.
+
+    Returns
+    -------
+    UnitPopulationConfig
+        One good/MUA, good/inside-brain selected-probe population. No other
+        probe metadata, spike arrays, or recordings are opened.
+    """
+
+    sorter_path = sorter_paths.get(probe_label)
+    aligned_path = aligned_spike_paths.get(probe_label)
+    if sorter_path is None or aligned_path is None:
+        raise ValueError(f"missing explicit paths for {probe_label}")
+    key = (probe_label, Path(sorter_path), Path(aligned_path))
+    retained_key = session_state.get("lfp_summary_population_key")
+    retained = session_state.get("lfp_summary_population")
+    if retained_key == key and isinstance(retained, UnitPopulationConfig):
+        return retained
+    population = build_active_summary_population(
+        probe_label=probe_label,
+        sorter_path=Path(sorter_path),
+        aligned_spike_path=Path(aligned_path),
+        cluster_metadata=cluster_metadata_loader(Path(sorter_path)),
+        channel_metadata=channel_metadata_loader(Path(sorter_path)),
+    )
+    session_state["lfp_summary_population_key"] = key
+    session_state["lfp_summary_population"] = population
+    return population
+
+
+def _snapshot_component_counts(
+    streamlit: StreamlitOutput,
+    component: str,
+    arrays: Mapping[str, np.ndarray],
+) -> None:
+    """Display saved counts/eligibility warnings without recalculating metrics.
+
+    Parameters
+    ----------
+    streamlit : StreamlitOutput
+        Text-only display seam.
+    component : str
+        Selected cache component identity.
+    arrays : mapping[str, numpy.ndarray]
+        Already-loaded cache arrays whose counts/masks keep their documented
+        axes; no numerical reduction changes a scientific result.
+
+    Returns
+    -------
+    None
+        Emits display-only count and eligibility text.
+    """
+
+    if component != "spike_phase":
+        return
+    trial_count = int(np.count_nonzero(np.asarray(arrays.get("filter_membership", ()), dtype=bool)))
+    unit_count = int(np.asarray(arrays.get("unit_ids", ())).size)
+    spike_count = int(np.nanmax(np.asarray(arrays.get("spike_count", (0,)))))
+    render_summary_counts(streamlit, trial_count=trial_count, unit_count=unit_count, spike_count=spike_count, unstable=True)
+    eligible = int(np.count_nonzero(np.asarray(arrays.get("null_eligible", ()), dtype=bool)))
+    streamlit.info(f"Eligible cached unit-frequency entries: {eligible}.")
+
+
+def _render_source_enabled_summary_view(
+    streamlit: object,
+    *,
+    session_id: str,
+    session_path: Path,
+    output_directory: Path,
+    sites: tuple[LFPSiteConfig, ...],
+    site_pairs: tuple[tuple[str, str], ...],
+    sorter_paths: Mapping[str, Path],
+    aligned_spike_paths: Mapping[str, Path],
+    cluster_metadata_loader: Callable[[Path], object],
+    channel_metadata_loader: Callable[[Path], object],
+    dependencies: SummaryWebDependencies,
+) -> None:
+    """Render the explicit snapshot/live route while keeping work outside Streamlit.
+
+    Parameters
+    ----------
+    streamlit : object
+        Streamlit-compatible host with sidebar, session-state, and text/figure
+        display methods. It is never passed to numerical pipeline code.
+    session_id, session_path, output_directory : str, pathlib.Path, pathlib.Path
+        Explicit live configuration provenance.
+    sites, site_pairs : tuple
+        Saved LFP site and pair definitions retaining their existing channels,
+        source voltage units, and categorical identities.
+    sorter_paths, aligned_spike_paths : mapping[str, pathlib.Path]
+        Parent-route supplied ProbeA/ProbeB paths. Metadata is lazy and selected
+        probe only.
+    cluster_metadata_loader, channel_metadata_loader : callable
+        Selected-sorter metadata seams; they are not called for blank/invalid
+        snapshots.
+    dependencies : SummaryWebDependencies
+        Injected composed live actions and cache loaders/plotting seams.
+
+    Returns
+    -------
+    None
+        Renders a read-only snapshot or explicit bounded live controls; it does
+        not write snapshots or invoke synchronous Spike/All computation.
+    """
+
+    sidebar = streamlit.sidebar
+    sidebar.header("Cached LFP Summary")
+    source_mode = sidebar.selectbox("Summary source", options=("snapshot", "live"))
+    probe_label = sidebar.selectbox("Active population", options=("ProbeA", "ProbeB"))
+    if source_mode == "snapshot":
+        entered_path = sidebar.text_input("Snapshot directory", value="")
+        inspection = _retained_snapshot_inspection(streamlit.session_state, entered_path)
+        if inspection is None:
+            streamlit.info("Snapshot path is blank.")
+            return
+        if not inspection.is_scientific_result:
+            streamlit.error(inspection.message)
+            return
+        streamlit.caption(f"Snapshot source cluster directory: {inspection.source_cluster_directory}")
+        component = sidebar.selectbox("Summary view", options=SUMMARY_VIEWS)
+        try:
+            population = _selected_population(
+                session_state=streamlit.session_state, probe_label=probe_label,
+                sorter_paths=sorter_paths, aligned_spike_paths=aligned_spike_paths,
+                cluster_metadata_loader=cluster_metadata_loader,
+                channel_metadata_loader=channel_metadata_loader,
+            )
+            status = snapshot_component_population_status(inspection, component, population)
+            streamlit.info(status.message)
+            if not status.can_plot:
+                return
+            cache = streamlit.session_state.get("lfp_summary_snapshot_component_cache")
+            if not isinstance(cache, SnapshotComponentCache):
+                cache = SnapshotComponentCache()
+                streamlit.session_state["lfp_summary_snapshot_component_cache"] = cache
+            arrays = cache.load(inspection, component, dependencies.load_component)
+            entry = inspection.manifest["components"][component]  # type: ignore[index]
+            if isinstance(entry, Mapping):
+                for warning in entry.get("warnings", ()):  # type: ignore[union-attr]
+                    streamlit.warning(str(warning))
+            _snapshot_component_counts(streamlit, component, arrays)
+            adapter_view = {"power": "condition_psd", "synchrony": "itpc_map", "spike_phase": "unit_ppc_map"}[component]
+            selection = SnapshotPlotSelection(adapter_view, "HPC1", "left", "after", "gamma")
+            saved_config, _ = _saved_snapshot_config(inspection, component, default_lfp_summary_config())
+            figure = plot_cached_snapshot_component(component, arrays, saved_config, selection, inspection=inspection)
+        except (KeyError, OSError, ValueError) as error:
+            streamlit.error(str(error))
+            return
+        render_summary_figure(streamlit, figure)
+        return
+
+    # Live mode is explicit: selected-probe metadata is now needed to construct
+    # the one population passed through the composed Power/Synchrony boundary.
+    try:
+        population = _selected_population(
+            session_state=streamlit.session_state, probe_label=probe_label,
+            sorter_paths=sorter_paths, aligned_spike_paths=aligned_spike_paths,
+            cluster_metadata_loader=cluster_metadata_loader,
+            channel_metadata_loader=channel_metadata_loader,
+        )
+        config = assemble_summary_config(
+            session_id=session_id, session_path=session_path, output_directory=output_directory,
+            sites=sites, site_pairs=site_pairs, unit_population=population,
+            choice_filter="all", context_filter="all", excluded_trial_indices=(),
+            alignment_event="choice_time", notch_enabled=True, bootstrap_count=1000,
+            random_seed=0,
+        )
+    except ValueError as error:
+        streamlit.error(str(error))
+        return
+    action = sidebar.selectbox("Summary action", options=SUMMARY_ACTIONS)
+    if not sidebar.button("Run summary action"):
+        return
+    outcome = dispatch_summary_action(
+        action, source=SummarySource("live", None, None, True, "Live cache mode."),
+        config=config, dependencies=dependencies,
+        launcher_command_builder=lambda chosen, active: "\n".join(
+            build_launcher_handoff_commands(active, action=chosen).values()
+        ),
+    )
+    if outcome.launcher_command:
+        streamlit.info(f"Launcher handoff:\n{outcome.launcher_command}")
+    elif outcome.state != "complete":
+        streamlit.error(outcome.error or "Live summary action failed.")
+
+
 def render_lfp_summary_view(
     streamlit: object,
     *,
@@ -1480,17 +2099,67 @@ def render_lfp_summary_view(
     site_pairs: tuple[tuple[str, str], ...],
     unit_population: UnitPopulationConfig | None = None,
     dependencies: SummaryWebDependencies | None = None,
+    sorter_paths: Mapping[str, Path] | None = None,
+    aligned_spike_paths: Mapping[str, Path] | None = None,
+    cluster_metadata_loader: Callable[[Path], object] | None = None,
+    channel_metadata_loader: Callable[[Path], object] | None = None,
 ) -> None:
-    """Render synchronous cache controls using active session inputs and seams.
+    """Render legacy controls or the explicit snapshot/live child route.
 
-    This boundary presents action and view selectors for an active session. It
-    does not prepare raw data or compute numerics. If production payload seams
-    are unavailable, it reports that explicit integration gap instead of
-    fabricating a second computational or cache path.
+    Parameters
+    ----------
+    streamlit : object
+        Streamlit-compatible UI host. It receives display-only cached figures.
+    session_id, session_path, output_directory : str, pathlib.Path, pathlib.Path
+        Explicit active-session provenance and live cache location.
+    sites, site_pairs : tuple
+        Existing saved site/pair definitions retaining channel axes and units.
+    unit_population : UnitPopulationConfig or None
+        Legacy-route active population. It is superseded by selected-probe
+        construction when the additive path mappings are supplied.
+    dependencies : SummaryWebDependencies or None
+        Existing composed live/cache seams; absent dependencies are displayed
+        as an integration error rather than fabricated.
+    sorter_paths, aligned_spike_paths : mapping[str, pathlib.Path] or None
+        Additive parent-route ProbeA/ProbeB identities. When provided together,
+        default snapshot mode defers metadata until a valid snapshot or explicit
+        live mode selects one probe.
+    cluster_metadata_loader, channel_metadata_loader : callable or None
+        Lazy selected-sorter metadata seams used only by the additive route.
+
+    Returns
+    -------
+    None
+        The legacy path keeps its public behavior. The additive route displays
+        cache-only snapshots or bounded Power/Synchrony live actions, with
+        Spike/All represented only by copyable launcher handoff text.
     """
 
     if dependencies is None:
         streamlit.error("LFP summary compute dependencies are not wired yet.")
+        return
+    if sorter_paths is not None or aligned_spike_paths is not None:
+        if (
+            sorter_paths is None
+            or aligned_spike_paths is None
+            or cluster_metadata_loader is None
+            or channel_metadata_loader is None
+        ):
+            streamlit.error("Selected-probe paths and lazy metadata loaders are required.")
+            return
+        _render_source_enabled_summary_view(
+            streamlit,
+            session_id=session_id,
+            session_path=session_path,
+            output_directory=output_directory,
+            sites=sites,
+            site_pairs=site_pairs,
+            sorter_paths=sorter_paths,
+            aligned_spike_paths=aligned_spike_paths,
+            cluster_metadata_loader=cluster_metadata_loader,
+            channel_metadata_loader=channel_metadata_loader,
+            dependencies=dependencies,
+        )
         return
     defaults = default_summary_ui_values()
     sidebar = streamlit.sidebar
