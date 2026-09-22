@@ -597,6 +597,62 @@ decision. In contrast, `analog_treadmill_decode.py` is exercised by manual
 synchronization tests and should initially be treated as supporting
 infrastructure even if its final ownership changes.
 
+The pre-planning repository classification is:
+
+| Current module | Category | Intended disposition |
+| --- | --- | --- |
+| `__init__.py` | 3 | Keep as a minimal package boundary; do not use it for broad convenience re-exports. |
+| `analog_treadmill_decode.py` | 3 | Split treadmill conversion/support needed by manual synchronization from standalone exploratory signal analysis. |
+| `behavior_pynap.py` | 5 | No repository caller or dedicated test found; review against notebooks/external use before preserving or retiring. |
+| `ephys_sync_utils.py` | 3 | Split acquisition-specific I/O into `sources` and reusable time mapping into `synchronization`. |
+| `lfp_loading.py` | 3 | Split Open Ephys and SpikeGLX adapters behind one documented LFP source contract. |
+| `lfp_phase_clustering.py` | 2 | Move numerical phase methods to `analyses/lfp_lfp` and figures/result writing to visualization/artifact owners. |
+| `lfp_power_summary.py` | 1 | Move pure Power kernels and result contracts to `analyses/lfp_lfp`. |
+| `lfp_power_validation.py` | 1 | Split action validation, CT026 configuration, report assembly, and rendering. |
+| `lfp_spectrogram.py` | 2 | Move reusable spectrogram kernels to `analyses/lfp_lfp`. |
+| `lfp_spike_phase_launcher.py` | 1 | Split generic execution lifecycle/run state/resource measurement from the thin CLI. |
+| `lfp_spike_phase_validation.py` | 1 | Split workflow validation, report assembly, visualization, and CT026 compatibility builders. |
+| `lfp_summary_ct026_profile_adapter.py` | 4 | Keep only CT026 binding/profiling adaptation under compatibility/profiling. |
+| `lfp_summary_ct026_profile_locks.py` | 4 | Retain with the CT026 profiling workflow until that harness is retired. |
+| `lfp_summary_ct026_profile_runner.py` | 4 | Retain as profiling run lifecycle, separate from production launchers. |
+| `lfp_summary_io.py` | 3 | Move reusable manifest and transactional component I/O to `artifacts`. |
+| `lfp_summary_models.py` | 1 | Split analysis/workflow configuration contracts from generic session metadata. |
+| `lfp_summary_payloads.py` | 1 | Move component serialization contracts to the artifact/workflow boundary. |
+| `lfp_summary_pipeline.py` | 1 | Remain the explicit LFP-summary workflow coordinator after imports migrate. |
+| `lfp_summary_plotting.py` | 1 | Move pure figures to domain visualization; keep report selection outside it. |
+| `lfp_summary_ppc_kernel.py` | 1 | Move unchanged performance-sensitive kernels to `analyses/spike_lfp` behind characterization gates. |
+| `lfp_summary_ppc_profile.py` | 4 | Move performance measurement and representative job selection to `profiling`. |
+| `lfp_summary_ppc_runtime.py` | 1 | Split PPC scientific planning/reduction from process execution and checkpoints. |
+| `lfp_summary_preparation.py` | 1 | Keep shared trial/LFP/spike preparation in the LFP-summary workflow layer. |
+| `lfp_summary_runtime.py` | 1 | Split into Power, Synchrony, and Spike-phase workflow implementations. |
+| `lfp_summary_webapp.py` | 1 | Split cached view state, snapshot validation, visualization dispatch, and command handoff. |
+| `lfp_summary_work_cache.py` | 3 | Move restart-only phase/PPC checkpoint mechanics to `artifacts`. |
+| `lfp_synchrony_summary.py` | 1 | Move pure Synchrony kernels and result contracts to `analyses/lfp_lfp`. |
+| `lfp_synchrony_validation.py` | 1 | Split workflow validation, CT026 builder, report assembly, and rendering. |
+| `manual_session_synchronization.py` | 3 | Split reusable alignment logic, source readers, and any user entry point. |
+| `modified_sinc_smoother.py` | 5 | No repository caller or dedicated test found; review provenance and uniqueness before migration. |
+| `plot_cross_session_analysis.py` | 2 | Split cross-session table aggregation from reusable figures and the CLI. |
+| `plot_single_session_analysis.py` | 5 | Empty module; propose removal during cleanup after confirming no external import requirement. |
+| `population_pca.py` | 2 | Move PCA kernels/profiling contracts to `analyses/population`. |
+| `population_pca_decoding.py` | 2 | Split population decoding kernels and Matplotlib figures. |
+| `population_pca_switch_trajectories.py` | 2 | Split trajectory computation and figures under population analysis/visualization. |
+| `psth_behavior.py` | 2 | Split PSTH selection/computation from raster/PSTH figures and its legacy CLI. |
+| `psth_webapp.py` | 2/1 | Replace the monolith with one app shell and explicit production/exploratory domain routes. |
+| `spike_behavior_analysis.py` | 5 | No repository caller or dedicated test found; review before migration. |
+| `spike_behavior_binning.py` | 5 | Appears superseded by tested Pynapple paths; confirm external use before retirement. |
+| `spike_behavior_pynapple.py` | 2/3 | Split session/source loading, spike binning, decoding kernels, tables, and legacy CLI. |
+| `spike_lfp_hilbert_phase.py` | 2 | Move Hilbert phase kernels/results to `analyses/spike_lfp`; move result writing to artifacts. |
+| `spike_lfp_phase_locking.py` | 2 | Move wavelet phase sampling/rate kernels to `analyses/spike_lfp`. |
+| `spike_lfp_summary.py` | 1 | Move approved PPC/permutation kernels and contracts to `analyses/spike_lfp`. |
+| `spikeglx_sync_io.py` | 3 | Move SpikeGLX digital readers to `sources/spikeglx`. |
+| `sync_ephys.py` | 3 | Reduce to a thin synchronization CLI over shared adapters/workflows. |
+| `unit_spike_loading.py` | 3 | Split sorter/channel-quality adapters from population selection and session construction. |
+| `unit_spike_plotting.py` | 2 | Split pure figures across units, LFP-LFP, Spike-LFP, and population visualization packages. |
+
+This classification covers current repository evidence. Category-5 modules are
+not considered safe to delete until likely external scripts and notebooks have
+been checked with the user.
+
 ### Documentation contract for new packages
 
 Every newly created subfolder must contain a short README. Documentation is a
@@ -617,6 +673,87 @@ physical units remain authoritative in Python docstrings. A README change is
 part of the same migration that adds, removes, or substantially changes a file
 in its folder; the final cleanup verifies completeness rather than reconstructing
 all documentation from scratch.
+
+### Representative session-layout findings
+
+The initial layout inspection used:
+
+- Open Ephys: `CT026/CT026_20260801_latent_inference`
+- SpikeGLX: `CT014/CT014_20251223_latentInference`
+
+Both keep required inputs under one session tree, but their acquisition and
+derived-data layouts differ enough that filename inference is not acceptable.
+
+For CT014 SpikeGLX:
+
+- The CatGT output contains two streams, `imec0` and `imec1`. Each has a
+  `*.lf.bin` LFP source paired with a same-stem `*.lf.meta` file.
+- The `*.lf.meta` file is the authoritative LFP reference for sample rate,
+  saved-channel count/order, binary size, probe type, ADC conversion, and gain
+  correction. In this example it reports approximately 2,500.0134 Hz and 385
+  saved rows, including the synchronization row.
+- The metadata distinguishes 384 signal rows from one synchronization row.
+  Site validation must use the stream's channel-type mapping, not merely
+  `saved_channel_index < nSavedChans`, or it could accept the sync row as LFP.
+- Manually curated sorter directories are nested below the original Kilosort
+  result. They contain `spike_times.npy`, `spike_clusters.npy`, and
+  `cluster_info.tsv`; the two probes use separately selected sorter paths.
+- `ephys/aligned/aligned_imec/imec0_sync.npz` and `imec1_sync.npz` are the
+  aligned-spike inputs. Their `spike_sample_ix` arrays exactly match the
+  selected curated sorters' `spike_times.npy`, and `spike_utc_unix` is finite
+  and one-to-one with `spike_clusters.npy` for both probes.
+- The aligned NPZ provenance names the parent Kilosort spike-time file rather
+  than the nested curated directory. Validation should therefore compare spike
+  sequence identity and shape, not require literal provenance-path equality.
+- No `channel_quality.csv` is present in this example. That source must remain
+  optional rather than preventing metadata creation or unrelated analyses.
+
+For CT026 Open Ephys:
+
+- Each derived probe directory contains `lfp.dat`, sibling
+  `lfp_preprocessing.json`, `kilosort4`, and optional channel-quality metadata.
+- `lfp_preprocessing.json` is the authoritative reference for the derived LFP
+  binary's 2,500 Hz sample rate, 384 saved channels, float32 time-major layout,
+  preprocessing history, channel order, scaling, and physical unit. The raw
+  `structure.oebin` remains upstream acquisition provenance, not the direct
+  contract for reading the derived `lfp.dat`.
+- `probeA_sync.npz` and `probeB_sync.npz` under
+  `ephys/aligned/aligned_open_ephys` are the aligned-spike and LFP time-mapping
+  inputs. Their spike samples exactly match the selected Kilosort outputs and
+  their aligned UTC arrays are finite and one-to-one with cluster assignments.
+- Probe channel-quality CSVs use the columns `channel_id`, `label`, `is_good`,
+  `inside_brain`, `x_um`, and `y_um`.
+
+The two augmented trial tables share the core timing, choice, reward, state,
+and model-derived columns needed by current analyses, but their full schemas
+are not identical. Analysis-specific validation should require named columns
+for the requested action rather than demanding one fixed whole-table schema.
+
+These observations imply that a probe entry needs explicit LFP, sorter,
+aligned-spike, and optional channel-quality paths. The acquisition adapter uses
+the selected session-wide format to locate and validate the corresponding
+reference metadata; the user does not enter sample rate, channel count, or
+voltage scaling manually.
+
+### Pre-existing Open Ephys scaling issue
+
+The CT026 `lfp_preprocessing.json` records a per-channel conversion of
+approximately `0.195 uV` per stored value and states that the derived LFP
+physical unit is microvolts after applying that conversion. The current Open
+Ephys read path loads float32 values from `lfp.dat` but does not apply the
+recorded `lfp_binary_scaling`, while downstream names and plots sometimes treat
+those values as microvolts. A sampled ProbeA segment had a raw standard
+deviation of about 611 stored units versus about 119 microvolts after the
+documented scale factor.
+
+This is a pre-existing units/scale mismatch, not a refactor behavior to change
+silently. Before implementation planning is frozen, it needs an explicit
+scientific decision: preserve current numerical behavior through the structural
+refactor and correct scaling in a separately versioned change, or correct the
+loader during adapter introduction with new cache identity and regression
+expectations. Phase-only quantities may be invariant to a positive constant
+scale, but traces, absolute amplitudes, thresholds, PSD values, labels, and
+possibly downstream selections must be audited rather than assumed unaffected.
 
 ## Conceptual metadata relationships
 
@@ -834,17 +971,21 @@ opt-in edit, not an automatic side effect of computation or transfer.
 
 ## Open design questions
 
-### Required pre-planning investigations
+### Required pre-planning decision
 
-1. Which acquisition reference file is authoritative for extracting sample
-   rate, voltage units, and any required raw-value scaling for Open Ephys and
-   SpikeGLX sessions?
-2. How consistent are sorter, aligned-spike, synchronization, channel-quality,
-   and augmented-trial-table layouts across mice and recording generations?
+1. Should the pre-existing CT026 Open Ephys `lfp_binary_scaling` mismatch be
+   preserved during the structural refactor and corrected in a separately
+   versioned scientific change, or corrected when the Open Ephys adapter is
+   introduced with new cache identity and regression expectations?
+
+The first adapters target the inspected CT026 Open Ephys and CT014 SpikeGLX
+layouts. Other recording generations may require later adapter extensions; the
+initial implementation must fail clearly on an unsupported layout rather than
+guess from similar filenames.
 
 ### Explicitly deferred design
 
-3. When channel-to-region grouping becomes a priority, will its authoritative
+2. When channel-to-region grouping becomes a priority, will its authoritative
    source be manually selected channel ranges, channel-quality metadata, or a
    separate anatomical registration artifact?
 
