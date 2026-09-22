@@ -633,6 +633,8 @@ def _small_synchrony_snapshot_arrays() -> dict[str, np.ndarray]:
         "epoch_names": np.array(("whole", "before", "after")),
         "band_names": np.array(("theta", "gamma")),
         "relative_time_s": np.array((-0.1, 0.1)),
+        "site_valid": np.array(((True, True), (True, True))),
+        "pair_valid": np.array(((True, True),)),
         "pair_site_a_ids": np.array(("PFC",)),
         "pair_site_b_ids": np.array(("HPC1",)),
         "itpc": np.full((2, 2, 2, 2), 0.11),
@@ -684,6 +686,8 @@ def _small_spike_snapshot_arrays() -> dict[str, np.ndarray]:
         "frequency_hz": np.array((8.0, 40.0)),
         "relative_time_s": np.array((-0.1, 0.1)),
         "phase_bin_edges_rad": np.array((-np.pi, 0.0, np.pi)),
+        "relative_spike_times_s": np.array((-0.05, 0.03, -0.02, 0.04)),
+        "relative_spike_time_offsets": np.array(((0, 1, 2), (2, 3, 4)), dtype=np.int64),
         "ppc": np.full(metric_shape, 0.2),
         "computable": np.ones(metric_shape, dtype=bool),
         "reliable": np.ones(metric_shape, dtype=bool),
@@ -699,8 +703,9 @@ def _small_spike_snapshot_arrays() -> dict[str, np.ndarray]:
         "hilbert_phase_rad": np.zeros((2, 2, 2, 2), dtype=float),
         "selected_low_unit_ids": np.full((2, 2, 3, 2), "ProbeB:7"),
         "selected_high_unit_ids": np.full((2, 2, 3, 2), "ProbeB:8"),
-        "illustrative_low_trial_indices": np.zeros((2, 2, 3, 2), dtype=np.int64),
-        "illustrative_high_trial_indices": np.ones((2, 2, 3, 2), dtype=np.int64),
+        "illustrative_trial_indices": np.full((2, 2, 3, 2), 11, dtype=np.int64),
+        "illustrative_low_trial_indices": np.full((2, 2, 3, 2), 10, dtype=np.int64),
+        "illustrative_high_trial_indices": np.full((2, 2, 3, 2), 11, dtype=np.int64),
     }
     return arrays
 
@@ -730,6 +735,7 @@ class RouteSidebar:
         self.action = action
         self.view = view
         self.labels: list[str] = []
+        self.button_labels: list[str] = []
 
     def header(self, label: str) -> None:
         """Record a visible categorical sidebar heading."""
@@ -785,6 +791,7 @@ class RouteSidebar:
         """Click only the action control for explicit live-mode route tests."""
 
         self.labels.append(label)
+        self.button_labels.append(label)
         return self.source_mode == "live" and ("compute" in label.lower() or "run" in label.lower())
 
 
@@ -2268,20 +2275,20 @@ def test_snapshot_plot_uses_selected_saved_configuration_and_cluster_provenance(
 
 
 @pytest.mark.parametrize(
-    ("component", "view", "plotter_name", "site_or_pair"),
+    ("component", "view", "plotter_name", "site_or_pair", "required_selectors"),
     (
-        ("power", "condition_psd", "plot_condition_psd", "HPC1"),
-        ("power", "band_power_summary", "plot_band_power_summary", "HPC1"),
-        ("synchrony", "itpc_map", "plot_phase_map", "HPC1"),
-        ("synchrony", "ispc_map", "plot_phase_map", "PFC-HPC1"),
-        ("synchrony", "itpc_band_summary", "plot_phase_band_summary", "HPC1"),
-        ("synchrony", "ispc_band_summary", "plot_phase_band_summary", "PFC-HPC1"),
-        ("synchrony", "plv_distribution", "plot_plv_distribution", "PFC-HPC1"),
-        ("synchrony", "plv_exemplar", "plot_plv_exemplar", "PFC-HPC1"),
-        ("spike_phase", "unit_ppc_map", "plot_unit_ppc_map", "HPC1"),
-        ("spike_phase", "population_ppc_maps", "plot_population_ppc_maps", "HPC1"),
-        ("spike_phase", "ppc_band_summary", "plot_ppc_band_summary", "HPC1"),
-        ("spike_phase", "ppc_exemplar_pair", "plot_ppc_exemplar_pair", "HPC1"),
+        ("power", "condition_psd", "plot_condition_psd", "HPC1", ("HPC1", "after")),
+        ("power", "band_power_summary", "plot_band_power_summary", "HPC1", ("HPC1",)),
+        ("synchrony", "itpc_map", "plot_phase_map", "HPC1", ("HPC1", "left")),
+        ("synchrony", "ispc_map", "plot_phase_map", "PFC-HPC1", ("PFC-HPC1", "left")),
+        ("synchrony", "itpc_band_summary", "plot_phase_band_summary", "HPC1", ("HPC1", "left", "after", "gamma")),
+        ("synchrony", "ispc_band_summary", "plot_phase_band_summary", "PFC-HPC1", ("PFC-HPC1", "left", "after", "gamma")),
+        ("synchrony", "plv_distribution", "plot_plv_distribution", "PFC-HPC1", ("PFC-HPC1", "left", "gamma")),
+        ("synchrony", "plv_exemplar", "plot_plv_exemplar", "PFC-HPC1", ("PFC-HPC1",)),
+        ("spike_phase", "unit_ppc_map", "plot_unit_ppc_map", "HPC1", ("HPC1", "left", "after")),
+        ("spike_phase", "population_ppc_maps", "plot_population_ppc_maps", "HPC1", ("HPC1", "after")),
+        ("spike_phase", "ppc_band_summary", "plot_ppc_band_summary", "HPC1", ("HPC1",)),
+        ("spike_phase", "ppc_exemplar_pair", "plot_ppc_exemplar_pair", "HPC1", ("HPC1", "left", "after", "gamma")),
     ),
 )
 def test_each_authoritative_snapshot_view_delegates_its_selected_cached_axes(
@@ -2290,6 +2297,7 @@ def test_each_authoritative_snapshot_view_delegates_its_selected_cached_axes(
     view: str,
     plotter_name: str,
     site_or_pair: str,
+    required_selectors: tuple[str, ...],
 ) -> None:
     """Every approved cached view must select arrays then delegate to its plotter.
 
@@ -2302,6 +2310,9 @@ def test_each_authoritative_snapshot_view_delegates_its_selected_cached_axes(
         Parametrized committed component, cached-view family, existing plotting
         function name, and relevant site or site-pair selector. They are
         categorical labels with no numerical units.
+    required_selectors : tuple[str, ...]
+        Exact categorical selectors relevant to this view family. Omitted
+        selectors must not be inferred from the view-name text.
     """
 
     arrays = {
@@ -2357,12 +2368,8 @@ def test_each_authoritative_snapshot_view_delegates_its_selected_cached_axes(
 
     assert [call[0] for call in calls] == [plotter_name]
     delegated_text = repr(calls[0][1]) + repr(calls[0][2])
-    assert site_or_pair in delegated_text
-    assert "left" in delegated_text
-    if "band" in view or "exemplar" in view:
-        assert "gamma" in delegated_text
-    if "band" in view or "exemplar" in view or view == "unit_ppc_map":
-        assert "after" in delegated_text
+    for selector in required_selectors:
+        assert selector in delegated_text
     plt.close(figure)
 
 
@@ -2416,9 +2423,9 @@ def test_child_renderer_defaults_to_noncomputational_snapshot_and_defers_populat
 
     assert metadata_paths == []
     assert calls == []
+    assert streamlit.sidebar.button_labels == []
     message_text = " ".join(message for _kind, message in streamlit.messages).lower()
     assert "snapshot" in message_text
-    assert "live" not in message_text
 
 
 def test_child_renderer_reuses_valid_snapshot_inspection_and_selected_probe_cache_adapter(
@@ -2513,11 +2520,13 @@ def test_child_renderer_reuses_valid_snapshot_inspection_and_selected_probe_cach
 
     lfp_summary_webapp.render_lfp_summary_view(streamlit, **route_kwargs)
     lfp_summary_webapp.render_lfp_summary_view(streamlit, **route_kwargs)
+    _change_snapshot_component_identity(snapshot, "spike_phase")
+    lfp_summary_webapp.render_lfp_summary_view(streamlit, **route_kwargs)
 
-    assert validation_calls == [snapshot]
+    assert validation_calls == [snapshot, snapshot]
     assert metadata_paths == [tmp_path / "sorter_b", tmp_path / "sorter_b"]
-    assert dependency_calls == ["load_spike_phase"]
-    assert len(plot_calls) == 2
+    assert dependency_calls == ["load_spike_phase", "load_spike_phase"]
+    assert len(plot_calls) == 3
     display_text = " ".join(message for _kind, message in streamlit.messages)
     assert "/cluster/final/cache" in display_text
     assert "synthetic instability warning" in display_text
