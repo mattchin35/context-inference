@@ -175,6 +175,8 @@ def render_lfp_summary_view(
     hpc_v1_aligned_spike_path: str,
     pfc_aligned_spike_path: str,
     dependencies: lfp_summary_webapp.SummaryWebDependencies | None = None,
+    hpc_v1_sorter_output_path: str | None = None,
+    pfc_sorter_output_path: str | None = None,
 ) -> None:
     """Delegate the cached LFP summary route using active session/probe inputs.
 
@@ -191,6 +193,11 @@ def render_lfp_summary_view(
     dependencies : SummaryWebDependencies | None
         Injected summary pipeline/cache seams. ``None`` reports the currently
         explicit production integration gap without computing numerical data.
+    hpc_v1_sorter_output_path, pfc_sorter_output_path : str | None
+        Optional explicit HPC/V1 and PFC ``kilosort4`` directory paths. When at
+        least one is supplied, the additive source-aware child route receives
+        ProbeA/PFC and ProbeB/HPC path mappings plus lazy metadata callbacks.
+        Empty values remain absent rather than being inferred from session data.
 
     Returns
     -------
@@ -239,14 +246,34 @@ def render_lfp_summary_view(
             2500.0,
         ),
     )
+    child_kwargs: dict[str, object] = {
+        "session_id": sess_id_full,
+        "session_path": session_path,
+        "output_directory": session_path / "processed" / "lfp_summary_cache",
+        "sites": sites,
+        "site_pairs": (("PFC", "HPC1"), ("PFC", "HPC2"), ("HPC1", "HPC2")),
+        "dependencies": dependencies,
+    }
+    if hpc_v1_sorter_output_path is not None or pfc_sorter_output_path is not None:
+        sorter_paths: dict[str, Path] = {}
+        aligned_spike_paths: dict[str, Path] = {}
+        if pfc_sorter_output_path and pfc_sorter_output_path.strip():
+            sorter_paths["ProbeA"] = Path(pfc_sorter_output_path)
+        if hpc_v1_sorter_output_path and hpc_v1_sorter_output_path.strip():
+            sorter_paths["ProbeB"] = Path(hpc_v1_sorter_output_path)
+        if pfc_aligned_spike_path and pfc_aligned_spike_path.strip():
+            aligned_spike_paths["ProbeA"] = Path(pfc_aligned_spike_path)
+        if hpc_v1_aligned_spike_path and hpc_v1_aligned_spike_path.strip():
+            aligned_spike_paths["ProbeB"] = Path(hpc_v1_aligned_spike_path)
+        child_kwargs.update(
+            sorter_paths=sorter_paths,
+            aligned_spike_paths=aligned_spike_paths,
+            cluster_metadata_loader=load_summary_cluster_metadata,
+            channel_metadata_loader=load_summary_channel_metadata,
+        )
     lfp_summary_webapp.render_lfp_summary_view(
         st,
-        session_id=sess_id_full,
-        session_path=session_path,
-        output_directory=session_path / "processed" / "lfp_summary_cache",
-        sites=sites,
-        site_pairs=(("PFC", "HPC1"), ("PFC", "HPC2"), ("HPC1", "HPC2")),
-        dependencies=dependencies,
+        **child_kwargs,
     )
 
 
@@ -487,7 +514,7 @@ def load_phase_clustering_session_cached(
 
 
 @st.cache_data(show_spinner="Loading channel quality...")
-def load_channel_quality_cached(channel_quality_path: str):
+def load_channel_quality_cached(channel_quality_path: str) -> pd.DataFrame:
     """
     Load normalized channel-quality metadata with Streamlit caching.
 
@@ -506,6 +533,76 @@ def load_channel_quality_cached(channel_quality_path: str):
     """
 
     return unit_spike_loading.load_channel_quality(Path(channel_quality_path))
+
+
+@st.cache_data(show_spinner="Loading sorter cluster metadata...")
+def load_cluster_info_cached(sorter_directory: str) -> pd.DataFrame:
+    """Load only one sorter's curation table with Streamlit data caching.
+
+    Parameters
+    ----------
+    sorter_directory : str
+        Explicit ``kilosort4`` output directory. Units: filesystem path; the
+        helper opens only ``cluster_info.tsv`` below this directory.
+
+    Returns
+    -------
+    pd.DataFrame
+        Sorter ``cluster_info.tsv`` table with shape
+        ``(n_clusters, n_metadata_columns)``. Rows are cluster identities and
+        columns retain the sorter-provided categorical/numerical metadata. No
+        spike-time, cluster-assignment, aligned-spike, or LFP array is loaded.
+    """
+
+    return pd.read_csv(Path(sorter_directory) / "cluster_info.tsv", sep="\t")
+
+
+def load_summary_cluster_metadata(sorter_path: Path) -> pd.DataFrame:
+    """Lazily load curation metadata for one explicit summary population.
+
+    Parameters
+    ----------
+    sorter_path : pathlib.Path
+        Selected ProbeA or ProbeB ``kilosort4`` directory. Units: filesystem
+        path. It is passed unchanged to the cluster-info-only cached reader.
+
+    Returns
+    -------
+    pd.DataFrame
+        ``cluster_info.tsv`` metadata with shape
+        ``(n_clusters, n_metadata_columns)``. No raw spike or LFP data is
+        opened, and no table axes or units are transformed.
+    """
+
+    return load_cluster_info_cached(str(sorter_path))
+
+
+def load_summary_channel_metadata(sorter_path: Path) -> pd.DataFrame:
+    """Lazily load normalized channel quality for one explicit summary probe.
+
+    Parameters
+    ----------
+    sorter_path : pathlib.Path
+        Selected ProbeA or ProbeB ``kilosort4`` directory. Units: filesystem
+        path. It is used only to infer the containing probe-derived directory.
+
+    Returns
+    -------
+    pd.DataFrame
+        Normalized channel-quality table with shape ``(n_channels, 7)`` and
+        zero-based ``ch`` rows; spatial coordinates, when present, are in
+        micrometers. The existing cached loader preserves its normalization.
+
+    Raises
+    ------
+    ValueError
+        If the supplied sorter path cannot identify a probe-derived directory.
+    """
+
+    probe_directory = unit_spike_loading.infer_probe_derived_dir(sorter_path, None)
+    if probe_directory is None:
+        raise ValueError(f"Could not infer a probe-derived directory from sorter path: {sorter_path}")
+    return load_channel_quality_cached(str(probe_directory))
 
 
 @st.cache_resource(show_spinner="Decoding LFP sync...")
@@ -3824,6 +3921,8 @@ def main() -> None:
             pfc_lfp_path=pfc_lfp_path,
             hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
             pfc_aligned_spike_path=pfc_aligned_spike_path,
+            hpc_v1_sorter_output_path=hpc_v1_sorter_output_path,
+            pfc_sorter_output_path=pfc_sorter_output_path,
         )
         return
 
