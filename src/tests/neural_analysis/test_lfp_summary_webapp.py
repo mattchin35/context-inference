@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from hashlib import sha256
+import json
 from pathlib import Path
+from typing import Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -203,6 +206,240 @@ def _fake_dependencies(
     )
 
 
+def _snapshot_receipt_digest(file_entries: list[dict[str, object]]) -> str:
+    """Return the ordered transfer identity for synthetic final-cache files.
+
+    Parameters
+    ----------
+    file_entries : list[dict[str, object]]
+        Receipt entries ordered by filename. Each entry has an ASCII filename,
+        integer ``size_bytes``, and lowercase hexadecimal ``sha256`` digest;
+        it contains no numerical arrays or physical units.
+
+    Returns
+    -------
+    str
+        Lowercase SHA-256 of the newline-delimited filename, size, and per-file
+        digest records, including a final newline. This is an identity checksum,
+        not a scientific value.
+    """
+
+    lines = [
+        f"{entry['filename']}\t{entry['size_bytes']}\t{entry['sha256']}"
+        for entry in file_entries
+    ]
+    return sha256(("\n".join(lines) + "\n").encode("ascii")).hexdigest()
+
+
+def _write_snapshot_fixture(
+    root: Path,
+    *,
+    component_states: dict[str, str] | None = None,
+    component_population_labels: dict[str, str] | None = None,
+    receipt_transform: Callable[[dict[str, object]], None] | None = None,
+) -> Path:
+    """Create a tiny immutable-cache topology for receipt-only UI contracts.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Writable temporary-test root. The helper creates exactly one
+        ``cache_snapshot`` child and never reads session, CT026, or network data.
+    component_states : dict[str, str] | None
+        Optional committed manifest state for each scientific component. Omitted
+        states are ``"complete"``. These are categorical state strings, not
+        numerical results.
+    component_population_labels : dict[str, str] | None
+        Optional stable selected-population label for a component. Labels are
+        categorical provenance values such as ``"ProbeB"`` and have no units.
+    receipt_transform : callable or None
+        Optional in-place mutation of the JSON-compatible receipt after its
+        correct file identity has been recorded. It receives and returns no
+        arrays, axes, units, or filesystem paths.
+
+    Returns
+    -------
+    pathlib.Path
+        Exact synthetic ``cache_snapshot`` directory containing an ASCII
+        manifest, three tiny NPZ component files, and an identity receipt.
+    """
+
+    snapshot = root / "cache_snapshot"
+    snapshot.mkdir()
+    states = component_states or {}
+    population_labels = component_population_labels or {}
+    manifest = {
+        "schema_version": "1",
+        "session_id": "synthetic-session",
+        "components": {
+            component: {
+                "state": states.get(component, "complete"),
+                **(
+                    {
+                        "configuration_snapshot": {
+                            "unit_population": {
+                                "label": f"{population_labels[component]} active",
+                                "probe_label": population_labels[component],
+                                "sorter_path": (
+                                    f"/cluster/final/{population_labels[component]}/kilosort4"
+                                ),
+                                "aligned_spike_path": (
+                                    f"/cluster/final/{population_labels[component]}/aligned_spikes.npz"
+                                ),
+                                "selected_channels": [1],
+                                "quality_settings": [
+                                    ["channel_quality", "good"],
+                                    ["inside_brain", "true"],
+                                    ["unit_quality", "good,mua"],
+                                ],
+                                "stable_unit_ids": [f"{population_labels[component]}:7"],
+                            }
+                        }
+                    }
+                    if component in population_labels
+                    else {}
+                ),
+            }
+            for component in lfp_summary_webapp.SUMMARY_COMPONENTS
+        },
+    }
+    (snapshot / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    for component in lfp_summary_webapp.SUMMARY_COMPONENTS:
+        np.savez(
+            snapshot / f"{component}.npz",
+            marker=np.array([len(component)], dtype=np.int64),
+        )
+    file_entries = []
+    for filename in ("manifest.json", "power.npz", "synchrony.npz", "spike_phase.npz"):
+        path = snapshot / filename
+        file_entries.append(
+            {
+                "filename": filename,
+                "size_bytes": path.stat().st_size,
+                "sha256": sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    receipt: dict[str, object] = {
+        "schema_version": 1,
+        "source_cluster_directory": "/cluster/final/cache",
+        "copied_at_utc": "2026-09-22T00:00:00Z",
+        "files": file_entries,
+        "aggregate": {
+            "algorithm": "sha256",
+            "canonical_record_format": "filename\\tsize_bytes\\tsha256\\n",
+            "order": [entry["filename"] for entry in file_entries],
+            "sha256": _snapshot_receipt_digest(file_entries),
+        },
+    }
+    if receipt_transform is not None:
+        receipt_transform(receipt)
+    (snapshot / "cache_snapshot_identity.json").write_text(
+        json.dumps(receipt),
+        encoding="ascii",
+    )
+    return snapshot
+
+
+def _set_receipt_schema_version_to_text(receipt: dict[str, object]) -> None:
+    """Replace a receipt's integer schema version with text for rejection tests.
+
+    Parameters
+    ----------
+    receipt : dict[str, object]
+        JSON-compatible transfer receipt without numerical arrays or units.
+
+    Returns
+    -------
+    None
+        Mutates only the categorical ``schema_version`` field in-place.
+    """
+
+    receipt["schema_version"] = "1"
+
+
+def _remove_receipt_final_newline_format(receipt: dict[str, object]) -> None:
+    """Corrupt only the receipt's required canonical aggregate record format.
+
+    Parameters
+    ----------
+    receipt : dict[str, object]
+        JSON-compatible transfer receipt without numerical arrays or units.
+
+    Returns
+    -------
+    None
+        Mutates only aggregate metadata, retaining all files and per-file hashes.
+    """
+
+    aggregate = receipt["aggregate"]
+    assert isinstance(aggregate, dict)
+    aggregate["canonical_record_format"] = "filename\\tsize_bytes\\tsha256"
+
+
+def _reverse_first_receipt_files(receipt: dict[str, object]) -> None:
+    """Change the required manifest-first aggregate order for rejection tests.
+
+    Parameters
+    ----------
+    receipt : dict[str, object]
+        JSON-compatible transfer receipt without numerical arrays or units.
+
+    Returns
+    -------
+    None
+        Mutates only the categorical aggregate order metadata in-place.
+    """
+
+    aggregate = receipt["aggregate"]
+    assert isinstance(aggregate, dict)
+    aggregate["order"] = [
+        "power.npz",
+        "manifest.json",
+        "synchrony.npz",
+        "spike_phase.npz",
+    ]
+
+
+def _synthetic_launcher_command(action: str, config: object) -> str:
+    """Return one synthetic launcher command for action-dispatch contract tests.
+
+    Parameters
+    ----------
+    action : str
+        Categorical requested summary action with no numerical data.
+    config : object
+        Opaque immutable configuration passed through without inspection.
+
+    Returns
+    -------
+    str
+        ASCII launcher handoff text; it represents no executed shell command.
+    """
+
+    del config
+    return f"launcher {action}"
+
+
+def _synthetic_slurm_command(action: str, config: object) -> str:
+    """Return one synthetic Slurm handoff string without submitting a job.
+
+    Parameters
+    ----------
+    action : str
+        Categorical requested summary action with no numerical data.
+    config : object
+        Opaque immutable configuration passed through without inspection.
+
+    Returns
+    -------
+    str
+        ASCII ``sbatch`` handoff text; it is never executed by a test.
+    """
+
+    del config
+    return f"sbatch {action}"
+
+
 def test_summary_defaults_match_approved_ct026_channels_and_analysis_settings() -> None:
     """The UI defaults should reproduce the approved first-session configuration."""
 
@@ -216,6 +453,581 @@ def test_summary_defaults_match_approved_ct026_channels_and_analysis_settings() 
     assert defaults.bootstrap_count == 1000
     assert defaults.choice_filter == "all"
     assert defaults.context_filter == "all"
+
+
+def test_snapshot_receipt_accepts_only_the_exact_final_files_and_transfer_identity(
+    tmp_path: Path,
+) -> None:
+    """A valid snapshot exposes provenance without replacing its cluster paths.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty temporary root used for a four-file final-cache copy plus receipt.
+    """
+
+    snapshot = _write_snapshot_fixture(tmp_path)
+
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+
+    assert inspection.state == "valid"
+    assert inspection.snapshot_directory == snapshot.resolve()
+    assert inspection.source_cluster_directory == "/cluster/final/cache"
+    assert inspection.component_paths == {
+        component: snapshot / f"{component}.npz"
+        for component in lfp_summary_webapp.SUMMARY_COMPONENTS
+    }
+
+
+@pytest.mark.parametrize(
+    "receipt_transform",
+    (
+        _set_receipt_schema_version_to_text,
+        _remove_receipt_final_newline_format,
+        _reverse_first_receipt_files,
+    ),
+)
+def test_snapshot_receipt_requires_integer_schema_and_exact_canonical_aggregate(
+    tmp_path: Path,
+    receipt_transform: Callable[[dict[str, object]], None],
+) -> None:
+    """Receipt schema and ordered-digest format are fixed transfer contracts.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty temporary root used for one synthetic final snapshot receipt.
+    receipt_transform : callable
+        In-place categorical receipt mutation that preserves files while making
+        the receipt schema or aggregate format invalid. It accepts and returns
+        JSON-compatible metadata only, with no numerical arrays or units.
+    """
+
+    snapshot = _write_snapshot_fixture(tmp_path, receipt_transform=receipt_transform)
+
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+
+    assert inspection.state == "malformed"
+    assert not inspection.is_scientific_result
+
+
+@pytest.mark.parametrize(
+    ("fixture_kind", "expected_state"),
+    (
+        ("missing", "missing"),
+        ("malformed", "malformed"),
+        ("tampered", "tampered"),
+        ("incomplete", "incomplete"),
+    ),
+)
+def test_snapshot_receipt_reports_noncommitted_states_without_live_fallback(
+    tmp_path: Path,
+    fixture_kind: str,
+    expected_state: str,
+) -> None:
+    """Missing or invalid final-cache copies must remain noncomputational states.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty temporary root used only for a tiny synthetic snapshot fixture.
+    fixture_kind : str
+        Categorical fixture mutation selecting a missing, malformed, tampered,
+        or incomplete transfer state. It has no numerical units.
+    expected_state : str
+        Required visible categorical snapshot status for that mutation.
+    """
+
+    if fixture_kind == "missing":
+        snapshot = tmp_path / "missing-cache_snapshot"
+    else:
+        snapshot = _write_snapshot_fixture(tmp_path)
+        if fixture_kind == "malformed":
+            (snapshot / "cache_snapshot_identity.json").write_text("{", encoding="ascii")
+        elif fixture_kind == "tampered":
+            (snapshot / "power.npz").write_bytes(b"tampered-after-receipt")
+        else:
+            (snapshot / "spike_phase.npz").unlink()
+
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+
+    assert inspection.state == expected_state
+    assert not inspection.is_scientific_result
+
+
+def test_snapshot_rejects_prepared_and_checkpoint_artifacts_as_scientific_components(
+    tmp_path: Path,
+) -> None:
+    """Execution-only artifacts cannot be promoted into cache-inspection views.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty temporary root used for a small synthetic cache and work artifact.
+    """
+
+    snapshot = _write_snapshot_fixture(
+        tmp_path,
+        component_states={"spike_phase": "prepared"},
+    )
+    np.savez(snapshot / "spike_phase_checkpoint.npz", marker=np.array([1]))
+
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+
+    assert inspection.state == "incomplete"
+    assert not inspection.is_scientific_result
+    assert "prepared" in inspection.message.lower() or "checkpoint" in inspection.message.lower()
+
+
+def test_snapshot_source_is_default_blank_then_retains_only_the_explicit_path(
+    tmp_path: Path,
+) -> None:
+    """Snapshot selection never discovers a run or substitutes a CT026 path.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root containing one explicitly supplied synthetic snapshot.
+    """
+
+    session_state: dict[str, object] = {}
+    blank_source = lfp_summary_webapp.resolve_summary_source(
+        source_mode="snapshot",
+        entered_snapshot_directory="",
+        session_state=session_state,
+    )
+    snapshot = _write_snapshot_fixture(tmp_path)
+    entered_source = lfp_summary_webapp.resolve_summary_source(
+        source_mode="snapshot",
+        entered_snapshot_directory=str(snapshot),
+        session_state=session_state,
+    )
+    rerendered_source = lfp_summary_webapp.resolve_summary_source(
+        source_mode="snapshot",
+        entered_snapshot_directory="",
+        session_state=session_state,
+    )
+
+    assert blank_source.mode == "snapshot"
+    assert blank_source.snapshot_directory is None
+    assert not blank_source.can_compute
+    assert entered_source.snapshot_directory == snapshot.resolve()
+    assert rerendered_source.snapshot_directory == snapshot.resolve()
+    assert rerendered_source.mode == "snapshot"
+    assert "latest" not in rerendered_source.message.lower()
+
+
+def test_blank_or_invalid_snapshot_source_cannot_dispatch_live_or_compute_actions(
+    tmp_path: Path,
+) -> None:
+    """Snapshot mode has no silent live-cache or numerical-action escape hatch.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty temporary root used to form an invalid explicit snapshot path.
+    """
+
+    calls: list[str] = []
+    source = lfp_summary_webapp.resolve_summary_source(
+        source_mode="snapshot",
+        entered_snapshot_directory=str(tmp_path / "absent"),
+        session_state={},
+    )
+
+    result = lfp_summary_webapp.dispatch_summary_action(
+        "power",
+        source=source,
+        config=default_lfp_summary_config(),
+        dependencies=_fake_dependencies(calls, []),
+        launcher_command_builder=_synthetic_launcher_command,
+    )
+
+    assert result.state == "blocked"
+    assert calls == []
+    assert "snapshot" in (result.error or "").lower()
+
+
+def test_valid_snapshot_mode_blocks_actions_and_preserves_every_snapshot_file(
+    tmp_path: Path,
+) -> None:
+    """Read-only snapshot inspection cannot dispatch live computation or write files.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root containing one exact synthetic final snapshot.
+    """
+
+    snapshot = _write_snapshot_fixture(tmp_path)
+    before = {
+        path.name: (path.stat().st_size, sha256(path.read_bytes()).hexdigest())
+        for path in snapshot.iterdir()
+    }
+    calls: list[str] = []
+    source = lfp_summary_webapp.resolve_summary_source(
+        source_mode="snapshot",
+        entered_snapshot_directory=str(snapshot),
+        session_state={},
+    )
+
+    result = lfp_summary_webapp.dispatch_summary_action(
+        "synchrony",
+        source=source,
+        config=default_lfp_summary_config(),
+        dependencies=_fake_dependencies(calls, []),
+        launcher_command_builder=_synthetic_launcher_command,
+    )
+
+    after = {
+        path.name: (path.stat().st_size, sha256(path.read_bytes()).hexdigest())
+        for path in snapshot.iterdir()
+    }
+    assert result.state == "blocked"
+    assert calls == []
+    assert after == before
+
+
+def test_snapshot_component_cache_opens_only_the_selected_component_once_per_identity(
+    tmp_path: Path,
+) -> None:
+    """Rerenders cache one selected final component without touching unrelated files.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root containing a receipt-validated synthetic final snapshot.
+    """
+
+    snapshot = _write_snapshot_fixture(tmp_path)
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+    cache = lfp_summary_webapp.SnapshotComponentCache()
+    opened: list[str] = []
+
+    def load_component(path: Path, manifest: dict[str, object], component: str) -> dict[str, np.ndarray]:
+        """Record one component-path open and return a one-element synthetic array.
+
+        Parameters are the exact selected NPZ path, JSON-compatible manifest, and
+        categorical component name. The return contains a dimensionless
+        one-dimensional ``marker`` array with shape ``(1,)``.
+        """
+
+        del path, manifest
+        opened.append(component)
+        return {"marker": np.array([len(component)], dtype=np.int64)}
+
+    first = cache.load(inspection, "synchrony", load_component)
+    second = cache.load(inspection, "synchrony", load_component)
+    second_root = tmp_path / "different_identity"
+    second_root.mkdir()
+    second_snapshot = _write_snapshot_fixture(second_root)
+    third = cache.load(
+        lfp_summary_webapp.validate_cache_snapshot(second_snapshot),
+        "synchrony",
+        load_component,
+    )
+
+    assert first is second
+    assert third is not first
+    assert opened == ["synchrony", "synchrony"]
+
+
+@pytest.mark.parametrize("component", ("synchrony", "spike_phase"))
+def test_snapshot_plotting_is_cache_only_and_closes_each_figure(
+    tmp_path: Path,
+    component: str,
+) -> None:
+    """Synchrony and Spike views must plot one cached component and close figures.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root containing a receipt-validated tiny snapshot.
+    component : str
+        Selected cached scientific component; no raw LFP, spike, or phase input
+        is supplied to the view.
+    """
+
+    snapshot = _write_snapshot_fixture(tmp_path)
+    streamlit = FakeStreamlit()
+    opened: list[str] = []
+    compute_calls: list[str] = []
+    created_figure_numbers: list[int] = []
+    before = {
+        path.name: (path.stat().st_size, sha256(path.read_bytes()).hexdigest())
+        for path in snapshot.iterdir()
+    }
+
+    def load_component(path: Path, manifest: dict[str, object], selected: str) -> dict[str, np.ndarray]:
+        """Record the selected NPZ identity and return a synthetic marker array."""
+
+        del path, manifest
+        opened.append(selected)
+        return {"marker": np.array([1], dtype=np.int64)}
+
+    def plot_component(selected: str, arrays: dict[str, np.ndarray]) -> plt.Figure:
+        """Build one unsaved figure from a selected dimensionless marker array."""
+
+        assert selected == component
+        assert arrays["marker"].shape == (1,)
+        figure, _axis = plt.subplots()
+        created_figure_numbers.append(figure.number)
+        return figure
+
+    def fail_if_computed() -> None:
+        """Record forbidden computation if a snapshot rendering callback invokes it.
+
+        Returns
+        -------
+        None
+            Appends a categorical marker only; it performs no numerical work.
+        """
+
+        compute_calls.append("compute")
+
+    lfp_summary_webapp.render_snapshot_component_view(
+        streamlit,
+        snapshot_directory=snapshot,
+        component=component,
+        component_cache=lfp_summary_webapp.SnapshotComponentCache(),
+        load_component=load_component,
+        plot_component=plot_component,
+        compute_callback=fail_if_computed,
+    )
+
+    assert opened == [component]
+    assert compute_calls == []
+    assert streamlit.figures
+    assert not plt.fignum_exists(created_figure_numbers[0])
+    after = {
+        path.name: (path.stat().st_size, sha256(path.read_bytes()).hexdigest())
+        for path in snapshot.iterdir()
+    }
+    assert after == before
+
+
+def test_production_snapshot_plot_adapters_select_cached_synchrony_and_spike_slices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production adapters forward interactive cached slices to established plotters.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces existing pure plotting functions to capture only their selected
+        cached arrays; no raw source, numerical preparation, or cache write occurs.
+    """
+
+    captured: dict[str, tuple[object, ...]] = {}
+
+    def fake_phase_map(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture one Synchrony cached slice and return an unsaved figure.
+
+        Parameters are the established plotting-module arguments: dimensionless
+        metric/count arrays, Hz/seconds coordinates, categorical labels, and
+        immutable plot context. No input arrays are transformed.
+        """
+
+        del kwargs
+        captured["synchrony"] = args
+        return plt.figure(), {}
+
+    def fake_unit_ppc_map(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture one Spike cached slice and return an unsaved figure.
+
+        Parameters are the established plotting-module arrays with unit and Hz
+        axes plus categorical selection labels and plot context. No numerical
+        computation or file I/O occurs.
+        """
+
+        del kwargs
+        captured["spike_phase"] = args
+        return plt.figure(), {}
+
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_plotting,
+        "plot_phase_map",
+        fake_phase_map,
+    )
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_plotting,
+        "plot_unit_ppc_map",
+        fake_unit_ppc_map,
+    )
+    selection = lfp_summary_webapp.SnapshotPlotSelection(
+        view="unit_ppc_map",
+        site_id="HPC1",
+        condition_name="left",
+        epoch_name="after",
+        band_name="gamma",
+    )
+    synchrony_arrays = {
+        "condition_names": np.array(("all", "left")),
+        "site_ids": np.array(("PFC", "HPC1")),
+        "frequency_hz": np.array((8.0,)),
+        "relative_time_s": np.array((0.0,)),
+        "condition_membership": np.array(((True, False), (True, True))),
+        "filter_membership": np.array((True, True)),
+        "itpc": np.array([[[[1.0]], [[2.0]]], [[[3.0]], [[7.0]]]]),
+        "itpc_effective_trial_count": np.array([[[[1]], [[1]]], [[[2]], [[2]]]]),
+    }
+    spike_band_ppc = np.full((1, 2, 2, 2, 2), np.nan)
+    spike_band_ppc[0, 1, 1, 1, 1] = 29.0
+    spike_ppc = np.full((1, 2, 2, 2, 1), np.nan)
+    spike_ppc[0, 1, 1, 1, 0] = 11.0
+    spike_arrays = {
+        "unit_ids": np.array(("ProbeB:7",)),
+        "condition_names": np.array(("all", "left")),
+        "site_ids": np.array(("PFC", "HPC1")),
+        "epoch_names": np.array(("before", "after")),
+        "band_names": np.array(("theta", "gamma")),
+        "frequency_hz": np.array((8.0,)),
+        "ppc": spike_ppc,
+        "computable": np.ones((1, 2, 2, 2, 1), dtype=bool),
+        "reliable": np.ones((1, 2, 2, 2, 1), dtype=bool),
+        "spike_count": np.ones((1, 2, 2, 2, 1), dtype=np.int64),
+        "ppc_band_mean": spike_band_ppc,
+    }
+
+    spike_slice = lfp_summary_webapp.select_spike_snapshot_slice(
+        spike_arrays,
+        selection,
+    )
+
+    synchrony_figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "synchrony",
+        synchrony_arrays,
+        default_lfp_summary_config(),
+        selection,
+    )
+    spike_figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "spike_phase",
+        spike_arrays,
+        default_lfp_summary_config(),
+        selection,
+    )
+
+    assert np.array_equal(captured["synchrony"][0], np.array([[7.0]]))
+    assert captured["synchrony"][5:7] == ("HPC1", "left")
+    assert np.array_equal(captured["spike_phase"][0], np.array([[11.0]]))
+    assert captured["spike_phase"][5:8] == (("ProbeB:7",), "left", "HPC1")
+    assert captured["spike_phase"][8] == "after"
+    assert spike_slice.view == "unit_ppc_map"
+    assert spike_slice.condition_index == 1
+    assert spike_slice.site_index == 1
+    assert spike_slice.epoch_index == 1
+    assert spike_slice.band_index == 1
+    plt.close(synchrony_figure)
+    plt.close(spike_figure)
+
+
+def test_probe_a_selection_reports_final_probe_b_spike_cache_mismatch(
+    tmp_path: Path,
+) -> None:
+    """A ProbeA view cannot relabel or plot a committed ProbeB Spike component.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root containing a synthetic final Spike component labeled ProbeB.
+    """
+
+    snapshot = _write_snapshot_fixture(
+        tmp_path,
+        component_population_labels={"spike_phase": "ProbeB"},
+    )
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+    probe_a = UnitPopulationConfig(
+        "ProbeA active",
+        "ProbeA",
+        tmp_path / "probe_a_sorter",
+        tmp_path / "probe_a_aligned.npz",
+        (1,),
+        (("channel_quality", "good"), ("inside_brain", "true"), ("unit_quality", "good,mua")),
+        ("ProbeA:11",),
+    )
+
+    status = lfp_summary_webapp.snapshot_component_population_status(
+        inspection,
+        "spike_phase",
+        probe_a,
+    )
+
+    assert status.state == "population_mismatch"
+    assert "ProbeB" in status.message
+    assert not status.can_plot
+
+
+def test_progress_rendering_and_launcher_handoff_do_not_compute_numerics() -> None:
+    """Progress is display-only while Spike phase and Compute All remain launcher handoffs."""
+
+    streamlit = FakeStreamlit()
+    compute_calls: list[str] = []
+    event = lfp_summary_webapp.ProgressEvent(
+        "spike_phase",
+        "shuffle",
+        7,
+        10,
+        "running shuffled nulls",
+        elapsed_seconds=12.0,
+        eta_seconds=5.0,
+    )
+
+    lfp_summary_webapp.render_progress_event(streamlit, event)
+    commands = lfp_summary_webapp.build_launcher_handoff_commands(
+        default_lfp_summary_config(),
+        action="spike_phase",
+    )
+    assert set(commands) == {"local_new", "slurm_new", "local_resume", "slurm_resume"}
+    assert all(isinstance(command, str) and command for command in commands.values())
+    for action in ("spike_phase", "all"):
+        handoff = lfp_summary_webapp.dispatch_summary_action(
+            action,
+            source=lfp_summary_webapp.resolve_summary_source(
+                source_mode="live",
+                entered_snapshot_directory="",
+                session_state={},
+            ),
+            config=default_lfp_summary_config(),
+            dependencies=_fake_dependencies(compute_calls, []),
+            launcher_command_builder=_synthetic_slurm_command,
+        )
+        assert handoff.state == "handoff"
+        assert handoff.launcher_command == f"sbatch {action}"
+
+    assert compute_calls == []
+    progress_text = " ".join(message for _kind, message in streamlit.messages)
+    assert "7" in progress_text and "10" in progress_text and "ETA" in progress_text
+
+
+def test_nonempty_absolute_amplitude_threshold_is_rejected_before_any_action_dispatch() -> None:
+    """Deferred absolute masking must not appear applied or reach a compute callback."""
+
+    calls: list[str] = []
+    config = replace(
+        default_lfp_summary_config(),
+        phase=replace(
+            default_lfp_summary_config().phase,
+            absolute_amplitude_thresholds=(("PFC", 12.5),),
+        ),
+    )
+    source = lfp_summary_webapp.resolve_summary_source(
+        source_mode="live",
+        entered_snapshot_directory="",
+        session_state={},
+    )
+
+    result = lfp_summary_webapp.dispatch_summary_action(
+        "power",
+        source=source,
+        config=config,
+        dependencies=_fake_dependencies(calls, []),
+        launcher_command_builder=_synthetic_launcher_command,
+    )
+
+    assert result.state == "blocked"
+    assert "absolute amplitude" in (result.error or "").lower()
+    assert calls == []
 
 
 def test_assemble_summary_config_maps_active_inputs_and_advanced_controls(tmp_path: Path) -> None:
@@ -489,6 +1301,70 @@ def test_production_power_action_delegates_to_atomic_runtime_pipeline(
     assert result.state == "complete"
     assert calls[-1] == (config, sentinel_dependencies)
     assert callable(calls[0]["trial_table_loader"])
+
+
+def test_live_power_and_synchrony_use_only_the_composed_runtime_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live bounded actions share WP10's composed dependency factory, not ad hoc seams.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the composed runtime factory and two pipeline entry points without
+        reading data, preparing phase, or writing a cache.
+    """
+
+    calls: list[str] = []
+    composed_dependencies = object()
+
+    def fake_composed_factory(**kwargs: object) -> object:
+        """Record composed-boundary construction and return an opaque bundle."""
+
+        assert callable(kwargs["trial_table_loader"])
+        calls.append("compose")
+        return composed_dependencies
+
+    def fake_component(component: str) -> Callable[[object, object], object]:
+        """Return a fake pipeline entry point that records one component identity."""
+
+        def compute(config: object, dependencies: object) -> object:
+            """Record exact composed inputs and return a successful result-like object."""
+
+            assert config == default_lfp_summary_config()
+            assert dependencies is composed_dependencies
+            calls.append(component)
+            return type(
+                "Result",
+                (),
+                {"component": component, "state": "complete", "error": None},
+            )()
+
+        return compute
+
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_runtime,
+        "make_lfp_summary_pipeline_dependencies",
+        fake_composed_factory,
+    )
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_pipeline,
+        "compute_power_component",
+        fake_component("power"),
+    )
+    monkeypatch.setattr(
+        lfp_summary_webapp.lfp_summary_pipeline,
+        "compute_synchrony_component",
+        fake_component("synchrony"),
+    )
+
+    dependencies = lfp_summary_webapp.make_production_summary_dependencies()
+    power = dependencies.compute_power(default_lfp_summary_config())
+    synchrony = dependencies.compute_synchrony(default_lfp_summary_config())
+
+    assert power.state == "complete"
+    assert synchrony.state == "complete"
+    assert calls == ["compose", "power", "synchrony"]
 
 
 def test_production_dependencies_load_cached_power_without_preparing_raw_lfp(

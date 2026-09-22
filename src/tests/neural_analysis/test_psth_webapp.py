@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import inspect
 from pathlib import Path
 
@@ -8,6 +9,132 @@ import pandas as pd
 import pytest
 
 from src.neural_analysis import lfp_phase_clustering, psth_webapp
+from src.neural_analysis import lfp_summary_webapp
+from src.neural_analysis.lfp_summary_models import component_fingerprint
+
+
+def _population_metadata() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return small Probe metadata tables for active-population selection tests.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame]
+        Cluster metadata has one categorical cluster id, zero-based channel, and
+        quality group per row. Channel metadata has zero-based channel labels
+        and boolean inside-brain flags. Neither table contains spike times,
+        LFP values, physical units, or session paths.
+    """
+
+    clusters = pd.DataFrame(
+        {
+            "cluster_id": [7, 8, 9, 10],
+            "ch": [1, 1, 2, 3],
+            "group": ["good", "mua", "noise", "good"],
+        }
+    )
+    channels = pd.DataFrame(
+        {
+            "channel": [1, 2, 3],
+            "channel_quality": ["good", "good", "good"],
+            "inside_brain": [True, False, True],
+        }
+    )
+    return clusters, channels
+
+
+@pytest.mark.parametrize("probe_label", ("ProbeA", "ProbeB"))
+def test_active_summary_population_uses_one_probe_with_good_mua_good_inside_brain_defaults(
+    tmp_path: Path,
+    probe_label: str,
+) -> None:
+    """Each active selector choice creates one probe-qualified, never-combined population.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root used only for distinct sorter and aligned-spike identities.
+    probe_label : str
+        Exact active population selector value, either ProbeA or ProbeB.
+    """
+
+    clusters, channels = _population_metadata()
+    sorter_path = tmp_path / probe_label / "kilosort4"
+    aligned_spike_path = tmp_path / probe_label / "aligned_spikes.npz"
+
+    population = lfp_summary_webapp.build_active_summary_population(
+        probe_label=probe_label,
+        sorter_path=sorter_path,
+        aligned_spike_path=aligned_spike_path,
+        cluster_metadata=clusters,
+        channel_metadata=channels,
+    )
+
+    assert population.probe_label == probe_label
+    assert population.sorter_path == sorter_path
+    assert population.aligned_spike_path == aligned_spike_path
+    assert population.selected_channels == (1, 3)
+    assert population.stable_unit_ids == (f"{probe_label}:7", f"{probe_label}:8", f"{probe_label}:10")
+    assert population.quality_settings == (
+        ("channel_quality", "good"),
+        ("inside_brain", "true"),
+        ("unit_quality", "good,mua"),
+    )
+    assert all(unit_id.startswith(f"{probe_label}:") for unit_id in population.stable_unit_ids)
+
+
+def test_active_summary_population_rejects_combined_probe_identity(
+    tmp_path: Path,
+) -> None:
+    """The summary selector has exactly one active probe and cannot merge units."""
+
+    clusters, channels = _population_metadata()
+
+    with pytest.raises(ValueError, match="ProbeA or ProbeB"):
+        lfp_summary_webapp.build_active_summary_population(
+            probe_label="ProbeA+ProbeB",
+            sorter_path=tmp_path / "sorter",
+            aligned_spike_path=tmp_path / "aligned.npz",
+            cluster_metadata=clusters,
+            channel_metadata=channels,
+        )
+
+
+def test_switching_active_probe_changes_spike_phase_fingerprint_without_combining_paths(
+    tmp_path: Path,
+) -> None:
+    """Probe choice must remain part of the Spike-phase identity and source provenance.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary root supplying deliberately distinct ProbeA and ProbeB paths.
+    """
+
+    clusters, channels = _population_metadata()
+    populations = {
+        probe: lfp_summary_webapp.build_active_summary_population(
+            probe_label=probe,
+            sorter_path=tmp_path / probe / "kilosort4",
+            aligned_spike_path=tmp_path / probe / "aligned_spikes.npz",
+            cluster_metadata=clusters,
+            channel_metadata=channels,
+        )
+        for probe in ("ProbeA", "ProbeB")
+    }
+    base = lfp_summary_webapp.default_lfp_summary_config()
+
+    fingerprint_a = component_fingerprint(
+        "spike_phase",
+        replace(base, unit_population=populations["ProbeA"]),
+    )
+    fingerprint_b = component_fingerprint(
+        "spike_phase",
+        replace(base, unit_population=populations["ProbeB"]),
+    )
+
+    assert fingerprint_a != fingerprint_b
+    assert populations["ProbeA"].sorter_path != populations["ProbeB"].sorter_path
+    assert populations["ProbeA"].aligned_spike_path != populations["ProbeB"].aligned_spike_path
 
 
 def test_webapp_keeps_existing_routes_and_exposes_lfp_summary_route():
@@ -72,6 +199,55 @@ def test_real_summary_route_builds_usable_production_dependencies(
 
     assert received["dependencies"] is sentinel_dependencies
     assert received["session_path"] == tmp_path
+
+
+def test_summary_route_forwards_sorter_and_aligned_paths_for_both_probes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The parent route must preserve every page-entered probe source identity.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the child renderer so no Streamlit controls, files, or numerical
+        computations are executed.
+    tmp_path : pathlib.Path
+        Temporary root used to construct distinct ProbeA and ProbeB source paths.
+    """
+
+    received: dict[str, object] = {}
+
+    def fake_render(*args: object, **kwargs: object) -> None:
+        """Record child-route inputs without loading metadata or cache files."""
+
+        del args
+        received.update(kwargs)
+
+    monkeypatch.setattr(
+        psth_webapp.lfp_summary_webapp,
+        "make_production_summary_dependencies",
+        lambda: object(),
+    )
+    monkeypatch.setattr(psth_webapp.lfp_summary_webapp, "render_lfp_summary_view", fake_render)
+    hpc_sorter = tmp_path / "probe_b" / "kilosort4"
+    pfc_sorter = tmp_path / "probe_a" / "kilosort4"
+    hpc_aligned = tmp_path / "probe_b" / "aligned_spikes.npz"
+    pfc_aligned = tmp_path / "probe_a" / "aligned_spikes.npz"
+
+    psth_webapp.render_lfp_summary_view(
+        str(tmp_path),
+        "synthetic-session",
+        str(tmp_path / "probe_b.lf.bin"),
+        str(tmp_path / "probe_a.lf.bin"),
+        str(hpc_aligned),
+        str(pfc_aligned),
+        hpc_v1_sorter_output_path=str(hpc_sorter),
+        pfc_sorter_output_path=str(pfc_sorter),
+    )
+
+    assert received["sorter_paths"] == {"ProbeA": pfc_sorter, "ProbeB": hpc_sorter}
+    assert received["aligned_spike_paths"] == {"ProbeA": pfc_aligned, "ProbeB": hpc_aligned}
 
 
 def test_derived_open_ephys_lfp_paths_use_aligned_sync_adapters(
