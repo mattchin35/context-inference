@@ -3142,10 +3142,12 @@ C1 ProbeB 1,000-shuffle final-run completion (submitted 2026-09-20; completed
   It contains all 27 requested PNG selections, report/configuration/source and
   manifest snapshots, and no exclusion, unavailable selection, or warning.
   Every PNG is a nonempty, structurally valid RGBA image at the expected plot
-  family dimensions. Visual content has not yet been reviewed: copying the
-  scientific images off-cluster was blocked pending explicit data-egress
-  approval. This is the remaining WP9 validation action and does not authorize
-  recomputation.
+  family dimensions. After explicit data-egress approval, all 27 PNGs were
+  copied to the matching local analysis-run/report directory. The local and
+  cluster sets both contain 27 files and have aggregate ordered SHA-256
+  `7deb2180f7638131cc9d6f851d7fb3979b22b45527a6213acb67f5e432f0c2a6`.
+  Visual content has not yet been reviewed. That review is the remaining WP9
+  validation action and does not authorize recomputation.
 
 Cluster validation before a scientific run:
 
