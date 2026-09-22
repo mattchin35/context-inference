@@ -716,7 +716,13 @@ overwritten.
 
 Streamlit runs locally and only while the user is inspecting data. There is no
 Slurm-hosted web process, SSH tunnel, SSHFS mount, or persistent service. The
-selected snapshot component is cached in local process memory by resolved
+initial mode is read-only snapshot inspection. Its explicit snapshot-directory
+sidebar input is blank on first use and retained only in Streamlit session state
+after entry. The app does not hard-code the CT026 path, search for a latest run,
+infer a final run, or fall through to live computation when the path is blank or
+invalid. Live-cache mode requires a separate explicit selection.
+
+The selected snapshot component is cached in local process memory by resolved
 snapshot path plus manifest/file identity, so an ordinary rerun does not reopen
 or decompress it. Stored cluster absolute paths remain visible provenance and
 are not rewritten to local paths. Snapshot mode validates committed component

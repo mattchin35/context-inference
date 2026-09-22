@@ -74,8 +74,8 @@ Source-of-truth hierarchy:
 | R1 local preview recovery | Complete; transaction and population-map fix verified on real cache | Tests `b77f4a5`; implementation `97fbf3b`; recovery/report commit `0589fa7`; recovered report path below | No further R1 work; visual QA findings are isolated into proposed R2 |
 | R2 local preview readability | Complete | Contract/tests `7ba6fe6`, `2aed50b`; implementation `575deee`, `767544a`; full-suite and real-report QA `8ca0e2b`, `49a7e6d` | None; consume the repaired plots in final-report inspection and WP11 |
 | C1 cluster execution | Complete through the ProbeB 1,000-shuffle final run | Wrapper/tests through `63b87eb`; dry-run evidence `02b0f2c`; Slurm job `30744006`; terminal launcher evidence below | Preserve cluster cache/report; use measured runtime and memory before changing future requests |
-| WP11 Streamlit integration | Next planned implementation package after completed C1 | Package below; local immutable-snapshot topology approved 2026-09-22; final cache remains preserved on the cluster pending one-time copy | Inspect a checksum-verified local cache snapshot with local on-demand Streamlit; support one explicitly selected ProbeA or ProbeB and complete cached views |
-| WP12 PPC plotting/reporting | Complete for transaction and R2 real-size display contract | Contract `5dfd439`; implementation `bd6fa50`; R1 population repair `b77f4a5`, `97fbf3b`; R2 `575deee`, `767544a`; final report below | Visual approval of the immutable final report remains a validation step, not implementation |
+| WP11 Streamlit integration | Authorized documentation-first package; implementation not started | Package below; local immutable-snapshot topology and Sol/Terra sequence approved 2026-09-22; final cache copied locally with verified identity | Execute WP11-1 tests-only work under the frozen sequential worker plan after the WP11-0 documentation commit |
+| WP12 PPC plotting/reporting | Complete for transaction, R2 real-size display contract, and visually approved final report | Contract `5dfd439`; implementation `bd6fa50`; R1 population repair `b77f4a5`, `97fbf3b`; R2 `575deee`, `767544a`; final report and approval below | None; preserve the immutable report and consume its cache-only plotting contracts in WP11 |
 | WP13 optional absolute-amplitude thresholds | Explicitly deferred; not a blocker while thresholds are empty | Package below; validation/fingerprint support exists; current CT026 threshold list is empty | Reject every nonempty request before computation until WP13 is separately implemented |
 
 This document replaces the older decoding task list. It translates the scientific
@@ -3516,10 +3516,13 @@ Interruption recovery:
 
 ### WP11 - Full Streamlit integration
 
-Owner: one implementer after R1 recovery and C1 cluster infrastructure are
-validated;
-exclusive owner of
-`lfp_summary_webapp.py`, `psth_webapp.py`, and their focused tests.
+Lead: one Sol high orchestrator. One Terra high writer performs WP11-1,
+WP11-3, and WP11-4 sequentially. The writer has exclusive ownership of
+`lfp_summary_webapp.py`, `psth_webapp.py`, and their focused tests while each
+assigned package is active. No parallel WP11 writer is permitted because the
+two routes share dependency and configuration interfaces. Sol owns the
+documentation, RED/GREEN gates, integration review, real-snapshot smoke test,
+and final handoff to the user.
 
 Files:
 
@@ -3559,6 +3562,13 @@ Architecture:
   committed manifest states, retains cluster paths as displayed provenance,
   and never rewrites paths to make a current local configuration appear
   compatible.
+- Snapshot mode is the initial UI mode. Its sidebar contains an explicit
+  snapshot-directory text input that is blank on first use and retained only
+  in Streamlit session state thereafter. Source code must not hard-code the
+  CT026 snapshot path, search for a latest run, infer a final run from the
+  session directory, or silently fall back to live mode. A blank or invalid
+  path produces a clear noncomputational status and no file access outside the
+  exact entered directory.
 - Live-cache mode remains separate and uses the active session's existing
   `processed/lfp_summary_cache`. Only this mode can expose the explicitly
   requested bounded Power/Synchrony actions. Snapshot mode disables every
@@ -3602,6 +3612,9 @@ Tests written first:
   compatible scientific components.
 - A nonempty unsupported amplitude-threshold request is blocked before action
   dispatch and is never presented as applied.
+- Snapshot mode is the default, its path starts blank, and rerenders retain an
+  explicitly entered path without hard-coding or auto-discovering a run. Blank
+  and invalid paths cannot fall through to live-cache computation.
 
 Performance considerations:
 
@@ -3627,26 +3640,171 @@ Implementation sequence:
 
 1. **Complete 2026-09-22:** visually review the already copied final PNG report
    and record any presentation-only findings without recomputation.
-2. **Complete 2026-09-22:** copy the four final cache files into the local final run's
-   `cache_snapshot/`, compare remote/local counts, sizes, and ordered SHA-256,
-   and write the immutable `cache_snapshot_identity.json` receipt. Do not touch
-   the existing local preview cache.
-3. Write the focused tests above, including snapshot/live separation and
-   one-open-per-component cache behavior; commit tests before source and record
-   genuine RED against the present Power-only webapp.
-4. Implement the smallest changes in `lfp_summary_webapp.py` and
-   `psth_webapp.py`: path forwarding, explicit population selection,
-   snapshot/live modes, handoff commands, saved progress/status, component
-   caching, and existing cache-only Synchrony/Spike plotting adapters.
-5. Run the focused command to GREEN, then all affected webapp, I/O, plotting,
-   runtime, and pipeline tests, followed by the complete neural suite. Preserve
-   public interfaces except for the documented addition of both probe sorter
-   paths and the explicit snapshot source.
-6. Start Streamlit locally against the copied snapshot, verify that no raw data
-   or network path is opened and ordinary rerenders do not reload the selected
-   NPZ, then visually approve Power, Synchrony, and interactive Spike-phase
-   views. Record exact commits, commands, counts, warnings, and remaining issues
-   here before declaring WP11 complete.
+2. **Complete 2026-09-22:** copy the four final cache files into the local final
+   run's `cache_snapshot/`, compare remote/local counts, sizes, and ordered
+   SHA-256, and write the immutable `cache_snapshot_identity.json` receipt. Do
+   not touch the existing local preview cache.
+3. Execute WP11-1 and WP11-2 below: one test-only commit followed by Sol review
+   and a recorded genuine RED against the present Power-only webapp.
+4. Execute WP11-3 and WP11-4 below with the same Terra high writer. Implement
+   the cache-inspector core before the parent-route wiring; do not edit tests to
+   make either implementation pass.
+5. Execute the WP11-5 Sol integration gate: focused GREEN, affected suites,
+   complete neural suite, contract/performance audit, and exact documentation.
+6. Execute WP11-6: start Streamlit locally against the copied snapshot, perform
+   the mechanical smoke checks, and obtain user visual approval before declaring
+   WP11 complete.
+
+Sol/Terra execution packages (approved 2026-09-22):
+
+#### WP11-0 - Sol documentation and preflight
+
+Owner: Sol high. Documentation and read-only inspection only.
+
+- Freeze this architecture, test list, worker ownership, snapshot-path behavior,
+  performance rules, commit gates, and interruption recovery before any WP11
+  test or source edit.
+- Correct stale package status, confirm the tracked worktree is clean, inventory
+  existing untracked files without modifying them, and inspect every directly
+  related public interface and caller.
+- Run the existing two focused test modules as a baseline. A baseline failure
+  stops worker dispatch; it is not folded into WP11 feature RED.
+- Commit only the documentation files. The next allowed mutation after that
+  commit is WP11-1's tests-only edit.
+
+#### WP11-1 - Terra tests-only contract
+
+Owner: the single Terra high writer. Files are limited to
+`test_lfp_summary_webapp.py` and `test_psth_webapp.py`.
+
+- Add all tests listed above, including exact receipt/size/digest validation,
+  missing/malformed/tampered/incomplete snapshot states, default snapshot mode,
+  blank explicit path behavior, session-state retention, strict snapshot/live
+  separation, one-open-per-component caching, ProbeA/ProbeB path and population
+  identity, no combined population, launcher-only Spike/Compute-All controls,
+  progress rendering, cache-only Synchrony/Spike plots, and figure closure.
+- Reuse focused fixtures and synthetic small NPZ files. Do not read CT026 data,
+  open a network path, or copy the 444-MB cache during tests.
+- Commit tests only. Do not change implementation, documentation, fixtures
+  outside the two authorized test modules, or dependencies.
+
+#### WP11-2 - Sol RED gate
+
+Owner: Sol high. Review and execution only, except for a subsequent
+documentation checkpoint recording exact evidence.
+
+- Inspect the WP11-1 diff and commit, confirm production source is untouched,
+  and confirm failures express missing approved behavior rather than fixture,
+  collection, import, syntax, or environment defects.
+- Run the documented focused RED command and the complete two focused modules.
+  Record selected tests, intended failures, unexpected failures, duration, and
+  the tests-only commit here before source implementation begins.
+- If a test is genuinely defective, document the defect and make a separate
+  tests-only correction commit before rerunning RED. Never weaken a requirement
+  to obtain GREEN.
+
+#### WP11-3 - Terra cache-inspector core
+
+Owner: the same Terra high writer. Source scope is limited to
+`lfp_summary_webapp.py`; tests remain frozen.
+
+- Add the smallest clear data contracts and helpers for snapshot receipt and
+  file identity validation, snapshot/live state separation, selected-component
+  memory caching, progress/status display, launcher command handoff, action
+  gating, and existing cache-only Synchrony/Spike plotting adapters.
+- Snapshot reads are confined to the exact entered directory and only the
+  selected component. Snapshot code cannot call compute, repair, resume, copy,
+  or write seams. Live Power/Synchrony computation must continue through the
+  existing WP10 composed dependency boundary.
+- Run the core subset of the focused tests to GREEN. Route tests that require
+  WP11-4 may remain RED for their already-recorded missing parent-route wiring.
+  Commit only the authorized source file.
+
+#### WP11-4 - Terra parent-route integration
+
+Owner: the same Terra high writer. Source scope is limited to
+`psth_webapp.py`; tests remain frozen.
+
+- Forward both sorter and aligned-spike paths, present exactly one ProbeA or
+  ProbeB active population, retain the same approved unit-quality/channel
+  defaults, expose explicit snapshot/live mode and blank snapshot path input,
+  and delegate through the WP11-3 contracts.
+- Preserve existing routes and public behavior except for the documented
+  additive arguments and controls. Do not put numerical work into Streamlit.
+- Run the documented focused command and both complete focused modules to
+  GREEN, then commit only the authorized source file.
+
+#### WP11-5 - Sol integration and performance gate
+
+Owner: Sol high. No feature expansion.
+
+- Review every WP11 source/test diff for explicit data contracts, clarity,
+  interface compatibility, no duplicated production logic, and strict snapshot
+  immutability.
+- Run focused GREEN, then affected cache I/O, plotting, runtime, pipeline, and
+  launcher tests, followed by the complete `src/tests/neural_analysis` suite.
+- Verify with instrumentation that an ordinary rerender does not reopen the
+  selected NPZ, only the selected component is loaded, no raw LFP or network
+  path is opened, no snapshot file is written, and every Matplotlib figure is
+  closed. Record commands, counts, durations, warnings, commits, and worktree
+  scope here.
+
+#### WP11-6 - Local smoke, user review, and closure
+
+Owner: Sol high for the mechanical smoke and documentation; user for scientific
+visual approval.
+
+- Launch Streamlit locally on demand against the exact checksum-verified
+  snapshot path. This is not a cluster job and creates no persistent service.
+- Mechanically inspect Power, Synchrony, and Spike-phase selectors, statuses,
+  population mismatch behavior, progress/handoff text, and repeated rerenders.
+- Present the local views for user visual review. Do not declare WP11 complete
+  until the user approves or any findings are recorded as a separately planned
+  repair package.
+- Record final evidence and commits in this document; do not run CT026
+  computation as part of closure.
+
+Worker and interruption rules:
+
+- WP11-1, WP11-3, and WP11-4 are sequential assignments to one Terra high
+  writer. No second writer, parallel edit, or speculative implementation task
+  is allowed. Sol high reviews at every boundary.
+- Terra stages and commits only the exact files assigned to the active package.
+  Sol owns documentation commits. Both preserve all unrelated tracked and
+  untracked user files and stop immediately on unexpected changes.
+- After WP11-0, resume at WP11-1 if no tests-only commit exists. After WP11-1
+  and recorded WP11-2 RED, tests are frozen and resume at WP11-3. After WP11-3,
+  retain its partial-GREEN evidence and resume at WP11-4. After WP11-4, resume
+  at WP11-5 even if focused tests were already run by Terra.
+- An interrupted uncommitted worker tree is never silently discarded,
+  overwritten, or reassigned. Sol first inventories and reviews it, then asks
+  the user if ownership or intent is ambiguous.
+- No package completion, merge, test run, or Streamlit rerender authorizes a
+  scientific recomputation, cluster submission, network transfer, WP13 work,
+  or nonempty amplitude-threshold request.
+
+WP11-0 preflight checkpoint (2026-09-22):
+
+- Baseline HEAD was `e753274` on `refactor`, with no tracked modification before
+  this documentation-only edit. The 4,077 pre-existing untracked paths are out
+  of scope; their ordered NUL-delimited `git ls-files --others
+  --exclude-standard -z` SHA-256 is
+  `2d002d8acb78fd894dbecded3b20b0fcb34f3749a4cfea38b2730e7a4f44139f`.
+- The existing focused baseline command was
+  `UV_CACHE_DIR=/tmp/context_inference_uv_cache uv run pytest -q -p
+  no:cacheprovider src/tests/neural_analysis/test_lfp_summary_webapp.py
+  src/tests/neural_analysis/test_psth_webapp.py`; it passed all 45 tests in
+  2.41 seconds before any WP11 test or source edit.
+- Read-only interface inspection confirmed the expected gaps:
+  `psth_webapp.render_lfp_summary_view` forwards aligned-spike but not sorter
+  paths; `make_production_summary_dependencies` provides production Power only;
+  the current route still offers synchronous Spike/Compute-All actions; and no
+  immutable-snapshot receipt, source mode, or selected-component memory cache
+  boundary exists.
+- This checkpoint changes only `Tasks_neural.md` and `webappDesign.md`. Its
+  documentation commit must be recorded at WP11-2 together with the later
+  tests-only commit and genuine RED evidence. No Terra worker may begin until
+  the documentation commit exists.
 
 ### WP12 - Complete PPC plotting and reporting
 
@@ -3919,16 +4077,19 @@ advertising nonempty absolute thresholds as a supported production feature.
 5. WP5C-4 integrates the already-green serial numerical and cache work.
 6. WP5C-5 and its approved S0-S8 sequence are complete. Eight workers are the
    preferred CT026 production setting; the universal default remains unchanged.
-7. WP10, WP12, and the standalone launcher are complete. The local ProbeB
-   100-shuffle component is complete; R1 is the next package and may perform
-   report-only recovery but no scientific recomputation.
-8. After R1 report inspection, C1 validates the simple uv/Slurm wrapper and
-   cluster paths. The ProbeB 1,000-shuffle run remains a separate explicitly
-   approved cluster invocation and never follows automatically.
-9. WP11 follows R1/C1 and supports one explicitly selected ProbeA or ProbeB
-   population per run, never a combined population. Its long-running Spike
-   controls hand off to the launcher; read-only cache inspection uses a
-   checksum-verified local final-run snapshot and local on-demand Streamlit.
+7. WP10, WP12, the standalone launcher, R1, R2, and C1 are complete. The
+   ProbeB 100-shuffle preview and explicitly approved 1,000-shuffle final run
+   are complete; the immutable final report has user visual approval.
+8. The final four-file numerical cache has been copied once to the separate
+   local final-run `cache_snapshot/` and its size, per-file SHA-256, and ordered
+   aggregate identity are verified. The cluster cache remains authoritative and
+   the existing local preview cache remains untouched.
+9. WP11 is the current package and follows WP11-0 through WP11-6 above under
+   one Sol high orchestrator and one sequential Terra high writer. It supports
+   one explicitly selected ProbeA or ProbeB population per run, never a combined
+   population. Its long-running Spike controls hand off to the launcher;
+   read-only cache inspection uses the checksum-verified local snapshot and
+   local on-demand Streamlit.
 10. WP13 remains deferred while absolute thresholds are empty. WP10, the
    launcher, and WP11 must reject every nonempty unsupported request before
    computation; warning and continuing is forbidden.
