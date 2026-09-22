@@ -4291,6 +4291,28 @@ WP11-5 automated GREEN and production-loader smoke gate (2026-09-22):
 - WP11-5 is complete. WP11-6 is unblocked but not complete: next is local
   Streamlit startup and a mechanical UI smoke followed by explicit user visual
   approval. That step must not compute analysis data or write caches.
+- WP11-6 mechanical smoke launched temporary local Streamlit with
+  `uv run streamlit run src/neural_analysis/psth_webapp.py --server.headless true --server.address 127.0.0.1 --server.port 8501 --browser.gatherUsageStats false`
+  at `http://127.0.0.1:8501`. Browser verification covered the default blank
+  snapshot state; the exact copied snapshot; Power `condition_psd` selectors,
+  figure, and status; Synchrony `itpc_map` and `ispc_map` with distinct Site
+  versus Site pair selectors; and ProbeB Spike `unit_ppc_map`. ProbeB reported
+  compatible status, 135 trials, 273 units, spikes 1-25741, 12,800 eligible and
+  12,800 reliable entries, plus the saved instability warning. ProbeA showed
+  the Spike mismatch text and no plot. Live ProbeA `spike_phase` exposed the
+  resume input and explicit 1,000-shuffle local plus `sbatch` launcher handoff.
+- No action button was clicked; no analysis computation, cache write, cluster
+  work, or network access occurred. Repeated snapshot selector rerenders
+  succeeded. Browser logs contained only Streamlit's frontend Popper
+  `preventOverflow` warning; server output contained only the established
+  Pynapple empty-epoch/divide-by-zero warnings from the initial legacy Unit
+  view, with no app error. Post-UI snapshot validation remains valid and its
+  aggregate receipt remains
+  `42379d6e654d59d468503b58c4b3eeb81a325a86eb5e4df4b3aaf3104c684ec7`.
+- Minor nonblocking usability observation: switching source to live and back
+  causes Streamlit's conditional Snapshot directory widget to return blank and
+  require re-entry; ordinary snapshot selector rerenders retain it. WP11-6
+  still awaits explicit user visual approval; do not mark WP11 complete.
 
 ### WP12 - Complete PPC plotting and reporting
 
