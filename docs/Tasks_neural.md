@@ -68,13 +68,13 @@ Source-of-truth hierarchy:
 | WP5C optimization | Complete through S8 | Grouped-parallel implementation `e89a0ee`; S7 documentation `8741d71`; full S7 neural suite 1,113 passed; accepted work-only S8 run `ct026_ppc_s8_2026-09-18T15-06-33Z`; `docs/ppc_speedup.md`; `docs/ppc_speedup_plan.md`; `docs/ppc_speedup_execution_log.md` | Preserve eight-worker production configuration and exact preflight; use R1/C1 for report recovery and later cluster execution |
 | WP6 plotting | Numerically complete; R2 readability repair complete | Original tests `b1f51f3`; implementation `d1c3e21`; R1 `b77f4a5`, `97fbf3b`; R2 tests/implementation `2aed50b`, `575deee`, `767544a`; real-report QA `49a7e6d` | Visually inspect and approve the completed 1,000-shuffle cluster report |
 | WP7 pipeline | Complete for component, Compute All, composition, and report-before-cleanup seams | Original tests `b1f51f3`; implementation `067fdef`; WP10 `98ac2ed`; WP12 deferred-cleanup implementation `bd6fa50`; `test_lfp_summary_pipeline.py` | UI progress/state integration remains in WP11 |
-| WP8 webapp | Partial; Power path only | Tests `c7ec7c1`, `003394a`, `f3954de`; implementations `2885ffd`, `926801b`; `test_lfp_summary_webapp.py` | After cluster package C1, add remote cluster-side cache inspection, Synchrony/Spike views, active population, and progress in WP11 |
-| WP9 validation | ProbeB 1,000-shuffle final run complete; visual approval pending | Final cluster run and report paths below; 273 units, 427 trials, 1,000 shuffles, 105/105 blocks, no warnings/errors | Copy or tunnel the immutable report for visual inspection; do not recompute |
+| WP8 webapp | Partial; Power path only | Tests `c7ec7c1`, `003394a`, `f3954de`; implementations `2885ffd`, `926801b`; `test_lfp_summary_webapp.py` | Add local immutable-snapshot inspection, Synchrony/Spike views, active population, and progress in WP11 |
+| WP9 validation | ProbeB 1,000-shuffle final run complete; visual approval pending | Final cluster run and report paths below; 273 units, 427 trials, 1,000 shuffles, 105/105 blocks, no warnings/errors; 27 PNGs copied locally with matching checksum | Visually inspect the local immutable report; do not recompute |
 | WP10 composed dependencies | Complete | Tests and implementation through `98ac2ed`; completion handoff `3aebba8`; PPC contracts and worker decision are stable | None; consume the composed boundary from the forthcoming launcher and WP11 |
 | R1 local preview recovery | Complete; transaction and population-map fix verified on real cache | Tests `b77f4a5`; implementation `97fbf3b`; recovery/report commit `0589fa7`; recovered report path below | No further R1 work; visual QA findings are isolated into proposed R2 |
 | R2 local preview readability | Complete | Contract/tests `7ba6fe6`, `2aed50b`; implementation `575deee`, `767544a`; full-suite and real-report QA `8ca0e2b`, `49a7e6d` | None; consume the repaired plots in final-report inspection and WP11 |
 | C1 cluster execution | Complete through the ProbeB 1,000-shuffle final run | Wrapper/tests through `63b87eb`; dry-run evidence `02b0f2c`; Slurm job `30744006`; terminal launcher evidence below | Preserve cluster cache/report; use measured runtime and memory before changing future requests |
-| WP11 Streamlit integration | Next planned implementation package after completed C1 | Package below; remote topology frozen below; final `spike_phase.npz` is cluster-resident | Inspect numerical caches using cluster-side Streamlit over an SSH tunnel; support one explicitly selected ProbeA or ProbeB and complete cached views |
+| WP11 Streamlit integration | Next planned implementation package after completed C1 | Package below; local immutable-snapshot topology approved 2026-09-22; final cache remains preserved on the cluster pending one-time copy | Inspect a checksum-verified local cache snapshot with local on-demand Streamlit; support one explicitly selected ProbeA or ProbeB and complete cached views |
 | WP12 PPC plotting/reporting | Complete for transaction and R2 real-size display contract | Contract `5dfd439`; implementation `bd6fa50`; R1 population repair `b77f4a5`, `97fbf3b`; R2 `575deee`, `767544a`; final report below | Visual approval of the immutable final report remains a validation step, not implementation |
 | WP13 optional absolute-amplitude thresholds | Explicitly deferred; not a blocker while thresholds are empty | Package below; validation/fingerprint support exists; current CT026 threshold list is empty | Reject every nonempty request before computation until WP13 is separately implemented |
 
@@ -3181,29 +3181,38 @@ Performance and resume policy:
   incomplete first run. Deterministic planning may repeat as already approved;
   compatible phase/PPC checkpoints remain exact-identity reusable.
 
-Cluster-resident cache and SSH inspection:
+Cluster preservation and local snapshot inspection (revised 2026-09-22):
 
-- Numerical caches, manifests, source data, and final validation remain on the
-  cluster under their cluster absolute paths. Do not use SSHFS as the primary
-  cache path and do not rewrite absolute identities during transfer.
-- Human-readable immutable reports may be copied locally for review. Numerical
-  inspection runs Streamlit on the cluster filesystem and binds only to
-  `127.0.0.1`; a local browser connects through SSH port forwarding. Only UI
-  messages and rendered figures cross SSH, not the complete NPZ on every
-  interaction.
-- WP11 must cache one validated selected component server-side using manifest
-  and file identity, keep arrays on the cluster, close every figure, and avoid
-  reloading/decompressing the component on each Streamlit rerun. This makes the
-  approximately 212 MB preview component, and a similarly shaped final
-  component, practical for interactive inspection after an initial load.
-- If cluster policy forbids a persistent login-node process, launch Streamlit
-  in an interactive or scheduled compute allocation and tunnel through the
-  login node. Never bind the application to a public interface. A lost SSH
-  connection cannot mutate or invalidate the cache.
-- Root-portable numerical identity and local inspection of a copied cache are
-  explicitly deferred. They are unnecessary for the approved cluster-side
-  server topology and must not be smuggled into C1 or WP11 without a separate
-  documentation/test contract.
+- This subsection supersedes the earlier cluster-side Streamlit/SSH-tunnel
+  topology. The complete final cache is only approximately 444 MB, including a
+  212-MB Spike-phase component, so avoiding a one-time transfer does not justify
+  a scheduled web server, compute-node routing, or tunnel lifecycle.
+- The authoritative numerical cache, manifest, source data, final run, and
+  report remain unchanged on the cluster. WP11 copies `manifest.json`,
+  `power.npz`, `synchrony.npz`, and `spike_phase.npz` once into an immutable
+  `cache_snapshot/` directory beneath the matching local final analysis run.
+  It must compare remote/local file counts, sizes, and ordered SHA-256 values
+  before the snapshot becomes inspectable. A local ASCII
+  `cache_snapshot_identity.json` receipt records schema version, source cluster
+  directory, copy UTC, each exact filename/size/SHA-256, and the aggregate
+  ordered SHA-256. Do not use SSHFS and do not rewrite the manifest's cluster
+  absolute paths or stored source identities.
+- The existing local `processed/lfp_summary_cache` contains the 100-shuffle
+  preview and must not be overwritten, merged, renamed, or treated as the final
+  snapshot. The final snapshot is a separate read-only inspection source.
+- Streamlit runs locally and only while the user is actively inspecting data.
+  No Slurm allocation, remote server process, public listener, SSH tunnel, or
+  persistent service is part of WP11. The local process caches one selected
+  validated component by snapshot manifest/file identity so ordinary rerenders
+  do not reopen or decompress its NPZ. Every rendered Matplotlib figure is
+  closed after display.
+- Snapshot mode validates the committed component state, array schemas, file
+  identity, and stored provenance without pretending cluster source paths exist
+  locally. It displays those absolute paths as immutable provenance. Snapshot
+  mode is read-only: it cannot compute, overwrite, repair, resume, or launch
+  against the copied cache. Active-session Power/Synchrony computation remains
+  a separate live-cache mode using the existing local session paths and normal
+  compatibility checks.
 
 Final-run gate and handoff:
 
@@ -3216,7 +3225,8 @@ Final-run gate and handoff:
   compare preview/final stability without treating overlapping conditions as
   independent, and record measured wall time, memory, storage, and utilization.
 - Only then reduce future resource requests and continue WP11 against the
-  cluster-resident cache. The cluster wrapper does not itself implement WP11.
+  checksum-verified local snapshot. The cluster wrapper does not itself
+  implement WP11.
 
 ### WP6 - Plotting
 
@@ -3506,20 +3516,34 @@ Architecture:
 - A combined ProbeA-plus-ProbeB population is out of scope. Switching probes
   changes Spike-phase compatibility and requires an explicit separate run; it
   must not merge units into an existing component.
-- The first cluster-integrated UI is a cache inspector and launcher handoff,
-  not the owner of a multi-hour process. It shows copyable local/SLURM new and
+- The first completed UI is a local cache inspector and launcher handoff, not
+  the owner of a multi-hour process. It shows copyable local/Slurm new and
   resume commands plus validated launcher/report state. Spike phase and Compute
   All do not run synchronously inside a Streamlit callback. Existing bounded
-  Power/Synchrony actions may continue to use the WP10 composed production
-  boundary; any future background submission control requires its own contract.
+  Power/Synchrony actions continue to use the WP10 composed production boundary
+  only in explicit live-cache mode; any future background submission control
+  requires its own contract.
 - Progress rendering may adapt saved launcher/log `ProgressEvent` metadata but
   never performs numerical work or restarts an action on rerender.
-- Cached plotting loads only the selected compatible final component. Work
+- Cached plotting loads only the selected committed final component. Work
   caches, checkpoints, launcher state, and incomplete reports remain invisible
   as scientific results.
-- Production deployment runs Streamlit beside the numerical cache on the
-  cluster, binds to loopback, and is viewed through SSH port forwarding. It
-  does not load a copied component over SSHFS or remap absolute source paths.
+- Read-only snapshot mode receives one explicit local `cache_snapshot/` path;
+  it never searches for a latest run. The directory must contain the copied
+  final `manifest.json`, exactly the expected component files, and
+  `cache_snapshot_identity.json`. It validates the receipt, file identity, and
+  committed manifest states, retains cluster paths as displayed provenance,
+  and never rewrites paths to make a current local configuration appear
+  compatible.
+- Live-cache mode remains separate and uses the active session's existing
+  `processed/lfp_summary_cache`. Only this mode can expose the explicitly
+  requested bounded Power/Synchrony actions. Snapshot mode disables every
+  compute/recompute control and cannot mutate either the snapshot or live cache.
+- Streamlit runs locally on demand through the existing Python environment.
+  WP11 adds no Slurm webapp script, compute allocation, SSH tunnel, SSHFS mount,
+  network service, or new dependency. The webapp itself never copies files;
+  the one-time `scp` plus checksum verification is an operator step completed
+  before snapshot inspection.
 
 Tests written first:
 
@@ -3534,12 +3558,22 @@ Tests written first:
   cannot enter a long-running numerical callback.
 - Progress stages, counts, elapsed time, and optional ETA render without
   numerical computation inside Streamlit.
-- Compatible/stale/missing/failing component states and fingerprint differences
-  are inspectable.
-- All cached selectors/plots load only final compatible component files.
-- A cluster-side selected component is cached server-side by manifest/file
-  identity and is not reopened on ordinary Streamlit rerenders; browser-facing
-  output contains figures/scalars rather than the component NPZ.
+- Compatible/stale/missing/failing live-component states and fingerprint
+  differences are inspectable. Snapshot components use distinct labels for a
+  valid committed snapshot versus missing, malformed, incomplete, or
+  transfer-identity mismatch; they are never mislabeled as live-compatible.
+- All cached selectors/plots load only the one component required by the
+  selected view. Snapshot tests prove no action writes into the snapshot.
+- A selected snapshot component is cached in the local Streamlit process by
+  resolved snapshot path, manifest identity, and component file identity. It
+  is not reopened on ordinary rerenders, selector changes that reuse the same
+  component, or rerendered progress/status panels.
+- Power/Synchrony live actions cannot receive the snapshot directory, while
+  Spike phase and Compute All never receive either synchronous compute action.
+- The copied final Spike component is ProbeB-qualified. Selecting ProbeA keeps
+  Power/Synchrony snapshot inspection available but reports Spike phase as a
+  population mismatch and offers only an explicit new-run handoff; it never
+  plots ProbeB units under a ProbeA label.
 - Prepared-phase caches, checkpoints, and other work artifacts never appear as
   compatible scientific components.
 - A nonempty unsupported amplitude-threshold request is blocked before action
@@ -3550,12 +3584,45 @@ Performance considerations:
 - Population metadata may be loaded for selector construction, but Streamlit
   rerenders must not reopen raw LFP or recompute phase/PPC data.
 - Figure rendering closes every Matplotlib figure and loads only the selected
-  component NPZ. The selected validated component remains server-side on the
-  cluster; SSH transports rendered UI output rather than numerical arrays.
+  component NPZ. The approximately 444-MB final cache is transferred once;
+  ordinary use performs no network I/O. The selected decompressed component
+  remains in local process memory only for the life of the on-demand app.
+
+Dependencies:
+
+- Reuse existing Streamlit, NumPy, Matplotlib, cache I/O, manifest validation,
+  population-building, launcher-state, and plotting modules. Introduce no new
+  package. Standard-library path/stat/hash utilities are sufficient for local
+  snapshot identity.
 
 RED command:
 
-`uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_lfp_summary_webapp.py src/tests/neural_analysis/test_psth_webapp.py -k "population or synchrony or spike_phase or compute_all or progress"`
+`uv run pytest -q -p no:cacheprovider src/tests/neural_analysis/test_lfp_summary_webapp.py src/tests/neural_analysis/test_psth_webapp.py -k "population or snapshot or component_cache or synchrony or spike_phase or compute_all or progress"`
+
+Implementation sequence:
+
+1. Complete visual review of the already copied final PNG report and record any
+   presentation-only findings without recomputation.
+2. Copy the four final cache files into the local final run's
+   `cache_snapshot/`, compare remote/local counts, sizes, and ordered SHA-256,
+   and write the immutable `cache_snapshot_identity.json` receipt. Do not touch
+   the existing local preview cache.
+3. Write the focused tests above, including snapshot/live separation and
+   one-open-per-component cache behavior; commit tests before source and record
+   genuine RED against the present Power-only webapp.
+4. Implement the smallest changes in `lfp_summary_webapp.py` and
+   `psth_webapp.py`: path forwarding, explicit population selection,
+   snapshot/live modes, handoff commands, saved progress/status, component
+   caching, and existing cache-only Synchrony/Spike plotting adapters.
+5. Run the focused command to GREEN, then all affected webapp, I/O, plotting,
+   runtime, and pipeline tests, followed by the complete neural suite. Preserve
+   public interfaces except for the documented addition of both probe sorter
+   paths and the explicit snapshot source.
+6. Start Streamlit locally against the copied snapshot, verify that no raw data
+   or network path is opened and ordinary rerenders do not reload the selected
+   NPZ, then visually approve Power, Synchrony, and interactive Spike-phase
+   views. Record exact commits, commands, counts, warnings, and remaining issues
+   here before declaring WP11 complete.
 
 ### WP12 - Complete PPC plotting and reporting
 
@@ -3836,8 +3903,8 @@ advertising nonempty absolute thresholds as a supported production feature.
    approved cluster invocation and never follows automatically.
 9. WP11 follows R1/C1 and supports one explicitly selected ProbeA or ProbeB
    population per run, never a combined population. Its long-running Spike
-   controls hand off to the launcher; cache inspection runs cluster-side over
-   an SSH tunnel.
+   controls hand off to the launcher; read-only cache inspection uses a
+   checksum-verified local final-run snapshot and local on-demand Streamlit.
 10. WP13 remains deferred while absolute thresholds are empty. WP10, the
    launcher, and WP11 must reject every nonempty unsupported request before
    computation; warning and continuing is forbidden.

@@ -600,14 +600,14 @@ The main outputs answer complementary questions:
 | Power compute/cache inspection | Implemented | Preserve compatible Power computation and limited cached plotting |
 | Synchrony numerical computation/reporting | Implemented outside Streamlit | Add the production Streamlit action and complete cached selectors |
 | Spike-phase grouped numerical bridge | Implemented outside Streamlit | Preserve its numerics and explicit eight-worker launcher request |
-| Standalone Spike-phase launcher | Implemented; local preview report recovery pending | Preserve new/resume/dry-run identity; add only explicit report-only recovery after the real 100-shuffle plotting failure |
-| SLURM execution | Planned before the final run | Use the tracked thin uv wrapper on `unlimited`, initially 8 CPUs, 32 GB, and 72 hours; keep preview/final commands explicit |
-| Synchrony and Spike-phase Streamlit controls | Planned after cluster infrastructure | Inspect compatible cluster-resident caches through tunneled cluster-side Streamlit; do not run multi-hour Spike computation in a render callback |
+| Standalone Spike-phase launcher | Implemented; ProbeB preview and final runs complete | Preserve new/resume/dry-run/report-recovery identity and the completed-run refusal boundary |
+| SLURM execution | Implemented and validated through the ProbeB 1,000-shuffle final run | Preserve the tracked thin uv wrapper and explicit preview/final commands; resource changes require new measured justification |
+| Synchrony and Spike-phase Streamlit controls | Planned after completed cluster execution | Inspect a checksum-verified local immutable cache snapshot with local on-demand Streamlit; do not run multi-hour Spike computation in a render callback |
 | Compute All | Numerical boundary implemented; interactive launch deferred | Do not synchronously dispatch long Spike/Compute All work from Streamlit; expose copyable launcher/SLURM handoff instead |
 | Active unit-population selection | Planned and required | Select exactly one ProbeA or ProbeB population per run, using the same good/MUA and good-inside-brain defaults; combined populations are out of scope |
 | Progress display | Planned and required | Display stage, completed/total work, elapsed time, and ETA only when available |
 | Cached Power selectors/plots | Partially implemented | Expand from the limited Power preview to the complete approved cached views |
-| Cached Synchrony/PPC selectors and plots | Planned | Load only compatible final cluster-resident component files server-side and expose counts, warnings, exclusions, and stale differences |
+| Cached Synchrony/PPC selectors and plots | Planned | Load one committed component at a time from the copied local final-run snapshot and expose counts, warnings, exclusions, stored provenance, and live-cache stale differences |
 | Absolute amplitude thresholds | Deferred | Empty thresholds are supported; reject every nonempty request before computation until masking is implemented |
 
 Prepared-phase tensors, schedules, PPC block checkpoints, incomplete work, and
@@ -621,10 +621,11 @@ scientific inspection.
 Power, Synchrony, Spike phase, and Compute All retain one composed production
 dependency boundary. The webapp must not choose component-specific numerical
 factories, load raw data for a cached plot, or implement scientific calculations
-in a Streamlit callback. The first cluster-integrated UI may use that boundary
-for bounded Power/Synchrony work, but it must not synchronously execute the
-multi-hour Spike-phase or Compute All paths. Those controls provide copyable
-launcher/SLURM new or resume commands and inspect saved state instead.
+in a Streamlit callback. The first snapshot-enabled local UI may use that
+boundary for bounded Power/Synchrony work only in explicit live-cache mode, but
+it must not synchronously execute the multi-hour Spike-phase or Compute All
+paths. Those controls provide copyable launcher/SLURM new or resume commands
+and inspect saved state instead.
 
 Compute All runs Power, Synchrony, and Spike phase in that order. Synchrony and
 Spike phase share one compatible prepared-phase product. Each component keeps
@@ -703,13 +704,28 @@ projection required by `Tasks_neural.md`. Webapp completion follows the
 recovered preview and cluster infrastructure and reuses its cache-only plotting
 contracts.
 
-The numerical component and manifest remain on the cluster. Streamlit runs on
-the cluster filesystem, binds only to loopback, and is reached from a local
-browser through SSH port forwarding. Cache identity is validated against the
-cluster paths. Only rendered figures and scalar UI data cross the tunnel. The
-selected component is cached server-side by manifest and file identity so an
-ordinary Streamlit rerun does not reopen or decompress it. SSHFS and local
-absolute-path remapping are not the primary inspection design.
+The authoritative numerical component and manifest remain unchanged on the
+cluster. For this approximately 444-MB final cache, an operator copies
+`manifest.json`, `power.npz`, `synchrony.npz`, and `spike_phase.npz` once into
+an immutable `cache_snapshot/` beneath the matching local final analysis run.
+Remote and local counts, sizes, and ordered SHA-256 values must match before the
+snapshot is inspectable. An ASCII `cache_snapshot_identity.json` receipt records
+the source cluster directory, copy UTC, exact filename/size/SHA-256 mapping, and
+aggregate ordered SHA-256. The existing local preview cache is never
+overwritten.
+
+Streamlit runs locally and only while the user is inspecting data. There is no
+Slurm-hosted web process, SSH tunnel, SSHFS mount, or persistent service. The
+selected snapshot component is cached in local process memory by resolved
+snapshot path plus manifest/file identity, so an ordinary rerun does not reopen
+or decompress it. Stored cluster absolute paths remain visible provenance and
+are not rewritten to local paths. Snapshot mode validates committed component
+state, transfer receipt, and array schema but is strictly read-only: it cannot
+compute, repair, resume, or write a component. The completed Spike component is
+ProbeB-qualified; a ProbeA selection reports a population mismatch rather than
+relabeling or plotting ProbeB units. Bounded Power/Synchrony computation remains
+available only in a separate live-cache mode with normal active local-session
+compatibility checks.
 
 ### 4.5 Standalone preview and final-run separation
 
