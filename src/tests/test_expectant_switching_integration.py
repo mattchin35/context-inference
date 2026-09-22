@@ -176,6 +176,26 @@ def test_controller_selects_both_agents_with_injected_rng():
     assert full.model_type == "expectancy_persistence_doubt"
 
 
+def test_run_parameter_summaries_include_adjustable_exemplar_parameters():
+    agent_params, task_params = make_agent_params()
+
+    simple_summary = controller.format_sample_agent_parameter_summary(
+        "simple_probe_persistence", task_params, agent_params
+    )
+    full_summary = controller.format_sample_agent_parameter_summary(
+        "expectancy_persistence_doubt", task_params, agent_params
+    )
+
+    assert "persistW-1" in simple_summary
+    assert "probeW-1" in simple_summary
+    assert "threshold-3" in full_summary
+    assert "scale-1" in full_summary
+    assert "doubtLam-0.5" in full_summary
+    assert "persistW-1" in full_summary
+    assert "expectW-1" in full_summary
+    assert "doubtW-1" in full_summary
+
+
 def test_online_agents_match_batch_replay_pretrial_values():
     actions = np.array([1, 1, 0, 0, 1], dtype=int)
     rewards = np.array([1.0, 1.0, 0.0, 0.0, 1.0])
