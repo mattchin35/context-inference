@@ -41,6 +41,8 @@ TRIAL_GLM_PREDICTOR_LABELS = {
     "rel_hazard_res": "rel_hazard_res",
     "time_to_choice": "time_to_choice",
     "relative_hazard_index": "hazard",
+    "simple_probe_persistence_value": "probe_persistence",
+    "expectancy_persistence_doubt_value": "expectancy_persistence_doubt",
 }
 DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS = (
     "FQlearning_rel_value",

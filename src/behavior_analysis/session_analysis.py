@@ -33,6 +33,8 @@ DEFAULT_AGENT_MOUSE_AGREEMENT_VALUE_COLUMNS = {
     "doubt_perseveration_mouse_agreement": "doubt_perseveration_value",
     "wsls_mouse_agreement": "wsls_regressor",
     "observer_mouse_agreement": "observer_value",
+    "simple_probe_persistence_mouse_agreement": "simple_probe_persistence_value",
+    "expectancy_persistence_doubt_mouse_agreement": "expectancy_persistence_doubt_value",
 }
 
 
@@ -768,7 +770,15 @@ def add_block_agent_mouse_agreement_columns(
         value column is missing.
     """
     if agent_value_columns is None:
-        agent_value_columns = DEFAULT_AGENT_MOUSE_AGREEMENT_VALUE_COLUMNS
+        # Preserve analysis of older augmented tables while enabling every
+        # default model automatically after its value column is generated.
+        agent_value_columns = {
+            output_column: value_column
+            for output_column, value_column in (
+                DEFAULT_AGENT_MOUSE_AGREEMENT_VALUE_COLUMNS.items()
+            )
+            if value_column in augmented_trial_df.columns
+        }
     if "cur_block" not in augmented_trial_df.columns:
         raise ValueError("augmented_trial_df is missing required column: cur_block")
 

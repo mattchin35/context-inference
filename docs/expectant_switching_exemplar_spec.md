@@ -9,7 +9,7 @@ Plan two modular, trial-level exemplar choice models:
 
 The target behavior includes repeated multi-trial excursions to the incorrect side, returns to the correct side, and subsequent excursions **without a real context change**. An excursion must not be forced to end after one omission.
 
-This is a planning specification, not a request for an immediate implementation or a new model-fitting framework. The source-code locations below come from a supplied Codex summary; they have not been inspected in this chat. Verify their current definitions and conventions before proposing changes.
+This is a planning specification, not a request for a new model-fitting framework. The relevant source locations and conventions have now been checked against the codebase. Implementation must still follow the repository's test-first workflow and the separately approved implementation plan.
 
 ## 2. Conventions and variables
 
@@ -30,7 +30,7 @@ The equations below use **positive = left-favoring** and **negative = right-favo
 | `P_t` | Persistence predictor, equal to `c_prev`. |
 | `G_t` | Constant post-reward probe predictor, `-c_prev * r_prev`. |
 | `X_E,t` | Count-dependent expectant-switch predictor, `G_t * E_t`. |
-| `D_t` | Existing doubt predictor, aligned to trial t and oriented so positive favors left. |
+| `D_t` | Choice-oriented doubt predictor for trial t. In current code this is `-relative_doubt_index`, because the stored index points toward the doubted side rather than the preferred next choice. Positive `D_t` favors left. |
 | `w_P`, `w_R`, `w_E`, `w_D` | Nonnegative exemplar weights for persistence, constant probing, expectancy, and doubt. Zero enables ablation. |
 | `S_t` | Unbounded weighted decision drive. |
 | `V_t` | Bounded model value, `tanh(S_t)`, in [-1, 1]. |
@@ -118,11 +118,20 @@ S_{\mathrm{full},t}=w_PP_t+w_EX_{E,t}+w_DD_t
 V_{\mathrm{full},t}=\tanh(S_{\mathrm{full},t}).
 \]
 
-The roles are distinct: persistence sustains a run, expectancy promotes post-reward departure, and doubt promotes departure from a side accumulating omission evidence.
+The roles are distinct: persistence sustains a run, expectancy promotes post-reward departure, and doubt promotes departure from a side accumulating omission evidence. For the verified implementation,
+
+\[
+D_t=-\texttt{relative\_doubt\_index}_t.
+\]
 
 Use immediate previous choice for the initial persistence module, **not the existing exponentially weighted choice-history regressor by default**. A long memory can still favor the old side immediately after an excursion begins; that would be a different comparator.
 
-No extra belief/HMM term, separate latent strategy state, or side-bias intercept is required initially. Weight values have not been selected; expose them explicitly and propose documented exemplar settings after checking the existing doubt scale and behavior. Do not silently assign “fitted” or “optimal” values.
+No extra belief/HMM term, separate latent strategy state, or side-bias intercept is required initially. Use an explicit initial demonstrative preset with all weights equal to 1:
+
+- simple model: `w_P = 1`, `w_R = 1`;
+- full model: `w_P = 1`, `w_E = 1`, `w_D = 1`.
+
+All weights must remain directly configurable and must not be described as fitted or optimal. With this preset, the simple model is exactly indifferent after reward. In the full model, bounded expectancy or doubt can reduce persistence to indifference but cannot by itself create a greater-than-0.5 switching preference. This is an accepted neutral starting point, not a guarantee of strong expectant switching; larger opposing weights can be evaluated later.
 
 ## 5. Signed value and probabilistic choice
 
@@ -146,25 +155,36 @@ That probability is constant across the run. A greedy version would keep repeati
 
 Greedy choices may remain available for existing agreement plots, but must not be the only behavioral interpretation or validation of these models. Avoid systematic left selection on exact ties; reuse an appropriate existing tie policy.
 
-## 6. Reuse the existing doubt model exactly
+## 6. Reuse the verified existing doubt model exactly
 
-Inspect the existing accumulating doubt implementation, beginning with `relative_doubt_index` and its use in the existing observer/composite models. Confirm that this is the intended doubt component rather than selecting a different omission regressor based only on its name.
+The intended component is the counterfactual side-specific omission state used by `relative_doubt_index`, not `signed_omission_regressor`, `relative_omissions_index`, or `doubt_perseveration_value`.
 
-Reuse its underlying function/state-transition logic and existing parameters. Do not implement a second, approximately equivalent doubt algorithm inside the new exemplar.
+The verified current update rules are:
+
+- an omission increments the chosen side's counterfactual omission count;
+- an omission does not clear or decrement the other side's count;
+- changing choice without reward does not reset either count;
+- any observed reward resets both side counts to zero;
+- the raw stored value is `H_L - H_R`, where `H_side = 1 - exp(-lambda * omissions_side)`;
+- therefore the raw value points toward the doubted side, and the preferred-choice signal used by the new full exemplar is its negation;
+- state starts at zero for each independently processed session;
+- experimenter-reward and no-choice rows do not update state.
+
+These rules allow doubt to accumulate during a multi-trial excursion and clear when reward is obtained. After reward clears doubt, preserved expectancy memory can support a later excursion. Preserve this behavior exactly in the initial model.
+
+The rules are currently duplicated between the batch decision-variable counters and `HMMRewardDecayRelativeDoubt`. Extract a small shared doubt component/update implementation and adapt both existing paths to use it without changing their public outputs. The new exemplar must use the same component rather than adding a third implementation.
 
 The adapter's contract is:
 
 - Supply choices and outcomes in the encoding the existing doubt code expects.
 - Produce a pre-trial `D_t` using only observations through trial t-1.
-- Orient its sign to the composite's preferred-choice convention.
+- Expose both the existing raw value and the negated preferred-choice value, and add only the latter to the new full exemplar.
 - Preserve the existing reward, omission, choice-change, counterfactual-update, saturation, decay, and reset rules.
 - Initialize/reset it using its existing independent-session initialization.
 
-**Do not impose “clear all doubt on reward” merely because that was an earlier conceptual example.** Its actual reset behavior is not established by the supplied code summary. Codex's plan must explicitly document what the current implementation does after reward, omission, side change, and session reset, and whether those rules support repeated excursions.
-
 Do not use `doubt_perseveration_value` as the doubt input if it already includes persistence; doing so would double-count that component. Do not per-session normalize or otherwise change the existing doubt signal merely to make weights convenient.
 
-If the existing doubt rules strongly suppress later excursions, report that finding and its implications for weight selection. Any change to those rules is a separately named model variant, not an invisible change to this one.
+Any later change to the verified doubt rules is a separately named model variant, not an invisible change to this one.
 
 ## 7. Modular design and trial ordering
 
@@ -180,7 +200,7 @@ Separate the following responsibilities, following the codebase's existing funct
 
 The new expectancy module must not own or rewrite the doubt module. The full exemplar should compose them. The simple exemplar should use the same persistence and probe-gate definitions, without a hidden separate implementation of their logic.
 
-Use one source of truth for state updates shared by batch feature generation and any executable agent. Avoid duplicating algorithms in `trial_features.py` and an agent class. A large refactor of unrelated models is not required.
+Use one source of truth for state updates shared by batch feature generation and executable agents. Avoid duplicating algorithms in `trial_features.py` and an agent class. The approved shared-doubt refactor is deliberately localized; a large refactor of unrelated models is not required.
 
 For each valid trial:
 
@@ -191,7 +211,7 @@ For each valid trial:
 
 A reward earned on t may update the predictor for t+1, never the prediction already assigned to t. All modules must observe the same history without double-updating shared counters.
 
-Reset all module state at independent-session boundaries. If processing one continuous session in chunks, preserve state across chunks. Do not reset at analysis blocks or true hidden-context transitions.
+The current feature pipeline processes one independent session per call. Initialize fresh module state at the start of that call and fresh agent state at construction. Do not add `session_ID` grouping, state serialization, or a new chunk-processing API in the initial implementation. The internal state objects should remain sequentially updateable, but production support for chunked or concatenated-session processing is out of scope. Do not reset at analysis blocks or true hidden-context transitions.
 
 For invalid/missing trials, reuse the pipeline's established validity and continuity policy and document it. Never silently treat missing reward as an omission or feed no-choice sentinels as a side. Count updates require a valid choice/outcome pair. Preserve row alignment and validity masks in outputs; make explicit whether “previous trial” means previous valid trial across excluded rows.
 
@@ -215,9 +235,18 @@ During the right-omission run, persistence points right and the existing doubt m
 
 ## 9. Outputs and checks
 
-Suggested diagnostic outputs, with naming adapted to the existing registry:
+Use the model identifiers `simple_probe_persistence` and `expectancy_persistence_doubt`. Diagnostic outputs, with exact final names settled in the implementation plan, should include:
 
 `previous_choice`, `reward_triggered_probe`, `expectancy_reward_count`, `expectancy_strength`, `expectant_switch`, `doubt_choice_signal`, plus each exemplar's decision drive, signed value, and left-choice probability. Keep the confirmed-side state available for debugging. Counts are diagnostic state, not bounded directional predictors.
+
+Integrate both models into all four approved paths:
+
+1. augmented-trial diagnostic, value, and left-choice-probability columns;
+2. default mouse-agent greedy-agreement summaries and their existing session/multisession plots;
+3. the trial GLM-HMM predictor registry, registering final model values rather than internal unsigned counts;
+4. executable-agent selection and closed-loop simulation through `behavior_modeling`.
+
+Add light-mode diagnostic plots for model traces and behavioral checks. Probabilistic predictions and simulation summaries remain primary; greedy agreement is a compatibility metric rather than the only validation.
 
 At minimum, plan tests for:
 
@@ -225,12 +254,12 @@ At minimum, plan tests for:
 - **Gating:** no reward on the preceding valid trial implies zero probe and expectancy-switch signals.
 - **Counter rules:** omissions preserve count; same-confirmed-side rewards increment it; opposite-side rewards reset it to 1; a choice change alone never resets it.
 - **No leakage:** changing trial t or later observations cannot change the prediction for t; hidden-context labels never enter predictor updates.
-- **Timing/reset:** correct first-trial state, independent-session reset, and equivalent chunked versus whole-session replay.
+- **Timing/reset:** correct first-trial state and fresh state for independent feature calls and newly constructed agents.
 - **Doubt parity:** adapter outputs match the existing doubt implementation, apart from an explicitly documented sign convention/alignment conversion.
 - **Modularity:** with a test expectancy magnitude fixed at 1, doubt weight zero, and `w_E = w_R`, the full composition matches the simple composition.
 - **Behavioral checks:** the simple model has constant departure probability during omission runs; the full model can show doubt-dependent returns and repeated excursions under documented parameters. Do not require exactly three incorrect trials or assume every parameter setting produces the target pattern.
 
-When simulating, generate predictors from the agent's own choices/outcomes. For closed-loop simulation of the actual task, use the task's reward-triggered context-transition rules; replay against a fixed mouse-derived context sequence is a different evaluation. Mouse-history prediction and autonomous simulation should be labelled separately.
+When simulating, generate predictors from the agent's own choices/outcomes. For closed-loop simulation, use the selected task object's configured context-transition rule. In the current `BaseMDP`, `success_trigger` is gated by a correct choice rather than by observed reward delivery; do not relabel it as reward-triggered. Replay against a fixed mouse-derived context sequence is a different evaluation. Mouse-history prediction and autonomous simulation should be labelled separately.
 
 Compare post-reward excursion frequency, incorrect-side run lengths, return intervals, and recurrence as a function of accumulated rewards—not just total greedy choice agreement.
 
@@ -240,6 +269,8 @@ Implement the saturating expectancy curve first. Keep the curve replaceable for 
 
 The two starting exemplars differ in both count dependence and doubt. Their comparison does not isolate expectancy alone. The modular design should make a future **constant probe + persistence + the same doubt** control straightforward without requiring it in the first implementation.
 
-Candidate integration points from the supplied summary are `trial_features.py`, `gather_trial_features.py`, `session_analysis.py`, the trial predictor registry in `trial_state_space_modeling.py`, and the existing executable-agent infrastructure in the neighboring `behavior_modeling` package. Inspect these before deciding where new code belongs; do not assume the legacy `model_agents.py` is the preferred home.
+Both mouse-history feature generation and executable closed-loop agents are in scope. There is no multi-session grouping or chunk-processing feature in the initial scope. No new third-party dependency is permitted for this work.
 
-Before implementation, Codex should return a plan identifying the exact reusable doubt function and its update/reset rules; verified sign/row conventions; module and file boundaries; proposed configuration/presets; required output/registry changes; and tests. Identify incompatibilities with this specification explicitly rather than silently changing either the new model or the existing doubt algorithm.
+Verified integration points are `trial_features.py`, `gather_trial_features.py`, `session_analysis.py`, the trial predictor registry in `trial_state_space_modeling.py`, and the executable-agent infrastructure in the neighboring `behavior_modeling` package. The legacy `model_agents.py` is not the preferred home.
+
+The companion implementation plan must identify the shared doubt component and its update/reset rules; verified sign/row conventions; module and file boundaries; the all-ones adjustable preset; output, plotting, registry, and simulation changes; performance considerations; and the tests committed before implementation. Identify any newly discovered incompatibility explicitly rather than silently changing either the new model or the existing doubt algorithm.

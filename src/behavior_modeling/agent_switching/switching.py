@@ -364,13 +364,6 @@ def _apply_hmm_decay_doubt_inactive_update(agent: agents.HMMRewardDecayRelativeD
     agent.prior /= np.sum(agent.prior) + agents.eps
     agent.hmm_value = agent.compute_relative_value()
 
-    left_doubt = 1 - np.exp(-agent.relative_doubt_lambda * agent.left_omissions_cf)
-    right_doubt = 1 - np.exp(-agent.relative_doubt_lambda * agent.right_omissions_cf)
-    decay_factor = float(np.exp(-agent.relative_doubt_lambda))
-    left_doubt *= decay_factor
-    right_doubt *= decay_factor
-    agent.left_omissions_cf = -np.log(max(1 - left_doubt, agents.eps)) / agent.relative_doubt_lambda
-    agent.right_omissions_cf = -np.log(max(1 - right_doubt, agents.eps)) / agent.relative_doubt_lambda
-    agent.doubt_value = agent.compute_doubt_value()
+    agent.apply_passive_doubt_decay()
     agent.value = agent.hmm_value - agent.doubt_value
     _refresh_action_policy(agent)

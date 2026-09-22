@@ -23,6 +23,8 @@ SUPPORTED_SAMPLE_AGENTS = {
     'F-Qlearning': 'FQL',
     'Qlearning': 'QL',
     'Logistic': 'RFLR',
+    'simple_probe_persistence': 'ProbeP',
+    'expectancy_persistence_doubt': 'ExpectDP',
 }
 
 TRIAL_DF_COLUMNS = [
@@ -43,6 +45,17 @@ TRIAL_DF_COLUMNS = [
     'agent_doubt_value',
     'agent_relative_value',
     'agent_prior',
+    'agent_previous_choice',
+    'agent_previous_reward',
+    'agent_reward_triggered_probe',
+    'agent_expectancy_confirmed_side',
+    'agent_expectancy_reward_count',
+    'agent_expectancy_strength',
+    'agent_expectant_switch',
+    'agent_doubt_raw_value',
+    'agent_doubt_choice_signal',
+    'agent_decision_drive',
+    'agent_prob_left',
 ]
 
 
@@ -182,6 +195,20 @@ def format_sample_agent_parameter_summary(
             f"alpha-{format_param_value(agent_params.logistic_alpha)}",
             f"beta-{format_param_value(agent_params.logistic_beta)}",
             f"tau-{format_param_value(agent_params.logistic_tau)}",
+        ])
+    elif agent_name == 'simple_probe_persistence':
+        fields.extend([
+            f"persistW-{format_param_value(agent_params.simple_persistence_weight)}",
+            f"probeW-{format_param_value(agent_params.simple_probe_weight)}",
+        ])
+    elif agent_name == 'expectancy_persistence_doubt':
+        fields.extend([
+            f"threshold-{format_param_value(agent_params.expectancy_threshold)}",
+            f"scale-{format_param_value(agent_params.expectancy_scale)}",
+            f"doubtLam-{format_param_value(agent_params.relative_doubt_lambda)}",
+            f"persistW-{format_param_value(agent_params.full_persistence_weight)}",
+            f"expectW-{format_param_value(agent_params.full_expectancy_weight)}",
+            f"doubtW-{format_param_value(agent_params.full_doubt_weight)}",
         ])
     else:
         raise ValueError(f"Unsupported sample-agent type: {agent_name}")
@@ -362,6 +389,33 @@ def run_task_cycle(task: BaseMDP, agent: agents.BehaviorAgent, performance: Dict
     performance['agent_prior'].append(get_agent_prior(agent))
     performance['agent_hmm_value'].append(get_agent_value_component(agent, 'hmm_value'))
     performance['agent_doubt_value'].append(get_agent_value_component(agent, 'doubt_value'))
+    performance['agent_previous_choice'].append(get_agent_value_component(agent, 'previous_choice'))
+    performance['agent_previous_reward'].append(get_agent_value_component(agent, 'previous_reward'))
+    performance['agent_reward_triggered_probe'].append(
+        get_agent_value_component(agent, 'reward_triggered_probe')
+    )
+    performance['agent_expectancy_confirmed_side'].append(
+        get_agent_value_component(agent, 'expectancy_confirmed_side')
+    )
+    performance['agent_expectancy_reward_count'].append(
+        get_agent_value_component(agent, 'expectancy_reward_count')
+    )
+    performance['agent_expectancy_strength'].append(
+        get_agent_value_component(agent, 'expectancy_strength')
+    )
+    performance['agent_expectant_switch'].append(
+        get_agent_value_component(agent, 'expectant_switch')
+    )
+    performance['agent_doubt_raw_value'].append(
+        get_agent_value_component(agent, 'doubt_raw_value')
+    )
+    performance['agent_doubt_choice_signal'].append(
+        get_agent_value_component(agent, 'doubt_choice_signal')
+    )
+    performance['agent_decision_drive'].append(
+        get_agent_value_component(agent, 'decision_drive')
+    )
+    performance['agent_prob_left'].append(get_agent_value_component(agent, 'prob_left'))
 
     stimulus = task.get_stimulus()
     action, action_dist = agent.choose_action(stimulus)
@@ -420,6 +474,16 @@ def select_agent(
         agent = agents.ForgettingQlearning(agent_params, rng=rng)
     elif agent_name == 'Logistic':
         agent = agents.Logistic(agent_params, task_params, rng=rng)
+    elif agent_name == 'simple_probe_persistence':
+        agent_rng = rng if rng is not None else np.random.default_rng()
+        agent = agents.SimpleProbePersistenceAgent(
+            agent_params, task_params, rng=agent_rng
+        )
+    elif agent_name == 'expectancy_persistence_doubt':
+        agent_rng = rng if rng is not None else np.random.default_rng()
+        agent = agents.ExpectancyPersistenceDoubtAgent(
+            agent_params, task_params, rng=agent_rng
+        )
     else:
         raise ValueError("Unknown agent name: {}".format(agent_name))
     return agent

@@ -13,6 +13,13 @@ from src.behavior_analysis.project_utils import (
 import json
 from typing import Optional
 from src.behavior_analysis import residualization
+from src.behavior_modeling.expectant_switching import (
+    ExpectancyCurveParams,
+    ExpectancyPersistenceDoubtParams,
+    ExpectantSwitchingFeatureConfig,
+    SimpleProbePersistenceParams,
+    replay_expectant_switching,
+)
 
 
 @dataclass
@@ -41,6 +48,15 @@ class TaskParams:
     perseveration_decay: float = 0.25
     max_explore_run_length: int = 5
 
+    # Expectant-switching exemplar parameters
+    expectancy_threshold: float = 3.0
+    expectancy_scale: float = 1.0
+    simple_persistence_weight: float = 1.0
+    simple_probe_weight: float = 1.0
+    full_persistence_weight: float = 1.0
+    full_expectancy_weight: float = 1.0
+    full_doubt_weight: float = 1.0
+
 
 LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE = (
     "Qlearning_rel_value",
@@ -58,6 +74,15 @@ LEFT_RIGHT_VALUE_COLUMNS_FOR_SIDE_EQUIVALENCE = (
     "observer_value",
     "HMM_decay_res",
     "rel_hazard_res",
+    "previous_choice",
+    "reward_triggered_probe",
+    "expectant_switch",
+    "doubt_raw_value",
+    "doubt_choice_signal",
+    "simple_probe_persistence_drive",
+    "simple_probe_persistence_value",
+    "expectancy_persistence_doubt_drive",
+    "expectancy_persistence_doubt_value",
 )
 
 TRIAL_TYPE_FLAG_COLUMNS = (
@@ -717,6 +742,96 @@ def validate_trial_feature_inputs(augmented_trial_df: pd.DataFrame) -> None:
         raise ValueError("augmented_trial_df must contain 'action' and 'reward' columns.")
 
 
+def make_expectant_switching_feature_config(
+    params: TaskParams,
+) -> ExpectantSwitchingFeatureConfig:
+    """Translate aggregate trial-feature parameters into focused model config.
+
+    Parameters
+    ----------
+    params : TaskParams
+        Analysis parameters. Expectancy count parameters are in rewarded
+        trials; ``omission_lam`` is in inverse omission trials; weights are
+        nonnegative and unitless.
+
+    Returns
+    -------
+    ExpectantSwitchingFeatureConfig
+        Frozen focused configuration for replaying both exemplars.
+    """
+    curve = ExpectancyCurveParams(
+        threshold=params.expectancy_threshold,
+        scale=params.expectancy_scale,
+    )
+    return ExpectantSwitchingFeatureConfig(
+        simple=SimpleProbePersistenceParams(
+            persistence_weight=params.simple_persistence_weight,
+            probe_weight=params.simple_probe_weight,
+        ),
+        full=ExpectancyPersistenceDoubtParams(
+            curve=curve,
+            doubt_lambda=params.omission_lam,
+            persistence_weight=params.full_persistence_weight,
+            expectancy_weight=params.full_expectancy_weight,
+            doubt_weight=params.full_doubt_weight,
+        ),
+    )
+
+
+def collect_expectant_switching_features(
+    augmented_trial_df: pd.DataFrame,
+    params: TaskParams,
+) -> pd.DataFrame:
+    """Add aligned pre-trial outputs for both expectant-switching exemplars.
+
+    Parameters
+    ----------
+    augmented_trial_df : pandas.DataFrame, shape (n_trials, n_columns)
+        Must contain ``action`` and ``reward``. Choices use ``0=right`` and
+        ``1=left``; rewards use task reward units. No-choice and experimenter-
+        reward rows are invalid and do not update history.
+    params : TaskParams
+        Feature-generation parameters.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy with the fifteen documented diagnostic, drive, value, and
+        left-probability columns. Invalid rows contain ``None``.
+    """
+    normalized = normalize_experimenter_reward_column(augmented_trial_df)
+    validate_trial_feature_inputs(normalized)
+    raw_actions = normalized["action"].to_numpy()
+    numeric_actions = pd.to_numeric(normalized["action"], errors="coerce").to_numpy()
+    numeric_rewards = pd.to_numeric(normalized["reward"], errors="coerce").to_numpy()
+    experimenter_reward = get_experimenter_reward_flags(normalized)
+    skip_mask = trial_features.make_skip_trial_mask(
+        experimenter_reward_given=experimenter_reward,
+        actions=raw_actions,
+    )
+    if skip_mask is None:
+        skip_mask = np.zeros(normalized.shape[0], dtype=bool)
+    valid_mask = (
+        ~np.asarray(skip_mask, dtype=bool)
+        & np.isin(numeric_actions, [0, 1])
+        & np.isfinite(numeric_rewards)
+    )
+    replay = replay_expectant_switching(
+        actions=numeric_actions,
+        rewards=numeric_rewards,
+        valid_mask=valid_mask,
+        config=make_expectant_switching_feature_config(params),
+    )
+
+    output = normalized.copy()
+    for column_name, values in replay.items():
+        object_values = np.full(values.shape, None, dtype=object)
+        finite = np.isfinite(values)
+        object_values[finite] = values[finite]
+        output[column_name] = object_values
+    return output
+
+
 def collect_trial_index_features(
     augmented_trial_df: pd.DataFrame,
     omission_lam: float = 0.5,
@@ -911,7 +1026,7 @@ def collect_model_value_features(
     augmented_trial_df['FQlearning_rel_value_fast_learn'] = fql_rel_value_fast_learn
     augmented_trial_df['HMM_rel_value_logodds'] = hmm_rel_value_logodds
     augmented_trial_df['HMM_rel_value_logodds_decay'] = hmm_rel_value_logodds_decay
-    return augmented_trial_df
+    return collect_expectant_switching_features(augmented_trial_df, params)
 
 
 def collect_residualized_trial_features(augmented_trial_df: pd.DataFrame) -> pd.DataFrame:

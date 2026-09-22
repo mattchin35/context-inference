@@ -10,6 +10,10 @@ except ImportError:
 from typing import Callable, Iterable
 import re
 
+from src.behavior_analysis.expectant_switching_analysis import (
+    post_reward_excursion_rate,
+)
+
 
 cmap = plt.cm.tab20
 n_colors = cmap.N  # Number of discrete colors (10 for tab10)
@@ -37,6 +41,8 @@ DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS = {
     "Doubt+P": "doubt_perseveration_mouse_agreement",
     "WSLS": "wsls_mouse_agreement",
     "Ideal": "observer_mouse_agreement",
+    "Probe+P": "simple_probe_persistence_mouse_agreement",
+    "Expect+D+P": "expectancy_persistence_doubt_mouse_agreement",
 }
 AGENT_MOUSE_AGREEMENT_COLORS = {
     "QL": "#1f77b4",
@@ -47,6 +53,8 @@ AGENT_MOUSE_AGREEMENT_COLORS = {
     "Doubt+P": "#8c564b",
     "WSLS": "#17becf",
     "Ideal": "#111111",
+    "Probe+P": "#e377c2",
+    "Expect+D+P": "#7f7f7f",
 }
 
 
@@ -69,6 +77,167 @@ def save_performance_figure(fig: plt.Figure, save_path: Path) -> None:
     fig.savefig(save_path, format="png", dpi=300, bbox_inches="tight")
     print("Saved as {}".format(save_path))
     plt.close(fig)
+
+
+def plot_expectant_switching_diagnostics(
+    trial_df: pd.DataFrame,
+    plot_path: Path,
+    sess_id_full: str,
+) -> Path:
+    """Save a light-mode overview of expectant-switching model components.
+
+    Parameters
+    ----------
+    trial_df : pandas.DataFrame, shape (n_trials, n_columns)
+        Aligned trial table containing observed ``action`` and ``reward`` plus
+        both exemplar probability traces, signed components, reward count, and
+        expectancy strength. Choices use ``0=right`` and ``1=left``; signed
+        model components are left-positive. An optional ``state`` column is
+        shown only as post hoc true-context annotation.
+    plot_path : pathlib.Path
+        Existing output directory.
+    sess_id_full : str
+        Session identifier used in the title and PNG filename.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved opaque-background PNG path.
+    """
+    required_columns = {
+        "action",
+        "reward",
+        "simple_probe_persistence_prob_left",
+        "expectancy_persistence_doubt_prob_left",
+        "previous_choice",
+        "reward_triggered_probe",
+        "expectant_switch",
+        "doubt_choice_signal",
+        "expectancy_reward_count",
+        "expectancy_strength",
+    }
+    missing_columns = sorted(required_columns.difference(trial_df.columns))
+    if missing_columns:
+        raise ValueError(f"trial_df is missing diagnostic columns: {missing_columns}")
+
+    trial_index = np.arange(trial_df.shape[0])
+    numeric = trial_df[list(required_columns)].apply(pd.to_numeric, errors="coerce")
+    fig, axes = plt.subplots(
+        4,
+        1,
+        figsize=(12, 10),
+        sharex=True,
+        facecolor="white",
+    )
+    for axis in axes:
+        axis.set_facecolor("white")
+        axis.tick_params(colors="black")
+        axis.grid(alpha=0.2)
+
+    axes[0].step(
+        trial_index,
+        numeric["action"],
+        where="mid",
+        color="#111111",
+        label="Observed choice (1=left)",
+    )
+    rewarded = numeric["reward"] > 0
+    axes[0].scatter(
+        trial_index[rewarded],
+        numeric.loc[rewarded, "action"],
+        color="#2ca02c",
+        marker="o",
+        s=24,
+        label="Reward",
+    )
+    if "state" in trial_df.columns:
+        state_values = trial_df["state"].replace({"right": 0, "left": 1})
+        state_numeric = pd.to_numeric(state_values, errors="coerce")
+        axes[0].step(
+            trial_index,
+            state_numeric,
+            where="mid",
+            color="#7f7f7f",
+            linestyle="--",
+            label="True context (post hoc)",
+        )
+    axes[0].set_ylabel("Choice / state")
+    axes[0].set_ylim(-0.15, 1.15)
+    axes[0].legend(loc="upper right", frameon=False, ncol=3)
+
+    axes[1].plot(
+        trial_index,
+        numeric["simple_probe_persistence_prob_left"],
+        color=AGENT_MOUSE_AGREEMENT_COLORS["Probe+P"],
+        label="Probe+P",
+    )
+    axes[1].plot(
+        trial_index,
+        numeric["expectancy_persistence_doubt_prob_left"],
+        color=AGENT_MOUSE_AGREEMENT_COLORS["Expect+D+P"],
+        label="Expect+D+P",
+    )
+    axes[1].axhline(0.5, color="#777777", linewidth=1, linestyle=":")
+    axes[1].set_ylabel("P(left)")
+    axes[1].set_ylim(-0.02, 1.02)
+    axes[1].legend(loc="upper right", frameon=False)
+
+    component_styles = {
+        "previous_choice": ("Persistence", "#111111"),
+        "reward_triggered_probe": ("Reward probe", "#e377c2"),
+        "expectant_switch": ("Expectant switch", "#9467bd"),
+        "doubt_choice_signal": ("Doubt choice", "#ff7f0e"),
+    }
+    for column, (label, color) in component_styles.items():
+        axes[2].plot(trial_index, numeric[column], label=label, color=color)
+    axes[2].axhline(0.0, color="#777777", linewidth=1)
+    axes[2].set_ylabel("Signed component")
+    axes[2].legend(loc="upper right", frameon=False, ncol=2)
+
+    axes[3].plot(
+        trial_index,
+        numeric["expectancy_reward_count"],
+        color="#1f77b4",
+        label="Reward count",
+    )
+    axes[3].plot(
+        trial_index,
+        numeric["expectancy_strength"],
+        color="#2ca02c",
+        label="Expectancy strength",
+    )
+    axes[3].set_ylabel("Count / strength")
+    axes[3].set_xlabel("Trial")
+    axes[3].legend(loc="upper right", frameon=False)
+
+    fig.suptitle(f"Expectant-switching diagnostics: {sess_id_full}", color="black")
+    valid_behavior = (
+        numeric["action"].isin([0, 1])
+        & numeric["reward"].notna()
+    ).to_numpy()
+    excursion_summary = post_reward_excursion_rate(
+        actions=numeric["action"].to_numpy(),
+        rewards=numeric["reward"].to_numpy(),
+        valid_mask=valid_behavior,
+    )
+    rate_text = (
+        "NA"
+        if np.isnan(excursion_summary.rate)
+        else f"{excursion_summary.rate:.2f}"
+    )
+    fig.text(
+        0.01,
+        0.005,
+        "Pre-trial model traces use only preceding valid choices and outcomes; "
+        "true context is displayed only for post hoc interpretation. "
+        f"Post-reward excursions: {excursion_summary.n_excursions}/"
+        f"{excursion_summary.n_opportunities} (rate={rate_text}).",
+        color="black",
+        fontsize=9,
+    )
+    save_path = plot_path / f"{sess_id_full}_expectant_switching.png"
+    save_performance_figure(fig, save_path)
+    return save_path
 
 
 def get_session_block_count_column(multisession_df: pd.DataFrame) -> str:
@@ -727,7 +896,13 @@ def plot_session_agent_mouse_agreement(
         If any requested agreement column is absent.
     """
     if agreement_columns is None:
-        agreement_columns = DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS
+        # Older saved block tables predate newer agreement models. Plot every
+        # default series that is available without making those tables invalid.
+        agreement_columns = {
+            label: column
+            for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()
+            if column in block_performance.columns
+        }
 
     missing_columns = [
         column for column in agreement_columns.values()

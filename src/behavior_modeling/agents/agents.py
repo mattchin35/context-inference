@@ -7,6 +7,25 @@ from typing import Optional, Protocol, Callable, Tuple
 from abc import ABC, abstractmethod
 import logging
 from src.behavior_modeling.parameters import task_config as config
+from src.behavior_modeling.counterfactual_doubt import (
+    CounterfactualDoubtState,
+    counterfactual_doubt_raw_value,
+    passively_decay_counterfactual_doubt,
+    update_counterfactual_doubt,
+)
+from src.behavior_modeling.expectant_switching import (
+    ExpectancyCurveParams,
+    ExpectancyPersistenceDoubtParams,
+    PreviousOutcomeState,
+    RewardConfirmedExpectancyState,
+    SimpleProbePersistenceParams,
+    expectancy_strength,
+    previous_outcome_signals,
+    read_expectancy_persistence_doubt,
+    read_simple_probe_persistence,
+    update_previous_outcome,
+    update_reward_confirmed_expectancy,
+)
 
 
 SEED = 12345
@@ -59,6 +78,181 @@ class BehaviorAgent(ABC):
         logit_left = self.stickiness * action_ix + self.value / self.temperature  # separate stickiness from temperature
         p_left = sp.special.expit(logit_left)
         self.action_dist = np.array([1 - p_left, p_left])
+
+
+class SimpleProbePersistenceAgent(BehaviorAgent):
+    """Executable constant-probe plus immediate-persistence exemplar.
+
+    Parameters
+    ----------
+    agent_params : config.AgentParams
+        Unitless model weights and action-selection settings.
+    task_params : config.TaskParams
+        Task reward configuration; retained for the common agent interface.
+    rng : numpy.random.Generator, optional
+        Random source for action sampling. Controllers should inject a seeded
+        generator for reproducible runs.
+    """
+
+    def __init__(
+        self,
+        agent_params: config.AgentParams,
+        task_params: config.TaskParams,
+        rng: np.random.Generator,
+    ):
+        self.rng = rng
+        self.greedy = agent_params.greedy_action_selection
+        self.epsilon = agent_params.greedy_epsilon
+        self.task_params = task_params
+        self.params = SimpleProbePersistenceParams(
+            persistence_weight=agent_params.simple_persistence_weight,
+            probe_weight=agent_params.simple_probe_weight,
+        )
+        self.model_type = "simple_probe_persistence"
+        self._previous_state = PreviousOutcomeState()
+        self._refresh_readout()
+
+    def _refresh_readout(self) -> None:
+        """Refresh public pre-trial diagnostics from current history state."""
+        persistence, probe = previous_outcome_signals(self._previous_state)
+        readout = read_simple_probe_persistence(persistence, probe, self.params)
+        self.previous_choice = persistence
+        self.previous_reward = self._previous_state.previous_reward
+        self.reward_triggered_probe = probe
+        self.decision_drive = readout.decision_drive
+        self.value = readout.signed_value
+        self.prob_left = readout.p_left
+        self.action_dist = np.array([readout.p_right, readout.p_left], dtype=float)
+
+    def choose_action(self, stimulus: int) -> tuple[int, np.ndarray]:
+        """Choose an action from direct exemplar probabilities.
+
+        ``stimulus`` is accepted for controller compatibility but does not
+        enter this history-only model. Returns a scalar action encoded
+        ``0=right`` or ``1=left`` and a length-two ``[p_right, p_left]`` array.
+        """
+        del stimulus
+        if self.greedy:
+            if self.rng.random() < self.epsilon:
+                action = int(self.rng.choice(N_ACTIONS))
+            elif self.action_dist[0] == self.action_dist[1]:
+                action = self._previous_state.previous_choice
+                if action is None:
+                    action = RIGHT_IX
+            else:
+                action = int(np.argmax(self.action_dist))
+        else:
+            action = int(self.rng.choice(N_ACTIONS, p=self.action_dist))
+        return action, self.action_dist.copy()
+
+    def update_params(self, action: int, reward: float) -> None:
+        """Advance history after one valid completed trial.
+
+        ``action`` uses ``0=right`` and ``1=left``; ``reward`` is in task
+        reward units, with positive values treated as rewarded.
+        """
+        self._previous_state = update_previous_outcome(
+            self._previous_state, action, reward
+        )
+        self._refresh_readout()
+
+
+class ExpectancyPersistenceDoubtAgent(BehaviorAgent):
+    """Executable reward-expectancy, persistence, and doubt exemplar.
+
+    Parameters follow :class:`SimpleProbePersistenceAgent`; expectancy count is
+    measured in rewarded trials and doubt lambda in inverse omission trials.
+    """
+
+    def __init__(
+        self,
+        agent_params: config.AgentParams,
+        task_params: config.TaskParams,
+        rng: np.random.Generator,
+    ):
+        self.rng = rng
+        self.greedy = agent_params.greedy_action_selection
+        self.epsilon = agent_params.greedy_epsilon
+        self.task_params = task_params
+        self.params = ExpectancyPersistenceDoubtParams(
+            curve=ExpectancyCurveParams(
+                threshold=agent_params.expectancy_threshold,
+                scale=agent_params.expectancy_scale,
+            ),
+            doubt_lambda=agent_params.relative_doubt_lambda,
+            persistence_weight=agent_params.full_persistence_weight,
+            expectancy_weight=agent_params.full_expectancy_weight,
+            doubt_weight=agent_params.full_doubt_weight,
+        )
+        self.model_type = "expectancy_persistence_doubt"
+        self._previous_state = PreviousOutcomeState()
+        self._expectancy_state = RewardConfirmedExpectancyState()
+        self._doubt_state = CounterfactualDoubtState()
+        self._refresh_readout()
+
+    def _refresh_readout(self) -> None:
+        """Refresh public pre-trial diagnostics from composed shared states."""
+        persistence, probe = previous_outcome_signals(self._previous_state)
+        strength = float(
+            expectancy_strength(
+                self._expectancy_state.reward_count,
+                self.params.curve,
+            )
+        )
+        expectant_switch = probe * strength
+        doubt_raw = counterfactual_doubt_raw_value(
+            self._doubt_state,
+            self.params.doubt_lambda,
+        )
+        doubt_choice = -doubt_raw
+        readout = read_expectancy_persistence_doubt(
+            persistence,
+            expectant_switch,
+            doubt_choice,
+            self.params,
+        )
+        self.previous_choice = persistence
+        self.previous_reward = self._previous_state.previous_reward
+        self.reward_triggered_probe = probe
+        self.expectancy_confirmed_side = self._expectancy_state.confirmed_side
+        self.expectancy_reward_count = self._expectancy_state.reward_count
+        self.expectancy_strength = strength
+        self.expectant_switch = expectant_switch
+        self.doubt_raw_value = doubt_raw
+        self.doubt_choice_signal = doubt_choice
+        self.decision_drive = readout.decision_drive
+        self.value = readout.signed_value
+        self.prob_left = readout.p_left
+        self.action_dist = np.array([readout.p_right, readout.p_left], dtype=float)
+
+    def choose_action(self, stimulus: int) -> tuple[int, np.ndarray]:
+        """Choose ``0=right`` or ``1=left`` from direct model probabilities."""
+        del stimulus
+        if self.greedy:
+            if self.rng.random() < self.epsilon:
+                action = int(self.rng.choice(N_ACTIONS))
+            elif self.action_dist[0] == self.action_dist[1]:
+                action = self._previous_state.previous_choice
+                if action is None:
+                    action = RIGHT_IX
+            else:
+                action = int(np.argmax(self.action_dist))
+        else:
+            action = int(self.rng.choice(N_ACTIONS, p=self.action_dist))
+        return action, self.action_dist.copy()
+
+    def update_params(self, action: int, reward: float) -> None:
+        """Advance all three component states after one valid trial."""
+        self._previous_state = update_previous_outcome(
+            self._previous_state, action, reward
+        )
+        self._expectancy_state = update_reward_confirmed_expectancy(
+            self._expectancy_state, action, reward
+        )
+        self._doubt_state = update_counterfactual_doubt(
+            self._doubt_state, action, reward
+        )
+        self._refresh_readout()
 
 
 class Qlearning(BehaviorAgent):
@@ -416,8 +610,7 @@ class HMMRewardDecayRelativeDoubt(HMMRewardDecay):
             raise ValueError("relative_doubt_lambda must be > 0.")
 
         self.relative_doubt_lambda = agent_params.relative_doubt_lambda
-        self.left_omissions_cf = 0
-        self.right_omissions_cf = 0
+        self._doubt_state = CounterfactualDoubtState()
         self.hmm_value = self.value
         self.doubt_value = 0.0
         self.value = self.hmm_value - self.doubt_value
@@ -425,31 +618,51 @@ class HMMRewardDecayRelativeDoubt(HMMRewardDecay):
         self.update_action_dist(self.last_action)
 
     def compute_doubt_value(self) -> float:
-        doubt_right = 1 - np.exp(-self.relative_doubt_lambda * self.right_omissions_cf)
-        doubt_left = 1 - np.exp(-self.relative_doubt_lambda * self.left_omissions_cf)
-        return doubt_left - doubt_right
+        """Return raw left-minus-right doubt for the current effective counts."""
+        return counterfactual_doubt_raw_value(
+            self._doubt_state,
+            self.relative_doubt_lambda,
+        )
+
+    @property
+    def left_omissions_cf(self) -> float:
+        """Compatibility view of left effective omission count, in trials."""
+        return self._doubt_state.left_omissions
+
+    @left_omissions_cf.setter
+    def left_omissions_cf(self, value: float) -> None:
+        self._doubt_state = CounterfactualDoubtState(
+            right_omissions=self._doubt_state.right_omissions,
+            left_omissions=value,
+        )
+
+    @property
+    def right_omissions_cf(self) -> float:
+        """Compatibility view of right effective omission count, in trials."""
+        return self._doubt_state.right_omissions
+
+    @right_omissions_cf.setter
+    def right_omissions_cf(self, value: float) -> None:
+        self._doubt_state = CounterfactualDoubtState(
+            right_omissions=value,
+            left_omissions=self._doubt_state.left_omissions,
+        )
 
     def update_doubt_state(self, action: int, reward: float) -> None:
-        rewarded = np.isclose(reward, self.task_params.mean_correct_reward)
-        omitted = np.isclose(reward, 0.0)
+        """Advance shared doubt state after one valid action and reward."""
+        self._doubt_state = update_counterfactual_doubt(
+            self._doubt_state,
+            action=action,
+            reward=reward,
+        )
+        self.doubt_value = self.compute_doubt_value()
 
-        if not rewarded and not omitted:
-            rewarded = reward > 0
-            omitted = reward <= 0
-
-        if action == RIGHT_IX:
-            if omitted:
-                self.right_omissions_cf += 1
-            elif rewarded:
-                self.right_omissions_cf = 0
-                self.left_omissions_cf = 0
-        elif action == LEFT_IX:
-            if omitted:
-                self.left_omissions_cf += 1
-            elif rewarded:
-                self.left_omissions_cf = 0
-                self.right_omissions_cf = 0
-
+    def apply_passive_doubt_decay(self) -> None:
+        """Apply one existing inactive-agent decay step to shared doubt state."""
+        self._doubt_state = passively_decay_counterfactual_doubt(
+            self._doubt_state,
+            self.relative_doubt_lambda,
+        )
         self.doubt_value = self.compute_doubt_value()
 
     def update_params(self, action, reward) -> None:

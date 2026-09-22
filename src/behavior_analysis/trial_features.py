@@ -2,6 +2,7 @@ import numpy as np
 from scipy.special import expit, logit
 from enum import IntEnum
 from src.behavior_analysis.project_utils import NO_CHOICE_ACTION_LABELS
+from src.behavior_modeling.counterfactual_doubt import counterfactual_doubt_raw_values
 
 N_ACTIONS = 2
 eps = np.finfo(float).eps
@@ -629,15 +630,11 @@ def relative_doubt_index(R_omissions, L_omissions, lam):
          0 → equal doubt
     """
 
-    R = np.asarray(R_omissions, dtype=float)
-    L = np.asarray(L_omissions, dtype=float)
-
-    # Exponential saturating doubt per side
-    H_R = 1 - np.exp(-lam * R)
-    H_L = 1 - np.exp(-lam * L)
-
-    # Left-minus-right convention so left is positive and right is negative.
-    return H_L - H_R
+    return counterfactual_doubt_raw_values(
+        right_omissions=R_omissions,
+        left_omissions=L_omissions,
+        omission_lambda=lam,
+    )
 
 
 def relative_hazard_index(relative_monotonic_cf_value, lam):

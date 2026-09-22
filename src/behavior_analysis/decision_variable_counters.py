@@ -4,6 +4,11 @@ Source: Cazettes et al., Nature Neuroscience 2023
 """
 import numpy as np
 
+from src.behavior_modeling.counterfactual_doubt import (
+    CounterfactualDoubtState,
+    update_counterfactual_doubt,
+)
+
 states = ['right', 'left']
 side_dict = {s: i for i, s in enumerate(states)}  # i.e. [0 right, 1 left]
 
@@ -127,19 +132,40 @@ def sided_omissions_counter(left_count: int, right_count: int, action: int, rewa
     A counter of consecutive omissions, increasing the count on unrewarded trials and resetting the count on rewarded trials.
     If counterfactual is True, also resets the value of the unchosen action on rewarded trials to 0.
     """
+    if counterfactual:
+        state = update_counterfactual_doubt(
+            CounterfactualDoubtState(
+                right_omissions=right_count,
+                left_omissions=left_count,
+            ),
+            action=action,
+            reward=reward,
+        )
+        # Preserve this legacy counter's integer tuple contract for ordinary
+        # trial updates even though the shared state also supports fractional
+        # effective counts used by passive agent decay.
+        left_value = (
+            int(state.left_omissions)
+            if state.left_omissions.is_integer()
+            else state.left_omissions
+        )
+        right_value = (
+            int(state.right_omissions)
+            if state.right_omissions.is_integer()
+            else state.right_omissions
+        )
+        return left_value, right_value
+
     if action == side_dict['right']:
         if reward == 0:
             right_count += 1
         elif reward == 1:
             right_count = 0
-            left_count *= (0 if counterfactual else 1)
 
     elif action == side_dict['left']:
         if reward == 0:
             left_count += 1
         elif reward == 1:
             left_count = 0
-            right_count *= (0 if counterfactual else 1)
 
     return left_count, right_count
-

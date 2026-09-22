@@ -58,6 +58,13 @@ class AgentParams:
     HMM_log_odds_tanh_scale: float = 1.0
     HMM_reward_decay_lambda: float = 0.2
     relative_doubt_lambda: float = 0.5
+    expectancy_threshold: float = 3.0
+    expectancy_scale: float = 1.0
+    simple_persistence_weight: float = 1.0
+    simple_probe_weight: float = 1.0
+    full_persistence_weight: float = 1.0
+    full_expectancy_weight: float = 1.0
+    full_doubt_weight: float = 1.0
     FQL_decay: float = .9  # for forgetting Q-learning agent
     QL_learning_rate: float = .1  # for standard Q-learning agent
     action_stickiness: float = 0  # tendency to repeat last action
