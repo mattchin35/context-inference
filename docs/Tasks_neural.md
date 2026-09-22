@@ -3867,7 +3867,11 @@ WP11-3 provisional implementation and Sol review repair gate (2026-09-22):
   accepted instead of failing closed; (4) active-population channel parsing can
   raise on a nonnumeric channel value and partially duplicates the established
   metadata-filter semantics; and (5) snapshot files may currently be symlinks,
-  contradicting the exact-entered-directory read boundary.
+  contradicting the exact-entered-directory read boundary. A sixth integration
+  gap is that the child `render_lfp_summary_view` still contains the prior
+  live-only controls and does not call the new snapshot/source/population/
+  launcher helpers. WP11-4 is deliberately limited to the parent file, so the
+  child UI must be completed and tested in WP11-3R before that handoff.
 - The review also found an under-specified plotting test. The authoritative
   cached-view requirement is the complete list in Section 3.6 and
   `webappDesign.md` Section 4.4, not merely one ITPC map and one unit-PPC map.
@@ -3886,7 +3890,12 @@ WP11-3 provisional implementation and Sol review repair gate (2026-09-22):
   saved component-configuration use for snapshot labels/provenance; and one
   delegation/axis-selection test for every cached view listed above. The commit
   must contain tests only, and Sol must record genuine RED before returning
-  `lfp_summary_webapp.py` to the writer.
+  `lfp_summary_webapp.py` to the writer. It also adds child-renderer tests for
+  the default blank snapshot state, explicit snapshot/live separation, exact
+  ProbeA/ProbeB path and metadata selection, retained inspection on unchanged
+  rerender, selected snapshot-component rendering, compute-control absence in
+  snapshot mode, and bounded-action versus launcher-handoff controls in live
+  mode.
 - The corrective WP11-3R source package is limited to
   `lfp_summary_webapp.py`. A valid `SnapshotInspection` retains the receipt's
   manifest and per-component SHA-256 identities so `SnapshotComponentCache`
