@@ -415,6 +415,7 @@ src/neural_analysis/
 
   webapp/
     app.py
+    routes.py
     state.py
     controls.py
     data_access.py
@@ -530,6 +531,60 @@ moves:
 - A module should normally have one primary reason to change. File-size targets
   may guide review, but should not cause arbitrary splits of cohesive numerical
   code.
+
+### Organization decisions
+
+- Use one Streamlit application shell for user readability. `webapp/app.py`
+  should load the session, show its validation/availability state, and delegate
+  through a small explicit route registry. Each scientific view remains in its
+  own domain-named module. This preserves one obvious launch command without
+  recreating one enormous application file.
+- Cached production summaries and interactive exploratory views may coexist in
+  that shell, but their routes must label the distinction clearly. A cached
+  result view must not silently perform exploratory computation.
+- Reusable Matplotlib visualization and human-readable report generation remain
+  separate. Reports may compose approved visualization functions with captions
+  and provenance, while webapp views may compose the same functions with
+  interactive controls.
+- Tests should mirror the target package boundaries. Cross-package CT026
+  equivalence tests remain in an integration suite rather than being assigned
+  to one implementation module.
+- Legacy import wrappers are temporary. They should be removed after repository
+  callers, tests, documented commands, and required resume paths have migrated,
+  with the removal milestone recorded in the eventual implementation plan.
+
+### Classify existing modules before moving them
+
+Classification is a migration decision, not a scientific reclassification. It
+asks what support obligation each current module has and therefore whether it
+belongs in the new architecture:
+
+1. **Supported production:** used by an approved cache/report workflow and
+   protected by numerical or integration tests. Move or split it while keeping
+   behavior and compatibility wrappers.
+2. **Supported exploratory:** intentionally exposed through the current webapp
+   or a documented analysis workflow and covered by meaningful tests. Move it
+   into the appropriate analysis/view packages, but do not silently promote its
+   outputs to approved production artifacts.
+3. **Shared infrastructure:** source loading, synchronization, artifact I/O, or
+   plotting infrastructure with active callers. Move it to the corresponding
+   responsibility package.
+4. **Dataset-specific compatibility or profiling:** still needed to reproduce,
+   inspect, or benchmark CT026 behavior but unsuitable as a generic default.
+   Isolate it under `compatibility` or `profiling`.
+5. **Unreferenced or superseded candidate:** no known repository callers,
+   tests, documented command, or unique behavior. Do not move it into the clean
+   package automatically. First check notebooks and external usage, then either
+   preserve it temporarily with a clear legacy label or propose deletion for
+   explicit approval.
+
+The current scan suggests that `behavior_pynap.py`,
+`spike_behavior_analysis.py`, `spike_behavior_binning.py`,
+`modified_sinc_smoother.py`, and the empty
+`plot_single_session_analysis.py` need category-5 review. This is not a deletion
+decision. In contrast, `analog_treadmill_decode.py` is exercised by manual
+synchronization tests and should initially be treated as supporting
+infrastructure even if its final ownership changes.
 
 ## Conceptual metadata relationships
 
