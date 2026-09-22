@@ -3959,6 +3959,59 @@ WP11-3R tests-only review checkpoint (2026-09-22):
   network I/O, hidden computation, or repeated snapshot hashing. It must commit
   only the authorized source file and stop before WP11-4.
 
+WP11-3R provisional source and second Sol review gate (2026-09-22):
+
+- Terra high source commit `77b180b` (`fix: complete WP11 snapshot webapp
+  repair`) changed only `lfp_summary_webapp.py`. It made the repair subset 26
+  passed, the complete child module 64 passed, and both focused modules 95
+  passed with only the expected untouched WP11-4 parent-forwarding failure.
+  WP11-4 remains blocked because Sol source review found scientific/display
+  distinctions that the green tests did not yet measure.
+- The population-PPC adapter must preserve the report's three different masks:
+  reliable units define the median PPC, null-eligible units define the FDR
+  prevalence denominator and eligible-count heatmap, and total configured
+  units define the total-count annotation. Intersecting reliable and eligible
+  for every panel changes the documented FDR-significant fraction and is not
+  acceptable.
+- PPC band-summary reliability is not the raw final frequency axis. For every
+  saved band, a unit/cell is band-reliable only when every retained frequency
+  in that band is reliable after open line-noise exclusions. Likewise PLV
+  band coverage is the conservative minimum saved sample count/fraction over
+  every retained band frequency, not the single frequency located at the band
+  ordinal. Both adapters must reproduce the already approved report semantics.
+- The Spike exemplar pair must use the selected band histogram, the saved
+  low/high unit and trial identities, the established `5th percentile`/`95th
+  percentile` labels, and the established representative frequencies (8 Hz
+  theta, 40 Hz gamma). It must not always select histogram band zero or invent
+  the midpoint 55 Hz for gamma.
+- The child snapshot route must build visible view/site-or-pair/condition/epoch/
+  band controls from the selected component's cached named axes. It must never
+  hard-code `HPC1`, `left`, `after`, or `gamma`; the copied Power cache does not
+  even use `left` as a condition label. Only controls relevant to the selected
+  view are shown and their exact selected values reach the adapter. Live Spike
+  and All handoff controls also accept an optional exact saved run directory;
+  resume commands appear only when that explicit value is nonblank.
+- Count/status display must not fabricate instability. It reports saved trial,
+  unit, spike, eligibility, and reliability information for the selected slice
+  and emits an instability warning only from saved masks/warnings. Synchrony
+  map annotations use the exact selected displayed-trial denominator; they may
+  not silently inflate it to match a conflicting effective-count array.
+- Before another source edit, the same Terra high writer receives a tests-only
+  WP11-3R2 package limited to `test_lfp_summary_webapp.py`. Add small synthetic
+  contracts that distinguish the reliability median from the null-eligible FDR
+  denominator; aggregate PPC reliability and PLV coverage over retained band
+  frequencies with gamma exclusions; verify selected-band Spike exemplar
+  histogram/identity/representative frequency; prove snapshot controls derive
+  choices from non-CT026 named axes and forward the user's selections; prove no
+  false instability warning; require exact selected map denominators; and prove
+  explicit resume input adds both local and Slurm resume commands while blank
+  input omits them. Commit tests only and record RED before returning the same
+  source file to the writer.
+- Refactor the corrective source into short view-specific helpers with explicit
+  data contracts. The current monolithic cached-plot dispatcher and nested
+  undocumented exemplar builder do not satisfy the repository clarity rules.
+  No new dependency or numerical pipeline is authorized.
+
 ### WP12 - Complete PPC plotting and reporting
 
 Owner: one implementer immediately after WP10. Scope is plotting/report files
