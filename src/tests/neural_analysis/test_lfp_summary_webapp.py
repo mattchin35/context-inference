@@ -2975,6 +2975,60 @@ def test_snapshot_phase_map_uses_exact_selected_displayed_trial_denominator(
     plt.close(figure)
 
 
+def test_snapshot_context_translates_an_empty_saved_gamma_exclusion_to_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A saved gamma band without exclusions must reach the cache plotter honestly.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the pure Synchrony map plotter and records only its immutable
+        ``PlotContext`` argument; it opens no raw source or numerical cache.
+
+    Returns
+    -------
+    None
+        The cache-only adapter delegates successfully with
+        ``PlotContext.gamma_exclusion_hz is None`` rather than indexing an
+        absent saved exclusion interval or inventing frequency bounds.
+    """
+
+    captured: dict[str, object] = {}
+
+    def plot_phase_map(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture immutable context while bypassing numerical rendering."""
+
+        del kwargs
+        captured["context"] = args[-1]
+        return plt.figure(), {}
+
+    config = default_lfp_summary_config()
+    gamma_index = next(index for index, band in enumerate(config.phase.bands) if band.name == "gamma")
+    phase_bands = list(config.phase.bands)
+    phase_bands[gamma_index] = replace(phase_bands[gamma_index], excluded_intervals_hz=())
+    config = replace(config, phase=replace(config.phase, bands=tuple(phase_bands)))
+    monkeypatch.setattr(lfp_summary_webapp.lfp_summary_plotting, "plot_phase_map", plot_phase_map)
+
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "synchrony",
+        _small_synchrony_snapshot_arrays(),
+        config,
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view="itpc_map",
+            site_id="HPC1",
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+    )
+
+    context = captured["context"]
+    assert isinstance(context, lfp_summary_webapp.lfp_summary_plotting.PlotContext)
+    assert context.gamma_exclusion_hz is None
+    plt.close(figure)
+
+
 class CachedAxisRouteSidebar(RouteSidebar):
     """Route fake that chooses supplied cached-axis labels and records options.
 
@@ -3235,12 +3289,12 @@ class ResumeRouteSidebar(RouteSidebar):
 
 @pytest.mark.parametrize("action", ("spike_phase", "all"))
 @pytest.mark.parametrize("resume_text", ("", "/saved/launcher/run_2026-09-22"))
-def test_live_spike_handoff_adds_resume_commands_only_for_an_explicit_run_directory(
+def test_live_spike_and_all_handoffs_add_resume_commands_only_for_an_explicit_run_directory(
     tmp_path: Path,
     action: str,
     resume_text: str,
 ) -> None:
-    """Live Spike handoff may resume only an exact nonblank saved run identity.
+    """Live Spike/All handoffs may resume only an exact nonblank saved run identity.
 
     Parameters
     ----------
