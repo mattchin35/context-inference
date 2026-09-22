@@ -1025,9 +1025,31 @@ def test_progress_rendering_and_launcher_handoff_do_not_compute_numerics() -> No
     )
 
     lfp_summary_webapp.render_progress_event(streamlit, event)
+    config = replace(
+        default_lfp_summary_config(),
+        unit_population=UnitPopulationConfig(
+            "ProbeA active",
+            "ProbeA",
+            Path("/explicit/probe-a/kilosort4"),
+            Path("/explicit/probe-a/aligned_spikes.npz"),
+            (1,),
+            (
+                ("channel_quality", "good"),
+                ("inside_brain", "true"),
+                ("unit_quality", "good,mua"),
+            ),
+            ("ProbeA:7",),
+        ),
+    )
+    new_run_commands = lfp_summary_webapp.build_launcher_handoff_commands(
+        config,
+        action="spike_phase",
+    )
+    assert set(new_run_commands) == {"local_new", "slurm_new"}
+    assert all(isinstance(command, str) and command for command in new_run_commands.values())
     resume_run_directory = Path("/explicit/saved/spike-phase-run")
     commands = lfp_summary_webapp.build_launcher_handoff_commands(
-        default_lfp_summary_config(),
+        config,
         action="spike_phase",
         resume_run_directory=resume_run_directory,
     )
@@ -1037,11 +1059,6 @@ def test_progress_rendering_and_launcher_handoff_do_not_compute_numerics() -> No
     assert str(resume_run_directory) in commands["slurm_resume"]
     assert "latest" not in commands["local_resume"].lower()
     assert "latest" not in commands["slurm_resume"].lower()
-    with pytest.raises(ValueError, match="resume"):
-        lfp_summary_webapp.build_launcher_handoff_commands(
-            default_lfp_summary_config(),
-            action="spike_phase",
-        )
     for action in ("spike_phase", "all"):
         handoff = lfp_summary_webapp.dispatch_summary_action(
             action,
