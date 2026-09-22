@@ -66,16 +66,16 @@ Source-of-truth hierarchy:
 | WP5B shuffle inference | Complete | Tests `c94e152`, `7d22d6f`; implementation `01b7507`; `test_spike_lfp_summary.py` | Performance redesign only; scientific reference must remain unchanged |
 | Spike runtime bridge | Complete, including grouped payload and exact exemplar-trial integration | Original bridge `c8e76d5`; grouped payload integration completed in S5; WP12 implementation `bd6fa50`; `test_lfp_summary_runtime.py` and synthetic cache/reload/plot coverage | UI integration in WP11 |
 | WP5C optimization | Complete through S8 | Grouped-parallel implementation `e89a0ee`; S7 documentation `8741d71`; full S7 neural suite 1,113 passed; accepted work-only S8 run `ct026_ppc_s8_2026-09-18T15-06-33Z`; `docs/ppc_speedup.md`; `docs/ppc_speedup_plan.md`; `docs/ppc_speedup_execution_log.md` | Preserve eight-worker production configuration and exact preflight; use R1/C1 for report recovery and later cluster execution |
-| WP6 plotting | Numerically complete; real-data PPC report readability defects open | Original tests `b1f51f3`; implementation `d1c3e21`; R1 `b77f4a5`, `97fbf3b`; recovered report evidence below | R2 must sparsify unit labels and replace the 54-label band plot with the required four-measurement median/IQR grouping |
+| WP6 plotting | Numerically complete; R2 readability repair complete | Original tests `b1f51f3`; implementation `d1c3e21`; R1 `b77f4a5`, `97fbf3b`; R2 tests/implementation `2aed50b`, `575deee`, `767544a`; real-report QA `49a7e6d` | Visually inspect and approve the completed 1,000-shuffle cluster report |
 | WP7 pipeline | Complete for component, Compute All, composition, and report-before-cleanup seams | Original tests `b1f51f3`; implementation `067fdef`; WP10 `98ac2ed`; WP12 deferred-cleanup implementation `bd6fa50`; `test_lfp_summary_pipeline.py` | UI progress/state integration remains in WP11 |
 | WP8 webapp | Partial; Power path only | Tests `c7ec7c1`, `003394a`, `f3954de`; implementations `2885ffd`, `926801b`; `test_lfp_summary_webapp.py` | After cluster package C1, add remote cluster-side cache inspection, Synchrony/Spike views, active population, and progress in WP11 |
-| WP9 validation | Partial; 100-shuffle report recovered but not visually approved | Approved Power and Synchrony reports; recovered ProbeB report at report commit `0589fa7`; exact evidence below | Complete and inspect local R2 report-only repair; C1 remains blocked pending approval |
+| WP9 validation | ProbeB 1,000-shuffle final run complete; visual approval pending | Final cluster run and report paths below; 273 units, 427 trials, 1,000 shuffles, 105/105 blocks, no warnings/errors | Copy or tunnel the immutable report for visual inspection; do not recompute |
 | WP10 composed dependencies | Complete | Tests and implementation through `98ac2ed`; completion handoff `3aebba8`; PPC contracts and worker decision are stable | None; consume the composed boundary from the forthcoming launcher and WP11 |
 | R1 local preview recovery | Complete; transaction and population-map fix verified on real cache | Tests `b77f4a5`; implementation `97fbf3b`; recovery/report commit `0589fa7`; recovered report path below | No further R1 work; visual QA findings are isolated into proposed R2 |
-| R2 local preview readability | Approved 2026-09-20; implementation not started | R1 visual QA evidence and frozen R2 contract below | Commit tests only, record genuine RED, implement, verify, and rerender the exact cache without computation or cleanup |
-| C1 cluster execution | Planned but explicitly blocked pending user approval after local R2 | Tracked `hpc_ppc.sh`, `pyproject.toml`, and `uv.lock` at `ce37409`; uv installed on cluster access; contract below | Do not begin; after R2 approval/completion, verify uv hello world, implement/test the thin 72-hour SLURM wrapper, and run metadata-only cluster checks |
-| WP11 Streamlit integration | Planned after R1 and C1 infrastructure | Package below; remote topology frozen below | Inspect numerical caches using cluster-side Streamlit over an SSH tunnel; support one explicitly selected ProbeA or ProbeB and complete cached views |
-| WP12 PPC plotting/reporting | Transaction complete; real-size display contract incomplete | Contract `5dfd439`; implementation `bd6fa50`; R1 population repair `b77f4a5`, `97fbf3b`; recovered report below | R2 must make unit/band figures readable and report worker metadata accurately before preview approval |
+| R2 local preview readability | Complete | Contract/tests `7ba6fe6`, `2aed50b`; implementation `575deee`, `767544a`; full-suite and real-report QA `8ca0e2b`, `49a7e6d` | None; consume the repaired plots in final-report inspection and WP11 |
+| C1 cluster execution | Complete through the ProbeB 1,000-shuffle final run | Wrapper/tests through `63b87eb`; dry-run evidence `02b0f2c`; Slurm job `30744006`; terminal launcher evidence below | Preserve cluster cache/report; use measured runtime and memory before changing future requests |
+| WP11 Streamlit integration | Next planned implementation package after completed C1 | Package below; remote topology frozen below; final `spike_phase.npz` is cluster-resident | Inspect numerical caches using cluster-side Streamlit over an SSH tunnel; support one explicitly selected ProbeA or ProbeB and complete cached views |
+| WP12 PPC plotting/reporting | Complete for transaction and R2 real-size display contract | Contract `5dfd439`; implementation `bd6fa50`; R1 population repair `b77f4a5`, `97fbf3b`; R2 `575deee`, `767544a`; final report below | Visual approval of the immutable final report remains a validation step, not implementation |
 | WP13 optional absolute-amplitude thresholds | Explicitly deferred; not a blocker while thresholds are empty | Package below; validation/fingerprint support exists; current CT026 threshold list is empty | Reject every nonempty request before computation until WP13 is separately implemented |
 
 This document replaces the older decoding task list. It translates the scientific
@@ -3092,6 +3092,60 @@ C1 metadata-only dry-run GREEN checkpoint (2026-09-20):
     --workers 8 \
     --final-run
   ```
+
+C1 ProbeB 1,000-shuffle final-run completion (submitted 2026-09-20; completed
+2026-09-22):
+
+- After explicit user approval, Slurm job `30744006` submitted the exact command
+  above from a tracked-clean checkout at
+  `02b0f2c1297b7f1f8344c16ee8a10e328cd49679`. Codex did not monitor the
+  long-running job. Later inspection found that the live Slurm controller had
+  already purged the job and `sacct` returned no record, so scheduler-level
+  exit and utilization fields are unavailable. The persistent launcher state,
+  component manifest, report transaction, and cleanup evidence are complete.
+- The authoritative run directory is
+  `/gs/gsfs0/home/mchin1/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/CT026_2026-08-01_130853_spike_phase_ProbeB_final_2026-09-21T00-34-20Z`.
+  Its state is terminal `complete` with no warning or error and the exact stage
+  sequence `initialized`, `preflight_complete`, `cleanup_prepared`,
+  `component_complete`, `report_complete`, `launcher_artifacts_validated`,
+  `cleanup_complete`, `complete`. Identity records ProbeB, 273 ordered units,
+  1,000 shuffles, `final_run=true`, eight workers, clean commit `02b0f2c`, and
+  the same source and population hashes as the approved ProbeB dry run.
+- All 105 planned blocks were newly completed and zero were resumed. The final
+  component covers 427 trials and 2,492,490 spikes. It contains 1,080,900
+  computable cells, 914,700 reliable/null-eligible cells, and 189,013
+  BH-FDR-significant cells. The descriptive significant fraction is 20.663934%
+  of null-eligible cells (17.486632% of all computable cells). The 100-shuffle
+  preview had 167,860 significant cells, or 18.351372% of the same eligible
+  denominator; the final count is 21,153 higher, a 2.312561 percentage-point
+  increase. These repeated unit/condition/site/epoch/frequency cells are not
+  independent biological samples, so this comparison is diagnostic rather
+  than an inferential test of preview/final agreement.
+- Measured component wall time was 102,462.905 seconds (28.462 hours): 135.342
+  seconds phase preparation, 7,306.097 seconds planning (2.029 hours), and
+  95,000.691 seconds grouped execution (26.389 hours). Report generation took
+  17.333 seconds. Runtime evidence records eight active planner workers, a
+  maximum of nine child processes, 6,725,238,920 planned aggregate-array bytes,
+  1,173,794,088 shared phase-mmap bytes, 8,150,206,464 process-tree PSS bytes,
+  and 11,301,756,928 process-tree RSS bytes. The first run was cold and stayed
+  comfortably within the 32-GB request; any future time/memory reduction needs
+  a separately documented resource decision rather than an automatic wrapper
+  change.
+- The current cluster cache contains complete `power.npz`, `synchrony.npz`, and
+  `spike_phase.npz` components plus `manifest.json`. `spike_phase.npz` is
+  211,876,438 bytes; the complete cache is 444,168,315 bytes. The exact
+  1,303,357,781-byte intermediate PPC work transaction was removed, and the
+  fingerprinted work directory no longer exists. Do not rerun or resume this
+  completed launcher run.
+- The immutable final report is
+  `/gs/gsfs0/home/mchin1/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/CT026_2026-08-01_130853_spike_phase_ProbeB_final_2026-09-21T00-34-20Z/report/CT026_2026-08-01_130853_lfp_spike_phase_final_report_2026-09-22T05-02-04Z`.
+  It contains all 27 requested PNG selections, report/configuration/source and
+  manifest snapshots, and no exclusion, unavailable selection, or warning.
+  Every PNG is a nonempty, structurally valid RGBA image at the expected plot
+  family dimensions. Visual content has not yet been reviewed: copying the
+  scientific images off-cluster was blocked pending explicit data-egress
+  approval. This is the remaining WP9 validation action and does not authorize
+  recomputation.
 
 Cluster validation before a scientific run:
 
