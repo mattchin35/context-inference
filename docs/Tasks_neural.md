@@ -4012,6 +4012,52 @@ WP11-3R provisional source and second Sol review gate (2026-09-22):
   undocumented exemplar builder do not satisfy the repository clarity rules.
   No new dependency or numerical pipeline is authorized.
 
+WP11-3R2 tests-only review and correction gate (2026-09-22):
+
+- Terra high tests-only commit `daf89a3` (`test: add WP11 snapshot review
+  contracts`) changed only `test_lfp_summary_webapp.py`. Sol independently ran
+  the complete child module: 12 intended failures and 64 passes in 1.73
+  seconds. The failures expose the provisional adapter/route defects rather
+  than import, collection, fixture, syntax, or environment problems.
+- Sol review found three coverage corrections required before source work. The
+  cached-axis route test currently requests epoch and band controls even for
+  views that do not consume those axes, contradicting the frozen rule that only
+  relevant controls are visible. Correct it so Power `condition_psd` exposes
+  site, condition, and epoch but no band, while Synchrony `ispc_map` exposes
+  pair and condition but no epoch or band; irrelevant fields in the immutable
+  selection record use deterministic first-axis values and are not presented as
+  user choices. The Spike selected-count route must additionally prove its
+  relevant non-hard-coded selectors reach the adapter.
+- The Spike count/status test must pin exact selected-slice summaries rather
+  than merely search for generic words. For the selected condition/site/epoch,
+  it reports the exact filtered trial count, configured unit count, saved
+  minimum-to-maximum spike-count range per unit-frequency cell, and exact
+  eligible and reliable unit-frequency counts over the selected slice. It may
+  emit an instability warning only when the selected saved reliability mask or
+  selected manifest warnings justify one. A maximum taken over the whole cache
+  or a fabricated unconditional warning is forbidden.
+- The optional explicit run-directory test must cover both `spike_phase` and
+  `all`: blank input produces only new local/Slurm commands, while a nonblank
+  exact path adds both local and Slurm resume commands. No latest-run search or
+  inferred resume identity is allowed.
+- Review also exposed a shared plotting-contract defect: `FrequencyBandConfig`
+  permits an empty gamma exclusion, and existing validation code already models
+  that state as `None`, but `PlotContext` declares only a tuple and `_caption`
+  indexes it unconditionally. Fixing only the webapp would either crash later
+  in the real plotter or invent exclusion bounds. The minimal WP11-3R2 scope is
+  therefore expanded to `test_lfp_summary_plotting.py` and
+  `lfp_summary_plotting.py` solely to permit
+  `gamma_exclusion_hz: tuple[float, float] | None` and render an honest
+  no-exclusion caption. No plot data, axes, statistical behavior, or other
+  plotting interface may change.
+- Before any corrective source edit, the same Terra high writer makes one
+  tests-only correction commit limited to `test_lfp_summary_webapp.py` and the
+  one focused optional-exclusion contract in `test_lfp_summary_plotting.py`.
+  Sol must review it and reproduce genuine RED. Only then may the writer change
+  `lfp_summary_webapp.py` plus the narrowly authorized PlotContext/caption lines
+  in `lfp_summary_plotting.py`. All numerical kernels, caches, reports, parent
+  routing, dependencies, and other files remain frozen.
+
 ### WP12 - Complete PPC plotting and reporting
 
 Owner: one implementer immediately after WP10. Scope is plotting/report files
