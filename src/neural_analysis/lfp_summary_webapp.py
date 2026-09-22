@@ -7,7 +7,7 @@ loads cached component arrays, and renders already-created Matplotlib figures.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -32,6 +32,7 @@ from src.neural_analysis.lfp_summary_io import (
 from src.neural_analysis.lfp_summary_models import (
     LFPSiteConfig,
     LFPSummaryConfig,
+    PPCExecutionConfig,
     TrialFilterConfig,
     UnitPopulationConfig,
     ProgressEvent,
@@ -813,7 +814,7 @@ def _saved_snapshot_config(
     component: str,
     fallback: LFPSummaryConfig,
 ) -> tuple[LFPSummaryConfig, str | None]:
-    """Return one component's complete saved configuration for cache labels.
+    """Return one component's saved configuration for cache-only labels.
 
     Parameters
     ----------
@@ -824,12 +825,16 @@ def _saved_snapshot_config(
         Final cached component whose configuration snapshot is required.
     fallback : LFPSummaryConfig
         Existing live configuration used solely by old callers without a
-        snapshot inspection; it does not open files or transform arrays.
+        snapshot inspection; it does not fill or override snapshot metadata.
 
     Returns
     -------
     tuple[LFPSummaryConfig, str or None]
         Deserialized saved config and the retained cluster-directory provenance.
+        For an otherwise complete legacy snapshot, only an absent
+        execution-only ``ppc_execution`` mapping receives the current
+        ``PPCExecutionConfig`` defaults. Every present saved field is retained,
+        and any other missing or malformed field remains fail-closed.
     """
 
     if inspection is None:
@@ -841,8 +846,14 @@ def _saved_snapshot_config(
     saved = entry.get("configuration_snapshot") if isinstance(entry, Mapping) else None
     if not isinstance(saved, Mapping):
         raise ValueError("snapshot component lacks a saved configuration")
+    saved_configuration = dict(saved)
+    if "ppc_execution" not in saved_configuration:
+        saved_configuration["ppc_execution"] = asdict(PPCExecutionConfig())
     try:
-        return lfp_summary_config_from_json(json.dumps(dict(saved))), inspection.source_cluster_directory
+        return (
+            lfp_summary_config_from_json(json.dumps(saved_configuration)),
+            inspection.source_cluster_directory,
+        )
     except (TypeError, ValueError) as error:
         raise ValueError("snapshot component saved configuration is malformed") from error
 
