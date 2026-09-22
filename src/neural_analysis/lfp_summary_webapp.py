@@ -1022,14 +1022,15 @@ def _retained_band_frequency_indices(
     config: LFPSummaryConfig,
     band_name: str,
 ) -> np.ndarray:
-    """Select saved Hz bins within one band and outside its open exclusions.
+    """Select saved Hz bins within one band and outside inclusive exclusions.
 
     Parameters
     ----------
     frequency_hz : numpy.ndarray
         Finite one-dimensional saved frequency coordinates in Hz.
     config : LFPSummaryConfig
-        Immutable saved phase-band bounds and open excluded intervals in Hz.
+        Immutable saved phase-band bounds and inclusively excluded intervals in
+        Hz, matching the established report adapters.
     band_name : str
         Categorical saved band label.
 
@@ -1037,7 +1038,7 @@ def _retained_band_frequency_indices(
     -------
     numpy.ndarray
         Nonempty integer positions into ``frequency_hz``. The outer bounds are
-        inclusive and each configured exclusion interval is open.
+        inclusive and each configured exclusion interval removes both endpoints.
     """
 
     frequency = np.asarray(frequency_hz, dtype=float)
@@ -1048,7 +1049,7 @@ def _retained_band_frequency_indices(
         raise ValueError(f"saved phase configuration lacks band {band_name!r}")
     retained = (frequency >= band.lower_hz) & (frequency <= band.upper_hz)
     for low_hz, high_hz in band.excluded_intervals_hz:
-        retained &= ~((frequency > low_hz) & (frequency < high_hz))
+        retained &= ~((frequency >= low_hz) & (frequency <= high_hz))
     indices = np.flatnonzero(retained)
     if not indices.size:
         raise ValueError(f"cached frequency axis has no retained {band_name} bins")
@@ -1088,14 +1089,14 @@ def _plot_cached_power_component(
         },
         "Power",
     )
-    condition_index = _named_index(arrays["condition_names"], selection.condition_name, "condition_names")
     site_index = _named_index(arrays["site_ids"], selection.site_id, "site_ids")
-    epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
-    selected_trials = _condition_trials(arrays, condition_index)
     condition_names = _cached_axis_values(arrays, "condition_names")
     epoch_names = _cached_axis_values(arrays, "epoch_names")
     band_names = _cached_axis_values(arrays, "band_names")
     if selection.view == "condition_psd":
+        condition_index = _named_index(arrays["condition_names"], selection.condition_name, "condition_names")
+        epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
+        selected_trials = _condition_trials(arrays, condition_index)
         psd = np.asarray(arrays["normalized_psd_session_db"])
         if psd.ndim != 4:
             raise ValueError("cached Power PSD axes are invalid")
@@ -1114,15 +1115,27 @@ def _plot_cached_power_component(
         values = np.asarray(arrays["band_power_session_db"])
         if values.ndim != 4:
             raise ValueError("cached Power band axes are invalid")
-        selected_values = np.full((1, values.shape[1], values.shape[2], values.shape[3]), np.nan)
-        selected_values[0, selected_trials] = values[site_index, selected_trials]
-        counts = np.asarray(arrays["condition_effective_trial_count"])[condition_index, site_index]
+        membership = np.asarray(arrays["condition_membership"], dtype=bool)
+        filtered = np.asarray(arrays["filter_membership"], dtype=bool)
+        if membership.shape != (values.shape[1], len(condition_names)) or filtered.shape != (values.shape[1],):
+            raise ValueError("cached Power condition membership axes are invalid")
+        selected_values = np.full(
+            (len(condition_names), values.shape[1], values.shape[2], values.shape[3]),
+            np.nan,
+        )
+        for saved_condition_index in range(len(condition_names)):
+            rows = membership[:, saved_condition_index] & filtered
+            selected_values[saved_condition_index, rows] = values[site_index, rows]
+        counts = np.asarray(arrays["condition_effective_trial_count"])
+        if counts.shape != (len(condition_names), values.shape[0]):
+            raise ValueError("cached Power effective-count axes are invalid")
+        epoch_counts = np.repeat(counts[:, site_index, np.newaxis], len(epoch_names), axis=1)
         figure, _ = lfp_summary_plotting.plot_band_power_summary(
             selected_values,
-            (condition_names[condition_index],),
+            condition_names,
             epoch_names,
             band_names,
-            np.full((1, len(epoch_names)), int(counts), dtype=np.int64),
+            epoch_counts,
             selection.site_id,
             "session-normalized dB",
             context,
