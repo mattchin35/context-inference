@@ -395,6 +395,34 @@ def test_phase_band_summary_accepts_an_all_nan_uncomputable_bootstrap_column() -
     _assert_figure_contract(figure, axes, {"summary"})
 
 
+def test_phase_band_summary_preserves_the_full_unsigned_selected_trial_count() -> None:
+    """Unsigned selected counts remain exact instead of overflowing plot integers."""
+    unsigned_maximum = np.uint64(np.iinfo(np.uint64).max)
+    figure, axes = plot_phase_band_summary(
+        observed_estimates=np.array((0.2,)),
+        bootstrap_quantiles=np.array(
+            ((0.1,), (0.15,), (0.2,), (0.25,), (0.3,))
+        ),
+        selected_trial_counts=np.array((unsigned_maximum,), dtype=np.uint64),
+        labels=("condition",),
+        band_name="theta",
+        epoch_name="whole",
+        metric_name="ITPC",
+        bootstrap_count=1_000,
+        context=_context(),
+    )
+    try:
+        assert [label.get_text() for label in axes["summary"].get_yticklabels()] == [
+            f"condition (n={int(unsigned_maximum)})"
+        ]
+        assert re.search(
+            r"unstable fewer-than-ten-trial\s+conditions:\s*\[\]",
+            figure.texts[-1].get_text(),
+        )
+    finally:
+        plt.close(figure)
+
+
 def test_phase_band_summary_reserves_space_for_nine_condition_labels() -> None:
     """Nine long condition labels stay inside a horizontal figure's left margin."""
     labels = (
