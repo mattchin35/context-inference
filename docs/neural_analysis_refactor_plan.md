@@ -14,9 +14,11 @@ scientifically and operationally approved after fresh Sol numerical,
 provenance, and systematic visual reviews; explicit user visual approval is
 pending. User review flagged that every observed point in the PFC theta-whole
 ITPC summary lies below its percentile-bootstrap 95% interval. The bars are not
-IQRs and the legacy figure has the same pattern, but the scientific/display
-interpretation must be resolved before approval. Spike-phase and cluster
-actions remain separately gated.
+IQRs and the legacy figure has the same pattern. The user selected the
+presentation-only resolution in Section 5.5 for both ITPC and ISPC because they
+share the same phase-clustering/resampling calculation. Implementation and a
+new versioned Synchrony artifact are pending. Spike-phase and cluster actions
+remain separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -45,8 +47,10 @@ amplitude behavior as if that behavior were scientifically correct.
   bounded numerical small-window check is also complete and approved. The
   corrected cache now contains approved Power and scientifically approved
   Synchrony only. Corrected Synchrony passed its numerical, provenance, and
-  reviewer visual gates; explicit user visual approval is the only remaining
-  item before the bounded Spike-phase preview can be authorized.
+  reviewer visual gates. The user selected the Section 5.5 presentation-only
+  revision for both ITPC and ISPC band summaries; implementation, a newly
+  versioned Synchrony artifact, and explicit visual approval remain before the
+  bounded Spike-phase preview can be authorized.
   The user requires any later preview to run unattended through Slurm without
   Codex monitoring; that execution is not approved.
 - **Approved NR1 destinations:** session root
@@ -178,10 +182,12 @@ amplitude behavior as if that behavior were scientifically correct.
   IQRs. With-replacement trial resampling biases the nonnegative vector
   magnitude upward; the current plotting test explicitly permits an interval
   not containing its estimate, and the legacy figure shows the same pattern.
-  Treat this as an unresolved scientific/display decision rather than an
-  affine-scaling regression. If later approved, the 100-shuffle ProbeB preview
-  must use the standalone Slurm launcher with eight workers, no `--final-run`,
-  and no Codex monitoring. Before proposing submission, close the safety gap:
+  Treat this as a presentation problem rather than an affine-scaling
+  regression. The user selected a horizontal observed-estimate plus bootstrap-
+  distribution boxplot for both ITPC and ISPC, as frozen in Section 5.5. The
+  100-shuffle ProbeB preview must use the standalone Slurm launcher with eight
+  workers, no `--final-run`, and no Codex monitoring. Before proposing
+  submission, close the presentation and safety gaps:
   the launcher has no corrected-cache output argument and still targets
   `processed/lfp_summary_cache`, the protected legacy cache. A tested explicit
   corrected-cache target, a pushed exact clean cluster checkout, and a reviewed
@@ -1293,32 +1299,166 @@ corrected artifacts, so it is not an Open Ephys affine-scaling regression.
 Nevertheless, systematic noncoverage in all nine displayed conditions is a
 scientific communication problem and remains a user-approval blocker.
 
-Do not change the statistic or plot implicitly. Before any such change, choose
-and document one of these distinct targets:
+The user selected a presentation-only revision on 2026-09-23. Apply it to both
+ITPC and ISPC band summaries. ITPC uses one site's phase vectors; ISPC uses the
+pair's relative-phase vectors. After that input distinction, both call the same
+`bootstrap_phase_clustering_bands` calculation: observed vector magnitude,
+finite time-frequency averaging, seeded with-replacement trial resampling, and
+the same percentile operation. Consistent presentation is therefore required.
 
-- presentation-only: retain the current estimate and percentile distribution,
-  but display the observed estimate, bootstrap median, and capped percentile
-  interval with different symbols and an explicit legend/caption;
-- interval-method change: retain ITPC but replace the percentile interval with
-  a predeclared bias-aware interval such as basic bootstrap or BCa, after
-  simulation demonstrates acceptable coverage for bounded nonlinear phase
-  magnitudes and the observed trial-count range; or
-- estimator change: use a bias-reduced phase-consistency estimand such as a
-  pairwise phase-consistency/PPC-family quantity, which is a new scientific
-  analysis and cannot be described as a plotting fix.
+#### Frozen presentation contract
 
-Tests must be written and committed before a chosen implementation. At minimum
-they must freeze the exact observed-versus-bootstrap series displayed, assert
-the legend/caption semantics, cover fewer-than-ten-trial instability, and use
-seeded uniform-phase and concentrated-phase simulations across representative
-trial counts. Any interval-method or estimator change additionally requires a
-simulation-based bias/coverage gate and a new cache/scientific version; it may
-not rewrite the approved Synchrony component in place.
+- Preserve the observed ITPC/ISPC computation, selected trials, valid masks,
+  seed, 1,000 resamples, time-frequency averaging, and existing 2.5th/97.5th
+  percentile endpoints exactly. This package changes no estimand, interval
+  method, or condition definition.
+- Derive the 25th percentile, median, and 75th percentile directly from each
+  finite `(bootstrap,)` scalar series while that series exists in
+  `bootstrap_phase_clustering_bands`. Use one explicit
+  `numpy.percentile(..., method="linear")` operation for
+  `(2.5, 25, 50, 75, 97.5)`. Never infer an interior quantile from the saved
+  endpoints, recenter the distribution, or substitute the bootstrap median for
+  the observed estimate.
+- Persist three additional dimensionless quantile arrays per metric:
+  `itpc_bootstrap_q25`, `itpc_bootstrap_median`, `itpc_bootstrap_q75`, and the
+  corresponding `ispc_bootstrap_q25`, `ispc_bootstrap_median`, and
+  `ispc_bootstrap_q75` arrays. Also persist the routine's exact
+  `selected_trial_count` as integer `itpc_band_trial_count` and
+  `ispc_band_trial_count` arrays rather than reconstructing a broader count from
+  condition/site or pair validity in presentation code. Retain
+  `itpc_ci_low/high` and `ispc_ci_low/high` as compatibility array names for the
+  unchanged 2.5th/97.5th endpoints, but do not expose confidence-interval
+  terminology in the revised figures. Do not persist all bootstrap draws.
+- Render one horizontal row per condition, preserving the current condition
+  order from top to bottom. Put the dimensionless ITPC or ISPC metric on the x
+  axis and label each condition with its exact trial count as
+  `<condition> (n=<count>)`.
+- Draw the observed plug-in estimate as a prominent filled circle. Draw the
+  bootstrap resampling distribution at a small nonoverlapping vertical offset
+  within the same condition row: an unnotched box from Q25 to Q75, a visible
+  median line, and capped whiskers at the unchanged 2.5th/97.5th percentiles.
+  Do not draw Tukey-derived whiskers, fliers, individual draws, or notches.
+- Include a compact legend with exactly two semantic entries: `Observed
+  estimate` and `Bootstrap resampling distribution`. Captions may identify the
+  number of deterministic trial resamples and instability threshold, but the
+  plot, caption, title, axes, and legend must not use `confidence interval`,
+  `CI`, `null`, `significant`, or `significance` language.
+- Retain the existing fewer-than-ten contributing-trials instability rule and
+  identify affected conditions descriptively without inferential language.
+  These single-session, overlapping condition summaries remain descriptive;
+  no between-condition test or multiplicity claim is added.
+
+#### Cache and implementation architecture
+
+The 1,000 bootstrap scalar draws were transient during the approved
+calculation and are not present in `synchrony.npz`; only the observed estimates
+and outer endpoints were saved. The new median and quartiles therefore cannot
+be recovered truthfully from the approved cache. Do not interpolate them from
+the endpoints or recompute them in report/webapp code.
+
+- Extend `PhaseBandBootstrapSummary` in `lfp_synchrony_summary.py` with Q25,
+  median, and Q75 arrays on `(epoch, band)` axes, computed beside the unchanged
+  endpoints from the same finite bootstrap values.
+- Extend `build_synchrony_payload` and `SYNCHRONY_ARRAY_SCHEMA` with the six
+  small arrays above. Add a code-owned Synchrony payload-contract version to
+  the Synchrony component fingerprint only. This must classify the old
+  Synchrony result as stale for active recomputation without invalidating the
+  approved Power component or pretending that the scientific phase settings
+  changed. Generic receipt/snapshot inspection of the old artifact remains
+  available.
+- Change `plot_phase_band_summary` to receive the observed values, five actual
+  bootstrap quantiles, exact saved band/epoch trial counts, bootstrap count,
+  and labels under non-inferential parameter names. Use the same public
+  renderer for ITPC and ISPC.
+- Update both cache-only report and webapp callers to require and pass the
+  saved quantiles. Neither presentation path may open raw LFP, reconstruct
+  phase tensors, generate bootstrap draws, or otherwise compute missing data.
+- Do not overwrite the approved cache or report. After code verification and
+  separate real-data authorization, create a new timestamped corrected cache,
+  copy the approved `power.npz` bytes unchanged with truthful manifest
+  provenance, and recompute only Synchrony with the unchanged scientific
+  configuration plus the new payload contract. Render a new timestamped report
+  for user approval. The prior cache, failed attempt, successful retry, report,
+  comparison, and packaging evidence remain immutable.
+
+#### Tests written first
+
+Commit RED tests before any source edit. They must prove:
+
+1. Q25/median/Q75 and the existing endpoints equal an independent explicit-
+   linear percentile calculation on the actual saved-in-memory bootstrap scalar
+   series for seeded uniform and concentrated phase fixtures, including NaN
+   handling and fewer-than-ten-trial instability;
+2. the observed ITPC/ISPC estimates, selected counts, full bootstrap scalar
+   series, seeds, and 2.5th/97.5th endpoints are unchanged by adding the three
+   interior summaries;
+3. the six new quantile arrays and two exact trial-count arrays have exact
+   `(condition, site-or-pair, epoch, band)` axes, dimensionless or trial units,
+   safe float/integer dtypes, and survive payload write/load validation;
+4. the component-specific payload version makes the old Synchrony cache stale
+   while leaving the same Power component compatible and receipt-only legacy
+   inspection readable;
+5. horizontal plotting preserves top-to-bottom condition order, places the
+   filled observed circle separately from the box, uses Q25/Q75 box edges, the
+   actual median, and capped 2.5th/97.5th whiskers, and permits the observed
+   point to lie outside those whiskers;
+6. the plot has no notches, fliers, or individual bootstrap points; displays
+   `<condition> (n=<count>)`; contains the two required legend entries; and
+   contains none of the prohibited inferential words, case-insensitively;
+7. ITPC and ISPC report figures both receive their metric-specific saved
+   quantiles and the webapp renders each cache-only without a numerical loader;
+8. report filenames, non-band Synchrony views, PLV views, trial identities,
+   and exclusions remain unchanged; and
+9. the seeded synthetic cache/write/reload/report integration exercises both
+   ITPC and ISPC horizontal summaries and remains deterministic.
+
+The initial source allowlist is
+`src/neural_analysis/lfp_synchrony_summary.py`,
+`src/neural_analysis/lfp_summary_runtime.py`,
+`src/neural_analysis/lfp_summary_payloads.py`,
+`src/neural_analysis/lfp_summary_models.py`,
+`src/neural_analysis/lfp_summary_plotting.py`,
+`src/neural_analysis/lfp_synchrony_validation.py`, and
+`src/neural_analysis/lfp_summary_webapp.py`. The matching initial test
+allowlist is `test_lfp_synchrony_runtime.py`, `test_lfp_summary_runtime.py`,
+`test_lfp_summary_payloads.py`, `test_lfp_summary_models.py`,
+`test_lfp_summary_io.py`, `test_lfp_summary_plotting.py`,
+`test_lfp_synchrony_validation.py`, `test_lfp_summary_webapp.py`, and
+`test_lfp_summary_synthetic_integration.py` beneath
+`src/tests/neural_analysis`. Amend the allowlists before touching any other
+file. Keep tests and implementation in separate commits.
+
+#### Dependencies, performance, and real-data gate
+
+Introduce no dependency. Reuse NumPy's installed percentile API and
+Matplotlib's low-level boxplot artists; verify those APIs from installed source
+before first project use. The six added float arrays plus two integer count
+arrays total fewer than 10 KiB for the current nine-condition, three-site,
+three-pair, three-epoch, two-band CT026 shape before NPZ compression. Bootstrap
+draws already exist one summary at a time and remain transient; do not add a
+second production phase tensor or retain all draws. Plotting loads only saved
+scalar summaries.
+
+The source change requires ordinary focused and complete-neural test gates. A
+subsequent real-data run requires separate authorization because it reads CT026
+and writes a new cache/report. Its expected Synchrony resource envelope is the
+reviewed prior run (about 729 seconds and 4.29 GB peak RSS); material deviation
+requires investigation. Acceptance requires exact equality of all identity,
+validity, phase, estimate, bootstrap endpoint, exemplar, and nonpresentation
+arrays; ordered endpoint/Q25/median/Q75 consistency; exact agreement between
+saved counts and instability flags; systematic figure inspection; and explicit
+user visual approval. Direct quantile-from-draw equality is established in the
+tests while the transient draws are available rather than by retaining or
+recomputing those production draws. Only the newly approved revised Synchrony
+artifact may advance to the Section 5.6 cluster copy.
 
 ### 5.6 Corrected-cache cluster preview prerequisites
 
-The eventual 100-shuffle ProbeB preview will reuse the approved corrected
-Power and Synchrony component bytes rather than recompute them on the cluster.
+The eventual 100-shuffle ProbeB preview will reuse the approved corrected Power
+bytes and the future user-approved Section 5.5 revised Synchrony bytes rather
+than recompute either component on the cluster. The currently approved
+pre-presentation Synchrony file is retained as evidence but is not the cluster
+preview prerequisite.
 This section is an implementation and execution plan only. It does not approve
 source edits, transfer, push, Slurm submission, or the preview itself.
 

@@ -297,6 +297,22 @@ publication, prerequisite validation, isolated new-run safety checks, and a
 durable submit-and-disconnect Slurm handoff. This documentation update does not
 authorize implementation, push, transfer, cache mutation, or submission.
 
+The user then selected the presentation-only resolution for both ITPC and ISPC
+band summaries because both use the same phase-clustering, trial-resampling,
+time-frequency averaging, and percentile calculation after their respective
+single-site versus relative-phase inputs. Plan Section 5.5 now freezes a
+horizontal display with a prominent observed-estimate circle and a slightly
+offset bootstrap box showing actual Q25/median/Q75 plus capped unchanged
+2.5/97.5 percentile whiskers, exact trial counts, a two-part legend, and no
+confidence/null/significance language. The bootstrap draws are not persisted
+in the approved Synchrony cache, so the interior quantiles cannot be inferred
+or produced by a cache-only rerender. The implementation must version the
+Synchrony payload, preserve Power, and remain tests-first; a new Synchrony
+artifact and report require separate real-data authorization and user visual
+approval before cluster transfer. No implementation or artifact mutation
+occurred in this documentation-only step; source work remains behind the
+plan-approval and tests-first gate.
+
 NR1 dry run was authorized by the user on 2026-09-23 with these exact paths:
 
 - session: `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference`
