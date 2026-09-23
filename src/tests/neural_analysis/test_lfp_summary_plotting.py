@@ -313,6 +313,88 @@ def test_phase_band_summary_keeps_an_observed_estimate_outside_bootstrap_whisker
     _assert_figure_contract(figure, axes, {"summary"})
 
 
+@pytest.mark.parametrize(
+    ("selected_trial_counts", "message"),
+    (
+        (np.array((2.5,), dtype=float), "integer dtype"),
+        (np.array((True,), dtype=bool), "integer dtype"),
+        (np.array((-1,), dtype=np.int64), "nonnegative"),
+    ),
+    ids=("fractional", "boolean", "negative"),
+)
+def test_phase_band_summary_rejects_noninteger_or_negative_selected_trial_counts(
+    selected_trial_counts: np.ndarray,
+    message: str,
+) -> None:
+    """Selected trial counts remain nonnegative integers before display conversion."""
+    with pytest.raises(ValueError, match=message):
+        plot_phase_band_summary(
+            observed_estimates=np.array((0.2,)),
+            bootstrap_quantiles=np.array(
+                ((0.1,), (0.15,), (0.2,), (0.25,), (0.3,))
+            ),
+            selected_trial_counts=selected_trial_counts,
+            labels=("condition",),
+            band_name="theta",
+            epoch_name="whole",
+            metric_name="ITPC",
+            bootstrap_count=1_000,
+            context=_context(),
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid_column",
+    (
+        np.array((0.10, np.nan, 0.20, 0.25, 0.30)),
+        np.array((0.10, 0.15, np.inf, 0.25, 0.30)),
+    ),
+    ids=("mixed_nan", "mixed_infinite"),
+)
+def test_phase_band_summary_rejects_mixed_nonfinite_bootstrap_quantile_columns(
+    invalid_column: np.ndarray,
+) -> None:
+    """A bootstrap column is either five ordered finite values or all NaN."""
+    with pytest.raises(ValueError, match="all finite and ordered or all NaN"):
+        plot_phase_band_summary(
+            observed_estimates=np.array((0.2, 0.4)),
+            bootstrap_quantiles=np.column_stack(
+                (
+                    np.array((0.10, 0.15, 0.20, 0.25, 0.30)),
+                    invalid_column,
+                )
+            ),
+            selected_trial_counts=np.array((12, 0), dtype=np.int64),
+            labels=("computable", "uncomputable"),
+            band_name="theta",
+            epoch_name="whole",
+            metric_name="ITPC",
+            bootstrap_count=1_000,
+            context=_context(),
+        )
+
+
+def test_phase_band_summary_accepts_an_all_nan_uncomputable_bootstrap_column() -> None:
+    """An all-NaN bootstrap column remains a valid unavailable summary."""
+    figure, axes = plot_phase_band_summary(
+        observed_estimates=np.array((0.2, np.nan)),
+        bootstrap_quantiles=np.column_stack(
+            (
+                np.array((0.10, 0.15, 0.20, 0.25, 0.30)),
+                np.full(5, np.nan),
+            )
+        ),
+        selected_trial_counts=np.array((12, 0), dtype=np.int64),
+        labels=("computable", "uncomputable"),
+        band_name="theta",
+        epoch_name="whole",
+        metric_name="ITPC",
+        bootstrap_count=1_000,
+        context=_context(),
+    )
+    _assert_figure_contract(figure, axes, {"summary"})
+
+
 def test_phase_band_summary_reserves_space_for_nine_condition_labels() -> None:
     """Nine long condition labels stay inside a horizontal figure's left margin."""
     labels = (

@@ -2870,7 +2870,7 @@ def test_cached_phase_band_webapp_uses_metric_specific_saved_quantiles_and_count
     np.testing.assert_array_equal(keyword["bootstrap_quantiles"][2], median)
     np.testing.assert_array_equal(keyword["bootstrap_quantiles"][3], q75)
     np.testing.assert_array_equal(keyword["selected_trial_counts"], counts)
-    assert keyword["labels"] == (f"{site_id} left",)
+    assert keyword["labels"] == ("left",)
     assert keyword["metric_name"] == (
         "ITPC PFC" if metric_prefix == "itpc" else "ISPC PFC-HPC1"
     )
