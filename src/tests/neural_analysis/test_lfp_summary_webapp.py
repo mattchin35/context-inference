@@ -1209,6 +1209,50 @@ def test_receipt_validated_legacy_snapshot_semantics_map_only_open_ephys_sites(
     ) == expected
 
 
+def test_receipt_validated_snapshot_rejects_unknown_present_open_ephys_semantics_version(
+    tmp_path: Path,
+) -> None:
+    """A present receipt provenance must use the known affine-uV semantics version.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-owned snapshot root. The rewritten manifest is re-receipted by
+        the existing fixture helper before cache-only inspection.
+    """
+    saved = _full_saved_component_configuration(tmp_path)
+    saved_sites = saved["sites"]
+    assert isinstance(saved_sites, list) and isinstance(saved_sites[0], dict)
+    saved_sites[0].update(
+        {
+            "acquisition_format": "open_ephys",
+            "lfp_path": "pre_nr0_pfc_lfp.dat",
+            "aligned_sync_path": "pre_nr0_pfc_sync.npz",
+            "voltage_unit": "uV",
+            "sample_rate_hz": 2500.0,
+        }
+    )
+    snapshot = _write_snapshot_fixture(
+        tmp_path,
+        component_configuration_snapshots={"power": saved},
+    )
+
+    def record_unknown_semantics(manifest: dict[str, object]) -> None:
+        """Record a receipt-valid but unknown version for the saved PFC site."""
+        components = manifest["components"]
+        assert isinstance(components, dict)
+        power = components["power"]
+        assert isinstance(power, dict)
+        power["source_value_semantics"] = {"PFC": "not-a-real-version"}
+
+    _rewrite_snapshot_manifest(snapshot, record_unknown_semantics)
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+
+    assert inspection.state == "valid"
+    with pytest.raises(ValueError, match="source value semantics"):
+        lfp_summary_webapp.snapshot_component_source_value_semantics(inspection, "power")
+
+
 @pytest.mark.parametrize(
     ("open_ephys_site_ids", "saved_semantics", "expected_semantics"),
     (

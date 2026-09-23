@@ -261,9 +261,13 @@ def test_default_spikeglx_route_decodes_sync_once_and_uses_real_loader_kwargs(
 
 def test_default_open_ephys_route_reports_lfp_metadata_rate_not_ap_rate(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Open Ephys routing obtains LFP rate from metadata and passes only its real API kwargs."""
-    site = LFPSiteConfig("HPC", "HPC", "open_ephys", Path("hpc.dat"), Path("hpc.npz"), "HPC", 2, "uV", 1000.0)
+    lfp_path = tmp_path / "hpc.dat"
+    sync_path = tmp_path / "hpc.npz"
+    sync_path.touch()
+    site = LFPSiteConfig("HPC", "HPC", "open_ephys", lfp_path, sync_path, "HPC", 2, "uV", 1000.0)
     loader_kwargs: list[dict[str, object]] = []
 
     def fake_metadata(_: Path) -> dict[str, object]:
@@ -298,10 +302,14 @@ def test_default_open_ephys_route_reports_lfp_metadata_rate_not_ap_rate(
 
 def test_open_ephys_preparation_retains_physical_uv_grid_validity_and_qc_scaling(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """The production adapter consumes reader-provided uV values without changing QC axes or scale."""
+    lfp_path = tmp_path / "hpc.dat"
+    sync_path = tmp_path / "hpc.npz"
+    sync_path.touch()
     site = LFPSiteConfig(
-        "HPC", "HPC", "open_ephys", Path("hpc.dat"), Path("hpc.npz"), "HPC", 0, "uV", 1000.0
+        "HPC", "HPC", "open_ephys", lfp_path, sync_path, "HPC", 0, "uV", 1000.0
     )
     native_time_s = -0.00125 + np.arange(6, dtype=float) / 1000.0
     stored_values = np.array([-2.0, -1.0, 0.0, 1.0, 2.0, 1.0])
@@ -360,17 +368,21 @@ def test_open_ephys_preparation_retains_physical_uv_grid_validity_and_qc_scaling
 )
 def test_open_ephys_summary_route_rejects_configured_metadata_disagreement_before_loading(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     configured_rate_hz: float,
     configured_unit: str,
     expected_message: str,
 ) -> None:
     """Production site labels must agree with the sidecar before traces or caches exist."""
+    lfp_path = tmp_path / "lfp.dat"
+    sync_path = tmp_path / "sync.npz"
+    sync_path.touch()
     site = LFPSiteConfig(
         "PFC",
         "PFC",
         "open_ephys",
-        Path("lfp.dat"),
-        Path("sync.npz"),
+        lfp_path,
+        sync_path,
         "PFC",
         0,
         configured_unit,
@@ -398,8 +410,127 @@ def test_open_ephys_summary_route_rejects_configured_metadata_disagreement_befor
     assert str(error.value) == expected_message
 
 
+@pytest.mark.parametrize("bad_sync_kind", ("none", "missing", "directory"))
+def test_later_open_ephys_unusable_sync_blocks_earlier_production_trial_loading(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    bad_sync_kind: str,
+) -> None:
+    """Every production OE sync path is preflighted before any earlier site can read.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces metadata and earlier SpikeGLX numerical seams with counters.
+    tmp_path : pathlib.Path
+        Pytest-owned path used for nonexistent and directory sync-path cases.
+    bad_sync_kind : str
+        ``"none"``, ``"missing"``, or ``"directory"`` invalid Open Ephys
+        aligned-sync selection for the later configured site.
+    """
+    sync_path: Path | None
+    if bad_sync_kind == "none":
+        sync_path = None
+    elif bad_sync_kind == "missing":
+        sync_path = tmp_path / "missing_sync.npz"
+    else:
+        sync_path = tmp_path / "sync_directory"
+        sync_path.mkdir()
+    earlier_site = LFPSiteConfig(
+        "EARLY", "EARLY", "spikeglx", Path("earlier.bin"), None, "EARLY", 0, "uV", 1000.0
+    )
+    later_site = LFPSiteConfig(
+        "LATE", "LATE", "open_ephys", tmp_path / "later.dat", sync_path, "LATE", 0, "uV", 1000.0
+    )
+    numerical_calls: list[str] = []
+
+    monkeypatch.setattr(
+        lfp_loading,
+        "load_open_ephys_lfp_metadata",
+        lambda _: _observed_open_ephys_metadata(1000.0, 1),
+    )
+
+    def earlier_decode(_: Path) -> tuple[pd.DataFrame, float]:
+        """Record an earlier production sync decode that must remain unreachable."""
+        numerical_calls.append("decode")
+        return pd.DataFrame(), 1000.0
+
+    def earlier_trace(**_: object) -> tuple[np.ndarray, np.ndarray, float]:
+        """Fail if the earlier source reaches its numerical trace reader."""
+        numerical_calls.append("trace")
+        raise AssertionError("later Open Ephys sync validation allowed an earlier trace read")
+
+    monkeypatch.setattr(lfp_loading, "decode_lfp_sync", earlier_decode)
+    monkeypatch.setattr(lfp_loading, "load_trial_lfp_trace_with_sample_rate", earlier_trace)
+
+    def forbidden_later_open_ephys_trial_loader(**_: object) -> tuple[np.ndarray, np.ndarray]:
+        """Fail if structural preflight tries to parse the later invalid sync source."""
+        raise AssertionError("later Open Ephys trial loading must not parse an unusable sync path")
+
+    monkeypatch.setattr(
+        lfp_loading,
+        "load_open_ephys_trial_lfp_trace",
+        forbidden_later_open_ephys_trial_loader,
+    )
+
+    with pytest.raises(ValueError) as error:
+        load_site_trial_traces(
+            [earlier_site, later_site],
+            np.array([0]),
+            np.array([1.0]),
+            (-0.001, 0.001),
+        )
+    message = str(error.value)
+    assert "LATE" in message
+    assert "aligned_sync_path" in message
+    assert "regular file" in message
+    assert numerical_calls == []
+
+
+def test_injected_open_ephys_trial_loader_does_not_require_a_readable_production_sync_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An injected OE trial seam remains independent of production path preflight.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Makes production Open Ephys metadata access fail if the injected seam
+        accidentally touches it.
+    tmp_path : pathlib.Path
+        Pytest-owned directory deliberately used as a non-file sync path.
+    """
+    unusable_sync_path = tmp_path / "not_a_sync_file"
+    unusable_sync_path.mkdir()
+    site = LFPSiteConfig(
+        "LATE", "LATE", "open_ephys", tmp_path / "later.dat", unusable_sync_path,
+        "LATE", 0, "uV", 1000.0,
+    )
+    monkeypatch.setattr(
+        lfp_loading,
+        "load_open_ephys_lfp_metadata",
+        lambda _: pytest.fail("injected Open Ephys trial loader parsed production metadata"),
+    )
+
+    def injected_loader(**_: object) -> tuple[np.ndarray, np.ndarray, float]:
+        """Return a nonconstant physical-uV two-sample native trace."""
+        return np.array([-0.001, 0.0]), np.array([1.0, 2.0]), 1000.0
+
+    loaded = load_site_trial_traces(
+        [site],
+        np.array([0]),
+        np.array([1.0]),
+        (-0.001, 0.001),
+        open_ephys_loader=injected_loader,
+    )
+
+    assert loaded["LATE"].valid.tolist() == [True]
+
+
 def test_open_ephys_fractional_alignment_is_interpolated_to_exact_native_grid(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """A sub-sample sync offset should retain valid exact event-relative samples.
 
@@ -409,12 +540,15 @@ def test_open_ephys_fractional_alignment_is_interpolated_to_exact_native_grid(
         Replaces Open Ephys metadata and trace loading with a fractional-offset
         native grid matching the production loader's sample-window behavior.
     """
+    lfp_path = tmp_path / "hpc.dat"
+    sync_path = tmp_path / "hpc.npz"
+    sync_path.touch()
     site = LFPSiteConfig(
         "HPC",
         "HPC",
         "open_ephys",
-        Path("hpc.dat"),
-        Path("hpc.npz"),
+        lfp_path,
+        sync_path,
         "HPC",
         2,
         "uV",
