@@ -1878,3 +1878,133 @@ def test_relocation_rejects_source_manifest_changed_after_validation_before_hash
     assert source_after["manifest.json"] == replacement_bytes
     assert source_after["power.npz"] == source_before["power.npz"]
     assert source_after["synchrony.npz"] == source_before["synchrony.npz"]
+
+
+def test_relocation_publication_window_invalid_component_race_preserves_destination(
+    relocation_fixture: _RelocationFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A post-publish invalid component replacement remains owned by its writer.
+
+    The existing publication seam atomically exposes the three-member cache. A
+    concurrent writer then atomically replaces ``power.npz`` before relocation
+    can capture rollback ownership. Relocation must fail before receipt
+    publication, remove only its private receipt/staging artifacts, and preserve
+    the entire concurrent destination cache without a receipt.
+    """
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_relocation")
+    publish_staged_cache = getattr(module, "_publish_staged_cache")
+    write_ascii_json = getattr(module, "_write_ascii_json")
+    real_replace = module.os.replace
+    source_before, legacy_before = _protected_inventories(relocation_fixture)
+    receipt_parent = relocation_fixture.receipt_path.parent
+    receipt_parent.mkdir()
+    (receipt_parent / "receipt-parent-sentinel.txt").write_bytes(
+        b"protected receipt parent"
+    )
+    receipt_parent_before = _directory_inventory(receipt_parent)
+    concurrent_power_bytes = b"not an NPZ archive"
+    published_other_members: dict[str, bytes] = {}
+    receipt_temporary_paths: list[Path] = []
+
+    def record_receipt_preparation(path: Path, payload: object) -> object:
+        """Record only relocation's external receipt temporary file after writing."""
+        if isinstance(payload, dict) and "source_producer_manifest" in payload:
+            result = write_ascii_json(path, payload)
+            receipt_temporary_paths.append(path)
+            return result
+        return write_ascii_json(path, payload)
+
+    def replace_power_after_publication(staging_directory: Path, destination_directory: Path) -> None:
+        """Atomically replace the public component before ownership capture occurs."""
+        publish_staged_cache(staging_directory, destination_directory)
+        published_other_members["manifest.json"] = (
+            destination_directory / "manifest.json"
+        ).read_bytes()
+        published_other_members["synchrony.npz"] = (
+            destination_directory / "synchrony.npz"
+        ).read_bytes()
+        replacement = destination_directory / ".concurrent-invalid-power.npz"
+        replacement.write_bytes(concurrent_power_bytes)
+        real_replace(replacement, destination_directory / "power.npz")
+
+    monkeypatch.setattr(module, "_write_ascii_json", record_receipt_preparation)
+    monkeypatch.setattr(module, "_publish_staged_cache", replace_power_after_publication)
+
+    with pytest.raises(ValueError):
+        _relocate(relocation_fixture)
+
+    assert relocation_fixture.destination_cache.is_dir()
+    assert (relocation_fixture.destination_cache / "power.npz").read_bytes() == concurrent_power_bytes
+    for name, expected_bytes in published_other_members.items():
+        assert (relocation_fixture.destination_cache / name).read_bytes() == expected_bytes
+    assert not relocation_fixture.receipt_path.exists()
+    assert _protected_inventories(relocation_fixture) == (source_before, legacy_before)
+    assert _directory_inventory(receipt_parent) == receipt_parent_before
+    assert not any(
+        path.name.startswith(f".{relocation_fixture.destination_cache.name}-stage-")
+        for path in relocation_fixture.destination_cache.parent.iterdir()
+    )
+    assert all(not path.exists() for path in receipt_temporary_paths)
+
+
+def test_relocation_publication_window_valid_component_race_fails_closed(
+    relocation_fixture: _RelocationFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A post-publish valid component replacement fails without a receipt.
+
+    The concurrent replacement has the same safe schema and shape, so header-only
+    validation alone cannot distinguish it from relocation's staged bytes. Its
+    values deliberately differ from the validated producer component, so
+    relocation must fail closed, preserve the concurrent destination, and create
+    no receipt even if it could otherwise rehash the replacement.
+    """
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_relocation")
+    publish_staged_cache = getattr(module, "_publish_staged_cache")
+    write_ascii_json = getattr(module, "_write_ascii_json")
+    real_replace = module.os.replace
+    source_before, legacy_before = _protected_inventories(relocation_fixture)
+    receipt_parent = relocation_fixture.receipt_path.parent
+    receipt_parent.mkdir()
+    (receipt_parent / "receipt-parent-sentinel.txt").write_bytes(
+        b"protected receipt parent"
+    )
+    receipt_parent_before = _directory_inventory(receipt_parent)
+    receipt_temporary_paths: list[Path] = []
+    replacement_power_bytes: bytes | None = None
+
+    def record_receipt_preparation(path: Path, payload: object) -> object:
+        """Track the receipt temporary path without adding a private test seam."""
+        if isinstance(payload, dict) and "source_producer_manifest" in payload:
+            result = write_ascii_json(path, payload)
+            receipt_temporary_paths.append(path)
+            return result
+        return write_ascii_json(path, payload)
+
+    def replace_power_after_publication(staging_directory: Path, destination_directory: Path) -> None:
+        """Atomically install a schema-valid same-shape component before capture."""
+        nonlocal replacement_power_bytes
+        publish_staged_cache(staging_directory, destination_directory)
+        replacement = destination_directory / ".concurrent-valid-power.npz"
+        np.savez(replacement, values=np.array((101.0, 102.0)))
+        replacement_power_bytes = replacement.read_bytes()
+        real_replace(replacement, destination_directory / "power.npz")
+
+    monkeypatch.setattr(module, "_write_ascii_json", record_receipt_preparation)
+    monkeypatch.setattr(module, "_publish_staged_cache", replace_power_after_publication)
+
+    with pytest.raises(ValueError, match="(?i)component|byte|hash|publication|changed"):
+        _relocate(relocation_fixture)
+
+    assert replacement_power_bytes is not None
+    assert relocation_fixture.destination_cache.is_dir()
+    assert (relocation_fixture.destination_cache / "power.npz").read_bytes() == replacement_power_bytes
+    assert _protected_inventories(relocation_fixture) == (source_before, legacy_before)
+    assert not any(
+        path.name.startswith(f".{relocation_fixture.destination_cache.name}-stage-")
+        for path in relocation_fixture.destination_cache.parent.iterdir()
+    )
+    assert all(not path.exists() for path in receipt_temporary_paths)
+    assert not relocation_fixture.receipt_path.exists()
+    assert _directory_inventory(receipt_parent) == receipt_parent_before
