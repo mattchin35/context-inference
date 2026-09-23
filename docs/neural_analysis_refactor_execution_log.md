@@ -313,6 +313,20 @@ approval before cluster transfer. No implementation or artifact mutation
 occurred in this documentation-only step; source work remains behind the
 plan-approval and tests-first gate.
 
+The subsequent documentation audit found that the generic Section 2.6 NR1 row
+still described only a command/evidence runner and therefore did not allocate
+the new tests/source work safely. The plan now defines five explicit sequential
+subpackages: NR1P (Terra/xhigh presentation/schema writer with mandatory fresh
+Sol/xhigh RED and GREEN reviews), NR1V (Terra/high real-data evidence runner
+with fresh Sol/xhigh artifact review), NR1C-A (Terra/xhigh atomic relocation
+writer), NR1C-B (separate Terra/xhigh launcher-target writer), and NR1E
+(Terra/high external cluster evidence runner). The lead remains Sol/high and
+alone edits documentation, stages, commits, communicates with the user, and
+decides gates. NR1E separates read-only preflight, user-approved transfer, Sol
+review, and separately approved single submission; the runner stops after the
+job id and never monitors. This worker-specification update makes no source,
+test, data, cache, cluster, push, or submission change.
+
 NR1 dry run was authorized by the user on 2026-09-23 with these exact paths:
 
 - session: `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference`

@@ -60,10 +60,14 @@ amplitude behavior as if that behavior were scientifically correct.
   report subdirectory `<run>/report`; temporary profiling subdirectory
   `<run>/profiling_tmp`. All four destinations were absent immediately before
   authorization was recorded.
-- **Agent policy:** lead Sol/high orchestration with one NR0 Terra/xhigh writer,
-  one fresh Sol/xhigh gate reviewer, and at most one optional Terra/medium
-  read-only scout. Only the Terra writer may author package tests/source; the
-  lead alone stages and commits reviewed paths.
+- **Agent policy:** lead Sol/high orchestration; one active Terra/xhigh writer
+  for NR1P or NR1C source packages, or one Terra/high evidence runner for NR1V
+  or NR1E; one fresh Sol/xhigh gate reviewer; and at most one optional
+  Terra/medium read-only scout. Only the active Terra writer may author package
+  tests/source. Evidence runners and reviewers are read-only with respect to
+  the repository; the lead alone edits documentation and stages/commits
+  reviewed paths. Section 2.6 and the package-specific divisions in Sections
+  5.5-5.6 are binding.
 - **Worktree safety:** tracked files were clean at the start. Pre-existing
   untracked files are user-owned and excluded from refactor commits unless the
   user separately approves them. In particular, 14 pre-existing untracked
@@ -484,7 +488,12 @@ implementation phases. Do not replace it merely to skip a clean handoff.
 | Package | Terra role and effort | Independent Sol gate | Test-design review | Principal risk |
 | --- | --- | --- | --- | --- |
 | NR0 | writer, `xhigh` | `xhigh` | mandatory | Units, cache identity, legacy compatibility. |
-| NR1 | command/evidence runner, `high` | `xhigh` | not applicable | Real-data scientific interpretation and artifact safety. |
+| NR1 completed gates | command/evidence runner, `high` | `xhigh` | not applicable | Historical real-data scientific interpretation and artifact safety. |
+| NR1P | writer, `xhigh` | `xhigh` | mandatory | Synchrony payload identity, exact quantiles, shared ITPC/ISPC presentation. |
+| NR1V | command/evidence runner, `high` | `xhigh` | not applicable | New versioned Synchrony artifact, Power preservation, visual approval. |
+| NR1C-A | writer, `xhigh` | `xhigh` | mandatory | Source equivalence, manifest rebinding, atomic cache relocation. |
+| NR1C-B | writer, `xhigh` | `xhigh` | mandatory | Explicit launcher cache target, legacy/work protection, resume identity. |
+| NR1E | cluster evidence runner, `high` | `xhigh` | not applicable | Authorized transfer/dry-run/submission boundaries and no monitoring. |
 | NR2 | writer, `high` | `high` | mandatory | Metadata missingness, path containment, schema migration. |
 | NR3 | writer, `xhigh` | `xhigh` | mandatory | Open Ephys/SpikeGLX units, channel semantics, bounded I/O. |
 | NR4 | writer, `xhigh` | `xhigh` | mandatory | Time coordinates, IRIG/manual alignment, CLI compatibility. |
@@ -1428,6 +1437,86 @@ allowlist is `test_lfp_synchrony_runtime.py`, `test_lfp_summary_runtime.py`,
 `src/tests/neural_analysis`. Amend the allowlists before touching any other
 file. Keep tests and implementation in separate commits.
 
+#### Sol/Terra work division for NR1P
+
+NR1P is a source package, not an NR1 evidence run. It follows the complete
+mandatory sequence in Section 2.6 with no overlapping writer/reviewer edits:
+
+1. The lead Sol/high records HEAD/status/diffs, re-reads every allowed source,
+   test, and direct caller, verifies the installed NumPy percentile and
+   Matplotlib boxplot APIs from package source, and prepares a bounded-context
+   prompt containing the frozen presentation contract. The optional
+   Terra/medium scout, if used, is read-only and may inspect only call sites and
+   installed-library APIs; it does not write tests or source.
+2. One Terra/xhigh writer receives only the test allowlist above. It writes all
+   NR1P tests, runs the focused suite, records genuine failures caused by the
+   absent quantile/count/schema/plot contracts, and stops. It may not edit
+   source or documentation, touch CT026, stage/commit, push, or spawn agents.
+3. The lead audits and independently reproduces RED. A fresh Sol/xhigh
+   read-only test-design reviewer checks scientific invariance, actual-draw
+   quantiles, axes/units, payload versioning, Power compatibility, horizontal
+   artist semantics, report/webapp cache-only behavior, and allowlist purity.
+   Any finding returns to the same Terra writer. Only after approval does the
+   lead commit the tests-only diff.
+4. The lead follows up with that same Terra/xhigh writer and authorizes only the
+   source allowlist above. The writer implements the smallest change, does not
+   alter the committed tests, runs focused GREEN, and stops without committing,
+   real-data access, artifact writes, push, or cluster action.
+5. The lead audits the diff, reproduces focused GREEN, and runs every affected
+   test file plus the complete `src/tests/neural_analysis` suite. A new fresh
+   Sol/xhigh read-only implementation reviewer audits numerical invariance,
+   schema/fingerprint migration, public interface callers, plotting semantics,
+   performance, and the stable complete diff. Findings return to the same
+   Terra writer until the reviewer approves with no unresolved P0-P3 issue.
+6. The lead alone commits implementation and then a documentation/evidence
+   update. NR1P stops at code/test completion; it has no authority to create a
+   real-data cache or report.
+
+The NR1P focused RED/GREEN command is:
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_synchrony_runtime.py \
+  src/tests/neural_analysis/test_lfp_summary_runtime.py \
+  src/tests/neural_analysis/test_lfp_summary_payloads.py \
+  src/tests/neural_analysis/test_lfp_summary_models.py \
+  src/tests/neural_analysis/test_lfp_summary_io.py \
+  src/tests/neural_analysis/test_lfp_summary_plotting.py \
+  src/tests/neural_analysis/test_lfp_synchrony_validation.py \
+  src/tests/neural_analysis/test_lfp_summary_webapp.py \
+  src/tests/neural_analysis/test_lfp_summary_synthetic_integration.py
+```
+
+#### Sol/Terra work division for NR1V
+
+NR1V begins only after NR1P implementation is committed and reviewed on an
+exact tracked-clean local checkout, and only after the user separately
+authorizes the exact new local cache/report/run paths. NR1V does not require or
+authorize a Git push; pushing is deferred to the separately gated NR1E cluster
+prerequisite.
+
+- One Terra/high command/evidence runner receives write authority only for
+  those exact new external analysis paths. It may copy the approved Power bytes
+  with a truthful receipt/manifest transition, execute production Synchrony
+  once, render the new report, and write reproducibility evidence. It may read
+  the immutable prior cache/report for comparison. It may not edit repository
+  files, stage/commit/push, overwrite any prior artifact, run Spike-phase, use
+  the cluster, loosen a tolerance, or rerun after an invariant failure without
+  new lead/user direction.
+- The runner stops after one terminal success or first invariant/error stop and
+  returns exact commands, hashes, counts, timings, peak memory, comparisons,
+  inventory, and preservation evidence. An interrupted or failed run remains
+  immutable and is not silently repaired or replaced.
+- A fresh Sol/xhigh read-only reviewer independently audits the stable artifact
+  package: unchanged Power bytes, new Synchrony manifest identity, exact old
+  numerical arrays/endpoints, new quantile/count ordering, performance,
+  provenance, filenames, and systematic ITPC/ISPC figure semantics. It does not
+  edit evidence or trigger computation. Findings requiring new computation or
+  a tolerance decision return to the lead and user.
+- The lead records the review and presents the figures. Only explicit user
+  visual approval designates the NR1V Synchrony component as the Section 5.6
+  transfer source.
+
 #### Dependencies, performance, and real-data gate
 
 Introduce no dependency. Reuse NumPy's installed percentile API and
@@ -1557,6 +1646,79 @@ allowlist is `src/tests/neural_analysis/test_lfp_spike_phase_launcher.py`,
 `src/tests/neural_analysis/test_lfp_summary_cache_relocation.py`. A shell source
 edit is not expected; if its tests reveal one is necessary, amend this
 allowlist before editing. Keep tests and implementation in separate commits.
+
+#### Sol/Terra work division for NR1C-A, NR1C-B, and NR1E
+
+Cluster preparation is split into two sequential source packages so no worker
+receives both atomic-relocation and launcher-orchestration authority at once.
+
+**NR1C-A - cache relocation.** One Terra/xhigh writer receives source authority
+only for `src/neural_analysis/lfp_summary_io.py` and the new
+`src/neural_analysis/lfp_summary_cache_relocation.py`, and test authority only
+for `src/tests/neural_analysis/test_lfp_summary_io.py` and the new
+`src/tests/neural_analysis/test_lfp_summary_cache_relocation.py`. It first
+writes tests and stops at genuine RED. The lead reproduces RED; a fresh
+Sol/xhigh read-only reviewer performs the mandatory test-design gate for source
+equivalence, streamed hashing, producer/destination provenance, path
+containment, failure atomicity, and byte preservation. After the lead commits
+tests, the same Terra writer implements source only and stops at focused GREEN.
+The lead runs affected/full-neural gates, and a second fresh Sol/xhigh
+read-only reviewer audits the stable implementation before the lead commits.
+No role in NR1C-A may access CT026, transfer files, push, or use the cluster.
+
+The NR1C-A focused command is:
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_summary_io.py \
+  src/tests/neural_analysis/test_lfp_summary_cache_relocation.py
+```
+
+**NR1C-B - launcher target and preflight.** Only after NR1C-A is committed, one
+Terra/xhigh writer receives source authority only for
+`src/neural_analysis/lfp_spike_phase_launcher.py` and test authority only for
+`src/tests/neural_analysis/test_lfp_spike_phase_launcher.py`. The worker may
+read, but not edit, `src/shell_scripts/hpc_ppc.sh` to test unchanged argument
+forwarding. It follows the same tests-only RED, lead reproduction, fresh
+Sol/xhigh mandatory test-design review, lead test commit, same-writer
+implementation, GREEN, complete-neural gate, and second fresh Sol/xhigh final
+review sequence. If shell source or another file must change, the worker stops
+and the lead amends the plan before any edit. No CT026, push, transfer, cache,
+or cluster action is allowed.
+
+The NR1C-B focused command is:
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_spike_phase_launcher.py
+```
+
+**NR1E - external cluster evidence.** NR1E begins only after NR1V, NR1C-A, and
+NR1C-B are approved and committed, the user approves a Git push, and the exact
+clean pushed cluster checkout is verified. One Terra/high cluster evidence
+runner has no repository-edit, stage, commit, or push authority. Each external
+mutation remains separately user-gated:
+
+1. With read-only authority, the runner verifies commit, tracked cleanliness,
+   environment, focused/full-neural tests, source paths, destination absence,
+   legacy preservation, and resource bounds, then stops with evidence.
+2. After explicit transfer/publication approval, the same runner may create
+   only the exact declared transfer run/staging/final paths, execute relocation
+   once, validate hashes/component states, and run one metadata-only launcher
+   dry run. It stops without submitting Slurm.
+3. A fresh Sol/xhigh read-only reviewer audits the stable transfer, rebinding
+   receipt, dry-run identity, legacy preservation, and exact proposed `sbatch`
+   command. Findings return to the runner only within already authorized paths;
+   any new mutation returns to the user.
+4. After separate explicit submission approval, the same Terra/high runner may
+   issue exactly one reviewed `sbatch` command, record its returned job id and
+   durable command, and stop immediately. It must not poll `squeue`, `sacct`,
+   logs, launcher state, or results. It may not submit a resume or another job.
+
+The lead remains the sole user-facing authority throughout NR1E and records
+every authorization boundary in the execution log. A later user-requested
+status/result inspection is a new bounded read-only assignment, not a
+continuation monitor and not authority to resume, repair, or submit.
 
 #### Dependencies and performance
 
