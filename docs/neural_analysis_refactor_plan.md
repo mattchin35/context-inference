@@ -4,10 +4,10 @@
 
 **Status:** implementation authorized by the user on 2026-09-23. NR0 is
 complete. The user-approved NR1 metadata/path/resource dry run completed and
-passed fresh Sol review on 2026-09-23. No numerical computation,
-scientific-cache mutation, report rendering, profiling run, or cluster action
-is authorized yet. The next ordered action is the small representative-window
-check in Section 5.2 item 2, which requires separate user approval.
+passed fresh Sol review on 2026-09-23. The user authorized the bounded small
+representative-window check in Section 5.2 item 2 on 2026-09-23. No scientific
+component computation, scientific-cache mutation, report rendering, profiling
+run, or cluster action is authorized yet.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -33,7 +33,7 @@ amplitude behavior as if that behavior were scientifically correct.
   and `2b497e4` plus implementation commit `177a8d6` are complete and
   approved. The NR1 metadata/path/resource dry run is complete and approved;
   its corrected cache, report, and profiling destinations remain absent. The
-  next numerical small-window check is not authorized.
+  bounded numerical small-window check is active under the authority below.
 - **Approved NR1 destinations:** session root
   `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference`;
   corrected cache `processed/lfp_summary_cache_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`;
@@ -68,6 +68,17 @@ amplitude behavior as if that behavior were scientifically correct.
   `incident.json`, the run log, preflight, and summary preserve that event. The
   corrected pass did not repeat the access, and fresh reviewer
   `/root/nr1_dryrun_reviewer` approved with no P0-P3 findings.
+- **Approved NR1 small-window check:** evidence may be written only beneath
+  `<session>/analysis_runs/ct026_nr1_small_window_open_ephys_affine_uV_v1_2026-09-23T12-04-46Z`.
+  Read exactly three 1-second, 2,500-sample windows at the start, midpoint, and
+  final valid second for PFC saved channel 5, HPC1 saved channel 222, and HPC2
+  saved channel 14. Compare direct stored float32 values with the public
+  loader's uV values and the authoritative per-channel affine formula; record
+  shape, sample rate, extrema, mean/standard deviation, equality error,
+  timing, peak allocation, source identity, and exact evidence hashes. Do not
+  read sync or spike arrays, execute scientific kernels, create/mutate any
+  cache, create report/profiling output, alter legacy artifacts, submit cluster
+  work, or push.
 - **Durable evidence:** exact commands, results, inventory hashes, commits,
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that

@@ -361,5 +361,17 @@ source_identity.json  dd18ce8845c914b6ae73a7c4d337167c24279ce912ae405fdd7d09dcf1
 
 Fresh reviewer `/root/nr1_dryrun_reviewer` (`gpt-5.6-sol`, `xhigh`) approved
 the corrected evidence with no P0-P3 findings. The next ordered action is the
-small representative-window affine check in plan Section 5.2 item 2. It is a
-numerical read and remains unauthorized. NR2-NR18 are not started.
+small representative-window affine check in plan Section 5.2 item 2.
+
+### NR1 small-window authorization
+
+The user authorized this bounded numerical read on 2026-09-23. Evidence is
+restricted to
+`<session>/analysis_runs/ct026_nr1_small_window_open_ephys_affine_uV_v1_2026-09-23T12-04-46Z`.
+For PFC channel 5, HPC1 channel 222, and HPC2 channel 14, the check reads only
+three 1-second/2,500-sample windows at the start, midpoint, and final valid
+second. It compares direct stored float32 values, the public loader's physical
+uV output, and the authoritative per-channel affine formula and records bounded
+timing/allocation evidence. Sync/spike arrays, scientific kernels, caches,
+reports, profiling, legacy mutation, cluster work, and Git push remain out of
+scope. Result and review are pending. NR2-NR18 are not started.
