@@ -738,8 +738,8 @@ def plot_plv_exemplar(
         axes["filtered"].plot(t, b[i], label=label)
         axes["phase"].plot(t, p[i], label=label)
     for axis, name in (
-        (axes["source"], "Source trace"),
-        (axes["filtered"], "Filtered trace"),
+        (axes["source"], f"LFP ({context.source_voltage_unit})"),
+        (axes["filtered"], f"Bandpassed LFP ({context.source_voltage_unit})"),
         (axes["phase"], "Phase (rad)"),
     ):
         axis.set(ylabel=name)

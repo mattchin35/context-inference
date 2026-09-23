@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from src.neural_analysis import (
+    lfp_loading,
     lfp_summary_pipeline,
     lfp_summary_plotting,
     lfp_summary_runtime,
@@ -856,6 +857,70 @@ def _saved_snapshot_config(
         )
     except (TypeError, ValueError) as error:
         raise ValueError("snapshot component saved configuration is malformed") from error
+
+
+def snapshot_component_source_value_semantics(
+    inspection: SnapshotInspection,
+    component: str,
+) -> dict[str, str]:
+    """Return receipt-validated per-site source semantics for cache-only inspection.
+
+    Parameters
+    ----------
+    inspection : SnapshotInspection
+        A valid committed snapshot inspection. Invalid or unvalidated input is
+        rejected before any historical fallback is considered.
+    component : str
+        Selected final component whose saved configuration/provenance is shown.
+
+    Returns
+    -------
+    dict[str, str]
+        Receipt-validated persisted per-site semantics with the exact saved
+        Open Ephys site-id keys. Historical entries with an absent semantics
+        field map only saved Open Ephys site ids to ``"legacy-unscaled"``;
+        all-SpikeGLX snapshots remain an empty mapping.
+
+    Raises
+    ------
+    ValueError
+        If the inspection or saved configuration is invalid, a present mapping
+        has missing, extra, non-string, empty, or non-current adapter-version
+        values, or an all-SpikeGLX snapshot stores a nonempty mapping.
+    """
+    if not inspection.is_scientific_result or not isinstance(inspection.manifest, Mapping):
+        raise ValueError("snapshot semantics require a valid inspection")
+    components = inspection.manifest.get("components")
+    entry = components.get(component) if isinstance(components, Mapping) else None
+    if not isinstance(entry, Mapping):
+        raise ValueError("snapshot component provenance is unavailable")
+    saved_config, _ = _saved_snapshot_config(inspection, component, default_lfp_summary_config())
+    expected_site_ids = tuple(
+        site.stable_id
+        for site in saved_config.sites
+        if site.acquisition_format == "open_ephys"
+    )
+    if "source_value_semantics" in entry:
+        persisted = entry["source_value_semantics"]
+        if not isinstance(persisted, Mapping):
+            raise ValueError("snapshot source value semantics is malformed")
+        if set(persisted) != set(expected_site_ids):
+            raise ValueError("snapshot source value semantics site ids do not match saved Open Ephys sites")
+        if not expected_site_ids:
+            return {}
+        values = tuple(persisted[site_id] for site_id in expected_site_ids)
+        if any(not isinstance(value, str) or not value.strip() for value in values):
+            raise ValueError("snapshot source value semantics values must be nonempty strings")
+        if any(value != lfp_loading.OPEN_EPHYS_AFFINE_UV_SEMANTICS for value in values):
+            raise ValueError(
+                "snapshot source value semantics must equal the current Open Ephys affine-uV version"
+            )
+        return {site_id: persisted[site_id] for site_id in expected_site_ids}
+    return {
+        site.stable_id: "legacy-unscaled"
+        for site in saved_config.sites
+        if site.acquisition_format == "open_ephys"
+    }
 
 
 def _pair_labels(arrays: Mapping[str, np.ndarray]) -> tuple[str, ...]:
@@ -2558,6 +2623,9 @@ def _render_source_enabled_summary_view(
         streamlit.caption(f"Snapshot source cluster directory: {inspection.source_cluster_directory}")
         component = sidebar.selectbox("Summary view", options=SUMMARY_VIEWS)
         try:
+            streamlit.caption(
+                f"Source value semantics: {snapshot_component_source_value_semantics(inspection, component)}"
+            )
             population = _selected_population(
                 session_state=streamlit.session_state, probe_label=probe_label,
                 sorter_paths=sorter_paths, aligned_spike_paths=aligned_spike_paths,

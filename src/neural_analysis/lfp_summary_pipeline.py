@@ -24,6 +24,7 @@ from src.neural_analysis.lfp_summary_models import (
     canonical_config_json,
     component_fingerprint,
     fingerprint_source_files,
+    source_value_semantics,
     validate_lfp_summary_config,
 )
 
@@ -487,6 +488,7 @@ def _merge_component_manifest(
             "configuration_fingerprint": component_fingerprint(component, config),
             "configuration_snapshot": json.loads(canonical_config_json(config)),
             "source_fingerprints": fingerprint_source_files(config, component),
+            "source_value_semantics": source_value_semantics(config),
             "completed_at": _completed_timestamp(),
         }
     )
