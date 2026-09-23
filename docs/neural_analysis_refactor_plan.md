@@ -201,8 +201,10 @@ amplitude behavior as if that behavior were scientifically correct.
   snapshot as valid.
 - **Local commits:** the reviewed NR0 tests are `e728cea` and `2b497e4`; the
   reviewed implementation is `177a8d6`; NR0 closure is `a94559d`; NR1 dry-run
-  authorization is `181b82b`. Documentation checkpoints through this handoff
-  are local. None has been pushed.
+  authorization is `181b82b`. Documentation checkpoints through `741c8e0`
+  were pushed to `origin/refactor` before this plan revision. Any later plan,
+  test, or implementation commit remains local until the user separately
+  approves another push.
 
 ## 1. Objectives
 
@@ -1252,6 +1254,205 @@ NR1 completes only when:
   regression baseline.
 
 No structural module move begins before this gate.
+
+### 5.5 Synchrony band-summary interpretation gate
+
+The flagged `PFC_theta_whole_itpc_band_summary.png` is not a median/IQR plot.
+For each displayed condition, the current analysis:
+
+1. selects trials passing the shared filter, objective-valid, user-exclusion,
+   condition-membership, and PFC-validity gates;
+2. represents each retained trial at every frequency/time point by its complex
+   unit phase vector;
+3. computes the observed ITPC map as the magnitude of the vector sum divided
+   by the number of numerically valid trials at each point;
+4. averages the finite ITPC-map values over the inclusive 6, 8, and 10 Hz
+   theta samples and the half-open `[-2, 2)` second whole epoch to obtain the
+   filled-circle point estimate;
+5. performs 1,000 deterministic, with-replacement resamples of the selected
+   trial positions, recomputes the nonlinear ITPC map for every resample, and
+   averages the same theta/whole points; and
+6. draws a vertical line from the 2.5th to the 97.5th percentile of those
+   1,000 bootstrap scalar values.
+
+The nine x positions are overlapping behavioral trial sets rather than nine
+independent groups. Their selected-trial counts are respectively 135, 40, 249,
+68, 218, 11, 29, 57, and 189 in the saved order. The y axis is dimensionless
+ITPC in `[0, 1]`; the plot is descriptive and contains no between-condition
+hypothesis test or multiplicity correction. The current caption calls the
+lines `95% bootstrap CI`, while it does not identify the circle as the
+plug-in estimate or show the bootstrap median.
+
+The geometry is possible because ITPC is a nonnegative magnitude after vector
+averaging. Resampling with replacement repeats some trial directions and
+reduces effective directional diversity. Especially near weak phase locking
+or with small trial counts, this shifts the bootstrap magnitude distribution
+upward. A percentile interval from that shifted distribution is not required
+to contain the original plug-in estimate. The effect occurs in the legacy and
+corrected artifacts, so it is not an Open Ephys affine-scaling regression.
+Nevertheless, systematic noncoverage in all nine displayed conditions is a
+scientific communication problem and remains a user-approval blocker.
+
+Do not change the statistic or plot implicitly. Before any such change, choose
+and document one of these distinct targets:
+
+- presentation-only: retain the current estimate and percentile distribution,
+  but display the observed estimate, bootstrap median, and capped percentile
+  interval with different symbols and an explicit legend/caption;
+- interval-method change: retain ITPC but replace the percentile interval with
+  a predeclared bias-aware interval such as basic bootstrap or BCa, after
+  simulation demonstrates acceptable coverage for bounded nonlinear phase
+  magnitudes and the observed trial-count range; or
+- estimator change: use a bias-reduced phase-consistency estimand such as a
+  pairwise phase-consistency/PPC-family quantity, which is a new scientific
+  analysis and cannot be described as a plotting fix.
+
+Tests must be written and committed before a chosen implementation. At minimum
+they must freeze the exact observed-versus-bootstrap series displayed, assert
+the legend/caption semantics, cover fewer-than-ten-trial instability, and use
+seeded uniform-phase and concentrated-phase simulations across representative
+trial counts. Any interval-method or estimator change additionally requires a
+simulation-based bias/coverage gate and a new cache/scientific version; it may
+not rewrite the approved Synchrony component in place.
+
+### 5.6 Corrected-cache cluster preview prerequisites
+
+The eventual 100-shuffle ProbeB preview will reuse the approved corrected
+Power and Synchrony component bytes rather than recompute them on the cluster.
+This section is an implementation and execution plan only. It does not approve
+source edits, transfer, push, Slurm submission, or the preview itself.
+
+#### Architecture and ownership
+
+- Add a required `--cache-directory PATH` argument to the launcher's `new`
+  mode. Apply it by immutably replacing only `LFPSummaryConfig.output_directory`
+  after the existing CT026 builder returns. Persist the resolved value in the
+  configuration, identity, preflight, state, summary, and resume contract.
+  `resume`, report recovery, and report rerender continue to recover the exact
+  path from saved state and must not accept a replacement path.
+- Validate the new-run target before creating numerical work. It must be a
+  nonsymlink direct child of the selected session's `processed` directory,
+  must not be the protected `processed/lfp_summary_cache`, and must contain
+  compatible complete Power and Synchrony components but no Spike-phase
+  component. Reject missing/stale/failed/running prerequisites, path aliases,
+  unexpected cache members, and a pre-existing matching PPC work root.
+  Interrupted work is continued only through `resume`.
+- Keep `src/shell_scripts/hpc_ppc.sh` as the resource boundary. It already
+  forwards launcher arguments without reinterpretation. Freeze that behavior
+  in tests and require the submitted command to include the explicit corrected
+  cache, `--probe ProbeB`, `--shuffles 100`, and `--workers 8`, without
+  `--final-run`.
+- Add a narrow cache-relocation command in
+  `src/neural_analysis/lfp_summary_cache_relocation.py` and a pure manifest
+  rebinding helper in `src/neural_analysis/lfp_summary_io.py`. The relocation
+  command owns path validation, source-equivalence evidence, byte-preserving
+  component copying, destination-manifest construction, atomic publication,
+  and an external ASCII JSON receipt. It does no Power, Synchrony, phase, or
+  Spike-phase numerical computation.
+- The transfer copies `power.npz` and `synchrony.npz` byte for byte. The local
+  manifest is retained only as source provenance and must not be installed
+  unchanged: component fingerprints and source records include resolved
+  absolute local paths and therefore classify an unchanged copied manifest as
+  stale on the cluster. Build a destination manifest against the active
+  cluster configuration while preserving the original producing manifest and
+  its SHA-256 in the relocation receipt. Preserve each component's original
+  completion time, generator, array schema, units, and scientific metadata;
+  replace only the destination-bound top-level configuration, component
+  configuration fingerprints/snapshots, and source fingerprints. Do not claim
+  that the copied components were computed on the cluster.
+- Before rebinding, prove source equivalence. Compare canonical configuration
+  fields relevant to Power and Synchrony after applying the single declared
+  local-session-root to cluster-session-root mapping and excluding only output
+  location. Unit-population and PPC execution fields are not component inputs
+  and must not be represented as having produced the copied components. Stream
+  SHA-256 once for every unique Power/Synchrony source on both hosts, including
+  both LFP binaries, aligned-sync NPZs, the trial table, and preprocessing
+  sidecars; compare exact byte size and digest. Sidecar semantics must remain
+  `open_ephys_affine_uV_v1`. A mismatch aborts without publishing a destination.
+- Stage under an absent sibling directory on the cluster filesystem. Require
+  the final destination to be absent, validate both NPZ schemas using the
+  original manifest, copy and hash the bytes, create the cluster-bound
+  manifest, validate both components through the public compatibility API,
+  assert Spike-phase is missing, write the relocation receipt outside the
+  cache, and atomically rename the staging directory into place. The published
+  cache contains only `manifest.json`, `power.npz`, and `synchrony.npz`.
+- Use a new timestamped cluster analysis-run directory for transfer/submission
+  receipts. Record the local and cluster roots, original and rebound manifest
+  hashes, component hashes, all source hashes, exact Git commit, command,
+  hostname, UTC times, and final public component states. Preserve the local
+  corrected cache and the protected legacy cluster cache unchanged.
+
+#### Tests written first
+
+Commit the following RED tests before any source edit:
+
+1. launcher parsing requires an explicit cache target for `new`, preserves it
+   through dry-run/state/resume, and rejects any resume-time replacement;
+2. launcher preflight rejects the protected legacy cache, symlinks, paths
+   outside the session's direct `processed` children, missing or stale
+   Power/Synchrony, an existing Spike component, unexpected cache members, and
+   pre-existing work; no numerical loader or run directory is reached;
+3. the Slurm wrapper forwards the cache path and exact preview arguments
+   unchanged and continues to enforce eight CPUs/workers;
+4. a fake local/cluster-root fixture proves that a literal manifest copy is
+   stale under the cluster configuration;
+5. relocation rejects any non-path scientific configuration difference, any
+   source size/digest/semantics mismatch, an existing or symlink destination,
+   and a source cache containing Spike/work/unexpected members;
+6. relocation keeps both NPZ SHA-256 values byte-identical, preserves original
+   producer identity in its receipt, changes only destination-bound manifest
+   identity, and yields public `compatible` states for Power/Synchrony and
+   `missing` for Spike-phase;
+7. injected interruption before atomic publication leaves the final
+   destination absent and the source/legacy caches unchanged; and
+8. a launcher dry run against the relocated cache writes evidence only and
+   performs no phase, spike, PPC, cache, work, report, or cleanup mutation.
+
+The initial source allowlist is
+`src/neural_analysis/lfp_spike_phase_launcher.py`,
+`src/neural_analysis/lfp_summary_io.py`, and the new
+`src/neural_analysis/lfp_summary_cache_relocation.py`. The initial test
+allowlist is `src/tests/neural_analysis/test_lfp_spike_phase_launcher.py`,
+`src/tests/neural_analysis/test_lfp_summary_io.py`, and a new
+`src/tests/neural_analysis/test_lfp_summary_cache_relocation.py`. A shell source
+edit is not expected; if its tests reveal one is necessary, amend this
+allowlist before editing. Keep tests and implementation in separate commits.
+
+#### Dependencies and performance
+
+Introduce no package dependency. Reuse the standard library, NumPy, existing
+canonical configuration/fingerprint functions, safe NPZ loader, atomic JSON
+writer, and public component-status validator. Hash files in fixed-size chunks;
+never use `read_bytes()` for large artifacts or sources. Hash each unique
+source/component once per host and reuse the recorded digest. The transfer is
+approximately 232 MB for the two component NPZs; source verification is I/O
+bound and may read both LFP binaries once but must not materialize them or any
+NPZ array collection simultaneously. Record wall time and peak RSS.
+
+#### Execution and no-monitoring handoff
+
+After the tests and implementation are green, a separate user approval is
+still required for each external mutation: Git push, cluster checkout update,
+component transfer/manifest publication, and Slurm submission. On the exact
+clean pushed cluster checkout:
+
+1. run focused and complete neural tests;
+2. run the relocation command into the exact approved versioned cache and
+   inspect its receipt plus public component states;
+3. run one metadata-only launcher dry run against that cache and inspect the
+   ProbeB population, 100 shuffles, eight workers, paths, resource bounds, and
+   absence of work/output mutation; and
+4. present the exact `sbatch src/shell_scripts/hpc_ppc.sh new ...` command for
+   separate approval.
+
+If submission is approved, capture only the returned Slurm job id and durable
+submission command, then stop. Codex must not poll `squeue`, `sacct`, logs, or
+launcher state. Slurm writes the persistent job log and the launcher writes its
+timestamped state, progress, checkpoints, exact resume command, component, and
+report. The user may later request a one-time status or result inspection. A
+timeout/preemption is never converted into a new run; the saved explicit
+`resume` command is submitted only after separate user direction. The preview
+cannot automatically escalate to 1,000 shuffles or `--final-run`.
 
 ## 6. Structural package contract
 

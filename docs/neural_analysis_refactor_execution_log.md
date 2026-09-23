@@ -275,6 +275,28 @@ Read-only representative CT026 and legacy-artifact check:
 
 ## NR1-NR18 records
 
+### NR1 Synchrony chart and cluster-preview plan revision
+
+On 2026-09-23 the user withheld Synchrony visual approval after observing that
+the PFC theta-whole ITPC circles lie below the vertical intervals. Inspection
+established that the circles are observed plug-in ITPC estimates and the lines
+are 2.5/97.5 percentile-bootstrap bounds, not medians/IQRs. The nonlinear
+with-replacement resampling distribution is shifted upward in all nine saved
+conditions; the legacy artifact has the same behavior. No code or artifact was
+changed. Plan Section 5.5 now freezes the exact analysis/display contract,
+interpretation, alternative future decisions, and required simulation tests.
+
+The user also selected byte-preserving reuse of the corrected Power and
+Synchrony components for an eventual cluster 100-shuffle ProbeB preview and
+requires that job to run without Codex monitoring. A literal whole-cache copy
+is insufficient because the manifest fingerprints resolved absolute source
+paths. Plan Section 5.6 therefore requires an explicit safe launcher cache
+target, exact source-equivalence hashing, byte-identical NPZ transfer,
+cluster-bound manifest rebinding with retained producer provenance, atomic
+publication, prerequisite validation, isolated new-run safety checks, and a
+durable submit-and-disconnect Slurm handoff. This documentation update does not
+authorize implementation, push, transfer, cache mutation, or submission.
+
 NR1 dry run was authorized by the user on 2026-09-23 with these exact paths:
 
 - session: `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference`
