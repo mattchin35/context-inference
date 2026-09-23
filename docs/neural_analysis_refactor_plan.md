@@ -1,0 +1,2237 @@
+# Neural Analysis Refactor Implementation Plan
+
+## Status and authority
+
+**Status:** codebase-audited comprehensive plan, ready for implementation
+authorization. Planning only: no implementation,
+scientific recomputation, cache mutation, artifact replacement, or cluster
+submission is authorized by this document in its current state.
+
+This plan translates the requirements and settled decisions in
+`docs/neural_analysis_refactor.md` into tests-first work packages. The design
+document remains authoritative for scientific and architectural intent, with
+the later user-approved refinements recorded in Section 25 incorporated into
+both documents before implementation.
+`docs/Tasks_neural.md` remains authoritative for the completed LFP-summary
+methods and historical CT026 evidence. If this plan conflicts with either
+document, stop and resolve the conflict before implementation.
+
+The immediate prerequisite is a separately versioned correction to the Open
+Ephys LFP value scaling. The structural refactor must use the corrected CT026
+outputs as its regression baseline; it must not preserve the known unscaled
+amplitude behavior as if that behavior were scientifically correct.
+
+## 1. Objectives
+
+The work has two ordered objectives:
+
+1. Correct the Open Ephys derived-LFP read contract so stored values are
+   converted using the authoritative `lfp_preprocessing.json` metadata, update
+   cache identity, and establish reviewed CT026 regression artifacts.
+2. Reorganize `src/neural_analysis` around explicit session metadata, source
+   adapters, pure analyses, artifacts, workflows, execution, visualization,
+   reports, and a metadata-driven webapp without changing the approved
+   computations.
+
+The refactor is complete only when a new supported session requires metadata
+authoring, not edits to shared analysis, workflow, source-adapter, or webapp
+modules. A user may either edit the clearly labeled values in the dedicated
+metadata-creator Python entry point or generate a skeleton and edit the resulting
+`neural_session.json`; the creator is an intentional user-facing authoring
+surface rather than a scientific implementation module.
+
+The refactor also produces one canonical, concise end-user guide at
+`src/neural_analysis/README.md`. Its purpose is to let a returning user who has
+forgotten the workflow quickly create or update session JSON, validate and run
+the cache, launch the webapp, and find/inspect completed outputs without reading
+the architecture documentation or historical task logs.
+
+## 2. Current baseline and constraints
+
+### 2.1 Relevant current architecture
+
+The production LFP-summary path is currently distributed across these
+responsibilities:
+
+- `lfp_loading.py` reads SpikeGLX and derived Open Ephys LFP data.
+- `lfp_summary_models.py` owns immutable analysis configuration and component
+  fingerprints.
+- `lfp_summary_preparation.py` loads trial-aligned native-rate traces.
+- `lfp_summary_runtime.py` prepares Power, Synchrony, and Spike-phase inputs and
+  contains a separate continuous block loader for phase transforms.
+- `lfp_summary_io.py`, `lfp_summary_work_cache.py`, and
+  `lfp_summary_pipeline.py` own final component state, work caches, and
+  publication.
+- CT026 builders and reports remain in the validation and profile modules.
+- `psth_webapp.py` and `lfp_summary_webapp.py` mix UI composition with source or
+  artifact routing.
+
+Both Open Ephys numerical routes converge on
+`read_open_ephys_lfp_channel_window`: trial loading reaches it through
+`load_open_ephys_trial_lfp_trace`, while continuous phase preparation calls it
+from `_production_phase_block_loader_factory`. The scaling correction should
+therefore be made at this lowest shared Open Ephys value boundary.
+
+`src/tests/neural_analysis/test_get_brain_channels.py` is retained in the full
+neural-suite gate but is not assigned a migration owner: despite its location,
+it tests `src/external_tools/get_brain_channels.py`, which is outside this
+`src/neural_analysis` refactor. If a new source adapter begins to consume that
+tool, the active package must first amend its allowlist and dependency contract.
+
+### 2.2 Verified focused baseline
+
+Before this draft, the following read-only baseline passed:
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_open_ephys_behavior_integration.py \
+  src/tests/neural_analysis/test_lfp_loading.py \
+  src/tests/neural_analysis/test_lfp_summary_models.py \
+  src/tests/neural_analysis/test_lfp_summary_preparation.py
+
+99 passed
+```
+
+The implementation phase must record the exact commit and rerun the applicable
+focused and full-suite baselines because the repository may advance after this
+draft.
+
+### 2.3 Non-negotiable implementation rules
+
+- Follow strict RED-GREEN-REFACTOR. Commit tests before implementation.
+- Preserve existing public call signatures unless a work package explicitly
+  approves a compatibility-preserving extension.
+- Run all Python commands with `uv run`.
+- Add no dependency for the scaling correction or initial structural work.
+- Keep raw array shapes, axis order, sampling rates, channel indices, and time
+  coordinates unchanged unless a separately approved requirement says
+  otherwise.
+- Never overwrite the approved historical CT026 caches or report directories.
+- Treat the old CT026 amplitude-bearing artifacts as immutable historical
+  evidence of the legacy unscaled behavior, not as the corrected baseline.
+- Do not combine import moves with numerical changes. The scaling correction
+  is completed and approved before responsibility moves begin.
+- Every new package directory receives a README when introduced, as required by
+  the design document.
+- `src/neural_analysis/README.md` is the end-user landing page. Subpackage
+  READMEs document developer ownership and internals and must not become
+  competing user guides.
+
+## 2.4 Design guidance for every work package
+
+The following rules apply the principles in `docs/SoftwareDesign.md` to this
+refactor. They are review criteria, not optional style preferences.
+
+### Purpose and contracts before abstractions
+
+- Every new module begins with one stated responsibility, its supported inputs
+  and outputs, its core transformation, and its limitations.
+- Every public function documents types, array/dataframe shapes, axis order,
+  physical units, missing-value semantics, return values, and failure behavior.
+- Use type hints for public functions, dataclass fields, and ambiguous local
+  values. Do not annotate obvious local variables merely to add noise.
+- Prefer plain functions and frozen dataclasses. A class is justified only when
+  it provides a clearer data or interface boundary.
+- Keep data records separate from complex behavior. Do not create a large
+  mutable `Session` object that loads data, runs analyses, writes caches, and
+  renders figures.
+
+### Composition and dependency injection
+
+- Assemble concrete loaders, workflows, and writers at CLI/application
+  boundaries; pass narrow callable or Protocol dependencies into consumers.
+- Prefer explicit arrays, columns, paths, and small configuration records over
+  passing a complete session object or dataframe when only a subset is used.
+- Use a small `Protocol` only where multiple real implementations share a
+  stable behavioral contract. Do not create Protocols for every function or in
+  anticipation of hypothetical backends.
+- Prefer composition over inheritance. No new mixins or multi-level inheritance
+  hierarchies are permitted without a separately approved rationale.
+- Avoid nested convenience functions and lambdas. Use module-level helpers or
+  `functools.partial` only when they make a real dependency boundary clearer.
+
+### Cohesion, coupling, and simplicity
+
+- A module has one primary reason to change. Source adapters do not select
+  analyses; analyses do not load paths; plotting does not compute or save;
+  reports do not reopen raw sources; webapp views do not implement numerics.
+- Dependency arrows follow the target layering in the design document. A lower
+  layer must not import workflows, reports, webapp modules, or CLIs.
+- Avoid control flags in numerical functions. Separate operations into named
+  functions; retain user-facing mode flags only at CLI/workflow boundaries.
+- Do not introduce `utils.py`, `helpers.py`, wildcard imports, dynamic plugin
+  discovery, a service/database, or a generic base-analysis class.
+- Apply DRY only after repeated behavior is demonstrably the same. Temporary
+  duplication is preferable to a premature abstraction that hides scientific
+  meaning.
+- Apply YAGNI: support the inspected CT026 Open Ephys and CT014 SpikeGLX layouts
+  and fail clearly on unsupported variants.
+
+### Scientific readability and reproducibility
+
+- Prefer established NumPy, SciPy, Pandas, Pynapple, and current project
+  functions over new mathematical implementations.
+- Any first use of a library API in this project must be checked against the
+  installed source or official documentation and captured by a focused test.
+- Randomness always enters through an explicit seed or generator and is saved
+  in result provenance.
+- Shape, axis, unit, coordinate, or dtype transformations are explicit in code
+  and documentation. Silent transposes, squeezing, unit conversions, and
+  dataframe-column inference are prohibited.
+- Optimize only measured bottlenecks. Keep performance-critical PPC kernels
+  isolated and do not make surrounding workflow code clever for speed.
+
+### Import and package policy
+
+- Use relative imports within one package and absolute imports across package
+  boundaries.
+- Keep `neural_analysis/__init__.py` minimal; do not create broad convenience
+  re-exports.
+- Keep nesting shallow. The target domain subpackages in the design document
+  are the maximum intended depth unless a reviewed package proves a clearer
+  boundary is needed.
+- Old import paths forward temporarily and emit no new behavior. Compatibility
+  wrappers never become a second implementation.
+
+## 2.5 Dependency waves and merge order
+
+The packages are sequential unless this plan explicitly permits read-only
+overlap. The dependency waves are:
+
+| Wave | Packages | Required result before next wave |
+| --- | --- | --- |
+| A - corrected baseline | NR0-NR1 | Corrected, approved CT026 regression artifacts; legacy artifacts preserved. |
+| B - foundations | NR2-NR5 | Session metadata, LFP/spike/behavior adapters, and synchronization contracts are green. |
+| C - generic integration | NR6-NR7 | Artifact mechanics and metadata-driven compute entry point operate over compatibility workflows. |
+| D - presentation | NR8-NR10 | Pure visualization and one metadata-driven webapp shell are green. |
+| E - scientific domains | NR11-NR14 | Numerical code is grouped by domain with exact compatibility imports and regression evidence. |
+| F - orchestration split | NR15-NR17 | Workflows, reports, execution, profiling, and compatibility bindings have their final owners. |
+| G - retirement | NR18 | Approved legacy removal, documentation consolidation, and final acceptance. |
+
+No package may consume a target interface from a later wave. A wave-boundary
+review checks dependency direction with repository import scans before the next
+wave starts.
+
+## 2.6 Codex implementation team and authority
+
+This subsection governs future implementation only after explicit user
+authorization. Approval of this plan does not itself authorize source edits,
+CT026 execution, cluster submission, cache mutation, or artifact replacement.
+
+The role names refer to Codex agents, not scientific multiprocessing workers:
+
+1. **Lead Sol orchestrator - `gpt-5.6-sol`, `high`.** The root agent owns user
+   communication, requirements, worktree safety, package ordering, worker
+   prompts, independent RED/GREEN reproduction, staging, commits, execution-log
+   updates, and completion decisions. It may edit planning/handoff documents
+   and perform mechanical staging/commits, but it does not author or repair
+   package source or test changes. Findings are returned to the Terra worker.
+2. **Sol gate reviewer - `gpt-5.6-sol`, `high` or `xhigh` as assigned below.**
+   A fresh read-only agent audits a stable tests-only or implementation diff for
+   scientific drift, missing cases, coupling, interface breaks, cache identity,
+   transactions, concurrency, and performance. It never edits, commits, spawns
+   agents, or broadens scope.
+3. **Terra package worker - `gpt-5.6-terra`, `high` or `xhigh` as assigned
+   below.** One write-enabled worker owns the active package's exact allowlist.
+   The same worker writes tests, stops at RED, and resumes for implementation
+   only after the lead's gate. It never commits, changes tests merely to reach
+   GREEN, edits outside scope, runs unauthorized real data, or spawns agents.
+4. **Optional Terra scout - `gpt-5.6-terra`, `medium`, read-only.** The lead may
+   use one scout for a bounded usage map, installed-library inspection,
+   performance-log analysis, or external-entry-point inventory. A scout returns
+   file/line evidence and uncertainty, with no edits or generated artifacts.
+
+Do not silently substitute models or efforts. If an assigned model/effort is
+unavailable, stop and ask the user to revise the plan. Do not use `max` or
+`ultra` without a documented plan change and approval.
+
+### Concurrency and shared-worktree rules
+
+- At most four Codex agents may be active: the lead, one Terra writer, one Sol
+  reviewer, and one optional Terra scout.
+- Only one agent may edit the shared worktree. All implementation packages are
+  sequential. Read-only scouting may overlap only with independent work;
+  review begins only after the diff is stable and the writer is idle.
+- Before and after every assignment, the lead records HEAD, branch, staged and
+  unstaged package diffs, and `git status --short`. Any unexpected tracked
+  change stops all work for user direction.
+- Every writer prompt contains an exact allowlist. A needed out-of-scope or
+  public-interface edit is a replanning request, not permission to expand.
+- The lead alone stages and commits reviewed paths. Unrelated existing changes
+  remain untouched and unstaged.
+- Read-only roles should use enforced read-only permissions when available. If
+  the runtime provides only inherited write permissions, the restriction is
+  procedural and the lead records and audits that limitation.
+- Subagents do not spawn subagents. The lead waits for every requested report
+  and ends completed assignments before opening the next package.
+
+### Agent spawn and handoff contract
+
+At implementation start, the lead verifies from host/runtime metadata that the
+root is Sol/high and explicit Terra/Sol child overrides are accepted. Model
+self-report is not evidence. With model overrides, use a bounded context fork
+and put all essential constraints in the prompt; do not rely on a full-history
+fork that would force inherited settings.
+
+Every assignment prompt states:
+
+- package ID, role, model, effort, read/write authority, and stopping gate;
+- goal, approved decisions, exact files allowed, and forbidden actions;
+- interfaces, scientific definitions, axes, units, and compatibility contracts
+  that must remain unchanged;
+- tests and commands to run, expected RED, performance constraints, and real-
+  data authorization state; and
+- required return: inspected/changed files, diff summary, commands/results,
+  RED/GREEN evidence, unresolved risks, and confirmation of no commit or
+  out-of-scope edit.
+
+Use follow-up tasks with the same Terra worker across tests-only and
+implementation phases. Do not replace it merely to skip a clean handoff.
+
+### Package-specific agent assignments
+
+| Package | Terra role and effort | Independent Sol gate | Test-design review | Principal risk |
+| --- | --- | --- | --- | --- |
+| NR0 | writer, `xhigh` | `xhigh` | mandatory | Units, cache identity, legacy compatibility. |
+| NR1 | command/evidence runner, `high` | `xhigh` | not applicable | Real-data scientific interpretation and artifact safety. |
+| NR2 | writer, `high` | `high` | mandatory | Metadata missingness, path containment, schema migration. |
+| NR3 | writer, `xhigh` | `xhigh` | mandatory | Open Ephys/SpikeGLX units, channel semantics, bounded I/O. |
+| NR4 | writer, `xhigh` | `xhigh` | mandatory | Time coordinates, IRIG/manual alignment, CLI compatibility. |
+| NR5 | writer, `high` | `high` | mandatory | Sorter/aligned-spike identity and dataframe contracts. |
+| NR6 | writer, `xhigh` | `xhigh` | mandatory | Atomic publication, stale/failed state, snapshot receipts. |
+| NR7 | writer, `high` | `high` | mandatory | Metadata-to-legacy workflow binding and dry-run purity. |
+| NR8 | writer, `high` | `high` | optional | Plot/computation separation and figure equivalence. |
+| NR9 | writer, `high` | `high` | optional | Unit/exploratory figure splits and computation-free plotting. |
+| NR10 | writer, `high` | `high` | mandatory | Streamlit state, snapshot identity, no rerender computation. |
+| NR11 | writer, `xhigh` | `xhigh` | mandatory | LFP numerical equality and phase conventions. |
+| NR12 | writer, `xhigh` | `xhigh` | mandatory | PPC seeds, schedules, checkpoints, memory, performance. |
+| NR13 | writer, `high` | `high` | optional | Trial/unit axes and Pynapple behavior. |
+| NR14 | writer, `high` | `high` | mandatory | PCA/decoding leakage, CV identities, cross-session inputs. |
+| NR15 | writer, `xhigh` | `xhigh` | mandatory | Component orchestration and corrected CT026 equivalence. |
+| NR16 | writer, `high` | `xhigh` | mandatory | Cache-only reports, CT026 compatibility, profiling isolation. |
+| NR17 | writer, `xhigh` | `xhigh` | mandatory | Resume, locks, failure transactions, local/Slurm parity. |
+| NR18 | writer, `high` | `xhigh` | mandatory | External callers, deprecation, deletion, final topology. |
+
+Every package receives a final independent Sol review. A mandatory test-design
+review occurs after the lead reproduces RED and before the test-only commit.
+For packages marked optional, the lead may still require it if the test diff
+changes a public contract or reveals comparable risk.
+
+### Mandatory per-package sequence
+
+1. Lead re-reads package source, tests, callers, documentation, and current
+   worktree; unresolved requirements return to the user.
+2. Optional read-only Terra scout gathers only the assigned evidence.
+3. Terra writer makes tests-only changes, runs the focused command, records
+   genuine expected RED, and stops.
+4. Lead audits the tests, independently reproduces RED, obtains the specified
+   Sol test-design review, and commits only the tests.
+5. Lead follows up with the same Terra writer to authorize implementation.
+6. Terra writer makes the smallest in-scope change, runs focused GREEN, and
+   stops without committing.
+7. Lead audits the complete diff and independently runs focused and affected
+   suites. Sol reviewer audits the stable GREEN diff.
+8. Accepted findings return to the same Terra worker; the lead repeats tests
+   and review as needed.
+9. Lead runs the package and wave gates, commits implementation separately,
+   then records evidence in a documentation-only execution-log commit.
+10. No next package starts until all agents are idle and the package record is
+    complete.
+
+### Interruption and disagreement policy
+
+- An interrupted worker or reviewer report is not a completed gate.
+- The lead records last verified HEAD, status, exact diff, commands/results,
+  and whether tests or implementation are uncommitted.
+- A replacement uses the same role/model/effort/allowlist after the lead
+  independently re-audits the diff and reproduces the last claimed result.
+- Conflicting agent reports, irreproducible failures, unclear library APIs,
+  unexpected scientific differences, or near-threshold inference changes stop
+  the package for user direction. Agent agreement is not correctness evidence.
+
+## 2.7 Dependencies and tooling
+
+No new runtime dependency is planned. The implementation uses:
+
+- standard-library dataclasses, JSON, hashing, paths, temporary files,
+  subprocess/process control, and atomic replacement;
+- NumPy for explicit arrays, memory mapping, and numerical contracts;
+- Pandas for source/trial/metadata tables;
+- SciPy and Pynapple for the already approved signal/statistical operations;
+- Matplotlib for pure visualization; and
+- Streamlit only inside the webapp package.
+
+Use `pytest` for every test. Use `uv` for dependency management and `uv run` for
+all Python commands. Do not introduce Pydantic, Marshmallow, Click/Typer, Zarr,
+HDF5, Dask, a workflow engine, or a plugin framework merely to implement this
+plan. A proposed new dependency requires demonstrated substantial benefit,
+official/package-source API verification, focused tests, and explicit user
+approval before its lockfile change.
+
+Formatting or static-analysis tools are not added implicitly. If the existing
+project later adopts one, integrate it as a separately reviewed tooling package
+rather than mixing broad mechanical rewrites into a scientific migration.
+
+## 2.8 Target integration contracts and data flow
+
+Exact field spellings are frozen by the NR2 tests-only review, but the following
+responsibilities and data flow are binding.
+
+### Session boundary
+
+- A frozen `SessionDescription`-style record represents decoded user metadata:
+  session identity, acquisition family, probes, sites, pairs, populations, and
+  cache references. It contains relative paths and optional values but no raw
+  arrays or analysis defaults.
+- A separate frozen `ResolvedSession`-style record contains the metadata-file
+  path and resolved absolute paths for one environment. Resolution changes
+  location only; it cannot change scientific identity.
+- In the initial schema, the metadata path must be the canonical
+  `<session_home>/neural_session.json`; its parent is the session root. External
+  metadata locations and root mappings are not part of this contract.
+- `load_session_metadata(path)` decodes and structurally validates JSON.
+- `resolve_session_paths(description, metadata_path)` resolves contained paths.
+- `validate_session_for_action(resolved, action)` returns a structured
+  availability/diagnostic result or raises an exact configuration error before
+  numerical loading.
+
+These names may be refined during NR2 review, but one object must not combine
+all three states or hide path resolution in attribute access.
+
+### Source boundary
+
+- LFP metadata records sample rate in Hz, saved-channel count/order, physical
+  unit, storage dtype/layout, sample count, source reference path, and adapter
+  value-semantics version.
+- A bounded LFP read accepts explicit source, zero-based saved-channel index,
+  and half-open sample bounds and returns a one-dimensional physical-value
+  array plus immutable metadata/provenance. It performs no trial alignment.
+- Synchronization functions accept explicit coordinate arrays and return
+  explicit mapped coordinates; acquisition event readers stay separate.
+- Spike and behavior adapters return validated native tables/arrays with stable
+  row/unit identities. They do not choose filters, populations, or analyses.
+
+### Analysis boundary
+
+- Analysis functions accept arrays/tables and small scientific configuration
+  records only. They do not receive session paths, open files, emit progress,
+  write artifacts, or render figures.
+- Result records identify axes, dtypes, physical units, and missingness. Large
+  arrays remain NumPy arrays rather than nested object graphs.
+- Random analyses require an explicit seed/generator. The resolved seed and
+  derivation identities are part of provenance and scientific identity.
+
+### Artifact boundary
+
+- Artifact readers validate manifest/schema/identity before returning arrays.
+- Component writers stage arrays and metadata, validate staged bytes, publish
+  the component atomically, and replace the manifest last.
+- Work artifacts/checkpoints have separate identities from final scientific
+  components and cannot masquerade as completed results.
+- Snapshot validation returns saved configuration/provenance; callers never
+  combine saved arrays with new live labels.
+
+### Workflow boundary
+
+- Each analysis descriptor states action requirements, scientific preset,
+  runnable components, expected artifacts, and cached views.
+- A component workflow accepts resolved validated configuration, narrow source
+  callables, artifact interfaces, and a progress callback. It returns a
+  structured result/status and optional exact cleanup request.
+- The registry is an explicit mapping of a small known set, not runtime plugin
+  discovery.
+
+### Presentation and execution boundaries
+
+- Visualization functions accept validated result arrays plus plot context and
+  return figures/axes. Reports decide what to render and where to publish.
+- Webapp views read metadata/artifacts and call visualization. They do not call
+  numerical kernels directly.
+- Execution freezes resolved configuration before starting work. Local and
+  Slurm paths invoke the same workflow contract. Resume uses saved run state,
+  not newly supplied session metadata.
+
+The intended flow is:
+
+```text
+neural_session.json
+  -> session decode / resolve / action validation
+  -> explicit analysis registry + versioned preset
+  -> source adapters
+  -> pure analysis kernels
+  -> component workflow
+  -> atomic artifacts
+  -> reports and/or cache-only webapp views
+```
+
+Execution wraps the workflow; it does not sit between sources and analyses.
+
+## 2.9 End-user quickstart documentation contract
+
+`src/neural_analysis/README.md` is a short operational guide, not an API
+reference or design narrative. It is written for a lab user returning after
+months away. The first screen should answer: which file do I edit, which command
+do I run, and where do I look afterward?
+
+The guide must contain these sections in this order:
+
+1. **Workflow at a glance.** A four-step summary: create/edit metadata, validate
+   or dry-run, compute/cache, inspect in the webapp.
+2. **Prerequisites.** Repository location, `uv` environment, session-directory
+   expectation, the initial-version requirement that metadata live at the
+   session root, and the rule that commands run from the repository root.
+3. **Create the session JSON.** Name the canonical
+   `<session_home>/neural_session.json` location; identify the clearly labeled
+   variables in `cli/create_session_metadata.py`; show how to edit those values
+   before running the creator; also show how to emit a default/incomplete
+   skeleton and edit the resulting JSON directly. Show the exact commands; list
+   the small set of user-supplied identities/paths; explain `null` versus an
+   omitted probe; and show how to run schema-only and requested filesystem
+   validation. Link to schema details rather than reproducing every field.
+4. **Run the cache.** Show exact dry-run and local commands for Power,
+   Synchrony, Spike phase, and all approved components. Explain that dry run
+   performs no computation or cache mutation. Keep Slurm to one short example
+   or link to a dedicated execution note; do not bury the common local workflow
+   under cluster details.
+5. **Know when a run finished.** Identify the run state, manifest, component
+   files, log, summary, report directory, and failure/resume information a user
+   should check. Explain that file existence alone does not establish a valid
+   compatible result.
+6. **Launch the webapp.** Show the exact command using
+   `--session-metadata PATH`, the expected startup state, and how live metadata
+   inspection differs from opening an approved copied snapshot.
+7. **Inspect cached output.** Explain how to select a component, site/pair,
+   population, condition, epoch, and cached view; where provenance and
+   compatibility status appear; and how unavailable results are represented.
+8. **Common recovery and troubleshooting.** Cover missing paths, invalid site or
+   population references, stale/incompatible caches, incomplete runs, resume,
+   missing optional inputs, and the warning not to edit manifests or NPZ files
+   manually.
+9. **Safety and provenance.** State that old approved snapshots are immutable,
+   computation does not silently rewrite session JSON, copied-local and
+   producing-cluster paths have different roles, and commands should be run
+   against an explicit metadata file.
+
+Documentation rules:
+
+- Use generic placeholders such as `/path/to/session/neural_session.json`; do
+  not present CT026 paths, fixed PFC/HPC sites, or ProbeA/ProbeB as universal
+  defaults.
+- State plainly that external metadata locations, absolute source paths, and
+  root remapping are not supported by the initial schema. The metadata file is
+  `<session_home>/neural_session.json`, and all source paths are relative to and
+  contained by that directory.
+- Include one compact example JSON only if it stays synchronized through a
+  tested fixture or generated output. Never maintain an untested hand-written
+  schema example that can silently drift.
+- Commands are copied from the actual CLI `--help` contract and use `uv run`.
+- Every command intended to be pasted by a user has a CLI parsing or smoke test.
+- Keep advanced schema, cache internals, report schemas, profiling, and package
+  topology in linked technical documentation.
+- Update the guide in the same package that changes a user-visible command,
+  path, output name, recovery step, or webapp control. Documentation drift is a
+  failing package review condition.
+- NR18 performs a novice-path review: starting only from this README and an
+  example session layout, the reviewer must be able to identify the JSON
+  creation, dry-run, cache, output-inspection, and webapp commands without
+  consulting implementation modules.
+
+## 2.10 Documentation and baseline gate before NR0
+
+Before a Terra writer receives NR0, the lead Sol completes a documentation-only
+baseline:
+
+1. Re-read this plan, `neural_analysis_refactor.md`, `SoftwareDesign.md`,
+   `Tasks_neural.md`, and relevant AGENTS instructions.
+2. Verify the branch/HEAD and record complete staged/unstaged/untracked status
+   without cleaning or changing unrelated files.
+3. Audit every untracked test used by a package or baseline. With explicit user
+   approval, either commit intended pre-existing tests in a standalone baseline
+   commit or record them as excluded user-owned work. A package may not modify
+   an untracked baseline test and then present the whole file as that package's
+   tests-only RED commit.
+4. Restage the exact reviewed documentation content, verify the cached diff is
+   nonempty and matches the worktree, and commit the approved design and
+   comprehensive plan as documentation only. Never rely on an intent-to-add or
+   empty staged placeholder.
+5. Create `docs/neural_analysis_refactor_execution_log.md` with the starting
+   HEAD, worktree inventory, model/effort policy, authorization state, focused
+   baseline commands, and empty NR0-NR18 package records; commit it separately
+   if it was not part of the approved documentation baseline.
+6. Run and record the focused NR0 baseline, the complete neural suite, and the
+   complete repository suite. Existing failures must be resolved or explicitly
+   accepted as a frozen unrelated baseline before tests-only work begins.
+7. Confirm the representative CT026 files and legacy artifacts are readable but
+   perform no scientific recomputation or write.
+8. Verify the named Sol/Terra model and effort overrides from runtime metadata.
+
+This is lead-orchestrator work, not a Terra source package. It creates no test
+or source diff and does not count as NR0 RED evidence.
+
+## 3. Approved version and compatibility policy
+
+The user approved this policy before implementation. Tests still freeze exact
+field spellings and compatibility fixtures before source edits.
+
+### 3.1 Do not use a global storage-schema bump for a value-semantics change
+
+The correction changes the interpretation of Open Ephys source values, not the
+shape or serialization format of every final component. Bumping the top-level
+manifest `schema_version` alone would unnecessarily invalidate SpikeGLX
+results, make the existing cache directory fail at manifest loading, and blur
+the distinction between artifact schema and scientific semantics.
+
+### 3.2 Add an explicit source-value semantics version
+
+Add a small, code-owned version identifier for each acquisition adapter that
+affects numerical values. The initial identifiers should distinguish at least:
+
+- legacy Open Ephys stored-value behavior; and
+- corrected Open Ephys metadata-scaled physical-value behavior.
+
+The corrected identifier must participate in the scientific identity of every
+component that consumes an Open Ephys site. It must also be saved in resolved
+configuration/component provenance. SpikeGLX identity must remain unchanged by
+NR0; the separately tested NR3 source-identity completion is outside this
+correction.
+The exact field name is chosen during the tests-only package, but it should
+describe source-value semantics rather than reuse `schema_version`.
+
+Recommended ownership:
+
+- the Open Ephys adapter defines its semantics version;
+- `component_fingerprint` includes the versions required by the configured
+  sites;
+- prepared-phase and PPC work identities inherit the corrected source identity;
+- the final manifest component entry records the resolved adapter versions.
+
+An old component assessed under corrected live configuration must become
+`stale`, not `compatible` and not an unreadable/corrupt artifact. Cache-only
+inspection of the old immutable snapshot must continue through its saved
+configuration and compatibility reader.
+
+### 3.3 Fingerprint the authoritative preprocessing metadata
+
+`fingerprint_source_files` currently includes the Open Ephys `lfp.dat` and
+aligned sync file, but not the sibling `lfp_preprocessing.json`. The correction
+must include that JSON as a required source sidecar for Open Ephys components.
+Changing its scaling, unit, channel count/order, dtype, layout, or sampling
+metadata must stale affected components and prepared work caches.
+
+The source fingerprint for this small authoritative JSON must include a
+streamed SHA-256 content digest in addition to its resolved path, size, and
+mtime. Size/mtime alone cannot guarantee invalidation for a same-length edit or
+a copy that preserves timestamps. This does not change the existing
+large-binary policy: production-sized LFP binaries retain the reviewed
+size/mtime convention unless a separate package approves content hashing.
+
+### 3.4 Close the other source-identity gaps during adapter extraction
+
+NR0 remains limited to the Open Ephys correction. The codebase audit found two
+separate omissions that must be closed by the later adapter packages rather
+than silently folded into NR0:
+
+- NR3 includes each SpikeGLX LFP binary's authoritative same-stem `*.lf.meta`
+  file in the source identity, including a SHA-256 content digest because the
+  metadata file is small and numerically authoritative. A binary path or
+  directory stat is not a substitute for the metadata that defines
+  saved-channel order, sample rate, channel type, and voltage conversion.
+- NR5 and NR7 carry the exact consumed spike-population sources into resolved
+  provenance and cache identity: `spike_times.npy`, `spike_clusters.npy`,
+  `cluster_info.tsv`, the aligned-spike NPZ, and the channel-quality file when
+  that file participates in population selection. Fingerprinting only the
+  sorter directory is insufficient because editing a contained file need not
+  change the directory entry itself.
+
+These are cache-integrity migrations, not numerical-method changes. Their
+tests-only gates must define old/new compatibility behavior before source edits:
+new artifacts use the complete source identity, legacy snapshots remain
+inspectable, and deterministic numerical arrays remain equal when the source
+contents are unchanged.
+
+## 4. Work package NR0 - Open Ephys scaling correction
+
+### 4.1 Scope
+
+NR0 is a minimal, isolated scientific correction. It does not introduce the new
+session schema, move modules, redesign loaders, change analysis defaults, or
+implement WP13 absolute-amplitude thresholds.
+
+The exact NR0 allowlist is:
+
+- `src/neural_analysis/lfp_loading.py`
+- `src/neural_analysis/lfp_summary_models.py`
+- `src/neural_analysis/lfp_summary_pipeline.py`
+- `src/neural_analysis/lfp_summary_runtime.py`
+- `src/tests/neural_analysis/test_open_ephys_behavior_integration.py`
+- `src/tests/neural_analysis/test_lfp_loading.py`
+- `src/tests/neural_analysis/test_lfp_summary_models.py`
+- `src/tests/neural_analysis/test_lfp_summary_io.py`
+- `src/tests/neural_analysis/test_lfp_summary_pipeline.py`
+- `src/tests/neural_analysis/test_lfp_summary_plotting.py`
+- `src/tests/neural_analysis/test_lfp_summary_preparation.py`
+- `src/tests/neural_analysis/test_lfp_summary_ppc_runtime.py`
+- `src/tests/neural_analysis/test_lfp_summary_runtime.py`
+- `src/tests/neural_analysis/test_lfp_summary_work_cache.py`
+- `src/tests/neural_analysis/test_lfp_summary_synthetic_integration.py`
+- `docs/neural_analysis_refactor_execution_log.md` by the lead only, after the
+  tests/implementation gates
+
+If implementation requires broader files, stop and amend the reviewed plan
+before editing them.
+
+### 4.2 Loader contract
+
+`lfp_preprocessing.json` is authoritative for the derived Open Ephys binary.
+The loader must validate the exact observed CT026 representation of:
+
+- sample rate in Hz;
+- saved-channel count and order;
+- output-binary name, segment count, and sample count;
+- dtype and time-major channel-interleaved layout;
+- the `lfp_binary_scaling` object and its documented affine conversion from
+  stored values to physical values; and
+- the physical voltage unit for every saved channel.
+
+The inspected CT026 representation is not a scalar or bare channel vector.
+`lfp_binary_scaling` is an object containing `data_units`,
+`has_scaleable_traces`, `channel_ids`, `gain_to_uV_by_channel`,
+`offset_to_uV_by_channel`, `physical_unit_by_channel`,
+`export_scale_factor`, and the explicit conversion
+`trace_uV = trace_value * gain_to_uV + offset_to_uV`. Support this observed
+documented representation, not speculative variants.
+
+The loader must require `output_binary` to match the selected binary basename,
+require the declared segment count to agree with the single observed sample-
+count entry, require the nested `channel_ids` to exactly match
+`channel_ids_in_binary_order`; require the gain, offset, and unit vectors to
+have length `num_channels`; select all three values by zero-based saved-channel
+index; and validate the observed data-unit, scalable-trace, export-factor, and
+conversion declarations. The initial adapter supports the observed
+`export_scale_factor == 1.0` and fails closed on other values until their
+semantics are reviewed. Gains must be finite and strictly positive. Offsets
+must be finite and may be zero, positive, or negative. Units must be explicit
+and supported; the initial supported physical unit is `uV`. Missing, malformed,
+nonfinite, nonpositive-gain, unsupported, or dimensionally inconsistent
+metadata fails before returning data. The loader must not infer a factor,
+offset, or unit from a filename.
+
+`read_open_ephys_lfp_channel_window` returns a one-dimensional float array in
+the declared physical voltage unit and the existing sample rate in Hz. After
+selecting and copying only the requested one-channel window, the reader applies
+the selected affine conversion exactly once. It should use in-place multiply
+and add operations on that float result so it does not allocate another
+window-sized array, and it must not materialize or scale the complete binary.
+
+The trial-window and continuous-block callers retain their current time grids,
+shapes, filtering order, and public signatures. Their documentation is updated
+to say physical microvolts for the supported CT026 metadata rather than
+ambiguous "derived units."
+
+### 4.3 Tests written and committed first
+
+The tests-only commit must include the following focused contracts.
+
+#### Metadata validation tests
+
+1. The observed CT026-style metadata normalizes per-channel gain, offset, and
+   physical unit without changing sample rate, sample count, dtype, layout, or
+   channel axes.
+2. Missing `lfp_binary_scaling` fails closed.
+3. Missing or unsupported `data_units`, `has_scaleable_traces`,
+   `export_scale_factor`, or conversion declarations fail closed with the exact
+   metadata field in the error.
+4. Channel-ID disagreement; gain, offset, or unit vectors with the wrong
+   length; and a channel-count mismatch fail closed.
+5. NaN, infinity, zero, or a negative gain fails. Nonfinite offsets fail, while
+   finite zero, positive, and negative offsets remain valid.
+6. A missing, mixed, or unsupported physical unit fails rather than being
+   labeled `uV` downstream.
+7. Output-binary name and segment/sample-count disagreements fail closed;
+   existing file-size and saved-channel validation remains unchanged.
+
+#### Value-loading tests
+
+8. A synthetic multi-channel `lfp.dat` applies the selected channel's exact
+   gain and nonzero offset and returns the existing one-dimensional float shape
+   and sample rate.
+9. A channel-dependent synthetic fixture proves that the reader does not use a
+   neighboring channel's gain, offset, or unit.
+10. The high-level Open Ephys trial loader applies the affine conversion
+    exactly once, before optional filtering, and preserves the requested
+    event-relative time grid.
+11. The LFP-summary trial preparation adapter returns physical values without
+    changing interpolation, validity, RMS, or peak-to-peak axes.
+12. The continuous phase-block loader receives physical values on the same
+    absolute time grid.
+13. SpikeGLX reading and gain correction are unchanged.
+
+#### Cache identity tests
+
+14. Open Ephys source fingerprints include `lfp_preprocessing.json` and its
+    SHA-256 digest; a same-length content edit with restored size/mtime still
+    changes the source fingerprint.
+15. Corrected Open Ephys semantics change Power, Synchrony, and Spike-phase
+    component fingerprints relative to the recorded legacy semantics.
+16. SpikeGLX component fingerprints do not change because of the Open Ephys
+    correction.
+17. A legacy complete Open Ephys component is classified as stale under the
+    corrected live configuration while remaining readable from its immutable
+    snapshot.
+18. Prepared-phase and PPC work caches reject legacy source-value semantics and
+    cannot resume mixed-semantics checkpoints.
+19. The manifest records the resolved source-value semantics version for each
+    completed affected component.
+
+#### Numerical impact tests
+
+For positive gain `c` and zero offset, deterministic synthetic inputs must
+demonstrate:
+
+20. source, filtered, RMS, and peak-to-peak amplitudes change by `c`;
+21. linear PSD, reference PSD, and linear band power change by `c^2`;
+22. session- and presession-normalized dB power remains equal within a stated
+    tight tolerance and without an added epsilon;
+23. Hilbert/Morlet phase, ITPC, ISPC, PLV, PPC, spike counts, null schedules,
+    and stable identities remain equal, using exact equality where stable and a
+    documented tight tolerance only for floating phase transforms;
+24. cached source and band-filtered traces change scale while phase arrays keep
+    their documented radians/dimensionless units;
+25. plot builders retain `uV`, `uV^2/Hz`, and dB labels and render the corrected
+    arrays without reopening raw data.
+
+A separate affine-conversion test uses a nonzero offset and asserts the exact
+physical trace. Scale-invariance claims are not applied to nonzero-offset data.
+
+Tests must assert values and units, not merely that functions return without
+error.
+
+### 4.4 Required RED evidence
+
+Run the focused tests after the tests-only commit and before any source edit.
+The failure record must show failures caused by absent scaling, absent metadata
+validation, or unchanged compatibility identity. Pre-existing unrelated
+failures do not satisfy RED.
+
+The initial focused command should cover:
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_open_ephys_behavior_integration.py \
+  src/tests/neural_analysis/test_lfp_loading.py \
+  src/tests/neural_analysis/test_lfp_summary_models.py \
+  src/tests/neural_analysis/test_lfp_summary_io.py \
+  src/tests/neural_analysis/test_lfp_summary_pipeline.py \
+  src/tests/neural_analysis/test_lfp_summary_plotting.py \
+  src/tests/neural_analysis/test_lfp_summary_preparation.py \
+  src/tests/neural_analysis/test_lfp_summary_ppc_runtime.py \
+  src/tests/neural_analysis/test_lfp_summary_runtime.py \
+  src/tests/neural_analysis/test_lfp_summary_work_cache.py \
+  src/tests/neural_analysis/test_lfp_summary_synthetic_integration.py
+```
+
+Narrow `-k` expressions may be used to make the first RED output readable, but
+the complete files must pass before NR0 is considered green.
+
+### 4.5 Implementation sequence
+
+1. Normalize and validate the authoritative scaling and unit metadata.
+2. Apply the selected conversion in the shared Open Ephys channel-window
+   reader and update its data contract.
+3. Add preprocessing metadata to source fingerprints.
+4. Add the source-value semantics version to scientific and work-cache
+   identities and persisted provenance.
+5. Prove through the compatibility tests that the existing generic reader can
+   inspect old snapshots while corrected live assessment marks them stale. No
+   `lfp_summary_io.py` source edit is expected in NR0; if an adjustment is
+   genuinely required, stop and amend the exact source allowlist before editing.
+6. Refactor only within the touched functions after all focused tests are
+   green.
+
+Implementation and tests remain separate commits. Do not modify tests merely
+to accept implementation output unless the reviewed requirement was wrong; in
+that case stop and amend the plan first.
+
+### 4.6 Verification ladder
+
+Run verification in this order:
+
+1. focused scaling and metadata tests;
+2. complete affected test files listed in the RED command;
+3. all LFP-summary, Power, Synchrony, Spike-phase, cache, plotting, webapp, and
+   launcher tests;
+4. complete `src/tests/neural_analysis` suite;
+5. complete repository test suite if the neural suite is green.
+
+Record exact commands, test counts, warnings, commit IDs, and elapsed times in
+the execution record. A skipped or unavailable test must be explained; it is
+not silently counted as verification.
+
+### 4.7 Performance constraints
+
+- Read only the requested memmap slice and allocate only its one-dimensional
+  float result.
+- Apply the affine conversion with in-place vectorized NumPy multiply/add
+  operations on the requested one-channel float result only.
+- Do not read or scale the full Open Ephys binary.
+- Do not add a second copy of production-sized phase or PPC arrays.
+- Metadata parsing must occur no more often than it does in the current path;
+  deduplicating existing repeated metadata reads is optional and should be a
+  separate behavior-preserving micro-refactor if pursued.
+- Compare focused loader time and peak allocation before and after the change.
+  A material regression requires investigation before CT026 execution.
+
+## 5. Work package NR1 - CT026 correction impact and baseline approval
+
+NR1 begins only after NR0 code and automated tests are green and reviewed. It is
+a data-analysis validation package, not part of the unit-test implementation.
+
+The Terra command/evidence runner may write only the new user-approved
+versioned CT026 cache/report/run locations and temporary profiling locations
+declared by the lead before execution. In the repository, only the lead edits
+`docs/neural_analysis_refactor_execution_log.md` and the authoritative handoff
+in `docs/Tasks_neural.md`. NR1 has no source or unit-test edit authority.
+
+### 5.1 Safety and provenance
+
+- Use the user-designated CT026 Open Ephys session from the design document.
+- Never modify or overwrite the approved legacy cache, copied snapshot, report,
+  receipt, or cluster run.
+- Create a new timestamped analysis-run directory containing the exact scripts
+  used, a Markdown summary, configuration, log, source identifiers, commit ID,
+  adapter semantics version, and parameters.
+- Write corrected intermediate/final artifacts to a new versioned cache
+  location until user approval.
+- Seed every stochastic operation with the already approved seed and record it.
+- Start with a dry run that resolves paths, metadata, output locations,
+  components, expected cache states, and resource bounds without numerical
+  computation or cache mutation.
+
+### 5.2 Ordered CT026 checks
+
+1. Inspect both probe preprocessing files and record the exact scaling-object
+   shape, gain and offset ranges, physical units, channel count/order, dtype,
+   layout, conversion declaration, and sample rate.
+2. Load small representative windows from each configured site and verify raw
+   stored values, corrected physical values, standard deviations, and the
+   expected affine conversion without producing a scientific cache.
+3. Run corrected Power only. Compare all axes, trial selections, validity,
+   references, traces, amplitudes, linear PSDs, band powers, normalized dB
+   arrays, reports, and plots against the legacy result.
+4. After Power review, run corrected Synchrony. Compare phase-derived arrays,
+   bootstrap schedules/results, validity masks, source/filtered traces,
+   exemplars, reports, and plots.
+5. After Synchrony review, run the bounded 100-shuffle ProbeB Spike-phase
+   preview. Compare unit/trial/site identities, phase, PPC, null results,
+   reliability/significance, exemplar selection, traces, reports, runtime, and
+   memory.
+6. Do not run the corrected 1,000-shuffle final Spike-phase computation until
+   the preview comparison is reviewed and the user explicitly authorizes it.
+7. If authorized, run and inspect the final corrected Spike-phase artifact,
+   copy it locally using the existing receipt/checksum workflow, and retain the
+   producing path separately from the copied-local path.
+
+### 5.3 Expected comparisons, not automatic acceptance criteria
+
+The following are hypotheses to test:
+
+- because the inspected CT026 offsets are zero, amplitude arrays scale by the
+  recorded per-site gain;
+- because those offsets are zero, linear power arrays scale by the gain squared;
+- normalized dB arrays remain numerically equivalent;
+- phase-derived statistics and categorical selections remain equivalent;
+- plot y-ranges change for amplitude-bearing panels while scientific labels and
+  captions become truthful.
+
+Any unexpected change in trial validity, phase validity, selected units,
+reliable/significant cells, null schedules, exemplars, or normalized power
+requires investigation. Do not loosen tolerances or relabel the change as
+expected without identifying its numerical cause.
+
+### 5.4 NR1 approval gate
+
+NR1 completes only when:
+
+- corrected cache and report artifacts validate independently;
+- old artifacts remain intact and inspectable;
+- the comparison report explains every changed and invariant quantity;
+- performance and memory remain acceptable;
+- plots receive explicit user visual approval; and
+- the user designates the corrected artifacts as the structural refactor's
+  regression baseline.
+
+No structural module move begins before this gate.
+
+## 6. Structural package contract
+
+After NR1 approval, use small vertical migrations. Each package introduces one
+target responsibility, migrates bounded callers, leaves a thin compatibility
+boundary, and proves corrected-baseline equivalence. A repository-wide rename
+or simultaneous reorganization is prohibited.
+
+Every package specification below freezes:
+
+- dependencies and exact responsibility;
+- current files that may be edited and target files that may be created;
+- tests written first and a focused RED/GREEN command;
+- interfaces and behavior that must remain unchanged;
+- performance and completion evidence; and
+- the appropriate Terra writer and Sol review from Section 2.6.
+
+File lists are allowlists. README and `__init__.py` files directly required for
+listed new packages are implicitly included, but they contain documentation and
+minimal exports only. Any other file requires a plan amendment before editing.
+
+After focused GREEN, every code package runs its directly affected complete
+test files and:
+
+```text
+uv run pytest -q -p no:cacheprovider src/tests/neural_analysis
+```
+
+The complete repository suite runs at every wave boundary and at NR18. Test
+counts, warnings, timing, and skips are recorded in
+`docs/neural_analysis_refactor_execution_log.md`, which the lead creates in the
+documentation-only implementation baseline before NR0 tests.
+
+## 7. NR2 - Session metadata foundation
+
+**Depends on:** approved NR1 corrected baseline.
+
+**Files:**
+
+- new `src/neural_analysis/session/models.py`
+- new `src/neural_analysis/session/json_io.py`
+- new `src/neural_analysis/session/paths.py`
+- new `src/neural_analysis/session/validation.py`
+- new `src/neural_analysis/session/README.md`
+- new `src/neural_analysis/README.md` with the initial workflow overview,
+  prerequisites, and session-JSON creation/validation sections
+- new `src/neural_analysis/cli/create_session_metadata.py`
+- new `src/neural_analysis/cli/README.md`
+- new `src/tests/neural_analysis/session/test_models.py`
+- new `src/tests/neural_analysis/session/test_json_io.py`
+- new `src/tests/neural_analysis/session/test_paths.py`
+- new `src/tests/neural_analysis/session/test_validation.py`
+- new `src/tests/neural_analysis/cli/test_create_session_metadata.py`
+
+**Design and tasks:**
+
+- Define frozen data-only records for session identity, acquisition family,
+  probes, sites, site pairs, populations, and approved cache references.
+- Keep scientific presets out of session JSON. Store only identity, sources,
+  topology, selection rules, and approved result references.
+- Decode one explicit schema version; reject future versions and provide only
+  reviewed conservative migration for older versions.
+- Require the initial metadata document to be named
+  `<session_home>/neural_session.json`. Resolve relative paths from that session
+  root and require all initial source paths to remain inside it. External
+  metadata locations, absolute source paths, traversal, and root remapping are
+  explicitly deferred.
+- Separate structural validation from action validation. Structural validation
+  permits useful incomplete descriptions; action validation reports exactly
+  what a requested operation lacks.
+- Keep records declarative. Loading arrays, computing analyses, inspecting
+  caches, and rendering UI are outside this package.
+- Provide the requested editable Python creator with clearly labeled variables
+  and a `main` function. Users may edit those values so the first generated JSON
+  already contains the intended session values. The same entry point also
+  supports emitting an intentionally incomplete/default skeleton for users who
+  prefer to edit JSON directly. It may write explicit `null` values but must not
+  invent paths, sites, probes, regions, populations, or results.
+- Create the canonical end-user README and document the exact JSON creation and
+  validation commands implemented in this package. Mark cache and webapp
+  sections as forthcoming until their tested commands exist; do not guess them.
+
+**Tests written first:**
+
+- deterministic JSON round trip, stable ordering, and strict schema version;
+- arbitrary probe/site identifiers, one or multiple probes, and explicit
+  site-pair references;
+- probe identity remains independent of site/region annotation;
+- `null`, omitted, empty string, invalid path, missing probe, and empty
+  scientific population are distinct;
+- duplicate IDs, unresolved references, population/probe mismatches, mixed
+  acquisition family, and malformed cache identities fail closed;
+- the canonical metadata filename and session-root location are enforced;
+  relative paths resolve from that root and reject absolute paths, traversal,
+  symlink escape, and external-metadata/root-remapping attempts;
+- filesystem existence checks are opt-in and fail requested missing non-null
+  paths;
+- incomplete metadata supports inspection while action validation disables
+  only unsupported work;
+- both edited-creator output and default-skeleton output validate and cause no
+  computation/cache side effect;
+- every JSON-creation/validation command shown in the top-level README parses
+  and runs against a temporary synthetic session;
+- representative CT026 and CT014 fixtures express their different layouts
+  without hardcoded PFC/HPC semantics.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/session \
+  src/tests/neural_analysis/cli/test_create_session_metadata.py
+```
+
+**Completion evidence:** public data contracts have full types/units/path
+semantics; metadata validation opens no large binary; no existing analysis
+module imports the new session package yet; README inventory is complete.
+
+## 8. NR3 - LFP source contracts and acquisition adapters
+
+**Depends on:** NR2; preserves NR0 corrected semantics exactly.
+
+**Files:**
+
+- new `src/neural_analysis/sources/contracts.py`
+- new `src/neural_analysis/sources/open_ephys/lfp.py`
+- new `src/neural_analysis/sources/spikeglx/lfp.py`
+- new READMEs in `sources`, `sources/open_ephys`, and `sources/spikeglx`
+- existing `src/neural_analysis/lfp_loading.py` as a compatibility facade
+- existing `src/neural_analysis/lfp_summary_models.py` only for the source-
+  fingerprint compatibility bridge
+- new `src/tests/neural_analysis/sources/test_contracts.py`
+- new `src/tests/neural_analysis/sources/open_ephys/test_lfp.py`
+- new `src/tests/neural_analysis/sources/spikeglx/test_lfp.py`
+- existing `test_lfp_loading.py`,
+  `test_open_ephys_behavior_integration.py`, and
+  `test_lfp_summary_preparation.py`
+- existing `test_lfp_summary_models.py` for source-identity regression
+
+**Design and tasks:**
+
+- Define the smallest explicit LFP metadata/window contracts needed by both
+  acquisition families. Prefer frozen dataclasses plus functions; do not build
+  a behavior-heavy loader hierarchy.
+- Move corrected Open Ephys metadata validation and bounded channel-window
+  reading without altering values, dtype conversions, shapes, or semantics
+  version.
+- Move SpikeGLX metadata, gain correction, and bounded reading. Validate saved
+  channel type/order so the synchronization row cannot be selected as LFP.
+- Have each adapter expose the exact authoritative metadata sidecars it
+  consumed. Include the same-stem SpikeGLX `*.lf.meta` in source fingerprints;
+  do not treat the `*.lf.bin` or its parent directory as sufficient identity.
+- Keep synchronization and trial alignment out of the LFP adapters; they accept
+  sample windows and return explicit sample rate, unit, and provenance.
+- Retain old `lfp_loading` imports and functions as thin forwarding wrappers.
+
+**Tests written first:**
+
+- both adapters satisfy the same documented window contract;
+- corrected Open Ephys results match NR1 values exactly;
+- SpikeGLX gain-corrected microvolt behavior matches the existing baseline;
+- changing only a SpikeGLX `*.lf.meta` file stales affected live components and
+  work caches while the unchanged legacy snapshot remains inspectable; a
+  same-length edit with restored size/mtime is detected by the metadata content
+  digest;
+- channel bounds, signal-versus-sync type, dtype, layout, byte size, scale,
+  unit, and sample rate validation fail with source-specific context;
+- unsupported metadata layouts fail rather than guessing;
+- wrappers preserve public signatures and return values;
+- static import tests forbid adapters from importing workflows, webapp,
+  reports, or Streamlit.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/sources/test_contracts.py \
+  src/tests/neural_analysis/sources/open_ephys/test_lfp.py \
+  src/tests/neural_analysis/sources/spikeglx/test_lfp.py \
+  src/tests/neural_analysis/test_lfp_loading.py \
+  src/tests/neural_analysis/test_open_ephys_behavior_integration.py \
+  src/tests/neural_analysis/test_lfp_summary_preparation.py \
+  src/tests/neural_analysis/test_lfp_summary_models.py
+```
+
+**Performance:** preserve memmap/bounded reads; measure allocation and time for
+representative windows; prohibit full-file copies or repeated gain correction.
+
+## 9. NR4 - Synchronization and acquisition digital I/O
+
+**Depends on:** NR3.
+
+**Files:**
+
+- new `src/neural_analysis/sources/open_ephys/synchronization.py`
+- new `src/neural_analysis/sources/spikeglx/synchronization.py`
+- new `src/neural_analysis/synchronization/alignment.py`
+- new `src/neural_analysis/synchronization/irig.py`
+- new `src/neural_analysis/synchronization/manual.py`
+- new `src/neural_analysis/synchronization/README.md`
+- existing `ephys_sync_utils.py`, `spikeglx_sync_io.py`,
+  `manual_session_synchronization.py`, `sync_ephys.py`, and
+  `analog_treadmill_decode.py` as source/compatibility inputs
+- existing `src/irig_tools/irig_sync_utils.py` and
+  `src/irig_tools/open_ephys_irig.py` as compatibility inputs for logic whose
+  neural-facing owner moves in this package
+- existing low-level `src/irig_tools/irig_core.py`,
+  `decode_irig_logic_csv.py`, and `irig_serial_io.py` remain the non-neural
+  decoder/serial owners and are regression inputs, not duplicate targets
+- their existing tests, including the decoder/serial/source-layout tests, plus
+  new tests under
+  `src/tests/neural_analysis/synchronization`
+
+**Design and tasks:**
+
+- Separate acquisition-specific digital/event reading from shared time mapping,
+  IRIG anchor validation, interpolation, and manual alignment.
+- Keep absolute Unix seconds, acquisition samples, derived LFP samples, and
+  event-relative seconds distinct in names and contracts.
+- Preserve Open Ephys global/AP-to-derived-LFP mapping and SpikeGLX digital-line
+  semantics.
+- Split treadmill conversion needed by manual synchronization from any
+  standalone exploratory signal analysis.
+- Move or wrap shared affine/anchor/interpolation logic exactly once. Keep the
+  low-level IRIG bit decoder and serial protocol in `src/irig_tools`; leave
+  forwarding imports there when current external callers require them rather
+  than copying an implementation into both packages.
+- Reduce `sync_ephys.py` to a compatibility CLI over explicit adapters. Do not
+  introduce session discovery or filename inference.
+
+**Tests written first:**
+
+- existing synthetic IRIG, serial, digital-line, and manual-alignment results
+  are exact;
+- monotonicity, finite anchors, minimum anchor count, UTC offset, sample-rate
+  mismatch, segment assumptions, and extrapolation behavior fail clearly;
+- coordinate conversions document input/output units and preserve shapes;
+- Open Ephys and SpikeGLX source readers meet one narrow shared alignment
+  contract without importing each other;
+- old imports and CLI calls forward during compatibility;
+- no synchronization module imports Streamlit, analysis, artifact, report, or
+  workflow code.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_irig_core.py \
+  src/tests/neural_analysis/test_decode_irig_logic_csv.py \
+  src/tests/neural_analysis/test_irig_logic_neurokairos_source.py \
+  src/tests/neural_analysis/test_irig_module_reorg.py \
+  src/tests/neural_analysis/test_irig_serial_io.py \
+  src/tests/neural_analysis/test_irig_sync_utils.py \
+  src/tests/neural_analysis/test_open_ephys_irig.py \
+  src/tests/neural_analysis/test_open_ephys_sync_utils.py \
+  src/tests/neural_analysis/test_spikeglx_sync_io.py \
+  src/tests/neural_analysis/test_sync_ephys.py \
+  src/tests/neural_analysis/test_manual_session_synchronization.py \
+  src/tests/neural_analysis/synchronization
+```
+
+**Completion evidence:** exact coordinate equality where deterministic; stated
+tolerance only for fitted/interpolated floats; no raw LFP numerical behavior
+changes; legacy command smoke passes.
+
+## 10. NR5 - Spike, channel-quality, and behavior source adapters
+
+**Depends on:** NR2 and NR4.
+
+**Files:**
+
+- new `src/neural_analysis/sources/spikes/kilosort.py`
+- new `src/neural_analysis/sources/spikes/aligned.py`
+- new `src/neural_analysis/sources/spikes/channel_quality.py`
+- new `src/neural_analysis/sources/behavior/trials.py`
+- new `src/neural_analysis/sources/behavior/events.py`
+- new `src/neural_analysis/sources/behavior/treadmill.py`
+- new READMEs in `sources/spikes` and `sources/behavior`
+- extraction/wrappers in `unit_spike_loading.py`,
+  `spike_behavior_pynapple.py`, and `analog_treadmill_decode.py`
+- source-fingerprint compatibility changes in `lfp_summary_models.py`
+- new tests under `src/tests/neural_analysis/sources/spikes` and
+  `sources/behavior`
+- affected existing loading, channel-quality, behavior-integration, and manual
+  synchronization tests
+
+**Design and tasks:**
+
+- Load and validate sorter metadata, spike sequences, aligned UTC arrays,
+  channel quality, trial tables, event tables, and treadmill data without
+  choosing an analysis.
+- Compare sorter/aligned-spike sequence identity and shape; do not require
+  literal provenance-path equality for the inspected CT014 layout.
+- Return the exact files consumed by population resolution. Source identity
+  includes sorter spike samples, cluster assignments, curated cluster metadata,
+  aligned spikes, and channel-quality metadata when it affects selection; a
+  sorter-directory stat alone is not accepted as the scientific source.
+- Represent those validated paths in a small immutable spike-source provenance
+  record returned by the adapter and consumed by NR7's resolved configuration.
+  Do not add mandatory constructor parameters to the current
+  `UnitPopulationConfig`; old configurations without the record remain legacy-
+  readable and new configurations fail closed if required provenance is absent.
+- Make population filtering a separate explicit operation over validated
+  tables. Report retained channel/unit counts and fail closed on required
+  missing/ambiguous columns.
+- Validate only action-required trial columns rather than one global table
+  schema.
+- Use Pynapple native structures where they are already the supported contract;
+  do not wrap them in redundant session classes.
+
+**Tests written first:**
+
+- Kilosort/aligned arrays preserve stable unit identity, one-to-one lengths,
+  finite UTC seconds, and source sample coordinates;
+- selected curated sorter paths may match aligned data whose stored provenance
+  names the parent sorter;
+- required quality columns/categories are explicit and counts are reported;
+- missing channel-quality files remain valid for actions that do not require
+  them;
+- trial/event loaders preserve row identity and require only named action
+  columns;
+- CT026 and CT014 fixtures retain distinct schemas without conditional subject
+  code;
+- old loading functions forward with unchanged public results;
+- changing any consumed sorter/aligned/channel-quality file stales only the
+  affected population/component; unrelated components retain their identity;
+  legacy directory-only identities remain readable but are not current.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/sources/spikes \
+  src/tests/neural_analysis/sources/behavior \
+  src/tests/neural_analysis/test_unit_spike_loading.py \
+  src/tests/neural_analysis/test_channel_quality_integration.py \
+  src/tests/neural_analysis/test_spike_behavior_pynapple.py \
+  src/tests/neural_analysis/test_open_ephys_behavior_integration.py \
+  src/tests/neural_analysis/test_manual_session_synchronization.py \
+  src/tests/neural_analysis/test_lfp_summary_models.py
+```
+
+**Performance:** metadata/table validation may load small tables and index
+arrays, but not LFP binaries or complete spike trains unnecessarily. Preserve
+row order and avoid dataframe copies where validation can use views.
+
+## 11. NR6 - Artifact, work-cache, and snapshot foundation
+
+**Depends on:** NR2-NR5; corrected semantics identity from NR0.
+
+**Files:**
+
+- new `src/neural_analysis/artifacts/manifests.py`
+- new `src/neural_analysis/artifacts/component_cache.py`
+- new `src/neural_analysis/artifacts/work_cache.py`
+- new `src/neural_analysis/artifacts/snapshots.py`
+- new `src/neural_analysis/artifacts/legacy_result_files.py`
+- new `src/neural_analysis/artifacts/README.md`
+- compatibility wrappers in `lfp_summary_io.py` and
+  `lfp_summary_work_cache.py`
+- smallest snapshot-validation extraction from `lfp_summary_webapp.py`
+- new artifact tests plus affected existing I/O, work-cache, webapp, pipeline,
+  and launcher tests
+
+**Design and tasks:**
+
+- Move generic JSON/NPZ validation, atomic component publication, manifest-last
+  updates, restart-only work caches, snapshot/receipt validation, and component
+  status into explicit artifact owners.
+- Provide a narrow, explicitly legacy named-array NPZ writer for the existing
+  exploratory result-save wrappers. It owns filesystem/serialization mechanics;
+  domain modules or workflows continue to define field names, units, axes, and
+  metadata.
+- Keep component-specific array schemas supplied by workflows; artifacts do not
+  know CT026 paths or scientific formulas.
+- Distinguish missing, stale, running, failed, corrupt, and compatible states.
+- Preserve `allow_pickle=False` for component caches and snapshots, named axes,
+  physical-unit metadata, rollback, immutable reports, cleanup ownership, and
+  copied-snapshot identity.
+- Retain legacy readers and wrappers; do not rewrite old snapshots.
+
+**Tests written first:**
+
+- previous valid bytes survive injected NPZ, JSON, validation, replace, and
+  manifest failures;
+- manifest publishes last and never points to an invalid component;
+- path traversal, symlink escapes, pickle/object arrays in component or
+  snapshot readers, axis mismatches, bad checksums, incompatible semantics,
+  and malformed receipts fail closed;
+- legacy snapshots remain inspectable but stale for corrected live computation;
+- work cache/checkpoint identity rejects scientific, representation, source,
+  semantics, and execution changes according to existing contracts;
+- artifact modules import no Streamlit, CT026 compatibility, source loaders, or
+  numerical analyses;
+- old public I/O functions forward exactly;
+- existing exploratory result files retain their names, named-array schemas,
+  object-array `meta`, overwrite/error behavior, and current `allow_pickle=True`
+  read contract when their wrappers later delegate to
+  `legacy_result_files.py`. That legacy format is never accepted as a component
+  cache or snapshot; replacing it with a pickle-free schema requires a separate
+  versioned migration rather than an import refactor.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_summary_io.py \
+  src/tests/neural_analysis/test_lfp_summary_work_cache.py \
+  src/tests/neural_analysis/test_lfp_summary_pipeline.py \
+  src/tests/neural_analysis/test_lfp_summary_webapp.py \
+  src/tests/neural_analysis/test_lfp_spike_phase_launcher.py \
+  src/tests/neural_analysis/artifacts
+```
+
+**Performance:** safe loading validates without duplicating complete arrays;
+snapshot hashing remains streaming/bounded; no new serialization dependency.
+
+## 12. NR7 - Metadata-driven analysis registry and cache runner
+
+**Depends on:** NR2-NR6.
+
+**Files:**
+
+- new `src/neural_analysis/workflows/contracts.py`
+- new `src/neural_analysis/workflows/registry.py`
+- new `src/neural_analysis/workflows/README.md`
+- new `src/neural_analysis/cli/run_cache.py`
+- update `src/neural_analysis/README.md` with dry-run, local cache, completion,
+  output-location, and first-line troubleshooting guidance
+- new tests for workflow contracts, registry, and CLI
+- minimal adapters in `lfp_summary_pipeline.py`, `lfp_power_validation.py`,
+  `lfp_synchrony_validation.py`, and `lfp_spike_phase_validation.py`
+
+**Design and tasks:**
+
+- Define a small explicit registry describing supported analysis name,
+  action-required metadata, runnable components, result artifacts, and cached
+  views. Do not build dynamic plugin discovery or a base-class hierarchy.
+- Resolve session metadata into the existing approved LFP-summary configuration
+  through a pure, reviewable adapter. Versioned code presets own scientific
+  defaults; every run saves the resolved combination.
+- Provide one cache command with explicit metadata path, component selection,
+  dry-run/local mode, output, and execution profile inputs.
+- Dry run validates paths and relationships, reports planned inputs/outputs and
+  resource bounds, and performs no numerical computation or cache mutation.
+- Keep Slurm submission, long-run state, and resume in NR17. The NR7 command may
+  invoke the current local compatibility workflow only.
+- Document only the cache modes actually implemented at this stage. The guide
+  identifies manifest, component, log/summary, and report outputs at a high
+  level and links to technical artifact documentation for schemas.
+
+**Tests written first:**
+
+- registry entries are explicit, unique, and dependency-valid;
+- arbitrary probe/site labels map to existing analysis contracts without CT026
+  branches;
+- Power, Synchrony, Spike phase, and Compute All require only their documented
+  metadata and produce deterministic resolved configurations;
+- scientific presets and execution settings remain separated in fingerprints;
+- dry run opens no raw arrays and writes nothing;
+- incomplete metadata disables only affected components with exact messages;
+- corrected CT026 metadata resolves to NR1 identities and numerical defaults;
+- CLI parsing is thin and delegates immediately.
+- README dry-run/cache commands are exercised against synthetic metadata, and
+  documented output names agree with the produced artifact plan/result.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/workflows/test_contracts.py \
+  src/tests/neural_analysis/workflows/test_registry.py \
+  src/tests/neural_analysis/cli/test_run_cache.py \
+  src/tests/neural_analysis/test_lfp_summary_models.py \
+  src/tests/neural_analysis/test_lfp_summary_pipeline.py
+```
+
+**Completion evidence:** metadata-driven CT026 dry run matches the corrected
+configuration; synthetic arbitrary probe/site dry run succeeds; no cluster or
+real computation occurs in package verification.
+
+## 13. NR8 - LFP-summary visualization extraction
+
+**Depends on:** NR6-NR7.
+
+**Files:**
+
+- new `src/neural_analysis/visualization/common.py`
+- new `src/neural_analysis/visualization/lfp_lfp/power.py`
+- new `src/neural_analysis/visualization/lfp_lfp/phase.py`
+- new `src/neural_analysis/visualization/lfp_lfp/synchrony.py`
+- new `src/neural_analysis/visualization/spike_lfp/phase.py`
+- new `src/neural_analysis/visualization/spike_lfp/ppc.py`
+- new READMEs under `visualization`, `visualization/lfp_lfp`, and
+  `visualization/spike_lfp`
+- compatibility facade in `lfp_summary_plotting.py`
+- plotting-only extraction from `lfp_phase_clustering.py` and the three LFP
+  validation modules
+- existing and new LFP-summary plotting tests
+
+**Design and tasks:**
+
+- Move pure Matplotlib construction only. Functions accept validated arrays and
+  small immutable plot-context records, return figures/axes, and neither load,
+  compute, save, nor import Streamlit.
+- Keep report selection, captions tied to report schema, file naming, and
+  artifact publication outside visualization.
+- Centralize only genuinely shared style/caption primitives. Domain meanings,
+  axes, and panels remain named in their domain modules.
+- Preserve light-mode defaults, opaque white background, black axes/text,
+  readable fonts, labels, and captions with statistical meaning.
+- Keep the old module as forwarding imports until NR18.
+
+**Tests written first:**
+
+- old and new entry points produce the same axes, artists, labels, captions,
+  panel ordering, and selections for fixed cached arrays;
+- figure functions do not call raw loaders, workflows, caches, or computation;
+- unit/radian/Hz/seconds/dB labels are exact, including corrected microvolt
+  amplitude axes;
+- unavailable exemplars remain explicit and never create fake plots;
+- figures close cleanly and repeated calls do not retain global state;
+- import-direction tests forbid Streamlit and upper-layer dependencies;
+- the phase-rate sparsity assessment is passed into visualization as prepared
+  presentation context; visualization does not calculate it. The existing
+  assessment remains at its compatibility location until NR12 moves it beside
+  the Spike-LFP numerical result it summarizes.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_summary_plotting.py \
+  src/tests/neural_analysis/test_lfp_phase_clustering.py \
+  src/tests/neural_analysis/test_lfp_power_validation.py \
+  src/tests/neural_analysis/test_lfp_synchrony_validation.py \
+  src/tests/neural_analysis/test_lfp_spike_phase_validation.py \
+  src/tests/neural_analysis/visualization/lfp_lfp \
+  src/tests/neural_analysis/visualization/spike_lfp
+```
+
+**Performance:** load no component twice, use array views for selections, save
+and close one report figure at a time, and retain the approved bounded PNG set.
+
+## 14. NR9 - Unit, spike-behavior, and population visualization extraction
+
+**Depends on:** NR5 and NR8.
+
+**Files:**
+
+- new `src/neural_analysis/visualization/units/raster.py`
+- new `src/neural_analysis/visualization/units/psth.py`
+- new `src/neural_analysis/visualization/population/pca.py`
+- new `src/neural_analysis/visualization/population/decoding.py`
+- new `src/neural_analysis/visualization/cross_session/decoding.py`
+- new READMEs for those visualization packages
+- plotting-only changes in `unit_spike_plotting.py`, `psth_behavior.py`,
+  `population_pca_decoding.py`, `population_pca_switch_trajectories.py`, and
+  `plot_cross_session_analysis.py`
+- corresponding existing/new plotting tests
+- existing `test_single_trial_spike_lfp_hilbert_plotting.py` and
+  `test_spike_lfp_phase_rate_plotting.py`
+
+**Design and tasks:**
+
+- Separate figure construction from selection, computation, file search, and
+  saving in each oversized module.
+- Keep plot inputs narrow: prepared arrays/tables plus explicit labels and
+  physical context, not complete session objects.
+- Avoid one generic plotting framework. Share only stable style primitives from
+  `visualization/common.py`.
+- Leave numerical functions in their current modules until NR13-NR14.
+
+**Tests written first:**
+
+- deterministic prepared inputs reproduce existing layouts, labels, pagination,
+  trial ordering, event markers, and summary statistics;
+- plotting does not mutate input arrays/dataframes or perform analysis/source
+  loading;
+- save functions, where retained temporarily, delegate to pure builders and
+  preserve filenames;
+- population and cross-session figures preserve date/session ordering and do
+  not refit PCA or decoders;
+- old public plotting imports forward.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_unit_spike_plotting.py \
+  src/tests/neural_analysis/test_single_trial_spike_lfp_hilbert_plotting.py \
+  src/tests/neural_analysis/test_spike_lfp_phase_rate_plotting.py \
+  src/tests/neural_analysis/test_psth_behavior.py \
+  src/tests/neural_analysis/test_population_pca_decoding.py \
+  src/tests/neural_analysis/test_population_pca_switch_trajectories.py \
+  src/tests/neural_analysis/test_plot_cross_session_analysis.py \
+  src/tests/neural_analysis/visualization/units \
+  src/tests/neural_analysis/visualization/population \
+  src/tests/neural_analysis/visualization/cross_session
+```
+
+**Completion evidence:** no new numerical logic in visualization; rendering
+smokes pass under a noninteractive backend; representative figures receive Sol
+structural review, not a new scientific visual-approval claim.
+
+## 15. NR10 - Metadata-driven Streamlit application shell
+
+**Depends on:** NR2, NR6-NR9.
+
+**Files:**
+
+- new `src/neural_analysis/webapp/app.py`
+- new `src/neural_analysis/webapp/routes.py`
+- new `src/neural_analysis/webapp/state.py`
+- new `src/neural_analysis/webapp/controls.py`
+- new `src/neural_analysis/webapp/data_access.py`
+- new domain files under `src/neural_analysis/webapp/views`
+- new `src/neural_analysis/webapp/README.md`
+- new `src/neural_analysis/cli/launch_webapp.py`
+- update `src/neural_analysis/README.md` with the final webapp launch and
+  cache/snapshot inspection walkthrough
+- compatibility wrappers in `psth_webapp.py` and `lfp_summary_webapp.py`
+- new webapp/CLI tests and affected existing webapp tests
+- concise launch how-to documentation
+
+**Design and tasks:**
+
+- Build one shell that loads an explicit metadata path, shows structural/action
+  availability, and delegates through the NR7 explicit registry.
+- Generate probe, site, pair, population, path, and cache controls from metadata
+  while showing hardware identity and anatomy separately.
+- Separate cached production views from exploratory live views in route labels
+  and behavior.
+- Snapshot inspection uses the saved snapshot configuration and receipt; live
+  metadata cannot relabel it.
+- Long computation remains outside rerenders. The app may validate, inspect,
+  render cached results, and construct an explicit command handoff.
+- Missing optional inputs disable only affected routes with actionable reasons.
+- The launcher accepts `--session-metadata PATH`; it contains no scientific
+  configuration logic.
+- The top-level README explains expected startup behavior, live versus snapshot
+  inspection, selectors, compatibility/provenance status, and unavailable
+  results without duplicating the view implementation.
+
+**Tests written first:**
+
+- explicit metadata is required and initializes stable state across rerenders;
+- arbitrary labels and one-probe/incomplete sessions create correct controls;
+- cached versus live source modes remain distinct and do not leak state;
+- snapshot manifest/config/receipt control labels and provenance;
+- cached routes call only artifact/data-access and visualization boundaries;
+- compute actions produce reviewed command requests and never execute during a
+  normal render;
+- old entry points forward during compatibility;
+- startup smoke uses a synthetic metadata file with no raw data.
+- the documented launch command parses successfully and the synthetic smoke
+  reaches the metadata-derived shell without computation.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_summary_webapp.py \
+  src/tests/neural_analysis/test_psth_webapp.py \
+  src/tests/neural_analysis/webapp \
+  src/tests/neural_analysis/cli/test_launch_webapp.py
+```
+
+**Performance:** use bounded Streamlit caches for metadata/small tables only;
+never cache a second production component copy; close figures; no raw wavelet,
+PPC, or batch computation during rerender.
+
+## 16. NR11 - LFP-LFP scientific analysis package
+
+**Depends on:** NR3-NR4 and NR8; no workflow move yet.
+
+**Files:**
+
+- new modules under `src/neural_analysis/analyses/lfp_lfp`: `power.py`,
+  `spectrogram.py`, `wavelet_phase.py`, `relative_phase.py`, `synchrony.py`, and
+  `README.md`
+- compatibility facades in `lfp_power_summary.py`, `lfp_spectrogram.py`,
+  `lfp_phase_clustering.py`, and `lfp_synchrony_summary.py`
+- configuration extraction/compatibility changes in `lfp_summary_models.py`
+- corresponding existing tests and mirrored target-package tests
+
+**Design and tasks:**
+
+- Move pure numerical kernels over explicit arrays/configuration only.
+- Split result serialization and residual plotting out of current modules before
+  moving functions.
+- Move LFP-analysis configuration records currently imported from
+  `lfp_summary_models.py` beside their owning pure analyses, leaving exact
+  compatibility re-exports for workflow callers.
+- Keep `make_phase_condition_masks` and `select_reference_trial_indices` in
+  compatibility code until NR13 moves their behavior-table selection logic to
+  `analyses/spike_behavior`; the new LFP numerical modules must not import
+  `spike_behavior_pynapple`.
+- Keep the three existing `lfp_phase_clustering.py` save entry points as thin
+  compatibility wrappers over `artifacts/legacy_result_files.py`; preserve
+  their NPZ schemas and move no file I/O into `analyses/lfp_lfp`.
+- Preserve Welch definitions, canonical frequency interpolation, notch behavior,
+  reference normalization, band integration, wavelet parameters, phase
+  conventions, bootstrap seeds, exclusions, and missingness.
+- Avoid a shared analysis base class. Small immutable result dataclasses may
+  remain next to the functions whose arrays they describe.
+
+**Tests written first:**
+
+- old/new imports and deterministic outputs match exactly where stable;
+- corrected NR1 Power/Synchrony regression fixtures match arrays, selections,
+  seeds, and identities;
+- phase-angle comparisons use circular differences and reviewed tolerances;
+- synthetic edge cases protect half-open windows, constant/nonfinite traces,
+  line exclusions, pair order, and unavailable references;
+- analysis modules perform no file I/O, cache writes, plotting, or Streamlit
+  import;
+- API/source checks confirm required SciPy/Pynapple calls against installed
+  implementations when first relocated behind a new seam.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_power_summary.py \
+  src/tests/neural_analysis/test_lfp_spectrogram.py \
+  src/tests/neural_analysis/test_lfp_phase_clustering.py \
+  src/tests/neural_analysis/test_lfp_synchrony_summary.py \
+  src/tests/neural_analysis/test_lfp_summary_models.py \
+  src/tests/neural_analysis/analyses/lfp_lfp
+```
+
+**Performance:** characterize Welch/wavelet/synchrony runtime and memory before
+and after moves; no recomputation per condition; preserve bounded block design.
+
+## 17. NR12 - Spike-LFP scientific analysis package
+
+**Depends on:** NR11 and approved existing PPC performance baseline.
+
+**Files:**
+
+- new modules under `src/neural_analysis/analyses/spike_lfp`:
+  `phase_sampling.py`, `phase_locking.py`, `ppc.py`, `ppc_kernel.py`, and
+  `README.md`
+- compatibility facades in `spike_lfp_hilbert_phase.py`,
+  `spike_lfp_phase_locking.py`, `spike_lfp_summary.py`, and
+  `lfp_summary_ppc_kernel.py`
+- existing spike-LFP/PPC kernel tests plus mirrored target tests
+- no launcher, work-cache, or multiprocessing-runtime move in this package
+
+**Design and tasks:**
+
+- Move only pure Hilbert/wavelet sampling, phase-rate, descriptive phase-rate
+  sparsity assessment, PPC, null, FDR, exemplar, and sufficient-statistic
+  kernels. The sparsity assessment remains a presentation diagnostic rather
+  than a significance or eligibility criterion; visualization receives its
+  prepared result and does not recompute it.
+- Preserve stable IDs, exact-sample semantics, epoch boundaries, overlap,
+  schedules, seeds, inference eligibility, BH families, histogram definitions,
+  and numerical tolerance policy.
+- Keep execution planning, workers, checkpoints, mmap ownership, and progress in
+  their current runtime until NR15/NR17.
+- Retain performance-critical functions as explicit readable kernels rather
+  than hiding them behind general abstractions.
+- Keep `save_single_trial_spike_lfp_hilbert_result` and
+  `save_spike_lfp_phase_locking_result` as compatibility wrappers over
+  `artifacts/legacy_result_files.py`. Their named-array/metadata contracts remain
+  covered by existing round-trip tests; target analysis modules perform no
+  filesystem I/O.
+
+**Tests written first:**
+
+- old/new pure-kernel results and errors match;
+- PPC and null schedules are deterministic and worker/block independent;
+- near-grid, boundary, overlap, sparse, tie, and empty eligibility fixtures
+  retain approved decisions;
+- phase-rate sparsity counts, occupancy warnings, and thresholds match the old
+  entry point, and visualization consumes the prepared assessment without
+  numerical work;
+- corrected scaling changes only cached amplitude traces, not phase/PPC
+  scientific meaning, under NR1 tolerances;
+- no source, artifact, workflow, report, plotting, or Streamlit imports;
+- representative kernel allocation and runtime remain within the approved PPC
+  gates.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_spike_lfp_hilbert_phase.py \
+  src/tests/neural_analysis/test_spike_lfp_phase_locking.py \
+  src/tests/neural_analysis/test_spike_lfp_phase_rate_sparsity.py \
+  src/tests/neural_analysis/test_spike_lfp_summary.py \
+  src/tests/neural_analysis/test_lfp_summary_ppc_kernel.py \
+  src/tests/neural_analysis/analyses/spike_lfp
+```
+
+**Performance:** run the frozen seeded microbenchmarks and allocation estimates;
+material regression or extra full-size copies blocks completion.
+
+## 18. NR13 - Spike-behavior analysis package
+
+**Depends on:** NR5 and NR9.
+
+**Files:**
+
+- new `src/neural_analysis/analyses/spike_behavior/binning.py`
+- new `src/neural_analysis/analyses/spike_behavior/psth.py`
+- new `src/neural_analysis/analyses/spike_behavior/decoding.py`
+- new `src/neural_analysis/analyses/spike_behavior/README.md`
+- numerical extraction/facades in `psth_behavior.py` and
+  `spike_behavior_pynapple.py`
+- existing PSTH/spike-behavior tests and new mirrored target tests
+- category-5 `spike_behavior_analysis.py` and `spike_behavior_binning.py` are
+  read-only evidence in this package, not deletion targets
+
+**Design and tasks:**
+
+- Separate trial/unit selection, binning, PSTH, feature-table construction, and
+  decoding kernels from loading, plotting, and CLI code.
+- Move the established condition-mask logic used by
+  `lfp_phase_clustering.make_phase_condition_masks` and
+  `lfp_spectrogram.select_reference_trial_indices` here, then leave those old
+  names as compatibility forwards. This prevents final LFP-LFP analysis modules
+  from depending on the current mixed-responsibility spike/behavior module.
+- Pass explicit columns/arrays when helpers use only part of a dataframe;
+  retain whole dataframes only for operations whose contract is row-aligned
+  table validation/transformation.
+- Preserve Pynapple-native supported paths and do not revive superseded code to
+  satisfy the target organization.
+
+**Tests written first:**
+
+- trial masks, bin edges, half-open windows, rates, unit identities, missing
+  events, and choice/context conventions remain exact;
+- decoding split identities and seeds are deterministic with no train/test
+  leakage;
+- numerical modules do not load files, plot, save, or import Streamlit;
+- wrappers preserve public behavior;
+- category-5 code has a documented caller/notebook inventory but remains
+  untouched.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_psth_behavior.py \
+  src/tests/neural_analysis/test_spike_behavior_pynapple.py \
+  src/tests/neural_analysis/analyses/spike_behavior
+```
+
+**Completion evidence:** existing analysis tables and figures consume the new
+pure outputs without numerical drift; no new dependency or speculative API.
+
+## 19. NR14 - Population and cross-session analysis packages
+
+**Depends on:** NR5, NR9, and NR13.
+
+**Files:**
+
+- new modules under `analyses/population`: `pca.py`, `decoding.py`,
+  `switch_trajectories.py`, and `README.md`
+- new `analyses/cross_session/decoding.py` and README
+- new `workflows/cross_session/decoding.py` and README
+- compatibility facades in `population_pca.py`,
+  `population_pca_decoding.py`, `population_pca_switch_trajectories.py`, and
+  `plot_cross_session_analysis.py`
+- existing population/cross-session tests and new mirrored analysis/workflow
+  tests
+
+**Design and tasks:**
+
+- Move rate-tensor construction, normalization, PCA, decoding, switch
+  trajectory, cross-session table transformation/aggregation, and statistics
+  separately from plotting and CLI concerns.
+- Keep `analyses/cross_session` pure: it accepts already loaded tables and
+  returns transformed/aggregated tables or statistical results without paths or
+  file I/O. `workflows/cross_session` owns explicit artifact selection, path/date
+  filtering, CSV loading, output naming, and publication through the appropriate
+  artifact writer.
+- Preserve observation axes, units, zero-variance handling, explained variance,
+  CV grouping, scaler/PCA fitting inside training folds, trial/date ordering,
+  and missingness.
+- The cross-session workflow consumes documented single-session
+  artifacts/tables; it must not reopen raw neural sources when cached sufficient
+  data exists.
+
+**Tests written first:**
+
+- exact tensor axes and seeded synthetic PCA results;
+- no CV leakage and stable split identities;
+- switch definitions, direction, trial filters, and trajectory ordering;
+- workflow-level cross-session file selection, date filters, and filenames;
+  analysis-level table aggregation remains path-free;
+- old/new import equivalence; analysis modules have no plotting, source, or
+  workflow dependencies;
+- benchmark representative tensor construction and decoder fits.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_population_pca.py \
+  src/tests/neural_analysis/test_population_pca_decoding.py \
+  src/tests/neural_analysis/test_population_pca_switch_trajectories.py \
+  src/tests/neural_analysis/test_plot_cross_session_analysis.py \
+  src/tests/neural_analysis/analyses/population \
+  src/tests/neural_analysis/analyses/cross_session \
+  src/tests/neural_analysis/workflows/cross_session
+```
+
+## 20. NR15 - LFP-summary workflow decomposition
+
+**Depends on:** NR3-NR7 and NR11-NR12.
+
+**Files:**
+
+- new files under `src/neural_analysis/workflows/lfp_summary`: `models.py`,
+  `payloads.py`, `preparation.py`, `pipeline.py`, `power.py`, `synchrony.py`,
+  `spike_phase.py`, and `README.md`
+- compatibility facades in `lfp_summary_models.py`,
+  `lfp_summary_preparation.py`, `lfp_summary_pipeline.py`,
+  `lfp_summary_payloads.py`, `lfp_summary_runtime.py`, and
+  `lfp_summary_ppc_runtime.py`
+- affected complete LFP-summary model/preparation/runtime/PPC/pipeline tests and
+  new mirrored workflow tests
+
+**Design and tasks:**
+
+- Split shared preparation and component orchestration by scientific component.
+- Move the Power/Synchrony/Spike-phase array schemas and payload validation from
+  `lfp_summary_payloads.py` to workflow-owned `payloads.py`; generic artifact
+  code accepts supplied schemas and does not learn component science.
+- Workflows receive validated session/configuration, source callables, artifact
+  writers, and progress callbacks through narrow explicit dependencies.
+- Keep pure analysis in `analyses`, acquisition I/O in `sources`, and generic
+  run lifecycle in `execution`.
+- Preserve component fingerprints, corrected source semantics, trial/site/unit
+  identities, progress, checkpoint behavior, cleanup deferral, worker-count
+  invariance, seeds, final array schemas, and Compute All ordering.
+- Move PPC runtime pieces only when their owner is clear: scientific planning
+  stays with the Spike-phase workflow; generic process lifecycle waits for
+  NR17.
+
+**Tests written first:**
+
+- old/new workflow entry points return exact component payloads/status;
+- injected sources prove no acquisition inference or hidden loading;
+- Power/Synchrony/Spike failure and retry states remain isolated by component;
+- Compute All does not recompute shared preparation incorrectly;
+- cold/warm prepared phase, checkpoint resume, transaction, progress, and
+  deferred cleanup remain exact;
+- corrected CT026 regression fixture matches NR1 arrays and scientific
+  configuration under the approved equality policy; source-identity changes
+  are limited to the explicitly tested NR3/NR5 completeness migrations;
+- dependency scans enforce layering.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_summary_models.py \
+  src/tests/neural_analysis/test_lfp_summary_preparation.py \
+  src/tests/neural_analysis/test_lfp_summary_runtime.py \
+  src/tests/neural_analysis/test_lfp_summary_payloads.py \
+  src/tests/neural_analysis/test_lfp_synchrony_runtime.py \
+  src/tests/neural_analysis/test_lfp_summary_ppc_runtime.py \
+  src/tests/neural_analysis/test_lfp_summary_ppc_parallel.py \
+  src/tests/neural_analysis/test_lfp_summary_pipeline.py \
+  src/tests/neural_analysis/test_lfp_summary_synthetic_integration.py \
+  src/tests/neural_analysis/workflows/lfp_summary
+```
+
+**Performance:** preserve prepared-phase mmap sharing, bounded PPC allocation,
+eight-worker CT026 production preference without changing portable default,
+and accepted runtime/memory gates. Run no real CT026 compute in this package.
+
+## 21. NR16 - Reports, CT026 compatibility, and profiling isolation
+
+**Depends on:** NR8 and NR15.
+
+**Files:**
+
+- new `src/neural_analysis/reports/common.py`, `power.py`, `synchrony.py`,
+  `spike_phase.py`, and `README.md`
+- new `src/neural_analysis/compatibility/ct026.py` and README
+- new `src/neural_analysis/profiling/ppc.py`, `profiling/ct026.py`, and README
+- report/builder extraction from `lfp_power_validation.py`,
+  `lfp_synchrony_validation.py`, `lfp_spike_phase_validation.py`, and CT026
+  profile modules
+- CT026-binding extraction, if still present after their earlier migrations,
+  from the top-level compatibility facades `unit_spike_loading.py`,
+  `sync_ephys.py`, `psth_webapp.py`, and `lfp_summary_webapp.py`
+- CT026 production-binding extraction from `lfp_spike_phase_launcher.py`; NR16
+  moves only dataset-specific paths/defaults/builders, while NR17 retains
+  ownership of the generic execution-lifecycle decomposition
+- exact CT026/profile inputs:
+  `lfp_summary_ct026_profile_adapter.py`,
+  `lfp_summary_ct026_profile_locks.py`,
+  `lfp_summary_ct026_profile_runner.py`, and
+  `lfp_summary_ppc_profile.py`
+- corresponding report, validation, profile, adapter, runner, and production-
+  binding tests
+
+**Design and tasks:**
+
+- Reports consume validated cache arrays/manifests and visualization functions,
+  create captions/summaries/logs, and publish immutable human-readable output.
+  They never calculate scientific results or reopen raw sources.
+- Move CT026 paths, fixed sites/channels, active-population builders, legacy
+  snapshot bindings, and dataset-specific defaults under compatibility only.
+- Move representative profiling fixtures, cost models, and profile lifecycle
+  under profiling. Production numerics remain imported from analyses/workflows.
+- Generic packages must contain no CT026 implementation, path, or default
+  construction after this package. Temporary top-level compatibility facades
+  may contain explicitly deprecated CT026 symbol names and forwarding imports
+  until their NR18 disposition is approved, but the values and behavior they
+  forward live only in `compatibility`.
+
+**Tests written first:**
+
+- cache-only report rendering calls no sources or analyses;
+- staged JSON/log/Markdown/PNG validation and atomic publication retain exact
+  failure behavior and cleanup ownership;
+- report schemas, selections, captions, unavailable-versus-zero semantics, and
+  measurements match current contracts;
+- corrected CT026 builders reproduce NR1 configuration and reports;
+- old CT026 snapshots remain inspectable and explicitly legacy-unscaled;
+- profiling produces only scalar/work evidence and cannot publish a scientific
+  component;
+- repository scan finds CT026 implementation values and paths only in approved
+  compatibility, profiling, tests/fixtures, and historical docs. Any CT026 text
+  in a temporary top-level facade is limited to deprecated symbol names,
+  forwarding imports, or deprecation documentation; an AST/source audit proves
+  that it contains no dataset-specific value or construction logic.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_power_validation.py \
+  src/tests/neural_analysis/test_lfp_synchrony_validation.py \
+  src/tests/neural_analysis/test_lfp_spike_phase_validation.py \
+  src/tests/neural_analysis/test_ct026_open_ephys_defaults.py \
+  src/tests/neural_analysis/test_unit_spike_loading.py \
+  src/tests/neural_analysis/test_sync_ephys.py \
+  src/tests/neural_analysis/test_psth_webapp.py \
+  src/tests/neural_analysis/test_lfp_summary_webapp.py \
+  src/tests/neural_analysis/test_lfp_spike_phase_launcher.py \
+  src/tests/neural_analysis/test_lfp_summary_ct026_profile_adapter.py \
+  src/tests/neural_analysis/test_lfp_summary_ct026_profile_runner.py \
+  src/tests/neural_analysis/test_lfp_summary_ct026_profile_production_binding.py \
+  src/tests/neural_analysis/test_lfp_summary_ppc_profile.py \
+  src/tests/neural_analysis/reports \
+  src/tests/neural_analysis/compatibility \
+  src/tests/neural_analysis/profiling
+```
+
+## 22. NR17 - Generic execution, launcher, and Slurm boundary
+
+**Depends on:** NR7, NR15, and NR16.
+
+**Files:**
+
+- new `src/neural_analysis/execution/run_state.py`
+- new `src/neural_analysis/execution/resources.py`
+- new `src/neural_analysis/execution/launcher.py`
+- new `src/neural_analysis/execution/slurm.py`
+- new `src/neural_analysis/execution/README.md`
+- compatibility facade in `lfp_spike_phase_launcher.py`
+- generic process/executor/resource extraction from
+  `lfp_summary_ppc_runtime.py`; its scientific PPC job planning/reduction stays
+  in `workflows/lfp_summary/spike_phase.py`
+- CLI integration in `cli/run_cache.py`
+- update `src/neural_analysis/README.md` with the tested Slurm handoff, run
+  completion checks, resume/recovery command, and final output-inspection steps
+- existing launcher/HPC tests and new execution tests
+- existing repository `src/shell_scripts/hpc_ppc.sh` only if a thin
+  compatibility forwarding
+  change is required and separately visible in the package diff
+
+**Design and tasks:**
+
+- Generalize persisted run state, locks, resource measurement, signals,
+  local/Slurm invocation, resume, cleanup-only recovery, report recovery, and
+  rerender around narrow workflow run contracts.
+- Scientific configuration is resolved and frozen before submission. Shell
+  code supplies environment/resources only.
+- Resume/recovery accepts the saved run directory and rejects replacement
+  session/configuration inputs.
+- Preserve process-tree RSS/PSS measurement, atomic state/log/summary writes,
+  signal behavior, lock recovery, repository identity, and deferred cleanup.
+- Keep local and Slurm scientific identity identical; execution resources do
+  not enter final component fingerprints.
+- Keep the README's cluster material short and operational: one supported
+  submission example, how to find state/log/report paths, and how to resume.
+  Link to detailed execution documentation for scheduler/resource options.
+
+**Tests written first:**
+
+- parsing and preflight are side-effect-free and metadata driven;
+- local and Slurm commands contain identical saved scientific configuration;
+- run-state transitions and ordered stages reject invalid recovery;
+- lock ownership, stale recovery, foreign host/live PID, signal interruption,
+  worker failure/cancellation, and cleanup are exact;
+- resume/report recovery/rerender cannot switch session or component identity;
+- path containment and symlink defenses remain enforced;
+- old launcher commands forward;
+- synthetic end-to-end execution publishes only after every component/report
+  gate and leaves recoverable state on injected failure.
+- every README execution/resume command is covered by parser or no-submit smoke
+  tests, and every named output path matches the synthetic run contract.
+
+**Focused RED/GREEN:**
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_spike_phase_launcher.py \
+  src/tests/neural_analysis/test_hpc_ppc_shell.py \
+  src/tests/neural_analysis/test_lfp_spike_phase_runtime.py \
+  src/tests/neural_analysis/test_lfp_summary_ppc_runtime.py \
+  src/tests/neural_analysis/test_lfp_summary_ppc_parallel.py \
+  src/tests/neural_analysis/execution \
+  src/tests/neural_analysis/cli/test_run_cache.py
+```
+
+**Performance and safety:** dry run opens no raw arrays; preflight uses existing
+bounded estimates; worker spawn occurs only after aggregate allocation checks;
+no real cluster submission is part of automated verification.
+
+## 23. NR18 - Compatibility retirement and final documentation
+
+**Depends on:** all prior packages and a user-reviewed external-caller audit.
+
+**Files:** exact removal/update list is produced and approved during NR18 test-
+design review. No file is deleted merely because it appears unused.
+
+**Tasks:**
+
+1. Search repository imports, commands, notebooks, README/docs, saved run
+   commands, and likely external scripts identified by the user.
+2. Classify every compatibility wrapper and category-5 module as retain,
+   deprecate, or remove, with evidence and recovery implications.
+   The complete category-5 inventory is `behavior_pynap.py`,
+   `spike_behavior_analysis.py`, `spike_behavior_binning.py`,
+   `modified_sinc_smoother.py`, and `plot_single_session_analysis.py`.
+3. Present the exact deletion/deprecation list for explicit approval.
+4. Remove only approved wrappers/modules; update callers and documentation.
+5. Verify every package README against actual files, responsibilities, public
+   entry points, shapes/units, algorithms, determinism, caches, parallelism,
+   runtime, and memory.
+6. Finalize `src/neural_analysis/README.md` as the single concise end-user
+   quickstart. Remove stale or duplicate operational instructions from other
+   current docs by replacing them with links, without rewriting historical
+   audit records.
+7. Perform the novice-path review required by Section 2.9 and correct any step
+   that requires undocumented code knowledge or a command that does not match
+   `--help`.
+8. Run final metadata creation, dry-run, cache-only webapp, legacy snapshot,
+   corrected CT026 snapshot, and supported non-CT026 session smokes.
+
+**Tests/checks written first:**
+
+- import/command tests prove approved old paths are no longer required;
+- retained compatibility readers cover every artifact that must remain
+  inspectable;
+- dependency scan has no upward arrows or CT026 leakage;
+- package and README inventories agree;
+- every quickstart command is covered by a parser/smoke test and every named
+  output exists in the corresponding synthetic workflow fixture;
+- a read-only reviewer following only `src/neural_analysis/README.md` can locate
+  JSON creation, validation, local cache, Slurm handoff, run status, outputs,
+  resume, webapp launch, and snapshot inspection;
+- category-5 removals have no known caller and explicit approval record;
+- all public functions satisfy type/shape/axis/unit/return documentation rules;
+- full neural and repository suites are green from the final topology.
+
+**Focused command:** the tests-only phase defines exact removed-import RED
+checks after the deletion list is approved. Final verification always includes:
+
+```text
+uv run pytest -q -p no:cacheprovider src/tests/neural_analysis
+uv run pytest -q -p no:cacheprovider
+```
+
+## 24. Wave gates and acceptance evidence
+
+### After every package
+
+- Tests-only commit exists before implementation commit and records genuine RED.
+- Lead reproduced RED and GREEN independently.
+- Assigned Sol review is accepted with every finding resolved or explicitly
+  deferred by the user.
+- Only allowlisted files changed; public interfaces remain or have reviewed
+  wrappers.
+- Docstrings specify types, shapes, axes, units, returns, and errors.
+- Package README and execution log are current.
+- No unauthorized real-data, cluster, cache, or external-state mutation
+  occurred.
+- All agents are idle; lead records model/effort/permissions and whether
+  read-only enforcement was technical or procedural.
+
+### Wave-boundary review
+
+- Complete repository suite passes.
+- Import/dependency scan matches the intended layer direction.
+- Corrected CT026 regression fixtures remain compatible.
+- Performance-sensitive paths show no material unexplained regression.
+- Worktree inventory matches the expected package commits and preserves
+  unrelated user files.
+- User receives the completed-wave evidence and approves any real-data or
+  deletion action required by the next wave.
+
+### Final acceptance
+
+- A new supported session can be described with `neural_session.json`, fully
+  validated, dry-run, computed locally or through Slurm, resumed from saved run
+  state, copied/verified, and inspected in the webapp without edits to shared
+  analysis, workflow, source-adapter, or webapp code. Editing the dedicated
+  metadata-creator values remains an approved authoring option.
+- CT026 corrected Power, Synchrony, and authorized Spike-phase artifacts remain
+  the regression reference; legacy unscaled artifacts remain explicitly
+  inspectable.
+- CT014 SpikeGLX metadata validates through the same session/workflow boundary.
+- Numerical definitions, seeds, identities, axis/unit contracts, component
+  schemas, cache transactions, and report meaning are unchanged except for the
+  explicitly approved Open Ephys scaling correction.
+- No generic production module contains CT026 paths, fixed PFC/HPC meanings, or
+  fixed two-probe assumptions.
+- Category-5 code and compatibility wrappers have explicit final dispositions.
+- Final package topology and all READMEs match the design document.
+- `src/neural_analysis/README.md` is the single tested end-user quickstart for
+  creating JSON, running/inspecting caches, launching the webapp, and recovering
+  a forgotten workflow.
+
+## 25. Approved decisions and remaining authorization gates
+
+The user approved the following planning decisions on 2026-09-22:
+
+1. Use a source-value semantics version plus preprocessing sidecar fingerprint,
+   rather than a global manifest schema bump, to invalidate legacy Open Ephys
+   numerical components.
+2. Preserve legacy CT026 artifacts unchanged and label them as historical
+   unscaled outputs; publish corrected artifacts at new paths.
+3. Use corrected CT026 artifacts as the structural regression baseline only
+   after staged Power, Synchrony, 100-shuffle preview, and—if separately
+   authorized—1,000-shuffle validation.
+4. Keep NR0 narrowly scoped to scaling and compatibility identity; defer the
+   new session model and source-package moves to later packages.
+5. Preserve an editable Python metadata creator so users can generate JSON with
+   the intended values, while also supporting an incomplete/default skeleton
+   that can be edited directly as JSON.
+6. Require initial metadata at `<session_home>/neural_session.json`; defer
+   external metadata locations, absolute source paths, and root remapping.
+7. Implement the exact observed Open Ephys affine value contract using
+   per-channel gain, offset, and unit metadata. Do not treat
+   `lfp_binary_scaling` as a scalar or bare vector, and do not silently ignore
+   offsets.
+8. Content-hash small authoritative preprocessing/metadata sidecars while
+   retaining the reviewed size/mtime policy for production-sized binaries.
+9. Keep cross-session file I/O in a workflow boundary, keep visualization free
+   of sparsity computation, and move all dataset-specific CT026 values under
+   compatibility before applying the CT026-isolation scan.
+
+The following remain separate explicit authorization gates:
+
+- implementation start after final review of this comprehensive plan;
+- every real CT026 numerical run in NR1, beginning with dry run and small-window
+  checks according to their stated mutation level;
+- the corrected 1,000-shuffle final run after preview review;
+- any Slurm submission or external copy/registration action; and
+- the NR18 deletion/deprecation list.
+
+Approval of this plan does not imply any of those actions.

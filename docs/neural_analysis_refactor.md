@@ -71,9 +71,11 @@ Further design direction:
 - A separate simple Python entry point should create a new session metadata
   file. Its first design should expose clearly labeled path and metadata
   variables near the top of the Python file for the user to edit, with its
-  `main` function validating those values and writing the JSON. It may record
-  incomplete or unavailable values explicitly rather than inventing paths,
-  probes, sites, or results.
+  `main` function validating those values and writing the JSON. The same entry
+  point should also be able to emit an intentionally incomplete/default
+  skeleton for users who prefer to edit the resulting JSON directly. It may
+  record incomplete or unavailable values explicitly rather than inventing
+  paths, probes, sites, or results.
 - Channel-to-region groupings may be added to the metadata model later, but a
   general channel-grouping system is not a priority for the first refactor.
 
@@ -382,6 +384,8 @@ src/neural_analysis/
       power.py
       synchrony.py
       spike_phase.py
+    cross_session/
+      decoding.py
 
   execution/
     launcher.py
@@ -457,7 +461,9 @@ The exact filenames are provisional. The important boundaries are:
 - `artifacts` owns reusable manifest, cache, checkpoint, snapshot, and receipt
   mechanics. It must not know CT026 paths or implement scientific formulas.
 - `workflows` joins validated session metadata, source adapters, numerical
-  analyses, artifacts, and progress reporting for a scientific pipeline.
+  analyses, artifacts, and progress reporting for a scientific pipeline. It
+  also owns cross-session artifact selection/loading and publication while the
+  corresponding analysis modules remain path-free.
 - `execution` owns generic restartable launcher state, process/resource
   measurement, and Slurm submission rather than embedding those concerns in
   numerical or analysis-specific modules.
@@ -633,7 +639,7 @@ The pre-planning repository classification is:
 | `lfp_synchrony_validation.py` | 1 | Split workflow validation, CT026 builder, report assembly, and rendering. |
 | `manual_session_synchronization.py` | 3 | Split reusable alignment logic, source readers, and any user entry point. |
 | `modified_sinc_smoother.py` | 5 | No repository caller or dedicated test found; review provenance and uniqueness before migration. |
-| `plot_cross_session_analysis.py` | 2 | Split cross-session table aggregation from reusable figures and the CLI. |
+| `plot_cross_session_analysis.py` | 2 | Split path-free table aggregation/statistics into `analyses`, artifact discovery/loading/publication into a cross-session workflow, and reusable figures from the CLI. |
 | `plot_single_session_analysis.py` | 5 | Empty module; propose removal during cleanup after confirming no external import requirement. |
 | `population_pca.py` | 2 | Move PCA kernels/profiling contracts to `analyses/population`. |
 | `population_pca_decoding.py` | 2 | Split population decoding kernels and Matplotlib figures. |
@@ -739,24 +745,27 @@ voltage scaling manually.
 
 ### Pre-existing Open Ephys scaling issue
 
-The CT026 `lfp_preprocessing.json` records a per-channel conversion of
-approximately `0.195 uV` per stored value and states that the derived LFP
-physical unit is microvolts after applying that conversion. The current Open
-Ephys read path loads float32 values from `lfp.dat` but does not apply the
-recorded `lfp_binary_scaling`, while downstream names and plots sometimes treat
-those values as microvolts. A sampled ProbeA segment had a raw standard
-deviation of about 611 stored units versus about 119 microvolts after the
-documented scale factor.
+The CT026 `lfp_preprocessing.json` records an explicit per-channel affine
+conversion,
+`trace_uV = trace_value * gain_to_uV + offset_to_uV`, with gain of
+approximately `0.195 uV` per stored value and observed zero offsets. It states
+that the derived LFP physical unit is microvolts after applying that conversion.
+The current Open Ephys read path loads float32 values from `lfp.dat` but does not
+apply the recorded `lfp_binary_scaling`, while downstream names and plots
+sometimes treat those values as microvolts. A sampled ProbeA segment had a raw
+standard deviation of about 611 stored units versus about 119 microvolts after
+the documented affine conversion.
 
 This is a pre-existing units/scale mismatch, not a refactor behavior to change
 silently. The approved resolution is a separate, versioned correction work
 package before structural migration. That work package must apply and test the
 documented conversion, choose and record the affected cache-version/identity
-change, measure effects on CT026 Power, Synchrony, Spike phase, and plots, and
-establish the corrected outputs as the refactor regression baseline. Phase-only
-quantities may be invariant to a positive constant scale, but traces, absolute
-amplitudes, thresholds, PSD values, labels, and downstream selections must be
-audited rather than assumed unaffected.
+change, content-hash the small authoritative preprocessing sidecar, measure
+effects on CT026 Power, Synchrony, Spike phase, and plots, and establish the
+corrected outputs as the refactor regression baseline. Phase-only quantities
+may be invariant to a positive constant scale with zero offset, but traces,
+absolute amplitudes, thresholds, PSD values, labels, and downstream selections
+must be audited rather than assumed unaffected.
 
 ## Conceptual metadata relationships
 
@@ -892,9 +901,9 @@ the following actions straightforward:
 
 ## Settled design decisions
 
-- The canonical session metadata file normally lives at
-  `<session_home>/neural_session.json`. An explicit external metadata path may
-  be used when the session directory is read-only or otherwise unsuitable.
+- The initial schema requires the canonical session metadata file at
+  `<session_home>/neural_session.json`. External metadata locations are deferred
+  with external data roots, absolute source paths, and root remapping.
 - Session metadata is explicitly maintained by the user. Analysis and copy
   commands must not silently rewrite it. Manual JSON editing is acceptable for
   the initial design.
@@ -933,8 +942,9 @@ the following actions straightforward:
   validated configurations and results for provenance.
 - The metadata creator is a straightforward Python file with clearly labeled,
   hardcoded variables for the user to edit and a `main` function that validates
-  them and writes the JSON. It is not an interactive wizard and does not launch
-  numerical work.
+  them and writes the JSON. It also supports writing an intentionally
+  incomplete/default skeleton for direct JSON editing. It is not an interactive
+  wizard and does not launch numerical work.
 - Acquisition family is session-wide in the initial schema. It explicitly
   selects Open Ephys or SpikeGLX. Supporting mixed-acquisition sessions would
   require a later schema decision.
@@ -984,6 +994,9 @@ guess from similar filenames.
 1. When channel-to-region grouping becomes a priority, will its authoritative
    source be manually selected channel ranges, channel-quality metadata, or a
    separate anatomical registration artifact?
+2. If a future session cannot store `neural_session.json` at its session root,
+   what explicit external-metadata/session-root mapping should replace the
+   initial contained-relative-path contract?
 
 ## Design decisions to record later
 
@@ -992,7 +1005,8 @@ As decisions are made, this document should record the rationale for:
 - metadata granularity and ownership;
 - stable identifiers and display labels;
 - storage format and schema-version policy;
-- relative-path resolution and portability rules;
+- any future external-metadata/root-mapping extension to the settled initial
+  contained-relative-path rule;
 - validation and dry-run behavior;
 - local versus Slurm execution profiles;
 - migration and backward-compatibility policy;
