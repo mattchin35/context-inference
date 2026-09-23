@@ -155,6 +155,17 @@ Read-only representative CT026 and legacy-artifact check:
   the complete pre-NR0 source identity; cover preparation validity/RMS/peak-to-
   peak axes; and prevent absent semantics on SpikeGLX snapshots from being
   labeled Open Ephys legacy-unscaled.
+- Revision-two RED command/result: exact 14-file Section 4.4 command
+  independently reproduced by the lead: 71 failed, 571 passed, 3 warnings in
+  35.74 seconds. No collection, import, or fixture failures occurred.
+- Third Sol test-design review: blocked. Required repairs are: verify saved
+  semantics/digest/unit provenance for relative-phase, phase-clustering, and
+  spike-phase-locking as well as Hilbert; expose legacy semantics through the
+  public receipt-validated cache UI and reject unvalidated fallback; cover
+  literal dtype aliases and invalid sample/channel/count metadata; freeze one
+  exact mismatch diagnostic across trial and continuous routes; remove the
+  invalid assumption that unequal Python objects have unequal hashes; and
+  assert cached trace/phase units plus the `uV^2/Hz` plotting contract.
 - Tests-only commit: pending.
 
 ### Implementation phase

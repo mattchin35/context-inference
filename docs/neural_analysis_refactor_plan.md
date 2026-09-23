@@ -29,10 +29,11 @@ amplitude behavior as if that behavior were scientifically correct.
   refactor prep`), equal to `origin/refactor` when implementation began.
 - **Active package:** NR0, tests-only revision. The documentation/baseline gate
   is complete. The lead independently reproduced the current tests-only RED
-  result (60 failed, 567 passed, 3 warnings), but the second mandatory Sol
-  review blocked the commit on incomplete cache/legacy/label contracts and one
-  source-allowlist contradiction. The same Terra writer must repair only the
-  tests before another independent RED run and fresh review.
+  revision-two RED result (71 failed, 571 passed, 3 warnings), but the third
+  mandatory Sol review blocked the commit on the remaining saved-provenance,
+  public legacy-presentation, malformed-metadata, exact-diagnostic, legal-hash,
+  and cached-unit contracts. The same Terra writer must repair only the tests
+  before another independent RED run and fresh review.
 - **Agent policy:** lead Sol/high orchestration with one NR0 Terra/xhigh writer,
   one fresh Sol/xhigh gate reviewer, and at most one optional Terra/medium
   read-only scout. Only the Terra writer may author package tests/source; the
