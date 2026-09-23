@@ -9,8 +9,9 @@ fresh Sol review on 2026-09-23. No scientific component computation,
 scientific-cache mutation, report rendering, profiling run, or cluster action
 is authorized beyond Power. Corrected Power, its Power-only report, and the
 read-only legacy Power comparison in Section 5.2 item 3 completed and passed
-fresh Sol scientific/evidence review on 2026-09-23. User visual approval is
-pending. Synchrony, Spike-phase, and cluster actions remain separately gated.
+fresh Sol scientific/evidence review on 2026-09-23. The user visually approved
+the Power report and authorized corrected Synchrony in Section 5.2 item 4 on
+2026-09-23. Spike-phase and cluster actions remain separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -37,7 +38,8 @@ amplitude behavior as if that behavior were scientifically correct.
   approved. The NR1 metadata/path/resource dry run is complete and approved;
   its corrected cache, report, and profiling destinations remain absent. The
   bounded numerical small-window check is also complete and approved. Corrected
-  Power is scientifically approved and awaits user visual review.
+  Power is fully approved. Corrected Synchrony is active under the authority
+  below.
 - **Approved NR1 destinations:** session root
   `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference`;
   corrected cache `processed/lfp_summary_cache_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`;
@@ -116,7 +118,19 @@ amplitude behavior as if that behavior were scientifically correct.
   original failure record remains unchanged. Fresh reviewer
   `/root/nr1_power_reviewer` approved the scientific, safety, and evidence gate
   with no P0-P3 findings. The 12 report PNGs await explicit user visual
-  approval; Synchrony is not authorized.
+  approval at this result checkpoint.
+- **Power visual approval:** the user approved all 12 corrected Power report
+  figures on 2026-09-23. They are now accepted NR1 evidence.
+- **Approved NR1 corrected Synchrony:** preserve the approved corrected Power
+  bytes and add only `synchrony.npz` plus the atomic manifest update to the
+  existing corrected cache. Write the exact runner, configuration/source
+  identity, logs, comparison, and Synchrony-only report beneath
+  `<session>/analysis_runs/ct026_nr1_synchrony_open_ephys_affine_uV_v1_2026-09-23T13-17-26Z`.
+  The legacy cache is read-only. Compare phase-derived arrays, bootstrap
+  schedules/results, all validity/support, source/filtered traces, exemplars,
+  report metadata/plots, runtime, and memory. Explain every changed or invariant
+  field. Do not compute or publish Spike-phase, alter approved Power or legacy
+  artifacts, submit cluster work, or push.
 - **Durable evidence:** exact commands, results, inventory hashes, commits,
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that

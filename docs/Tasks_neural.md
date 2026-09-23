@@ -21,9 +21,10 @@
   scalar evidence is in the separately timestamped NR1 small-window run.
   Corrected Power, its Power-only report, and read-only legacy comparison are
   complete. Fresh Sol review approved the scientific/safety/evidence gate with
-  no P0-P3 findings. The corrected cache contains only manifest plus Power and
-  is hash-anchored; the 12 report PNGs await explicit user visual approval.
-  Synchrony, Spike-phase, cluster, and push actions remain separately gated.
+  no P0-P3 findings, and the user visually approved all 12 report PNGs on
+  2026-09-23. Corrected Synchrony is now authorized at the exact versioned run
+  path in the refactor plan. Spike-phase, cluster, and push actions remain
+  separately gated.
 - For this structural-refactor sequence,
   `docs/neural_analysis_refactor_plan.md` and
   `docs/neural_analysis_refactor_execution_log.md` are the ongoing detailed

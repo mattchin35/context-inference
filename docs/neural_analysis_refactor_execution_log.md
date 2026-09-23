@@ -526,4 +526,18 @@ hashes and mtimes are unchanged; repository state remained tracked-clean at
 
 Fresh reviewer `/root/nr1_power_reviewer` (`gpt-5.6-sol`, `xhigh`) approved the
 scientific, safety, and evidence gate with no P0-P3 findings. User visual
-approval is still required. Synchrony and NR2-NR18 are not started.
+approval followed on 2026-09-23; the 12 Power PNGs are accepted.
+
+### NR1 corrected-Synchrony authorization
+
+The user authorized corrected Synchrony on 2026-09-23. The approved Power
+component and manifest identity must be preserved while the existing corrected
+cache receives only `synchrony.npz` and its atomic manifest update. Runner,
+identity, configuration, log, comparison, and Synchrony-only report evidence is
+restricted to
+`<session>/analysis_runs/ct026_nr1_synchrony_open_ephys_affine_uV_v1_2026-09-23T13-17-26Z`.
+The legacy cache is read-only. The gate compares phase-derived arrays,
+bootstrap schedules/results, validity/support, source and filtered traces,
+exemplars, report metadata/plots, runtime, and memory. Spike-phase, approved
+Power mutation, legacy mutation, cluster work, and Git push remain prohibited.
+Result and review are pending. NR2-NR18 are not started.
