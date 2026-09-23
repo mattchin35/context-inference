@@ -437,4 +437,18 @@ source_identity.json  22e212e535bbc28becaaf1ed5a880964ce56be893bbff9e3a50d078c85
 
 Fresh reviewer `/root/nr1_window_reviewer` (`gpt-5.6-sol`, `xhigh`) approved
 with no P0-P3 findings. Corrected Power in plan Section 5.2 item 3 is the next
-ordered action and remains separately gated. NR2-NR18 are not started.
+ordered action.
+
+### NR1 corrected-Power authorization
+
+The user authorized corrected Power on 2026-09-23. The only scientific output
+location is the reserved corrected cache
+`<session>/processed/lfp_summary_cache_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`;
+it may receive only the Power component and its manifest. Runner, identity,
+configuration, log, comparison, and Power-only report evidence is restricted to
+`<session>/analysis_runs/ct026_nr1_power_open_ephys_affine_uV_v1_2026-09-23T12-23-53Z`.
+The legacy cache may be loaded only for read-only Power comparison. The gate
+must compare axes, trials, validity, references/traces, linear PSDs, band power,
+normalized dB, reports/plots, runtime, memory, and cache provenance. Synchrony,
+Spike-phase, legacy mutation, cluster work, and Git push remain prohibited.
+Result and review are pending. NR2-NR18 are not started.

@@ -19,8 +19,10 @@
 - Plan Section 5.2 item 2 is complete and approved. Nine bounded windows across
   PFC, HPC1, and HPC2 matched the declared stored-to-uV affine formula exactly;
   scalar evidence is in the separately timestamped NR1 small-window run.
-  Corrected Power is the next action and remains separately gated, as do
-  Synchrony, Spike-phase, report, profiling, cluster, and push actions.
+  The user authorized corrected Power, a Power-only report, and read-only
+  legacy Power comparison on 2026-09-23 at the exact versioned cache/run paths
+  in the refactor plan. Synchrony, Spike-phase, cluster, and push actions remain
+  separately gated.
 - For this structural-refactor sequence,
   `docs/neural_analysis_refactor_plan.md` and
   `docs/neural_analysis_refactor_execution_log.md` are the ongoing detailed
