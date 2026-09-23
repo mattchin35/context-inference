@@ -21,10 +21,13 @@ package implementing that presentation is complete, committed, and approved by
 a fresh Sol/xhigh implementation review. The NR1C-A cache-relocation package is
 also complete, committed, and approved after tests-first concurrency and
 provenance hardening. The NR1C-B explicit launcher-target/preflight package is
-complete, committed, and approved as well. A
-separately authorized NR1V run must
-still create and review a new versioned Synchrony artifact; no existing cache or
-report was changed. Spike-phase and cluster actions remain separately gated.
+complete, committed, and approved as well. The separately authorized NR1V run
+created a scientifically approved versioned Synchrony cache, but fresh visual
+review rejected its first immutable report because observed-marker footprints
+overlapped the offset boxes in 12 of 18 ISPC summaries. The tests-first
+presentation-only correction is complete through `389e4fd`; a separately
+authorized immutable cache-only rerender and explicit user visual approval
+remain. Spike-phase and cluster actions remain separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -46,7 +49,7 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** external-gated NR1V/NR1E evidence. NR0 tests commits `e728cea`
+- **Active package:** external-gated NR1V immutable report rerender. NR0 tests commits `e728cea`
   and `2b497e4` plus implementation commit `177a8d6` are complete and
   approved. The NR1 metadata/path/resource dry run is complete and approved;
   its original dry-run report and profiling destinations remain absent. The
@@ -59,9 +62,11 @@ amplitude behavior as if that behavior were scientifically correct.
   tests are complete through `b994495`, and the reviewed implementation is
   `e1d99c3`. NR1C-B tests are complete through `4646b5d`, and its reviewed
   implementation is `c844adc`; no CT026 or cluster path was accessed during
-  either package. A newly versioned
-  Synchrony artifact and explicit visual approval remain before the bounded
-  Spike-phase preview can be authorized.
+  either package. NR1V published the versioned scientific cache successfully;
+  its first report is preserved but rejected for marker/box overlap. The
+  reviewed geometry regression is `88d7826` and its presentation-only source
+  fix is `389e4fd`. A new immutable cache-only report and explicit visual
+  approval remain before the bounded Spike-phase preview can be authorized.
   The user requires any later preview to run unattended through Slurm without
   Codex monitoring; that execution is not approved.
 - **Approved NR1 destinations:** session root
@@ -191,6 +196,27 @@ amplitude behavior as if that behavior were scientifically correct.
   exact production runner, formulas, artifacts, and 276-file inventory are
   preserved and independently approved. User visual approval remains pending;
   no Spike-phase work is authorized yet.
+- **NR1V versioned Synchrony result:** the user authorized cache
+  `<session>/processed/lfp_summary_cache_open_ephys_affine_uV_v1_synchrony_bootstrap_quantiles_counts_v1_2026-09-23T22-09-50Z`
+  and run
+  `<session>/analysis_runs/ct026_nr1v_synchrony_bootstrap_quantiles_counts_v1_2026-09-23T22-09-50Z`.
+  One production invocation at pushed clean HEAD `3a50de3` completed in
+  704.424 seconds with 4,288,274,432-byte peak RSS. Power remained byte-exact
+  at SHA-256 `164114d606cc204ff29ad173a686f0be66b54c2b944ed1f15008b2fa85367355`;
+  new Synchrony SHA-256 is
+  `d9673f2183dcbb2eac7d8ec2be80916840815c727f1431b8fdf65b41d95cb86f`.
+  All 38 prior arrays match exactly, and the eight added quantile/count arrays
+  satisfy schema, ordering, finiteness, count, and instability contracts. The
+  live CT026 Synchrony fingerprint is
+  `12e5f78a347e7cc2a210172dd08bfc59c9152a79e58464cd5ba6fe5d80049e29`;
+  The historical `18eeb15...` NR1P value is only the frozen one-site Open
+  Ephys unit-test fixture, not a universal format or CT026 identity.
+  Fresh review accepted the scientific cache and all 216 non-band figures but
+  rejected the immutable first report because marker footprints overlap boxes
+  in 12 of 18 ISPC summaries. Preserve that report. A tests-first geometry fix
+  (`88d7826`, `389e4fd`) now uses a 0.30-row box offset and 0.20-row box height
+  while preserving all values and meanings. A new exact cache-only rerender
+  path and explicit user visual approval are still required.
 - **User Synchrony finding and preview execution requirement:** the circles in
   the flagged PFC theta-whole figure are observed nonlinear ITPC estimates and
   the vertical lines are percentile-bootstrap 95% intervals, not medians and
@@ -211,8 +237,8 @@ amplitude behavior as if that behavior were scientifically correct.
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that
   log after every commit or interruption-relevant gate.
-- **Verified baseline:** the final NR1C-B focused command passed 50 tests; the
-  complete neural suite passed 1,530 tests with 22 known warnings. The complete
+- **Verified baseline:** the corrected plotting suite passed 29 tests and the
+  complete neural suite passed 1,531 tests with 22 known warnings. The complete
   repository run stops at
   collection because the pre-existing untracked
   `src/tests/behavior_analysis/test_project_utils.py` imports unavailable
@@ -229,8 +255,9 @@ amplitude behavior as if that behavior were scientifically correct.
   tests are `e940671`, `72028ad`, `6e243c3`, `f10b7bd`, and `b994495`; its
   reviewed implementation is `e1d99c3`. NR1C-B tests are `0d056fa` and the
   fixture-isolation correction `4646b5d`; its reviewed implementation is
-  `c844adc`. These later test, implementation, and documentation commits remain
-  local until the user separately approves another push.
+  `c844adc`. The NR1V rendered-geometry regression is `88d7826` and its
+  presentation-only correction is `389e4fd`. These later commits remain local
+  until the user separately approves another push.
 
 ## 1. Objectives
 
@@ -1532,6 +1559,26 @@ prerequisite.
 - The lead records the review and presents the figures. Only explicit user
   visual approval designates the NR1V Synchrony component as the Section 5.6
   transfer source.
+
+#### NR1V presentation-correction checkpoint
+
+The single authorized NR1V scientific invocation completed successfully and
+its cache passed numerical, schema, provenance, preservation, and performance
+review. Do not recompute it. The first immutable report is rejected and
+preserved because rendered observed-circle footprints overlap bootstrap boxes
+in 12 of 18 ISPC summaries. Tests-first commits `88d7826` and `389e4fd` close
+that defect by validating display-coordinate footprints and moving a 0.20-row
+box to a +0.30-row offset; all scientific values and meanings are unchanged.
+
+The next NR1V action is a cache-only report rerender. It requires explicit user
+authorization for one new absent run/report path. A Terra/high evidence runner
+must pin the accepted cache hashes and current clean Git commit, call only the
+production cache-only report renderer, compare the result with both preserved
+reports, and write inventory/provenance/visual-comparison evidence. It must not
+modify the cache, load raw LFP/sync/spike inputs, recompute any component, write
+PPC/work state, overwrite either prior report, use the cluster, or rerun after
+failure. A fresh Sol/xhigh reviewer must re-audit all 36 band summaries and
+verify the remaining 216 PNGs are byte-identical before user visual approval.
 
 #### Dependencies, performance, and real-data gate
 

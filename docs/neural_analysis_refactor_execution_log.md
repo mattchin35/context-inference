@@ -778,7 +778,10 @@ unchanged. The new expected Synchrony fingerprints are
 `4f2754235f64490fca168107d5e34e005bcd3f0e50cd9b000721f2c79bd4b706`
 for the frozen SpikeGLX configuration and
 `18eeb15ac4450408bd676bdcdf3450f7afb9f95fd31fc66cb6a1f6d8fc7b77a5`
-for the frozen corrected Open Ephys configuration.
+for the frozen one-site corrected Open Ephys unit-test configuration. These are
+fixture-specific identities, not universal format identities. The later full
+live CT026 configuration correctly resolves to
+`12e5f78a347e7cc2a210172dd08bfc59c9152a79e58464cd5ba6fe5d80049e29`.
 
 Tests were written and committed before source implementation. The initial RED
 package was committed as `d5d9e2b`. Fresh Sol/xhigh test-design review found
@@ -938,3 +941,81 @@ passed
 separately before source. Fresh Sol/xhigh implementation review reported no
 P0-P3 findings. NR1V real-data presentation evidence, Git push, cluster
 relocation, dry-run evidence, and Slurm submission remain separate user gates.
+
+### NR1V versioned Synchrony artifact and presentation correction
+
+Status: the scientific cache is complete and approved; the first immutable
+report is preserved but rejected for observed-marker/box overlap. A reviewed
+presentation-only source correction is committed, and a new immutable
+cache-only rerender remains separately user-gated.
+
+The user authorized these exact local destinations:
+
+- cache:
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/processed/lfp_summary_cache_open_ephys_affine_uV_v1_synchrony_bootstrap_quantiles_counts_v1_2026-09-23T22-09-50Z`;
+- run:
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_nr1v_synchrony_bootstrap_quantiles_counts_v1_2026-09-23T22-09-50Z`;
+- report: `<run>/report`.
+
+Preparation stopped before invocation when the draft runner incorrectly used
+the frozen one-site Open Ephys unit-test fingerprint `18eeb15...` as a live
+CT026 identity. Read-only review independently reconstructed old CT026
+fingerprint `7b89286d914cd3a53ab649dfceff813fda312c85933b75c91772e936353ed909`
+and new fingerprint
+`12e5f78a347e7cc2a210172dd08bfc59c9152a79e58464cd5ba6fe5d80049e29`,
+with only `synchrony_payload_contract_version` added. Static review also fixed
+the approved source-report leaf, pinned source-manifest hash/schema, removed a
+preparatory bytecode file, and made workflow metadata non-transient before the
+first invocation. `preparation_incident.json` preserves the draft hashes and
+corrections. Corrected runner SHA-256 is
+`c24a99bbacfe90c44c210a4136180e6c6e5b02082d6884f77f2bae3ba7249531`.
+A fresh Sol/xhigh static reviewer approved with no P0-P3 findings.
+
+The sole production invocation at pushed tracked-clean HEAD `3a50de3` completed
+with exit code zero in 704.424 seconds and 4,288,274,432-byte peak RSS. Power
+remained byte-identical at SHA-256
+`164114d606cc204ff29ad173a686f0be66b54c2b944ed1f15008b2fa85367355`;
+new Synchrony SHA-256 is
+`d9673f2183dcbb2eac7d8ec2be80916840815c727f1431b8fdf65b41d95cb86f`.
+The cache has exactly manifest, Power, and Synchrony members. Public component
+status passed; cache and report manifest snapshots agree and contain no pending
+metadata. All 38 prior Synchrony arrays, including NaN locations, endpoints,
+validity, phase, estimates, and exemplars, are exactly equal. Exactly eight
+quantile/count arrays were added; quantiles are finite and ordered, counts are
+nonnegative `int32`, and instability is exactly `count < 10`. Source cache/run
+inventories remained unchanged. No Spike phase, PPC, cluster action, retry, or
+repository mutation occurred.
+
+The first report preserved all 252 filenames; 216 non-band PNGs are
+byte-identical to the approved source report. All 36 revised band summaries
+were inspected. Counts, order, actual medians/quartiles/endpoints, caps,
+legends, wording, and clipping passed. Fresh review nevertheless found the
+filled observed-circle footprint overprinted the bootstrap box in 12 of 18
+ISPC summaries when the observed estimate lay inside Q25-Q75 (82 of 162 ISPC
+cells). The scientific cache requires no recomputation, but the first report is
+not visually approved and must remain immutable.
+
+The correction followed tests-first review. Commit `88d7826` adds a
+post-render display-coordinate regression including marker/box strokes across
+all nine rows. Commit `389e4fd` changes only presentation geometry: box center
+offset `+0.30` rows and box height `0.20` rows, retaining the exact `s=64`
+filled observed circles and every scientific/presentation meaning. Fresh
+Sol/xhigh review found no P0-P3 issue and independently verified positive,
+DPI-invariant clearance for 1, 2, 9, and 20 rows plus PDF/SVG export. Final
+gates were:
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_summary_plotting.py
+29 passed, 2 warnings
+
+uv run pytest -q -p no:cacheprovider <nine NR1P files>
+279 passed, 2 warnings
+
+uv run pytest -q -p no:cacheprovider src/tests/neural_analysis
+1531 passed, 22 warnings in 171.22s
+```
+
+A new exact immutable cache-only report destination and explicit user approval
+are required before rerendering. The accepted scientific cache is the sole
+candidate for that rerender; Synchrony must not be recomputed.
