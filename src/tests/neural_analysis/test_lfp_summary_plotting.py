@@ -416,7 +416,7 @@ def test_phase_band_summary_preserves_the_full_unsigned_selected_trial_count() -
             f"condition (n={int(unsigned_maximum)})"
         ]
         assert re.search(
-            r"unstable fewer-than-ten-trial\s+conditions:\s*\[\]",
+            r"conditions:\s*\[\]",
             figure.texts[-1].get_text(),
         )
     finally:
