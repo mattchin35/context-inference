@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
 from typing import Any, Mapping
+import zipfile
 
 import numpy as np
 
@@ -16,6 +19,7 @@ from src.neural_analysis.lfp_summary_models import (
     canonical_config_json,
     component_fingerprint,
     fingerprint_source_files,
+    source_value_semantics,
 )
 
 
@@ -208,6 +212,171 @@ def _validate_arrays(arrays: Mapping[str, np.ndarray], entry: Mapping[str, Any])
     for name, array in arrays.items():
         if array.dtype.kind not in {"b", "i", "u", "f", "c", "U"}:
             raise ValueError(f"array {name} has object or pickle dtype")
+
+
+def _validate_array_schema_header(
+    name: str,
+    shape: tuple[int, ...],
+    dtype: np.dtype[Any],
+    schema: Mapping[str, Any],
+    dimensions: dict[str, int],
+) -> None:
+    """Check one NPZ member's NPY header against its named-axis contract.
+
+    Parameters
+    ----------
+    name : str
+        Manifest array name without the ``.npy`` archive suffix.
+    shape : tuple[int, ...]
+        Stored array shape in manifest axis order.  No numerical array values
+        are loaded.
+    dtype : numpy.dtype
+        Stored NPY dtype. Object and pickle-bearing dtypes are rejected.
+    schema : Mapping[str, Any]
+        JSON-decoded ``array_schema`` mapping with named axes and physical-unit
+        labels.
+    dimensions : dict[str, int]
+        Mutable named-axis size table shared by all members in one component.
+
+    Returns
+    -------
+    None
+        The header and schema are only inspected.  Array shapes, values, units,
+        and missingness are not transformed.
+    """
+    contract = schema.get(name)
+    if not isinstance(contract, Mapping):
+        raise ValueError(f"invalid array schema for {name}")
+    axes = contract.get("axes")
+    units = contract.get("units")
+    if (
+        not isinstance(axes, list)
+        or not axes
+        or not all(isinstance(axis, str) and axis for axis in axes)
+        or not isinstance(units, str)
+        or not units
+    ):
+        raise ValueError(f"invalid array schema for {name}")
+    if dtype.kind not in {"b", "i", "u", "f", "c", "U"}:
+        raise ValueError(f"array {name} has object or pickle dtype")
+    if len(shape) != len(axes):
+        raise ValueError(f"array-axis rank mismatch for {name}")
+    for axis, size in zip(axes, shape, strict=True):
+        if size < 0:
+            raise ValueError(f"array {name} has an invalid negative shape")
+        prior_size = dimensions.get(axis)
+        if prior_size is not None and prior_size != size:
+            raise ValueError(f"array-axis size mismatch for {name}: axis {axis}")
+        dimensions[axis] = size
+
+
+def _read_npy_header(member: zipfile.ZipExtFile) -> tuple[tuple[int, ...], np.dtype[Any]]:
+    """Read one bounded NPY header from an opened ZIP member.
+
+    Parameters
+    ----------
+    member : zipfile.ZipExtFile
+        Open compressed ``.npy`` member positioned at its magic prefix. Header
+        reads are bounded by NumPy's fixed header limit; numerical payload bytes
+        are never read.
+
+    Returns
+    -------
+    tuple[tuple[int, ...], numpy.dtype]
+        Stored shape and dtype. Axis order is represented by the companion
+        manifest, while physical units remain manifest metadata.
+
+    Raises
+    ------
+    ValueError
+        If the member is not a supported NPY 1.0 or 2.0 stream or has an unsafe
+        header. NPY 3.0 is deliberately rejected because the installed NumPy
+        exposes no corresponding bounded public header reader.
+    """
+    version = np.lib.format.read_magic(member)
+    if version == (1, 0):
+        shape, _fortran_order, dtype = np.lib.format.read_array_header_1_0(member)
+    elif version == (2, 0):
+        shape, _fortran_order, dtype = np.lib.format.read_array_header_2_0(member)
+    else:
+        raise ValueError(f"unsupported NPY header version: {version}")
+    if not isinstance(shape, tuple) or not all(isinstance(size, int) for size in shape):
+        raise ValueError("invalid NPY array shape")
+    return shape, dtype
+
+
+def validate_component_npz_headers(
+    component_path: Path,
+    manifest: Mapping[str, Any],
+    component: str,
+) -> None:
+    """Validate one component NPZ's schema using ZIP and NPY headers only.
+
+    Parameters
+    ----------
+    component_path : pathlib.Path
+        Existing local ``.npz`` component archive. Its compressed numerical
+        arrays are not materialized and no pickle support is enabled.
+    manifest : Mapping[str, Any]
+        JSON-decoded component metadata with an ``array_schema`` defining
+        named axes and physical-unit labels.
+    component : str
+        Component identity used to select the manifest entry.
+
+    Returns
+    -------
+    None
+        Confirms exact NPY member names, unique members, safe dtypes, shapes,
+        shared named-axis sizes, and declared uncompressed payload sizes. Array
+        values, axis order, units, and NaN missingness remain on disk unchanged.
+
+    Raises
+    ------
+    ValueError
+        If the archive, member names, headers, dtype, schema, or uncompressed
+        payload lengths are invalid. The error is raised before any full array
+        or 232 MB component payload is allocated.
+    """
+    entry = _component_entry(manifest, component)
+    _component_filename(entry, component)
+    schema = entry.get("array_schema")
+    if not isinstance(schema, Mapping) or not schema:
+        raise ValueError("manifest lacks array_schema")
+    expected_names = []
+    for name, contract in schema.items():
+        if not isinstance(name, str) or not isinstance(contract, Mapping):
+            raise ValueError("invalid array schema entry")
+        expected_names.append(f"{name}.npy")
+    if len(set(expected_names)) != len(expected_names):
+        raise ValueError("array schema contains duplicate member names")
+
+    try:
+        with zipfile.ZipFile(component_path) as archive:
+            members = archive.infolist()
+            member_names = [member.filename for member in members]
+            if len(member_names) != len(set(member_names)):
+                raise ValueError("component archive contains duplicate members")
+            if set(member_names) != set(expected_names):
+                raise ValueError("component archive members differ from its array schema")
+            dimensions: dict[str, int] = {}
+            for info in members:
+                if info.is_dir() or info.filename not in expected_names:
+                    raise ValueError("component archive contains an unsafe member")
+                name = info.filename.removesuffix(".npy")
+                with archive.open(info, "r") as member:
+                    shape, dtype = _read_npy_header(member)
+                    header_size = member.tell()
+                # Reject unsafe dtype/rank/axis contracts from bounded metadata
+                # before interpreting any declared payload byte count.
+                _validate_array_schema_header(name, shape, dtype, schema, dimensions)
+                element_count = math.prod(shape)
+                payload_size = element_count * dtype.itemsize
+                if header_size + payload_size != info.file_size:
+                    raise ValueError(f"truncated or invalid NPY payload for {name}")
+    except (OSError, zipfile.BadZipFile, ValueError) as error:
+        if isinstance(error, ValueError):
+            raise
+        raise ValueError("component contains invalid NPZ or NPY header data") from error
 
 
 def load_component_arrays(component_path: Path, manifest: Mapping[str, Any], component: str) -> dict[str, np.ndarray]:
@@ -431,6 +600,7 @@ def _source_fingerprint_differences(
     entry: Mapping[str, Any],
     config: LFPSummaryConfig,
     component: str,
+    current_source_fingerprints: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
     """Compare cached and active component-scoped source fingerprints.
 
@@ -442,6 +612,10 @@ def _source_fingerprint_differences(
         Active configuration identifying source paths.
     component : str
         Component that determines which sources are relevant.
+    current_source_fingerprints : Mapping[str, Any] or None
+        Optional already-validated live source records for this component. When
+        supplied, they are compared directly and no source path is restatted or
+        Open Ephys sidecar is hashed a second time.
 
     Returns
     -------
@@ -452,7 +626,11 @@ def _source_fingerprint_differences(
     cached = entry.get("source_fingerprints")
     if not isinstance(cached, Mapping):
         return ("manifest lacks source fingerprints",)
-    current = fingerprint_source_files(config, component=component)
+    current = (
+        current_source_fingerprints
+        if current_source_fingerprints is not None
+        else fingerprint_source_files(config, component=component)
+    )
     if cached != current:
         return ("source fingerprints differ from active session inputs",)
     return ()
@@ -463,6 +641,9 @@ def assess_component_status(
     component: str,
     config: LFPSummaryConfig,
     manifest: Mapping[str, Any],
+    *,
+    current_source_fingerprints: Mapping[str, Any] | None = None,
+    validate_headers_only: bool = False,
 ) -> ComponentStatus:
     """Classify one component as missing, compatible, stale, running, or failed.
 
@@ -476,6 +657,14 @@ def assess_component_status(
         Active configuration with paths, units, and axis contracts.
     manifest : Mapping[str, Any]
         Decoded cache manifest.
+    current_source_fingerprints : Mapping[str, Any] or None, keyword-only
+        Optional active component-scoped source records obtained by an earlier
+        streamed verification pass. They preserve the live fingerprint format
+        and avoid rehashing Open Ephys sidecars.
+    validate_headers_only : bool, keyword-only
+        When ``True``, validate only ZIP/NPY headers and declared payload sizes
+        through :func:`validate_component_npz_headers`. This avoids materializing
+        component arrays while retaining named-axis and unit-schema checks.
 
     Returns
     -------
@@ -499,7 +688,10 @@ def assess_component_status(
     if state != "complete":
         return ComponentStatus("failed", (f"invalid component state: {state}",))
     try:
-        load_component_arrays(component_path, manifest, component)
+        if validate_headers_only:
+            validate_component_npz_headers(component_path, manifest, component)
+        else:
+            load_component_arrays(component_path, manifest, component)
     except ValueError as error:
         return ComponentStatus("failed", (f"invalid component arrays: {error}",))
     differences: list[str] = []
@@ -512,7 +704,72 @@ def assess_component_status(
     actual = entry.get("configuration_fingerprint")
     if actual != expected:
         differences.append(f"configuration fingerprint differs: cached={actual}, current={expected}")
-    differences.extend(_source_fingerprint_differences(entry, config, component))
+    differences.extend(
+        _source_fingerprint_differences(
+            entry,
+            config,
+            component,
+            current_source_fingerprints=current_source_fingerprints,
+        )
+    )
     if differences:
         return ComponentStatus("stale", tuple(differences))
     return ComponentStatus("compatible")
+
+
+def rebind_power_synchrony_manifest(
+    source_manifest: Mapping[str, Any],
+    destination_config: LFPSummaryConfig,
+    *,
+    destination_source_fingerprints: Mapping[str, Mapping[str, Any]],
+) -> dict[str, object]:
+    """Build a destination-compatible Power/Synchrony manifest without I/O.
+
+    Parameters
+    ----------
+    source_manifest : Mapping[str, Any]
+        JSON-decoded producer manifest. Completion time, generator, schema,
+        units, scientific metadata, and all non-copied component metadata are
+        retained as producer history.
+    destination_config : LFPSummaryConfig
+        Valid active cluster configuration. Its Power/Synchrony fingerprints
+        and canonical snapshot become destination compatibility identity; no
+        numerical array, source file, or cache path is opened by this helper.
+    destination_source_fingerprints : Mapping[str, Mapping[str, Any]]
+        Prevalidated active source records keyed by ``"power"`` and
+        ``"synchrony"``. The caller owns their streamed verification.
+
+    Returns
+    -------
+    dict[str, object]
+        Deep-copied rebound manifest. Only top-level ``configuration`` and the
+        copied components' configuration snapshot, fingerprint, source records,
+        and source-value semantics are replaced. Array shapes, axes, physical
+        units, completion status, and producer/scientific metadata are unchanged.
+
+    Raises
+    ------
+    ValueError
+        If Power/Synchrony entries or their required prevalidated destination
+        source-record mappings are absent or malformed.
+    """
+    rebound = deepcopy(dict(source_manifest))
+    components = rebound.get("components")
+    if not isinstance(components, dict):
+        raise ValueError("manifest components must be a mapping")
+    # These JSON trees are destination compatibility identity, not shared
+    # producer provenance. Keep each location independently mutable.
+    snapshot = json.loads(canonical_config_json(destination_config))
+    rebound["configuration"] = deepcopy(snapshot)
+    for component in ("power", "synchrony"):
+        entry = components.get(component)
+        fingerprints = destination_source_fingerprints.get(component)
+        if not isinstance(entry, dict) or not isinstance(fingerprints, Mapping):
+            raise ValueError(f"manifest lacks prevalidated {component} metadata")
+        entry["configuration_snapshot"] = deepcopy(snapshot)
+        entry["configuration_fingerprint"] = component_fingerprint(
+            component, destination_config
+        )
+        entry["source_fingerprints"] = deepcopy(dict(fingerprints))
+        entry["source_value_semantics"] = source_value_semantics(destination_config)
+    return rebound
