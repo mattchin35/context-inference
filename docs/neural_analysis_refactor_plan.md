@@ -25,9 +25,9 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** NR0, documentation/baseline gate. The next allowed code
-  change is the NR0 tests-only edit after the required baselines and read-only
-  source audit are recorded.
+- **Active package:** NR0, tests-only preparation. The documentation/baseline
+  gate is complete; the next allowed code change is the NR0 tests-only edit
+  after the lead and optional scout finish the read-only source/caller audit.
 - **Agent policy:** lead Sol/high orchestration with one NR0 Terra/xhigh writer,
   one fresh Sol/xhigh gate reviewer, and at most one optional Terra/medium
   read-only scout. Only the Terra writer may author package tests/source; the
@@ -44,6 +44,17 @@ amplitude behavior as if that behavior were scientifically correct.
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that
   log after every commit or interruption-relevant gate.
+- **Verified baseline:** the NR0 focused command passed 555 tests; the complete
+  neural suite passed 1,246 tests. The complete repository run stops at
+  collection because the pre-existing untracked
+  `src/tests/behavior_analysis/test_project_utils.py` imports unavailable
+  `autograd`; this is frozen unrelated user-owned baseline behavior and does
+  not justify a refactor dependency. Both representative CT026 preprocessing
+  sidecars are readable, and the public validator reports the immutable copied
+  snapshot as valid.
+- **Local implementation commits:** `d4b1c30` records authorization/status and
+  `9a76d20` creates the execution log. Neither has been pushed; no push is
+  required for the current local tests-first gate.
 
 ## 1. Objectives
 

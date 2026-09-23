@@ -46,7 +46,8 @@
 
 ## Baseline gate
 
-Status: in progress. No NR0 test or source edit has started.
+Status: complete. No NR0 test or source edit had started when these baselines
+were run.
 
 Required commands:
 
@@ -72,16 +73,46 @@ uv run pytest -q -p no:cacheprovider src/tests/neural_analysis
 uv run pytest -q -p no:cacheprovider
 ```
 
-Results: pending.
+Results:
 
-Read-only representative CT026 and legacy-artifact readability check: pending.
-This check must not execute analysis code or modify timestamps/content.
+- Focused NR0 command: 555 passed, 3 warning instances, 35.05 seconds. The
+  warnings were two all-NaN plotting warnings and the intentional duplicate NPZ
+  member warning.
+- Complete `src/tests/neural_analysis` command: 1,246 passed, 22 warning
+  instances, 157.52 seconds. Warning categories were the existing
+  multiprocessing-fork deprecation, all-NaN plotting, intentional duplicate
+  NPZ member, and Pynapple empty-epoch/divide-by-zero warnings.
+- Complete repository command: collection stopped with one unrelated error in
+  2.90 seconds because the pre-existing untracked
+  `src/tests/behavior_analysis/test_project_utils.py` imports unavailable
+  `autograd`. The file and dependency are outside NR0. This is accepted as a
+  frozen user-owned baseline failure; NR0 will neither edit the test nor add the
+  missing dependency.
+- Pytest initially could not create a lock in `/home/matt/.cache/uv` under the
+  filesystem sandbox. The same commands were rerun with approved access to the
+  existing uv cache; no dependency installation or repository write occurred.
+
+Read-only representative CT026 and legacy-artifact check:
+
+- Both ProbeA and ProbeB `lfp_preprocessing.json` files exist, are ASCII/JSON
+  readable, and expose the reviewed `float32`, 2,500 Hz, 384-channel,
+  time-major layout plus the nested affine scaling object.
+- Both corresponding `lfp.dat` files exist at 14,338,163,712 bytes. No binary
+  samples were loaded during the baseline check.
+- The five-file local final `cache_snapshot` has the expected recorded sizes.
+  Calling the existing public `validate_cache_snapshot` read-only returned
+  `valid: Valid committed snapshot.`
+- The first validator import command lacked `src` on `sys.path` and failed with
+  `ModuleNotFoundError`; the corrected command added only the in-process import
+  path and passed. Neither command modified the snapshot.
+- Tracked status remained clean and both untracked inventory hashes remained
+  exactly equal to the starting checkpoint after all baselines.
 
 ## Package ledger
 
 | Package | State | Test commit | Implementation commit | Evidence and next gate |
 | --- | --- | --- | --- | --- |
-| NR0 | Baseline gate active | - | - | Run and record baselines, then assign tests-only work. |
+| NR0 | Tests-only preparation | - | - | Finish read-only audit, then assign the continuing Terra/xhigh writer. |
 | NR1 | Pending | - | - | Requires accepted NR0 and separate real-data gates. |
 | NR2 | Pending | - | - | Requires approved NR1 corrected baseline. |
 | NR3 | Pending | - | - | Sequential after NR2. |
