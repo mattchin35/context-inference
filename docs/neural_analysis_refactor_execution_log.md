@@ -817,3 +817,66 @@ and a different fresh Sol/xhigh read-only implementation reviewer. Reviewer
 write restrictions were procedural; repository state checks confirmed that
 they made no edits. The lead alone staged and committed reviewed paths. All
 NR1P agents are complete. Git push remains a separate user authorization gate.
+
+### NR1C-A corrected-cache relocation implementation
+
+Status: complete and approved in code on 2026-09-23. No CT026 path, cluster,
+network transfer, scientific kernel, cache artifact, or external run directory
+was accessed or changed. Git push remains separately gated.
+
+The initial tests-first contracts were committed as `e940671` and hardened as
+`72028ad`. They freeze the pure manifest-rebinding API, bounded ZIP/NPY header
+validation, backward-compatible header-only public component status, exact
+source/configuration equivalence, nonsymlink containment, streamed hashing,
+byte-preserving Power/Synchrony transfer, external ASCII receipt, executable
+CLI, atomic sibling publication, and source/legacy preservation. Focused RED
+was genuine: the existing IO tests passed and every new failure was an absent
+planned interface or relocation module.
+
+Implementation review exposed three concurrency/provenance boundaries, each
+handled tests-first before its source correction:
+
+- `6e243c3` requires receipt-failure rollback to preserve a destination whose
+  same-name component was concurrently replaced;
+- `f10b7bd` requires the embedded source-producer manifest and its SHA-256 to
+  describe one coherent bounded byte snapshot; and
+- `b994495` covers invalid and schema-valid replacements in the interval
+  immediately after atomic publication, requiring fail-closed behavior,
+  preservation of the changed destination, and no success receipt.
+
+The reviewed implementation is `e1d99c3`. `lfp_summary_io.py` now provides the
+pure rebinding helper and bounded header-only NPZ validation without loading
+numerical arrays. `lfp_summary_cache_relocation.py` provides the immutable
+request/runtime/result contracts, strict root/path/source equivalence checks,
+streamed byte copies and hashes, destination-bound manifest construction,
+prepublication receipt preparation, atomic cache publication, public
+header-only validation, and receipt commit. Producer-manifest content and
+digest are derived from one bounded ASCII read. Cache ownership is captured
+from staging before rename using directory device/inode plus exact identities
+for `manifest.json`, `power.npz`, and `synchrony.npz`; it is checked immediately
+after publication and immediately before receipt commit. Failure rollback
+removes only that unchanged publication and preserves the whole destination if
+any concurrent actor changed it.
+
+Final verification was:
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_summary_io.py \
+  src/tests/neural_analysis/test_lfp_summary_cache_relocation.py
+107 passed in 2.31s
+
+uv run pytest -q -p no:cacheprovider src/tests/neural_analysis
+1503 passed, 22 warnings in 169.10s
+
+uv run python -m py_compile \
+  src/neural_analysis/lfp_summary_io.py \
+  src/neural_analysis/lfp_summary_cache_relocation.py
+passed
+```
+
+`git diff --check` passed. Source scope was exactly the two Section 5.6 NR1C-A
+files; tests were committed separately before implementation. Fresh Sol/xhigh
+test-design and implementation review approved the final state with no P0-P3
+findings. NR1C-B launcher-target/preflight work is now unblocked, but cluster
+transfer, push, and Slurm submission remain unauthorized.

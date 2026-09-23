@@ -18,7 +18,10 @@ IQRs and the legacy figure has the same pattern. The user selected the
 presentation-only resolution in Section 5.5 for both ITPC and ISPC because they
 share the same phase-clustering/resampling calculation. The NR1P code/test
 package implementing that presentation is complete, committed, and approved by
-a fresh Sol/xhigh implementation review. A separately authorized NR1V run must
+a fresh Sol/xhigh implementation review. The NR1C-A cache-relocation package is
+also complete, committed, and approved after tests-first concurrency and
+provenance hardening; NR1C-B launcher-target work is the next source package. A
+separately authorized NR1V run must
 still create and review a new versioned Synchrony artifact; no existing cache or
 report was changed. Spike-phase and cluster actions remain separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
@@ -42,7 +45,7 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** NR1 staged CT026 validation. NR0 tests commits `e728cea`
+- **Active package:** NR1C-B launcher target and preflight. NR0 tests commits `e728cea`
   and `2b497e4` plus implementation commit `177a8d6` are complete and
   approved. The NR1 metadata/path/resource dry run is complete and approved;
   its original dry-run report and profiling destinations remain absent. The
@@ -51,7 +54,9 @@ amplitude behavior as if that behavior were scientifically correct.
   Synchrony only. Corrected Synchrony passed its numerical, provenance, and
   reviewer visual gates. The user selected the Section 5.5 presentation-only
   revision for both ITPC and ISPC band summaries. NR1P tests and implementation
-  are complete through implementation commit `ad8e598`; a newly versioned
+  are complete through implementation commit `ad8e598`. NR1C-A relocation
+  tests are complete through `b994495`, and the reviewed implementation is
+  `e1d99c3`; no CT026 or cluster path was accessed during that package. A newly versioned
   Synchrony artifact and explicit visual approval remain before the bounded
   Spike-phase preview can be authorized.
   The user requires any later preview to run unattended through Slurm without
@@ -204,8 +209,8 @@ amplitude behavior as if that behavior were scientifically correct.
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that
   log after every commit or interruption-relevant gate.
-- **Verified baseline:** the final NR1P focused command passed 269 tests; the
-  complete neural suite passed 1,415 tests with 22 known warnings. The complete
+- **Verified baseline:** the final NR1C-A focused command passed 107 tests; the
+  complete neural suite passed 1,503 tests with 22 known warnings. The complete
   repository run stops at
   collection because the pre-existing untracked
   `src/tests/behavior_analysis/test_project_utils.py` imports unavailable
@@ -218,9 +223,11 @@ amplitude behavior as if that behavior were scientifically correct.
   authorization is `181b82b`. NR1P tests are `d5d9e2b`, `5ae2040`,
   `c0129fe`, and the wrapping-only harness correction `0b8e2d7`; the reviewed
   NR1P implementation is `ad8e598`. Documentation checkpoints through
-  `3e15a31` were pushed to `origin/refactor` before NR1P implementation. These
-  later test, implementation, and documentation commits remain local until the
-  user separately approves another push.
+  `3e15a31` were pushed to `origin/refactor` before NR1P implementation. NR1C-A
+  tests are `e940671`, `72028ad`, `6e243c3`, `f10b7bd`, and `b994495`; its
+  reviewed implementation is `e1d99c3`. These later test, implementation, and
+  documentation commits remain local until the user separately approves
+  another push.
 
 ## 1. Objectives
 
@@ -1679,6 +1686,33 @@ uv run pytest -q -p no:cacheprovider \
   src/tests/neural_analysis/test_lfp_summary_io.py \
   src/tests/neural_analysis/test_lfp_summary_cache_relocation.py
 ```
+
+**NR1C-A result - complete and approved.** Tests were committed before source
+implementation as `e940671` and `72028ad`. Three later tests-first hardening
+commits freeze rollback ownership under concurrent replacement (`6e243c3`), a
+coherent source-manifest mapping/digest snapshot (`f10b7bd`), and the atomic
+publication window (`b994495`). The reviewed source implementation is
+`e1d99c3`.
+
+The package adds a pure destination-manifest rebinding helper, bounded ZIP/NPY
+header validation without numerical-array materialization, backward-compatible
+header-only public component status, and an executable relocation module. The
+relocation command validates exact root/path/configuration/source equivalence,
+streams each source/component digest through the shared hash seam, copies only
+Power and Synchrony bytes, prepares an external ASCII receipt before cache
+publication, and atomically publishes the three-member cache. The producer
+manifest mapping and SHA-256 come from one bounded byte snapshot. Staging
+ownership is captured before rename and checked immediately after publication
+and immediately before receipt commit; rollback removes only the unchanged
+cache published by the current invocation and preserves any concurrently
+changed destination. No normal success path rehashes component bytes for those
+ownership checks.
+
+Final verification was 107 focused tests and 1,503 complete neural-analysis
+tests with 22 known warnings; `py_compile` and `git diff --check` passed. A
+fresh Sol/xhigh implementation reviewer reported no P0-P3 findings. Work stayed
+within the NR1C-A source/test allowlists and did not access CT026, transfer data,
+touch a cluster, push Git, or run scientific computation.
 
 **NR1C-B - launcher target and preflight.** Only after NR1C-A is committed, one
 Terra/xhigh writer receives source authority only for
