@@ -7,9 +7,10 @@ complete. The user-approved NR1 metadata/path/resource dry run and bounded
 small representative-window check in Section 5.2 items 1-2 completed and passed
 fresh Sol review on 2026-09-23. No scientific component computation,
 scientific-cache mutation, report rendering, profiling run, or cluster action
-is authorized beyond Power. The user authorized corrected Power, its Power-only
-report, and the read-only legacy Power comparison in Section 5.2 item 3 on
-2026-09-23. Synchrony, Spike-phase, and cluster actions remain separately gated.
+is authorized beyond Power. Corrected Power, its Power-only report, and the
+read-only legacy Power comparison in Section 5.2 item 3 completed and passed
+fresh Sol scientific/evidence review on 2026-09-23. User visual approval is
+pending. Synchrony, Spike-phase, and cluster actions remain separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -36,7 +37,7 @@ amplitude behavior as if that behavior were scientifically correct.
   approved. The NR1 metadata/path/resource dry run is complete and approved;
   its corrected cache, report, and profiling destinations remain absent. The
   bounded numerical small-window check is also complete and approved. Corrected
-  Power is active under the authority below.
+  Power is scientifically approved and awaits user visual review.
 - **Approved NR1 destinations:** session root
   `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference`;
   corrected cache `processed/lfp_summary_cache_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`;
@@ -103,6 +104,19 @@ amplitude behavior as if that behavior were scientifically correct.
   report metadata, plots, runtime, and memory. Record and explain every changed
   or invariant field. Do not compute or publish Synchrony or Spike-phase, alter
   legacy artifacts, submit cluster work, or push.
+- **NR1 corrected-Power result:** the corrected cache contains only validated
+  `manifest.json` and `power.npz`, anchored by SHA-256 in the run evidence. All
+  axes, selections, validity, exclusions, and finite masks are invariant;
+  amplitude and linear-power arrays follow gain and gain-squared expectations.
+  Twenty-eight of 30 arrays passed the original tolerance. Two full-resolution
+  normalized-PSD arrays stopped the initial gate at approximately
+  3.35e-7 dB maximum error, localized to near-zero 1,250-Hz support. A separate
+  mechanistic log-ratio propagation bound plus a fixed 1e-6-dB ceiling accepted
+  both with zero violations; below 100 Hz, maximum error is 6.31e-12 dB. The
+  original failure record remains unchanged. Fresh reviewer
+  `/root/nr1_power_reviewer` approved the scientific, safety, and evidence gate
+  with no P0-P3 findings. The 12 report PNGs await explicit user visual
+  approval; Synchrony is not authorized.
 - **Durable evidence:** exact commands, results, inventory hashes, commits,
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that

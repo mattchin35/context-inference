@@ -113,7 +113,7 @@ Read-only representative CT026 and legacy-artifact check:
 | Package | State | Test commit | Implementation commit | Evidence and next gate |
 | --- | --- | --- | --- | --- |
 | NR0 | Complete and approved | `e728cea`, `2b497e4` | `177a8d6` | Final focused 704 passed; neural suite 1,395 passed; fresh Sol review approved; closure `a94559d`. |
-| NR1 | In progress; checks 1-2 approved | - | - | Metadata/path/resource and bounded affine-window evidence passed fresh Sol reviews. Corrected Power requires separate user approval. |
+| NR1 | In progress; Power awaits visual approval | - | - | Checks 1-2 and corrected Power passed fresh Sol scientific/evidence reviews. Twelve Power PNGs require explicit user visual approval before Synchrony. |
 | NR2 | Pending | - | - | Requires approved NR1 corrected baseline. |
 | NR3 | Pending | - | - | Sequential after NR2. |
 | NR4 | Pending | - | - | Sequential after NR3. |
@@ -452,3 +452,78 @@ must compare axes, trials, validity, references/traces, linear PSDs, band power,
 normalized dB, reports/plots, runtime, memory, and cache provenance. Synchrony,
 Spike-phase, legacy mutation, cluster work, and Git push remain prohibited.
 Result and review are pending. NR2-NR18 are not started.
+
+### NR1 corrected-Power result
+
+Status: scientifically and operationally approved; explicit user visual review
+of the 12 PNGs is pending. Production command:
+
+```text
+uv run /home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_nr1_power_open_ephys_affine_uV_v1_2026-09-23T12-23-53Z/run_power.py
+```
+
+The corrected cache contains exactly two files:
+
+```text
+manifest.json  14,726 bytes      4218cb430f2a17f7bb4ea44248005d98e431c95f891ff9763e444b9c641b73dc
+power.npz      78,680,638 bytes  164114d606cc204ff29ad173a686f0be66b54c2b944ed1f15008b2fa85367355
+```
+
+The component independently reloads as compatible, contains the expected 30
+arrays, and records corrected fingerprint
+`9e4df59438cebb9aaeab0b6dd10dfd3872d0c00e265f988b1df862a7f4578df4`,
+both sidecars, and `open_ephys_affine_uV_v1` for all three sites. No corrected
+Synchrony or Spike-phase component or work artifact exists.
+
+All shapes/dtypes, axes, trial indices, nine condition memberships/counts,
+objective/site/PSD validity, exclusions, reference availability, and finite
+support match the legacy Power component. Source traces scale by the common
+gain; linear PSD, references, and band power scale by gain squared. Normalized
+band powers differ by at most `1.70e-13 dB`.
+
+The initial fixed comparison (`rtol=1e-9`, `atol=1e-10`) stopped on only two
+full-resolution arrays:
+
+- `normalized_psd_session_db`: 3,316 cells; maximum `3.344045609310342e-7 dB`;
+- `normalized_psd_presession_db`: 1,597 cells; maximum
+  `3.345628485362795e-7 dB`.
+
+The original `comparison.json` remains failed and unchanged. A read-only
+diagnostic established identical finite masks, gain-squared proportional PSDs
+and references, and legacy gain-cancellation reconstruction error no larger
+than `1.4210854715202004e-14 dB`. The maxima occur at 1,250 Hz where PSD support
+is approximately `1.014e-15`; below 100 Hz, maxima are `6.31e-12 dB` session
+and `5.34e-12 dB` presession. Median errors are about `3e-14 dB`.
+
+Fresh review required and then verified a separate a priori acceptance rule,
+without rewriting the original result:
+
+```text
+B = (10 / ln(10)) * (abs(ln(P1/P0)) + abs(ln(R1/R0)))
+    + 32 * eps64 * max(1, abs(D0), abs(D1))
+fixed ceiling: atol = 1e-6 dB, rtol = 0
+```
+
+Observed/bound maxima were `3.3440456093e-7 / 3.3440486933e-7 dB` for session
+and `3.3456284854e-7 / 3.3456320204e-7 dB` for presession, with zero pointwise
+bound or fixed-ceiling violations. This identifies floating-point re-execution
+before the ratio/log operation rather than a scientific or support change.
+
+Power ran in 42.56690235005226 seconds with 591,646,720-byte peak RSS, versus
+legacy 10.4942 seconds and 586,289,152 bytes: 4.056x wall time and +0.914% RSS.
+The component size is exactly unchanged. A single cold/cache-sensitive run
+cannot attribute the runtime difference to affine conversion; it remains
+unexplained variance but is operationally acceptable at under one minute.
+
+The report contains 12 validated PNGs with the expected names and dimensions,
+427 trials, 424 valid trials per site, three `missing_choice_time` exclusions,
+and no new warning. Cache and report hashes are recursively anchored in
+`file_inventory.json`; corrected cache hashes are separately anchored in
+`artifact_inventory.json`. Evidence chronology retains the initial hard stop,
+the diagnostic, the separate acceptance, and packaging repair. Legacy content
+hashes and mtimes are unchanged; repository state remained tracked-clean at
+`d78db2429a2a06abab8850ca8cecfce2e6a0e22d`.
+
+Fresh reviewer `/root/nr1_power_reviewer` (`gpt-5.6-sol`, `xhigh`) approved the
+scientific, safety, and evidence gate with no P0-P3 findings. User visual
+approval is still required. Synchrony and NR2-NR18 are not started.
