@@ -177,6 +177,14 @@ Read-only representative CT026 and legacy-artifact check:
   vary only semantics in work-cache checks, exercise semantics-version changes
   through every exploratory cache, and complete malformed primitive/unit/layout
   validation plus exact sidecar-digest assertions.
+- Revision-four RED command/result: exact 14-file Section 4.4 command
+  independently reproduced by the lead: 114 failed, 582 passed, 3 warnings in
+  36.85 seconds. No collection, import, or fixture failures occurred.
+- Fifth Sol test-design review: blocked. Repair an impossible pre-edit digest
+  assertion, allow `.astype(float, copy=True)` followed by in-place operators,
+  resolve the production generic PSD schema with cached `site_voltage_units`
+  rather than a test-local schema, use the real corrected component fingerprint
+  for legacy staleness, and compare PPC null summaries plus stable cache axes.
 - Tests-only commit: pending.
 
 ### Implementation phase

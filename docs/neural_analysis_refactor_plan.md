@@ -29,12 +29,13 @@ amplitude behavior as if that behavior were scientifically correct.
   refactor prep`), equal to `origin/refactor` when implementation began.
 - **Active package:** NR0, tests-only revision. The documentation/baseline gate
   is complete. The lead independently reproduced the current tests-only RED
-  revision-three RED result (101 failed, 578 passed, 3 warnings), but the
-  fourth mandatory Sol review blocked the commit on one scientifically wrong
-  PSD-label assertion plus incomplete in-place-allocation, semantics-only
-  invalidation, non-vacuous legacy, and malformed-metadata contracts. The same
-  Terra writer must repair only the tests before another independent RED run
-  and fresh review.
+  revision-four RED result (114 failed, 582 passed, 3 warnings), but the fifth
+  mandatory Sol review blocked the commit on two test defects and three
+  remaining causal gaps: pre/post sidecar digest comparison, support for a
+  valid `.astype(..., copy=True)` in-place implementation, production-schema
+  unit resolution, actual legacy-to-corrected staleness, and complete PPC/cache
+  identity invariants. The same Terra writer must repair only those tests
+  before another independent RED run and fresh review.
 - **Agent policy:** lead Sol/high orchestration with one NR0 Terra/xhigh writer,
   one fresh Sol/xhigh gate reviewer, and at most one optional Terra/medium
   read-only scout. Only the Terra writer may author package tests/source; the
@@ -932,10 +933,12 @@ demonstrate:
 29. cached source and band-filtered traces change scale while phase arrays keep
     their documented radians/dimensionless units;
 30. plot builders retain scientifically applicable unit labels and render the
-    corrected arrays without reopening raw data: physical traces use `uV`,
-    linear PSD cache/schema values use `uV^2/Hz`, and reference-normalized or
-    log-power plots remain labeled in dB. A normalized dB axis must not be
-    mislabeled as linear `uV^2/Hz`.
+    corrected arrays without reopening raw data: physical traces use `uV`;
+    the generic linear-PSD cache schema remains
+    `source-voltage-unit^2/Hz` and resolves to `uV^2/Hz` together with cached
+    per-site voltage units; and reference-normalized or log-power plots remain
+    labeled in dB. A normalized dB axis must not be mislabeled as linear
+    `uV^2/Hz`.
 
 A separate affine-conversion test uses a nonzero offset and asserts the exact
 physical trace. Scale-invariance claims are not applied to nonzero-offset data.
