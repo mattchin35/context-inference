@@ -205,9 +205,19 @@ Read-only representative CT026 and legacy-artifact check:
 
 ### Implementation phase
 
-- GREEN command/result: pending; source implementation is the next gate.
-- Affected/full-suite results: pending.
-- Sol implementation review: pending.
+- First GREEN command/result: exact 14-file Section 4.4 command independently
+  passed 695 tests with 3 warnings in 37.28 seconds.
+- First affected/full-suite result: complete `src/tests/neural_analysis` passed
+  1,386 tests with 22 warnings in 180.02 seconds.
+- First Sol implementation review: blocked despite GREEN. The source must build
+  and reuse exact tokens at actual view boundaries, bind supplied tokens to the
+  requested paths, save provenance from the computation token, stream sidecar
+  SHA-256, own the semantics identifier once at the adapter boundary, correct
+  all affected data contracts, and centralize trial/continuous metadata
+  compatibility validation with saved-channel bounds.
+- Final GREEN command/result: pending after source-only corrections.
+- Final affected/full-suite results: pending.
+- Final Sol implementation review: pending.
 - Implementation commit: pending.
 - Performance evidence: pending.
 - Unresolved risks: none recorded yet.

@@ -27,11 +27,12 @@ amplitude behavior as if that behavior were scientifically correct.
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
 - **Active package:** NR0, source implementation. Tests-only commit `e728cea`
-  is approved and complete. The lead independently reproduced the final exact
-  RED result (115 failed, 580 passed, 3 warnings in 37.43 seconds), and the
-  fresh Sol/xhigh reviewer approved the stable 12-file tests-only diff. The
-  next allowed edits are the smallest implementation changes inside the NR0
-  source allowlist by the same Terra/xhigh writer; tests are frozen.
+  is approved and complete. The first source revision passed 695 focused tests
+  and 1,386 complete neural-analysis tests, but the mandatory Sol review
+  blocked it on view-boundary token ownership/reuse, streamed hashing, one
+  adapter-owned semantics constant, accurate data contracts, and duplicated
+  trial/continuous metadata validation. The same Terra/xhigh writer is making
+  source-only corrections inside the eight-file allowlist; tests are frozen.
 - **Agent policy:** lead Sol/high orchestration with one NR0 Terra/xhigh writer,
   one fresh Sol/xhigh gate reviewer, and at most one optional Terra/medium
   read-only scout. Only the Terra writer may author package tests/source; the
