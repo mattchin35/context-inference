@@ -604,7 +604,9 @@ def plot_phase_band_summary(
     figure, axes = _figure(("summary",))
     axis = axes["summary"]
     row_positions = np.arange(len(labels), dtype=float)
-    box_positions = row_positions + 0.18
+    # Keep both artists inside one condition row while leaving the observed circle clear.
+    box_positions = row_positions + 0.30
+    box_width = 0.20
     bxp_stats = [
         {
             "med": quantiles[2, index],
@@ -620,6 +622,7 @@ def plot_phase_band_summary(
     axis.bxp(
         bxp_stats,
         positions=box_positions,
+        widths=box_width,
         orientation="horizontal",
         patch_artist=True,
         shownotches=False,
