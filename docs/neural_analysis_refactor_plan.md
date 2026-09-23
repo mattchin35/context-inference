@@ -12,7 +12,11 @@ the Power report and authorized corrected Synchrony in Section 5.2 item 4 on
 2026-09-23. Corrected Synchrony, its report, and the legacy comparison are now
 scientifically and operationally approved after fresh Sol numerical,
 provenance, and systematic visual reviews; explicit user visual approval is
-pending. Spike-phase and cluster actions remain separately gated.
+pending. User review flagged that every observed point in the PFC theta-whole
+ITPC summary lies below its percentile-bootstrap 95% interval. The bars are not
+IQRs and the legacy figure has the same pattern, but the scientific/display
+interpretation must be resolved before approval. Spike-phase and cluster
+actions remain separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -43,6 +47,8 @@ amplitude behavior as if that behavior were scientifically correct.
   Synchrony only. Corrected Synchrony passed its numerical, provenance, and
   reviewer visual gates; explicit user visual approval is the only remaining
   item before the bounded Spike-phase preview can be authorized.
+  The user requires any later preview to run unattended through Slurm without
+  Codex monitoring; that execution is not approved.
 - **Approved NR1 destinations:** session root
   `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference`;
   corrected cache `processed/lfp_summary_cache_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`;
@@ -166,6 +172,21 @@ amplitude behavior as if that behavior were scientifically correct.
   exact production runner, formulas, artifacts, and 276-file inventory are
   preserved and independently approved. User visual approval remains pending;
   no Spike-phase work is authorized yet.
+- **User Synchrony finding and preview execution requirement:** the circles in
+  the flagged PFC theta-whole figure are observed nonlinear ITPC estimates and
+  the vertical lines are percentile-bootstrap 95% intervals, not medians and
+  IQRs. With-replacement trial resampling biases the nonnegative vector
+  magnitude upward; the current plotting test explicitly permits an interval
+  not containing its estimate, and the legacy figure shows the same pattern.
+  Treat this as an unresolved scientific/display decision rather than an
+  affine-scaling regression. If later approved, the 100-shuffle ProbeB preview
+  must use the standalone Slurm launcher with eight workers, no `--final-run`,
+  and no Codex monitoring. Before proposing submission, close the safety gap:
+  the launcher has no corrected-cache output argument and still targets
+  `processed/lfp_summary_cache`, the protected legacy cache. A tested explicit
+  corrected-cache target, a pushed exact clean cluster checkout, and a reviewed
+  way to establish the approved Power/Synchrony state on the cluster are
+  required. No push, transfer, or Slurm submission is authorized by this note.
 - **Durable evidence:** exact commands, results, inventory hashes, commits,
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that

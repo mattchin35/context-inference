@@ -650,3 +650,50 @@ without invoking the packager again. Fresh re-review accepted the disclosure
 and full package with no P0-P3 finding. Legacy hashes and mtimes, approved Power
 bytes, report bytes, repository HEAD `19f9ef866ae9381db22836cfcb8fb6bbc46d466c`,
 and tracked-clean state remained unchanged.
+
+### NR1 Synchrony user-review finding and Spike-preview execution decision
+
+The user withheld Synchrony approval after noticing that every observed point
+in `PFC_theta_whole_itpc_band_summary.png` lies below its vertical interval.
+The lines are saved percentile-bootstrap 95% intervals, not IQRs, and the
+circles are observed nonlinear ITPC estimates rather than bootstrap medians.
+The saved `(estimate, low, high)` triples are:
+
+```text
+correct_rewarded  (0.093031498, 0.101026567, 0.141250198)
+omission          (0.138474499, 0.160156721, 0.233108471)
+incorrect         (0.063974960, 0.073807686, 0.097182355)
+switch            (0.112607792, 0.132281939, 0.179805459)
+stay              (0.064153998, 0.075357745, 0.100829593)
+omission_switch   (0.290252871, 0.320827530, 0.488008435)
+omission_stay     (0.179708280, 0.205423319, 0.288580083)
+incorrect_switch  (0.131302948, 0.147979124, 0.206079952)
+incorrect_stay    (0.066730630, 0.080087825, 0.106781842)
+```
+
+The implementation recomputes the nonnegative vector-magnitude statistic for
+each with-replacement trial resample before taking percentile bounds. Duplicate
+trials reduce effective directional diversity and produce upward finite-sample
+bias, so a percentile interval need not contain the original estimate. The
+plotting test explicitly freezes that behavior, and the legacy figure has the
+same geometry. This explains the result but does not settle whether its
+statistical method or presentation should change. No scientific or plot code
+was changed, and Synchrony user approval remains pending.
+
+The user requires the eventual 100-shuffle ProbeB preview to run on Slurm
+without Codex monitoring. The existing planned execution path is the standalone
+launcher through `src/shell_scripts/hpc_ppc.sh`: one task, eight CPUs/workers,
+32 GiB, 72 hours, `--shuffles 100`, no `--final-run`, timestamped state/log,
+exact resume command, persistent checkpoints, and terminal report validation.
+Codex may inspect persistent state later when asked but must not poll the job.
+
+Submission is neither safe nor authorized yet. The launcher exposes session,
+analysis-root, probe, shuffle, and worker arguments but no cache-output
+argument; its CT026 builder targets `processed/lfp_summary_cache`, the protected
+legacy cache. The branch is also 25 commits ahead of `origin/refactor` at local
+HEAD `058665443b54550e7ca585c012d212f0dff55266`, so cluster execution requires a
+separately approved push and exact clean checkout. Before proposing submission,
+add and test an explicit corrected-cache target and choose a reviewed way to
+establish the approved corrected Power/Synchrony state on the cluster (verified
+copy or separately authorized reproduction). No push, transfer, or Slurm
+submission occurred.

@@ -31,6 +31,16 @@
   packaging chronology remain preserved; the reviewed acceptance and 276-file
   inventory explain them. Explicit user visual approval is pending. Spike-phase,
   cluster, and push actions remain separately gated.
+- User review then flagged the PFC theta-whole ITPC summary because all
+  observed points lie below the vertical intervals. Those lines are
+  percentile-bootstrap 95% intervals, not IQRs; resampling bias in the
+  nonnegative clustering magnitude explains the legacy-matching result, but
+  its scientific/display treatment remains unresolved and Synchrony is not
+  approved. Any eventual 100-shuffle ProbeB preview must run unattended through
+  Slurm without Codex monitoring. The current launcher cannot safely do that
+  for NR1 because it lacks a corrected-cache output argument and would target
+  the protected legacy cache. No preview, push, transfer, or submission is
+  authorized until those gaps are resolved.
 - For this structural-refactor sequence,
   `docs/neural_analysis_refactor_plan.md` and
   `docs/neural_analysis_refactor_execution_log.md` are the ongoing detailed
