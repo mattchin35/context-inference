@@ -112,7 +112,7 @@ Read-only representative CT026 and legacy-artifact check:
 
 | Package | State | Test commit | Implementation commit | Evidence and next gate |
 | --- | --- | --- | --- | --- |
-| NR0 | Tests-only preparation | - | - | Finish read-only audit, then assign the continuing Terra/xhigh writer. |
+| NR0 | Tests-only revision | - | - | Second Sol review blocked; revise cache, legacy, label, and preparation contracts, then repeat RED/review. |
 | NR1 | Pending | - | - | Requires accepted NR0 and separate real-data gates. |
 | NR2 | Pending | - | - | Requires approved NR1 corrected baseline. |
 | NR3 | Pending | - | - | Sequential after NR2. |
@@ -136,10 +136,25 @@ Read-only representative CT026 and legacy-artifact check:
 
 ### Tests-only phase
 
-- Assigned writer: pending.
+- Assigned writer: `/root/nr0_writer`, `gpt-5.6-terra`, `xhigh`; the same
+  writer continues through tests and implementation.
 - Allowed files: exact NR0 allowlist in plan Section 4.1.
-- RED command/result: pending.
-- Sol test-design review: pending.
+- Source-allowlist correction: added `src/neural_analysis/lfp_summary_plotting.py`
+  on 2026-09-23 because Section 4.3 item 30 already requires corrected plot
+  unit labels and the existing hard-coded labels cannot be changed from any
+  originally allowlisted source. Scope is labels only, not plot numerics.
+- First tests draft: blocked by the first Sol review because several failures
+  were malformed or vacuous and production/cache/legacy routes were missing.
+- Revised RED command/result: exact 14-file Section 4.4 command independently
+  reproduced by the lead: 60 failed, 567 passed, 3 warnings in 34.54 seconds.
+  There were no collection, import, or fixture failures.
+- Second Sol test-design review: blocked. Required repairs are: prove semantic
+  identity reaches and invalidates every Open Ephys keyed exploratory cache;
+  test truthful exploratory labels and saved provenance plus SpikeGLX
+  non-regression; require both configured and observed mismatch values; freeze
+  the complete pre-NR0 source identity; cover preparation validity/RMS/peak-to-
+  peak axes; and prevent absent semantics on SpikeGLX snapshots from being
+  labeled Open Ephys legacy-unscaled.
 - Tests-only commit: pending.
 
 ### Implementation phase

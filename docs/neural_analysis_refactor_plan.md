@@ -3,7 +3,9 @@
 ## Status and authority
 
 **Status:** implementation authorized by the user on 2026-09-23. NR0 is active
-at the documentation and baseline gate; no NR0 test or source edit has started.
+at the tests-only gate. The baseline is complete, but the tests-only commit is
+blocked on the second Sol design review and is being revised; no NR0 source
+implementation has started.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -25,9 +27,12 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** NR0, tests-only preparation. The documentation/baseline
-  gate is complete; the next allowed code change is the NR0 tests-only edit
-  after the lead and optional scout finish the read-only source/caller audit.
+- **Active package:** NR0, tests-only revision. The documentation/baseline gate
+  is complete. The lead independently reproduced the current tests-only RED
+  result (60 failed, 567 passed, 3 warnings), but the second mandatory Sol
+  review blocked the commit on incomplete cache/legacy/label contracts and one
+  source-allowlist contradiction. The same Terra writer must repair only the
+  tests before another independent RED run and fresh review.
 - **Agent policy:** lead Sol/high orchestration with one NR0 Terra/xhigh writer,
   one fresh Sol/xhigh gate reviewer, and at most one optional Terra/medium
   read-only scout. Only the Terra writer may author package tests/source; the
@@ -729,6 +734,7 @@ The exact NR0 allowlist is:
 - `src/neural_analysis/lfp_summary_models.py`
 - `src/neural_analysis/lfp_summary_preparation.py`
 - `src/neural_analysis/lfp_summary_pipeline.py`
+- `src/neural_analysis/lfp_summary_plotting.py`
 - `src/neural_analysis/lfp_summary_runtime.py`
 - `src/neural_analysis/lfp_summary_webapp.py`
 - `src/neural_analysis/psth_webapp.py`
@@ -751,6 +757,14 @@ The exact NR0 allowlist is:
 
 If implementation requires broader files, stop and amend the reviewed plan
 before editing them.
+
+`lfp_summary_plotting.py` was added during the tests-only gate on 2026-09-23.
+Section 4.3 item 30 already requires corrected physical-unit labels from plot
+builders, and the existing implementation hard-codes ambiguous source/filtered
+trace labels. Omitting the owning module made the approved requirement
+impossible to implement inside the original source allowlist. This amendment is
+limited to those required label changes; it does not authorize numerical plot
+changes.
 
 ### 4.2 Loader contract
 
