@@ -288,6 +288,7 @@ def _request(
     receipt_path: Path | None = None,
     local_session_root: Path | None = None,
     cluster_session_root: Path | None = None,
+    git_commit: str | None = None,
 ) -> object:
     """Build one relocation request with explicit roots and durable provenance.
 
@@ -303,8 +304,10 @@ def _request(
         Optional requested final cache path. ``None`` uses the configured target.
     destination_config : LFPSummaryConfig or None
         Optional active cluster configuration. ``None`` uses the equivalent one.
-    receipt_path, local_session_root, cluster_session_root : pathlib.Path or None
-        Optional external receipt or declared roots. ``None`` uses fixture values.
+    receipt_path, local_session_root, cluster_session_root, git_commit :
+        pathlib.Path or str or None
+        Optional external receipt, declared roots, or exact producer revision.
+        ``None`` uses fixture values.
 
     Returns
     -------
@@ -337,7 +340,7 @@ def _request(
             "src.neural_analysis.lfp_summary_cache_relocation",
             "--synthetic-test",
         ),
-        git_commit="a" * 40,
+        git_commit="a" * 40 if git_commit is None else git_commit,
     )
 
 
@@ -900,6 +903,110 @@ def test_relocation_ignores_only_noncomponent_configuration_fields(
         ).status == "compatible"
 
 
+@pytest.mark.parametrize("site_field", ("label", "stable_id"))
+def test_relocation_does_not_root_map_path_looking_site_identity_strings(
+    relocation_fixture: _RelocationFixture,
+    site_field: str,
+) -> None:
+    """The sole root substitution applies only to explicit configuration paths."""
+    source_site = replace(
+        relocation_fixture.source_config.sites[0],
+        **{site_field: str(relocation_fixture.local_root)},
+    )
+    destination_site = replace(
+        relocation_fixture.destination_config.sites[0],
+        **{site_field: str(relocation_fixture.cluster_root)},
+    )
+    source_pairs = relocation_fixture.source_config.site_pairs
+    destination_pairs = relocation_fixture.destination_config.site_pairs
+    if site_field == "stable_id":
+        source_pairs = tuple(
+            tuple(
+                str(relocation_fixture.local_root) if site_id == "PFC" else site_id
+                for site_id in pair
+            )
+            for pair in source_pairs
+        )
+        destination_pairs = tuple(
+            tuple(
+                str(relocation_fixture.cluster_root) if site_id == "PFC" else site_id
+                for site_id in pair
+            )
+            for pair in destination_pairs
+        )
+    source_config = replace(
+        relocation_fixture.source_config,
+        sites=(source_site,) + relocation_fixture.source_config.sites[1:],
+        site_pairs=source_pairs,
+    )
+    destination_config = replace(
+        relocation_fixture.destination_config,
+        sites=(destination_site,) + relocation_fixture.destination_config.sites[1:],
+        site_pairs=destination_pairs,
+    )
+    source_manifest = relocation_fixture.source_manifest
+    source_snapshot = json.loads(canonical_config_json(source_config))
+    source_manifest["configuration"] = source_snapshot
+    for component in ("power", "synchrony"):
+        source_entry = source_manifest["components"][component]
+        source_entry["configuration_snapshot"] = source_snapshot
+        source_entry["configuration_fingerprint"] = component_fingerprint(
+            component, source_config
+        )
+        source_entry["source_fingerprints"] = fingerprint_source_files(
+            source_config, component=component
+        )
+        source_entry["source_value_semantics"] = source_value_semantics(source_config)
+    (relocation_fixture.source_cache / "manifest.json").write_text(
+        json.dumps(source_manifest, sort_keys=True), encoding="ascii"
+    )
+    source_before, legacy_before = _protected_inventories(relocation_fixture)
+
+    with pytest.raises(ValueError, match="(?i)scientific|configuration|mapping|site"):
+        _relocate(
+            relocation_fixture,
+            source_config=source_config,
+            destination_config=destination_config,
+        )
+
+    assert not relocation_fixture.destination_cache.exists()
+    assert not relocation_fixture.receipt_path.exists()
+    assert _protected_inventories(relocation_fixture) == (source_before, legacy_before)
+
+
+@pytest.mark.parametrize("git_commit", ("", "a" * 39, "g" * 40, "A" * 40))
+def test_relocation_rejects_noncanonical_git_commit_before_hashing_or_staging(
+    relocation_fixture: _RelocationFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    git_commit: str,
+) -> None:
+    """Receipt provenance accepts exactly a forty-character lowercase hex revision."""
+    source_before, legacy_before = _protected_inventories(relocation_fixture)
+    destination_parent_before = _directory_inventory(
+        relocation_fixture.destination_cache.parent
+    )
+
+    def forbid_streamed_hash(*_args: object, **_kwargs: object) -> str:
+        """Malformed provenance must fail before source or component hashing."""
+        raise AssertionError("git validation must precede every streamed hash")
+
+    def forbid_staging(*_args: object, **_kwargs: object) -> Path:
+        """Malformed provenance must fail before allocating a staging directory."""
+        raise AssertionError("git validation must precede staging allocation")
+
+    monkeypatch.setattr(lfp_summary_models, "sha256_file_content", forbid_streamed_hash)
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_relocation")
+    monkeypatch.setattr(module, "_create_staging_directory", forbid_staging)
+
+    with pytest.raises(ValueError, match="(?i)git|commit|hex|revision"):
+        _relocate(relocation_fixture, git_commit=git_commit)
+
+    assert not relocation_fixture.destination_cache.exists()
+    assert not relocation_fixture.receipt_path.exists()
+    assert _protected_inventories(relocation_fixture) == (source_before, legacy_before)
+    assert _directory_inventory(relocation_fixture.destination_cache.parent) == destination_parent_before
+
+
 @pytest.mark.parametrize("location", ("outside_root", "wrong_relative_path"))
 def test_relocation_requires_one_declared_session_root_mapping(
     relocation_fixture: _RelocationFixture,
@@ -1001,6 +1108,39 @@ def test_relocation_rejects_noncanonical_resolved_containment_paths(
         _relocate(relocation_fixture, **request_kwargs)
 
     assert not relocation_fixture.destination_cache.exists()
+    assert _protected_inventories(relocation_fixture) == (source_before, legacy_before)
+
+
+@pytest.mark.parametrize("host", ("local", "cluster"))
+def test_relocation_rejects_a_symlinked_derived_open_ephys_sidecar_before_hashing(
+    relocation_fixture: _RelocationFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    host: str,
+) -> None:
+    """Derived Open Ephys sidecars must be contained regular files before hashing."""
+    source_before, legacy_before = _protected_inventories(relocation_fixture)
+    config = (
+        relocation_fixture.source_config
+        if host == "local"
+        else relocation_fixture.destination_config
+    )
+    sidecar = config.sites[0].lfp_path.parent / "lfp_preprocessing.json"
+    external_target = config.session_path.parent / f"outside-{host}-sidecar.json"
+    external_target.write_bytes(sidecar.read_bytes())
+    sidecar.unlink()
+    sidecar.symlink_to(external_target)
+
+    def forbid_streamed_hash(*_args: object, **_kwargs: object) -> str:
+        """Derived-sidecar containment must fail before any content hash starts."""
+        raise AssertionError("symlinked sidecars must be rejected before hashing")
+
+    monkeypatch.setattr(lfp_summary_models, "sha256_file_content", forbid_streamed_hash)
+
+    with pytest.raises(ValueError, match="(?i)sidecar|symlink|source|containment"):
+        _relocate(relocation_fixture)
+
+    assert not relocation_fixture.destination_cache.exists()
+    assert not relocation_fixture.receipt_path.exists()
     assert _protected_inventories(relocation_fixture) == (source_before, legacy_before)
 
 
@@ -1441,3 +1581,146 @@ def test_prepublication_interruption_keeps_final_source_and_legacy_caches_unchan
         stage.name in {path.name for path in attempted_stages}
         for stage in relocation_fixture.cluster_root.rglob("*")
     )
+
+
+def test_relocation_prepares_receipt_before_atomic_cache_publication(
+    relocation_fixture: _RelocationFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Receipt bytes are prepared and validated before the cache becomes public."""
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_relocation")
+    write_ascii_json = getattr(module, "_write_ascii_json")
+    publish_staged_cache = getattr(module, "_publish_staged_cache")
+    real_replace = module.os.replace
+    events: list[str] = []
+    receipt_temporary_paths: list[Path] = []
+
+    def record_receipt_preparation(path: Path, payload: object) -> object:
+        """Record only the external receipt serialization through existing I/O."""
+        if isinstance(payload, dict) and "source_producer_manifest" in payload:
+            result = write_ascii_json(path, payload)
+            assert path != relocation_fixture.receipt_path
+            assert path.is_file()
+            assert path.read_bytes().isascii()
+            assert not path.is_relative_to(relocation_fixture.source_cache)
+            assert not path.is_relative_to(relocation_fixture.destination_cache)
+            receipt_temporary_paths.append(path)
+            events.append("receipt-prepared")
+            return result
+        return write_ascii_json(path, payload)
+
+    def require_prepared_receipt(staging_directory: Path, destination_directory: Path) -> None:
+        """Reject publication if no durable temporary receipt was prepared first."""
+        assert events == ["receipt-prepared"]
+        publish_staged_cache(staging_directory, destination_directory)
+        events.append("cache-published")
+
+    def record_receipt_commit(source_path: Path | str, destination_path: Path | str) -> None:
+        """Record the final external receipt replacement after cache publication."""
+        if Path(destination_path) == relocation_fixture.receipt_path:
+            assert relocation_fixture.destination_cache.is_dir()
+            assert events == ["receipt-prepared", "cache-published"]
+            real_replace(source_path, destination_path)
+            events.append("receipt-committed")
+            return
+        real_replace(source_path, destination_path)
+
+    monkeypatch.setattr(module, "_write_ascii_json", record_receipt_preparation)
+    monkeypatch.setattr(module, "_publish_staged_cache", require_prepared_receipt)
+    monkeypatch.setattr(module.os, "replace", record_receipt_commit)
+
+    _relocate(relocation_fixture)
+
+    assert events == ["receipt-prepared", "cache-published", "receipt-committed"]
+    assert all(not path.exists() for path in receipt_temporary_paths)
+    assert relocation_fixture.destination_cache.is_dir()
+    assert relocation_fixture.receipt_path.is_file()
+
+
+@pytest.mark.parametrize(
+    "failure_point",
+    ("receipt_parent", "receipt_preparation", "receipt_commit"),
+)
+def test_relocation_receipt_transaction_failures_leave_no_public_artifacts(
+    relocation_fixture: _RelocationFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+) -> None:
+    """Receipt failures clean only their new transaction artifacts and destination."""
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_relocation")
+    write_ascii_json = getattr(module, "_write_ascii_json")
+    real_replace = module.os.replace
+    source_before, legacy_before = _protected_inventories(relocation_fixture)
+    receipt_parent = relocation_fixture.receipt_path.parent
+    if failure_point != "receipt_parent":
+        receipt_parent.mkdir()
+        (receipt_parent / "receipt-parent-sentinel.txt").write_bytes(
+            b"protected receipt parent"
+        )
+    receipt_parent_before = (
+        None if not receipt_parent.exists() else _directory_inventory(receipt_parent)
+    )
+    local_root_before = _directory_inventory(relocation_fixture.local_root)
+    cluster_root_before = _directory_inventory(relocation_fixture.cluster_root)
+    receipt_temporary_paths: list[Path] = []
+
+    def record_or_fail_receipt_preparation(path: Path, payload: object) -> object:
+        """Observe only external receipt serialization through the existing writer."""
+        if isinstance(payload, dict) and "source_producer_manifest" in payload:
+            if failure_point == "receipt_preparation":
+                raise OSError("injected receipt preparation failure")
+            result = write_ascii_json(path, payload)
+            assert path != relocation_fixture.receipt_path
+            assert path.is_file()
+            assert path.read_bytes().isascii()
+            assert not path.is_relative_to(relocation_fixture.source_cache)
+            assert not path.is_relative_to(relocation_fixture.destination_cache)
+            receipt_temporary_paths.append(path)
+            return result
+        return write_ascii_json(path, payload)
+
+    monkeypatch.setattr(module, "_write_ascii_json", record_or_fail_receipt_preparation)
+
+    if failure_point == "receipt_parent":
+        original_mkdir = module.Path.mkdir
+
+        def fail_receipt_parent_mkdir(path: Path, *args: object, **kwargs: object) -> None:
+            """Inject only the requested external receipt-parent creation failure."""
+            if path == receipt_parent:
+                raise OSError("injected receipt-parent creation failure")
+            original_mkdir(path, *args, **kwargs)
+
+        monkeypatch.setattr(module.Path, "mkdir", fail_receipt_parent_mkdir)
+    elif failure_point == "receipt_commit":
+
+        def fail_receipt_commit(source_path: Path | str, destination_path: Path | str) -> None:
+            """Abort only the final external receipt replacement primitive."""
+            if Path(destination_path) == relocation_fixture.receipt_path:
+                assert relocation_fixture.destination_cache.is_dir()
+                raise OSError("injected receipt commit failure")
+            real_replace(source_path, destination_path)
+
+        monkeypatch.setattr(module.os, "replace", fail_receipt_commit)
+
+    with pytest.raises(OSError, match="injected receipt"):
+        _relocate(relocation_fixture)
+
+    assert not relocation_fixture.destination_cache.exists()
+    assert not relocation_fixture.receipt_path.exists()
+    assert _protected_inventories(relocation_fixture) == (source_before, legacy_before)
+    assert _directory_inventory(relocation_fixture.local_root) == local_root_before
+    assert _directory_inventory(relocation_fixture.cluster_root) == cluster_root_before
+    if receipt_parent_before is None:
+        assert not receipt_parent.exists()
+    else:
+        assert _directory_inventory(receipt_parent) == receipt_parent_before
+    assert not any(
+        path.name.startswith(f".{relocation_fixture.destination_cache.name}-stage-")
+        for path in relocation_fixture.destination_cache.parent.iterdir()
+    )
+    if receipt_parent.exists():
+        assert not any(
+            path.name.startswith(f".{relocation_fixture.receipt_path.name}-")
+            for path in receipt_parent.iterdir()
+        )
+    assert all(not path.exists() for path in receipt_temporary_paths)

@@ -856,6 +856,24 @@ def test_rebind_power_synchrony_manifest_replaces_only_destination_identity(
     assert assess_component_status(
         destination_cache, "synchrony", destination_config, rebound_manifest
     ).status == "compatible"
+    # Each destination-bound snapshot must be an independent deep object. A
+    # later caller may annotate one JSON tree without mutating producer history
+    # or another copied component's compatibility identity.
+    rebound_manifest["configuration"]["power"]["notch_quality_factor"] = 17.0
+    assert rebound_manifest["components"]["power"]["configuration_snapshot"][
+        "power"
+    ]["notch_quality_factor"] == destination_config.power.notch_quality_factor
+    assert rebound_manifest["components"]["synchrony"]["configuration_snapshot"][
+        "power"
+    ]["notch_quality_factor"] == destination_config.power.notch_quality_factor
+    rebound_manifest["components"]["power"]["configuration_snapshot"]["power"][
+        "notch_quality_factor"
+    ] = 19.0
+    assert rebound_manifest["configuration"]["power"]["notch_quality_factor"] == 17.0
+    assert rebound_manifest["components"]["synchrony"]["configuration_snapshot"][
+        "power"
+    ]["notch_quality_factor"] == destination_config.power.notch_quality_factor
+    assert source_manifest == source_before
 
 
 def test_component_status_uses_prevalidated_current_source_fingerprints(
