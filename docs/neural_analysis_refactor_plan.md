@@ -16,9 +16,11 @@ pending. User review flagged that every observed point in the PFC theta-whole
 ITPC summary lies below its percentile-bootstrap 95% interval. The bars are not
 IQRs and the legacy figure has the same pattern. The user selected the
 presentation-only resolution in Section 5.5 for both ITPC and ISPC because they
-share the same phase-clustering/resampling calculation. Implementation and a
-new versioned Synchrony artifact are pending. Spike-phase and cluster actions
-remain separately gated.
+share the same phase-clustering/resampling calculation. The NR1P code/test
+package implementing that presentation is complete, committed, and approved by
+a fresh Sol/xhigh implementation review. A separately authorized NR1V run must
+still create and review a new versioned Synchrony artifact; no existing cache or
+report was changed. Spike-phase and cluster actions remain separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -48,9 +50,10 @@ amplitude behavior as if that behavior were scientifically correct.
   corrected cache now contains approved Power and scientifically approved
   Synchrony only. Corrected Synchrony passed its numerical, provenance, and
   reviewer visual gates. The user selected the Section 5.5 presentation-only
-  revision for both ITPC and ISPC band summaries; implementation, a newly
-  versioned Synchrony artifact, and explicit visual approval remain before the
-  bounded Spike-phase preview can be authorized.
+  revision for both ITPC and ISPC band summaries. NR1P tests and implementation
+  are complete through implementation commit `ad8e598`; a newly versioned
+  Synchrony artifact and explicit visual approval remain before the bounded
+  Spike-phase preview can be authorized.
   The user requires any later preview to run unattended through Slurm without
   Codex monitoring; that execution is not approved.
 - **Approved NR1 destinations:** session root
@@ -201,8 +204,9 @@ amplitude behavior as if that behavior were scientifically correct.
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that
   log after every commit or interruption-relevant gate.
-- **Verified baseline:** the final NR0 focused command passed 704 tests; the
-  complete neural suite passed 1,395 tests. The complete repository run stops at
+- **Verified baseline:** the final NR1P focused command passed 269 tests; the
+  complete neural suite passed 1,415 tests with 22 known warnings. The complete
+  repository run stops at
   collection because the pre-existing untracked
   `src/tests/behavior_analysis/test_project_utils.py` imports unavailable
   `autograd`; this is frozen unrelated user-owned baseline behavior and does
@@ -211,10 +215,12 @@ amplitude behavior as if that behavior were scientifically correct.
   snapshot as valid.
 - **Local commits:** the reviewed NR0 tests are `e728cea` and `2b497e4`; the
   reviewed implementation is `177a8d6`; NR0 closure is `a94559d`; NR1 dry-run
-  authorization is `181b82b`. Documentation checkpoints through `741c8e0`
-  were pushed to `origin/refactor` before this plan revision. Any later plan,
-  test, or implementation commit remains local until the user separately
-  approves another push.
+  authorization is `181b82b`. NR1P tests are `d5d9e2b`, `5ae2040`,
+  `c0129fe`, and the wrapping-only harness correction `0b8e2d7`; the reviewed
+  NR1P implementation is `ad8e598`. Documentation checkpoints through
+  `3e15a31` were pushed to `origin/refactor` before NR1P implementation. These
+  later test, implementation, and documentation commits remain local until the
+  user separately approves another push.
 
 ## 1. Objectives
 

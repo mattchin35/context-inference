@@ -749,3 +749,71 @@ add and test an explicit corrected-cache target and choose a reviewed way to
 establish the approved corrected Power/Synchrony state on the cluster (verified
 copy or separately authorized reproduction). No push, transfer, or Slurm
 submission occurred.
+
+### NR1P Synchrony presentation implementation
+
+Status: complete and approved in code; no real-data artifact was created or
+changed. The next step is the separately authorized NR1V versioned Synchrony
+run and user visual review.
+
+The user selected a presentation-only revision for both ITPC and ISPC. The
+observed phase-clustering estimate, trial selection, validity masks, seed,
+1,000 with-replacement resamples, time-frequency averaging, and existing
+2.5th/97.5th percentile endpoints remain unchanged. The implementation now
+computes Q25, median, and Q75 from the same finite scalar bootstrap draws using
+one explicit linear-percentile operation, persists those six small metric
+arrays plus the two exact per-band/epoch selected-trial-count arrays, and does
+not persist the bootstrap draws.
+
+The shared renderer now uses horizontal condition rows. Each row labels the
+condition and exact saved trial count, shows the observed estimate as a filled
+circle, and offsets an unnotched Q25-Q75 box with its actual median and capped
+2.5th/97.5th percentile whiskers. The figure legend distinguishes the observed
+estimate from the bootstrap resampling distribution and uses no confidence,
+null, or significance claim. Report and webapp paths consume only the saved
+cache arrays. A code-owned Synchrony-only identity key
+`synchrony_payload_contract_version` has value
+`synchrony-bootstrap-quantiles-counts-v1`; Power and Spike-phase identities are
+unchanged. The new expected Synchrony fingerprints are
+`4f2754235f64490fca168107d5e34e005bcd3f0e50cd9b000721f2c79bd4b706`
+for the frozen SpikeGLX configuration and
+`18eeb15ac4450408bd676bdcdf3450f7afb9f95fd31fc66cb6a1f6d8fc7b77a5`
+for the frozen corrected Open Ephys configuration.
+
+Tests were written and committed before source implementation. The initial RED
+package was committed as `d5d9e2b`. Fresh Sol/xhigh test-design review found
+gaps in exact counts, fingerprint identity, payload validation, NaN handling,
+artist semantics, caller wiring, and legacy-receipt isolation; the same
+Terra/xhigh writer corrected them before approval. During implementation
+review, tests-first corrections added fail-closed count/quantile validation and
+the condition-only webapp label (`5ae2040`), exact unsigned-count preservation
+(`c0129fe`), and a one-line wrapping-only harness correction (`0b8e2d7`). Each
+behavioral correction reproduced genuine RED before its source fix.
+
+The reviewed source implementation is commit `ad8e598`. Final lead and worker
+verification was:
+
+```text
+uv run pytest -q -p no:cacheprovider <nine NR1P files>
+269 passed, 2 warnings in 19.75s
+
+uv run pytest -q -p no:cacheprovider src/tests/neural_analysis
+1415 passed, 22 warnings in 166.76s
+
+uv run python -m py_compile <seven NR1P source modules>
+passed
+```
+
+The warnings are the known PPC all-NaN-slice, multiprocessing fork, duplicate
+ZIP-entry fixture, and Pynapple empty-epoch warnings. `git diff --check` passed,
+and each test/source commit stayed within its Section 5.5 allowlist. No CT026
+array, existing cache, report, external analysis directory, cluster checkout,
+or Slurm state was accessed or mutated during NR1P. No dependency or
+configuration file changed.
+
+Orchestration followed the frozen division: lead Sol/high; one Terra/xhigh
+writer for tests and source; a fresh Sol/xhigh read-only test-design reviewer;
+and a different fresh Sol/xhigh read-only implementation reviewer. Reviewer
+write restrictions were procedural; repository state checks confirmed that
+they made no edits. The lead alone staged and committed reviewed paths. All
+NR1P agents are complete. Git push remains a separate user authorization gate.
