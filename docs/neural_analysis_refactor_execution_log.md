@@ -113,7 +113,7 @@ Read-only representative CT026 and legacy-artifact check:
 | Package | State | Test commit | Implementation commit | Evidence and next gate |
 | --- | --- | --- | --- | --- |
 | NR0 | Complete and approved | `e728cea`, `2b497e4` | `177a8d6` | Final focused 704 passed; neural suite 1,395 passed; fresh Sol review approved; closure `a94559d`. |
-| NR1 | In progress; Power awaits visual approval | - | - | Checks 1-2 and corrected Power passed fresh Sol scientific/evidence reviews. Twelve Power PNGs require explicit user visual approval before Synchrony. |
+| NR1 | In progress; Synchrony awaits user visual approval | - | - | Checks 1-2 and corrected Power are approved. Corrected Synchrony passed fresh Sol numerical, evidence/provenance, and systematic visual reviews; user visual approval is required before Spike preview. |
 | NR2 | Pending | - | - | Requires approved NR1 corrected baseline. |
 | NR3 | Pending | - | - | Sequential after NR2. |
 | NR4 | Pending | - | - | Sequential after NR3. |
@@ -451,7 +451,8 @@ The legacy cache may be loaded only for read-only Power comparison. The gate
 must compare axes, trials, validity, references/traces, linear PSDs, band power,
 normalized dB, reports/plots, runtime, memory, and cache provenance. Synchrony,
 Spike-phase, legacy mutation, cluster work, and Git push remain prohibited.
-Result and review are pending. NR2-NR18 are not started.
+At authorization, result and review were pending. The completed Power result
+is recorded below. NR2-NR18 are not started.
 
 #### First Synchrony attempt and retry boundary
 
@@ -473,13 +474,13 @@ scientific Synchrony settings will be retried at
 The retry adds complete Git/hash/source preconditions, durable progress and
 exception evidence before compute, resource snapshots, and a terminal session
 that is explicitly polled through completion. This is an operational retry
-within the approved Synchrony scope; no scientific setting is reduced. Result
-and review remain pending.
+within the approved Synchrony scope; no scientific setting is reduced. At this
+checkpoint, result and review remained pending; the completed result follows.
 
 ### NR1 corrected-Power result
 
-Status: scientifically and operationally approved; explicit user visual review
-of the 12 PNGs is pending. Production command:
+Status: scientifically, operationally, and visually approved by the user.
+Production command:
 
 ```text
 uv run /home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_nr1_power_open_ephys_affine_uV_v1_2026-09-23T12-23-53Z/run_power.py
@@ -563,4 +564,89 @@ The legacy cache is read-only. The gate compares phase-derived arrays,
 bootstrap schedules/results, validity/support, source and filtered traces,
 exemplars, report metadata/plots, runtime, and memory. Spike-phase, approved
 Power mutation, legacy mutation, cluster work, and Git push remain prohibited.
-Result and review are pending. NR2-NR18 are not started.
+At authorization, result and review were pending. The completed result follows;
+NR2-NR18 are not started.
+
+### NR1 corrected-Synchrony result
+
+Status: scientifically and operationally approved after fresh Sol numerical,
+provenance, and systematic visual reviews; explicit user visual approval is
+pending. The first run directory remains immutable failed operational evidence.
+The successful retry and all evidence are at:
+
+```text
+/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_nr1_synchrony_open_ephys_affine_uV_v1_retry_2026-09-23T13-23-01Z
+```
+
+Production command:
+
+```text
+uv run /home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_nr1_synchrony_open_ephys_affine_uV_v1_retry_2026-09-23T13-23-01Z/run_synchrony_retry.py
+```
+
+The corrected cache contains exactly three files and no Spike-phase or work
+artifact:
+
+```text
+manifest.json   25,489 bytes      f0301f3006be225e4c55142e68a3024ea06ddd8bb90542a6704d11e703a57ba3
+power.npz       78,680,638 bytes  164114d606cc204ff29ad173a686f0be66b54c2b944ed1f15008b2fa85367355
+synchrony.npz  153,572,688 bytes  fc4d742ec42dfd00281e8759b15545c4e9488a34e85c38cd26a6e30469145983
+```
+
+The production calculation and report completed, then the predeclared strict
+comparison stopped on nine arrays. Its original `comparison.json`,
+`failure.json`, and failed `postflight.json` remain unchanged. All 38 arrays
+have identical schema, shape, dtype, and finite masks; 29 passed the original
+rules, including every exact identity, mask, count, axis, validity, and support
+field. `source_trace` follows the strict gain rule. `band_filtered_trace`
+differs from `float32(legacy * gain)` by at most one float32 ULP. The largest
+Hilbert phase difference is `2.9802322388e-8 rad`; ITPC and ISPC differ by at
+most `1.8747214725e-7` and `2.1686773694e-7`; frequency-resolved PLV differs by
+at most `1.5274714604e-8`.
+
+Fresh review approved a separate fixed policy without changing the failed
+comparison: exact fields remain exact; source trace retains the original
+`atol=1e-10, rtol=1e-9`; filtered trace uses `atol=0,
+rtol=2*float32_eps`; Hilbert phase uses wrapped `atol=1e-6 rad`; all
+dimensionless and bootstrap summaries use `atol=1e-6, rtol=0`; ISPC and PLV
+complex coherence vectors use `atol=1e-6, rtol=0` plus a raw wrapped-angle
+ceiling of `1e-3 rad`. All checks pass. The maximum ISPC angle change,
+`1.0875650435e-4 rad` (`0.00623 degrees`), occurs at resultant magnitude
+`9.10e-5`; maximum ISPC complex-vector error is `2.2379020101e-7`. The maximum
+PLV angle change is `1.7986499481e-6 rad` at PLV `0.00204`; maximum PLV
+complex-vector error is `1.5280284020e-8`. This is the expected conditioning
+of angles near zero resultant magnitude, not a validity or phase reversal.
+
+Thirteen of 108 PLV exemplar selections switch. Every switch is between the
+same two adjacent order statistics at an exact 25th/75th-percentile `.5` rank;
+legacy and corrected distances from the interpolated target differ by no more
+than `1.11e-16`. Selection pools, rank order, validity, and the other 95
+exemplars are unchanged. This satisfies the separately reviewed exact
+midpoint-bracket rule while preserving the changed trial identities for visual
+review.
+
+Synchrony ran in `728.9850418729475 s` with `4,286,124,032` bytes peak RSS,
+versus legacy `642.487 s` and unavailable peak memory. The +13.46% wall time is
+acceptable for this cold single-run gate; RSS is below the configured 12-GiB
+aggregate limit. Component size is unchanged. The report has the same 252 PNG
+filenames, trial/exclusion counts, zero unstable summaries, and no warnings.
+Thirty-four image-dimension differences are exemplar-only tight-layout changes
+of 3-8 vertical pixels. A fresh reviewer systematically inspected all 252
+figures and approved with no P0-P3 findings; this does not replace user visual
+approval.
+
+Acceptance packaging preserves the original hard stop and uses separate
+`diagnostic.json` and `acceptance.json`. A first packaging invocation failed
+before atomic diagnostic output on NumPy-bool JSON serialization. The script
+was edited in place, one fixed revision packaged the acceptance, and a later
+incident/log revision refreshed it. The pre-fix and intermediate bytes/hashes
+were not preserved. `packaging_chronology.json` discloses this irrecoverable
+ancillary limitation and maps all three invocations; final revision B is
+preserved at SHA-256
+`df3e58eb2891ce4b1ec558139f5473374740b059f0a6f3f76fe153f1d8193dd7`.
+The exact production runner and scientific artifacts are preserved. A
+dedicated provenance-only closer refreshed the 276-file recursive inventory
+without invoking the packager again. Fresh re-review accepted the disclosure
+and full package with no P0-P3 finding. Legacy hashes and mtimes, approved Power
+bytes, report bytes, repository HEAD `19f9ef866ae9381db22836cfcb8fb6bbc46d466c`,
+and tracked-clean state remained unchanged.

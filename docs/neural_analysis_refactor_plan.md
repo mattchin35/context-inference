@@ -5,13 +5,14 @@
 **Status:** implementation authorized by the user on 2026-09-23. NR0 is
 complete. The user-approved NR1 metadata/path/resource dry run and bounded
 small representative-window check in Section 5.2 items 1-2 completed and passed
-fresh Sol review on 2026-09-23. No scientific component computation,
-scientific-cache mutation, report rendering, profiling run, or cluster action
-is authorized beyond Power. Corrected Power, its Power-only report, and the
+fresh Sol review on 2026-09-23. Corrected Power, its Power-only report, and the
 read-only legacy Power comparison in Section 5.2 item 3 completed and passed
 fresh Sol scientific/evidence review on 2026-09-23. The user visually approved
 the Power report and authorized corrected Synchrony in Section 5.2 item 4 on
-2026-09-23. Spike-phase and cluster actions remain separately gated.
+2026-09-23. Corrected Synchrony, its report, and the legacy comparison are now
+scientifically and operationally approved after fresh Sol numerical,
+provenance, and systematic visual reviews; explicit user visual approval is
+pending. Spike-phase and cluster actions remain separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -36,10 +37,12 @@ amplitude behavior as if that behavior were scientifically correct.
 - **Active package:** NR1 staged CT026 validation. NR0 tests commits `e728cea`
   and `2b497e4` plus implementation commit `177a8d6` are complete and
   approved. The NR1 metadata/path/resource dry run is complete and approved;
-  its corrected cache, report, and profiling destinations remain absent. The
-  bounded numerical small-window check is also complete and approved. Corrected
-  Power is fully approved. Corrected Synchrony is active under the authority
-  below.
+  its original dry-run report and profiling destinations remain absent. The
+  bounded numerical small-window check is also complete and approved. The
+  corrected cache now contains approved Power and scientifically approved
+  Synchrony only. Corrected Synchrony passed its numerical, provenance, and
+  reviewer visual gates; explicit user visual approval is the only remaining
+  item before the bounded Spike-phase preview can be authorized.
 - **Approved NR1 destinations:** session root
   `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference`;
   corrected cache `processed/lfp_summary_cache_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`;
@@ -142,6 +145,27 @@ amplitude behavior as if that behavior were scientifically correct.
   `<session>/analysis_runs/ct026_nr1_synchrony_open_ephys_affine_uV_v1_retry_2026-09-23T13-23-01Z`,
   with durable precompute/progress/error/resource evidence and terminal-session
   polling. Do not reuse or overwrite the failed run.
+- **NR1 corrected-Synchrony result:** the retry completed in 728.985 seconds
+  with 4,286,124,032-byte peak RSS and published only `synchrony.npz` plus the
+  atomic manifest update. Approved Power SHA-256 remains
+  `164114d606cc204ff29ad173a686f0be66b54c2b944ed1f15008b2fa85367355`;
+  Synchrony SHA-256 is
+  `fc4d742ec42dfd00281e8759b15545c4e9488a34e85c38cd26a6e30469145983`.
+  All schema, dtype, shape, finite-mask, identity, validity, support, count,
+  selection-pool, and rank-order contracts match legacy. The original strict
+  comparison remains failed on nine floating-point arrays. Separate reviewed
+  evidence accepts them under fixed bounds: one-float32-ULP filtered-trace
+  scaling, `1e-6` rad Hilbert phase, `1e-6` absolute dimensionless summaries,
+  `1e-6` complex coherence-vector error, and `1e-3` rad raw circular sanity.
+  Observed maxima are within those bounds. Thirteen of 108 PLV exemplars switch
+  only between the same adjacent, exactly equidistant `.5`-rank percentile
+  candidates; all other exemplars are unchanged. The 252-PNG report passed a
+  systematic fresh visual review with no P0-P3 finding. A packaging-script
+  provenance gap is explicitly disclosed: the pre-fix and intermediate
+  revision bytes were not preserved, while the final authoritative packager,
+  exact production runner, formulas, artifacts, and 276-file inventory are
+  preserved and independently approved. User visual approval remains pending;
+  no Spike-phase work is authorized yet.
 - **Durable evidence:** exact commands, results, inventory hashes, commits,
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that

@@ -10,8 +10,10 @@
 - The NR1 metadata/path/resource dry run is complete at
   `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_nr1_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`.
   Fresh Sol review approved the corrected evidence with no P0-P3 findings.
-  Corrected cache, report, and profiling destinations remain absent; legacy
-  components are expected stale by manifest-only identity comparison.
+  At that checkpoint the corrected cache, report, and profiling destinations
+  were absent; its dry-run report/profiling paths remain absent, while the
+  corrected cache was later populated only by the approved staged runs below.
+  Legacy components are expected stale by manifest-only identity comparison.
 - The rejected intermediate dry-run pass accidentally materialized legacy
   component NPZ members read-only through `assess_component_status`. It changed
   access times but not content or modification times. The final run preserves
@@ -22,9 +24,13 @@
   Corrected Power, its Power-only report, and read-only legacy comparison are
   complete. Fresh Sol review approved the scientific/safety/evidence gate with
   no P0-P3 findings, and the user visually approved all 12 report PNGs on
-  2026-09-23. Corrected Synchrony is now authorized at the exact versioned run
-  path in the refactor plan. Spike-phase, cluster, and push actions remain
-  separately gated.
+  2026-09-23. Corrected Synchrony then completed at the exact retry path in the
+  refactor plan. Fresh Sol numerical, evidence/provenance, and systematic visual
+  reviews approved its 38-array comparison and all 252 report PNGs with no
+  P0-P3 findings. The original strict nine-array floating-point hard stop and
+  packaging chronology remain preserved; the reviewed acceptance and 276-file
+  inventory explain them. Explicit user visual approval is pending. Spike-phase,
+  cluster, and push actions remain separately gated.
 - For this structural-refactor sequence,
   `docs/neural_analysis_refactor_plan.md` and
   `docs/neural_analysis_refactor_execution_log.md` are the ongoing detailed
