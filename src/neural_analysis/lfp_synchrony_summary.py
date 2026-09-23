@@ -73,14 +73,18 @@ class BootstrapBandMean:
 class PhaseBandBootstrapSummary:
     """Seeded phase-clustering estimates and trial-resampling uncertainty.
 
-    ``estimate``, ``ci_low``, ``ci_high``, ``selected_trial_count``, and
-    ``unstable`` have axes ``(epoch, band)``. ``bootstrap_values`` has axes
-    ``(bootstrap, epoch, band)``. Values are dimensionless phase-clustering
-    magnitudes; trial counts and bootstrap counts are categorical integers.
+    ``estimate``, ``ci_low``, ``q25``, ``median``, ``q75``, ``ci_high``,
+    ``selected_trial_count``, and ``unstable`` have axes ``(epoch, band)``.
+    ``bootstrap_values`` has axes ``(bootstrap, epoch, band)``. Values are
+    dimensionless phase-clustering magnitudes; trial counts and bootstrap
+    counts are categorical integers.
     """
 
     estimate: np.ndarray
     ci_low: np.ndarray
+    q25: np.ndarray
+    median: np.ndarray
+    q75: np.ndarray
     ci_high: np.ndarray
     selected_trial_count: np.ndarray
     unstable: np.ndarray
@@ -371,8 +375,9 @@ def bootstrap_phase_clustering_bands(
     Returns
     -------
     PhaseBandBootstrapSummary
-        Dimensionless estimates/intervals on ``(epoch, band)`` axes and all
-        seeded bootstrap scalar values on ``(bootstrap, epoch, band)`` axes.
+        Dimensionless estimates and five bootstrap quantiles on ``(epoch,
+        band)`` axes, plus seeded bootstrap scalar values on ``(bootstrap,
+        epoch, band)`` axes.
 
     Raises
     ------
@@ -414,6 +419,9 @@ def bootstrap_phase_clustering_bands(
     shape = (len(epoch_names), len(bands))
     estimate = np.full(shape, np.nan, dtype=float)
     ci_low = np.full(shape, np.nan, dtype=float)
+    q25 = np.full(shape, np.nan, dtype=float)
+    median = np.full(shape, np.nan, dtype=float)
+    q75 = np.full(shape, np.nan, dtype=float)
     ci_high = np.full(shape, np.nan, dtype=float)
     selected_count = np.zeros(shape, dtype=np.int32)
     unstable = np.ones(shape, dtype=bool)
@@ -422,6 +430,9 @@ def bootstrap_phase_clustering_bands(
         return PhaseBandBootstrapSummary(
             estimate,
             ci_low,
+            q25,
+            median,
+            q75,
             ci_high,
             selected_count,
             unstable,
@@ -481,11 +492,24 @@ def bootstrap_phase_clustering_bands(
             values = bootstrap_values[:, epoch_index, band_index]
             finite = values[np.isfinite(values)]
             if finite.size:
-                ci_low[epoch_index, band_index] = np.percentile(finite, 2.5)
-                ci_high[epoch_index, band_index] = np.percentile(finite, 97.5)
+                quantiles = np.percentile(
+                    finite,
+                    q=(2.5, 25.0, 50.0, 75.0, 97.5),
+                    method="linear",
+                )
+                (
+                    ci_low[epoch_index, band_index],
+                    q25[epoch_index, band_index],
+                    median[epoch_index, band_index],
+                    q75[epoch_index, band_index],
+                    ci_high[epoch_index, band_index],
+                ) = quantiles
     return PhaseBandBootstrapSummary(
         estimate,
         ci_low,
+        q25,
+        median,
+        q75,
         ci_high,
         selected_count,
         unstable,

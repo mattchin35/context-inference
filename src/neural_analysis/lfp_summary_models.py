@@ -19,6 +19,10 @@ from src.neural_analysis.lfp_loading import (
     sha256_file_content,
 )
 
+
+SYNCHRONY_PAYLOAD_CONTRACT_VERSION = "synchrony-bootstrap-quantiles-counts-v1"
+
+
 @dataclass(frozen=True)
 class LFPSiteConfig:
     """One saved LFP channel with a zero-based channel index and explicit units."""
@@ -737,7 +741,12 @@ def component_fingerprint(component: str, config: LFPSummaryConfig) -> str:
     if component == "power":
         payload = {**shared, "power": config.power}
     elif component == "synchrony":
-        payload = {**shared, "site_pairs": config.site_pairs, "phase": _phase_transform_payload(config.phase, True)}
+        payload = {
+            **shared,
+            "site_pairs": config.site_pairs,
+            "phase": _phase_transform_payload(config.phase, True),
+            "synchrony_payload_contract_version": SYNCHRONY_PAYLOAD_CONTRACT_VERSION,
+        }
     elif component == "spike_phase":
         payload = {**shared, "unit_population": config.unit_population, "phase": _phase_transform_payload(config.phase, False), "ppc": config.ppc}
     else:

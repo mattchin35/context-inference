@@ -1313,15 +1313,77 @@ def _plot_cached_synchrony_component(
         epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
         band_index = _named_index(arrays["band_names"], selection.band_name, "band_names")
         figure, _ = lfp_summary_plotting.plot_phase_band_summary(
-            np.array((np.asarray(arrays[f"{metric_prefix}_band_mean"])[condition_index, entity_index, epoch_index, band_index],)),
-            np.array((np.asarray(arrays[f"{metric_prefix}_ci_low"])[condition_index, entity_index, epoch_index, band_index],)),
-            np.array((np.asarray(arrays[f"{metric_prefix}_ci_high"])[condition_index, entity_index, epoch_index, band_index],)),
-            np.array((np.count_nonzero(selected_trials),), dtype=np.int64),
-            (f"{entity_label} {selection.condition_name}",),
-            selection.band_name,
-            selection.epoch_name,
-            metric_name,
-            context,
+            observed_estimates=np.array(
+                (
+                    np.asarray(arrays[f"{metric_prefix}_band_mean"])[
+                        condition_index,
+                        entity_index,
+                        epoch_index,
+                        band_index,
+                    ],
+                )
+            ),
+            bootstrap_quantiles=np.array(
+                (
+                    (
+                        np.asarray(arrays[f"{metric_prefix}_ci_low"])[
+                            condition_index,
+                            entity_index,
+                            epoch_index,
+                            band_index,
+                        ],
+                    ),
+                    (
+                        np.asarray(arrays[f"{metric_prefix}_bootstrap_q25"])[
+                            condition_index,
+                            entity_index,
+                            epoch_index,
+                            band_index,
+                        ],
+                    ),
+                    (
+                        np.asarray(arrays[f"{metric_prefix}_bootstrap_median"])[
+                            condition_index,
+                            entity_index,
+                            epoch_index,
+                            band_index,
+                        ],
+                    ),
+                    (
+                        np.asarray(arrays[f"{metric_prefix}_bootstrap_q75"])[
+                            condition_index,
+                            entity_index,
+                            epoch_index,
+                            band_index,
+                        ],
+                    ),
+                    (
+                        np.asarray(arrays[f"{metric_prefix}_ci_high"])[
+                            condition_index,
+                            entity_index,
+                            epoch_index,
+                            band_index,
+                        ],
+                    ),
+                )
+            ),
+            selected_trial_counts=np.array(
+                (
+                    np.asarray(arrays[f"{metric_prefix}_band_trial_count"])[
+                        condition_index,
+                        entity_index,
+                        epoch_index,
+                        band_index,
+                    ],
+                ),
+                dtype=np.int64,
+            ),
+            labels=(selection.condition_name,),
+            band_name=selection.band_name,
+            epoch_name=selection.epoch_name,
+            metric_name=f"{metric_name} {entity_label}",
+            bootstrap_count=config.phase.bootstrap_count,
+            context=context,
         )
         return figure
     if selection.view not in {"plv_distribution", "plv_exemplar"}:

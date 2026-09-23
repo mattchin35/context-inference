@@ -869,14 +869,22 @@ def build_synchrony_payload(
         np.nan,
     )
     itpc_low = itpc_band.copy()
+    itpc_q25 = itpc_band.copy()
+    itpc_median = itpc_band.copy()
+    itpc_q75 = itpc_band.copy()
     itpc_high = itpc_band.copy()
+    itpc_selected_count = np.zeros(itpc_band.shape, dtype=np.int32)
     itpc_unstable = np.ones(itpc_band.shape, dtype=bool)
     ispc_band = np.full(
         (condition_count, pair_count, epoch_count, band_count),
         np.nan,
     )
     ispc_low = ispc_band.copy()
+    ispc_q25 = ispc_band.copy()
+    ispc_median = ispc_band.copy()
+    ispc_q75 = ispc_band.copy()
     ispc_high = ispc_band.copy()
+    ispc_selected_count = np.zeros(ispc_band.shape, dtype=np.int32)
     ispc_unstable = np.ones(ispc_band.shape, dtype=bool)
     for condition_index in range(condition_count):
         condition_mask = condition_membership[:, condition_index]
@@ -895,7 +903,11 @@ def build_synchrony_payload(
             )
             itpc_band[condition_index, site_index] = summary.estimate
             itpc_low[condition_index, site_index] = summary.ci_low
+            itpc_q25[condition_index, site_index] = summary.q25
+            itpc_median[condition_index, site_index] = summary.median
+            itpc_q75[condition_index, site_index] = summary.q75
             itpc_high[condition_index, site_index] = summary.ci_high
+            itpc_selected_count[condition_index, site_index] = summary.selected_trial_count
             itpc_unstable[condition_index, site_index] = summary.unstable
 
     plv_shape = (
@@ -947,7 +959,11 @@ def build_synchrony_payload(
             )
             ispc_band[condition_index, pair_index] = summary.estimate
             ispc_low[condition_index, pair_index] = summary.ci_low
+            ispc_q25[condition_index, pair_index] = summary.q25
+            ispc_median[condition_index, pair_index] = summary.median
+            ispc_q75[condition_index, pair_index] = summary.q75
             ispc_high[condition_index, pair_index] = summary.ci_high
+            ispc_selected_count[condition_index, pair_index] = summary.selected_trial_count
             ispc_unstable[condition_index, pair_index] = summary.unstable
     filtered_trace, hilbert_phase_rad = _band_hilbert_traces(config, prepared)
     arrays = {
@@ -990,11 +1006,19 @@ def build_synchrony_payload(
         "ispc_effective_trial_count": clustering.ispc_effective_trial_count,
         "itpc_band_mean": itpc_band,
         "itpc_ci_low": itpc_low,
+        "itpc_bootstrap_q25": itpc_q25,
+        "itpc_bootstrap_median": itpc_median,
+        "itpc_bootstrap_q75": itpc_q75,
         "itpc_ci_high": itpc_high,
+        "itpc_band_trial_count": itpc_selected_count,
         "itpc_unstable": itpc_unstable,
         "ispc_band_mean": ispc_band,
         "ispc_ci_low": ispc_low,
+        "ispc_bootstrap_q25": ispc_q25,
+        "ispc_bootstrap_median": ispc_median,
+        "ispc_bootstrap_q75": ispc_q75,
         "ispc_ci_high": ispc_high,
+        "ispc_band_trial_count": ispc_selected_count,
         "ispc_unstable": ispc_unstable,
         "plv_by_frequency": plv_by_frequency,
         "plv_phase_offset_rad": plv_offset,
