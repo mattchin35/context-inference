@@ -10,6 +10,7 @@ from matplotlib.axes import Axes
 from matplotlib.collections import PathCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, PathPatch
+from matplotlib.transforms import Affine2D, Bbox
 import numpy as np
 import pytest
 
@@ -640,6 +641,117 @@ def test_phase_band_summary_offsets_the_one_condition_box_from_its_observed_poin
     assert 0.0 < abs(box_center - observed_y) <= 0.4
     assert observed_y < np.min(box_y) or observed_y > np.max(box_y)
     _assert_figure_contract(figure, axes, {"summary"})
+
+
+def test_phase_band_summary_separates_rendered_observed_markers_from_multirow_boxes() -> None:
+    """Rendered observed circles do not overlap their same-row bootstrap boxes."""
+    labels = tuple(f"condition_{index}" for index in range(9))
+    observed = np.linspace(0.46, 0.54, len(labels))
+    quantiles = np.vstack(
+        (
+            np.full(len(labels), 0.20),
+            np.full(len(labels), 0.40),
+            np.full(len(labels), 0.50),
+            np.full(len(labels), 0.60),
+            np.full(len(labels), 0.80),
+        )
+    )
+    figure, axes = plot_phase_band_summary(
+        observed_estimates=observed,
+        bootstrap_quantiles=quantiles,
+        selected_trial_counts=np.full(len(labels), 12, dtype=np.int64),
+        labels=labels,
+        band_name="theta",
+        epoch_name="whole",
+        metric_name="ITPC",
+        bootstrap_count=1_000,
+        context=_context(),
+    )
+
+    try:
+        figure.canvas.draw()
+        axis = axes["summary"]
+        boxes = [patch for patch in axis.patches if isinstance(patch, PathPatch)]
+        assert len(boxes) == len(labels)
+        assert np.all((quantiles[1] < observed) & (observed < quantiles[3]))
+
+        observed_collections = [
+            collection
+            for collection in axis.collections
+            if isinstance(collection, PathCollection)
+        ]
+        observed_lines = [line for line in axis.lines if line.get_marker() == "o"]
+        assert not (observed_collections and observed_lines)
+
+        marker_bboxes: list[Bbox]
+        if observed_collections:
+            assert len(observed_collections) == 1
+            collection = observed_collections[0]
+            assert collection.get_offsets().shape == (len(labels), 2)
+            assert len(collection.get_paths()) == 1
+            marker_transforms = collection.get_transforms()
+            assert len(marker_transforms) in {1, len(labels)}
+            marker_path = collection.get_paths()[0]
+            marker_linewidths = np.asarray(collection.get_linewidths(), dtype=float)
+            assert marker_linewidths.size == 1
+            marker_stroke_padding = marker_linewidths[0] * figure.dpi / 144.0
+            marker_bboxes = []
+            for index, offset in enumerate(collection.get_offsets()):
+                transform_index = 0 if len(marker_transforms) == 1 else index
+                display_path = marker_path.transformed(
+                    Affine2D(marker_transforms[transform_index])
+                ).transformed(
+                    Affine2D().translate(*collection.get_offset_transform().transform(offset))
+                )
+                marker_bboxes.append(
+                    display_path.get_extents().padded(marker_stroke_padding)
+                )
+        else:
+            assert len(observed_lines) == len(labels)
+            marker_bboxes = []
+            for line in observed_lines:
+                x_data = np.asarray(line.get_xdata(), dtype=float)
+                y_data = np.asarray(line.get_ydata(), dtype=float)
+                assert x_data.shape == (1,)
+                assert y_data.shape == (1,)
+                center_x, center_y = axis.transData.transform(
+                    (x_data[0], y_data[0])
+                )
+                marker_radius = (
+                    line.get_markersize() + line.get_markeredgewidth()
+                ) * figure.dpi / 144.0
+                marker_bboxes.append(
+                    Bbox.from_extents(
+                        center_x - marker_radius,
+                        center_y - marker_radius,
+                        center_x + marker_radius,
+                        center_y + marker_radius,
+                    )
+                )
+
+        for marker_bbox, box in zip(marker_bboxes, boxes, strict=True):
+            box_stroke_padding = box.get_linewidth() * figure.dpi / 144.0
+            box_bbox = box.get_path().transformed(box.get_transform()).get_extents().padded(
+                box_stroke_padding
+            )
+            assert (
+                marker_bbox.x1 <= box_bbox.x0
+                or box_bbox.x1 <= marker_bbox.x0
+                or marker_bbox.y1 <= box_bbox.y0
+                or box_bbox.y1 <= marker_bbox.y0
+            )
+
+        row_positions = np.arange(len(labels), dtype=float)
+        row_spacing = np.diff(row_positions)
+        assert np.allclose(row_spacing, row_spacing[0], rtol=0.0, atol=0.0)
+        half_row_spacing = row_spacing[0] / 2.0
+        for row_position, box in zip(row_positions, boxes, strict=True):
+            box_y = box.get_path().vertices[:, 1]
+            assert row_position - half_row_spacing < np.min(box_y)
+            assert np.max(box_y) < row_position + half_row_spacing
+            assert np.max(box_y) < row_position or row_position < np.min(box_y)
+    finally:
+        plt.close(figure)
 
 
 def test_phase_band_summary_uses_only_the_two_required_legend_meanings_and_noninferential_words() -> None:
