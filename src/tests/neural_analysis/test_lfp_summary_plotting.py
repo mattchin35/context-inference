@@ -82,7 +82,7 @@ def test_condition_psd_shows_every_condition_median_iqr_count_reference_and_unit
 
     _assert_figure_contract(figure, axes, {"spectrum"})
     assert len(axes["spectrum"].lines) == 2
-    assert "dB" in axes["spectrum"].get_ylabel()
+    assert axes["spectrum"].get_ylabel() == "PSD (dB)"
     caption = figure.texts[-1].get_text()
     assert "correct_rewarded (n=2)" in caption and "omission (n=2)" in caption
     assert "session" in caption and "uV" in caption
@@ -335,6 +335,9 @@ def test_plv_distribution_and_exemplar_distinguish_trial_metric_from_illustratio
         context=_context(),
     )
     _assert_figure_contract(figure, axes, {"source", "filtered", "phase"})
+    assert axes["source"].get_ylabel() == "LFP (uV)"
+    assert axes["filtered"].get_ylabel() == "Bandpassed LFP (uV)"
+    assert axes["phase"].get_ylabel() == "Phase (rad)"
     caption = figure.texts[-1].get_text().lower()
     assert "pooled" in caption and "illustrative" in caption and "trial 7" in caption
 

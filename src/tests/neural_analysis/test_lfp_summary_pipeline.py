@@ -369,6 +369,39 @@ def test_component_manifest_merges_preserve_unrelated_entries_and_update_fingerp
     ]
 
 
+def test_completed_open_ephys_component_manifest_records_resolved_value_semantics() -> None:
+    """Every completed OE consumer saves the corrected per-site semantics provenance."""
+    config = default_lfp_summary_config()
+    open_ephys_site = replace(
+        config.sites[0],
+        acquisition_format="open_ephys",
+        lfp_path=Path("lfp.dat"),
+        aligned_sync_path=Path("probe_sync.npz"),
+        voltage_unit="uV",
+        sample_rate_hz=2_500.0,
+    )
+    config = replace(config, sites=(open_ephys_site,) + config.sites[1:])
+    manifests: list[dict[str, object]] = []
+
+    lfp_summary_pipeline.compute_all_components(config, _make_dependencies([], manifests))
+
+    for component in ("power", "synchrony", "spike_phase"):
+        entry = manifests[-1]["components"][component]
+        assert entry["source_value_semantics"] == {"PFC": "open_ephys_affine_uV_v1"}
+
+
+def test_completed_spikeglx_component_manifest_keeps_empty_open_ephys_semantics_mapping() -> None:
+    """The NR0 value correction does not add a false Open Ephys dependency to SpikeGLX."""
+    manifests: list[dict[str, object]] = []
+
+    lfp_summary_pipeline.compute_power_component(
+        default_lfp_summary_config(),
+        _make_dependencies([], manifests),
+    )
+
+    assert manifests[-1]["components"]["power"]["source_value_semantics"] == {}
+
+
 def test_pipeline_and_numerical_modules_do_not_import_streamlit() -> None:
     """Numerical orchestration must remain usable outside the Streamlit process."""
 

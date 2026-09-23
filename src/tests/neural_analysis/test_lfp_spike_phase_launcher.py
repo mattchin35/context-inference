@@ -486,6 +486,61 @@ def test_resume_rejects_tampered_source_artifact_before_component_access(
     assert resume_calls == []
 
 
+def test_resume_rejects_mixed_open_ephys_value_semantics_before_component_access(
+    tmp_path: Path,
+) -> None:
+    """A corrected checkpoint cannot be resumed against an explicitly legacy source identity."""
+    launcher = _launcher()
+    terminal: list[str] = []
+    first_dependencies = _dependencies(
+        tmp_path,
+        [],
+        terminal,
+        cleanup=lambda _target: (_ for _ in ()).throw(OSError("retain work for resume")),
+    )
+    first_dependencies = replace(
+        first_dependencies,
+        source_fingerprints=lambda _config: {
+            "lfp.dat": {"value_semantics": "open_ephys_affine_uV_v1"}
+        },
+    )
+    failed = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            [
+                "new", "--session-path", str(tmp_path / "CT026"),
+                "--analysis-root", str(tmp_path / "runs"),
+                "--probe", "ProbeB", "--shuffles", "100",
+            ]
+        ),
+        first_dependencies,
+    )
+    assert failed.status == "cleanup_failed"
+
+    resume_calls: list[str] = []
+    resumed_dependencies = _dependencies(
+        tmp_path,
+        resume_calls,
+        terminal,
+        component_compatible=True,
+    )
+    resumed_dependencies = replace(
+        resumed_dependencies,
+        source_fingerprints=lambda _config: {
+            # Live identities retain the historical absence; only receipt-validated
+            # cache inspection renders that absence as "legacy-unscaled".
+            "lfp.dat": {}
+        },
+    )
+
+    resumed = launcher.run_launcher(
+        launcher.parse_launcher_command(["resume", "--run-directory", str(failed.run_directory)]),
+        resumed_dependencies,
+    )
+
+    assert resumed.exit_code == 2
+    assert resume_calls == []
+
+
 def test_live_launcher_lock_fails_without_mutating_owner_state(tmp_path: Path) -> None:
     """A competing resume cannot relabel or append to the lock owner's run."""
     launcher = _launcher()

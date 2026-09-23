@@ -32,6 +32,31 @@ CONDITIONS = (
 )
 
 
+def _observed_open_ephys_metadata(sample_rate_hz: float, channel_count: int) -> dict[str, object]:
+    """Return normalized production-sidecar metadata for synthetic physical-uV routes."""
+    channel_ids = [f"CH{index}" for index in range(channel_count)]
+    return {
+        "output_binary": "lfp.dat",
+        "sampling_frequency_hz": sample_rate_hz,
+        "num_channels": channel_count,
+        "num_segments": 1,
+        "num_samples_by_segment": [1],
+        "dtype": "float32",
+        "binary_layout": "time_major_channel_interleaved",
+        "channel_ids_in_binary_order": channel_ids,
+        "lfp_binary_scaling": {
+            "data_units": "unscaled_binary_values",
+            "has_scaleable_traces": True,
+            "channel_ids": channel_ids,
+            "gain_to_uV_by_channel": [0.195] * channel_count,
+            "offset_to_uV_by_channel": [0.0] * channel_count,
+            "physical_unit_by_channel": ["uV"] * channel_count,
+            "export_scale_factor": 1.0,
+            "conversion": "trace_uV = trace_value * gain_to_uV + offset_to_uV",
+        },
+    }
+
+
 def _trials() -> pd.DataFrame:
     """Return a trial table with overlapping condition membership and behavior edge cases."""
     return pd.DataFrame({
@@ -238,17 +263,18 @@ def test_default_open_ephys_route_reports_lfp_metadata_rate_not_ap_rate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Open Ephys routing obtains LFP rate from metadata and passes only its real API kwargs."""
-    site = LFPSiteConfig("HPC", "HPC", "open_ephys", Path("hpc.dat"), Path("hpc.npz"), "HPC", 2, "mV", 30000.0)
+    site = LFPSiteConfig("HPC", "HPC", "open_ephys", Path("hpc.dat"), Path("hpc.npz"), "HPC", 2, "uV", 1000.0)
     loader_kwargs: list[dict[str, object]] = []
 
-    def fake_metadata(_: Path) -> dict[str, float]:
-        """Return derived-LFP metadata with a 1000-Hz sampling frequency."""
-        return {"sampling_frequency_hz": 1000.0}
+    def fake_metadata(_: Path) -> dict[str, object]:
+        """Return authoritative 1000-Hz, microvolt metadata for saved channel two."""
+        return _observed_open_ephys_metadata(1000.0, 3)
 
     def fake_loader(**kwargs: object) -> tuple[np.ndarray, np.ndarray]:
-        """Record real Open Ephys loader kwargs and return `(time, mV)` arrays."""
+        """Record a complete native `(time, physical-uV)` Open Ephys trial window."""
         loader_kwargs.append(kwargs)
-        return np.array([0.0]), np.array([3.0])
+        relative_time_s = -1.0 + np.arange(2_000, dtype=float) / 1_000.0
+        return relative_time_s, 3.0 + np.sin(2.0 * np.pi * 8.0 * relative_time_s)
 
     monkeypatch.setattr(lfp_loading, "load_open_ephys_lfp_metadata", fake_metadata)
     monkeypatch.setattr(lfp_loading, "load_open_ephys_trial_lfp_trace", fake_loader)
@@ -259,6 +285,117 @@ def test_default_open_ephys_route_reports_lfp_metadata_rate_not_ap_rate(
         "lfp_path", "aligned_sync_npz_path", "saved_channel_index", "alignment_time_s", "window"
     }
     assert loaded["HPC"].sample_rate_hz == 1000.0
+    assert loaded["HPC"].voltage_unit == "uV"
+    np.testing.assert_array_equal(
+        loaded["HPC"].relative_time_s,
+        -1.0 + np.arange(2_000, dtype=float) / 1_000.0,
+    )
+    np.testing.assert_array_equal(
+        loaded["HPC"].source_trace,
+        3.0 + np.sin(2.0 * np.pi * 8.0 * loaded["HPC"].relative_time_s)[np.newaxis, :],
+    )
+
+
+def test_open_ephys_preparation_retains_physical_uv_grid_validity_and_qc_scaling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production adapter consumes reader-provided uV values without changing QC axes or scale."""
+    site = LFPSiteConfig(
+        "HPC", "HPC", "open_ephys", Path("hpc.dat"), Path("hpc.npz"), "HPC", 0, "uV", 1000.0
+    )
+    native_time_s = -0.00125 + np.arange(6, dtype=float) / 1000.0
+    stored_values = np.array([-2.0, -1.0, 0.0, 1.0, 2.0, 1.0])
+    prepared_by_gain: dict[float, object] = {}
+
+    for gain_to_uv in (1.0, 0.195):
+        metadata = _observed_open_ephys_metadata(1000.0, 1)
+        scaling = metadata["lfp_binary_scaling"]
+        assert isinstance(scaling, dict)
+        scaling["gain_to_uV_by_channel"] = [gain_to_uv]
+        monkeypatch.setattr(lfp_loading, "load_open_ephys_lfp_metadata", lambda _: metadata)
+        monkeypatch.setattr(
+            lfp_loading,
+            "load_open_ephys_trial_lfp_trace",
+            lambda **_: (native_time_s, gain_to_uv * stored_values),
+        )
+        prepared_by_gain[gain_to_uv] = load_site_trial_traces(
+            [site],
+            np.array([11, 12]),
+            np.array([100.0, np.nan]),
+            (-0.001, 0.003),
+        )["HPC"]
+
+    identity = prepared_by_gain[1.0]
+    corrected = prepared_by_gain[0.195]
+    expected_grid = np.array([-0.001, 0.0, 0.001, 0.002])
+    assert identity.voltage_unit == corrected.voltage_unit == "uV"
+    assert identity.sample_rate_hz == corrected.sample_rate_hz == 1000.0
+    np.testing.assert_array_equal(identity.relative_time_s, expected_grid)
+    np.testing.assert_array_equal(corrected.relative_time_s, expected_grid)
+    assert identity.valid.tolist() == corrected.valid.tolist() == [True, False]
+    assert identity.exclusion_reason.tolist() == corrected.exclusion_reason.tolist() == ["", "missing_alignment"]
+    np.testing.assert_allclose(corrected.source_trace[0], 0.195 * identity.source_trace[0])
+    np.testing.assert_allclose(corrected.rms[0], 0.195 * identity.rms[0])
+    np.testing.assert_allclose(corrected.peak_to_peak[0], 0.195 * identity.peak_to_peak[0])
+    assert np.isnan(identity.source_trace[1]).all()
+    assert np.isnan(corrected.source_trace[1]).all()
+    assert np.isnan(identity.rms[1]) and np.isnan(corrected.rms[1])
+    assert np.isnan(identity.peak_to_peak[1]) and np.isnan(corrected.peak_to_peak[1])
+
+
+@pytest.mark.parametrize(
+    ("configured_rate_hz", "configured_unit", "expected_message"),
+    (
+        (
+            12.5,
+            "uV",
+            "Open Ephys site PFC: configured sample_rate_hz=12.5 does not match authoritative sample_rate_hz=10.0",
+        ),
+        (
+            10.0,
+            "mV",
+            "Open Ephys site PFC: configured voltage_unit=mV does not match authoritative voltage_unit=uV",
+        ),
+    ),
+)
+def test_open_ephys_summary_route_rejects_configured_metadata_disagreement_before_loading(
+    monkeypatch: pytest.MonkeyPatch,
+    configured_rate_hz: float,
+    configured_unit: str,
+    expected_message: str,
+) -> None:
+    """Production site labels must agree with the sidecar before traces or caches exist."""
+    site = LFPSiteConfig(
+        "PFC",
+        "PFC",
+        "open_ephys",
+        Path("lfp.dat"),
+        Path("sync.npz"),
+        "PFC",
+        0,
+        configured_unit,
+        configured_rate_hz,
+    )
+    loader_called = False
+
+    monkeypatch.setattr(
+        lfp_loading,
+        "load_open_ephys_lfp_metadata",
+        lambda _: _observed_open_ephys_metadata(10.0, 1),
+    )
+
+    def forbidden_loader(**_: object) -> tuple[np.ndarray, np.ndarray]:
+        """Fail if numerical Open Ephys loading starts after a metadata mismatch."""
+        nonlocal loader_called
+        loader_called = True
+        raise AssertionError("numerical loading must not run after a metadata mismatch")
+
+    monkeypatch.setattr(lfp_loading, "load_open_ephys_trial_lfp_trace", forbidden_loader)
+
+    with pytest.raises(ValueError) as error:
+        load_site_trial_traces([site], np.array([0]), np.array([1.0]), (-0.1, 0.1))
+    assert not loader_called
+    assert str(error.value) == expected_message
 
 
 def test_open_ephys_fractional_alignment_is_interpolated_to_exact_native_grid(
@@ -287,7 +424,7 @@ def test_open_ephys_fractional_alignment_is_interpolated_to_exact_native_grid(
     monkeypatch.setattr(
         lfp_loading,
         "load_open_ephys_lfp_metadata",
-        lambda _: {"sampling_frequency_hz": 1000.0},
+        lambda _: _observed_open_ephys_metadata(1000.0, 3),
     )
 
     def fake_loader(**_: object) -> tuple[np.ndarray, np.ndarray]:

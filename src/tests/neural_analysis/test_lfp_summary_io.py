@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from src.neural_analysis import lfp_summary_io
 from src.neural_analysis.lfp_summary_io import (
     assess_component_status,
     load_or_initialize_manifest,
@@ -22,6 +23,7 @@ from src.neural_analysis.lfp_summary_models import (
     component_fingerprint,
     default_lfp_summary_config,
     fingerprint_source_files,
+    lfp_summary_config_from_json,
 )
 
 
@@ -55,7 +57,10 @@ def _power_array_schema() -> dict[str, dict[str, object]]:
         "trial_indices": {"axes": ["trial"], "units": "trial-table-row"},
         "site_ids": {"axes": ["site"], "units": "stable-site-id"},
         "frequency_hz": {"axes": ["frequency"], "units": "Hz"},
-        "psd_linear": {"axes": ["site", "trial", "epoch", "frequency"], "units": "uV^2/Hz"},
+        "psd_linear": {
+            "axes": ["site", "trial", "epoch", "frequency"],
+            "units": "source-voltage-unit^2/Hz",
+        },
         "psd_valid": {"axes": ["site", "trial", "epoch"], "units": "boolean"},
     }
 
@@ -397,6 +402,78 @@ def test_status_rejects_changed_source_dependency(tmp_path: Path) -> None:
     source_status = assess_component_status(tmp_path, "power", source_config, manifest)
     assert source_status.status == "stale"
     assert any("source" in difference.lower() for difference in source_status.differences)
+
+
+def test_legacy_open_ephys_component_is_stale_live_but_its_saved_snapshot_remains_readable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Corrected live identity never relabels a receipt-validated legacy cache as corrupt."""
+    base_config = default_lfp_summary_config()
+    open_ephys_site = replace(
+        base_config.sites[0],
+        acquisition_format="open_ephys",
+        lfp_path=Path("pre_nr0_pfc_lfp.dat"),
+        aligned_sync_path=Path("pre_nr0_pfc_sync.npz"),
+        voltage_unit="uV",
+        sample_rate_hz=2_500.0,
+    )
+    live_config = replace(base_config, sites=(open_ephys_site,) + base_config.sites[1:])
+    legacy_digest = "97d72e6bce66f44c89b5ddd11ce257fde21c5c68ac190adb92873750676f5a61"
+    corrected_digest = "0e9b29b41f7ece65f6432fef3ad81acf7d5bc6dacd1fb4daa3528225daf7e1bb"
+    legacy_manifest = _manifest(legacy_digest, config=live_config)
+    # Freeze the complete observed pre-NR0 record.  Do not obtain it through
+    # the live fingerprint helper, because that helper must gain the sidecar
+    # and semantics provenance being tested here.
+    lfp_path = Path(open_ephys_site.lfp_path).resolve()
+    sync_path = Path(open_ephys_site.aligned_sync_path).resolve()
+    legacy_source_fingerprints = {
+        str(lfp_path): {
+            "path": str(lfp_path),
+            "size_bytes": -1,
+            "mtime_ns": -1,
+        },
+        str(sync_path): {
+            "path": str(sync_path),
+            "size_bytes": -1,
+            "mtime_ns": -1,
+        },
+    }
+    # A pre-NR0 receipt has no sidecar or semantics mapping. That absence is
+    # legacy only during receipt-validated inspection and never a live identity.
+    legacy_entry = legacy_manifest["components"]["power"]
+    legacy_entry["source_fingerprints"] = legacy_source_fingerprints
+    legacy_entry.pop("source_value_semantics", None)
+    np.savez(tmp_path / "power.npz", **_power_arrays())
+
+    # This generic I/O test fixes only the historical source records. The live
+    # component hash remains the real code-owned value for the exact fixed
+    # configuration used by the model digest test.
+    monkeypatch.setattr(
+        lfp_summary_io,
+        "fingerprint_source_files",
+        lambda *_args, **_kwargs: legacy_source_fingerprints,
+    )
+    corrected_status = assess_component_status(
+        tmp_path, "power", live_config, legacy_manifest
+    )
+    saved_snapshot = lfp_summary_config_from_json(
+        json.dumps(legacy_entry["configuration_snapshot"])
+    )
+
+    assert corrected_status.status == "stale"
+    assert component_fingerprint("power", live_config) == corrected_digest
+    assert corrected_status.differences == (
+        f"configuration fingerprint differs: cached={legacy_digest}, current={corrected_digest}",
+    )
+    assert saved_snapshot == live_config
+    assert "source_value_semantics" not in legacy_entry
+    assert legacy_entry["source_fingerprints"] == legacy_source_fingerprints
+    assert all("lfp_preprocessing.json" not in path for path in legacy_source_fingerprints)
+    assert all(
+        "value_semantics" not in record
+        for record in legacy_source_fingerprints.values()
+    )
 
 
 def test_unit_source_change_stales_spike_phase_only(tmp_path: Path) -> None:

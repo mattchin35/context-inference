@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from hashlib import sha256
+import json
 from math import nan
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -22,6 +25,7 @@ from src.neural_analysis.lfp_summary_models import (
     lfp_summary_config_from_json,
     validate_lfp_summary_config,
 )
+from src.neural_analysis import lfp_summary_models
 
 
 ConfigMutation = Callable[[LFPSummaryConfig], LFPSummaryConfig]
@@ -49,6 +53,52 @@ def _default_config_with_temporary_sources(tmp_path: Path) -> LFPSummaryConfig:
         sync_path.write_text("{}", encoding="ascii")
         sites.append(replace(site, lfp_path=lfp_path, aligned_sync_path=sync_path))
     return replace(config, sites=tuple(sites))
+
+
+def _open_ephys_config_with_temporary_sidecar(tmp_path: Path) -> LFPSummaryConfig:
+    """Return a configuration with one authoritative Open Ephys sidecar.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-managed directory containing synthetic LFP, sync, and metadata
+        source files only.
+
+    Returns
+    -------
+    LFPSummaryConfig
+        Valid configuration retaining the first site's stable identity while
+        declaring the Open Ephys adapter and physical microvolt metadata.
+    """
+    config = _default_config_with_temporary_sources(tmp_path)
+    first_site = config.sites[0]
+    lfp_path = tmp_path / "open_ephys" / "lfp.dat"
+    sync_path = tmp_path / "open_ephys" / "probe_sync.npz"
+    lfp_path.parent.mkdir()
+    lfp_path.write_bytes(b"lfp")
+    sync_path.write_bytes(b"sync")
+    sidecar_path = lfp_path.parent / "lfp_preprocessing.json"
+    sidecar_path.write_text(
+        '{"output_binary":"lfp.dat","sampling_frequency_hz":2500.0,'
+        '"num_channels":1,"num_segments":1,"num_samples_by_segment":[1],'
+        '"dtype":"float32","binary_layout":"time_major_channel_interleaved",'
+        '"channel_ids_in_binary_order":["CH0"],"lfp_binary_scaling":'
+        '{"data_units":"unscaled_binary_values","has_scaleable_traces":true,'
+        '"channel_ids":["CH0"],"gain_to_uV_by_channel":[0.195],'
+        '"offset_to_uV_by_channel":[0.0],"physical_unit_by_channel":["uV"],'
+        '"export_scale_factor":1.0,'
+        '"conversion":"trace_uV = trace_value * gain_to_uV + offset_to_uV"}}',
+        encoding="ascii",
+    )
+    open_ephys_site = replace(
+        first_site,
+        acquisition_format="open_ephys",
+        lfp_path=lfp_path,
+        aligned_sync_path=sync_path,
+        voltage_unit="uV",
+        sample_rate_hz=2500.0,
+    )
+    return replace(config, sites=(open_ephys_site,) + config.sites[1:])
 
 
 def test_default_configuration_is_frozen_deterministic_and_round_trips() -> None:
@@ -534,3 +584,165 @@ def test_component_source_fingerprints_scope_unit_and_trial_table_inputs(tmp_pat
     assert str(trial_table_path.resolve()) in power_sources
     assert str(trial_table_path.resolve()) in synchrony_sources
     assert str(trial_table_path.resolve()) in spike_sources
+
+
+@pytest.mark.parametrize("component", ("power", "synchrony", "spike_phase"))
+def test_open_ephys_source_fingerprint_hashes_preprocessing_sidecar_content(
+    tmp_path: Path,
+    component: str,
+) -> None:
+    """A same-size, timestamp-restored sidecar edit stales all affected source identity."""
+    config = _open_ephys_config_with_temporary_sidecar(tmp_path)
+    lfp_path = Path(config.sites[0].lfp_path)
+    sidecar_path = lfp_path.parent / "lfp_preprocessing.json"
+    original_stat = sidecar_path.stat()
+    original_digest = sha256(sidecar_path.read_bytes()).hexdigest()
+
+    before = fingerprint_source_files(config, component=component)
+    before_sidecar = before[str(sidecar_path.resolve())]
+    lfp_entry = before[str(lfp_path.resolve())]
+    sidecar = json.loads(sidecar_path.read_text(encoding="ascii"))
+    sidecar["lfp_binary_scaling"]["gain_to_uV_by_channel"] = [0.196]
+    sidecar_path.write_text(json.dumps(sidecar, separators=(",", ":")), encoding="ascii")
+    os.utime(sidecar_path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    after = fingerprint_source_files(config, component=component)
+    after_sidecar = after[str(sidecar_path.resolve())]
+
+    assert before_sidecar["path"] == str(sidecar_path.resolve())
+    assert lfp_entry["value_semantics"] == "open_ephys_affine_uV_v1"
+    assert before_sidecar["size_bytes"] == after_sidecar["size_bytes"]
+    assert before_sidecar["mtime_ns"] == after_sidecar["mtime_ns"]
+    assert before_sidecar["sha256"] == original_digest
+    assert before != after
+    assert before_sidecar["sha256"] != after_sidecar["sha256"]
+    assert after_sidecar["sha256"] == sha256(sidecar_path.read_bytes()).hexdigest()
+
+
+_PRE_NR0_OPEN_EPHYS_COMPONENT_FINGERPRINTS = {
+    "power": "97d72e6bce66f44c89b5ddd11ce257fde21c5c68ac190adb92873750676f5a61",
+    "synchrony": "5018dc585ccf8c1e3d2b559955f6a82005b2770c0dc76216d8dd5b23c0dec4db",
+    "spike_phase": "856ecd69eeec22e44e2cca8c54fadfef55f516a3b5d2abb89138d65be5e19d3a",
+}
+_SPIKEGLX_COMPONENT_FINGERPRINTS = {
+    "power": "c92331e34cc0252eacbc36b92c3beca0d2a99e5d35102325c88293c866da99b3",
+    "synchrony": "28127adaf4318f33aa29aaa653b15ab950890fcb606eb4cd5fa5e4f75596ee43",
+    "spike_phase": "3254279e2c37a4e238f5fe240524d2c9d914d1600af5adf0d934588009a1aab8",
+}
+_CORRECTED_OPEN_EPHYS_COMPONENT_FINGERPRINTS = {
+    "power": "0e9b29b41f7ece65f6432fef3ad81acf7d5bc6dacd1fb4daa3528225daf7e1bb",
+    "synchrony": "99bf31cd16fe74744e7b75526836eec07f14623aed7b6ad86d2772cc8a3e29e5",
+    "spike_phase": "d2cfc02352b4792911b2754fde3ff8eac157eea71f66ac47aff7546490860d68",
+}
+
+
+def _fixed_open_ephys_identity_config() -> LFPSummaryConfig:
+    """Return the path-stable pre-NR0 identity fixture with one Open Ephys site."""
+    config = default_lfp_summary_config()
+    first_site = replace(
+        config.sites[0],
+        acquisition_format="open_ephys",
+        lfp_path=Path("pre_nr0_pfc_lfp.dat"),
+        aligned_sync_path=Path("pre_nr0_pfc_sync.npz"),
+        voltage_unit="uV",
+        sample_rate_hz=2_500.0,
+    )
+    return replace(config, sites=(first_site,) + config.sites[1:])
+
+
+def test_source_value_semantics_is_code_owned_and_open_ephys_scoped() -> None:
+    """Live semantics are derived from acquisition metadata, never caller overrides."""
+    open_ephys_config = _fixed_open_ephys_identity_config()
+    spikeglx_config = default_lfp_summary_config()
+
+    assert lfp_summary_models.source_value_semantics(open_ephys_config) == {
+        "PFC": "open_ephys_affine_uV_v1"
+    }
+    assert lfp_summary_models.source_value_semantics(spikeglx_config) == {}
+
+
+def _explicit_component_fingerprint_payload(
+    component: str,
+    config: LFPSummaryConfig,
+    source_semantics: dict[str, str] | None,
+) -> dict[str, object]:
+    """Build the approved canonical fingerprint input without calling the production hasher."""
+    canonical = json.loads(canonical_config_json(config))
+    shared: dict[str, object] = {
+        "schema_version": canonical["schema_version"],
+        "session_id": canonical["session_id"],
+        "session_path": canonical["session_path"],
+        "trial_table_path": canonical["trial_table_path"],
+        "sites": canonical["sites"],
+        "trial_filter": canonical["trial_filter"],
+        "windows": canonical["analysis_windows"],
+    }
+    if source_semantics:
+        shared["source_value_semantics"] = source_semantics
+    if component == "power":
+        payload = {**shared, "power": canonical["power"]}
+    elif component == "synchrony":
+        phase = dict(canonical["phase"])
+        payload = {
+            **shared,
+            "site_pairs": canonical["site_pairs"],
+            "phase": phase,
+        }
+    elif component == "spike_phase":
+        phase = dict(canonical["phase"])
+        phase.pop("bootstrap_count")
+        phase.pop("seed")
+        payload = {
+            **shared,
+            "unit_population": canonical["unit_population"],
+            "phase": phase,
+            "ppc": canonical["ppc"],
+        }
+    else:
+        raise AssertionError(f"unexpected component {component!r}")
+    return payload
+
+
+def _explicit_fingerprint_digest(payload: dict[str, object]) -> str:
+    """Return the documented SHA-256 digest of one canonical JSON payload."""
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return sha256(encoded.encode("utf-8")).hexdigest()
+
+
+@pytest.mark.parametrize("component", ("power", "synchrony", "spike_phase"))
+def test_open_ephys_component_identity_uses_only_the_resolved_semantics_payload_addition(
+    component: str,
+) -> None:
+    """Every affected digest is the frozen canonical payload plus one OE semantics mapping."""
+    config = _fixed_open_ephys_identity_config()
+    legacy_payload = _explicit_component_fingerprint_payload(component, config, None)
+    corrected_payload = _explicit_component_fingerprint_payload(
+        component,
+        config,
+        {"PFC": "open_ephys_affine_uV_v1"},
+    )
+
+    assert set(corrected_payload) == set(legacy_payload) | {"source_value_semantics"}
+    assert {
+        key: value for key, value in corrected_payload.items() if key != "source_value_semantics"
+    } == legacy_payload
+    assert _explicit_fingerprint_digest(legacy_payload) == _PRE_NR0_OPEN_EPHYS_COMPONENT_FINGERPRINTS[component]
+    assert _explicit_fingerprint_digest(corrected_payload) == _CORRECTED_OPEN_EPHYS_COMPONENT_FINGERPRINTS[component]
+    assert component_fingerprint(component, config) == _CORRECTED_OPEN_EPHYS_COMPONENT_FINGERPRINTS[component]
+
+
+@pytest.mark.parametrize("component", ("power", "synchrony", "spike_phase"))
+def test_spikeglx_component_identity_retains_its_frozen_pre_nr0_digest(component: str) -> None:
+    """Open Ephys provenance must not perturb an all-SpikeGLX component identity."""
+    assert component_fingerprint(component, default_lfp_summary_config()) == (
+        _SPIKEGLX_COMPONENT_FINGERPRINTS[component]
+    )
+
+
+def test_legacy_canonical_configuration_deserializes_without_value_semantics_field() -> None:
+    """Adapter semantics stay in provenance so historical config JSON remains readable."""
+    encoded = canonical_config_json(default_lfp_summary_config())
+
+    decoded = lfp_summary_config_from_json(encoded)
+
+    assert decoded == default_lfp_summary_config()
+    assert "source_value_semantics" not in encoded
