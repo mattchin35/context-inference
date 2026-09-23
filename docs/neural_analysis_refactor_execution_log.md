@@ -228,6 +228,15 @@ Read-only representative CT026 and legacy-artifact check:
   site's numerical/work-cache I/O; present-but-malformed saved semantics were
   coerced rather than rejected; and several new or modified function contracts
   remained incomplete.
+- Third-candidate GREEN command/result: the lead independently ran the exact
+  14-file Section 4.4 command: 695 passed, 3 warnings in 36.72 seconds; complete
+  `src/tests/neural_analysis`: 1,386 passed, 22 warnings in 158.97 seconds.
+- Third fresh Sol implementation review: blocked. A present but unknown saved
+  semantics string was still accepted; an unusable aligned-sync path on a
+  later production Open Ephys site could be rejected only after prior
+  numerical or work-cache I/O; and the changed metadata/fingerprint public
+  contracts remained incomplete. The first two missing cases now require a
+  narrow reviewed tests-first addendum before source correction.
 - Final GREEN command/result: pending after source-only corrections.
 - Final affected/full-suite results: pending.
 - Final Sol implementation review: pending.
