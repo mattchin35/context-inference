@@ -166,6 +166,17 @@ Read-only representative CT026 and legacy-artifact check:
   exact mismatch diagnostic across trial and continuous routes; remove the
   invalid assumption that unequal Python objects have unequal hashes; and
   assert cached trace/phase units plus the `uV^2/Hz` plotting contract.
+- Revision-three RED command/result: exact 14-file Section 4.4 command
+  independently reproduced by the lead: 101 failed, 578 passed, 3 warnings in
+  36.50 seconds. No collection, import, or fixture failures occurred.
+- Fourth Sol test-design review: blocked. One test incorrectly required linear
+  `uV^2/Hz` on a normalized-dB PSD axis; plan item 30 now separates linear
+  cache/schema units from normalized display units. Remaining repairs must
+  enforce in-place affine operations, make the legacy stale fixture initially
+  compatible except for semantics, freeze exact corrected component identity,
+  vary only semantics in work-cache checks, exercise semantics-version changes
+  through every exploratory cache, and complete malformed primitive/unit/layout
+  validation plus exact sidecar-digest assertions.
 - Tests-only commit: pending.
 
 ### Implementation phase
