@@ -3,11 +3,12 @@
 ## Status and authority
 
 **Status:** implementation authorized by the user on 2026-09-23. NR0 is
-complete. The user-approved NR1 metadata/path/resource dry run completed and
-passed fresh Sol review on 2026-09-23. The user authorized the bounded small
-representative-window check in Section 5.2 item 2 on 2026-09-23. No scientific
-component computation, scientific-cache mutation, report rendering, profiling
-run, or cluster action is authorized yet.
+complete. The user-approved NR1 metadata/path/resource dry run and bounded
+small representative-window check in Section 5.2 items 1-2 completed and passed
+fresh Sol review on 2026-09-23. No scientific component computation,
+scientific-cache mutation, report rendering, profiling run, or cluster action
+is authorized yet. Corrected Power in Section 5.2 item 3 is the next separately
+gated action.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -33,7 +34,8 @@ amplitude behavior as if that behavior were scientifically correct.
   and `2b497e4` plus implementation commit `177a8d6` are complete and
   approved. The NR1 metadata/path/resource dry run is complete and approved;
   its corrected cache, report, and profiling destinations remain absent. The
-  bounded numerical small-window check is active under the authority below.
+  bounded numerical small-window check is also complete and approved. Corrected
+  Power has not been authorized.
 - **Approved NR1 destinations:** session root
   `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference`;
   corrected cache `processed/lfp_summary_cache_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`;
@@ -79,6 +81,16 @@ amplitude behavior as if that behavior were scientifically correct.
   read sync or spike arrays, execute scientific kernels, create/mutate any
   cache, create report/profiling output, alter legacy artifacts, submit cluster
   work, or push.
+- **NR1 small-window result:** all nine authorized reads used the exact start,
+  centered, and final 2,500-sample windows. Direct float32 stored values and
+  public float64 uV results matched the declared affine formula elementwise
+  with zero absolute and relative error. Public reads took 1.677-4.304 ms with
+  212,179-214,419 traced Python bytes. Evidence contains scalar summaries only;
+  arrays were not persisted, and every protected path remained unchanged.
+  Exact equality proves implementation agreement with the parsed sidecar gain
+  and operation order; it does not independently validate the calibration
+  declared by that sidecar. Fresh reviewer `/root/nr1_window_reviewer`
+  approved with no P0-P3 findings.
 - **Durable evidence:** exact commands, results, inventory hashes, commits,
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that

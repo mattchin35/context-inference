@@ -16,11 +16,11 @@
   component NPZ members read-only through `assess_component_status`. It changed
   access times but not content or modification times. The final run preserves
   this disclosure in `incident.json` and does not repeat the access.
-- The user authorized plan Section 5.2 item 2 on 2026-09-23: bounded
-  representative numerical windows from PFC, HPC1, and HPC2 to verify
-  stored-to-uV affine conversion. Evidence is restricted to the separately
-  timestamped NR1 small-window run directory. Corrected Power, Synchrony,
-  Spike-phase, report, profiling, cluster, and push actions remain gated.
+- Plan Section 5.2 item 2 is complete and approved. Nine bounded windows across
+  PFC, HPC1, and HPC2 matched the declared stored-to-uV affine formula exactly;
+  scalar evidence is in the separately timestamped NR1 small-window run.
+  Corrected Power is the next action and remains separately gated, as do
+  Synchrony, Spike-phase, report, profiling, cluster, and push actions.
 - For this structural-refactor sequence,
   `docs/neural_analysis_refactor_plan.md` and
   `docs/neural_analysis_refactor_execution_log.md` are the ongoing detailed

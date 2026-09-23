@@ -113,7 +113,7 @@ Read-only representative CT026 and legacy-artifact check:
 | Package | State | Test commit | Implementation commit | Evidence and next gate |
 | --- | --- | --- | --- | --- |
 | NR0 | Complete and approved | `e728cea`, `2b497e4` | `177a8d6` | Final focused 704 passed; neural suite 1,395 passed; fresh Sol review approved; closure `a94559d`. |
-| NR1 | In progress; dry run approved | - | - | Metadata/path/resource evidence passed fresh Sol review. Small numerical windows require separate user approval. |
+| NR1 | In progress; checks 1-2 approved | - | - | Metadata/path/resource and bounded affine-window evidence passed fresh Sol reviews. Corrected Power requires separate user approval. |
 | NR2 | Pending | - | - | Requires approved NR1 corrected baseline. |
 | NR3 | Pending | - | - | Sequential after NR2. |
 | NR4 | Pending | - | - | Sequential after NR3. |
@@ -374,4 +374,67 @@ second. It compares direct stored float32 values, the public loader's physical
 uV output, and the authoritative per-channel affine formula and records bounded
 timing/allocation evidence. Sync/spike arrays, scientific kernels, caches,
 reports, profiling, legacy mutation, cluster work, and Git push remain out of
-scope. Result and review are pending. NR2-NR18 are not started.
+scope.
+
+### NR1 small-window result
+
+Status: complete and approved on 2026-09-23. The exact command was:
+
+```text
+uv run /home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_nr1_small_window_open_ephys_affine_uV_v1_2026-09-23T12-04-46Z/small_window.py
+```
+
+The runner performed exactly nine bounded public reads: three configured sites
+times `[0,2500)`, centered `[4666121,4668621)`, and final
+`[9332242,9334742)` windows. Raw arrays were `(2500,)` float32 stored values;
+public outputs were `(2500,)` float64 uV at 2,500 Hz. Every selected channel
+used gain `0.1949999928 uV/value` and zero offset. All nine outputs were exactly
+equal to `raw.astype(float) * gain + offset`, including
+`array_equal=True`, `allclose(rtol=0, atol=0)`, zero maximum absolute error, and
+zero maximum relative error.
+
+Scalar population statistics:
+
+| Site | Window | Raw min | Raw max | Raw mean | Raw SD | uV min | uV max | uV mean | uV SD |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| PFC | start | -1883.9042 | 1481.1938 | 32.2544 | 680.2274 | -367.3613 | 288.8328 | 6.2896 | 132.6443 |
+| PFC | midpoint | -1584.6124 | 1599.3354 | 21.9784 | 583.9948 | -308.9994 | 311.8704 | 4.2858 | 113.8790 |
+| PFC | final | -1817.8446 | 1737.9828 | -30.7842 | 598.7260 | -354.4797 | 338.9066 | -6.0029 | 116.7516 |
+| HPC1 | start | -1352.0294 | 1584.6024 | 52.8167 | 519.2606 | -263.6457 | 308.9975 | 10.2993 | 101.2558 |
+| HPC1 | midpoint | -1497.8121 | 1746.2561 | 75.8701 | 640.4283 | -292.0734 | 340.5199 | 14.7947 | 124.8835 |
+| HPC1 | final | -1258.1469 | 1400.8303 | -7.2143 | 473.6809 | -245.3386 | 273.1619 | -1.4068 | 92.3678 |
+| HPC2 | start | -889.3183 | 795.0800 | -7.7922 | 324.0905 | -173.4171 | 155.0406 | -1.5195 | 63.1976 |
+| HPC2 | midpoint | -1105.2030 | 924.4885 | 49.6060 | 421.5107 | -215.5146 | 180.2753 | 9.6732 | 82.1946 |
+| HPC2 | final | -915.3886 | 1093.4213 | -3.3301 | 371.6038 | -178.5008 | 213.2171 | -0.6494 | 72.4627 |
+
+Public per-window reads took 1,676,658-4,304,161 ns with
+212,179-214,419 traced Python bytes. These are bounded call measurements, not a
+full-component runtime or process-RSS claim. Exact output equality establishes
+agreement with the same parsed sidecar gain and operation ordering; it does not
+independently establish that the declared decimal calibration is scientifically
+correct.
+
+The evidence directory contains only `small_window.py`, `preflight.json`,
+`source_identity.json`, `results.json`, `run.log`, `run_summary.md`, and
+`file_inventory.json`. Arrays were retained only in memory. Corrected
+cache/report/profiling targets remained absent; legacy directory stat identity
+was unchanged; no legacy component NPZ, sync, spike, cache, component, kernel,
+report, profiling, cluster, stage, commit, or push route ran. Repository state
+remained tracked-clean at
+`f0736f546c2ae7e93722770705edd204cdbee7d5`.
+
+Final evidence SHA-256 values:
+
+```text
+file_inventory.json   028b010b9246e860e12724245a1213c851970abb72cb4821d423edec293b1667
+preflight.json        1870bae4cb93a4f311d6ce2761056759f524d3ace7af6be8d2605c53b91b8421
+results.json          b67c002a449912cbeaf352c89bbb0cfb3f31d92300fe1b6cbea3644d9deaf1a3
+run.log               8112496653a56f03a7fd07aca937f0ffd91ad8dc9671bcfe3cff4fc65414170d
+run_summary.md        60b010303b90cd611b92985081ceb272d89ae2ea7273bdf027d47ee619a13276
+small_window.py       ea2c000da5bb762e7c4ffb44fd1acc380848388ed41446519a05de19fa5d5640
+source_identity.json  22e212e535bbc28becaaf1ed5a880964ce56be893bbff9e3a50d078c85104d97
+```
+
+Fresh reviewer `/root/nr1_window_reviewer` (`gpt-5.6-sol`, `xhigh`) approved
+with no P0-P3 findings. Corrected Power in plan Section 5.2 item 3 is the next
+ordered action and remains separately gated. NR2-NR18 are not started.
