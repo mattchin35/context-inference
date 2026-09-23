@@ -3,9 +3,8 @@
 ## Status and authority
 
 **Status:** implementation authorized by the user on 2026-09-23. NR0 is active
-at the tests-only gate. The baseline is complete, but the tests-only commit is
-blocked on the second Sol design review and is being revised; no NR0 source
-implementation has started.
+at the source-implementation gate. The reviewed tests-only RED commit is
+complete; no NR0 source implementation has started yet.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -27,15 +26,12 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** NR0, tests-only revision. The documentation/baseline gate
-  is complete. The lead independently reproduced the current tests-only RED
-  revision-four RED result (114 failed, 582 passed, 3 warnings), but the fifth
-  mandatory Sol review blocked the commit on two test defects and three
-  remaining causal gaps: pre/post sidecar digest comparison, support for a
-  valid `.astype(..., copy=True)` in-place implementation, production-schema
-  unit resolution, actual legacy-to-corrected staleness, and complete PPC/cache
-  identity invariants. The same Terra writer must repair only those tests
-  before another independent RED run and fresh review.
+- **Active package:** NR0, source implementation. Tests-only commit `e728cea`
+  is approved and complete. The lead independently reproduced the final exact
+  RED result (115 failed, 580 passed, 3 warnings in 37.43 seconds), and the
+  fresh Sol/xhigh reviewer approved the stable 12-file tests-only diff. The
+  next allowed edits are the smallest implementation changes inside the NR0
+  source allowlist by the same Terra/xhigh writer; tests are frozen.
 - **Agent policy:** lead Sol/high orchestration with one NR0 Terra/xhigh writer,
   one fresh Sol/xhigh gate reviewer, and at most one optional Terra/medium
   read-only scout. Only the Terra writer may author package tests/source; the

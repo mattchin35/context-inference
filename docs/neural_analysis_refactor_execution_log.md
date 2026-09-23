@@ -185,11 +185,27 @@ Read-only representative CT026 and legacy-artifact check:
   resolve the production generic PSD schema with cached `site_voltage_units`
   rather than a test-local schema, use the real corrected component fingerprint
   for legacy staleness, and compare PPC null summaries plus stable cache axes.
-- Tests-only commit: pending.
+- Revision-five RED command/result: exact 14-file Section 4.4 command
+  independently reproduced by the lead: 115 failed, 580 passed, 3 warnings in
+  38.40 seconds. The sixth review found two hidden GREEN defects: a tracking
+  ndarray rejected its own final non-affine assertion, and a pure-sine
+  presession reference made near-zero Welch bins numerically unstable.
+- Revision-six RED command/result: exact command independently reproduced: 115
+  failed, 580 passed, 3 warnings in 38.21 seconds. The seventh review found one
+  arithmetic typo in the tracking fixture and approved all other contracts
+  under an in-memory intended affine implementation.
+- Final RED command/result: exact command independently reproduced after the
+  surgical arithmetic fix: 115 failed, 580 passed, 3 warnings in 37.43 seconds.
+  There were no collection, import, or fixture failures.
+- Final Sol test-design review: fresh reviewer `/root/nr0_test_reviewer_8`,
+  `gpt-5.6-sol`, `xhigh`: APPROVE. Scope was exactly 12 allowlisted tracked
+  test files, staging was empty, and `git diff --check` passed.
+- Tests-only commit: `e728cea` (`test: define NR0 Open Ephys scaling
+  contract`).
 
 ### Implementation phase
 
-- GREEN command/result: pending.
+- GREEN command/result: pending; source implementation is the next gate.
 - Affected/full-suite results: pending.
 - Sol implementation review: pending.
 - Implementation commit: pending.
