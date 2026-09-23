@@ -215,12 +215,33 @@ Read-only representative CT026 and legacy-artifact check:
   SHA-256, own the semantics identifier once at the adapter boundary, correct
   all affected data contracts, and centralize trial/continuous metadata
   compatibility validation with saved-channel bounds.
+- Second GREEN command/result: the lead independently ran the exact 14-file
+  Section 4.4 command: 695 passed, 3 warnings in 38.14 seconds.
+- Second affected-suite result: complete `src/tests/neural_analysis`: 1,386
+  passed, 22 warnings in 159.78 seconds.
+- Complete-repository result: collection still stops only at the frozen
+  unrelated untracked `test_project_utils.py` import of unavailable
+  `autograd`: 1 error and 1 warning in 2.00 seconds.
+- Second fresh Sol implementation review: blocked. Saved exploratory semantics
+  still came from the global constant rather than the exact compute token;
+  multi-site production compatibility checks could occur after an earlier
+  site's numerical/work-cache I/O; present-but-malformed saved semantics were
+  coerced rather than rejected; and several new or modified function contracts
+  remained incomplete.
 - Final GREEN command/result: pending after source-only corrections.
 - Final affected/full-suite results: pending.
 - Final Sol implementation review: pending.
 - Implementation commit: pending.
-- Performance evidence: pending.
-- Unresolved risks: none recorded yet.
+- Performance evidence: a synthetic 32-channel, 300,000-sample float32 binary
+  compared commit `e728cea` with the current bounded 200,000-sample
+  single-channel read over 25 warm repetitions. Median time changed from
+  1.380 ms to 1.494 ms (1.083x); traced peak allocation changed from 1,613,183
+  to 1,613,064 bytes (1.000x). The corrected first value was exactly 10.125 for
+  stored 1.25, gain 2.5, and offset 7.0. Shape and 2,500 Hz rate were unchanged.
+- Unresolved risk under final review: token construction and later source reads
+  are not one atomic filesystem operation, so concurrent external source
+  mutation could create a token/read TOCTOU mismatch. NR0 does not mutate
+  sources; the final gate must classify or close this risk explicitly.
 
 ## NR1-NR18 records
 
