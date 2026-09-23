@@ -237,6 +237,16 @@ Read-only representative CT026 and legacy-artifact check:
   numerical or work-cache I/O; and the changed metadata/fingerprint public
   contracts remained incomplete. The first two missing cases now require a
   narrow reviewed tests-first addendum before source correction.
+- Addendum RED command/result: the lead ran the three affected files: 7 failed,
+  129 passed in 6.64 seconds. The failures were exactly three trial preflight
+  order cases, three phase work-cache/preflight order cases, and one unknown
+  present-semantics case; injected-seam and current/legacy controls passed.
+- Addendum Sol test-design review: fresh reviewer
+  `/root/nr0_addendum_test_reviewer_2`, `gpt-5.6-sol`, `xhigh`: APPROVE. The
+  source diff remained frozen, error contracts and unreachable numerical/cache
+  seams were explicit, and `git diff --check` passed.
+- Addendum tests-only commit: `2b497e4` (`test: close NR0 fail-closed preflight
+  gaps`).
 - Final GREEN command/result: pending after source-only corrections.
 - Final affected/full-suite results: pending.
 - Final Sol implementation review: pending.

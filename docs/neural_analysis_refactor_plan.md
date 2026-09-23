@@ -27,13 +27,12 @@ amplitude behavior as if that behavior were scientifically correct.
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
 - **Active package:** NR0, source implementation. Tests-only commit `e728cea`
-  is approved and complete. The third source candidate passes 695 focused
-  tests and 1,386 complete neural-analysis tests, but the fresh mandatory Sol
-  review found uncovered fail-closed cases: unknown persisted semantics and a
-  later Open Ephys site's unusable aligned-sync path can still pass too far.
-  A narrow tests-first addendum is active for those discovered cases before the
-  same Terra/xhigh writer makes the source-only correction. Complete data
-  contracts for the changed metadata/fingerprint APIs remain part of that
+  and addendum tests commit `2b497e4` are approved and complete. The addendum
+  independently reproduced 7 genuine RED failures with 129 controls passing:
+  unknown persisted semantics and a later Open Ephys site's unusable
+  aligned-sync path still pass too far. The same Terra/xhigh writer is making
+  the final source-only correction inside the eight-file allowlist. Complete
+  data contracts for the changed metadata/fingerprint APIs remain part of that
   correction.
 - **Agent policy:** lead Sol/high orchestration with one NR0 Terra/xhigh writer,
   one fresh Sol/xhigh gate reviewer, and at most one optional Terra/medium
