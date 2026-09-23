@@ -20,7 +20,8 @@ share the same phase-clustering/resampling calculation. The NR1P code/test
 package implementing that presentation is complete, committed, and approved by
 a fresh Sol/xhigh implementation review. The NR1C-A cache-relocation package is
 also complete, committed, and approved after tests-first concurrency and
-provenance hardening; NR1C-B launcher-target work is the next source package. A
+provenance hardening. The NR1C-B explicit launcher-target/preflight package is
+complete, committed, and approved as well. A
 separately authorized NR1V run must
 still create and review a new versioned Synchrony artifact; no existing cache or
 report was changed. Spike-phase and cluster actions remain separately gated.
@@ -45,7 +46,7 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** NR1C-B launcher target and preflight. NR0 tests commits `e728cea`
+- **Active package:** external-gated NR1V/NR1E evidence. NR0 tests commits `e728cea`
   and `2b497e4` plus implementation commit `177a8d6` are complete and
   approved. The NR1 metadata/path/resource dry run is complete and approved;
   its original dry-run report and profiling destinations remain absent. The
@@ -56,7 +57,9 @@ amplitude behavior as if that behavior were scientifically correct.
   revision for both ITPC and ISPC band summaries. NR1P tests and implementation
   are complete through implementation commit `ad8e598`. NR1C-A relocation
   tests are complete through `b994495`, and the reviewed implementation is
-  `e1d99c3`; no CT026 or cluster path was accessed during that package. A newly versioned
+  `e1d99c3`. NR1C-B tests are complete through `4646b5d`, and its reviewed
+  implementation is `c844adc`; no CT026 or cluster path was accessed during
+  either package. A newly versioned
   Synchrony artifact and explicit visual approval remain before the bounded
   Spike-phase preview can be authorized.
   The user requires any later preview to run unattended through Slurm without
@@ -199,18 +202,17 @@ amplitude behavior as if that behavior were scientifically correct.
   distribution boxplot for both ITPC and ISPC, as frozen in Section 5.5. The
   100-shuffle ProbeB preview must use the standalone Slurm launcher with eight
   workers, no `--final-run`, and no Codex monitoring. Before proposing
-  submission, close the presentation and safety gaps:
-  the launcher has no corrected-cache output argument and still targets
-  `processed/lfp_summary_cache`, the protected legacy cache. A tested explicit
-  corrected-cache target, a pushed exact clean cluster checkout, and a reviewed
-  way to establish the approved Power/Synchrony state on the cluster are
-  required. No push, transfer, or Slurm submission is authorized by this note.
+  submission, use the now-tested required `--cache-directory` target and its
+  fail-closed prerequisite validation. A pushed exact clean cluster checkout
+  and a reviewed way to establish the approved Power/Synchrony state on the
+  cluster are still required. No push, transfer, or Slurm submission is
+  authorized by this note.
 - **Durable evidence:** exact commands, results, inventory hashes, commits,
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that
   log after every commit or interruption-relevant gate.
-- **Verified baseline:** the final NR1C-A focused command passed 107 tests; the
-  complete neural suite passed 1,503 tests with 22 known warnings. The complete
+- **Verified baseline:** the final NR1C-B focused command passed 50 tests; the
+  complete neural suite passed 1,530 tests with 22 known warnings. The complete
   repository run stops at
   collection because the pre-existing untracked
   `src/tests/behavior_analysis/test_project_utils.py` imports unavailable
@@ -225,9 +227,10 @@ amplitude behavior as if that behavior were scientifically correct.
   NR1P implementation is `ad8e598`. Documentation checkpoints through
   `3e15a31` were pushed to `origin/refactor` before NR1P implementation. NR1C-A
   tests are `e940671`, `72028ad`, `6e243c3`, `f10b7bd`, and `b994495`; its
-  reviewed implementation is `e1d99c3`. These later test, implementation, and
-  documentation commits remain local until the user separately approves
-  another push.
+  reviewed implementation is `e1d99c3`. NR1C-B tests are `0d056fa` and the
+  fixture-isolation correction `4646b5d`; its reviewed implementation is
+  `c844adc`. These later test, implementation, and documentation commits remain
+  local until the user separately approves another push.
 
 ## 1. Objectives
 
@@ -1561,8 +1564,9 @@ bytes and the future user-approved Section 5.5 revised Synchrony bytes rather
 than recompute either component on the cluster. The currently approved
 pre-presentation Synchrony file is retained as evidence but is not the cluster
 preview prerequisite.
-This section is an implementation and execution plan only. It does not approve
-source edits, transfer, push, Slurm submission, or the preview itself.
+The NR1C-A and NR1C-B source packages in this section are complete and approved.
+This section still does not approve NR1V real-data work, transfer, push, Slurm
+submission, or the preview itself.
 
 #### Architecture and ownership
 
@@ -1732,6 +1736,31 @@ The NR1C-B focused command is:
 uv run pytest -q -p no:cacheprovider \
   src/tests/neural_analysis/test_lfp_spike_phase_launcher.py
 ```
+
+**NR1C-B result - complete and approved.** The reviewed RED contract is
+`0d056fa`; `4646b5d` repairs two dangling-symlink fixtures and isolates an
+older retained-work recovery subcase without weakening the new safety
+requirements. The reviewed source implementation is `c844adc`.
+
+`new` now requires `--cache-directory` and immutably replaces only the builder
+configuration's `output_directory`. Before trial metadata, numerical work, or
+run-directory creation, it requires an existing nonsymlink direct child of the
+selected session's `processed` directory, rejects the protected legacy cache
+and every alias/nested/outside target, enforces the exact three-member cache
+inventory, validates Power and Synchrony as compatible and Spike phase as
+missing through the public header-only status API, and rejects the derived
+pre-existing PPC work root. The exact resolved target is persisted in canonical
+configuration, identity, paths, preflight, state, summary, resume, report
+recovery, and rerender contracts; non-new modes accept no replacement target.
+The existing Slurm wrapper remains unchanged and was dynamically verified to
+forward the corrected cache, ProbeB, 100 shuffles, and eight workers without
+`--final-run`.
+
+Final verification was 50 focused tests and 1,530 complete neural-analysis
+tests with 22 known warnings; `py_compile` and `git diff --check` passed. Fresh
+Sol/xhigh test-design and implementation reviewers reported no P0-P3 findings.
+Work stayed within the one NR1C-B source/test pair and did not access CT026,
+transfer data, touch a cluster, push Git, or run scientific computation.
 
 **NR1E - external cluster evidence.** NR1E begins only after NR1V, NR1C-A, and
 NR1C-B are approved and committed, the user approves a Git push, and the exact

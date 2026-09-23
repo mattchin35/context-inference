@@ -880,3 +880,61 @@ files; tests were committed separately before implementation. Fresh Sol/xhigh
 test-design and implementation review approved the final state with no P0-P3
 findings. NR1C-B launcher-target/preflight work is now unblocked, but cluster
 transfer, push, and Slurm submission remain unauthorized.
+
+### NR1C-B explicit launcher cache target
+
+Status: complete and approved in code on 2026-09-23. No CT026 path, cache,
+scientific kernel, cluster, network transfer, or Slurm state was accessed or
+changed. The existing shell wrapper was read and exercised only through a
+temporary synthetic Git repository.
+
+The tests-first launcher contract was committed as `0d056fa`. It requires an
+explicit new-run cache target, full durable identity propagation through every
+resume/recovery path, direct-child/nonsymlink containment, protected-legacy and
+alias rejection, exact prerequisite inventory, public header-only component
+status, absent Spike phase and derived work root, builder immutability, dry-run
+nonmutation, and exact eight-worker preview argument forwarding through the
+unchanged Slurm wrapper. Initial RED was 45 failures and five intentional
+existing boundary passes. Fresh Sol/xhigh test-design review approved the
+contract after adding arbitrary nondefault-cache recovery, no-array-load,
+corrupt-header, nested/symlink, exact-inventory, and dynamic-wrapper coverage.
+
+Once the parser accepted the new argument, two dangling-symlink fixtures and an
+older second-new-run subcase surfaced as genuine test isolation errors. The
+reviewed correction `4646b5d` creates each real backing cache before its alias
+and isolates the older recovery subcase from the first run's intentionally
+retained work root. It does not weaken launcher safety.
+
+The reviewed implementation is `c844adc`. `new` requires
+`--cache-directory`, validates it as an existing nonsymlink direct child of the
+selected session's `processed` directory, and immutably replaces only
+`LFPSummaryConfig.output_directory`. Before trial loading or run-directory
+creation it rejects the protected legacy cache, aliases/nesting/outside paths,
+unexpected or unsafe members, non-compatible Power/Synchrony, a present Spike
+component, and the exact derived PPC work root. Prerequisite NPZ validation
+uses `assess_component_status(..., validate_headers_only=True)` and never loads
+numerical arrays. Configuration, identity, paths, preflight, state, summary,
+ordinary resume, report recovery, and rerender recover the exact saved target;
+non-new CLI modes expose no replacement option. `src/shell_scripts/hpc_ppc.sh`
+was not changed.
+
+Final verification was:
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_spike_phase_launcher.py
+50 passed in 1.75s
+
+uv run pytest -q -p no:cacheprovider src/tests/neural_analysis
+1530 passed, 22 warnings in 169.42s
+
+uv run python -m py_compile \
+  src/neural_analysis/lfp_spike_phase_launcher.py
+passed
+```
+
+`git diff --check` passed. Final implementation scope was exactly
+`src/neural_analysis/lfp_spike_phase_launcher.py`; its tests were committed
+separately before source. Fresh Sol/xhigh implementation review reported no
+P0-P3 findings. NR1V real-data presentation evidence, Git push, cluster
+relocation, dry-run evidence, and Slurm submission remain separate user gates.
