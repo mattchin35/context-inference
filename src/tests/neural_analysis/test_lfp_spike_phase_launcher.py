@@ -7,16 +7,28 @@ from dataclasses import replace
 import fcntl
 import importlib
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 from types import SimpleNamespace
 from typing import Callable
 
+import numpy as np
 import pytest
 
 from src.neural_analysis.lfp_spike_phase_validation import (
     build_ct026_spike_phase_preview_config,
 )
-from src.neural_analysis.lfp_summary_models import UnitPopulationConfig
+from src.neural_analysis import lfp_summary_io
+from src.neural_analysis.lfp_summary_models import (
+    LFPSummaryConfig,
+    UnitPopulationConfig,
+    canonical_config_json,
+    component_fingerprint,
+    fingerprint_source_files,
+    source_value_semantics,
+)
 from src.neural_analysis.lfp_summary_pipeline import ComponentRunResult
 
 
@@ -42,6 +54,146 @@ def _population(probe: str = "ProbeB") -> UnitPopulationConfig:
     )
 
 
+def _corrected_cache_directory(tmp_path: Path) -> Path:
+    """Return the sole ordinary synthetic corrected cache target.
+
+    The path is a direct child of the selected session's ``processed``
+    directory. It intentionally differs from the protected legacy cache name.
+    """
+    return tmp_path / "CT026" / "processed" / "corrected_lfp_summary_cache"
+
+
+def _new_command_arguments(
+    tmp_path: Path,
+    *,
+    probe: str = "ProbeB",
+    shuffle_count: int = 100,
+    worker_count: int | None = None,
+    analysis_root: Path | None = None,
+    cache_directory: Path | None = None,
+    dry_run: bool = False,
+    final_run: bool = False,
+) -> list[str]:
+    """Build one explicit new-run CLI request with a cache target.
+
+    Parameters use paths and count-only launcher values. The helper creates no
+    directory or numerical data; fixtures create the compatibility cache
+    separately when a run must reach preflight.
+    """
+    arguments = [
+        "new",
+        "--session-path",
+        str(tmp_path / "CT026"),
+        "--cache-directory",
+        str(cache_directory or _corrected_cache_directory(tmp_path)),
+        "--probe",
+        probe,
+        "--shuffles",
+        str(shuffle_count),
+    ]
+    if worker_count is not None:
+        arguments.extend(("--workers", str(worker_count)))
+    if analysis_root is not None:
+        arguments.extend(("--analysis-root", str(analysis_root)))
+    if dry_run:
+        arguments.append("--dry-run")
+    if final_run:
+        arguments.append("--final-run")
+    return arguments
+
+
+def _cache_config(
+    tmp_path: Path,
+    cache_directory: Path,
+    *,
+    probe: str = "ProbeB",
+    shuffle_count: int = 100,
+    worker_count: int = 8,
+) -> LFPSummaryConfig:
+    """Build the exact immutable configuration expected for a cache target.
+
+    No input recording exists in this synthetic fixture. Missing inputs are
+    represented by the public source-fingerprint contract, so no signal array
+    is opened while a Power/Synchrony prerequisite is assembled.
+    """
+    config = build_ct026_spike_phase_preview_config(
+        tmp_path / "CT026",
+        _population(probe),
+    )
+    return replace(
+        config,
+        output_directory=cache_directory,
+        ppc=replace(config.ppc, shuffle_count=shuffle_count),
+        ppc_execution=replace(
+            config.ppc_execution,
+            worker_count=worker_count,
+            checkpoint_enabled=True,
+            checkpoint_retention="incomplete_only",
+        ),
+    )
+
+
+def _write_prerequisite_cache(
+    tmp_path: Path,
+    cache_directory: Path | None = None,
+    *,
+    power_state: str = "complete",
+    synchrony_state: str = "complete",
+    include_spike_phase: bool = False,
+    unexpected_member: str | None = None,
+) -> LFPSummaryConfig:
+    """Write a minimal complete Power/Synchrony cache using public contracts.
+
+    The tiny scalar NPZ files stand in only for cache schema/header validation.
+    They contain no experimental samples, phase values, PPC results, or report
+    output. Every manifest fingerprint is generated from the immutable active
+    configuration supplied to the launcher.
+    """
+    target = cache_directory or _corrected_cache_directory(tmp_path)
+    config = _cache_config(tmp_path, target)
+    target.mkdir(parents=True, exist_ok=False)
+    schema = {"values": {"axes": ["sample"], "units": "dimensionless"}}
+    components: dict[str, object] = {}
+    for component, state in (
+        ("power", power_state),
+        ("synchrony", synchrony_state),
+    ):
+        components[component] = {
+            "file_name": f"{component}.npz",
+            "state": state,
+            "configuration_fingerprint": component_fingerprint(component, config),
+            "configuration_snapshot": json.loads(canonical_config_json(config)),
+            "source_fingerprints": fingerprint_source_files(config, component),
+            "source_value_semantics": source_value_semantics(config),
+            "array_schema": schema,
+        }
+        np.savez(target / f"{component}.npz", values=np.array((1.0,)))
+    if include_spike_phase:
+        components["spike_phase"] = {
+            "file_name": "spike_phase.npz",
+            "state": "complete",
+            "configuration_fingerprint": component_fingerprint("spike_phase", config),
+            "configuration_snapshot": json.loads(canonical_config_json(config)),
+            "source_fingerprints": fingerprint_source_files(config, "spike_phase"),
+            "source_value_semantics": source_value_semantics(config),
+            "array_schema": schema,
+        }
+        np.savez(target / "spike_phase.npz", values=np.array((1.0,)))
+    manifest = {
+        "schema_version": config.schema_version,
+        "session_id": config.session_id,
+        "configuration": json.loads(canonical_config_json(config)),
+        "components": components,
+    }
+    (target / "manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True) + "\n",
+        encoding="ascii",
+    )
+    if unexpected_member is not None:
+        (target / unexpected_member).write_text("unexpected\n", encoding="ascii")
+    return config
+
+
 class _MemorySample:
     """Mutable scalar memory record populated by an injected context manager."""
 
@@ -62,9 +214,13 @@ def _dependencies(
     component_compatible: bool = False,
     cleanup: Callable[[object], None] | None = None,
     report: Callable[..., object] | None = None,
+    built_configurations: list[LFPSummaryConfig] | None = None,
 ) -> object:
     """Return deterministic high-level launcher seams with no raw-data access."""
     launcher = _launcher()
+    default_cache = _corrected_cache_directory(tmp_path)
+    if not default_cache.exists():
+        _write_prerequisite_cache(tmp_path, default_cache)
 
     def build_config(
         session_path: Path,
@@ -74,7 +230,7 @@ def _dependencies(
     ) -> object:
         """Build the reviewed CT026 configuration with explicit execution values."""
         config = build_ct026_spike_phase_preview_config(session_path, population)
-        return replace(
+        configured = replace(
             config,
             ppc=replace(config.ppc, shuffle_count=shuffle_count),
             ppc_execution=replace(
@@ -84,6 +240,9 @@ def _dependencies(
                 checkpoint_retention="incomplete_only",
             ),
         )
+        if built_configurations is not None:
+            built_configurations.append(configured)
+        return configured
 
     def default_compute(
         config: object,
@@ -182,14 +341,16 @@ def _dependencies(
     )
 
 
-def test_parser_requires_explicit_probe_and_final_confirmation() -> None:
-    """CLI accepts only explicit one-probe preview/final and exact resume modes."""
+def test_parser_requires_explicit_cache_probe_and_final_confirmation() -> None:
+    """CLI accepts only explicit corrected-cache preview/final requests."""
     launcher = _launcher()
     preview = launcher.parse_launcher_command(
         [
             "new",
             "--session-path",
             "/data/CT026",
+            "--cache-directory",
+            "/data/CT026/processed/corrected-cache",
             "--probe",
             "ProbeA",
             "--shuffles",
@@ -201,12 +362,15 @@ def test_parser_requires_explicit_probe_and_final_confirmation() -> None:
     assert preview.worker_count == 8
     assert preview.shuffle_count == 100
     assert preview.final_run is False
+    assert preview.cache_directory == Path("/data/CT026/processed/corrected-cache")
 
     final = launcher.parse_launcher_command(
         [
             "new",
             "--session-path",
             "/data/CT026",
+            "--cache-directory",
+            "/data/CT026/processed/corrected-cache-v2",
             "--probe",
             "ProbeB",
             "--shuffles",
@@ -236,10 +400,16 @@ def test_parser_requires_explicit_probe_and_final_confirmation() -> None:
         ["new", "--session-path", "/data/CT026", "--shuffles", "100"],
         [
             "new", "--session-path", "/data/CT026", "--probe", "ProbeB",
+            "--shuffles", "100",
+        ],
+        [
+            "new", "--session-path", "/data/CT026", "--probe", "ProbeB",
+            "--cache-directory", "/data/CT026/processed/corrected-cache",
             "--shuffles", "1000",
         ],
         [
             "new", "--session-path", "/data/CT026", "--probe", "ProbeB",
+            "--cache-directory", "/data/CT026/processed/corrected-cache",
             "--shuffles", "100", "--final-run",
         ],
     )
@@ -248,23 +418,39 @@ def test_parser_requires_explicit_probe_and_final_confirmation() -> None:
             launcher.parse_launcher_command(arguments)
 
 
+@pytest.mark.parametrize("mode", ("resume", "recover-report", "rerender-report"))
+def test_parser_rejects_cache_replacement_for_every_recovery_mode(mode: str) -> None:
+    """Only a new run may name a cache; recovery is bound to saved identity."""
+    launcher = _launcher()
+
+    with pytest.raises(SystemExit):
+        launcher.parse_launcher_command(
+            [
+                mode,
+                "--run-directory",
+                "/runs/exact",
+                "--cache-directory",
+                "/data/CT026/processed/replacement",
+            ]
+        )
+
+
 def test_dry_run_writes_evidence_without_scientific_work(tmp_path: Path) -> None:
     """Metadata preflight is terminal and never invokes computation or reporting."""
     launcher = _launcher()
     calls: list[str] = []
     terminal: list[str] = []
     dependencies = _dependencies(tmp_path, calls, terminal)
+    cache_directory = _corrected_cache_directory(tmp_path).resolve()
+    cache_before = {
+        child.name: child.read_bytes()
+        for child in cache_directory.iterdir()
+        if child.is_file()
+    }
+    assert set(cache_before) == {"manifest.json", "power.npz", "synchrony.npz"}
+    assert not (cache_directory.parent / "lfp_summary_work").exists()
     command = launcher.parse_launcher_command(
-        [
-            "new",
-            "--session-path",
-            str(tmp_path / "CT026"),
-            "--probe",
-            "ProbeB",
-            "--shuffles",
-            "100",
-            "--dry-run",
-        ]
+        _new_command_arguments(tmp_path, dry_run=True)
     )
 
     result = launcher.run_launcher(command, dependencies)
@@ -273,13 +459,485 @@ def test_dry_run_writes_evidence_without_scientific_work(tmp_path: Path) -> None
     assert calls == []
     assert result.run_directory.is_dir()
     state = json.loads((result.run_directory / "launcher_state.json").read_text())
+    configuration = json.loads((result.run_directory / "configuration.json").read_text())
     preflight = json.loads((result.run_directory / "preflight.json").read_text())
+    summary = (result.run_directory / "run_summary.md").read_text(encoding="ascii")
+    cache_after = {
+        child.name: child.read_bytes()
+        for child in cache_directory.iterdir()
+        if child.is_file()
+    }
     assert state["resume_command"] is None
+    assert configuration["output_directory"] == str(cache_directory)
+    assert state["identity"]["cache_directory"] == str(cache_directory)
+    assert state["paths"]["output_directory"] == str(cache_directory)
+    assert preflight["cache_directory"] == str(cache_directory)
+    assert preflight["paths"]["output_directory"] == str(cache_directory)
+    assert f"Cache directory: {cache_directory}" in summary
     assert preflight["schema_version"] == "spike_phase_preflight.v1"
     assert preflight["exact_plan_available"] is False
     assert preflight["ppc_planning_seconds"] is None
     assert preflight["planned_ppc_allocation_bytes"] is None
+    assert cache_after == cache_before
+    assert not (cache_directory / "spike_phase.npz").exists()
+    assert not (cache_directory.parent / "lfp_summary_work").exists()
+    assert not (result.run_directory / "report").exists()
+    assert list(result.run_directory.parent.iterdir()) == [result.run_directory]
     assert not (tmp_path / "CT026" / "processed" / "lfp_summary_cache").exists()
+
+
+def test_new_run_immutably_replaces_only_the_builder_cache_directory(
+    tmp_path: Path,
+) -> None:
+    """The caller-selected target replaces only frozen ``output_directory``."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / "arbitrary-corrected-cache"
+    _write_prerequisite_cache(tmp_path, target)
+    calls: list[str] = []
+    terminal: list[str] = []
+    builder_results: list[LFPSummaryConfig] = []
+    dependencies = _dependencies(
+        tmp_path,
+        calls,
+        terminal,
+        built_configurations=builder_results,
+    )
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=tmp_path / "runs",
+                dry_run=True,
+            )
+        ),
+        dependencies,
+    )
+
+    assert result.exit_code == 0 and result.status == "preflight_complete"
+    assert len(builder_results) == 1
+    original = builder_results[0]
+    expected = replace(original, output_directory=target.resolve())
+    saved = json.loads(
+        (result.run_directory / "configuration.json").read_text(encoding="ascii")
+    )
+    assert saved == json.loads(canonical_config_json(expected))
+    assert original.output_directory == tmp_path / "CT026" / "processed" / "lfp_summary_cache"
+    assert original != expected
+
+
+def test_preflight_ignores_unrelated_empty_work_roots(tmp_path: Path) -> None:
+    """Only the exact derived work root blocks a new run; unrelated roots do not."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / "second-corrected-cache"
+    _write_prerequisite_cache(tmp_path, target)
+    (tmp_path / "unrelated" / "lfp_summary_work").mkdir(parents=True)
+    (target.parent / "other_lfp_summary_work").mkdir()
+    calls: list[str] = []
+    terminal: list[str] = []
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=tmp_path / "runs",
+                dry_run=True,
+            )
+        ),
+        _dependencies(tmp_path, calls, terminal),
+    )
+
+    assert result.exit_code == 0 and result.status == "preflight_complete"
+    assert calls == []
+
+
+def test_preflight_uses_public_header_only_component_status_without_array_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Power/Synchrony/Spike checks inspect only public archive headers."""
+    launcher = _launcher()
+    calls: list[str] = []
+    terminal: list[str] = []
+    dependencies = _dependencies(tmp_path, calls, terminal)
+    seen_status_calls: list[tuple[str, bool]] = []
+    real_assess = lfp_summary_io.assess_component_status
+
+    def record_status(
+        cache_directory: Path,
+        component: str,
+        config: LFPSummaryConfig,
+        manifest: object,
+        **kwargs: object,
+    ) -> object:
+        """Record the public status mode while retaining real header validation."""
+        seen_status_calls.append((component, bool(kwargs.get("validate_headers_only"))))
+        return real_assess(cache_directory, component, config, manifest, **kwargs)
+
+    def forbid_array_loading(*_args: object, **_kwargs: object) -> object:
+        """Fail if a cache prerequisite opens an NPZ numerical array collection."""
+        raise AssertionError("launcher preflight must not load component arrays")
+
+    monkeypatch.setattr(lfp_summary_io, "assess_component_status", record_status)
+    monkeypatch.setattr(
+        launcher,
+        "assess_component_status",
+        record_status,
+        raising=False,
+    )
+    monkeypatch.setattr(lfp_summary_io, "load_component_arrays", forbid_array_loading)
+    monkeypatch.setattr(
+        launcher,
+        "load_component_arrays",
+        forbid_array_loading,
+        raising=False,
+    )
+    monkeypatch.setattr(np, "load", forbid_array_loading)
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(tmp_path, dry_run=True)
+        ),
+        dependencies,
+    )
+
+    assert result.exit_code == 0 and result.status == "preflight_complete"
+    assert seen_status_calls == [
+        ("power", True),
+        ("synchrony", True),
+        ("spike_phase", True),
+    ]
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "label",
+    (
+        "missing",
+        "legacy",
+        "outside",
+        "nested",
+        "path-alias",
+        "symlink",
+        "component-symlink",
+        "processed-symlink",
+        "stale",
+        "running",
+        "failed",
+        "spike-phase",
+        "unexpected-member",
+        "unexpected-directory",
+        "unexpected-symlink",
+        "preexisting-work",
+    ),
+)
+def test_preflight_rejects_unsafe_or_nonprerequisite_cache_before_trial_loading(
+    tmp_path: Path,
+    label: str,
+) -> None:
+    """Invalid cache targets cannot create a run or reach a trial/phase loader."""
+    launcher = _launcher()
+    processed = tmp_path / "CT026" / "processed"
+    target = processed / f"{label}-cache"
+    if label == "missing":
+        pass
+    elif label == "legacy":
+        target = processed / "lfp_summary_cache"
+        _write_prerequisite_cache(tmp_path, target)
+    elif label == "outside":
+        target = tmp_path / "outside-session" / "corrected-cache"
+        _write_prerequisite_cache(tmp_path, target)
+    elif label == "nested":
+        target = processed / "nested" / "corrected-cache"
+        _write_prerequisite_cache(tmp_path, target)
+    elif label == "path-alias":
+        real_target = processed / "path-alias-cache"
+        _write_prerequisite_cache(tmp_path, real_target)
+        target = processed / ".." / "processed" / "path-alias-cache"
+    elif label == "symlink":
+        backing = processed / "symlink-backing"
+        _write_prerequisite_cache(tmp_path, backing)
+        target = processed / "symlink-cache"
+        try:
+            target.symlink_to(backing, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f"test filesystem does not support symlinks: {error}")
+    elif label == "component-symlink":
+        linked_parent = processed / "linked-parent"
+        backing_parent = tmp_path / "outside-linked-parent"
+        processed.mkdir(parents=True)
+        try:
+            linked_parent.symlink_to(backing_parent, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f"test filesystem does not support symlinks: {error}")
+        target = linked_parent / "corrected-cache"
+        _write_prerequisite_cache(tmp_path, target)
+    elif label == "processed-symlink":
+        backing_processed = tmp_path / "outside-processed"
+        processed.parent.mkdir(parents=True)
+        try:
+            processed.symlink_to(backing_processed, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f"test filesystem does not support symlinks: {error}")
+        target = processed / "corrected-cache"
+        _write_prerequisite_cache(tmp_path, target)
+    elif label == "stale":
+        _write_prerequisite_cache(tmp_path, target)
+        manifest_path = target / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+        manifest["components"]["power"]["configuration_fingerprint"] = "0" * 64
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="ascii")
+    elif label == "running":
+        _write_prerequisite_cache(tmp_path, target, synchrony_state="running")
+    elif label == "failed":
+        _write_prerequisite_cache(tmp_path, target, power_state="failed")
+    elif label == "spike-phase":
+        _write_prerequisite_cache(tmp_path, target, include_spike_phase=True)
+    elif label == "unexpected-member":
+        _write_prerequisite_cache(tmp_path, target, unexpected_member="extra.txt")
+    elif label == "unexpected-directory":
+        _write_prerequisite_cache(tmp_path, target)
+        (target / "extra-directory").mkdir()
+    elif label == "unexpected-symlink":
+        _write_prerequisite_cache(tmp_path, target)
+        try:
+            (target / "extra-link").symlink_to(target / "power.npz")
+        except OSError as error:
+            pytest.skip(f"test filesystem does not support symlinks: {error}")
+    else:
+        _write_prerequisite_cache(tmp_path, target)
+        (processed / "lfp_summary_work").mkdir()
+    calls: list[str] = []
+    terminal: list[str] = []
+    dependencies = replace(
+        _dependencies(tmp_path, calls, terminal),
+        load_trial_count=lambda _config: (_ for _ in ()).throw(
+            AssertionError(f"{label} cache reached trial loading")
+        ),
+        compute_component=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError(f"{label} cache reached numerical computation")
+        ),
+        publish_report=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError(f"{label} cache reached report rendering")
+        ),
+    )
+    command = launcher.parse_launcher_command(
+        _new_command_arguments(
+            tmp_path,
+            cache_directory=target,
+            analysis_root=tmp_path / f"runs-{label}",
+        )
+    )
+
+    result = launcher.run_launcher(command, dependencies)
+
+    assert result.exit_code == 2
+    assert result.run_directory is None
+    assert not (tmp_path / f"runs-{label}").exists()
+    assert calls == []
+
+
+def test_preflight_rejects_missing_component_members_before_trial_loading(
+    tmp_path: Path,
+) -> None:
+    """Both completed Power and Synchrony archive members are mandatory."""
+    launcher = _launcher()
+    for component in ("power", "synchrony"):
+        target = tmp_path / "CT026" / "processed" / f"missing-{component}"
+        _write_prerequisite_cache(tmp_path, target)
+        (target / f"{component}.npz").unlink()
+        calls: list[str] = []
+        terminal: list[str] = []
+        dependencies = replace(
+            _dependencies(tmp_path, calls, terminal),
+            load_trial_count=lambda _config: (_ for _ in ()).throw(
+                AssertionError("missing prerequisite reached trial loading")
+            ),
+        )
+        result = launcher.run_launcher(
+            launcher.parse_launcher_command(
+                _new_command_arguments(
+                    tmp_path,
+                    cache_directory=target,
+                    analysis_root=tmp_path / f"runs-missing-{component}",
+                )
+            ),
+            dependencies,
+        )
+
+        assert result.exit_code == 2
+        assert result.run_directory is None
+        assert calls == []
+
+
+@pytest.mark.parametrize("damage", ("truncated", "object-dtype"))
+def test_preflight_rejects_unsafe_component_headers_before_trial_loading(
+    tmp_path: Path,
+    damage: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Corrupt or pickle-capable prerequisites fail before any numerical work."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"unsafe-{damage}"
+    _write_prerequisite_cache(tmp_path, target)
+    power_path = target / "power.npz"
+    if damage == "truncated":
+        power_path.write_bytes(b"not an NPZ archive")
+    else:
+        np.savez(power_path, values=np.array(("unsafe",), dtype=object))
+    calls: list[str] = []
+    terminal: list[str] = []
+
+    def forbid_array_loading(*_args: object, **_kwargs: object) -> object:
+        """Fail if corrupt-cache preflight attempts a numerical array load."""
+        raise AssertionError("corrupt cache preflight loaded an array")
+
+    monkeypatch.setattr(np, "load", forbid_array_loading)
+    monkeypatch.setattr(lfp_summary_io, "load_component_arrays", forbid_array_loading)
+    monkeypatch.setattr(
+        launcher,
+        "load_component_arrays",
+        forbid_array_loading,
+        raising=False,
+    )
+    dependencies = replace(
+        _dependencies(tmp_path, calls, terminal),
+        load_trial_count=lambda _config: (_ for _ in ()).throw(
+            AssertionError("unsafe cache reached trial loading")
+        ),
+    )
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=tmp_path / f"runs-unsafe-{damage}",
+            )
+        ),
+        dependencies,
+    )
+
+    assert result.exit_code == 2
+    assert result.run_directory is None
+    assert calls == []
+
+
+def test_hpc_wrapper_keeps_the_exact_eight_worker_preview_forwarding_boundary() -> None:
+    """The reviewed Slurm wrapper remains a thin eight-CPU argument forwarder."""
+    repository_root = Path(__file__).resolve().parents[3]
+    wrapper = repository_root / "src" / "shell_scripts" / "hpc_ppc.sh"
+    text = wrapper.read_text(encoding="ascii")
+
+    assert "#SBATCH --cpus-per-task=8" in text
+    assert '"$SLURM_CPUS_PER_TASK" -ne 8' in text
+    assert '"$explicit_worker_count" -ne "$SLURM_CPUS_PER_TASK"' in text
+    assert 'python -m src.neural_analysis.lfp_spike_phase_launcher "$@"' in text
+
+
+def _wrapper_test_repository(tmp_path: Path) -> tuple[Path, Path]:
+    """Create a clean temporary checkout containing only the reviewed wrapper.
+
+    The fake checkout exists solely to exercise argument forwarding. It does
+    not import project code, create a cache, or submit a Slurm job.
+    """
+    repository = tmp_path / "wrapper-repository"
+    wrapper = repository / "src" / "shell_scripts" / "hpc_ppc.sh"
+    launcher = repository / "src" / "neural_analysis" / "lfp_spike_phase_launcher.py"
+    wrapper.parent.mkdir(parents=True)
+    launcher.parent.mkdir(parents=True)
+    tracked_wrapper = Path(__file__).resolve().parents[3] / "src" / "shell_scripts" / "hpc_ppc.sh"
+    shutil.copy2(tracked_wrapper, wrapper)
+    launcher.write_text('"""Synthetic wrapper identity target."""\n', encoding="ascii")
+    (repository / "pyproject.toml").write_text(
+        "[project]\nname = 'launcher-wrapper-test'\nversion = '0.0.0'\n",
+        encoding="ascii",
+    )
+    for command in (
+        ("git", "init", "-q"),
+        ("git", "config", "user.email", "launcher-wrapper@example.invalid"),
+        ("git", "config", "user.name", "Launcher Wrapper Test"),
+        ("git", "add", "."),
+        ("git", "commit", "-q", "-m", "wrapper fixture"),
+    ):
+        subprocess.run(command, cwd=repository, check=True)
+    return repository, wrapper
+
+
+def _fake_uv_for_wrapper(tmp_path: Path) -> tuple[Path, Path]:
+    """Create an executable fake ``uv`` that records its exact arguments."""
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    capture = tmp_path / "forwarded-argv.bin"
+    executable = fake_bin / "uv"
+    executable.write_text(
+        """#!/bin/bash
+set -eu
+if [[ "${1-}" == "--version" ]]; then
+    printf 'uv 0.test\\n'
+    exit 0
+fi
+printf '%s\\0' "$@" > "$PPC_TEST_CAPTURE"
+""",
+        encoding="ascii",
+    )
+    executable.chmod(0o755)
+    return fake_bin, capture
+
+
+def test_hpc_wrapper_forwards_the_exact_corrected_cache_preview_argv(
+    tmp_path: Path,
+) -> None:
+    """The reviewed wrapper preserves the bounded preview command verbatim."""
+    repository, wrapper = _wrapper_test_repository(tmp_path)
+    fake_bin, capture = _fake_uv_for_wrapper(tmp_path)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
+            "PPC_TEST_CAPTURE": str(capture),
+            "SLURM_CPUS_PER_TASK": "8",
+            "SLURM_SUBMIT_DIR": str(repository),
+        }
+    )
+    preview_arguments = (
+        "new",
+        "--session-path",
+        "/cluster/CT026",
+        "--cache-directory",
+        "/cluster/CT026/processed/corrected-cache",
+        "--probe",
+        "ProbeB",
+        "--shuffles",
+        "100",
+        "--workers",
+        "8",
+    )
+
+    result = subprocess.run(
+        ("bash", str(wrapper), *preview_arguments),
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    forwarded = capture.read_bytes().decode("ascii").rstrip("\0").split("\0")
+    assert forwarded == [
+        "run",
+        "--frozen",
+        "--no-sync",
+        "--offline",
+        "python",
+        "-m",
+        "src.neural_analysis.lfp_spike_phase_launcher",
+        *preview_arguments,
+    ]
+    assert "--final-run" not in forwarded
 
 
 def test_identity_and_resume_command_exist_before_interrupted_planning(
@@ -289,6 +947,8 @@ def test_identity_and_resume_command_exist_before_interrupted_planning(
     launcher = _launcher()
     calls: list[str] = []
     terminal: list[str] = []
+    cache_directory = tmp_path / "CT026" / "processed" / "interrupted-nondefault-cache"
+    _write_prerequisite_cache(tmp_path, cache_directory)
 
     def interrupt(
         config: object,
@@ -311,15 +971,18 @@ def test_identity_and_resume_command_exist_before_interrupted_planning(
             assert (run / name).is_file()
         state = json.loads((run / "launcher_state.json").read_text())
         assert state["resume_command"].startswith("uv run python -m ")
+        assert state["identity"]["cache_directory"] == str(
+            cache_directory.resolve()
+        )
         raise KeyboardInterrupt("synthetic planning interruption")
 
     dependencies = _dependencies(tmp_path, calls, terminal, compute=interrupt)
     command = launcher.parse_launcher_command(
-        [
-            "new", "--session-path", str(tmp_path / "CT026"),
-            "--analysis-root", str(tmp_path / "runs"),
-            "--probe", "ProbeB", "--shuffles", "100",
-        ]
+        _new_command_arguments(
+            tmp_path,
+            cache_directory=cache_directory,
+            analysis_root=tmp_path / "runs",
+        )
     )
     result = launcher.run_launcher(command, dependencies)
 
@@ -337,11 +1000,11 @@ def test_success_validates_then_cleans_exact_target(tmp_path: Path) -> None:
     terminal: list[str] = []
     dependencies = _dependencies(tmp_path, calls, terminal)
     command = launcher.parse_launcher_command(
-        [
-            "new", "--session-path", str(tmp_path / "CT026"),
-            "--analysis-root", str(tmp_path / "runs"),
-            "--probe", "ProbeA", "--shuffles", "100",
-        ]
+        _new_command_arguments(
+            tmp_path,
+            probe="ProbeA",
+            analysis_root=tmp_path / "runs",
+        )
     )
 
     result = launcher.run_launcher(command, dependencies)
@@ -368,6 +1031,8 @@ def test_cleanup_failure_resumes_without_recomputing_or_rerendering(
     launcher = _launcher()
     first_calls: list[str] = []
     terminal: list[str] = []
+    cache_directory = tmp_path / "CT026" / "processed" / "resume-nondefault-cache"
+    _write_prerequisite_cache(tmp_path, cache_directory)
 
     def fail_cleanup(target: object) -> None:
         """Leave exact work in place on the first cleanup attempt."""
@@ -381,14 +1046,20 @@ def test_cleanup_failure_resumes_without_recomputing_or_rerendering(
         cleanup=fail_cleanup,
     )
     command = launcher.parse_launcher_command(
-        [
-            "new", "--session-path", str(tmp_path / "CT026"),
-            "--analysis-root", str(tmp_path / "runs"),
-            "--probe", "ProbeB", "--shuffles", "100",
-        ]
+        _new_command_arguments(
+            tmp_path,
+            cache_directory=cache_directory,
+            analysis_root=tmp_path / "runs",
+        )
     )
     failed = launcher.run_launcher(command, first_dependencies)
     assert failed.exit_code == 1 and failed.status == "cleanup_failed"
+    saved_configuration = json.loads(
+        (failed.run_directory / "configuration.json").read_text(encoding="ascii")
+    )
+    assert saved_configuration["output_directory"] == str(
+        cache_directory.resolve()
+    )
 
     resume_calls: list[str] = []
 
@@ -433,11 +1104,7 @@ def test_dirty_tracked_checkout_fails_before_run_directory(tmp_path: Path) -> No
         ),
     )
     command = launcher.parse_launcher_command(
-        [
-            "new", "--session-path", str(tmp_path / "CT026"),
-            "--analysis-root", str(tmp_path / "runs"),
-            "--probe", "ProbeB", "--shuffles", "100",
-        ]
+        _new_command_arguments(tmp_path, analysis_root=tmp_path / "runs")
     )
 
     result = launcher.run_launcher(command, dependencies)
@@ -456,11 +1123,7 @@ def test_resume_rejects_tampered_source_artifact_before_component_access(
     terminal: list[str] = []
     failed = launcher.run_launcher(
         launcher.parse_launcher_command(
-            [
-                "new", "--session-path", str(tmp_path / "CT026"),
-                "--analysis-root", str(tmp_path / "runs"),
-                "--probe", "ProbeB", "--shuffles", "100",
-            ]
+            _new_command_arguments(tmp_path, analysis_root=tmp_path / "runs")
         ),
         _dependencies(
             tmp_path,
@@ -506,11 +1169,7 @@ def test_resume_rejects_mixed_open_ephys_value_semantics_before_component_access
     )
     failed = launcher.run_launcher(
         launcher.parse_launcher_command(
-            [
-                "new", "--session-path", str(tmp_path / "CT026"),
-                "--analysis-root", str(tmp_path / "runs"),
-                "--probe", "ProbeB", "--shuffles", "100",
-            ]
+            _new_command_arguments(tmp_path, analysis_root=tmp_path / "runs")
         ),
         first_dependencies,
     )
@@ -548,11 +1207,7 @@ def test_live_launcher_lock_fails_without_mutating_owner_state(tmp_path: Path) -
     terminal: list[str] = []
     failed = launcher.run_launcher(
         launcher.parse_launcher_command(
-            [
-                "new", "--session-path", str(tmp_path / "CT026"),
-                "--analysis-root", str(tmp_path / "runs"),
-                "--probe", "ProbeB", "--shuffles", "100",
-            ]
+            _new_command_arguments(tmp_path, analysis_root=tmp_path / "runs")
         ),
         _dependencies(
             tmp_path,
@@ -586,6 +1241,8 @@ def _component_complete_report_failure(
     """Create one original-commit run that fails only during report rendering."""
     launcher = _launcher()
     calls: list[str] = []
+    cache_directory = tmp_path / "CT026" / "processed" / "report-recovery-nondefault-cache"
+    _write_prerequisite_cache(tmp_path, cache_directory)
 
     def fail_report(**_: object) -> object:
         """Fail after component publication and before report publication."""
@@ -599,11 +1256,11 @@ def _component_complete_report_failure(
         report=fail_report,
     )
     command = launcher.parse_launcher_command(
-        [
-            "new", "--session-path", str(tmp_path / "CT026"),
-            "--analysis-root", str(tmp_path / "runs"),
-            "--probe", "ProbeB", "--shuffles", "100",
-        ]
+        _new_command_arguments(
+            tmp_path,
+            cache_directory=cache_directory,
+            analysis_root=tmp_path / "runs",
+        )
     )
     failed = launcher.run_launcher(command, dependencies)
     state = json.loads((failed.run_directory / "launcher_state.json").read_text())
@@ -612,6 +1269,7 @@ def _component_complete_report_failure(
     assert failed.exit_code == 1 and failed.status == "failed"
     assert state["completed_stages"][-1] == "component_complete"
     assert state["report_directory"] is None
+    assert state["identity"]["cache_directory"] == str(cache_directory.resolve())
     assert target.is_dir()
     return launcher, failed, target
 
@@ -859,11 +1517,10 @@ def test_report_recovery_rejects_same_commit_and_precomponent_stage(
 
     interrupted = launcher.run_launcher(
         launcher.parse_launcher_command(
-            [
-                "new", "--session-path", str(tmp_path / "CT026"),
-                "--analysis-root", str(tmp_path / "other-runs"),
-                "--probe", "ProbeB", "--shuffles", "100",
-            ]
+            _new_command_arguments(
+                tmp_path,
+                analysis_root=tmp_path / "other-runs",
+            )
         ),
         _dependencies(tmp_path, [], terminal, compute=interrupt),
     )
@@ -933,25 +1590,22 @@ def _completed_launcher_run(
 ) -> tuple[object, object, Path]:
     """Create one fully completed original-commit run and immutable report."""
     launcher = _launcher()
+    cache_directory = tmp_path / "CT026" / "processed" / "rerender-nondefault-cache"
+    _write_prerequisite_cache(tmp_path, cache_directory)
     result = launcher.run_launcher(
         launcher.parse_launcher_command(
-            [
-                "new",
-                "--session-path",
-                str(tmp_path / "CT026"),
-                "--analysis-root",
-                str(tmp_path / "runs"),
-                "--probe",
-                "ProbeB",
-                "--shuffles",
-                "100",
-            ]
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=cache_directory,
+                analysis_root=tmp_path / "runs",
+            )
         ),
         _dependencies(tmp_path, [], terminal),
     )
     state = json.loads((result.run_directory / "launcher_state.json").read_text())
     report_directory = Path(state["report_directory"])
     assert result.status == "complete"
+    assert state["identity"]["cache_directory"] == str(cache_directory.resolve())
     assert report_directory.is_dir()
     return launcher, result, report_directory
 
