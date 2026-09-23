@@ -667,22 +667,28 @@ def test_preflight_rejects_unsafe_or_nonprerequisite_cache_before_trial_loading(
     elif label == "component-symlink":
         linked_parent = processed / "linked-parent"
         backing_parent = tmp_path / "outside-linked-parent"
+        _write_prerequisite_cache(
+            tmp_path,
+            backing_parent / "corrected-cache",
+        )
         processed.mkdir(parents=True)
         try:
             linked_parent.symlink_to(backing_parent, target_is_directory=True)
         except OSError as error:
             pytest.skip(f"test filesystem does not support symlinks: {error}")
         target = linked_parent / "corrected-cache"
-        _write_prerequisite_cache(tmp_path, target)
     elif label == "processed-symlink":
         backing_processed = tmp_path / "outside-processed"
+        _write_prerequisite_cache(
+            tmp_path,
+            backing_processed / "corrected-cache",
+        )
         processed.parent.mkdir(parents=True)
         try:
             processed.symlink_to(backing_processed, target_is_directory=True)
         except OSError as error:
             pytest.skip(f"test filesystem does not support symlinks: {error}")
         target = processed / "corrected-cache"
-        _write_prerequisite_cache(tmp_path, target)
     elif label == "stale":
         _write_prerequisite_cache(tmp_path, target)
         manifest_path = target / "manifest.json"
@@ -1515,20 +1521,24 @@ def test_report_recovery_rejects_same_commit_and_precomponent_stage(
         """Leave a second run before component completion."""
         raise KeyboardInterrupt("synthetic interruption")
 
+    precomponent_root = tmp_path / "precomponent-root"
     interrupted = launcher.run_launcher(
         launcher.parse_launcher_command(
             _new_command_arguments(
-                tmp_path,
-                analysis_root=tmp_path / "other-runs",
+                precomponent_root,
+                analysis_root=precomponent_root / "other-runs",
             )
         ),
-        _dependencies(tmp_path, [], terminal, compute=interrupt),
+        _dependencies(precomponent_root, [], terminal, compute=interrupt),
     )
+    assert interrupted.exit_code == 130
+    assert interrupted.status == "interrupted"
+    assert interrupted.run_directory is not None
     rejected = launcher.run_launcher(
         launcher.parse_launcher_command(
             ["recover-report", "--run-directory", str(interrupted.run_directory)]
         ),
-        _report_recovery_dependencies(tmp_path, [], terminal),
+        _report_recovery_dependencies(precomponent_root, [], terminal),
     )
     assert rejected.exit_code == 2
     assert "component_complete" in json.loads(
