@@ -1724,3 +1724,70 @@ def test_relocation_receipt_transaction_failures_leave_no_public_artifacts(
             for path in receipt_parent.iterdir()
         )
     assert all(not path.exists() for path in receipt_temporary_paths)
+
+
+def test_relocation_receipt_commit_race_preserves_concurrent_destination_change(
+    relocation_fixture: _RelocationFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rollback never removes a destination changed after this command published it.
+
+    The injected receipt-commit failure occurs after the cache directory rename.
+    A concurrent actor atomically replaces one same-name regular component before
+    the failure is raised. Relocation must leave that destination cache intact,
+    while still removing only its private receipt temporary file and staging
+    directory. Synthetic source and protected legacy cache bytes remain unchanged.
+    """
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_relocation")
+    write_ascii_json = getattr(module, "_write_ascii_json")
+    real_replace = module.os.replace
+    source_before, legacy_before = _protected_inventories(relocation_fixture)
+    receipt_parent = relocation_fixture.receipt_path.parent
+    receipt_parent.mkdir()
+    (receipt_parent / "receipt-parent-sentinel.txt").write_bytes(
+        b"protected receipt parent"
+    )
+    receipt_parent_before = _directory_inventory(receipt_parent)
+    concurrent_power_bytes = b"concurrent destination power bytes"
+    receipt_temporary_paths: list[Path] = []
+
+    def record_receipt_preparation(path: Path, payload: object) -> object:
+        """Record the exact private receipt file after its real ASCII write."""
+        if isinstance(payload, dict) and "source_producer_manifest" in payload:
+            result = write_ascii_json(path, payload)
+            assert path.is_file()
+            receipt_temporary_paths.append(path)
+            return result
+        return write_ascii_json(path, payload)
+
+    def replace_component_then_fail_receipt(
+        source_path: Path | str,
+        destination_path: Path | str,
+    ) -> None:
+        """Model a concurrent same-name component replacement before receipt failure."""
+        if Path(destination_path) == relocation_fixture.receipt_path:
+            assert relocation_fixture.destination_cache.is_dir()
+            replacement = relocation_fixture.destination_cache / ".concurrent-power.npz"
+            replacement.write_bytes(concurrent_power_bytes)
+            real_replace(replacement, relocation_fixture.destination_cache / "power.npz")
+            raise OSError("injected receipt commit race failure")
+        real_replace(source_path, destination_path)
+
+    monkeypatch.setattr(module, "_write_ascii_json", record_receipt_preparation)
+    monkeypatch.setattr(module.os, "replace", replace_component_then_fail_receipt)
+
+    with pytest.raises(OSError, match="injected receipt commit race"):
+        _relocate(relocation_fixture)
+
+    assert relocation_fixture.destination_cache.is_dir()
+    assert (relocation_fixture.destination_cache / "power.npz").read_bytes() == concurrent_power_bytes
+    assert (relocation_fixture.destination_cache / "synchrony.npz").is_file()
+    assert (relocation_fixture.destination_cache / "manifest.json").is_file()
+    assert not relocation_fixture.receipt_path.exists()
+    assert _protected_inventories(relocation_fixture) == (source_before, legacy_before)
+    assert _directory_inventory(receipt_parent) == receipt_parent_before
+    assert not any(
+        path.name.startswith(f".{relocation_fixture.destination_cache.name}-stage-")
+        for path in relocation_fixture.destination_cache.parent.iterdir()
+    )
+    assert all(not path.exists() for path in receipt_temporary_paths)
