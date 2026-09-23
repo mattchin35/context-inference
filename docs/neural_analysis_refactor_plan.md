@@ -2,9 +2,9 @@
 
 ## Status and authority
 
-**Status:** implementation authorized by the user on 2026-09-23. NR0 is active
-at the source-implementation gate. The reviewed tests-only RED commit is
-complete; the source implementation is in mandatory review/correction.
+**Status:** implementation authorized by the user on 2026-09-23. NR0 is
+complete. NR1 awaits the separately required user approval of exact new
+versioned CT026 cache, report, run, and temporary profiling destinations.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -26,14 +26,12 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** NR0, source implementation. Tests-only commit `e728cea`
-  and addendum tests commit `2b497e4` are approved and complete. The addendum
-  independently reproduced 7 genuine RED failures with 129 controls passing:
-  unknown persisted semantics and a later Open Ephys site's unusable
-  aligned-sync path still pass too far. The same Terra/xhigh writer is making
-  the final source-only correction inside the eight-file allowlist. Complete
-  data contracts for the changed metadata/fingerprint APIs remain part of that
-  correction.
+- **Active package:** NR1 authorization gate. NR0 tests commits `e728cea` and
+  `2b497e4` plus implementation commit `177a8d6` are complete and approved.
+  The final independent gates passed 136 addendum tests, 704 focused tests, and
+  1,395 complete neural-analysis tests. No CT026 computation or artifact write
+  has occurred. NR1 cannot start until the user approves the exact new
+  versioned output and temporary profiling locations required by Section 5.
 - **Agent policy:** lead Sol/high orchestration with one NR0 Terra/xhigh writer,
   one fresh Sol/xhigh gate reviewer, and at most one optional Terra/medium
   read-only scout. Only the Terra writer may author package tests/source; the
@@ -58,9 +56,10 @@ amplitude behavior as if that behavior were scientifically correct.
   not justify a refactor dependency. Both representative CT026 preprocessing
   sidecars are readable, and the public validator reports the immutable copied
   snapshot as valid.
-- **Local implementation commits:** `d4b1c30` records authorization/status and
-  `9a76d20` creates the execution log. Neither has been pushed; no push is
-  required for the current local tests-first gate.
+- **Local NR0 commits:** the reviewed tests are `e728cea` and `2b497e4`; the
+  reviewed implementation is `177a8d6`; documentation checkpoints through
+  this handoff are local. None has been pushed, and no push is required before
+  the NR1 authorization decision.
 
 ## 1. Objectives
 

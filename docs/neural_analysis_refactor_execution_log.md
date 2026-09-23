@@ -247,22 +247,34 @@ Read-only representative CT026 and legacy-artifact check:
   seams were explicit, and `git diff --check` passed.
 - Addendum tests-only commit: `2b497e4` (`test: close NR0 fail-closed preflight
   gaps`).
-- Final GREEN command/result: pending after source-only corrections.
-- Final affected/full-suite results: pending.
-- Final Sol implementation review: pending.
-- Implementation commit: pending.
+- Final addendum GREEN: 136 passed in 6.95 seconds.
+- Final GREEN command/result: exact 14-file Section 4.4 command: 704 passed,
+  3 warnings in 37.19 seconds.
+- Final affected/full-suite result: complete `src/tests/neural_analysis`:
+  1,395 passed, 22 warnings in 159.73 seconds.
+- Final complete-repository result: collection stopped only at the frozen
+  unrelated untracked `test_project_utils.py` import of unavailable
+  `autograd`: 1 error and 1 warning in 1.99 seconds.
+- Final Sol implementation review: fresh reviewer `/root/nr0_impl_reviewer_4`,
+  `gpt-5.6-sol`, `xhigh`: APPROVE with no P0-P3 findings. Scope was exactly
+  the eight source files, staging was empty, and `git diff --check` passed.
+- Implementation commit: `177a8d6` (`fix: scale Open Ephys LFP values from
+  metadata`).
 - Performance evidence: a synthetic 32-channel, 300,000-sample float32 binary
   compared commit `e728cea` with the current bounded 200,000-sample
   single-channel read over 25 warm repetitions. Median time changed from
   1.380 ms to 1.494 ms (1.083x); traced peak allocation changed from 1,613,183
   to 1,613,064 bytes (1.000x). The corrected first value was exactly 10.125 for
   stored 1.25, gain 2.5, and offset 7.0. Shape and 2,500 Hz rate were unchanged.
-- Unresolved risk under final review: token construction and later source reads
-  are not one atomic filesystem operation, so concurrent external source
-  mutation could create a token/read TOCTOU mismatch. NR0 does not mutate
-  sources; the final gate must classify or close this risk explicitly.
+- Accepted residual risk: token construction and later source reads are not one
+  atomic filesystem operation, so concurrent external source mutation could
+  create a token/read TOCTOU mismatch. NR0's operating contract treats inputs
+  as immutable during computation. Atomic snapshots or post-read identity
+  revalidation are deferred unless a later package adds concurrent-mutation
+  support.
 
 ## NR1-NR18 records
 
-Not started. Add exact commands, results, commits, review findings, performance
-evidence, authorization state, and next gate before each package handoff.
+NR1 is not started. Its first dry run still requires user approval of the exact
+new versioned CT026 cache, report, analysis-run, and temporary profiling
+locations. Legacy artifacts remain immutable. NR2-NR18 are not started.
