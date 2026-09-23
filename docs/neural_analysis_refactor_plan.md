@@ -131,6 +131,17 @@ amplitude behavior as if that behavior were scientifically correct.
   report metadata/plots, runtime, and memory. Explain every changed or invariant
   field. Do not compute or publish Spike-phase, alter approved Power or legacy
   artifacts, submit cluster work, or push.
+- **Synchrony retry checkpoint:** the first authorized runner at
+  `ct026_nr1_synchrony_open_ephys_affine_uV_v1_2026-09-23T13-17-26Z` returned
+  silently after about 31 seconds before publication. It created only its
+  script, configuration, and preflight evidence; the corrected cache and
+  approved Power hashes remained byte-identical, and no Synchrony/report/work
+  artifact appeared. Kernel logs contain no OOM evidence, so the cause is an
+  unproven external/tool termination. Preserve that failed run. Retry the same
+  unchanged production Synchrony settings only in
+  `<session>/analysis_runs/ct026_nr1_synchrony_open_ephys_affine_uV_v1_retry_2026-09-23T13-23-01Z`,
+  with durable precompute/progress/error/resource evidence and terminal-session
+  polling. Do not reuse or overwrite the failed run.
 - **Durable evidence:** exact commands, results, inventory hashes, commits,
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that

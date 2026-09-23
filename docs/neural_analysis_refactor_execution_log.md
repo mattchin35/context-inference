@@ -453,6 +453,29 @@ normalized dB, reports/plots, runtime, memory, and cache provenance. Synchrony,
 Spike-phase, legacy mutation, cluster work, and Git push remain prohibited.
 Result and review are pending. NR2-NR18 are not started.
 
+#### First Synchrony attempt and retry boundary
+
+The first production attempt under
+`ct026_nr1_synchrony_open_ephys_affine_uV_v1_2026-09-23T13-17-26Z` did not
+publish Synchrony. The command tool yielded after 31 seconds and then returned
+empty output without exit metadata or a Python traceback. No process remained.
+The run contains only `run_synchrony.py`, `configuration.json`, and
+`preflight.json`; no report, log, postflight, or scientific artifact exists.
+The corrected cache still contains only the approved manifest and byte-identical
+Power component. No kernel OOM event was available, so SIGKILL/OOM is plausible
+but unproven. Available RAM after the event was approximately 34 GB, while swap
+was nearly exhausted. The historical approved Synchrony run took 642.487
+seconds, so a 31-second silent return is not a successful computation.
+
+The failed run is immutable evidence and must not be reused. The same unchanged
+scientific Synchrony settings will be retried at
+`<session>/analysis_runs/ct026_nr1_synchrony_open_ephys_affine_uV_v1_retry_2026-09-23T13-23-01Z`.
+The retry adds complete Git/hash/source preconditions, durable progress and
+exception evidence before compute, resource snapshots, and a terminal session
+that is explicitly polled through completion. This is an operational retry
+within the approved Synchrony scope; no scientific setting is reduced. Result
+and review remain pending.
+
 ### NR1 corrected-Power result
 
 Status: scientifically and operationally approved; explicit user visual review
