@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from hashlib import sha256
 import importlib
 import json
 import os
@@ -1791,3 +1792,89 @@ def test_relocation_receipt_commit_race_preserves_concurrent_destination_change(
         for path in relocation_fixture.destination_cache.parent.iterdir()
     )
     assert all(not path.exists() for path in receipt_temporary_paths)
+
+
+def test_relocation_rejects_source_manifest_changed_after_validation_before_hash(
+    relocation_fixture: _RelocationFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decoded producer manifest cannot be paired with a later file hash.
+
+    The public source compatibility status seam runs after manifest decoding and
+    validation. This test atomically replaces that otherwise valid producer
+    manifest when its final source status returns, before relocation's existing
+    separate streamed manifest-hash call. The operation may fail closed, or it
+    may publish only if its receipt binds the producer mapping and SHA to one
+    complete original or replacement byte version.
+    """
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_relocation")
+    original_status = getattr(module, "assess_component_status")
+    real_replace = module.os.replace
+    source_manifest_path = relocation_fixture.source_cache / "manifest.json"
+    source_before = _directory_inventory(relocation_fixture.source_cache)
+    legacy_before = _directory_inventory(relocation_fixture.legacy_cache)
+    original_manifest_bytes = source_before["manifest.json"]
+    assert isinstance(original_manifest_bytes, bytes)
+    original_manifest = json.loads(original_manifest_bytes.decode("ascii"))
+    replacement_manifest = json.loads(source_manifest_path.read_text(encoding="ascii"))
+    replacement_manifest["generator"]["producer_label"] = "concurrent producer"
+    replacement_bytes = json.dumps(
+        replacement_manifest,
+        ensure_ascii=True,
+        sort_keys=True,
+    ).encode("ascii")
+    replaced = False
+
+    def replace_validated_manifest(
+        cache_directory: Path,
+        component: str,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        """Replace the source manifest after its final public compatibility check."""
+        nonlocal replaced
+        result = original_status(cache_directory, component, *args, **kwargs)
+        if cache_directory == relocation_fixture.source_cache and component == "synchrony":
+            replacement_path = relocation_fixture.source_cache / ".concurrent-manifest.json"
+            replacement_path.write_bytes(replacement_bytes)
+            real_replace(replacement_path, source_manifest_path)
+            replaced = True
+        return result
+
+    monkeypatch.setattr(module, "assess_component_status", replace_validated_manifest)
+
+    relocation_error: Exception | None = None
+    try:
+        _relocate(relocation_fixture)
+    except (OSError, ValueError) as error:
+        relocation_error = error
+
+    assert replaced
+    assert source_manifest_path.read_bytes() == replacement_bytes
+    assert _directory_inventory(relocation_fixture.legacy_cache) == legacy_before
+    if relocation_error is not None:
+        assert not relocation_fixture.destination_cache.exists()
+        assert not relocation_fixture.receipt_path.exists()
+        assert not any(
+            path.name.startswith(f".{relocation_fixture.destination_cache.name}-stage-")
+            for path in relocation_fixture.destination_cache.parent.iterdir()
+        )
+        assert not any(
+            path.name.startswith(f".{relocation_fixture.receipt_path.name}-")
+            for path in relocation_fixture.receipt_path.parent.glob("*")
+        )
+    else:
+        receipt = json.loads(relocation_fixture.receipt_path.read_text(encoding="ascii"))
+        expected_producer_versions = (
+            (original_manifest, sha256(original_manifest_bytes).hexdigest()),
+            (replacement_manifest, sha256(replacement_bytes).hexdigest()),
+        )
+        assert any(
+            receipt["source_producer_manifest"] == producer_manifest
+            and receipt["source_producer_manifest_sha256"] == producer_digest
+            for producer_manifest, producer_digest in expected_producer_versions
+        )
+    source_after = _directory_inventory(relocation_fixture.source_cache)
+    assert source_after["manifest.json"] == replacement_bytes
+    assert source_after["power.npz"] == source_before["power.npz"]
+    assert source_after["synchrony.npz"] == source_before["synchrony.npz"]
