@@ -36,6 +36,10 @@ from src.neural_analysis.lfp_summary_models import (
     fingerprint_source_files,
     validate_lfp_summary_config,
 )
+from src.neural_analysis.lfp_summary_io import (
+    assess_component_status,
+    load_or_initialize_manifest,
+)
 from src.neural_analysis.lfp_summary_pipeline import (
     ComponentRunResult,
     PPCWorkCleanupTarget,
@@ -50,6 +54,15 @@ _REPORT_RERENDER_SCHEMA = "spike_phase_report_rerender.v1"
 _RUN_NAME = re.compile(
     r"^[A-Za-z0-9_.-]+_spike_phase_(ProbeA|ProbeB)_"
     r"(preview|final|dry_run)_[A-Za-z0-9_.:-]+$"
+)
+_PREREQUISITE_CACHE_MEMBERS = frozenset(
+    {"manifest.json", "power.npz", "synchrony.npz"}
+)
+_LEGACY_CACHE_DIRECTORY_NAME = "lfp_summary_cache"
+_PREREQUISITE_COMPONENT_STATES = (
+    ("power", "compatible"),
+    ("synchrony", "compatible"),
+    ("spike_phase", "missing"),
 )
 _STAGES = (
     "initialized",
@@ -77,6 +90,7 @@ class LauncherCommand:
     shuffle_count: int | None = None
     worker_count: int | None = None
     analysis_root: Path | None = None
+    cache_directory: Path | None = None
     dry_run: bool = False
     final_run: bool = False
     run_directory: Path | None = None
@@ -164,6 +178,7 @@ def parse_launcher_command(argv: Sequence[str] | None = None) -> LauncherCommand
     new.add_argument("--shuffles", dest="shuffle_count", type=int, choices=(100, 1000), required=True)
     new.add_argument("--workers", dest="worker_count", type=int, default=8)
     new.add_argument("--analysis-root", type=Path)
+    new.add_argument("--cache-directory", type=Path, required=True)
     new.add_argument("--dry-run", action="store_true")
     new.add_argument("--final-run", action="store_true")
     resume = subparsers.add_parser("resume")
@@ -189,6 +204,7 @@ def parse_launcher_command(argv: Sequence[str] | None = None) -> LauncherCommand
         shuffle_count=values.shuffle_count,
         worker_count=values.worker_count,
         analysis_root=analysis_root,
+        cache_directory=values.cache_directory,
         dry_run=bool(values.dry_run),
         final_run=bool(values.final_run),
     )
@@ -427,6 +443,7 @@ def _prepare_new_run(
     assert command.shuffle_count is not None
     assert command.worker_count is not None
     assert command.analysis_root is not None
+    assert command.cache_directory is not None
     repository = dependencies.repository_state()
     if not repository.tracked_clean:
         raise ValueError("launcher requires a clean tracked Git checkout")
@@ -440,7 +457,15 @@ def _prepare_new_run(
         command.shuffle_count,
         command.worker_count,
     )
+    cache_directory = _validated_new_cache_directory(
+        Path(command.cache_directory),
+        Path(command.session_path),
+    )
+    # The creator supplies scientific settings; the explicit CLI target alone
+    # replaces its protected default cache location.
+    config = replace(config, output_directory=cache_directory)
     _validate_launcher_config(config, command)
+    _validate_new_cache_preflight(config)
     source_fingerprints = dict(dependencies.source_fingerprints(config))
     trial_count = dependencies.load_trial_count(config)
     if isinstance(trial_count, bool) or not isinstance(trial_count, int) or trial_count < 1:
@@ -573,6 +598,8 @@ def _rebuild_saved_config(
         int(identity["shuffle_count"]),
         int(identity["requested_worker_count"]),
     )
+    cache_directory = _saved_cache_directory(identity)
+    config = replace(config, output_directory=cache_directory)
     rebuilt_command = LauncherCommand(
         mode="new",
         session_path=session_path,
@@ -580,6 +607,7 @@ def _rebuild_saved_config(
         shuffle_count=int(identity["shuffle_count"]),
         worker_count=int(identity["requested_worker_count"]),
         analysis_root=run_directory.parent,
+        cache_directory=cache_directory,
         dry_run=False,
         final_run=bool(identity["final_run"]),
     )
@@ -980,6 +1008,136 @@ def _validated_analysis_root(path: Path) -> Path:
     return path.resolve(strict=False)
 
 
+def _validated_new_cache_directory(cache_directory: Path, session_path: Path) -> Path:
+    """Resolve one safe direct child of the selected session's processed path.
+
+    Parameters
+    ----------
+    cache_directory : pathlib.Path
+        User-supplied corrected-cache directory. It must exist, be a real
+        directory, and be a direct child of ``session_path / 'processed'``.
+    session_path : pathlib.Path
+        Selected session directory. Its path and the target path may not cross
+        symbolic links or lexical parent-directory aliases.
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute, normalized cache directory used in every saved artifact.
+    """
+    resolved_session = _resolved_nonsymlink_path(session_path, "session_path")
+    resolved_cache = _resolved_nonsymlink_path(cache_directory, "cache_directory")
+    processed_directory = resolved_session / "processed"
+    if processed_directory.is_symlink():
+        raise ValueError("session processed directory must not be a symbolic link")
+    resolved_processed = processed_directory.resolve(strict=False)
+    if resolved_cache.name == _LEGACY_CACHE_DIRECTORY_NAME:
+        raise ValueError("the legacy lfp_summary_cache directory is protected")
+    if resolved_cache.parent != resolved_processed:
+        raise ValueError(
+            "cache_directory must be a direct child of the selected session processed directory"
+        )
+    if not resolved_cache.is_dir():
+        raise ValueError("cache_directory must be an existing directory")
+    return resolved_cache
+
+
+def _resolved_nonsymlink_path(path: Path, label: str) -> Path:
+    """Return a normalized path after rejecting aliases and symlink components.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Absolute or current-directory-relative filesystem identity.
+    label : str
+        Human-readable argument name included in validation errors.
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute normalized path. This helper does not create filesystem
+        entries and accepts a final path that does not yet exist.
+    """
+    requested = Path(path)
+    if ".." in requested.parts:
+        raise ValueError(f"{label} must not contain a parent-directory alias")
+    absolute_path = requested if requested.is_absolute() else Path.cwd() / requested
+    current = Path(absolute_path.anchor)
+    for part in absolute_path.parts[1:]:
+        current /= part
+        if current.is_symlink():
+            raise ValueError(f"{label} must not traverse a symbolic link")
+    return absolute_path.resolve(strict=False)
+
+
+def _validate_new_cache_preflight(config: LFPSummaryConfig) -> None:
+    """Validate immutable prerequisite cache evidence without loading arrays.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Fully validated active configuration whose output directory is the
+        selected corrected cache. No trial table, phase array, PPC work, or
+        launcher run directory is opened or created by this check.
+
+    Returns
+    -------
+    None
+        The cache is only read through manifest JSON and public NPZ header
+        checks. Any incompatible prerequisite raises ``ValueError``.
+    """
+    cache_directory = config.output_directory
+    work_root = cache_directory.parent / "lfp_summary_work"
+    if work_root.exists() or work_root.is_symlink():
+        raise FileExistsError(f"pre-existing PPC work root: {work_root}")
+    members = tuple(cache_directory.iterdir())
+    member_names = {member.name for member in members}
+    if member_names != _PREREQUISITE_CACHE_MEMBERS:
+        raise ValueError(
+            "corrected cache must contain exactly manifest.json, power.npz, and synchrony.npz"
+        )
+    for member in members:
+        if member.is_symlink() or not member.is_file():
+            raise ValueError("corrected cache members must be regular non-symbolic-link files")
+    manifest = load_or_initialize_manifest(cache_directory, config)
+    for component, expected_status in _PREREQUISITE_COMPONENT_STATES:
+        status = assess_component_status(
+            cache_directory,
+            component,
+            config,
+            manifest,
+            validate_headers_only=True,
+        )
+        if status.status != expected_status:
+            differences = "; ".join(status.differences)
+            raise ValueError(
+                f"{component} prerequisite must be {expected_status}, "
+                f"found {status.status}: {differences or 'no details'}"
+            )
+
+
+def _saved_cache_directory(identity: Mapping[str, object]) -> Path:
+    """Return the immutable cache target recorded by an earlier new run.
+
+    Parameters
+    ----------
+    identity : Mapping[str, object]
+        Durable launcher identity JSON containing the resolved cache path.
+
+    Returns
+    -------
+    pathlib.Path
+        Exact absolute cache path persisted by the originating new run.
+    """
+    value = identity.get("cache_directory")
+    if not isinstance(value, str) or not value:
+        raise ValueError("saved launcher identity lacks cache_directory")
+    path = Path(value)
+    if not path.is_absolute() or str(path.resolve(strict=False)) != value:
+        raise ValueError("saved launcher cache_directory is not a resolved absolute path")
+    return path
+
+
 def _identity_mapping(
     config: LFPSummaryConfig,
     command: LauncherCommand,
@@ -994,6 +1152,7 @@ def _identity_mapping(
     config_json = canonical_config_json(config)
     return {
         "session_path": str(config.session_path.resolve(strict=False)),
+        "cache_directory": str(config.output_directory.resolve(strict=False)),
         "repository_path": str(repository.repository_root.resolve(strict=False)),
         "session_id": config.session_id,
         "probe_label": population.probe_label,
@@ -1070,6 +1229,7 @@ def _preflight_mapping(
         "estimated_phase_and_validity_bytes": phase_cell_count * 9,
         "exact_plan_available": False,
         "exact_plan_unavailable_reason": "phase-derived site validity and schedules require scientific execution",
+        "cache_directory": str(config.output_directory.resolve(strict=False)),
         "ppc_planning_seconds": None,
         "planned_ppc_allocation_bytes": None,
         "maximum_child_process_count": None,
@@ -1858,12 +2018,16 @@ def _validate_launcher_identity_artifacts(
     }
     if source != expected_source:
         raise ValueError("source_identity.json does not match durable identity")
+    cache_directory = identity.get("cache_directory")
     if (
-        not isinstance(preflight, dict)
+        not isinstance(cache_directory, str)
+        or paths.get("output_directory") != cache_directory
+        or not isinstance(preflight, dict)
         or preflight.get("schema_version") != _PREFLIGHT_SCHEMA
         or preflight.get("session_id") != identity.get("session_id")
         or preflight.get("probe_label") != identity.get("probe_label")
         or preflight.get("shuffle_count") != identity.get("shuffle_count")
+        or preflight.get("cache_directory") != cache_directory
         or preflight.get("paths") != paths
     ):
         raise ValueError("preflight.json does not match durable identity")
@@ -1954,6 +2118,7 @@ def _write_summary(run_directory: Path, state: Mapping[str, object]) -> None:
         f"Probe: {identity['probe_label']}\n\n"
         f"Shuffles: {identity['shuffle_count']}\n\n"
         f"Requested workers: {identity['requested_worker_count']}\n\n"
+        f"Cache directory: {identity['cache_directory']}\n\n"
         f"Completed stages: {state['completed_stages']}\n\n"
         f"Measurements: {json.dumps(dict(measurements), sort_keys=True, allow_nan=False)}\n\n"
         f"Warnings: {state['warnings']}\n\n"
@@ -2205,11 +2370,7 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         make_production_spike_phase_preview_dependencies,
         render_cached_spike_phase_report,
     )
-    from src.neural_analysis.lfp_summary_io import (
-        assess_component_status,
-        load_component_arrays,
-        load_or_initialize_manifest,
-    )
+    from src.neural_analysis.lfp_summary_io import load_component_arrays
     from src.neural_analysis.lfp_summary_pipeline import (
         compute_spike_phase_component,
     )
