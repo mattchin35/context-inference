@@ -3,9 +3,11 @@
 ## Status and authority
 
 **Status:** implementation authorized by the user on 2026-09-23. NR0 is
-complete. The user approved the NR1 metadata/path/resource dry run and its exact
-new destinations on 2026-09-23. No numerical computation, scientific-cache
-mutation, report rendering, profiling run, or cluster action is authorized yet.
+complete. The user-approved NR1 metadata/path/resource dry run completed and
+passed fresh Sol review on 2026-09-23. No numerical computation,
+scientific-cache mutation, report rendering, profiling run, or cluster action
+is authorized yet. The next ordered action is the small representative-window
+check in Section 5.2 item 2, which requires separate user approval.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -27,12 +29,11 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** NR1 dry run. NR0 tests commits `e728cea` and `2b497e4`
-  plus implementation commit `177a8d6` are complete and approved. The NR1
-  runner may create dry-run evidence only beneath the approved run directory
-  below. It may inspect paths, metadata, source identities, expected component
-  states, and resource bounds. The corrected cache, report, and profiling
-  destinations must remain absent during this gate.
+- **Active package:** NR1 staged CT026 validation. NR0 tests commits `e728cea`
+  and `2b497e4` plus implementation commit `177a8d6` are complete and
+  approved. The NR1 metadata/path/resource dry run is complete and approved;
+  its corrected cache, report, and profiling destinations remain absent. The
+  next numerical small-window check is not authorized.
 - **Approved NR1 destinations:** session root
   `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference`;
   corrected cache `processed/lfp_summary_cache_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`;
@@ -55,22 +56,34 @@ amplitude behavior as if that behavior were scientifically correct.
   LFP windows, execute Power/Synchrony/Spike-phase kernels, create or mutate the
   corrected cache, create the report/profiling subdirectories, alter any legacy
   artifact, submit cluster work, or push Git commits.
+- **NR1 dry-run result:** the approved run directory contains the exact runner
+  plus nine evidence files. It records 427 trials, three sites, 50 frequencies,
+  2,000 phase samples, a conservative eight-worker bound, and a
+  1,152,900,000-byte phase/validity estimate. Corrected Power, Synchrony, and
+  100-shuffle ProbeB identities were resolved with
+  `open_ephys_affine_uV_v1`; the legacy cache is expected stale by manifest-only
+  identity comparison. A rejected intermediate evidence pass accidentally
+  materialized legacy component NPZ members read-only through
+  `assess_component_status`; it did not change content or modification times.
+  `incident.json`, the run log, preflight, and summary preserve that event. The
+  corrected pass did not repeat the access, and fresh reviewer
+  `/root/nr1_dryrun_reviewer` approved with no P0-P3 findings.
 - **Durable evidence:** exact commands, results, inventory hashes, commits,
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that
   log after every commit or interruption-relevant gate.
-- **Verified baseline:** the NR0 focused command passed 555 tests; the complete
-  neural suite passed 1,246 tests. The complete repository run stops at
+- **Verified baseline:** the final NR0 focused command passed 704 tests; the
+  complete neural suite passed 1,395 tests. The complete repository run stops at
   collection because the pre-existing untracked
   `src/tests/behavior_analysis/test_project_utils.py` imports unavailable
   `autograd`; this is frozen unrelated user-owned baseline behavior and does
   not justify a refactor dependency. Both representative CT026 preprocessing
   sidecars are readable, and the public validator reports the immutable copied
   snapshot as valid.
-- **Local NR0 commits:** the reviewed tests are `e728cea` and `2b497e4`; the
-  reviewed implementation is `177a8d6`; documentation checkpoints through
-  this handoff are local. None has been pushed, and no push is required before
-  the NR1 authorization decision.
+- **Local commits:** the reviewed NR0 tests are `e728cea` and `2b497e4`; the
+  reviewed implementation is `177a8d6`; NR0 closure is `a94559d`; NR1 dry-run
+  authorization is `181b82b`. Documentation checkpoints through this handoff
+  are local. None has been pushed.
 
 ## 1. Objectives
 

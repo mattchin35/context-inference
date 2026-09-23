@@ -2,6 +2,30 @@
 
 ## Live handoff snapshot
 
+### 2026-09-23 structural-refactor correction overlay
+
+- NR0 Open Ephys affine scaling is complete and approved on branch `refactor`.
+  Tests are `e728cea` and `2b497e4`; implementation is `177a8d6`; closure is
+  `a94559d`. Final gates were 704 focused tests and 1,395 complete neural tests.
+- The NR1 metadata/path/resource dry run is complete at
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_nr1_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`.
+  Fresh Sol review approved the corrected evidence with no P0-P3 findings.
+  Corrected cache, report, and profiling destinations remain absent; legacy
+  components are expected stale by manifest-only identity comparison.
+- The rejected intermediate dry-run pass accidentally materialized legacy
+  component NPZ members read-only through `assess_component_status`. It changed
+  access times but not content or modification times. The final run preserves
+  this disclosure in `incident.json` and does not repeat the access.
+- The next action is plan Section 5.2 item 2: bounded representative numerical
+  windows from PFC, HPC1, and HPC2 to verify stored-to-uV affine conversion.
+  That numerical read is not yet authorized. Corrected Power, Synchrony,
+  Spike-phase, report, profiling, cluster, and push actions also remain gated.
+- For this structural-refactor sequence,
+  `docs/neural_analysis_refactor_plan.md` and
+  `docs/neural_analysis_refactor_execution_log.md` are the ongoing detailed
+  authority. The historical WP status below remains evidence for the approved
+  legacy pipeline and must not be interpreted as approval to overwrite it.
+
 - **Snapshot:** 2026-09-22 on branch `refactor`.
 - **Current implementation HEAD before this documentation update:** `e8f8dca`
   (`feat: add WP11 snapshot inspector core`). This WP11-3 commit is under Sol

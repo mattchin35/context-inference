@@ -112,8 +112,8 @@ Read-only representative CT026 and legacy-artifact check:
 
 | Package | State | Test commit | Implementation commit | Evidence and next gate |
 | --- | --- | --- | --- | --- |
-| NR0 | Tests-only revision | - | - | Second Sol review blocked; revise cache, legacy, label, and preparation contracts, then repeat RED/review. |
-| NR1 | Pending | - | - | Requires accepted NR0 and separate real-data gates. |
+| NR0 | Complete and approved | `e728cea`, `2b497e4` | `177a8d6` | Final focused 704 passed; neural suite 1,395 passed; fresh Sol review approved; closure `a94559d`. |
+| NR1 | In progress; dry run approved | - | - | Metadata/path/resource evidence passed fresh Sol review. Small numerical windows require separate user approval. |
 | NR2 | Pending | - | - | Requires approved NR1 corrected baseline. |
 | NR3 | Pending | - | - | Sequential after NR2. |
 | NR4 | Pending | - | - | Sequential after NR3. |
@@ -283,9 +283,83 @@ NR1 dry run was authorized by the user on 2026-09-23 with these exact paths:
 - report: `<run>/report`
 - temporary profiling: `<run>/profiling_tmp`
 
-All destinations were absent before the gate. The approved action may create
+All destinations were absent before the gate. The approved action could create
 dry-run scripts/configuration/identity/preflight/log/summary evidence only
-inside `<run>`. It may not load numerical LFP windows, compute components,
+inside `<run>`. It could not load numerical LFP windows, compute components,
 create or mutate the corrected cache, create report/profiling outputs, alter
-legacy artifacts, submit cluster work, or push. Dry-run command/result and
-review are pending. NR2-NR18 are not started.
+legacy artifacts, submit cluster work, or push.
+
+### NR1 metadata/path/resource dry run
+
+Status: complete and approved on 2026-09-23. The exact command was:
+
+```text
+uv run /home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_nr1_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z/dry_run.py
+```
+
+The final run directory contains `dry_run.py`, `configuration.json`,
+`source_identity.json`, `preflight.json`, `cache_state.json`,
+`resource_bounds.json`, `incident.json`, `run.log`, `run_summary.md`, and
+`file_inventory.json`. There are no unlisted directories, numerical arrays,
+plots, report artifacts, profiling artifacts, or temporary files. The corrected
+cache, report, and profiling destinations were absent before and after. The
+repository remained tracked-clean on `refactor` at
+`181b82b796f2c68d7126267975951e84c25db291`; no stage, commit, push, or cluster
+action occurred during the run.
+
+Resolved evidence:
+
+- Both Open Ephys sources are float32, time-major/channel-interleaved,
+  384-channel, 9,334,742-sample, 2,500-Hz files. Each is 14,338,163,712 bytes;
+  gain is `0.1949999928 uV/value`, offset is zero, physical units are uV, and
+  the affine conversion declaration is present. Both sidecars have SHA-256
+  `38f0f874988bbd71d25f66c82b4282146b738af640a4b3f1808045b681650706`.
+- The trial table has 427 rows. Sites are PFC channel 5, HPC1 channel 222, and
+  HPC2 channel 14; all three configured pairs and the -2/0/+2-second windows
+  are preserved. Theta is 6-10 Hz; gamma is 30-80 Hz excluding 58-62 Hz.
+- Every site records `open_ephys_affine_uV_v1`. Corrected fingerprints are
+  Power `9e4df59438cebb9aaeab0b6dd10dfd3872d0c00e265f988b1df862a7f4578df4`,
+  Synchrony
+  `7b89286d914cd3a53ab649dfceff813fda312c85933b75c91772e936353ed909`,
+  and 100-shuffle ProbeB Spike-phase
+  `e31ebb2c6f708c0fd048489faf1696aef037b24be13b53946869b196eda901f9`.
+- The metadata-only ProbeB population contains 273 ordered units and 383
+  selected channels. Its stable-unit SHA-256 is
+  `eb3a9cc6cacb9dbbc4fc4f82b195ebbc64b0870f89e47c1065ca1535e55902ff`.
+- The preview records 100 shuffles, seed zero, eight workers, unit/shuffle/
+  trial-edge blocks 8/25/64, checkpointing, prepared-phase caching, a 2-GiB
+  per-worker cap, and a 12-GiB aggregate cap. The conservative dry-run estimate
+  is 427 trials x 3 sites x 50 frequencies x 2,000 samples x 9 bytes =
+  1,152,900,000 bytes. Exact PPC planning remains unavailable without
+  unauthorized phase validity and spike geometry.
+- Corrected-cache components are expected missing. Legacy Power, Synchrony,
+  and Spike-phase are expected stale by explicitly labeled manifest-only
+  fingerprint/source-identity comparison; the corrected pass did not open
+  component NPZ files.
+
+The first completed evidence attempt was rejected during fresh review. It used
+`assess_component_status`, which materialized legacy component NPZ members
+read-only and advanced their access times to approximately 07:22:48-49 EDT.
+It did not change content or modification times. The final runner removes that
+route, and `incident.json`, `preflight.json`, `run.log`, and `run_summary.md`
+retain the incident rather than concealing it.
+
+Final evidence SHA-256 values:
+
+```text
+cache_state.json      7a8cf35ff14f696d19bf53fe51d87ece8378cc50fae3f0582b2eb9fa8f4cb7ef
+configuration.json    fc83c1707d952efd46eff7a301b4ff50a813cdd2b116bb583ab4f03ad9210c50
+dry_run.py            98f37ea59a569a34fbbd911819307e252114cbb5266d67bbb6b117dfdc52e765
+file_inventory.json   5f1838bd1c98cce67e0d80b49c59ef63bdf914de2cf326590d66f53de1ed0643
+incident.json         e8efc5e7f201db553b63c500b3fa8fc2aac60851125e8d4bbd9b0f629520e134
+preflight.json        c74065795a53431874ebd83c9cef1e9ba7a644da3ff8c506dc868fa5fb9bd320
+resource_bounds.json  2e6bac0063b5613f3548cec8efae37f1ec4b9a2ad475919db2351802f193d4ef
+run.log               17efbb3f15c1bd2c7a6b558e95411dea3bf7dad3c2f661c6fc1b50e959c2356b
+run_summary.md        45d3080b051478f11db391e01e352dd6505029dad805dab186018dba33ee7e06
+source_identity.json  dd18ce8845c914b6ae73a7c4d337167c24279ce912ae405fdd7d09dcf12c4b0d
+```
+
+Fresh reviewer `/root/nr1_dryrun_reviewer` (`gpt-5.6-sol`, `xhigh`) approved
+the corrected evidence with no P0-P3 findings. The next ordered action is the
+small representative-window affine check in plan Section 5.2 item 2. It is a
+numerical read and remains unauthorized. NR2-NR18 are not started.
