@@ -645,10 +645,18 @@ def _small_synchrony_snapshot_arrays() -> dict[str, np.ndarray]:
         "itpc_band_mean": np.full((2, 2, 3, 2), 0.33),
         "itpc_ci_low": np.full((2, 2, 3, 2), 0.30),
         "itpc_ci_high": np.full((2, 2, 3, 2), 0.36),
+        "itpc_bootstrap_q25": np.full((2, 2, 3, 2), 0.31),
+        "itpc_bootstrap_median": np.full((2, 2, 3, 2), 0.32),
+        "itpc_bootstrap_q75": np.full((2, 2, 3, 2), 0.34),
+        "itpc_band_trial_count": np.full((2, 2, 3, 2), 301, dtype=np.int64),
         "itpc_unstable": np.zeros((2, 2, 3, 2), dtype=bool),
         "ispc_band_mean": np.full((2, 1, 3, 2), 0.44),
         "ispc_ci_low": np.full((2, 1, 3, 2), 0.40),
         "ispc_ci_high": np.full((2, 1, 3, 2), 0.48),
+        "ispc_bootstrap_q25": np.full((2, 1, 3, 2), 0.41),
+        "ispc_bootstrap_median": np.full((2, 1, 3, 2), 0.42),
+        "ispc_bootstrap_q75": np.full((2, 1, 3, 2), 0.46),
+        "ispc_band_trial_count": np.full((2, 1, 3, 2), 401, dtype=np.int64),
         "ispc_unstable": np.zeros((2, 1, 3, 2), dtype=bool),
         "plv_by_frequency": np.full((2, 1, 3, 2), 0.55),
         "plv_valid_sample_count": np.full((2, 1, 3, 2), 7, dtype=np.int64),
@@ -2782,6 +2790,91 @@ def test_each_authoritative_snapshot_view_delegates_its_selected_cached_axes(
     delegated_text = repr(calls[0][1]) + repr(calls[0][2])
     for selector in required_selectors:
         assert selector in delegated_text
+    plt.close(figure)
+
+
+@pytest.mark.parametrize(
+    ("view", "site_id", "metric_prefix", "expected_values"),
+    (
+        (
+            "itpc_band_summary",
+            "PFC",
+            "itpc",
+            (
+                np.array((0.33,)),
+                np.array(((0.30,), (0.31,), (0.32,), (0.34,), (0.36,))),
+                np.array((0.31,)),
+                np.array((0.32,)),
+                np.array((0.34,)),
+                np.array((301,), dtype=np.int64),
+            ),
+        ),
+        (
+            "ispc_band_summary",
+            "PFC-HPC1",
+            "ispc",
+            (
+                np.array((0.44,)),
+                np.array(((0.40,), (0.41,), (0.42,), (0.46,), (0.48,))),
+                np.array((0.41,)),
+                np.array((0.42,)),
+                np.array((0.46,)),
+                np.array((401,), dtype=np.int64),
+            ),
+        ),
+    ),
+)
+def test_cached_phase_band_webapp_uses_metric_specific_saved_quantiles_and_counts_only(
+    monkeypatch: pytest.MonkeyPatch,
+    view: str,
+    site_id: str,
+    metric_prefix: str,
+    expected_values: tuple[np.ndarray, ...],
+) -> None:
+    """The webapp forwards saved band summaries without opening a numerical loader."""
+    arrays = _small_synchrony_snapshot_arrays()
+    captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def plot_summary(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture cache arrays selected for one horizontal band-summary renderer."""
+        captured.append((args, kwargs))
+        return plt.figure(), {}
+
+    def forbidden_loader(*_: object, **__: object) -> object:
+        """Reject any attempt to reopen a cache or invoke numerical work from the adapter."""
+        raise AssertionError("cache-only webapp band summary reopened a numerical loader")
+
+    monkeypatch.setattr(lfp_summary_webapp.lfp_summary_plotting, "plot_phase_band_summary", plot_summary)
+    monkeypatch.setattr(lfp_summary_webapp, "load_component_arrays", forbidden_loader)
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "synchrony",
+        arrays,
+        default_lfp_summary_config(),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view=view,
+            site_id=site_id,
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+    )
+
+    assert metric_prefix in view
+    assert len(captured) == 1
+    positional, keyword = captured[0]
+    observed, stacked, q25, median, q75, counts = expected_values
+    assert positional == ()
+    np.testing.assert_array_equal(keyword["observed_estimates"], observed)
+    np.testing.assert_array_equal(keyword["bootstrap_quantiles"], stacked)
+    np.testing.assert_array_equal(keyword["bootstrap_quantiles"][1], q25)
+    np.testing.assert_array_equal(keyword["bootstrap_quantiles"][2], median)
+    np.testing.assert_array_equal(keyword["bootstrap_quantiles"][3], q75)
+    np.testing.assert_array_equal(keyword["selected_trial_counts"], counts)
+    assert keyword["labels"] == (f"{site_id} left",)
+    assert keyword["metric_name"] == (
+        "ITPC PFC" if metric_prefix == "itpc" else "ISPC PFC-HPC1"
+    )
+    assert keyword["bootstrap_count"] == default_lfp_summary_config().phase.bootstrap_count
     plt.close(figure)
 
 

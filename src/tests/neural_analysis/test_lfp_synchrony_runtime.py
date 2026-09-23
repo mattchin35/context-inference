@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
+from hashlib import sha256
 from pathlib import Path
 from typing import Callable
 
@@ -225,6 +226,71 @@ def _prepared_phase(tmp_path: Path) -> tuple[LFPSummaryConfig, PreparedPhaseRun]
     return config, prepared
 
 
+def _prepared_phase_with_distinct_band_validity(
+    tmp_path: Path,
+) -> tuple[LFPSummaryConfig, PreparedPhaseRun]:
+    """Return a phase seam whose numerical validity differs by epoch and band.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-owned cache root.
+
+    Returns
+    -------
+    tuple[LFPSummaryConfig, PreparedPhaseRun]
+        A three-trial ``correct_rewarded`` seam. Both sites and their ordered
+        pair retain three selected trials in whole/before but only two in the
+        chosen band/after combinations. Trial-specific unit phases make all
+        saved bootstrap interior summaries distinguishable.
+    """
+    config, prepared = _prepared_phase(tmp_path)
+    phase = np.zeros_like(prepared.phase_tensor)
+    valid = np.zeros_like(prepared.phase_valid, dtype=bool)
+    before = prepared.relative_time_s < 0.0
+    after = ~before
+
+    def set_phase(
+        site_index: int,
+        frequency_index: int,
+        trial_index: int,
+        time_mask: np.ndarray,
+        angle_rad: float,
+    ) -> None:
+        """Set one fixture phase segment without making invalid samples finite."""
+        phase[site_index, frequency_index, trial_index, time_mask] = np.complex64(
+            np.exp(1j * angle_rad)
+        )
+        valid[site_index, frequency_index, trial_index, time_mask] = True
+
+    # Theta: all three trials contribute before, while the third is absent
+    # after. Gamma: trial zero is after-only and trial two is before-only.
+    for site_index, angles in enumerate(((0.0, 1.0, 2.4), (0.2, 1.5, -1.8))):
+        for trial_index, angle_rad in enumerate(angles):
+            set_phase(site_index, 0, trial_index, before, angle_rad)
+        for trial_index, angle_rad in enumerate(angles[:2]):
+            set_phase(site_index, 0, trial_index, after, angle_rad)
+        set_phase(site_index, 1, 0, after, angles[0])
+        set_phase(site_index, 1, 1, before | after, angles[1])
+        set_phase(site_index, 1, 2, before, angles[2])
+
+    condition_membership = prepared.prepared_trials.condition_membership.copy()
+    condition_index = prepared.prepared_trials.condition_names.index("correct_rewarded")
+    condition_membership[:, condition_index] = True
+    prepared_trials = replace(
+        prepared.prepared_trials,
+        condition_membership=condition_membership,
+    )
+    return config, replace(
+        prepared,
+        prepared_trials=prepared_trials,
+        phase_tensor=phase,
+        phase_valid=valid,
+        site_valid=np.ones_like(prepared.site_valid, dtype=bool),
+        pair_valid=np.ones_like(prepared.pair_valid, dtype=bool),
+    )
+
+
 def test_prepare_phase_run_preserves_full_trial_axis_and_pair_specific_missingness(
     tmp_path: Path,
 ) -> None:
@@ -378,6 +444,176 @@ def test_phase_bootstrap_recomputes_the_nonlinear_clustering_statistic() -> None
     assert first.bootstrap_values.shape == (200, 1, 1)
 
 
+@pytest.mark.parametrize(
+    ("phase_vectors", "valid_mask", "expected_unstable"),
+    (
+        (
+            np.repeat(
+                np.exp(1j * np.linspace(0.0, 2.0 * np.pi, 12, endpoint=False))[
+                    :, None, None
+                ],
+                4,
+                axis=2,
+            ).astype(np.complex64),
+            np.ones((12, 1, 4), dtype=bool),
+            False,
+        ),
+        (
+            np.array(
+                [
+                    [[np.nan + 1j * np.nan] * 4],
+                    *[
+                        [[np.exp(1j * angle)] * 4]
+                        for angle in np.linspace(-0.2, 0.2, 8)
+                    ],
+                ],
+                dtype=np.complex64,
+            ),
+            np.ones((9, 1, 4), dtype=bool),
+            True,
+        ),
+    ),
+    ids=("uniform_phase", "concentrated_phase_with_nan_trial"),
+)
+def test_phase_band_bootstrap_interior_quantiles_equal_actual_finite_draw_percentiles(
+    phase_vectors: np.ndarray,
+    valid_mask: np.ndarray,
+    expected_unstable: bool,
+) -> None:
+    """All five saved summaries come directly from the finite seeded draw series."""
+    summary = bootstrap_phase_clustering_bands(
+        phase_vectors=phase_vectors,
+        valid_mask=valid_mask,
+        trial_mask=np.ones(phase_vectors.shape[0], dtype=bool),
+        frequencies_hz=np.array((8.0,)),
+        relative_time_s=np.array((-0.5, -0.25, 0.0, 0.25)),
+        epoch_windows={"whole": (-0.5, 0.5)},
+        bands=_config(Path("cache")).phase.bands[:1],
+        bootstrap_count=1_000,
+        seed=917,
+    )
+
+    finite_draws = summary.bootstrap_values[:, 0, 0]
+    finite_draws = finite_draws[np.isfinite(finite_draws)]
+    expected = np.percentile(
+        finite_draws,
+        q=(2.5, 25.0, 50.0, 75.0, 97.5),
+        method="linear",
+    )
+
+    np.testing.assert_allclose(
+        np.array(
+            (
+                summary.ci_low[0, 0],
+                summary.q25[0, 0],
+                summary.median[0, 0],
+                summary.q75[0, 0],
+                summary.ci_high[0, 0],
+            )
+        ),
+        expected,
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert bool(summary.unstable[0, 0]) is expected_unstable
+    assert np.isfinite(summary.q25[0, 0])
+    assert np.isfinite(summary.median[0, 0])
+    assert np.isfinite(summary.q75[0, 0])
+
+
+def test_phase_band_bootstrap_preserves_the_frozen_seeded_draws_and_endpoints() -> None:
+    """Adding interior summaries cannot alter the selected trials or old bootstrap output."""
+    phase_vectors = np.repeat(
+        np.exp(1j * np.linspace(0.0, 2.0 * np.pi, 12, endpoint=False))[:, None, None],
+        4,
+        axis=2,
+    ).astype(np.complex64)
+    summary = bootstrap_phase_clustering_bands(
+        phase_vectors=phase_vectors,
+        valid_mask=np.ones_like(phase_vectors, dtype=bool),
+        trial_mask=np.ones(12, dtype=bool),
+        frequencies_hz=np.array((8.0,)),
+        relative_time_s=np.array((-0.5, -0.25, 0.0, 0.25)),
+        epoch_windows={"whole": (-0.5, 0.5)},
+        bands=_config(Path("cache")).phase.bands[:1],
+        bootstrap_count=1_000,
+        seed=917,
+    )
+
+    assert summary.selected_trial_count.tolist() == [[12]]
+    assert summary.estimate[0, 0] == pytest.approx(1.850371707708594e-17)
+    assert summary.ci_low[0, 0] == pytest.approx(0.043136512709727855)
+    assert summary.ci_high[0, 0] == pytest.approx(0.5421184825635231)
+    assert sha256(summary.bootstrap_values.tobytes()).hexdigest() == (
+        "d96414097044afb30d97cd7d2d2436f8d94b71f06172385c7a7f3eb7e816db01"
+    )
+
+
+def test_phase_band_bootstrap_uses_finite_draws_and_leaves_all_invalid_summaries_nan() -> None:
+    """Finite-draw percentiles exclude NaN resamples without inventing all-invalid values."""
+    one_valid_one_invalid = np.array(
+        [
+            [[1.0 + 0.0j] * 4],
+            [[np.nan + 1j * np.nan] * 4],
+        ],
+        dtype=np.complex64,
+    )
+    kwargs = {
+        "trial_mask": np.array((True, True)),
+        "frequencies_hz": np.array((8.0,)),
+        "relative_time_s": np.array((-0.5, -0.25, 0.0, 0.25)),
+        "epoch_windows": {"whole": (-0.5, 0.5)},
+        "bands": _config(Path("cache")).phase.bands[:1],
+        "bootstrap_count": 32,
+        "seed": 12,
+    }
+    finite_and_nan = bootstrap_phase_clustering_bands(
+        phase_vectors=one_valid_one_invalid,
+        valid_mask=np.ones_like(one_valid_one_invalid, dtype=bool),
+        **kwargs,
+    )
+    draws = finite_and_nan.bootstrap_values[:, 0, 0]
+    finite_draws = draws[np.isfinite(draws)]
+    expected = np.percentile(
+        finite_draws,
+        q=(2.5, 25.0, 50.0, 75.0, 97.5),
+        method="linear",
+    )
+
+    assert np.any(np.isfinite(draws)) and np.any(np.isnan(draws))
+    np.testing.assert_allclose(
+        (
+            finite_and_nan.ci_low[0, 0],
+            finite_and_nan.q25[0, 0],
+            finite_and_nan.median[0, 0],
+            finite_and_nan.q75[0, 0],
+            finite_and_nan.ci_high[0, 0],
+        ),
+        expected,
+        rtol=0.0,
+        atol=0.0,
+    )
+
+    all_invalid = bootstrap_phase_clustering_bands(
+        phase_vectors=np.full_like(one_valid_one_invalid, np.nan + 1j * np.nan),
+        valid_mask=np.ones_like(one_valid_one_invalid, dtype=bool),
+        **kwargs,
+    )
+    assert np.isnan(all_invalid.bootstrap_values).all()
+    assert all_invalid.selected_trial_count[0, 0] == 0
+    assert all_invalid.unstable[0, 0]
+    assert np.isnan(
+        (
+            all_invalid.estimate[0, 0],
+            all_invalid.ci_low[0, 0],
+            all_invalid.q25[0, 0],
+            all_invalid.median[0, 0],
+            all_invalid.q75[0, 0],
+            all_invalid.ci_high[0, 0],
+        )
+    ).all()
+
+
 def test_build_synchrony_payload_populates_exact_schema_and_ordered_offsets(
     tmp_path: Path,
 ) -> None:
@@ -389,6 +625,7 @@ def test_build_synchrony_payload_populates_exact_schema_and_ordered_offsets(
     validate_component_payload("synchrony", payload)
     arrays = payload.arrays
     assert "wavelet_coefficients" not in arrays and "phase_tensor" not in arrays
+    assert "bootstrap_values" not in arrays
     assert arrays["trial_indices"].tolist() == [0, 1, 2]
     assert arrays["frequency_hz"].tolist() == [8.0, 40.0]
     assert arrays["epoch_names"].tolist() == ["whole", "before", "after"]
@@ -399,6 +636,12 @@ def test_build_synchrony_payload_populates_exact_schema_and_ordered_offsets(
     assert arrays["source_trace"].shape == (2, 3, 2000)
     assert arrays["band_filtered_trace"].shape == (2, 3, 2, 2000)
     assert arrays["hilbert_phase_rad"].shape == (2, 3, 2, 2000)
+    np.testing.assert_array_equal(
+        arrays["condition_membership"], prepared.prepared_trials.condition_membership
+    )
+    np.testing.assert_array_equal(
+        arrays["filter_membership"], prepared.prepared_trials.filter_membership
+    )
     correct_index = arrays["condition_names"].tolist().index("correct_rewarded")
     assert np.nanmean(arrays["itpc"][correct_index, 0, 0]) > 0.99
     offset = arrays["ispc_phase_offset_rad"][correct_index, 0, 0]
@@ -408,6 +651,90 @@ def test_build_synchrony_payload_populates_exact_schema_and_ordered_offsets(
     )
     assert arrays["plv_computable"][0, 0].all()
     assert not arrays["plv_computable"][2, 0].any()
+    for metric_prefix in ("itpc", "ispc"):
+        quantile_shape = arrays[f"{metric_prefix}_band_mean"].shape
+        for name in ("bootstrap_q25", "bootstrap_median", "bootstrap_q75"):
+            values = arrays[f"{metric_prefix}_{name}"]
+            assert values.shape == quantile_shape
+            assert values.dtype.kind == "f"
+        counts = arrays[f"{metric_prefix}_band_trial_count"]
+        assert counts.shape == quantile_shape
+        assert counts.dtype.kind in {"i", "u"}
+        assert np.array_equal(counts < 10, arrays[f"{metric_prefix}_unstable"])
+
+
+def test_build_synchrony_payload_maps_per_epoch_band_bootstrap_outputs_exactly(
+    tmp_path: Path,
+) -> None:
+    """Payload counts and interior summaries retain each numerical phase selection.
+
+    The fixture changes only finite phase samples, so it distinguishes the
+    selected trial count over epoch/band cells without reverse-engineering it
+    from the broader site or pair masks.
+    """
+    config, prepared = _prepared_phase_with_distinct_band_validity(tmp_path)
+    payload = build_synchrony_payload(config, prepared)
+    arrays = payload.arrays
+    condition_index = prepared.prepared_trials.condition_names.index("correct_rewarded")
+    condition_mask = prepared.prepared_trials.condition_membership[:, condition_index]
+    epoch_windows = {
+        "whole": (-2.0, 2.0),
+        "before": (-2.0, 0.0),
+        "after": (0.0, 2.0),
+    }
+
+    expected_itpc = bootstrap_phase_clustering_bands(
+        phase_vectors=np.moveaxis(prepared.phase_tensor[0], 1, 0),
+        valid_mask=np.moveaxis(prepared.phase_valid[0], 1, 0),
+        trial_mask=condition_mask & prepared.site_valid[0],
+        frequencies_hz=np.asarray(config.phase.frequency_hz, dtype=float),
+        relative_time_s=prepared.relative_time_s,
+        epoch_windows=epoch_windows,
+        bands=config.phase.bands,
+        bootstrap_count=config.phase.bootstrap_count,
+        seed=config.phase.seed + condition_index,
+    )
+    relative_phase = prepared.phase_tensor[0] * np.conjugate(prepared.phase_tensor[1])
+    expected_ispc = bootstrap_phase_clustering_bands(
+        phase_vectors=np.moveaxis(relative_phase, 1, 0),
+        valid_mask=np.moveaxis(
+            prepared.phase_valid[0] & prepared.phase_valid[1],
+            1,
+            0,
+        ),
+        trial_mask=condition_mask & prepared.pair_valid[0],
+        frequencies_hz=np.asarray(config.phase.frequency_hz, dtype=float),
+        relative_time_s=prepared.relative_time_s,
+        epoch_windows=epoch_windows,
+        bands=config.phase.bands,
+        bootstrap_count=config.phase.bootstrap_count,
+        seed=config.phase.seed + condition_index,
+    )
+
+    for metric_prefix, entity_index, expected in (
+        ("itpc", 0, expected_itpc),
+        ("ispc", 0, expected_ispc),
+    ):
+        np.testing.assert_array_equal(
+            arrays[f"{metric_prefix}_band_trial_count"][
+                condition_index, entity_index
+            ],
+            expected.selected_trial_count,
+        )
+        assert np.unique(expected.selected_trial_count).size > 1
+        for saved_name, summary_name in (
+            ("bootstrap_q25", "q25"),
+            ("bootstrap_median", "median"),
+            ("bootstrap_q75", "q75"),
+        ):
+            expected_values = getattr(expected, summary_name)
+            assert np.unique(expected_values[np.isfinite(expected_values)]).size > 1
+            np.testing.assert_array_equal(
+                arrays[f"{metric_prefix}_{saved_name}"][
+                    condition_index, entity_index
+                ],
+                expected_values,
+            )
 
 
 def test_synchrony_factory_commits_only_synchrony_and_reloads_compatible_cache(
@@ -440,6 +767,12 @@ def test_synchrony_factory_commits_only_synchrony_and_reloads_compatible_cache(
     assert result.stage == "complete_synchrony"
     assert status.status == "compatible"
     assert arrays["itpc"].shape == (9, 2, 2, 2000)
+    for metric_prefix in ("itpc", "ispc"):
+        for summary_name in ("bootstrap_q25", "bootstrap_median", "bootstrap_q75"):
+            summary = arrays[f"{metric_prefix}_{summary_name}"]
+            assert summary.shape == arrays[f"{metric_prefix}_band_mean"].shape
+            assert summary.dtype.kind == "f"
+        assert arrays[f"{metric_prefix}_band_trial_count"].dtype.kind in {"i", "u"}
     assert not (config.output_directory / "power.npz").exists()
     assert not (config.output_directory / "spike_phase.npz").exists()
     with pytest.raises((NotImplementedError, RuntimeError), match="power|unsupported"):

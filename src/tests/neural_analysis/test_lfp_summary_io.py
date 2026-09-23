@@ -25,6 +25,135 @@ from src.neural_analysis.lfp_summary_models import (
     fingerprint_source_files,
     lfp_summary_config_from_json,
 )
+from src.neural_analysis.lfp_summary_payloads import SYNCHRONY_ARRAY_SCHEMA
+
+
+def _schema_entry(axes: tuple[str, ...], units: str) -> dict[str, object]:
+    """Return one static JSON-ready legacy array contract entry."""
+    return {"axes": list(axes), "units": units}
+
+
+# Freeze the complete pre-NR1P Synchrony receipt independently of the live
+# schema. This fixture is deliberately not generated from SYNCHRONY_ARRAY_SCHEMA.
+_PRE_NR1P_SYNCHRONY_ARRAY_SCHEMA = {
+    "trial_indices": _schema_entry(("trial",), "trial-table-row"),
+    "site_ids": _schema_entry(("site",), "stable-site-id"),
+    "site_voltage_units": _schema_entry(("site",), "source-voltage-unit"),
+    "condition_names": _schema_entry(("condition",), "condition-name"),
+    "condition_membership": _schema_entry(("trial", "condition"), "boolean"),
+    "filter_membership": _schema_entry(("trial",), "boolean"),
+    "frequency_hz": _schema_entry(("frequency",), "Hz"),
+    "epoch_names": _schema_entry(("epoch",), "epoch-name"),
+    "band_names": _schema_entry(("band",), "band-name"),
+    "relative_time_s": _schema_entry(("time",), "s"),
+    "site_valid": _schema_entry(("site", "trial"), "boolean"),
+    "pair_valid": _schema_entry(("pair", "trial"), "boolean"),
+    "site_exclusion_count": _schema_entry(("site",), "trial"),
+    "pair_exclusion_count": _schema_entry(("pair",), "trial"),
+    "pair_site_a_ids": _schema_entry(("pair",), "stable-site-id"),
+    "pair_site_b_ids": _schema_entry(("pair",), "stable-site-id"),
+    "itpc": _schema_entry(
+        ("condition", "site", "frequency", "time"), "dimensionless"
+    ),
+    "itpc_effective_trial_count": _schema_entry(
+        ("condition", "site", "frequency", "time"), "trial"
+    ),
+    "ispc": _schema_entry(
+        ("condition", "pair", "frequency", "time"), "dimensionless"
+    ),
+    "ispc_phase_offset_rad": _schema_entry(
+        ("condition", "pair", "frequency", "time"), "rad"
+    ),
+    "ispc_effective_trial_count": _schema_entry(
+        ("condition", "pair", "frequency", "time"), "trial"
+    ),
+    "itpc_band_mean": _schema_entry(
+        ("condition", "site", "epoch", "band"), "dimensionless"
+    ),
+    "itpc_ci_low": _schema_entry(
+        ("condition", "site", "epoch", "band"), "dimensionless"
+    ),
+    "itpc_ci_high": _schema_entry(
+        ("condition", "site", "epoch", "band"), "dimensionless"
+    ),
+    "itpc_unstable": _schema_entry(
+        ("condition", "site", "epoch", "band"), "boolean"
+    ),
+    "ispc_band_mean": _schema_entry(
+        ("condition", "pair", "epoch", "band"), "dimensionless"
+    ),
+    "ispc_ci_low": _schema_entry(
+        ("condition", "pair", "epoch", "band"), "dimensionless"
+    ),
+    "ispc_ci_high": _schema_entry(
+        ("condition", "pair", "epoch", "band"), "dimensionless"
+    ),
+    "ispc_unstable": _schema_entry(
+        ("condition", "pair", "epoch", "band"), "boolean"
+    ),
+    "plv_by_frequency": _schema_entry(
+        ("trial", "pair", "epoch", "frequency"), "dimensionless"
+    ),
+    "plv_phase_offset_rad": _schema_entry(
+        ("trial", "pair", "epoch", "frequency"), "rad"
+    ),
+    "plv_valid_sample_count": _schema_entry(
+        ("trial", "pair", "epoch", "frequency"), "sample"
+    ),
+    "plv_valid_sample_fraction": _schema_entry(
+        ("trial", "pair", "epoch", "frequency"), "fraction"
+    ),
+    "plv_computable": _schema_entry(
+        ("trial", "pair", "epoch", "frequency"), "boolean"
+    ),
+    "plv_band_mean": _schema_entry(
+        ("trial", "pair", "epoch", "band"), "dimensionless"
+    ),
+    "source_trace": _schema_entry(
+        ("site", "trial", "time"), "source-voltage-unit"
+    ),
+    "band_filtered_trace": _schema_entry(
+        ("site", "trial", "band", "time"), "source-voltage-unit"
+    ),
+    "hilbert_phase_rad": _schema_entry(("site", "trial", "band", "time"), "rad"),
+}
+_LEGACY_STRING_ARRAYS = {
+    "site_ids",
+    "site_voltage_units",
+    "condition_names",
+    "epoch_names",
+    "band_names",
+    "pair_site_a_ids",
+    "pair_site_b_ids",
+}
+_LEGACY_BOOLEAN_UNITS = {"boolean"}
+_LEGACY_INTEGER_UNITS = {"trial", "sample", "trial-table-row"}
+
+
+def _pre_nr1p_synchrony_arrays() -> dict[str, np.ndarray]:
+    """Return a semantically typed, complete pre-NR1P Synchrony receipt."""
+    axis_lengths = {
+        "trial": 2,
+        "site": 2,
+        "pair": 1,
+        "condition": 1,
+        "frequency": 1,
+        "epoch": 1,
+        "band": 1,
+        "time": 2,
+    }
+    arrays: dict[str, np.ndarray] = {}
+    for name, contract in _PRE_NR1P_SYNCHRONY_ARRAY_SCHEMA.items():
+        shape = tuple(axis_lengths[axis] for axis in contract["axes"])
+        if name in _LEGACY_STRING_ARRAYS:
+            arrays[name] = np.full(shape, name, dtype="<U32")
+        elif contract["units"] in _LEGACY_BOOLEAN_UNITS:
+            arrays[name] = np.ones(shape, dtype=bool)
+        elif contract["units"] in _LEGACY_INTEGER_UNITS:
+            arrays[name] = np.ones(shape, dtype=np.int64)
+        else:
+            arrays[name] = np.ones(shape, dtype=np.float64)
+    return arrays
 
 
 def _power_arrays() -> dict[str, np.ndarray]:
@@ -356,6 +485,54 @@ def test_corrupt_component_is_never_reported_compatible(tmp_path: Path) -> None:
     corrupt = assess_component_status(tmp_path, "power", config, _manifest(fingerprint))
     assert corrupt.status == "failed"
     assert any("invalid" in difference.lower() or "missing" in difference.lower() for difference in corrupt.differences)
+
+
+def test_old_synchrony_payload_is_stale_live_while_power_stays_compatible_and_receipt_readable(
+    tmp_path: Path,
+) -> None:
+    """A payload-version migration stales only live Synchrony, not a receipt schema."""
+    config = default_lfp_summary_config()
+    new_synchrony_fields = (
+        "itpc_bootstrap_q25",
+        "itpc_bootstrap_median",
+        "itpc_bootstrap_q75",
+        "itpc_band_trial_count",
+        "ispc_bootstrap_q25",
+        "ispc_bootstrap_median",
+        "ispc_bootstrap_q75",
+        "ispc_band_trial_count",
+    )
+    assert set(new_synchrony_fields).issubset(SYNCHRONY_ARRAY_SCHEMA)
+    legacy_schema = _PRE_NR1P_SYNCHRONY_ARRAY_SCHEMA
+    legacy_arrays = _pre_nr1p_synchrony_arrays()
+    old_synchrony_fingerprint = (
+        "28127adaf4318f33aa29aaa653b15ab950890fcb606eb4cd5fa5e4f75596ee43"
+    )
+    manifest = _manifest(component_fingerprint("power", config), config=config)
+    manifest["components"]["synchrony"] = {
+        "file_name": "synchrony.npz",
+        "configuration_fingerprint": old_synchrony_fingerprint,
+        "configuration_snapshot": json.loads(canonical_config_json(config)),
+        "source_fingerprints": fingerprint_source_files(config, component="synchrony"),
+        "array_schema": legacy_schema,
+        "state": "complete",
+    }
+    np.savez(tmp_path / "power.npz", **_power_arrays())
+    np.savez(tmp_path / "synchrony.npz", **legacy_arrays)
+
+    synchrony_status = assess_component_status(tmp_path, "synchrony", config, manifest)
+    power_status = assess_component_status(tmp_path, "power", config, manifest)
+    receipt_arrays = load_component_arrays(tmp_path / "synchrony.npz", manifest, "synchrony")
+
+    assert synchrony_status.status == "stale"
+    assert any("fingerprint" in detail for detail in synchrony_status.differences)
+    assert power_status.status == "compatible"
+    assert receipt_arrays.keys() == legacy_arrays.keys()
+    assert not any(name in receipt_arrays for name in new_synchrony_fields)
+    assert receipt_arrays["site_ids"].dtype.kind == "U"
+    assert receipt_arrays["site_valid"].dtype == np.dtype(bool)
+    assert receipt_arrays["itpc_effective_trial_count"].dtype.kind in {"i", "u"}
+    assert receipt_arrays["itpc"].dtype.kind == "f"
 
 
 def _source_config_and_manifest(tmp_path: Path) -> tuple[LFPSummaryConfig, dict[str, object], Path]:

@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import re
+
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
+from matplotlib.collections import PathCollection
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch, PathPatch
 import numpy as np
 import pytest
 
@@ -209,8 +214,8 @@ def test_band_summary_uses_trial_boxplots_in_required_measurement_order(
     assert axes["band_power"].get_ylabel().startswith("Band power (dB")
 
 
-def test_phase_maps_and_band_summaries_expose_counts_uncertainty_and_instability() -> None:
-    """ITPC/ISPC figures expose effective count, bootstrap CI, and low-n warnings."""
+def test_phase_maps_and_band_summaries_expose_counts_resampling_and_instability() -> None:
+    """ITPC/ISPC figures expose effective count, resampling summaries, and low-n warnings."""
 
     figure, axes = plot_phase_map(
         metric=np.full((2, 3), 0.4),
@@ -243,41 +248,73 @@ def test_phase_maps_and_band_summaries_expose_counts_uncertainty_and_instability
     assert "Effective/total displayed: 5/6" in figure.texts[-1].get_text()
 
     figure, axes = plot_phase_band_summary(
-        estimates=np.array([0.2, 0.4]),
-        ci_low=np.array([0.1, 0.2]),
-        ci_high=np.array([0.3, 0.6]),
-        contributing_trial_counts=np.array([3, 12]),
+        observed_estimates=np.array([0.2, 0.4]),
+        bootstrap_quantiles=np.array(
+            [
+                [0.1, 0.2],
+                [0.15, 0.3],
+                [0.2, 0.4],
+                [0.25, 0.5],
+                [0.3, 0.6],
+            ]
+        ),
+        selected_trial_counts=np.array([3, 12]),
         labels=("PFC", "PFC-HPC1"),
         band_name="theta",
         epoch_name="after",
         metric_name="ITPC/ISPC",
+        bootstrap_count=1_000,
         context=_context(),
     )
     _assert_figure_contract(figure, axes, {"summary"})
     assert "unstable" in figure.texts[-1].get_text().lower()
-    assert "95%" in figure.texts[-1].get_text()
+    assert "1,000" in figure.texts[-1].get_text()
 
 
-def test_phase_band_summary_accepts_percentile_ci_not_containing_estimate() -> None:
-    """Percentile intervals may validly lie entirely above the point estimate."""
+def test_phase_band_summary_keeps_an_observed_estimate_outside_bootstrap_whiskers() -> None:
+    """Observed estimates remain distinct from resampling quantiles and whiskers."""
     figure, axes = plot_phase_band_summary(
-        estimates=np.array([0.2, 0.8]),
-        ci_low=np.array([0.4, 0.1]),
-        ci_high=np.array([0.6, 0.7]),
-        contributing_trial_counts=np.array([8, 12]),
+        observed_estimates=np.array([0.2, 0.8]),
+        bootstrap_quantiles=np.array(
+            [
+                [0.4, 0.1],
+                [0.45, 0.2],
+                [0.5, 0.4],
+                [0.55, 0.6],
+                [0.6, 0.7],
+            ]
+        ),
+        selected_trial_counts=np.array([8, 12]),
         labels=("PFC", "PFC-HPC1"),
         band_name="gamma",
         epoch_name="before",
         metric_name="ITPC/ISPC",
+        bootstrap_count=1_000,
         context=_context(),
     )
 
+    observed_markers = [
+        line
+        for line in axes["summary"].lines
+        if isinstance(line, Line2D) and line.get_marker() == "o"
+    ]
+    observed_collections = [
+        collection
+        for collection in axes["summary"].collections
+        if isinstance(collection, PathCollection)
+    ]
+    if observed_markers:
+        assert len(observed_markers) == 2
+        assert observed_markers[0].get_xdata()[0] == pytest.approx(0.2)
+        assert observed_markers[0].get_markerfacecolor() != "none"
+    else:
+        assert len(observed_collections) == 1
+        assert observed_collections[0].get_offsets()[0, 0] == pytest.approx(0.2)
     _assert_figure_contract(figure, axes, {"summary"})
-    assert len(axes["summary"].collections) >= 1
 
 
 def test_phase_band_summary_reserves_space_for_nine_condition_labels() -> None:
-    """Nine long condition names must remain separated from the caption."""
+    """Nine long condition labels stay inside a horizontal figure's left margin."""
     labels = (
         "correct_rewarded",
         "omission",
@@ -290,20 +327,274 @@ def test_phase_band_summary_reserves_space_for_nine_condition_labels() -> None:
         "incorrect_stay",
     )
     figure, axes = plot_phase_band_summary(
-        estimates=np.linspace(0.1, 0.9, len(labels)),
-        ci_low=np.linspace(0.05, 0.85, len(labels)),
-        ci_high=np.linspace(0.15, 0.95, len(labels)),
-        contributing_trial_counts=np.arange(10, 10 + len(labels)),
+        observed_estimates=np.linspace(0.1, 0.9, len(labels)),
+        bootstrap_quantiles=np.vstack(
+            (
+                np.linspace(0.05, 0.75, len(labels)),
+                np.linspace(0.075, 0.775, len(labels)),
+                np.linspace(0.1, 0.8, len(labels)),
+                np.linspace(0.125, 0.825, len(labels)),
+                np.linspace(0.15, 0.85, len(labels)),
+            )
+        ),
+        selected_trial_counts=np.arange(10, 10 + len(labels)),
         labels=labels,
         band_name="theta",
         epoch_name="before",
         metric_name="ITPC PFC",
+        bootstrap_count=1_000,
         context=_context(),
     )
 
+    figure.canvas.draw()
+    figure_box = figure.bbox
+    assert figure.get_size_inches()[1] >= 0.55 * len(labels)
+    for label in axes["summary"].get_yticklabels():
+        label_box = label.get_window_extent()
+        assert figure_box.x0 <= label_box.x0 <= label_box.x1 <= figure_box.x1
+    for caption in figure.texts:
+        caption_box = caption.get_window_extent()
+        assert figure_box.x0 <= caption_box.x0 <= caption_box.x1 <= figure_box.x1
     _assert_figure_contract(figure, axes, {"summary"})
-    assert figure.get_size_inches()[0] >= 12.0
-    assert figure.subplotpars.bottom >= 0.35
+
+
+def test_phase_band_summary_uses_horizontal_actual_quantile_artists_in_input_order() -> None:
+    """Horizontal bxp rows preserve exact five-number summaries and input order."""
+    labels = ("first_condition", "second_condition", "third_condition")
+    observed = np.array((0.12, 0.62, 0.92))
+    quantiles = np.array(
+        (
+            (0.30, 0.40, 0.50),
+            (0.35, 0.45, 0.55),
+            (0.40, 0.50, 0.60),
+            (0.45, 0.55, 0.65),
+            (0.50, 0.60, 0.70),
+        )
+    )
+    counts = np.array((11, 12, 13), dtype=np.int64)
+
+    bxp_calls: list[tuple[list[dict[str, float]], dict[str, object]]] = []
+    original_bxp = Axes.bxp
+
+    def capture_bxp(
+        axis: Axes,
+        stats: list[dict[str, float]],
+        **kwargs: object,
+    ) -> dict[str, list[object]]:
+        """Record bxp statistics while retaining actual Matplotlib artists."""
+        bxp_calls.append((stats, kwargs))
+        return original_bxp(axis, stats, **kwargs)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(Axes, "bxp", capture_bxp)
+    try:
+        figure, axes = plot_phase_band_summary(
+            observed_estimates=observed,
+            bootstrap_quantiles=quantiles,
+            selected_trial_counts=counts,
+            labels=labels,
+            band_name="theta",
+            epoch_name="whole",
+            metric_name="ITPC",
+            bootstrap_count=1_000,
+            context=_context(),
+        )
+    finally:
+        monkeypatch.undo()
+
+    axis = axes["summary"]
+    expected_stats = [
+        {
+            "med": quantiles[2, index],
+            "q1": quantiles[1, index],
+            "q3": quantiles[3, index],
+            "whislo": quantiles[0, index],
+            "whishi": quantiles[4, index],
+            "fliers": [],
+        }
+        for index in range(len(labels))
+    ]
+    assert len(bxp_calls) == 1
+    stats, options = bxp_calls[0]
+    assert stats == expected_stats
+    assert options["orientation"] == "horizontal"
+    assert "vert" not in options
+    assert options["showfliers"] is False
+    assert options["shownotches"] is False
+    assert options["showcaps"] is True
+    box_positions = np.asarray(options["positions"], dtype=float)
+    row_positions = np.arange(len(labels), dtype=float)
+    box_offsets = box_positions - row_positions
+    assert np.allclose(box_offsets, box_offsets[0], rtol=0.0, atol=1e-12)
+    assert 0.0 < abs(box_offsets[0]) <= 0.4
+    assert options["patch_artist"] is True
+
+    assert [label.get_text() for label in axis.get_yticklabels()] == [
+        "first_condition (n=11)",
+        "second_condition (n=12)",
+        "third_condition (n=13)",
+    ]
+    assert axis.yaxis_inverted()
+    assert "ITPC" in axis.get_xlabel()
+    assert "dimensionless" in axis.get_xlabel().lower()
+    boxes = [patch for patch in axis.patches if isinstance(patch, PathPatch)]
+    assert len(boxes) == len(labels)
+    assert all(box.get_facecolor()[3] > 0.0 for box in boxes)
+    for index, box in enumerate(boxes):
+        x_coordinates = box.get_path().vertices[:, 0]
+        y_coordinates = box.get_path().vertices[:, 1]
+        assert np.min(x_coordinates) == pytest.approx(quantiles[1, index])
+        assert np.max(x_coordinates) == pytest.approx(quantiles[3, index])
+        assert (np.min(y_coordinates) + np.max(y_coordinates)) / 2.0 == pytest.approx(
+            box_positions[index]
+        )
+        assert box.get_path().vertices.shape[0] == 6
+
+    vertical_lines = [
+        line
+        for line in axis.lines
+        if np.ptp(line.get_xdata()) == 0.0 and np.ptp(line.get_ydata()) > 0.0
+    ]
+    for median in quantiles[2]:
+        assert any(line.get_xdata()[0] == pytest.approx(median) for line in vertical_lines)
+    for endpoint in (*quantiles[0], *quantiles[4]):
+        assert any(
+            endpoint == pytest.approx(value)
+            for line in axis.lines
+            for value in line.get_xdata()
+        )
+    observed_markers = [line for line in axis.lines if line.get_marker() == "o"]
+    observed_collections = [
+        collection for collection in axis.collections if isinstance(collection, PathCollection)
+    ]
+    if observed_markers:
+        assert len(observed_markers) == len(labels)
+        assert observed_collections == []
+        np.testing.assert_allclose(
+            [line.get_xdata()[0] for line in observed_markers], observed, rtol=0.0, atol=0.0
+        )
+        assert all(line.get_markerfacecolor() != "none" for line in observed_markers)
+        assert all(line.get_markersize() >= 7.0 for line in observed_markers)
+        observed_coordinates = np.array(
+            [(line.get_xdata()[0], line.get_ydata()[0]) for line in observed_markers]
+        )
+    else:
+        assert len(observed_collections) == 1
+        assert observed_collections[0].get_offsets().shape == (len(labels), 2)
+        assert np.all(observed_collections[0].get_sizes() >= 49.0)
+        observed_coordinates = observed_collections[0].get_offsets()
+        np.testing.assert_allclose(observed_coordinates[:, 0], observed, rtol=0.0, atol=0.0)
+    assert np.allclose(observed_coordinates[:, 1], np.arange(len(labels), dtype=float))
+    for index, box in enumerate(boxes):
+        box_y = box.get_path().vertices[:, 1]
+        observed_y = observed_coordinates[index, 1]
+        assert observed_y < np.min(box_y) or observed_y > np.max(box_y)
+    assert not any(line.get_marker() not in {None, "", "None", "o"} for line in axis.lines)
+    assert all(line.get_marker() != "o" for line in axis.lines if line not in observed_markers)
+    _assert_figure_contract(figure, axes, {"summary"})
+
+
+def test_phase_band_summary_offsets_the_one_condition_box_from_its_observed_point() -> None:
+    """A single horizontal row keeps the observed point disjoint from its box."""
+    figure, axes = plot_phase_band_summary(
+        observed_estimates=np.array((0.25,)),
+        bootstrap_quantiles=np.array(((0.10,), (0.15,), (0.20,), (0.30,), (0.35,))),
+        selected_trial_counts=np.array((12,), dtype=np.int64),
+        labels=("only_condition",),
+        band_name="theta",
+        epoch_name="whole",
+        metric_name="ITPC",
+        bootstrap_count=1_000,
+        context=_context(),
+    )
+
+    axis = axes["summary"]
+    boxes = [patch for patch in axis.patches if isinstance(patch, PathPatch)]
+    assert len(boxes) == 1
+    observed_markers = [line for line in axis.lines if line.get_marker() == "o"]
+    observed_collections = [
+        collection for collection in axis.collections if isinstance(collection, PathCollection)
+    ]
+    if observed_markers:
+        assert len(observed_markers) == 1
+        assert observed_collections == []
+        assert observed_markers[0].get_markersize() >= 7.0
+        observed_y = float(observed_markers[0].get_ydata()[0])
+    else:
+        assert len(observed_collections) == 1
+        assert observed_collections[0].get_offsets().shape == (1, 2)
+        assert np.all(observed_collections[0].get_sizes() >= 49.0)
+        observed_y = float(observed_collections[0].get_offsets()[0, 1])
+    box_y = boxes[0].get_path().vertices[:, 1]
+    box_center = (np.min(box_y) + np.max(box_y)) / 2.0
+    assert 0.0 < abs(box_center - observed_y) <= 0.4
+    assert observed_y < np.min(box_y) or observed_y > np.max(box_y)
+    _assert_figure_contract(figure, axes, {"summary"})
+
+
+def test_phase_band_summary_uses_only_the_two_required_legend_meanings_and_noninferential_words() -> None:
+    """The descriptive shared renderer excludes notches, fliers, draws, and inferential text."""
+    figure, axes = plot_phase_band_summary(
+        observed_estimates=np.array((0.2, 0.8)),
+        bootstrap_quantiles=np.array(
+            ((0.4, 0.1), (0.45, 0.2), (0.5, 0.4), (0.55, 0.6), (0.6, 0.7))
+        ),
+        selected_trial_counts=np.array((8, 12)),
+        labels=("PFC", "PFC-HPC1"),
+        band_name="gamma",
+        epoch_name="before",
+        metric_name="ISPC",
+        bootstrap_count=1_000,
+        context=_context(),
+    )
+
+    axis = axes["summary"]
+    legend = axis.get_legend() or (figure.legends[0] if figure.legends else None)
+    assert legend is not None
+    assert [text.get_text() for text in legend.get_texts()] == [
+        "Observed estimate",
+        "Bootstrap resampling distribution",
+    ]
+    legend_lines = legend.get_lines()
+    legend_patches = legend.get_patches()
+    assert len(legend_lines) == 1
+    assert len(legend_patches) == 1
+    observed_handle = legend_lines[0]
+    distribution_handle = legend_patches[0]
+    assert observed_handle.get_marker() == "o"
+    assert observed_handle.get_markerfacecolor() != "none"
+    assert observed_handle.get_markersize() >= 7.0
+    assert isinstance(distribution_handle, Patch)
+    assert distribution_handle.get_facecolor()[3] > 0.0
+    marker_lines = [line for line in axis.lines if line.get_marker() == "o"]
+    marker_collections = [
+        collection for collection in axis.collections if isinstance(collection, PathCollection)
+    ]
+    assert len(marker_lines) == 2 or (
+        not marker_lines
+        and len(marker_collections) == 1
+        and marker_collections[0].get_offsets().shape == (2, 2)
+    )
+    rendered_text = "\n".join(
+        [
+            axis.get_title(),
+            axis.get_xlabel(),
+            axis.get_ylabel(),
+            *(text.get_text() for text in axis.get_yticklabels()),
+            *(text.get_text() for text in figure.texts),
+            *(text.get_text() for text in legend.get_texts()),
+        ]
+    )
+    assert re.search(
+        re.escape("confidence interval"),
+        rendered_text,
+        flags=re.IGNORECASE,
+    ) is None
+    assert re.search(r"\bCI\b", rendered_text, flags=re.IGNORECASE) is None
+    lowered_text = rendered_text.casefold()
+    for forbidden in ("null", "significant", "significance"):
+        assert forbidden not in lowered_text
+    _assert_figure_contract(figure, axes, {"summary"})
 
 
 def test_plv_distribution_and_exemplar_distinguish_trial_metric_from_illustration() -> None:

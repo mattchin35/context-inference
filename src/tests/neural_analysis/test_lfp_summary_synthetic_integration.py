@@ -44,6 +44,10 @@ from src.neural_analysis.lfp_summary_pipeline import (
     compute_spike_phase_component,
     compute_synchrony_component,
 )
+from src.neural_analysis.lfp_synchrony_validation import (
+    SynchronyValidationDependencies,
+    render_cached_synchrony_validation,
+)
 from src.neural_analysis.lfp_summary_plotting import (
     PlotContext,
     plot_band_power_summary,
@@ -852,6 +856,16 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
     sliced only from the loaded arrays for every plotting API.
     """
     config = _synthetic_configuration(tmp_path)
+    assert {
+        "itpc_bootstrap_q25",
+        "itpc_bootstrap_median",
+        "itpc_bootstrap_q75",
+        "itpc_band_trial_count",
+        "ispc_bootstrap_q25",
+        "ispc_bootstrap_median",
+        "ispc_bootstrap_q75",
+        "ispc_band_trial_count",
+    }.issubset(COMPONENT_ARRAY_SCHEMAS["synchrony"])
     trial_df, traces = _synthetic_trials_and_traces()
     prepared = build_prepared_trials(
         trial_df,
@@ -1109,13 +1123,27 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
         ispc=clustering.ispc,
         ispc_phase_offset_rad=clustering.ispc_phase_offset_rad,
         ispc_effective_trial_count=clustering.ispc_effective_trial_count,
-        itpc_band_mean=np.full((3, 2, 3, 2), np.nan),
-        itpc_ci_low=np.full((3, 2, 3, 2), np.nan),
-        itpc_ci_high=np.full((3, 2, 3, 2), np.nan),
+        itpc_band_mean=np.full((3, 2, 3, 2), 0.72),
+        itpc_ci_low=np.full((3, 2, 3, 2), 0.60),
+        itpc_ci_high=np.full((3, 2, 3, 2), 0.80),
+        itpc_bootstrap_q25=np.full((3, 2, 3, 2), 0.65),
+        itpc_bootstrap_median=np.full((3, 2, 3, 2), 0.70),
+        itpc_bootstrap_q75=np.full((3, 2, 3, 2), 0.75),
+        itpc_band_trial_count=np.broadcast_to(
+            np.array((2, 1, 4), dtype=np.int64)[:, None, None, None],
+            (3, 2, 3, 2),
+        ).copy(),
         itpc_unstable=np.ones((3, 2, 3, 2), dtype=bool),
-        ispc_band_mean=np.full((3, 1, 3, 2), np.nan),
-        ispc_ci_low=np.full((3, 1, 3, 2), np.nan),
-        ispc_ci_high=np.full((3, 1, 3, 2), np.nan),
+        ispc_band_mean=np.full((3, 1, 3, 2), 0.42),
+        ispc_ci_low=np.full((3, 1, 3, 2), 0.30),
+        ispc_ci_high=np.full((3, 1, 3, 2), 0.50),
+        ispc_bootstrap_q25=np.full((3, 1, 3, 2), 0.35),
+        ispc_bootstrap_median=np.full((3, 1, 3, 2), 0.40),
+        ispc_bootstrap_q75=np.full((3, 1, 3, 2), 0.45),
+        ispc_band_trial_count=np.broadcast_to(
+            np.array((2, 1, 4), dtype=np.int64)[:, None, None, None],
+            (3, 1, 3, 2),
+        ).copy(),
         ispc_unstable=np.ones((3, 1, 3, 2), dtype=bool),
         plv_by_frequency=np.moveaxis(plv.plv_by_frequency, (0, 1), (1, 0)),
         plv_phase_offset_rad=np.moveaxis(plv.plv_phase_offset_rad, (0, 1), (1, 0)),
@@ -1223,6 +1251,26 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
         np.array_equal(loaded[name]["filter_membership"], filter_membership)
         for name in loaded
     )
+    np.testing.assert_array_equal(
+        loaded["synchrony"]["itpc_band_trial_count"][:, 0, 0, 0],
+        np.array((2, 1, 4), dtype=np.int64),
+    )
+    np.testing.assert_array_equal(
+        loaded["synchrony"]["ispc_band_trial_count"][:, 0, 0, 0],
+        np.array((2, 1, 4), dtype=np.int64),
+    )
+    np.testing.assert_allclose(
+        loaded["synchrony"]["itpc_bootstrap_median"],
+        0.70,
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        loaded["synchrony"]["ispc_bootstrap_median"],
+        0.40,
+        rtol=0.0,
+        atol=0.0,
+    )
 
     context = _plot_context()
     figures = [
@@ -1260,15 +1308,42 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
             total_displayed_trial_count=int(condition_membership[:, 0].sum()),
         ),
         plot_phase_band_summary(
-            np.array((0.9, 0.8)),
-            np.array((0.8, 0.7)),
-            np.array((1.0, 0.9)),
-            np.array((2, 2)),
-            ("PFC", "PFC-HPC1"),
-            "theta",
-            "whole",
-            "ITPC/ISPC",
-            context,
+            observed_estimates=loaded["synchrony"]["itpc_band_mean"][:, 0, 0, 0],
+            bootstrap_quantiles=np.vstack(
+                (
+                    loaded["synchrony"]["itpc_ci_low"][:, 0, 0, 0],
+                    loaded["synchrony"]["itpc_bootstrap_q25"][:, 0, 0, 0],
+                    loaded["synchrony"]["itpc_bootstrap_median"][:, 0, 0, 0],
+                    loaded["synchrony"]["itpc_bootstrap_q75"][:, 0, 0, 0],
+                    loaded["synchrony"]["itpc_ci_high"][:, 0, 0, 0],
+                )
+            ),
+            selected_trial_counts=loaded["synchrony"]["itpc_band_trial_count"][:, 0, 0, 0],
+            labels=_CONDITION_NAMES,
+            band_name="theta",
+            epoch_name="whole",
+            metric_name="ITPC PFC",
+            bootstrap_count=config.phase.bootstrap_count,
+            context=context,
+        ),
+        plot_phase_band_summary(
+            observed_estimates=loaded["synchrony"]["ispc_band_mean"][:, 0, 0, 0],
+            bootstrap_quantiles=np.vstack(
+                (
+                    loaded["synchrony"]["ispc_ci_low"][:, 0, 0, 0],
+                    loaded["synchrony"]["ispc_bootstrap_q25"][:, 0, 0, 0],
+                    loaded["synchrony"]["ispc_bootstrap_median"][:, 0, 0, 0],
+                    loaded["synchrony"]["ispc_bootstrap_q75"][:, 0, 0, 0],
+                    loaded["synchrony"]["ispc_ci_high"][:, 0, 0, 0],
+                )
+            ),
+            selected_trial_counts=loaded["synchrony"]["ispc_band_trial_count"][:, 0, 0, 0],
+            labels=_CONDITION_NAMES,
+            band_name="theta",
+            epoch_name="whole",
+            metric_name="ISPC PFC-HPC1",
+            bootstrap_count=config.phase.bootstrap_count,
+            context=context,
         ),
         plot_plv_distribution(
             loaded["synchrony"]["plv_band_mean"][:, 0, :, 0],
@@ -1350,6 +1425,89 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
     ]
     for figure, _ in figures:
         plt.close(figure)
+
+    report_calls: list[dict[str, object]] = []
+
+    def cache_figure(*_: object, **__: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Return a disposable report figure without numerical recomputation."""
+        return plt.figure(), {}
+
+    def cache_band_summary(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture cache-only phase-summary inputs for both metric families."""
+        assert args == ()
+        report_calls.append(kwargs)
+        return plt.figure(), {}
+
+    def save_marker(figure: plt.Figure, path: Path) -> None:
+        """Record a report PNG path without rendering data outside pytest storage."""
+        del figure
+        path.write_bytes(b"png")
+
+    report_dependencies = SynchronyValidationDependencies(
+        pipeline_dependencies=object(),
+        compute_synchrony_component=lambda *_: (_ for _ in ()).throw(
+            AssertionError("cached report must not compute Synchrony")
+        ),
+        load_manifest=lambda directory, active_config: load_or_initialize_manifest(
+            directory, active_config
+        ),
+        assess_component_status=assess_component_status,
+        load_synchrony_arrays=lambda directory, manifest: load_component_arrays(
+            directory / "synchrony.npz", manifest, "synchrony"
+        ),
+        plot_phase_map=cache_figure,
+        plot_phase_band_summary=cache_band_summary,
+        plot_plv_distribution=cache_figure,
+        plot_plv_exemplar=cache_figure,
+        save_png=save_marker,
+        close_figure=plt.close,
+        now_utc=lambda: "2026-09-23T00-00-00Z",
+        monotonic_seconds=lambda: 1.0,
+        peak_memory_bytes=lambda: 0,
+        source_identifiers=lambda _: {"fixture": "seeded"},
+    )
+    report = render_cached_synchrony_validation(
+        config,
+        tmp_path / "cache_only_report",
+        report_dependencies,
+        synchrony_wall_time_s=1.0,
+        synchrony_peak_memory_bytes=0,
+    )
+
+    assert report.component == "synchrony"
+    assert len(report_calls) == 18
+    for kwargs in report_calls:
+        metric_prefix, entity_label = str(kwargs["metric_name"]).split(maxsplit=1)
+        epoch_index = _EPOCH_NAMES.index(str(kwargs["epoch_name"]))
+        band_index = _BAND_NAMES.index(str(kwargs["band_name"]))
+        if metric_prefix == "ITPC":
+            entity_index = ("PFC", "HPC1").index(entity_label)
+            array_prefix = "itpc"
+        else:
+            entity_index = ("PFC-HPC1",).index(entity_label)
+            array_prefix = "ispc"
+        np.testing.assert_array_equal(
+            kwargs["observed_estimates"],
+            loaded["synchrony"][f"{array_prefix}_band_mean"][:, entity_index, epoch_index, band_index],
+        )
+        np.testing.assert_array_equal(
+            kwargs["bootstrap_quantiles"],
+            np.vstack(
+                (
+                    loaded["synchrony"][f"{array_prefix}_ci_low"][:, entity_index, epoch_index, band_index],
+                    loaded["synchrony"][f"{array_prefix}_bootstrap_q25"][:, entity_index, epoch_index, band_index],
+                    loaded["synchrony"][f"{array_prefix}_bootstrap_median"][:, entity_index, epoch_index, band_index],
+                    loaded["synchrony"][f"{array_prefix}_bootstrap_q75"][:, entity_index, epoch_index, band_index],
+                    loaded["synchrony"][f"{array_prefix}_ci_high"][:, entity_index, epoch_index, band_index],
+                )
+            ),
+        )
+        np.testing.assert_array_equal(
+            kwargs["selected_trial_counts"],
+            loaded["synchrony"][f"{array_prefix}_band_trial_count"][:, entity_index, epoch_index, band_index],
+        )
+        assert kwargs["labels"] == _CONDITION_NAMES
+        assert kwargs["bootstrap_count"] == config.phase.bootstrap_count
 
 
 def test_seeded_synthetic_spike_payload_uses_production_grouped_path_cache_reload_and_plot(

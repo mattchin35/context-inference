@@ -633,6 +633,14 @@ _CORRECTED_OPEN_EPHYS_COMPONENT_FINGERPRINTS = {
     "synchrony": "99bf31cd16fe74744e7b75526836eec07f14623aed7b6ad86d2772cc8a3e29e5",
     "spike_phase": "d2cfc02352b4792911b2754fde3ff8eac157eea71f66ac47aff7546490860d68",
 }
+_SYNCHRONY_PAYLOAD_CONTRACT_KEY = "synchrony_payload_contract_version"
+_SYNCHRONY_PAYLOAD_CONTRACT_VERSION = "synchrony-bootstrap-quantiles-counts-v1"
+_NR1P_SPIKEGLX_SYNCHRONY_FINGERPRINT = (
+    "4f2754235f64490fca168107d5e34e005bcd3f0e50cd9b000721f2c79bd4b706"
+)
+_NR1P_CORRECTED_OPEN_EPHYS_SYNCHRONY_FINGERPRINT = (
+    "18eeb15ac4450408bd676bdcdf3450f7afb9f95fd31fc66cb6a1f6d8fc7b77a5"
+)
 
 
 def _fixed_open_ephys_identity_config() -> LFPSummaryConfig:
@@ -664,6 +672,7 @@ def _explicit_component_fingerprint_payload(
     component: str,
     config: LFPSummaryConfig,
     source_semantics: dict[str, str] | None,
+    synchrony_payload_contract_version: str | None = None,
 ) -> dict[str, object]:
     """Build the approved canonical fingerprint input without calling the production hasher."""
     canonical = json.loads(canonical_config_json(config))
@@ -687,6 +696,10 @@ def _explicit_component_fingerprint_payload(
             "site_pairs": canonical["site_pairs"],
             "phase": phase,
         }
+        if synchrony_payload_contract_version is not None:
+            payload[_SYNCHRONY_PAYLOAD_CONTRACT_KEY] = (
+                synchrony_payload_contract_version
+            )
     elif component == "spike_phase":
         phase = dict(canonical["phase"])
         phase.pop("bootstrap_count")
@@ -712,7 +725,7 @@ def _explicit_fingerprint_digest(payload: dict[str, object]) -> str:
 def test_open_ephys_component_identity_uses_only_the_resolved_semantics_payload_addition(
     component: str,
 ) -> None:
-    """Every affected digest is the frozen canonical payload plus one OE semantics mapping."""
+    """Synchrony alone adds its code-owned payload contract to frozen scientific inputs."""
     config = _fixed_open_ephys_identity_config()
     legacy_payload = _explicit_component_fingerprint_payload(component, config, None)
     corrected_payload = _explicit_component_fingerprint_payload(
@@ -727,15 +740,64 @@ def test_open_ephys_component_identity_uses_only_the_resolved_semantics_payload_
     } == legacy_payload
     assert _explicit_fingerprint_digest(legacy_payload) == _PRE_NR0_OPEN_EPHYS_COMPONENT_FINGERPRINTS[component]
     assert _explicit_fingerprint_digest(corrected_payload) == _CORRECTED_OPEN_EPHYS_COMPONENT_FINGERPRINTS[component]
-    assert component_fingerprint(component, config) == _CORRECTED_OPEN_EPHYS_COMPONENT_FINGERPRINTS[component]
+    if component == "synchrony":
+        nr1p_payload = _explicit_component_fingerprint_payload(
+            component,
+            config,
+            {"PFC": "open_ephys_affine_uV_v1"},
+            _SYNCHRONY_PAYLOAD_CONTRACT_VERSION,
+        )
+        assert nr1p_payload[_SYNCHRONY_PAYLOAD_CONTRACT_KEY] == (
+            _SYNCHRONY_PAYLOAD_CONTRACT_VERSION
+        )
+        assert _explicit_fingerprint_digest(nr1p_payload) == (
+            _NR1P_CORRECTED_OPEN_EPHYS_SYNCHRONY_FINGERPRINT
+        )
+        assert getattr(
+            lfp_summary_models,
+            "SYNCHRONY_PAYLOAD_CONTRACT_VERSION",
+            None,
+        ) == _SYNCHRONY_PAYLOAD_CONTRACT_VERSION
+        assert component_fingerprint(component, config) == (
+            _NR1P_CORRECTED_OPEN_EPHYS_SYNCHRONY_FINGERPRINT
+        )
+    else:
+        assert component_fingerprint(component, config) == (
+            _CORRECTED_OPEN_EPHYS_COMPONENT_FINGERPRINTS[component]
+        )
 
 
 @pytest.mark.parametrize("component", ("power", "synchrony", "spike_phase"))
-def test_spikeglx_component_identity_retains_its_frozen_pre_nr0_digest(component: str) -> None:
-    """Open Ephys provenance must not perturb an all-SpikeGLX component identity."""
-    assert component_fingerprint(component, default_lfp_summary_config()) == (
-        _SPIKEGLX_COMPONENT_FINGERPRINTS[component]
-    )
+def test_spikeglx_component_identity_adds_only_the_frozen_nr1p_synchrony_contract(
+    component: str,
+) -> None:
+    """Only Synchrony adds the frozen NR1P contract key to its cache identity."""
+    config = default_lfp_summary_config()
+    if component == "synchrony":
+        legacy_payload = _explicit_component_fingerprint_payload(component, config, None)
+        nr1p_payload = _explicit_component_fingerprint_payload(
+            component,
+            config,
+            None,
+            _SYNCHRONY_PAYLOAD_CONTRACT_VERSION,
+        )
+        assert _explicit_fingerprint_digest(legacy_payload) == (
+            _SPIKEGLX_COMPONENT_FINGERPRINTS[component]
+        )
+        assert nr1p_payload == {
+            **legacy_payload,
+            _SYNCHRONY_PAYLOAD_CONTRACT_KEY: _SYNCHRONY_PAYLOAD_CONTRACT_VERSION,
+        }
+        assert _explicit_fingerprint_digest(nr1p_payload) == (
+            _NR1P_SPIKEGLX_SYNCHRONY_FINGERPRINT
+        )
+        assert component_fingerprint(component, config) == (
+            _NR1P_SPIKEGLX_SYNCHRONY_FINGERPRINT
+        )
+    else:
+        assert component_fingerprint(component, config) == _SPIKEGLX_COMPONENT_FINGERPRINTS[
+            component
+        ]
 
 
 def test_legacy_canonical_configuration_deserializes_without_value_semantics_field() -> None:
