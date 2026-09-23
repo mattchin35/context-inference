@@ -2,10 +2,10 @@
 
 ## Status and authority
 
-**Status:** codebase-audited comprehensive plan, ready for implementation
-authorization. Planning only: no implementation,
-scientific recomputation, cache mutation, artifact replacement, or cluster
-submission is authorized by this document in its current state.
+**Status:** implementation authorized by the user on 2026-09-23. NR0 is active
+at the documentation and baseline gate; no NR0 test or source edit has started.
+Scientific recomputation, cache mutation, artifact replacement, and cluster
+submission remain separately gated exactly as specified below.
 
 This plan translates the requirements and settled decisions in
 `docs/neural_analysis_refactor.md` into tests-first work packages. The design
@@ -20,6 +20,30 @@ The immediate prerequisite is a separately versioned correction to the Open
 Ephys LFP value scaling. The structural refactor must use the corrected CT026
 outputs as its regression baseline; it must not preserve the known unscaled
 amplitude behavior as if that behavior were scientifically correct.
+
+### Live implementation handoff
+
+- **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
+  refactor prep`), equal to `origin/refactor` when implementation began.
+- **Active package:** NR0, documentation/baseline gate. The next allowed code
+  change is the NR0 tests-only edit after the required baselines and read-only
+  source audit are recorded.
+- **Agent policy:** lead Sol/high orchestration with one NR0 Terra/xhigh writer,
+  one fresh Sol/xhigh gate reviewer, and at most one optional Terra/medium
+  read-only scout. Only the Terra writer may author package tests/source; the
+  lead alone stages and commits reviewed paths.
+- **Worktree safety:** tracked files were clean at the start. Pre-existing
+  untracked files are user-owned and excluded from refactor commits unless the
+  user separately approves them. In particular, 14 pre-existing untracked
+  neural test files are baseline evidence only and are not NR0 test-authoring
+  targets.
+- **Real-data authority:** only read-only existence/readability checks are
+  allowed during the NR0 baseline. No CT026 recomputation, cache/report write,
+  artifact replacement, cluster submission, or push is authorized.
+- **Durable evidence:** exact commands, results, inventory hashes, commits,
+  findings, and the NR0-NR18 package ledger live in
+  `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that
+  log after every commit or interruption-relevant gate.
 
 ## 1. Objectives
 
