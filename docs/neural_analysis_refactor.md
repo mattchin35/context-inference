@@ -177,10 +177,13 @@ sufficient compatibility evidence.
 
 ### 7. Keep local and cluster layouts portable
 
-- Metadata should distinguish logical dataset-relative paths from environment-
-  specific roots where practical.
-- Moving between the workstation and cluster should require an explicit root
-  mapping or environment profile, not editing every source path or Python file.
+- Initial metadata uses logical session-relative paths beneath the directory
+  containing `neural_session.json`. Moving between matching workstation and
+  cluster session layouts means selecting the corresponding canonical metadata
+  file at that session root, not editing every source path or Python file.
+- If a future environment cannot preserve the contained relative layout, it
+  will require a separately designed explicit root mapping or environment
+  profile. That extension is deferred from the initial schema.
 - Resolved absolute paths must be recorded at execution time for provenance.
 - A path mapping must never change probe, site, channel, unit, or session
   identity; it changes location only.
@@ -204,6 +207,13 @@ sufficient compatibility evidence.
 - Expensive analysis must remain outside ordinary Streamlit rerenders. The app
   may validate metadata and render cached results, while long work is handed to
   the generic computation entry point.
+- Bounded live exploratory views call small non-Streamlit workflow functions
+  that compose validated metadata, source adapters, and pure analyses. Webapp
+  modules do not import source adapters or numerical kernels directly, and the
+  exploratory workflows do not publish production artifacts or hide long work
+  inside a rerender. A bounded exploratory transform runs only after an
+  explicit user action and is reused from a complete-source-identity cache on
+  unrelated rerenders.
 - Webapp startup should accept one explicit session metadata path and initialize
   available probes, sites, source paths, and cache choices from it. Missing
   optional fields should produce actionable unavailable states rather than
@@ -264,8 +274,9 @@ sufficient compatibility evidence.
 - File placement should communicate whether code is a pure numerical method, a
   source-format adapter, a workflow/orchestrator, a report writer, or a user
   interface.
-- Dataset-specific code such as CT026 builders and profiling fixtures should be
-  isolated from generic analysis packages.
+- Dataset-specific code such as CT014/CT026 builders, paths, channel/date
+  presets, and profiling fixtures should be isolated from generic analysis
+  packages.
 - Reorganization must not be combined casually with numerical changes. Import
   moves and responsibility splits should retain behavior through regression
   tests and temporary compatibility imports where needed.
@@ -375,15 +386,23 @@ src/neural_analysis/
     component_cache.py
     work_cache.py
     snapshots.py
+    tabular.py
+    legacy_result_files.py
 
   workflows/
     lfp_summary/
       models.py
+      payloads.py
       preparation.py
       pipeline.py
       power.py
       synchrony.py
       spike_phase.py
+    exploration/
+      units.py
+      lfp_lfp.py
+      spike_lfp.py
+      population.py
     cross_session/
       decoding.py
 
@@ -437,6 +456,7 @@ src/neural_analysis/
     launch_webapp.py
 
   compatibility/
+    ct014.py
     ct026.py
 
   profiling/
@@ -459,11 +479,15 @@ The exact filenames are provisional. The important boundaries are:
   modules do not read session paths, write caches, launch processes, or import
   Streamlit.
 - `artifacts` owns reusable manifest, cache, checkpoint, snapshot, and receipt
-  mechanics. It must not know CT026 paths or implement scientific formulas.
+  mechanics, generic atomic tabular publication, and explicitly legacy result-
+  file serialization. It must not know dataset paths or implement scientific
+  formulas.
 - `workflows` joins validated session metadata, source adapters, numerical
   analyses, artifacts, and progress reporting for a scientific pipeline. It
   also owns cross-session artifact selection/loading and publication while the
-  corresponding analysis modules remain path-free.
+  corresponding analysis modules remain path-free. Small exploratory workflows
+  compose bounded source/analysis calls for interactive views without importing
+  Streamlit, plotting, or production execution.
 - `execution` owns generic restartable launcher state, process/resource
   measurement, and Slurm submission rather than embedding those concerns in
   numerical or analysis-specific modules.
@@ -473,12 +497,14 @@ The exact filenames are provisional. The important boundaries are:
 - `reports` selects figures, captions, summaries, and immutable report outputs.
   It may call `visualization` but must not recalculate numerical results.
 - `webapp` owns Streamlit state, controls, routing, cached artifact selection,
-  and view composition. A view calls `visualization` or reads a validated
-  artifact; it does not become a second implementation of an analysis.
+  and view composition. A cached view reads a validated artifact; a live
+  exploratory view calls a narrow exploratory workflow. Both then call
+  `visualization`; webapp code does not import source adapters or numerical
+  kernels directly or become a second implementation of an analysis.
 - `cli` contains thin user entry points. Argument parsing should delegate
   immediately to `session`, `workflows`, or the webapp launcher.
-- `compatibility` temporarily isolates CT026 builders and old import paths.
-  Dataset-specific defaults must not leak back into generic packages.
+- `compatibility` temporarily isolates CT014/CT026 builders and old import
+  paths. Dataset-specific defaults must not leak back into generic packages.
 - `profiling` contains developer performance harnesses and representative
   fixtures, not production numerical definitions.
 
@@ -493,8 +519,9 @@ SpikeGLX reader. `workflows` may depend on all four foundational packages, and
 `visualization` consumes documented analysis-result or artifact contracts and
 is used by both `reports` and `webapp`. `reports` may depend on `artifacts` and
 `visualization`. `webapp` may depend on session metadata, validated artifacts,
-visualization, and narrow workflow command interfaces. Finally, `cli` delegates
-to session creation, workflows, or the webapp launcher.
+visualization, and narrow production-command or exploratory-workflow
+interfaces, but not directly on `sources` or `analyses`. Finally, `cli`
+delegates to session creation, workflows, or the webapp launcher.
 
 Dependency arrows must not point back upward: foundational modules must not
 import workflows, reports, Streamlit views, or command-line modules. A generic
@@ -508,7 +535,7 @@ moves:
 
 | Current area | Proposed ownership |
 | --- | --- |
-| `psth_webapp.py` | `webapp/app.py`, domain view modules, `webapp/data_access.py`, and thin calls into analysis/visualization packages |
+| `psth_webapp.py` | `webapp/app.py`, domain view modules, metadata/artifact-only `webapp/data_access.py`, bounded exploratory workflows, and visualization packages |
 | `lfp_summary_webapp.py` | cached-summary view state in `webapp/views/cached_summary.py`; snapshot validation in `artifacts/snapshots.py`; command construction in workflow/CLI code |
 | `unit_spike_plotting.py` | pure figures split across the `visualization/units`, `visualization/lfp_lfp`, `visualization/spike_lfp`, and `visualization/population` domain packages |
 | `lfp_summary_runtime.py` | component-specific Power, Synchrony, and Spike workflow modules plus shared preparation |
@@ -518,6 +545,7 @@ moves:
 | `lfp_loading.py` and sync modules | acquisition adapters in `sources` plus shared time alignment in `synchronization` |
 | PCA modules | `analyses/population`; their figures move to `visualization/population.py` |
 | spike/behavior modules | source-table loading under `sources`; numerical binning/decoding/PSTH under `analyses/spike_behavior` |
+| CT014 example paths/presets | temporary `compatibility/ct014.py`; generic analyses/workflows accept metadata-provided identities and regions |
 | CT026 profile modules | temporary `profiling/ct026.py` and `compatibility/ct026.py`, with no generic production defaults |
 
 ### Migration constraints
@@ -639,7 +667,7 @@ The pre-planning repository classification is:
 | `lfp_synchrony_validation.py` | 1 | Split workflow validation, CT026 builder, report assembly, and rendering. |
 | `manual_session_synchronization.py` | 3 | Split reusable alignment logic, source readers, and any user entry point. |
 | `modified_sinc_smoother.py` | 5 | No repository caller or dedicated test found; review provenance and uniqueness before migration. |
-| `plot_cross_session_analysis.py` | 2 | Split path-free table aggregation/statistics into `analyses`, artifact discovery/loading/publication into a cross-session workflow, and reusable figures from the CLI. |
+| `plot_cross_session_analysis.py` | 2 | Split path-free table aggregation/statistics into `analyses`, artifact discovery/loading and generic atomic-tabular publication into a cross-session workflow, and reusable figures from the CLI. |
 | `plot_single_session_analysis.py` | 5 | Empty module; propose removal during cleanup after confirming no external import requirement. |
 | `population_pca.py` | 2 | Move PCA kernels/profiling contracts to `analyses/population`. |
 | `population_pca_decoding.py` | 2 | Split population decoding kernels and Matplotlib figures. |
@@ -766,6 +794,22 @@ corrected outputs as the refactor regression baseline. Phase-only quantities
 may be invariant to a positive constant scale with zero offset, but traces,
 absolute amplitudes, thresholds, PSD values, labels, and downstream selections
 must be audited rather than assumed unaffected.
+
+Because the shared reader also serves exploratory Streamlit paths, the
+correction applies to those consumers too. Their cache identities must include
+the code-owned value-semantics version and the preprocessing-sidecar digest;
+their plots and saved provenance must call corrected values `uV` and corrected
+power `uV^2` where applicable. Current pre-session-schema production
+configuration must match the sidecar's unit and sample rate or fail before
+computation rather than silently publishing authoritative values with stale
+labels. The initial Open Ephys adapter supports the observed canonical
+`float32` storage declaration only; unreviewed dtype variants fail closed.
+
+The semantics version is persisted as component provenance and participates in
+fingerprints without becoming a new required field that prevents old canonical
+configuration JSON from deserializing. Absence of the field denotes legacy
+unscaled semantics only when inspecting a receipt-validated historical
+snapshot; it is never accepted as current live-computation identity.
 
 ## Conceptual metadata relationships
 
@@ -932,6 +976,11 @@ the following actions straightforward:
   omitted rather than represented by a dummy or all-null probe entry.
 - Probe identifiers are arbitrary stable strings. Names such as `ProbeA`,
   `ProbeB`, and `Probe1` are all valid and carry no anatomical meaning.
+- Subject, site, and region identifiers are likewise arbitrary nonempty
+  metadata values in generic code. CT014/CT026 paths, channel/date presets,
+  probe-to-region maps, and fixed topology belong only in explicit
+  compatibility modules; a generic-code scan must detect their values rather
+  than merely search for dataset-name strings.
 - Each probe records one selected LFP source and one selected sorter generation
   in the initial schema. Retaining alternative source histories is out of scope.
 - Each LFP site records a stable site ID, display label, probe ID, saved-channel
@@ -969,6 +1018,15 @@ the following actions straightforward:
   metadata/artifact contracts, while existing resume operations retain their
   saved run configuration. Removing a compatibility reader requires explicit
   approval after its consumers are retired.
+- Cross-session workflows use a generic atomic tabular artifact writer for CSV
+  publication. The writer preserves validated workflow-supplied filenames,
+  column/row order, missingness, and overwrite behavior while knowing no
+  scientific table schema. It accepts only direct-child filenames and rejects
+  absolute paths, separators, traversal, symlinks, and output-directory
+  escapes. Generic workflows derive filenames from stable identifiers or a
+  tested deterministic safe encoding rather than raw display or region labels,
+  reject encoding collisions, and leave exact legacy filenames to compatibility
+  adapters.
 - Behavior-preserving migration requires exact equality for deterministic
   arrays, identities, seeds, manifests, and selection logic. Tight numerical
   tolerances are acceptable only where exact equality is genuinely unstable;
