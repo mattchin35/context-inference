@@ -275,6 +275,17 @@ Read-only representative CT026 and legacy-artifact check:
 
 ## NR1-NR18 records
 
-NR1 is not started. Its first dry run still requires user approval of the exact
-new versioned CT026 cache, report, analysis-run, and temporary profiling
-locations. Legacy artifacts remain immutable. NR2-NR18 are not started.
+NR1 dry run was authorized by the user on 2026-09-23 with these exact paths:
+
+- session: `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference`
+- corrected cache: `<session>/processed/lfp_summary_cache_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`
+- analysis run: `<session>/analysis_runs/ct026_nr1_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`
+- report: `<run>/report`
+- temporary profiling: `<run>/profiling_tmp`
+
+All destinations were absent before the gate. The approved action may create
+dry-run scripts/configuration/identity/preflight/log/summary evidence only
+inside `<run>`. It may not load numerical LFP windows, compute components,
+create or mutate the corrected cache, create report/profiling outputs, alter
+legacy artifacts, submit cluster work, or push. Dry-run command/result and
+review are pending. NR2-NR18 are not started.

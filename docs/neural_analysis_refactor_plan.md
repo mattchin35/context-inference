@@ -3,8 +3,9 @@
 ## Status and authority
 
 **Status:** implementation authorized by the user on 2026-09-23. NR0 is
-complete. NR1 awaits the separately required user approval of exact new
-versioned CT026 cache, report, run, and temporary profiling destinations.
+complete. The user approved the NR1 metadata/path/resource dry run and its exact
+new destinations on 2026-09-23. No numerical computation, scientific-cache
+mutation, report rendering, profiling run, or cluster action is authorized yet.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -26,12 +27,19 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** NR1 authorization gate. NR0 tests commits `e728cea` and
-  `2b497e4` plus implementation commit `177a8d6` are complete and approved.
-  The final independent gates passed 136 addendum tests, 704 focused tests, and
-  1,395 complete neural-analysis tests. No CT026 computation or artifact write
-  has occurred. NR1 cannot start until the user approves the exact new
-  versioned output and temporary profiling locations required by Section 5.
+- **Active package:** NR1 dry run. NR0 tests commits `e728cea` and `2b497e4`
+  plus implementation commit `177a8d6` are complete and approved. The NR1
+  runner may create dry-run evidence only beneath the approved run directory
+  below. It may inspect paths, metadata, source identities, expected component
+  states, and resource bounds. The corrected cache, report, and profiling
+  destinations must remain absent during this gate.
+- **Approved NR1 destinations:** session root
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference`;
+  corrected cache `processed/lfp_summary_cache_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`;
+  analysis run `analysis_runs/ct026_nr1_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`;
+  report subdirectory `<run>/report`; temporary profiling subdirectory
+  `<run>/profiling_tmp`. All four destinations were absent immediately before
+  authorization was recorded.
 - **Agent policy:** lead Sol/high orchestration with one NR0 Terra/xhigh writer,
   one fresh Sol/xhigh gate reviewer, and at most one optional Terra/medium
   read-only scout. Only the Terra writer may author package tests/source; the
@@ -41,9 +49,12 @@ amplitude behavior as if that behavior were scientifically correct.
   user separately approves them. In particular, 14 pre-existing untracked
   neural test files are baseline evidence only and are not NR0 test-authoring
   targets.
-- **Real-data authority:** only read-only existence/readability checks are
-  allowed during the NR0 baseline. No CT026 recomputation, cache/report write,
-  artifact replacement, cluster submission, or push is authorized.
+- **Real-data authority:** the NR1 dry run may read CT026 path, metadata, trial,
+  sorter, and source-identity information and may write reproducibility evidence
+  only inside the approved analysis-run directory. It must not read numerical
+  LFP windows, execute Power/Synchrony/Spike-phase kernels, create or mutate the
+  corrected cache, create the report/profiling subdirectories, alter any legacy
+  artifact, submit cluster work, or push Git commits.
 - **Durable evidence:** exact commands, results, inventory hashes, commits,
   findings, and the NR0-NR18 package ledger live in
   `docs/neural_analysis_refactor_execution_log.md`. Update this handoff and that
