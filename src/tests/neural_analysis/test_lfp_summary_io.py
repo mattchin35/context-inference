@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from copy import deepcopy
 from pathlib import Path
+import zipfile
 
 import numpy as np
 import pytest
@@ -24,6 +26,7 @@ from src.neural_analysis.lfp_summary_models import (
     default_lfp_summary_config,
     fingerprint_source_files,
     lfp_summary_config_from_json,
+    source_value_semantics,
 )
 from src.neural_analysis.lfp_summary_payloads import SYNCHRONY_ARRAY_SCHEMA
 
@@ -712,3 +715,336 @@ def test_transaction_rejects_component_filename_outside_cache_directory(tmp_path
             write_component_transaction(tmp_path, "power", _power_arrays(), manifest)
     finally:
         escaped_path.unlink(missing_ok=True)
+
+
+def test_rebind_power_synchrony_manifest_replaces_only_destination_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pure rebind makes copied Power/Synchrony bytes compatible at a new root.
+
+    The helper receives JSON manifest metadata plus a validated destination
+    configuration.  It neither opens component arrays nor reads source files.
+    It must preserve the original producer/completion/scientific metadata while
+    replacing only the top-level configuration and each copied component's
+    destination-bound compatibility identity.
+    """
+    base_config = default_lfp_summary_config()
+    local_root = tmp_path / "local-session"
+    cluster_root = tmp_path / "cluster-session"
+    source_sites = tuple(
+        replace(
+            site,
+            lfp_path=local_root / "processed" / f"{site.stable_id}.bin",
+            aligned_sync_path=local_root / "processed" / f"{site.stable_id}.sync.npz",
+        )
+        for site in base_config.sites
+    )
+    destination_sites = tuple(
+        replace(
+            site,
+            lfp_path=cluster_root / "processed" / f"{site.stable_id}.bin",
+            aligned_sync_path=cluster_root / "processed" / f"{site.stable_id}.sync.npz",
+        )
+        for site in base_config.sites
+    )
+    source_config = replace(
+        base_config,
+        session_path=local_root,
+        output_directory=local_root / "processed" / "corrected-cache",
+        sites=source_sites,
+        trial_table_path=local_root / "processed" / "trials.csv",
+    )
+    destination_config = replace(
+        base_config,
+        session_path=cluster_root,
+        output_directory=cluster_root / "processed" / "corrected-cache",
+        sites=destination_sites,
+        trial_table_path=cluster_root / "processed" / "trials.csv",
+    )
+    source_manifest = _manifest(
+        component_fingerprint("power", source_config), config=source_config
+    )
+    source_manifest.update(
+        {
+            "configuration": json.loads(canonical_config_json(source_config)),
+            "generator": {"module": "original.producer", "version": "v1"},
+            "reference": {"statement": "original scientific reference"},
+            "processing_metadata": {"status": "complete", "run": "local"},
+        }
+    )
+    source_manifest["components"]["power"].update(
+        {
+            "completed_at": "2026-09-01T00:00:00Z",
+            "generator": {"module": "original.power"},
+            "units": {"psd_linear": "uV^2/Hz"},
+            "scientific_metadata": {"normalization": "session_reference"},
+            "source_value_semantics": source_value_semantics(source_config),
+        }
+    )
+    source_manifest["components"]["synchrony"] = {
+        **deepcopy(source_manifest["components"]["power"]),
+        "file_name": "synchrony.npz",
+        "configuration_fingerprint": component_fingerprint("synchrony", source_config),
+        "source_fingerprints": fingerprint_source_files(source_config, component="synchrony"),
+        "generator": {"module": "original.synchrony"},
+        "units": {"itpc": "dimensionless"},
+        "scientific_metadata": {"bootstrap_count": 200},
+    }
+    source_before = deepcopy(source_manifest)
+
+    # A literal manifest copy is stale once the active configuration resolves
+    # all input paths under the cluster session root.
+    destination_cache = tmp_path / "literal-copy"
+    destination_cache.mkdir()
+    np.savez(destination_cache / "power.npz", **_power_arrays())
+    np.savez(destination_cache / "synchrony.npz", **_power_arrays())
+    assert assess_component_status(
+        destination_cache, "power", destination_config, source_manifest
+    ).status == "stale"
+    assert assess_component_status(
+        destination_cache, "synchrony", destination_config, source_manifest
+    ).status == "stale"
+
+    destination_source_fingerprints = {
+        component: fingerprint_source_files(destination_config, component=component)
+        for component in ("power", "synchrony")
+    }
+    rebind = getattr(lfp_summary_io, "rebind_power_synchrony_manifest")
+
+    def forbid_filesystem(*_args: object, **_kwargs: object) -> object:
+        """Fail if the pure manifest transform touches the filesystem."""
+        raise AssertionError("pure manifest rebinding must not access the filesystem")
+
+    # Source fingerprints are relocation-owned evidence. The pure helper must
+    # receive those already-validated mappings and never inspect a path itself.
+    with monkeypatch.context() as guarded:
+        guarded.setattr(lfp_summary_io, "fingerprint_source_files", forbid_filesystem)
+        guarded.setattr(Path, "open", forbid_filesystem)
+        guarded.setattr(Path, "stat", forbid_filesystem)
+        guarded.setattr(Path, "exists", forbid_filesystem)
+        rebound_manifest = rebind(
+            source_manifest,
+            destination_config,
+            destination_source_fingerprints=destination_source_fingerprints,
+        )
+
+    expected_manifest = deepcopy(source_manifest)
+    expected_manifest["configuration"] = json.loads(
+        canonical_config_json(destination_config)
+    )
+    for component in ("power", "synchrony"):
+        expected_entry = expected_manifest["components"][component]
+        expected_entry["configuration_snapshot"] = json.loads(
+            canonical_config_json(destination_config)
+        )
+        expected_entry["configuration_fingerprint"] = component_fingerprint(
+            component, destination_config
+        )
+        expected_entry["source_fingerprints"] = destination_source_fingerprints[
+            component
+        ]
+        expected_entry["source_value_semantics"] = source_value_semantics(
+            destination_config
+        )
+
+    assert rebound_manifest == expected_manifest
+    assert source_manifest == source_before
+    assert assess_component_status(
+        destination_cache, "power", destination_config, rebound_manifest
+    ).status == "compatible"
+    assert assess_component_status(
+        destination_cache, "synchrony", destination_config, rebound_manifest
+    ).status == "compatible"
+
+
+def test_component_status_uses_prevalidated_current_source_fingerprints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Public status can validate a component without rehashing an OE sidecar.
+
+    ``current_source_fingerprints`` is the exact active component-scoped
+    mapping obtained by the relocation command. It avoids a second source
+    fingerprint pass after the command has already streamed and validated each
+    unique input.
+    """
+    base = default_lfp_summary_config()
+    lfp_path = tmp_path / "PFC.dat"
+    sync_path = tmp_path / "PFC.sync.npz"
+    lfp_path.write_bytes(b"open-ephys-lfp")
+    sync_path.write_bytes(b"sync")
+    (tmp_path / "lfp_preprocessing.json").write_text("{}", encoding="ascii")
+    open_ephys_site = replace(
+        base.sites[0],
+        acquisition_format="open_ephys",
+        lfp_path=lfp_path,
+        aligned_sync_path=sync_path,
+    )
+    config = replace(base, sites=(open_ephys_site,) + base.sites[1:])
+    manifest = _manifest(component_fingerprint("power", config), config=config)
+    np.savez(tmp_path / "power.npz", **_power_arrays())
+    current_source_fingerprints = fingerprint_source_files(config, component="power")
+
+    def forbid_rehash(*_args: object, **_kwargs: object) -> object:
+        """Fail if public status ignores its supplied current fingerprints."""
+        raise AssertionError("status must reuse the supplied source fingerprints")
+
+    def forbid_array_materialization(*_args: object, **_kwargs: object) -> object:
+        """Fail if headers-only status routes through the full array loader."""
+        raise AssertionError("headers-only status must not materialize NPZ arrays")
+
+    header_validations: list[tuple[Path, str]] = []
+    validate_headers = getattr(lfp_summary_io, "validate_component_npz_headers")
+
+    def record_header_validation(
+        component_path: Path,
+        status_manifest: dict[str, object],
+        component: str,
+    ) -> object:
+        """Record public status' bounded schema check without replacing it."""
+        header_validations.append((component_path, component))
+        return validate_headers(component_path, status_manifest, component)
+
+    monkeypatch.setattr(lfp_summary_io, "fingerprint_source_files", forbid_rehash)
+    monkeypatch.setattr(lfp_summary_io, "load_component_arrays", forbid_array_materialization)
+    monkeypatch.setattr(
+        lfp_summary_io, "validate_component_npz_headers", record_header_validation
+    )
+    status = assess_component_status(
+        tmp_path,
+        "power",
+        config,
+        manifest,
+        current_source_fingerprints=current_source_fingerprints,
+        validate_headers_only=True,
+    )
+
+    assert status.status == "compatible"
+    assert header_validations == [(tmp_path / "power.npz", "power")]
+
+
+def test_header_only_component_validation_reads_zip_npy_headers_without_arrays(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Header validation checks schema safely without materializing NPZ members.
+
+    ``validate_component_npz_headers`` accepts one component archive plus its
+    manifest schema and verifies ZIP member names, safe NPY dtypes, shapes, and
+    named axes from headers only. It must reject a declared enormous/truncated
+    member without allocating its 232 MB payload.
+    """
+    config = default_lfp_summary_config()
+    manifest = _manifest(component_fingerprint("power", config), config=config)
+    component_path = tmp_path / "power.npz"
+    np.savez(component_path, **_power_arrays())
+    validate_headers = getattr(lfp_summary_io, "validate_component_npz_headers")
+
+    def forbid_array_loading(*_args: object, **_kwargs: object) -> object:
+        """Fail if header validation tries NumPy's array-materializing loader."""
+        raise AssertionError("header-only validation must not call numpy.load")
+
+    original_member_read = zipfile.ZipExtFile.read
+
+    def require_bounded_member_reads(
+        member: zipfile.ZipExtFile,
+        size: int | None = -1,
+    ) -> bytes:
+        """Forbid ZIP member reads that could materialize a full NPZ payload."""
+        if size is None or size < 0:
+            raise AssertionError("header validation must use bounded ZIP member reads")
+        return original_member_read(member, size)
+
+    monkeypatch.setattr(lfp_summary_io.np, "load", forbid_array_loading)
+    monkeypatch.setattr(zipfile.ZipExtFile, "read", require_bounded_member_reads)
+    validate_headers(component_path, manifest, "power")
+
+    truncated_path = tmp_path / "truncated-power.npz"
+    with zipfile.ZipFile(truncated_path, "w") as archive:
+        with archive.open("values.npy", "w") as member:
+            np.lib.format.write_array_header_1_0(
+                member,
+                {
+                    "descr": "<f8",
+                    "fortran_order": False,
+                    "shape": (29_000_000,),
+                },
+            )
+    bounded_manifest = deepcopy(manifest)
+    bounded_manifest["components"]["power"]["array_schema"] = {
+        "values": {"axes": ["trial"], "units": "dimensionless"}
+    }
+
+    with pytest.raises(ValueError, match="truncated|byte|NPY|array"):
+        validate_headers(truncated_path, bounded_manifest, "power")
+
+
+@pytest.mark.parametrize(
+    ("arrays", "array_schema", "error"),
+    (
+        (
+            {"values": np.array([object()], dtype=object)},
+            {"values": {"axes": ["trial"], "units": "dimensionless"}},
+            "object|pickle|dtype",
+        ),
+        (
+            {"values": np.ones((1, 1), dtype=np.float64)},
+            {"values": {"axes": ["trial"], "units": "dimensionless"}},
+            "rank|axis|shape",
+        ),
+        (
+            {
+                "first": np.ones((1,), dtype=np.float64),
+                "second": np.ones((2,), dtype=np.float64),
+            },
+            {
+                "first": {"axes": ["trial"], "units": "dimensionless"},
+                "second": {"axes": ["trial"], "units": "dimensionless"},
+            },
+            "axis|shape|inconsistent",
+        ),
+    ),
+)
+def test_header_only_component_validation_rejects_unsafe_dtype_and_schema_contracts(
+    tmp_path: Path,
+    arrays: dict[str, np.ndarray],
+    array_schema: dict[str, dict[str, object]],
+    error: str,
+) -> None:
+    """Header-only validation rejects unsafe dtypes and inconsistent named axes."""
+    config = default_lfp_summary_config()
+    manifest = _manifest(component_fingerprint("power", config), config=config)
+    manifest["components"]["power"]["array_schema"] = array_schema
+    component_path = tmp_path / "invalid-power.npz"
+    np.savez(component_path, **arrays)
+    validate_headers = getattr(lfp_summary_io, "validate_component_npz_headers")
+
+    with pytest.raises(ValueError, match=error):
+        validate_headers(component_path, manifest, "power")
+
+
+@pytest.mark.parametrize("member_case", ("unsafe", "undeclared_safe", "duplicate"))
+def test_header_only_component_validation_rejects_unsafe_extra_or_duplicate_member(
+    tmp_path: Path,
+    member_case: str,
+) -> None:
+    """The archive may contain each schema-declared ``.npy`` member exactly once."""
+    config = default_lfp_summary_config()
+    manifest = _manifest(component_fingerprint("power", config), config=config)
+    component_path = tmp_path / "extra-member-power.npz"
+    safe_extra_path = tmp_path / "safe-extra.npy"
+    np.savez(component_path, **_power_arrays())
+    np.save(safe_extra_path, np.array((1.0,), dtype=np.float64))
+    with zipfile.ZipFile(component_path, "a") as archive:
+        if member_case == "unsafe":
+            archive.writestr("untrusted.txt", b"not an NPY member")
+        elif member_case == "undeclared_safe":
+            archive.write(safe_extra_path, arcname="undeclared.npy")
+        else:
+            with pytest.warns(UserWarning, match="Duplicate name"):
+                archive.write(safe_extra_path, arcname="trial_indices.npy")
+    validate_headers = getattr(lfp_summary_io, "validate_component_npz_headers")
+
+    with pytest.raises(ValueError, match="extra|member|unsafe|schema|duplicate"):
+        validate_headers(component_path, manifest, "power")
