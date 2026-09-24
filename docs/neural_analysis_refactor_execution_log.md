@@ -1016,6 +1016,45 @@ uv run pytest -q -p no:cacheprovider src/tests/neural_analysis
 1531 passed, 22 warnings in 171.22s
 ```
 
-A new exact immutable cache-only report destination and explicit user approval
-are required before rerendering. The accepted scientific cache is the sole
-candidate for that rerender; Synchrony must not be recomputed.
+The user then authorized exactly one immutable cache-only rerender at:
+
+```text
+/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_nr1v_synchrony_presentation_rerender_2026-09-23T23-30-02Z
+```
+
+Fresh Sol/xhigh static review approved runner SHA-256
+`678b2b110ca897cc1d696159b78cf53269a26d374a5289f31006f057315aa273`
+before invocation. The runner called the production cache-only renderer once
+at exact tracked-clean HEAD `f8ecbf0fab09c0023160727df58c859e6aea5299`.
+It completed with exit code zero in 74.825914 seconds with 685,510,656-byte
+process peak RSS. No retry, raw-data loader, scientific computation, cache
+write, work/PPC write, cluster action, or prior-report overwrite occurred.
+
+The accepted cache retained exactly three members and unchanged SHA-256s:
+
+```text
+manifest.json  7967c14b77adf9b0041d6bd32593a0d06df3615a9289cd025d7289d927bf9986
+power.npz      164114d606cc204ff29ad173a686f0be66b54c2b944ed1f15008b2fa85367355
+synchrony.npz  d9673f2183dcbb2eac7d8ec2be80916840815c727f1431b8fdf65b41d95cb86f
+```
+
+The sole new report leaf is:
+
+```text
+<run>/report/CT026_2026-08-01_130853_lfp_synchrony_validation_2026-09-23T23-30-02Z
+```
+
+It contains exactly 257 direct files: 252 PNGs plus
+`configuration.json`, `manifest.json`, `run.log`, `run_summary.md`, and
+`source_identifiers.json`. All 216 non-band PNGs are byte-identical to both
+preserved reports. Exactly all 36 band summaries changed from the rejected
+geometry. Fresh Sol/xhigh artifact review inspected all 18 ITPC and 18 ISPC
+summaries and reported no P0-P3 finding. Its independent pixel audit covered
+all 324 condition rows, found zero marker/box overlaps, and measured at least
+seven clear pixel rows in every row. The accepted cache, both prior reports,
+and Git identity remained unchanged.
+
+Status is `rendered_once_pending_fresh_review_and_user_visual_approval`; the
+fresh review is now complete, so explicit user visual approval is the sole
+remaining NR1V gate. Synchrony must not be recomputed, and Spike-phase,
+transfer, push, and cluster submission remain unapproved.

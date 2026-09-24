@@ -26,8 +26,9 @@ created a scientifically approved versioned Synchrony cache, but fresh visual
 review rejected its first immutable report because observed-marker footprints
 overlapped the offset boxes in 12 of 18 ISPC summaries. The tests-first
 presentation-only correction is complete through `389e4fd`; a separately
-authorized immutable cache-only rerender and explicit user visual approval
-remain. Spike-phase and cluster actions remain separately gated.
+authorized immutable cache-only rerender completed and passed fresh Sol/xhigh
+artifact review. Explicit user visual approval remains. Spike-phase and
+cluster actions remain separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -65,8 +66,9 @@ amplitude behavior as if that behavior were scientifically correct.
   either package. NR1V published the versioned scientific cache successfully;
   its first report is preserved but rejected for marker/box overlap. The
   reviewed geometry regression is `88d7826` and its presentation-only source
-  fix is `389e4fd`. A new immutable cache-only report and explicit visual
-  approval remain before the bounded Spike-phase preview can be authorized.
+  fix is `389e4fd`. The one-shot immutable cache-only rerender at clean HEAD
+  `f8ecbf0` completed and passed fresh artifact review; explicit user visual
+  approval remains before the bounded Spike-phase preview can be authorized.
   The user requires any later preview to run unattended through Slurm without
   Codex monitoring; that execution is not approved.
 - **Approved NR1 destinations:** session root
@@ -216,7 +218,15 @@ amplitude behavior as if that behavior were scientifically correct.
   in 12 of 18 ISPC summaries. Preserve that report. A tests-first geometry fix
   (`88d7826`, `389e4fd`) now uses a 0.30-row box offset and 0.20-row box height
   while preserving all values and meanings. A new exact cache-only rerender
-  path and explicit user visual approval are still required.
+  at
+  `<session>/analysis_runs/ct026_nr1v_synchrony_presentation_rerender_2026-09-23T23-30-02Z`
+  completed once from the accepted cache at clean HEAD `f8ecbf0`. Its sole
+  report leaf has exactly 252 PNGs plus the five required metadata files. All
+  216 non-band PNGs are byte-identical to both preserved reports, all 36 band
+  summaries changed from the rejected geometry, and fresh read-only review
+  found zero marker/box overlaps across all 324 condition rows with at least
+  seven clear pixel rows. Cache and prior-report hashes remained unchanged.
+  Explicit user visual approval is still required.
 - **User Synchrony finding and preview execution requirement:** the circles in
   the flagged PFC theta-whole figure are observed nonlinear ITPC estimates and
   the vertical lines are percentile-bootstrap 95% intervals, not medians and
@@ -1570,15 +1580,25 @@ in 12 of 18 ISPC summaries. Tests-first commits `88d7826` and `389e4fd` close
 that defect by validating display-coordinate footprints and moving a 0.20-row
 box to a +0.30-row offset; all scientific values and meanings are unchanged.
 
-The next NR1V action is a cache-only report rerender. It requires explicit user
-authorization for one new absent run/report path. A Terra/high evidence runner
-must pin the accepted cache hashes and current clean Git commit, call only the
-production cache-only report renderer, compare the result with both preserved
-reports, and write inventory/provenance/visual-comparison evidence. It must not
-modify the cache, load raw LFP/sync/spike inputs, recompute any component, write
-PPC/work state, overwrite either prior report, use the cluster, or rerun after
-failure. A fresh Sol/xhigh reviewer must re-audit all 36 band summaries and
-verify the remaining 216 PNGs are byte-identical before user visual approval.
+The user authorized exactly one cache-only report rerender at
+`<session>/analysis_runs/ct026_nr1v_synchrony_presentation_rerender_2026-09-23T23-30-02Z`.
+After fresh static approval, runner SHA-256
+`678b2b110ca897cc1d696159b78cf53269a26d374a5289f31006f057315aa273`
+called the production cache-only renderer once at clean HEAD `f8ecbf0`. The
+render completed in 74.826 seconds with 685,510,656-byte peak RSS; no retry,
+raw LFP/sync/spike load, scientific recomputation, cache mutation, PPC/work
+write, cluster action, or prior-report overwrite occurred. The exact accepted
+cache hashes remained manifest `7967c14b...`, Power `164114d6...`, and
+Synchrony `d9673f21...` before and after.
+
+The sole new report leaf contains exactly 257 direct files: 252 PNGs and the
+five required metadata files. All 216 non-band PNGs are byte-identical to both
+preserved reports, and exactly all 36 ITPC/ISPC band summaries changed from the
+rejected geometry. Fresh Sol/xhigh review inspected every band summary and
+found no P0-P3 issue. An independent pixel audit found zero marker/box overlap
+across all 324 condition rows, with a minimum seven clear pixel rows. This
+artifact is now pending only explicit user visual approval; do not authorize
+Spike-phase or Section 5.6 transfer from it until that approval is recorded.
 
 #### Dependencies, performance, and real-data gate
 
