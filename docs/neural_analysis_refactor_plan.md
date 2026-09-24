@@ -9,10 +9,11 @@ fresh Sol review on 2026-09-23. Corrected Power, its Power-only report, and the
 read-only legacy Power comparison in Section 5.2 item 3 completed and passed
 fresh Sol scientific/evidence review on 2026-09-23. The user visually approved
 the Power report and authorized corrected Synchrony in Section 5.2 item 4 on
-2026-09-23. Corrected Synchrony, its report, and the legacy comparison are now
-scientifically and operationally approved after fresh Sol numerical,
-provenance, and systematic visual reviews; explicit user visual approval is
-pending. User review flagged that every observed point in the PFC theta-whole
+2026-09-23. Corrected Synchrony, its revised report, and the legacy comparison
+are now scientifically, operationally, and visually approved after fresh Sol
+numerical, provenance, and systematic visual reviews plus explicit user
+approval on 2026-09-23. Earlier user review flagged that every observed point
+in the PFC theta-whole
 ITPC summary lies below its percentile-bootstrap 95% interval. The bars are not
 IQRs and the legacy figure has the same pattern. The user selected the
 presentation-only resolution in Section 5.5 for both ITPC and ISPC because they
@@ -27,8 +28,9 @@ review rejected its first immutable report because observed-marker footprints
 overlapped the offset boxes in 12 of 18 ISPC summaries. The tests-first
 presentation-only correction is complete through `389e4fd`; a separately
 authorized immutable cache-only rerender completed and passed fresh Sol/xhigh
-artifact review. Explicit user visual approval remains. Spike-phase and
-cluster actions remain separately gated.
+artifact review, and the user visually approved it on 2026-09-23. NR1E now
+stops at its separately required Git-push authorization; Spike-phase transfer
+and cluster actions remain separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -50,7 +52,9 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** external-gated NR1V immutable report rerender. NR0 tests commits `e728cea`
+- **Active package:** NR1E external cluster evidence, blocked before its first
+  prerequisite by the separate Git-push authorization gate. NR0 tests commits
+  `e728cea`
   and `2b497e4` plus implementation commit `177a8d6` are complete and
   approved. The NR1 metadata/path/resource dry run is complete and approved;
   its original dry-run report and profiling destinations remain absent. The
@@ -67,8 +71,10 @@ amplitude behavior as if that behavior were scientifically correct.
   its first report is preserved but rejected for marker/box overlap. The
   reviewed geometry regression is `88d7826` and its presentation-only source
   fix is `389e4fd`. The one-shot immutable cache-only rerender at clean HEAD
-  `f8ecbf0` completed and passed fresh artifact review; explicit user visual
-  approval remains before the bounded Spike-phase preview can be authorized.
+  `f8ecbf0` completed and passed fresh artifact review; the user visually
+  approved it on 2026-09-23. The revised NR1V Synchrony cache is therefore the
+  Section 5.6 transfer source. No push, transfer, cluster checkout update,
+  dry run, or Slurm submission is authorized yet.
   The user requires any later preview to run unattended through Slurm without
   Codex monitoring; that execution is not approved.
 - **Approved NR1 destinations:** session root
@@ -196,8 +202,9 @@ amplitude behavior as if that behavior were scientifically correct.
   provenance gap is explicitly disclosed: the pre-fix and intermediate
   revision bytes were not preserved, while the final authoritative packager,
   exact production runner, formulas, artifacts, and 276-file inventory are
-  preserved and independently approved. User visual approval remains pending;
-  no Spike-phase work is authorized yet.
+  preserved and independently approved. That historical first report was
+  later superseded by the reviewed and user-approved NR1V presentation report;
+  no Spike-phase execution is authorized yet.
 - **NR1V versioned Synchrony result:** the user authorized cache
   `<session>/processed/lfp_summary_cache_open_ephys_affine_uV_v1_synchrony_bootstrap_quantiles_counts_v1_2026-09-23T22-09-50Z`
   and run
@@ -226,7 +233,8 @@ amplitude behavior as if that behavior were scientifically correct.
   summaries changed from the rejected geometry, and fresh read-only review
   found zero marker/box overlaps across all 324 condition rows with at least
   seven clear pixel rows. Cache and prior-report hashes remained unchanged.
-  Explicit user visual approval is still required.
+  The user explicitly visually approved this revised report on 2026-09-23.
+  It is now the sole Section 5.6 Synchrony transfer source.
 - **User Synchrony finding and preview execution requirement:** the circles in
   the flagged PFC theta-whole figure are observed nonlinear ITPC estimates and
   the vertical lines are percentile-bootstrap 95% intervals, not medians and
@@ -266,8 +274,9 @@ amplitude behavior as if that behavior were scientifically correct.
   reviewed implementation is `e1d99c3`. NR1C-B tests are `0d056fa` and the
   fixture-isolation correction `4646b5d`; its reviewed implementation is
   `c844adc`. The NR1V rendered-geometry regression is `88d7826` and its
-  presentation-only correction is `389e4fd`. These later commits remain local
-  until the user separately approves another push.
+  presentation-only correction is `389e4fd`; rerender-review documentation is
+  `f8ecbf0` and `1cb0263`. These later commits remain local until the user
+  separately approves another push.
 
 ## 1. Objectives
 
@@ -1597,8 +1606,9 @@ preserved reports, and exactly all 36 ITPC/ISPC band summaries changed from the
 rejected geometry. Fresh Sol/xhigh review inspected every band summary and
 found no P0-P3 issue. An independent pixel audit found zero marker/box overlap
 across all 324 condition rows, with a minimum seven clear pixel rows. This
-artifact is now pending only explicit user visual approval; do not authorize
-Spike-phase or Section 5.6 transfer from it until that approval is recorded.
+artifact received explicit user visual approval on 2026-09-23. It is now the
+sole Section 5.6 Synchrony transfer source. That approval does not authorize a
+Git push, cluster checkout update, transfer, dry run, or Slurm submission.
 
 #### Dependencies, performance, and real-data gate
 
@@ -1627,13 +1637,13 @@ artifact may advance to the Section 5.6 cluster copy.
 ### 5.6 Corrected-cache cluster preview prerequisites
 
 The eventual 100-shuffle ProbeB preview will reuse the approved corrected Power
-bytes and the future user-approved Section 5.5 revised Synchrony bytes rather
+bytes and the user-approved Section 5.5 revised Synchrony bytes rather
 than recompute either component on the cluster. The currently approved
 pre-presentation Synchrony file is retained as evidence but is not the cluster
 preview prerequisite.
-The NR1C-A and NR1C-B source packages in this section are complete and approved.
-This section still does not approve NR1V real-data work, transfer, push, Slurm
-submission, or the preview itself.
+The NR1C-A and NR1C-B source packages and NR1V real-data presentation gate are
+complete and approved. This section still does not approve transfer, push,
+cluster checkout mutation, Slurm submission, or the preview itself.
 
 #### Architecture and ownership
 

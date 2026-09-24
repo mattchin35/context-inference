@@ -113,7 +113,7 @@ Read-only representative CT026 and legacy-artifact check:
 | Package | State | Test commit | Implementation commit | Evidence and next gate |
 | --- | --- | --- | --- | --- |
 | NR0 | Complete and approved | `e728cea`, `2b497e4` | `177a8d6` | Final focused 704 passed; neural suite 1,395 passed; fresh Sol review approved; closure `a94559d`. |
-| NR1 | In progress; Synchrony awaits user visual approval | - | - | Checks 1-2 and corrected Power are approved. Corrected Synchrony passed fresh Sol numerical, evidence/provenance, and systematic visual reviews; user visual approval is required before Spike preview. |
+| NR1 | Synchrony approved; NR1E awaits push authorization | - | - | Checks 1-2, corrected Power, revised Synchrony, and the immutable presentation rerender are approved. The user visually approved the revised report on 2026-09-23. Git push, transfer, cluster checkout mutation, dry run, and Slurm submission remain separately gated. |
 | NR2 | Pending | - | - | Requires approved NR1 corrected baseline. |
 | NR3 | Pending | - | - | Sequential after NR2. |
 | NR4 | Pending | - | - | Sequential after NR3. |
@@ -1054,7 +1054,11 @@ all 324 condition rows, found zero marker/box overlaps, and measured at least
 seven clear pixel rows in every row. The accepted cache, both prior reports,
 and Git identity remained unchanged.
 
-Status is `rendered_once_pending_fresh_review_and_user_visual_approval`; the
-fresh review is now complete, so explicit user visual approval is the sole
-remaining NR1V gate. Synchrony must not be recomputed, and Spike-phase,
-transfer, push, and cluster submission remain unapproved.
+The runner's terminal status was
+`rendered_once_pending_fresh_review_and_user_visual_approval`. Fresh review
+then completed, and the user explicitly visually approved the revised report
+on 2026-09-23 with "Looks good, keep going." The NR1V cache is now the sole
+Section 5.6 transfer source and must not be recomputed. NR1E cannot begin until
+the user separately authorizes the required Git push; transfer, cluster
+checkout mutation, dry run, Spike-phase execution, and Slurm submission remain
+unapproved.
