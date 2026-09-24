@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 from contextlib import nullcontext
 from dataclasses import replace
 import fcntl
@@ -30,6 +31,9 @@ from src.neural_analysis.lfp_summary_models import (
     source_value_semantics,
 )
 from src.neural_analysis.lfp_summary_pipeline import ComponentRunResult
+
+
+_MAX_RETAINED_IDENTITY_JSON_BYTES = 64 * 1024
 
 
 def _launcher() -> object:
@@ -341,6 +345,153 @@ def _dependencies(
     )
 
 
+def _prepared_phase_metadata(representation_fingerprint: str) -> dict[str, object]:
+    """Return a metadata-only retained prepared-phase identity record.
+
+    The launcher preflight may inspect this JSON record but must not inspect
+    the synthetic numerical payload files stored beside it.
+    """
+    return {
+        "generator": "synthetic_launcher_test",
+        "analysis_version": "test",
+        "schema_version": "prepared_phase_cache.v1",
+        "source_fingerprint": "a" * 64,
+        "scientific_fingerprint": "b" * 64,
+        "representation_fingerprint": representation_fingerprint,
+        "execution_settings": {},
+        "axes": ["site", "frequency", "trial", "time"],
+        "shapes": {},
+        "dtypes": {},
+        "units": {},
+    }
+
+
+def _write_retained_prepared_phase(
+    work_root: Path,
+    representation_fingerprint: str,
+    *,
+    metadata: object | None = None,
+    completion: object | None = None,
+) -> Path:
+    """Write one metadata-valid retained work representation without arrays.
+
+    The ``.npy`` and ``.npz`` payloads deliberately contain opaque ASCII
+    sentinels rather than numerical data. A launcher preflight that tries to
+    open them therefore violates this test fixture's contract immediately.
+    """
+    representation = (
+        work_root / "prepared_phase" / representation_fingerprint
+    )
+    representation.mkdir(parents=True)
+    representation_metadata = (
+        _prepared_phase_metadata(representation_fingerprint)
+        if metadata is None
+        else metadata
+    )
+    representation_completion = (
+        {"representation_fingerprint": representation_fingerprint}
+        if completion is None
+        else completion
+    )
+    (representation / "metadata.json").write_text(
+        json.dumps(representation_metadata, sort_keys=True) + "\n",
+        encoding="ascii",
+    )
+    (representation / "complete.json").write_text(
+        json.dumps(representation_completion, sort_keys=True) + "\n",
+        encoding="ascii",
+    )
+    (representation / "axes.npz").write_bytes(b"retained synthetic axes\n")
+    (representation / "valid.npy").write_bytes(b"retained synthetic validity\n")
+    (representation / "phase.npy").write_bytes(b"retained synthetic phase\n")
+    return representation
+
+
+def _work_tree_snapshot(work_root: Path) -> tuple[tuple[str, ...], dict[str, bytes]]:
+    """Return a deterministic directory inventory and regular-file bytes."""
+    directories: list[str] = []
+    files: dict[str, bytes] = {}
+    for path in sorted(work_root.rglob("*")):
+        relative = str(path.relative_to(work_root))
+        if path.is_dir():
+            directories.append(relative)
+        elif path.is_file():
+            files[relative] = path.read_bytes()
+    return tuple(directories), files
+
+
+def _preflight_only_dependencies(
+    tmp_path: Path,
+    calls: list[str],
+    terminal: list[str],
+    *,
+    label: str,
+) -> object:
+    """Return seams that fail if unsafe work reaches trial loading or a run."""
+    return replace(
+        _dependencies(tmp_path, calls, terminal),
+        load_trial_count=lambda _config: (_ for _ in ()).throw(
+            AssertionError(f"{label} work reached trial loading")
+        ),
+        compute_component=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError(f"{label} work reached numerical computation")
+        ),
+        publish_report=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError(f"{label} work reached report rendering")
+        ),
+    )
+
+
+def _forbid_retained_payload_opening(
+    monkeypatch: pytest.MonkeyPatch,
+    launcher: object,
+    representations: tuple[Path, ...],
+) -> None:
+    """Fail if preflight opens any synthetic retained numerical payload."""
+    numerical_paths = {
+        representation / filename
+        for representation in representations
+        for filename in ("phase.npy", "valid.npy", "axes.npz")
+    }
+    real_builtin_open = builtins.open
+    real_path_open = Path.open
+
+    def forbid_payload_open(
+        file: object,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        """Delegate every non-payload open to the standard implementation."""
+        if isinstance(file, (str, os.PathLike)) and Path(file) in numerical_paths:
+            raise AssertionError("launcher preflight opened retained numerical payload")
+        return real_builtin_open(file, *args, **kwargs)
+
+    def forbid_payload_path_open(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        """Protect ``Path.read_*`` calls in addition to builtin ``open``."""
+        if path in numerical_paths:
+            raise AssertionError("launcher preflight opened retained numerical payload")
+        return real_path_open(path, *args, **kwargs)
+
+    def forbid_array_loading(*_args: object, **_kwargs: object) -> object:
+        """Fail if preflight delegates retained work to an array loader."""
+        raise AssertionError("launcher preflight loaded retained numerical arrays")
+
+    monkeypatch.setattr(builtins, "open", forbid_payload_open)
+    monkeypatch.setattr(Path, "open", forbid_payload_path_open)
+    monkeypatch.setattr(np, "load", forbid_array_loading)
+    monkeypatch.setattr(lfp_summary_io, "load_component_arrays", forbid_array_loading)
+    monkeypatch.setattr(
+        launcher,
+        "load_component_arrays",
+        forbid_array_loading,
+        raising=False,
+    )
+
+
 def test_parser_requires_explicit_cache_probe_and_final_confirmation() -> None:
     """CLI accepts only explicit corrected-cache preview/final requests."""
     launcher = _launcher()
@@ -612,6 +763,580 @@ def test_preflight_uses_public_header_only_component_status_without_array_loadin
     assert calls == []
 
 
+def test_preflight_permits_retained_prepared_phase_and_empty_ppc_without_opening_arrays(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A post-success retained representation permits an immutable dry run."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / "retained-work-cache"
+    _write_prerequisite_cache(tmp_path, target)
+    work_root = target.parent / "lfp_summary_work"
+    representation = _write_retained_prepared_phase(work_root, "c" * 64)
+    (work_root / "ppc").mkdir()
+    before = _work_tree_snapshot(work_root)
+    calls: list[str] = []
+    terminal: list[str] = []
+
+    # The open guards apply only to launcher preflight. The subsequent snapshot
+    # intentionally reads the fixture bytes to prove the work stayed unchanged.
+    with monkeypatch.context() as guarded_monkeypatch:
+        _forbid_retained_payload_opening(
+            guarded_monkeypatch,
+            launcher,
+            (representation,),
+        )
+        result = launcher.run_launcher(
+            launcher.parse_launcher_command(
+                _new_command_arguments(
+                    tmp_path,
+                    cache_directory=target,
+                    analysis_root=tmp_path / "runs-retained-work",
+                    dry_run=True,
+                )
+            ),
+            _dependencies(tmp_path, calls, terminal),
+        )
+
+    assert result.exit_code == 0 and result.status == "preflight_complete"
+    assert calls == []
+    assert _work_tree_snapshot(work_root) == before
+
+
+def test_preflight_permits_multiple_complete_retained_prepared_representations(
+    tmp_path: Path,
+) -> None:
+    """Preflight classifies every safe retained representation as inert work."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / "multiple-retained-work-cache"
+    _write_prerequisite_cache(tmp_path, target)
+    work_root = target.parent / "lfp_summary_work"
+    _write_retained_prepared_phase(work_root, "d" * 64)
+    _write_retained_prepared_phase(work_root, "e" * 64)
+    calls: list[str] = []
+    terminal: list[str] = []
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=tmp_path / "runs-multiple-retained-work",
+                dry_run=True,
+            )
+        ),
+        _dependencies(tmp_path, calls, terminal),
+    )
+
+    assert result.exit_code == 0 and result.status == "preflight_complete"
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "containers",
+    ((), ("prepared_phase",), ("ppc",), ("prepared_phase", "ppc")),
+)
+def test_preflight_permits_existing_empty_safe_work_layout(
+    tmp_path: Path,
+    containers: tuple[str, ...],
+) -> None:
+    """An empty shared root and its optional empty containers are inert."""
+    launcher = _launcher()
+    layout_name = "-".join(containers) or "root-only"
+    target = tmp_path / "CT026" / "processed" / f"empty-work-{layout_name}"
+    _write_prerequisite_cache(tmp_path, target)
+    work_root = target.parent / "lfp_summary_work"
+    work_root.mkdir()
+    for container in containers:
+        (work_root / container).mkdir()
+    calls: list[str] = []
+    terminal: list[str] = []
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=tmp_path / f"runs-empty-work-{layout_name}",
+                dry_run=True,
+            )
+        ),
+        _dependencies(tmp_path, calls, terminal),
+    )
+
+    assert result.exit_code == 0 and result.status == "preflight_complete"
+    assert calls == []
+
+
+@pytest.mark.parametrize("ppc_state", ("complete", "incomplete", "locked", "malformed"))
+def test_preflight_rejects_any_retained_ppc_child_before_trial_loading(
+    tmp_path: Path,
+    ppc_state: str,
+) -> None:
+    """Any PPC child is active/resumable work and blocks a new launcher run."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"ppc-{ppc_state}-cache"
+    _write_prerequisite_cache(tmp_path, target)
+    run_fingerprint = "f" * 64
+    run_directory = target.parent / "lfp_summary_work" / "ppc" / run_fingerprint
+    run_directory.mkdir(parents=True)
+    if ppc_state == "complete":
+        (run_directory / "metadata.json").write_text(
+            json.dumps({"run_fingerprint": run_fingerprint}) + "\n",
+            encoding="ascii",
+        )
+        blocks = run_directory / "blocks"
+        blocks.mkdir()
+        (blocks / "summary.npz").write_bytes(b"synthetic PPC result\n")
+        (blocks / "summary.complete.json").write_text(
+            json.dumps(
+                {"block_id": "summary", "run_fingerprint": run_fingerprint}
+            )
+            + "\n",
+            encoding="ascii",
+        )
+    elif ppc_state == "incomplete":
+        (run_directory / "metadata.json").write_text(
+            json.dumps({"run_fingerprint": run_fingerprint}) + "\n",
+            encoding="ascii",
+        )
+    elif ppc_state == "locked":
+        (run_directory / "executor.lock").write_text("active\n", encoding="ascii")
+    else:
+        (run_directory / "metadata.json").write_text("{\n", encoding="ascii")
+    calls: list[str] = []
+    terminal: list[str] = []
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=tmp_path / f"runs-ppc-{ppc_state}",
+            )
+        ),
+        _preflight_only_dependencies(tmp_path, calls, terminal, label=ppc_state),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not (tmp_path / f"runs-ppc-{ppc_state}").exists()
+    assert calls == []
+
+
+@pytest.mark.parametrize("entry_kind", ("regular-file", "symlink"))
+def test_preflight_rejects_non_directory_or_linked_ppc_child_before_trial_loading(
+    tmp_path: Path,
+    entry_kind: str,
+) -> None:
+    """A PPC container must have no entries, including files and links."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"ppc-{entry_kind}-cache"
+    _write_prerequisite_cache(tmp_path, target)
+    ppc = target.parent / "lfp_summary_work" / "ppc"
+    ppc.mkdir(parents=True)
+    child = ppc / "unsafe-entry"
+    if entry_kind == "regular-file":
+        child.write_text("unexpected PPC entry\n", encoding="ascii")
+    else:
+        backing = tmp_path / "unsafe-ppc-entry-backing"
+        backing.write_text("unexpected PPC entry\n", encoding="ascii")
+        try:
+            child.symlink_to(backing)
+        except OSError as error:
+            pytest.skip(f"test filesystem does not support symlinks: {error}")
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / f"runs-ppc-{entry_kind}"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(tmp_path, calls, terminal, label=entry_kind),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+
+
+def _unsafe_work_root(
+    tmp_path: Path,
+    target: Path,
+    label: str,
+) -> None:
+    """Create one unsafe shared-work-root layout for preflight rejection."""
+    work_root = target.parent / "lfp_summary_work"
+    fingerprint = "c" * 64
+    if label == "root-file":
+        work_root.write_text("not a directory\n", encoding="ascii")
+    elif label == "root-symlink":
+        backing = tmp_path / "unsafe-root-backing"
+        backing.mkdir()
+        try:
+            work_root.symlink_to(backing, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f"test filesystem does not support symlinks: {error}")
+    elif label == "prepared-container-symlink":
+        work_root.mkdir()
+        backing = tmp_path / "unsafe-prepared-backing"
+        backing.mkdir()
+        try:
+            (work_root / "prepared_phase").symlink_to(
+                backing,
+                target_is_directory=True,
+            )
+        except OSError as error:
+            pytest.skip(f"test filesystem does not support symlinks: {error}")
+    elif label == "ppc-container-symlink":
+        work_root.mkdir()
+        backing = tmp_path / "unsafe-ppc-backing"
+        backing.mkdir()
+        try:
+            (work_root / "ppc").symlink_to(backing, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f"test filesystem does not support symlinks: {error}")
+    elif label == "representation-symlink":
+        backing_root = tmp_path / "unsafe-representation-backing"
+        backing = _write_retained_prepared_phase(backing_root, fingerprint)
+        prepared = work_root / "prepared_phase"
+        prepared.mkdir(parents=True)
+        try:
+            (prepared / fingerprint).symlink_to(backing, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f"test filesystem does not support symlinks: {error}")
+    elif label == "representation-file":
+        prepared = work_root / "prepared_phase"
+        prepared.mkdir(parents=True)
+        (prepared / fingerprint).write_text("not a representation directory\n", encoding="ascii")
+    elif label == "prepared-container-file":
+        work_root.mkdir()
+        (work_root / "prepared_phase").write_text("not a directory\n", encoding="ascii")
+    elif label == "ppc-container-file":
+        work_root.mkdir()
+        (work_root / "ppc").write_text("not a directory\n", encoding="ascii")
+    elif label == "prepared-lock":
+        representation = _write_retained_prepared_phase(work_root, fingerprint)
+        (representation / "writer.lock").write_text("active\n", encoding="ascii")
+    elif label == "incomplete-representation":
+        representation = _write_retained_prepared_phase(work_root, fingerprint)
+        (representation / "valid.npy").unlink()
+    elif label == "malformed-metadata":
+        representation = _write_retained_prepared_phase(work_root, fingerprint)
+        (representation / "metadata.json").write_text("{\n", encoding="ascii")
+    elif label == "malformed-complete":
+        representation = _write_retained_prepared_phase(work_root, fingerprint)
+        (representation / "complete.json").write_text("{\n", encoding="ascii")
+    elif label == "inconsistent-complete":
+        representation = _write_retained_prepared_phase(work_root, fingerprint)
+        (representation / "complete.json").write_text(
+            json.dumps({"representation_fingerprint": "d" * 64}) + "\n",
+            encoding="ascii",
+        )
+    elif label == "inconsistent-metadata":
+        representation = _write_retained_prepared_phase(work_root, fingerprint)
+        inconsistent_metadata = _prepared_phase_metadata(fingerprint)
+        inconsistent_metadata["representation_fingerprint"] = "d" * 64
+        (representation / "metadata.json").write_text(
+            json.dumps(inconsistent_metadata, sort_keys=True) + "\n",
+            encoding="ascii",
+        )
+    elif label == "unexpected-root-member":
+        work_root.mkdir()
+        (work_root / "leftover.txt").write_text("unexpected\n", encoding="ascii")
+    elif label == "unexpected-prepared-member":
+        prepared = work_root / "prepared_phase"
+        prepared.mkdir(parents=True)
+        (prepared / "leftover.txt").write_text("unexpected\n", encoding="ascii")
+    elif label == "unexpected-representation-member":
+        representation = _write_retained_prepared_phase(work_root, fingerprint)
+        (representation / "leftover.txt").write_text("unexpected\n", encoding="ascii")
+    elif label == "nonfingerprint-representation":
+        _write_retained_prepared_phase(work_root, "not-a-fingerprint")
+    else:
+        raise AssertionError(f"unknown unsafe work layout: {label}")
+
+
+@pytest.mark.parametrize(
+    "label",
+    (
+        "root-file",
+        "root-symlink",
+        "prepared-container-symlink",
+        "ppc-container-symlink",
+        "representation-symlink",
+        "representation-file",
+        "prepared-container-file",
+        "ppc-container-file",
+        "prepared-lock",
+        "incomplete-representation",
+        "malformed-metadata",
+        "malformed-complete",
+        "inconsistent-complete",
+        "inconsistent-metadata",
+        "unexpected-root-member",
+        "unexpected-prepared-member",
+        "unexpected-representation-member",
+        "nonfingerprint-representation",
+    ),
+)
+def test_preflight_rejects_unsafe_retained_work_layout_before_trial_loading(
+    tmp_path: Path,
+    label: str,
+) -> None:
+    """Only inert complete prepared work may coexist with a new run."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"unsafe-work-{label}"
+    _write_prerequisite_cache(tmp_path, target)
+    _unsafe_work_root(tmp_path, target, label)
+    calls: list[str] = []
+    terminal: list[str] = []
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=tmp_path / f"runs-unsafe-work-{label}",
+            )
+        ),
+        _preflight_only_dependencies(tmp_path, calls, terminal, label=label),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not (tmp_path / f"runs-unsafe-work-{label}").exists()
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "member_name",
+    ("metadata.json", "complete.json", "axes.npz", "valid.npy", "phase.npy"),
+)
+def test_preflight_rejects_missing_prepared_representation_member_before_trial_loading(
+    tmp_path: Path,
+    member_name: str,
+) -> None:
+    """Every retained representation member is required before reuse is considered."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"missing-retained-{member_name}"
+    _write_prerequisite_cache(tmp_path, target)
+    representation = _write_retained_prepared_phase(
+        target.parent / "lfp_summary_work",
+        "c" * 64,
+    )
+    (representation / member_name).unlink()
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / f"runs-missing-retained-{member_name}"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(tmp_path, calls, terminal, label=member_name),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "member_name",
+    ("metadata.json", "complete.json", "axes.npz", "valid.npy", "phase.npy"),
+)
+def test_preflight_rejects_symlinked_prepared_representation_member_before_trial_loading(
+    tmp_path: Path,
+    member_name: str,
+) -> None:
+    """Retained representation files are regular files, never link aliases."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"symlink-retained-{member_name}"
+    _write_prerequisite_cache(tmp_path, target)
+    representation = _write_retained_prepared_phase(
+        target.parent / "lfp_summary_work",
+        "c" * 64,
+    )
+    backing = tmp_path / f"symlinked-{member_name}"
+    backing.write_bytes((representation / member_name).read_bytes())
+    (representation / member_name).unlink()
+    try:
+        (representation / member_name).symlink_to(backing)
+    except OSError as error:
+        pytest.skip(f"test filesystem does not support symlinks: {error}")
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / f"runs-symlink-retained-{member_name}"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(tmp_path, calls, terminal, label=member_name),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "member_name",
+    ("metadata.json", "complete.json", "axes.npz", "valid.npy", "phase.npy"),
+)
+def test_preflight_rejects_directory_replacing_prepared_representation_member(
+    tmp_path: Path,
+    member_name: str,
+) -> None:
+    """Every expected retained representation member is a regular file."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"directory-retained-{member_name}"
+    _write_prerequisite_cache(tmp_path, target)
+    representation = _write_retained_prepared_phase(
+        target.parent / "lfp_summary_work",
+        "c" * 64,
+    )
+    (representation / member_name).unlink()
+    (representation / member_name).mkdir()
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / f"runs-directory-retained-{member_name}"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(tmp_path, calls, terminal, label=member_name),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+
+
+@pytest.mark.parametrize("identity_name", ("metadata.json", "complete.json"))
+def test_preflight_rejects_oversized_retained_identity_json_before_trial_loading(
+    tmp_path: Path,
+    identity_name: str,
+) -> None:
+    """Retained identity records have a bounded metadata-only read budget."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"oversized-{identity_name}"
+    _write_prerequisite_cache(tmp_path, target)
+    representation = _write_retained_prepared_phase(
+        target.parent / "lfp_summary_work",
+        "c" * 64,
+    )
+    identity_path = representation / identity_name
+    identity_path.write_bytes(
+        identity_path.read_bytes().rstrip() + b" " * _MAX_RETAINED_IDENTITY_JSON_BYTES
+    )
+    assert identity_path.stat().st_size > _MAX_RETAINED_IDENTITY_JSON_BYTES
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / f"runs-oversized-{identity_name}"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(tmp_path, calls, terminal, label=identity_name),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+
+
+@pytest.mark.parametrize("identity_name", ("metadata.json", "complete.json"))
+@pytest.mark.parametrize(
+    "record_case",
+    ("json-list", "json-scalar", "missing-fingerprint", "wrong-fingerprint", "nonstring-fingerprint"),
+)
+def test_preflight_rejects_nonidentity_retained_json_before_trial_loading(
+    tmp_path: Path,
+    identity_name: str,
+    record_case: str,
+) -> None:
+    """Both retained identity records must be mappings with the path fingerprint."""
+    launcher = _launcher()
+    target = (
+        tmp_path
+        / "CT026"
+        / "processed"
+        / f"invalid-{identity_name}-{record_case}"
+    )
+    _write_prerequisite_cache(tmp_path, target)
+    fingerprint = "c" * 64
+    representation = _write_retained_prepared_phase(
+        target.parent / "lfp_summary_work",
+        fingerprint,
+    )
+    record: object
+    if record_case == "json-list":
+        record = []
+    elif record_case == "json-scalar":
+        record = 1
+    elif identity_name == "metadata.json":
+        record = _prepared_phase_metadata(fingerprint)
+        if record_case == "missing-fingerprint":
+            del record["representation_fingerprint"]
+        elif record_case == "wrong-fingerprint":
+            record["representation_fingerprint"] = "d" * 64
+        else:
+            record["representation_fingerprint"] = 1
+    else:
+        record = {"representation_fingerprint": fingerprint}
+        if record_case == "missing-fingerprint":
+            record = {}
+        elif record_case == "wrong-fingerprint":
+            record = {"representation_fingerprint": "d" * 64}
+        else:
+            record = {"representation_fingerprint": 1}
+    (representation / identity_name).write_text(
+        json.dumps(record, sort_keys=True) + "\n",
+        encoding="ascii",
+    )
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / f"runs-invalid-{identity_name}-{record_case}"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(tmp_path, calls, terminal, label=record_case),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     "label",
     (
@@ -630,7 +1355,6 @@ def test_preflight_uses_public_header_only_component_status_without_array_loadin
         "unexpected-member",
         "unexpected-directory",
         "unexpected-symlink",
-        "preexisting-work",
     ),
 )
 def test_preflight_rejects_unsafe_or_nonprerequisite_cache_before_trial_loading(
@@ -713,8 +1437,7 @@ def test_preflight_rejects_unsafe_or_nonprerequisite_cache_before_trial_loading(
         except OSError as error:
             pytest.skip(f"test filesystem does not support symlinks: {error}")
     else:
-        _write_prerequisite_cache(tmp_path, target)
-        (processed / "lfp_summary_work").mkdir()
+        raise AssertionError(f"unknown unsafe cache fixture: {label}")
     calls: list[str] = []
     terminal: list[str] = []
     dependencies = replace(
