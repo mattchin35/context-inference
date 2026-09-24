@@ -1465,3 +1465,59 @@ unchanged cluster checkout has already passed its focused and complete neural
 suites repeatedly. Any newly discovered source defect becomes a separate small
 tests-first correction. This decision is a scope correction, not a waiver of
 scientific validation or protected-data preservation.
+
+### NR1E simplified cluster preflight
+
+The first simplified preflight attempt created the fresh evidence directory:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/analysis_runs/
+  ct026_nr1e_simple_preflight_2026-09-24T20-27-02Z
+```
+
+It stopped at the configuration identity check after the one permitted
+production read of ProbeB `spike_clusters.npy`. The expected configuration
+hash was stale: `423440e0...` was bound to the superseded destination basename
+ending `2026-09-23T09-49-58Z`. Holding every other configuration field fixed
+and using the authoritative destination basename ending
+`2026-09-23T22-09-50Z` gives canonical SHA-256
+`e0af24a7d670c43a26022aa20137cbaecf4a22cb675589f6263518c654829e63`.
+This was a preflight-constant error, not a scientific configuration mismatch.
+The failed evidence directory remains preserved. The attempt performed no
+cache transfer, launcher run, or Slurm action and did not reach the retained-
+work or protected-after checks.
+
+After separate user authorization, the one-constant correction was reviewed
+and the preflight ran once in a new evidence directory:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/analysis_runs/
+  ct026_nr1e_simple_preflight_2026-09-24T21-41-48Z
+```
+
+That run passed. Its direct topology is exactly the copied script,
+`command.txt`, `preflight.log`, `result.json`, and `evidence_sha256.json`; the
+hash inventory excludes itself and rehashes exactly. The copied script SHA-256
+is `3163aaa66628f17fcd8ec7f9f2f3b7e773ecfe2bb7274e4ca8b676690e5f6c1d`.
+The evidence verifies:
+
+- cluster HEAD and local `origin/refactor` are exact tracked-clean
+  `5cc1385b74ae2c95894ef0cf3a6a07c607ff73e7`;
+- the corrected destination was absent before and after the preflight;
+- exactly one NumPy load targeted ProbeB `spike_clusters.npy`, with device,
+  inode, regular-file mode, size, mtime, ctime, and atime unchanged;
+- the population is 273 stable units over 383 selected channels excluding
+  channel 220, with the approved stable-unit digest;
+- configuration hash `e0af24a7...`, Spike fingerprint `227793124...`, three
+  sites/pairs, 100 shuffles, seed zero, eight workers, 8/25/64 blocks,
+  checkpoint/incomplete-only/prepared-cache behavior, and 2-GiB/12-GiB
+  allocation caps all match the approved plan; and
+- the retained-work metadata classifier passed, while the protected legacy
+  cache and retained-work inventories were exactly equal before and after.
+
+A fresh read-only review approved the five-file evidence with no findings.
+No cache transfer, launcher dry run, report generation, or Slurm action has
+occurred. The next external step remains the separately authorized cache
+transfer and metadata-only launcher dry run from the simplified workflow.
