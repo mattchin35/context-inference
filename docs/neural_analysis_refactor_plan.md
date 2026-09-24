@@ -129,12 +129,13 @@ amplitude behavior as if that behavior were scientifically correct.
   authorization was recorded.
 - **Agent policy:** lead Sol/high orchestration; one active Terra/xhigh writer
   for NR1P or NR1C source packages, or one Terra/high evidence runner for NR1V
-  or NR1E; one fresh Sol/xhigh gate reviewer; and at most one optional
-  Terra/medium read-only scout. Only the active Terra writer may author package
-  tests/source. Evidence runners and reviewers are read-only with respect to
-  the repository; the lead alone edits documentation and stages/commits
-  reviewed paths. Section 2.6 and the package-specific divisions in Sections
-  5.5-5.6 are binding.
+  or NR1E; one fresh Sol/xhigh gate reviewer for source/scientific packages or
+  Sol/high reviewer for the simplified NR1E operational checks; and at most one
+  optional Terra/medium read-only scout. Only the active Terra writer may
+  author package tests/source. Evidence runners and reviewers are read-only
+  with respect to the repository; the lead alone edits documentation and
+  stages/commits reviewed paths. Section 2.6 and the package-specific divisions
+  in Sections 5.5-5.6 are binding.
 - **Worktree safety:** tracked files were clean at the start. Pre-existing
   untracked files are user-owned and excluded from refactor commits unless the
   user separately approves them. In particular, 14 pre-existing untracked
@@ -602,7 +603,7 @@ implementation phases. Do not replace it merely to skip a clean handoff.
 | NR1C-A | writer, `xhigh` | `xhigh` | mandatory | Source equivalence, manifest rebinding, atomic cache relocation. |
 | NR1C-B | writer, `xhigh` | `xhigh` | mandatory | Explicit launcher cache target, legacy/work protection, resume identity. |
 | NR1C-C | writer, `xhigh` | `xhigh` | mandatory | Safe classification of retained prepared-phase work versus active PPC work. |
-| NR1E | cluster evidence runner, `high` | `xhigh` | not applicable | Authorized transfer/dry-run/submission boundaries and no monitoring. |
+| NR1E | cluster evidence/transfer runner, `high` | `high` | not applicable | Realistic path/data preservation, explicit mutation gates, and no monitoring. |
 | NR2 | writer, `high` | `high` | mandatory | Metadata missingness, path containment, schema migration. |
 | NR3 | writer, `xhigh` | `xhigh` | mandatory | Open Ephys/SpikeGLX units, channel semantics, bounded I/O. |
 | NR4 | writer, `xhigh` | `xhigh` | mandatory | Time coordinates, IRIG/manual alignment, CLI compatibility. |
@@ -2264,6 +2265,65 @@ already passed the focused and complete tracked neural suites repeatedly at
 the unchanged `5cc1385`; do not rerun them solely to produce another evidence
 copy. Any newly discovered production defect becomes a separate, small
 tests-first correction rather than being patched into an external script.
+
+#### Sol/Terra work division for simplified NR1E
+
+Use one worker at a time. These are operational assignments, not repository
+code packages, so they do not use a RED/test-design/source-implementation
+sequence.
+
+**Lead Sol/high - authority and handoff.** The lead owns this plan, the
+execution log, exact path/commit constants, user authorization boundaries,
+documentation commits/pushes, and final user-facing decisions. The lead does
+not expand a worker's mutation scope implicitly. If a production source defect
+appears, the lead stops NR1E and creates a separate tests-first correction
+package.
+
+**Terra/high - preflight author and runner.** One Terra/high worker may author
+exactly one session-specific Python preflight script outside the repository.
+Its write allowlist is one newly declared evidence directory. Before execution
+it returns the script, command, paths, and expected outputs to the lead and
+stops. After explicit preflight authorization, the same worker executes it
+once and returns the result, log, and inventory. It may perform the one
+documented categorical `spike_clusters.npy` read but no other experimental
+array read and no cache, work, report, transfer, or Slurm mutation.
+
+**Sol/high - preflight review.** One read-only Sol/high reviewer checks the
+script against a short practical checklist: correct production API names;
+exact CT026 paths and constants; one allowed categorical read; forbidden-array
+and mutation boundaries; before/after preservation; understandable failure
+messages; and complete ordinary evidence files. It rejects only concrete
+scientific, data-loss, path, authorization, or likely operational failures. It
+must not require defenses against a hostile concurrent writer, transactional
+receipts, wrapper/sealer processes, or a generalized recovery framework. After
+execution it performs one read-only result review against the same checklist.
+
+**Terra/high - transfer and dry-run runner.** After separate authorization,
+one Terra/high worker owns only the declared local transfer record, remote
+transfer run/staging/final cache paths, external receipt, and launcher dry-run
+directory. It writes one simple session-specific publication script, streams
+the three cache members with `rsync`, verifies hashes, rebinds and validates the
+manifest, publishes the absent final cache, and runs the metadata-only launcher
+dry run. It stops before `sbatch`. It may not edit the repository, legacy
+cache, retained work, scientific source files, or any earlier evidence run.
+
+**Sol/high - transfer/dry-run review.** One read-only Sol/high reviewer checks
+source/destination hashes, destination manifest/configuration identity, public
+component states, receipt, legacy/work preservation, dry-run contents, and the
+literal proposed `sbatch` vector. The review is bounded to those artifacts and
+does not reopen component arrays or introduce new machinery.
+
+**Terra/high - submission only.** After explicit submission authorization, the
+same transfer runner may execute exactly the reviewed `sbatch` command, record
+the returned job ID and command, and stop. It must not poll or inspect any job
+state. A later user-requested result check is a new read-only Sol/high task.
+
+Every NR1E worker prompt must include the realistic single-user threat model,
+its exact path allowlist, the allowed reads/writes, and its stop condition.
+Workers stop on an actual path/configuration/hash/status mismatch, insufficient
+resources, an unexpected ordinary filesystem error, or a need to mutate
+outside the allowlist. They do not stop merely because additional defensive
+machinery could be imagined.
 
 **NR1E - external cluster evidence.** NR1E begins only after NR1V, NR1C-A, and
 NR1C-B are approved and committed, NR1C-C is complete and pushed, and the
