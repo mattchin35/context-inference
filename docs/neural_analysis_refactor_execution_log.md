@@ -113,7 +113,7 @@ Read-only representative CT026 and legacy-artifact check:
 | Package | State | Test commit | Implementation commit | Evidence and next gate |
 | --- | --- | --- | --- | --- |
 | NR0 | Complete and approved | `e728cea`, `2b497e4` | `177a8d6` | Final focused 704 passed; neural suite 1,395 passed; fresh Sol review approved; closure `a94559d`. |
-| NR1 | Synchrony approved; NR1C-C correction planned | - | - | Revised Synchrony is user-approved. Push and first checkout update reached `c859afe`; NR1E stopped before evidence/transfer because valid retained prepared-phase work exposed an overbroad launcher root-existence guard. NR1C-C requires user approval before tests-first implementation. |
+| NR1 | Synchrony and NR1C-C approved; awaits push | `337480a`, `2522b45`, `ca3863b`, `84c138d`, `6b2f937` | `4a9554a` | Revised Synchrony is user-approved. NR1C-C safely classifies retained prepared work and passed 135 launcher/1,616 neural tests plus fresh review. Its Git push and later cluster update remain separately gated. |
 | NR2 | Pending | - | - | Requires approved NR1 corrected baseline. |
 | NR3 | Pending | - | - | Sequential after NR2. |
 | NR4 | Pending | - | - | Sequential after NR3. |
@@ -1113,3 +1113,45 @@ never opens numerical work payloads. Historical work must not be deleted,
 archived, moved, or rewritten. NR1C-C implementation, its later push/checkout,
 cache relocation, launcher dry run, and Slurm submission remain separately
 gated.
+
+### NR1C-C implementation result
+
+The user approved the amended tests-first package. Tests were committed before
+source as `337480a`, `2522b45`, `ca3863b`, `84c138d`, and `6b2f937`. They freeze
+valid retained-work layouts, exact authentic prepared metadata and completion
+identity, bounded JSON, numerical-payload non-opening, unsafe members and
+special nodes, active PPC rejection, and deterministic file/directory/
+hierarchy replacement plus late-PPC-child races. Demonstrated test-harness
+lifetime defects were corrected narrowly without weakening launcher-time
+guards.
+
+Implementation commit `4a9554a` retains the shared work path and public
+interfaces but replaces the blanket root-existence rejection with
+descriptor-anchored structural classification. Directory and file opens use
+no-follow semantics; identity JSON opens are nonblocking and capped at 64 KiB.
+The classifier validates the authentic writer schema, recomputes the
+representation fingerprint, requires exact completion identity, never opens
+numerical payloads, and holds or revalidates anchored identities and stable
+inventories through the final hierarchy decision. Safe complete prepared work
+with an empty PPC container passes. Any PPC child, lock, malformed record,
+unsafe type/link, incomplete inventory, identity mismatch, replacement, or
+late insertion fails before trial loading or run-directory creation.
+
+Final gates:
+
+```text
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_spike_phase_launcher.py
+135 passed
+
+uv run pytest -q -p no:cacheprovider src/tests/neural_analysis
+1616 passed, 22 warnings in 169.01s
+```
+
+`py_compile`, Ruff, and `git diff --check` passed. Fresh Sol/xhigh final review
+reported no P0-P3 findings; adversarial probes confirmed fail-closed behavior
+and balanced descriptors across repeated success/failure validation. No cluster
+path or numerical CT026 work was accessed or changed during NR1C-C. The local
+NR1C-C commits remain unpushed. A new Git push, second cluster checkout update,
+NR1E evidence preflight, cache transfer, launcher dry run, and Slurm submission
+remain separately user-gated.

@@ -31,7 +31,9 @@ authorized immutable cache-only rerender completed and passed fresh Sol/xhigh
 artifact review, and the user visually approved it on 2026-09-23. The approved
 commits were pushed and the cluster checkout was safely fast-forwarded to
 `c859afe`, but NR1E preflight exposed the NR1C-C shared-work-root defect below.
-Spike-phase transfer and cluster actions remain separately gated.
+NR1C-C is now complete and approved locally through `4a9554a`; its next Git
+push, cluster update, Spike-phase transfer, and cluster actions remain
+separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -53,8 +55,8 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** tests-first NR1C-C launcher shared-work-root correction,
-  awaiting user approval. NR0 tests commits
+- **Active package:** NR1C-C is complete and approved; the next NR1E
+  prerequisite is a separately authorized Git push. NR0 tests commits
   `e728cea`
   and `2b497e4` plus implementation commit `177a8d6` are complete and
   approved. The NR1 metadata/path/resource dry run is complete and approved;
@@ -77,7 +79,9 @@ amplitude behavior as if that behavior were scientifically correct.
   Section 5.6 transfer source. The user authorized and completed the Git push
   and first cluster checkout update to `c859afe`; preflight then stopped before
   evidence creation because the launcher rejects the valid retained shared
-  prepared-phase work root. No transfer, dry run, or Slurm submission is
+  prepared-phase work root. NR1C-C now corrects that guard locally, with all
+  tests and fresh implementation review passing. Its commits are not pushed;
+  no second cluster update, transfer, dry run, or Slurm submission is
   authorized yet.
   The user requires any later preview to run unattended through Slurm without
   Codex monitoring; that execution is not approved.
@@ -280,7 +284,10 @@ amplitude behavior as if that behavior were scientifically correct.
   `c844adc`. The NR1V rendered-geometry regression is `88d7826` and its
   presentation-only correction is `389e4fd`; rerender-review documentation is
   `f8ecbf0`, `1cb0263`, and `c859afe`. All are pushed to `origin/refactor` at
-  exact `c859afe7d08235e4454fa15858ed8e02f6ce6feb`.
+  exact `c859afe7d08235e4454fa15858ed8e02f6ce6feb`. NR1C-C documentation is
+  `9ea98ab`; tests-first commits are `337480a`, `2522b45`, `ca3863b`,
+  `84c138d`, and `6b2f937`; the reviewed implementation is `4a9554a`. These
+  NR1C-C commits remain local pending separate push authorization.
 
 ## 1. Objectives
 
@@ -1906,6 +1913,29 @@ JSON/stat records. No role may access numerical CT026 work arrays, mutate the
 cluster, transfer artifacts, push, or submit Slurm during NR1C-C. After it is
 approved and committed, a new Git push and exact cluster checkout update are
 separate user gates before NR1E preflight restarts in a new evidence directory.
+
+**NR1C-C result - complete and approved.** Tests-first commits `337480a`,
+`2522b45`, `ca3863b`, `84c138d`, and `6b2f937` cover safe retained layouts,
+authentic prepared-metadata schema/fingerprint validation, bounded identity
+records, every unsafe/special-node layout, and deterministic leaf/container/
+hierarchy replacement races. Implementation commit `4a9554a` replaces the
+blanket root-existence rejection with descriptor-anchored, metadata-only
+classification. It uses no-follow/nonblocking opens, bounded 64-KiB identity
+reads, authentic writer-schema and fingerprint checks, stable inventories,
+and repeated anchored identity checks through the final hierarchy decision.
+Numerical `.npy`/`.npz` payloads are never opened. Complete prepared work plus
+an absent or empty PPC container is permitted, while every PPC child and every
+unsafe, incomplete, malformed, locked, replaced, or changing structure fails
+closed before trial loading or run creation. Public CLI, work paths, resume,
+report, cleanup, and runtime scientific identities are unchanged.
+
+Final verification was 135 launcher tests and 1,616 complete neural-analysis
+tests with 22 known warnings. `py_compile`, Ruff, and `git diff --check` pass.
+A fresh Sol/xhigh implementation reviewer reported no P0-P3 findings after
+adversarial path-replacement, late-child, descriptor-leak, and schema probes.
+No cluster path or numerical CT026 work was accessed or modified during this
+package. The next user gate is the NR1C-C Git push; after that, a second exact
+cluster checkout update remains separately gated.
 
 **NR1E - external cluster evidence.** NR1E begins only after NR1V, NR1C-A, and
 NR1C-B are approved and committed, NR1C-C is complete, the user approves the
