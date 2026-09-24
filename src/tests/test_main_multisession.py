@@ -22,6 +22,13 @@ def load_main_module():
     behavior_analysis_pkg.performance_plots = ModuleType("behavior_analysis.performance_plots")
     behavior_analysis_pkg.performance_plots.DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS = {
         "QL": "qlearning_mouse_agreement",
+        "FQL": "fql_mouse_agreement",
+        "HMM": "hmm_logodds_mouse_agreement",
+        "HMM decay": "hmm_logodds_decay_mouse_agreement",
+        "Persev": "perseveration_mouse_agreement",
+        "Doubt+P": "doubt_perseveration_mouse_agreement",
+        "WSLS": "wsls_mouse_agreement",
+        "Ideal": "observer_mouse_agreement",
         "Probe+P": "simple_probe_persistence_mouse_agreement",
         "Expect+D+P": "expectancy_persistence_doubt_mouse_agreement",
     }
@@ -1881,6 +1888,8 @@ def test_ensure_block_agent_mouse_agreement_columns_regenerates_missing_columns(
             doubt_perseveration_mouse_agreement=[0.75, 0.25],
             wsls_mouse_agreement=[1.0, 0.5],
             observer_mouse_agreement=[0.5, 0.5],
+            simple_probe_persistence_mouse_agreement=[0.5, 0.75],
+            expectancy_persistence_doubt_mouse_agreement=[0.75, 1.0],
         )
 
     monkeypatch.setattr(
@@ -1916,6 +1925,8 @@ def test_prepare_agent_mouse_agreement_block_points_long_format():
                     "doubt_perseveration_mouse_agreement": [0.75, 0.25],
                     "wsls_mouse_agreement": [1.0, "None"],
                     "observer_mouse_agreement": [0.5, 0.5],
+                    "simple_probe_persistence_mouse_agreement": [0.5, 0.75],
+                    "expectancy_persistence_doubt_mouse_agreement": [0.75, 1.0],
                 }
             ),
             augmented_trial_df=pd.DataFrame({"cur_block": [0, 1]}),
@@ -1959,6 +1970,8 @@ def test_prepare_agent_mouse_agreement_summary_calculates_session_agent_quartile
                     "doubt_perseveration_mouse_agreement": [0.0, 0.5, 1.0],
                     "wsls_mouse_agreement": [1.0, 0.5, 0.0],
                     "observer_mouse_agreement": [0.5, 0.5, 1.0],
+                    "simple_probe_persistence_mouse_agreement": [0.25, 0.5, 0.75],
+                    "expectancy_persistence_doubt_mouse_agreement": [0.0, 0.5, 1.0],
                 }
             ),
             augmented_trial_df=pd.DataFrame({"cur_block": [0, 1, 2]}),
