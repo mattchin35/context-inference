@@ -1355,3 +1355,55 @@ introspection may construct production dependencies but may not call a data
 seam or held-script `main`. Only after that static approval may the user
 separately authorize one invocation. Staging does not authorize tests, the
 categorical read, transfer, launcher dry run, or Slurm.
+
+### NR1E first held bundle and static rejection
+
+The user authorized staging only. The evidence runner verified the exact
+tracked-clean cluster checkout at `5cc1385` with the pre-existing generated
+untracked-name set preserved, preserved all three rejected incident
+directories, and created only:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/analysis_runs/
+  ct026_nr1e_held_runner_2026-09-24T06-07-05Z
+```
+
+It wrote every planned executable/helper plus the exact invocation command,
+recorded SHA-256 manifests, set status
+`held_unexecuted_pending_static_review`, and stopped. No held script, test,
+import, compile, NumPy call, production factory, data seam, transfer, launcher,
+or Slurm command ran. Key frozen digests were:
+
+```text
+held_files.sha256       43d4fc248c57b4cf16401d768ae97d9daf6d2d9447a896f7f3c6cf0a1f72f813
+staging_manifest.tsv    9050ba44dd5f9fb9566bffdb26983c30bcd712dffa3785587510a8db8e8c6de1
+run_held_preflight.sh   cccb1bebda223ed0aa9bb12451aea19a4fcca227062c8e3871571551634c1e29
+guarded runner          d6781366c3c2227b1a1aa993aa9e5e091f3f22e383d5cd408cf54bd794f49537
+finalizer               27b0505dcc586fc9c5ee5b0fe74f8448cb7a08495ff1901a6c33f1c3b7ec546c
+```
+
+Fresh Sol/xhigh static review rehashed unchanged bytes; passed Bash syntax,
+no-bytecode Python AST/compile, runtime dataclass-field, and signature-binding
+checks without calling a data seam or held `main`; and confirmed ProbeB atime
+remained unchanged. It rejected invocation for six P1 defects:
+
+1. the wrapper trusts mutable `held_files.sha256` rather than first matching it
+   to an externally approved literal digest;
+2. initial/final checkout state is recorded but not required to equal clean
+   `5cc1385` and the baseline untracked-name set;
+3. shell `set -e` skips final preservation and failure evidence on any phase,
+   test, guarded-read, or classifier error;
+4. guard failures can falsely mark a descriptor closed and omit initial,
+   post-load, or post-close status evidence;
+5. terminal success is written before hash/inventory completion; and
+6. exact source paths, 273-unit/383-channel population identity, stable-unit
+   digest, seed, 8/25/64 blocks, checkpoint/prepared-cache settings, 2-GiB/
+   12-GiB bounds, resource sufficiency, and full-call RSS are not enforced.
+
+P2 gaps were a missing durable protected-after comparison receipt, incomplete
+command/failure chronology, and a staging inventory that recorded its own size
+as zero. The bundle remains frozen and must not be invoked or modified. The
+next possible external mutation is another separately authorized staging-only
+replacement bundle followed by a new static review. No invocation, categorical
+read, transfer, launcher dry run, or Slurm action is authorized.

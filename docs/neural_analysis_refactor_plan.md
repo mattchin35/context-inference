@@ -41,7 +41,10 @@ requested `O_NOATIME` flag. The authorized NFS-aware attempt again passed every
 test gate but stopped before the read because its runner used the wrong
 production dependency attribute. A complete held-runner staging and static
 review now precede any further invocation; staging and invocation are separate
-user gates. Spike-phase transfer and later cluster actions remain unapproved.
+user gates. The first staging-only bundle was frozen without execution and
+rejected by static review for fail-closed evidence defects. It must remain
+unchanged; any correction requires a new staging-only bundle and review.
+Spike-phase transfer and later cluster actions remain unapproved.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -105,8 +108,9 @@ amplitude behavior as if that behavior were scientifically correct.
   `load_population` instead of the actual `load_active_population` field. Its
   preserved runner also lacks complete post-state/resource/final-evidence
   handling, so a mechanical retry is prohibited. A staging-only frozen-runner
-  review, later invocation, transfer, launcher dry run, and Slurm submission
-  are not authorized yet.
+  review rejected the first held bundle before execution. A corrected fresh
+  staging-only bundle, later invocation, transfer, launcher dry run, and Slurm
+  submission are not authorized yet.
   The user requires any later preview to run unattended through Slurm without
   Codex monitoring; that execution is not approved.
 - **Approved NR1 destinations:** session root
@@ -2141,6 +2145,47 @@ with an intervening read-only static review:
 The next user decision is staging-only. It does not authorize runner execution
 or rereading `spike_clusters.npy`. The two earlier rejected directories and
 this third rejected directory remain immutable incident evidence.
+
+**First held bundle - staged and rejected.** The user authorized staging only.
+The runner created this fresh directory and wrote the bundle without executing
+any held script, test, import, compile, NumPy call, production factory, data
+seam, transfer, launcher, or Slurm command:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/analysis_runs/
+  ct026_nr1e_held_runner_2026-09-24T06-07-05Z
+```
+
+Its frozen `held_files.sha256` digest is
+`43d4fc248c57b4cf16401d768ae97d9daf6d2d9447a896f7f3c6cf0a1f72f813`;
+the staging-manifest TSV digest is
+`9050ba44dd5f9fb9566bffdb26983c30bcd712dffa3785587510a8db8e8c6de1`.
+Fresh static review rehashed the unchanged bytes, passed shell syntax,
+no-bytecode Python AST/compile, dataclass-field, and signature-binding checks,
+and confirmed no guarded read occurred. It rejected invocation for six P1
+fail-closed defects:
+
+- the wrapper trusts a mutable digest manifest rather than an externally
+  approved literal digest;
+- initial/final checkout state is logged but not required to equal clean
+  `5cc1385` and the preserved untracked-name baseline;
+- shell `set -e` bypasses final preservation/failure evidence on any gate
+  error;
+- guarded-read failures can claim descriptor closure falsely and lose the
+  initial/post/post-close status records;
+- success is written before evidence hashing/inventory completion; and
+- exact CT026 paths, 273-unit/383-channel population identity, stable-unit
+  digest, seed, 8/25/64 blocks, checkpoint/prepared-cache settings, 2-GiB/
+  12-GiB bounds, resource sufficiency, and full-call RSS are not enforced.
+
+P2 gaps are the absence of a durable protected-after comparison receipt,
+incomplete command/failure chronology, and a self-inaccurate staging inventory.
+Do not invoke or modify this bundle. A correction requires another newly
+timestamped staging-only directory containing a complete replacement bundle,
+new digests, and another fresh static review under the same two-authorization
+workflow. The next user decision remains staging-only; no invocation,
+categorical reread, transfer, launcher dry run, or Slurm action is authorized.
 
 **NR1E - external cluster evidence.** NR1E begins only after NR1V, NR1C-A, and
 NR1C-B are approved and committed, NR1C-C is complete and pushed, and the
