@@ -234,7 +234,7 @@ and outcome-driven:
 | --- | --- |
 | U1 - session metadata | CT026, CT014, and a differently named synthetic session can describe and validate behavior and per-probe sources without code edits. |
 | U2 - metadata-driven webapp | The existing webapp launches from one metadata path and uses those resolved sources for existing bounded interactive and cached views. |
-| U3 - metadata-driven computation entry | The existing LFP-summary dry run, local entry, and Slurm handoff resolve the same metadata and scientific configuration. |
+| U3 - metadata-driven computation entry | The existing Spike-phase/PPC dry run, local entry, and Slurm handoff resolve the same metadata and scientific configuration. |
 | U4 - documentation and usability approval | A user can follow the concise guide without reading implementation modules; the user approves the workflow. |
 | R - readability-only reorganization | After U4 approval, selected existing modules may be moved or split with no new functionality. |
 
@@ -255,6 +255,37 @@ simplest implementation.
 - Do not require a separate reviewer, model assignment table, or documentation
   commit for every small extraction.
 - Keep one editing agent and preserve unrelated user changes.
+
+Milestone ownership is deliberately small:
+
+| Milestone | Terra/high writer | Sol/high review | Lead responsibility |
+| --- | --- | --- | --- |
+| U1 | Focused RED tests, metadata records, JSON/CLI, and resolution | Schema meaning, source binding, missingness, and the no-array boundary | Freeze the field/consumer contract, protect scope, commit, and update the guide |
+| U2 | Focused webapp RED tests and minimal replacement of manual source wiring | Source routing, saved-versus-live provenance, and startup non-computation | Freeze the supported view list and conduct the usability check |
+| U3 | Focused adapter/launcher/wrapper RED tests and minimal metadata integration | Configuration equivalence, source fingerprints, saved-run behavior, and dry-run nonmutation | Preserve execution and authorization boundaries and approve user-facing commands |
+| U4 | Examples, README, and command smoke tests | README-only novice workflow review and final cross-milestone consistency review | Conduct user acceptance and decide whether readability phase R may start |
+
+One Terra/high writer may carry U1 through U3 for continuity. Do not create a
+new writer or reviewer for every file. Sol/xhigh is reserved for an actual
+numerical-method change or unexpected real-data scientific discrepancy; none
+is planned for U1-U4.
+
+Every implementation handoff contains only:
+
+- the milestone goal and explicit non-goals;
+- the baseline commit and known unrelated user-owned changes;
+- the exact editable file list and current functions/callers in scope;
+- the metadata field-to-consumer mapping relevant to that milestone;
+- the tests to add, the focused RED command, and the expected RED reason;
+- the focused GREEN and milestone-completion commands;
+- the array/I/O performance boundary and forbidden real-data or external
+  actions; and
+- the final diff, test summary, and remaining user gate.
+
+Reviews address ordinary end-user failures, scientific source/configuration
+identity, saved provenance, and destructive mistakes. They must not add
+hostile-writer, concurrency, generalized transaction, hypothetical-layout, or
+framework requirements.
 
 For each implementation milestone:
 
@@ -319,6 +350,30 @@ data flow is binding.
   already used by CT026 and CT014. Unknown layouts fail clearly; no migration,
   external-root mapping, or layout inference is added.
 
+The U1 tests freeze exact field spellings. Before those tests are written, the
+tests-only handoff must map each field to its current consumer using this
+minimal content contract:
+
+| Metadata value | Kind | Needed by | Existing consumer |
+| --- | --- | --- | --- |
+| subject and session identity | scalar labels | every action | current display and `LFPSummaryConfig` identity |
+| behavior session directory and explicit trial/event files used by current code | directory and files | behavior views and applicable summary components | current behavior/trial loaders |
+| optional existing treadmill source | file | treadmill-dependent existing views | current treadmill loader |
+| stable probe ID and acquisition family | scalar labels | probe selection and LFP loading | current Open Ephys or SpikeGLX loader selection |
+| LFP source and its authoritative preprocessing/metadata sidecar | files | LFP views and summary components | current Open Ephys `lfp_preprocessing.json` or SpikeGLX same-stem metadata reader |
+| synchronization source | file | aligned LFP views and summary components | current alignment loader |
+| sorter output | directory | spike views and Spike phase | current sorter metadata loader |
+| aligned spikes | file | spike views and Spike phase | current aligned-spike loader |
+| optional channel-quality source | file | quality-selected populations | current channel-quality loader |
+| site IDs, display labels, probe references, and saved-channel indices | records | LFP controls and configuration | current `LFPSiteConfig` construction |
+| site-pair references | ID pairs | existing synchrony views | current site-pair configuration |
+| optional approved cache or snapshot directory | directory | cached views | current cache/snapshot inspection |
+
+The metadata records source locations and stable labels. It does not store
+derived unit IDs, selected-unit results, scientific thresholds, quality-filter
+rules, bands, seeds, or execution policy. Current code-owned selection rules
+remain code owned; explicit run choices remain command inputs.
+
 ### Resolution boundary
 
 One small metadata module loads, structurally validates, resolves paths, and
@@ -345,23 +400,29 @@ Tests-only review may refine names, but it may not expand responsibility.
   controls from resolved metadata.
 - Existing bounded interactive capabilities may run only after explicit user
   action and continue using their current numerical functions.
-- Expensive Power/Synchrony/Spike-phase production computation remains outside
-  Streamlit. The app may show the exact dry-run or launcher command.
+- Spike-phase/PPC production computation remains outside Streamlit. The app
+  retains its current explicitly triggered bounded Power/Synchrony actions and
+  may show the exact Spike-phase/PPC dry-run or launcher command.
 - Cached views use the saved cache/snapshot provenance and never relabel saved
   arrays with new live metadata.
 - Startup and unrelated rerenders do not perform expensive computation.
 
 ### Computation boundary
 
-- The existing LFP-summary launcher and shell wrapper gain a metadata input;
-  they are not replaced by a generic execution system.
+- The existing Spike-phase/PPC launcher and `hpc_ppc.sh` wrapper gain a metadata
+  input; they are not replaced by a generic execution system.
 - Dry run, local execution, and Slurm handoff resolve the same metadata into the
   same scientific configuration.
-- Explicit user choices remain explicit: component, probe/population, shuffle
-  count, worker count, preview/final intent, and output/run root when needed.
+- Explicit user choices remain explicit: probe/population, shuffle count,
+  worker count, preview/final intent, cache directory, and output/run root when
+  needed.
 - Resume uses the saved run directory and saved resolved configuration.
 - Existing cache, checkpoint, progress, resource, signal, and report behavior
   remains unchanged.
+- Power and Synchrony retain their current bounded local/webapp entry points.
+  U3 does not add Power, Synchrony, or Compute All to the cluster launcher. A
+  future request for those cluster modes requires a separate user-approved
+  usability milestone.
 
 ### Supported flow
 
@@ -370,7 +431,7 @@ neural_session.json
   -> load / validate / resolve session and per-probe sources
   -> existing bounded webapp views
   -> existing cache inspection
-  -> existing LFP-summary dry run / local launcher / Slurm wrapper
+  -> existing Spike-phase/PPC dry run / local launcher / Slurm wrapper
 ```
 
 This is a user-input and routing change, not a new scientific workflow.
@@ -395,8 +456,10 @@ It contains these sections:
 4. **Launch the webapp.** Show one metadata-driven command, expected selectors,
    live versus cached behavior, and unavailable-input messages.
 5. **Run a large computation.** Show exact metadata-driven dry-run, local, and
-   supported Slurm commands for the existing LFP-summary components. Explain
-   preview versus final intent and identify the run directory.
+   Slurm commands for the existing Spike-phase/PPC launcher. Explain preview
+   versus final intent and identify the run directory. Describe Power and
+   Synchrony only through their already-supported bounded local/webapp paths;
+   do not imply that they have a cluster launcher.
 6. **Know when a run finished.** Identify state, log, manifest, component,
    report, failure, and resume locations without implying that file existence
    alone proves compatibility.
@@ -1948,7 +2011,8 @@ The initial schema contains only values required by existing capabilities:
 - for each probe, the existing spike sorter directory, aligned-spike source,
   and optional channel-quality source used by current population selection;
 - existing site/channel/anatomical labels and site-pair references;
-- existing population selection inputs; and
+- stable population labels and probe references needed to request the current
+  code-owned population selection; and
 - optional references to approved caches or snapshots already supported by the
   webapp.
 
@@ -1959,7 +2023,44 @@ Scientific bands, window definitions, seeds, shuffle procedures, numerical
 thresholds, memory limits, cache schemas, and figure settings remain outside
 metadata.
 
-### 7.4 Tests written first
+Validation has three direct levels:
+
+1. structural validation checks JSON types, IDs, references, and the one schema
+   version without touching the filesystem;
+2. filesystem validation resolves session-root-relative paths and checks their
+   declared file/directory kinds without opening scientific arrays; and
+3. action validation reports which existing webapp or computation actions are
+   available and which required inputs are missing.
+
+Open Ephys versus SpikeGLX comes from the explicit acquisition-family field,
+not a filename guess. Authoritative sample rate, units, and source-value
+semantics come from the current acquisition metadata readers, not duplicated
+user-entered values.
+
+### 7.4 User-facing contract
+
+The initial public Python boundary is the five small functions in Section 2.8.
+The tests-only package may improve their names only to avoid a real collision;
+it may not introduce managers, registries, base classes, or a second metadata
+representation.
+
+The CLI has two ordinary operations:
+
+```text
+uv run python -m src.neural_analysis.cli.create_session_metadata create \
+  --session-root SESSION_ROOT [--output METADATA_PATH]
+
+uv run python -m src.neural_analysis.cli.create_session_metadata validate \
+  --metadata METADATA_PATH [--action webapp|power|synchrony|spike-phase]
+```
+
+`create` writes one human-editable incomplete skeleton and never searches the
+session tree. The user fills explicit paths and records. `validate` prints a
+short availability summary and returns nonzero for malformed metadata or for
+missing inputs required by the requested action. With no `--action`, it reports
+all four action categories without requiring every optional capability.
+
+### 7.5 Tests written first
 
 - deterministic JSON round trip and stable output ordering;
 - exactly one schema version and clear rejection of unknown versions;
@@ -1981,7 +2082,15 @@ Do not test unrequested metadata locations, mixed new acquisition layouts,
 automatic migrations, network sources, dynamic discovery, or hostile concurrent
 replacement.
 
-### 7.5 Performance and completion
+Focused RED/GREEN command:
+
+```bash
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_session_metadata.py \
+  src/tests/neural_analysis/cli/test_create_session_metadata.py
+```
+
+### 7.6 Performance and completion
 
 Metadata validation reads JSON and small authoritative text metadata only when
 filesystem/action validation requires it. It does not read LFP, sync, spike-
@@ -2001,11 +2110,40 @@ current scientific and presentation behavior.
 
 ### 8.2 Implementation scope
 
-Modify the existing webapp entry points and only their immediately required
-helpers. Add one small adapter module only if direct use from both current
-webapp entry points would otherwise duplicate resolution logic. Do not create a
-new application shell, router, state framework, data-access framework, or view
-package hierarchy.
+Modify `psth_webapp.main`, its existing LFP-summary bridge, and
+`lfp_summary_webapp.render_lfp_summary_view` only as required. Add one narrow
+`lfp_summary_session.py` adapter in U2 because both the webapp and the later U3
+launcher need the same resolved-session-to-`LFPSummaryConfig` construction.
+The adapter contains direct functions, not a workflow registry, factory tree,
+or source framework. Do not create a new application shell, router, state
+framework, data-access framework, or view package hierarchy.
+
+The initial U2 edit set is:
+
+- `src/neural_analysis/lfp_summary_session.py`;
+- `src/neural_analysis/psth_webapp.py`;
+- `src/neural_analysis/lfp_summary_webapp.py`;
+- `src/tests/neural_analysis/test_lfp_summary_session.py`;
+- `src/tests/neural_analysis/test_psth_webapp.py`;
+- `src/tests/neural_analysis/test_lfp_summary_webapp.py`; and
+- the webapp section of `src/neural_analysis/README.md`.
+
+Broader source edits require a concrete missing current caller and a plan
+amendment; a future preferred package shape is not sufficient.
+
+The documented launch shape is:
+
+```bash
+uv run streamlit run src/neural_analysis/psth_webapp.py -- \
+  --session-metadata /path/to/session/neural_session.json
+```
+
+The app loads and resolves that metadata once, then passes resolved records to
+the current loader and view functions. Existing directly called helper
+signatures remain compatible during U2. The metadata path replaces hardcoded
+browser roots, session IDs, probe paths, fixed site/channel definitions, and
+CT-specific region defaults in the metadata-driven route; it does not add a
+second application.
 
 The webapp accepts one explicit metadata path and derives the existing:
 
@@ -2018,8 +2156,24 @@ The webapp accepts one explicit metadata path and derives the existing:
 - approved cache/snapshot choices.
 
 Existing bounded interactive analysis may run after the same explicit user
-actions used today. Existing expensive production computation remains outside
+actions used today. Spike-phase/PPC production computation remains outside
 Streamlit. The webapp may display the exact launcher command for that work.
+
+The supported current views are explicitly:
+
+- Unit raster/PSTH;
+- Trial spikes/licks/choices;
+- Population PCA decoding;
+- Population PCA switch trajectories;
+- LFP phase clustering;
+- Single-trial relative phase;
+- Spike-LFP phase locking;
+- Single-trial spike-LFP phase; and
+- Cached LFP summary, including its existing cached and explicitly triggered
+  bounded Power/Synchrony routes.
+
+Metadata may make a view unavailable when its current required source is
+missing. U2 does not add a view or extend an existing view to a new analysis.
 
 ### 8.3 Tests written first
 
@@ -2041,6 +2195,16 @@ Streamlit. The webapp may display the exact launcher command for that work.
 - a synthetic noninteractive startup smoke reaches the metadata-derived UI
   without raw-data computation.
 
+Focused RED/GREEN command:
+
+```bash
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_session_metadata.py \
+  src/tests/neural_analysis/test_lfp_summary_session.py \
+  src/tests/neural_analysis/test_lfp_summary_webapp.py \
+  src/tests/neural_analysis/test_psth_webapp.py
+```
+
 ### 8.4 Performance and completion
 
 Startup may read metadata and small manifests/tables but not full LFP, phase,
@@ -2056,25 +2220,49 @@ Python paths or dataset constants.
 
 ### 9.1 Purpose
 
-Give large existing computations one easy, metadata-driven entry point while
-retaining the proven LFP-summary launcher, cache, checkpoint, report, and Slurm
-behavior.
+Give the existing large Spike-phase/PPC computation one easy, metadata-driven
+entry point while retaining its proven launcher, cache, checkpoint, report,
+and Slurm behavior.
 
 ### 9.2 Initial production scope
 
-Prefer one narrow adapter such as
-`src/neural_analysis/lfp_summary_session.py`. It resolves U1 metadata into the
-existing `LFPSummaryConfig` and current source callables. The tests-only review
-may choose a clearer existing-module location, but it may not introduce a
-workflow registry or execution package.
-
-Extend the current launcher and `src/shell_scripts/hpc_ppc.sh` only as needed
+Reuse the narrow `lfp_summary_session.py` adapter introduced in U2. Extend
+`lfp_spike_phase_launcher.py` and `src/shell_scripts/hpc_ppc.sh` only as needed
 to accept an explicit metadata path. Preserve direct-path commands during the
-transition.
+transition. Do not introduce another configuration builder, workflow registry,
+or execution package.
+
+The initial U3 edit set is:
+
+- `src/neural_analysis/lfp_summary_session.py`, only for launcher-facing
+  request construction not already covered by U2;
+- `src/neural_analysis/lfp_summary_models.py`, only for the missing current
+  source identities listed below;
+- `src/neural_analysis/lfp_spike_phase_launcher.py`;
+- `src/shell_scripts/hpc_ppc.sh`;
+- `src/tests/neural_analysis/test_lfp_summary_session.py`;
+- `src/tests/neural_analysis/test_lfp_summary_models.py`;
+- `src/tests/neural_analysis/test_lfp_summary_io.py`;
+- `src/tests/neural_analysis/test_lfp_summary_synthetic_integration.py`;
+- `src/tests/neural_analysis/test_lfp_spike_phase_launcher.py`;
+- `src/tests/neural_analysis/test_hpc_ppc_shell.py`; and
+- the computation section of `src/neural_analysis/README.md`.
+
+For `new`, `--session-metadata` and the legacy `--session-path` are mutually
+exclusive. `--cache-directory` remains explicit, so session metadata does not
+become an output-placement policy. Resume, report recovery, and report rerender
+continue to accept only their saved run directory and never reread live session
+metadata.
+
+The metadata-driven command shape is:
+
+```text
+new --session-metadata PATH --probe ID --shuffles 100|1000 --workers N \
+    --cache-directory PATH [--analysis-root PATH] [--dry-run|--final-run]
+```
 
 The user continues to state existing run choices explicitly:
 
-- component or Compute All;
 - probe/population;
 - shuffle count;
 - worker count;
@@ -2085,6 +2273,11 @@ The user continues to state existing run choices explicitly:
 The metadata supplies session identity and sources. It does not silently choose
 scientific or execution settings.
 
+U3 does not add Power, Synchrony, or Compute All modes to this launcher. Their
+existing Python pipeline functions and bounded webapp actions remain available,
+but adding new local/Slurm execution modes would be new execution capability
+and requires a separate user-approved plan.
+
 ### 9.3 Tests written first
 
 - CT026 metadata resolves to the approved configuration, source semantics,
@@ -2094,16 +2287,36 @@ scientific or execution settings.
 - the synthetic differently named fixture passes through labels unchanged;
 - webapp handoff and launcher dry run resolve the same session/probe/source
   identities;
-- Power, Synchrony, Spike phase, and Compute All require only their current
-  inputs and report unavailable inputs clearly;
-- missing Spike inputs do not disable Power or Synchrony;
+- Spike phase requires only its current inputs and reports missing behavior,
+  LFP, sync, sorter, aligned-spike, or quality sources clearly;
+- action validation still proves that missing Spike inputs do not disable the
+  existing Power or Synchrony webapp paths;
 - dry run performs no numerical array load and no cache/work/report mutation;
-- one bounded synthetic integration reaches the existing pipeline;
+- one bounded synthetic integration reaches the existing Spike-phase pipeline;
 - existing direct-path CLI, resume, recovery, checkpoint, and Slurm forwarding
   tests remain green;
 - resume continues to use saved run configuration rather than changed live
   metadata; and
 - documentation commands parse and reach no-submit smoke paths.
+
+The same milestone adds only the source-identity records already required for
+correct reuse with new sessions: the authoritative same-stem SpikeGLX metadata
+file plus the consumed `spike_times.npy`, `spike_clusters.npy`,
+`cluster_info.tsv`, aligned-spike file, and channel-quality file when used.
+Implement this by extending the current component-scoped source fingerprint
+function directly; do not add a source registry or fingerprint framework.
+
+Focused RED/GREEN command:
+
+```bash
+uv run pytest -q -p no:cacheprovider \
+  src/tests/neural_analysis/test_lfp_summary_session.py \
+  src/tests/neural_analysis/test_lfp_summary_models.py \
+  src/tests/neural_analysis/test_lfp_summary_io.py \
+  src/tests/neural_analysis/test_lfp_summary_synthetic_integration.py \
+  src/tests/neural_analysis/test_lfp_spike_phase_launcher.py \
+  src/tests/neural_analysis/test_hpc_ppc_shell.py
+```
 
 No new scheduler, execution backend, run-state model, lock behavior, recovery
 mode, resource policy, component schema, or cache publication behavior is in
@@ -2115,9 +2328,9 @@ Metadata resolution adds no large-array copy. Existing memory maps, prepared-
 phase sharing, worker bounds, checkpoint behavior, and scientific kernels are
 unchanged. Run no real session computation without a separate user gate.
 
-U3 is complete when the metadata-driven dry run matches the existing approved
-configuration, a synthetic run reaches the current pipeline, and the existing
-Slurm wrapper can receive the same metadata-driven request.
+U3 is complete when the metadata-driven Spike-phase/PPC dry run matches the
+existing approved configuration, a synthetic run reaches the current pipeline,
+and the existing Slurm wrapper can receive the same metadata-driven request.
 
 ## 10. U4 - Documentation and usability acceptance
 
@@ -2127,7 +2340,8 @@ Finalize `src/neural_analysis/README.md` as the single end-user guide described
 in Section 2.9. Keep technical details in function docstrings or one linked
 developer note only when needed.
 
-Provide tested, generated examples for:
+Provide tested, generated examples under
+`docs/examples/neural_analysis/` for:
 
 - an Open Ephys session shaped like the existing CT026 inputs;
 - a SpikeGLX session shaped like the existing CT014 inputs; and
@@ -2135,6 +2349,17 @@ Provide tested, generated examples for:
   branches.
 
 Document the small supported Python API, not every internal function.
+
+The final README contains copyable commands for metadata creation and
+validation, Streamlit launch, Spike-phase/PPC dry run and local execution, the
+current Slurm handoff, resume, report recovery, and report rerender. Owning
+parser tests exercise those commands; do not build a documentation-test
+framework.
+
+U4 edits only `src/neural_analysis/README.md`, the three files under
+`docs/examples/neural_analysis/`, and the smallest owning parser/smoke tests
+needed to exercise copied commands. If U4 uncovers a source defect, stop and
+plan that localized fix rather than hiding it in documentation work.
 
 ### 10.2 Usability review
 
@@ -2153,6 +2378,12 @@ be able to:
 
 Every copied command is exercised by a parser or synthetic smoke test. The
 review must not require reading source code or architecture documents.
+
+The U4 reviewer performs one novice walkthrough for an Open Ephys-shaped
+example and one for a SpikeGLX-shaped example, plus the differently named
+synthetic fixture. The walkthrough may parse commands and run metadata-only
+smokes, but it performs no real numerical computation, cache publication,
+external copy, or Slurm submission.
 
 ### 10.3 Usability completion gate
 
@@ -2260,8 +2491,8 @@ generalized versions; it does not remove current proven safety behavior.
 - behavior and per-probe LFP/sync/spike/quality sources are selected from that
   metadata with no dataset-specific code edit;
 - the existing webapp opens the supported existing views from metadata;
-- the existing LFP-summary dry run, local entry, and Slurm handoff resolve the
-  same metadata and scientific configuration;
+- the existing Spike-phase/PPC dry run, local entry, and Slurm handoff resolve
+  the same metadata and scientific configuration;
 - approved historical and corrected artifacts remain readable and unchanged;
 - the concise README is sufficient for the end-user workflow; and
 - the complete neural and repository suites pass.
