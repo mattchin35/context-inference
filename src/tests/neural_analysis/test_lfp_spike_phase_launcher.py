@@ -1297,6 +1297,255 @@ def test_preflight_fails_closed_when_prepared_child_changes_before_inventory(
     assert _work_tree_snapshot(original_representation) == original_inventory
 
 
+def _forbid_numerical_member_descriptor_opening(
+    monkeypatch: pytest.MonkeyPatch,
+    representations: tuple[Path, ...],
+) -> None:
+    """Fail if preflight opens any listed representation's numerical payload.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Patch controller used to replace :func:`os.open` for one test.
+    representations : tuple[pathlib.Path, ...]
+        Absolute retained-representation directories whose ``axes.npz``,
+        ``valid.npy``, and ``phase.npy`` members must remain opaque.
+
+    Returns
+    -------
+    None
+        Installs a guard that rejects both directory-descriptor basenames and
+        absolute member paths, independent of the requested ``os.open`` mode.
+    """
+    real_open = os.open
+    numerical_member_names = {"axes.npz", "valid.npy", "phase.npy"}
+    protected_numerical_paths = {
+        os.fspath(representation / member_name)
+        for representation in representations
+        for member_name in numerical_member_names
+    }
+
+    def guarded_open(
+        path: object,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        """Delegate metadata opens while refusing numerical-member descriptors."""
+        path_name = os.fsdecode(os.fspath(path))
+        if (
+            path_name in protected_numerical_paths
+            or (dir_fd is not None and path_name in numerical_member_names)
+        ):
+            raise AssertionError("launcher preflight opened a numerical member")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", guarded_open)
+
+
+@pytest.mark.parametrize(
+    ("identity_name", "read_occurrence"),
+    (("metadata.json", 1), ("complete.json", 2)),
+)
+def test_preflight_fails_closed_when_identity_is_replaced_after_descriptor_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    identity_name: str,
+    read_occurrence: int,
+) -> None:
+    """A same-name identity replacement cannot certify the old descriptor data."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"post-read-{identity_name}"
+    config = _write_prerequisite_cache(tmp_path, target)
+    representation = _write_authentic_retained_prepared_phase(
+        target.parent / "lfp_summary_work",
+        config,
+    )
+    identity_path = representation / identity_name
+    replacement = tmp_path / f"replacement-{identity_name}"
+    replacement.write_bytes(identity_path.read_bytes())
+    replacement_inode = replacement.lstat().st_ino
+    real_read = os.read
+    observed_reads = 0
+
+    def raced_read(descriptor: int, size: int) -> bytes:
+        """Return the original descriptor bytes, then atomically replace its name."""
+        nonlocal observed_reads
+        encoded = real_read(descriptor, size)
+        observed_reads += 1
+        if observed_reads == read_occurrence:
+            replacement.replace(identity_path)
+        return encoded
+
+    monkeypatch.setattr(os, "read", raced_read)
+    _forbid_retained_payload_opening(monkeypatch, launcher, (representation,))
+    _forbid_numerical_member_descriptor_opening(monkeypatch, (representation,))
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / f"runs-post-read-{identity_name}"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(
+            tmp_path,
+            calls,
+            terminal,
+            label=identity_name,
+        ),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+    assert identity_path.lstat().st_ino == replacement_inode
+
+
+@pytest.mark.parametrize("member_name", ("axes.npz", "valid.npy", "phase.npy"))
+def test_preflight_fails_closed_when_numerical_member_is_replaced_after_stat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    member_name: str,
+) -> None:
+    """An opaque numerical member cannot change after preflight classifies it."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"post-stat-{member_name}"
+    config = _write_prerequisite_cache(tmp_path, target)
+    representation = _write_authentic_retained_prepared_phase(
+        target.parent / "lfp_summary_work",
+        config,
+    )
+    member_path = representation / member_name
+    replacement = tmp_path / f"replacement-{member_name}"
+    replacement.write_bytes(member_path.read_bytes())
+    replacement_inode = replacement.lstat().st_ino
+    real_stat = os.stat
+    replaced = False
+
+    def raced_stat(
+        path: object,
+        *args: object,
+        **kwargs: object,
+    ) -> os.stat_result:
+        """Return the original anchored status, then replace the same entry."""
+        nonlocal replaced
+        status = real_stat(path, *args, **kwargs)
+        if (
+            not replaced
+            and path == member_name
+            and kwargs.get("dir_fd") is not None
+            and kwargs.get("follow_symlinks") is False
+        ):
+            replacement.replace(member_path)
+            replaced = True
+        return status
+
+    monkeypatch.setattr(os, "stat", raced_stat)
+    _forbid_retained_payload_opening(monkeypatch, launcher, (representation,))
+    _forbid_numerical_member_descriptor_opening(monkeypatch, (representation,))
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / f"runs-post-stat-{member_name}"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(
+            tmp_path,
+            calls,
+            terminal,
+            label=member_name,
+        ),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+    assert replaced is True
+    assert member_path.lstat().st_ino == replacement_inode
+
+
+def test_preflight_fails_closed_when_representation_is_replaced_after_final_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The final representation path check cannot certify a replaced directory."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / "post-final-representation"
+    config = _write_prerequisite_cache(tmp_path, target)
+    work_root = target.parent / "lfp_summary_work"
+    representation = _write_authentic_retained_prepared_phase(work_root, config)
+    original_representation = tmp_path / "post-final-original-representation"
+    external_root = tmp_path / "post-final-external-root"
+    external_representation = _write_authentic_retained_prepared_phase(
+        external_root,
+        config,
+    )
+    original_inventory = _work_tree_snapshot(representation)
+    replacement_inventory = _work_tree_snapshot(external_representation)
+    original_inode = representation.lstat().st_ino
+    replacement_inode = external_representation.lstat().st_ino
+
+    def replace_after_final_status() -> None:
+        """Swap the name only after its final old-directory status is returned."""
+        representation.rename(original_representation)
+        external_representation.rename(representation)
+
+    _install_lstat_replacement_race(
+        monkeypatch,
+        representation,
+        occurrence=2,
+        replacement=replace_after_final_status,
+    )
+    _forbid_retained_payload_opening(
+        monkeypatch,
+        launcher,
+        (representation, original_representation, external_representation),
+    )
+    _forbid_numerical_member_descriptor_opening(
+        monkeypatch,
+        (representation, original_representation, external_representation),
+    )
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / "runs-post-final-representation"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(
+            tmp_path,
+            calls,
+            terminal,
+            label="post-final-representation",
+        ),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+    assert _work_tree_snapshot(original_representation) == original_inventory
+    assert original_representation.lstat().st_ino == original_inode
+    assert _work_tree_snapshot(representation) == replacement_inventory
+    assert representation.lstat().st_ino == replacement_inode
+
+
 @pytest.mark.parametrize("ppc_state", ("complete", "incomplete", "locked", "malformed"))
 def test_preflight_rejects_any_retained_ppc_child_before_trial_loading(
     tmp_path: Path,
