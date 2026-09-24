@@ -1792,6 +1792,58 @@ def test_preflight_fails_closed_when_empty_ppc_is_replaced_after_close(
     assert ppc_path.lstat().st_ino == replacement_inode
 
 
+def test_preflight_fails_closed_when_ppc_child_is_inserted_after_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty PPC container cannot gain a child after its descriptor closes."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / "post-close-ppc-child"
+    _write_prerequisite_cache(tmp_path, target)
+    work_root = target.parent / "lfp_summary_work"
+    ppc_path = work_root / "ppc"
+    ppc_path.mkdir(parents=True)
+    ppc_inode = ppc_path.lstat().st_ino
+    inserted_child = ppc_path / "late-child"
+    inserted_bytes = b"late PPC child\n"
+
+    def insert_child_after_ppc_close() -> None:
+        """Create work only after the empty PPC descriptor has closed."""
+        inserted_child.write_bytes(inserted_bytes)
+
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / "runs-post-close-ppc-child"
+    with monkeypatch.context() as guarded_monkeypatch:
+        race_state = _install_descriptor_close_replacement_race(
+            guarded_monkeypatch,
+            ppc_path.lstat(),
+            insert_child_after_ppc_close,
+        )
+        result = launcher.run_launcher(
+            launcher.parse_launcher_command(
+                _new_command_arguments(
+                    tmp_path,
+                    cache_directory=target,
+                    analysis_root=analysis_root,
+                )
+            ),
+            _preflight_only_dependencies(
+                tmp_path,
+                calls,
+                terminal,
+                label="post-close-ppc-child",
+            ),
+        )
+
+    assert race_state["triggered"] is True
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+    assert ppc_path.lstat().st_ino == ppc_inode
+    assert inserted_child.read_bytes() == inserted_bytes
+
+
 @pytest.mark.parametrize("ppc_state", ("complete", "incomplete", "locked", "malformed"))
 def test_preflight_rejects_any_retained_ppc_child_before_trial_loading(
     tmp_path: Path,
