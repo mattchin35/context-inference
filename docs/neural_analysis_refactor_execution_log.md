@@ -1343,11 +1343,12 @@ comparison, destination recheck, exact scientific source-path validation,
 full-call resource/RSS measurement, final Git/untracked-name checks, robust
 post-close failure evidence, immutable hashes/inventory, and terminal status.
 
-The authoritative plan therefore prohibits another direct retry. The next
-possible external action is staging-only: write and hash every executable and
-helper byte for a fresh attempt, including phase-1 driver, snapshot/inventory
-helper, guarded runner, finalizer, hash/inventory logic, and the exact ordered
-invocation command, then stop without execution or imports. A fresh Sol/xhigh
+The authoritative plan therefore prohibited another direct retry. At that
+time the next possible external action was staging-only: write and hash every
+executable and helper byte for a fresh attempt, including phase-1 driver,
+snapshot/inventory helper, guarded runner, finalizer, hash/inventory logic, and
+the exact ordered invocation command, then stop without execution or imports.
+A fresh Sol/xhigh
 review must bind compile/AST and runtime-introspection checks plus every
 lifecycle/evidence branch to those exact digests. All review commands use
 `PYTHONDONTWRITEBYTECODE=1` and the frozen/offline/no-sync environment;
@@ -1355,6 +1356,9 @@ introspection may construct production dependencies but may not call a data
 seam or held-script `main`. Only after that static approval may the user
 separately authorize one invocation. Staging does not authorize tests, the
 categorical read, transfer, launcher dry run, or Slurm.
+
+That held-runner workflow was later superseded by the simplification decision
+recorded below.
 
 ### NR1E first held bundle and static rejection
 
@@ -1404,6 +1408,60 @@ remained unchanged. It rejected invocation for six P1 defects:
 P2 gaps were a missing durable protected-after comparison receipt, incomplete
 command/failure chronology, and a staging inventory that recorded its own size
 as zero. The bundle remains frozen and must not be invoked or modified. The
-next possible external mutation is another separately authorized staging-only
-replacement bundle followed by a new static review. No invocation, categorical
-read, transfer, launcher dry run, or Slurm action is authorized.
+later requirement for another staged held-runner replacement is superseded by
+the simplified completion decision below. No invocation, categorical read,
+transfer, launcher dry run, or Slurm action followed this bundle.
+
+### NR1E simplification decision
+
+After the rejected cluster bundle, several local-only drafts attempted to
+close increasingly hypothetical failure modes with wrapper/sealer processes,
+transactional receipts, inode ownership checks, shell chronologies, and commit
+records. None of those drafts was executed, copied to the cluster, imported by
+the repository, or used to read CT026 data. They are rejected local design
+artifacts and are not inputs to any later run.
+
+The user stopped that work and required the pre-refactor completion path to
+follow the `SoftwareDesign.md` guidance under **Avoid overengineering**:
+design for realistic operating conditions; handle ordinary user mistakes,
+malformed inputs, interrupted runs, and normal filesystem/dependency failures;
+and do not add wrappers, transaction systems, concurrency defenses, or
+abstractions without a concrete plausible requirement. The prior held-runner
+staging/review protocol is therefore retired.
+
+The remaining NR1E workflow is now:
+
+1. Run one readable evidence-only Python preflight in one fresh run directory.
+   It verifies tracked-clean `5cc1385`, expected source paths, destination
+   absence, resources, legacy/work preservation, the exact CT026 production
+   population/configuration, and the retained-work classifier. It permits the
+   production population seam's one ProbeB `spike_clusters.npy` read and the
+   documented NFS-only monotonic atime change while requiring every content-
+   identity and modification field to remain stable. It writes an ordinary
+   log, result JSON, command copy, and hash inventory. It performs no cache,
+   report, work, or Slurm mutation.
+2. Copy the approved three-member local Power/Synchrony cache into a fresh
+   cluster staging directory, verify hashes, construct the destination
+   configuration, rebind the manifest through the existing pure helper,
+   validate Power/Synchrony header-only and Spike missing, atomically publish
+   the absent destination, and write one external transfer receipt. Direct use
+   of the general relocation CLI is not required because its current contract
+   assumes both local and cluster session trees are visible to one process,
+   which is false across these hosts. Do not create mounts or fake source trees
+   to force that interface.
+3. Run one metadata-only launcher dry run for the corrected cache, ProbeB, 100
+   shuffles, eight workers, and no `--final-run`; verify no scientific/cache/
+   work/report mutation.
+4. Review the transfer, dry run, legacy preservation, and exact `sbatch`
+   command. After separate user authorization, submit once, record the job ID
+   and command, and stop without monitoring.
+5. Inspect results only after a later user request. Resume only after explicit
+   direction, never escalate automatically to 1,000 shuffles, and close NR1
+   only after Spike-phase/report validation and user visual approval.
+
+No new repository implementation or unit test is planned for these one-session
+operations. Existing committed tests cover the production helpers, and the
+unchanged cluster checkout has already passed its focused and complete neural
+suites repeatedly. Any newly discovered source defect becomes a separate small
+tests-first correction. This decision is a scope correction, not a waiver of
+scientific validation or protected-data preservation.

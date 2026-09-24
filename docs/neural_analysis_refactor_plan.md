@@ -39,12 +39,15 @@ first guarded correction passed every test gate but then stopped because the
 NFSv3 server advanced only that file's access time despite the correctly
 requested `O_NOATIME` flag. The authorized NFS-aware attempt again passed every
 test gate but stopped before the read because its runner used the wrong
-production dependency attribute. A complete held-runner staging and static
-review now precede any further invocation; staging and invocation are separate
-user gates. The first staging-only bundle was frozen without execution and
-rejected by static review for fail-closed evidence defects. It must remain
-unchanged; any correction requires a new staging-only bundle and review.
-Spike-phase transfer and later cluster actions remain unapproved.
+production dependency attribute. The first staging-only held-runner bundle was
+frozen without execution and rejected by static review. Subsequent local-only
+drafts showed that the held-runner design was expanding into a transactional
+evidence system whose complexity was not proportional to this single-user
+scientific workflow. The user stopped that work and required the simplified
+NR1E completion plan below. No local draft was executed or copied to the
+cluster, and the rejected cluster bundle remains unchanged. The next action is
+one plainly written evidence-only preflight with ordinary failure handling;
+transfer and later cluster actions remain separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -67,9 +70,11 @@ amplitude behavior as if that behavior were scientifically correct.
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
 - **Active package:** NR1C-C is complete, approved, pushed, and installed on
-  the clean cluster checkout at `5cc1385`. The next NR1E prerequisite is a
-  separately authorized corrected evidence-only preflight in a new immutable
-  evidence directory. NR0 tests commits
+  the tracked-clean cluster checkout at `5cc1385`. The next NR1E prerequisite
+  is the simplified evidence-only preflight specified below. It uses one
+  readable script and one run directory; it does not use a held wrapper,
+  sealer, commit receipt, adversarial race defenses, or another full test-suite
+  rerun. NR0 tests commits
   `e728cea`
   and `2b497e4` plus implementation commit `177a8d6` are complete and
   approved. The NR1 metadata/path/resource dry run is complete and approved;
@@ -107,10 +112,12 @@ amplitude behavior as if that behavior were scientifically correct.
   failed before the guarded read because the evidence script referenced
   `load_population` instead of the actual `load_active_population` field. Its
   preserved runner also lacks complete post-state/resource/final-evidence
-  handling, so a mechanical retry is prohibited. A staging-only frozen-runner
-  review rejected the first held bundle before execution. A corrected fresh
-  staging-only bundle, later invocation, transfer, launcher dry run, and Slurm
-  submission are not authorized yet.
+  handling, so it will not be retried. A staging-only frozen-runner review
+  rejected the first held bundle before execution. Later local-only bundles
+  are rejected design experiments, not execution artifacts. Their wrapper/
+  sealer machinery is abandoned under the project's KISS/YAGNI guidance. A
+  simple preflight, later cache transfer, launcher dry run, and Slurm submission
+  remain separate steps.
   The user requires any later preview to run unattended through Slurm without
   Codex monitoring; that execution is not approved.
 - **Approved NR1 destinations:** session root
@@ -2113,8 +2120,8 @@ population/configuration/classifier call, final HEAD/origin/tracked and
 untracked-name checks, failure evidence after descriptor closure, immutable
 hash/inventory records, and terminal status.
 
-Before any further invocation, use two separately authorized mutation gates
-with an intervening read-only static review:
+At that point the plan required two separately authorized mutation gates with
+an intervening read-only static review:
 
 1. **Staging authorization.** Create one newly timestamped absent evidence
    directory and write every executable/helper byte for the attempt: phase-1
@@ -2142,8 +2149,8 @@ with an intervening read-only static review:
    exact-one guarded categorical read, no-scientific-compute, complete evidence
    contract and stops without transfer, launcher dry run, or Slurm.
 
-The next user decision is staging-only. It does not authorize runner execution
-or rereading `spike_clusters.npy`. The two earlier rejected directories and
+This held-runner requirement was attempted once and later superseded by the
+simplified completion plan below. The two earlier rejected directories and
 this third rejected directory remain immutable incident evidence.
 
 **First held bundle - staged and rejected.** The user authorized staging only.
@@ -2181,34 +2188,95 @@ fail-closed defects:
 
 P2 gaps are the absence of a durable protected-after comparison receipt,
 incomplete command/failure chronology, and a self-inaccurate staging inventory.
-Do not invoke or modify this bundle. A correction requires another newly
-timestamped staging-only directory containing a complete replacement bundle,
-new digests, and another fresh static review under the same two-authorization
-workflow. The next user decision remains staging-only; no invocation,
-categorical reread, transfer, launcher dry run, or Slurm action is authorized.
+Do not invoke or modify this bundle. The original requirement for another
+held-runner bundle and a separate staging review is superseded by the
+simplified plan below. No invocation, transfer, launcher dry run, or Slurm
+action followed this rejected bundle.
+
+#### Simplified NR1E completion plan - superseding the held-runner design
+
+The user rejected further held-runner development after local-only drafts
+v7-v12 repeatedly expanded into wrappers, sealers, commit receipts,
+transactional publication, and defenses against hypothetical concurrent file
+replacement. Those drafts were never executed, copied to the cluster, or added
+to the repository. Preserve them only as local rejected design artifacts; they
+are not inputs to any later run.
+
+This project is scientific end-user software operated by one user and trusted
+collaborators. Apply the `SoftwareDesign.md` guidance on KISS, YAGNI, and
+avoiding overengineering. Handle realistic failures: wrong or missing paths,
+malformed metadata, symlinks, insufficient resources, interrupted commands,
+ordinary write failures, and inconsistent outputs. Do not build adversarial
+race defenses, a transaction protocol, or a generalized execution framework
+for a one-use preflight script. If review begins expanding beyond this threat
+model, stop and simplify the design rather than preserving complexity already
+written.
+
+The remaining pre-refactor work has five bounded stages:
+
+1. **Simple evidence-only preflight.** Create one fresh timestamped evidence
+   directory containing one readable Python script, its command, log, result
+   JSON, and a SHA-256 inventory. Verify tracked-clean `5cc1385`, expected
+   paths, resource availability, destination absence, ordinary legacy/work
+   structure, and the exact CT026 production population/configuration. Call
+   `load_active_population` once. Permit exactly one production read of ProbeB
+   `spike_clusters.npy`; on NFS, allow its atime to remain unchanged or advance
+   monotonically while device, inode, regular type, permissions, size, mtime,
+   and ctime remain exact. Run the metadata-only retained-work classifier and
+   compare protected path inventories before/after. Do not read LFP, sync,
+   retained phase, component NPZ, or spike-time arrays. Do not create a cache,
+   report, work product, or Slurm job.
+2. **Two-host cache transfer and publication.** Record the approved local
+   source cache's exact three-file inventory and hashes, transfer its manifest,
+   `power.npz`, and `synchrony.npz` into a fresh cluster staging directory, and
+   verify remote hashes. A small session-specific cluster script constructs the
+   destination CT026 configuration, verifies the documented local-to-cluster
+   path mapping from the source manifest, uses the existing pure manifest-
+   rebinding helper, validates Power/Synchrony through the public header-only
+   status API, requires Spike-phase missing, then atomically renames staging to
+   the absent final cache and writes one external receipt. This deliberately
+   replaces direct use of the general relocation CLI: that CLI requires the
+   local and cluster session trees to be visible to one process, which is not
+   true across these two hosts. Do not introduce mounts, fake source trees, or
+   another repository package to force that interface.
+3. **Metadata-only launcher dry run.** Run `new` with the corrected cache,
+   ProbeB, 100 shuffles, eight workers, and `--dry-run`, without `--final-run`.
+   Verify the exact cache identity, compatible Power/Synchrony, missing Spike,
+   accepted retained prepared-phase state, resource estimates, and absence of
+   scientific/cache/work/report mutation.
+4. **Review and submit once.** Perform one bounded read-only review of the
+   transfer receipt, cache hashes, dry-run configuration, legacy/work
+   preservation, and exact `sbatch` command. After separate user authorization,
+   submit exactly once, record only the returned job ID and durable command,
+   then stop. Do not poll Slurm, logs, launcher state, checkpoints, or results.
+5. **User-requested result inspection and NR1 closure.** When the user later
+   requests inspection, read the completed state once. If interrupted, present
+   the saved resume command and wait for direction. If successful, validate the
+   Spike-phase component and report, obtain user visual approval, update this
+   plan and the execution log, commit/push the documentation, and only then
+   begin NR2. Never escalate automatically to 1,000 shuffles.
+
+No repository source implementation or new unit test is planned for these
+session-specific operations. Existing committed tests already cover manifest
+rebinding, header-only component validation, retained-work classification,
+launcher dry-run behavior, and Slurm argument forwarding. The cluster has
+already passed the focused and complete tracked neural suites repeatedly at
+the unchanged `5cc1385`; do not rerun them solely to produce another evidence
+copy. Any newly discovered production defect becomes a separate, small
+tests-first correction rather than being patched into an external script.
 
 **NR1E - external cluster evidence.** NR1E begins only after NR1V, NR1C-A, and
 NR1C-B are approved and committed, NR1C-C is complete and pushed, and the
 exact clean pushed cluster checkout is verified. These prerequisites are now
-complete at `5cc1385`. One Terra/high cluster evidence
-runner has no repository-edit, stage, commit, or push authority. Each external
-mutation remains separately user-gated:
+complete at `5cc1385`. Keep the cluster checkout pinned there for NR1E; later
+unrelated local commits do not require another checkout update. One simple
+evidence script and one simple transfer/publication script are sufficient. A
+reviewer checks realistic scientific, path, and preservation invariants, not
+hypothetical hostile concurrency.
 
-1. With read-only authority, the runner verifies commit, tracked cleanliness,
-   environment, focused/full-neural tests, source paths, destination absence,
-   legacy preservation, and resource bounds, then stops with evidence.
-2. After explicit transfer/publication approval, the same runner may create
-   only the exact declared transfer run/staging/final paths, execute relocation
-   once, validate hashes/component states, and run one metadata-only launcher
-   dry run. It stops without submitting Slurm.
-3. A fresh Sol/xhigh read-only reviewer audits the stable transfer, rebinding
-   receipt, dry-run identity, legacy preservation, and exact proposed `sbatch`
-   command. Findings return to the runner only within already authorized paths;
-   any new mutation returns to the user.
-4. After separate explicit submission approval, the same Terra/high runner may
-   issue exactly one reviewed `sbatch` command, record its returned job id and
-   durable command, and stop immediately. It must not poll `squeue`, `sacct`,
-   logs, launcher state, or results. It may not submit a resume or another job.
+Each external mutation remains separately user-gated: preflight invocation;
+cache transfer/publication plus launcher dry run; and Slurm submission. A
+documentation commit or Git push does not grant any of those authorities.
 
 The lead remains the sole user-facing authority throughout NR1E and records
 every authorization boundary in the execution log. A later user-requested
@@ -2217,30 +2285,24 @@ continuation monitor and not authority to resume, repair, or submit.
 
 #### Dependencies and performance
 
-Introduce no package dependency. Reuse the standard library, NumPy, existing
-canonical configuration/fingerprint functions, safe NPZ loader, atomic JSON
-writer, and public component-status validator. Hash files in fixed-size chunks;
-never use `read_bytes()` for large artifacts or sources. Hash each unique
-source/component once per host and reuse the recorded digest. The transfer is
-approximately 232 MB for the two component NPZs; source verification is I/O
-bound and may read both LFP binaries once but must not materialize them or any
-NPZ array collection simultaneously. Record wall time and peak RSS.
+Introduce no package dependency. Reuse the standard library, NumPy, `uv`, SSH,
+`rsync`, Slurm, existing canonical configuration/fingerprint functions, the
+pure manifest-rebinding helper, and the public header-only component validator.
+Hash files in fixed-size chunks and reuse each digest. The transfer is about
+232 MB and is I/O-bound; do not load component NPZ arrays. The preflight may
+materialize the one 22,715,988-byte categorical `spike_clusters.npy` array
+required by the production population seam, but no LFP, sync, phase, or
+spike-time array. Record ordinary wall time and peak RSS without building a
+profiling framework.
 
 #### Execution and no-monitoring handoff
 
-After the tests and implementation are green, a separate user approval is
-still required for each external mutation: Git push, cluster checkout update,
-component transfer/manifest publication, and Slurm submission. On the exact
-clean pushed cluster checkout:
-
-1. run focused and complete neural tests;
-2. run the relocation command into the exact approved versioned cache and
-   inspect its receipt plus public component states;
-3. run one metadata-only launcher dry run against that cache and inspect the
-   ProbeB population, 100 shuffles, eight workers, paths, resource bounds, and
-   absence of work/output mutation; and
-4. present the exact `sbatch src/shell_scripts/hpc_ppc.sh new ...` command for
-   separate approval.
+Use the already tested, tracked-clean `5cc1385` checkout. Run the simple
+preflight once; after its review and separate authorization, transfer/publish
+the cache and run the metadata-only launcher dry run; then present the exact
+`sbatch src/shell_scripts/hpc_ppc.sh new ...` command for separate approval.
+Do not rerun the complete test suite unless the checkout or relevant source
+changes.
 
 If submission is approved, capture only the returned Slurm job id and durable
 submission command, then stop. Codex must not poll `squeue`, `sacct`, logs, or
