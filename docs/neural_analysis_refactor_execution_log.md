@@ -1521,3 +1521,74 @@ A fresh read-only review approved the five-file evidence with no findings.
 No cache transfer, launcher dry run, report generation, or Slurm action has
 occurred. The next external step remains the separately authorized cache
 transfer and metadata-only launcher dry run from the simplified workflow.
+
+### NR1E cache transfer and launcher dry run
+
+After separate user authorization, the approved three-member local cache was
+copied through a fresh cluster staging directory and published at:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/processed/
+  lfp_summary_cache_open_ephys_affine_uV_v1_
+  synchrony_bootstrap_quantiles_counts_v1_2026-09-23T22-09-50Z
+```
+
+Transfer evidence is preserved at:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/analysis_runs/
+  ct026_nr1e_cache_transfer_2026-09-24T21-49-32Z
+```
+
+The final cache has exactly `manifest.json`, `power.npz`, and
+`synchrony.npz`. Power and Synchrony remain byte-identical to the approved
+local source:
+
+```text
+manifest.json   a4ef306ed7045e119555013e378d966dae0e3a3c3932171b7d01cd35df308caf
+power.npz       164114d606cc204ff29ad173a686f0be66b54c2b944ed1f15008b2fa85367355
+synchrony.npz   d9673f2183dcbb2eac7d8ec2be80916840815c727f1431b8fdf65b41d95cb86f
+```
+
+The rebound manifest retains the immutable source-producer provenance while
+using the destination configuration and source fingerprints as compatibility
+metadata. Public header-only validation reports Power and Synchrony
+`compatible` and Spike-phase `missing`. The external transfer receipt SHA-256
+is `1e9bebf3d1a934b9aade48756ae51100e5d70848213a1df29c360ecf2f84fd99`.
+
+The authorized metadata-only launcher dry run completed at:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/analysis_runs/
+  CT026_2026-08-01_130853_spike_phase_ProbeB_dry_run_2026-09-24T21-53-31Z
+```
+
+Its state is `preflight_complete` for ProbeB, 100 shuffles, eight workers,
+configuration hash `e0af24a7...`, and Spike fingerprint `227793124...` with
+`final_run=false`. It accepted the retained prepared-phase state and created
+no report. The corrected cache stayed exact, the protected legacy cache and
+retained-work inventories remained identical across publication and dry run,
+the ProbeB categorical source status remained unchanged, and the cluster
+checkout remained tracked-clean at `5cc1385`. A bounded fresh read-only review
+approved the transfer, receipt, cache, dry run, and preservation evidence with
+no P0-P3 findings.
+
+The exact reviewed but unexecuted submission command, from
+`/gs/gsfs0/home/mchin1/context-inference`, is:
+
+```bash
+sbatch src/shell_scripts/hpc_ppc.sh new \
+  --session-path /gs/gsfs0/home/mchin1/contextProjectData/CT026/CT026_20260801_latent_inference \
+  --probe ProbeB \
+  --shuffles 100 \
+  --workers 8 \
+  --analysis-root /gs/gsfs0/home/mchin1/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs \
+  --cache-directory /gs/gsfs0/home/mchin1/contextProjectData/CT026/CT026_20260801_latent_inference/processed/lfp_summary_cache_open_ephys_affine_uV_v1_synchrony_bootstrap_quantiles_counts_v1_2026-09-23T22-09-50Z
+```
+
+The command deliberately omits `--dry-run` and `--final-run`; it is the
+planned 100-shuffle preview. No Slurm submission or job monitoring has
+occurred. Submission remains a separate user authorization gate.
