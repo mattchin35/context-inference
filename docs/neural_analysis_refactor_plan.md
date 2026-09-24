@@ -28,9 +28,10 @@ review rejected its first immutable report because observed-marker footprints
 overlapped the offset boxes in 12 of 18 ISPC summaries. The tests-first
 presentation-only correction is complete through `389e4fd`; a separately
 authorized immutable cache-only rerender completed and passed fresh Sol/xhigh
-artifact review, and the user visually approved it on 2026-09-23. NR1E now
-stops at its separately required Git-push authorization; Spike-phase transfer
-and cluster actions remain separately gated.
+artifact review, and the user visually approved it on 2026-09-23. The approved
+commits were pushed and the cluster checkout was safely fast-forwarded to
+`c859afe`, but NR1E preflight exposed the NR1C-C shared-work-root defect below.
+Spike-phase transfer and cluster actions remain separately gated.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -52,8 +53,8 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** NR1E external cluster evidence, blocked before its first
-  prerequisite by the separate Git-push authorization gate. NR0 tests commits
+- **Active package:** tests-first NR1C-C launcher shared-work-root correction,
+  awaiting user approval. NR0 tests commits
   `e728cea`
   and `2b497e4` plus implementation commit `177a8d6` are complete and
   approved. The NR1 metadata/path/resource dry run is complete and approved;
@@ -73,8 +74,11 @@ amplitude behavior as if that behavior were scientifically correct.
   fix is `389e4fd`. The one-shot immutable cache-only rerender at clean HEAD
   `f8ecbf0` completed and passed fresh artifact review; the user visually
   approved it on 2026-09-23. The revised NR1V Synchrony cache is therefore the
-  Section 5.6 transfer source. No push, transfer, cluster checkout update,
-  dry run, or Slurm submission is authorized yet.
+  Section 5.6 transfer source. The user authorized and completed the Git push
+  and first cluster checkout update to `c859afe`; preflight then stopped before
+  evidence creation because the launcher rejects the valid retained shared
+  prepared-phase work root. No transfer, dry run, or Slurm submission is
+  authorized yet.
   The user requires any later preview to run unattended through Slurm without
   Codex monitoring; that execution is not approved.
 - **Approved NR1 destinations:** session root
@@ -275,8 +279,8 @@ amplitude behavior as if that behavior were scientifically correct.
   fixture-isolation correction `4646b5d`; its reviewed implementation is
   `c844adc`. The NR1V rendered-geometry regression is `88d7826` and its
   presentation-only correction is `389e4fd`; rerender-review documentation is
-  `f8ecbf0` and `1cb0263`. These later commits remain local until the user
-  separately approves another push.
+  `f8ecbf0`, `1cb0263`, and `c859afe`. All are pushed to `origin/refactor` at
+  exact `c859afe7d08235e4454fa15858ed8e02f6ce6feb`.
 
 ## 1. Objectives
 
@@ -555,6 +559,7 @@ implementation phases. Do not replace it merely to skip a clean handoff.
 | NR1V | command/evidence runner, `high` | `xhigh` | not applicable | New versioned Synchrony artifact, Power preservation, visual approval. |
 | NR1C-A | writer, `xhigh` | `xhigh` | mandatory | Source equivalence, manifest rebinding, atomic cache relocation. |
 | NR1C-B | writer, `xhigh` | `xhigh` | mandatory | Explicit launcher cache target, legacy/work protection, resume identity. |
+| NR1C-C | writer, `xhigh` | `xhigh` | mandatory | Safe classification of retained prepared-phase work versus active PPC work. |
 | NR1E | cluster evidence runner, `high` | `xhigh` | not applicable | Authorized transfer/dry-run/submission boundaries and no monitoring. |
 | NR2 | writer, `high` | `high` | mandatory | Metadata missingness, path containment, schema migration. |
 | NR3 | writer, `xhigh` | `xhigh` | mandatory | Open Ephys/SpikeGLX units, channel semantics, bounded I/O. |
@@ -1839,9 +1844,72 @@ Sol/xhigh test-design and implementation reviewers reported no P0-P3 findings.
 Work stayed within the one NR1C-B source/test pair and did not access CT026,
 transfer data, touch a cluster, push Git, or run scientific computation.
 
+**NR1C-C - retained shared-work-root correction.** The first authorized NR1E
+cluster preflight safely updated the tracked-clean cluster checkout to pushed
+commit `c859afe`, then stopped before evidence-directory creation because
+`processed/lfp_summary_work` already exists. Read-only review proved this is a
+valid historical post-success state: the root contains one complete retained
+prepared-phase representation (about 1.15 GB), an empty real `ppc/` directory,
+and no PPC run, lock, symlink, or unexpected member. The prior successful
+1,000-shuffle run removed its exact PPC run directory during cleanup. The
+current launcher incorrectly rejects the shared root's mere existence, so any
+successful session run permanently blocks a later `new` run. This contradicts
+the intended NR1C-B contract, which protects active or retained PPC work rather
+than prohibiting identity-safe prepared-phase retention.
+
+Do not delete, archive, move, or numerically open the retained cluster work.
+Keep the shared `processed/lfp_summary_work` path and every CLI, saved-state,
+resume, report, cleanup, and runtime fingerprint interface unchanged. Correct
+only metadata-only launcher preflight classification:
+
+- an absent work root remains valid;
+- an existing root must be a real nonsymlink directory with only optional
+  `prepared_phase/` and `ppc/` children;
+- `ppc/` must be absent or a real nonsymlink empty directory; any child blocks
+  `new` conservatively and preserves resume-only semantics;
+- `prepared_phase/` may contain multiple fingerprint-named, complete,
+  lock-free, nonsymlink representation directories with exactly the expected
+  regular files and mutually consistent small `metadata.json` and
+  `complete.json` identity records; and
+- preflight must not open `phase.npy`, `valid.npy`, `axes.npz`, or any other
+  numerical array payload. Runtime identity checks remain solely responsible
+  for deciding whether a completed representation is reusable. Legacy and
+  `open_ephys_affine_uV_v1` source/value identities remain distinct, so the
+  retained legacy representation cannot be reused as corrected work.
+
+Tests must be committed before source and must prove:
+
+1. a historical post-success root with complete prepared phase plus an empty
+   `ppc/` container permits launcher dry-run preflight and remains byte- and
+   inventory-identical;
+2. multiple complete prepared representations are permitted;
+3. any complete, incomplete, malformed, or locked child under `ppc/` rejects
+   before trial loading or run-directory creation;
+4. root/container/representation symlinks, active locks, incomplete
+   structures, malformed or inconsistent identity JSON, unexpected members,
+   and non-fingerprint representation names reject;
+5. preflight never calls `numpy.load`, the component-array loader, or opens the
+   retained `.npy`/`.npz` payloads;
+6. existing resume and cleanup behavior for an exact retained PPC run remains
+   unchanged; and
+7. corrected-versus-legacy prepared-phase and PPC identity tests remain green.
+
+The source/test allowlist is exactly
+`src/neural_analysis/lfp_spike_phase_launcher.py` and
+`src/tests/neural_analysis/test_lfp_spike_phase_launcher.py`, plus this plan
+and execution log for lead-owned status. One Terra/xhigh writer follows the
+same tests-only RED, fresh Sol/xhigh test-design review, test commit,
+source-only GREEN, complete-neural gate, and second fresh Sol/xhigh
+implementation-review sequence as NR1C-B. No new dependency is allowed.
+Inspection is linear in the small metadata inventory and may read only bounded
+JSON/stat records. No role may access numerical CT026 work arrays, mutate the
+cluster, transfer artifacts, push, or submit Slurm during NR1C-C. After it is
+approved and committed, a new Git push and exact cluster checkout update are
+separate user gates before NR1E preflight restarts in a new evidence directory.
+
 **NR1E - external cluster evidence.** NR1E begins only after NR1V, NR1C-A, and
-NR1C-B are approved and committed, the user approves a Git push, and the exact
-clean pushed cluster checkout is verified. One Terra/high cluster evidence
+NR1C-B are approved and committed, NR1C-C is complete, the user approves the
+next Git push, and the exact clean pushed cluster checkout is verified. One Terra/high cluster evidence
 runner has no repository-edit, stage, commit, or push authority. Each external
 mutation remains separately user-gated:
 

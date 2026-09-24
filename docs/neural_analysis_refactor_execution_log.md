@@ -113,7 +113,7 @@ Read-only representative CT026 and legacy-artifact check:
 | Package | State | Test commit | Implementation commit | Evidence and next gate |
 | --- | --- | --- | --- | --- |
 | NR0 | Complete and approved | `e728cea`, `2b497e4` | `177a8d6` | Final focused 704 passed; neural suite 1,395 passed; fresh Sol review approved; closure `a94559d`. |
-| NR1 | Synchrony approved; NR1E awaits push authorization | - | - | Checks 1-2, corrected Power, revised Synchrony, and the immutable presentation rerender are approved. The user visually approved the revised report on 2026-09-23. Git push, transfer, cluster checkout mutation, dry run, and Slurm submission remain separately gated. |
+| NR1 | Synchrony approved; NR1C-C correction planned | - | - | Revised Synchrony is user-approved. Push and first checkout update reached `c859afe`; NR1E stopped before evidence/transfer because valid retained prepared-phase work exposed an overbroad launcher root-existence guard. NR1C-C requires user approval before tests-first implementation. |
 | NR2 | Pending | - | - | Requires approved NR1 corrected baseline. |
 | NR3 | Pending | - | - | Sequential after NR2. |
 | NR4 | Pending | - | - | Sequential after NR3. |
@@ -1062,3 +1062,54 @@ Section 5.6 transfer source and must not be recomputed. NR1E cannot begin until
 the user separately authorizes the required Git push; transfer, cluster
 checkout mutation, dry run, Spike-phase execution, and Slurm submission remain
 unapproved.
+
+### NR1E pushed-checkout preflight and NR1C-C blocker
+
+The user separately authorized the required Git push. Exactly the five reviewed
+commits from `88d7826` through `c859afe` were pushed with:
+
+```text
+git push origin refactor
+```
+
+Local `HEAD` and `origin/refactor` then both resolved to exact
+`c859afe7d08235e4454fa15858ed8e02f6ce6feb`, with tracked files clean and all
+pre-existing user-owned untracked files unchanged.
+
+The user next separately authorized the cluster checkout update and read-only
+preflight. The cluster checkout at
+`/gs/gsfs0/home/mchin1/context-inference` was tracked-clean on `refactor` at
+`02b0f2c`. A safe fetch required fetched `origin/refactor` to equal exact
+`c859afe`; a fast-forward then succeeded. Pre-existing untracked Python cache
+and egg-info entries were preserved. No reset, clean, or unrelated mutation
+occurred.
+
+Preflight stopped before creating its proposed evidence directory
+`analysis_runs/ct026_nr1e_cluster_checkout_preflight_2026-09-24T02-01-13Z`.
+The planned corrected-cache destination was absent, but the launcher derives
+the shared work path `processed/lfp_summary_work` and rejects its mere
+existence. Read-only inspection found a valid historical post-success state:
+
+- one empty real `ppc/` directory;
+- one complete fingerprint-named prepared-phase representation with exactly
+  `metadata.json`, `complete.json`, `axes.npz`, `valid.npy`, and `phase.npy`,
+  totaling 1,153,088,565 bytes;
+- no PPC run child, lock, symlink, or unexpected member; and
+- a completed historical 1,000-shuffle launcher record showing successful
+  cleanup of its exact PPC run directory.
+
+No numerical `.npy` or `.npz` payload was opened. No evidence directory,
+corrected cache, work, report, transfer, launcher dry run, or Slurm artifact was
+created. Fresh Sol/xhigh diagnosis classified the launcher check as an
+overbroad P1: successful execution intentionally retains fingerprinted
+prepared phase while deleting the exact PPC run. Rejecting the container itself
+therefore permanently prevents any later `new` invocation for the session and
+contradicts the plan's active-PPC protection.
+
+The recommended NR1C-C correction is tests-first and launcher-only. It permits
+complete lock-free prepared representations plus an absent or empty real
+`ppc/` container, rejects any PPC child or unsafe/malformed work structure, and
+never opens numerical work payloads. Historical work must not be deleted,
+archived, moved, or rewritten. NR1C-C implementation, its later push/checkout,
+cache relocation, launcher dry run, and Slurm submission remain separately
+gated.
