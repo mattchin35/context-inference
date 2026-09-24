@@ -504,6 +504,53 @@ def _install_lstat_replacement_race(
     monkeypatch.setattr(Path, "lstat", raced_lstat)
 
 
+def _install_descriptor_close_replacement_race(
+    monkeypatch: pytest.MonkeyPatch,
+    closed_entry_status: os.stat_result,
+    replacement: Callable[[], None],
+) -> dict[str, bool]:
+    """Replace an entry immediately after its anchored descriptor closes.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Patch controller used to replace the standard :func:`os.close` seam.
+    closed_entry_status : os.stat_result
+        Pre-race device and inode identity of the directory whose descriptor
+        close should trigger the replacement. No directory contents are read.
+    replacement : collections.abc.Callable[[], None]
+        Atomic same-name replacement action performed after the original
+        descriptor has closed.
+
+    Returns
+    -------
+    dict[str, bool]
+        Mutable ``{"triggered": bool}`` record proving the close boundary was
+        reached during the launcher invocation.
+    """
+    real_close = os.close
+    race_state = {"triggered": False}
+
+    def raced_close(descriptor: int) -> None:
+        """Close first, then replace only the matching closed directory."""
+        try:
+            status = os.fstat(descriptor)
+        except OSError:
+            real_close(descriptor)
+            return
+        real_close(descriptor)
+        if (
+            not race_state["triggered"]
+            and status.st_dev == closed_entry_status.st_dev
+            and status.st_ino == closed_entry_status.st_ino
+        ):
+            replacement()
+            race_state["triggered"] = True
+
+    monkeypatch.setattr(os, "close", raced_close)
+    return race_state
+
+
 def _forbid_raced_identity_path_opening(
     monkeypatch: pytest.MonkeyPatch,
     identity_path: Path,
@@ -1502,40 +1549,41 @@ def test_preflight_fails_closed_when_representation_is_replaced_after_final_stat
         representation.rename(original_representation)
         external_representation.rename(representation)
 
-    _install_lstat_replacement_race(
-        monkeypatch,
-        representation,
-        occurrence=2,
-        replacement=replace_after_final_status,
-    )
-    _forbid_retained_payload_opening(
-        monkeypatch,
-        launcher,
-        (representation, original_representation, external_representation),
-    )
-    _forbid_numerical_member_descriptor_opening(
-        monkeypatch,
-        (representation, original_representation, external_representation),
-    )
     calls: list[str] = []
     terminal: list[str] = []
     analysis_root = tmp_path / "runs-post-final-representation"
 
-    result = launcher.run_launcher(
-        launcher.parse_launcher_command(
-            _new_command_arguments(
+    with monkeypatch.context() as guarded_monkeypatch:
+        _install_lstat_replacement_race(
+            guarded_monkeypatch,
+            representation,
+            occurrence=2,
+            replacement=replace_after_final_status,
+        )
+        _forbid_retained_payload_opening(
+            guarded_monkeypatch,
+            launcher,
+            (representation, original_representation, external_representation),
+        )
+        _forbid_numerical_member_descriptor_opening(
+            guarded_monkeypatch,
+            (representation, original_representation, external_representation),
+        )
+        result = launcher.run_launcher(
+            launcher.parse_launcher_command(
+                _new_command_arguments(
+                    tmp_path,
+                    cache_directory=target,
+                    analysis_root=analysis_root,
+                )
+            ),
+            _preflight_only_dependencies(
                 tmp_path,
-                cache_directory=target,
-                analysis_root=analysis_root,
-            )
-        ),
-        _preflight_only_dependencies(
-            tmp_path,
-            calls,
-            terminal,
-            label="post-final-representation",
-        ),
-    )
+                calls,
+                terminal,
+                label="post-final-representation",
+            ),
+        )
 
     assert result.exit_code == 2 and result.run_directory is None
     assert not analysis_root.exists()
@@ -1544,6 +1592,204 @@ def test_preflight_fails_closed_when_representation_is_replaced_after_final_stat
     assert original_representation.lstat().st_ino == original_inode
     assert _work_tree_snapshot(representation) == replacement_inventory
     assert representation.lstat().st_ino == replacement_inode
+
+
+def test_preflight_fails_closed_when_representation_is_replaced_after_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid-looking representation cannot change after its descriptor closes."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / "post-close-representation"
+    config = _write_prerequisite_cache(tmp_path, target)
+    work_root = target.parent / "lfp_summary_work"
+    representation = _write_authentic_retained_prepared_phase(work_root, config)
+    original_representation = tmp_path / "post-close-original-representation"
+    replacement_work_root = tmp_path / "post-close-replacement-work-root"
+    replacement_representation = _write_authentic_retained_prepared_phase(
+        replacement_work_root,
+        config,
+    )
+    assert replacement_representation.name == representation.name
+    original_inventory = _work_tree_snapshot(representation)
+    replacement_inventory = _work_tree_snapshot(replacement_representation)
+    original_inode = representation.lstat().st_ino
+    replacement_inode = replacement_representation.lstat().st_ino
+
+    def replace_after_representation_close() -> None:
+        """Replace the validated name only after its anchored fd is closed."""
+        representation.rename(original_representation)
+        replacement_representation.rename(representation)
+
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / "runs-post-close-representation"
+    with monkeypatch.context() as guarded_monkeypatch:
+        race_state = _install_descriptor_close_replacement_race(
+            guarded_monkeypatch,
+            representation.lstat(),
+            replace_after_representation_close,
+        )
+        _forbid_retained_payload_opening(
+            guarded_monkeypatch,
+            launcher,
+            (representation, original_representation, replacement_representation),
+        )
+        _forbid_numerical_member_descriptor_opening(
+            guarded_monkeypatch,
+            (representation, original_representation, replacement_representation),
+        )
+        result = launcher.run_launcher(
+            launcher.parse_launcher_command(
+                _new_command_arguments(
+                    tmp_path,
+                    cache_directory=target,
+                    analysis_root=analysis_root,
+                )
+            ),
+            _preflight_only_dependencies(
+                tmp_path,
+                calls,
+                terminal,
+                label="post-close-representation",
+            ),
+        )
+
+    assert race_state["triggered"] is True
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+    assert _work_tree_snapshot(original_representation) == original_inventory
+    assert original_representation.lstat().st_ino == original_inode
+    assert _work_tree_snapshot(representation) == replacement_inventory
+    assert representation.lstat().st_ino == replacement_inode
+
+
+def test_preflight_fails_closed_when_prepared_container_is_replaced_after_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A prepared container cannot change after its descriptor closes."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / "post-close-prepared"
+    config = _write_prerequisite_cache(tmp_path, target)
+    work_root = target.parent / "lfp_summary_work"
+    representation = _write_authentic_retained_prepared_phase(work_root, config)
+    prepared_path = representation.parent
+    original_prepared = tmp_path / "post-close-original-prepared"
+    replacement_prepared = tmp_path / "post-close-replacement-prepared"
+    replacement_prepared.mkdir()
+    original_inventory = _work_tree_snapshot(prepared_path)
+    replacement_inventory = _work_tree_snapshot(replacement_prepared)
+    original_inode = prepared_path.lstat().st_ino
+    replacement_inode = replacement_prepared.lstat().st_ino
+
+    def replace_after_prepared_close() -> None:
+        """Replace the validated container after its anchored fd is closed."""
+        prepared_path.rename(original_prepared)
+        replacement_prepared.rename(prepared_path)
+
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / "runs-post-close-prepared"
+    with monkeypatch.context() as guarded_monkeypatch:
+        race_state = _install_descriptor_close_replacement_race(
+            guarded_monkeypatch,
+            prepared_path.lstat(),
+            replace_after_prepared_close,
+        )
+        _forbid_retained_payload_opening(
+            guarded_monkeypatch,
+            launcher,
+            (representation, original_prepared / representation.name),
+        )
+        _forbid_numerical_member_descriptor_opening(
+            guarded_monkeypatch,
+            (representation, original_prepared / representation.name),
+        )
+        result = launcher.run_launcher(
+            launcher.parse_launcher_command(
+                _new_command_arguments(
+                    tmp_path,
+                    cache_directory=target,
+                    analysis_root=analysis_root,
+                )
+            ),
+            _preflight_only_dependencies(
+                tmp_path,
+                calls,
+                terminal,
+                label="post-close-prepared",
+            ),
+        )
+
+    assert race_state["triggered"] is True
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+    assert _work_tree_snapshot(original_prepared) == original_inventory
+    assert original_prepared.lstat().st_ino == original_inode
+    assert _work_tree_snapshot(prepared_path) == replacement_inventory
+    assert prepared_path.lstat().st_ino == replacement_inode
+
+
+def test_preflight_fails_closed_when_empty_ppc_is_replaced_after_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty PPC container cannot change after its descriptor closes."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / "post-close-ppc"
+    _write_prerequisite_cache(tmp_path, target)
+    work_root = target.parent / "lfp_summary_work"
+    ppc_path = work_root / "ppc"
+    ppc_path.mkdir(parents=True)
+    original_ppc = tmp_path / "post-close-original-ppc"
+    replacement_ppc = tmp_path / "post-close-replacement-ppc"
+    replacement_ppc.mkdir()
+    original_inventory = _work_tree_snapshot(ppc_path)
+    replacement_inventory = _work_tree_snapshot(replacement_ppc)
+    original_inode = ppc_path.lstat().st_ino
+    replacement_inode = replacement_ppc.lstat().st_ino
+
+    def replace_after_ppc_close() -> None:
+        """Replace the validated empty container after its fd is closed."""
+        ppc_path.rename(original_ppc)
+        replacement_ppc.rename(ppc_path)
+
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / "runs-post-close-ppc"
+    with monkeypatch.context() as guarded_monkeypatch:
+        race_state = _install_descriptor_close_replacement_race(
+            guarded_monkeypatch,
+            ppc_path.lstat(),
+            replace_after_ppc_close,
+        )
+        result = launcher.run_launcher(
+            launcher.parse_launcher_command(
+                _new_command_arguments(
+                    tmp_path,
+                    cache_directory=target,
+                    analysis_root=analysis_root,
+                )
+            ),
+            _preflight_only_dependencies(
+                tmp_path,
+                calls,
+                terminal,
+                label="post-close-ppc",
+            ),
+        )
+
+    assert race_state["triggered"] is True
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+    assert _work_tree_snapshot(original_ppc) == original_inventory
+    assert original_ppc.lstat().st_ino == original_inode
+    assert _work_tree_snapshot(ppc_path) == replacement_inventory
+    assert ppc_path.lstat().st_ino == replacement_inode
 
 
 @pytest.mark.parametrize("ppc_state", ("complete", "incomplete", "locked", "malformed"))
