@@ -1592,3 +1592,13 @@ sbatch src/shell_scripts/hpc_ppc.sh new \
 The command deliberately omits `--dry-run` and `--final-run`; it is the
 planned 100-shuffle preview. No Slurm submission or job monitoring has
 occurred. Submission remains a separate user authorization gate.
+
+The user subsequently authorized that exact command. After the immediate
+tracked-checkout and three-member cache hash checks passed, it was submitted
+once from the reviewed working directory. `sbatch` returned Slurm job ID
+`30766437`. The exact command, UTC timestamp, raw stdout/stderr, exit code, and
+parsed job ID are preserved in `submission_receipt.json` and
+`submission_stdout_stderr.txt` in the transfer evidence directory. No
+`squeue`, `sacct`, `scontrol`, log, run-directory, checkpoint, or result query
+followed. The job is intentionally unmonitored; any later status or result
+inspection requires a new user request.
