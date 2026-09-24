@@ -37,9 +37,11 @@ tests when its intentionally strict array guard encountered the production
 population loader's discarded categorical `spike_clusters.npy` read. The
 first guarded correction passed every test gate but then stopped because the
 NFSv3 server advanced only that file's access time despite the correctly
-requested `O_NOATIME` flag. The NFS-aware evidence correction and a fresh
-evidence-directory rerun remain separately gated; Spike-phase transfer and
-later cluster actions remain unapproved.
+requested `O_NOATIME` flag. The authorized NFS-aware attempt again passed every
+test gate but stopped before the read because its runner used the wrong
+production dependency attribute. A complete held-runner staging and static
+review now precede any further invocation; staging and invocation are separate
+user gates. Spike-phase transfer and later cluster actions remain unapproved.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -98,8 +100,13 @@ amplitude behavior as if that behavior were scientifically correct.
   guarded correction; its focused and complete tests passed, and the sole
   categorical file read completed, but NFSv3 `relatime` advanced only the
   file's access time and triggered the deliberately strict preservation gate.
-  A fresh NFS-aware preflight attempt, transfer, launcher dry run, and Slurm
-  submission are not authorized yet.
+  The user authorized the NFS-aware attempt; it again passed all tests but
+  failed before the guarded read because the evidence script referenced
+  `load_population` instead of the actual `load_active_population` field. Its
+  preserved runner also lacks complete post-state/resource/final-evidence
+  handling, so a mechanical retry is prohibited. A staging-only frozen-runner
+  review, later invocation, transfer, launcher dry run, and Slurm submission
+  are not authorized yet.
   The user requires any later preview to run unattended through Slurm without
   Codex monitoring; that execution is not approved.
 - **Approved NR1 destinations:** session root
@@ -2065,8 +2072,75 @@ payload. The next attempt must use another fresh timestamped evidence directory
 and the same binding order, exact-one guarded read, and no-scientific-compute
 boundary. It must accept either unchanged atime or a monotonic NFS-only atime
 advance while requiring all content-identity and modification fields to remain
-exact. That third evidence attempt requires explicit user authorization and
-still does not authorize transfer, launcher dry run, or Slurm submission.
+exact. That third evidence attempt required and received explicit user
+authorization but failed as recorded below; it did not authorize transfer,
+launcher dry run, or Slurm submission.
+
+#### NR1E held-runner gate after the third incident
+
+The authorized NFS-aware attempt used a third fresh directory and completed
+all phase-1 gates, then stopped before the permitted read because the evidence
+script called nonexistent `dependencies.load_population` rather than the
+actual `LauncherDependencies.load_active_population` field. The guarded NumPy
+seam was never called, so ProbeB atime and every other file status remained
+unchanged from the prior incident. Preserve this directory unchanged:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/analysis_runs/
+  ct026_nr1e_cluster_checkout_preflight_nfs_aware_2026-09-24T05-20-12Z
+```
+
+It contains exactly seven direct files and no guarded-population JSON, terminal
+status, hash manifest, or final inventory. The run passed 107 relocation, 135
+launcher, 15 wrapper, and 1,425 complete tracked neural tests with 12 known
+warnings. Checkout/environment/mount/wrapper/destination checks passed, all 14
+protected legacy/work status records still match the saved before-snapshot,
+and the pre-existing untracked generated-file name set is unchanged. No array,
+cache, work, report, launcher dry run, or Slurm action occurred outside the
+synthetic/test data used by pytest; no CT026 experimental/source array or
+protected numerical payload was opened.
+
+A one-line retry is prohibited. Static review of that correction found that the
+runner would still omit necessary final evidence: protected after-inventory
+comparison, destination recheck, exact sorter/aligned-spike/trial/LFP/sync
+source-path validation, resource bounds and peak RSS covering the entire
+population/configuration/classifier call, final HEAD/origin/tracked and
+untracked-name checks, failure evidence after descriptor closure, immutable
+hash/inventory records, and terminal status.
+
+Before any further invocation, use two separately authorized mutation gates
+with an intervening read-only static review:
+
+1. **Staging authorization.** Create one newly timestamped absent evidence
+   directory and write every executable/helper byte for the attempt: phase-1
+   driver, snapshot/inventory helper, guarded runner, finalizer, hash/inventory
+   logic, and exact ordered invocation command. Record every held file's
+   SHA-256 and stop, without executing tests, production imports, population
+   loading, NumPy, finalization, transfer, launcher, or Slurm.
+2. **Held-script static review.** A fresh Sol/xhigh reviewer verifies those
+   exact remote bytes without mutation: no-bytecode compile and AST inspection;
+   `dataclasses.fields` and `inspect.signature(...).bind(...)` checks against
+   the exact `5cc1385` checkout; production field/path names; the guarded
+   pre-path -> initial-fd -> post-load-fd -> close -> post-close-final-path
+   lifecycle; every failure branch; before/after preservation; resources;
+   final Git state; hashes/inventory; and terminal status. The reviewer freezes
+   the approved SHA-256 values. Any subsequent byte change invalidates review.
+   Every compile, AST, import, and runtime-introspection command must use
+   `PYTHONDONTWRITEBYTECODE=1` plus the frozen/offline/no-sync environment so
+   review cannot create or refresh Python caches. Introspection may instantiate
+   the production dependency factory but must not call a data seam or any held
+   script's `main`.
+3. **Invocation authorization.** Only after the lead presents static approval
+   and the exact held digests may the user separately authorize one execution.
+   Remote staging must rehash the held bytes immediately before execution and
+   require exact equality. Execution then follows the existing tests-first,
+   exact-one guarded categorical read, no-scientific-compute, complete evidence
+   contract and stops without transfer, launcher dry run, or Slurm.
+
+The next user decision is staging-only. It does not authorize runner execution
+or rereading `spike_clusters.npy`. The two earlier rejected directories and
+this third rejected directory remain immutable incident evidence.
 
 **NR1E - external cluster evidence.** NR1E begins only after NR1V, NR1C-A, and
 NR1C-B are approved and committed, NR1C-C is complete and pushed, and the

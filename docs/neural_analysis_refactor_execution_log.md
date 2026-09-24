@@ -1292,3 +1292,66 @@ descriptor atime observations and mount options must be recorded; and every
 other array read remains forbidden. Preserve this second rejected directory
 unchanged. A third fresh evidence attempt requires explicit user authorization;
 transfer, launcher dry run, and Slurm submission remain unauthorized.
+
+### NR1E NFS-aware runner API incident
+
+The user explicitly authorized a third, NFS-aware evidence-only attempt. The
+runner preserved the two earlier rejected directories and created only:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/analysis_runs/
+  ct026_nr1e_cluster_checkout_preflight_nfs_aware_2026-09-24T05-20-12Z
+```
+
+Phase 1 again passed on exact tracked-clean `5cc1385`: checkout/origin,
+environment, NFSv3 `relatime`, wrapper syntax, destination absence, 107
+relocation tests, 135 launcher tests, 15 wrapper tests, and 1,425 complete
+tracked neural tests with 12 known warnings. Phase 2 then failed before the
+permitted read because the evidence script called nonexistent
+`dependencies.load_population`; the actual production dataclass field is
+`load_active_population`. The guarded NumPy seam was never called. ProbeB
+atime remains exactly 1790226094047832332, and its other status fields remain
+unchanged from the prior incident.
+
+The directory contains exactly seven direct files:
+
+```text
+commands.txt                       2,607 bytes
+guarded_population_preflight.py   7,576 bytes
+phase1_status.txt                    16 bytes
+phase1_tests.sh                    2,250 bytes
+run.log                           17,156 bytes
+snapshot_before.json               6,324 bytes
+snapshot_before.py                 2,421 bytes
+```
+
+It has no guarded-population JSON, final inventory/hash manifest, terminal
+status, transfer, launcher dry run, or Slurm artifact. All 14 protected legacy/
+work records still match the saved before-snapshot. The pre-existing untracked
+generated-file name set is unchanged, although those untracked bytes were not
+snapshotted. The completed pytest gates opened only their synthetic/test
+arrays. No CT026 experimental/source array or protected numerical payload was
+opened, and no protected cache/work state was mutated.
+
+A fresh Sol/xhigh corrected-line audit confirmed that
+`dependencies.load_active_population(SESSION, PROBE_LABEL)` and every later
+referenced production field/signature exist at `5cc1385`, and the retained
+metadata layout should pass. It also found that a one-line retry would still
+produce incomplete evidence because the script lacks protected after-inventory
+comparison, destination recheck, exact scientific source-path validation,
+full-call resource/RSS measurement, final Git/untracked-name checks, robust
+post-close failure evidence, immutable hashes/inventory, and terminal status.
+
+The authoritative plan therefore prohibits another direct retry. The next
+possible external action is staging-only: write and hash every executable and
+helper byte for a fresh attempt, including phase-1 driver, snapshot/inventory
+helper, guarded runner, finalizer, hash/inventory logic, and the exact ordered
+invocation command, then stop without execution or imports. A fresh Sol/xhigh
+review must bind compile/AST and runtime-introspection checks plus every
+lifecycle/evidence branch to those exact digests. All review commands use
+`PYTHONDONTWRITEBYTECODE=1` and the frozen/offline/no-sync environment;
+introspection may construct production dependencies but may not call a data
+seam or held-script `main`. Only after that static approval may the user
+separately authorize one invocation. Staging does not authorize tests, the
+categorical read, transfer, launcher dry run, or Slurm.
