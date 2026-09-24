@@ -21,7 +21,7 @@ import pytest
 from src.neural_analysis.lfp_spike_phase_validation import (
     build_ct026_spike_phase_preview_config,
 )
-from src.neural_analysis import lfp_summary_io
+from src.neural_analysis import lfp_summary_io, lfp_summary_runtime
 from src.neural_analysis.lfp_summary_models import (
     LFPSummaryConfig,
     UnitPopulationConfig,
@@ -34,6 +34,15 @@ from src.neural_analysis.lfp_summary_pipeline import ComponentRunResult
 
 
 _MAX_RETAINED_IDENTITY_JSON_BYTES = 64 * 1024
+_PREPARED_REPRESENTATION_IDENTITY_KEYS = (
+    "generator",
+    "analysis_version",
+    "source_fingerprint",
+    "scientific_fingerprint",
+    "axes",
+    "shapes",
+    "dtypes",
+)
 
 
 def _launcher() -> object:
@@ -407,6 +416,114 @@ def _write_retained_prepared_phase(
     return representation
 
 
+def _authentic_prepared_phase_metadata(
+    config: LFPSummaryConfig,
+    *,
+    trial_offset: int = 0,
+) -> dict[str, object]:
+    """Build real runtime metadata for a small synthetic prepared trial axis.
+
+    This calls the pure runtime metadata builder and its fingerprint algorithm;
+    it never creates a phase array or reads experimental data. The two trial
+    positions and two finite alignment times are scalar test identities only.
+    """
+    trial_indices = np.asarray((trial_offset, trial_offset + 1), dtype=np.int64)
+    alignment_times_s = np.asarray(
+        (float(trial_offset) + 1.0, float(trial_offset) + 2.0),
+        dtype=np.float64,
+    )
+    metadata = lfp_summary_runtime._prepared_phase_work_metadata(
+        config,
+        trial_indices,
+        alignment_times_s,
+    )
+    representation_identity = {
+        key: metadata[key] for key in _PREPARED_REPRESENTATION_IDENTITY_KEYS
+    }
+    assert metadata["representation_fingerprint"] == (
+        lfp_summary_runtime._work_fingerprint(representation_identity)
+    )
+    return metadata
+
+
+def _write_authentic_retained_prepared_phase(
+    work_root: Path,
+    config: LFPSummaryConfig,
+    *,
+    trial_offset: int = 0,
+    metadata: dict[str, object] | None = None,
+    completion: object | None = None,
+) -> Path:
+    """Write authentic metadata with opaque retained numerical sentinels.
+
+    The metadata follows the live writer/runtime contract exactly. The three
+    numerical member files remain non-array ASCII sentinels because launcher
+    preflight must classify their paths without opening their contents.
+    """
+    authentic_metadata = (
+        _authentic_prepared_phase_metadata(config, trial_offset=trial_offset)
+        if metadata is None
+        else metadata
+    )
+    fingerprint = authentic_metadata["representation_fingerprint"]
+    assert isinstance(fingerprint, str)
+    return _write_retained_prepared_phase(
+        work_root,
+        fingerprint,
+        metadata=authentic_metadata,
+        completion=completion,
+    )
+
+
+def _install_lstat_replacement_race(
+    monkeypatch: pytest.MonkeyPatch,
+    target: Path,
+    *,
+    occurrence: int,
+    replacement: Callable[[], None],
+) -> None:
+    """Replace one entry after its chosen ``lstat`` result is returned.
+
+    The hook simulates a deterministic filesystem race without naming a
+    launcher helper. A safe preflight must reject rather than inspect the
+    replacement, load trials, or create a run directory.
+    """
+    real_lstat = Path.lstat
+    observed = 0
+
+    def raced_lstat(path: Path) -> os.stat_result:
+        """Return original metadata, then atomically perform the test race."""
+        nonlocal observed
+        status = real_lstat(path)
+        if path == target:
+            observed += 1
+            if observed == occurrence:
+                replacement()
+        return status
+
+    monkeypatch.setattr(Path, "lstat", raced_lstat)
+
+
+def _forbid_raced_identity_path_opening(
+    monkeypatch: pytest.MonkeyPatch,
+    identity_path: Path,
+) -> None:
+    """Prevent an unsafe high-level read after an identity path is replaced."""
+    real_path_open = Path.open
+
+    def guarded_path_open(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        """Fail deterministically if preflight reopens the raced identity path."""
+        if path == identity_path:
+            raise AssertionError("preflight attempted to read a raced identity path")
+        return real_path_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded_path_open)
+
+
 def _work_tree_snapshot(work_root: Path) -> tuple[tuple[str, ...], dict[str, bytes]]:
     """Return a deterministic directory inventory and regular-file bytes."""
     directories: list[str] = []
@@ -770,9 +887,9 @@ def test_preflight_permits_retained_prepared_phase_and_empty_ppc_without_opening
     """A post-success retained representation permits an immutable dry run."""
     launcher = _launcher()
     target = tmp_path / "CT026" / "processed" / "retained-work-cache"
-    _write_prerequisite_cache(tmp_path, target)
+    config = _write_prerequisite_cache(tmp_path, target)
     work_root = target.parent / "lfp_summary_work"
-    representation = _write_retained_prepared_phase(work_root, "c" * 64)
+    representation = _write_authentic_retained_prepared_phase(work_root, config)
     (work_root / "ppc").mkdir()
     before = _work_tree_snapshot(work_root)
     calls: list[str] = []
@@ -809,10 +926,14 @@ def test_preflight_permits_multiple_complete_retained_prepared_representations(
     """Preflight classifies every safe retained representation as inert work."""
     launcher = _launcher()
     target = tmp_path / "CT026" / "processed" / "multiple-retained-work-cache"
-    _write_prerequisite_cache(tmp_path, target)
+    config = _write_prerequisite_cache(tmp_path, target)
     work_root = target.parent / "lfp_summary_work"
-    _write_retained_prepared_phase(work_root, "d" * 64)
-    _write_retained_prepared_phase(work_root, "e" * 64)
+    _write_authentic_retained_prepared_phase(work_root, config)
+    _write_authentic_retained_prepared_phase(
+        work_root,
+        config,
+        trial_offset=2,
+    )
     calls: list[str] = []
     terminal: list[str] = []
 
@@ -866,6 +987,314 @@ def test_preflight_permits_existing_empty_safe_work_layout(
 
     assert result.exit_code == 0 and result.status == "preflight_complete"
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "source-identity",
+        "scientific-identity",
+        "representation-input",
+        "missing-schema-key",
+        "extra-schema-key",
+        "wrong-generator-type",
+        "wrong-schema-version",
+        "wrong-execution-settings-type",
+        "wrong-axes",
+        "wrong-shapes-type",
+        "wrong-dtypes-type",
+        "wrong-units-type",
+    ),
+)
+def test_preflight_rejects_noncanonical_authentic_prepared_metadata_before_trial_loading(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    """Retained metadata must remain an exact self-authenticating writer record."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"metadata-{mutation}-cache"
+    config = _write_prerequisite_cache(tmp_path, target)
+    metadata = _authentic_prepared_phase_metadata(config)
+    fingerprint = metadata["representation_fingerprint"]
+    assert isinstance(fingerprint, str)
+    if mutation == "source-identity":
+        metadata["source_fingerprint"] = "d" * 64
+    elif mutation == "scientific-identity":
+        metadata["scientific_fingerprint"] = "e" * 64
+    elif mutation == "representation-input":
+        metadata["generator"] = "different_phase_generator"
+    elif mutation == "missing-schema-key":
+        del metadata["units"]
+    elif mutation == "extra-schema-key":
+        metadata["unexpected"] = "not writer metadata"
+    elif mutation == "wrong-generator-type":
+        metadata["generator"] = 1
+    elif mutation == "wrong-schema-version":
+        metadata["schema_version"] = "unsupported-schema"
+    elif mutation == "wrong-execution-settings-type":
+        metadata["execution_settings"] = []
+    elif mutation == "wrong-axes":
+        metadata["axes"] = ["site", "trial"]
+    elif mutation == "wrong-shapes-type":
+        metadata["shapes"] = []
+    elif mutation == "wrong-dtypes-type":
+        metadata["dtypes"] = []
+    elif mutation == "wrong-units-type":
+        metadata["units"] = []
+    else:
+        raise AssertionError(f"unknown metadata mutation: {mutation}")
+    assert metadata["representation_fingerprint"] == fingerprint
+    _write_authentic_retained_prepared_phase(
+        target.parent / "lfp_summary_work",
+        config,
+        metadata=metadata,
+    )
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / f"runs-metadata-{mutation}"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(tmp_path, calls, terminal, label=mutation),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+
+
+@pytest.mark.parametrize("completion_case", ("missing", "extra"))
+def test_preflight_requires_exact_one_field_authentic_prepared_completion(
+    tmp_path: Path,
+    completion_case: str,
+) -> None:
+    """Completion certifies only the matching representation fingerprint."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"completion-{completion_case}-cache"
+    config = _write_prerequisite_cache(tmp_path, target)
+    metadata = _authentic_prepared_phase_metadata(config)
+    fingerprint = metadata["representation_fingerprint"]
+    assert isinstance(fingerprint, str)
+    completion: dict[str, object]
+    if completion_case == "missing":
+        completion = {}
+    else:
+        completion = {
+            "representation_fingerprint": fingerprint,
+            "unexpected": "not a completion certificate",
+        }
+    _write_authentic_retained_prepared_phase(
+        target.parent / "lfp_summary_work",
+        config,
+        metadata=metadata,
+        completion=completion,
+    )
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / f"runs-completion-{completion_case}"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(
+            tmp_path,
+            calls,
+            terminal,
+            label=completion_case,
+        ),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+
+
+@pytest.mark.parametrize("replacement_kind", ("symlink", "fifo", "external-file"))
+def test_preflight_fails_closed_when_identity_file_changes_after_status_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement_kind: str,
+) -> None:
+    """Identity races cannot read a replacement, block, or reach trial loading."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / f"identity-race-{replacement_kind}"
+    config = _write_prerequisite_cache(tmp_path, target)
+    representation = _write_authentic_retained_prepared_phase(
+        target.parent / "lfp_summary_work",
+        config,
+    )
+    identity_path = representation / "metadata.json"
+    external_path = tmp_path / f"external-{replacement_kind}-metadata.json"
+    if replacement_kind != "fifo":
+        external_path.write_bytes(identity_path.read_bytes())
+
+    def replace_identity() -> None:
+        """Substitute the inspected identity entry before its content read."""
+        identity_path.unlink()
+        if replacement_kind == "symlink":
+            identity_path.symlink_to(external_path)
+        elif replacement_kind == "fifo":
+            os.mkfifo(identity_path)
+        else:
+            external_path.replace(identity_path)
+
+    _install_lstat_replacement_race(
+        monkeypatch,
+        identity_path,
+        occurrence=2,
+        replacement=replace_identity,
+    )
+    _forbid_raced_identity_path_opening(monkeypatch, identity_path)
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / f"runs-identity-race-{replacement_kind}"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(
+            tmp_path,
+            calls,
+            terminal,
+            label=replacement_kind,
+        ),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+
+
+def test_preflight_fails_closed_when_work_root_changes_before_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A directory identity must remain stable from status check through listing."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / "work-root-directory-race"
+    config = _write_prerequisite_cache(tmp_path, target)
+    work_root = target.parent / "lfp_summary_work"
+    work_root.mkdir()
+    original_root = tmp_path / "original-work-root"
+    external_root = tmp_path / "external-work-root"
+    external_representation = _write_authentic_retained_prepared_phase(
+        external_root,
+        config,
+    )
+    original_inventory = _work_tree_snapshot(work_root)
+    replacement_identity = (
+        work_root
+        / "prepared_phase"
+        / external_representation.name
+        / "metadata.json"
+    )
+
+    def replace_work_root() -> None:
+        """Swap a safe empty root for an external valid-looking directory."""
+        work_root.rename(original_root)
+        external_root.rename(work_root)
+
+    _install_lstat_replacement_race(
+        monkeypatch,
+        work_root,
+        occurrence=1,
+        replacement=replace_work_root,
+    )
+    _forbid_raced_identity_path_opening(monkeypatch, replacement_identity)
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / "runs-work-root-directory-race"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(tmp_path, calls, terminal, label="work-root-race"),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+    assert _work_tree_snapshot(original_root) == original_inventory
+
+
+def test_preflight_fails_closed_when_prepared_child_changes_before_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retained representation cannot be substituted after its status check."""
+    launcher = _launcher()
+    target = tmp_path / "CT026" / "processed" / "prepared-child-directory-race"
+    config = _write_prerequisite_cache(tmp_path, target)
+    work_root = target.parent / "lfp_summary_work"
+    representation = _write_authentic_retained_prepared_phase(work_root, config)
+    original_representation = tmp_path / "original-prepared-representation"
+    external_root = tmp_path / "external-prepared-root"
+    external_representation = _write_authentic_retained_prepared_phase(
+        external_root,
+        config,
+    )
+    original_inventory = _work_tree_snapshot(representation)
+
+    def replace_representation() -> None:
+        """Swap the inspected child for a matching external directory."""
+        representation.rename(original_representation)
+        external_representation.rename(representation)
+
+    _install_lstat_replacement_race(
+        monkeypatch,
+        representation,
+        occurrence=1,
+        replacement=replace_representation,
+    )
+    _forbid_raced_identity_path_opening(
+        monkeypatch,
+        representation / "metadata.json",
+    )
+    calls: list[str] = []
+    terminal: list[str] = []
+    analysis_root = tmp_path / "runs-prepared-child-directory-race"
+
+    result = launcher.run_launcher(
+        launcher.parse_launcher_command(
+            _new_command_arguments(
+                tmp_path,
+                cache_directory=target,
+                analysis_root=analysis_root,
+            )
+        ),
+        _preflight_only_dependencies(
+            tmp_path,
+            calls,
+            terminal,
+            label="prepared-child-race",
+        ),
+    )
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert not analysis_root.exists()
+    assert calls == []
+    assert _work_tree_snapshot(original_representation) == original_inventory
 
 
 @pytest.mark.parametrize("ppc_state", ("complete", "incomplete", "locked", "malformed"))
