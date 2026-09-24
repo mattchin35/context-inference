@@ -31,9 +31,13 @@ authorized immutable cache-only rerender completed and passed fresh Sol/xhigh
 artifact review, and the user visually approved it on 2026-09-23. The approved
 commits were pushed and the cluster checkout was safely fast-forwarded to
 `c859afe`, but NR1E preflight exposed the NR1C-C shared-work-root defect below.
-NR1C-C is now complete and approved locally through `4a9554a`; its next Git
-push, cluster update, Spike-phase transfer, and cluster actions remain
-separately gated.
+NR1C-C is now complete, approved, pushed through `5cc1385`, and installed in
+the clean cluster checkout. A second evidence-only NR1E preflight stopped before
+tests when its intentionally strict array guard encountered the production
+population loader's discarded categorical `spike_clusters.npy` read. The
+bounded preflight correction and a fresh evidence-directory rerun remain
+separately gated; Spike-phase transfer and later cluster actions remain
+unapproved.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -55,8 +59,10 @@ amplitude behavior as if that behavior were scientifically correct.
 
 - **Branch and planning baseline:** `refactor` at `2245475` (`neural analysis
   refactor prep`), equal to `origin/refactor` when implementation began.
-- **Active package:** NR1C-C is complete and approved; the next NR1E
-  prerequisite is a separately authorized Git push. NR0 tests commits
+- **Active package:** NR1C-C is complete, approved, pushed, and installed on
+  the clean cluster checkout at `5cc1385`. The next NR1E prerequisite is a
+  separately authorized corrected evidence-only preflight in a new immutable
+  evidence directory. NR0 tests commits
   `e728cea`
   and `2b497e4` plus implementation commit `177a8d6` are complete and
   approved. The NR1 metadata/path/resource dry run is complete and approved;
@@ -79,10 +85,15 @@ amplitude behavior as if that behavior were scientifically correct.
   Section 5.6 transfer source. The user authorized and completed the Git push
   and first cluster checkout update to `c859afe`; preflight then stopped before
   evidence creation because the launcher rejects the valid retained shared
-  prepared-phase work root. NR1C-C now corrects that guard locally, with all
-  tests and fresh implementation review passing. Its commits are not pushed;
-  no second cluster update, transfer, dry run, or Slurm submission is
-  authorized yet.
+  prepared-phase work root. NR1C-C corrected that guard, passed all tests and
+  fresh implementation review, was pushed, and the separately authorized
+  second cluster update reached exact clean `5cc1385`. The second preflight
+  attempt then stopped before focused tests because the evidence runner's
+  blanket `numpy.load` guard rejected the production population seam's
+  unnecessary read of the 22,715,988-byte categorical
+  `spike_clusters.npy`. No numerical payload was opened and no cache, work,
+  report, launcher, or Slurm mutation occurred. A fresh preflight attempt,
+  transfer, launcher dry run, and Slurm submission are not authorized yet.
   The user requires any later preview to run unattended through Slurm without
   Codex monitoring; that execution is not approved.
 - **Approved NR1 destinations:** session root
@@ -1934,12 +1945,87 @@ tests with 22 known warnings. `py_compile`, Ruff, and `git diff --check` pass.
 A fresh Sol/xhigh implementation reviewer reported no P0-P3 findings after
 adversarial path-replacement, late-child, descriptor-leak, and schema probes.
 No cluster path or numerical CT026 work was accessed or modified during this
-package. The next user gate is the NR1C-C Git push; after that, a second exact
-cluster checkout update remains separately gated.
+package. The NR1C-C commits were pushed through `5cc1385`, and the separately
+authorized cluster checkout update reached that exact tracked-clean commit.
+Cache transfer, launcher dry run, and Slurm submission remain separately
+user-gated.
+
+#### NR1E second-preflight correction
+
+The separately authorized second NR1E evidence preflight used a fresh immutable
+directory and stopped at its first invariant failure before focused tests. The
+production launcher population seam calls
+`load_sorter_metadata(sorter)[1]`. That loader unconditionally materializes the
+selected ProbeB `spike_clusters.npy` before returning `cluster_info.tsv`, even
+though the population builder discards the categorical assignment array and
+uses only the cluster and channel metadata tables. The evidence runner's
+blanket `numpy.load` prohibition therefore rejected the production call before
+NumPy opened the 22,715,988-byte file. Its access time still predates the
+attempt. This is an evidence-runner contract mismatch, not a scientific
+computation failure or a need to alter the selected population.
+
+Preserve the failed evidence directory unchanged as rejected incident evidence:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/analysis_runs/
+  ct026_nr1e_cluster_checkout_preflight_2026-09-24T04-07-04Z
+```
+
+It contains only the two runner scripts and three partial text logs; it has no
+terminal JSON, inventory, relocation, launcher, cache, work, report, or Slurm
+artifact. The cluster checkout remains exact tracked-clean `5cc1385`, the
+corrected destination remains absent, and current metadata inventories show the
+protected legacy cache plus the same one complete retained prepared-phase
+representation and empty `ppc/` container. Because the failed attempt did not
+reach its after-snapshot, byte preservation is inferred from the stopped code
+path and current inode/size/mtime records rather than claimed as a completed
+hash proof.
+
+The smallest faithful correction is evidence-only; no source package or new
+Git push is required. In one newly authorized, newly timestamped evidence
+directory, the runner may invoke the unchanged production population seam with
+an exact-path, exactly-once `numpy.load` allowance for only the selected ProbeB
+categorical `spike_clusters.npy`. It must reject every other `numpy.load`,
+pre-validate that one owner-controlled exact resolved path with `lstat` as a
+regular nonsymlink file, then open it with
+`O_RDONLY | O_NOFOLLOW | O_NOATIME | O_CLOEXEC`. An immediate `fstat` must
+match the pre-open device, inode, regular-file type, and size before the binary
+handle is passed to NumPy with only the exact production arguments. Post-load
+`fstat` and final no-follow path status must still match device, inode, type,
+size, mtime, ctime, and atime. The descriptor must close on every success and
+failure path; fail closed if no-atime opening is unavailable, with no fallback
+to an ordinary atime-updating open. Record the resolved path, exact-one call,
+size, dtype/shape, stat records, wall time, and peak RSS, and do not inspect,
+retain, or serialize array values. The allowance does not extend to aligned
+spikes, LFP, component NPZs, prepared-phase arrays, PPC work, or scientific
+kernels. This preserves the production binding that the launcher will actually
+use and makes explicit the same bounded categorical-metadata read used by the
+previously approved local NR1 dry run. A cluster-info-only source refactor
+would avoid this discarded read, but it would introduce another tests/source/
+push/checkout cycle without changing configuration or execution; defer that
+cleanup from NR1E.
+
+The corrected preflight order is binding:
+
+1. verify checkout, environment, wrapper, corrected-destination absence, and
+   run the focused and complete neural test gates;
+2. invoke the guarded production population/configuration path exactly once;
+3. run descriptor-anchored retained-work classification without numerical
+   member access, source/path checks, legacy/work before-after preservation,
+   and resource-bound checks; and
+4. record final Git status plus complete immutable evidence hashes, inventory,
+   command order, and terminal status.
+
+A fresh Sol/xhigh read-only reviewer must approve that stable evidence. The
+failed directory may not be overwritten or reused. The fresh preflight rerun
+requires explicit user authorization and does not authorize transfer, launcher
+dry run, or Slurm submission.
 
 **NR1E - external cluster evidence.** NR1E begins only after NR1V, NR1C-A, and
-NR1C-B are approved and committed, NR1C-C is complete, the user approves the
-next Git push, and the exact clean pushed cluster checkout is verified. One Terra/high cluster evidence
+NR1C-B are approved and committed, NR1C-C is complete and pushed, and the
+exact clean pushed cluster checkout is verified. These prerequisites are now
+complete at `5cc1385`. One Terra/high cluster evidence
 runner has no repository-edit, stage, commit, or push authority. Each external
 mutation remains separately user-gated:
 

@@ -1155,3 +1155,77 @@ path or numerical CT026 work was accessed or changed during NR1C-C. The local
 NR1C-C commits remain unpushed. A new Git push, second cluster checkout update,
 NR1E evidence preflight, cache transfer, launcher dry run, and Slurm submission
 remain separately user-gated.
+
+### NR1C-C push and second NR1E preflight incident
+
+The user separately authorized the NR1C-C push. Local `HEAD` and
+`origin/refactor` reached exact
+`5cc1385b74ae2c95894ef0cf3a6a07c607ff73e7`, tracked-clean, with all
+pre-existing untracked files unchanged. The user then separately authorized a
+second cluster checkout update and evidence-only preflight. The canonical
+cluster checkout at `/gs/gsfs0/home/mchin1/context-inference` safely fetched
+and fast-forwarded from `c859afe` to exact `5cc1385`. It remained tracked-clean;
+pre-existing untracked Python cache and egg-info entries were preserved.
+
+The previously proposed but unused evidence path ending `T02-01-13Z` remained
+absent. The runner created only this fresh evidence directory:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/analysis_runs/
+  ct026_nr1e_cluster_checkout_preflight_2026-09-24T04-07-04Z
+```
+
+There was one preliminary metadata invocation and one invocation inside
+`run_preflight.sh`; both stopped at the same first invariant. No corrected
+retry occurred. The exact partial inventory is:
+
+```text
+commands.txt                    800 bytes
+metadata_preflight_before.log  1,877 bytes
+run.log                       2,706 bytes
+run_preflight.sh              3,088 bytes
+preflight_metadata.py         5,246 bytes
+```
+
+The main run recorded exact clean `HEAD` `5cc1385`, uv 0.12.17, Python 3.14.7,
+Slurm 25.05.4, and successful `hpc_ppc.sh` Bash syntax. The metadata script
+then verified the real session path and absent corrected destination and
+traversed the protected legacy cache and retained work without mutating them.
+Its in-memory inventories were not persisted. It stopped while resolving the
+production ProbeB population, before retained-
+work classification, source records, after-inventory comparison, resource
+evidence, JSON completion, focused tests, the full neural suite, transfer,
+launcher dry run, or Slurm action.
+
+The evidence guard rejected the first `numpy.load` call. Production
+`make_production_launcher_dependencies().load_active_population` calls
+`load_sorter_metadata(sorter)[1]`; that loader opens
+`spike_clusters.npy` before reading `cluster_info.tsv`, although the population
+builder discards the categorical assignment array. The exact ProbeB file is
+22,715,988 bytes. Its current access time is
+2026-09-20T20:24:30.373073347-04:00 and therefore predates both failed
+2026-09-24 attempts; NumPy never opened it. No LFP, aligned-spike, component,
+prepared-phase, or PPC array was opened. Current read-only review confirms the
+destination is still absent, checkout and origin are exact `5cc1385`, and the
+current legacy/work inventory retains the expected topology. The failed code
+path was non-mutating, but it did not complete or independently prove exact
+before/after metadata or byte preservation.
+
+Fresh Sol/xhigh diagnosis classified the stop as an evidence-runner contract
+mismatch. The production active population is scientifically unchanged and
+the categorical assignment read performs no scientific kernel. The
+authoritative plan now permits only a fresh, explicitly authorized evidence
+attempt in a new directory with an exact-path, exactly-once allowance for this
+one ProbeB `spike_clusters.npy` load. The corrected evidence runner must
+pre-validate the exact path by no-follow status, open it with
+`O_RDONLY | O_NOFOLLOW | O_NOATIME | O_CLOEXEC`, bind the descriptor to that
+status by `fstat`, and pass only the resulting binary handle with the exact
+production arguments to NumPy. Post-load descriptor and final no-follow path
+status must retain device, inode, regular-file type, size, mtime, ctime, and
+atime; the descriptor must close on every path and there is no ordinary-open
+fallback. Record only scalar path/call/stat/dtype/shape/time/RSS evidence. Run
+this production path once after the test gates and align `commands.txt` with
+the actual order. Every other array load remains prohibited. Preserve this
+incomplete directory unchanged. No transfer, launcher dry run, or Slurm action
+is authorized by this resolution.
