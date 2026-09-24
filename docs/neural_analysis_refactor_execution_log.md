@@ -1221,11 +1221,74 @@ one ProbeB `spike_clusters.npy` load. The corrected evidence runner must
 pre-validate the exact path by no-follow status, open it with
 `O_RDONLY | O_NOFOLLOW | O_NOATIME | O_CLOEXEC`, bind the descriptor to that
 status by `fstat`, and pass only the resulting binary handle with the exact
-production arguments to NumPy. Post-load descriptor and final no-follow path
-status must retain device, inode, regular-file type, size, mtime, ctime, and
-atime; the descriptor must close on every path and there is no ordinary-open
-fallback. Record only scalar path/call/stat/dtype/shape/time/RSS evidence. Run
+production arguments to NumPy. Post-load descriptor status must retain device,
+inode, regular-file type, size, mtime, ctime, and atime; the descriptor must
+then close on every path, after which a final no-follow path status must retain
+the same identity and non-atime fields. There is no ordinary-open fallback.
+Record only scalar path/call/stat/dtype/shape/time/RSS evidence. Run
 this production path once after the test gates and align `commands.txt` with
 the actual order. Every other array load remains prohibited. Preserve this
 incomplete directory unchanged. No transfer, launcher dry run, or Slurm action
 is authorized by this resolution.
+
+### NR1E guarded categorical-read NFS incident
+
+The user explicitly authorized the corrected evidence-only preflight. The
+runner preserved the prior incomplete directory and created only this fresh
+path:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/analysis_runs/
+  ct026_nr1e_cluster_checkout_preflight_guarded_2026-09-24T04-48-54Z
+```
+
+Phase 1 completed successfully on the exact tracked-clean cluster checkout at
+`5cc1385`: uv, Python, Slurm, wrapper syntax, corrected-destination absence,
+107 relocation tests, 135 launcher tests, 15 wrapper tests, and 1,425 complete
+tracked neural tests with 12 known warnings. The runner then entered the sole
+authorized production `numpy.load` using a descriptor opened with
+`O_RDONLY | O_NOFOLLOW | O_NOATIME | O_CLOEXEC`. Pre-open and initial
+descriptor identity matched. NumPy completed materializing the categorical
+assignment array from the 22,715,988-byte `.npy` file, after which the strict
+post-read timestamp check failed. Array dtype, shape, and in-memory byte size
+were not persisted. The wrapper raised before `.astype(int)`, population/
+configuration construction, retained-work classification, resources, final
+Git checks, or terminal evidence. It did not retry.
+
+The evidence directory contains exactly eight direct files:
+
+```text
+commands.txt                       1,694 bytes
+guarded_population_preflight.py   9,457 bytes
+phase1_status.txt                    27 bytes
+phase1_tests.sh                    1,823 bytes
+phase2_finalize.sh                 1,745 bytes
+run.log                            9,491 bytes
+snapshot_before.json               7,000 bytes
+snapshot_before.py                 2,566 bytes
+```
+
+There is no guarded population JSON, terminal status, evidence hash manifest,
+inventory, transfer, launcher dry run, report, work mutation, or Slurm action.
+Current read-only review confirms the corrected destination is absent, the
+checkout remains tracked-clean at exact `5cc1385`, and all 14 protected
+legacy/work records still match their durable before-snapshot without opening
+payloads.
+
+Fresh diagnosis proved that only `st_atime_ns` changed during the authorized
+read, from 1789950270373073347 to 1790226094047832332. Device 44, inode
+85963785470, regular mode 0664, size 22,715,988, mtime, and ctime remained
+exact. `findmnt` identifies NFSv3 mounted `relatime`; Linux does not guarantee
+that client `O_NOATIME` suppresses server-maintained NFS access time. This is
+not a content, modification-time, or identity mutation. Do not restore the old
+atime because that would itself mutate source metadata.
+
+The authoritative plan now keeps no-atime/no-follow opening mandatory but
+permits only this exact file's atime to remain equal or advance monotonically.
+Every content-identity and modification field must remain exact; the final
+no-follow path status must be taken after descriptor closure; all four path/
+descriptor atime observations and mount options must be recorded; and every
+other array read remains forbidden. Preserve this second rejected directory
+unchanged. A third fresh evidence attempt requires explicit user authorization;
+transfer, launcher dry run, and Slurm submission remain unauthorized.

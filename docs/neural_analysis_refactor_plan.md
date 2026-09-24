@@ -35,9 +35,11 @@ NR1C-C is now complete, approved, pushed through `5cc1385`, and installed in
 the clean cluster checkout. A second evidence-only NR1E preflight stopped before
 tests when its intentionally strict array guard encountered the production
 population loader's discarded categorical `spike_clusters.npy` read. The
-bounded preflight correction and a fresh evidence-directory rerun remain
-separately gated; Spike-phase transfer and later cluster actions remain
-unapproved.
+first guarded correction passed every test gate but then stopped because the
+NFSv3 server advanced only that file's access time despite the correctly
+requested `O_NOATIME` flag. The NFS-aware evidence correction and a fresh
+evidence-directory rerun remain separately gated; Spike-phase transfer and
+later cluster actions remain unapproved.
 Scientific recomputation, cache mutation, artifact replacement, and cluster
 submission remain separately gated exactly as specified below.
 
@@ -92,8 +94,12 @@ amplitude behavior as if that behavior were scientifically correct.
   blanket `numpy.load` guard rejected the production population seam's
   unnecessary read of the 22,715,988-byte categorical
   `spike_clusters.npy`. No numerical payload was opened and no cache, work,
-  report, launcher, or Slurm mutation occurred. A fresh preflight attempt,
-  transfer, launcher dry run, and Slurm submission are not authorized yet.
+  report, launcher, or Slurm mutation occurred. The user authorized the first
+  guarded correction; its focused and complete tests passed, and the sole
+  categorical file read completed, but NFSv3 `relatime` advanced only the
+  file's access time and triggered the deliberately strict preservation gate.
+  A fresh NFS-aware preflight attempt, transfer, launcher dry run, and Slurm
+  submission are not authorized yet.
   The user requires any later preview to run unattended through Slurm without
   Codex monitoring; that execution is not approved.
 - **Approved NR1 destinations:** session root
@@ -1992,12 +1998,19 @@ regular nonsymlink file, then open it with
 `O_RDONLY | O_NOFOLLOW | O_NOATIME | O_CLOEXEC`. An immediate `fstat` must
 match the pre-open device, inode, regular-file type, and size before the binary
 handle is passed to NumPy with only the exact production arguments. Post-load
-`fstat` and final no-follow path status must still match device, inode, type,
-size, mtime, ctime, and atime. The descriptor must close on every success and
-failure path; fail closed if no-atime opening is unavailable, with no fallback
-to an ordinary atime-updating open. Record the resolved path, exact-one call,
-size, dtype/shape, stat records, wall time, and peak RSS, and do not inspect,
-retain, or serialize array values. The allowance does not extend to aligned
+`fstat` must still match device, inode, type, mode/permissions, size, mtime, and
+ctime. The descriptor must then close on every success and failure path, and a
+post-close final no-follow path status must match the descriptor identity and
+all of those non-atime fields.
+`O_NOATIME` remains mandatory and there is no ordinary-open fallback, but the
+NFSv3 server is permitted to leave `st_atime_ns` unchanged or advance it
+monotonically for this exact authorized read; no other status field may change.
+Record `findmnt` filesystem type/options plus all pre-path, initial-fd,
+post-load-fd, and post-close-final-path atime values. Record the resolved path,
+exact-one call, size,
+dtype/shape, stat records, wall time, and peak RSS, and do not inspect, retain,
+or serialize array values. Never restore the old access time because that
+would itself mutate source metadata. The allowance does not extend to aligned
 spikes, LFP, component NPZs, prepared-phase arrays, PPC work, or scientific
 kernels. This preserves the production binding that the launcher will actually
 use and makes explicit the same bounded categorical-metadata read used by the
@@ -2021,6 +2034,39 @@ A fresh Sol/xhigh read-only reviewer must approve that stable evidence. The
 failed directory may not be overwritten or reused. The fresh preflight rerun
 requires explicit user authorization and does not authorize transfer, launcher
 dry run, or Slurm submission.
+
+The first guarded attempt is also rejected incident evidence and must remain
+unchanged:
+
+```text
+/gs/gsfs0/home/mchin1/contextProjectData/CT026/
+  CT026_20260801_latent_inference/analysis_runs/
+  ct026_nr1e_cluster_checkout_preflight_guarded_2026-09-24T04-48-54Z
+```
+
+It contains exactly eight direct files and no final guarded JSON, terminal
+status, evidence hash manifest, or inventory. Phase 1 completed successfully:
+107 relocation tests, 135 launcher tests, 15 wrapper tests, and 1,425 complete
+tracked neural tests with 12 known warnings. The one production NumPy read
+then completed materializing the categorical assignment array from the
+22,715,988-byte `.npy` file, but the runner stopped before `.astype(int)`,
+population/configuration construction, or any later check. Array dtype, shape,
+and in-memory byte size were not persisted. Only `st_atime_ns` advanced, from
+1789950270373073347 to 1790226094047832332. Device, inode, regular mode and
+permissions, size, mtime, and ctime remained exact. The source is on NFSv3
+mounted `relatime`; Linux does not guarantee that `O_NOATIME` suppresses a
+server-managed NFS access-time update. This was the exact authorized read, not
+a content or source-identity mutation. Do not restore the prior access time.
+
+The current corrected destination remains absent, the checkout remains exact
+tracked-clean `5cc1385`, and every one of the 14 legacy/work status records in
+the durable before-snapshot still matches the current path without opening any
+payload. The next attempt must use another fresh timestamped evidence directory
+and the same binding order, exact-one guarded read, and no-scientific-compute
+boundary. It must accept either unchanged atime or a monotonic NFS-only atime
+advance while requiring all content-identity and modification fields to remain
+exact. That third evidence attempt requires explicit user authorization and
+still does not authorize transfer, launcher dry run, or Slurm submission.
 
 **NR1E - external cluster evidence.** NR1E begins only after NR1V, NR1C-A, and
 NR1C-B are approved and committed, NR1C-C is complete and pushed, and the
