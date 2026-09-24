@@ -20,6 +20,11 @@ def load_main_module():
     """
     behavior_analysis_pkg = ModuleType("behavior_analysis")
     behavior_analysis_pkg.performance_plots = ModuleType("behavior_analysis.performance_plots")
+    behavior_analysis_pkg.performance_plots.DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS = {
+        "QL": "qlearning_mouse_agreement",
+        "Probe+P": "simple_probe_persistence_mouse_agreement",
+        "Expect+D+P": "expectancy_persistence_doubt_mouse_agreement",
+    }
     behavior_analysis_pkg.raster_plots = ModuleType("behavior_analysis.raster_plots")
     behavior_analysis_pkg.session_analysis = ModuleType("behavior_analysis.session_analysis")
     behavior_analysis_pkg.simulate_priors = ModuleType("behavior_analysis.simulate_priors")
@@ -73,6 +78,171 @@ def load_main_module():
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     return module
+
+
+def test_main_uses_canonical_agent_agreement_plot_registry():
+    """Single- and multisession workflows should share one agent registry."""
+    main_module = load_main_module()
+
+    assert main_module.AGENT_MOUSE_AGREEMENT_COLUMNS == (
+        main_module.performance_plots.DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS
+    )
+    assert "Probe+P" in main_module.AGENT_MOUSE_AGREEMENT_COLUMNS
+    assert "Expect+D+P" in main_module.AGENT_MOUSE_AGREEMENT_COLUMNS
+
+
+def test_collect_configured_trial_features_forwards_supplied_params(tmp_path, monkeypatch):
+    """The session entrypoint should forward adjustable model parameters."""
+    main_module = load_main_module()
+    supplied_params = object()
+    config = main_module.SingleSessionAnalysisConfig(
+        trial_feature_params=supplied_params,
+        max_explore_run_length=7,
+    )
+    session = SimpleNamespace(
+        processed_data_path=tmp_path,
+        sess_id_full="CT016_test",
+    )
+    captured = {}
+
+    def fake_collect(frame, **kwargs):
+        captured.update(kwargs)
+        return frame.copy(), supplied_params
+
+    monkeypatch.setattr(main_module.gtf, "collect_and_save_trial_features", fake_collect, raising=False)
+
+    output, returned_params = main_module.collect_configured_trial_features(
+        pd.DataFrame({"action": [1], "reward": [1]}),
+        session,
+        config,
+    )
+
+    assert output.shape[0] == 1
+    assert returned_params is supplied_params
+    assert captured["params"] is supplied_params
+    assert captured["max_explore_run_length"] == 7
+
+
+def test_save_and_plot_multisession_agent_agreement_uses_existing_plot(
+    tmp_path,
+    monkeypatch,
+):
+    """The lightweight alignment path should only summarize and plot agreement."""
+    main_module = load_main_module()
+    summary = pd.DataFrame({"agent": ["Probe+P"], "agreement_median": [0.6]})
+    blocks = pd.DataFrame({"agent": ["Probe+P"], "agreement": [0.6]})
+    calls = {}
+    monkeypatch.setattr(
+        main_module,
+        "prepare_agent_mouse_agreement_summary",
+        lambda _sessions: summary,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "prepare_agent_mouse_agreement_block_points",
+        lambda _sessions: blocks,
+    )
+
+    def fake_plot(**kwargs):
+        calls.update(kwargs)
+        return tmp_path / "CT016_agent-mouse-agreement-quality.png"
+
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_multisession_agent_mouse_agreement_quality",
+        fake_plot,
+        raising=False,
+    )
+
+    returned_summary, returned_blocks, plot_path = (
+        main_module.save_and_plot_multisession_agent_mouse_agreement(
+            saved_sessions=[object()],
+            output_path=tmp_path,
+            mouse="CT016",
+            show_raw_blocks=False,
+        )
+    )
+
+    pd.testing.assert_frame_equal(returned_summary, summary)
+    pd.testing.assert_frame_equal(returned_blocks, blocks)
+    assert (tmp_path / "CT016_agent_mouse_agreement_summary.csv").exists()
+    assert (tmp_path / "CT016_agent_mouse_agreement_block_points.csv").exists()
+    assert calls["show_raw_blocks"] is False
+    assert plot_path.name == "CT016_agent-mouse-agreement-quality.png"
+
+
+def test_expectant_session_outputs_call_value_and_component_plots(tmp_path, monkeypatch):
+    """Each processed session should receive both complementary tuning plots."""
+    main_module = load_main_module()
+    session = SimpleNamespace(
+        figure_path=tmp_path,
+        processed_data_path=tmp_path,
+        sess_id_full="CT016_test",
+    )
+    params = object()
+    trial_df = pd.DataFrame({"action": [1], "reward": [1]})
+    calls = []
+
+    monkeypatch.setattr(
+        main_module.plot_model_values,
+        "plot_mouse_history_expectant_switching_values",
+        lambda **_kwargs: (trial_df.copy(), tmp_path / "values.png"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_expectant_switching_diagnostics",
+        lambda *_args, **_kwargs: calls.append("diagnostic") or tmp_path / "diagnostic.png",
+        raising=False,
+    )
+
+    outputs = main_module.plot_expectant_switching_for_session(
+        augmented_trial_df=trial_df,
+        session=session,
+        params=params,
+    )
+
+    assert outputs["value_plot"] == tmp_path / "values.png"
+    assert outputs["diagnostic_plot"] == tmp_path / "diagnostic.png"
+    assert calls == ["diagnostic"]
+
+
+def test_multisession_agent_agreement_only_returns_before_hmm_work(monkeypatch):
+    """Agreement alignment should not require concatenation or HMM execution."""
+    main_module = load_main_module()
+    session = SimpleNamespace(sess_id_full="CT016_test", date="2026-06-10")
+    saved_session = object()
+    calls = []
+    monkeypatch.setattr(
+        main_module,
+        "resolve_multisession_dates",
+        lambda **_kwargs: ["2026-06-10"],
+    )
+    monkeypatch.setattr(
+        main_module,
+        "find_saved_session_by_date",
+        lambda **_kwargs: session,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "load_saved_session_analysis",
+        lambda _session: saved_session,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "save_and_plot_multisession_agent_mouse_agreement",
+        lambda **_kwargs: calls.append("agreement"),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "concatenate_saved_sessions",
+        lambda _sessions: (_ for _ in ()).throw(AssertionError("HMM path reached")),
+    )
+
+    result = main_module.main_multisession(agent_agreement_only=True)
+
+    assert result is None
+    assert calls == ["agreement"]
 
 
 def write_saved_session(
