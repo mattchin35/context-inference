@@ -44,7 +44,7 @@ color_names = ["windows blue",
 colors = sns.xkcd_palette(color_names)
 cmap = ListedColormap(colors)
 
-AGENT_MOUSE_AGREEMENT_COLUMNS = {
+_LEGACY_AGENT_MOUSE_AGREEMENT_COLUMNS = {
     "QL": "qlearning_mouse_agreement",
     "FQL": "fql_mouse_agreement",
     "HMM": "hmm_logodds_mouse_agreement",
@@ -54,6 +54,13 @@ AGENT_MOUSE_AGREEMENT_COLUMNS = {
     "WSLS": "wsls_mouse_agreement",
     "Ideal": "observer_mouse_agreement",
 }
+AGENT_MOUSE_AGREEMENT_COLUMNS = dict(
+    getattr(
+        performance_plots,
+        "DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS",
+        _LEGACY_AGENT_MOUSE_AGREEMENT_COLUMNS,
+    )
+)
 
 CROSS_MOUSE_SESSION_METRIC_SPECS = {
     "median_TTS": {
@@ -209,6 +216,11 @@ class SingleSessionAnalysisConfig:
         Step size between sliding-regression windows, in valid blocks.
     trial_glm_predictor_columns : tuple[str, ...]
         Trial-level predictor columns reserved for trial HMM modeling.
+    trial_feature_params : object or None
+        Optional ``gather_trial_features.TaskParams`` instance. None constructs
+        the documented defaults when trial features are collected. Supplying
+        an instance exposes the expectant-switching parameters at the workflow
+        boundary without enabling trial GLM-HMM execution.
     max_explore_run_length : int
         Maximum number of exploratory-side valid choice trials allowed in one
         explore run during trial-feature collection.
@@ -234,6 +246,7 @@ class SingleSessionAnalysisConfig:
     sliding_regression_step_size: int = 5
     max_explore_run_length: int = 5
     min_explore_run_length_to_count: int = 1
+    trial_feature_params: object | None = None
     trial_glm_predictor_columns: tuple[str, ...] = (
         "FQlearning_rel_value",
         "HMM_decay_res",
@@ -474,6 +487,83 @@ def plot_mouse_history_ideal_observer_for_session(
         figure_path=session.figure_path,
         sess_id_full=session.sess_id_full,
     )
+
+
+def collect_configured_trial_features(
+    augmented_trial_df: pd.DataFrame,
+    session: Session,
+    config: SingleSessionAnalysisConfig,
+) -> tuple[pd.DataFrame, object]:
+    """Collect and save trial features with workflow-supplied parameters.
+
+    Parameters
+    ----------
+    augmented_trial_df : pandas.DataFrame, shape (n_trials, n_columns)
+        Session trial table before model feature generation.
+    session : Session
+        Session metadata providing the processed-data path and identifier.
+    config : SingleSessionAnalysisConfig
+        Workflow configuration. ``trial_feature_params`` may hold a configured
+        ``gather_trial_features.TaskParams`` instance; None uses its defaults.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, object]
+        Augmented feature table and the exact parameter object saved alongside
+        it. Row count and trial ordering are preserved.
+    """
+    params = config.trial_feature_params
+    if params is None:
+        params = gtf.TaskParams()
+    return gtf.collect_and_save_trial_features(
+        augmented_trial_df,
+        processed_data_path=session.processed_data_path,
+        sess_id_full=session.sess_id_full,
+        params=params,
+        max_explore_run_length=config.max_explore_run_length,
+    )
+
+
+def plot_expectant_switching_for_session(
+    augmented_trial_df: pd.DataFrame,
+    session: Session,
+    params,
+) -> dict[str, Path]:
+    """Save complementary expectant-switching tuning plots for one session.
+
+    Parameters
+    ----------
+    augmented_trial_df : pandas.DataFrame, shape (n_trials, n_columns)
+        Trial table containing the expectant-switching values, probabilities,
+        and component diagnostics. Choices use ``0=right`` and ``1=left``.
+    session : Session
+        Session metadata providing ``figure_path`` and ``sess_id_full``.
+    params : object
+        Exact trial-feature parameter object used to generate model columns.
+
+    Returns
+    -------
+    dict[str, pathlib.Path]
+        Paths keyed by ``value_plot`` and ``diagnostic_plot``.
+    """
+    _plot_df, value_path = (
+        plot_model_values.plot_mouse_history_expectant_switching_values(
+            trial_df=augmented_trial_df,
+            figure_path=session.figure_path,
+            sess_id_full=session.sess_id_full,
+            params=params,
+            theme="light",
+        )
+    )
+    diagnostic_path = performance_plots.plot_expectant_switching_diagnostics(
+        augmented_trial_df,
+        plot_path=session.figure_path,
+        sess_id_full=session.sess_id_full,
+    )
+    return {
+        "value_plot": value_path,
+        "diagnostic_plot": diagnostic_path,
+    }
 
 
 def save_and_plot_switch_persistence_for_session(
@@ -2676,6 +2766,18 @@ def ensure_block_agent_mouse_agreement_columns(
             "Rerun single-session trial feature collection for this session."
         ) from exc
 
+    still_missing = [
+        column
+        for column in AGENT_MOUSE_AGREEMENT_COLUMNS.values()
+        if column not in block_performance.columns
+    ]
+    if still_missing:
+        raise ValueError(
+            f"{saved_session.session.sess_id_full} could not regenerate agent-agreement "
+            f"columns {still_missing}. Rerun single-session trial feature collection "
+            "for this session."
+        )
+
     return SavedSessionAnalysis(
         session=saved_session.session,
         block_performance=block_performance,
@@ -2796,6 +2898,54 @@ def prepare_agent_mouse_agreement_summary(
             )
 
     return pd.DataFrame(rows, columns=columns)
+
+
+def save_and_plot_multisession_agent_mouse_agreement(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+    output_path: Path,
+    mouse: str,
+    show_raw_blocks: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame, Path]:
+    """Save and plot existing date-aligned agent agreement across sessions.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Saved single-session analyses in chronological plotting order.
+    output_path : pathlib.Path
+        Cross-session output directory.
+    mouse : str
+        Mouse identifier used in filenames and the plot title.
+    show_raw_blocks : bool, default=False
+        Whether to overlay block-level points on the existing agreement plot.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame, pathlib.Path]
+        Session summary, block-level points, and saved plot path. This helper
+        performs no block or trial HMM modeling.
+    """
+    output_path.mkdir(parents=True, exist_ok=True)
+    summary = prepare_agent_mouse_agreement_summary(saved_sessions)
+    block_points = prepare_agent_mouse_agreement_block_points(saved_sessions)
+    summary.to_csv(
+        output_path / f"{mouse}_agent_mouse_agreement_summary.csv",
+        index=False,
+        na_rep="None",
+    )
+    block_points.to_csv(
+        output_path / f"{mouse}_agent_mouse_agreement_block_points.csv",
+        index=False,
+        na_rep="None",
+    )
+    plot_path = performance_plots.plot_multisession_agent_mouse_agreement_quality(
+        summary_df=summary,
+        block_points_df=block_points,
+        plot_path=output_path,
+        figure_id=mouse,
+        show_raw_blocks=show_raw_blocks,
+    )
+    return summary, block_points, plot_path
 
 
 def prepare_block_switch_block_points(
@@ -3763,7 +3913,10 @@ def main_simulation():
     #                                              prior_sigma=1)
 
 
-def main_multisession(multisession_collection_only: bool = True):
+def main_multisession(
+    multisession_collection_only: bool = True,
+    agent_agreement_only: bool = False,
+):
     """Analyze selected saved sessions as one continuous multisession table.
 
     Parameters
@@ -3772,8 +3925,12 @@ def main_multisession(multisession_collection_only: bool = True):
         If True, overwrite the saved multisession block/trial CSVs from the
         current single-session CSVs and return before plotting or HMM-related
         work. If False, run the full multisession plotting and modeling flow.
+    agent_agreement_only : bool, default=False
+        If True, save and plot the existing date-aligned mouse-agent agreement
+        outputs, then return before concatenation, residual summaries, or HMM
+        work. This takes precedence over ``multisession_collection_only``.
     """
-    mouse = 'CT024'
+    mouse = 'CT016'
     session_data_root = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}')
     multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
     task_tag = "latent_inference"
@@ -3846,6 +4003,14 @@ def main_multisession(multisession_collection_only: bool = True):
         for date in dates
     ]
     saved_sessions = [load_saved_session_analysis(session) for session in sessions]
+    if agent_agreement_only:
+        save_and_plot_multisession_agent_mouse_agreement(
+            saved_sessions=saved_sessions,
+            output_path=multi_session_save_path,
+            mouse=mouse,
+            show_raw_blocks=plot_agent_agreement_raw_blocks,
+        )
+        return
     if all(hasattr(saved_session.session, "processed_data_path") for saved_session in saved_sessions):
         for model_formula in BLOCK_RESIDUAL_MODEL_FORMULAS:
             collect_mouse_block_residual_model_summaries(
@@ -3910,24 +4075,13 @@ def main_multisession(multisession_collection_only: bool = True):
         size_column="state_block_count",
         marker_mode=block_hmm_state_marker_mode,
     )
-    agent_mouse_agreement_summary = prepare_agent_mouse_agreement_summary(saved_sessions)
-    agent_mouse_agreement_block_points = prepare_agent_mouse_agreement_block_points(saved_sessions)
-    agent_mouse_agreement_summary.to_csv(
-        multi_session_save_path / f"{mouse}_agent_mouse_agreement_summary.csv",
-        index=False,
-        na_rep="None",
-    )
-    agent_mouse_agreement_block_points.to_csv(
-        multi_session_save_path / f"{mouse}_agent_mouse_agreement_block_points.csv",
-        index=False,
-        na_rep="None",
-    )
-    performance_plots.plot_multisession_agent_mouse_agreement_quality(
-        summary_df=agent_mouse_agreement_summary,
-        block_points_df=agent_mouse_agreement_block_points,
-        plot_path=multi_session_save_path,
-        figure_id=mouse,
-        show_raw_blocks=plot_agent_agreement_raw_blocks,
+    agent_mouse_agreement_summary, agent_mouse_agreement_block_points, _ = (
+        save_and_plot_multisession_agent_mouse_agreement(
+            saved_sessions=saved_sessions,
+            output_path=multi_session_save_path,
+            mouse=mouse,
+            show_raw_blocks=plot_agent_agreement_raw_blocks,
+        )
     )
     trials_to_correct_summary = prepare_session_trials_to_correct_summary(saved_sessions)
     performance_plots.plot_trials_to_correct_session_summary(
@@ -4217,11 +4371,10 @@ def run_single_session_workflow(
         regressor_column=config.scatter_regressor,
     )
 
-    augmented_trial_df, _task_params = gtf.collect_and_save_trial_features(
-        augmented_trial_df,
-        processed_data_path=sess.processed_data_path,
-        sess_id_full=sess.sess_id_full,
-        max_explore_run_length=config.max_explore_run_length,
+    augmented_trial_df, task_params = collect_configured_trial_features(
+        augmented_trial_df=augmented_trial_df,
+        session=sess,
+        config=config,
     )
     block_performance = session_analysis.add_block_agent_mouse_agreement_columns(
         block_performance,
@@ -4246,6 +4399,11 @@ def run_single_session_workflow(
     performance_plots.plot_session_explore_trials(block_performance, sess.figure_path, sess.sess_id_full)
     performance_plots.plot_session_explore_runs(block_performance, sess.figure_path, sess.sess_id_full)
     performance_plots.plot_session_agent_mouse_agreement(block_performance, sess.figure_path, sess.sess_id_full)
+    plot_expectant_switching_for_session(
+        augmented_trial_df=augmented_trial_df,
+        session=sess,
+        params=task_params,
+    )
     plot_mouse_history_ideal_observer_for_session(
         augmented_trial_df=augmented_trial_df,
         session=sess,
@@ -4365,6 +4523,16 @@ def main_mouse():
         skip_block_hmm_if_existing=True,
         max_explore_run_length=5,
         min_explore_run_length_to_count=2,
+        trial_feature_params=gtf.TaskParams(
+            expectancy_threshold=3.0,
+            expectancy_scale=1.0,
+            omission_lam=0.5,
+            simple_persistence_weight=1.0,
+            simple_probe_weight=1.0,
+            full_persistence_weight=1.0,
+            full_expectancy_weight=1.0,
+            full_doubt_weight=1.0,
+        ),
     )
 
     sess = find_raw_session_by_date(
@@ -4380,7 +4548,7 @@ def main_mouse():
 
 def main_mouse_batch():
     """Run ordinary single-session analysis for several dates of one mouse."""
-    mouse = "CT024"
+    mouse = "CT016"
     use_all_dates_for_task_tag = True
     dates = [#'2026-04-17', '2026-04-20',
         #'2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
@@ -4419,6 +4587,16 @@ def main_mouse_batch():
         skip_block_hmm_if_existing=True,
         max_explore_run_length=5,
         min_explore_run_length_to_count=2,
+        trial_feature_params=gtf.TaskParams(
+            expectancy_threshold=3.0,
+            expectancy_scale=1.0,
+            omission_lam=0.5,
+            simple_persistence_weight=1.0,
+            simple_probe_weight=1.0,
+            full_persistence_weight=1.0,
+            full_expectancy_weight=1.0,
+            full_doubt_weight=1.0,
+        ),
     )
 
     run_single_session_batch(
@@ -4528,8 +4706,8 @@ def main_cross_mouse_multisession_block_performance(
 
 
 if __name__ == '__main__':
-    main_mouse()
-    # main_mouse_batch()
-    # main_multisession(multisession_collection_only=True)
+    # main_mouse()
+    main_mouse_batch()
+    main_multisession(agent_agreement_only=True)
     # main_simulation()
     # main_cross_mouse_metrics()

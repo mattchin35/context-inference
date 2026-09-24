@@ -738,3 +738,27 @@ Implementation is complete only when:
 - focused behavior-analysis and behavior-modeling test suites pass;
 - public functions/classes document types, shapes, choice encoding, timing,
   units, and return values.
+
+## 13. CT016 workflow integration
+
+The post-implementation workflow integration uses the existing session and
+cross-session agent-agreement plots rather than adding a new cross-session
+reward-count plot. Trial GLM-HMM execution remains disabled.
+
+For each session, `main.py` now:
+
+1. receives an optional configured `TaskParams` object through
+   `SingleSessionAnalysisConfig`;
+2. computes and saves both expectant-switching feature sets;
+3. adds both models to the existing blockwise agreement plot;
+4. saves the component/probability diagnostic; and
+5. saves a one-panel mouse-history value plot overlaying both signed model
+   values with choices, rewarded choices, context shading, and the active
+   parameter preset.
+
+For cross-session alignment, a lightweight agreement-only path regenerates
+missing block agreement values from augmented trials, writes the existing
+summary and block-point CSVs, and saves the existing date-aligned agreement
+plot. It returns before concatenation or block/trial HMM work. The canonical
+agreement registry is owned by `performance_plots.py` and consumed by
+`main.py`, preventing the single- and multisession model lists from diverging.
