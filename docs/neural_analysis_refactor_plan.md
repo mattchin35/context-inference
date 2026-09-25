@@ -73,8 +73,8 @@ exist. A user must be able to:
 4. validate those paths and relationships without loading large arrays;
 5. launch the existing webapp from that metadata and use the existing bounded
    interactive and cached-result views without editing Python constants;
-6. dry-run and hand off the existing large LFP-summary computation locally or
-   through the existing Slurm wrapper from the same resolved metadata; and
+6. dry-run and hand off the existing large Spike-phase/PPC computation locally
+   or through the existing Slurm wrapper from the same resolved metadata; and
 7. find short instructions for the supported commands, outputs, recovery
    steps, and important Python functions.
 
@@ -340,8 +340,9 @@ data flow is binding.
 - It records session identity and session-level behavior sources.
 - It contains a list of probes. Each probe records its stable probe ID,
   acquisition family, LFP source, required synchronization source, spike
-  sorter/aligned-spike sources, optional channel-quality source, sites, and
-  population references used by existing capabilities.
+  sorter/aligned-spike sources, optional channel-quality source, sites,
+  anatomical channel groups, and population references used by existing
+  capabilities.
 - Field names make file-versus-directory expectations explicit.
 - Hardware/probe identity remains distinct from anatomical labels.
 - Paths are relative to the session root and must remain contained within it.
@@ -366,13 +367,17 @@ minimal content contract:
 | aligned spikes | file | spike views and Spike phase | current aligned-spike loader |
 | optional channel-quality source | file | quality-selected populations | current channel-quality loader |
 | site IDs, display labels, probe references, and saved-channel indices | records | LFP controls and configuration | current `LFPSiteConfig` construction |
+| anatomical channel-group label, probe reference, and channel indices | records | unit-region controls | current region/channel selection |
 | site-pair references | ID pairs | existing synchrony views | current site-pair configuration |
 | optional approved cache or snapshot directory | directory | cached views | current cache/snapshot inspection |
 
-The metadata records source locations and stable labels. It does not store
-derived unit IDs, selected-unit results, scientific thresholds, quality-filter
-rules, bands, seeds, or execution policy. Current code-owned selection rules
-remain code owned; explicit run choices remain command inputs.
+The metadata records source locations, stable labels, and the anatomical
+channel groups needed to replace current CT-specific region presets. Those
+groups contain only a label, probe reference, and explicit channel indices.
+Metadata does not store derived unit IDs, selected-unit results, scientific
+thresholds, quality-filter rules, bands, seeds, or execution policy. Current
+code-owned unit-selection rules remain code owned; explicit run choices remain
+command inputs.
 
 ### Resolution boundary
 
@@ -446,7 +451,7 @@ look afterward?
 It contains these sections:
 
 1. **Workflow at a glance.** Create/edit metadata, validate, launch the
-   webapp, and dry-run or start the existing LFP-summary computation.
+   webapp, and dry-run or start the existing Spike-phase/PPC computation.
 2. **Create the session metadata.** Show the canonical path, the editable
    creator values, skeleton generation, and the exact validation command.
 3. **Metadata fields.** A compact table states the type, file/directory
@@ -1983,11 +1988,11 @@ Prefer a flat, direct implementation:
 
 - new `src/neural_analysis/session_metadata.py` for data records, JSON I/O,
   structural validation, contained path resolution, and action validation;
-- new `src/neural_analysis/cli/create_session_metadata.py` for editable creator,
+- new `src/neural_analysis/session_metadata_cli.py` for editable creator,
   skeleton generation, and validation;
 - new focused tests in
   `src/tests/neural_analysis/test_session_metadata.py` and
-  `src/tests/neural_analysis/cli/test_create_session_metadata.py`;
+  `src/tests/neural_analysis/test_session_metadata_cli.py`;
 - the initial metadata and validation sections of
   `src/neural_analysis/README.md`.
 
@@ -2006,11 +2011,12 @@ The initial schema contains only values required by existing capabilities:
 - a list of probes, each with stable probe ID and the inspected acquisition
   family;
 - for each probe, the exact existing LFP data source and authoritative metadata
-  sidecar or directory expected by its current loader;
+  sidecar file expected by its current loader;
 - for each probe, the exact synchronization source used by current alignment;
 - for each probe, the existing spike sorter directory, aligned-spike source,
   and optional channel-quality source used by current population selection;
-- existing site/channel/anatomical labels and site-pair references;
+- existing site/channel/anatomical labels, anatomical channel groups, and
+  site-pair references;
 - stable population labels and probe references needed to request the current
   code-owned population selection; and
 - optional references to approved caches or snapshots already supported by the
@@ -2018,6 +2024,9 @@ The initial schema contains only values required by existing capabilities:
 
 File and directory fields are separate and explicitly named. Metadata does not
 accept arbitrary bags of paths or infer a source by searching a directory.
+The fixed observed sorter filenames may be resolved directly beneath the
+explicit sorter directory; no directory scan or alternate-name discovery is
+added.
 
 Scientific bands, window definitions, seeds, shuffle procedures, numerical
 thresholds, memory limits, cache schemas, and figure settings remain outside
@@ -2047,18 +2056,20 @@ representation.
 The CLI has two ordinary operations:
 
 ```text
-uv run python -m src.neural_analysis.cli.create_session_metadata create \
-  --session-root SESSION_ROOT [--output METADATA_PATH]
+uv run python -m src.neural_analysis.session_metadata_cli create \
+  --session-root SESSION_ROOT
 
-uv run python -m src.neural_analysis.cli.create_session_metadata validate \
+uv run python -m src.neural_analysis.session_metadata_cli validate \
   --metadata METADATA_PATH [--action webapp|power|synchrony|spike-phase]
 ```
 
-`create` writes one human-editable incomplete skeleton and never searches the
-session tree. The user fills explicit paths and records. `validate` prints a
-short availability summary and returns nonzero for malformed metadata or for
-missing inputs required by the requested action. With no `--action`, it reports
-all four action categories without requiring every optional capability.
+`create` writes one human-editable incomplete skeleton only at
+`<session-root>/neural_session.json`, refuses to replace an existing file, and
+never searches the session tree. The user fills explicit paths and records.
+`validate` prints a short availability summary and returns nonzero for malformed
+metadata or for missing inputs required by the requested action. With no
+`--action`, it reports all four action categories without requiring every
+optional capability.
 
 ### 7.5 Tests written first
 
@@ -2070,11 +2081,14 @@ all four action categories without requiring every optional capability.
 - one and multiple probes with different source paths;
 - inspected Open Ephys/CT026 and SpikeGLX/CT014 layouts;
 - a differently named synthetic mouse/session/probe with no CT-specific branch;
+- anatomical channel groups retain their labels, probe references, and channel
+  indices without using the CT014 preset table;
 - duplicate IDs and broken probe/site/pair/population references;
 - missing, `null`, and empty values remain distinct;
 - incomplete metadata can be displayed while action validation explains which
   current view or computation is unavailable;
-- creator output and skeleton output validate;
+- the created skeleton loads structurally while action validation reports its
+  intentionally incomplete inputs;
 - metadata validation loads no scientific array and mutates no cache, work, or
   report path.
 
@@ -2087,7 +2101,7 @@ Focused RED/GREEN command:
 ```bash
 uv run pytest -q -p no:cacheprovider \
   src/tests/neural_analysis/test_session_metadata.py \
-  src/tests/neural_analysis/cli/test_create_session_metadata.py
+  src/tests/neural_analysis/test_session_metadata_cli.py
 ```
 
 ### 7.6 Performance and completion
@@ -2295,6 +2309,8 @@ and requires a separate user-approved plan.
 - one bounded synthetic integration reaches the existing Spike-phase pipeline;
 - existing direct-path CLI, resume, recovery, checkpoint, and Slurm forwarding
   tests remain green;
+- legacy configuration JSON without the new optional population-source paths
+  still loads with `None` defaults for snapshot inspection;
 - resume continues to use saved run configuration rather than changed live
   metadata; and
 - documentation commands parse and reach no-submit smoke paths.
@@ -2303,8 +2319,15 @@ The same milestone adds only the source-identity records already required for
 correct reuse with new sessions: the authoritative same-stem SpikeGLX metadata
 file plus the consumed `spike_times.npy`, `spike_clusters.npy`,
 `cluster_info.tsv`, aligned-spike file, and channel-quality file when used.
-Implement this by extending the current component-scoped source fingerprint
-function directly; do not add a source registry or fingerprint framework.
+Extend the existing `UnitPopulationConfig` with optional
+`spike_times_path`, `spike_clusters_path`, `cluster_info_path`, and
+`channel_quality_path` fields, each defaulting to `None` for legacy
+configuration loading. New metadata-driven configurations populate the exact
+resolved paths. The existing `aligned_spike_path` field remains authoritative
+for aligned spikes. Include these explicit paths in the current component
+configuration/source identities by extending the existing model and
+component-scoped source fingerprint function directly; do not add a new source
+record, registry, or fingerprint framework.
 
 Focused RED/GREEN command:
 
