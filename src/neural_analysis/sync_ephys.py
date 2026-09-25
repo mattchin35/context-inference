@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.neural_analysis import ephys_sync_utils
+from src.neural_analysis.synchronization import alignment as ephys_sync_utils
 
 
 def _require_existing_file(file_path: Path) -> Path:
@@ -240,4 +240,3 @@ if __name__ == "__main__":
     # main_workflow()
     # main_ni_only()
     main_open_ephys_workflow()
-

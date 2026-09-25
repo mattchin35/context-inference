@@ -11,7 +11,7 @@ import pandas as pd
 import pynapple as nap
 
 import src.external_tools.readSGLX as readSGLX
-from src.neural_analysis import ephys_sync_utils
+from src.neural_analysis.synchronization import alignment as ephys_sync_utils
 
 
 OPEN_EPHYS_AFFINE_UV_SEMANTICS = "open_ephys_affine_uV_v1"
