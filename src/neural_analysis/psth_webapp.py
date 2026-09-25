@@ -16,7 +16,6 @@ import streamlit as st
 from src.neural_analysis import (
     lfp_phase_clustering,
     lfp_summary_webapp,
-    population_pca,
     population_pca_decoding,
     population_pca_switch_trajectories,
     unit_spike_plotting,
@@ -27,6 +26,7 @@ from src.neural_analysis.lfp.loading import (
     OPEN_EPHYS_AFFINE_UV_SEMANTICS,
     sha256_file_content,
 )
+from src.neural_analysis.population import pca as population_pca
 from src.neural_analysis.spike_behavior import loading as spike_behavior_pynapple
 from src.neural_analysis.spike_behavior import loading as unit_spike_loading
 from src.neural_analysis.spike_lfp import hilbert as spike_lfp_hilbert_phase
