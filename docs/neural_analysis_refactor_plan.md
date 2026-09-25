@@ -2,9 +2,9 @@
 
 ## Status and authority
 
-**Current status:** U1-U4, R0, R1, and R2A are complete. R2B was authorized on
-2026-09-25, implemented tests-first, and verified locally; user review is
-pending. R2C and R2D each require separate approval.
+**Current status:** U1-U4, R0, R1, R2A, and R2B are complete. R2C was
+authorized on 2026-09-25, implemented tests-first, and verified locally; user
+review is pending. R2D requires separate approval.
 
 This plan supersedes the former NR2-NR18 package roadmap and the former broad
 layered target architecture. Historical execution details, reviews, paths,
@@ -611,6 +611,29 @@ Tests written first:
 Run the existing synthetic/injected representative PPC kernel workload before
 and after this slice. Do not load CT026 or another real session without a
 separate authorization.
+
+#### R2C implementation result
+
+R2C tests were committed first in `2c3fbba`, with 17 expected RED failures for
+the absent canonical package and 200 passing focused tests. The tests preserve
+the established Hilbert and phase-locking analysis versions, the legacy
+generator strings saved by the exploratory webapp, public and tested-private
+PPC helpers, and kernel/runtime monkeypatch seams.
+
+The implementation was committed in `d730325`. It creates the minimal
+`spike_lfp` package with `hilbert.py`, `phase_locking.py`, `ppc.py`, and
+`ppc_kernel.py`. Each old numerical module is an exact module alias of its
+canonical owner. Plotting remains in `unit_spike_plotting.py` until R3, while
+workflow workers, checkpoints, and process policy remain in `lfp_summary`.
+
+The focused R2C suite passed 217 tests, the affected PPC/runtime/profile/
+synthetic/webapp suite passed 349 tests, and the complete neural suite passed
+1,731 tests with the 22 previously inventoried warnings. The affected suite
+includes the existing injected representative timing/memory contracts,
+allocation and array-ownership checks, serial/parallel equality, seeded
+schedules, and checkpoint behavior. Three moved numerical modules were exact
+AST matches; PPC differed only in importing the canonical phase-locking owner.
+No real session, cache, report, external system, or scheduler was accessed.
 
 ### R2D - Population and cross-session analysis
 
