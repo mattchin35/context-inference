@@ -5,6 +5,16 @@ code where one session's behavior, LFP, synchronization, and spike sources are.
 It contains paths and labels only; scientific settings remain in the analysis
 code and explicit run commands.
 
+Start from the closest editable example:
+
+- `docs/examples/neural_analysis/open_ephys_session.json`
+- `docs/examples/neural_analysis/spikeglx_session.json`
+- `docs/examples/neural_analysis/differently_named_session.json`
+
+Copy the example to the session root as `neural_session.json`, then replace its
+relative paths and labels. Probe IDs identify recording hardware; site and
+channel-group labels describe anatomy. They do not need to have the same name.
+
 ## Create and validate session metadata
 
 Create the editable skeleton in an existing session directory:
@@ -75,6 +85,8 @@ which source is unavailable.
 
 ## Run Spike-phase/PPC computation
 
+### Local preview
+
 Check a new request locally without loading numerical arrays or starting the
 computation:
 
@@ -93,6 +105,23 @@ probe, shuffle count, worker count, cache directory, and optional analysis root
 explicit. Metadata supplies only session identity and input paths. The legacy
 `--session-path` route remains available for the reviewed CT026 workflow.
 
+Run the local preview only after its dry run succeeds:
+
+```bash
+uv run python -m src.neural_analysis.lfp_spike_phase_launcher new \
+  --session-metadata /path/to/session/neural_session.json \
+  --probe rear-probe \
+  --cache-directory /path/to/session/processed/lfp-summary-cache \
+  --shuffles 100 \
+  --workers 8
+```
+
+The existing final intent remains explicit: use `--shuffles 1000 --final-run`.
+This is the same computation with the reviewed final shuffle count, not a new
+analysis mode.
+
+### Slurm
+
 For Slurm, submit the same arguments through the existing wrapper:
 
 ```bash
@@ -104,10 +133,62 @@ sbatch src/shell_scripts/hpc_ppc.sh new \
   --workers 8
 ```
 
-Resume and report commands use the saved run configuration and do not reread
-live session metadata:
+Submit from a tracked-clean repository root. The wrapper fixes the Slurm task
+to eight CPUs and requires `--workers 8`; it forwards the scientific arguments
+to the same Python launcher.
+
+### Resume and recover
+
+These commands use the saved run configuration and do not reread live session
+metadata:
 
 ```bash
 uv run python -m src.neural_analysis.lfp_spike_phase_launcher resume \
   --run-directory /path/to/session/analysis_runs/exact-run-directory
 ```
+
+If computation completed but report publication failed:
+
+```bash
+uv run python -m src.neural_analysis.lfp_spike_phase_launcher recover-report \
+  --run-directory /path/to/session/analysis_runs/exact-run-directory
+```
+
+To rebuild only the report from a completed run:
+
+```bash
+uv run python -m src.neural_analysis.lfp_spike_phase_launcher rerender-report \
+  --run-directory /path/to/session/analysis_runs/exact-run-directory
+```
+
+## Where outputs go
+
+- `processed/lfp_summary_cache*` holds reusable component NPZ files and their
+  manifest. It stays under the session, outside Git.
+- `processed/lfp_summary_work` holds current prepared/checkpoint work managed
+  by the existing computation.
+- `analysis_runs/<timestamped-run>` holds launcher state, configuration,
+  source identity, logs, summary, and the human-readable report.
+- The exact `resume` command is printed and saved in an interrupted run.
+
+Never point a new run at the protected historical `processed/lfp_summary_cache`
+unless it is already the intended compatible input. Use an explicit new cache
+directory for a new source/configuration identity.
+
+## Python API
+
+The small public surface for new-session use is:
+
+- `load_session_metadata(path)` parses the version-1 JSON file;
+- `resolve_session_metadata(metadata, path)` resolves relative paths beneath
+  the metadata file's session directory;
+- `validate_session_for_action(session, action)` reports missing ordinary
+  inputs without loading arrays;
+- `build_lfp_summary_config(session, request)` builds the existing Power and
+  Synchrony configuration from metadata; and
+- `build_metadata_spike_phase_config(...)` adds one selected population and
+  explicit cache/shuffle/worker choices for the existing Spike-phase pipeline.
+
+The dataclass and function docstrings specify path types, zero-based channel
+axes, seconds, Hz, and uV. Scientific calculations, plot definitions, cache
+formats, and scheduler behavior are unchanged by the metadata layer.
