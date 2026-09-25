@@ -245,6 +245,89 @@ def test_active_summary_population_accepts_metadata_probe_ids() -> None:
     assert population.stable_unit_ids == ("rear-probe:4",)
 
 
+def test_load_webapp_session_resolves_metadata_without_array_loading(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Webapp startup reads one metadata document but no scientific arrays."""
+    from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
+
+    expected = _write_resolved_session(tmp_path)
+    metadata_path = tmp_path / "neural_session.json"
+
+    def forbidden_load(*args: object, **kwargs: object) -> None:
+        raise AssertionError("webapp startup must not load a scientific array")
+
+    monkeypatch.setattr(np, "load", forbidden_load)
+
+    session = psth_webapp.load_webapp_session(metadata_path)
+
+    assert session == expected
+
+
+def test_metadata_population_inputs_keep_hardware_anatomy_and_paths_separate(
+    tmp_path: Path,
+) -> None:
+    """A population selects its probe, anatomical channels, and exact sources."""
+    from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
+
+    session = _write_resolved_session(tmp_path)
+
+    selection = psth_webapp.metadata_population_inputs(session, "rear-active")
+
+    assert selection.population_id == "rear-active"
+    assert selection.population_label == "active HPC units"
+    assert selection.probe_id == "rear-probe"
+    assert selection.probe_label == "rear hardware"
+    assert selection.channel_group_label == "HPC"
+    assert selection.channel_indices == (7, 8, 9)
+    assert selection.sorter_directory == (tmp_path / "ephys/rear/kilosort4").resolve()
+    assert selection.aligned_spike_file == (tmp_path / "ephys/rear_sync.npz").resolve()
+    assert selection.lfp_file == (tmp_path / "ephys/rear/recording.lf.bin").resolve()
+
+
+def test_metadata_lfp_site_inputs_preserve_user_order_and_saved_channels(tmp_path: Path) -> None:
+    """LFP controls come from site records rather than CT-specific presets."""
+    from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
+
+    session = _write_resolved_session(tmp_path)
+
+    sites = psth_webapp.metadata_lfp_site_inputs(session)
+
+    assert [(site.site_id, site.display_label) for site in sites] == [
+        ("frontal-site", "PFC"),
+        ("rear-site", "HPC"),
+    ]
+    assert [site.probe_id for site in sites] == ["front-probe", "rear-probe"]
+    assert [site.saved_channel_index for site in sites] == [0, 7]
+    assert [site.acquisition_family for site in sites] == ["open_ephys", "spikeglx"]
+
+
+def test_metadata_view_availability_disables_only_views_missing_their_sources(
+    tmp_path: Path,
+) -> None:
+    """Missing spike inputs do not disable LFP-only views or cached inspection."""
+    from dataclasses import replace
+    from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
+
+    session = _write_resolved_session(tmp_path)
+    rear = replace(
+        session.probes[1],
+        sorter_directory=None,
+        aligned_spike_file=None,
+    )
+    session = replace(session, probes=(session.probes[0], rear))
+
+    availability = psth_webapp.metadata_view_availability(session)
+
+    assert availability[psth_webapp.PLOT_VIEW_LFP_PHASE_CLUSTERING].available is True
+    assert availability[psth_webapp.PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE].available is True
+    assert availability[psth_webapp.PLOT_VIEW_LFP_SUMMARY].available is True
+    assert availability[psth_webapp.PLOT_VIEW_UNIT_RASTER].available is False
+    assert "rear-probe" in availability[psth_webapp.PLOT_VIEW_UNIT_RASTER].reason
+    assert availability[psth_webapp.PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING].available is False
+
+
 def test_real_summary_route_builds_usable_production_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
