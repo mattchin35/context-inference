@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 
 from src.neural_analysis import session_metadata_cli
 from src.neural_analysis.lfp_spike_phase_launcher import parse_launcher_command
@@ -102,3 +103,18 @@ def test_documented_commands_are_owned_by_existing_parsers() -> None:
         "recover-report",
         "rerender-report",
     }
+
+
+def test_each_example_can_be_copied_and_validated_as_an_incomplete_template(
+    tmp_path: Path,
+) -> None:
+    """The documented copy-and-edit start succeeds without requiring real files."""
+    for example in sorted(_EXAMPLES.glob("*.json")):
+        session_root = tmp_path / example.stem
+        session_root.mkdir()
+        metadata_path = session_root / "neural_session.json"
+        shutil.copyfile(example, metadata_path)
+
+        assert session_metadata_cli.main(
+            ["validate", "--metadata", str(metadata_path)]
+        ) == 0
