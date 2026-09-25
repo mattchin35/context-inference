@@ -190,6 +190,7 @@ src/neural_analysis/
     binning.py
     decoding.py
     psth.py
+    publication.py
     plotting.py
 
   spike_lfp/

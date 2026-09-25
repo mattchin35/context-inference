@@ -2,9 +2,9 @@
 
 ## Status and authority
 
-**Current status:** U1-U4, R0, and R1 are complete. R2A was authorized on
+**Current status:** U1-U4, R0, R1, and R2A are complete. R2B was authorized on
 2026-09-25, implemented tests-first, and verified locally; user review is
-pending. R2B-R2D each require separate approval.
+pending. R2C and R2D each require separate approval.
 
 This plan supersedes the former NR2-NR18 package roadmap and the former broad
 layered target architecture. Historical execution details, reviews, paths,
@@ -564,6 +564,30 @@ Tests written first:
   seeded results, and saved tables are unchanged;
 - PSTH arrays and plot inputs are unchanged; and
 - old import paths remain compatible.
+
+#### R2B implementation result
+
+R2B tests were committed first in `4069b77`, with 23 expected RED failures for
+the absent canonical package and 89 passing focused tests. Per user direction,
+the commit also starts tracking `test_unit_spike_loading.py` and removes tests
+that coupled CT014 channel presets to hardcoded source literals. CT026 example
+tests now preserve probe-routing relationships without treating the example
+session path as authoritative.
+
+The implementation was committed in `7118a44`. It creates the minimal
+`spike_behavior` package with `loading.py`, `trials.py`, `binning.py`,
+`decoding.py`, `psth.py`, and `publication.py`. The publication module contains
+only the two established decoding CSV contracts and their filename/table
+helpers. Plotting and hardcoded direct dispatch remain at their legacy paths
+until R3. The old unit-loading module aliases the canonical loading owner; the
+two mixed legacy modules forward moved objects while retaining their plots and
+direct entry behavior.
+
+The focused R2B suite passed 112 tests, directly affected integrations passed
+442 tests, and the complete neural suite passed 1,714 tests with the 22
+previously inventoried warnings. Every moved computational body was compared
+with its pre-refactor AST and remained unchanged. No experimental data, cache,
+report, external system, or scheduler was accessed.
 
 ### R2C - Spike-LFP
 
