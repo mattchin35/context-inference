@@ -5361,6 +5361,111 @@ def _legacy_population_controls(
     )
 
 
+def _metadata_population_controls(
+    session: ResolvedSession,
+) -> tuple[str, str, str, str, str, np.ndarray, str]:
+    """Render the established scientific controls using metadata-defined paths.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        One resolved session. Probe paths are absolute filesystem paths;
+        ``unit_channels`` values, when present, are zero-based channel ids.
+
+    Returns
+    -------
+    tuple[str, str, str, str, str, numpy.ndarray, str]
+        Region label, probe id, sorter path, alignment path, LFP path,
+        one-dimensional zero-based channel ids, and channel-source label.
+        This function reads only the selected probe's small quality table.
+    """
+    if not session.probes:
+        raise ValueError("No probes are configured in session metadata.")
+
+    st.sidebar.header("Region and Units")
+    probe_ids = tuple(probe.probe_id for probe in session.probes)
+    probe_id = st.sidebar.selectbox("Probe / region", options=probe_ids, index=0)
+    probe = resolve_probe_sources(session, probe_id)
+    st.sidebar.caption(f"Active probe: {probe.probe_id}")
+
+    quality_path = probe.channel_quality_file
+    channel_source_options = [CHANNEL_SOURCE_MANUAL]
+    if quality_path is not None and quality_path.is_file():
+        channel_source_options.append(CHANNEL_SOURCE_CHANNEL_QUALITY)
+    channel_source = st.sidebar.selectbox(
+        "Channel source",
+        options=channel_source_options,
+        index=1 if CHANNEL_SOURCE_CHANNEL_QUALITY in channel_source_options else 0,
+        help="Use channel_quality when available to select good in-brain probe sites.",
+    )
+
+    channel_quality = None
+    channel_quality_labels: tuple[str, ...] = ("good",)
+    require_inside_brain = True
+    manual_defaults = probe.unit_channels
+    if manual_defaults is None:
+        manual_defaults = tuple(site.saved_channel_index for site in probe.sites)
+    manual_channel_text = unit_spike_loading.format_channel_list(manual_defaults)
+
+    if channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY:
+        channel_quality = load_channel_quality_cached(str(quality_path))
+        st.sidebar.caption(f"Channel quality: {quality_path}")
+        available_labels = sorted(
+            channel_quality["label"].astype(str).str.strip().str.lower().unique().tolist()
+        )
+        default_labels = ["good"] if "good" in available_labels else available_labels
+        channel_quality_labels = tuple(
+            st.sidebar.multiselect(
+                "Channel labels",
+                options=available_labels,
+                default=default_labels,
+            )
+        )
+        require_inside_brain = st.sidebar.checkbox("Inside brain only", value=True)
+        disagreement_count = int(
+            (
+                channel_quality["label"].astype(str).str.strip().str.lower().eq("good")
+                != channel_quality["is_good"].astype(bool)
+            ).sum()
+        )
+        if disagreement_count:
+            st.sidebar.warning(
+                f"{disagreement_count} channels disagree between label == 'good' and is_good."
+            )
+    else:
+        manual_channel_text = st.sidebar.text_area(
+            "Region channels",
+            value=manual_channel_text,
+            key=f"channel_text_{probe.probe_id}",
+            height=140,
+        )
+
+    region_channels, channel_summary = resolve_region_channels_for_source(
+        channel_source=channel_source,
+        manual_channel_text=manual_channel_text,
+        channel_quality=channel_quality,
+        require_inside_brain=require_inside_brain,
+        channel_quality_labels=channel_quality_labels,
+    )
+    if channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY and probe.unit_channels is not None:
+        region_channels = np.intersect1d(
+            region_channels,
+            np.asarray(probe.unit_channels, dtype=int),
+        )
+        channel_summary += f" Metadata restriction kept {region_channels.size} channels."
+    st.sidebar.caption(channel_summary)
+
+    return (
+        probe.probe_id,
+        probe.probe_id,
+        str(probe.sorter_directory or ""),
+        str(probe.aligned_spike_file or ""),
+        str(probe.lfp_file or ""),
+        region_channels,
+        channel_source,
+    )
+
+
 def _start_metadata_webapp(session: ResolvedSession) -> str | None:
     """Render metadata identity/view controls and return an available non-summary view.
 
@@ -5543,32 +5648,15 @@ def main(argv: Sequence[str] = ()) -> None:
 
     try:
         if metadata_session is not None:
-            st.sidebar.header("Population")
-            population_ids = tuple(item.population_id for item in metadata_session.populations)
-            selected_population_id = st.sidebar.selectbox(
-                "Population",
-                options=population_ids,
-                format_func=lambda value: next(
-                    item.display_label
-                    for item in metadata_session.populations
-                    if item.population_id == value
-                ),
-            )
-            selected_population = metadata_population_inputs(
-                metadata_session,
-                selected_population_id,
-            )
-            region_name = selected_population.channel_group_label
-            active_probe_label = selected_population.probe_id
-            active_sorter_output_path = str(selected_population.sorter_directory or "")
-            active_aligned_spike_path = str(selected_population.aligned_spike_file or "")
-            active_lfp_path = str(selected_population.lfp_file or "")
-            region_channels = np.asarray(selected_population.channel_indices, dtype=int)
-            channel_source = CHANNEL_SOURCE_MANUAL
-            st.sidebar.caption(
-                f"Probe: {selected_population.probe_label} ({selected_population.probe_id}); "
-                f"anatomy: {selected_population.channel_group_label}"
-            )
+            (
+                region_name,
+                active_probe_label,
+                active_sorter_output_path,
+                active_aligned_spike_path,
+                active_lfp_path,
+                region_channels,
+                channel_source,
+            ) = _metadata_population_controls(metadata_session)
         else:
             (
                 region_name,
