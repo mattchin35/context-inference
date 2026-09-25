@@ -13,7 +13,9 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from src.neural_analysis import population_pca
-from src.neural_analysis import spike_behavior_pynapple
+from src.neural_analysis.spike_behavior import binning as spike_behavior_binning
+from src.neural_analysis.spike_behavior import decoding as spike_behavior_decoding
+from src.neural_analysis.spike_behavior import trials as spike_behavior_trials
 
 
 PCA_DECODING_MODE_EXPLORATORY = "Exploratory"
@@ -125,7 +127,7 @@ def select_pca_decoding_trial_indices(
     ----------
     trial_df : pd.DataFrame
         Trial table with one row per trial. Must contain the columns required
-        by ``spike_behavior_pynapple.make_trial_type_masks`` and a numeric
+        by ``spike_behavior.trials.make_trial_type_masks`` and a numeric
         ``choice_time`` column in seconds.
     condition_names : list[str] | tuple[str, ...], default=base conditions
         Base condition masks to include in the PCA fit. Conditions are combined
@@ -142,7 +144,7 @@ def select_pca_decoding_trial_indices(
 
     if "choice_time" not in trial_df.columns:
         raise ValueError("trial_df is missing required choice_time column.")
-    trial_masks = spike_behavior_pynapple.make_trial_type_masks(trial_df)
+    trial_masks = spike_behavior_trials.make_trial_type_masks(trial_df)
     finite_choice_mask = pd.to_numeric(trial_df["choice_time"], errors="coerce").notna()
     selected_mask = pd.Series(False, index=trial_df.index)
     for condition_name in condition_names:
@@ -177,7 +179,7 @@ def build_valid_base_condition_masks(
 
     if "choice_time" not in trial_df.columns:
         raise ValueError("trial_df is missing required choice_time column.")
-    trial_masks = spike_behavior_pynapple.make_trial_type_masks(trial_df)
+    trial_masks = spike_behavior_trials.make_trial_type_masks(trial_df)
     finite_choice_mask = pd.to_numeric(trial_df["choice_time"], errors="coerce").notna()
     valid_masks: dict[str, pd.Series] = {}
     for condition_name in condition_names:
@@ -303,7 +305,7 @@ def run_exploratory_pca_choice_decoding(
         normalization=normalization,
     )
     condition_masks = build_valid_base_condition_masks(trial_df, condition_names)
-    collected_bins = spike_behavior_pynapple.collect_condition_classifier_bins(
+    collected_bins = spike_behavior_binning.collect_condition_classifier_bins(
         region_trial_binned=trial_bins,
         trial_df=trial_df,
         trial_masks=condition_masks,
@@ -1211,7 +1213,7 @@ def _decode_collected_condition_bins(
                 continue
 
             target_values = entry["state_bins"] if target == "state_int" else entry["choice_bins"]
-            decode_result = spike_behavior_pynapple.cv_decodeability_score(
+            decode_result = spike_behavior_decoding.cv_decodeability_score(
                 binned_spikes=entry["spike_bins"],
                 target_values=target_values,
                 cv=int(cv),

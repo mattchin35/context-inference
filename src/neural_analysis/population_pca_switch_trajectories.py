@@ -5,7 +5,7 @@ from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
-from src.neural_analysis import spike_behavior_pynapple
+from src.neural_analysis.spike_behavior import trials as spike_behavior_trials
 
 
 SWITCH_PRE_FILTER_ALL = "All choice switches"
@@ -77,7 +77,7 @@ def select_valid_choice_trial_indices(trial_df: pd.DataFrame) -> np.ndarray:
 
     if "choice_time" not in trial_df.columns:
         raise ValueError("trial_df is missing required choice_time column.")
-    valid_mask = spike_behavior_pynapple.make_trial_type_masks(trial_df)["valid"]
+    valid_mask = spike_behavior_trials.make_trial_type_masks(trial_df)["valid"]
     finite_choice_mask = pd.to_numeric(trial_df["choice_time"], errors="coerce").notna()
     valid_choice_mask = valid_mask & finite_choice_mask & trial_df["action"].notna()
     return np.flatnonzero(np.asarray(valid_choice_mask, dtype=bool))

@@ -20,10 +20,8 @@ from scipy import signal
 
 from src.neural_analysis import (
     lfp_summary_ppc_runtime,
-    spike_behavior_pynapple,
     spike_lfp_summary,
     spike_lfp_hilbert_phase,
-    unit_spike_loading,
 )
 from src.neural_analysis.lfp import loading as lfp_loading
 from src.neural_analysis.lfp import phase as lfp_phase_clustering
@@ -77,6 +75,8 @@ from src.neural_analysis.lfp.synchrony import (
     compute_phase_clustering_summary,
     compute_trial_plv_by_frequency,
 )
+from src.neural_analysis.spike_behavior import loading as spike_behavior_pynapple
+from src.neural_analysis.spike_behavior import loading as unit_spike_loading
 
 
 _CACHE_SAMPLE_RATE_HZ = 500.0

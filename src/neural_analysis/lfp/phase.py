@@ -10,8 +10,8 @@ import numpy as np
 import pandas as pd
 import pynapple as nap
 
-from src.neural_analysis import spike_behavior_pynapple
 from src.neural_analysis.lfp import spectrogram as lfp_spectrogram
+from src.neural_analysis.spike_behavior import trials as spike_behavior_pynapple
 
 
 ANALYSIS_VERSION = "0.2.0"

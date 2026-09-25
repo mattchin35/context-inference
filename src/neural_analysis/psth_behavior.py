@@ -1,61 +1,27 @@
-"""
-The goal of this function is to make plots of events around the LED cue or the choice event.
-It will be done with licks and with spikes.
-Licks should have L and R plots
-Spikes should have a plot for each unit
-"""
+"""Legacy PSTH API with plotting and direct dispatch retained."""
 
-"""
-- load a session, its PFC-HPC-V1 spikes, and its L-R licks from the event dict
-- reject all the experimenter-given-reward trials
-- gather the LED onsets and the choice events
-- Gather trial conditions - L/R correct, L/R incorrect, L/R omission, L/R switch, L/R stay 
+from __future__ import annotations
 
-Lick plots
-- plot L/R licks in a plot_peth-like fashion, both on the same superplot. Make superplots for each condition
-- ideally sort trials by 
-0) All trials in chronological order.
-Trial-start alignment
-I'd like trials to be perfectly aligned to the same window (say, 2s before trial start to 1s after choice), but the LED-choice intervals may vary.7
-I want the plots to have that full window for each trial, even if it doesn't look ideal - so the plot should be as wide as the longest trial, and shorter trials will have blank space after the choice.
-Time 0 will be trial start, and have a general vertical line at 0.
-Each trial should have a vertical line at the time of the LED cue and a vertical line at the time of the choice. Those LED signals should
-all be at the same time, so if things check out then I'll want to be able to turn off the LED lines.
-
-Choice time alignment
-Trials should show -2s before choice to 1s after choice. I want vertical lines for trial start, LED on (able to be turned off), 
-choice time (should be a general vertical line at 0). Using choice time means that I should be able to use the same window size for every plot.
-
-L licks and R licks should be treated like different units, so L and R will have their own PETH and mean plots.    
-
-Unit-spike plots
-Only assess units that are not noise, by user-chosen labels (mua or good is fine)
-
-1) L-correct + R-correct. 
-Use the same windows as in the lick trials.
-
-2) L-incorrect + R-incorrect 
-3) L-omission + R-omission
-4) L-switch + R-switch
-5) L-stay + R-stay
-This could probably all live on one big figure, with 5 x 4 subplots. That is 5 conditions, each with 2 psth (L/R lick) and their 2 mean plots  
-
-- Each unit needs its own plot... but a superplot would be helpful. but what if I have like 300 units lol
-    - I should plot all 300 while getting used to inspecting the data. Either do a long pdf or split across multiple images
-    to maintain visibility  
-    
-"""
-
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import pynapple as nap
 from pathlib import Path
 from typing import Mapping
-from dataclasses import dataclass
-from src.behavior_analysis.project_utils import get_experimenter_reward_flags
-from src.neural_analysis import spike_behavior_pynapple
 
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pynapple as nap
+
+from src.neural_analysis import spike_behavior_pynapple
+from src.neural_analysis.spike_behavior.psth import (
+    LickPethData,
+    SpikePethData,
+    build_lick_peth_data,
+    build_single_unit_spike_peth_data,
+    select_first_valid_unit_cluster_id,
+)
+from src.neural_analysis.spike_behavior.trials import (
+    make_lick_peth_trial_type_masks,
+    select_valid_lick_peth_trials,
+)
 
 SUPPORTED_ANALYSIS_REGIONS = {"HPC", "V1", "PFC"}
 LEFT_LICK_EVENT = "left_entry"
@@ -64,549 +30,6 @@ LICK_COLORS = {
     LEFT_LICK_EVENT: "tab:orange",
     RIGHT_LICK_EVENT: "tab:blue",
 }
-
-
-@dataclass(frozen=True)
-class LickPethData:
-    """
-    Trial-aligned lick raster and rate data for PETH-style plots.
-
-    Attributes
-    ----------
-    alignment : str
-        Alignment mode. Supported values are ``"trial_start"`` and ``"choice"``.
-    trial_indices : np.ndarray
-        One-dimensional integer array with shape ``(n_trials,)`` containing source trial indices.
-    time_bin_edges : np.ndarray
-        One-dimensional float array with shape ``(n_bins + 1,)`` in seconds relative to alignment.
-    time_bin_centers : np.ndarray
-        One-dimensional float array with shape ``(n_bins,)`` in seconds relative to alignment.
-    left_raster_times_by_trial, right_raster_times_by_trial : list[np.ndarray]
-        One array per trial. Each array contains lick times in seconds relative to alignment.
-    left_rate_by_trial, right_rate_by_trial : np.ndarray
-        Lick-rate arrays with shape ``(n_trials, n_bins)`` in events/s. Invalid bins are ``NaN``.
-    valid_rate_bins : np.ndarray
-        Boolean array with shape ``(n_trials, n_bins)`` marking bins included in mean rates.
-    trial_start_offsets, led_offsets, choice_offsets : np.ndarray
-        One-dimensional float arrays with shape ``(n_trials,)`` in seconds relative to alignment.
-    """
-
-    alignment: str
-    trial_indices: np.ndarray
-    time_bin_edges: np.ndarray
-    time_bin_centers: np.ndarray
-    left_raster_times_by_trial: list[np.ndarray]
-    right_raster_times_by_trial: list[np.ndarray]
-    left_rate_by_trial: np.ndarray
-    right_rate_by_trial: np.ndarray
-    valid_rate_bins: np.ndarray
-    trial_start_offsets: np.ndarray
-    led_offsets: np.ndarray
-    choice_offsets: np.ndarray
-
-
-@dataclass(frozen=True)
-class SpikePethData:
-    """
-    Trial-aligned spike raster and firing-rate data for one unit.
-
-    Attributes
-    ----------
-    unit_cluster_id : int
-        Sorter cluster id for the plotted unit.
-    alignment : str
-        Alignment mode. Supported values are ``"trial_start"`` and ``"choice"``.
-    trial_indices : np.ndarray
-        One-dimensional integer array with shape ``(n_trials,)`` containing source trial indices.
-    time_bin_edges : np.ndarray
-        One-dimensional float array with shape ``(n_bins + 1,)`` in seconds relative to alignment.
-    time_bin_centers : np.ndarray
-        One-dimensional float array with shape ``(n_bins,)`` in seconds relative to alignment.
-    spike_raster_times_by_trial : list[np.ndarray]
-        One array per trial. Each array contains spike times in seconds relative to alignment.
-    spike_rate_by_trial : np.ndarray
-        Firing-rate array with shape ``(n_trials, n_bins)`` in spikes/s. Invalid bins are ``NaN``.
-    valid_rate_bins : np.ndarray
-        Boolean array with shape ``(n_trials, n_bins)`` marking bins included in mean rates.
-    trial_start_offsets, led_offsets, choice_offsets : np.ndarray
-        One-dimensional float arrays with shape ``(n_trials,)`` in seconds relative to alignment.
-    """
-
-    unit_cluster_id: int
-    alignment: str
-    trial_indices: np.ndarray
-    time_bin_edges: np.ndarray
-    time_bin_centers: np.ndarray
-    spike_raster_times_by_trial: list[np.ndarray]
-    spike_rate_by_trial: np.ndarray
-    valid_rate_bins: np.ndarray
-    trial_start_offsets: np.ndarray
-    led_offsets: np.ndarray
-    choice_offsets: np.ndarray
-
-
-def _numeric_present(values: pd.Series) -> pd.Series:
-    """Return rows with numeric, non-missing values."""
-    return pd.to_numeric(values, errors="coerce").notna()
-
-
-def select_first_valid_unit_cluster_id(cluster_info: pd.DataFrame) -> int:
-    """
-    Select the first sorter unit labeled as usable for single-unit PETH plotting.
-
-    Parameters
-    ----------
-    cluster_info : pd.DataFrame
-        Cluster metadata table with shape ``(n_units, n_columns)``. Required columns are
-        ``cluster_id`` and ``group``. ``cluster_id`` contains integer sorter cluster ids.
-        ``group`` contains sorter labels, where ``"good"`` and ``"mua"`` are treated as valid.
-
-    Returns
-    -------
-    int
-        First valid ``cluster_id`` in the existing row order.
-    """
-
-    required_columns = {"cluster_id", "group"}
-    missing_columns = required_columns - set(cluster_info.columns)
-    if missing_columns:
-        raise ValueError(f"cluster_info is missing required columns: {sorted(missing_columns)}")
-
-    normalized_groups = cluster_info["group"].astype(str).str.strip().str.lower()
-    valid_unit_mask = normalized_groups.isin({"good", "mua"})
-    if not valid_unit_mask.any():
-        raise ValueError("No units labeled 'good' or 'mua' are available for spike PETH plotting.")
-
-    return int(cluster_info.loc[valid_unit_mask, "cluster_id"].iloc[0])
-
-
-def select_valid_lick_peth_trials(
-    trial_df: pd.DataFrame,
-    require_led_time: bool = True,
-) -> pd.Series:
-    """
-    Select trials suitable for lick PETH plots.
-
-    Parameters
-    ----------
-    trial_df : pd.DataFrame
-        Trial table with shape ``(n_trials, n_columns)``. Required columns are
-        ``start_time`` and ``choice_time`` in seconds. ``led_on_time`` in seconds is required
-        when ``require_led_time=True``. Legacy ``give_reward`` and current
-        ``experimenter_reward_given`` reward flags are accepted.
-    require_led_time : bool, default=True
-        Whether selected trials must have numeric ``led_on_time`` values in seconds.
-
-    Returns
-    -------
-    pd.Series
-        Boolean mask with shape ``(n_trials,)`` indexed like ``trial_df``. True rows have no
-        experimenter reward and numeric alignment/event times.
-    """
-
-    required_columns = {"start_time", "choice_time"}
-    if require_led_time:
-        required_columns.add("led_on_time")
-    missing_columns = required_columns - set(trial_df.columns)
-    if missing_columns:
-        raise ValueError(f"trial_df is missing required columns: {sorted(missing_columns)}")
-
-    experimenter_reward_flags = get_experimenter_reward_flags(trial_df, default_zero=True)
-    valid_mask = pd.Series(experimenter_reward_flags == 0, index=trial_df.index)
-    valid_mask &= _numeric_present(trial_df["start_time"])
-    valid_mask &= _numeric_present(trial_df["choice_time"])
-    if require_led_time:
-        valid_mask &= _numeric_present(trial_df["led_on_time"])
-    return valid_mask
-
-
-def make_lick_peth_trial_type_masks(
-    trial_df: pd.DataFrame,
-    require_led_time: bool = True,
-) -> dict[str, pd.Series]:
-    """
-    Build trial-type masks for lick PETH plots.
-
-    Parameters
-    ----------
-    trial_df : pd.DataFrame
-        Trial table with shape ``(n_trials, n_columns)``. Required columns are ``start_time``,
-        ``choice_time``, ``correct``, ``reward``, and ``action``. ``led_on_time`` is required
-        when ``require_led_time=True``. Times are in seconds. Choices use the project convention
-        ``0=right`` and ``1=left``.
-    require_led_time : bool, default=True
-        Whether selected trials must have numeric ``led_on_time`` values in seconds.
-
-    Returns
-    -------
-    dict[str, pd.Series]
-        Boolean masks indexed like ``trial_df``. Current keys are ``valid``, side-specific
-        correct, incorrect, omission, switch, and stay masks. Correct masks include only
-        correct rewarded trials. Switch/stay masks label the current unrewarded trial based
-        on the next valid row's action, matching ``spike_behavior_pynapple.make_trial_type_masks``.
-    """
-
-    required_columns = {"correct", "reward", "action"}
-    missing_columns = required_columns - set(trial_df.columns)
-    if missing_columns:
-        raise ValueError(f"trial_df is missing required columns: {sorted(missing_columns)}")
-
-    valid = select_valid_lick_peth_trials(trial_df, require_led_time=require_led_time)
-    correct = pd.to_numeric(trial_df["correct"], errors="coerce").eq(1)
-    rewarded = pd.to_numeric(trial_df["reward"], errors="coerce").eq(1)
-    action = pd.to_numeric(trial_df["action"], errors="coerce")
-
-    left_action = action.eq(1)
-    right_action = action.eq(0)
-    correct_rewarded = valid & correct & rewarded
-    incorrect = valid & pd.to_numeric(trial_df["correct"], errors="coerce").eq(0) & action.notna()
-    omission = valid & correct & pd.to_numeric(trial_df["reward"], errors="coerce").eq(0)
-
-    current_unrewarded = valid & pd.to_numeric(trial_df["reward"], errors="coerce").eq(0)
-    current_action_valid = action.notna()
-    next_valid = valid.shift(-1).fillna(False)
-    next_action = action.shift(-1)
-    next_action_valid = next_action.notna()
-    comparable_next_trial = current_unrewarded & current_action_valid & next_valid & next_action_valid
-    switch = comparable_next_trial & next_action.ne(action)
-    stay = comparable_next_trial & next_action.eq(action)
-
-    return {
-        "valid": valid,
-        "left_correct": correct_rewarded & left_action,
-        "right_correct": correct_rewarded & right_action,
-        "left_incorrect": incorrect & left_action,
-        "right_incorrect": incorrect & right_action,
-        "left_omission": omission & left_action,
-        "right_omission": omission & right_action,
-        "left_switch": switch & left_action,
-        "right_switch": switch & right_action,
-        "left_stay": stay & left_action,
-        "right_stay": stay & right_action,
-    }
-
-
-def _normalize_trial_mask(trial_mask: pd.Series | np.ndarray, trial_df: pd.DataFrame) -> pd.Series:
-    """Validate and align a user-provided trial mask to the trial table."""
-    if isinstance(trial_mask, pd.Series):
-        if not trial_mask.index.equals(trial_df.index):
-            trial_mask = trial_mask.reindex(trial_df.index, fill_value=False)
-        return trial_mask.astype(bool)
-
-    mask_array = np.asarray(trial_mask, dtype=bool)
-    if mask_array.ndim != 1 or mask_array.shape[0] != trial_df.shape[0]:
-        raise ValueError("trial_mask must be a one-dimensional boolean mask matching trial_df rows.")
-    return pd.Series(mask_array, index=trial_df.index)
-
-
-def _make_relative_bin_edges(x_start: float, x_end: float, bin_size: float) -> np.ndarray:
-    """Create bin edges that cover the requested relative-time window."""
-    if bin_size <= 0:
-        raise ValueError("bin_size must be positive.")
-    if x_end <= x_start:
-        raise ValueError("PETH window end must be greater than window start.")
-
-    n_bins = int(np.ceil((x_end - x_start) / bin_size))
-    return x_start + np.arange(n_bins + 1, dtype=float) * bin_size
-
-
-def _ts_times(event_times: nap.Ts, event_name: str) -> np.ndarray:
-    """Extract sorted timestamps from one Pynapple event stream."""
-    if not isinstance(event_times, nap.Ts):
-        raise TypeError(f"{event_name!r} must be a pynapple Ts.")
-    return np.sort(np.asarray(event_times.index.to_numpy(), dtype=float))
-
-
-def _make_event_rate_row(
-    absolute_event_times: np.ndarray,
-    reference_time: float,
-    time_bin_edges: np.ndarray,
-    valid_bin_mask: np.ndarray,
-    bin_size: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return relative event times and binned event rates for one trial."""
-    relative_event_times = absolute_event_times - reference_time
-    valid_window_start = time_bin_edges[0]
-    valid_window_end = time_bin_edges[:-1][valid_bin_mask][-1] + bin_size
-    event_mask = (relative_event_times >= valid_window_start) & (relative_event_times <= valid_window_end)
-    plotted_event_times = relative_event_times[event_mask]
-
-    event_counts, _ = np.histogram(plotted_event_times, bins=time_bin_edges)
-    event_rate = event_counts.astype(float) / bin_size
-    event_rate[~valid_bin_mask] = np.nan
-    return plotted_event_times, event_rate
-
-
-def build_lick_peth_data(
-    trial_df: pd.DataFrame,
-    lick_times: Mapping[str, nap.Ts],
-    alignment: str,
-    rate_bin_size: float = 0.5,
-    pre_time: float = 2.0,
-    post_time: float = 1.0,
-    show_led_lines: bool = True,
-    max_time_after_trial_start: float | None = None,
-    trial_mask: pd.Series | np.ndarray | None = None,
-) -> LickPethData:
-    """
-    Build trial-aligned lick rasters and lick-rate arrays.
-
-    Parameters
-    ----------
-    trial_df : pd.DataFrame
-        Trial table with shape ``(n_trials, n_columns)``. Required columns are
-        ``start_time`` and ``choice_time`` in seconds. ``led_on_time`` in seconds is required
-        when ``show_led_lines=True``.
-    lick_times : Mapping[str, nap.Ts]
-        Mapping with ``"left_entry"`` and ``"right_entry"`` keys. Each value is a
-        one-dimensional Pynapple ``Ts`` of lick timestamps in seconds.
-    alignment : str
-        Alignment mode. ``"trial_start"`` aligns time zero to ``start_time`` and uses the
-        longest selected choice latency plus ``post_time`` as the right x-limit. ``"choice"``
-        aligns time zero to ``choice_time`` and uses a fixed ``[-pre_time, post_time]`` window.
-    rate_bin_size : float, default=0.5
-        Lick-rate bin width in seconds for the lower mean-rate panel.
-    pre_time : float, default=2.0
-        Seconds before the alignment event to include.
-    post_time : float, default=1.0
-        Seconds after choice to include for trial-start alignment, or seconds after choice
-        alignment for choice-aligned plots.
-    show_led_lines : bool, default=True
-        Whether to require numeric LED times while preparing event offsets.
-    max_time_after_trial_start : float or None, default=None
-        Optional positive x-axis cap in seconds after trial start. This applies only to
-        ``alignment="trial_start"`` and does not drop long trials; licks and event markers beyond
-        the cap are not shown.
-    trial_mask : pd.Series, np.ndarray, or None, default=None
-        Optional boolean selector with shape ``(n_trials,)``. The selected trials are intersected
-        with the validity mask and remain in chronological table order.
-
-    Returns
-    -------
-    LickPethData
-        Dataclass containing trial-wise relative lick rasters, binned lick rates with shape
-        ``(n_trials, n_bins)``, and event offsets in seconds.
-    """
-
-    if alignment not in {"trial_start", "choice"}:
-        raise ValueError("alignment must be 'trial_start' or 'choice'.")
-    if pre_time < 0 or post_time < 0:
-        raise ValueError("pre_time and post_time must be non-negative.")
-    if rate_bin_size <= 0:
-        raise ValueError("rate_bin_size must be positive.")
-    if max_time_after_trial_start is not None and max_time_after_trial_start <= 0:
-        raise ValueError("max_time_after_trial_start must be positive when provided.")
-    if LEFT_LICK_EVENT not in lick_times or RIGHT_LICK_EVENT not in lick_times:
-        raise ValueError("lick_times must contain 'left_entry' and 'right_entry' keys.")
-
-    valid_trial_mask = select_valid_lick_peth_trials(trial_df, require_led_time=show_led_lines)
-    if trial_mask is not None:
-        valid_trial_mask &= _normalize_trial_mask(trial_mask, trial_df)
-    selected_trials = trial_df.loc[valid_trial_mask].copy()
-    if selected_trials.empty:
-        raise ValueError("No valid trials are available for lick PETH plotting.")
-
-    start_times = pd.to_numeric(selected_trials["start_time"], errors="coerce").to_numpy(dtype=float)
-    choice_times = pd.to_numeric(selected_trials["choice_time"], errors="coerce").to_numpy(dtype=float)
-    if "led_on_time" in selected_trials.columns:
-        led_times = pd.to_numeric(selected_trials["led_on_time"], errors="coerce").to_numpy(dtype=float)
-    else:
-        led_times = np.full(selected_trials.shape[0], np.nan, dtype=float)
-
-    if alignment == "trial_start":
-        reference_times = start_times
-        trial_start_offsets = np.zeros_like(start_times)
-        led_offsets = led_times - start_times
-        choice_offsets = choice_times - start_times
-        x_start = -float(pre_time)
-        x_end = float(np.nanmax(choice_offsets) + post_time)
-        if max_time_after_trial_start is not None:
-            x_end = min(x_end, float(max_time_after_trial_start))
-        trial_end_offsets = choice_offsets + post_time
-    else:
-        reference_times = choice_times
-        trial_start_offsets = start_times - choice_times
-        led_offsets = led_times - choice_times
-        choice_offsets = np.zeros_like(choice_times)
-        x_start = -float(pre_time)
-        x_end = float(post_time)
-        trial_end_offsets = np.full_like(choice_times, x_end, dtype=float)
-
-    time_bin_edges = _make_relative_bin_edges(x_start=x_start, x_end=x_end, bin_size=rate_bin_size)
-    time_bin_centers = time_bin_edges[:-1] + rate_bin_size / 2
-    valid_rate_bins = time_bin_centers[None, :] <= trial_end_offsets[:, None]
-
-    left_times = _ts_times(lick_times[LEFT_LICK_EVENT], LEFT_LICK_EVENT)
-    right_times = _ts_times(lick_times[RIGHT_LICK_EVENT], RIGHT_LICK_EVENT)
-    left_raster_times_by_trial: list[np.ndarray] = []
-    right_raster_times_by_trial: list[np.ndarray] = []
-    left_rate_rows = []
-    right_rate_rows = []
-    for trial_idx, reference_time in enumerate(reference_times):
-        left_raster_times, left_rate = _make_event_rate_row(
-            absolute_event_times=left_times,
-            reference_time=float(reference_time),
-            time_bin_edges=time_bin_edges,
-            valid_bin_mask=valid_rate_bins[trial_idx],
-            bin_size=rate_bin_size,
-        )
-        right_raster_times, right_rate = _make_event_rate_row(
-            absolute_event_times=right_times,
-            reference_time=float(reference_time),
-            time_bin_edges=time_bin_edges,
-            valid_bin_mask=valid_rate_bins[trial_idx],
-            bin_size=rate_bin_size,
-        )
-        left_raster_times_by_trial.append(left_raster_times)
-        right_raster_times_by_trial.append(right_raster_times)
-        left_rate_rows.append(left_rate)
-        right_rate_rows.append(right_rate)
-
-    return LickPethData(
-        alignment=alignment,
-        trial_indices=selected_trials.index.to_numpy(dtype=int),
-        time_bin_edges=time_bin_edges,
-        time_bin_centers=time_bin_centers,
-        left_raster_times_by_trial=left_raster_times_by_trial,
-        right_raster_times_by_trial=right_raster_times_by_trial,
-        left_rate_by_trial=np.vstack(left_rate_rows),
-        right_rate_by_trial=np.vstack(right_rate_rows),
-        valid_rate_bins=valid_rate_bins,
-        trial_start_offsets=trial_start_offsets,
-        led_offsets=led_offsets,
-        choice_offsets=choice_offsets,
-    )
-
-
-def build_single_unit_spike_peth_data(
-    trial_df: pd.DataFrame,
-    unit_spikes: nap.Ts,
-    unit_cluster_id: int,
-    alignment: str,
-    rate_bin_size: float = 0.1,
-    pre_time: float = 2.0,
-    post_time: float = 1.0,
-    show_led_lines: bool = True,
-    max_time_after_trial_start: float | None = None,
-    trial_mask: pd.Series | np.ndarray | None = None,
-) -> SpikePethData:
-    """
-    Build trial-aligned spike rasters and firing-rate arrays for one unit.
-
-    Parameters
-    ----------
-    trial_df : pd.DataFrame
-        Trial table with shape ``(n_trials, n_columns)``. Required columns are
-        ``start_time`` and ``choice_time`` in seconds. ``led_on_time`` in seconds is required
-        when ``show_led_lines=True``.
-    unit_spikes : nap.Ts
-        One-dimensional Pynapple ``Ts`` containing spike timestamps for one unit in seconds.
-    unit_cluster_id : int
-        Sorter cluster id for ``unit_spikes``.
-    alignment : str
-        Alignment mode. ``"trial_start"`` aligns time zero to ``start_time`` and uses the
-        longest selected choice latency plus ``post_time`` as the right x-limit. ``"choice"``
-        aligns time zero to ``choice_time`` and uses a fixed ``[-pre_time, post_time]`` window.
-    rate_bin_size : float, default=0.1
-        Firing-rate bin width in seconds for the lower mean-rate panel.
-    pre_time : float, default=2.0
-        Seconds before the alignment event to include.
-    post_time : float, default=1.0
-        Seconds after choice to include for trial-start alignment, or seconds after choice
-        alignment for choice-aligned plots.
-    show_led_lines : bool, default=True
-        Whether to require numeric LED times while preparing event offsets.
-    max_time_after_trial_start : float or None, default=None
-        Optional positive x-axis cap in seconds after trial start. This applies only to
-        ``alignment="trial_start"`` and does not drop long trials; spikes and event markers
-        beyond the cap are not shown.
-    trial_mask : pd.Series, np.ndarray, or None, default=None
-        Optional boolean selector with shape ``(n_trials,)``. The selected trials are intersected
-        with the validity mask and remain in chronological table order.
-
-    Returns
-    -------
-    SpikePethData
-        Dataclass containing trial-wise relative spike rasters, binned firing rates with shape
-        ``(n_trials, n_bins)``, and event offsets in seconds.
-    """
-
-    if alignment not in {"trial_start", "choice"}:
-        raise ValueError("alignment must be 'trial_start' or 'choice'.")
-    if not isinstance(unit_spikes, nap.Ts):
-        raise TypeError("unit_spikes must be a pynapple Ts.")
-    if pre_time < 0 or post_time < 0:
-        raise ValueError("pre_time and post_time must be non-negative.")
-    if rate_bin_size <= 0:
-        raise ValueError("rate_bin_size must be positive.")
-    if max_time_after_trial_start is not None and max_time_after_trial_start <= 0:
-        raise ValueError("max_time_after_trial_start must be positive when provided.")
-
-    valid_trial_mask = select_valid_lick_peth_trials(trial_df, require_led_time=show_led_lines)
-    if trial_mask is not None:
-        valid_trial_mask &= _normalize_trial_mask(trial_mask, trial_df)
-    selected_trials = trial_df.loc[valid_trial_mask].copy()
-    if selected_trials.empty:
-        raise ValueError("No valid trials are available for spike PETH plotting.")
-
-    start_times = pd.to_numeric(selected_trials["start_time"], errors="coerce").to_numpy(dtype=float)
-    choice_times = pd.to_numeric(selected_trials["choice_time"], errors="coerce").to_numpy(dtype=float)
-    if "led_on_time" in selected_trials.columns:
-        led_times = pd.to_numeric(selected_trials["led_on_time"], errors="coerce").to_numpy(dtype=float)
-    else:
-        led_times = np.full(selected_trials.shape[0], np.nan, dtype=float)
-
-    if alignment == "trial_start":
-        reference_times = start_times
-        trial_start_offsets = np.zeros_like(start_times)
-        led_offsets = led_times - start_times
-        choice_offsets = choice_times - start_times
-        x_start = -float(pre_time)
-        x_end = float(np.nanmax(choice_offsets) + post_time)
-        if max_time_after_trial_start is not None:
-            x_end = min(x_end, float(max_time_after_trial_start))
-        trial_end_offsets = choice_offsets + post_time
-    else:
-        reference_times = choice_times
-        trial_start_offsets = start_times - choice_times
-        led_offsets = led_times - choice_times
-        choice_offsets = np.zeros_like(choice_times)
-        x_start = -float(pre_time)
-        x_end = float(post_time)
-        trial_end_offsets = np.full_like(choice_times, x_end, dtype=float)
-
-    time_bin_edges = _make_relative_bin_edges(x_start=x_start, x_end=x_end, bin_size=rate_bin_size)
-    time_bin_centers = time_bin_edges[:-1] + rate_bin_size / 2
-    valid_rate_bins = time_bin_centers[None, :] <= trial_end_offsets[:, None]
-
-    spike_times = _ts_times(unit_spikes, "unit_spikes")
-    spike_raster_times_by_trial: list[np.ndarray] = []
-    spike_rate_rows = []
-    for trial_idx, reference_time in enumerate(reference_times):
-        spike_raster_times, spike_rate = _make_event_rate_row(
-            absolute_event_times=spike_times,
-            reference_time=float(reference_time),
-            time_bin_edges=time_bin_edges,
-            valid_bin_mask=valid_rate_bins[trial_idx],
-            bin_size=rate_bin_size,
-        )
-        spike_raster_times_by_trial.append(spike_raster_times)
-        spike_rate_rows.append(spike_rate)
-
-    return SpikePethData(
-        unit_cluster_id=int(unit_cluster_id),
-        alignment=alignment,
-        trial_indices=selected_trials.index.to_numpy(dtype=int),
-        time_bin_edges=time_bin_edges,
-        time_bin_centers=time_bin_centers,
-        spike_raster_times_by_trial=spike_raster_times_by_trial,
-        spike_rate_by_trial=np.vstack(spike_rate_rows),
-        valid_rate_bins=valid_rate_bins,
-        trial_start_offsets=trial_start_offsets,
-        led_offsets=led_offsets,
-        choice_offsets=choice_offsets,
-    )
-
 
 def _nanmean_rate(rate_by_trial: np.ndarray) -> np.ndarray:
     """Average rates across trials while ignoring invalid bins."""
@@ -618,7 +41,6 @@ def _nanmean_rate(rate_by_trial: np.ndarray) -> np.ndarray:
         out=np.full(rate_by_trial.shape[1], np.nan, dtype=float),
         where=valid_counts > 0,
     )
-
 
 def _plot_raster_rows(
     ax,
@@ -641,7 +63,6 @@ def _plot_raster_rows(
     )
     if event_collections:
         event_collections[0].set_label(label)
-
 
 def _draw_trial_event_markers(
     ax,
@@ -682,7 +103,6 @@ def _draw_trial_event_markers(
             label="LED",
         )
 
-
 def _format_lick_axes(
     raster_ax,
     mean_ax,
@@ -710,7 +130,6 @@ def _format_lick_axes(
     mean_ax.set_ylabel("Licks/s")
     mean_ax.set_xlabel("Time from alignment (s)")
 
-
 def _format_spike_axes(
     raster_ax,
     mean_ax,
@@ -737,7 +156,6 @@ def _format_spike_axes(
     mean_ax.set_ylabel("Spikes/s")
     mean_ax.set_xlabel("Time from alignment (s)")
 
-
 def _lick_peth_fig_height(n_trials: int, row_height_inches: float, min_fig_height: float) -> float:
     """Scale raster figure height with trial count while keeping small plots readable."""
     if row_height_inches <= 0:
@@ -745,7 +163,6 @@ def _lick_peth_fig_height(n_trials: int, row_height_inches: float, min_fig_heigh
     if min_fig_height <= 0:
         raise ValueError("min_fig_height must be positive.")
     return max(float(min_fig_height), 2.0 + int(n_trials) * float(row_height_inches))
-
 
 def plot_lick_peth(
     lick_peth_data: LickPethData,
@@ -879,7 +296,6 @@ z
     fig.tight_layout()
     return fig, axes
 
-
 def plot_single_unit_spike_peth(
     spike_peth_data: SpikePethData,
     show_led_lines: bool = True,
@@ -953,7 +369,6 @@ def plot_single_unit_spike_peth(
     fig.tight_layout()
     return fig, axes
 
-
 def save_figure_with_message(fig: plt.Figure, save_path: Path) -> None:
     """
     Save one matplotlib figure and print its output path.
@@ -974,9 +389,30 @@ def save_figure_with_message(fig: plt.Figure, save_path: Path) -> None:
     fig.savefig(save_path, format="png", dpi=300)
     print(f"Saved figure {save_path.name} to {save_path}")
 
-
 def plot_peth(unit_peth, unit_peth_counts, ax_mean, ax_spikes,
               bin_size, color=None):
+    """Plot legacy event rasters and mean firing rates on caller-owned axes.
+
+    Parameters
+    ----------
+    unit_peth : pynapple.TsGroup
+        Event-aligned spike group whose ``to_tsd()`` values are plotted as
+        raster ticks. Timestamps are seconds relative to the event.
+    unit_peth_counts : numpy.ndarray
+        Spike counts with shape ``(n_time_bins, n_trials)``.
+    ax_mean, ax_spikes : matplotlib.axes.Axes
+        Caller-owned axes for the mean firing rate and raster, respectively.
+    bin_size : float
+        Positive bin width in seconds used to convert counts to spikes/s.
+    color : Any, optional
+        Matplotlib-compatible color forwarded to both plots.
+
+    Returns
+    -------
+    None
+        The supplied axes are modified in place; no array axes or units change.
+    """
+
     mean = np.mean(unit_peth_counts / bin_size, axis=1)
     ax_mean.plot(mean, color=color)
     ax_mean.set_ylabel("spikes/s")
@@ -985,7 +421,6 @@ def plot_peth(unit_peth, unit_peth_counts, ax_mean, ax_spikes,
     ax_mean.set_xlabel("time from event (s)")
     ax_spikes.set_ylabel("event")
     ax_spikes.axvline(0.0, color="gray", linestyle="--")
-
 
 def main() -> None:
     """

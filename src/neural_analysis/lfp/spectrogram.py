@@ -9,7 +9,7 @@ import pandas as pd
 import pynapple as nap
 from scipy import signal
 
-from src.neural_analysis.spike_behavior_pynapple import make_trial_type_masks
+from src.neural_analysis.spike_behavior.trials import make_trial_type_masks
 
 
 MORLET_SUPPORT_CUTOFF = 8.0

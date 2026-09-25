@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pynapple as nap
 
-from src.neural_analysis.spike_behavior_pynapple import make_trial_type_masks
+from src.neural_analysis.spike_behavior.trials import make_trial_type_masks
 
 if TYPE_CHECKING:
     from src.neural_analysis.lfp.phase import SingleTrialRelativePhaseResult, WithinTrialPLVResult

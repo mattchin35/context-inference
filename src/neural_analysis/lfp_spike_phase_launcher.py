@@ -3469,8 +3469,7 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         resolve_session_metadata,
         validate_session_for_action,
     )
-    from src.neural_analysis.spike_behavior_pynapple import load_sorter_metadata
-    from src.neural_analysis.unit_spike_loading import load_channel_quality
+    from src.neural_analysis.spike_behavior.loading import load_channel_quality, load_sorter_metadata
 
     pipeline = make_spike_phase_pipeline_dependencies(
         trial_table_loader=load_configured_trial_table,

@@ -12,7 +12,7 @@ import pandas as pd
 
 from src.neural_analysis.lfp import loading as lfp_loading
 from src.neural_analysis.lfp_summary_models import LFPSiteConfig, ProgressEvent, TrialFilterConfig
-from src.neural_analysis.spike_behavior_pynapple import make_trial_type_masks
+from src.neural_analysis.spike_behavior.trials import make_trial_type_masks
 
 
 CONDITION_NAMES = (
