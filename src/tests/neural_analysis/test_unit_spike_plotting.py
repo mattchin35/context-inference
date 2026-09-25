@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -13,8 +14,10 @@ from src.neural_analysis import unit_spike_plotting
 
 
 def test_hilbert_phase_trial_plot_has_exactly_one_public_definition():
-    """The public Hilbert-phase trial plot must not be shadowed by a later definition."""
-    source_path = Path(unit_spike_plotting.__file__)
+    """The canonical Hilbert trial plot must have one definition and one legacy forward."""
+
+    canonical_plotting = importlib.import_module("src.neural_analysis.spike_lfp.plotting")
+    source_path = Path(canonical_plotting.__file__)
     module_ast = ast.parse(source_path.read_text(encoding="utf-8"))
     matching_definitions = [
         node
@@ -24,6 +27,10 @@ def test_hilbert_phase_trial_plot_has_exactly_one_public_definition():
     ]
 
     assert len(matching_definitions) == 1
+    assert (
+        unit_spike_plotting.plot_trial_spike_lfp_hilbert_phase_and_behavior
+        is canonical_plotting.plot_trial_spike_lfp_hilbert_phase_and_behavior
+    )
 
 
 def make_trial_df() -> pd.DataFrame:
