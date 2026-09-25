@@ -27,6 +27,10 @@ def _write_resolved_session(tmp_path: Path):
     behavior = tmp_path / "behavior"
     for directory in (open_ephys_directory, spikeglx_directory, sorter_a, sorter_b, behavior):
         directory.mkdir(parents=True, exist_ok=True)
+    for sorter in (sorter_a, sorter_b):
+        (sorter / "spike_times.npy").write_bytes(b"spike-times")
+        (sorter / "spike_clusters.npy").write_bytes(b"spike-clusters")
+        (sorter / "cluster_info.tsv").write_text("cluster_id\tch\tgroup\n", encoding="ascii")
     (behavior / "trials.csv").write_text("choice_time\n", encoding="ascii")
     open_ephys_lfp = open_ephys_directory / "lfp.dat"
     open_ephys_lfp.write_bytes(np.array([[1.0]], dtype=np.float32).tobytes())
