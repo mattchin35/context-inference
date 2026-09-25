@@ -18,11 +18,7 @@ import numpy as np
 import pandas as pd
 from scipy import signal
 
-from src.neural_analysis import (
-    lfp_summary_ppc_runtime,
-    spike_lfp_summary,
-    spike_lfp_hilbert_phase,
-)
+from src.neural_analysis import lfp_summary_ppc_runtime
 from src.neural_analysis.lfp import loading as lfp_loading
 from src.neural_analysis.lfp import phase as lfp_phase_clustering
 from src.neural_analysis.lfp import spectrogram as lfp_spectrogram
@@ -53,6 +49,8 @@ from src.neural_analysis.lfp_summary_work_cache import (
     load_prepared_phase_cache,
     write_prepared_phase_cache,
 )
+from src.neural_analysis.spike_lfp import hilbert as spike_lfp_hilbert_phase
+from src.neural_analysis.spike_lfp import ppc as spike_lfp_summary
 from src.neural_analysis.lfp_summary_pipeline import (
     ComponentPayload,
     PPCWorkCleanupTarget,

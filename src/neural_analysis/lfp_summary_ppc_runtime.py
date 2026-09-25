@@ -21,8 +21,8 @@ import zipfile
 
 import numpy as np
 
-from src.neural_analysis import spike_lfp_summary
-from src.neural_analysis.lfp_summary_ppc_kernel import (
+from src.neural_analysis.spike_lfp import ppc as spike_lfp_summary
+from src.neural_analysis.spike_lfp.ppc_kernel import (
     aggregate_observed_trial_segmented_ppc_statistics,
     build_source_trial_spike_geometry,
     compose_observed_segmented_ppc_metrics,

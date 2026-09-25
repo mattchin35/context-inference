@@ -13,8 +13,8 @@ from src.neural_analysis.spike_behavior.trials import make_trial_type_masks
 
 if TYPE_CHECKING:
     from src.neural_analysis.lfp.phase import SingleTrialRelativePhaseResult, WithinTrialPLVResult
-    from src.neural_analysis.spike_lfp_hilbert_phase import SingleTrialSpikeLFPHilbertResult
-    from src.neural_analysis.spike_lfp_phase_locking import SpikePhaseLockingResult
+    from src.neural_analysis.spike_lfp.hilbert import SingleTrialSpikeLFPHilbertResult
+    from src.neural_analysis.spike_lfp.phase_locking import SpikePhaseLockingResult
 
 
 LEFT_LICK_EVENT = "left_entry"

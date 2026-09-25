@@ -19,8 +19,6 @@ from src.neural_analysis import (
     population_pca,
     population_pca_decoding,
     population_pca_switch_trajectories,
-    spike_lfp_hilbert_phase,
-    spike_lfp_phase_locking,
     unit_spike_plotting,
 )
 from src.neural_analysis.lfp import loading as lfp_loading
@@ -31,6 +29,8 @@ from src.neural_analysis.lfp.loading import (
 )
 from src.neural_analysis.spike_behavior import loading as spike_behavior_pynapple
 from src.neural_analysis.spike_behavior import loading as unit_spike_loading
+from src.neural_analysis.spike_lfp import hilbert as spike_lfp_hilbert_phase
+from src.neural_analysis.spike_lfp import phase_locking as spike_lfp_phase_locking
 from src.neural_analysis.lfp_summary_session import (
     LFPSummarySessionRequest,
     build_lfp_summary_config,
