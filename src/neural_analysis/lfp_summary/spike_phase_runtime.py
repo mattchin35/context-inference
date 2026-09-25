@@ -9,7 +9,7 @@ from typing import Callable, Mapping
 import numpy as np
 import pandas as pd
 
-from src.neural_analysis import lfp_summary_ppc_runtime
+from src.neural_analysis.lfp_summary import ppc_execution as lfp_summary_ppc_runtime
 from src.neural_analysis.lfp import phase as lfp_phase_clustering
 from src.neural_analysis.lfp_summary.cache import load_or_initialize_manifest, write_component_transaction
 from src.neural_analysis.lfp_summary.models import LFPSiteConfig, LFPSummaryConfig, ProgressEvent

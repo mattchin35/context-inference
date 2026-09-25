@@ -15,7 +15,7 @@ from typing import Callable, Mapping
 
 import numpy as np
 
-from src.neural_analysis import lfp_summary_ppc_runtime
+from src.neural_analysis.lfp_summary import ppc_execution as lfp_summary_ppc_runtime
 from src.neural_analysis.lfp_summary.models import LFPSummaryConfig, PPCExecutionConfig
 
 
