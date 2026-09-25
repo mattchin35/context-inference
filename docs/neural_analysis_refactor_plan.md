@@ -2,9 +2,9 @@
 
 ## Status and authority
 
-**Current status:** U1-U4 and R0 are complete. R1 was authorized on
+**Current status:** U1-U4, R0, and R1 are complete. R2A was authorized on
 2026-09-25, implemented tests-first, and verified locally; user review is
-pending. Each R2 scientific-domain slice requires separate approval.
+pending. R2B-R2D each require separate approval.
 
 This plan supersedes the former NR2-NR18 package roadmap and the former broad
 layered target architecture. Historical execution details, reviews, paths,
@@ -519,6 +519,29 @@ Tests written first:
 - saved result behavior is unchanged;
 - no module under `lfp` imports `lfp_summary`; and
 - old module imports forward correctly.
+
+#### R2A implementation result
+
+R2A tests were committed first in `087d356`. The absent canonical package
+produced 18 expected RED failures while the 149 existing focused tests passed.
+The implementation was committed in `e90a593`. It creates the minimal `lfp`
+package with `config.py`, `loading.py`, `power.py`, `spectrogram.py`,
+`phase.py`, and `synchrony.py`; moves the three reusable configuration records
+to `lfp/config.py`; and keeps their old workflow-model names as aliases to the
+same class objects.
+
+The old loading, Power, spectrogram, and Synchrony modules are compatibility
+aliases to their canonical modules. The old phase module forwards its moved
+scientific records and functions while retaining the existing plotting
+implementation until R3. Repository callers now use the canonical scientific
+owners except where the legacy phase path is still required for that plot and
+its existing patch seams.
+
+The focused R2A suite passed 167 tests. The complete neural suite passed 1,694
+tests with the 22 previously inventoried warnings. No scientific calculation,
+default, array contract, saved-result behavior, dependency, or user-facing
+entry point changed, and no experimental data, cache, report, external system,
+or scheduler was accessed.
 
 ### R2B - Spike behavior
 
