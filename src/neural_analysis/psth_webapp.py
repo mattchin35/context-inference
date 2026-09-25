@@ -14,10 +14,8 @@ import pandas as pd
 import streamlit as st
 
 from src.neural_analysis import (
-    lfp_loading,
     lfp_phase_clustering,
     lfp_summary_webapp,
-    lfp_spectrogram,
     population_pca,
     population_pca_decoding,
     population_pca_switch_trajectories,
@@ -27,7 +25,9 @@ from src.neural_analysis import (
     unit_spike_loading,
     unit_spike_plotting,
 )
-from src.neural_analysis.lfp_loading import (
+from src.neural_analysis.lfp import loading as lfp_loading
+from src.neural_analysis.lfp import spectrogram as lfp_spectrogram
+from src.neural_analysis.lfp.loading import (
     OPEN_EPHYS_AFFINE_UV_SEMANTICS,
     sha256_file_content,
 )

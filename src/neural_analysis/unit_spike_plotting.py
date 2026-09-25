@@ -12,7 +12,7 @@ import pynapple as nap
 from src.neural_analysis.spike_behavior_pynapple import make_trial_type_masks
 
 if TYPE_CHECKING:
-    from src.neural_analysis.lfp_phase_clustering import SingleTrialRelativePhaseResult, WithinTrialPLVResult
+    from src.neural_analysis.lfp.phase import SingleTrialRelativePhaseResult, WithinTrialPLVResult
     from src.neural_analysis.spike_lfp_hilbert_phase import SingleTrialSpikeLFPHilbertResult
     from src.neural_analysis.spike_lfp_phase_locking import SpikePhaseLockingResult
 

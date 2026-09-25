@@ -9,7 +9,7 @@ from typing import Mapping
 import numpy as np
 from scipy.signal import hilbert
 
-from src.neural_analysis import lfp_loading
+from src.neural_analysis.lfp import loading as lfp_loading
 
 
 ANALYSIS_VERSION = "0.1.0"

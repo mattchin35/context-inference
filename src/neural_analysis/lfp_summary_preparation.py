@@ -10,7 +10,7 @@ from typing import Callable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-from src.neural_analysis import lfp_loading
+from src.neural_analysis.lfp import loading as lfp_loading
 from src.neural_analysis.lfp_summary_models import LFPSiteConfig, ProgressEvent, TrialFilterConfig
 from src.neural_analysis.spike_behavior_pynapple import make_trial_type_masks
 

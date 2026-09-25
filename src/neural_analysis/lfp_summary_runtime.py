@@ -19,16 +19,16 @@ import pandas as pd
 from scipy import signal
 
 from src.neural_analysis import (
-    lfp_loading,
-    lfp_phase_clustering,
-    lfp_spectrogram,
     lfp_summary_ppc_runtime,
     spike_behavior_pynapple,
     spike_lfp_summary,
     spike_lfp_hilbert_phase,
     unit_spike_loading,
 )
-from src.neural_analysis.lfp_power_summary import (
+from src.neural_analysis.lfp import loading as lfp_loading
+from src.neural_analysis.lfp import phase as lfp_phase_clustering
+from src.neural_analysis.lfp import spectrogram as lfp_spectrogram
+from src.neural_analysis.lfp.power import (
     compute_presession_reference_psd,
     compute_session_reference_psd,
     compute_trial_epoch_psds,
@@ -71,7 +71,7 @@ from src.neural_analysis.lfp_summary_preparation import (
     preflight_open_ephys_site_metadata,
     validate_open_ephys_aligned_sync_path,
 )
-from src.neural_analysis.lfp_synchrony_summary import (
+from src.neural_analysis.lfp.synchrony import (
     aggregate_trial_plv_bands,
     bootstrap_phase_clustering_bands,
     compute_phase_clustering_summary,

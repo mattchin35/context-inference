@@ -9,7 +9,7 @@ from typing import Callable
 
 import pandas as pd
 from src.external_tools import readSGLX
-from src.neural_analysis import lfp_loading
+from src.neural_analysis.lfp import loading as lfp_loading
 from src.neural_analysis.lfp_summary_models import (
     LFPSiteConfig,
     LFPSummaryConfig,

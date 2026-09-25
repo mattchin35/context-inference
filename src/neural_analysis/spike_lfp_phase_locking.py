@@ -8,7 +8,7 @@ from typing import Callable
 
 import numpy as np
 
-from src.neural_analysis import lfp_phase_clustering
+from src.neural_analysis.lfp import phase as lfp_phase_clustering
 
 
 ANALYSIS_VERSION = "0.2.0"
