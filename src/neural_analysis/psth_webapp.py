@@ -35,6 +35,11 @@ from src.neural_analysis.lfp_summary_session import (
     build_lfp_summary_config,
 )
 from src.neural_analysis.session_metadata import ResolvedSession
+from src.neural_analysis.session_metadata import (
+    load_session_metadata,
+    resolve_probe_sources,
+    resolve_session_metadata,
+)
 
 
 CONDITION_OPTIONS = [
@@ -151,6 +156,202 @@ class OpenEphysCacheToken:
     lfp_preprocessing_mtime_ns: int
     lfp_preprocessing_sha256: str
     source_value_semantics: str = OPEN_EPHYS_AFFINE_UV_SEMANTICS
+
+
+@dataclass(frozen=True)
+class MetadataPopulationInputs:
+    """Resolved paths and zero-based channels for one metadata population."""
+
+    population_id: str
+    population_label: str
+    probe_id: str
+    probe_label: str
+    channel_group_label: str
+    channel_indices: tuple[int, ...]
+    sorter_directory: Path | None
+    aligned_spike_file: Path | None
+    lfp_file: Path | None
+    channel_quality_file: Path | None
+
+
+@dataclass(frozen=True)
+class MetadataLFPSiteInputs:
+    """One metadata-defined saved LFP channel and its resolved source paths."""
+
+    site_id: str
+    display_label: str
+    probe_id: str
+    acquisition_family: str
+    saved_channel_index: int
+    lfp_file: Path | None
+    synchronization_file: Path | None
+
+
+@dataclass(frozen=True)
+class MetadataViewAvailability:
+    """Whether one existing webapp view has its ordinary required sources."""
+
+    available: bool
+    reason: str
+
+
+def load_webapp_session(metadata_path: Path | str) -> ResolvedSession:
+    """Load and resolve one canonical session document without reading arrays.
+
+    Parameters
+    ----------
+    metadata_path : pathlib.Path or str
+        Existing ``neural_session.json`` path.
+
+    Returns
+    -------
+    ResolvedSession
+        Frozen session, probe, site, population, and filesystem records.
+    """
+    path = Path(metadata_path)
+    return resolve_session_metadata(load_session_metadata(path), path)
+
+
+def metadata_population_inputs(
+    session: ResolvedSession,
+    population_id: str,
+) -> MetadataPopulationInputs:
+    """Resolve one metadata population to its probe sources and anatomy.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        One metadata-resolved session.
+    population_id : str
+        Exact stable population identifier.
+
+    Returns
+    -------
+    MetadataPopulationInputs
+        Paths, labels, and zero-based channel indices. No unit IDs or spike
+        arrays are derived.
+    """
+    population = next(
+        (item for item in session.populations if item.population_id == population_id),
+        None,
+    )
+    if population is None:
+        raise ValueError(f"unknown population ID: {population_id}")
+    group = next(
+        item
+        for item in session.channel_groups
+        if item.channel_group_id == population.channel_group_id
+    )
+    probe = resolve_probe_sources(session, population.probe_id)
+    return MetadataPopulationInputs(
+        population_id=population.population_id,
+        population_label=population.display_label,
+        probe_id=probe.probe_id,
+        probe_label=probe.display_label,
+        channel_group_label=group.display_label,
+        channel_indices=group.channel_indices,
+        sorter_directory=probe.sorter_directory,
+        aligned_spike_file=probe.aligned_spike_file,
+        lfp_file=probe.lfp_file,
+        channel_quality_file=probe.channel_quality_file,
+    )
+
+
+def metadata_lfp_site_inputs(session: ResolvedSession) -> tuple[MetadataLFPSiteInputs, ...]:
+    """Return metadata-defined LFP sites in the user's declared order.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        One metadata-resolved session.
+
+    Returns
+    -------
+    tuple[MetadataLFPSiteInputs, ...]
+        Site labels, zero-based saved channels, and source paths; no LFP data
+        or sidecar values are loaded.
+    """
+    sites = []
+    for site in session.sites:
+        probe = resolve_probe_sources(session, site.probe_id)
+        sites.append(
+            MetadataLFPSiteInputs(
+                site_id=site.site_id,
+                display_label=site.display_label,
+                probe_id=probe.probe_id,
+                acquisition_family=probe.acquisition_family,
+                saved_channel_index=site.saved_channel_index,
+                lfp_file=probe.lfp_file,
+                synchronization_file=probe.synchronization_file,
+            )
+        )
+    return tuple(sites)
+
+
+def metadata_view_availability(
+    session: ResolvedSession,
+) -> dict[str, MetadataViewAvailability]:
+    """Report ordinary source availability for each existing webapp view.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        Resolved paths. Files are checked by kind but never opened.
+
+    Returns
+    -------
+    dict[str, MetadataViewAvailability]
+        One entry for every value in ``PLOT_VIEW_OPTIONS``.
+    """
+    behavior_ready = (
+        session.behavior.session_directory is not None
+        and session.behavior.session_directory.is_dir()
+        and session.behavior.trial_table_file is not None
+        and session.behavior.trial_table_file.is_file()
+    )
+    lfp_ready = bool(session.sites) and all(
+        site.lfp_file is not None
+        and site.lfp_file.is_file()
+        and site.synchronization_file is not None
+        and site.synchronization_file.is_file()
+        for site in metadata_lfp_site_inputs(session)
+    )
+    missing_spike_probes = []
+    for population in session.populations:
+        probe = resolve_probe_sources(session, population.probe_id)
+        if (
+            probe.sorter_directory is None
+            or not probe.sorter_directory.is_dir()
+            or probe.aligned_spike_file is None
+            or not probe.aligned_spike_file.is_file()
+        ):
+            missing_spike_probes.append(probe.probe_id)
+    spike_ready = bool(session.populations) and not missing_spike_probes
+
+    behavior_reason = "behavior trial sources are missing"
+    lfp_reason = "LFP or synchronization sources are missing"
+    spike_reason = (
+        "spike sources are missing for " + ", ".join(missing_spike_probes)
+        if missing_spike_probes
+        else "no metadata population is configured"
+    )
+
+    availability: dict[str, MetadataViewAvailability] = {}
+    lfp_only = {PLOT_VIEW_LFP_PHASE_CLUSTERING, PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE}
+    combined = {PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING, PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT}
+    for view in PLOT_VIEW_OPTIONS:
+        if not behavior_ready:
+            availability[view] = MetadataViewAvailability(False, behavior_reason)
+        elif view in lfp_only and not lfp_ready:
+            availability[view] = MetadataViewAvailability(False, lfp_reason)
+        elif view in combined and (not lfp_ready or not spike_ready):
+            reason = lfp_reason if not lfp_ready else spike_reason
+            availability[view] = MetadataViewAvailability(False, reason)
+        elif view not in lfp_only | combined | {PLOT_VIEW_LFP_SUMMARY} and not spike_ready:
+            availability[view] = MetadataViewAvailability(False, spike_reason)
+        else:
+            availability[view] = MetadataViewAvailability(True, "available")
+    return availability
 
 
 def build_open_ephys_cache_token(
