@@ -88,16 +88,16 @@ def test_active_summary_population_uses_one_probe_with_good_mua_good_inside_brai
     assert all(unit_id.startswith(f"{probe_label}:") for unit_id in population.stable_unit_ids)
 
 
-def test_active_summary_population_rejects_combined_probe_identity(
+def test_active_summary_population_rejects_empty_probe_identity(
     tmp_path: Path,
 ) -> None:
-    """The summary selector has exactly one active probe and cannot merge units."""
+    """The summary selector requires one nonempty metadata-defined probe ID."""
 
     clusters, channels = _population_metadata()
 
-    with pytest.raises(ValueError, match="ProbeA or ProbeB"):
+    with pytest.raises(ValueError, match="nonempty"):
         lfp_summary_webapp.build_active_summary_population(
-            probe_label="ProbeA+ProbeB",
+            probe_label="",
             sorter_path=tmp_path / "sorter",
             aligned_spike_path=tmp_path / "aligned.npz",
             cluster_metadata=clusters,

@@ -526,12 +526,12 @@ def build_active_summary_population(
     cluster_metadata: object,
     channel_metadata: object,
 ) -> UnitPopulationConfig:
-    """Build exactly one active ProbeA or ProbeB population from supplied paths.
+    """Build exactly one active metadata-selected population from supplied paths.
 
     Parameters
     ----------
     probe_label : str
-        Exact categorical ``"ProbeA"`` or ``"ProbeB"`` selection.
+        Nonempty stable hardware/probe identifier from session metadata.
     sorter_path, aligned_spike_path : pathlib.Path
         Explicit page-supplied source identities. Paths are preserved verbatim
         and are not inferred from a session or replaced with CT026 defaults.
@@ -548,8 +548,8 @@ def build_active_summary_population(
         with stable ``probe:cluster`` identifiers.
     """
 
-    if probe_label not in {"ProbeA", "ProbeB"}:
-        raise ValueError("probe_label must be ProbeA or ProbeB")
+    if not isinstance(probe_label, str) or not probe_label.strip():
+        raise ValueError("probe_label must be a nonempty string")
     required_clusters = {"cluster_id", "ch", "group"}
     if not hasattr(cluster_metadata, "columns") or not hasattr(channel_metadata, "columns"):
         raise ValueError("population metadata must be tabular")
@@ -1849,6 +1849,7 @@ def assemble_summary_config(
     bootstrap_count: int,
     random_seed: int,
     output_rate_hz: float = 500.0,
+    trial_table_path: Path | None = None,
 ) -> LFPSummaryConfig:
     """Assemble and validate one immutable config from active summary controls.
 
@@ -1891,7 +1892,9 @@ def assemble_summary_config(
         phase=phase,
         ppc=ppc,
         trial_table_path=(
-            Path(session_path) / "processed" / f"{session_id}_augmented_trials.csv"
+            Path(trial_table_path)
+            if trial_table_path is not None
+            else Path(session_path) / "processed" / f"{session_id}_augmented_trials.csv"
         ),
         random_seed=int(random_seed),
     )
@@ -2635,6 +2638,7 @@ def _render_source_enabled_summary_view(
     output_directory: Path,
     sites: tuple[LFPSiteConfig, ...],
     site_pairs: tuple[tuple[str, str], ...],
+    trial_table_path: Path | None,
     sorter_paths: Mapping[str, Path],
     aligned_spike_paths: Mapping[str, Path],
     cluster_metadata_loader: Callable[[Path], object],
@@ -2672,7 +2676,7 @@ def _render_source_enabled_summary_view(
     sidebar = streamlit.sidebar
     sidebar.header("Cached LFP Summary")
     source_mode = sidebar.selectbox("Summary source", options=("snapshot", "live"))
-    probe_label = sidebar.selectbox("Active population", options=("ProbeA", "ProbeB"))
+    probe_label = sidebar.selectbox("Active population", options=tuple(sorter_paths))
     if source_mode == "snapshot":
         entered_path = sidebar.text_input("Snapshot directory", value="")
         inspection = _retained_snapshot_inspection(streamlit.session_state, entered_path)
@@ -2735,6 +2739,7 @@ def _render_source_enabled_summary_view(
             choice_filter="all", context_filter="all", excluded_trial_indices=(),
             alignment_event="choice_time", notch_enabled=True, bootstrap_count=1000,
             random_seed=0,
+            trial_table_path=trial_table_path,
         )
     except ValueError as error:
         streamlit.error(str(error))
@@ -2784,6 +2789,7 @@ def render_lfp_summary_view(
     aligned_spike_paths: Mapping[str, Path] | None = None,
     cluster_metadata_loader: Callable[[Path], object] | None = None,
     channel_metadata_loader: Callable[[Path], object] | None = None,
+    trial_table_path: Path | None = None,
 ) -> None:
     """Render legacy controls or the explicit snapshot/live child route.
 
@@ -2835,6 +2841,7 @@ def render_lfp_summary_view(
             output_directory=output_directory,
             sites=sites,
             site_pairs=site_pairs,
+            trial_table_path=trial_table_path,
             sorter_paths=sorter_paths,
             aligned_spike_paths=aligned_spike_paths,
             cluster_metadata_loader=cluster_metadata_loader,

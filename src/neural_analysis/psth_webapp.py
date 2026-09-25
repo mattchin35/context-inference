@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from datetime import datetime
 import math
 from pathlib import Path
+from typing import Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -28,6 +30,11 @@ from src.neural_analysis.lfp_loading import (
     OPEN_EPHYS_AFFINE_UV_SEMANTICS,
     sha256_file_content,
 )
+from src.neural_analysis.lfp_summary_session import (
+    LFPSummarySessionRequest,
+    build_lfp_summary_config,
+)
+from src.neural_analysis.session_metadata import ResolvedSession
 
 
 CONDITION_OPTIONS = [
@@ -391,6 +398,77 @@ RASTER_LAYOUT_OPTIONS = {
     "Separated": {"row_spacing": 1.5, "figure_size": (12.0, 10.0)},
     "Wide": {"row_spacing": 2.0, "figure_size": (12.0, 13.0)},
 }
+
+
+def parse_webapp_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse the optional metadata path passed after Streamlit's ``--``.
+
+    Parameters
+    ----------
+    argv : sequence of str or None
+        Script arguments. ``None`` uses ``argparse``'s process arguments.
+
+    Returns
+    -------
+    argparse.Namespace
+        Namespace whose ``session_metadata`` value is a ``Path`` or ``None``.
+    """
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--session-metadata", type=Path)
+    return parser.parse_args(argv)
+
+
+def render_metadata_lfp_summary_view(
+    streamlit: object,
+    session: ResolvedSession,
+    *,
+    dependencies: lfp_summary_webapp.SummaryWebDependencies | None = None,
+) -> None:
+    """Render the existing summary UI from one resolved metadata session.
+
+    Parameters
+    ----------
+    streamlit : object
+        Streamlit-compatible UI host. It is not passed to scientific loaders.
+    session : ResolvedSession
+        Explicit session/probe/site paths and zero-based channel identities.
+    dependencies : SummaryWebDependencies or None
+        Existing cache/compute seams. ``None`` builds the production bundle.
+
+    Returns
+    -------
+    None
+        Delegates controls only; raw arrays remain behind existing explicit UI
+        actions and cached-view selections.
+    """
+    config = build_lfp_summary_config(session, LFPSummarySessionRequest())
+    sorter_paths = {
+        probe.probe_id: probe.sorter_directory
+        for probe in session.probes
+        if probe.sorter_directory is not None
+    }
+    aligned_spike_paths = {
+        probe.probe_id: probe.aligned_spike_file
+        for probe in session.probes
+        if probe.aligned_spike_file is not None
+    }
+    if dependencies is None:
+        dependencies = lfp_summary_webapp.make_production_summary_dependencies()
+    lfp_summary_webapp.render_lfp_summary_view(
+        streamlit,
+        session_id=config.session_id,
+        session_path=config.session_path,
+        output_directory=config.output_directory,
+        sites=config.sites,
+        site_pairs=config.site_pairs,
+        unit_population=config.unit_population,
+        dependencies=dependencies,
+        sorter_paths=sorter_paths,
+        aligned_spike_paths=aligned_spike_paths,
+        cluster_metadata_loader=load_summary_cluster_metadata,
+        channel_metadata_loader=load_summary_channel_metadata,
+        trial_table_path=config.trial_table_path,
+    )
 
 
 def render_lfp_summary_view(
