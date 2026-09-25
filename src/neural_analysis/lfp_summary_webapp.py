@@ -19,9 +19,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from src.neural_analysis import lfp_summary_plotting, lfp_summary_runtime
+from src.neural_analysis import lfp_summary_plotting
 from src.neural_analysis.lfp import loading as lfp_loading
 from src.neural_analysis.lfp_summary import pipeline as lfp_summary_pipeline
+from src.neural_analysis.lfp_summary import runtime as lfp_summary_runtime
 from src.neural_analysis.lfp_summary.cache import (
     ComponentStatus,
     assess_component_status,

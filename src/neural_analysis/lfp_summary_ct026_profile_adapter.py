@@ -17,7 +17,8 @@ from typing import Callable, Mapping
 
 import numpy as np
 
-from src.neural_analysis import lfp_summary_ppc_runtime, lfp_summary_runtime
+from src.neural_analysis import lfp_summary_ppc_runtime
+from src.neural_analysis.lfp_summary import runtime as lfp_summary_runtime
 from src.neural_analysis.lfp_summary import work_cache as lfp_summary_work_cache
 from src.neural_analysis.spike_behavior import loading as spike_behavior_pynapple
 from src.neural_analysis.spike_behavior import loading as unit_spike_loading

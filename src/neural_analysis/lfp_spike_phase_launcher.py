@@ -46,7 +46,7 @@ from src.neural_analysis.lfp_summary.pipeline import (
     ComponentRunResult,
     PPCWorkCleanupTarget,
 )
-from src.neural_analysis.lfp_summary_runtime import _work_fingerprint
+from src.neural_analysis.lfp_summary.runtime_common import _work_fingerprint
 
 
 _MODULE = "src.neural_analysis.lfp_spike_phase_launcher"
@@ -3456,8 +3456,8 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
     from src.neural_analysis.lfp_summary.pipeline import (
         compute_spike_phase_component,
     )
-    from src.neural_analysis.lfp_summary_runtime import (
-        load_configured_trial_table,
+    from src.neural_analysis.lfp_summary.runtime_common import load_configured_trial_table
+    from src.neural_analysis.lfp_summary.spike_phase_runtime import (
         make_spike_phase_pipeline_dependencies,
     )
     from src.neural_analysis.lfp_summary.work_cache import cleanup_ppc_run

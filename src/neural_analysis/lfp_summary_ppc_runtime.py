@@ -21,6 +21,8 @@ import zipfile
 
 import numpy as np
 
+import src.neural_analysis.lfp_summary.runtime_common as runtime_common
+
 from src.neural_analysis.spike_lfp import ppc as spike_lfp_summary
 from src.neural_analysis.spike_lfp.ppc_kernel import (
     aggregate_observed_trial_segmented_ppc_statistics,
@@ -2359,13 +2361,8 @@ def execute_grouped_ppc_component(
         raise ValueError("grouped PPC execution must equal config.ppc_execution")
     planning_started = time.perf_counter()
 
-    # Import locally: the production runtime imports this module for legacy
-    # job execution, while this serial bridge only needs its prepared-record
-    # validation and condition intersection after execution was authorized.
-    from src.neural_analysis import lfp_summary_runtime
-
-    lfp_summary_runtime._validate_prepared_phase_run(config, prepared_phase)
-    lfp_summary_runtime._validate_prepared_spike_run(
+    runtime_common._validate_prepared_phase_run(config, prepared_phase)
+    runtime_common._validate_prepared_spike_run(
         config, prepared_phase, prepared_spikes
     )
     phase = np.asarray(prepared_phase.phase_tensor)
@@ -2396,7 +2393,7 @@ def execute_grouped_ppc_component(
         prepared_spikes=prepared_spikes,
         shared_phase_mmap_bytes=shared_worker_input_bytes,
     )
-    membership = lfp_summary_runtime._analysis_condition_membership(
+    membership = runtime_common._analysis_condition_membership(
         prepared_phase.prepared_trials
     )
     frequencies_hz = np.asarray(config.phase.frequency_hz, dtype=float)

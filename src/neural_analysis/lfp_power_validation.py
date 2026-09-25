@@ -14,7 +14,8 @@ from typing import Any, Callable, Mapping
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.neural_analysis import lfp_summary_runtime
+from src.neural_analysis.lfp_summary import power_runtime
+from src.neural_analysis.lfp_summary.runtime_common import load_configured_trial_table
 from src.neural_analysis.lfp_summary.cache import (
     ComponentStatus,
     assess_component_status,
@@ -438,8 +439,8 @@ def make_production_power_validation_dependencies() -> PowerValidationDependenci
         with the existing safe I/O API; clock values are seconds and peak memory
         is a Linux-independent best-effort byte measurement.
     """
-    pipeline = lfp_summary_runtime.make_power_pipeline_dependencies(
-        trial_table_loader=lfp_summary_runtime.load_configured_trial_table,
+    pipeline = power_runtime.make_power_pipeline_dependencies(
+        trial_table_loader=load_configured_trial_table,
     )
 
     def load_manifest(directory: Path, config: LFPSummaryConfig) -> dict[str, object]:
@@ -865,7 +866,7 @@ def _production_source_identifiers(config: LFPSummaryConfig) -> dict[str, str]:
         commit = "unavailable"
     return {
         "git_commit": commit or "unavailable",
-        "runtime_module": str(Path(lfp_summary_runtime.__file__).resolve()),
+        "runtime_module": str(Path(__file__).resolve().with_name("lfp_summary_runtime.py")),
         "pipeline_module": str(Path(__file__).with_name("lfp_summary_pipeline.py").resolve()),
         "validation_module": str(Path(__file__).resolve()),
         "session_id": config.session_id,

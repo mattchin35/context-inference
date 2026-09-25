@@ -16,7 +16,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from src.neural_analysis import lfp_summary_runtime
+from src.neural_analysis.lfp_summary import spike_phase_runtime
+from src.neural_analysis.lfp_summary.runtime_common import load_configured_trial_table
 from src.neural_analysis.lfp_power_validation import build_ct026_power_config
 from src.neural_analysis.lfp_summary.cache import ComponentStatus
 from src.neural_analysis.lfp_summary.models import (
@@ -355,11 +356,11 @@ def make_production_spike_phase_preview_dependencies(
         Production seams. The numerical Spike runtime is required separately;
         this factory never calculates PPC or opens raw data for plotting.
     """
-    factory = getattr(lfp_summary_runtime, "make_spike_phase_pipeline_dependencies", None)
+    factory = getattr(spike_phase_runtime, "make_spike_phase_pipeline_dependencies", None)
     if factory is None:
         pipeline: object = _unavailable_spike_pipeline()
     else:
-        pipeline = factory(trial_table_loader=lfp_summary_runtime.load_configured_trial_table)
+        pipeline = factory(trial_table_loader=load_configured_trial_table)
 
     def load_manifest(directory: Path, config: LFPSummaryConfig) -> dict[str, object]:
         """Load the manifest matching the immutable active configuration."""
@@ -2042,7 +2043,7 @@ def _source_identifiers(config: LFPSummaryConfig) -> dict[str, str]:
         commit = "unavailable"
     return {
         "git_commit": commit or "unavailable",
-        "runtime_module": str(Path(lfp_summary_runtime.__file__).resolve()),
+        "runtime_module": str(Path(__file__).resolve().with_name("lfp_summary_runtime.py")),
         "validation_module": str(Path(__file__).resolve()),
         "session_id": config.session_id,
     }
