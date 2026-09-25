@@ -2,10 +2,9 @@
 
 ## Status and authority
 
-**Current status:** U1-U4 are implemented, and the user explicitly accepted
-the current version-2 U4 workflow on 2026-09-25. R0 inventory work was
-authorized on 2026-09-25 and is under review. R1 source movement requires
-separate approval.
+**Current status:** U1-U4 and R0 are complete. R1 was authorized on
+2026-09-25, implemented tests-first, and verified locally; user review is
+pending. Each R2 scientific-domain slice requires separate approval.
 
 This plan supersedes the former NR2-NR18 package roadmap and the former broad
 layered target architecture. Historical execution details, reviews, paths,
@@ -455,6 +454,22 @@ point.
 No benchmark is required. The move must not add a second read of large source
 files or materialize arrays that are currently streamed or selected. Focused
 synchronization tests and the complete neural suite must pass.
+
+### Implementation result
+
+R1 tests were committed first in `b7696aa`, with six expected RED failures for
+the absent canonical package and 59 passing focused tests. The implementation
+was committed in `6588fc5`. It adds only `synchronization/alignment.py`,
+`synchronization/spikeglx.py`, `synchronization/manual.py`, and a minimal
+initializer; the three old modules are compatibility aliases, while
+`sync_ephys.py` remains the root script/function entry.
+
+The final focused synchronization and LFP-loading run passed 76 tests. The
+complete neural suite passed 1,676 tests with the 22 previously inventoried
+warnings. A complete repository run was attempted but could not collect the
+unrelated behavior-analysis suite because `autograd` is absent from the local
+environment. No dependency was added, and no experimental data, cache,
+report, external system, or scheduler was accessed.
 
 ## 11. Work package R2 - Scientific-domain organization
 
