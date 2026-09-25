@@ -342,6 +342,18 @@ def test_metadata_population_controls_restore_quality_dropdowns_and_default_all_
         "front-probe", psth_webapp.CHANNEL_SOURCE_CHANNEL_QUALITY
     )
     monkeypatch.setattr(psth_webapp, "st", SimpleNamespace(sidebar=sidebar))
+    monkeypatch.setattr(
+        psth_webapp,
+        "load_channel_quality_cached",
+        lambda _path: pd.DataFrame(
+            {
+                "ch": [0, 7, 8, 9],
+                "label": ["good", "good", "bad", "good"],
+                "is_good": [True, True, False, True],
+                "inside_brain": [True, True, True, True],
+            }
+        ),
+    )
 
     selection = psth_webapp._metadata_population_controls(session)
 
@@ -373,6 +385,18 @@ def test_metadata_population_controls_apply_optional_channels_without_hiding_con
         "rear-probe", psth_webapp.CHANNEL_SOURCE_CHANNEL_QUALITY
     )
     monkeypatch.setattr(psth_webapp, "st", SimpleNamespace(sidebar=sidebar))
+    monkeypatch.setattr(
+        psth_webapp,
+        "load_channel_quality_cached",
+        lambda _path: pd.DataFrame(
+            {
+                "ch": [7, 8, 9],
+                "label": ["good", "bad", "good"],
+                "is_good": [True, False, True],
+                "inside_brain": [True, True, True],
+            }
+        ),
+    )
 
     selection = psth_webapp._metadata_population_controls(session)
 
