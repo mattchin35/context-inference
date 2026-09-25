@@ -2510,7 +2510,7 @@ def _report_measurements(
     state: Mapping[str, object],
 ) -> object:
     """Build WP12 scalar report measurements from launcher state."""
-    from src.neural_analysis.lfp_spike_phase_validation import (
+    from src.neural_analysis.lfp_summary.spike_phase_validation import (
         SpikePhaseFilterBenchmark,
         SpikePhaseReportMeasurements,
     )
@@ -3446,7 +3446,7 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
     """
     import pandas as pd
 
-    from src.neural_analysis.lfp_spike_phase_validation import (
+    from src.neural_analysis.lfp_summary.spike_phase_validation import (
         build_ct026_active_population,
         build_ct026_spike_phase_preview_config,
         make_production_spike_phase_preview_dependencies,
