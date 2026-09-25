@@ -2,9 +2,9 @@
 
 ## Status and authority
 
-**Current status:** U1-U4, R0, R1, and R2A-R2D are complete. R2D was
-authorized on 2026-09-25, implemented tests-first, and verified locally; user
-review is pending. R3 requires separate approval.
+**Current status:** U1-U4 and R0-R3 are complete. R3 was authorized on
+2026-09-25, implemented tests-first, and verified locally; user review is
+pending. R4 requires separate approval.
 
 This plan supersedes the former NR2-NR18 package roadmap and the former broad
 layered target architecture. Historical execution details, reviews, paths,
@@ -727,6 +727,32 @@ add brittle pixel-for-pixel snapshots when the current contract is structural.
 
 No plot, style, control, statistic, caption, or report content changes. Focused
 plot tests, affected webapp/report tests, and the complete neural suite pass.
+
+### R3 implementation result
+
+R3 ownership tests were committed first in `4c8a54c`, with 19 expected RED
+failures for the four absent domain plotting modules and 76 passing package-
+boundary tests. Commit `aae862a` updates one source-location test to inspect
+the new canonical Spike-LFP owner; it failed RED because that owner did not yet
+exist. Existing structural and content plot tests remain the behavioral
+contract rather than introducing pixel snapshots.
+
+The implementation was committed in `9e25afb`. It creates `plotting.py` in
+`lfp`, `spike_behavior`, `spike_lfp`, and `population`. The former mixed
+modules now forward the exact canonical callables while retaining their
+current example defaults and direct dispatch. `unit_spike_plotting.py` is a
+small compatibility facade over the four domain owners. Workflow-specific
+summary plotting remains unchanged in `lfp_summary_plotting.py`.
+
+The focused rendering suite passed 242 tests, the affected webapp/summary/
+report suite passed 217 tests, and the complete neural suite passed 1,768
+tests with the 22 previously inventoried warnings. An AST audit found all 67
+moved definitions unchanged except for disambiguating two unrelated private
+helpers that formerly shared the name `_draw_trial_event_markers` in separate
+modules. All canonical plotting definitions retain data-contract docstrings,
+and the new modules have no back-dependency on UI, workflows, or legacy mixed
+modules. No experimental data, cache, report, external system, or scheduler
+was accessed.
 
 ## 13. Work package R4 - LFP-summary workflow organization
 
