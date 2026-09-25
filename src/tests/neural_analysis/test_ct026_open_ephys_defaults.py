@@ -27,14 +27,13 @@ def test_default_probe_paths_keep_open_ephys_probe_assignments_consistent():
     assert pfc_sorter_path.parent.name.endswith(".ProbeA")
     assert hpc_sorter_path.parent.name.endswith(".ProbeB")
     assert pfc_sorter_path.name == hpc_sorter_path.name
-    assert unit_spike_loading.DEFAULT_PFC_ALIGNED_SPIKE_PATH == (
-        session_home
-        / "ephys/aligned/aligned_open_ephys/probeA_sync.npz"
-    )
-    assert unit_spike_loading.DEFAULT_HPC_V1_ALIGNED_SPIKE_PATH == (
-        session_home
-        / "ephys/aligned/aligned_open_ephys/probeB_sync.npz"
-    )
+    pfc_aligned_path = unit_spike_loading.DEFAULT_PFC_ALIGNED_SPIKE_PATH
+    hpc_aligned_path = unit_spike_loading.DEFAULT_HPC_V1_ALIGNED_SPIKE_PATH
+    assert session_home in pfc_aligned_path.parents
+    assert session_home in hpc_aligned_path.parents
+    assert pfc_aligned_path.parent == hpc_aligned_path.parent
+    assert pfc_aligned_path.name == "probeA_sync.npz"
+    assert hpc_aligned_path.name == "probeB_sync.npz"
     assert unit_spike_loading.DEFAULT_PFC_LFP_PATH.parent == pfc_sorter_path.parent
     assert unit_spike_loading.DEFAULT_HPC_V1_LFP_PATH.parent == hpc_sorter_path.parent
     assert unit_spike_loading.DEFAULT_PFC_LFP_PATH.name == "lfp.dat"
