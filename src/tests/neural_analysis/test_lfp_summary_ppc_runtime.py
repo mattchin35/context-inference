@@ -6316,7 +6316,7 @@ def test_grouped_allocation_validates_counts_and_position_axes_without_vector_ma
     protected_values = (source_counts, edge_positions, observed_positions)
     original_asarray = ppc_runtime.np.asarray
     original_unique = ppc_runtime.np.unique
-    original_kernel_estimator = ppc_runtime.estimate_segmented_kernel_allocation
+    original_kernel_estimator = ppc_planning.estimate_segmented_kernel_allocation
     original_array = ppc_runtime.np.array
     original_copy = ppc_runtime.np.copy
     original_ascontiguousarray = ppc_runtime.np.ascontiguousarray
@@ -6386,7 +6386,7 @@ def test_grouped_allocation_validates_counts_and_position_axes_without_vector_ma
         forbid_protected_contiguous_copy,
     )
     monkeypatch.setattr(
-        ppc_runtime,
+        ppc_planning,
         "estimate_segmented_kernel_allocation",
         recording_kernel_estimator,
     )
@@ -6757,7 +6757,7 @@ def test_grouped_plan_fingerprint_routes_all_provenance_arrays_through_bounded_h
         captured_arrays.extend(np.asarray(array) for array in arrays)
         return original_fingerprint(*arrays)
 
-    monkeypatch.setattr(ppc_planning, "_array_fingerprint", recording_fingerprint)
+    monkeypatch.setattr(ppc_runtime, "_array_fingerprint", recording_fingerprint)
     assert isinstance(ppc_runtime._grouped_execution_plan_fingerprint(component), str)
     for provenance in provenance_arrays:
         assert any(
