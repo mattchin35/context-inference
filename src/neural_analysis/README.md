@@ -58,5 +58,20 @@ Python callers use `load_session_metadata`, `resolve_session_metadata`,
 labels, zero-based channel indices, and filesystem paths; they return no signal
 arrays and perform no unit conversion.
 
-The webapp and computation commands will be added in U2 and U3; they are not
-claimed as metadata-driven until those milestones are implemented and tested.
+## Launch the webapp
+
+```bash
+uv run streamlit run src/neural_analysis/psth_webapp.py -- \
+  --session-metadata /path/to/session/neural_session.json
+```
+
+The app gets the subject/session labels, probe sources, LFP sites and pairs,
+anatomical channel groups, populations, behavior tables, and optional summary
+cache from that one file. Startup reads metadata and checks paths but does not
+load LFP or spike arrays. Selecting a spike-dependent view loads only its
+selected population; selecting a cached summary keeps the existing saved
+provenance. A missing optional source disables the affected view and explains
+which source is unavailable.
+
+The large-computation command will be added in U3 and is not claimed as
+metadata-driven until that milestone is implemented and tested.

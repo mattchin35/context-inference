@@ -2658,8 +2658,11 @@ def _render_source_enabled_summary_view(
         Saved LFP site and pair definitions retaining their existing channels,
         source voltage units, and categorical identities.
     sorter_paths, aligned_spike_paths : mapping[str, pathlib.Path]
-        Parent-route supplied ProbeA/ProbeB paths. Metadata is lazy and selected
-        probe only.
+        Parent-route supplied stable probe IDs and paths. Metadata is lazy and
+        selected-probe only.
+    trial_table_path : pathlib.Path or None
+        Explicit metadata-defined trial CSV. ``None`` retains the legacy
+        session-ID-derived table path.
     cluster_metadata_loader, channel_metadata_loader : callable
         Selected-sorter metadata seams; they are not called for blank/invalid
         snapshots.
@@ -2813,6 +2816,9 @@ def render_lfp_summary_view(
         live mode selects one probe.
     cluster_metadata_loader, channel_metadata_loader : callable or None
         Lazy selected-sorter metadata seams used only by the additive route.
+    trial_table_path : pathlib.Path or None
+        Explicit trial CSV for metadata-driven live configuration. ``None``
+        retains the legacy derived path.
 
     Returns
     -------

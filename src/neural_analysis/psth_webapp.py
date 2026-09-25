@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import math
 from pathlib import Path
+import sys
 from typing import Sequence
 
 import matplotlib.pyplot as plt
@@ -1016,6 +1017,106 @@ def load_phase_clustering_session_cached(
     )
     event_df, trial_df = spike_behavior_pynapple.load_session_tables(session)
     return session, event_df, trial_df
+
+
+@st.cache_resource(show_spinner="Loading metadata-defined behavior data...")
+def load_metadata_behavior_session_cached(
+    session_root: str,
+    subject_id: str,
+    session_id: str,
+    session_date: str | None,
+    behavior_directory: str,
+    trial_table_file: str,
+    event_table_file: str | None,
+) -> tuple[spike_behavior_pynapple.Session, pd.DataFrame, pd.DataFrame]:
+    """Load explicit metadata behavior tables for one webapp session.
+
+    Parameters
+    ----------
+    session_root, behavior_directory, trial_table_file, event_table_file : str or None
+        Resolved filesystem paths. CSV time columns retain their existing
+        absolute-second conventions; no resampling or unit conversion occurs.
+    subject_id, session_id, session_date : str or None
+        Display/saved identity labels from metadata.
+
+    Returns
+    -------
+    tuple[Session, pandas.DataFrame, pandas.DataFrame]
+        Session record, event rows, and trial rows. Missing optional event data
+        produces an empty table; the required trial table is read exactly once.
+    """
+    root = Path(session_root)
+    date = session_date or "unknown-date"
+    session = spike_behavior_pynapple.Session(
+        session_data_home=root,
+        sess_id_full=session_id,
+        sess_id_abbreviated=f"{subject_id}_{date}",
+        raw_behavior_folder=Path(behavior_directory),
+        processed_data_path=Path(trial_table_file).parent,
+        figure_path=root / "figures",
+        mouse=subject_id,
+        date=date,
+        timestamp="",
+    )
+    trial_df = pd.read_csv(trial_table_file)
+    event_df = pd.read_csv(event_table_file) if event_table_file else pd.DataFrame()
+    return session, event_df, trial_df
+
+
+@st.cache_resource(show_spinner="Loading metadata-defined probe data...")
+def load_metadata_viewer_data_cached(
+    session_root: str,
+    subject_id: str,
+    session_id: str,
+    session_date: str | None,
+    behavior_directory: str,
+    trial_table_file: str,
+    event_table_file: str | None,
+    probe_id: str,
+    sorter_directory: str,
+    aligned_spike_file: str,
+    lfp_file: str | None,
+) -> dict[str, object]:
+    """Load explicit metadata behavior and one selected probe for existing views.
+
+    Sorter cluster assignments and aligned spike times are one-dimensional
+    arrays aligned by spike index; times are absolute seconds. The function is
+    called only after the user selects a spike-dependent view.
+    """
+    session, event_df, trial_df = load_metadata_behavior_session_cached(
+        session_root,
+        subject_id,
+        session_id,
+        session_date,
+        behavior_directory,
+        trial_table_file,
+        event_table_file,
+    )
+    sorter_path = Path(sorter_directory)
+    aligned_path = Path(aligned_spike_file)
+    spike_clusters, cluster_info = spike_behavior_pynapple.load_sorter_metadata(sorter_path)
+    aligned_spike_times = spike_behavior_pynapple.load_aligned_spikes(aligned_path)
+    spike_behavior_pynapple.validate_aligned_spike_inputs(
+        aligned_spike_times,
+        spike_clusters,
+    )
+    spike_group = spike_behavior_pynapple.build_spike_tsgroup(
+        spike_times=aligned_spike_times,
+        spike_clusters=spike_clusters,
+    )
+    session.session_info = {
+        "active_probe_label": probe_id,
+        "aligned_spike_path": aligned_spike_file,
+        "lfp_path": lfp_file,
+    }
+    return {
+        "session": session,
+        "event_df": event_df,
+        "trial_df": trial_df,
+        "cluster_info": cluster_info,
+        "spike_group": spike_group,
+        "aligned_spike_times": aligned_spike_times,
+    }
 
 
 @st.cache_data(show_spinner="Loading channel quality...")
@@ -5147,15 +5248,155 @@ def render_single_trial_spike_lfp_hilbert_view(
     plt.close(figure)
 
 
-def main() -> None:
+def _legacy_population_controls(
+    hpc_sorter_path: str,
+    hpc_aligned_path: str,
+    hpc_lfp_path: str,
+    pfc_sorter_path: str,
+    pfc_aligned_path: str,
+    pfc_lfp_path: str,
+) -> tuple[str, str, str, str, str, np.ndarray, str]:
+    """Render the existing manual region controls and return their selection.
+
+    All paths are user-entered filesystem strings. The returned channel array
+    is one-dimensional, integer, and zero based. This helper preserves the
+    legacy route while the metadata route supplies the same values directly.
+    """
+    st.sidebar.header("Region and Units")
+    preset_options = list(unit_spike_loading.get_ct014_region_channel_presets().keys())
+    region_name = st.sidebar.selectbox("Region preset", options=preset_options, index=0)
+    custom_probe_label = None
+    if region_name == "Custom":
+        custom_probe_label = st.sidebar.selectbox(
+            "Custom probe source",
+            options=list(unit_spike_loading.SUPPORTED_PROBE_LABELS),
+        )
+    active_probe_label = unit_spike_loading.get_probe_label_for_region(
+        region_name,
+        custom_probe_label=custom_probe_label,
+    )
+    st.sidebar.caption(f"Active probe: {active_probe_label}")
+    if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1:
+        active_sorter_output_path = hpc_sorter_path
+        active_aligned_spike_path = hpc_aligned_path
+        active_lfp_path = hpc_lfp_path
+    else:
+        active_sorter_output_path = pfc_sorter_path
+        active_aligned_spike_path = pfc_aligned_path
+        active_lfp_path = pfc_lfp_path
+
+    inferred_probe_derived_dir = unit_spike_loading.infer_probe_derived_dir(
+        sorter_output_path=active_sorter_output_path,
+        lfp_path=active_lfp_path,
+    )
+    channel_quality_path = None
+    if inferred_probe_derived_dir is not None:
+        try:
+            channel_quality_path = unit_spike_loading.resolve_channel_quality_path(
+                inferred_probe_derived_dir
+            )
+        except (FileNotFoundError, ValueError):
+            channel_quality_path = None
+    channel_source_options = [CHANNEL_SOURCE_MANUAL]
+    if channel_quality_path is not None:
+        channel_source_options.append(CHANNEL_SOURCE_CHANNEL_QUALITY)
+    channel_source = st.sidebar.selectbox(
+        "Channel source",
+        options=channel_source_options,
+        index=1 if CHANNEL_SOURCE_CHANNEL_QUALITY in channel_source_options else 0,
+        help="Use channel_quality when available to select good in-brain probe sites.",
+    )
+    channel_quality = None
+    channel_quality_labels = ("good",)
+    require_inside_brain = True
+    if channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY:
+        channel_quality = load_channel_quality_cached(str(channel_quality_path))
+        st.sidebar.caption(f"Channel quality: {channel_quality_path}")
+        available_labels = sorted(
+            channel_quality["label"].astype(str).str.strip().str.lower().unique().tolist()
+        )
+        default_labels = ["good"] if "good" in available_labels else available_labels
+        channel_quality_labels = tuple(
+            st.sidebar.multiselect(
+                "Channel labels",
+                options=available_labels,
+                default=default_labels,
+            )
+        )
+        require_inside_brain = st.sidebar.checkbox("Inside brain only", value=True)
+        disagreement_count = int(
+            (
+                channel_quality["label"].astype(str).str.strip().str.lower().eq("good")
+                != channel_quality["is_good"].astype(bool)
+            ).sum()
+        )
+        if disagreement_count:
+            st.sidebar.warning(
+                f"{disagreement_count} channels disagree between label == 'good' and is_good."
+            )
+        manual_channel_text = _build_channel_text(region_name)
+    else:
+        manual_channel_text = st.sidebar.text_area(
+            "Region channels",
+            value=_build_channel_text(region_name),
+            key=f"channel_text_{region_name}",
+            height=140,
+        )
+    region_channels, channel_summary = resolve_region_channels_for_source(
+        channel_source=channel_source,
+        manual_channel_text=manual_channel_text,
+        channel_quality=channel_quality,
+        require_inside_brain=require_inside_brain,
+        channel_quality_labels=channel_quality_labels,
+    )
+    st.sidebar.caption(channel_summary)
+    return (
+        region_name,
+        active_probe_label,
+        active_sorter_output_path,
+        active_aligned_spike_path,
+        active_lfp_path,
+        region_channels,
+        channel_source,
+    )
+
+
+def _start_metadata_webapp(session: ResolvedSession) -> str | None:
+    """Render metadata identity/view controls and return an available non-summary view.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        One resolved metadata session. No scientific array has been opened.
+
+    Returns
+    -------
+    str or None
+        Selected non-summary view, or ``None`` after rendering a summary view
+        or explaining why the selected view is unavailable.
+    """
+    st.sidebar.caption(f"Session: {session.subject_id} / {session.session_id}")
+    plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+    availability = metadata_view_availability(session)[plot_view]
+    if not availability.available:
+        st.warning(availability.reason)
+        return None
+    if plot_view == PLOT_VIEW_LFP_SUMMARY:
+        render_metadata_lfp_summary_view(st, session)
+        return None
+    return plot_view
+
+
+def main(argv: Sequence[str] = ()) -> None:
     """
     Run the local Streamlit unit raster/PSTH browser.
 
     Parameters
     ----------
-    None
-        Streamlit controls provide session paths, unit selection, and plotting
-        settings.
+    argv : sequence of str
+        Optional script arguments after Streamlit's ``--``. An explicit
+        ``--session-metadata`` selects the metadata-driven route; an empty
+        sequence preserves the existing direct/manual route.
 
     Returns
     -------
@@ -5171,44 +5412,74 @@ def main() -> None:
         st.cache_data.clear()
         st.rerun()
 
-    _initialize_path_input_state()
-    st.sidebar.header("Session")
-    session_data_home = st.sidebar.text_input(
-        "Session data home",
-        key="session_data_home_input",
-    )
-    sess_id_full = st.sidebar.text_input(
-        "Session id",
-        value=unit_spike_loading.DEFAULT_SESSION_ID,
-    )
+    arguments = parse_webapp_arguments(argv)
+    metadata_session: ResolvedSession | None = None
+    if arguments.session_metadata is not None:
+        try:
+            metadata_session = load_webapp_session(arguments.session_metadata)
+        except (OSError, ValueError) as error:
+            st.error(f"Could not load session metadata: {error}")
+            return
+        selected_metadata_view = _start_metadata_webapp(metadata_session)
+        if selected_metadata_view is None:
+            return
+        plot_view = selected_metadata_view
+        session_data_home = str(metadata_session.session_root)
+        sess_id_full = metadata_session.session_id
+        site_probe_ids = tuple(dict.fromkeys(site.probe_id for site in metadata_session.sites))
+        if not site_probe_ids:
+            site_probe_ids = tuple(probe.probe_id for probe in metadata_session.probes)
+        first_probe = resolve_probe_sources(metadata_session, site_probe_ids[0])
+        second_probe = (
+            resolve_probe_sources(metadata_session, site_probe_ids[1])
+            if len(site_probe_ids) > 1
+            else first_probe
+        )
+        pfc_sorter_output_path = str(first_probe.sorter_directory or "")
+        pfc_aligned_spike_path = str(first_probe.aligned_spike_file or "")
+        pfc_lfp_path = str(first_probe.lfp_file or "")
+        hpc_v1_sorter_output_path = str(second_probe.sorter_directory or "")
+        hpc_v1_aligned_spike_path = str(second_probe.aligned_spike_file or "")
+        hpc_v1_lfp_path = str(second_probe.lfp_file or "")
+    else:
+        _initialize_path_input_state()
+        st.sidebar.header("Session")
+        session_data_home = st.sidebar.text_input(
+            "Session data home",
+            key="session_data_home_input",
+        )
+        sess_id_full = st.sidebar.text_input(
+            "Session id",
+            value=unit_spike_loading.DEFAULT_SESSION_ID,
+        )
 
-    st.sidebar.header("Probe Paths")
-    hpc_v1_sorter_output_path = st.sidebar.text_input(
-        "HPC/V1 sorter output path",
-        key="hpc_v1_sorter_output_path_input",
-    )
-    hpc_v1_aligned_spike_path = st.sidebar.text_input(
-        "HPC/V1 aligned spike path",
-        key="hpc_v1_aligned_spike_path_input",
-    )
-    hpc_v1_lfp_path = st.sidebar.text_input(
-        "HPC/V1 LFP path",
-        key="hpc_v1_lfp_path_input",
-    )
-    pfc_sorter_output_path = st.sidebar.text_input(
-        "PFC sorter output path",
-        key="pfc_sorter_output_path_input",
-    )
-    pfc_aligned_spike_path = st.sidebar.text_input(
-        "PFC aligned spike path",
-        key="pfc_aligned_spike_path_input",
-    )
-    pfc_lfp_path = st.sidebar.text_input(
-        "PFC LFP path",
-        key="pfc_lfp_path_input",
-    )
-    _render_path_browser()
-    plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+        st.sidebar.header("Probe Paths")
+        hpc_v1_sorter_output_path = st.sidebar.text_input(
+            "HPC/V1 sorter output path",
+            key="hpc_v1_sorter_output_path_input",
+        )
+        hpc_v1_aligned_spike_path = st.sidebar.text_input(
+            "HPC/V1 aligned spike path",
+            key="hpc_v1_aligned_spike_path_input",
+        )
+        hpc_v1_lfp_path = st.sidebar.text_input(
+            "HPC/V1 LFP path",
+            key="hpc_v1_lfp_path_input",
+        )
+        pfc_sorter_output_path = st.sidebar.text_input(
+            "PFC sorter output path",
+            key="pfc_sorter_output_path_input",
+        )
+        pfc_aligned_spike_path = st.sidebar.text_input(
+            "PFC aligned spike path",
+            key="pfc_aligned_spike_path_input",
+        )
+        pfc_lfp_path = st.sidebar.text_input(
+            "PFC LFP path",
+            key="pfc_lfp_path_input",
+        )
+        _render_path_browser()
+        plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
 
     if plot_view == PLOT_VIEW_LFP_SUMMARY:
         render_lfp_summary_view(
@@ -5225,10 +5496,27 @@ def main() -> None:
 
     if plot_view in {PLOT_VIEW_LFP_PHASE_CLUSTERING, PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE}:
         try:
-            phase_session, phase_event_df, phase_trial_df = load_phase_clustering_session_cached(
-                session_data_home=session_data_home,
-                sess_id_full=sess_id_full,
-            )
+            if metadata_session is not None:
+                phase_session, phase_event_df, phase_trial_df = (
+                    load_metadata_behavior_session_cached(
+                        str(metadata_session.session_root),
+                        metadata_session.subject_id,
+                        metadata_session.session_id,
+                        metadata_session.session_date,
+                        str(metadata_session.behavior.session_directory),
+                        str(metadata_session.behavior.trial_table_file),
+                        (
+                            str(metadata_session.behavior.event_table_file)
+                            if metadata_session.behavior.event_table_file is not None
+                            else None
+                        ),
+                    )
+                )
+            else:
+                phase_session, phase_event_df, phase_trial_df = load_phase_clustering_session_cached(
+                    session_data_home=session_data_home,
+                    sess_id_full=sess_id_full,
+                )
         except Exception as error:  # noqa: BLE001 - Streamlit should display behavior loading failures cleanly.
             st.error(f"Could not load session behavior data: {error}")
             st.stop()
@@ -5253,115 +5541,86 @@ def main() -> None:
             )
         return
 
-    st.sidebar.header("Region and Units")
-    preset_options = list(unit_spike_loading.get_ct014_region_channel_presets().keys())
-    region_name = st.sidebar.selectbox("Region preset", options=preset_options, index=0)
-    custom_probe_label = None
-    if region_name == "Custom":
-        custom_probe_label = st.sidebar.selectbox(
-            "Custom probe source",
-            options=list(unit_spike_loading.SUPPORTED_PROBE_LABELS),
-        )
     try:
-        active_probe_label = unit_spike_loading.get_probe_label_for_region(
-            region_name,
-            custom_probe_label=custom_probe_label,
-        )
-    except ValueError as error:
-        st.error(str(error))
-        st.stop()
-    st.sidebar.caption(f"Active probe: {active_probe_label}")
-
-    if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1:
-        active_sorter_output_path = hpc_v1_sorter_output_path
-        active_aligned_spike_path = hpc_v1_aligned_spike_path
-        active_lfp_path = hpc_v1_lfp_path
-    else:
-        active_sorter_output_path = pfc_sorter_output_path
-        active_aligned_spike_path = pfc_aligned_spike_path
-        active_lfp_path = pfc_lfp_path
-
-    inferred_probe_derived_dir = unit_spike_loading.infer_probe_derived_dir(
-        sorter_output_path=active_sorter_output_path,
-        lfp_path=active_lfp_path,
-    )
-    channel_quality_path = None
-    if inferred_probe_derived_dir is not None:
-        try:
-            channel_quality_path = unit_spike_loading.resolve_channel_quality_path(inferred_probe_derived_dir)
-        except (FileNotFoundError, ValueError):
-            channel_quality_path = None
-    channel_source_options = [CHANNEL_SOURCE_MANUAL]
-    if channel_quality_path is not None:
-        channel_source_options.append(CHANNEL_SOURCE_CHANNEL_QUALITY)
-    channel_source = st.sidebar.selectbox(
-        "Channel source",
-        options=channel_source_options,
-        index=1 if CHANNEL_SOURCE_CHANNEL_QUALITY in channel_source_options else 0,
-        help="Use channel_quality when available to select good in-brain probe sites.",
-    )
-
-    channel_quality = None
-    channel_quality_labels = ("good",)
-    require_inside_brain = True
-    if channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY:
-        try:
-            channel_quality = load_channel_quality_cached(str(channel_quality_path))
-        except Exception as error:  # noqa: BLE001 - Streamlit should show metadata failures cleanly.
-            st.error(f"Could not load channel quality: {error}")
-            st.stop()
-        st.sidebar.caption(f"Channel quality: {channel_quality_path}")
-        available_channel_labels = sorted(channel_quality["label"].astype(str).str.strip().str.lower().unique().tolist())
-        default_channel_labels = ["good"] if "good" in available_channel_labels else available_channel_labels
-        channel_quality_labels = tuple(
-            st.sidebar.multiselect(
-                "Channel labels",
-                options=available_channel_labels,
-                default=default_channel_labels,
-                help="Good-site selection uses channel_quality label values; label='good' is the default.",
+        if metadata_session is not None:
+            st.sidebar.header("Population")
+            population_ids = tuple(item.population_id for item in metadata_session.populations)
+            selected_population_id = st.sidebar.selectbox(
+                "Population",
+                options=population_ids,
+                format_func=lambda value: next(
+                    item.display_label
+                    for item in metadata_session.populations
+                    if item.population_id == value
+                ),
             )
-        )
-        require_inside_brain = st.sidebar.checkbox("Inside brain only", value=True)
-        label_good_mask = channel_quality["label"].astype(str).str.strip().str.lower().eq("good")
-        is_good_mask = channel_quality["is_good"].astype(bool)
-        disagreement_count = int((label_good_mask != is_good_mask).sum())
-        if disagreement_count > 0:
-            st.sidebar.warning(f"{disagreement_count} channels disagree between label == 'good' and is_good.")
-        manual_channel_text = _build_channel_text(region_name)
-    else:
-        manual_channel_text = st.sidebar.text_area(
-            "Region channels",
-            value=_build_channel_text(region_name),
-            key=f"channel_text_{region_name}",
-            height=140,
-            help="CT014 presets are editable defaults. Replace with custom channel ids when needed.",
-        )
-
-    try:
-        region_channels, channel_summary = resolve_region_channels_for_source(
-            channel_source=channel_source,
-            manual_channel_text=manual_channel_text,
-            channel_quality=channel_quality,
-            require_inside_brain=require_inside_brain,
-            channel_quality_labels=channel_quality_labels,
-        )
-    except ValueError as error:
+            selected_population = metadata_population_inputs(
+                metadata_session,
+                selected_population_id,
+            )
+            region_name = selected_population.channel_group_label
+            active_probe_label = selected_population.probe_id
+            active_sorter_output_path = str(selected_population.sorter_directory or "")
+            active_aligned_spike_path = str(selected_population.aligned_spike_file or "")
+            active_lfp_path = str(selected_population.lfp_file or "")
+            region_channels = np.asarray(selected_population.channel_indices, dtype=int)
+            channel_source = CHANNEL_SOURCE_MANUAL
+            st.sidebar.caption(
+                f"Probe: {selected_population.probe_label} ({selected_population.probe_id}); "
+                f"anatomy: {selected_population.channel_group_label}"
+            )
+        else:
+            (
+                region_name,
+                active_probe_label,
+                active_sorter_output_path,
+                active_aligned_spike_path,
+                active_lfp_path,
+                region_channels,
+                channel_source,
+            ) = _legacy_population_controls(
+                hpc_v1_sorter_output_path,
+                hpc_v1_aligned_spike_path,
+                hpc_v1_lfp_path,
+                pfc_sorter_output_path,
+                pfc_aligned_spike_path,
+                pfc_lfp_path,
+            )
+    except (OSError, ValueError) as error:
         st.error(str(error))
         st.stop()
-    st.sidebar.caption(channel_summary)
     if region_channels.size == 0:
         st.warning("No region channels are selected.")
         st.stop()
 
     try:
-        viewer_data = load_viewer_data_cached(
-            session_data_home=session_data_home,
-            sess_id_full=sess_id_full,
-            active_probe_label=active_probe_label,
-            sorter_output_path=active_sorter_output_path,
-            aligned_spike_path=active_aligned_spike_path,
-            lfp_path=active_lfp_path,
-        )
+        if metadata_session is not None:
+            viewer_data = load_metadata_viewer_data_cached(
+                str(metadata_session.session_root),
+                metadata_session.subject_id,
+                metadata_session.session_id,
+                metadata_session.session_date,
+                str(metadata_session.behavior.session_directory),
+                str(metadata_session.behavior.trial_table_file),
+                (
+                    str(metadata_session.behavior.event_table_file)
+                    if metadata_session.behavior.event_table_file is not None
+                    else None
+                ),
+                active_probe_label,
+                active_sorter_output_path,
+                active_aligned_spike_path,
+                active_lfp_path or None,
+            )
+        else:
+            viewer_data = load_viewer_data_cached(
+                session_data_home=session_data_home,
+                sess_id_full=sess_id_full,
+                active_probe_label=active_probe_label,
+                sorter_output_path=active_sorter_output_path,
+                aligned_spike_path=active_aligned_spike_path,
+                lfp_path=active_lfp_path,
+            )
     except Exception as error:  # noqa: BLE001 - Streamlit should display load failures without a traceback wall.
         st.error(f"Could not load {active_probe_label} spike data: {error}")
         st.stop()
@@ -6400,4 +6659,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
