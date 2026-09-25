@@ -162,6 +162,89 @@ def test_webapp_keeps_existing_routes_and_exposes_lfp_summary_route():
     assert callable(psth_webapp.render_lfp_summary_view)
 
 
+def test_webapp_argument_parser_accepts_one_explicit_session_metadata_path(tmp_path: Path) -> None:
+    """The Streamlit script argument is explicit and has no CT-specific default."""
+    metadata_path = tmp_path / "neural_session.json"
+
+    arguments = psth_webapp.parse_webapp_arguments(
+        ["--session-metadata", str(metadata_path)]
+    )
+
+    assert arguments.session_metadata == metadata_path
+
+
+def test_metadata_summary_route_forwards_arbitrary_probe_sources_lazily(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Metadata-defined probe IDs reach the existing summary UI without array loading."""
+    from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
+
+    session = _write_resolved_session(tmp_path)
+    received: dict[str, object] = {}
+
+    def fake_build(active_session: object, request: object) -> object:
+        """Return a config marker while recording the exact session request."""
+        received["session"] = active_session
+        received["request"] = request
+        return SimpleNamespace(
+            session_id=session.session_id,
+            session_path=session.session_root,
+            output_directory=tmp_path / "cache",
+            sites=("site-config",),
+            site_pairs=session.site_pairs,
+            unit_population=None,
+            trial_table_path=session.behavior.trial_table_file,
+        )
+
+    def fake_render(*args: object, **kwargs: object) -> None:
+        """Record child inputs without touching source or cache arrays."""
+        received["streamlit"] = args[0]
+        received.update(kwargs)
+
+    monkeypatch.setattr(psth_webapp, "build_lfp_summary_config", fake_build)
+    monkeypatch.setattr(psth_webapp.lfp_summary_webapp, "render_lfp_summary_view", fake_render)
+    sentinel_streamlit = object()
+
+    psth_webapp.render_metadata_lfp_summary_view(
+        sentinel_streamlit,
+        session,
+        dependencies=object(),
+    )
+
+    assert received["streamlit"] is sentinel_streamlit
+    assert received["sorter_paths"] == {
+        "front-probe": (tmp_path / "ephys/front/kilosort4").resolve(),
+        "rear-probe": (tmp_path / "ephys/rear/kilosort4").resolve(),
+    }
+    assert received["aligned_spike_paths"] == {
+        "front-probe": (tmp_path / "ephys/front_sync.npz").resolve(),
+        "rear-probe": (tmp_path / "ephys/rear_sync.npz").resolve(),
+    }
+    assert received["trial_table_path"] == (tmp_path / "behavior/trials.csv").resolve()
+
+
+def test_active_summary_population_accepts_metadata_probe_ids() -> None:
+    """Population construction has no ProbeA/ProbeB identity restriction."""
+    cluster_metadata = pd.DataFrame(
+        {"cluster_id": [4], "ch": [7], "group": ["good"]}
+    )
+    channel_metadata = pd.DataFrame(
+        {"channel": [7], "channel_quality": ["good"], "inside_brain": [True]}
+    )
+
+    population = lfp_summary_webapp.build_active_summary_population(
+        probe_label="rear-probe",
+        sorter_path=Path("/session/rear/kilosort4"),
+        aligned_spike_path=Path("/session/rear_sync.npz"),
+        cluster_metadata=cluster_metadata,
+        channel_metadata=channel_metadata,
+    )
+
+    assert population.probe_label == "rear-probe"
+    assert population.stable_unit_ids == ("rear-probe:4",)
+
+
 def test_real_summary_route_builds_usable_production_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
