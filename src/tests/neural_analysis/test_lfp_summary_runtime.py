@@ -52,6 +52,7 @@ from src.neural_analysis.lfp_summary_runtime import (
     make_power_pipeline_dependencies,
     prepare_power_run,
 )
+from src.neural_analysis.lfp_summary import synchrony_runtime
 
 
 def _config(output_directory: Path):
@@ -274,7 +275,7 @@ def test_later_open_ephys_unusable_sync_blocks_phase_cache_and_earlier_productio
         numerical_calls.append("decode")
         raise AssertionError("later Open Ephys sync validation reached earlier sync decoding")
 
-    monkeypatch.setattr(lfp_summary_runtime, "load_prepared_phase_cache", forbidden_cache_lookup)
+    monkeypatch.setattr(synchrony_runtime, "load_prepared_phase_cache", forbidden_cache_lookup)
     monkeypatch.setattr(lfp_loading, "decode_lfp_sync", forbidden_earlier_decode)
 
     def forbidden_later_open_ephys_sync(*args: object, **kwargs: object) -> pd.DataFrame:

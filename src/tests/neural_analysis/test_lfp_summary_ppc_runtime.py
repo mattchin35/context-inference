@@ -24,6 +24,7 @@ from src.neural_analysis import lfp_summary_ppc_kernel as ppc_kernel
 from src.neural_analysis import lfp_summary_runtime
 from src.neural_analysis import lfp_summary_work_cache as work_cache
 from src.neural_analysis import spike_lfp_summary
+from src.neural_analysis.lfp_summary import runtime_common
 from src.neural_analysis.lfp_summary_models import (
     PPCExecutionConfig,
     UnitPopulationConfig,
@@ -5472,7 +5473,7 @@ def test_grouped_component_releases_gated_membership_and_full_source_counts_afte
     """S4 deletes planner-only full tables before parent summary allocation."""
     config = _grouped_config()
     phase, spikes = _grouped_inputs(config)
-    original_membership = lfp_summary_runtime._analysis_condition_membership
+    original_membership = runtime_common._analysis_condition_membership
     original_counts = ppc_runtime._grouped_source_trial_spike_counts
     original_summary = ppc_runtime._empty_grouped_summary_arrays
     original_plan = ppc_runtime.plan_grouped_ppc_component
@@ -5508,7 +5509,7 @@ def test_grouped_component_releases_gated_membership_and_full_source_counts_afte
         return plan
 
     monkeypatch.setattr(
-        lfp_summary_runtime,
+        runtime_common,
         "_analysis_condition_membership",
         recording_membership,
     )
@@ -5813,7 +5814,7 @@ def test_grouped_component_preflights_full_scalar_construction_scratch_before_al
         """Construction/allocation must not occur after a dimension-only rejection."""
         raise AssertionError("unsafe planning table was allocated")
 
-    monkeypatch.setattr(lfp_summary_runtime, "_analysis_condition_membership", forbidden)
+    monkeypatch.setattr(runtime_common, "_analysis_condition_membership", forbidden)
     monkeypatch.setattr(ppc_runtime, "_grouped_source_trial_spike_counts", forbidden)
     monkeypatch.setattr(ppc_runtime, "generate_trial_derangement_schedule", forbidden)
     monkeypatch.setattr(ppc_runtime, "plan_grouped_ppc_component", forbidden)
@@ -9001,7 +9002,7 @@ def test_grouped_parallel_scalar_preflight_charges_all_six_inputs_before_plannin
         raise AssertionError("parallel scalar preflight reached planner construction")
 
     monkeypatch.setattr(
-        lfp_summary_runtime,
+        runtime_common,
         "_analysis_condition_membership",
         forbid_planner_array,
     )
