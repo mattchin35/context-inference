@@ -273,17 +273,17 @@ def test_metadata_population_inputs_keep_hardware_anatomy_and_paths_separate(
 
     session = _write_resolved_session(tmp_path)
 
-    selection = psth_webapp.metadata_population_inputs(session, "rear-active")
+    selection = psth_webapp.metadata_population_inputs(session, "rear-probe")
 
-    assert selection.population_id == "rear-active"
-    assert selection.population_label == "active HPC units"
+    assert selection.population_id == "rear-probe"
+    assert selection.population_label == "rear-probe"
     assert selection.probe_id == "rear-probe"
-    assert selection.probe_label == "rear hardware"
-    assert selection.channel_group_label == "HPC"
+    assert selection.probe_label == "rear-probe"
+    assert selection.channel_group_label == "rear-probe"
     assert selection.channel_indices == (7, 8, 9)
     assert selection.sorter_directory == (tmp_path / "ephys/rear/kilosort4").resolve()
     assert selection.aligned_spike_file == (tmp_path / "ephys/rear_sync.npz").resolve()
-    assert selection.lfp_file == (tmp_path / "ephys/rear/recording.lf.bin").resolve()
+    assert selection.lfp_file == (tmp_path / "ephys/rear/lfp.dat").resolve()
 
 
 def test_metadata_lfp_site_inputs_preserve_user_order_and_saved_channels(tmp_path: Path) -> None:
@@ -295,12 +295,12 @@ def test_metadata_lfp_site_inputs_preserve_user_order_and_saved_channels(tmp_pat
     sites = psth_webapp.metadata_lfp_site_inputs(session)
 
     assert [(site.site_id, site.display_label) for site in sites] == [
-        ("frontal-site", "PFC"),
-        ("rear-site", "HPC"),
+        ("PFC", "PFC"),
+        ("HPC", "HPC"),
     ]
     assert [site.probe_id for site in sites] == ["front-probe", "rear-probe"]
     assert [site.saved_channel_index for site in sites] == [0, 7]
-    assert [site.acquisition_family for site in sites] == ["open_ephys", "spikeglx"]
+    assert [site.acquisition_family for site in sites] == ["open_ephys", "open_ephys"]
 
 
 def test_metadata_view_availability_disables_only_views_missing_their_sources(
@@ -314,7 +314,6 @@ def test_metadata_view_availability_disables_only_views_missing_their_sources(
     rear = replace(
         session.probes[1],
         sorter_directory=None,
-        aligned_spike_file=None,
     )
     session = replace(session, probes=(session.probes[0], rear))
 

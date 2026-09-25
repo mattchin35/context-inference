@@ -19,7 +19,7 @@ from src.neural_analysis.session_metadata import load_session_metadata, resolve_
 
 
 def _write_resolved_session(tmp_path: Path):
-    """Write and resolve a small mixed-acquisition metadata fixture."""
+    """Write and resolve a small version-2 two-probe metadata fixture."""
     open_ephys_directory = tmp_path / "ephys/front"
     spikeglx_directory = tmp_path / "ephys/rear"
     sorter_a = open_ephys_directory / "kilosort4"
@@ -59,83 +59,47 @@ def _write_resolved_session(tmp_path: Path):
         ),
         encoding="ascii",
     )
-    spikeglx_lfp = spikeglx_directory / "recording.lf.bin"
-    spikeglx_lfp.write_bytes(b"")
-    (spikeglx_directory / "recording.lf.meta").write_text(
-        "typeThis=imec\nimSampRate=2500\n",
+    rear_lfp = spikeglx_directory / "lfp.dat"
+    rear_lfp.write_bytes(np.array([[1.0]], dtype=np.float32).tobytes())
+    (spikeglx_directory / "lfp_preprocessing.json").write_text(
+        (open_ephys_directory / "lfp_preprocessing.json").read_text(encoding="ascii"),
         encoding="ascii",
     )
     for name in ("front_sync.npz", "rear_sync.npz"):
         (tmp_path / "ephys" / name).write_bytes(b"sync")
+    for quality in (
+        open_ephys_directory / "channel_quality.csv",
+        spikeglx_directory / "channel_quality.csv",
+    ):
+        quality.write_text(
+            "channel_id,label,inside_brain\nCH0,good,true\nCH7,good,true\n"
+            "CH8,bad,true\nCH9,good,true\n",
+            encoding="ascii",
+        )
     payload = {
-        "schema_version": "1",
-        "subject_id": "Mouse-Z",
-        "session_id": "Mouse-Z_2030-01-02_030405",
-        "session_date": "2030-01-02",
-        "session_label": None,
-        "behavior": {
-            "session_directory": "behavior",
-            "trial_table_file": "behavior/trials.csv",
-            "event_table_file": None,
-            "treadmill_file": None,
+        "schema_version": "2",
+        "session": "Mouse-Z_2030-01-02_030405",
+        "acquisition": "open_ephys",
+        "behavior": {"trials": "behavior/trials.csv"},
+        "probes": {
+            "front-probe": {
+                "lfp": "ephys/front/lfp.dat",
+                "alignment": "ephys/front_sync.npz",
+                "sorter": "ephys/front/kilosort4",
+                "quality": "ephys/front/channel_quality.csv",
+                "sites": {"PFC": 0},
+            },
+            "rear-probe": {
+                "lfp": "ephys/rear/lfp.dat",
+                "alignment": "ephys/rear_sync.npz",
+                "sorter": "ephys/rear/kilosort4",
+                "quality": "ephys/rear/channel_quality.csv",
+                "sites": {"HPC": 7},
+                "unit_channels": [7, 8, 9],
+            },
         },
-        "probes": [
-            {
-                "probe_id": "front-probe",
-                "display_label": "frontal hardware",
-                "acquisition_family": "open_ephys",
-                "lfp_file": "ephys/front/lfp.dat",
-                "lfp_metadata_file": "ephys/front/lfp_preprocessing.json",
-                "synchronization_file": "ephys/front_sync.npz",
-                "sorter_directory": "ephys/front/kilosort4",
-                "aligned_spike_file": "ephys/front_sync.npz",
-                "channel_quality_file": None,
-            },
-            {
-                "probe_id": "rear-probe",
-                "display_label": "rear hardware",
-                "acquisition_family": "spikeglx",
-                "lfp_file": "ephys/rear/recording.lf.bin",
-                "lfp_metadata_file": "ephys/rear/recording.lf.meta",
-                "synchronization_file": "ephys/rear_sync.npz",
-                "sorter_directory": "ephys/rear/kilosort4",
-                "aligned_spike_file": "ephys/rear_sync.npz",
-                "channel_quality_file": None,
-            },
-        ],
-        "sites": [
-            {
-                "site_id": "frontal-site",
-                "display_label": "PFC",
-                "probe_id": "front-probe",
-                "saved_channel_index": 0,
-            },
-            {
-                "site_id": "rear-site",
-                "display_label": "HPC",
-                "probe_id": "rear-probe",
-                "saved_channel_index": 7,
-            },
-        ],
-        "site_pairs": [["frontal-site", "rear-site"]],
-        "channel_groups": [
-            {
-                "channel_group_id": "rear-hpc",
-                "display_label": "HPC",
-                "probe_id": "rear-probe",
-                "channel_indices": [7, 8, 9],
-            }
-        ],
-        "populations": [
-            {
-                "population_id": "rear-active",
-                "display_label": "active HPC units",
-                "probe_id": "rear-probe",
-                "channel_group_id": "rear-hpc",
-            }
-        ],
-        "lfp_summary_cache_directory": "processed/summary-cache",
-        "lfp_summary_snapshot_directory": None,
+        "site_pairs": [["PFC", "HPC"]],
+        "cache": "processed/summary-cache",
     }
     metadata_path = tmp_path / "neural_session.json"
     metadata_path.write_text(json.dumps(payload), encoding="ascii")
@@ -143,7 +107,7 @@ def _write_resolved_session(tmp_path: Path):
 
 
 def test_build_config_uses_metadata_sources_labels_and_authoritative_rates(tmp_path: Path) -> None:
-    """Mixed Open Ephys/SpikeGLX sites retain metadata identities and physical units."""
+    """Probe-owned sites retain metadata identities and physical units."""
     session = _write_resolved_session(tmp_path)
 
     config = build_lfp_summary_config(session, LFPSummarySessionRequest())
@@ -153,14 +117,14 @@ def test_build_config_uses_metadata_sources_labels_and_authoritative_rates(tmp_p
     assert config.output_directory == (tmp_path / "processed/summary-cache").resolve()
     assert config.trial_table_path == (tmp_path / "behavior/trials.csv").resolve()
     assert [(site.stable_id, site.label) for site in config.sites] == [
-        ("frontal-site", "PFC"),
-        ("rear-site", "HPC"),
+        ("PFC", "PFC"),
+        ("HPC", "HPC"),
     ]
     assert [site.probe_label for site in config.sites] == ["front-probe", "rear-probe"]
-    assert [site.acquisition_format for site in config.sites] == ["open_ephys", "spikeglx"]
-    assert [site.sample_rate_hz for site in config.sites] == [1250.0, 2500.0]
+    assert [site.acquisition_format for site in config.sites] == ["open_ephys", "open_ephys"]
+    assert [site.sample_rate_hz for site in config.sites] == [1250.0, 1250.0]
     assert [site.voltage_unit for site in config.sites] == ["uV", "uV"]
-    assert config.site_pairs == (("frontal-site", "rear-site"),)
+    assert config.site_pairs == (("PFC", "HPC"),)
     assert config.unit_population is None
 
 
@@ -170,12 +134,12 @@ def test_selected_population_uses_metadata_group_and_exact_probe_paths(tmp_path:
 
     config = build_lfp_summary_config(
         session,
-        LFPSummarySessionRequest(population_id="rear-active"),
+        LFPSummarySessionRequest(population_id="rear-probe"),
     )
 
     population = config.unit_population
     assert population is not None
-    assert population.label == "active HPC units"
+    assert population.label == "rear-probe"
     assert population.probe_label == "rear-probe"
     assert population.sorter_path == (tmp_path / "ephys/rear/kilosort4").resolve()
     assert population.aligned_spike_path == (tmp_path / "ephys/rear_sync.npz").resolve()
@@ -277,19 +241,23 @@ def test_active_population_uses_metadata_paths_and_existing_quality_rules(
     assert population.channel_quality_path == quality_path
 
 
-def test_metadata_population_requires_one_declared_population_for_probe(
+def test_omitted_unit_channels_uses_all_quality_approved_channels(
     tmp_path: Path,
 ) -> None:
-    """Probe selection fails clearly rather than silently choosing a population."""
+    """A probe without unit_channels does not require a redundant population record."""
     session = _write_resolved_session(tmp_path)
+    clusters = __import__("pandas").DataFrame(
+        {"cluster_id": [1, 2], "ch": [0, 7], "group": ["good", "good"]}
+    )
 
-    with pytest.raises(ValueError, match="no population.*front-probe"):
-        build_active_unit_population(
-            session,
-            "front-probe",
-            cluster_metadata_loader=lambda _path: None,
-            channel_metadata_loader=lambda _path: None,
-        )
+    population = build_active_unit_population(
+        session,
+        "front-probe",
+        cluster_metadata_loader=lambda _path: clusters,
+        channel_metadata_loader=lambda path: __import__("pandas").read_csv(path),
+    )
+
+    assert population.selected_channels == (0, 7)
 
 
 def test_metadata_spike_phase_config_keeps_user_choices_explicit(tmp_path: Path) -> None:

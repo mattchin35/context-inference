@@ -17,20 +17,17 @@ _EXAMPLES = _ROOT / "docs/examples/neural_analysis"
 
 
 def test_three_examples_cover_open_ephys_spikeglx_and_arbitrary_names() -> None:
-    """Examples are valid schema files and keep hardware IDs separate from anatomy."""
+    """Examples are valid compact files with one acquisition family per session."""
     expected = {
         "open_ephys_session.json": ("CT026-example", {"open_ephys"}),
         "spikeglx_session.json": ("CT014-example", {"spikeglx"}),
-        "differently_named_session.json": (
-            "Mouse-Z-example",
-            {"open_ephys", "spikeglx"},
-        ),
+        "differently_named_session.json": ("Mouse-Z-example", {"open_ephys"}),
     }
 
     assert {path.name for path in _EXAMPLES.glob("*.json")} == set(expected)
     for name, (session_id, acquisition_families) in expected.items():
         metadata = load_session_metadata(_EXAMPLES / name)
-        assert metadata.session_id == session_id
+        assert metadata.session == session_id
         assert {probe.acquisition_family for probe in metadata.probes} == (
             acquisition_families
         )
