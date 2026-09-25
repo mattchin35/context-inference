@@ -12,8 +12,9 @@ Start from the closest editable example:
 - `docs/examples/neural_analysis/differently_named_session.json`
 
 Copy the example to the session root as `neural_session.json`, then replace its
-relative paths and labels. Probe IDs identify recording hardware; site and
-channel-group labels describe anatomy. They do not need to have the same name.
+relative paths. Each probe is one complete record containing that probe's
+files, LFP sites, and optional channel restriction. The probe dictionary key is
+the only probe label.
 
 ## Create and validate session metadata
 
@@ -32,21 +33,23 @@ The file has these user-edited sections:
 
 | Section or field | Meaning |
 | --- | --- |
-| `subject_id`, `session_id`, optional date/label | Display and saved session identity |
-| `behavior` | Behavior directory, trial table, and optional event/treadmill files |
-| `probes` | Stable hardware ID plus explicit Open Ephys or SpikeGLX source files |
-| `sites` | Display label, probe reference, and zero-based saved LFP channel |
-| `site_pairs` | Existing site-ID pairs available to synchrony views |
-| `channel_groups` | Anatomical label, probe reference, and zero-based channel indices |
-| `populations` | Stable label linking one probe to one anatomical channel group |
-| optional cache/snapshot directory | Existing approved saved output for cached views |
+| `session` | The single session name used in displays and saved outputs |
+| `acquisition` | One session-wide value: `open_ephys` or `spikeglx` |
+| `behavior` | Required trial table and optional event table |
+| `probes` | One complete record per probe: paths, sites, and optional unit channels |
+| `site_pairs` | Site-name pairs available to synchrony views |
+| optional `cache` | The session-wide reusable LFP-summary cache |
 
-For each probe, `lfp_file`, `lfp_metadata_file`, `synchronization_file`,
-`aligned_spike_file`, and optional `channel_quality_file` name files;
-`sorter_directory` names the existing sorter output directory. The fixed
+For each probe, `lfp`, `alignment`, `sorter`, `quality`, and `sites` are
+required. `alignment` is the one aligned file used for synchronization and
+spikes. `sites` maps each site name directly to its zero-based saved LFP
+channel. Optional `unit_channels` restricts population analysis to those
+zero-based channels; omit it to use every quality-approved inside-brain
+channel. The fixed
 `spike_times.npy`, `spike_clusters.npy`, and `cluster_info.tsv` children are
-resolved directly beneath that directory. No alternative filenames are
-searched for.
+resolved directly beneath `sorter`. The LFP sidecar is inferred from
+`acquisition`: `lfp_preprocessing.json` beside Open Ephys LFP data, or the
+matching `.meta` file for SpikeGLX. No alternative filenames are searched for.
 
 Validate all currently supported action categories:
 
@@ -60,7 +63,7 @@ To require one action to be ready, add `--action webapp`, `--action power`,
 returns a nonzero exit code and lists the missing inputs. General validation
 lists all four categories and permits an intentionally incomplete skeleton.
 
-The initial schema accepts the existing Open Ephys and SpikeGLX source layouts.
+Schema version 2 accepts the existing Open Ephys and SpikeGLX source layouts.
 It never loads LFP, synchronization, or spike arrays during metadata validation.
 Python callers use `load_session_metadata`, `resolve_session_metadata`,
 `resolve_probe_sources`, and `validate_session_for_action` from
@@ -75,9 +78,9 @@ uv run streamlit run src/neural_analysis/psth_webapp.py -- \
   --session-metadata /path/to/session/neural_session.json
 ```
 
-The app gets the subject/session labels, probe sources, LFP sites and pairs,
-anatomical channel groups, populations, behavior tables, and optional summary
-cache from that one file. Startup reads metadata and checks paths but does not
+The app gets the session name, probe sources, LFP sites and pairs, implicit
+per-probe populations, behavior tables, and optional summary cache from that
+one file. Startup reads metadata and checks paths but does not
 load LFP or spike arrays. Selecting a spike-dependent view loads only its
 selected population; selecting a cached summary keeps the existing saved
 provenance. A missing optional source disables the affected view and explains
@@ -179,14 +182,14 @@ directory for a new source/configuration identity.
 
 The small public surface for new-session use is:
 
-- `load_session_metadata(path)` parses the version-1 JSON file;
+- `load_session_metadata(path)` parses the version-2 JSON file;
 - `resolve_session_metadata(metadata, path)` resolves relative paths beneath
   the metadata file's session directory;
 - `validate_session_for_action(session, action)` reports missing ordinary
   inputs without loading arrays;
 - `build_lfp_summary_config(session, request)` builds the existing Power and
   Synchrony configuration from metadata; and
-- `build_metadata_spike_phase_config(...)` adds one selected population and
+- `build_metadata_spike_phase_config(...)` adds one selected probe population and
   explicit cache/shuffle/worker choices for the existing Spike-phase pipeline.
 
 The dataclass and function docstrings specify path types, zero-based channel

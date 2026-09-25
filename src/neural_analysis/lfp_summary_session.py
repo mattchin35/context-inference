@@ -191,17 +191,6 @@ def build_active_unit_population(
         Probe-qualified unit IDs and zero-based selected channels. No spike-time
         or LFP array is loaded by this function.
     """
-    matching = [item for item in session.populations if item.probe_id == probe_id]
-    if not matching:
-        raise ValueError(f"no population is declared for probe {probe_id!r}")
-    if len(matching) != 1:
-        raise ValueError(f"multiple populations are declared for probe {probe_id!r}")
-    declared = matching[0]
-    group = next(
-        item
-        for item in session.channel_groups
-        if item.channel_group_id == declared.channel_group_id
-    )
     probe = resolve_probe_sources(session, probe_id)
     sorter = _required_path(
         probe.sorter_directory,
@@ -253,19 +242,21 @@ def build_active_unit_population(
         labels = channels["channel_quality"]
     else:
         raise ValueError("channel quality lacks a channel id or quality label")
-    allowed_channels = set(group.channel_indices)
     good = channel_numbers.loc[
         labels.astype(str).str.lower().eq("good")
         & channels["inside_brain"].astype(bool)
         & channel_numbers.notna()
     ].astype(int)
-    selected_channels = tuple(sorted(set(good) & allowed_channels))
+    good_channels = set(good)
+    if probe.unit_channels is not None:
+        good_channels &= set(probe.unit_channels)
+    selected_channels = tuple(sorted(good_channels))
     selected = clusters.loc[
         clusters["ch"].isin(selected_channels)
         & clusters["group"].astype(str).str.lower().isin(("good", "mua"))
     ].sort_values("cluster_id")
     return UnitPopulationConfig(
-        label=declared.display_label,
+        label=probe.probe_id,
         probe_label=probe_id,
         sorter_path=sorter,
         aligned_spike_path=aligned,

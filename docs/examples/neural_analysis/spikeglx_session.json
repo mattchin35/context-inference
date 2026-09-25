@@ -1,53 +1,23 @@
 {
+  "schema_version": "2",
+  "session": "CT014-example",
+  "acquisition": "spikeglx",
   "behavior": {
-    "event_table_file": "behavior/events.csv",
-    "session_directory": "behavior",
-    "treadmill_file": null,
-    "trial_table_file": "behavior/trials.csv"
+    "trials": "behavior/trials.csv",
+    "events": "behavior/events.csv"
   },
-  "channel_groups": [
-    {
-      "channel_group_id": "imec0-pfc",
-      "channel_indices": [20, 21, 22],
-      "display_label": "PFC",
-      "probe_id": "imec0"
+  "probes": {
+    "imec0": {
+      "lfp": "ephys/imec0/session_g0_t0.imec0.lf.bin",
+      "alignment": "ephys/aligned/imec0_sync.npz",
+      "sorter": "ephys/imec0/kilosort4",
+      "quality": "ephys/imec0/channel_quality.csv",
+      "sites": {
+        "PFC": 20
+      },
+      "unit_channels": [20, 21, 22]
     }
-  ],
-  "lfp_summary_cache_directory": "processed/lfp_summary_cache",
-  "lfp_summary_snapshot_directory": null,
-  "populations": [
-    {
-      "channel_group_id": "imec0-pfc",
-      "display_label": "imec0 active PFC units",
-      "population_id": "imec0-active",
-      "probe_id": "imec0"
-    }
-  ],
-  "probes": [
-    {
-      "acquisition_family": "spikeglx",
-      "aligned_spike_file": "ephys/aligned/imec0_sync.npz",
-      "channel_quality_file": "ephys/imec0/channel_quality.csv",
-      "display_label": "SpikeGLX imec0",
-      "lfp_file": "ephys/imec0/session_g0_t0.imec0.lf.bin",
-      "lfp_metadata_file": "ephys/imec0/session_g0_t0.imec0.lf.meta",
-      "probe_id": "imec0",
-      "sorter_directory": "ephys/imec0/kilosort4",
-      "synchronization_file": "ephys/aligned/imec0_sync.npz"
-    }
-  ],
-  "schema_version": "1",
-  "session_date": "2025-12-02",
-  "session_id": "CT014-example",
-  "session_label": "SpikeGLX example",
+  },
   "site_pairs": [],
-  "sites": [
-    {
-      "display_label": "PFC",
-      "probe_id": "imec0",
-      "saved_channel_index": 20,
-      "site_id": "pfc"
-    }
-  ],
-  "subject_id": "CT014"
+  "cache": "processed/lfp_summary_cache"
 }
