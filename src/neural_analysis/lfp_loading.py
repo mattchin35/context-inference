@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
+from math import isfinite
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,6 +12,9 @@ import pynapple as nap
 
 import src.external_tools.readSGLX as readSGLX
 from src.neural_analysis import ephys_sync_utils
+
+
+OPEN_EPHYS_AFFINE_UV_SEMANTICS = "open_ephys_affine_uV_v1"
 
 
 def load_lfp_metadata(lfp_path: Path | str) -> dict:
@@ -37,8 +42,7 @@ def load_lfp_metadata(lfp_path: Path | str) -> dict:
 
 
 def load_open_ephys_lfp_metadata(lfp_path: Path | str) -> dict:
-    """
-    Load metadata for one derived Open Ephys LFP binary file.
+    """Load and fail-closed normalize metadata for one derived Open Ephys LFP binary.
 
     Parameters
     ----------
@@ -49,12 +53,37 @@ def load_open_ephys_lfp_metadata(lfp_path: Path | str) -> dict:
     Returns
     -------
     dict
-        Normalized metadata dictionary. Required fields are
-        ``sampling_frequency_hz`` in Hz, ``num_channels`` in saved-channel
-        columns, ``num_samples`` in LFP samples, ``dtype`` as a NumPy dtype
-        string, and ``binary_layout``. The supported binary layout is
-        ``"time_major_channel_interleaved"``, meaning array shape
-        ``(n_samples, n_channels)``.
+        A normalized JSON-compatible mapping with no numerical trace arrays.
+        ``output_binary`` exactly matches the selected filename;
+        ``sampling_frequency_hz`` is a finite positive float in Hz;
+        ``num_channels`` is a positive saved-channel count; ``num_segments``
+        is exactly one; and ``num_samples_by_segment`` is retained as a
+        one-entry count list while derived ``num_samples`` is a positive
+        sample count. ``dtype`` is exactly ``"float32"`` and
+        ``binary_layout`` is exactly ``"time_major_channel_interleaved"``,
+        so raw stored values have logical shape ``(sample, saved_channel)``.
+        ``channel_ids_in_binary_order`` is a nonempty string list of shape
+        ``(num_channels,)``. ``lfp_binary_scaling`` retains the observed
+        ``data_units``, ``has_scaleable_traces``, channel-id, gain, offset,
+        unit, export-scale, and conversion fields; each gain/offset/unit
+        vector has shape ``(num_channels,)``, gains are finite positive
+        multipliers to uV, offsets are finite uV, and units are explicitly
+        ``"uV"``. No scaling is applied by this metadata loader.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the selected LFP binary or its sibling
+        ``lfp_preprocessing.json`` file is absent.
+    OSError
+        If either file cannot be opened, read, or statted.
+    json.JSONDecodeError
+        If the sidecar is not valid JSON.
+    ValueError
+        If mandatory fields, primitive types, literal contracts, channel
+        order/vector shapes, physical units, scaling values, or the exact
+        binary byte size disagree with the supported one-segment float32
+        contract.
     """
 
     lfp_file = Path(lfp_path)
@@ -67,29 +96,54 @@ def load_open_ephys_lfp_metadata(lfp_path: Path | str) -> dict:
         metadata = json.load(file_handle)
 
     required_fields = {
+        "output_binary",
         "sampling_frequency_hz",
         "num_channels",
+        "num_segments",
         "num_samples_by_segment",
         "dtype",
         "binary_layout",
+        "channel_ids_in_binary_order",
+        "lfp_binary_scaling",
     }
     missing_fields = required_fields - set(metadata)
     if missing_fields:
         raise ValueError(f"Open Ephys LFP metadata is missing required fields: {sorted(missing_fields)}")
-    if str(metadata["binary_layout"]) != "time_major_channel_interleaved":
+    if metadata["output_binary"] != lfp_file.name:
+        raise ValueError("Open Ephys LFP metadata output_binary does not match the selected binary.")
+    if metadata["dtype"] != "float32":
+        raise ValueError("Open Ephys LFP metadata dtype must be exactly 'float32'.")
+    if metadata["binary_layout"] != "time_major_channel_interleaved":
         raise ValueError(
-            "Only Open Ephys LFP metadata with binary_layout='time_major_channel_interleaved' is supported."
+            "Open Ephys LFP metadata binary_layout is incompatible with the output_binary/"
+            "num_segments/num_samples_by_segment contract."
         )
-
-    sample_counts = [int(sample_count) for sample_count in metadata["num_samples_by_segment"]]
-    if len(sample_counts) != 1:
-        raise ValueError("Only single-segment Open Ephys LFP files are supported.")
+    sampling_frequency_hz = _positive_finite_number(
+        metadata["sampling_frequency_hz"], "sampling_frequency_hz"
+    )
+    num_channels = _positive_integer(metadata["num_channels"], "num_channels")
+    num_segments = _positive_integer(metadata["num_segments"], "num_segments")
+    if num_segments != 1:
+        raise ValueError("Open Ephys LFP metadata num_segments must be exactly one.")
+    sample_counts_value = metadata["num_samples_by_segment"]
+    if not isinstance(sample_counts_value, list) or len(sample_counts_value) != 1:
+        raise ValueError("Open Ephys LFP metadata num_samples_by_segment must contain one sample count.")
+    sample_counts = [_positive_integer(sample_counts_value[0], "num_samples_by_segment")]
+    channel_ids = metadata["channel_ids_in_binary_order"]
+    if (
+        not isinstance(channel_ids, list)
+        or len(channel_ids) != num_channels
+        or any(not isinstance(channel_id, str) or not channel_id for channel_id in channel_ids)
+    ):
+        raise ValueError("Open Ephys LFP metadata channel_ids_in_binary_order is invalid for num_channels.")
+    _validate_open_ephys_scaling(metadata["lfp_binary_scaling"], channel_ids, num_channels)
     normalized_metadata = dict(metadata)
-    normalized_metadata["sampling_frequency_hz"] = float(metadata["sampling_frequency_hz"])
-    normalized_metadata["num_channels"] = int(metadata["num_channels"])
+    normalized_metadata["sampling_frequency_hz"] = sampling_frequency_hz
+    normalized_metadata["num_channels"] = num_channels
+    normalized_metadata["num_segments"] = num_segments
     normalized_metadata["num_samples"] = int(sample_counts[0])
-    normalized_metadata["dtype"] = str(metadata["dtype"])
-    normalized_metadata["binary_layout"] = str(metadata["binary_layout"])
+    normalized_metadata["dtype"] = "float32"
+    normalized_metadata["binary_layout"] = "time_major_channel_interleaved"
 
     dtype = np.dtype(normalized_metadata["dtype"])
     expected_bytes = normalized_metadata["num_samples"] * normalized_metadata["num_channels"] * dtype.itemsize
@@ -99,6 +153,254 @@ def load_open_ephys_lfp_metadata(lfp_path: Path | str) -> dict:
             f"found {lfp_file.stat().st_size} bytes."
         )
     return normalized_metadata
+
+
+def _positive_finite_number(value: object, field_name: str) -> float:
+    """Validate one positive finite JSON physical scalar.
+
+    Parameters
+    ----------
+    value : object
+        JSON-decoded candidate numeric scalar. Booleans, strings, arrays,
+        nonfinite values, zero, and negative values are invalid.
+    field_name : str
+        Metadata-field label used only in the failure message. It has no
+        physical unit or array axis.
+
+    Returns
+    -------
+    float
+        Finite positive scalar preserving the caller-defined physical unit,
+        such as Hz. It has no array axis.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not a non-boolean finite positive JSON number.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(float(value)) or value <= 0:
+        raise ValueError(f"Open Ephys LFP metadata {field_name} must be a finite positive number.")
+    return float(value)
+
+
+def _positive_integer(value: object, field_name: str) -> int:
+    """Validate one positive JSON integer count.
+
+    Parameters
+    ----------
+    value : object
+        JSON-decoded candidate count. Only non-boolean Python integers greater
+        than zero are accepted; floats and strings are rejected.
+    field_name : str
+        Metadata-field label used only in the failure message. It has no
+        physical unit or array axis.
+
+    Returns
+    -------
+    int
+        Positive count with no physical unit and no array axis.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not a non-boolean positive integer.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"Open Ephys LFP metadata {field_name} must be a positive integer.")
+    return value
+
+
+def _validate_open_ephys_scaling(
+    scaling: object,
+    channel_ids: list[object],
+    num_channels: int,
+) -> None:
+    """Fail closed unless one sidecar has the full observed affine-uV contract.
+
+    Parameters
+    ----------
+    scaling : object
+        JSON-decoded ``lfp_binary_scaling`` candidate. It must be a mapping
+        describing canonical float32 stored values and one affine conversion
+        to physical uV per saved-channel axis entry.
+    channel_ids : list[object]
+        Ordered sidecar channel identifiers for the saved-channel axis. They
+        are categorical labels with shape ``(num_channels,)`` and no unit.
+    num_channels : int
+        Positive saved-channel-axis length. It has no physical unit.
+
+    Returns
+    -------
+    None
+        The input mapping is not mutated. No binary samples, synchronization,
+        cache, filtering, interpolation, or numerical analysis is read.
+
+    Raises
+    ------
+    ValueError
+        If any required observed literal, channel-axis length/order, finite
+        gain/offset, or explicit per-channel uV unit is absent or invalid.
+    """
+    if not isinstance(scaling, dict):
+        raise ValueError("Open Ephys LFP metadata lfp_binary_scaling must be an object.")
+    required_fields = {
+        "data_units",
+        "has_scaleable_traces",
+        "channel_ids",
+        "gain_to_uV_by_channel",
+        "offset_to_uV_by_channel",
+        "physical_unit_by_channel",
+        "export_scale_factor",
+        "conversion",
+    }
+    missing_fields = required_fields - set(scaling)
+    if missing_fields:
+        raise ValueError(f"Open Ephys LFP scaling is missing required fields: {sorted(missing_fields)}")
+    if scaling["data_units"] != "unscaled_binary_values":
+        raise ValueError("Open Ephys LFP scaling data_units is unsupported.")
+    if scaling["has_scaleable_traces"] is not True:
+        raise ValueError("Open Ephys LFP scaling has_scaleable_traces must be true.")
+    if (
+        isinstance(scaling["export_scale_factor"], bool)
+        or not isinstance(scaling["export_scale_factor"], (int, float))
+        or scaling["export_scale_factor"] != 1.0
+    ):
+        raise ValueError("Open Ephys LFP scaling export_scale_factor must be exactly 1.0.")
+    if scaling["conversion"] != "trace_uV = trace_value * gain_to_uV + offset_to_uV":
+        raise ValueError("Open Ephys LFP scaling conversion is unsupported.")
+    for field_name in (
+        "channel_ids",
+        "gain_to_uV_by_channel",
+        "offset_to_uV_by_channel",
+        "physical_unit_by_channel",
+    ):
+        values = scaling[field_name]
+        if not isinstance(values, list) or len(values) != num_channels:
+            raise ValueError(f"Open Ephys LFP scaling {field_name} must match num_channels.")
+    if scaling["channel_ids"] != channel_ids:
+        raise ValueError("Open Ephys LFP scaling channel_ids must match channel_ids_in_binary_order.")
+    if any(unit != "uV" for unit in scaling["physical_unit_by_channel"]):
+        raise ValueError("Open Ephys LFP scaling physical_unit_by_channel must be explicit uV.")
+    for gain in scaling["gain_to_uV_by_channel"]:
+        if isinstance(gain, bool) or not isinstance(gain, (int, float)) or not isfinite(float(gain)) or gain <= 0:
+            raise ValueError("Open Ephys LFP scaling gain_to_uV_by_channel must be finite and positive.")
+    for offset in scaling["offset_to_uV_by_channel"]:
+        if isinstance(offset, bool) or not isinstance(offset, (int, float)) or not isfinite(float(offset)):
+            raise ValueError("Open Ephys LFP scaling offset_to_uV_by_channel must be finite.")
+
+
+def sha256_file_content(path: Path | str, *, chunk_size_bytes: int = 1024 * 1024) -> str:
+    """Return a streamed SHA-256 digest for one source-sidecar file.
+
+    Parameters
+    ----------
+    path : pathlib.Path or str
+        Existing file to hash. Units: filesystem path; contents are arbitrary
+        bytes and are never interpreted as a numerical array.
+    chunk_size_bytes : int, default=1048576
+        Positive byte count read per iteration. It bounds temporary memory and
+        does not change the returned digest.
+
+    Returns
+    -------
+    str
+        Lowercase hexadecimal SHA-256 digest of every byte in ``path``. The
+        return has no physical unit or array axis.
+
+    Raises
+    ------
+    ValueError
+        If ``chunk_size_bytes`` is not a positive integer.
+    OSError
+        If the source file cannot be opened or read.
+    """
+    if isinstance(chunk_size_bytes, bool) or not isinstance(chunk_size_bytes, int) or chunk_size_bytes <= 0:
+        raise ValueError("chunk_size_bytes must be a positive integer")
+    digest = sha256()
+    with Path(path).open("rb") as file_handle:
+        while chunk := file_handle.read(chunk_size_bytes):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_open_ephys_site_metadata(
+    site_id: str,
+    saved_channel_index: int,
+    configured_sample_rate_hz: float,
+    configured_voltage_unit: str,
+    metadata: dict[str, object],
+) -> None:
+    """Require one configured Open Ephys site to match normalized sidecar metadata.
+
+    Parameters
+    ----------
+    site_id : str
+        Stable human-readable site identifier. It has no physical unit.
+    saved_channel_index : int
+        Zero-based selected channel in the saved binary channel axis.
+    configured_sample_rate_hz : float
+        Positive configured LFP sampling rate in Hz.
+    configured_voltage_unit : str
+        Configured physical voltage unit for the selected channel.
+    metadata : dict[str, object]
+        Normalized Open Ephys sidecar metadata. ``num_channels`` defines the
+        saved-channel axis and ``physical_unit_by_channel`` is aligned to it.
+
+    Returns
+    -------
+    None
+        Validation is non-mutating and performs no sync, binary-trace, cache,
+        interpolation, filtering, or numerical analysis I/O.
+
+    Raises
+    ------
+    ValueError
+        If the selected channel is out of bounds or the configured rate/unit
+        disagrees with authoritative normalized sidecar values.
+    """
+    num_channels = metadata.get("num_channels")
+    if isinstance(saved_channel_index, bool) or not isinstance(saved_channel_index, int):
+        raise ValueError(f"Open Ephys site {site_id}: saved_channel_index must be an integer")
+    if isinstance(num_channels, bool) or not isinstance(num_channels, int) or num_channels <= 0:
+        raise ValueError(f"Open Ephys site {site_id}: normalized metadata num_channels is invalid")
+    if saved_channel_index < 0 or saved_channel_index >= num_channels:
+        raise ValueError(
+            f"Open Ephys site {site_id}: saved_channel_index={saved_channel_index} "
+            f"is outside authoritative num_channels={num_channels}"
+        )
+    authoritative_rate_hz = metadata.get("sampling_frequency_hz")
+    if (
+        isinstance(configured_sample_rate_hz, bool)
+        or not isinstance(configured_sample_rate_hz, (int, float))
+        or not isfinite(float(configured_sample_rate_hz))
+        or configured_sample_rate_hz <= 0
+        or isinstance(authoritative_rate_hz, bool)
+        or not isinstance(authoritative_rate_hz, (int, float))
+        or not isfinite(float(authoritative_rate_hz))
+        or authoritative_rate_hz <= 0
+    ):
+        raise ValueError(f"Open Ephys site {site_id}: sample_rate_hz must be finite and positive")
+    configured_rate_hz = float(configured_sample_rate_hz)
+    authoritative_rate = float(authoritative_rate_hz)
+    if configured_rate_hz != authoritative_rate:
+        raise ValueError(
+            f"Open Ephys site {site_id}: configured sample_rate_hz={configured_rate_hz} "
+            f"does not match authoritative sample_rate_hz={authoritative_rate}"
+        )
+    scaling = metadata.get("lfp_binary_scaling")
+    if not isinstance(scaling, dict):
+        raise ValueError(f"Open Ephys site {site_id}: normalized scaling metadata is invalid")
+    physical_units = scaling.get("physical_unit_by_channel")
+    if not isinstance(physical_units, list) or len(physical_units) != num_channels:
+        raise ValueError(f"Open Ephys site {site_id}: normalized physical_unit_by_channel is invalid")
+    authoritative_unit = physical_units[saved_channel_index]
+    if not isinstance(configured_voltage_unit, str) or not isinstance(authoritative_unit, str):
+        raise ValueError(f"Open Ephys site {site_id}: voltage_unit metadata is invalid")
+    if configured_voltage_unit != authoritative_unit:
+        raise ValueError(
+            f"Open Ephys site {site_id}: configured voltage_unit={configured_voltage_unit} "
+            f"does not match authoritative voltage_unit={authoritative_unit}"
+        )
 
 
 def validate_lfp_saved_channel(meta: dict, saved_channel_index: int) -> None:
@@ -156,7 +458,7 @@ def read_open_ephys_lfp_channel_window(
     -------
     tuple[np.ndarray, float]
         ``(lfp_values, sample_rate_hz)``. ``lfp_values`` has shape
-        ``(stop_sample - start_sample,)`` in derived Open Ephys LFP units.
+        ``(stop_sample - start_sample,)`` in physical microvolts (uV).
         ``sample_rate_hz`` is the LFP sampling frequency in Hz.
     """
 
@@ -185,6 +487,12 @@ def read_open_ephys_lfp_channel_window(
         lfp_memmap[int(start_sample):int(stop_sample), int(saved_channel_index)],
         dtype=float,
     ).reshape(-1)
+    scaling = metadata["lfp_binary_scaling"]
+    gain_to_uv = float(scaling["gain_to_uV_by_channel"][int(saved_channel_index)])
+    offset_to_uv = float(scaling["offset_to_uV_by_channel"][int(saved_channel_index)])
+    # The selected float window is the only affine destination buffer.
+    lfp_values *= gain_to_uv
+    lfp_values += offset_to_uv
     return lfp_values, float(metadata["sampling_frequency_hz"])
 
 
@@ -672,7 +980,9 @@ def load_open_ephys_trial_lfp_trace(
     tuple[np.ndarray, np.ndarray]
         ``(relative_time_s, lfp_values)``. Both arrays have shape
         ``(n_samples,)``. Time is in seconds relative to alignment; LFP values
-        are in the derived Open Ephys LFP units recorded in ``lfp.dat``.
+        are physical uV after exactly one affine conversion from canonical
+        float32 ``lfp.dat`` storage. The returned working array remains the
+        reader's floating-point copy and preserves the requested time grid.
     """
 
     metadata = load_open_ephys_lfp_metadata(lfp_path)

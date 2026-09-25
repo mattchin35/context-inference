@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from itertools import combinations
 from math import isfinite
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -352,6 +352,7 @@ def load_site_trial_traces(
     *,
     spikeglx_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None = None,
     open_ephys_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None = None,
+    open_ephys_metadata_by_site: Mapping[str, dict[str, object]] | None = None,
 ) -> dict[str, PreparedSiteTraces]:
     """Prepare multiple sites via normalized injected seams or production adapters.
 
@@ -377,6 +378,11 @@ def load_site_trial_traces(
         matching one-dimensional native seconds and voltage arrays plus a
         finite positive native rate in Hz. ``None`` selects the corresponding
         production adapter; invalid rows remain NaN with reason codes.
+    open_ephys_metadata_by_site : mapping[str, dict[str, object]] or None
+        Optional normalized production metadata keyed by stable site id. It is
+        used only when ``open_ephys_loader`` is ``None`` and is validated
+        before any trial numerical loading. Supplying an injected Open Ephys
+        loader leaves that seam independent of production metadata I/O.
 
     Returns
     -------
@@ -389,9 +395,28 @@ def load_site_trial_traces(
         If site identities/formats or preparation inputs violate their contracts.
     """
     _validate_sites(sites)
+    normalized_metadata = (
+        preflight_open_ephys_site_metadata(sites, open_ephys_metadata_by_site)
+        if open_ephys_loader is None
+        else {}
+    )
+    # Construct all production adapters before any site enters its trial loop.
+    # This makes a later invalid Open Ephys site fail before another site's
+    # numerical reads can begin.
+    site_adapters = [
+        (
+            site,
+            *_site_loader(
+                site,
+                spikeglx_loader,
+                open_ephys_loader,
+                normalized_metadata.get(site.stable_id),
+            ),
+        )
+        for site in sites
+    ]
     prepared: dict[str, PreparedSiteTraces] = {}
-    for site in sites:
-        loader, effective_site = _site_loader(site, spikeglx_loader, open_ephys_loader)
+    for site, loader, effective_site in site_adapters:
         prepared[site.stable_id] = prepare_site_trial_traces(
             effective_site,
             trial_indices,
@@ -400,6 +425,102 @@ def load_site_trial_traces(
             loader,
         )
     return prepared
+
+
+def preflight_open_ephys_site_metadata(
+    sites: Sequence[LFPSiteConfig],
+    metadata_by_site: Mapping[str, dict[str, object]] | None = None,
+) -> dict[str, dict[str, object]]:
+    """Structurally preflight, then load/reuse every production Open Ephys sidecar.
+
+    Parameters
+    ----------
+    sites : Sequence[LFPSiteConfig]
+        Configured sites with unique stable ids. Only entries with
+        ``acquisition_format == "open_ephys"`` are inspected. Their paths
+        have no numerical axes; configured rates are Hz and voltage units are
+        categorical physical-unit labels.
+    metadata_by_site : mapping[str, dict[str, object]] or None, optional
+        Already normalized sidecars keyed by Open Ephys stable id. A supplied
+        entry is reused without reparsing its JSON file, but it is still
+        checked against the configured saved-channel index, rate, and unit.
+
+    Returns
+    -------
+    dict[str, dict[str, object]]
+        The exact normalized metadata mappings keyed by each Open Ephys stable
+        id. First, every selected aligned-sync path is checked as an existing
+        regular file before any sidecar is parsed. The mapping contains no
+        trace samples and does not parse synchronization data or perform
+        binary-trace, cache, filter, interpolation, or transform I/O.
+
+    Raises
+    ------
+    ValueError
+        If a configured Open Ephys aligned-sync path is absent or not a regular
+        file, a site lacks normalized metadata, or its saved channel,
+        configured rate, or configured voltage unit is invalid. Structural
+        failures are raised before any sidecar metadata parsing.
+    OSError
+        If an absent metadata entry cannot be read from its production sidecar.
+    """
+    open_ephys_sites = tuple(
+        site for site in sites if site.acquisition_format == "open_ephys"
+    )
+    # Check every source path first so a later unusable OE site cannot permit
+    # earlier metadata, cache, sync, or numerical work to begin.
+    for site in open_ephys_sites:
+        validate_open_ephys_aligned_sync_path(site)
+
+    preloaded = metadata_by_site or {}
+    normalized: dict[str, dict[str, object]] = {}
+    for site in open_ephys_sites:
+        if site.stable_id in preloaded:
+            metadata = preloaded[site.stable_id]
+            if not isinstance(metadata, dict):
+                raise ValueError(f"Open Ephys site {site.stable_id}: normalized metadata is invalid")
+        else:
+            metadata = lfp_loading.load_open_ephys_lfp_metadata(site.lfp_path)
+        lfp_loading.validate_open_ephys_site_metadata(
+            site.stable_id,
+            site.saved_channel_index,
+            site.sample_rate_hz,
+            site.voltage_unit,
+            metadata,
+        )
+        normalized[site.stable_id] = metadata
+    return normalized
+
+
+def validate_open_ephys_aligned_sync_path(site: LFPSiteConfig) -> None:
+    """Require one production Open Ephys site to reference a regular sync file.
+
+    Parameters
+    ----------
+    site : LFPSiteConfig
+        One configured derived Open Ephys source. ``aligned_sync_path`` has no
+        numerical axis or physical unit and must identify the already-created
+        aligned synchronization file; no NPZ contents are parsed.
+
+    Returns
+    -------
+    None
+        Returns after a non-mutating ``Path.is_file`` structural check. It does
+        not read metadata, synchronization samples, binary traces, caches, or
+        numerical arrays.
+
+    Raises
+    ------
+    ValueError
+        If ``aligned_sync_path`` is absent or is not an existing regular file.
+        The message identifies the configured stable site and field name.
+    """
+    sync_path = site.aligned_sync_path
+    if sync_path is None or not sync_path.is_file():
+        raise ValueError(
+            f"Open Ephys site {site.stable_id}: aligned_sync_path must be an "
+            "existing regular file"
+        )
 
 
 def build_trial_relative_spike_trains(
@@ -687,8 +808,29 @@ def _site_loader(
     site: LFPSiteConfig,
     spikeglx_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None,
     open_ephys_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None,
+    normalized_open_ephys_metadata: dict[str, object] | None = None,
 ) -> tuple[Callable[..., tuple[np.ndarray, np.ndarray, float]], LFPSiteConfig]:
-    """Return normalized loader seam and effective-rate site configuration."""
+    """Return one normalized loader seam and effective-rate site configuration.
+
+    Parameters
+    ----------
+    site : LFPSiteConfig
+        One configured saved channel with categorical source units and a
+        native sampling rate in Hz.
+    spikeglx_loader, open_ephys_loader : callable or None
+        Optional injected ``(site, alignment_time_s, window)`` trace seams.
+        Their time arrays are one-dimensional seconds and values retain source
+        voltage units. ``None`` selects production loading.
+    normalized_open_ephys_metadata : dict[str, object] or None, optional
+        Preflighted normalized Open Ephys sidecar for this site. It has no
+        sample array and is ignored by injected seams and SpikeGLX.
+
+    Returns
+    -------
+    tuple[callable, LFPSiteConfig]
+        A normalized trial loader returning ``(time_s, values, rate_hz)`` on
+        one-dimensional time/value axes, plus its effective-rate site config.
+    """
     injected = spikeglx_loader if site.acquisition_format == "spikeglx" else open_ephys_loader
     if injected is not None:
         def injected_adapter(
@@ -700,7 +842,7 @@ def _site_loader(
         return injected_adapter, site
     if site.acquisition_format == "spikeglx":
         return _spikeglx_adapter(site)
-    return _open_ephys_adapter(site)
+    return _open_ephys_adapter(site, normalized_open_ephys_metadata)
 
 
 def _spikeglx_adapter(
@@ -728,12 +870,50 @@ def _spikeglx_adapter(
 
 def _open_ephys_adapter(
     site: LFPSiteConfig,
+    normalized_metadata: dict[str, object] | None = None,
 ) -> tuple[Callable[..., tuple[np.ndarray, np.ndarray, float]], LFPSiteConfig]:
-    """Read metadata once and adapt fractional Open Ephys grids to native samples."""
-    if site.aligned_sync_path is None:
-        raise ValueError("Open Ephys site requires aligned sync path")
-    metadata = lfp_loading.load_open_ephys_lfp_metadata(site.lfp_path)
+    """Adapt one preflighted Open Ephys source to exact native trial grids.
+
+    Parameters
+    ----------
+    site : LFPSiteConfig
+        One configured Open Ephys saved channel. Its configured sampling rate
+        is Hz and its source voltage unit must match sidecar physical uV.
+    normalized_metadata : dict[str, object] or None, optional
+        Normalized sidecar metadata from :func:`preflight_open_ephys_site_metadata`.
+        When omitted, this private adapter loads and validates one sidecar for
+        direct callers. It contains no trace samples.
+
+    Returns
+    -------
+    tuple[callable, LFPSiteConfig]
+        A loader accepting absolute alignment seconds and a relative seconds
+        window, returning exact native ``(time_s, values_uV, rate_hz)``
+        one-dimensional arrays/scalar. The effective site rate is authoritative
+        sidecar Hz.
+
+    Raises
+    ------
+    ValueError
+        If sync, normalized metadata, saved-channel bounds, rate, or physical
+        voltage units are incompatible. No trial numerical loading occurs.
+    """
+    validate_open_ephys_aligned_sync_path(site)
+    metadata = (
+        normalized_metadata
+        if normalized_metadata is not None
+        else lfp_loading.load_open_ephys_lfp_metadata(site.lfp_path)
+    )
+    if not isinstance(metadata, dict):
+        raise ValueError(f"Open Ephys site {site.stable_id}: normalized metadata is invalid")
     sample_rate_hz = float(metadata["sampling_frequency_hz"])
+    lfp_loading.validate_open_ephys_site_metadata(
+        site.stable_id,
+        site.saved_channel_index,
+        site.sample_rate_hz,
+        site.voltage_unit,
+        metadata,
+    )
     effective_site = replace(site, sample_rate_hz=sample_rate_hz)
 
     def loader(

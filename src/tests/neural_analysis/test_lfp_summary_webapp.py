@@ -20,6 +20,7 @@ from src.neural_analysis.lfp_summary_models import (
     UnitPopulationConfig,
     canonical_config_json,
     default_lfp_summary_config,
+    lfp_summary_config_from_json,
 )
 
 
@@ -644,10 +645,18 @@ def _small_synchrony_snapshot_arrays() -> dict[str, np.ndarray]:
         "itpc_band_mean": np.full((2, 2, 3, 2), 0.33),
         "itpc_ci_low": np.full((2, 2, 3, 2), 0.30),
         "itpc_ci_high": np.full((2, 2, 3, 2), 0.36),
+        "itpc_bootstrap_q25": np.full((2, 2, 3, 2), 0.31),
+        "itpc_bootstrap_median": np.full((2, 2, 3, 2), 0.32),
+        "itpc_bootstrap_q75": np.full((2, 2, 3, 2), 0.34),
+        "itpc_band_trial_count": np.full((2, 2, 3, 2), 301, dtype=np.int64),
         "itpc_unstable": np.zeros((2, 2, 3, 2), dtype=bool),
         "ispc_band_mean": np.full((2, 1, 3, 2), 0.44),
         "ispc_ci_low": np.full((2, 1, 3, 2), 0.40),
         "ispc_ci_high": np.full((2, 1, 3, 2), 0.48),
+        "ispc_bootstrap_q25": np.full((2, 1, 3, 2), 0.41),
+        "ispc_bootstrap_median": np.full((2, 1, 3, 2), 0.42),
+        "ispc_bootstrap_q75": np.full((2, 1, 3, 2), 0.46),
+        "ispc_band_trial_count": np.full((2, 1, 3, 2), 401, dtype=np.int64),
         "ispc_unstable": np.zeros((2, 1, 3, 2), dtype=bool),
         "plv_by_frequency": np.full((2, 1, 3, 2), 0.55),
         "plv_valid_sample_count": np.full((2, 1, 3, 2), 7, dtype=np.int64),
@@ -1116,6 +1125,267 @@ def test_snapshot_component_cache_opens_only_the_selected_component_once_per_ide
     assert changed_inspection.snapshot_directory == inspection.snapshot_directory
     assert third is not first
     assert opened == ["synchrony", "synchrony"]
+
+
+def test_receipt_validated_cache_only_snapshot_labels_absent_open_ephys_semantics_as_legacy(
+    tmp_path: Path,
+) -> None:
+    """A historical receipt stays readable only in cache inspection and visibly reports legacy values."""
+    saved = _full_saved_component_configuration(tmp_path)
+    saved_sites = saved["sites"]
+    assert isinstance(saved_sites, list)
+    first_site = saved_sites[0]
+    assert isinstance(first_site, dict)
+    first_site.update(
+        {
+            "acquisition_format": "open_ephys",
+            "lfp_path": "pre_nr0_pfc_lfp.dat",
+            "aligned_sync_path": "pre_nr0_pfc_sync.npz",
+            "voltage_unit": "uV",
+            "sample_rate_hz": 2500.0,
+        }
+    )
+    snapshot = _write_snapshot_fixture(
+        tmp_path,
+        component_configuration_snapshots={"power": saved},
+    )
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+    cache = lfp_summary_webapp.SnapshotComponentCache()
+    opens: list[str] = []
+
+    def load_power(path: Path, manifest: dict[str, object], component: str) -> dict[str, np.ndarray]:
+        """Open only the receipt-approved Power NPZ and return its retained marker array."""
+        assert path == snapshot / "power.npz"
+        assert manifest is inspection.manifest
+        opens.append(component)
+        with np.load(path, allow_pickle=False) as archive:
+            return {name: archive[name] for name in archive.files}
+
+    arrays = cache.load(inspection, "power", load_power)
+    entry = inspection.manifest["components"]["power"]  # type: ignore[index]
+    assert isinstance(entry, dict)
+    saved_config = lfp_summary_config_from_json(json.dumps(entry["configuration_snapshot"]))
+
+    assert inspection.state == "valid"
+    assert arrays["marker"].tolist() == [len("power")]
+    assert opens == ["power"]
+    assert saved_config.sites[0].acquisition_format == "open_ephys"
+    assert "source_value_semantics" not in entry
+    assert lfp_summary_webapp.snapshot_component_source_value_semantics(
+        inspection, "power"
+    ) == {"PFC": "legacy-unscaled"}
+
+
+@pytest.mark.parametrize(
+    ("open_ephys_site_ids", "expected"),
+    (
+        ((), {}),
+        (("PFC",), {"PFC": "legacy-unscaled"}),
+        (("PFC", "HPC2"), {"PFC": "legacy-unscaled", "HPC2": "legacy-unscaled"}),
+    ),
+)
+def test_receipt_validated_legacy_snapshot_semantics_map_only_open_ephys_sites(
+    tmp_path: Path,
+    open_ephys_site_ids: tuple[str, ...],
+    expected: dict[str, str],
+) -> None:
+    """Absent historical provenance labels only saved Open Ephys sites during cache-only inspection."""
+    saved = _full_saved_component_configuration(tmp_path)
+    saved_sites = saved["sites"]
+    assert isinstance(saved_sites, list)
+    for site in saved_sites:
+        assert isinstance(site, dict)
+        if site["stable_id"] in open_ephys_site_ids:
+            site.update(
+                {
+                    "acquisition_format": "open_ephys",
+                    "lfp_path": f"pre_nr0_{site['stable_id']}_lfp.dat",
+                    "aligned_sync_path": f"pre_nr0_{site['stable_id']}_sync.npz",
+                    "voltage_unit": "uV",
+                    "sample_rate_hz": 2500.0,
+                }
+            )
+    snapshot = _write_snapshot_fixture(
+        tmp_path,
+        component_configuration_snapshots={"power": saved},
+    )
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+
+    assert inspection.state == "valid"
+    assert lfp_summary_webapp.snapshot_component_source_value_semantics(
+        inspection, "power"
+    ) == expected
+
+
+def test_receipt_validated_snapshot_rejects_unknown_present_open_ephys_semantics_version(
+    tmp_path: Path,
+) -> None:
+    """A present receipt provenance must use the known affine-uV semantics version.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-owned snapshot root. The rewritten manifest is re-receipted by
+        the existing fixture helper before cache-only inspection.
+    """
+    saved = _full_saved_component_configuration(tmp_path)
+    saved_sites = saved["sites"]
+    assert isinstance(saved_sites, list) and isinstance(saved_sites[0], dict)
+    saved_sites[0].update(
+        {
+            "acquisition_format": "open_ephys",
+            "lfp_path": "pre_nr0_pfc_lfp.dat",
+            "aligned_sync_path": "pre_nr0_pfc_sync.npz",
+            "voltage_unit": "uV",
+            "sample_rate_hz": 2500.0,
+        }
+    )
+    snapshot = _write_snapshot_fixture(
+        tmp_path,
+        component_configuration_snapshots={"power": saved},
+    )
+
+    def record_unknown_semantics(manifest: dict[str, object]) -> None:
+        """Record a receipt-valid but unknown version for the saved PFC site."""
+        components = manifest["components"]
+        assert isinstance(components, dict)
+        power = components["power"]
+        assert isinstance(power, dict)
+        power["source_value_semantics"] = {"PFC": "not-a-real-version"}
+
+    _rewrite_snapshot_manifest(snapshot, record_unknown_semantics)
+    inspection = lfp_summary_webapp.validate_cache_snapshot(snapshot)
+
+    assert inspection.state == "valid"
+    with pytest.raises(ValueError, match="source value semantics"):
+        lfp_summary_webapp.snapshot_component_source_value_semantics(inspection, "power")
+
+
+@pytest.mark.parametrize(
+    ("open_ephys_site_ids", "saved_semantics", "expected_semantics"),
+    (
+        (("PFC",), None, {"PFC": "legacy-unscaled"}),
+        (("PFC",), {"PFC": "open_ephys_affine_uV_v1"}, {"PFC": "open_ephys_affine_uV_v1"}),
+        ((), None, {}),
+    ),
+)
+def test_public_cache_only_route_visibly_displays_receipt_validated_source_value_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    open_ephys_site_ids: tuple[str, ...],
+    saved_semantics: dict[str, str] | None,
+    expected_semantics: dict[str, str],
+) -> None:
+    """The public snapshot route presents only its receipt-validated per-site semantics mapping."""
+    saved = _full_saved_component_configuration(tmp_path)
+    saved_sites = saved["sites"]
+    assert isinstance(saved_sites, list)
+    for site in saved_sites:
+        assert isinstance(site, dict)
+        if site["stable_id"] in open_ephys_site_ids:
+            site.update(
+                {
+                    "acquisition_format": "open_ephys",
+                    "lfp_path": f"pre_nr0_{site['stable_id']}_lfp.dat",
+                    "aligned_sync_path": f"pre_nr0_{site['stable_id']}_sync.npz",
+                    "voltage_unit": "uV",
+                    "sample_rate_hz": 2500.0,
+                }
+            )
+    snapshot = _write_snapshot_fixture(
+        tmp_path,
+        component_configuration_snapshots={"power": saved},
+    )
+    if saved_semantics is not None:
+        def record_semantics(manifest: dict[str, object]) -> None:
+            """Insert present corrected provenance before rewriting the temporary receipt."""
+            components = manifest["components"]
+            assert isinstance(components, dict)
+            power = components["power"]
+            assert isinstance(power, dict)
+            power["source_value_semantics"] = saved_semantics
+
+        _rewrite_snapshot_manifest(snapshot, record_semantics)
+
+    streamlit = RouteFakeStreamlit(source_mode="snapshot", snapshot_text=str(snapshot), view="power")
+    metadata_calls: list[Path] = []
+
+    def metadata_loader(path: Path) -> pd.DataFrame:
+        """Return selected ProbeB metadata only after receipt validation permits the public route."""
+        metadata_calls.append(path)
+        if len(metadata_calls) == 1:
+            return pd.DataFrame({"cluster_id": (7,), "ch": (1,), "group": ("good",)})
+        return pd.DataFrame({"channel": (1,), "channel_quality": ("good",), "inside_brain": (True,)})
+
+    dependencies = replace(
+        _fake_dependencies([], []),
+        load_component=lambda *_: _small_power_snapshot_arrays(),
+    )
+    monkeypatch.setattr(lfp_summary_webapp, "plot_cached_snapshot_component", lambda *_args, **_kwargs: plt.figure())
+
+    lfp_summary_webapp.render_lfp_summary_view(
+        streamlit,
+        session_id="synthetic-session",
+        session_path=tmp_path,
+        output_directory=tmp_path / "live_cache",
+        sites=_summary_sites(tmp_path),
+        site_pairs=(("PFC", "HPC1"),),
+        sorter_paths={"ProbeA": tmp_path / "sorter_a", "ProbeB": tmp_path / "sorter_b"},
+        aligned_spike_paths={"ProbeA": tmp_path / "aligned_a.npz", "ProbeB": tmp_path / "aligned_b.npz"},
+        cluster_metadata_loader=metadata_loader,
+        channel_metadata_loader=metadata_loader,
+        dependencies=dependencies,
+    )
+
+    assert metadata_calls == [tmp_path / "sorter_b", tmp_path / "sorter_b"]
+    assert ("caption", f"Source value semantics: {expected_semantics}") in streamlit.messages
+
+
+@pytest.mark.parametrize("invalid_kind", ("missing_receipt", "tampered_manifest"))
+def test_public_cache_only_route_never_synthesizes_legacy_semantics_for_unvalidated_snapshots(
+    tmp_path: Path,
+    invalid_kind: str,
+) -> None:
+    """Absent provenance falls back to legacy only after receipt validation, never for invalid snapshot input."""
+    saved = _full_saved_component_configuration(tmp_path)
+    saved_sites = saved["sites"]
+    assert isinstance(saved_sites, list) and isinstance(saved_sites[0], dict)
+    saved_sites[0].update(
+        {
+            "acquisition_format": "open_ephys",
+            "lfp_path": "pre_nr0_pfc_lfp.dat",
+            "aligned_sync_path": "pre_nr0_pfc_sync.npz",
+            "voltage_unit": "uV",
+            "sample_rate_hz": 2500.0,
+        }
+    )
+    snapshot = _write_snapshot_fixture(tmp_path, component_configuration_snapshots={"power": saved})
+    if invalid_kind == "missing_receipt":
+        (snapshot / "cache_snapshot_identity.json").unlink()
+    else:
+        manifest_path = snapshot / "manifest.json"
+        manifest_path.write_text(manifest_path.read_text(encoding="utf-8") + " ", encoding="utf-8")
+
+    streamlit = RouteFakeStreamlit(source_mode="snapshot", snapshot_text=str(snapshot), view="power")
+    calls: list[str] = []
+
+    lfp_summary_webapp.render_lfp_summary_view(
+        streamlit,
+        session_id="synthetic-session",
+        session_path=tmp_path,
+        output_directory=tmp_path / "live_cache",
+        sites=_summary_sites(tmp_path),
+        site_pairs=(("PFC", "HPC1"),),
+        sorter_paths={"ProbeA": tmp_path / "sorter_a", "ProbeB": tmp_path / "sorter_b"},
+        aligned_spike_paths={"ProbeA": tmp_path / "aligned_a.npz", "ProbeB": tmp_path / "aligned_b.npz"},
+        cluster_metadata_loader=lambda _: pytest.fail("invalid snapshot loaded cluster metadata"),
+        channel_metadata_loader=lambda _: pytest.fail("invalid snapshot loaded channel metadata"),
+        dependencies=_fake_dependencies(calls, []),
+    )
+
+    assert calls == []
+    assert all("Source value semantics:" not in message for _kind, message in streamlit.messages)
+    assert all("legacy-unscaled" not in message for _kind, message in streamlit.messages)
 
 
 @pytest.mark.parametrize("component", ("synchrony", "spike_phase"))
@@ -2520,6 +2790,91 @@ def test_each_authoritative_snapshot_view_delegates_its_selected_cached_axes(
     delegated_text = repr(calls[0][1]) + repr(calls[0][2])
     for selector in required_selectors:
         assert selector in delegated_text
+    plt.close(figure)
+
+
+@pytest.mark.parametrize(
+    ("view", "site_id", "metric_prefix", "expected_values"),
+    (
+        (
+            "itpc_band_summary",
+            "PFC",
+            "itpc",
+            (
+                np.array((0.33,)),
+                np.array(((0.30,), (0.31,), (0.32,), (0.34,), (0.36,))),
+                np.array((0.31,)),
+                np.array((0.32,)),
+                np.array((0.34,)),
+                np.array((301,), dtype=np.int64),
+            ),
+        ),
+        (
+            "ispc_band_summary",
+            "PFC-HPC1",
+            "ispc",
+            (
+                np.array((0.44,)),
+                np.array(((0.40,), (0.41,), (0.42,), (0.46,), (0.48,))),
+                np.array((0.41,)),
+                np.array((0.42,)),
+                np.array((0.46,)),
+                np.array((401,), dtype=np.int64),
+            ),
+        ),
+    ),
+)
+def test_cached_phase_band_webapp_uses_metric_specific_saved_quantiles_and_counts_only(
+    monkeypatch: pytest.MonkeyPatch,
+    view: str,
+    site_id: str,
+    metric_prefix: str,
+    expected_values: tuple[np.ndarray, ...],
+) -> None:
+    """The webapp forwards saved band summaries without opening a numerical loader."""
+    arrays = _small_synchrony_snapshot_arrays()
+    captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def plot_summary(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture cache arrays selected for one horizontal band-summary renderer."""
+        captured.append((args, kwargs))
+        return plt.figure(), {}
+
+    def forbidden_loader(*_: object, **__: object) -> object:
+        """Reject any attempt to reopen a cache or invoke numerical work from the adapter."""
+        raise AssertionError("cache-only webapp band summary reopened a numerical loader")
+
+    monkeypatch.setattr(lfp_summary_webapp.lfp_summary_plotting, "plot_phase_band_summary", plot_summary)
+    monkeypatch.setattr(lfp_summary_webapp, "load_component_arrays", forbidden_loader)
+    figure = lfp_summary_webapp.plot_cached_snapshot_component(
+        "synchrony",
+        arrays,
+        default_lfp_summary_config(),
+        lfp_summary_webapp.SnapshotPlotSelection(
+            view=view,
+            site_id=site_id,
+            condition_name="left",
+            epoch_name="after",
+            band_name="gamma",
+        ),
+    )
+
+    assert metric_prefix in view
+    assert len(captured) == 1
+    positional, keyword = captured[0]
+    observed, stacked, q25, median, q75, counts = expected_values
+    assert positional == ()
+    np.testing.assert_array_equal(keyword["observed_estimates"], observed)
+    np.testing.assert_array_equal(keyword["bootstrap_quantiles"], stacked)
+    np.testing.assert_array_equal(keyword["bootstrap_quantiles"][1], q25)
+    np.testing.assert_array_equal(keyword["bootstrap_quantiles"][2], median)
+    np.testing.assert_array_equal(keyword["bootstrap_quantiles"][3], q75)
+    np.testing.assert_array_equal(keyword["selected_trial_counts"], counts)
+    assert keyword["labels"] == ("left",)
+    assert keyword["metric_name"] == (
+        "ITPC PFC" if metric_prefix == "itpc" else "ISPC PFC-HPC1"
+    )
+    assert keyword["bootstrap_count"] == default_lfp_summary_config().phase.bootstrap_count
     plt.close(figure)
 
 

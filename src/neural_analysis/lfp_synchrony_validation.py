@@ -525,6 +525,7 @@ def _render_cached_synchrony_pngs(
 
     paths.extend(
         _render_phase_band_summaries(
+            config,
             arrays,
             condition_names,
             site_ids,
@@ -550,6 +551,7 @@ def _render_cached_synchrony_pngs(
 
 
 def _render_phase_band_summaries(
+    config: LFPSummaryConfig,
     arrays: Mapping[str, np.ndarray],
     condition_names: tuple[str, ...],
     site_ids: tuple[str, ...],
@@ -562,6 +564,8 @@ def _render_phase_band_summaries(
 
     Parameters
     ----------
+    config : LFPSummaryConfig
+        Active phase configuration supplying the deterministic bootstrap count.
     arrays : Mapping[str, numpy.ndarray]
         Cache estimates/intervals on condition, entity, epoch, and band axes.
     condition_names, site_ids, pair_labels : tuple[str, ...]
@@ -580,33 +584,42 @@ def _render_phase_band_summaries(
     """
     epoch_names = tuple(str(value) for value in arrays["epoch_names"])
     band_names = tuple(str(value) for value in arrays["band_names"])
-    membership = np.asarray(arrays["condition_membership"], dtype=bool)
-    site_valid = np.asarray(arrays["site_valid"], dtype=bool)
-    pair_valid = np.asarray(arrays["pair_valid"], dtype=bool)
     paths = []
     for epoch_index, epoch_name in enumerate(epoch_names):
         for band_index, band_name in enumerate(band_names):
             for site_index, site_id in enumerate(site_ids):
-                counts = np.count_nonzero(
-                    membership & site_valid[site_index, :, None],
-                    axis=0,
-                )
                 figure, _ = dependencies.plot_phase_band_summary(
-                    np.asarray(arrays["itpc_band_mean"])[
+                    observed_estimates=np.asarray(arrays["itpc_band_mean"])[
                         :, site_index, epoch_index, band_index
                     ],
-                    np.asarray(arrays["itpc_ci_low"])[
+                    bootstrap_quantiles=np.vstack(
+                        (
+                            np.asarray(arrays["itpc_ci_low"])[
+                                :, site_index, epoch_index, band_index
+                            ],
+                            np.asarray(arrays["itpc_bootstrap_q25"])[
+                                :, site_index, epoch_index, band_index
+                            ],
+                            np.asarray(arrays["itpc_bootstrap_median"])[
+                                :, site_index, epoch_index, band_index
+                            ],
+                            np.asarray(arrays["itpc_bootstrap_q75"])[
+                                :, site_index, epoch_index, band_index
+                            ],
+                            np.asarray(arrays["itpc_ci_high"])[
+                                :, site_index, epoch_index, band_index
+                            ],
+                        )
+                    ),
+                    selected_trial_counts=np.asarray(arrays["itpc_band_trial_count"])[
                         :, site_index, epoch_index, band_index
                     ],
-                    np.asarray(arrays["itpc_ci_high"])[
-                        :, site_index, epoch_index, band_index
-                    ],
-                    counts,
-                    condition_names,
-                    band_name,
-                    epoch_name,
-                    f"ITPC {site_id}",
-                    context,
+                    labels=condition_names,
+                    band_name=band_name,
+                    epoch_name=epoch_name,
+                    metric_name=f"ITPC {site_id}",
+                    bootstrap_count=config.phase.bootstrap_count,
+                    context=context,
                 )
                 path = run_directory / (
                     f"{site_id}_{band_name}_{epoch_name}_itpc_band_summary.png"
@@ -614,26 +627,38 @@ def _render_phase_band_summaries(
                 _save_and_close(figure, path, dependencies)
                 paths.append(path)
             for pair_index, pair_label in enumerate(pair_labels):
-                counts = np.count_nonzero(
-                    membership & pair_valid[pair_index, :, None],
-                    axis=0,
-                )
                 figure, _ = dependencies.plot_phase_band_summary(
-                    np.asarray(arrays["ispc_band_mean"])[
+                    observed_estimates=np.asarray(arrays["ispc_band_mean"])[
                         :, pair_index, epoch_index, band_index
                     ],
-                    np.asarray(arrays["ispc_ci_low"])[
+                    bootstrap_quantiles=np.vstack(
+                        (
+                            np.asarray(arrays["ispc_ci_low"])[
+                                :, pair_index, epoch_index, band_index
+                            ],
+                            np.asarray(arrays["ispc_bootstrap_q25"])[
+                                :, pair_index, epoch_index, band_index
+                            ],
+                            np.asarray(arrays["ispc_bootstrap_median"])[
+                                :, pair_index, epoch_index, band_index
+                            ],
+                            np.asarray(arrays["ispc_bootstrap_q75"])[
+                                :, pair_index, epoch_index, band_index
+                            ],
+                            np.asarray(arrays["ispc_ci_high"])[
+                                :, pair_index, epoch_index, band_index
+                            ],
+                        )
+                    ),
+                    selected_trial_counts=np.asarray(arrays["ispc_band_trial_count"])[
                         :, pair_index, epoch_index, band_index
                     ],
-                    np.asarray(arrays["ispc_ci_high"])[
-                        :, pair_index, epoch_index, band_index
-                    ],
-                    counts,
-                    condition_names,
-                    band_name,
-                    epoch_name,
-                    f"ISPC {pair_label.replace('_', '-')}",
-                    context,
+                    labels=condition_names,
+                    band_name=band_name,
+                    epoch_name=epoch_name,
+                    metric_name=f"ISPC {pair_label.replace('_', '-')}",
+                    bootstrap_count=config.phase.bootstrap_count,
+                    context=context,
                 )
                 path = run_directory / (
                     f"{pair_label}_{band_name}_{epoch_name}_ispc_band_summary.png"

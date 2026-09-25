@@ -7,12 +7,20 @@ of large recordings.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields
+from dataclasses import MISSING, asdict, dataclass, fields
 from hashlib import sha256
 import json
 from math import isfinite
 from pathlib import Path
 from typing import Any
+
+from src.neural_analysis.lfp_loading import (
+    OPEN_EPHYS_AFFINE_UV_SEMANTICS,
+    sha256_file_content,
+)
+
+
+SYNCHRONY_PAYLOAD_CONTRACT_VERSION = "synchrony-bootstrap-quantiles-counts-v1"
 
 
 @dataclass(frozen=True)
@@ -41,6 +49,10 @@ class UnitPopulationConfig:
     selected_channels: tuple[int, ...]
     quality_settings: tuple[tuple[str, str], ...]
     stable_unit_ids: tuple[str, ...]
+    spike_times_path: Path | None = None
+    spike_clusters_path: Path | None = None
+    cluster_info_path: Path | None = None
+    channel_quality_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -308,10 +320,17 @@ def _construct(cls: type[Any], data: dict[str, Any]) -> Any:
     path_fields = {
         "session_path", "output_directory", "lfp_path", "aligned_sync_path",
         "sorter_path", "aligned_spike_path", "trial_table_path",
+        "spike_times_path", "spike_clusters_path", "cluster_info_path",
+        "channel_quality_path",
     }
     kwargs: dict[str, Any] = {}
     for field in fields(cls):
-        value = data[field.name]
+        if field.name in data:
+            value = data[field.name]
+        elif field.default is not MISSING:
+            value = field.default
+        else:
+            raise ValueError(f"configuration is missing required field: {field.name}")
         kwargs[field.name] = Path(value) if field.name in path_fields and value is not None else value
     return cls(**kwargs)
 
@@ -689,6 +708,27 @@ def _phase_transform_payload(phase: PhaseAnalysisConfig, include_bootstrap: bool
     return payload
 
 
+def source_value_semantics(config: LFPSummaryConfig) -> dict[str, str]:
+    """Return code-owned source-value semantics for live configured sites.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Valid analysis configuration. Site ids identify the returned mapping.
+
+    Returns
+    -------
+    dict[str, str]
+        Open Ephys stable ids mapped to the fixed affine-uV semantics version.
+        All-SpikeGLX configurations return an empty mapping.
+    """
+    return {
+        site.stable_id: OPEN_EPHYS_AFFINE_UV_SEMANTICS
+        for site in config.sites
+        if site.acquisition_format == "open_ephys"
+    }
+
+
 def component_fingerprint(component: str, config: LFPSummaryConfig) -> str:
     """Return a SHA-256 fingerprint for one component's configuration subset.
 
@@ -706,10 +746,18 @@ def component_fingerprint(component: str, config: LFPSummaryConfig) -> str:
     """
     validate_lfp_summary_config(config)
     shared = {"schema_version": config.schema_version, "session_id": config.session_id, "session_path": config.session_path, "trial_table_path": config.trial_table_path, "sites": config.sites, "trial_filter": config.trial_filter, "windows": config.analysis_windows}
+    semantics = source_value_semantics(config)
+    if semantics:
+        shared["source_value_semantics"] = semantics
     if component == "power":
         payload = {**shared, "power": config.power}
     elif component == "synchrony":
-        payload = {**shared, "site_pairs": config.site_pairs, "phase": _phase_transform_payload(config.phase, True)}
+        payload = {
+            **shared,
+            "site_pairs": config.site_pairs,
+            "phase": _phase_transform_payload(config.phase, True),
+            "synchrony_payload_contract_version": SYNCHRONY_PAYLOAD_CONTRACT_VERSION,
+        }
     elif component == "spike_phase":
         payload = {**shared, "unit_population": config.unit_population, "phase": _phase_transform_payload(config.phase, False), "ppc": config.ppc}
     else:
@@ -722,7 +770,7 @@ def fingerprint_source_files(
     config: LFPSummaryConfig,
     component: str | None = None,
 ) -> dict[str, dict[str, int | str]]:
-    """Return component-scoped resolved-path, byte-size, and mtime fingerprints.
+    """Return component-scoped resolved source records and OE sidecar digests.
 
     Parameters
     ----------
@@ -735,7 +783,25 @@ def fingerprint_source_files(
     Returns
     -------
     dict[str, dict[str, int | str]]
-        Resolved path metadata. Missing files have size and mtime ``-1``.
+        Mapping keyed by resolved filesystem path. Every selected source record
+        has ``path`` (resolved string), ``size_bytes`` (bytes), and ``mtime_ns``
+        (nanoseconds); missing source paths use ``-1`` for both numeric fields.
+        Every Open Ephys LFP record also has
+        ``value_semantics="open_ephys_affine_uV_v1"``. Its sibling
+        ``lfp_preprocessing.json`` is an additional record with the same path,
+        byte, and mtime fields plus a streamed ``sha256`` hexadecimal digest;
+        a missing sidecar has ``-1``, ``-1``, and ``""`` respectively. ``None``
+        includes LFP, aligned-sync, trial-table, and unit inputs; ``power`` and
+        ``synchrony`` exclude unit inputs; ``spike_phase`` includes them. The
+        records contain no numerical samples and are source identities only.
+
+    Raises
+    ------
+    ValueError
+        If ``component`` is not one of the documented component scopes.
+    OSError
+        If a present configured path cannot be resolved/statted, or a present
+        Open Ephys sidecar cannot be opened or streamed for SHA-256 hashing.
     """
     if component not in {None, "power", "synchrony", "spike_phase"}:
         raise ValueError(f"unknown component: {component}")
@@ -743,10 +809,35 @@ def fingerprint_source_files(
     if config.trial_table_path is not None:
         paths.append(config.trial_table_path)
     if config.unit_population is not None and component in {None, "spike_phase"}:
-        paths.extend(path for path in (config.unit_population.sorter_path, config.unit_population.aligned_spike_path) if path is not None)
+        paths.extend(
+            path
+            for path in (
+                config.unit_population.sorter_path,
+                config.unit_population.aligned_spike_path,
+                config.unit_population.spike_times_path,
+                config.unit_population.spike_clusters_path,
+                config.unit_population.cluster_info_path,
+                config.unit_population.channel_quality_path,
+            )
+            if path is not None
+        )
     result: dict[str, dict[str, int | str]] = {}
     for path in paths:
         resolved = path.resolve()
         stat = resolved.stat() if resolved.exists() else None
         result[str(resolved)] = {"path": str(resolved), "size_bytes": stat.st_size if stat else -1, "mtime_ns": stat.st_mtime_ns if stat else -1}
+    for site in config.sites:
+        if site.acquisition_format != "open_ephys":
+            continue
+        lfp_resolved = site.lfp_path.resolve()
+        lfp_entry = result[str(lfp_resolved)]
+        lfp_entry["value_semantics"] = OPEN_EPHYS_AFFINE_UV_SEMANTICS
+        sidecar = lfp_resolved.parent / "lfp_preprocessing.json"
+        sidecar_stat = sidecar.stat() if sidecar.exists() else None
+        result[str(sidecar)] = {
+            "path": str(sidecar),
+            "size_bytes": sidecar_stat.st_size if sidecar_stat else -1,
+            "mtime_ns": sidecar_stat.st_mtime_ns if sidecar_stat else -1,
+            "sha256": sha256_file_content(sidecar) if sidecar_stat else "",
+        }
     return result

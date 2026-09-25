@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -11,11 +12,13 @@ import pandas as pd
 import pytest
 
 from src.neural_analysis.lfp_power_summary import (
+    compute_presession_reference_psd,
     compute_session_reference_psd,
     compute_trial_epoch_psds,
     mean_band_power_linear,
     normalize_psd_db,
 )
+from src.neural_analysis import lfp_loading, lfp_phase_clustering
 from src.neural_analysis.lfp_summary_io import (
     assess_component_status,
     load_component_arrays,
@@ -39,6 +42,11 @@ from src.neural_analysis.lfp_summary_pipeline import (
     PipelineDependencies,
     compute_all_components,
     compute_spike_phase_component,
+    compute_synchrony_component,
+)
+from src.neural_analysis.lfp_synchrony_validation import (
+    SynchronyValidationDependencies,
+    render_cached_synchrony_validation,
 )
 from src.neural_analysis.lfp_summary_plotting import (
     PlotContext,
@@ -75,6 +83,7 @@ from src.neural_analysis.spike_lfp_summary import (
     compute_trial_shuffle_ppc,
     generate_trial_derangement_schedule,
 )
+from src.neural_analysis.spike_lfp_hilbert_phase import compute_hilbert_phase_trace
 
 
 _FS_HZ = 500.0
@@ -314,6 +323,529 @@ def _plot_context() -> PlotContext:
     )
 
 
+def test_positive_open_ephys_gain_scales_amplitudes_and_linear_power_but_not_normalized_db_or_hilbert_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Actual Open Ephys reads scale physical amplitudes but preserve deterministic phase metrics.
+
+    Both files store identical raw float32 traces. The only difference is the
+    observed positive, zero-offset gain in ``lfp_preprocessing.json``. This
+    deliberately exercises the adapter boundary rather than manufacturing a
+    scaled array downstream of it.
+    """
+    config = _synthetic_configuration(tmp_path)
+    _, source_trials = _synthetic_trials_and_traces()
+    gain_to_uv = 0.195
+    trial_count = 2
+    trial_samples = _TIME_S.size
+    # Seeded broadband content in both trial and presession windows keeps every
+    # Welch reference bin well conditioned. The exact same raw matrix is then
+    # written under the identity and corrected gain sidecars.
+    raw_trials = source_trials[:, :trial_count] + 0.05 * np.random.default_rng(103).normal(
+        size=(2, trial_count, trial_samples)
+    )
+    baseline_time_s = np.arange(5_000, dtype=float) / _FS_HZ
+    raw_baseline = np.stack(
+        (
+            2.0 * np.sin(2.0 * np.pi * 8.0 * baseline_time_s),
+            2.0 * np.sin(2.0 * np.pi * 8.0 * baseline_time_s - _SITE_OFFSET_RAD),
+        ),
+        axis=1,
+    )
+    raw_baseline += 0.05 * np.random.default_rng(104).normal(
+        size=raw_baseline.shape
+    )
+    raw_matrix = np.concatenate(
+        (raw_baseline, np.moveaxis(raw_trials, 0, -1).reshape(-1, 2)), axis=0
+    ).astype(np.float32)
+
+    def write_reader_source(directory: Path, gain: float) -> Path:
+        """Write one synthetic raw binary and full observed affine sidecar metadata."""
+        directory.mkdir()
+        lfp_path = directory / "lfp.dat"
+        raw_matrix.tofile(lfp_path)
+        metadata = {
+            "output_binary": "lfp.dat",
+            "sampling_frequency_hz": _FS_HZ,
+            "num_channels": 2,
+            "num_segments": 1,
+            "num_samples_by_segment": [raw_matrix.shape[0]],
+            "dtype": "float32",
+            "binary_layout": "time_major_channel_interleaved",
+            "channel_ids_in_binary_order": ["CH0", "CH1"],
+            "lfp_binary_scaling": {
+                "data_units": "unscaled_binary_values",
+                "has_scaleable_traces": True,
+                "channel_ids": ["CH0", "CH1"],
+                "gain_to_uV_by_channel": [gain, gain],
+                "offset_to_uV_by_channel": [0.0, 0.0],
+                "physical_unit_by_channel": ["uV", "uV"],
+                "export_scale_factor": 1.0,
+                "conversion": "trace_uV = trace_value * gain_to_uV + offset_to_uV",
+            },
+        }
+        (directory / "lfp_preprocessing.json").write_text(json.dumps(metadata), encoding="ascii")
+        return lfp_path
+
+    identity_path = write_reader_source(tmp_path / "identity", 1.0)
+    corrected_path = write_reader_source(tmp_path / "corrected", gain_to_uv)
+
+    def read_trials(path: Path) -> np.ndarray:
+        """Read the two stored channels and trials only through the production window reader."""
+        values = np.empty((2, trial_count, 2, trial_samples), dtype=float)
+        for trial_index in range(trial_count):
+            start = 5_000 + trial_index * trial_samples
+            stop = start + trial_samples
+            for channel_index in range(2):
+                values[channel_index, trial_index, channel_index], rate_hz = (
+                    lfp_loading.read_open_ephys_lfp_channel_window(
+                        path, channel_index, start, stop
+                    )
+                )
+                assert rate_hz == _FS_HZ
+        return np.stack(
+            (
+                values[0, :, 0],
+                values[1, :, 1],
+            ),
+            axis=0,
+        )
+
+    identity_trials = read_trials(identity_path)
+    corrected_trials = read_trials(corrected_path)
+    identity_baseline, _ = lfp_loading.read_open_ephys_lfp_channel_window(
+        identity_path, 0, 0, 5_000
+    )
+    corrected_baseline, _ = lfp_loading.read_open_ephys_lfp_channel_window(
+        corrected_path, 0, 0, 5_000
+    )
+    identity_metadata = lfp_loading.load_open_ephys_lfp_metadata(identity_path)
+    corrected_metadata = lfp_loading.load_open_ephys_lfp_metadata(corrected_path)
+
+    def cache_reader_derived_phase(
+        cache_config,
+        trials: np.ndarray,
+    ) -> tuple[dict[str, np.ndarray], dict[str, object]]:
+        """Commit reader-derived source, filtered, and phase arrays through Synchrony."""
+        filtered = np.empty((2, trial_count, 1, trial_samples), dtype=float)
+        phase_rad = np.empty_like(filtered)
+        for site_index in range(2):
+            for trial_index in range(trial_count):
+                transformed = compute_hilbert_phase_trace(
+                    _TIME_S,
+                    trials[site_index, trial_index],
+                    _FS_HZ,
+                    frequency_band_hz=(6.0, 10.0),
+                )
+                filtered[site_index, trial_index, 0] = transformed.bandpassed_lfp
+                phase_rad[site_index, trial_index, 0] = transformed.phase_rad
+        sizes = {
+            "site": 2,
+            "trial": trial_count,
+            "condition": 1,
+            "frequency": 1,
+            "epoch": 1,
+            "band": 1,
+            "pair": 1,
+            "time": trial_samples,
+        }
+        arrays = _payload_arrays("synchrony", sizes)
+        arrays.update(
+            trial_indices=np.arange(trial_count, dtype=np.int64),
+            site_ids=np.array(("PFC", "HPC1")),
+            site_voltage_units=np.array(("uV", "uV")),
+            condition_names=np.array(("all_trials",)),
+            condition_membership=np.ones((trial_count, 1), dtype=bool),
+            filter_membership=np.ones(trial_count, dtype=bool),
+            frequency_hz=np.array((8.0,)),
+            epoch_names=np.array(("whole",)),
+            band_names=np.array(("theta",)),
+            relative_time_s=_TIME_S,
+            site_valid=np.ones((2, trial_count), dtype=bool),
+            pair_valid=np.ones((1, trial_count), dtype=bool),
+            site_exclusion_count=np.zeros(2, dtype=np.int64),
+            pair_exclusion_count=np.zeros(1, dtype=np.int64),
+            pair_site_a_ids=np.array(("PFC",)),
+            pair_site_b_ids=np.array(("HPC1",)),
+            itpc=np.ones((1, 2, 1, trial_samples)),
+            itpc_effective_trial_count=np.full(
+                (1, 2, 1, trial_samples), trial_count, dtype=np.int64
+            ),
+            ispc=np.ones((1, 1, 1, trial_samples)),
+            ispc_phase_offset_rad=np.zeros((1, 1, 1, trial_samples)),
+            ispc_effective_trial_count=np.full(
+                (1, 1, 1, trial_samples), trial_count, dtype=np.int64
+            ),
+            itpc_band_mean=np.ones((1, 2, 1, 1)),
+            itpc_ci_low=np.ones((1, 2, 1, 1)),
+            itpc_ci_high=np.ones((1, 2, 1, 1)),
+            itpc_unstable=np.zeros((1, 2, 1, 1), dtype=bool),
+            ispc_band_mean=np.ones((1, 1, 1, 1)),
+            ispc_ci_low=np.ones((1, 1, 1, 1)),
+            ispc_ci_high=np.ones((1, 1, 1, 1)),
+            ispc_unstable=np.zeros((1, 1, 1, 1), dtype=bool),
+            plv_by_frequency=np.ones((trial_count, 1, 1, 1)),
+            plv_phase_offset_rad=np.zeros((trial_count, 1, 1, 1)),
+            plv_valid_sample_count=np.full(
+                (trial_count, 1, 1, 1), trial_samples, dtype=np.int64
+            ),
+            plv_valid_sample_fraction=np.ones((trial_count, 1, 1, 1)),
+            plv_computable=np.ones((trial_count, 1, 1, 1), dtype=bool),
+            plv_band_mean=np.ones((trial_count, 1, 1, 1)),
+            source_trace=trials,
+            band_filtered_trace=filtered,
+            hilbert_phase_rad=phase_rad,
+        )
+        payload = build_component_payload("synchrony", arrays)
+        dependencies = PipelineDependencies(
+            prepare_power=lambda _: object(),
+            prepare_phase=lambda _: object(),
+            prepare_spike=lambda _, __: object(),
+            build_power_payload=lambda _, __: payload,
+            build_synchrony_payload=lambda _, __: payload,
+            build_spike_phase_payload=lambda _, __, ___: payload,
+            load_manifest=lambda directory: load_or_initialize_manifest(
+                directory, cache_config
+            ),
+            write_component=write_component_transaction,
+        )
+        result = compute_synchrony_component(
+            cache_config, dependencies, prepared_phase=object()
+        )
+        assert result.state == "complete"
+        assert result.manifest is not None
+        return (
+            load_component_arrays(
+                cache_config.output_directory / "synchrony.npz",
+                result.manifest,
+                "synchrony",
+            ),
+            result.manifest,
+        )
+
+    def open_ephys_cache_config(lfp_path: Path, cache_name: str):
+        """Bind the two summary sites to distinct channels of one physical-uV source."""
+        sites = tuple(
+            replace(
+                site,
+                acquisition_format="open_ephys",
+                lfp_path=lfp_path,
+                aligned_sync_path=None,
+                saved_channel_index=index,
+                voltage_unit="uV",
+                sample_rate_hz=_FS_HZ,
+            )
+            for index, site in enumerate(config.sites)
+        )
+        return replace(
+            config,
+            session_id=f"synthetic-cache-{cache_name}",
+            output_directory=tmp_path / cache_name,
+            sites=sites,
+        )
+
+    identity_cache, identity_manifest = cache_reader_derived_phase(
+        open_ephys_cache_config(identity_path, "identity-cache"), identity_trials
+    )
+    corrected_cache, corrected_manifest = cache_reader_derived_phase(
+        open_ephys_cache_config(corrected_path, "corrected-cache"), corrected_trials
+    )
+
+    # The production schema remains adapter-neutral; cached per-site metadata
+    # resolves its physical voltage placeholder for this Open Ephys payload.
+    linear_psd_contract = COMPONENT_ARRAY_SCHEMAS["power"]["psd_linear"]
+    assert linear_psd_contract.units == "source-voltage-unit^2/Hz"
+    np.testing.assert_array_equal(
+        corrected_cache["site_voltage_units"], np.array(("uV", "uV"))
+    )
+    assert linear_psd_contract.units.replace("source-voltage-unit", "uV") == "uV^2/Hz"
+
+    for stable_axis in (
+        "site_ids",
+        "trial_indices",
+        "site_voltage_units",
+        "condition_names",
+        "frequency_hz",
+        "epoch_names",
+        "band_names",
+        "pair_site_a_ids",
+        "pair_site_b_ids",
+    ):
+        np.testing.assert_array_equal(
+            corrected_cache[stable_axis], identity_cache[stable_axis]
+        )
+    np.testing.assert_allclose(
+        corrected_cache["source_trace"],
+        gain_to_uv * identity_cache["source_trace"],
+        rtol=0.0,
+        atol=1e-7,
+    )
+    np.testing.assert_allclose(
+        corrected_cache["band_filtered_trace"],
+        gain_to_uv * identity_cache["band_filtered_trace"],
+        rtol=1e-9,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        corrected_cache["hilbert_phase_rad"],
+        identity_cache["hilbert_phase_rad"],
+        rtol=0.0,
+        atol=1e-10,
+    )
+    for manifest in (identity_manifest, corrected_manifest):
+        schema = manifest["components"]["synchrony"]["array_schema"]
+        assert schema["source_trace"]["units"] == "source-voltage-unit"
+        assert schema["band_filtered_trace"]["units"] == "source-voltage-unit"
+        assert schema["hilbert_phase_rad"]["units"] == "rad"
+        assert schema["itpc"]["units"] == "dimensionless"
+
+    def forbid_raw_reopen(*_: object, **__: object) -> None:
+        """Fail if a cache-backed figure reaches the raw Open Ephys reader."""
+        pytest.fail("cache-backed plot reopened a raw Open Ephys LFP source")
+
+    monkeypatch.setattr(
+        lfp_loading, "read_open_ephys_lfp_channel_window", forbid_raw_reopen
+    )
+    figure, axes = plot_plv_exemplar(
+        corrected_cache["relative_time_s"],
+        corrected_cache["source_trace"][:, 0],
+        corrected_cache["band_filtered_trace"][:, 0, 0],
+        corrected_cache["hilbert_phase_rad"][:, 0, 0],
+        ("PFC", "HPC1"),
+        "PFC-HPC1",
+        0,
+        "reader-derived cache",
+        1.0,
+        1.0,
+        _plot_context(),
+    )
+    assert axes["source"].get_ylabel() == "LFP (uV)"
+    assert axes["filtered"].get_ylabel() == "Bandpassed LFP (uV)"
+    assert axes["phase"].get_ylabel() == "Phase (rad)"
+    plt.close(figure)
+
+    np.testing.assert_allclose(corrected_trials, gain_to_uv * identity_trials, rtol=0.0, atol=1e-7)
+    np.testing.assert_allclose(
+        np.sqrt(np.mean(corrected_trials**2, axis=2)),
+        gain_to_uv * np.sqrt(np.mean(identity_trials**2, axis=2)),
+        rtol=1e-12,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        np.ptp(corrected_trials, axis=2),
+        gain_to_uv * np.ptp(identity_trials, axis=2),
+        rtol=1e-12,
+        atol=0.0,
+    )
+    identity_psd = compute_trial_epoch_psds(
+        identity_trials[0], _TIME_S, _FS_HZ, config.analysis_windows, config.power
+    )
+    corrected_psd = compute_trial_epoch_psds(
+        corrected_trials[0], _TIME_S, _FS_HZ, config.analysis_windows, config.power
+    )
+    identity_reference = compute_session_reference_psd(
+        identity_psd.psd_linear[:, 0], identity_psd.psd_valid[:, 0]
+    )
+    corrected_reference = compute_session_reference_psd(
+        corrected_psd.psd_linear[:, 0], corrected_psd.psd_valid[:, 0]
+    )
+    identity_presession_hz, identity_presession, identity_presession_available = (
+        compute_presession_reference_psd(
+            baseline_time_s,
+            identity_baseline,
+            10.0,
+            _FS_HZ,
+            config.power,
+        )
+    )
+    corrected_presession_hz, corrected_presession, corrected_presession_available = (
+        compute_presession_reference_psd(
+            baseline_time_s,
+            corrected_baseline,
+            10.0,
+            _FS_HZ,
+            config.power,
+        )
+    )
+    identity_band = mean_band_power_linear(
+        identity_psd.psd_linear, identity_psd.frequency_hz, config.power.bands[0]
+    )[0]
+    corrected_band = mean_band_power_linear(
+        corrected_psd.psd_linear, corrected_psd.frequency_hz, config.power.bands[0]
+    )[0]
+
+    np.testing.assert_allclose(
+        corrected_psd.psd_linear,
+        gain_to_uv**2 * identity_psd.psd_linear,
+        rtol=1e-10,
+        atol=1e-16,
+    )
+    np.testing.assert_allclose(
+        corrected_reference,
+        gain_to_uv**2 * identity_reference,
+        rtol=1e-10,
+        atol=1e-16,
+    )
+    np.testing.assert_allclose(
+        corrected_band,
+        gain_to_uv**2 * identity_band,
+        rtol=1e-10,
+        atol=1e-16,
+    )
+    assert identity_presession_available and corrected_presession_available
+    np.testing.assert_array_equal(identity_presession_hz, corrected_presession_hz)
+    np.testing.assert_allclose(
+        corrected_presession,
+        gain_to_uv**2 * identity_presession,
+        rtol=1e-10,
+        atol=1e-16,
+    )
+    np.testing.assert_allclose(
+        normalize_psd_db(corrected_psd.psd_linear, corrected_reference),
+        normalize_psd_db(identity_psd.psd_linear, identity_reference),
+        rtol=0.0,
+        atol=1e-10,
+    )
+    np.testing.assert_allclose(
+        normalize_psd_db(corrected_psd.psd_linear, corrected_presession),
+        normalize_psd_db(identity_psd.psd_linear, identity_presession),
+        rtol=0.0,
+        atol=1e-10,
+    )
+    identity_hilbert = compute_hilbert_phase_trace(
+        _TIME_S, identity_trials[0, 0], _FS_HZ, frequency_band_hz=(6.0, 10.0)
+    )
+    corrected_hilbert = compute_hilbert_phase_trace(
+        _TIME_S, corrected_trials[0, 0], _FS_HZ, frequency_band_hz=(6.0, 10.0)
+    )
+    np.testing.assert_allclose(
+        corrected_hilbert.bandpassed_lfp,
+        gain_to_uv * identity_hilbert.bandpassed_lfp,
+        rtol=1e-9,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        corrected_hilbert.phase_rad,
+        identity_hilbert.phase_rad,
+        rtol=0.0,
+        atol=1e-10,
+    )
+    assert np.array_equal(corrected_hilbert.phase_valid, identity_hilbert.phase_valid)
+
+    def wavelet_phase(trials: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Compute Morlet unit phase from the reader-derived physical-uV trial traces."""
+        site_phase = []
+        site_valid = []
+        output_time_s: np.ndarray | None = None
+        for site_index in range(2):
+            trial_phase = []
+            trial_valid = []
+            for trial_index in range(trial_count):
+                coefficients = lfp_phase_clustering.compute_wavelet_coefficients(
+                    _TIME_S,
+                    trials[site_index, trial_index],
+                    _FS_HZ,
+                    np.array([8.0]),
+                    precision=8,
+                    target_sample_rate_hz=_FS_HZ,
+                )
+                phase, valid = lfp_phase_clustering.normalize_wavelet_phase(coefficients.coefficients)
+                output_time_s = coefficients.time_s
+                trial_phase.append(phase)
+                trial_valid.append(valid)
+            site_phase.append(np.stack(trial_phase, axis=1))
+            site_valid.append(np.stack(trial_valid, axis=1))
+        assert output_time_s is not None
+        return np.stack(site_phase), np.stack(site_valid), output_time_s
+
+    identity_phase, identity_valid, phase_time_s = wavelet_phase(identity_trials)
+    corrected_phase, corrected_valid, corrected_phase_time_s = wavelet_phase(corrected_trials)
+    membership = np.ones((trial_count, 1), dtype=bool)
+    identity_clustering = compute_phase_clustering_summary(
+        identity_phase, identity_valid, ("all",), membership, ((0, 1),)
+    )
+    corrected_clustering = compute_phase_clustering_summary(
+        corrected_phase, corrected_valid, ("all",), membership, ((0, 1),)
+    )
+    identity_relative = np.moveaxis(
+        identity_phase[:1] * np.conjugate(identity_phase[1:]), 1, 2
+    )
+    corrected_relative = np.moveaxis(
+        corrected_phase[:1] * np.conjugate(corrected_phase[1:]), 1, 2
+    )
+    identity_plv = compute_trial_plv_by_frequency(
+        identity_relative,
+        np.moveaxis(identity_valid[:1] & identity_valid[1:], 1, 2),
+        phase_time_s,
+        {"whole": (-2.0, 2.0)},
+    )
+    corrected_plv = compute_trial_plv_by_frequency(
+        corrected_relative,
+        np.moveaxis(corrected_valid[:1] & corrected_valid[1:], 1, 2),
+        corrected_phase_time_s,
+        {"whole": (-2.0, 2.0)},
+    )
+    spike_trains = tuple(np.linspace(-1.8, 1.8, 52) for _ in range(trial_count))
+    identity_schedule = generate_trial_derangement_schedule(trial_count, 3, seed=71)
+    corrected_schedule = generate_trial_derangement_schedule(trial_count, 3, seed=71)
+    identity_ppc = compute_trial_shuffle_ppc(
+        trial_relative_spike_times_s=spike_trains,
+        phase_time_s=phase_time_s,
+        trial_phase_vectors=np.moveaxis(identity_phase[0], 1, 0),
+        frequencies_hz=np.array([8.0]),
+        schedule=identity_schedule,
+    )
+    corrected_ppc = compute_trial_shuffle_ppc(
+        trial_relative_spike_times_s=spike_trains,
+        phase_time_s=corrected_phase_time_s,
+        trial_phase_vectors=np.moveaxis(corrected_phase[0], 1, 0),
+        frequencies_hz=np.array([8.0]),
+        schedule=corrected_schedule,
+    )
+
+    np.testing.assert_array_equal(phase_time_s, corrected_phase_time_s)
+    np.testing.assert_allclose(corrected_phase, identity_phase, rtol=0.0, atol=1e-6)
+    assert np.array_equal(corrected_valid, identity_valid)
+    np.testing.assert_allclose(corrected_clustering.itpc, identity_clustering.itpc, atol=1e-6)
+    np.testing.assert_allclose(corrected_clustering.ispc, identity_clustering.ispc, atol=1e-6)
+    np.testing.assert_allclose(corrected_plv.plv_by_frequency, identity_plv.plv_by_frequency, atol=1e-6)
+    np.testing.assert_array_equal(corrected_ppc.spike_count, identity_ppc.spike_count)
+    np.testing.assert_array_equal(corrected_ppc.schedule, identity_ppc.schedule)
+    np.testing.assert_allclose(corrected_ppc.observed_ppc, identity_ppc.observed_ppc, atol=1e-6)
+    for null_count_name in (
+        "null_exceedance_count",
+        "permutation_count",
+        "eligible_trial_count",
+    ):
+        np.testing.assert_array_equal(
+            getattr(corrected_ppc.null_summary, null_count_name),
+            getattr(identity_ppc.null_summary, null_count_name),
+        )
+    for null_float_name in (
+        "p_value",
+        "null_mean",
+        "null_std",
+        "null_p025",
+        "null_p50",
+        "null_p975",
+    ):
+        np.testing.assert_allclose(
+            getattr(corrected_ppc.null_summary, null_float_name),
+            getattr(identity_ppc.null_summary, null_float_name),
+            rtol=0.0,
+            atol=1e-6,
+            equal_nan=True,
+        )
+    for null_boolean_name in ("null_eligible", "significant"):
+        np.testing.assert_array_equal(
+            getattr(corrected_ppc.null_summary, null_boolean_name),
+            getattr(identity_ppc.null_summary, null_boolean_name),
+        )
+    assert identity_metadata["lfp_binary_scaling"]["physical_unit_by_channel"] == ["uV", "uV"]
+    assert corrected_metadata["lfp_binary_scaling"]["physical_unit_by_channel"] == ["uV", "uV"]
+
+
 def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
     tmp_path: Path,
 ) -> None:
@@ -324,6 +856,16 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
     sliced only from the loaded arrays for every plotting API.
     """
     config = _synthetic_configuration(tmp_path)
+    assert {
+        "itpc_bootstrap_q25",
+        "itpc_bootstrap_median",
+        "itpc_bootstrap_q75",
+        "itpc_band_trial_count",
+        "ispc_bootstrap_q25",
+        "ispc_bootstrap_median",
+        "ispc_bootstrap_q75",
+        "ispc_band_trial_count",
+    }.issubset(COMPONENT_ARRAY_SCHEMAS["synchrony"])
     trial_df, traces = _synthetic_trials_and_traces()
     prepared = build_prepared_trials(
         trial_df,
@@ -581,13 +1123,27 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
         ispc=clustering.ispc,
         ispc_phase_offset_rad=clustering.ispc_phase_offset_rad,
         ispc_effective_trial_count=clustering.ispc_effective_trial_count,
-        itpc_band_mean=np.full((3, 2, 3, 2), np.nan),
-        itpc_ci_low=np.full((3, 2, 3, 2), np.nan),
-        itpc_ci_high=np.full((3, 2, 3, 2), np.nan),
+        itpc_band_mean=np.full((3, 2, 3, 2), 0.72),
+        itpc_ci_low=np.full((3, 2, 3, 2), 0.60),
+        itpc_ci_high=np.full((3, 2, 3, 2), 0.80),
+        itpc_bootstrap_q25=np.full((3, 2, 3, 2), 0.65),
+        itpc_bootstrap_median=np.full((3, 2, 3, 2), 0.70),
+        itpc_bootstrap_q75=np.full((3, 2, 3, 2), 0.75),
+        itpc_band_trial_count=np.broadcast_to(
+            np.array((2, 1, 4), dtype=np.int64)[:, None, None, None],
+            (3, 2, 3, 2),
+        ).copy(),
         itpc_unstable=np.ones((3, 2, 3, 2), dtype=bool),
-        ispc_band_mean=np.full((3, 1, 3, 2), np.nan),
-        ispc_ci_low=np.full((3, 1, 3, 2), np.nan),
-        ispc_ci_high=np.full((3, 1, 3, 2), np.nan),
+        ispc_band_mean=np.full((3, 1, 3, 2), 0.42),
+        ispc_ci_low=np.full((3, 1, 3, 2), 0.30),
+        ispc_ci_high=np.full((3, 1, 3, 2), 0.50),
+        ispc_bootstrap_q25=np.full((3, 1, 3, 2), 0.35),
+        ispc_bootstrap_median=np.full((3, 1, 3, 2), 0.40),
+        ispc_bootstrap_q75=np.full((3, 1, 3, 2), 0.45),
+        ispc_band_trial_count=np.broadcast_to(
+            np.array((2, 1, 4), dtype=np.int64)[:, None, None, None],
+            (3, 1, 3, 2),
+        ).copy(),
         ispc_unstable=np.ones((3, 1, 3, 2), dtype=bool),
         plv_by_frequency=np.moveaxis(plv.plv_by_frequency, (0, 1), (1, 0)),
         plv_phase_offset_rad=np.moveaxis(plv.plv_phase_offset_rad, (0, 1), (1, 0)),
@@ -695,6 +1251,26 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
         np.array_equal(loaded[name]["filter_membership"], filter_membership)
         for name in loaded
     )
+    np.testing.assert_array_equal(
+        loaded["synchrony"]["itpc_band_trial_count"][:, 0, 0, 0],
+        np.array((2, 1, 4), dtype=np.int64),
+    )
+    np.testing.assert_array_equal(
+        loaded["synchrony"]["ispc_band_trial_count"][:, 0, 0, 0],
+        np.array((2, 1, 4), dtype=np.int64),
+    )
+    np.testing.assert_allclose(
+        loaded["synchrony"]["itpc_bootstrap_median"],
+        0.70,
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        loaded["synchrony"]["ispc_bootstrap_median"],
+        0.40,
+        rtol=0.0,
+        atol=0.0,
+    )
 
     context = _plot_context()
     figures = [
@@ -732,15 +1308,42 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
             total_displayed_trial_count=int(condition_membership[:, 0].sum()),
         ),
         plot_phase_band_summary(
-            np.array((0.9, 0.8)),
-            np.array((0.8, 0.7)),
-            np.array((1.0, 0.9)),
-            np.array((2, 2)),
-            ("PFC", "PFC-HPC1"),
-            "theta",
-            "whole",
-            "ITPC/ISPC",
-            context,
+            observed_estimates=loaded["synchrony"]["itpc_band_mean"][:, 0, 0, 0],
+            bootstrap_quantiles=np.vstack(
+                (
+                    loaded["synchrony"]["itpc_ci_low"][:, 0, 0, 0],
+                    loaded["synchrony"]["itpc_bootstrap_q25"][:, 0, 0, 0],
+                    loaded["synchrony"]["itpc_bootstrap_median"][:, 0, 0, 0],
+                    loaded["synchrony"]["itpc_bootstrap_q75"][:, 0, 0, 0],
+                    loaded["synchrony"]["itpc_ci_high"][:, 0, 0, 0],
+                )
+            ),
+            selected_trial_counts=loaded["synchrony"]["itpc_band_trial_count"][:, 0, 0, 0],
+            labels=_CONDITION_NAMES,
+            band_name="theta",
+            epoch_name="whole",
+            metric_name="ITPC PFC",
+            bootstrap_count=config.phase.bootstrap_count,
+            context=context,
+        ),
+        plot_phase_band_summary(
+            observed_estimates=loaded["synchrony"]["ispc_band_mean"][:, 0, 0, 0],
+            bootstrap_quantiles=np.vstack(
+                (
+                    loaded["synchrony"]["ispc_ci_low"][:, 0, 0, 0],
+                    loaded["synchrony"]["ispc_bootstrap_q25"][:, 0, 0, 0],
+                    loaded["synchrony"]["ispc_bootstrap_median"][:, 0, 0, 0],
+                    loaded["synchrony"]["ispc_bootstrap_q75"][:, 0, 0, 0],
+                    loaded["synchrony"]["ispc_ci_high"][:, 0, 0, 0],
+                )
+            ),
+            selected_trial_counts=loaded["synchrony"]["ispc_band_trial_count"][:, 0, 0, 0],
+            labels=_CONDITION_NAMES,
+            band_name="theta",
+            epoch_name="whole",
+            metric_name="ISPC PFC-HPC1",
+            bootstrap_count=config.phase.bootstrap_count,
+            context=context,
         ),
         plot_plv_distribution(
             loaded["synchrony"]["plv_band_mean"][:, 0, :, 0],
@@ -822,6 +1425,89 @@ def test_seeded_synthetic_lfp_summary_pipeline_cache_and_plotting(
     ]
     for figure, _ in figures:
         plt.close(figure)
+
+    report_calls: list[dict[str, object]] = []
+
+    def cache_figure(*_: object, **__: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Return a disposable report figure without numerical recomputation."""
+        return plt.figure(), {}
+
+    def cache_band_summary(*args: object, **kwargs: object) -> tuple[plt.Figure, dict[str, object]]:
+        """Capture cache-only phase-summary inputs for both metric families."""
+        assert args == ()
+        report_calls.append(kwargs)
+        return plt.figure(), {}
+
+    def save_marker(figure: plt.Figure, path: Path) -> None:
+        """Record a report PNG path without rendering data outside pytest storage."""
+        del figure
+        path.write_bytes(b"png")
+
+    report_dependencies = SynchronyValidationDependencies(
+        pipeline_dependencies=object(),
+        compute_synchrony_component=lambda *_: (_ for _ in ()).throw(
+            AssertionError("cached report must not compute Synchrony")
+        ),
+        load_manifest=lambda directory, active_config: load_or_initialize_manifest(
+            directory, active_config
+        ),
+        assess_component_status=assess_component_status,
+        load_synchrony_arrays=lambda directory, manifest: load_component_arrays(
+            directory / "synchrony.npz", manifest, "synchrony"
+        ),
+        plot_phase_map=cache_figure,
+        plot_phase_band_summary=cache_band_summary,
+        plot_plv_distribution=cache_figure,
+        plot_plv_exemplar=cache_figure,
+        save_png=save_marker,
+        close_figure=plt.close,
+        now_utc=lambda: "2026-09-23T00-00-00Z",
+        monotonic_seconds=lambda: 1.0,
+        peak_memory_bytes=lambda: 0,
+        source_identifiers=lambda _: {"fixture": "seeded"},
+    )
+    report = render_cached_synchrony_validation(
+        config,
+        tmp_path / "cache_only_report",
+        report_dependencies,
+        synchrony_wall_time_s=1.0,
+        synchrony_peak_memory_bytes=0,
+    )
+
+    assert report.component == "synchrony"
+    assert len(report_calls) == 18
+    for kwargs in report_calls:
+        metric_prefix, entity_label = str(kwargs["metric_name"]).split(maxsplit=1)
+        epoch_index = _EPOCH_NAMES.index(str(kwargs["epoch_name"]))
+        band_index = _BAND_NAMES.index(str(kwargs["band_name"]))
+        if metric_prefix == "ITPC":
+            entity_index = ("PFC", "HPC1").index(entity_label)
+            array_prefix = "itpc"
+        else:
+            entity_index = ("PFC-HPC1",).index(entity_label)
+            array_prefix = "ispc"
+        np.testing.assert_array_equal(
+            kwargs["observed_estimates"],
+            loaded["synchrony"][f"{array_prefix}_band_mean"][:, entity_index, epoch_index, band_index],
+        )
+        np.testing.assert_array_equal(
+            kwargs["bootstrap_quantiles"],
+            np.vstack(
+                (
+                    loaded["synchrony"][f"{array_prefix}_ci_low"][:, entity_index, epoch_index, band_index],
+                    loaded["synchrony"][f"{array_prefix}_bootstrap_q25"][:, entity_index, epoch_index, band_index],
+                    loaded["synchrony"][f"{array_prefix}_bootstrap_median"][:, entity_index, epoch_index, band_index],
+                    loaded["synchrony"][f"{array_prefix}_bootstrap_q75"][:, entity_index, epoch_index, band_index],
+                    loaded["synchrony"][f"{array_prefix}_ci_high"][:, entity_index, epoch_index, band_index],
+                )
+            ),
+        )
+        np.testing.assert_array_equal(
+            kwargs["selected_trial_counts"],
+            loaded["synchrony"][f"{array_prefix}_band_trial_count"][:, entity_index, epoch_index, band_index],
+        )
+        assert kwargs["labels"] == _CONDITION_NAMES
+        assert kwargs["bootstrap_count"] == config.phase.bootstrap_count
 
 
 def test_seeded_synthetic_spike_payload_uses_production_grouped_path_cache_reload_and_plot(

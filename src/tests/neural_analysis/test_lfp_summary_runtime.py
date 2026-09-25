@@ -4,16 +4,20 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from src.neural_analysis import (
+    lfp_loading,
+    lfp_phase_clustering,
     lfp_summary_pipeline,
     lfp_summary_ppc_kernel,
     lfp_summary_ppc_runtime,
     lfp_summary_runtime,
+    lfp_summary_work_cache,
     spike_lfp_summary,
 )
 from src.neural_analysis.lfp_summary_io import (
@@ -83,6 +87,418 @@ def _config(output_directory: Path):
         site_pairs=(),
         power=PowerAnalysisConfig(notch_enabled=False),
     )
+
+
+def _observed_open_ephys_metadata(sample_rate_hz: float) -> dict[str, object]:
+    """Return complete normalized one-channel physical-uV metadata for runtime seams."""
+    return {
+        "output_binary": "lfp.dat",
+        "sampling_frequency_hz": sample_rate_hz,
+        "num_channels": 1,
+        "num_segments": 1,
+        "num_samples_by_segment": [3],
+        "dtype": "float32",
+        "binary_layout": "time_major_channel_interleaved",
+        "channel_ids_in_binary_order": ["CH0"],
+        "lfp_binary_scaling": {
+            "data_units": "unscaled_binary_values",
+            "has_scaleable_traces": True,
+            "channel_ids": ["CH0"],
+            "gain_to_uV_by_channel": [0.195],
+            "offset_to_uV_by_channel": [0.0],
+            "physical_unit_by_channel": ["uV"],
+            "export_scale_factor": 1.0,
+            "conversion": "trace_uV = trace_value * gain_to_uV + offset_to_uV",
+        },
+    }
+
+
+def test_production_continuous_open_ephys_block_preserves_physical_uv_and_grid(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Continuous phase blocks retain the reader's physical-uV values on its exact grid."""
+    lfp_path = tmp_path / "lfp.dat"
+    sync_path = tmp_path / "sync.npz"
+    sync_path.touch()
+    site = LFPSiteConfig(
+        "PFC", "PFC", "open_ephys", lfp_path, sync_path, "PFC", 0, "uV", 10.0
+    )
+    relative_time_s = np.array([0.0, 0.1, 0.2])
+    physical_uv = np.array([1.95, 3.9, 5.85])
+    reader_calls: list[tuple[Path, int, int, int]] = []
+
+    monkeypatch.setattr(
+        lfp_loading,
+        "load_open_ephys_lfp_metadata",
+        lambda _: _observed_open_ephys_metadata(10.0),
+    )
+    monkeypatch.setattr(
+        lfp_loading,
+        "build_open_ephys_lfp_irig_df",
+        lambda *_: pd.DataFrame({"sample_ix": [0], "utc_unix": [100.0]}),
+    )
+    monkeypatch.setattr(
+        lfp_loading,
+        "map_lfp_time_window_to_samples",
+        lambda *_args, **_kwargs: (relative_time_s, 2, 5),
+    )
+
+    def physical_reader(
+        lfp_path: Path,
+        saved_channel_index: int,
+        start_sample: int,
+        stop_sample: int,
+    ) -> tuple[np.ndarray, float]:
+        """Return the already affine-converted selected physical-uV window once."""
+        reader_calls.append((lfp_path, saved_channel_index, start_sample, stop_sample))
+        return physical_uv, 10.0
+
+    monkeypatch.setattr(lfp_loading, "read_open_ephys_lfp_channel_window", physical_reader)
+    loader = lfp_summary_runtime._production_phase_block_loader_factory(site)
+    absolute_time_s, values_uv, sample_rate_hz = loader(100.0, 100.3)
+
+    np.testing.assert_array_equal(absolute_time_s, 100.0 + relative_time_s)
+    np.testing.assert_array_equal(values_uv, physical_uv)
+    assert sample_rate_hz == 10.0
+    assert reader_calls == [(lfp_path, 0, 2, 5)]
+
+
+@pytest.mark.parametrize(
+    ("configured_rate_hz", "configured_unit", "expected_message"),
+    (
+        (
+            12.5,
+            "uV",
+            "Open Ephys site PFC: configured sample_rate_hz=12.5 does not match authoritative sample_rate_hz=10.0",
+        ),
+        (
+            10.0,
+            "mV",
+            "Open Ephys site PFC: configured voltage_unit=mV does not match authoritative voltage_unit=uV",
+        ),
+    ),
+)
+def test_continuous_open_ephys_route_rejects_configured_metadata_mismatch_before_io(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    configured_rate_hz: float,
+    configured_unit: str,
+    expected_message: str,
+) -> None:
+    """Continuous production loading validates site rate/unit before sync, reads, or cache work."""
+    lfp_path = tmp_path / "lfp.dat"
+    sync_path = tmp_path / "sync.npz"
+    sync_path.touch()
+    site = LFPSiteConfig(
+        "PFC", "PFC", "open_ephys", lfp_path, sync_path, "PFC", 0,
+        configured_unit, configured_rate_hz,
+    )
+    io_calls: list[str] = []
+    monkeypatch.setattr(
+        lfp_loading,
+        "load_open_ephys_lfp_metadata",
+        lambda _: _observed_open_ephys_metadata(10.0),
+    )
+
+    def forbidden_io(*_: object, **__: object) -> object:
+        """Fail if mismatch handling reaches any sync or numerical source operation."""
+        io_calls.append("io")
+        raise AssertionError("Open Ephys mismatch reached numerical I/O")
+
+    monkeypatch.setattr(lfp_loading, "build_open_ephys_lfp_irig_df", forbidden_io)
+
+    with pytest.raises(ValueError) as error:
+        lfp_summary_runtime._production_phase_block_loader_factory(site)
+
+    assert str(error.value) == expected_message
+    assert io_calls == []
+
+
+@pytest.mark.parametrize("bad_sync_kind", ("none", "missing", "directory"))
+def test_later_open_ephys_unusable_sync_blocks_phase_cache_and_earlier_production_io(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    bad_sync_kind: str,
+) -> None:
+    """Phase setup preflights all sites before warm-cache lookup or earlier I/O.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces production metadata, work-cache lookup, and earlier SpikeGLX
+        sync decoding with explicit unreachable seams.
+    tmp_path : pathlib.Path
+        Pytest-owned final/work paths and invalid later sync-path variants.
+    bad_sync_kind : str
+        ``"none"``, ``"missing"``, or ``"directory"`` invalid later-site
+        Open Ephys aligned-sync selection.
+    """
+    sync_path: Path | None
+    if bad_sync_kind == "none":
+        sync_path = None
+    elif bad_sync_kind == "missing":
+        sync_path = tmp_path / "missing_sync.npz"
+    else:
+        sync_path = tmp_path / "sync_directory"
+        sync_path.mkdir()
+    base = _config(tmp_path / "final")
+    earlier_site = base.sites[0]
+    later_site = LFPSiteConfig(
+        "LATE", "LATE", "open_ephys", tmp_path / "later.dat", sync_path,
+        "LATE", 0, "uV", 2500.0,
+    )
+    config = replace(
+        base,
+        sites=(earlier_site, later_site),
+        site_pairs=((earlier_site.stable_id, later_site.stable_id),),
+        ppc_execution=replace(base.ppc_execution, prepared_phase_cache_enabled=True),
+    )
+    cache_calls: list[object] = []
+    numerical_calls: list[str] = []
+    monkeypatch.setattr(
+        lfp_loading,
+        "load_open_ephys_lfp_metadata",
+        lambda _: _observed_open_ephys_metadata(2500.0),
+    )
+
+    def forbidden_cache_lookup(*args: object, **kwargs: object) -> object:
+        """Record any warm-cache lookup that should follow OE preflight only."""
+        del args, kwargs
+        cache_calls.append(object())
+        raise AssertionError("later Open Ephys sync validation reached prepared-work cache lookup")
+
+    def forbidden_earlier_decode(*args: object, **kwargs: object) -> tuple[pd.DataFrame, float]:
+        """Record any earlier numerical sync read that should remain unreachable."""
+        del args, kwargs
+        numerical_calls.append("decode")
+        raise AssertionError("later Open Ephys sync validation reached earlier sync decoding")
+
+    monkeypatch.setattr(lfp_summary_runtime, "load_prepared_phase_cache", forbidden_cache_lookup)
+    monkeypatch.setattr(lfp_loading, "decode_lfp_sync", forbidden_earlier_decode)
+
+    def forbidden_later_open_ephys_sync(*args: object, **kwargs: object) -> pd.DataFrame:
+        """Fail if structural preflight tries to parse the later invalid sync source."""
+        del args, kwargs
+        raise AssertionError("later Open Ephys sync parsing must not run before structural preflight")
+
+    monkeypatch.setattr(
+        lfp_loading,
+        "build_open_ephys_lfp_irig_df",
+        forbidden_later_open_ephys_sync,
+    )
+
+    with pytest.raises(ValueError) as error:
+        lfp_summary_runtime.prepare_phase_run(
+            config,
+            lambda _: _trial_table(),
+            work_cache_root=tmp_path / "work",
+        )
+    message = str(error.value)
+    assert "LATE" in message
+    assert "aligned_sync_path" in message
+    assert "regular file" in message
+    assert cache_calls == []
+    assert numerical_calls == []
+
+
+def test_fully_injected_phase_and_open_ephys_seams_do_not_require_production_sync_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Injected phase/trace seams remain usable with deliberately unreadable OE sync paths.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fails the production metadata reader if an injected seam accidentally
+        invokes production Open Ephys path handling.
+    tmp_path : pathlib.Path
+        Pytest-owned path used as a deliberately non-file synchronized source.
+    """
+    unusable_sync_path = tmp_path / "not_a_sync_file"
+    unusable_sync_path.mkdir()
+    base = _config(tmp_path / "final")
+    site_a = LFPSiteConfig(
+        "EARLY", "EARLY", "open_ephys", tmp_path / "early.dat", unusable_sync_path,
+        "EARLY", 0, "uV", 2500.0,
+    )
+    site_b = LFPSiteConfig(
+        "LATE", "LATE", "open_ephys", tmp_path / "late.dat", unusable_sync_path,
+        "LATE", 0, "uV", 2500.0,
+    )
+    config = replace(
+        base,
+        sites=(site_a, site_b),
+        site_pairs=((site_a.stable_id, site_b.stable_id),),
+    )
+    monkeypatch.setattr(
+        lfp_loading,
+        "load_open_ephys_lfp_metadata",
+        lambda _: pytest.fail("fully injected phase path parsed production Open Ephys metadata"),
+    )
+    factory_sites: list[str] = []
+
+    def injected_block_loader_factory(
+        site: LFPSiteConfig,
+    ) -> Callable[[float, float], tuple[np.ndarray, np.ndarray, float]]:
+        """Return an unused absolute-time physical-uV source-block seam.
+
+        Parameters
+        ----------
+        site : LFPSiteConfig
+            Configured source whose stable ID is recorded for factory-order
+            assertions.
+
+        Returns
+        -------
+        Callable[[float, float], tuple[numpy.ndarray, numpy.ndarray, float]]
+            Loader accepting absolute half-open ``(start_s, stop_s)`` seconds
+            and returning one-dimensional absolute seconds, one-dimensional
+            physical-uV voltage, and the source sample rate in Hz. The injected
+            phase builder must not invoke this deliberately unreachable seam.
+        """
+        factory_sites.append(site.stable_id)
+
+        def unreachable_block_loader(
+            start_s: float,
+            stop_s: float,
+        ) -> tuple[np.ndarray, np.ndarray, float]:
+            """Fail if the injected phase builder unexpectedly requests a source block."""
+            del start_s, stop_s
+            pytest.fail("injected phase builder unexpectedly read a source block")
+
+        return unreachable_block_loader
+
+    def injected_phase_builder(**kwargs: object) -> lfp_phase_clustering.PhaseTrialTensor:
+        """Return a valid unit-phase tensor on the requested trial/frequency/time axes."""
+        event_times_s = np.asarray(kwargs["event_times_s"], dtype=float)
+        trial_indices = np.asarray(kwargs["trial_indices"], dtype=np.int64)
+        frequencies_hz = np.asarray(kwargs["frequencies_hz"], dtype=float)
+        window = kwargs["window"]
+        assert isinstance(window, tuple)
+        output_rate_hz = float(kwargs["output_sample_rate_hz"])
+        relative_time_s = build_common_event_grid(window[0], window[1], output_rate_hz)
+        phase = np.ones(
+            (1, frequencies_hz.size, event_times_s.size, relative_time_s.size),
+            dtype=np.complex64,
+        )
+        return lfp_phase_clustering.PhaseTrialTensor(
+            phase=phase,
+            valid=np.ones_like(phase, dtype=bool),
+            relative_time_s=relative_time_s,
+            trial_indices=trial_indices,
+            excluded_trial_indices=np.empty(0, dtype=np.int64),
+        )
+
+    def injected_open_ephys_loader(**kwargs: object) -> tuple[np.ndarray, np.ndarray, float]:
+        """Return a nonconstant physical-uV native trace on each requested window."""
+        start_s, stop_s = kwargs["window"]
+        time_s = np.arange(float(start_s), float(stop_s), 1.0 / 2500.0)
+        return time_s, 1.0 + np.sin(2.0 * np.pi * 8.0 * time_s), 2500.0
+
+    prepared = lfp_summary_runtime.prepare_phase_run(
+        config,
+        lambda _: _trial_table(),
+        site_phase_tensor_builder=injected_phase_builder,
+        block_loader_factory=injected_block_loader_factory,
+        open_ephys_loader=injected_open_ephys_loader,
+    )
+
+    assert factory_sites == ["EARLY", "LATE"]
+    assert prepared.source_trace.shape[:2] == (2, 3)
+
+
+def test_prepared_phase_producer_identity_rejects_a_legacy_open_ephys_source_record(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The actual prepared-phase producer derives distinct work identities before reader reuse."""
+    base = _config(tmp_path / "final")
+    open_ephys_site = replace(
+        base.sites[0],
+        acquisition_format="open_ephys",
+        lfp_path=tmp_path / "lfp.dat",
+        aligned_sync_path=tmp_path / "sync.npz",
+        voltage_unit="uV",
+    )
+    config = replace(base, sites=(open_ephys_site,))
+    trial_indices = np.array([7], dtype=np.int64)
+    alignment_times_s = np.array([100.0])
+    source_path = str(open_ephys_site.lfp_path.resolve())
+    sidecar_path = str((tmp_path / "lfp_preprocessing.json").resolve())
+    shared_sidecar = {
+        "path": sidecar_path,
+        "size_bytes": 101,
+        "mtime_ns": 2,
+        "sha256": "a" * 64,
+    }
+    legacy_sources = {
+        source_path: {
+            "path": source_path,
+            "size_bytes": 4,
+            "mtime_ns": 1,
+            "value_semantics": "legacy-unscaled",
+        },
+        sidecar_path: shared_sidecar,
+    }
+    corrected_sources = {
+        **legacy_sources,
+        source_path: {
+            **legacy_sources[source_path],
+            "value_semantics": "open_ephys_affine_uV_v1",
+        },
+    }
+    monkeypatch.setattr(
+        lfp_summary_runtime,
+        "fingerprint_source_files",
+        lambda *_args, **_kwargs: legacy_sources,
+    )
+    legacy_metadata = lfp_summary_runtime._prepared_phase_work_metadata(
+        config, trial_indices, alignment_times_s
+    )
+    monkeypatch.setattr(
+        lfp_summary_runtime,
+        "fingerprint_source_files",
+        lambda *_args, **_kwargs: corrected_sources,
+    )
+    corrected_metadata = lfp_summary_runtime._prepared_phase_work_metadata(
+        config, trial_indices, alignment_times_s
+    )
+    phase_shape = tuple(legacy_metadata["shapes"]["phase"])
+    phase = np.ones(phase_shape, dtype=np.complex64)
+    valid = np.ones(phase_shape, dtype=bool)
+    axes = {
+        "site_ids": np.array(["PFC"], dtype="<U64"),
+        "frequency_hz": np.asarray(config.phase.frequency_hz, dtype=float),
+        "trial_indices": trial_indices,
+        "relative_time_s": build_common_event_grid(
+            config.analysis_windows.whole_start_s,
+            config.analysis_windows.whole_stop_s,
+            config.phase.output_rate_hz,
+        ),
+        "site_trial_valid": np.ones((1, 1), dtype=bool),
+        "site_trial_exclusion_reason": np.array([[""]], dtype="<U32"),
+    }
+
+    assert legacy_metadata["source_fingerprint"] != corrected_metadata["source_fingerprint"]
+    assert legacy_metadata["representation_fingerprint"] != corrected_metadata["representation_fingerprint"]
+    assert legacy_sources[sidecar_path] == corrected_sources[sidecar_path]
+    assert {
+        key: value
+        for key, value in legacy_sources[source_path].items()
+        if key != "value_semantics"
+    } == {
+        key: value
+        for key, value in corrected_sources[source_path].items()
+        if key != "value_semantics"
+    }
+    lfp_summary_work_cache.write_prepared_phase_cache(
+        tmp_path / "work", legacy_metadata, phase, valid, axes
+    )
+    assert lfp_summary_work_cache.load_prepared_phase_cache(
+        tmp_path / "work", corrected_metadata
+    ) is None
 
 
 def _trial_table() -> pd.DataFrame:

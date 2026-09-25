@@ -8,6 +8,7 @@ decimation, and stores only the documented 500-Hz inspection traces in payloads.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -67,6 +68,8 @@ from src.neural_analysis.lfp_summary_preparation import (
     build_prepared_trials,
     build_trial_relative_spike_trains,
     load_site_trial_traces,
+    preflight_open_ephys_site_metadata,
+    validate_open_ephys_aligned_sync_path,
 )
 from src.neural_analysis.lfp_synchrony_summary import (
     aggregate_trial_plv_bands,
@@ -399,6 +402,11 @@ def prepare_power_run(
         when the full configured interval immediately before the first
         ``start_time`` loads on the exact expected grid.
     """
+    normalized_open_ephys_metadata = (
+        preflight_open_ephys_site_metadata(config.sites)
+        if open_ephys_loader is None
+        else {}
+    )
     trial_table = trial_table_loader(config)
     if not isinstance(trial_table, pd.DataFrame):
         raise ValueError("trial_table_loader must return a pandas DataFrame")
@@ -411,6 +419,7 @@ def prepare_power_run(
         (config.analysis_windows.whole_start_s, config.analysis_windows.whole_stop_s),
         spikeglx_loader=spikeglx_loader,
         open_ephys_loader=open_ephys_loader,
+        open_ephys_metadata_by_site=normalized_open_ephys_metadata,
     )
     prepared_trials = build_prepared_trials(
         trial_table,
@@ -424,6 +433,7 @@ def prepare_power_run(
         first_start_time_s,
         spikeglx_loader,
         open_ephys_loader,
+        normalized_open_ephys_metadata,
     )
     return PreparedPowerRun(
         trial_indices=trial_indices,
@@ -489,6 +499,16 @@ def prepare_phase_run(
         If the trial table, configured sites/pairs, transform axes, or common
         phase/source time grids are invalid.
     """
+    # Preflight before the work-cache read so an invalid production sidecar
+    # cannot be hidden behind a warm phase tensor.
+    production_open_ephys_metadata_needed = (
+        block_loader_factory is None or open_ephys_loader is None
+    )
+    normalized_open_ephys_metadata = (
+        preflight_open_ephys_site_metadata(config.sites)
+        if production_open_ephys_metadata_needed
+        else {}
+    )
     trial_table = trial_table_loader(config)
     if not isinstance(trial_table, pd.DataFrame):
         raise ValueError("trial_table_loader must return a pandas DataFrame")
@@ -502,7 +522,14 @@ def prepare_phase_run(
     transform_positions = np.flatnonzero(preliminary_trials.objective_valid)
     if not transform_positions.size:
         raise ValueError("phase preparation requires at least one finite alignment")
-    factory = block_loader_factory or _production_phase_block_loader_factory
+    factory = (
+        partial(
+            _preflighted_production_phase_block_loader_factory,
+            normalized_open_ephys_metadata_by_site=normalized_open_ephys_metadata,
+        )
+        if block_loader_factory is None
+        else block_loader_factory
+    )
     frequency_hz = np.asarray(config.phase.frequency_hz, dtype=float)
     whole_window = (
         config.analysis_windows.whole_start_s,
@@ -607,6 +634,7 @@ def prepare_phase_run(
         whole_window,
         spikeglx_loader=spikeglx_loader,
         open_ephys_loader=open_ephys_loader,
+        open_ephys_metadata_by_site=normalized_open_ephys_metadata,
     )
     source_time_s, source_trace = _cached_prepared_source_traces(
         config,
@@ -841,14 +869,22 @@ def build_synchrony_payload(
         np.nan,
     )
     itpc_low = itpc_band.copy()
+    itpc_q25 = itpc_band.copy()
+    itpc_median = itpc_band.copy()
+    itpc_q75 = itpc_band.copy()
     itpc_high = itpc_band.copy()
+    itpc_selected_count = np.zeros(itpc_band.shape, dtype=np.int32)
     itpc_unstable = np.ones(itpc_band.shape, dtype=bool)
     ispc_band = np.full(
         (condition_count, pair_count, epoch_count, band_count),
         np.nan,
     )
     ispc_low = ispc_band.copy()
+    ispc_q25 = ispc_band.copy()
+    ispc_median = ispc_band.copy()
+    ispc_q75 = ispc_band.copy()
     ispc_high = ispc_band.copy()
+    ispc_selected_count = np.zeros(ispc_band.shape, dtype=np.int32)
     ispc_unstable = np.ones(ispc_band.shape, dtype=bool)
     for condition_index in range(condition_count):
         condition_mask = condition_membership[:, condition_index]
@@ -867,7 +903,11 @@ def build_synchrony_payload(
             )
             itpc_band[condition_index, site_index] = summary.estimate
             itpc_low[condition_index, site_index] = summary.ci_low
+            itpc_q25[condition_index, site_index] = summary.q25
+            itpc_median[condition_index, site_index] = summary.median
+            itpc_q75[condition_index, site_index] = summary.q75
             itpc_high[condition_index, site_index] = summary.ci_high
+            itpc_selected_count[condition_index, site_index] = summary.selected_trial_count
             itpc_unstable[condition_index, site_index] = summary.unstable
 
     plv_shape = (
@@ -919,7 +959,11 @@ def build_synchrony_payload(
             )
             ispc_band[condition_index, pair_index] = summary.estimate
             ispc_low[condition_index, pair_index] = summary.ci_low
+            ispc_q25[condition_index, pair_index] = summary.q25
+            ispc_median[condition_index, pair_index] = summary.median
+            ispc_q75[condition_index, pair_index] = summary.q75
             ispc_high[condition_index, pair_index] = summary.ci_high
+            ispc_selected_count[condition_index, pair_index] = summary.selected_trial_count
             ispc_unstable[condition_index, pair_index] = summary.unstable
     filtered_trace, hilbert_phase_rad = _band_hilbert_traces(config, prepared)
     arrays = {
@@ -962,11 +1006,19 @@ def build_synchrony_payload(
         "ispc_effective_trial_count": clustering.ispc_effective_trial_count,
         "itpc_band_mean": itpc_band,
         "itpc_ci_low": itpc_low,
+        "itpc_bootstrap_q25": itpc_q25,
+        "itpc_bootstrap_median": itpc_median,
+        "itpc_bootstrap_q75": itpc_q75,
         "itpc_ci_high": itpc_high,
+        "itpc_band_trial_count": itpc_selected_count,
         "itpc_unstable": itpc_unstable,
         "ispc_band_mean": ispc_band,
         "ispc_ci_low": ispc_low,
+        "ispc_bootstrap_q25": ispc_q25,
+        "ispc_bootstrap_median": ispc_median,
+        "ispc_bootstrap_q75": ispc_q75,
         "ispc_ci_high": ispc_high,
+        "ispc_band_trial_count": ispc_selected_count,
         "ispc_unstable": ispc_unstable,
         "plv_by_frequency": plv_by_frequency,
         "plv_phase_offset_rad": plv_offset,
@@ -1809,6 +1861,7 @@ def _cached_prepared_source_traces(
 
 def _production_phase_block_loader_factory(
     site: LFPSiteConfig,
+    normalized_open_ephys_metadata: dict[str, object] | None = None,
 ) -> Callable[[float, float], tuple[np.ndarray, np.ndarray, float]]:
     """Bind one configured site's production continuous absolute-time loader.
 
@@ -1816,18 +1869,41 @@ def _production_phase_block_loader_factory(
     ----------
     site : LFPSiteConfig
         Saved LFP channel, acquisition format, sync path, and source units.
+    normalized_open_ephys_metadata : dict[str, object] or None, optional
+        Preflighted normalized Open Ephys sidecar for ``site``. It contains no
+        trace samples and avoids metadata reparsing during phase preparation.
+        ``None`` preserves the direct production-factory behavior.
 
     Returns
     -------
     Callable
         Loader accepting absolute start/stop seconds and returning matching
         absolute seconds, source-voltage samples, and native rate in Hz.
+
+    Raises
+    ------
+    ValueError
+        If the source configuration, normalized Open Ephys metadata,
+        saved-channel bounds, rate, or physical unit is invalid before sync or
+        binary-trace numerical I/O begins.
     """
     if site.acquisition_format == "open_ephys":
-        if site.aligned_sync_path is None:
-            raise ValueError("Open Ephys phase loading requires aligned_sync_path")
-        metadata = lfp_loading.load_open_ephys_lfp_metadata(site.lfp_path)
+        validate_open_ephys_aligned_sync_path(site)
+        metadata = (
+            normalized_open_ephys_metadata
+            if normalized_open_ephys_metadata is not None
+            else lfp_loading.load_open_ephys_lfp_metadata(site.lfp_path)
+        )
+        if not isinstance(metadata, dict):
+            raise ValueError(f"Open Ephys site {site.stable_id}: normalized metadata is invalid")
         sample_rate_hz = float(metadata["sampling_frequency_hz"])
+        lfp_loading.validate_open_ephys_site_metadata(
+            site.stable_id,
+            site.saved_channel_index,
+            site.sample_rate_hz,
+            site.voltage_unit,
+            metadata,
+        )
         sync = lfp_loading.build_open_ephys_lfp_irig_df(
             site.aligned_sync_path,
             sample_rate_hz,
@@ -1879,6 +1955,45 @@ def _production_phase_block_loader_factory(
 
         return load_spikeglx
     raise ValueError(f"unsupported phase acquisition format: {site.acquisition_format}")
+
+
+def _preflighted_production_phase_block_loader_factory(
+    site: LFPSiteConfig,
+    *,
+    normalized_open_ephys_metadata_by_site: Mapping[str, dict[str, object]],
+) -> Callable[[float, float], tuple[np.ndarray, np.ndarray, float]]:
+    """Bind a phase block loader while reusing all-site preflighted OE metadata.
+
+    Parameters
+    ----------
+    site : LFPSiteConfig
+        One configured source. Its source time coordinates are absolute
+        seconds, source voltage is in the configured physical unit, and its
+        saved-channel index selects one channel from the binary channel axis.
+    normalized_open_ephys_metadata_by_site : Mapping[str, dict[str, object]]
+        Exact sidecar mappings returned by
+        :func:`preflight_open_ephys_site_metadata`, keyed by Open Ephys stable
+        site ID. The mappings contain no traces and are reused without JSON
+        reparsing. SpikeGLX IDs are absent.
+
+    Returns
+    -------
+    Callable[[float, float], tuple[numpy.ndarray, numpy.ndarray, float]]
+        A loader accepting absolute half-open ``(start_s, stop_s)`` seconds and
+        returning matching one-dimensional absolute seconds, one-dimensional
+        physical-voltage samples, and a finite source sample rate in Hz.
+
+    Raises
+    ------
+    ValueError
+        If a configured source is unsupported or an Open Ephys metadata/path
+        contract is invalid. No sidecar JSON is reloaded for a supplied
+        Open Ephys mapping.
+    """
+    return _production_phase_block_loader_factory(
+        site,
+        normalized_open_ephys_metadata_by_site.get(site.stable_id),
+    )
 
 
 def _validate_prepared_phase_run(
@@ -2462,8 +2577,30 @@ def _load_presession_traces(
     first_start_time_s: float,
     spikeglx_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None,
     open_ephys_loader: Callable[..., tuple[np.ndarray, np.ndarray, float]] | None,
+    open_ephys_metadata_by_site: Mapping[str, dict[str, object]] | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
-    """Load one exact pre-session interval through the established trace adapters."""
+    """Load one exact pre-session interval through preflighted trace adapters.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Valid configuration with a positive pre-session duration in seconds.
+    first_start_time_s : float
+        Earliest finite absolute trial start in seconds, or NaN when absent.
+    spikeglx_loader, open_ephys_loader : callable or None
+        Optional normalized injected trace seams. Their returned time/value
+        vectors are one-dimensional seconds/source-voltage axes and a rate in
+        Hz. ``None`` selects production adapters.
+    open_ephys_metadata_by_site : mapping[str, dict[str, object]] or None
+        Preflighted normalized production Open Ephys sidecars keyed by stable
+        site id. They contain no trace samples and are reused without reparsing.
+
+    Returns
+    -------
+    tuple[dict[str, numpy.ndarray], dict[str, numpy.ndarray]]
+        Site-keyed pre-session voltage ``(sample,)`` arrays and matching
+        relative-second coordinates. Missing first starts yield NaN traces.
+    """
     duration_s = config.power.presession_reference_duration_s
     if np.isfinite(first_start_time_s):
         loaded = load_site_trial_traces(
@@ -2473,6 +2610,7 @@ def _load_presession_traces(
             (-duration_s, 0.0),
             spikeglx_loader=spikeglx_loader,
             open_ephys_loader=open_ephys_loader,
+            open_ephys_metadata_by_site=open_ephys_metadata_by_site,
         )
     else:
         loaded = {}

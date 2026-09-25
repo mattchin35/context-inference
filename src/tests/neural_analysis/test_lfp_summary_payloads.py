@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from src.neural_analysis.lfp_summary_payloads import (
+    SYNCHRONY_ARRAY_SCHEMA,
     build_component_payload,
     validate_component_payload,
 )
@@ -120,10 +121,18 @@ _SYNCHRONY = _schema(
         "itpc_band_mean": (("condition", "site", "epoch", "band"), "dimensionless"),
         "itpc_ci_low": (("condition", "site", "epoch", "band"), "dimensionless"),
         "itpc_ci_high": (("condition", "site", "epoch", "band"), "dimensionless"),
+        "itpc_bootstrap_q25": (("condition", "site", "epoch", "band"), "dimensionless"),
+        "itpc_bootstrap_median": (("condition", "site", "epoch", "band"), "dimensionless"),
+        "itpc_bootstrap_q75": (("condition", "site", "epoch", "band"), "dimensionless"),
+        "itpc_band_trial_count": (("condition", "site", "epoch", "band"), "trial"),
         "itpc_unstable": (("condition", "site", "epoch", "band"), "boolean"),
         "ispc_band_mean": (("condition", "pair", "epoch", "band"), "dimensionless"),
         "ispc_ci_low": (("condition", "pair", "epoch", "band"), "dimensionless"),
         "ispc_ci_high": (("condition", "pair", "epoch", "band"), "dimensionless"),
+        "ispc_bootstrap_q25": (("condition", "pair", "epoch", "band"), "dimensionless"),
+        "ispc_bootstrap_median": (("condition", "pair", "epoch", "band"), "dimensionless"),
+        "ispc_bootstrap_q75": (("condition", "pair", "epoch", "band"), "dimensionless"),
+        "ispc_band_trial_count": (("condition", "pair", "epoch", "band"), "trial"),
         "ispc_unstable": (("condition", "pair", "epoch", "band"), "boolean"),
         "plv_by_frequency": (("trial", "pair", "epoch", "frequency"), "dimensionless"),
         "plv_phase_offset_rad": (("trial", "pair", "epoch", "frequency"), "rad"),
@@ -249,7 +258,7 @@ def _arrays_for(component: str) -> dict[str, np.ndarray]:
     return arrays
 
 
-@pytest.mark.parametrize("component", tuple(_SCHEMAS))
+@pytest.mark.parametrize("component", ("power", "synchrony", "spike_phase"))
 def test_build_component_payload_declares_required_arrays_with_exact_axes_and_units(
     component: str,
 ) -> None:
@@ -272,7 +281,7 @@ def test_build_component_payload_declares_required_arrays_with_exact_axes_and_un
     validate_component_payload(component, payload)
 
 
-@pytest.mark.parametrize("component", tuple(_SCHEMAS))
+@pytest.mark.parametrize("component", ("power", "synchrony", "spike_phase"))
 def test_payload_rejects_missing_object_shape_mismatch_and_undeclared_arrays(
     component: str,
 ) -> None:
@@ -316,7 +325,10 @@ def test_payload_rejects_missing_object_shape_mismatch_and_undeclared_arrays(
 
 @pytest.mark.parametrize(
     ("component", "forbidden_name"),
-    (("synchrony", "wavelet_coefficients"), ("spike_phase", "null_ppc_draws")),
+    (
+        ("synchrony", "wavelet_coefficients"),
+        ("spike_phase", "null_ppc_draws"),
+    ),
 )
 def test_payload_rejects_full_temporary_wavelet_or_null_draw_arrays(
     component: str,
@@ -338,7 +350,7 @@ def test_payload_rejects_full_temporary_wavelet_or_null_draw_arrays(
         build_component_payload(component, arrays)
 
 
-@pytest.mark.parametrize("component", tuple(_SCHEMAS))
+@pytest.mark.parametrize("component", ("power", "synchrony", "spike_phase"))
 def test_payload_identity_masks_and_counts_use_contract_dtypes(component: str) -> None:
     """Identity coordinates, masks, and counts retain safe explicit semantic dtypes.
 
@@ -358,6 +370,29 @@ def test_payload_identity_masks_and_counts_use_contract_dtypes(component: str) -
             assert array.dtype == np.dtype(bool)
         elif units in _INTEGER_UNITS:
             assert array.dtype.kind in {"i", "u"}
+
+
+def test_synchrony_payload_declares_saved_quantiles_counts_and_no_bootstrap_draw_axis() -> None:
+    """Synchrony persists compact scalar summaries, never the transient bootstrap draws."""
+    expected_axes = {
+        "itpc_bootstrap_q25": ("condition", "site", "epoch", "band"),
+        "itpc_bootstrap_median": ("condition", "site", "epoch", "band"),
+        "itpc_bootstrap_q75": ("condition", "site", "epoch", "band"),
+        "itpc_band_trial_count": ("condition", "site", "epoch", "band"),
+        "ispc_bootstrap_q25": ("condition", "pair", "epoch", "band"),
+        "ispc_bootstrap_median": ("condition", "pair", "epoch", "band"),
+        "ispc_bootstrap_q75": ("condition", "pair", "epoch", "band"),
+        "ispc_band_trial_count": ("condition", "pair", "epoch", "band"),
+    }
+
+    assert set(expected_axes).issubset(SYNCHRONY_ARRAY_SCHEMA)
+    for name, axes in expected_axes.items():
+        contract = SYNCHRONY_ARRAY_SCHEMA[name]
+        assert contract.axes == axes
+        assert contract.units == (
+            "trial" if name.endswith("trial_count") else "dimensionless"
+        )
+    assert all("bootstrap_values" not in name for name in SYNCHRONY_ARRAY_SCHEMA)
 
 
 def test_spike_payload_offsets_index_each_unit_trial_and_bound_packed_spikes() -> None:

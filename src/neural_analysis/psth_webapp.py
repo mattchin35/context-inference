@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import argparse
+from dataclasses import dataclass
 from datetime import datetime
 import math
 from pathlib import Path
+import sys
+from typing import Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,6 +26,20 @@ from src.neural_analysis import (
     spike_lfp_phase_locking,
     unit_spike_loading,
     unit_spike_plotting,
+)
+from src.neural_analysis.lfp_loading import (
+    OPEN_EPHYS_AFFINE_UV_SEMANTICS,
+    sha256_file_content,
+)
+from src.neural_analysis.lfp_summary_session import (
+    LFPSummarySessionRequest,
+    build_lfp_summary_config,
+)
+from src.neural_analysis.session_metadata import ResolvedSession
+from src.neural_analysis.session_metadata import (
+    load_session_metadata,
+    resolve_probe_sources,
+    resolve_session_metadata,
 )
 
 
@@ -105,6 +123,423 @@ LFP_DROPDOWN_LABEL_PFC = "PFC LFP"
 LFP_FORMAT_SPIKEGLX = "SpikeGLX"
 LFP_FORMAT_OPEN_EPHYS_DERIVED = "Open Ephys derived"
 LFP_FORMAT_OPTIONS = [LFP_FORMAT_SPIKEGLX, LFP_FORMAT_OPEN_EPHYS_DERIVED]
+
+
+@dataclass(frozen=True)
+class OpenEphysCacheToken:
+    """Hashable selected-source identity for Open Ephys raw-value cache entries.
+
+    Attributes
+    ----------
+    lfp_path, aligned_sync_path, lfp_preprocessing_path : str
+        Resolved filesystem paths for one selected derived LFP binary, its
+        aligned synchronization NPZ, and the sibling preprocessing sidecar.
+        Paths have no numerical array axis or physical unit.
+    lfp_size_bytes, aligned_sync_size_bytes, lfp_preprocessing_size_bytes : int
+        Source byte counts at token construction time. Units: bytes.
+    lfp_mtime_ns, aligned_sync_mtime_ns, lfp_preprocessing_mtime_ns : int
+        Source modification timestamps. Units: nanoseconds.
+    lfp_preprocessing_sha256 : str
+        Hex digest of sidecar bytes. It has no physical unit.
+    source_value_semantics : str
+        Code-owned affine-value contract applied by the reader; it preserves
+        physical trace units as uV and has no array axis.
+    """
+
+    lfp_path: str
+    lfp_size_bytes: int
+    lfp_mtime_ns: int
+    aligned_sync_path: str
+    aligned_sync_size_bytes: int
+    aligned_sync_mtime_ns: int
+    lfp_preprocessing_path: str
+    lfp_preprocessing_size_bytes: int
+    lfp_preprocessing_mtime_ns: int
+    lfp_preprocessing_sha256: str
+    source_value_semantics: str = OPEN_EPHYS_AFFINE_UV_SEMANTICS
+
+
+@dataclass(frozen=True)
+class MetadataPopulationInputs:
+    """Resolved paths and zero-based channels for one metadata population."""
+
+    population_id: str
+    population_label: str
+    probe_id: str
+    probe_label: str
+    channel_group_label: str
+    channel_indices: tuple[int, ...]
+    sorter_directory: Path | None
+    aligned_spike_file: Path | None
+    lfp_file: Path | None
+    channel_quality_file: Path | None
+
+
+@dataclass(frozen=True)
+class MetadataLFPSiteInputs:
+    """One metadata-defined saved LFP channel and its resolved source paths."""
+
+    site_id: str
+    display_label: str
+    probe_id: str
+    acquisition_family: str
+    saved_channel_index: int
+    lfp_file: Path | None
+    synchronization_file: Path | None
+
+
+@dataclass(frozen=True)
+class MetadataViewAvailability:
+    """Whether one existing webapp view has its ordinary required sources."""
+
+    available: bool
+    reason: str
+
+
+def load_webapp_session(metadata_path: Path | str) -> ResolvedSession:
+    """Load and resolve one canonical session document without reading arrays.
+
+    Parameters
+    ----------
+    metadata_path : pathlib.Path or str
+        Existing ``neural_session.json`` path.
+
+    Returns
+    -------
+    ResolvedSession
+        Frozen session, probe, site, population, and filesystem records.
+    """
+    path = Path(metadata_path)
+    return resolve_session_metadata(load_session_metadata(path), path)
+
+
+def metadata_population_inputs(
+    session: ResolvedSession,
+    population_id: str,
+) -> MetadataPopulationInputs:
+    """Resolve one metadata population to its probe sources and anatomy.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        One metadata-resolved session.
+    population_id : str
+        Exact stable population identifier.
+
+    Returns
+    -------
+    MetadataPopulationInputs
+        Paths, labels, and zero-based channel indices. No unit IDs or spike
+        arrays are derived.
+    """
+    population = next(
+        (item for item in session.populations if item.population_id == population_id),
+        None,
+    )
+    if population is None:
+        raise ValueError(f"unknown population ID: {population_id}")
+    group = next(
+        item
+        for item in session.channel_groups
+        if item.channel_group_id == population.channel_group_id
+    )
+    probe = resolve_probe_sources(session, population.probe_id)
+    return MetadataPopulationInputs(
+        population_id=population.population_id,
+        population_label=population.display_label,
+        probe_id=probe.probe_id,
+        probe_label=probe.display_label,
+        channel_group_label=group.display_label,
+        channel_indices=group.channel_indices,
+        sorter_directory=probe.sorter_directory,
+        aligned_spike_file=probe.aligned_spike_file,
+        lfp_file=probe.lfp_file,
+        channel_quality_file=probe.channel_quality_file,
+    )
+
+
+def metadata_lfp_site_inputs(session: ResolvedSession) -> tuple[MetadataLFPSiteInputs, ...]:
+    """Return metadata-defined LFP sites in the user's declared order.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        One metadata-resolved session.
+
+    Returns
+    -------
+    tuple[MetadataLFPSiteInputs, ...]
+        Site labels, zero-based saved channels, and source paths; no LFP data
+        or sidecar values are loaded.
+    """
+    sites = []
+    for site in session.sites:
+        probe = resolve_probe_sources(session, site.probe_id)
+        sites.append(
+            MetadataLFPSiteInputs(
+                site_id=site.site_id,
+                display_label=site.display_label,
+                probe_id=probe.probe_id,
+                acquisition_family=probe.acquisition_family,
+                saved_channel_index=site.saved_channel_index,
+                lfp_file=probe.lfp_file,
+                synchronization_file=probe.synchronization_file,
+            )
+        )
+    return tuple(sites)
+
+
+def metadata_view_availability(
+    session: ResolvedSession,
+) -> dict[str, MetadataViewAvailability]:
+    """Report ordinary source availability for each existing webapp view.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        Resolved paths. Files are checked by kind but never opened.
+
+    Returns
+    -------
+    dict[str, MetadataViewAvailability]
+        One entry for every value in ``PLOT_VIEW_OPTIONS``.
+    """
+    behavior_ready = (
+        session.behavior.session_directory is not None
+        and session.behavior.session_directory.is_dir()
+        and session.behavior.trial_table_file is not None
+        and session.behavior.trial_table_file.is_file()
+    )
+    lfp_ready = bool(session.sites) and all(
+        site.lfp_file is not None
+        and site.lfp_file.is_file()
+        and site.synchronization_file is not None
+        and site.synchronization_file.is_file()
+        for site in metadata_lfp_site_inputs(session)
+    )
+    missing_spike_probes = []
+    for population in session.populations:
+        probe = resolve_probe_sources(session, population.probe_id)
+        if (
+            probe.sorter_directory is None
+            or not probe.sorter_directory.is_dir()
+            or probe.aligned_spike_file is None
+            or not probe.aligned_spike_file.is_file()
+        ):
+            missing_spike_probes.append(probe.probe_id)
+    spike_ready = bool(session.populations) and not missing_spike_probes
+
+    behavior_reason = "behavior trial sources are missing"
+    lfp_reason = "LFP or synchronization sources are missing"
+    spike_reason = (
+        "spike sources are missing for " + ", ".join(missing_spike_probes)
+        if missing_spike_probes
+        else "no metadata population is configured"
+    )
+
+    availability: dict[str, MetadataViewAvailability] = {}
+    lfp_only = {PLOT_VIEW_LFP_PHASE_CLUSTERING, PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE}
+    combined = {PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING, PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT}
+    for view in PLOT_VIEW_OPTIONS:
+        if not behavior_ready:
+            availability[view] = MetadataViewAvailability(False, behavior_reason)
+        elif view in lfp_only and not lfp_ready:
+            availability[view] = MetadataViewAvailability(False, lfp_reason)
+        elif view in combined and (not lfp_ready or not spike_ready):
+            reason = lfp_reason if not lfp_ready else spike_reason
+            availability[view] = MetadataViewAvailability(False, reason)
+        elif view not in lfp_only | combined | {PLOT_VIEW_LFP_SUMMARY} and not spike_ready:
+            availability[view] = MetadataViewAvailability(False, spike_reason)
+        else:
+            availability[view] = MetadataViewAvailability(True, "available")
+    return availability
+
+
+def build_open_ephys_cache_token(
+    lfp_path: Path | str,
+    aligned_sync_path: Path | str,
+) -> OpenEphysCacheToken:
+    """Build one complete cache identity at an Open Ephys source boundary.
+
+    Parameters
+    ----------
+    lfp_path, aligned_sync_path : pathlib.Path or str
+        Selected LFP binary and its aligned synchronization NPZ paths.
+
+    Returns
+    -------
+    OpenEphysCacheToken
+        Frozen identity containing resolved source/sync/sidecar path, byte,
+        mtime, digest, and affine-uV semantics fields. Missing inputs raise
+        before a cached numerical body can run.
+
+    Raises
+    ------
+    OSError
+        If the selected LFP, aligned sync, or preprocessing sidecar cannot be
+        statted or streamed. No numerical LFP samples are loaded.
+    """
+    lfp_file = Path(lfp_path).resolve()
+    sync_file = Path(aligned_sync_path).resolve()
+    sidecar = lfp_file.parent / "lfp_preprocessing.json"
+    lfp_stat = lfp_file.stat()
+    sync_stat = sync_file.stat()
+    sidecar_stat = sidecar.stat()
+    return OpenEphysCacheToken(
+        lfp_path=str(lfp_file),
+        lfp_size_bytes=lfp_stat.st_size,
+        lfp_mtime_ns=lfp_stat.st_mtime_ns,
+        aligned_sync_path=str(sync_file),
+        aligned_sync_size_bytes=sync_stat.st_size,
+        aligned_sync_mtime_ns=sync_stat.st_mtime_ns,
+        lfp_preprocessing_path=str(sidecar.resolve()),
+        lfp_preprocessing_size_bytes=sidecar_stat.st_size,
+        lfp_preprocessing_mtime_ns=sidecar_stat.st_mtime_ns,
+        lfp_preprocessing_sha256=sha256_file_content(sidecar),
+    )
+
+
+def _validate_supplied_open_ephys_cache_token(
+    token: OpenEphysCacheToken,
+    lfp_path: str,
+    aligned_sync_npz_path: str,
+) -> OpenEphysCacheToken:
+    """Validate that a supplied cache token belongs to the selected source paths.
+
+    Parameters
+    ----------
+    token : OpenEphysCacheToken
+        Frozen token for one physical-uV Open Ephys source. It contains only
+        source identity metadata, never sample arrays.
+    lfp_path, aligned_sync_npz_path : str
+        Requested LFP binary and aligned sync paths. Units: filesystem paths;
+        neither input has an array shape or physical value unit.
+
+    Returns
+    -------
+    OpenEphysCacheToken
+        The unchanged supplied instance. It is not rehashed or rebuilt, so a
+        caller-selected semantics-only variant remains a distinct cache key.
+
+    Raises
+    ------
+    ValueError
+        If the token is not the expected frozen type or any resolved LFP,
+        sync, or sidecar path is bound to a different selected source.
+    """
+    if not isinstance(token, OpenEphysCacheToken):
+        raise ValueError("Open Ephys cache token must be an OpenEphysCacheToken")
+    resolved_lfp = str(Path(lfp_path).resolve())
+    resolved_sync = str(Path(aligned_sync_npz_path).resolve())
+    resolved_sidecar = str((Path(resolved_lfp).parent / "lfp_preprocessing.json").resolve())
+    if token.lfp_path != resolved_lfp:
+        raise ValueError("Open Ephys cache token is not bound to the requested LFP path")
+    if token.aligned_sync_path != resolved_sync:
+        raise ValueError("Open Ephys cache token is not bound to the requested aligned sync path")
+    if token.lfp_preprocessing_path != resolved_sidecar:
+        raise ValueError("Open Ephys cache token is not bound to the requested preprocessing sidecar")
+    return token
+
+
+def _open_ephys_cache_token_or_none(
+    lfp_format: str,
+    lfp_path: str,
+    aligned_sync_npz_path: str | None,
+    open_ephys_cache_token: OpenEphysCacheToken | None,
+) -> OpenEphysCacheToken | None:
+    """Reuse or build one Open Ephys token before an inner cache is keyed.
+
+    Parameters
+    ----------
+    lfp_format : str
+        Acquisition-format label selecting SpikeGLX or derived Open Ephys.
+    lfp_path : str
+        Requested LFP binary path. Units: filesystem path; no array axis.
+    aligned_sync_npz_path : str or None
+        Requested Open Ephys aligned synchronization path, or ``None`` for
+        SpikeGLX. Units: filesystem path.
+    open_ephys_cache_token : OpenEphysCacheToken or None
+        Optional frozen identity for physical-uV Open Ephys values. It contains
+        no sample array and does not alter source trace shape or units.
+
+    Returns
+    -------
+    OpenEphysCacheToken or None
+        A complete token for Open Ephys, or ``None`` for unchanged SpikeGLX
+        compatibility. A valid supplied instance is returned unchanged.
+
+    Raises
+    ------
+    ValueError
+        If Open Ephys lacks an aligned sync path or a supplied token is not
+        bound to the requested resolved LFP, sync, and sidecar paths.
+    OSError
+        If an omitted-token Open Ephys request cannot build its source identity.
+    """
+    if lfp_format != LFP_FORMAT_OPEN_EPHYS_DERIVED:
+        return None
+    if aligned_sync_npz_path is None or not str(aligned_sync_npz_path).strip():
+        raise ValueError("Open Ephys derived LFP requires an aligned sync .npz path.")
+    if open_ephys_cache_token is not None:
+        return _validate_supplied_open_ephys_cache_token(
+            open_ephys_cache_token,
+            lfp_path,
+            aligned_sync_npz_path,
+        )
+    return build_open_ephys_cache_token(lfp_path, aligned_sync_npz_path)
+
+
+def _open_ephys_exploratory_provenance(
+    lfp_format: str,
+    source_tokens: tuple[OpenEphysCacheToken, ...],
+) -> dict[str, object]:
+    """Return saved Open Ephys provenance from the exact compute-bound tokens.
+
+    Parameters
+    ----------
+    lfp_format : str
+        Acquisition-format label. SpikeGLX selects an empty provenance mapping.
+    source_tokens : tuple[OpenEphysCacheToken, ...]
+        Complete tokens constructed at the actual selected-source boundary and
+        passed to cached computation. They contain no numerical array data;
+        their source traces are physical uV by the token semantics contract.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-compatible semantics copied from the supplied token instances plus
+        either one SHA-256 sidecar digest or a resolved-LFP-path keyed digest
+        mapping. No sidecar is reopened, read, or hashed by this helper.
+
+    Raises
+    ------
+    ValueError
+        If Open Ephys provenance lacks a compute-bound token, contains an
+        invalid token, or combines token instances with different semantics.
+    """
+    if lfp_format != LFP_FORMAT_OPEN_EPHYS_DERIVED:
+        return {}
+    if not source_tokens:
+        raise ValueError("Open Ephys exploratory provenance requires compute-bound cache tokens")
+    if any(not isinstance(token, OpenEphysCacheToken) for token in source_tokens):
+        raise ValueError("Open Ephys exploratory provenance requires OpenEphysCacheToken instances")
+    unique_tokens = tuple(dict.fromkeys(source_tokens))
+    semantics_versions = {token.source_value_semantics for token in unique_tokens}
+    if len(semantics_versions) != 1:
+        raise ValueError("Open Ephys exploratory provenance cannot mix source value semantics")
+    source_value_semantics = next(iter(semantics_versions))
+    if not isinstance(source_value_semantics, str) or not source_value_semantics.strip():
+        raise ValueError("Open Ephys exploratory provenance requires a nonempty source value semantics")
+    digests = {
+        token.lfp_path: token.lfp_preprocessing_sha256
+        for token in unique_tokens
+    }
+    provenance: dict[str, object] = {"source_value_semantics": source_value_semantics}
+    if len(digests) == 1:
+        provenance["lfp_preprocessing_sha256"] = next(iter(digests.values()))
+    else:
+        provenance["lfp_preprocessing_sha256_by_source"] = digests
+    return provenance
 LFP_FILTER_BANDS = {
     "Default": None,
     "Theta (5-10 Hz)": (5.0, 10.0),
@@ -165,6 +600,77 @@ RASTER_LAYOUT_OPTIONS = {
     "Separated": {"row_spacing": 1.5, "figure_size": (12.0, 10.0)},
     "Wide": {"row_spacing": 2.0, "figure_size": (12.0, 13.0)},
 }
+
+
+def parse_webapp_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse the optional metadata path passed after Streamlit's ``--``.
+
+    Parameters
+    ----------
+    argv : sequence of str or None
+        Script arguments. ``None`` uses ``argparse``'s process arguments.
+
+    Returns
+    -------
+    argparse.Namespace
+        Namespace whose ``session_metadata`` value is a ``Path`` or ``None``.
+    """
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--session-metadata", type=Path)
+    return parser.parse_args(argv)
+
+
+def render_metadata_lfp_summary_view(
+    streamlit: object,
+    session: ResolvedSession,
+    *,
+    dependencies: lfp_summary_webapp.SummaryWebDependencies | None = None,
+) -> None:
+    """Render the existing summary UI from one resolved metadata session.
+
+    Parameters
+    ----------
+    streamlit : object
+        Streamlit-compatible UI host. It is not passed to scientific loaders.
+    session : ResolvedSession
+        Explicit session/probe/site paths and zero-based channel identities.
+    dependencies : SummaryWebDependencies or None
+        Existing cache/compute seams. ``None`` builds the production bundle.
+
+    Returns
+    -------
+    None
+        Delegates controls only; raw arrays remain behind existing explicit UI
+        actions and cached-view selections.
+    """
+    config = build_lfp_summary_config(session, LFPSummarySessionRequest())
+    sorter_paths = {
+        probe.probe_id: probe.sorter_directory
+        for probe in session.probes
+        if probe.sorter_directory is not None
+    }
+    aligned_spike_paths = {
+        probe.probe_id: probe.aligned_spike_file
+        for probe in session.probes
+        if probe.aligned_spike_file is not None
+    }
+    if dependencies is None:
+        dependencies = lfp_summary_webapp.make_production_summary_dependencies()
+    lfp_summary_webapp.render_lfp_summary_view(
+        streamlit,
+        session_id=config.session_id,
+        session_path=config.session_path,
+        output_directory=config.output_directory,
+        sites=config.sites,
+        site_pairs=config.site_pairs,
+        unit_population=config.unit_population,
+        dependencies=dependencies,
+        sorter_paths=sorter_paths,
+        aligned_spike_paths=aligned_spike_paths,
+        cluster_metadata_loader=load_summary_cluster_metadata,
+        channel_metadata_loader=load_summary_channel_metadata,
+        trial_table_path=config.trial_table_path,
+    )
 
 
 def render_lfp_summary_view(
@@ -513,6 +1019,106 @@ def load_phase_clustering_session_cached(
     return session, event_df, trial_df
 
 
+@st.cache_resource(show_spinner="Loading metadata-defined behavior data...")
+def load_metadata_behavior_session_cached(
+    session_root: str,
+    subject_id: str,
+    session_id: str,
+    session_date: str | None,
+    behavior_directory: str,
+    trial_table_file: str,
+    event_table_file: str | None,
+) -> tuple[spike_behavior_pynapple.Session, pd.DataFrame, pd.DataFrame]:
+    """Load explicit metadata behavior tables for one webapp session.
+
+    Parameters
+    ----------
+    session_root, behavior_directory, trial_table_file, event_table_file : str or None
+        Resolved filesystem paths. CSV time columns retain their existing
+        absolute-second conventions; no resampling or unit conversion occurs.
+    subject_id, session_id, session_date : str or None
+        Display/saved identity labels from metadata.
+
+    Returns
+    -------
+    tuple[Session, pandas.DataFrame, pandas.DataFrame]
+        Session record, event rows, and trial rows. Missing optional event data
+        produces an empty table; the required trial table is read exactly once.
+    """
+    root = Path(session_root)
+    date = session_date or "unknown-date"
+    session = spike_behavior_pynapple.Session(
+        session_data_home=root,
+        sess_id_full=session_id,
+        sess_id_abbreviated=f"{subject_id}_{date}",
+        raw_behavior_folder=Path(behavior_directory),
+        processed_data_path=Path(trial_table_file).parent,
+        figure_path=root / "figures",
+        mouse=subject_id,
+        date=date,
+        timestamp="",
+    )
+    trial_df = pd.read_csv(trial_table_file)
+    event_df = pd.read_csv(event_table_file) if event_table_file else pd.DataFrame()
+    return session, event_df, trial_df
+
+
+@st.cache_resource(show_spinner="Loading metadata-defined probe data...")
+def load_metadata_viewer_data_cached(
+    session_root: str,
+    subject_id: str,
+    session_id: str,
+    session_date: str | None,
+    behavior_directory: str,
+    trial_table_file: str,
+    event_table_file: str | None,
+    probe_id: str,
+    sorter_directory: str,
+    aligned_spike_file: str,
+    lfp_file: str | None,
+) -> dict[str, object]:
+    """Load explicit metadata behavior and one selected probe for existing views.
+
+    Sorter cluster assignments and aligned spike times are one-dimensional
+    arrays aligned by spike index; times are absolute seconds. The function is
+    called only after the user selects a spike-dependent view.
+    """
+    session, event_df, trial_df = load_metadata_behavior_session_cached(
+        session_root,
+        subject_id,
+        session_id,
+        session_date,
+        behavior_directory,
+        trial_table_file,
+        event_table_file,
+    )
+    sorter_path = Path(sorter_directory)
+    aligned_path = Path(aligned_spike_file)
+    spike_clusters, cluster_info = spike_behavior_pynapple.load_sorter_metadata(sorter_path)
+    aligned_spike_times = spike_behavior_pynapple.load_aligned_spikes(aligned_path)
+    spike_behavior_pynapple.validate_aligned_spike_inputs(
+        aligned_spike_times,
+        spike_clusters,
+    )
+    spike_group = spike_behavior_pynapple.build_spike_tsgroup(
+        spike_times=aligned_spike_times,
+        spike_clusters=spike_clusters,
+    )
+    session.session_info = {
+        "active_probe_label": probe_id,
+        "aligned_spike_path": aligned_spike_file,
+        "lfp_path": lfp_file,
+    }
+    return {
+        "session": session,
+        "event_df": event_df,
+        "trial_df": trial_df,
+        "cluster_info": cluster_info,
+        "spike_group": spike_group,
+        "aligned_spike_times": aligned_spike_times,
+    }
+
+
 @st.cache_data(show_spinner="Loading channel quality...")
 def load_channel_quality_cached(channel_quality_path: str) -> pd.DataFrame:
     """
@@ -645,7 +1251,7 @@ def decode_lfp_sync_cached(
 
 
 @st.cache_data(show_spinner="Loading LFP trace...")
-def load_trial_lfp_trace_cached(
+def _load_trial_lfp_trace_cached(
     lfp_format: str,
     lfp_path: str,
     saved_channel_index: int,
@@ -660,6 +1266,7 @@ def load_trial_lfp_trace_cached(
     filter_high_hz: float | None,
     filter_padding_s: float,
     aligned_sync_npz_path: str | None = None,
+    open_ephys_cache_token: OpenEphysCacheToken | None = None,
 ):
     """
     Load and cache one trial-aligned LFP channel window.
@@ -694,6 +1301,10 @@ def load_trial_lfp_trace_cached(
     aligned_sync_npz_path : str | None, optional
         Open Ephys probe sync ``.npz`` path. Required for
         ``LFP_FORMAT_OPEN_EPHYS_DERIVED`` and ignored for SpikeGLX.
+    open_ephys_cache_token : OpenEphysCacheToken or None, optional
+        Complete hashable Open Ephys source identity used only in this inner
+        cache key. It has no sample axis or voltage values; the public wrapper
+        builds or validates it before this decorated function executes.
 
     Returns
     -------
@@ -702,6 +1313,7 @@ def load_trial_lfp_trace_cached(
         relative to alignment.
     """
 
+    del open_ephys_cache_token
     return load_trial_lfp_trace_for_format(
         lfp_format=lfp_format,
         lfp_path=lfp_path,
@@ -718,6 +1330,84 @@ def load_trial_lfp_trace_cached(
         filter_padding_s=float(filter_padding_s),
         aligned_sync_npz_path=aligned_sync_npz_path,
     )
+
+
+def load_trial_lfp_trace_cached(
+    lfp_format: str,
+    lfp_path: str,
+    saved_channel_index: int,
+    alignment_time_s: float,
+    window_start_s: float,
+    window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    filter_low_hz: float | None,
+    filter_high_hz: float | None,
+    filter_padding_s: float,
+    aligned_sync_npz_path: str | None = None,
+    *,
+    open_ephys_cache_token: OpenEphysCacheToken | None = None,
+):
+    """Load one trial-aligned LFP trace through a source-identity cache.
+
+    Parameters
+    ----------
+    lfp_format : str
+        Acquisition-format label. Open Ephys selects the physical-uV affine
+        reader; SpikeGLX retains its existing source behavior.
+    lfp_path : str
+        Selected LFP binary filesystem path with no array axis or physical
+        unit.
+    aligned_sync_npz_path : str or None
+        Open Ephys aligned sync ``.npz`` filesystem path, required for that
+        format and unused for SpikeGLX.
+    saved_channel_index : int
+        Zero-based saved-channel index on the binary channel axis.
+    alignment_time_s, window_start_s, window_end_s, bit_period_s : float
+        Absolute alignment time and event-relative window bounds in seconds;
+        ``bit_period_s`` is the SpikeGLX IRIG period in seconds.
+    digital_word, irig_line : int
+        SpikeGLX synchronization selectors, ignored for Open Ephys.
+    utc_offset_hours : float
+        Constant synchronization offset in hours.
+    filter_low_hz, filter_high_hz : float or None
+        Optional bandpass cutoffs in Hz. Both are required to filter.
+    filter_padding_s : float
+        Padding on each side of the requested interval in seconds.
+    open_ephys_cache_token : OpenEphysCacheToken or None, keyword-only
+        Optional complete source identity. A supplied token is path-validated
+        and reused unchanged; an omitted token is built before the keyed inner
+        cache. It never contains sample values.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray]
+        ``(relative_time_s, lfp_values)`` one-dimensional arrays with shape
+        ``(sample,)``. Time is seconds relative to alignment. Open Ephys
+        values are physical uV after one reader-side affine conversion.
+
+    Raises
+    ------
+    ValueError
+        If format/synchronization/window/filter settings are invalid or an
+        Open Ephys token is absent, malformed, or bound to another source.
+    OSError
+        If the selected production source cannot be read.
+    """
+    token = _open_ephys_cache_token_or_none(
+        lfp_format, lfp_path, aligned_sync_npz_path, open_ephys_cache_token
+    )
+    return _load_trial_lfp_trace_cached(
+        lfp_format, lfp_path, saved_channel_index, alignment_time_s,
+        window_start_s, window_end_s, digital_word, irig_line, bit_period_s,
+        utc_offset_hours, filter_low_hz, filter_high_hz, filter_padding_s,
+        aligned_sync_npz_path, token,
+    )
+
+
+load_trial_lfp_trace_cached.clear = _load_trial_lfp_trace_cached.clear
 
 
 def load_trial_lfp_trace_for_format(
@@ -778,7 +1468,8 @@ def load_trial_lfp_trace_for_format(
     tuple[np.ndarray, np.ndarray]
         ``(relative_time_s, lfp_values)``. Both arrays have shape
         ``(n_samples,)``. Time is in seconds relative to alignment; LFP units
-        depend on the selected file format.
+        are physical uV for both formats. Open Ephys values are converted once
+        from canonical float32 binary storage before optional filtering.
     """
 
     frequency_band_hz = (
@@ -863,8 +1554,8 @@ def load_trial_lfp_trace_for_format_with_sample_rate(
     -------
     tuple[np.ndarray, np.ndarray, float]
         Relative times and LFP values with shape ``(n_samples,)``, followed by
-        sample rate in Hz. SpikeGLX values are microvolts; Open Ephys values
-        retain their derived-file units.
+        sample rate in Hz. Values are physical uV for both formats; Open Ephys
+        values are converted once from canonical float32 binary storage.
     """
 
     if lfp_format == LFP_FORMAT_SPIKEGLX:
@@ -901,7 +1592,7 @@ def load_trial_lfp_trace_for_format_with_sample_rate(
 
 
 @st.cache_data(show_spinner="Computing trial LFP spectrogram...")
-def compute_trial_lfp_spectrogram_cached(
+def _compute_trial_lfp_spectrogram_cached(
     lfp_format: str,
     lfp_path: str,
     saved_channel_index: int,
@@ -921,6 +1612,7 @@ def compute_trial_lfp_spectrogram_cached(
     notch_60_hz: bool,
     notch_quality_factor: float,
     aligned_sync_npz_path: str | None = None,
+    open_ephys_cache_token: OpenEphysCacheToken | None = None,
 ) -> lfp_spectrogram.LFPSpectrogramResult:
     """
     Load, pad, decimate, and cache one trial's absolute Morlet power.
@@ -963,6 +1655,9 @@ def compute_trial_lfp_spectrogram_cached(
         Dimensionless 60 Hz notch quality factor.
     aligned_sync_npz_path : str | None, optional
         Open Ephys aligned sync path; ignored for SpikeGLX.
+    open_ephys_cache_token : OpenEphysCacheToken or None, optional
+        Complete physical-uV Open Ephys identity used only for this decorated
+        cache key. The public wrapper resolves it before numerical loading.
 
     Returns
     -------
@@ -972,6 +1667,7 @@ def compute_trial_lfp_spectrogram_cached(
         input unit; time is in relative seconds and frequencies are in Hz.
     """
 
+    del open_ephys_cache_token
     frequencies = np.asarray(frequencies_hz, dtype=float)
     padding_s = lfp_spectrogram.compute_wavelet_padding_s(
         minimum_frequency_hz=float(np.min(frequencies)),
@@ -1008,8 +1704,100 @@ def compute_trial_lfp_spectrogram_cached(
     )
 
 
+def compute_trial_lfp_spectrogram_cached(
+    lfp_format: str,
+    lfp_path: str,
+    saved_channel_index: int,
+    alignment_time_s: float,
+    visible_window_start_s: float,
+    visible_window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    frequencies_hz: tuple[float, ...],
+    gaussian_width: float,
+    window_length: float,
+    precision: int,
+    norm: str,
+    target_sample_rate_hz: float,
+    notch_60_hz: bool,
+    notch_quality_factor: float,
+    aligned_sync_npz_path: str | None = None,
+    *,
+    open_ephys_cache_token: OpenEphysCacheToken | None = None,
+) -> lfp_spectrogram.LFPSpectrogramResult:
+    """Compute one visible trial spectrogram through a source-identity cache.
+
+    Parameters
+    ----------
+    lfp_format : str
+        Acquisition-format label selecting the Open Ephys physical-uV reader
+        or unchanged SpikeGLX source path.
+    lfp_path : str
+        Selected LFP binary filesystem path with no array axis or physical
+        unit.
+    aligned_sync_npz_path : str or None
+        Open Ephys synchronization filesystem path, required for that format
+        and unused for SpikeGLX.
+    saved_channel_index : int
+        Zero-based saved-channel index on the source channel axis.
+    alignment_time_s, visible_window_start_s, visible_window_end_s : float
+        Absolute alignment and event-relative visible bounds in seconds.
+    digital_word, irig_line : int
+        SpikeGLX synchronization selectors.
+    bit_period_s, utc_offset_hours : float
+        SpikeGLX IRIG period in seconds and synchronization offset in hours.
+    frequencies_hz : tuple[float, ...]
+        One-dimensional positive Morlet frequency axis in Hz.
+    gaussian_width, window_length : float
+        Dimensionless Morlet settings.
+    precision : int
+        Base-2 Morlet evaluation precision.
+    norm : str
+        Morlet normalization label.
+    target_sample_rate_hz : float
+        Positive output sampling rate in Hz.
+    notch_60_hz : bool
+        Whether to apply the existing 60 Hz notch.
+    notch_quality_factor : float
+        Dimensionless notch quality factor.
+    open_ephys_cache_token : OpenEphysCacheToken or None, keyword-only
+        Optional complete source identity. Omission remains compatible and
+        builds one before cache keying; a supplied valid token is reused.
+
+    Returns
+    -------
+    lfp_spectrogram.LFPSpectrogramResult
+        Visible one-dimensional time (seconds) and raw LFP (uV for Open
+        Ephys), plus frequency-by-time log-power in dB relative to uV^2 for
+        Open Ephys.
+
+    Raises
+    ------
+    ValueError
+        If transform settings, source/sync identity, or the Open Ephys token
+        contract is invalid before the decorated cache body runs.
+    OSError
+        If the selected source cannot be read.
+    """
+    token = _open_ephys_cache_token_or_none(
+        lfp_format, lfp_path, aligned_sync_npz_path, open_ephys_cache_token
+    )
+    return _compute_trial_lfp_spectrogram_cached(
+        lfp_format, lfp_path, saved_channel_index, alignment_time_s,
+        visible_window_start_s, visible_window_end_s, digital_word, irig_line,
+        bit_period_s, utc_offset_hours, frequencies_hz, gaussian_width,
+        window_length, precision, norm, target_sample_rate_hz, notch_60_hz,
+        notch_quality_factor, aligned_sync_npz_path, token,
+    )
+
+
+compute_trial_lfp_spectrogram_cached.clear = _compute_trial_lfp_spectrogram_cached.clear
+
+
 @st.cache_data(show_spinner="Estimating shared LFP power scale...")
-def compute_shared_lfp_power_limits_cached(
+def _compute_shared_lfp_power_limits_cached(
     reference_alignment_times_s: tuple[float, ...],
     lfp_format: str,
     lfp_path: str,
@@ -1031,6 +1819,7 @@ def compute_shared_lfp_power_limits_cached(
     lower_percentile: float,
     upper_percentile: float,
     aligned_sync_npz_path: str | None = None,
+    open_ephys_cache_token: OpenEphysCacheToken | None = None,
 ) -> tuple[tuple[float, float], int]:
     """
     Compute a shared robust power scale from session reference trials.
@@ -1067,6 +1856,9 @@ def compute_shared_lfp_power_limits_cached(
         Pooled robust percentile bounds in percent.
     aligned_sync_npz_path : str | None, optional
         Open Ephys aligned sync path.
+    open_ephys_cache_token : OpenEphysCacheToken or None, optional
+        Complete physical-uV source identity passed unchanged to every nested
+        trial spectrogram cache key. It contains no numerical trace arrays.
 
     Returns
     -------
@@ -1099,6 +1891,7 @@ def compute_shared_lfp_power_limits_cached(
                 notch_60_hz=bool(notch_60_hz),
                 notch_quality_factor=float(notch_quality_factor),
                 aligned_sync_npz_path=aligned_sync_npz_path,
+                open_ephys_cache_token=open_ephys_cache_token,
             )
         except (FileNotFoundError, OSError, ValueError):
             continue
@@ -1111,8 +1904,103 @@ def compute_shared_lfp_power_limits_cached(
     return limits, len(reference_power)
 
 
+def compute_shared_lfp_power_limits_cached(
+    reference_alignment_times_s: tuple[float, ...],
+    lfp_format: str,
+    lfp_path: str,
+    saved_channel_index: int,
+    visible_window_start_s: float,
+    visible_window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    frequencies_hz: tuple[float, ...],
+    gaussian_width: float,
+    window_length: float,
+    precision: int,
+    norm: str,
+    target_sample_rate_hz: float,
+    notch_60_hz: bool,
+    notch_quality_factor: float,
+    lower_percentile: float,
+    upper_percentile: float,
+    aligned_sync_npz_path: str | None = None,
+    *,
+    open_ephys_cache_token: OpenEphysCacheToken | None = None,
+) -> tuple[tuple[float, float], int]:
+    """Estimate one shared spectrogram scale through a source-identity cache.
+
+    Parameters
+    ----------
+    reference_alignment_times_s : tuple[float, ...]
+        One-dimensional sequence of absolute reference-trial timestamps in
+        seconds; each element is independently loaded with the same source.
+    lfp_format : str
+        Acquisition-format label selecting Open Ephys or SpikeGLX behavior.
+    lfp_path : str
+        Selected LFP binary filesystem path with no array axis or physical
+        unit.
+    aligned_sync_npz_path : str or None
+        Open Ephys sync filesystem path, required for that format and unused
+        for SpikeGLX.
+    saved_channel_index : int
+        Zero-based source channel index.
+    visible_window_start_s, visible_window_end_s, bit_period_s : float
+        Event-relative visible bounds and IRIG period in seconds.
+    digital_word, irig_line : int
+        SpikeGLX synchronization selectors.
+    utc_offset_hours : float
+        Synchronization offset in hours.
+    frequencies_hz : tuple[float, ...]
+        One-dimensional Morlet frequency axis in Hz.
+    gaussian_width, window_length, notch_quality_factor : float
+        Dimensionless transform/filter settings.
+    precision : int
+        Base-2 Morlet evaluation precision.
+    norm : str
+        Morlet normalization label.
+    target_sample_rate_hz : float
+        Positive output rate in Hz.
+    notch_60_hz : bool
+        Whether to apply the existing notch filter.
+    lower_percentile, upper_percentile : float
+        Robust pooled power percentiles in percent.
+    open_ephys_cache_token : OpenEphysCacheToken or None, keyword-only
+        Complete physical-uV source identity shared unchanged with nested
+        spectrogram calls, or ``None`` to construct one before keying.
+
+    Returns
+    -------
+    tuple[tuple[float, float], int]
+        ``((minimum_db, maximum_db), included_count)``. Limits describe dB
+        relative to uV^2 for Open Ephys and have no trace array axis.
+
+    Raises
+    ------
+    ValueError
+        If the source/token/transform contract is invalid before nested cache
+        calls. Individual unusable reference trials remain excluded rather
+        than failing the shared-limit calculation.
+    """
+    token = _open_ephys_cache_token_or_none(
+        lfp_format, lfp_path, aligned_sync_npz_path, open_ephys_cache_token
+    )
+    return _compute_shared_lfp_power_limits_cached(
+        reference_alignment_times_s, lfp_format, lfp_path, saved_channel_index,
+        visible_window_start_s, visible_window_end_s, digital_word, irig_line,
+        bit_period_s, utc_offset_hours, frequencies_hz, gaussian_width,
+        window_length, precision, norm, target_sample_rate_hz, notch_60_hz,
+        notch_quality_factor, lower_percentile, upper_percentile,
+        aligned_sync_npz_path, token,
+    )
+
+
+compute_shared_lfp_power_limits_cached.clear = _compute_shared_lfp_power_limits_cached.clear
+
+
 @st.cache_data(show_spinner="Computing continuous LFP phase tensors...")
-def compute_lfp_phase_site_cached(
+def _compute_lfp_phase_site_cached(
     lfp_format: str,
     lfp_path: str,
     lfp_file_mtime_ns: int,
@@ -1136,6 +2024,7 @@ def compute_lfp_phase_site_cached(
     minimum_relative_magnitude: float,
     maximum_core_duration_s: float,
     aligned_sync_npz_path: str | None = None,
+    open_ephys_cache_token: OpenEphysCacheToken | None = None,
 ) -> lfp_phase_clustering.PhaseTrialTensor:
     """
     Cache continuous-block Morlet phase preprocessing for one LFP site.
@@ -1183,6 +2072,9 @@ def compute_lfp_phase_site_cached(
         Maximum unpadded continuous transform block duration in seconds.
     aligned_sync_npz_path : str | None, optional
         Open Ephys aligned sync path; ignored for SpikeGLX.
+    open_ephys_cache_token : OpenEphysCacheToken or None, optional
+        Complete physical-uV source identity used only in this decorated cache
+        key. It has no phase/trace array axes and is resolved by the wrapper.
 
     Returns
     -------
@@ -1191,7 +2083,7 @@ def compute_lfp_phase_site_cached(
         phase is unitless complex phase and time is in event-relative seconds.
     """
 
-    del lfp_file_mtime_ns
+    del lfp_file_mtime_ns, open_ephys_cache_token
 
     def load_absolute_block(
         block_start_s: float,
@@ -1233,11 +2125,113 @@ def compute_lfp_phase_site_cached(
     )
 
 
+def compute_lfp_phase_site_cached(
+    lfp_format: str,
+    lfp_path: str,
+    lfp_file_mtime_ns: int,
+    saved_channel_index: int,
+    event_times_s: tuple[float, ...],
+    trial_indices: tuple[int, ...],
+    window_start_s: float,
+    window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    frequencies_hz: tuple[float, ...],
+    gaussian_width: float,
+    window_length: float,
+    precision: int,
+    norm: str,
+    output_sample_rate_hz: float,
+    notch_60_hz: bool,
+    notch_quality_factor: float,
+    minimum_relative_magnitude: float,
+    maximum_core_duration_s: float,
+    aligned_sync_npz_path: str | None = None,
+    *,
+    open_ephys_cache_token: OpenEphysCacheToken | None = None,
+) -> lfp_phase_clustering.PhaseTrialTensor:
+    """Compute a continuous site phase tensor through a source-identity cache.
+
+    Parameters
+    ----------
+    lfp_format : str
+        Acquisition-format label selecting Open Ephys or SpikeGLX behavior.
+    lfp_path : str
+        Selected LFP binary filesystem path with no array axis or physical
+        unit.
+    aligned_sync_npz_path : str or None
+        Open Ephys synchronization filesystem path, required for that format
+        and unused for SpikeGLX.
+    lfp_file_mtime_ns : int
+        Existing compatibility cache identity in nanoseconds.
+    saved_channel_index : int
+        Zero-based saved-channel index.
+    event_times_s : tuple[float, ...]
+        One-dimensional absolute event timestamps in seconds.
+    trial_indices : tuple[int, ...]
+        One-dimensional source trial-row axis aligned with ``event_times_s``.
+    window_start_s, window_end_s, bit_period_s : float
+        Event-relative bounds and SpikeGLX IRIG period in seconds.
+    digital_word, irig_line : int
+        SpikeGLX synchronization selectors.
+    utc_offset_hours : float
+        Synchronization offset in hours.
+    frequencies_hz : tuple[float, ...]
+        One-dimensional positive Morlet frequencies in Hz.
+    gaussian_width, window_length, notch_quality_factor : float
+        Dimensionless transform/filter settings.
+    precision : int
+        Base-2 Morlet evaluation precision.
+    norm : str
+        Morlet normalization label.
+    output_sample_rate_hz : float
+        Positive output time-axis rate in Hz.
+    notch_60_hz : bool
+        Whether to apply the existing notch filter.
+    minimum_relative_magnitude, maximum_core_duration_s : float
+        Dimensionless validity threshold and maximum block span in seconds.
+    open_ephys_cache_token : OpenEphysCacheToken or None, keyword-only
+        Optional complete physical-uV source identity, constructed before the
+        keyed cache only when omitted.
+
+    Returns
+    -------
+    lfp_phase_clustering.PhaseTrialTensor
+        Unit complex phase and validity arrays with axes ``(frequency, trial,
+        time)``; phase is dimensionless/radians and its time coordinate is in
+        event-relative seconds.
+
+    Raises
+    ------
+    ValueError
+        If the source/synchronization/token identity, event/trial axes, or
+        transform settings are invalid before the decorated cache body runs.
+    OSError
+        If production source loading fails.
+    """
+    token = _open_ephys_cache_token_or_none(
+        lfp_format, lfp_path, aligned_sync_npz_path, open_ephys_cache_token
+    )
+    return _compute_lfp_phase_site_cached(
+        lfp_format, lfp_path, lfp_file_mtime_ns, saved_channel_index,
+        event_times_s, trial_indices, window_start_s, window_end_s, digital_word,
+        irig_line, bit_period_s, utc_offset_hours, frequencies_hz, gaussian_width,
+        window_length, precision, norm, output_sample_rate_hz, notch_60_hz,
+        notch_quality_factor, minimum_relative_magnitude, maximum_core_duration_s,
+        aligned_sync_npz_path, token,
+    )
+
+
+compute_lfp_phase_site_cached.clear = _compute_lfp_phase_site_cached.clear
+
+
 @st.cache_data(
     show_spinner="Computing single-trial relative phase...",
     max_entries=RELATIVE_PHASE_CACHE_MAX_ENTRIES,
 )
-def compute_single_trial_relative_phase_cached(
+def _compute_single_trial_relative_phase_cached(
     lfp_format: str,
     lfp_path_a: str,
     lfp_mtime_ns_a: int,
@@ -1271,6 +2265,7 @@ def compute_single_trial_relative_phase_cached(
     plv_window_cycles: float,
     plv_min_window_s: float | None,
     plv_max_window_s: float | None,
+    open_ephys_cache_token: tuple[OpenEphysCacheToken | None, OpenEphysCacheToken | None] | None = None,
 ) -> lfp_phase_clustering.SingleTrialRelativePhaseResult:
     """
     Load and compare two padded LFP segments for one selected trial.
@@ -1324,6 +2319,10 @@ def compute_single_trial_relative_phase_cached(
     plv_min_window_s, plv_max_window_s : float | None
         Optional local PLV duration bounds in seconds. These affect the retained
         support interval and therefore participate in the cache key.
+    open_ephys_cache_token : tuple[OpenEphysCacheToken | None, OpenEphysCacheToken | None] or None
+        Ordered complete identities for source A and source B, used only in
+        this decorated cache key. The public wrapper path-validates or builds
+        both identities before numerical loading.
 
     Returns
     -------
@@ -1338,6 +2337,7 @@ def compute_single_trial_relative_phase_cached(
         lfp_mtime_ns_b,
         aligned_sync_mtime_ns_a,
         aligned_sync_mtime_ns_b,
+        open_ephys_cache_token,
     )
     frequencies = np.asarray(frequencies_hz, dtype=float)
     padding_s = lfp_spectrogram.compute_wavelet_padding_s(
@@ -1406,11 +2406,141 @@ def compute_single_trial_relative_phase_cached(
     )
 
 
+def compute_single_trial_relative_phase_cached(
+    lfp_format: str,
+    lfp_path_a: str,
+    lfp_mtime_ns_a: int,
+    channel_a: int,
+    site_a_label: str,
+    aligned_sync_path_a: str | None,
+    aligned_sync_mtime_ns_a: int,
+    lfp_path_b: str,
+    lfp_mtime_ns_b: int,
+    channel_b: int,
+    site_b_label: str,
+    aligned_sync_path_b: str | None,
+    aligned_sync_mtime_ns_b: int,
+    trial_index: int,
+    event_time_s: float,
+    window_start_s: float,
+    window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    frequencies_hz: tuple[float, ...],
+    gaussian_width: float,
+    wavelet_window_length: float,
+    precision: int,
+    norm: str,
+    output_sample_rate_hz: float,
+    notch_60_hz: bool,
+    notch_quality_factor: float,
+    minimum_relative_magnitude: float,
+    plv_window_cycles: float,
+    plv_min_window_s: float | None,
+    plv_max_window_s: float | None,
+    *,
+    open_ephys_cache_token: tuple[OpenEphysCacheToken | None, OpenEphysCacheToken | None] | None = None,
+) -> lfp_phase_clustering.SingleTrialRelativePhaseResult:
+    """Compute one pairwise cached relative-phase result.
+
+    Parameters
+    ----------
+    lfp_format : str
+        Shared acquisition format for both sources.
+    lfp_path_a, lfp_path_b : str
+        Source-A/B LFP binary filesystem paths with no numerical array axis.
+    aligned_sync_path_a, aligned_sync_path_b : str or None
+        Source-A/B Open Ephys synchronization paths, required for Open Ephys
+        and unused for SpikeGLX.
+    lfp_mtime_ns_a, lfp_mtime_ns_b, aligned_sync_mtime_ns_a, aligned_sync_mtime_ns_b : int
+        Compatibility cache identities in nanoseconds.
+    channel_a, channel_b, trial_index : int
+        Zero-based saved-channel and trial-row identifiers with no physical unit.
+    site_a_label, site_b_label : str
+        Ordered human-readable source labels defining phase A minus B; they
+        are categorical values with no physical unit or numerical axis.
+    event_time_s, window_start_s, window_end_s : float
+        Absolute and event-relative timestamps in seconds.
+    digital_word, irig_line : int
+        SpikeGLX synchronization selectors, ignored by Open Ephys.
+    bit_period_s, utc_offset_hours : float
+        SpikeGLX IRIG period in seconds and synchronization offset in hours.
+    frequencies_hz : tuple[float, ...]
+        One-dimensional ascending frequency axis in Hz.
+    gaussian_width, wavelet_window_length, notch_quality_factor : float
+        Dimensionless Morlet/notch settings.
+    precision : int
+        Base-2 Morlet evaluation precision.
+    norm : str
+        Morlet normalization label.
+    output_sample_rate_hz : float
+        Positive common phase-grid rate in Hz.
+    notch_60_hz : bool
+        Whether to apply the existing notch filter.
+    minimum_relative_magnitude : float
+        Dimensionless wavelet numerical-validity threshold.
+    plv_window_cycles : float
+        Positive local PLV window width in cycles.
+    plv_min_window_s, plv_max_window_s : float or None
+        Optional PLV duration bounds in seconds.
+    open_ephys_cache_token : tuple[OpenEphysCacheToken, OpenEphysCacheToken] or None
+        Optional complete identities for sources A/B. Valid supplied instances
+        are path-validated without rebuilding or rehashing.
+
+    Returns
+    -------
+    lfp_phase_clustering.SingleTrialRelativePhaseResult
+        Relative-phase arrays with frequency-by-time axes; phase is in radians,
+        source trace values remain uV for Open Ephys, and time is seconds.
+
+    Raises
+    ------
+    ValueError
+        If either source/synchronization/token binding, the paired trial axes,
+        or transform/PLV settings are invalid before cache execution.
+    OSError
+        If either production LFP source cannot be read.
+    """
+    if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED:
+        if open_ephys_cache_token is None:
+            tokens = (
+                _open_ephys_cache_token_or_none(lfp_format, lfp_path_a, aligned_sync_path_a, None),
+                _open_ephys_cache_token_or_none(lfp_format, lfp_path_b, aligned_sync_path_b, None),
+            )
+        else:
+            if len(open_ephys_cache_token) != 2:
+                raise ValueError("relative-phase Open Ephys cache token must contain source A and B")
+            token_a, token_b = open_ephys_cache_token
+            if token_a is None or token_b is None or aligned_sync_path_a is None or aligned_sync_path_b is None:
+                raise ValueError("relative-phase Open Ephys cache tokens require both aligned sync paths")
+            tokens = (
+                _validate_supplied_open_ephys_cache_token(token_a, lfp_path_a, aligned_sync_path_a),
+                _validate_supplied_open_ephys_cache_token(token_b, lfp_path_b, aligned_sync_path_b),
+            )
+    else:
+        tokens = None
+    return _compute_single_trial_relative_phase_cached(
+        lfp_format, lfp_path_a, lfp_mtime_ns_a, channel_a, site_a_label,
+        aligned_sync_path_a, aligned_sync_mtime_ns_a, lfp_path_b, lfp_mtime_ns_b,
+        channel_b, site_b_label, aligned_sync_path_b, aligned_sync_mtime_ns_b,
+        trial_index, event_time_s, window_start_s, window_end_s, digital_word,
+        irig_line, bit_period_s, utc_offset_hours, frequencies_hz, gaussian_width,
+        wavelet_window_length, precision, norm, output_sample_rate_hz, notch_60_hz,
+        notch_quality_factor, minimum_relative_magnitude, plv_window_cycles,
+        plv_min_window_s, plv_max_window_s, tokens,
+    )
+
+
+compute_single_trial_relative_phase_cached.clear = _compute_single_trial_relative_phase_cached.clear
+
+
 @st.cache_data(
     show_spinner="Computing spike-LFP phase locking...",
     max_entries=SPIKE_LFP_PHASE_CACHE_MAX_ENTRIES,
 )
-def compute_spike_lfp_phase_locking_cached(
+def _compute_spike_lfp_phase_locking_cached(
     lfp_format: str,
     lfp_path: str,
     lfp_mtime_ns: int,
@@ -1440,6 +2570,7 @@ def compute_spike_lfp_phase_locking_cached(
     absolute_amplitude_threshold: float,
     maximum_core_duration_s: float,
     phase_bin_count: int,
+    open_ephys_cache_token: OpenEphysCacheToken | None = None,
 ) -> spike_lfp_phase_locking.SpikePhaseLockingResult:
     """
     Load bounded continuous LFP blocks and pool one unit's trial-window phases.
@@ -1501,6 +2632,9 @@ def compute_spike_lfp_phase_locking_cached(
         Number of equal-width phase bins spanning ``[-pi, pi]``. This is an
         explicit cache parameter so phase-tuning results cannot be reused
         across different binning settings.
+    open_ephys_cache_token : OpenEphysCacheToken or None, optional
+        Complete physical-uV source identity used only in this decorated cache
+        key. It contains no retained LFP samples or phase values.
 
     Returns
     -------
@@ -1510,7 +2644,7 @@ def compute_spike_lfp_phase_locking_cached(
         ``(frequency, phase_bin)``.
     """
 
-    del lfp_mtime_ns, aligned_sync_mtime_ns
+    del lfp_mtime_ns, aligned_sync_mtime_ns, open_ephys_cache_token
     frequencies = np.asarray(frequencies_hz, dtype=float)
     padding_s = lfp_spectrogram.compute_wavelet_padding_s(
         minimum_frequency_hz=float(np.min(frequencies)),
@@ -1560,11 +2694,122 @@ def compute_spike_lfp_phase_locking_cached(
     )
 
 
+def compute_spike_lfp_phase_locking_cached(
+    lfp_format: str,
+    lfp_path: str,
+    lfp_mtime_ns: int,
+    saved_channel_index: int,
+    lfp_site_label: str,
+    aligned_sync_path: str | None,
+    aligned_sync_mtime_ns: int,
+    unit_id: int,
+    unit_spike_times_s: tuple[float, ...],
+    trial_indices: tuple[int, ...],
+    event_times_s: tuple[float, ...],
+    window_start_s: float,
+    window_end_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    frequencies_hz: tuple[float, ...],
+    gaussian_width: float,
+    wavelet_window_length: float,
+    precision: int,
+    norm: str,
+    target_sample_rate_hz: float,
+    notch_60_hz: bool,
+    notch_quality_factor: float,
+    minimum_relative_magnitude: float,
+    absolute_amplitude_threshold: float,
+    maximum_core_duration_s: float,
+    phase_bin_count: int,
+    *,
+    open_ephys_cache_token: OpenEphysCacheToken | None = None,
+) -> spike_lfp_phase_locking.SpikePhaseLockingResult:
+    """Compute one unit/site phase-locking result through a source cache.
+
+    Parameters
+    ----------
+    lfp_format : str
+        Acquisition-format label selecting Open Ephys or SpikeGLX behavior.
+    lfp_path : str
+        Selected LFP binary filesystem path with no numerical array axis.
+    aligned_sync_path : str or None
+        Open Ephys synchronization path, required for that format and unused
+        for SpikeGLX.
+    lfp_mtime_ns, aligned_sync_mtime_ns : int
+        Existing compatibility cache identities in nanoseconds.
+    saved_channel_index, unit_id : int
+        Zero-based LFP saved channel and sorter unit identifiers.
+    lfp_site_label : str
+        Human-readable probe/channel label with no physical unit.
+    unit_spike_times_s, event_times_s : tuple[float, ...]
+        One-dimensional absolute timestamps in seconds.
+    trial_indices : tuple[int, ...]
+        One-dimensional source trial-row axis aligned with event times.
+    window_start_s, window_end_s, bit_period_s, maximum_core_duration_s : float
+        Event-relative bounds, IRIG period, and block-duration limit in
+        seconds.
+    digital_word, irig_line, phase_bin_count : int
+        SpikeGLX synchronization selectors and phase-bin count.
+    utc_offset_hours : float
+        Synchronization offset in hours.
+    frequencies_hz : tuple[float, ...]
+        One-dimensional positive Morlet frequency axis in Hz.
+    gaussian_width, wavelet_window_length, notch_quality_factor : float
+        Dimensionless transform/filter settings.
+    precision : int
+        Base-2 Morlet precision.
+    norm : str
+        Morlet normalization label.
+    target_sample_rate_hz : float
+        Positive phase time-axis rate in Hz.
+    notch_60_hz : bool
+        Whether to apply the existing 60 Hz notch.
+    minimum_relative_magnitude, absolute_amplitude_threshold : float
+        Dimensionless numerical-validity and source-amplitude thresholds.
+    open_ephys_cache_token : OpenEphysCacheToken or None, keyword-only
+        Optional complete physical-uV source identity, constructed before
+        cache keying only when omitted.
+
+    Returns
+    -------
+    spike_lfp_phase_locking.SpikePhaseLockingResult
+        Frequency metrics and retained phase observations. Frequency is Hz,
+        phase is radians/dimensionless, and source LFP remains uV for Open
+        Ephys before phase conversion.
+
+    Raises
+    ------
+    ValueError
+        If source/synchronization/token bindings, spike/trial axes, or phase
+        transform/threshold settings are invalid before cache execution.
+    OSError
+        If production LFP loading fails.
+    """
+    token = _open_ephys_cache_token_or_none(
+        lfp_format, lfp_path, aligned_sync_path, open_ephys_cache_token
+    )
+    return _compute_spike_lfp_phase_locking_cached(
+        lfp_format, lfp_path, lfp_mtime_ns, saved_channel_index, lfp_site_label,
+        aligned_sync_path, aligned_sync_mtime_ns, unit_id, unit_spike_times_s,
+        trial_indices, event_times_s, window_start_s, window_end_s, digital_word,
+        irig_line, bit_period_s, utc_offset_hours, frequencies_hz, gaussian_width,
+        wavelet_window_length, precision, norm, target_sample_rate_hz,
+        notch_60_hz, notch_quality_factor, minimum_relative_magnitude,
+        absolute_amplitude_threshold, maximum_core_duration_s, phase_bin_count, token,
+    )
+
+
+compute_spike_lfp_phase_locking_cached.clear = _compute_spike_lfp_phase_locking_cached.clear
+
+
 @st.cache_data(
     show_spinner="Computing single-trial spike-LFP Hilbert phase...",
     max_entries=SPIKE_LFP_HILBERT_CACHE_MAX_ENTRIES,
 )
-def compute_single_trial_spike_lfp_hilbert_cached(
+def _compute_single_trial_spike_lfp_hilbert_cached(
     lfp_format: str,
     lfp_path: str,
     lfp_mtime_ns: int,
@@ -1586,6 +2831,7 @@ def compute_single_trial_spike_lfp_hilbert_cached(
     bit_period_s: float,
     utc_offset_hours: float,
     minimum_envelope: float,
+    open_ephys_cache_token: OpenEphysCacheToken | None = None,
 ) -> spike_lfp_hilbert_phase.SingleTrialSpikeLFPHilbertResult:
     """Load one padded raw LFP interval and compute visible Hilbert phase.
 
@@ -1629,6 +2875,9 @@ def compute_single_trial_spike_lfp_hilbert_cached(
         Constant synchronization offset in hours.
     minimum_envelope : float
         Nonnegative source-unit Hilbert envelope validity threshold.
+    open_ephys_cache_token : OpenEphysCacheToken or None, optional
+        Complete physical-uV source identity used only in this decorated cache
+        key. The public wrapper validates/binds it before the raw trace loads.
 
     Returns
     -------
@@ -1638,7 +2887,7 @@ def compute_single_trial_spike_lfp_hilbert_cached(
     """
 
     # These values are cache-key inputs, not numerical computation inputs.
-    del lfp_mtime_ns, aligned_sync_mtime_ns
+    del lfp_mtime_ns, aligned_sync_mtime_ns, open_ephys_cache_token
     padded_start_s = float(window_start_s) - float(filter_padding_s)
     padded_end_s = float(window_end_s) + float(filter_padding_s)
     relative_time_s, raw_lfp, source_sample_rate_hz = load_trial_lfp_trace_for_format_with_sample_rate(
@@ -1668,6 +2917,95 @@ def compute_single_trial_spike_lfp_hilbert_cached(
         unit_id=int(unit_id),
         lfp_site_label=lfp_site_label,
     )
+
+
+def compute_single_trial_spike_lfp_hilbert_cached(
+    lfp_format: str,
+    lfp_path: str,
+    lfp_mtime_ns: int,
+    saved_channel_index: int,
+    lfp_site_label: str,
+    aligned_sync_path: str | None,
+    aligned_sync_mtime_ns: int,
+    unit_id: int,
+    unit_spike_times_s: tuple[float, ...],
+    trial_index: int,
+    event_time_s: float,
+    window_start_s: float,
+    window_end_s: float,
+    band_low_hz: float,
+    band_high_hz: float,
+    filter_padding_s: float,
+    digital_word: int,
+    irig_line: int,
+    bit_period_s: float,
+    utc_offset_hours: float,
+    minimum_envelope: float,
+    *,
+    open_ephys_cache_token: OpenEphysCacheToken | None = None,
+) -> spike_lfp_hilbert_phase.SingleTrialSpikeLFPHilbertResult:
+    """Compute one trial's Hilbert phase through a source-identity cache.
+
+    Parameters
+    ----------
+    lfp_format : str
+        Acquisition-format label selecting Open Ephys or SpikeGLX behavior.
+    lfp_path : str
+        Selected LFP binary filesystem path with no numerical array axis.
+    aligned_sync_path : str or None
+        Open Ephys synchronization path, required for that format and unused
+        for SpikeGLX.
+    lfp_mtime_ns, aligned_sync_mtime_ns : int
+        Existing compatibility cache identities in nanoseconds.
+    saved_channel_index, unit_id, trial_index : int
+        Zero-based saved-channel, sorter-unit, and trial-row identifiers.
+    lfp_site_label : str
+        Human-readable source site label with no physical unit.
+    unit_spike_times_s : tuple[float, ...]
+        One-dimensional absolute spike timestamps in seconds.
+    event_time_s, window_start_s, window_end_s, filter_padding_s, bit_period_s : float
+        Absolute alignment, relative visible window, filter padding, and
+        SpikeGLX IRIG period in seconds.
+    band_low_hz, band_high_hz : float
+        Positive bandpass edges in Hz.
+    digital_word, irig_line : int
+        SpikeGLX synchronization selectors.
+    utc_offset_hours : float
+        Synchronization offset in hours.
+    minimum_envelope : float
+        Nonnegative physical-uV Hilbert-envelope validity threshold for Open
+        Ephys source values.
+    open_ephys_cache_token : OpenEphysCacheToken or None, keyword-only
+        Optional complete source identity. Omission builds it before cache
+        keying; a supplied valid token is reused without sidecar hashing.
+
+    Returns
+    -------
+    spike_lfp_hilbert_phase.SingleTrialSpikeLFPHilbertResult
+        One-dimensional visible raw/filtered LFP arrays in uV for Open Ephys,
+        plus phase in radians and spike observations on seconds-based axes.
+
+    Raises
+    ------
+    ValueError
+        If source/synchronization/token bindings, selected trial/spike inputs,
+        Hilbert band, or validity threshold are invalid before cache execution.
+    OSError
+        If production LFP loading fails.
+    """
+    token = _open_ephys_cache_token_or_none(
+        lfp_format, lfp_path, aligned_sync_path, open_ephys_cache_token
+    )
+    return _compute_single_trial_spike_lfp_hilbert_cached(
+        lfp_format, lfp_path, lfp_mtime_ns, saved_channel_index, lfp_site_label,
+        aligned_sync_path, aligned_sync_mtime_ns, unit_id, unit_spike_times_s,
+        trial_index, event_time_s, window_start_s, window_end_s, band_low_hz,
+        band_high_hz, filter_padding_s, digital_word, irig_line, bit_period_s,
+        utc_offset_hours, minimum_envelope, token,
+    )
+
+
+compute_single_trial_spike_lfp_hilbert_cached.clear = _compute_single_trial_spike_lfp_hilbert_cached.clear
 
 
 def _build_channel_text(region_name: str) -> str:
@@ -1975,7 +3313,21 @@ def render_single_trial_relative_phase_view(
 
     site_a_label = f"{probe_a}, channel {channel_a}"
     site_b_label = f"{probe_b}, channel {channel_b}"
+    open_ephys_tokens: tuple[OpenEphysCacheToken, ...] = ()
     try:
+        if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED:
+            if aligned_sync_a is None or aligned_sync_b is None:
+                raise ValueError("Open Ephys relative phase requires both aligned sync paths")
+            tokens_by_source: dict[tuple[str, str], OpenEphysCacheToken] = {}
+            selected_tokens = []
+            for source, sync in ((source_a, aligned_sync_a), (source_b, aligned_sync_b)):
+                source_identity = (str(source.resolve()), str(Path(sync).resolve()))
+                token = tokens_by_source.get(source_identity)
+                if token is None:
+                    token = build_open_ephys_cache_token(source, sync)
+                    tokens_by_source[source_identity] = token
+                selected_tokens.append(token)
+            open_ephys_tokens = tuple(selected_tokens)
         result = compute_single_trial_relative_phase_cached(
             lfp_format=lfp_format,
             lfp_path_a=str(source_a),
@@ -2010,6 +3362,11 @@ def render_single_trial_relative_phase_view(
             plv_window_cycles=plv_window_cycles,
             plv_min_window_s=plv_min_window_s,
             plv_max_window_s=plv_max_window_s,
+            open_ephys_cache_token=(
+                (open_ephys_tokens[0], open_ephys_tokens[1])
+                if open_ephys_tokens
+                else None
+            ),
         )
     except Exception as error:  # noqa: BLE001 - Streamlit should report pair-specific loading failures.
         st.error(f"Could not compute single-trial relative phase: {error}")
@@ -2044,7 +3401,7 @@ def render_single_trial_relative_phase_view(
         site_b_label=site_b_label,
     )
     lick_times = spike_behavior_pynapple.build_lick_time_dict(event_df)
-    lfp_y_label = "LFP (uV)" if lfp_format == LFP_FORMAT_SPIKEGLX else "LFP"
+    lfp_y_label = "LFP (uV)"
     figure, _axes = unit_spike_plotting.plot_trial_lfp_phase_analysis_and_behavior(
         trial_df=trial_df,
         trial_index=trial_index,
@@ -2123,6 +3480,9 @@ def render_single_trial_relative_phase_view(
             "time_units": "s relative to alignment event",
             "random_seed": None,
         }
+        if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED:
+            metadata["source_lfp_units"] = "uV"
+        metadata.update(_open_ephys_exploratory_provenance(lfp_format, open_ephys_tokens))
         lfp_phase_clustering.save_single_trial_phase_analysis_result(
             numeric_output_dir / "phase_and_plv.npz",
             phase_result=result,
@@ -2320,13 +3680,26 @@ def render_lfp_phase_clustering_view(
     site_tensors = []
     site_labels = []
     source_paths = []
+    open_ephys_tokens_by_source: dict[tuple[str, str], OpenEphysCacheToken] = {}
     for probe_label, saved_channel_index in unique_sites:
         source_path, aligned_sync_path = probe_sources[probe_label]
         source = Path(str(source_path)).expanduser()
         if not str(source_path).strip() or not source.exists():
             st.error(f"LFP path for {probe_label} does not exist: {source_path}")
             st.stop()
-        aligned_sync_argument = str(aligned_sync_path) if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED else None
+        aligned_sync_argument = None
+        open_ephys_cache_token = None
+        if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED:
+            sync = Path(str(aligned_sync_path)).expanduser()
+            if not str(aligned_sync_path).strip() or not sync.is_file():
+                st.error(f"Aligned sync path for {probe_label} does not exist: {sync}")
+                st.stop()
+            aligned_sync_argument = str(sync)
+            source_identity = (str(source.resolve()), str(sync.resolve()))
+            open_ephys_cache_token = open_ephys_tokens_by_source.get(source_identity)
+            if open_ephys_cache_token is None:
+                open_ephys_cache_token = build_open_ephys_cache_token(source, sync)
+                open_ephys_tokens_by_source[source_identity] = open_ephys_cache_token
         site_label = f"{probe_label}, channel {saved_channel_index}"
         try:
             site_tensor = compute_lfp_phase_site_cached(
@@ -2353,6 +3726,7 @@ def render_lfp_phase_clustering_view(
                 minimum_relative_magnitude=LFP_PHASE_CLUSTERING_MINIMUM_RELATIVE_MAGNITUDE,
                 maximum_core_duration_s=LFP_PHASE_CLUSTERING_MAXIMUM_CORE_DURATION_S,
                 aligned_sync_npz_path=aligned_sync_argument,
+                open_ephys_cache_token=open_ephys_cache_token,
             )
         except Exception as error:  # noqa: BLE001 - Streamlit should report site-specific loading failures.
             st.error(f"Could not preprocess {site_label}: {error}")
@@ -2475,6 +3849,12 @@ def render_lfp_phase_clustering_view(
             "time_units": "s relative to alignment event",
             "random_seed": None,
         }
+        common_metadata.update(
+            _open_ephys_exploratory_provenance(
+                lfp_format,
+                tuple(open_ephys_tokens_by_source.values()),
+            )
+        )
         for result_number, (result_label, result) in enumerate(calculated_results, start=1):
             result_metadata = dict(common_metadata)
             result_metadata["site_or_pair"] = result_label
@@ -3396,7 +4776,12 @@ def render_spike_lfp_phase_locking_view(
 
     unit_spike_times_s = unit_spike_loading.get_unit_spike_times(spike_group, selected_unit_id)
     lfp_site_label = f"{lfp_probe_label}, channel {lfp_saved_channel_index}"
+    open_ephys_tokens: tuple[OpenEphysCacheToken, ...] = ()
     try:
+        if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED:
+            if aligned_sync_path is None:
+                raise ValueError("Open Ephys phase locking requires an aligned sync path")
+            open_ephys_tokens = (build_open_ephys_cache_token(lfp_source, aligned_sync_path),)
         result = compute_spike_lfp_phase_locking_cached(
             lfp_format=lfp_format,
             lfp_path=str(lfp_source),
@@ -3427,6 +4812,7 @@ def render_spike_lfp_phase_locking_view(
             absolute_amplitude_threshold=absolute_amplitude_threshold,
             maximum_core_duration_s=SPIKE_LFP_PHASE_MAXIMUM_CORE_DURATION_S,
             phase_bin_count=SPIKE_LFP_PHASE_BIN_COUNT,
+            open_ephys_cache_token=open_ephys_tokens[0] if open_ephys_tokens else None,
         )
     except Exception as error:  # noqa: BLE001 - Streamlit should report unit/site-specific failures.
         st.error(f"Could not compute spike-LFP phase locking: {error}")
@@ -3516,7 +4902,11 @@ def render_spike_lfp_phase_locking_view(
             "target_sample_rate_hz": LFP_PHASE_CLUSTERING_OUTPUT_SAMPLE_RATE_HZ,
             "amplitude_mask_mode": amplitude_mask_mode,
             "absolute_amplitude_threshold": absolute_amplitude_threshold,
-            "amplitude_units": "source-dependent wavelet magnitude",
+            "amplitude_units": (
+                "uV"
+                if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED
+                else "source-dependent wavelet magnitude"
+            ),
             "phase_units": "radians",
             "phase_bin_count": int(SPIKE_LFP_PHASE_BIN_COUNT),
             "phase_bin_range_rad": [-float(np.pi), float(np.pi)],
@@ -3551,6 +4941,7 @@ def render_spike_lfp_phase_locking_view(
             },
             "random_seed": None,
         }
+        metadata.update(_open_ephys_exploratory_provenance(lfp_format, open_ephys_tokens))
         spike_lfp_phase_locking.save_spike_lfp_phase_locking_result(
             output_path=numeric_output_dir / "spike_lfp_phase_locking.npz",
             result=result,
@@ -3703,7 +5094,12 @@ def render_single_trial_spike_lfp_hilbert_view(
 
     unit_spike_times_s = unit_spike_loading.get_unit_spike_times(spike_group, selected_unit_id)
     lfp_site_label = f"{lfp_probe_label}, channel {lfp_saved_channel_index}"
+    open_ephys_tokens: tuple[OpenEphysCacheToken, ...] = ()
     try:
+        if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED:
+            if aligned_sync_path is None:
+                raise ValueError("Open Ephys Hilbert phase requires an aligned sync path")
+            open_ephys_tokens = (build_open_ephys_cache_token(lfp_source, aligned_sync_path),)
         result = compute_single_trial_spike_lfp_hilbert_cached(
             lfp_format=lfp_format,
             lfp_path=str(lfp_source),
@@ -3726,13 +5122,14 @@ def render_single_trial_spike_lfp_hilbert_view(
             bit_period_s=1.0,
             utc_offset_hours=utc_offset_hours,
             minimum_envelope=float(SPIKE_LFP_HILBERT_MINIMUM_ENVELOPE),
+            open_ephys_cache_token=open_ephys_tokens[0] if open_ephys_tokens else None,
         )
     except Exception as error:  # noqa: BLE001 - Streamlit should display unit/site loading failures cleanly.
         st.error(f"Could not compute single-trial spike-LFP phase: {error}")
         st.stop()
 
     lick_times = spike_behavior_pynapple.build_lick_time_dict(event_df)
-    lfp_y_label = "LFP (uV)" if lfp_format == LFP_FORMAT_SPIKEGLX else "LFP"
+    lfp_y_label = "LFP (uV)"
     figure, _axes = unit_spike_plotting.plot_trial_spike_lfp_hilbert_phase_and_behavior(
         trial_df=trial_df,
         trial_index=trial_index,
@@ -3797,8 +5194,8 @@ def render_single_trial_spike_lfp_hilbert_view(
             "phase_convention": "angle(hilbert(Pynapple Butterworth bandpass))",
             "phase_units": "radians",
             "phase_range_rad": [-float(np.pi), float(np.pi)],
-            "raw_lfp_units": "uV" if lfp_format == LFP_FORMAT_SPIKEGLX else "source units",
-            "filtered_lfp_units": "uV" if lfp_format == LFP_FORMAT_SPIKEGLX else "source units",
+            "raw_lfp_units": "uV",
+            "filtered_lfp_units": "uV",
             "time_units": "seconds relative to alignment event",
             "spike_time_units": "seconds relative to alignment event",
             "spike_phase_units": "radians",
@@ -3818,6 +5215,7 @@ def render_single_trial_spike_lfp_hilbert_view(
             ),
             "random_seed": None,
         }
+        metadata.update(_open_ephys_exploratory_provenance(lfp_format, open_ephys_tokens))
         spike_lfp_hilbert_phase.save_single_trial_spike_lfp_hilbert_result(
             output_path=numeric_output_dir / "single_trial_spike_lfp_hilbert.npz",
             result=result,
@@ -3850,15 +5248,155 @@ def render_single_trial_spike_lfp_hilbert_view(
     plt.close(figure)
 
 
-def main() -> None:
+def _legacy_population_controls(
+    hpc_sorter_path: str,
+    hpc_aligned_path: str,
+    hpc_lfp_path: str,
+    pfc_sorter_path: str,
+    pfc_aligned_path: str,
+    pfc_lfp_path: str,
+) -> tuple[str, str, str, str, str, np.ndarray, str]:
+    """Render the existing manual region controls and return their selection.
+
+    All paths are user-entered filesystem strings. The returned channel array
+    is one-dimensional, integer, and zero based. This helper preserves the
+    legacy route while the metadata route supplies the same values directly.
+    """
+    st.sidebar.header("Region and Units")
+    preset_options = list(unit_spike_loading.get_ct014_region_channel_presets().keys())
+    region_name = st.sidebar.selectbox("Region preset", options=preset_options, index=0)
+    custom_probe_label = None
+    if region_name == "Custom":
+        custom_probe_label = st.sidebar.selectbox(
+            "Custom probe source",
+            options=list(unit_spike_loading.SUPPORTED_PROBE_LABELS),
+        )
+    active_probe_label = unit_spike_loading.get_probe_label_for_region(
+        region_name,
+        custom_probe_label=custom_probe_label,
+    )
+    st.sidebar.caption(f"Active probe: {active_probe_label}")
+    if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1:
+        active_sorter_output_path = hpc_sorter_path
+        active_aligned_spike_path = hpc_aligned_path
+        active_lfp_path = hpc_lfp_path
+    else:
+        active_sorter_output_path = pfc_sorter_path
+        active_aligned_spike_path = pfc_aligned_path
+        active_lfp_path = pfc_lfp_path
+
+    inferred_probe_derived_dir = unit_spike_loading.infer_probe_derived_dir(
+        sorter_output_path=active_sorter_output_path,
+        lfp_path=active_lfp_path,
+    )
+    channel_quality_path = None
+    if inferred_probe_derived_dir is not None:
+        try:
+            channel_quality_path = unit_spike_loading.resolve_channel_quality_path(
+                inferred_probe_derived_dir
+            )
+        except (FileNotFoundError, ValueError):
+            channel_quality_path = None
+    channel_source_options = [CHANNEL_SOURCE_MANUAL]
+    if channel_quality_path is not None:
+        channel_source_options.append(CHANNEL_SOURCE_CHANNEL_QUALITY)
+    channel_source = st.sidebar.selectbox(
+        "Channel source",
+        options=channel_source_options,
+        index=1 if CHANNEL_SOURCE_CHANNEL_QUALITY in channel_source_options else 0,
+        help="Use channel_quality when available to select good in-brain probe sites.",
+    )
+    channel_quality = None
+    channel_quality_labels = ("good",)
+    require_inside_brain = True
+    if channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY:
+        channel_quality = load_channel_quality_cached(str(channel_quality_path))
+        st.sidebar.caption(f"Channel quality: {channel_quality_path}")
+        available_labels = sorted(
+            channel_quality["label"].astype(str).str.strip().str.lower().unique().tolist()
+        )
+        default_labels = ["good"] if "good" in available_labels else available_labels
+        channel_quality_labels = tuple(
+            st.sidebar.multiselect(
+                "Channel labels",
+                options=available_labels,
+                default=default_labels,
+            )
+        )
+        require_inside_brain = st.sidebar.checkbox("Inside brain only", value=True)
+        disagreement_count = int(
+            (
+                channel_quality["label"].astype(str).str.strip().str.lower().eq("good")
+                != channel_quality["is_good"].astype(bool)
+            ).sum()
+        )
+        if disagreement_count:
+            st.sidebar.warning(
+                f"{disagreement_count} channels disagree between label == 'good' and is_good."
+            )
+        manual_channel_text = _build_channel_text(region_name)
+    else:
+        manual_channel_text = st.sidebar.text_area(
+            "Region channels",
+            value=_build_channel_text(region_name),
+            key=f"channel_text_{region_name}",
+            height=140,
+        )
+    region_channels, channel_summary = resolve_region_channels_for_source(
+        channel_source=channel_source,
+        manual_channel_text=manual_channel_text,
+        channel_quality=channel_quality,
+        require_inside_brain=require_inside_brain,
+        channel_quality_labels=channel_quality_labels,
+    )
+    st.sidebar.caption(channel_summary)
+    return (
+        region_name,
+        active_probe_label,
+        active_sorter_output_path,
+        active_aligned_spike_path,
+        active_lfp_path,
+        region_channels,
+        channel_source,
+    )
+
+
+def _start_metadata_webapp(session: ResolvedSession) -> str | None:
+    """Render metadata identity/view controls and return an available non-summary view.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        One resolved metadata session. No scientific array has been opened.
+
+    Returns
+    -------
+    str or None
+        Selected non-summary view, or ``None`` after rendering a summary view
+        or explaining why the selected view is unavailable.
+    """
+    st.sidebar.caption(f"Session: {session.subject_id} / {session.session_id}")
+    plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+    availability = metadata_view_availability(session)[plot_view]
+    if not availability.available:
+        st.warning(availability.reason)
+        return None
+    if plot_view == PLOT_VIEW_LFP_SUMMARY:
+        render_metadata_lfp_summary_view(st, session)
+        return None
+    return plot_view
+
+
+def main(argv: Sequence[str] = ()) -> None:
     """
     Run the local Streamlit unit raster/PSTH browser.
 
     Parameters
     ----------
-    None
-        Streamlit controls provide session paths, unit selection, and plotting
-        settings.
+    argv : sequence of str
+        Optional script arguments after Streamlit's ``--``. An explicit
+        ``--session-metadata`` selects the metadata-driven route; an empty
+        sequence preserves the existing direct/manual route.
 
     Returns
     -------
@@ -3874,44 +5412,74 @@ def main() -> None:
         st.cache_data.clear()
         st.rerun()
 
-    _initialize_path_input_state()
-    st.sidebar.header("Session")
-    session_data_home = st.sidebar.text_input(
-        "Session data home",
-        key="session_data_home_input",
-    )
-    sess_id_full = st.sidebar.text_input(
-        "Session id",
-        value=unit_spike_loading.DEFAULT_SESSION_ID,
-    )
+    arguments = parse_webapp_arguments(argv)
+    metadata_session: ResolvedSession | None = None
+    if arguments.session_metadata is not None:
+        try:
+            metadata_session = load_webapp_session(arguments.session_metadata)
+        except (OSError, ValueError) as error:
+            st.error(f"Could not load session metadata: {error}")
+            return
+        selected_metadata_view = _start_metadata_webapp(metadata_session)
+        if selected_metadata_view is None:
+            return
+        plot_view = selected_metadata_view
+        session_data_home = str(metadata_session.session_root)
+        sess_id_full = metadata_session.session_id
+        site_probe_ids = tuple(dict.fromkeys(site.probe_id for site in metadata_session.sites))
+        if not site_probe_ids:
+            site_probe_ids = tuple(probe.probe_id for probe in metadata_session.probes)
+        first_probe = resolve_probe_sources(metadata_session, site_probe_ids[0])
+        second_probe = (
+            resolve_probe_sources(metadata_session, site_probe_ids[1])
+            if len(site_probe_ids) > 1
+            else first_probe
+        )
+        pfc_sorter_output_path = str(first_probe.sorter_directory or "")
+        pfc_aligned_spike_path = str(first_probe.aligned_spike_file or "")
+        pfc_lfp_path = str(first_probe.lfp_file or "")
+        hpc_v1_sorter_output_path = str(second_probe.sorter_directory or "")
+        hpc_v1_aligned_spike_path = str(second_probe.aligned_spike_file or "")
+        hpc_v1_lfp_path = str(second_probe.lfp_file or "")
+    else:
+        _initialize_path_input_state()
+        st.sidebar.header("Session")
+        session_data_home = st.sidebar.text_input(
+            "Session data home",
+            key="session_data_home_input",
+        )
+        sess_id_full = st.sidebar.text_input(
+            "Session id",
+            value=unit_spike_loading.DEFAULT_SESSION_ID,
+        )
 
-    st.sidebar.header("Probe Paths")
-    hpc_v1_sorter_output_path = st.sidebar.text_input(
-        "HPC/V1 sorter output path",
-        key="hpc_v1_sorter_output_path_input",
-    )
-    hpc_v1_aligned_spike_path = st.sidebar.text_input(
-        "HPC/V1 aligned spike path",
-        key="hpc_v1_aligned_spike_path_input",
-    )
-    hpc_v1_lfp_path = st.sidebar.text_input(
-        "HPC/V1 LFP path",
-        key="hpc_v1_lfp_path_input",
-    )
-    pfc_sorter_output_path = st.sidebar.text_input(
-        "PFC sorter output path",
-        key="pfc_sorter_output_path_input",
-    )
-    pfc_aligned_spike_path = st.sidebar.text_input(
-        "PFC aligned spike path",
-        key="pfc_aligned_spike_path_input",
-    )
-    pfc_lfp_path = st.sidebar.text_input(
-        "PFC LFP path",
-        key="pfc_lfp_path_input",
-    )
-    _render_path_browser()
-    plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+        st.sidebar.header("Probe Paths")
+        hpc_v1_sorter_output_path = st.sidebar.text_input(
+            "HPC/V1 sorter output path",
+            key="hpc_v1_sorter_output_path_input",
+        )
+        hpc_v1_aligned_spike_path = st.sidebar.text_input(
+            "HPC/V1 aligned spike path",
+            key="hpc_v1_aligned_spike_path_input",
+        )
+        hpc_v1_lfp_path = st.sidebar.text_input(
+            "HPC/V1 LFP path",
+            key="hpc_v1_lfp_path_input",
+        )
+        pfc_sorter_output_path = st.sidebar.text_input(
+            "PFC sorter output path",
+            key="pfc_sorter_output_path_input",
+        )
+        pfc_aligned_spike_path = st.sidebar.text_input(
+            "PFC aligned spike path",
+            key="pfc_aligned_spike_path_input",
+        )
+        pfc_lfp_path = st.sidebar.text_input(
+            "PFC LFP path",
+            key="pfc_lfp_path_input",
+        )
+        _render_path_browser()
+        plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
 
     if plot_view == PLOT_VIEW_LFP_SUMMARY:
         render_lfp_summary_view(
@@ -3928,10 +5496,27 @@ def main() -> None:
 
     if plot_view in {PLOT_VIEW_LFP_PHASE_CLUSTERING, PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE}:
         try:
-            phase_session, phase_event_df, phase_trial_df = load_phase_clustering_session_cached(
-                session_data_home=session_data_home,
-                sess_id_full=sess_id_full,
-            )
+            if metadata_session is not None:
+                phase_session, phase_event_df, phase_trial_df = (
+                    load_metadata_behavior_session_cached(
+                        str(metadata_session.session_root),
+                        metadata_session.subject_id,
+                        metadata_session.session_id,
+                        metadata_session.session_date,
+                        str(metadata_session.behavior.session_directory),
+                        str(metadata_session.behavior.trial_table_file),
+                        (
+                            str(metadata_session.behavior.event_table_file)
+                            if metadata_session.behavior.event_table_file is not None
+                            else None
+                        ),
+                    )
+                )
+            else:
+                phase_session, phase_event_df, phase_trial_df = load_phase_clustering_session_cached(
+                    session_data_home=session_data_home,
+                    sess_id_full=sess_id_full,
+                )
         except Exception as error:  # noqa: BLE001 - Streamlit should display behavior loading failures cleanly.
             st.error(f"Could not load session behavior data: {error}")
             st.stop()
@@ -3956,115 +5541,86 @@ def main() -> None:
             )
         return
 
-    st.sidebar.header("Region and Units")
-    preset_options = list(unit_spike_loading.get_ct014_region_channel_presets().keys())
-    region_name = st.sidebar.selectbox("Region preset", options=preset_options, index=0)
-    custom_probe_label = None
-    if region_name == "Custom":
-        custom_probe_label = st.sidebar.selectbox(
-            "Custom probe source",
-            options=list(unit_spike_loading.SUPPORTED_PROBE_LABELS),
-        )
     try:
-        active_probe_label = unit_spike_loading.get_probe_label_for_region(
-            region_name,
-            custom_probe_label=custom_probe_label,
-        )
-    except ValueError as error:
-        st.error(str(error))
-        st.stop()
-    st.sidebar.caption(f"Active probe: {active_probe_label}")
-
-    if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1:
-        active_sorter_output_path = hpc_v1_sorter_output_path
-        active_aligned_spike_path = hpc_v1_aligned_spike_path
-        active_lfp_path = hpc_v1_lfp_path
-    else:
-        active_sorter_output_path = pfc_sorter_output_path
-        active_aligned_spike_path = pfc_aligned_spike_path
-        active_lfp_path = pfc_lfp_path
-
-    inferred_probe_derived_dir = unit_spike_loading.infer_probe_derived_dir(
-        sorter_output_path=active_sorter_output_path,
-        lfp_path=active_lfp_path,
-    )
-    channel_quality_path = None
-    if inferred_probe_derived_dir is not None:
-        try:
-            channel_quality_path = unit_spike_loading.resolve_channel_quality_path(inferred_probe_derived_dir)
-        except (FileNotFoundError, ValueError):
-            channel_quality_path = None
-    channel_source_options = [CHANNEL_SOURCE_MANUAL]
-    if channel_quality_path is not None:
-        channel_source_options.append(CHANNEL_SOURCE_CHANNEL_QUALITY)
-    channel_source = st.sidebar.selectbox(
-        "Channel source",
-        options=channel_source_options,
-        index=1 if CHANNEL_SOURCE_CHANNEL_QUALITY in channel_source_options else 0,
-        help="Use channel_quality when available to select good in-brain probe sites.",
-    )
-
-    channel_quality = None
-    channel_quality_labels = ("good",)
-    require_inside_brain = True
-    if channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY:
-        try:
-            channel_quality = load_channel_quality_cached(str(channel_quality_path))
-        except Exception as error:  # noqa: BLE001 - Streamlit should show metadata failures cleanly.
-            st.error(f"Could not load channel quality: {error}")
-            st.stop()
-        st.sidebar.caption(f"Channel quality: {channel_quality_path}")
-        available_channel_labels = sorted(channel_quality["label"].astype(str).str.strip().str.lower().unique().tolist())
-        default_channel_labels = ["good"] if "good" in available_channel_labels else available_channel_labels
-        channel_quality_labels = tuple(
-            st.sidebar.multiselect(
-                "Channel labels",
-                options=available_channel_labels,
-                default=default_channel_labels,
-                help="Good-site selection uses channel_quality label values; label='good' is the default.",
+        if metadata_session is not None:
+            st.sidebar.header("Population")
+            population_ids = tuple(item.population_id for item in metadata_session.populations)
+            selected_population_id = st.sidebar.selectbox(
+                "Population",
+                options=population_ids,
+                format_func=lambda value: next(
+                    item.display_label
+                    for item in metadata_session.populations
+                    if item.population_id == value
+                ),
             )
-        )
-        require_inside_brain = st.sidebar.checkbox("Inside brain only", value=True)
-        label_good_mask = channel_quality["label"].astype(str).str.strip().str.lower().eq("good")
-        is_good_mask = channel_quality["is_good"].astype(bool)
-        disagreement_count = int((label_good_mask != is_good_mask).sum())
-        if disagreement_count > 0:
-            st.sidebar.warning(f"{disagreement_count} channels disagree between label == 'good' and is_good.")
-        manual_channel_text = _build_channel_text(region_name)
-    else:
-        manual_channel_text = st.sidebar.text_area(
-            "Region channels",
-            value=_build_channel_text(region_name),
-            key=f"channel_text_{region_name}",
-            height=140,
-            help="CT014 presets are editable defaults. Replace with custom channel ids when needed.",
-        )
-
-    try:
-        region_channels, channel_summary = resolve_region_channels_for_source(
-            channel_source=channel_source,
-            manual_channel_text=manual_channel_text,
-            channel_quality=channel_quality,
-            require_inside_brain=require_inside_brain,
-            channel_quality_labels=channel_quality_labels,
-        )
-    except ValueError as error:
+            selected_population = metadata_population_inputs(
+                metadata_session,
+                selected_population_id,
+            )
+            region_name = selected_population.channel_group_label
+            active_probe_label = selected_population.probe_id
+            active_sorter_output_path = str(selected_population.sorter_directory or "")
+            active_aligned_spike_path = str(selected_population.aligned_spike_file or "")
+            active_lfp_path = str(selected_population.lfp_file or "")
+            region_channels = np.asarray(selected_population.channel_indices, dtype=int)
+            channel_source = CHANNEL_SOURCE_MANUAL
+            st.sidebar.caption(
+                f"Probe: {selected_population.probe_label} ({selected_population.probe_id}); "
+                f"anatomy: {selected_population.channel_group_label}"
+            )
+        else:
+            (
+                region_name,
+                active_probe_label,
+                active_sorter_output_path,
+                active_aligned_spike_path,
+                active_lfp_path,
+                region_channels,
+                channel_source,
+            ) = _legacy_population_controls(
+                hpc_v1_sorter_output_path,
+                hpc_v1_aligned_spike_path,
+                hpc_v1_lfp_path,
+                pfc_sorter_output_path,
+                pfc_aligned_spike_path,
+                pfc_lfp_path,
+            )
+    except (OSError, ValueError) as error:
         st.error(str(error))
         st.stop()
-    st.sidebar.caption(channel_summary)
     if region_channels.size == 0:
         st.warning("No region channels are selected.")
         st.stop()
 
     try:
-        viewer_data = load_viewer_data_cached(
-            session_data_home=session_data_home,
-            sess_id_full=sess_id_full,
-            active_probe_label=active_probe_label,
-            sorter_output_path=active_sorter_output_path,
-            aligned_spike_path=active_aligned_spike_path,
-            lfp_path=active_lfp_path,
-        )
+        if metadata_session is not None:
+            viewer_data = load_metadata_viewer_data_cached(
+                str(metadata_session.session_root),
+                metadata_session.subject_id,
+                metadata_session.session_id,
+                metadata_session.session_date,
+                str(metadata_session.behavior.session_directory),
+                str(metadata_session.behavior.trial_table_file),
+                (
+                    str(metadata_session.behavior.event_table_file)
+                    if metadata_session.behavior.event_table_file is not None
+                    else None
+                ),
+                active_probe_label,
+                active_sorter_output_path,
+                active_aligned_spike_path,
+                active_lfp_path or None,
+            )
+        else:
+            viewer_data = load_viewer_data_cached(
+                session_data_home=session_data_home,
+                sess_id_full=sess_id_full,
+                active_probe_label=active_probe_label,
+                sorter_output_path=active_sorter_output_path,
+                aligned_spike_path=active_aligned_spike_path,
+                lfp_path=active_lfp_path,
+            )
     except Exception as error:  # noqa: BLE001 - Streamlit should display load failures without a traceback wall.
         st.error(f"Could not load {active_probe_label} spike data: {error}")
         st.stop()
@@ -4783,8 +6339,8 @@ def main() -> None:
                     value=str(default_aligned_sync_path),
                     help="Use the probe sync .npz produced by the Open Ephys spike synchronization workflow.",
                 )
-                lfp_y_label = "LFP"
-                lfp_power_unit_label = "dB re 1 input-unit^2"
+                lfp_y_label = "LFP (uV)"
+                lfp_power_unit_label = "dB re 1 uV^2"
             st.sidebar.caption(selected_lfp_path or "No LFP path entered for this selection.")
             if channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY and region_channels.size > 0:
                 lfp_saved_channel_index = st.sidebar.selectbox(
@@ -4818,6 +6374,17 @@ def main() -> None:
                         if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED
                         else None
                     )
+                    # Build one complete identity at this selected-source boundary.
+                    # The same instance keys the displayed trial and every nested
+                    # reference-trial spectrogram calculation below.
+                    selected_open_ephys_cache_token = (
+                        build_open_ephys_cache_token(
+                            selected_lfp_path,
+                            aligned_sync_path_argument,
+                        )
+                        if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED
+                        else None
+                    )
                     lfp_label = f"{selected_lfp_label}, {lfp_format}, saved channel {int(lfp_saved_channel_index)}"
                     if lfp_spectrogram_display:
                         lfp_spectrogram_result = compute_trial_lfp_spectrogram_cached(
@@ -4840,6 +6407,7 @@ def main() -> None:
                             notch_60_hz=spectrogram_notch_60_hz,
                             notch_quality_factor=LFP_SPECTROGRAM_NOTCH_QUALITY_FACTOR,
                             aligned_sync_npz_path=aligned_sync_path_argument,
+                            open_ephys_cache_token=selected_open_ephys_cache_token,
                         )
                         reference_trial_indices = lfp_spectrogram.select_reference_trial_indices(
                             trial_df=trial_df,
@@ -4877,6 +6445,7 @@ def main() -> None:
                             lower_percentile=LFP_SPECTROGRAM_COLOR_PERCENTILES[0],
                             upper_percentile=LFP_SPECTROGRAM_COLOR_PERCENTILES[1],
                             aligned_sync_npz_path=aligned_sync_path_argument,
+                            open_ephys_cache_token=selected_open_ephys_cache_token,
                         )
                         lfp_time_s = lfp_spectrogram_result.time_s
                         lfp_uv = lfp_spectrogram_result.lfp_values
@@ -4896,6 +6465,7 @@ def main() -> None:
                             filter_high_hz=lfp_filter_band[1] if lfp_filter_band is not None else None,
                             filter_padding_s=LFP_FILTER_PADDING_S,
                             aligned_sync_npz_path=aligned_sync_path_argument,
+                            open_ephys_cache_token=selected_open_ephys_cache_token,
                         )
                     if lfp_filter_band is not None:
                         lfp_label = f"{lfp_label}, {lfp_filter_label}"
@@ -5089,4 +6659,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from src.neural_analysis import (
+    lfp_loading,
     lfp_summary_pipeline,
     lfp_summary_plotting,
     lfp_summary_runtime,
@@ -525,12 +526,12 @@ def build_active_summary_population(
     cluster_metadata: object,
     channel_metadata: object,
 ) -> UnitPopulationConfig:
-    """Build exactly one active ProbeA or ProbeB population from supplied paths.
+    """Build exactly one active metadata-selected population from supplied paths.
 
     Parameters
     ----------
     probe_label : str
-        Exact categorical ``"ProbeA"`` or ``"ProbeB"`` selection.
+        Nonempty stable hardware/probe identifier from session metadata.
     sorter_path, aligned_spike_path : pathlib.Path
         Explicit page-supplied source identities. Paths are preserved verbatim
         and are not inferred from a session or replaced with CT026 defaults.
@@ -547,8 +548,8 @@ def build_active_summary_population(
         with stable ``probe:cluster`` identifiers.
     """
 
-    if probe_label not in {"ProbeA", "ProbeB"}:
-        raise ValueError("probe_label must be ProbeA or ProbeB")
+    if not isinstance(probe_label, str) or not probe_label.strip():
+        raise ValueError("probe_label must be a nonempty string")
     required_clusters = {"cluster_id", "ch", "group"}
     if not hasattr(cluster_metadata, "columns") or not hasattr(channel_metadata, "columns"):
         raise ValueError("population metadata must be tabular")
@@ -856,6 +857,70 @@ def _saved_snapshot_config(
         )
     except (TypeError, ValueError) as error:
         raise ValueError("snapshot component saved configuration is malformed") from error
+
+
+def snapshot_component_source_value_semantics(
+    inspection: SnapshotInspection,
+    component: str,
+) -> dict[str, str]:
+    """Return receipt-validated per-site source semantics for cache-only inspection.
+
+    Parameters
+    ----------
+    inspection : SnapshotInspection
+        A valid committed snapshot inspection. Invalid or unvalidated input is
+        rejected before any historical fallback is considered.
+    component : str
+        Selected final component whose saved configuration/provenance is shown.
+
+    Returns
+    -------
+    dict[str, str]
+        Receipt-validated persisted per-site semantics with the exact saved
+        Open Ephys site-id keys. Historical entries with an absent semantics
+        field map only saved Open Ephys site ids to ``"legacy-unscaled"``;
+        all-SpikeGLX snapshots remain an empty mapping.
+
+    Raises
+    ------
+    ValueError
+        If the inspection or saved configuration is invalid, a present mapping
+        has missing, extra, non-string, empty, or non-current adapter-version
+        values, or an all-SpikeGLX snapshot stores a nonempty mapping.
+    """
+    if not inspection.is_scientific_result or not isinstance(inspection.manifest, Mapping):
+        raise ValueError("snapshot semantics require a valid inspection")
+    components = inspection.manifest.get("components")
+    entry = components.get(component) if isinstance(components, Mapping) else None
+    if not isinstance(entry, Mapping):
+        raise ValueError("snapshot component provenance is unavailable")
+    saved_config, _ = _saved_snapshot_config(inspection, component, default_lfp_summary_config())
+    expected_site_ids = tuple(
+        site.stable_id
+        for site in saved_config.sites
+        if site.acquisition_format == "open_ephys"
+    )
+    if "source_value_semantics" in entry:
+        persisted = entry["source_value_semantics"]
+        if not isinstance(persisted, Mapping):
+            raise ValueError("snapshot source value semantics is malformed")
+        if set(persisted) != set(expected_site_ids):
+            raise ValueError("snapshot source value semantics site ids do not match saved Open Ephys sites")
+        if not expected_site_ids:
+            return {}
+        values = tuple(persisted[site_id] for site_id in expected_site_ids)
+        if any(not isinstance(value, str) or not value.strip() for value in values):
+            raise ValueError("snapshot source value semantics values must be nonempty strings")
+        if any(value != lfp_loading.OPEN_EPHYS_AFFINE_UV_SEMANTICS for value in values):
+            raise ValueError(
+                "snapshot source value semantics must equal the current Open Ephys affine-uV version"
+            )
+        return {site_id: persisted[site_id] for site_id in expected_site_ids}
+    return {
+        site.stable_id: "legacy-unscaled"
+        for site in saved_config.sites
+        if site.acquisition_format == "open_ephys"
+    }
 
 
 def _pair_labels(arrays: Mapping[str, np.ndarray]) -> tuple[str, ...]:
@@ -1248,15 +1313,77 @@ def _plot_cached_synchrony_component(
         epoch_index = _named_index(arrays["epoch_names"], selection.epoch_name, "epoch_names")
         band_index = _named_index(arrays["band_names"], selection.band_name, "band_names")
         figure, _ = lfp_summary_plotting.plot_phase_band_summary(
-            np.array((np.asarray(arrays[f"{metric_prefix}_band_mean"])[condition_index, entity_index, epoch_index, band_index],)),
-            np.array((np.asarray(arrays[f"{metric_prefix}_ci_low"])[condition_index, entity_index, epoch_index, band_index],)),
-            np.array((np.asarray(arrays[f"{metric_prefix}_ci_high"])[condition_index, entity_index, epoch_index, band_index],)),
-            np.array((np.count_nonzero(selected_trials),), dtype=np.int64),
-            (f"{entity_label} {selection.condition_name}",),
-            selection.band_name,
-            selection.epoch_name,
-            metric_name,
-            context,
+            observed_estimates=np.array(
+                (
+                    np.asarray(arrays[f"{metric_prefix}_band_mean"])[
+                        condition_index,
+                        entity_index,
+                        epoch_index,
+                        band_index,
+                    ],
+                )
+            ),
+            bootstrap_quantiles=np.array(
+                (
+                    (
+                        np.asarray(arrays[f"{metric_prefix}_ci_low"])[
+                            condition_index,
+                            entity_index,
+                            epoch_index,
+                            band_index,
+                        ],
+                    ),
+                    (
+                        np.asarray(arrays[f"{metric_prefix}_bootstrap_q25"])[
+                            condition_index,
+                            entity_index,
+                            epoch_index,
+                            band_index,
+                        ],
+                    ),
+                    (
+                        np.asarray(arrays[f"{metric_prefix}_bootstrap_median"])[
+                            condition_index,
+                            entity_index,
+                            epoch_index,
+                            band_index,
+                        ],
+                    ),
+                    (
+                        np.asarray(arrays[f"{metric_prefix}_bootstrap_q75"])[
+                            condition_index,
+                            entity_index,
+                            epoch_index,
+                            band_index,
+                        ],
+                    ),
+                    (
+                        np.asarray(arrays[f"{metric_prefix}_ci_high"])[
+                            condition_index,
+                            entity_index,
+                            epoch_index,
+                            band_index,
+                        ],
+                    ),
+                )
+            ),
+            selected_trial_counts=np.array(
+                (
+                    np.asarray(arrays[f"{metric_prefix}_band_trial_count"])[
+                        condition_index,
+                        entity_index,
+                        epoch_index,
+                        band_index,
+                    ],
+                ),
+                dtype=np.int64,
+            ),
+            labels=(selection.condition_name,),
+            band_name=selection.band_name,
+            epoch_name=selection.epoch_name,
+            metric_name=f"{metric_name} {entity_label}",
+            bootstrap_count=config.phase.bootstrap_count,
+            context=context,
         )
         return figure
     if selection.view not in {"plv_distribution", "plv_exemplar"}:
@@ -1722,6 +1849,7 @@ def assemble_summary_config(
     bootstrap_count: int,
     random_seed: int,
     output_rate_hz: float = 500.0,
+    trial_table_path: Path | None = None,
 ) -> LFPSummaryConfig:
     """Assemble and validate one immutable config from active summary controls.
 
@@ -1764,7 +1892,9 @@ def assemble_summary_config(
         phase=phase,
         ppc=ppc,
         trial_table_path=(
-            Path(session_path) / "processed" / f"{session_id}_augmented_trials.csv"
+            Path(trial_table_path)
+            if trial_table_path is not None
+            else Path(session_path) / "processed" / f"{session_id}_augmented_trials.csv"
         ),
         random_seed=int(random_seed),
     )
@@ -2508,6 +2638,7 @@ def _render_source_enabled_summary_view(
     output_directory: Path,
     sites: tuple[LFPSiteConfig, ...],
     site_pairs: tuple[tuple[str, str], ...],
+    trial_table_path: Path | None,
     sorter_paths: Mapping[str, Path],
     aligned_spike_paths: Mapping[str, Path],
     cluster_metadata_loader: Callable[[Path], object],
@@ -2527,8 +2658,11 @@ def _render_source_enabled_summary_view(
         Saved LFP site and pair definitions retaining their existing channels,
         source voltage units, and categorical identities.
     sorter_paths, aligned_spike_paths : mapping[str, pathlib.Path]
-        Parent-route supplied ProbeA/ProbeB paths. Metadata is lazy and selected
-        probe only.
+        Parent-route supplied stable probe IDs and paths. Metadata is lazy and
+        selected-probe only.
+    trial_table_path : pathlib.Path or None
+        Explicit metadata-defined trial CSV. ``None`` retains the legacy
+        session-ID-derived table path.
     cluster_metadata_loader, channel_metadata_loader : callable
         Selected-sorter metadata seams; they are not called for blank/invalid
         snapshots.
@@ -2545,7 +2679,7 @@ def _render_source_enabled_summary_view(
     sidebar = streamlit.sidebar
     sidebar.header("Cached LFP Summary")
     source_mode = sidebar.selectbox("Summary source", options=("snapshot", "live"))
-    probe_label = sidebar.selectbox("Active population", options=("ProbeA", "ProbeB"))
+    probe_label = sidebar.selectbox("Active population", options=tuple(sorter_paths))
     if source_mode == "snapshot":
         entered_path = sidebar.text_input("Snapshot directory", value="")
         inspection = _retained_snapshot_inspection(streamlit.session_state, entered_path)
@@ -2558,6 +2692,9 @@ def _render_source_enabled_summary_view(
         streamlit.caption(f"Snapshot source cluster directory: {inspection.source_cluster_directory}")
         component = sidebar.selectbox("Summary view", options=SUMMARY_VIEWS)
         try:
+            streamlit.caption(
+                f"Source value semantics: {snapshot_component_source_value_semantics(inspection, component)}"
+            )
             population = _selected_population(
                 session_state=streamlit.session_state, probe_label=probe_label,
                 sorter_paths=sorter_paths, aligned_spike_paths=aligned_spike_paths,
@@ -2605,6 +2742,7 @@ def _render_source_enabled_summary_view(
             choice_filter="all", context_filter="all", excluded_trial_indices=(),
             alignment_event="choice_time", notch_enabled=True, bootstrap_count=1000,
             random_seed=0,
+            trial_table_path=trial_table_path,
         )
     except ValueError as error:
         streamlit.error(str(error))
@@ -2654,6 +2792,7 @@ def render_lfp_summary_view(
     aligned_spike_paths: Mapping[str, Path] | None = None,
     cluster_metadata_loader: Callable[[Path], object] | None = None,
     channel_metadata_loader: Callable[[Path], object] | None = None,
+    trial_table_path: Path | None = None,
 ) -> None:
     """Render legacy controls or the explicit snapshot/live child route.
 
@@ -2677,6 +2816,9 @@ def render_lfp_summary_view(
         live mode selects one probe.
     cluster_metadata_loader, channel_metadata_loader : callable or None
         Lazy selected-sorter metadata seams used only by the additive route.
+    trial_table_path : pathlib.Path or None
+        Explicit trial CSV for metadata-driven live configuration. ``None``
+        retains the legacy derived path.
 
     Returns
     -------
@@ -2705,6 +2847,7 @@ def render_lfp_summary_view(
             output_directory=output_directory,
             sites=sites,
             site_pairs=site_pairs,
+            trial_table_path=trial_table_path,
             sorter_paths=sorter_paths,
             aligned_spike_paths=aligned_spike_paths,
             cluster_metadata_loader=cluster_metadata_loader,

@@ -9,6 +9,12 @@ import re
 import json
 
 from src.behavior_analysis import ideal_observer
+from src.behavior_analysis.project_utils import (
+    get_experimenter_reward_flags,
+    is_zero_flag,
+    make_no_choice_action_mask,
+    normalize_experimenter_reward_column,
+)
 from src.visualization.agent_run_plot import plot_run_dataframe
 
 plt.style.use('dark_background')
@@ -735,6 +741,104 @@ def plot_mouse_history_ideal_observer_values(
     plt.close(fig)
     print("saved figure as {}".format(save_path))
     return observer_run_df, save_path
+
+
+def plot_mouse_history_expectant_switching_values(
+    trial_df: pd.DataFrame,
+    figure_path: Path,
+    sess_id_full: str,
+    params,
+    theme: str = "light",
+    xtick_interval: int | None = 50,
+) -> tuple[pd.DataFrame, Path]:
+    """Plot both expectant-switching values over the mouse's trial history.
+
+    Parameters
+    ----------
+    trial_df : pandas.DataFrame, shape (n_trials, n_columns)
+        Augmented trial table containing ``state``, ``action``, ``reward``,
+        ``simple_probe_persistence_value``, and
+        ``expectancy_persistence_doubt_value``. Choices use ``0=right`` and
+        ``1=left``; values are unitless and left-positive. No-choice and
+        experimenter-reward rows are excluded without breaking row order.
+    figure_path : pathlib.Path
+        Directory where the PNG is saved.
+    sess_id_full : str
+        Full session identifier used in the title and filename.
+    params : object
+        Trial-feature parameters exposing expectancy threshold/scale, omission
+        lambda, and all five exemplar weights.
+    theme : {"light", "dark"}, default="light"
+        Plot theme forwarded to the shared model-run plotter.
+    xtick_interval : int or None, default=50
+        Trial-position tick interval. None uses context-transition ticks.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pathlib.Path]
+        Valid plotted rows, preserving their original dataframe index, and the
+        saved one-panel PNG path.
+    """
+    value_columns = [
+        "simple_probe_persistence_value",
+        "expectancy_persistence_doubt_value",
+    ]
+    required_columns = {"state", "action", "reward", *value_columns}
+    missing_columns = sorted(required_columns.difference(trial_df.columns))
+    if missing_columns:
+        raise ValueError(f"trial_df is missing expectant value columns: {missing_columns}")
+
+    normalized = normalize_experimenter_reward_column(trial_df)
+    actions = pd.to_numeric(normalized["action"], errors="coerce")
+    rewards = pd.to_numeric(normalized["reward"], errors="coerce")
+    values = normalized[value_columns].apply(pd.to_numeric, errors="coerce")
+    no_choice = make_no_choice_action_mask(normalized["action"]).to_numpy(dtype=bool)
+    experimenter_reward = ~is_zero_flag(
+        get_experimenter_reward_flags(normalized)
+    ).to_numpy(dtype=bool)
+    valid_rows = (
+        ~no_choice
+        & ~experimenter_reward
+        & actions.isin([RIGHT_IX, LEFT_IX]).to_numpy()
+        & rewards.notna().to_numpy()
+        & values.notna().all(axis=1).to_numpy()
+    )
+    plot_df = normalized.loc[valid_rows].copy()
+    if plot_df.empty:
+        raise ValueError("trial_df contains no valid rows with both expectant model values.")
+    plot_df["action"] = actions.loc[valid_rows].to_numpy(dtype=int)
+    plot_df["reward"] = rewards.loc[valid_rows].to_numpy(dtype=float)
+    for column in value_columns:
+        plot_df[column] = values.loc[valid_rows, column].to_numpy(dtype=float)
+
+    fig, _axis = plot_run_dataframe(
+        plot_df,
+        title=f"{sess_id_full} mouse-history expectant-switching values",
+        value_columns=value_columns,
+        show_action_probability=False,
+        show_legend=True,
+        xtick_interval=xtick_interval,
+        save_path=None,
+        show=False,
+        theme=theme,
+    )
+    caption = (
+        f"k0={params.expectancy_threshold:g}, scale={params.expectancy_scale:g}, "
+        f"lambda={params.omission_lam:g}; "
+        f"simple(wP={params.simple_persistence_weight:g}, "
+        f"wR={params.simple_probe_weight:g}); "
+        f"full(wP={params.full_persistence_weight:g}, "
+        f"wE={params.full_expectancy_weight:g}, "
+        f"wD={params.full_doubt_weight:g})"
+    )
+    fig.text(0.01, 0.01, caption, color="#111111" if theme == "light" else "#f5f5f5", fontsize=9)
+    fig.subplots_adjust(bottom=0.16)
+    save_path = figure_path / f"{sess_id_full}_mouse_history_expectant_switching_values.png"
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=300, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    print("saved figure as {}".format(save_path))
+    return plot_df, save_path
 
 
 def plot_mouse_history_ideal_observer_value_on_ax(

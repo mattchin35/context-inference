@@ -62,14 +62,26 @@ def _synchrony_arrays() -> dict[str, np.ndarray]:
         "ispc": np.ones((condition_count, 1, 2, 4)),
         "ispc_phase_offset_rad": np.zeros((condition_count, 1, 2, 4)),
         "ispc_effective_trial_count": np.full((condition_count, 1, 2, 4), 2),
-        "itpc_band_mean": np.ones((condition_count, 2, 3, 2)),
+        "itpc_band_mean": np.full((condition_count, 2, 3, 2), 0.84),
         "itpc_ci_low": np.full((condition_count, 2, 3, 2), 0.8),
-        "itpc_ci_high": np.ones((condition_count, 2, 3, 2)),
-        "itpc_unstable": np.ones((condition_count, 2, 3, 2), dtype=bool),
-        "ispc_band_mean": np.ones((condition_count, 1, 3, 2)),
-        "ispc_ci_low": np.full((condition_count, 1, 3, 2), 0.8),
-        "ispc_ci_high": np.ones((condition_count, 1, 3, 2)),
-        "ispc_unstable": np.ones((condition_count, 1, 3, 2), dtype=bool),
+        "itpc_ci_high": np.full((condition_count, 2, 3, 2), 0.88),
+        "itpc_bootstrap_q25": np.full((condition_count, 2, 3, 2), 0.81),
+        "itpc_bootstrap_median": np.full((condition_count, 2, 3, 2), 0.82),
+        "itpc_bootstrap_q75": np.full((condition_count, 2, 3, 2), 0.83),
+        "itpc_band_trial_count": np.full(
+            (condition_count, 2, 3, 2), 101, dtype=np.int64
+        ),
+        "itpc_unstable": np.zeros((condition_count, 2, 3, 2), dtype=bool),
+        "ispc_band_mean": np.full((condition_count, 1, 3, 2), 0.44),
+        "ispc_ci_low": np.full((condition_count, 1, 3, 2), 0.4),
+        "ispc_ci_high": np.full((condition_count, 1, 3, 2), 0.48),
+        "ispc_bootstrap_q25": np.full((condition_count, 1, 3, 2), 0.41),
+        "ispc_bootstrap_median": np.full((condition_count, 1, 3, 2), 0.42),
+        "ispc_bootstrap_q75": np.full((condition_count, 1, 3, 2), 0.43),
+        "ispc_band_trial_count": np.full(
+            (condition_count, 1, 3, 2), 201, dtype=np.int64
+        ),
+        "ispc_unstable": np.zeros((condition_count, 1, 3, 2), dtype=bool),
         "plv_by_frequency": np.ones((2, 1, 3, 2)),
         "plv_phase_offset_rad": np.zeros((2, 1, 3, 2)),
         "plv_valid_sample_count": np.full((2, 1, 3, 2), 1000),
@@ -82,7 +94,10 @@ def _synchrony_arrays() -> dict[str, np.ndarray]:
     }
 
 
-def _dependencies(calls: list[str]) -> SynchronyValidationDependencies:
+def _dependencies(
+    calls: list[str],
+    summary_arguments: list[tuple[tuple[object, ...], dict[str, object]]] | None = None,
+) -> SynchronyValidationDependencies:
     """Build fake Synchrony-only compute, cache, plotting, and report seams.
 
     Parameters
@@ -123,9 +138,11 @@ def _dependencies(calls: list[str]) -> SynchronyValidationDependencies:
         calls.append(f"map_total={kwargs['total_displayed_trial_count']}")
         return _FakeFigure(), {}
 
-    def plot_summary(*_: object, **__: object) -> tuple[_FakeFigure, dict[str, object]]:
+    def plot_summary(*args: object, **kwargs: object) -> tuple[_FakeFigure, dict[str, object]]:
         """Return an unsaved fake summary figure with count display inputs."""
         calls.append("summary")
+        if summary_arguments is not None:
+            summary_arguments.append((args, kwargs))
         return _FakeFigure(), {}
 
     def plot_distribution(*_: object, **__: object) -> tuple[_FakeFigure, dict[str, object]]:
@@ -190,16 +207,115 @@ def test_synchrony_validation_runs_only_synchrony_and_writes_cache_backed_report
     assert result.log_path.is_file()
     assert result.manifest_snapshot_path.is_file()
     assert result.configuration_snapshot_path.is_file()
-    names = {path.name for path in result.png_paths}
-    assert "PFC_correct_rewarded_itpc_map.png" in names
-    assert "PFC_HPC1_correct_rewarded_ispc_map.png" in names
-    assert "PFC_theta_before_itpc_band_summary.png" in names
-    assert "PFC_HPC1_theta_before_ispc_band_summary.png" in names
-    assert "PFC_HPC1_correct_rewarded_theta_plv_distribution.png" in names
-    assert "PFC_HPC1_correct_rewarded_theta_low_plv_exemplar.png" in names
-    assert "PFC_HPC1_correct_rewarded_theta_high_plv_exemplar.png" in names
+    arrays = _synchrony_arrays()
+    site_ids = tuple(str(value) for value in arrays["site_ids"])
+    pair_labels = tuple(
+        f"{site_a}_{site_b}"
+        for site_a, site_b in zip(
+            arrays["pair_site_a_ids"], arrays["pair_site_b_ids"], strict=True
+        )
+    )
+    condition_names = tuple(str(value) for value in arrays["condition_names"])
+    epoch_names = tuple(str(value) for value in arrays["epoch_names"])
+    band_names = tuple(str(value) for value in arrays["band_names"])
+    expected_names = {
+        f"{site_id}_{condition_name}_itpc_map.png"
+        for condition_name in condition_names
+        for site_id in site_ids
+    } | {
+        f"{pair_label}_{condition_name}_ispc_map.png"
+        for condition_name in condition_names
+        for pair_label in pair_labels
+    } | {
+        f"{site_id}_{band_name}_{epoch_name}_itpc_band_summary.png"
+        for epoch_name in epoch_names
+        for band_name in band_names
+        for site_id in site_ids
+    } | {
+        f"{pair_label}_{band_name}_{epoch_name}_ispc_band_summary.png"
+        for epoch_name in epoch_names
+        for band_name in band_names
+        for pair_label in pair_labels
+    } | {
+        f"{pair_label}_{condition_name}_{band_name}_{suffix}_plv_exemplar.png"
+        for pair_label in pair_labels
+        for condition_name in condition_names
+        for band_name in band_names
+        for suffix in ("low", "high")
+    } | {
+        f"{pair_label}_{condition_name}_{band_name}_plv_distribution.png"
+        for pair_label in pair_labels
+        for condition_name in condition_names
+        for band_name in band_names
+    }
+    assert {path.name for path in result.png_paths} == expected_names
     assert {"map", "summary", "distribution", "exemplar"}.issubset(calls)
     assert "map_total=2" in calls
+
+
+def test_synchrony_report_passes_metric_specific_saved_quantiles_and_counts_without_a_loader(
+    tmp_path: Path,
+) -> None:
+    """ITPC and ISPC reports use their cache fields, never reconstructed counts or draws."""
+    calls: list[str] = []
+    summary_arguments: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    config = build_ct026_synchrony_config(tmp_path / "CT026")
+
+    result = run_synchrony_validation(
+        config,
+        tmp_path / "runs",
+        _dependencies(calls, summary_arguments),
+    )
+
+    expected_by_metric = {
+        "ITPC": {
+            "observed_estimates": np.full(9, 0.84),
+            "bootstrap_quantiles": np.vstack(
+                (
+                    np.full(9, 0.80),
+                    np.full(9, 0.81),
+                    np.full(9, 0.82),
+                    np.full(9, 0.83),
+                    np.full(9, 0.88),
+                )
+            ),
+            "selected_trial_counts": np.full(9, 101, dtype=np.int64),
+        },
+        "ISPC": {
+            "observed_estimates": np.full(9, 0.44),
+            "bootstrap_quantiles": np.vstack(
+                (
+                    np.full(9, 0.40),
+                    np.full(9, 0.41),
+                    np.full(9, 0.42),
+                    np.full(9, 0.43),
+                    np.full(9, 0.48),
+                )
+            ),
+            "selected_trial_counts": np.full(9, 201, dtype=np.int64),
+        },
+    }
+
+    assert calls[:3] == ["compute_synchrony", "load_manifest", "load_synchrony"]
+    assert len(summary_arguments) == 18
+    for positional, keyword in summary_arguments:
+        assert positional == ()
+        metric = str(keyword["metric_name"]).split(maxsplit=1)[0]
+        expected = expected_by_metric[metric]
+        np.testing.assert_array_equal(
+            keyword["observed_estimates"], expected["observed_estimates"]
+        )
+        np.testing.assert_array_equal(
+            keyword["bootstrap_quantiles"], expected["bootstrap_quantiles"]
+        )
+        np.testing.assert_array_equal(
+            keyword["selected_trial_counts"], expected["selected_trial_counts"]
+        )
+        assert keyword["labels"] == tuple(_synchrony_arrays()["condition_names"])
+        assert keyword["bootstrap_count"] == config.phase.bootstrap_count
+    png_names = {path.name for path in result.png_paths}
+    assert "PFC_correct_rewarded_itpc_map.png" in png_names
+    assert "PFC_HPC1_correct_rewarded_theta_plv_distribution.png" in png_names
 
 
 def test_synchrony_validation_aborts_before_report_when_component_fails(tmp_path: Path) -> None:

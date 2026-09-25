@@ -20,6 +20,7 @@ import re
 import shlex
 import signal
 import socket
+import stat
 import subprocess
 import sys
 from tempfile import NamedTemporaryFile
@@ -34,12 +35,18 @@ from src.neural_analysis.lfp_summary_models import (
     canonical_config_json,
     component_fingerprint,
     fingerprint_source_files,
+    lfp_summary_config_from_json,
     validate_lfp_summary_config,
+)
+from src.neural_analysis.lfp_summary_io import (
+    assess_component_status,
+    load_or_initialize_manifest,
 )
 from src.neural_analysis.lfp_summary_pipeline import (
     ComponentRunResult,
     PPCWorkCleanupTarget,
 )
+from src.neural_analysis.lfp_summary_runtime import _work_fingerprint
 
 
 _MODULE = "src.neural_analysis.lfp_spike_phase_launcher"
@@ -48,8 +55,62 @@ _PREFLIGHT_SCHEMA = "spike_phase_preflight.v1"
 _REPORT_RECOVERY_SCHEMA = "spike_phase_report_recovery.v1"
 _REPORT_RERENDER_SCHEMA = "spike_phase_report_rerender.v1"
 _RUN_NAME = re.compile(
-    r"^[A-Za-z0-9_.-]+_spike_phase_(ProbeA|ProbeB)_"
+    r"^[A-Za-z0-9_.-]+_spike_phase_[A-Za-z0-9_.-]+_"
     r"(preview|final|dry_run)_[A-Za-z0-9_.:-]+$"
+)
+_PREREQUISITE_CACHE_MEMBERS = frozenset(
+    {"manifest.json", "power.npz", "synchrony.npz"}
+)
+_LEGACY_CACHE_DIRECTORY_NAME = "lfp_summary_cache"
+_WORK_ROOT_MEMBERS = frozenset({"prepared_phase", "ppc"})
+_PREPARED_REPRESENTATION_MEMBERS = frozenset(
+    {"metadata.json", "complete.json", "axes.npz", "valid.npy", "phase.npy"}
+)
+_PREPARED_METADATA_KEYS = frozenset(
+    {
+        "generator",
+        "analysis_version",
+        "schema_version",
+        "source_fingerprint",
+        "scientific_fingerprint",
+        "representation_fingerprint",
+        "execution_settings",
+        "axes",
+        "shapes",
+        "dtypes",
+        "units",
+    }
+)
+_PREPARED_REPRESENTATION_IDENTITY_KEYS = (
+    "generator",
+    "analysis_version",
+    "source_fingerprint",
+    "scientific_fingerprint",
+    "axes",
+    "shapes",
+    "dtypes",
+)
+_PREPARED_GENERATOR = "prepare_phase_run"
+_PREPARED_ANALYSIS_VERSION = "prepared-phase-cache-v1"
+_PREPARED_EXECUTION_SETTINGS = {"phase_storage": "complex64/bool"}
+_PREPARED_AXES = ["site", "frequency", "trial", "time"]
+_PREPARED_DTYPES = {
+    "phase": "complex64",
+    "valid": "bool",
+    "site_trial_valid": "bool",
+    "site_trial_exclusion_reason": "<U32",
+}
+_PREPARED_UNITS = {
+    "phase": "dimensionless",
+    "relative_time_s": "s",
+    "frequency_hz": "Hz",
+}
+_WORK_FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
+_MAX_RETAINED_IDENTITY_JSON_BYTES = 64 * 1024
+_PREREQUISITE_COMPONENT_STATES = (
+    ("power", "compatible"),
+    ("synchrony", "compatible"),
+    ("spike_phase", "missing"),
 )
 _STAGES = (
     "initialized",
@@ -73,10 +134,12 @@ class LauncherCommand:
 
     mode: str
     session_path: Path | None = None
+    session_metadata: Path | None = None
     probe_label: str | None = None
     shuffle_count: int | None = None
     worker_count: int | None = None
     analysis_root: Path | None = None
+    cache_directory: Path | None = None
     dry_run: bool = False
     final_run: bool = False
     run_directory: Path | None = None
@@ -118,6 +181,9 @@ class LauncherDependencies:
     process_tree_sampler: Callable[[], AbstractContextManager[object]]
     terminal_write: Callable[[str], None]
     repository_commit_is_ancestor: Callable[[str, str], bool] | None = None
+    load_metadata_config: Callable[
+        [Path, str, Path, int, int], LFPSummaryConfig
+    ] | None = None
 
 
 @dataclass(frozen=True)
@@ -159,11 +225,14 @@ def parse_launcher_command(argv: Sequence[str] | None = None) -> LauncherCommand
     parser = argparse.ArgumentParser(prog=f"python -m {_MODULE}")
     subparsers = parser.add_subparsers(dest="mode", required=True)
     new = subparsers.add_parser("new")
-    new.add_argument("--session-path", type=Path, required=True)
-    new.add_argument("--probe", dest="probe_label", choices=("ProbeA", "ProbeB"), required=True)
+    session_source = new.add_mutually_exclusive_group(required=True)
+    session_source.add_argument("--session-path", type=Path)
+    session_source.add_argument("--session-metadata", type=Path)
+    new.add_argument("--probe", dest="probe_label", required=True)
     new.add_argument("--shuffles", dest="shuffle_count", type=int, choices=(100, 1000), required=True)
     new.add_argument("--workers", dest="worker_count", type=int, default=8)
     new.add_argument("--analysis-root", type=Path)
+    new.add_argument("--cache-directory", type=Path, required=True)
     new.add_argument("--dry-run", action="store_true")
     new.add_argument("--final-run", action="store_true")
     resume = subparsers.add_parser("resume")
@@ -181,14 +250,19 @@ def parse_launcher_command(argv: Sequence[str] | None = None) -> LauncherCommand
         parser.error("1,000 shuffles requires --final-run")
     if values.shuffle_count == 100 and values.final_run:
         parser.error("--final-run is valid only with 1,000 shuffles")
-    analysis_root = values.analysis_root or values.session_path / "analysis_runs"
+    analysis_root = (
+        values.analysis_root
+        or (values.session_path / "analysis_runs" if values.session_path is not None else None)
+    )
     return LauncherCommand(
         mode="new",
         session_path=values.session_path,
+        session_metadata=values.session_metadata,
         probe_label=values.probe_label,
         shuffle_count=values.shuffle_count,
         worker_count=values.worker_count,
         analysis_root=analysis_root,
+        cache_directory=values.cache_directory,
         dry_run=bool(values.dry_run),
         final_run=bool(values.final_run),
     )
@@ -422,32 +496,53 @@ def _prepare_new_run(
     dependencies: LauncherDependencies,
 ) -> tuple[LFPSummaryConfig, Path, dict[str, object]]:
     """Validate identity and atomically initialize one new run directory."""
-    assert command.session_path is not None
+    assert command.session_path is not None or command.session_metadata is not None
     assert command.probe_label is not None
     assert command.shuffle_count is not None
     assert command.worker_count is not None
-    assert command.analysis_root is not None
+    assert command.cache_directory is not None
     repository = dependencies.repository_state()
     if not repository.tracked_clean:
         raise ValueError("launcher requires a clean tracked Git checkout")
-    population = dependencies.load_active_population(
-        Path(command.session_path),
-        command.probe_label,
+    if command.session_metadata is not None:
+        if dependencies.load_metadata_config is None:
+            raise ValueError("metadata-driven launcher configuration is unavailable")
+        config = dependencies.load_metadata_config(
+            Path(command.session_metadata),
+            command.probe_label,
+            Path(command.cache_directory),
+            command.shuffle_count,
+            command.worker_count,
+        )
+    else:
+        assert command.session_path is not None
+        population = dependencies.load_active_population(
+            Path(command.session_path),
+            command.probe_label,
+        )
+        config = dependencies.build_config(
+            Path(command.session_path),
+            population,
+            command.shuffle_count,
+            command.worker_count,
+        )
+    cache_directory = _validated_new_cache_directory(
+        Path(command.cache_directory),
+        Path(config.session_path),
     )
-    config = dependencies.build_config(
-        Path(command.session_path),
-        population,
-        command.shuffle_count,
-        command.worker_count,
-    )
+    # The creator supplies scientific settings; the explicit CLI target alone
+    # replaces its protected default cache location.
+    config = replace(config, output_directory=cache_directory)
     _validate_launcher_config(config, command)
+    _validate_new_cache_preflight(config)
     source_fingerprints = dict(dependencies.source_fingerprints(config))
     trial_count = dependencies.load_trial_count(config)
     if isinstance(trial_count, bool) or not isinstance(trial_count, int) or trial_count < 1:
         raise ValueError("load_trial_count must return a positive integer")
     timestamp = dependencies.now_utc()
     run_kind = "dry_run" if command.dry_run else ("final" if command.final_run else "preview")
-    analysis_root = _validated_analysis_root(Path(command.analysis_root))
+    requested_analysis_root = command.analysis_root or config.session_path / "analysis_runs"
+    analysis_root = _validated_analysis_root(Path(requested_analysis_root))
     run_name = f"{config.session_id}_spike_phase_{command.probe_label}_{run_kind}_{timestamp}"
     if _RUN_NAME.fullmatch(run_name) is None:
         raise ValueError("launcher timestamp/session produced an unsafe run name")
@@ -566,20 +661,29 @@ def _rebuild_saved_config(
     assert isinstance(identity, dict)
     session_path = Path(str(identity["session_path"]))
     probe_label = str(identity["probe_label"])
-    population = dependencies.load_active_population(session_path, probe_label)
-    config = dependencies.build_config(
-        session_path,
-        population,
-        int(identity["shuffle_count"]),
-        int(identity["requested_worker_count"]),
-    )
+    metadata_path = identity.get("session_metadata")
+    if metadata_path is not None:
+        snapshot_path = run_directory / "configuration.json"
+        config = lfp_summary_config_from_json(snapshot_path.read_text(encoding="ascii"))
+    else:
+        population = dependencies.load_active_population(session_path, probe_label)
+        config = dependencies.build_config(
+            session_path,
+            population,
+            int(identity["shuffle_count"]),
+            int(identity["requested_worker_count"]),
+        )
+    cache_directory = _saved_cache_directory(identity)
+    config = replace(config, output_directory=cache_directory)
     rebuilt_command = LauncherCommand(
         mode="new",
         session_path=session_path,
+        session_metadata=Path(str(metadata_path)) if metadata_path is not None else None,
         probe_label=probe_label,
         shuffle_count=int(identity["shuffle_count"]),
         worker_count=int(identity["requested_worker_count"]),
         analysis_root=run_directory.parent,
+        cache_directory=cache_directory,
         dry_run=False,
         final_run=bool(identity["final_run"]),
     )
@@ -980,6 +1084,1137 @@ def _validated_analysis_root(path: Path) -> Path:
     return path.resolve(strict=False)
 
 
+def _validated_new_cache_directory(cache_directory: Path, session_path: Path) -> Path:
+    """Resolve one safe direct child of the selected session's processed path.
+
+    Parameters
+    ----------
+    cache_directory : pathlib.Path
+        User-supplied corrected-cache directory. It must exist, be a real
+        directory, and be a direct child of ``session_path / 'processed'``.
+    session_path : pathlib.Path
+        Selected session directory. Its path and the target path may not cross
+        symbolic links or lexical parent-directory aliases.
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute, normalized cache directory used in every saved artifact.
+    """
+    resolved_session = _resolved_nonsymlink_path(session_path, "session_path")
+    resolved_cache = _resolved_nonsymlink_path(cache_directory, "cache_directory")
+    processed_directory = resolved_session / "processed"
+    if processed_directory.is_symlink():
+        raise ValueError("session processed directory must not be a symbolic link")
+    resolved_processed = processed_directory.resolve(strict=False)
+    if resolved_cache.name == _LEGACY_CACHE_DIRECTORY_NAME:
+        raise ValueError("the legacy lfp_summary_cache directory is protected")
+    if resolved_cache.parent != resolved_processed:
+        raise ValueError(
+            "cache_directory must be a direct child of the selected session processed directory"
+        )
+    if not resolved_cache.is_dir():
+        raise ValueError("cache_directory must be an existing directory")
+    return resolved_cache
+
+
+def _resolved_nonsymlink_path(path: Path, label: str) -> Path:
+    """Return a normalized path after rejecting aliases and symlink components.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Absolute or current-directory-relative filesystem identity.
+    label : str
+        Human-readable argument name included in validation errors.
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute normalized path. This helper does not create filesystem
+        entries and accepts a final path that does not yet exist.
+    """
+    requested = Path(path)
+    if ".." in requested.parts:
+        raise ValueError(f"{label} must not contain a parent-directory alias")
+    absolute_path = requested if requested.is_absolute() else Path.cwd() / requested
+    current = Path(absolute_path.anchor)
+    for part in absolute_path.parts[1:]:
+        current /= part
+        if current.is_symlink():
+            raise ValueError(f"{label} must not traverse a symbolic link")
+    return absolute_path.resolve(strict=False)
+
+
+def _validate_new_cache_preflight(config: LFPSummaryConfig) -> None:
+    """Validate immutable prerequisite cache evidence without loading arrays.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Fully validated active configuration whose output directory is the
+        selected corrected cache. No trial table, phase array, PPC work, or
+        launcher run directory is opened or created by this check.
+
+    Returns
+    -------
+    None
+        The cache is only read through manifest JSON and public NPZ header
+        checks. Any incompatible prerequisite raises ``ValueError``.
+    """
+    cache_directory = config.output_directory
+    work_root = cache_directory.parent / "lfp_summary_work"
+    _validate_retained_work_root(work_root, config)
+    members = tuple(cache_directory.iterdir())
+    member_names = {member.name for member in members}
+    if member_names != _PREREQUISITE_CACHE_MEMBERS:
+        raise ValueError(
+            "corrected cache must contain exactly manifest.json, power.npz, and synchrony.npz"
+        )
+    for member in members:
+        if member.is_symlink() or not member.is_file():
+            raise ValueError("corrected cache members must be regular non-symbolic-link files")
+    manifest = load_or_initialize_manifest(cache_directory, config)
+    for component, expected_status in _PREREQUISITE_COMPONENT_STATES:
+        status = assess_component_status(
+            cache_directory,
+            component,
+            config,
+            manifest,
+            validate_headers_only=True,
+        )
+        if status.status != expected_status:
+            differences = "; ".join(status.differences)
+            raise ValueError(
+                f"{component} prerequisite must be {expected_status}, "
+                f"found {status.status}: {differences or 'no details'}"
+            )
+
+
+def _validate_retained_work_root(work_root: Path, config: LFPSummaryConfig) -> None:
+    """Classify optional retained work through stable directory descriptors.
+
+    Parameters
+    ----------
+    work_root : pathlib.Path
+        Exact session-local ``lfp_summary_work`` path. An absent path is valid;
+        an existing path must retain a stable real-directory identity while it
+        is inspected. No numerical array payload, shape, axis, or unit data is
+        opened by this preflight classifier.
+    config : LFPSummaryConfig
+        Validated active configuration. Only ``schema_version`` is used to
+        validate retained metadata generated by the current writer contract.
+
+    Returns
+    -------
+    None
+        The existing tree is read-only. Only absent/empty safe layouts and
+        complete lock-free retained prepared representations are accepted.
+
+    Raises
+    ------
+    ValueError
+        If an entry is linked, malformed, substituted, or structurally unsafe.
+    FileExistsError
+        If the exact ``ppc`` container has any child, preserving it for resume.
+    """
+    root_status = _lstat_or_none(work_root)
+    if root_status is None:
+        return
+    with _opened_anchored_directory(
+        work_root,
+        "work root",
+        expected_status=root_status,
+    ) as work_root_fd:
+        initial_root_status = os.fstat(work_root_fd)
+        root_members = _stable_directory_member_names(work_root_fd, "work root")
+        if set(root_members) - _WORK_ROOT_MEMBERS:
+            raise ValueError("work root contains unexpected members")
+        root_member_statuses = _anchored_member_statuses(
+            work_root_fd,
+            root_members,
+            "work root member",
+        )
+
+        if "prepared_phase" in root_members:
+            prepared_path = work_root / "prepared_phase"
+            with _opened_anchored_directory(
+                prepared_path,
+                "prepared_phase container",
+                parent_descriptor=work_root_fd,
+                member_name="prepared_phase",
+                expected_status=root_member_statuses["prepared_phase"],
+            ) as prepared_fd:
+                _validate_retained_prepared_phase(
+                    prepared_path,
+                    prepared_fd,
+                    config,
+                )
+
+        if "ppc" in root_members:
+            ppc_path = work_root / "ppc"
+            with _opened_anchored_directory(
+                ppc_path,
+                "ppc container",
+                parent_descriptor=work_root_fd,
+                member_name="ppc",
+                expected_status=root_member_statuses["ppc"],
+            ) as ppc_fd:
+                if _stable_directory_member_names(ppc_fd, "ppc container"):
+                    raise FileExistsError(f"pre-existing PPC work: {ppc_path}")
+
+            # A new PPC child can appear after the first descriptor closes.
+            # Reopen the same anchored entry before accepting the work root.
+            with _opened_anchored_directory(
+                ppc_path,
+                "ppc container",
+                parent_descriptor=work_root_fd,
+                member_name="ppc",
+                expected_status=root_member_statuses["ppc"],
+            ) as final_ppc_fd:
+                if _stable_directory_member_names(final_ppc_fd, "ppc container"):
+                    raise FileExistsError(f"pre-existing PPC work: {ppc_path}")
+
+        final_root_members = _stable_directory_member_names(work_root_fd, "work root")
+        if final_root_members != root_members:
+            raise ValueError("work root inventory changed during preflight")
+        _require_unchanged_anchored_members(
+            work_root_fd,
+            root_member_statuses,
+            "work root member",
+        )
+        _require_same_directory_inventory(
+            initial_root_status,
+            os.fstat(work_root_fd),
+            "work root",
+        )
+        _require_stable_directory_path(work_root, work_root_fd, "work root")
+
+
+def _validate_retained_prepared_phase(
+    prepared_path: Path,
+    prepared_descriptor: int,
+    config: LFPSummaryConfig,
+) -> None:
+    """Validate prepared representations using descriptors and small JSON only.
+
+    Parameters
+    ----------
+    prepared_path : pathlib.Path
+        Display path for the already-open ``prepared_phase`` directory. It is
+        rechecked against ``prepared_descriptor`` before return.
+    prepared_descriptor : int
+        Open read-only directory descriptor anchored to ``prepared_path``.
+        Direct children are opened relative to this descriptor, never through
+        an unverified replacement path.
+    config : LFPSummaryConfig
+        Active configuration supplying the canonical metadata schema version.
+        No trial table or numerical phase data is loaded.
+
+    Returns
+    -------
+    None
+        Every accepted child has an exact writer metadata schema, a matching
+        representation fingerprint, and a one-field completion certificate.
+
+    Raises
+    ------
+    ValueError
+        If an entry changes identity, inventory, metadata, or completion while
+        preflight is in progress.
+    """
+    initial_prepared_status = os.fstat(prepared_descriptor)
+    representation_names = _stable_directory_member_names(
+        prepared_descriptor,
+        "prepared_phase container",
+    )
+    for fingerprint in representation_names:
+        if _WORK_FINGERPRINT.fullmatch(fingerprint) is None:
+            raise ValueError("prepared representation name is not a fingerprint")
+    representation_statuses = _anchored_member_statuses(
+        prepared_descriptor,
+        representation_names,
+        "prepared representation",
+    )
+    for fingerprint in representation_names:
+        representation_path = prepared_path / fingerprint
+        with _opened_anchored_directory(
+            representation_path,
+            "prepared representation",
+            parent_descriptor=prepared_descriptor,
+            member_name=fingerprint,
+            expected_status=representation_statuses[fingerprint],
+        ) as representation_fd:
+            _validate_retained_representation(
+                representation_path,
+                representation_fd,
+                fingerprint,
+                config,
+            )
+
+    final_representation_names = _stable_directory_member_names(
+        prepared_descriptor,
+        "prepared_phase container",
+    )
+    if final_representation_names != representation_names:
+        raise ValueError("prepared_phase inventory changed during preflight")
+    _require_unchanged_anchored_members(
+        prepared_descriptor,
+        representation_statuses,
+        "prepared representation",
+    )
+    _require_same_directory_inventory(
+        initial_prepared_status,
+        os.fstat(prepared_descriptor),
+        "prepared_phase container",
+    )
+    _require_stable_directory_path(
+        prepared_path,
+        prepared_descriptor,
+        "prepared_phase container",
+    )
+
+
+def _validate_retained_representation(
+    representation_path: Path,
+    representation_descriptor: int,
+    fingerprint: str,
+    config: LFPSummaryConfig,
+) -> None:
+    """Validate one retained representation without opening its array payloads.
+
+    Parameters
+    ----------
+    representation_path : pathlib.Path
+        Display path for an already-open fingerprint-named representation.
+    representation_descriptor : int
+        Stable read-only descriptor for ``representation_path``. Named members
+        are statted/opened relative to it, preventing replacement-path use.
+    fingerprint : str
+        Lowercase 64-hex representation directory name. It must match the
+        canonical hash recomputed from stored metadata.
+    config : LFPSummaryConfig
+        Active configuration supplying the exact writer schema version.
+
+    Returns
+    -------
+    None
+        Only ``metadata.json`` and ``complete.json`` bytes are read, each under
+        64 KiB. ``phase.npy``, ``valid.npy``, and ``axes.npz`` stay unopened.
+
+    Raises
+    ------
+    ValueError
+        If the member inventory/type/identity changes or violates the writer
+        contract.
+    """
+    initial_representation_status = os.fstat(representation_descriptor)
+    if not stat.S_ISDIR(initial_representation_status.st_mode):
+        raise ValueError("prepared representation descriptor is not a directory")
+    member_names = _stable_directory_member_names(
+        representation_descriptor,
+        "prepared representation",
+    )
+    if set(member_names) != _PREPARED_REPRESENTATION_MEMBERS:
+        raise ValueError("prepared representation members are incomplete or unexpected")
+    initial_member_statuses: dict[str, os.stat_result] = {}
+    for member_name in member_names:
+        member_path = representation_path / member_name
+        expected_status = _lstat_or_none(member_path)
+        if expected_status is None:
+            raise ValueError(f"prepared representation member is missing: {member_path}")
+        _require_regular_nonsymlink_file(
+            member_path,
+            expected_status,
+            "prepared representation member",
+        )
+        descriptor_status = _stat_member_without_following(
+            representation_descriptor,
+            member_name,
+            "prepared representation member",
+        )
+        _require_same_entry(
+            expected_status,
+            descriptor_status,
+            "prepared representation member",
+        )
+        initial_member_statuses[member_name] = descriptor_status
+
+    metadata = _read_bounded_identity_json(
+        representation_descriptor,
+        "metadata.json",
+        representation_path / "metadata.json",
+    )
+    completion = _read_bounded_identity_json(
+        representation_descriptor,
+        "complete.json",
+        representation_path / "complete.json",
+    )
+    _validate_prepared_metadata(metadata, fingerprint, config.schema_version)
+    _validate_prepared_completion(completion, fingerprint)
+
+    final_member_names = _stable_directory_member_names(
+        representation_descriptor,
+        "prepared representation",
+    )
+    if final_member_names != member_names:
+        raise ValueError("prepared representation inventory changed during preflight")
+    for member_name, initial_status in initial_member_statuses.items():
+        final_status = _stat_member_without_following(
+            representation_descriptor,
+            member_name,
+            "prepared representation member",
+        )
+        _require_same_entry(
+            initial_status,
+            final_status,
+            "prepared representation member",
+        )
+    _require_same_directory_inventory(
+        initial_representation_status,
+        os.fstat(representation_descriptor),
+        "prepared representation",
+    )
+    _require_stable_directory_path(
+        representation_path,
+        representation_descriptor,
+        "prepared representation",
+    )
+
+
+@contextmanager
+def _opened_anchored_directory(
+    path: Path,
+    label: str,
+    *,
+    parent_descriptor: int | None = None,
+    member_name: str | None = None,
+    expected_status: os.stat_result | None = None,
+) -> Iterator[int]:
+    """Open one real directory and bind it to its checked ``lstat`` identity.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Expected directory path used solely for link-preserving identity checks
+        and diagnostics. It must not be trusted after its status is read.
+    label : str
+        Human-readable role for a validation error.
+    parent_descriptor : int or None, default=None
+        Stable parent directory descriptor. When supplied, ``member_name`` is
+        opened relative to it; otherwise ``path`` is opened directly.
+    member_name : str or None, default=None
+        Direct child name to open relative to ``parent_descriptor``. It has no
+        array, axis, shape, or physical-unit content.
+    expected_status : os.stat_result or None, default=None
+        Previously captured nofollow status for ``path``. Supplying it binds
+        the open operation to an earlier existence check instead of performing
+        a second path lookup after a possible replacement race.
+
+    Yields
+    ------
+    int
+        Open read-only directory descriptor whose ``fstat`` identity exactly
+        matches the preceding nonsymlink ``lstat`` result.
+
+    Raises
+    ------
+    ValueError
+        If the path is missing, linked, non-directory, substituted, or cannot
+        be opened with no-follow semantics.
+    """
+    status = expected_status if expected_status is not None else _lstat_or_none(path)
+    if status is None:
+        raise ValueError(f"{label} is missing: {path}")
+    _require_real_directory(path, status, label)
+    if parent_descriptor is None:
+        if member_name is not None:
+            raise ValueError("member_name requires a parent directory descriptor")
+        open_target: str | Path = path
+    else:
+        if not isinstance(member_name, str) or not member_name:
+            raise ValueError("anchored child directory requires a member name")
+        open_target = member_name
+    flags = _directory_open_flags()
+    try:
+        descriptor = os.open(open_target, flags, dir_fd=parent_descriptor)
+    except OSError as error:
+        raise ValueError(f"cannot safely open {label}: {path}") from error
+    try:
+        actual_status = os.fstat(descriptor)
+        _require_real_directory(path, actual_status, label)
+        _require_same_entry(status, actual_status, label)
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+def _directory_open_flags() -> int:
+    """Return mandatory no-follow read-only flags for directory inspection.
+
+    Returns
+    -------
+    int
+        POSIX ``os.open`` flags for a read-only directory descriptor with close
+        on exec and symbolic-link following disabled. No data arrays or units
+        are involved.
+
+    Raises
+    ------
+    ValueError
+        If the host lacks mandatory directory or no-follow support, because
+        preflight must fail closed rather than use an unsafe fallback.
+    """
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory is None:
+        raise ValueError("safe retained-work inspection requires O_NOFOLLOW and O_DIRECTORY")
+    return os.O_RDONLY | no_follow | directory | getattr(os, "O_CLOEXEC", 0)
+
+
+def _file_open_flags() -> int:
+    """Return mandatory no-follow nonblocking flags for identity JSON reads.
+
+    Returns
+    -------
+    int
+        POSIX ``os.open`` flags that prevent link following and ensure a raced
+        FIFO cannot block this metadata-only preflight. No numerical payload is
+        opened with these flags.
+
+    Raises
+    ------
+    ValueError
+        If the host lacks no-follow support and cannot fail safely.
+    """
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise ValueError("safe retained-work inspection requires O_NOFOLLOW")
+    return os.O_RDONLY | no_follow | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+
+
+def _stable_directory_member_names(descriptor: int, label: str) -> tuple[str, ...]:
+    """Return a stable sorted direct inventory from an open directory descriptor.
+
+    Parameters
+    ----------
+    descriptor : int
+        Open stable directory descriptor. Its contents are listed directly;
+        no replacement path, numerical payload, array axis, or unit is read.
+    label : str
+        Human-readable role for a validation error.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted direct child basenames after matching before/after directory
+        metadata confirms that the inventory did not change while listing.
+
+    Raises
+    ------
+    ValueError
+        If descriptor type or directory inventory metadata changes during the
+        listing, or the inventory cannot be listed.
+    """
+    before = os.fstat(descriptor)
+    if not stat.S_ISDIR(before.st_mode):
+        raise ValueError(f"{label} descriptor is not a directory")
+    try:
+        member_names = tuple(sorted(os.listdir(descriptor)))
+    except OSError as error:
+        raise ValueError(f"cannot inspect {label} inventory") from error
+    after = os.fstat(descriptor)
+    _require_same_directory_inventory(before, after, label)
+    return member_names
+
+
+def _read_bounded_identity_json(
+    parent_descriptor: int,
+    member_name: str,
+    path: Path,
+) -> object:
+    """Read one anchored JSON identity file through a capped no-follow descriptor.
+
+    Parameters
+    ----------
+    parent_descriptor : int
+        Stable descriptor for the prepared representation containing the JSON.
+    member_name : str
+        Exact direct filename, ``metadata.json`` or ``complete.json``.
+    path : pathlib.Path
+        Display path whose immediate pre-open ``lstat`` identity must match the
+        descriptor opened relative to ``parent_descriptor``. No numerical
+        arrays, axes, shapes, or units are read.
+
+    Returns
+    -------
+    object
+        Parsed UTF-8 JSON value from at most 64 KiB. The caller validates its
+        schema and fingerprint before treating it as a retained identity.
+
+    Raises
+    ------
+    ValueError
+        If the entry is linked, nonregular, substituted, oversized, changed
+        while read, malformed, or cannot be safely opened without blocking.
+    """
+    expected_status = _lstat_or_none(path)
+    if expected_status is None:
+        raise ValueError(f"retained identity file is missing: {path}")
+    _require_regular_nonsymlink_file(path, expected_status, "retained identity file")
+    if expected_status.st_size > _MAX_RETAINED_IDENTITY_JSON_BYTES:
+        raise ValueError(f"retained identity JSON exceeds 64 KiB: {path}")
+    try:
+        descriptor = os.open(
+            member_name,
+            _file_open_flags(),
+            dir_fd=parent_descriptor,
+        )
+    except OSError as error:
+        raise ValueError(f"cannot safely open retained identity JSON: {path}") from error
+    try:
+        opened_status = os.fstat(descriptor)
+        _require_regular_nonsymlink_file(
+            path,
+            opened_status,
+            "retained identity file",
+        )
+        _require_same_entry(expected_status, opened_status, "retained identity file")
+        if opened_status.st_size > _MAX_RETAINED_IDENTITY_JSON_BYTES:
+            raise ValueError(f"retained identity JSON exceeds 64 KiB: {path}")
+        encoded = _read_descriptor_at_most(
+            descriptor,
+            _MAX_RETAINED_IDENTITY_JSON_BYTES,
+            path,
+        )
+        final_status = os.fstat(descriptor)
+        _require_same_entry(opened_status, final_status, "retained identity file")
+        if final_status.st_size != opened_status.st_size or len(encoded) != final_status.st_size:
+            raise ValueError(f"retained identity JSON changed while read: {path}")
+        current_status = _stat_member_without_following(
+            parent_descriptor,
+            member_name,
+            "retained identity file",
+        )
+        _require_same_entry(
+            final_status,
+            current_status,
+            "retained identity file",
+        )
+    finally:
+        os.close(descriptor)
+    try:
+        return json.loads(encoded.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"retained identity JSON is malformed: {path}") from error
+
+
+def _read_descriptor_at_most(descriptor: int, maximum_bytes: int, path: Path) -> bytes:
+    """Read at most one bounded regular-file payload from an open descriptor.
+
+    Parameters
+    ----------
+    descriptor : int
+        Open nonblocking descriptor for a regular metadata file. It never
+        identifies a numerical work array.
+    maximum_bytes : int
+        Nonnegative maximum allowed payload length in bytes. The helper reads
+        one additional byte to detect growth beyond this ceiling.
+    path : pathlib.Path
+        Display path for a validation error only.
+
+    Returns
+    -------
+    bytes
+        Entire metadata payload when it is no longer than ``maximum_bytes``.
+
+    Raises
+    ------
+    ValueError
+        If the read fails or exceeds the fixed ceiling.
+    """
+    try:
+        encoded = os.read(descriptor, maximum_bytes + 1)
+    except OSError as error:
+        raise ValueError(f"cannot read retained identity JSON: {path}") from error
+    if len(encoded) > maximum_bytes:
+        raise ValueError(f"retained identity JSON exceeds 64 KiB: {path}")
+    return encoded
+
+
+def _validate_prepared_metadata(
+    record: object,
+    expected_fingerprint: str,
+    expected_schema_version: str,
+) -> None:
+    """Require the exact current writer metadata schema and self-hash.
+
+    Parameters
+    ----------
+    record : object
+        Parsed bounded JSON metadata. It may contain scalar/list/mapping JSON
+        values but never numerical payload arrays.
+    expected_fingerprint : str
+        Fingerprint from the anchored representation directory name.
+    expected_schema_version : str
+        Current configuration schema identifier that the writer records.
+
+    Returns
+    -------
+    None
+        The metadata is inspected only; no filesystem or numerical data is
+        mutated.
+
+    Raises
+    ------
+    ValueError
+        If keys, canonical values, identifier formats, shape/dtype/unit schema,
+        or the real writer representation fingerprint are invalid.
+    """
+    if not isinstance(record, dict) or set(record) != _PREPARED_METADATA_KEYS:
+        raise ValueError("prepared metadata has an invalid key set")
+    if (
+        record.get("generator") != _PREPARED_GENERATOR
+        or record.get("analysis_version") != _PREPARED_ANALYSIS_VERSION
+        or record.get("schema_version") != expected_schema_version
+        or record.get("execution_settings") != _PREPARED_EXECUTION_SETTINGS
+        or record.get("axes") != _PREPARED_AXES
+        or record.get("dtypes") != _PREPARED_DTYPES
+        or record.get("units") != _PREPARED_UNITS
+    ):
+        raise ValueError("prepared metadata differs from the current writer schema")
+    for key in (
+        "generator",
+        "analysis_version",
+        "schema_version",
+        "source_fingerprint",
+        "scientific_fingerprint",
+        "representation_fingerprint",
+    ):
+        if not isinstance(record[key], str) or not record[key]:
+            raise ValueError("prepared metadata identifier type is invalid")
+    if (
+        _WORK_FINGERPRINT.fullmatch(record["source_fingerprint"]) is None
+        or _WORK_FINGERPRINT.fullmatch(record["scientific_fingerprint"]) is None
+        or _WORK_FINGERPRINT.fullmatch(record["representation_fingerprint"]) is None
+    ):
+        raise ValueError("prepared metadata fingerprint format is invalid")
+    _validate_prepared_shape_schema(record["shapes"])
+    identity = {
+        key: record[key] for key in _PREPARED_REPRESENTATION_IDENTITY_KEYS
+    }
+    if _work_fingerprint(identity) != record["representation_fingerprint"]:
+        raise ValueError("prepared metadata representation fingerprint is invalid")
+    if record["representation_fingerprint"] != expected_fingerprint:
+        raise ValueError("prepared metadata fingerprint differs from its directory")
+
+
+def _validate_prepared_shape_schema(shapes: object) -> None:
+    """Validate writer-declared prepared array shape metadata without arrays.
+
+    Parameters
+    ----------
+    shapes : object
+        JSON shape mapping from retained metadata. Expected arrays use
+        `(site, frequency, trial, time)` and `(site, trial)` axes, but no array
+        payload, unit conversion, or axis values are opened.
+
+    Returns
+    -------
+    None
+        The mapping is inspected without mutation.
+
+    Raises
+    ------
+    ValueError
+        If keys, integer dimensions, or writer-required axis relationships are
+        malformed.
+    """
+    expected_keys = {
+        "phase",
+        "valid",
+        "site_trial_valid",
+        "site_trial_exclusion_reason",
+    }
+    if not isinstance(shapes, dict) or set(shapes) != expected_keys:
+        raise ValueError("prepared metadata shape schema is invalid")
+    phase = shapes["phase"]
+    valid = shapes["valid"]
+    site_trial_valid = shapes["site_trial_valid"]
+    exclusion_reason = shapes["site_trial_exclusion_reason"]
+    if not _nonnegative_integer_list(phase, 4):
+        raise ValueError("prepared phase shape is invalid")
+    if valid != phase or site_trial_valid != [phase[0], phase[2]]:
+        raise ValueError("prepared validity shape differs from phase shape")
+    if exclusion_reason != [phase[0], phase[2]]:
+        raise ValueError("prepared exclusion-reason shape differs from phase shape")
+
+
+def _nonnegative_integer_list(value: object, length: int) -> bool:
+    """Return whether a JSON list has one fixed count of nonnegative integers.
+
+    Parameters
+    ----------
+    value : object
+        JSON value expected to be a finite list of count dimensions. It has no
+        physical units and is never converted into an array.
+    length : int
+        Required number of dimensions.
+
+    Returns
+    -------
+    bool
+        ``True`` only for exactly ``length`` non-Boolean nonnegative integers.
+    """
+    return (
+        isinstance(value, list)
+        and len(value) == length
+        and all(isinstance(item, int) and not isinstance(item, bool) and item >= 0 for item in value)
+    )
+
+
+def _validate_prepared_completion(record: object, expected_fingerprint: str) -> None:
+    """Require the exact one-field completion certificate from the writer.
+
+    Parameters
+    ----------
+    record : object
+        Parsed bounded completion JSON. It contains no numerical array data.
+    expected_fingerprint : str
+        Representation directory identity that the sole certificate field must
+        exactly equal.
+
+    Returns
+    -------
+    None
+        The record is read-only.
+
+    Raises
+    ------
+    ValueError
+        If completion is not exactly one matching fingerprint field.
+    """
+    if record != {"representation_fingerprint": expected_fingerprint}:
+        raise ValueError("prepared completion certificate is invalid")
+
+
+def _lstat_or_none(path: Path) -> os.stat_result | None:
+    """Return link-preserving status metadata for one path without opening it.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        One direct filesystem entry. Its data payload, numerical arrays, axes,
+        shapes, and units remain unread.
+
+    Returns
+    -------
+    os.stat_result or None
+        Nofollow status metadata for an existing entry, or ``None`` when the
+        exact path is absent.
+
+    Raises
+    ------
+    OSError
+        If metadata cannot be inspected.
+    """
+    try:
+        return path.lstat()
+    except FileNotFoundError:
+        return None
+
+
+def _require_real_directory(path: Path, status: os.stat_result, label: str) -> None:
+    """Require status metadata to describe a real nonsymlink directory.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Display path for an error only; it is never reopened by this helper.
+    status : os.stat_result
+        Nofollow ``lstat`` or descriptor ``fstat`` metadata with no numerical
+        content, axes, shapes, or units.
+    label : str
+        Human-readable entry role for a validation error.
+
+    Returns
+    -------
+    None
+        The filesystem is not mutated.
+
+    Raises
+    ------
+    ValueError
+        If the entry is linked or not a directory.
+    """
+    if stat.S_ISLNK(status.st_mode) or not stat.S_ISDIR(status.st_mode):
+        raise ValueError(f"{label} must be a real non-symbolic-link directory: {path}")
+
+
+def _require_regular_nonsymlink_file(
+    path: Path,
+    status: os.stat_result,
+    label: str,
+) -> None:
+    """Require status metadata to describe a regular nonsymlink identity file.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Display path for an error only; array payload bytes remain unopened.
+    status : os.stat_result
+        Nofollow ``lstat`` or descriptor ``fstat`` metadata.
+    label : str
+        Human-readable entry role for a validation error.
+
+    Returns
+    -------
+    None
+        The filesystem is not mutated.
+
+    Raises
+    ------
+    ValueError
+        If the entry is linked or not a regular file.
+    """
+    if stat.S_ISLNK(status.st_mode) or not stat.S_ISREG(status.st_mode):
+        raise ValueError(f"{label} must be a regular non-symbolic-link file: {path}")
+
+
+def _stat_member_without_following(
+    parent_descriptor: int,
+    member_name: str,
+    label: str,
+) -> os.stat_result:
+    """Return nofollow direct-child status relative to a stable directory fd.
+
+    Parameters
+    ----------
+    parent_descriptor : int
+        Open stable directory descriptor containing ``member_name``.
+    member_name : str
+        Direct child basename with no array payload content.
+    label : str
+        Human-readable entry role for an I/O error.
+
+    Returns
+    -------
+    os.stat_result
+        Nofollow child status metadata, never child bytes or numerical arrays.
+
+    Raises
+    ------
+    ValueError
+        If the child cannot be statted relative to the anchored directory.
+    """
+    try:
+        return os.stat(member_name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except OSError as error:
+        raise ValueError(f"cannot inspect {label}: {member_name}") from error
+
+
+def _anchored_member_statuses(
+    parent_descriptor: int,
+    member_names: Sequence[str],
+    label: str,
+) -> dict[str, os.stat_result]:
+    """Capture nofollow identities for direct children of an anchored directory.
+
+    Parameters
+    ----------
+    parent_descriptor : int
+        Open stable parent directory descriptor whose direct children are
+        classified without opening their payloads.
+    member_names : collections.abc.Sequence[str]
+        Exact direct child basenames from a stable parent inventory.
+    label : str
+        Human-readable role supplied to filesystem validation errors.
+
+    Returns
+    -------
+    dict[str, os.stat_result]
+        Nofollow device, inode, type, and size metadata keyed by each direct
+        child basename. No child bytes, arrays, axes, or units are read.
+    """
+    return {
+        member_name: _stat_member_without_following(
+            parent_descriptor,
+            member_name,
+            label,
+        )
+        for member_name in member_names
+    }
+
+
+def _require_unchanged_anchored_members(
+    parent_descriptor: int,
+    initial_statuses: Mapping[str, os.stat_result],
+    label: str,
+) -> None:
+    """Require every direct child to retain its anchored nofollow identity.
+
+    Parameters
+    ----------
+    parent_descriptor : int
+        Still-open stable parent directory descriptor used for final direct
+        child status checks after nested child descriptors have closed.
+    initial_statuses : collections.abc.Mapping[str, os.stat_result]
+        Initial nofollow status records keyed by direct child basename. The
+        records contain no payload values or physical units.
+    label : str
+        Human-readable role supplied to replacement validation errors.
+
+    Returns
+    -------
+    None
+        The hierarchy stays read-only. Every current child must match the
+        original device, inode, type, and size metadata.
+
+    Raises
+    ------
+    ValueError
+        If a child is missing, linked, substituted, changes type, or changes
+        size before the parent directory is accepted.
+    """
+    for member_name, initial_status in initial_statuses.items():
+        final_status = _stat_member_without_following(
+            parent_descriptor,
+            member_name,
+            label,
+        )
+        _require_same_entry(initial_status, final_status, label)
+
+
+def _require_same_entry(
+    expected: os.stat_result,
+    actual: os.stat_result,
+    label: str,
+) -> None:
+    """Require two status records to identify the same filesystem entry.
+
+    Parameters
+    ----------
+    expected, actual : os.stat_result
+        Nofollow or descriptor status records containing identity/type/size
+        metadata only. No numerical values, axes, shapes, or units are read.
+    label : str
+        Human-readable role for a validation error.
+
+    Returns
+    -------
+    None
+        No entry is changed.
+
+    Raises
+    ------
+    ValueError
+        If device, inode, file type, or size changed between inspections.
+    """
+    if (
+        expected.st_dev != actual.st_dev
+        or expected.st_ino != actual.st_ino
+        or stat.S_IFMT(expected.st_mode) != stat.S_IFMT(actual.st_mode)
+        or expected.st_size != actual.st_size
+    ):
+        raise ValueError(f"{label} changed identity during preflight")
+
+
+def _require_stable_directory_path(path: Path, descriptor: int, label: str) -> None:
+    """Require a directory pathname to still identify its anchored descriptor.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Directory path rechecked after descriptor-based inspection.
+    descriptor : int
+        Open anchored directory descriptor whose identity must match ``path``.
+    label : str
+        Human-readable role for a validation error.
+
+    Returns
+    -------
+    None
+        The path and descriptor remain read-only.
+
+    Raises
+    ------
+    ValueError
+        If the path was removed, linked, substituted, or changed type.
+    """
+    descriptor_status = os.fstat(descriptor)
+    current_status = _lstat_or_none(path)
+    if current_status is None:
+        raise ValueError(f"{label} disappeared during preflight")
+    _require_real_directory(path, current_status, label)
+    _require_same_entry(current_status, descriptor_status, label)
+
+    # Recheck after comparing the original pathname status to the fd. A
+    # same-name directory replacement can occur in that narrow gap.
+    final_status = _lstat_or_none(path)
+    if final_status is None:
+        raise ValueError(f"{label} disappeared during preflight")
+    _require_real_directory(path, final_status, label)
+    _require_same_entry(final_status, descriptor_status, label)
+
+
+def _require_same_directory_inventory(
+    before: os.stat_result,
+    after: os.stat_result,
+    label: str,
+) -> None:
+    """Require directory identity and mutation metadata to remain unchanged.
+
+    Parameters
+    ----------
+    before, after : os.stat_result
+        ``fstat`` records from one open directory descriptor before and after
+        listing direct children. They contain no child payload or numerical
+        array contents.
+    label : str
+        Human-readable directory role for a validation error.
+
+    Returns
+    -------
+    None
+        The directory is not modified.
+
+    Raises
+    ------
+    ValueError
+        If identity, type, size, link count, modification, or change time
+        differs while its inventory is read.
+    """
+    _require_same_entry(before, after, label)
+    if (
+        before.st_nlink != after.st_nlink
+        or before.st_mtime_ns != after.st_mtime_ns
+        or before.st_ctime_ns != after.st_ctime_ns
+    ):
+        raise ValueError(f"{label} inventory changed during preflight")
+
+
+def _saved_cache_directory(identity: Mapping[str, object]) -> Path:
+    """Return the immutable cache target recorded by an earlier new run.
+
+    Parameters
+    ----------
+    identity : Mapping[str, object]
+        Durable launcher identity JSON containing the resolved cache path.
+
+    Returns
+    -------
+    pathlib.Path
+        Exact absolute cache path persisted by the originating new run.
+    """
+    value = identity.get("cache_directory")
+    if not isinstance(value, str) or not value:
+        raise ValueError("saved launcher identity lacks cache_directory")
+    path = Path(value)
+    if not path.is_absolute() or str(path.resolve(strict=False)) != value:
+        raise ValueError("saved launcher cache_directory is not a resolved absolute path")
+    return path
+
+
 def _identity_mapping(
     config: LFPSummaryConfig,
     command: LauncherCommand,
@@ -992,8 +2227,9 @@ def _identity_mapping(
     unit_json = json.dumps(list(population.stable_unit_ids), separators=(",", ":"))
     source_json = json.dumps(dict(source_fingerprints), sort_keys=True, separators=(",", ":"), allow_nan=False)
     config_json = canonical_config_json(config)
-    return {
+    identity = {
         "session_path": str(config.session_path.resolve(strict=False)),
+        "cache_directory": str(config.output_directory.resolve(strict=False)),
         "repository_path": str(repository.repository_root.resolve(strict=False)),
         "session_id": config.session_id,
         "probe_label": population.probe_label,
@@ -1009,6 +2245,9 @@ def _identity_mapping(
         "git_commit": repository.git_commit,
         "tracked_clean": repository.tracked_clean,
     }
+    if command.session_metadata is not None:
+        identity["session_metadata"] = str(command.session_metadata.resolve(strict=False))
+    return identity
 
 
 def _paths_mapping(
@@ -1070,6 +2309,7 @@ def _preflight_mapping(
         "estimated_phase_and_validity_bytes": phase_cell_count * 9,
         "exact_plan_available": False,
         "exact_plan_unavailable_reason": "phase-derived site validity and schedules require scientific execution",
+        "cache_directory": str(config.output_directory.resolve(strict=False)),
         "ppc_planning_seconds": None,
         "planned_ppc_allocation_bytes": None,
         "maximum_child_process_count": None,
@@ -1858,12 +3098,16 @@ def _validate_launcher_identity_artifacts(
     }
     if source != expected_source:
         raise ValueError("source_identity.json does not match durable identity")
+    cache_directory = identity.get("cache_directory")
     if (
-        not isinstance(preflight, dict)
+        not isinstance(cache_directory, str)
+        or paths.get("output_directory") != cache_directory
+        or not isinstance(preflight, dict)
         or preflight.get("schema_version") != _PREFLIGHT_SCHEMA
         or preflight.get("session_id") != identity.get("session_id")
         or preflight.get("probe_label") != identity.get("probe_label")
         or preflight.get("shuffle_count") != identity.get("shuffle_count")
+        or preflight.get("cache_directory") != cache_directory
         or preflight.get("paths") != paths
     ):
         raise ValueError("preflight.json does not match durable identity")
@@ -1954,6 +3198,7 @@ def _write_summary(run_directory: Path, state: Mapping[str, object]) -> None:
         f"Probe: {identity['probe_label']}\n\n"
         f"Shuffles: {identity['shuffle_count']}\n\n"
         f"Requested workers: {identity['requested_worker_count']}\n\n"
+        f"Cache directory: {identity['cache_directory']}\n\n"
         f"Completed stages: {state['completed_stages']}\n\n"
         f"Measurements: {json.dumps(dict(measurements), sort_keys=True, allow_nan=False)}\n\n"
         f"Warnings: {state['warnings']}\n\n"
@@ -2190,7 +3435,7 @@ def _proc_memory_bytes(pid: int) -> tuple[int, int | None] | None:
 
 
 def make_production_launcher_dependencies() -> LauncherDependencies:
-    """Bind the reviewed CT026 metadata, runtime, report, and cleanup seams.
+    """Bind direct-path and session-metadata runtime, report, and cleanup seams.
 
     Returns
     -------
@@ -2199,17 +3444,15 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         selected probe, while numerical LFP/PPC work remains inside the
         existing Spike-phase pipeline.
     """
+    import pandas as pd
+
     from src.neural_analysis.lfp_spike_phase_validation import (
         build_ct026_active_population,
         build_ct026_spike_phase_preview_config,
         make_production_spike_phase_preview_dependencies,
         render_cached_spike_phase_report,
     )
-    from src.neural_analysis.lfp_summary_io import (
-        assess_component_status,
-        load_component_arrays,
-        load_or_initialize_manifest,
-    )
+    from src.neural_analysis.lfp_summary_io import load_component_arrays
     from src.neural_analysis.lfp_summary_pipeline import (
         compute_spike_phase_component,
     )
@@ -2218,6 +3461,14 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         make_spike_phase_pipeline_dependencies,
     )
     from src.neural_analysis.lfp_summary_work_cache import cleanup_ppc_run
+    from src.neural_analysis.lfp_summary_session import (
+        build_metadata_spike_phase_config,
+    )
+    from src.neural_analysis.session_metadata import (
+        load_session_metadata,
+        resolve_session_metadata,
+        validate_session_for_action,
+    )
     from src.neural_analysis.spike_behavior_pynapple import load_sorter_metadata
     from src.neural_analysis.unit_spike_loading import load_channel_quality
 
@@ -2255,6 +3506,35 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
                 checkpoint_enabled=True,
                 checkpoint_retention="incomplete_only",
             ),
+        )
+
+    def load_metadata_config(
+        metadata_path: Path,
+        probe_label: str,
+        cache_directory: Path,
+        shuffle_count: int,
+        worker_count: int,
+    ) -> LFPSummaryConfig:
+        """Build one existing Spike-phase request from explicit session metadata."""
+        metadata = load_session_metadata(metadata_path)
+        session = resolve_session_metadata(metadata, metadata_path)
+        availability = validate_session_for_action(session, "spike-phase")
+        if not availability.available:
+            raise ValueError(
+                "session metadata is missing Spike-phase inputs: "
+                + ", ".join(availability.missing_inputs)
+            )
+        return build_metadata_spike_phase_config(
+            session,
+            probe_id=probe_label,
+            cache_directory=cache_directory,
+            shuffle_count=shuffle_count,
+            worker_count=worker_count,
+            cluster_metadata_loader=lambda sorter: pd.read_csv(
+                sorter / "cluster_info.tsv",
+                sep="\t",
+            ),
+            channel_metadata_loader=load_channel_quality,
         )
 
     def repository_state() -> RepositoryState:
@@ -2376,6 +3656,7 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         process_tree_sampler=_LinuxProcessTreeSampler,
         terminal_write=lambda message: print(message, flush=True),
         repository_commit_is_ancestor=repository_commit_is_ancestor,
+        load_metadata_config=load_metadata_config,
     )
 
 

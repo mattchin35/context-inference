@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import re
 import textwrap
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 import numpy as np
 
@@ -531,28 +532,37 @@ def plot_phase_map(
 
 
 def plot_phase_band_summary(
-    estimates: np.ndarray,
-    ci_low: np.ndarray,
-    ci_high: np.ndarray,
-    contributing_trial_counts: np.ndarray,
+    *,
+    observed_estimates: np.ndarray,
+    bootstrap_quantiles: np.ndarray,
+    selected_trial_counts: np.ndarray,
     labels: tuple[str, ...],
     band_name: str,
     epoch_name: str,
     metric_name: str,
+    bootstrap_count: int,
     context: PlotContext,
 ) -> tuple[plt.Figure, dict[str, plt.Axes]]:
-    """Plot scalar phase estimates, bootstrap intervals, and counts.
+    """Plot observed phase estimates and cached bootstrap resampling summaries.
 
     Parameters
     ----------
-    estimates, ci_low, ci_high : numpy.ndarray
-        Dimensionless shape ``(summary,)`` estimates and bootstrap 95% bounds.
-    contributing_trial_counts : numpy.ndarray
-        Integer shape ``(summary,)`` effective trial counts.
+    observed_estimates : numpy.ndarray
+        Dimensionless float shape ``(condition,)`` plug-in ITPC or ISPC values.
+    bootstrap_quantiles : numpy.ndarray
+        Dimensionless float shape ``(5, condition)`` ordered as 2.5th, 25th,
+        50th, 75th, and 97.5th percentiles of saved bootstrap scalar draws.
+    selected_trial_counts : numpy.ndarray
+        Nonnegative signed or unsigned integer shape ``(condition,)`` exact
+        selected trials for the matching entity, epoch, and band; these are not
+        reconstructed for plotting.
     labels : tuple[str, ...]
-        Labels for the summary axis.
+        Ordered condition labels, rendered from top to bottom.
     band_name, epoch_name, metric_name : str
         Frequency-band, half-open epoch, and statistic labels.
+    bootstrap_count : int
+        Positive deterministic resample count used to create the saved
+        quantiles.
     context : PlotContext
         Figure provenance and source-unit metadata.
 
@@ -564,38 +574,114 @@ def plot_phase_band_summary(
     Raises
     ------
     ValueError
-        If estimates, intervals, counts, and labels do not share one axis.
+        If summaries, counts, labels, or percentile order do not share their
+        documented axes, or counts are not nonnegative integers.
     """
-    e = np.asarray(estimates, float)
-    lo = np.asarray(ci_low, float)
-    hi = np.asarray(ci_high, float)
-    n = np.asarray(contributing_trial_counts, int)
+    observed = np.asarray(observed_estimates, dtype=float)
+    quantiles = np.asarray(bootstrap_quantiles, dtype=float)
+    raw_counts = np.asarray(selected_trial_counts)
+    if raw_counts.dtype.kind not in {"i", "u"}:
+        raise ValueError("selected_trial_counts must have an integer dtype")
+    if np.any(raw_counts < 0):
+        raise ValueError("selected_trial_counts must be nonnegative")
+    counts = raw_counts
     if (
-        e.shape != lo.shape
-        or e.shape != hi.shape
-        or e.shape != n.shape
-        or e.shape != (len(labels),)
+        observed.shape != (len(labels),)
+        or quantiles.shape != (5, len(labels))
+        or counts.shape != (len(labels),)
     ):
         raise ValueError("phase-summary axes are invalid")
+    if int(bootstrap_count) != bootstrap_count or int(bootstrap_count) < 1:
+        raise ValueError("bootstrap_count must be a positive integer")
+    finite_quantile_columns = np.all(np.isfinite(quantiles), axis=0)
+    all_nan_quantile_columns = np.all(np.isnan(quantiles), axis=0)
+    if not np.all(finite_quantile_columns | all_nan_quantile_columns):
+        raise ValueError(
+            "each bootstrap quantile column must be all finite and ordered or all NaN"
+        )
+    if np.any(np.diff(quantiles[:, finite_quantile_columns], axis=0) < 0.0):
+        raise ValueError("phase-summary bootstrap quantiles are not ordered")
     figure, axes = _figure(("summary",))
     axis = axes["summary"]
-    x = np.arange(e.size)
-    finite_interval = np.isfinite(lo) & np.isfinite(hi)
-    if np.any(lo[finite_interval] > hi[finite_interval]):
-        raise ValueError("phase-summary confidence interval bounds are reversed")
-    axis.plot(x, e, "o", linestyle="none")
-    axis.vlines(x[finite_interval], lo[finite_interval], hi[finite_interval])
-    axis.set_xticks(x, labels, rotation=25, ha="right")
-    axis.set_ylabel(metric_name)
+    row_positions = np.arange(len(labels), dtype=float)
+    # Keep both artists inside one condition row while leaving the observed circle clear.
+    box_positions = row_positions + 0.30
+    box_width = 0.20
+    bxp_stats = [
+        {
+            "med": quantiles[2, index],
+            "q1": quantiles[1, index],
+            "q3": quantiles[3, index],
+            "whislo": quantiles[0, index],
+            "whishi": quantiles[4, index],
+            "fliers": [],
+        }
+        for index in range(len(labels))
+    ]
+    distribution_color = "#4C78A8"
+    axis.bxp(
+        bxp_stats,
+        positions=box_positions,
+        widths=box_width,
+        orientation="horizontal",
+        patch_artist=True,
+        shownotches=False,
+        showfliers=False,
+        showcaps=True,
+        boxprops={"facecolor": distribution_color, "alpha": 0.55},
+        medianprops={"color": "black", "linewidth": 1.5},
+        whiskerprops={"color": distribution_color, "linewidth": 1.2},
+        capprops={"color": distribution_color, "linewidth": 1.2},
+    )
+    axis.scatter(
+        observed,
+        row_positions,
+        s=64.0,
+        color="black",
+        edgecolors="white",
+        linewidths=0.8,
+        zorder=3,
+    )
+    axis.set_yticks(
+        row_positions,
+        [f"{label} (n={count})" for label, count in zip(labels, counts, strict=True)],
+    )
+    axis.invert_yaxis()
+    axis.set_xlabel(f"{metric_name} (dimensionless)")
     axis.set_title(f"{band_name} {epoch_name}")
-    figure.set_size_inches(max(10.0, 1.4 * len(labels)), 6.0)
-    unstable = [labels[i] for i in np.flatnonzero(n < 10)]
+    axis.legend(
+        handles=(
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="none",
+                color="black",
+                markerfacecolor="black",
+                markersize=8,
+                label="Observed estimate",
+            ),
+            Patch(
+                facecolor=distribution_color,
+                alpha=0.55,
+                label="Bootstrap resampling distribution",
+            ),
+        ),
+        loc="best",
+    )
+    figure.set_size_inches(10.0, max(4.5, 0.65 * len(labels) + 1.0))
+    unstable = [labels[index] for index in np.flatnonzero(counts < 10)]
     _caption(
         figure,
         context,
-        f"95% bootstrap CI; counts={n.tolist()}; unstable low trial count: {unstable}",
+        (
+            "Bootstrap resampling distribution from "
+            f"{int(bootstrap_count):,} deterministic trial resamples; "
+            f"selected counts={counts.tolist()}; unstable fewer-than-ten-trial "
+            f"conditions: {unstable}"
+        ),
     )
-    figure.subplots_adjust(bottom=max(figure.subplotpars.bottom, 0.35))
+    figure.subplots_adjust(left=max(figure.subplotpars.left, 0.32))
     return figure, axes
 
 
@@ -738,8 +824,8 @@ def plot_plv_exemplar(
         axes["filtered"].plot(t, b[i], label=label)
         axes["phase"].plot(t, p[i], label=label)
     for axis, name in (
-        (axes["source"], "Source trace"),
-        (axes["filtered"], "Filtered trace"),
+        (axes["source"], f"LFP ({context.source_voltage_unit})"),
+        (axes["filtered"], f"Bandpassed LFP ({context.source_voltage_unit})"),
         (axes["phase"], "Phase (rad)"),
     ):
         axis.set(ylabel=name)

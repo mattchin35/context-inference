@@ -1,0 +1,70 @@
+{
+  "behavior": {
+    "event_table_file": "tables/events.csv",
+    "session_directory": "tables",
+    "treadmill_file": "tables/treadmill.csv",
+    "trial_table_file": "tables/trials.csv"
+  },
+  "channel_groups": [
+    {
+      "channel_group_id": "rear-memory",
+      "channel_indices": [3, 8, 13],
+      "display_label": "memory region",
+      "probe_id": "rear-shank"
+    }
+  ],
+  "lfp_summary_cache_directory": "processed/lfp_summary_cache",
+  "lfp_summary_snapshot_directory": null,
+  "populations": [
+    {
+      "channel_group_id": "rear-memory",
+      "display_label": "rear active units",
+      "population_id": "rear-active",
+      "probe_id": "rear-shank"
+    }
+  ],
+  "probes": [
+    {
+      "acquisition_family": "open_ephys",
+      "aligned_spike_file": "recordings/front/aligned_spikes.npz",
+      "channel_quality_file": "recordings/front/channel_quality.json",
+      "display_label": "front hardware",
+      "lfp_file": "recordings/front/lfp.dat",
+      "lfp_metadata_file": "recordings/front/lfp_preprocessing.json",
+      "probe_id": "front-array",
+      "sorter_directory": "recordings/front/kilosort4",
+      "synchronization_file": "recordings/front/synchronization.npz"
+    },
+    {
+      "acquisition_family": "spikeglx",
+      "aligned_spike_file": "recordings/rear/aligned_spikes.npz",
+      "channel_quality_file": "recordings/rear/channel_quality.csv",
+      "display_label": "rear hardware",
+      "lfp_file": "recordings/rear/run.lf.bin",
+      "lfp_metadata_file": "recordings/rear/run.lf.meta",
+      "probe_id": "rear-shank",
+      "sorter_directory": "recordings/rear/kilosort4",
+      "synchronization_file": "recordings/rear/synchronization.npz"
+    }
+  ],
+  "schema_version": "1",
+  "session_date": "2030-01-02",
+  "session_id": "Mouse-Z-example",
+  "session_label": "Names are metadata",
+  "site_pairs": [["frontal-cortex", "memory-site"]],
+  "sites": [
+    {
+      "display_label": "frontal cortex",
+      "probe_id": "front-array",
+      "saved_channel_index": 1,
+      "site_id": "frontal-cortex"
+    },
+    {
+      "display_label": "memory site",
+      "probe_id": "rear-shank",
+      "saved_channel_index": 8,
+      "site_id": "memory-site"
+    }
+  ],
+  "subject_id": "Mouse-Z"
+}

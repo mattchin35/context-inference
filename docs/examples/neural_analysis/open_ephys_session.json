@@ -1,0 +1,53 @@
+{
+  "behavior": {
+    "event_table_file": "behavior/processed/events.csv",
+    "session_directory": "behavior",
+    "treadmill_file": null,
+    "trial_table_file": "behavior/processed/trials.csv"
+  },
+  "channel_groups": [
+    {
+      "channel_group_id": "probe-b-hpc",
+      "channel_indices": [7, 11, 15],
+      "display_label": "HPC",
+      "probe_id": "ProbeB"
+    }
+  ],
+  "lfp_summary_cache_directory": "processed/lfp_summary_cache",
+  "lfp_summary_snapshot_directory": null,
+  "populations": [
+    {
+      "channel_group_id": "probe-b-hpc",
+      "display_label": "ProbeB active HPC units",
+      "population_id": "probe-b-active",
+      "probe_id": "ProbeB"
+    }
+  ],
+  "probes": [
+    {
+      "acquisition_family": "open_ephys",
+      "aligned_spike_file": "ephys/aligned/aligned_open_ephys/probeB_sync.npz",
+      "channel_quality_file": "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeB/channel_quality.csv",
+      "display_label": "Open Ephys ProbeB",
+      "lfp_file": "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeB/lfp.dat",
+      "lfp_metadata_file": "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeB/lfp_preprocessing.json",
+      "probe_id": "ProbeB",
+      "sorter_directory": "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeB/kilosort4",
+      "synchronization_file": "ephys/aligned/aligned_open_ephys/probeB_sync.npz"
+    }
+  ],
+  "schema_version": "1",
+  "session_date": "2026-08-01",
+  "session_id": "CT026-example",
+  "session_label": "Open Ephys example",
+  "site_pairs": [],
+  "sites": [
+    {
+      "display_label": "HPC1",
+      "probe_id": "ProbeB",
+      "saved_channel_index": 7,
+      "site_id": "hpc1"
+    }
+  ],
+  "subject_id": "CT026"
+}

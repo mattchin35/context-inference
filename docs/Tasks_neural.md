@@ -2,6 +2,51 @@
 
 ## Live handoff snapshot
 
+### 2026-09-23 structural-refactor correction overlay
+
+- NR0 Open Ephys affine scaling is complete and approved on branch `refactor`.
+  Tests are `e728cea` and `2b497e4`; implementation is `177a8d6`; closure is
+  `a94559d`. Final gates were 704 focused tests and 1,395 complete neural tests.
+- The NR1 metadata/path/resource dry run is complete at
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260801_latent_inference/analysis_runs/ct026_nr1_open_ephys_affine_uV_v1_2026-09-23T09-49-58Z`.
+  Fresh Sol review approved the corrected evidence with no P0-P3 findings.
+  At that checkpoint the corrected cache, report, and profiling destinations
+  were absent; its dry-run report/profiling paths remain absent, while the
+  corrected cache was later populated only by the approved staged runs below.
+  Legacy components are expected stale by manifest-only identity comparison.
+- The rejected intermediate dry-run pass accidentally materialized legacy
+  component NPZ members read-only through `assess_component_status`. It changed
+  access times but not content or modification times. The final run preserves
+  this disclosure in `incident.json` and does not repeat the access.
+- Plan Section 5.2 item 2 is complete and approved. Nine bounded windows across
+  PFC, HPC1, and HPC2 matched the declared stored-to-uV affine formula exactly;
+  scalar evidence is in the separately timestamped NR1 small-window run.
+  Corrected Power, its Power-only report, and read-only legacy comparison are
+  complete. Fresh Sol review approved the scientific/safety/evidence gate with
+  no P0-P3 findings, and the user visually approved all 12 report PNGs on
+  2026-09-23. Corrected Synchrony then completed at the exact retry path in the
+  refactor plan. Fresh Sol numerical, evidence/provenance, and systematic visual
+  reviews approved its 38-array comparison and all 252 report PNGs with no
+  P0-P3 findings. The original strict nine-array floating-point hard stop and
+  packaging chronology remain preserved; the reviewed acceptance and 276-file
+  inventory explain them. Explicit user visual approval is pending. Spike-phase,
+  cluster, and push actions remain separately gated.
+- User review then flagged the PFC theta-whole ITPC summary because all
+  observed points lie below the vertical intervals. Those lines are
+  percentile-bootstrap 95% intervals, not IQRs; resampling bias in the
+  nonnegative clustering magnitude explains the legacy-matching result, but
+  its scientific/display treatment remains unresolved and Synchrony is not
+  approved. Any eventual 100-shuffle ProbeB preview must run unattended through
+  Slurm without Codex monitoring. The current launcher cannot safely do that
+  for NR1 because it lacks a corrected-cache output argument and would target
+  the protected legacy cache. No preview, push, transfer, or submission is
+  authorized until those gaps are resolved.
+- For this structural-refactor sequence,
+  `docs/neural_analysis_refactor_plan.md` and
+  `docs/neural_analysis_refactor_execution_log.md` are the ongoing detailed
+  authority. The historical WP status below remains evidence for the approved
+  legacy pipeline and must not be interpreted as approval to overwrite it.
+
 - **Snapshot:** 2026-09-22 on branch `refactor`.
 - **Current implementation HEAD before this documentation update:** `e8f8dca`
   (`feat: add WP11 snapshot inspector core`). This WP11-3 commit is under Sol

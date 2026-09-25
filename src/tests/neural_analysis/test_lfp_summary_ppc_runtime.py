@@ -403,6 +403,89 @@ def test_run_identity_binds_selected_job_inputs_and_source_representation(
     assert changed.resumed_block_ids == ()
 
 
+def test_ppc_checkpoint_identity_rejects_a_legacy_open_ephys_source_record(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The actual PPC producer places legacy and corrected Open Ephys checkpoints in distinct runs."""
+    base = _config()
+    open_ephys_site = replace(
+        base.sites[0],
+        acquisition_format="open_ephys",
+        lfp_path=tmp_path / "lfp.dat",
+        aligned_sync_path=tmp_path / "sync.npz",
+        voltage_unit="uV",
+    )
+    config = replace(base, sites=(open_ephys_site, *base.sites[1:]))
+    phase, spikes, schedule = _inputs()
+    source_path = str(open_ephys_site.lfp_path.resolve())
+    sidecar_path = str((tmp_path / "lfp_preprocessing.json").resolve())
+    shared_sidecar = {
+        "path": sidecar_path,
+        "size_bytes": 101,
+        "mtime_ns": 2,
+        "sha256": "a" * 64,
+    }
+    legacy_sources = {
+        source_path: {
+            "path": source_path,
+            "size_bytes": 4,
+            "mtime_ns": 1,
+            "value_semantics": "legacy-unscaled",
+        },
+        sidecar_path: shared_sidecar,
+    }
+    corrected_sources = {
+        source_path: {
+            **legacy_sources[source_path],
+            "value_semantics": "open_ephys_affine_uV_v1",
+        },
+        sidecar_path: shared_sidecar,
+    }
+    monkeypatch.setattr(
+        ppc_runtime,
+        "fingerprint_source_files",
+        lambda *_args, **_kwargs: legacy_sources,
+    )
+    legacy = ppc_runtime.execute_ppc_blocks(
+        config=config,
+        execution=config.ppc_execution,
+        prepared_phase=phase,
+        prepared_spikes=spikes,
+        schedule=schedule,
+        work_root=tmp_path / "work",
+    )
+    monkeypatch.setattr(
+        ppc_runtime,
+        "fingerprint_source_files",
+        lambda *_args, **_kwargs: corrected_sources,
+    )
+    corrected = ppc_runtime.execute_ppc_blocks(
+        config=config,
+        execution=config.ppc_execution,
+        prepared_phase=phase,
+        prepared_spikes=spikes,
+        schedule=schedule,
+        work_root=tmp_path / "work",
+    )
+
+    assert legacy.run_fingerprint != corrected.run_fingerprint
+    assert corrected.resumed_block_ids == ()
+    assert legacy.run_directory != corrected.run_directory
+    assert (legacy.run_directory / "metadata.json").is_file()
+    assert (corrected.run_directory / "metadata.json").is_file()
+    assert legacy_sources[sidecar_path] == corrected_sources[sidecar_path]
+    assert {
+        key: value
+        for key, value in legacy_sources[source_path].items()
+        if key != "value_semantics"
+    } == {
+        key: value
+        for key, value in corrected_sources[source_path].items()
+        if key != "value_semantics"
+    }
+
+
 def test_frequency_axis_mismatch_is_rejected_without_repeating_phase_data(
     tmp_path: Path,
 ) -> None:
