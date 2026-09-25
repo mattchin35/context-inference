@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from math import isfinite
 from pathlib import Path
+from typing import Callable
 
+import pandas as pd
 from src.external_tools import readSGLX
 from src.neural_analysis import lfp_loading
 from src.neural_analysis.lfp_summary_models import (
@@ -155,7 +157,195 @@ def _build_population(
         selected_channels=group.channel_indices,
         quality_settings=(),
         stable_unit_ids=(),
+        spike_times_path=probe.sorter_directory / "spike_times.npy",
+        spike_clusters_path=probe.sorter_directory / "spike_clusters.npy",
+        cluster_info_path=probe.sorter_directory / "cluster_info.tsv",
+        channel_quality_path=probe.channel_quality_file,
     )
+
+
+def build_active_unit_population(
+    session: ResolvedSession,
+    probe_id: str,
+    cluster_metadata_loader: Callable[[Path], pd.DataFrame],
+    channel_metadata_loader: Callable[[Path], pd.DataFrame],
+) -> UnitPopulationConfig:
+    """Select the existing good/MUA population for one metadata probe.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        Resolved paths and categorical identities for one recording session.
+    probe_id : str
+        Stable hardware identity declared in the session metadata.
+    cluster_metadata_loader : Callable[[Path], pandas.DataFrame]
+        Loader receiving the sorter directory and returning ``cluster_id``,
+        zero-based ``ch``, and ``group`` columns.
+    channel_metadata_loader : Callable[[Path], pandas.DataFrame]
+        Loader receiving the declared quality file and returning a channel id,
+        quality label, and Boolean ``inside_brain`` column.
+
+    Returns
+    -------
+    UnitPopulationConfig
+        Probe-qualified unit IDs and zero-based selected channels. No spike-time
+        or LFP array is loaded by this function.
+    """
+    matching = [item for item in session.populations if item.probe_id == probe_id]
+    if not matching:
+        raise ValueError(f"no population is declared for probe {probe_id!r}")
+    if len(matching) != 1:
+        raise ValueError(f"multiple populations are declared for probe {probe_id!r}")
+    declared = matching[0]
+    group = next(
+        item
+        for item in session.channel_groups
+        if item.channel_group_id == declared.channel_group_id
+    )
+    probe = resolve_probe_sources(session, probe_id)
+    sorter = _required_path(
+        probe.sorter_directory,
+        f"probes[{probe_id}].sorter_directory",
+        "directory",
+    )
+    quality_path = _required_path(
+        probe.channel_quality_file,
+        f"probes[{probe_id}].channel_quality_file",
+        "file",
+    )
+    aligned = _required_path(
+        probe.aligned_spike_file,
+        f"probes[{probe_id}].aligned_spike_file",
+        "file",
+    )
+    spike_times_path = _required_path(
+        sorter / "spike_times.npy",
+        f"probes[{probe_id}].sorter_directory/spike_times.npy",
+        "file",
+    )
+    spike_clusters_path = _required_path(
+        sorter / "spike_clusters.npy",
+        f"probes[{probe_id}].sorter_directory/spike_clusters.npy",
+        "file",
+    )
+    cluster_info_path = _required_path(
+        sorter / "cluster_info.tsv",
+        f"probes[{probe_id}].sorter_directory/cluster_info.tsv",
+        "file",
+    )
+    clusters = cluster_metadata_loader(sorter)
+    channels = channel_metadata_loader(quality_path)
+    if not {"cluster_id", "ch", "group"}.issubset(clusters):
+        raise ValueError("cluster metadata is missing cluster_id, ch, or group")
+    if "inside_brain" not in channels:
+        raise ValueError("channel quality is missing inside_brain")
+    if {"ch", "label"}.issubset(channels):
+        channel_numbers = pd.to_numeric(channels["ch"], errors="coerce")
+        labels = channels["label"]
+    elif {"channel_id", "label"}.issubset(channels):
+        channel_numbers = pd.to_numeric(
+            channels["channel_id"].astype(str).str.replace("CH", "", regex=False),
+            errors="coerce",
+        )
+        labels = channels["label"]
+    elif {"channel", "channel_quality"}.issubset(channels):
+        channel_numbers = pd.to_numeric(channels["channel"], errors="coerce")
+        labels = channels["channel_quality"]
+    else:
+        raise ValueError("channel quality lacks a channel id or quality label")
+    allowed_channels = set(group.channel_indices)
+    good = channel_numbers.loc[
+        labels.astype(str).str.lower().eq("good")
+        & channels["inside_brain"].astype(bool)
+        & channel_numbers.notna()
+    ].astype(int)
+    selected_channels = tuple(sorted(set(good) & allowed_channels))
+    selected = clusters.loc[
+        clusters["ch"].isin(selected_channels)
+        & clusters["group"].astype(str).str.lower().isin(("good", "mua"))
+    ].sort_values("cluster_id")
+    return UnitPopulationConfig(
+        label=declared.display_label,
+        probe_label=probe_id,
+        sorter_path=sorter,
+        aligned_spike_path=aligned,
+        selected_channels=selected_channels,
+        quality_settings=(
+            ("channel_quality", "good"),
+            ("inside_brain", "true"),
+            ("unit_quality", "good,mua"),
+        ),
+        stable_unit_ids=tuple(
+            f"{probe_id}:{int(cluster_id)}" for cluster_id in selected["cluster_id"]
+        ),
+        spike_times_path=spike_times_path,
+        spike_clusters_path=spike_clusters_path,
+        cluster_info_path=cluster_info_path,
+        channel_quality_path=quality_path,
+    )
+
+
+def build_metadata_spike_phase_config(
+    session: ResolvedSession,
+    probe_id: str,
+    cache_directory: Path,
+    shuffle_count: int,
+    worker_count: int,
+    cluster_metadata_loader: Callable[[Path], pd.DataFrame],
+    channel_metadata_loader: Callable[[Path], pd.DataFrame],
+) -> LFPSummaryConfig:
+    """Build the existing Spike-phase configuration from metadata and CLI choices.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        Resolved session metadata; LFP sample rates and units come from the
+        declared acquisition sidecars.
+    probe_id : str
+        Stable probe identity with exactly one declared population.
+    cache_directory : pathlib.Path
+        Explicit existing-component cache target.
+    shuffle_count, worker_count : int
+        Positive execution counts supplied by the launcher CLI.
+    cluster_metadata_loader, channel_metadata_loader : Callable
+        Small-table loaders with the contracts documented by
+        :func:`build_active_unit_population`.
+
+    Returns
+    -------
+    LFPSummaryConfig
+        Validated existing configuration. Time remains seconds, frequency Hz,
+        voltage uV, and channel indices zero based.
+    """
+    matching = [item for item in session.populations if item.probe_id == probe_id]
+    if len(matching) != 1:
+        raise ValueError(f"probe {probe_id!r} must have exactly one declared population")
+    population = build_active_unit_population(
+        session,
+        probe_id,
+        cluster_metadata_loader,
+        channel_metadata_loader,
+    )
+    base = build_lfp_summary_config(
+        session,
+        LFPSummarySessionRequest(
+            population_id=matching[0].population_id,
+            output_directory=cache_directory,
+        ),
+    )
+    config = replace(
+        base,
+        unit_population=population,
+        ppc=replace(base.ppc, shuffle_count=shuffle_count),
+        ppc_execution=replace(
+            base.ppc_execution,
+            worker_count=worker_count,
+            checkpoint_enabled=True,
+            checkpoint_retention="incomplete_only",
+        ),
+    )
+    validate_lfp_summary_config(config)
+    return config
 
 
 def build_lfp_summary_config(

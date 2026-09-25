@@ -7,7 +7,7 @@ of large recordings.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields
+from dataclasses import MISSING, asdict, dataclass, fields
 from hashlib import sha256
 import json
 from math import isfinite
@@ -49,6 +49,10 @@ class UnitPopulationConfig:
     selected_channels: tuple[int, ...]
     quality_settings: tuple[tuple[str, str], ...]
     stable_unit_ids: tuple[str, ...]
+    spike_times_path: Path | None = None
+    spike_clusters_path: Path | None = None
+    cluster_info_path: Path | None = None
+    channel_quality_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -316,10 +320,17 @@ def _construct(cls: type[Any], data: dict[str, Any]) -> Any:
     path_fields = {
         "session_path", "output_directory", "lfp_path", "aligned_sync_path",
         "sorter_path", "aligned_spike_path", "trial_table_path",
+        "spike_times_path", "spike_clusters_path", "cluster_info_path",
+        "channel_quality_path",
     }
     kwargs: dict[str, Any] = {}
     for field in fields(cls):
-        value = data[field.name]
+        if field.name in data:
+            value = data[field.name]
+        elif field.default is not MISSING:
+            value = field.default
+        else:
+            raise ValueError(f"configuration is missing required field: {field.name}")
         kwargs[field.name] = Path(value) if field.name in path_fields and value is not None else value
     return cls(**kwargs)
 
@@ -798,7 +809,18 @@ def fingerprint_source_files(
     if config.trial_table_path is not None:
         paths.append(config.trial_table_path)
     if config.unit_population is not None and component in {None, "spike_phase"}:
-        paths.extend(path for path in (config.unit_population.sorter_path, config.unit_population.aligned_spike_path) if path is not None)
+        paths.extend(
+            path
+            for path in (
+                config.unit_population.sorter_path,
+                config.unit_population.aligned_spike_path,
+                config.unit_population.spike_times_path,
+                config.unit_population.spike_clusters_path,
+                config.unit_population.cluster_info_path,
+                config.unit_population.channel_quality_path,
+            )
+            if path is not None
+        )
     result: dict[str, dict[str, int | str]] = {}
     for path in paths:
         resolved = path.resolve()

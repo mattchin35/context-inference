@@ -73,5 +73,41 @@ selected population; selecting a cached summary keeps the existing saved
 provenance. A missing optional source disables the affected view and explains
 which source is unavailable.
 
-The large-computation command will be added in U3 and is not claimed as
-metadata-driven until that milestone is implemented and tested.
+## Run Spike-phase/PPC computation
+
+Check a new request locally without loading numerical arrays or starting the
+computation:
+
+```bash
+uv run python -m src.neural_analysis.lfp_spike_phase_launcher new \
+  --session-metadata /path/to/session/neural_session.json \
+  --probe rear-probe \
+  --cache-directory /path/to/session/processed/lfp-summary-cache \
+  --shuffles 100 \
+  --workers 8 \
+  --dry-run
+```
+
+Remove `--dry-run` for the existing 100-shuffle preview. The command keeps the
+probe, shuffle count, worker count, cache directory, and optional analysis root
+explicit. Metadata supplies only session identity and input paths. The legacy
+`--session-path` route remains available for the reviewed CT026 workflow.
+
+For Slurm, submit the same arguments through the existing wrapper:
+
+```bash
+sbatch src/shell_scripts/hpc_ppc.sh new \
+  --session-metadata /path/to/session/neural_session.json \
+  --probe rear-probe \
+  --cache-directory /path/to/session/processed/lfp-summary-cache \
+  --shuffles 100 \
+  --workers 8
+```
+
+Resume and report commands use the saved run configuration and do not reread
+live session metadata:
+
+```bash
+uv run python -m src.neural_analysis.lfp_spike_phase_launcher resume \
+  --run-directory /path/to/session/analysis_runs/exact-run-directory
+```

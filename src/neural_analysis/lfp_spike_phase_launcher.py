@@ -35,6 +35,7 @@ from src.neural_analysis.lfp_summary_models import (
     canonical_config_json,
     component_fingerprint,
     fingerprint_source_files,
+    lfp_summary_config_from_json,
     validate_lfp_summary_config,
 )
 from src.neural_analysis.lfp_summary_io import (
@@ -54,7 +55,7 @@ _PREFLIGHT_SCHEMA = "spike_phase_preflight.v1"
 _REPORT_RECOVERY_SCHEMA = "spike_phase_report_recovery.v1"
 _REPORT_RERENDER_SCHEMA = "spike_phase_report_rerender.v1"
 _RUN_NAME = re.compile(
-    r"^[A-Za-z0-9_.-]+_spike_phase_(ProbeA|ProbeB)_"
+    r"^[A-Za-z0-9_.-]+_spike_phase_[A-Za-z0-9_.-]+_"
     r"(preview|final|dry_run)_[A-Za-z0-9_.:-]+$"
 )
 _PREREQUISITE_CACHE_MEMBERS = frozenset(
@@ -133,6 +134,7 @@ class LauncherCommand:
 
     mode: str
     session_path: Path | None = None
+    session_metadata: Path | None = None
     probe_label: str | None = None
     shuffle_count: int | None = None
     worker_count: int | None = None
@@ -179,6 +181,9 @@ class LauncherDependencies:
     process_tree_sampler: Callable[[], AbstractContextManager[object]]
     terminal_write: Callable[[str], None]
     repository_commit_is_ancestor: Callable[[str, str], bool] | None = None
+    load_metadata_config: Callable[
+        [Path, str, Path, int, int], LFPSummaryConfig
+    ] | None = None
 
 
 @dataclass(frozen=True)
@@ -220,8 +225,10 @@ def parse_launcher_command(argv: Sequence[str] | None = None) -> LauncherCommand
     parser = argparse.ArgumentParser(prog=f"python -m {_MODULE}")
     subparsers = parser.add_subparsers(dest="mode", required=True)
     new = subparsers.add_parser("new")
-    new.add_argument("--session-path", type=Path, required=True)
-    new.add_argument("--probe", dest="probe_label", choices=("ProbeA", "ProbeB"), required=True)
+    session_source = new.add_mutually_exclusive_group(required=True)
+    session_source.add_argument("--session-path", type=Path)
+    session_source.add_argument("--session-metadata", type=Path)
+    new.add_argument("--probe", dest="probe_label", required=True)
     new.add_argument("--shuffles", dest="shuffle_count", type=int, choices=(100, 1000), required=True)
     new.add_argument("--workers", dest="worker_count", type=int, default=8)
     new.add_argument("--analysis-root", type=Path)
@@ -243,10 +250,14 @@ def parse_launcher_command(argv: Sequence[str] | None = None) -> LauncherCommand
         parser.error("1,000 shuffles requires --final-run")
     if values.shuffle_count == 100 and values.final_run:
         parser.error("--final-run is valid only with 1,000 shuffles")
-    analysis_root = values.analysis_root or values.session_path / "analysis_runs"
+    analysis_root = (
+        values.analysis_root
+        or (values.session_path / "analysis_runs" if values.session_path is not None else None)
+    )
     return LauncherCommand(
         mode="new",
         session_path=values.session_path,
+        session_metadata=values.session_metadata,
         probe_label=values.probe_label,
         shuffle_count=values.shuffle_count,
         worker_count=values.worker_count,
@@ -485,28 +496,39 @@ def _prepare_new_run(
     dependencies: LauncherDependencies,
 ) -> tuple[LFPSummaryConfig, Path, dict[str, object]]:
     """Validate identity and atomically initialize one new run directory."""
-    assert command.session_path is not None
+    assert command.session_path is not None or command.session_metadata is not None
     assert command.probe_label is not None
     assert command.shuffle_count is not None
     assert command.worker_count is not None
-    assert command.analysis_root is not None
     assert command.cache_directory is not None
     repository = dependencies.repository_state()
     if not repository.tracked_clean:
         raise ValueError("launcher requires a clean tracked Git checkout")
-    population = dependencies.load_active_population(
-        Path(command.session_path),
-        command.probe_label,
-    )
-    config = dependencies.build_config(
-        Path(command.session_path),
-        population,
-        command.shuffle_count,
-        command.worker_count,
-    )
+    if command.session_metadata is not None:
+        if dependencies.load_metadata_config is None:
+            raise ValueError("metadata-driven launcher configuration is unavailable")
+        config = dependencies.load_metadata_config(
+            Path(command.session_metadata),
+            command.probe_label,
+            Path(command.cache_directory),
+            command.shuffle_count,
+            command.worker_count,
+        )
+    else:
+        assert command.session_path is not None
+        population = dependencies.load_active_population(
+            Path(command.session_path),
+            command.probe_label,
+        )
+        config = dependencies.build_config(
+            Path(command.session_path),
+            population,
+            command.shuffle_count,
+            command.worker_count,
+        )
     cache_directory = _validated_new_cache_directory(
         Path(command.cache_directory),
-        Path(command.session_path),
+        Path(config.session_path),
     )
     # The creator supplies scientific settings; the explicit CLI target alone
     # replaces its protected default cache location.
@@ -519,7 +541,8 @@ def _prepare_new_run(
         raise ValueError("load_trial_count must return a positive integer")
     timestamp = dependencies.now_utc()
     run_kind = "dry_run" if command.dry_run else ("final" if command.final_run else "preview")
-    analysis_root = _validated_analysis_root(Path(command.analysis_root))
+    requested_analysis_root = command.analysis_root or config.session_path / "analysis_runs"
+    analysis_root = _validated_analysis_root(Path(requested_analysis_root))
     run_name = f"{config.session_id}_spike_phase_{command.probe_label}_{run_kind}_{timestamp}"
     if _RUN_NAME.fullmatch(run_name) is None:
         raise ValueError("launcher timestamp/session produced an unsafe run name")
@@ -638,18 +661,24 @@ def _rebuild_saved_config(
     assert isinstance(identity, dict)
     session_path = Path(str(identity["session_path"]))
     probe_label = str(identity["probe_label"])
-    population = dependencies.load_active_population(session_path, probe_label)
-    config = dependencies.build_config(
-        session_path,
-        population,
-        int(identity["shuffle_count"]),
-        int(identity["requested_worker_count"]),
-    )
+    metadata_path = identity.get("session_metadata")
+    if metadata_path is not None:
+        snapshot_path = run_directory / "configuration.json"
+        config = lfp_summary_config_from_json(snapshot_path.read_text(encoding="ascii"))
+    else:
+        population = dependencies.load_active_population(session_path, probe_label)
+        config = dependencies.build_config(
+            session_path,
+            population,
+            int(identity["shuffle_count"]),
+            int(identity["requested_worker_count"]),
+        )
     cache_directory = _saved_cache_directory(identity)
     config = replace(config, output_directory=cache_directory)
     rebuilt_command = LauncherCommand(
         mode="new",
         session_path=session_path,
+        session_metadata=Path(str(metadata_path)) if metadata_path is not None else None,
         probe_label=probe_label,
         shuffle_count=int(identity["shuffle_count"]),
         worker_count=int(identity["requested_worker_count"]),
@@ -2198,7 +2227,7 @@ def _identity_mapping(
     unit_json = json.dumps(list(population.stable_unit_ids), separators=(",", ":"))
     source_json = json.dumps(dict(source_fingerprints), sort_keys=True, separators=(",", ":"), allow_nan=False)
     config_json = canonical_config_json(config)
-    return {
+    identity = {
         "session_path": str(config.session_path.resolve(strict=False)),
         "cache_directory": str(config.output_directory.resolve(strict=False)),
         "repository_path": str(repository.repository_root.resolve(strict=False)),
@@ -2216,6 +2245,9 @@ def _identity_mapping(
         "git_commit": repository.git_commit,
         "tracked_clean": repository.tracked_clean,
     }
+    if command.session_metadata is not None:
+        identity["session_metadata"] = str(command.session_metadata.resolve(strict=False))
+    return identity
 
 
 def _paths_mapping(
@@ -3403,7 +3435,7 @@ def _proc_memory_bytes(pid: int) -> tuple[int, int | None] | None:
 
 
 def make_production_launcher_dependencies() -> LauncherDependencies:
-    """Bind the reviewed CT026 metadata, runtime, report, and cleanup seams.
+    """Bind direct-path and session-metadata runtime, report, and cleanup seams.
 
     Returns
     -------
@@ -3412,6 +3444,8 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         selected probe, while numerical LFP/PPC work remains inside the
         existing Spike-phase pipeline.
     """
+    import pandas as pd
+
     from src.neural_analysis.lfp_spike_phase_validation import (
         build_ct026_active_population,
         build_ct026_spike_phase_preview_config,
@@ -3427,6 +3461,14 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         make_spike_phase_pipeline_dependencies,
     )
     from src.neural_analysis.lfp_summary_work_cache import cleanup_ppc_run
+    from src.neural_analysis.lfp_summary_session import (
+        build_metadata_spike_phase_config,
+    )
+    from src.neural_analysis.session_metadata import (
+        load_session_metadata,
+        resolve_session_metadata,
+        validate_session_for_action,
+    )
     from src.neural_analysis.spike_behavior_pynapple import load_sorter_metadata
     from src.neural_analysis.unit_spike_loading import load_channel_quality
 
@@ -3464,6 +3506,35 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
                 checkpoint_enabled=True,
                 checkpoint_retention="incomplete_only",
             ),
+        )
+
+    def load_metadata_config(
+        metadata_path: Path,
+        probe_label: str,
+        cache_directory: Path,
+        shuffle_count: int,
+        worker_count: int,
+    ) -> LFPSummaryConfig:
+        """Build one existing Spike-phase request from explicit session metadata."""
+        metadata = load_session_metadata(metadata_path)
+        session = resolve_session_metadata(metadata, metadata_path)
+        availability = validate_session_for_action(session, "spike-phase")
+        if not availability.available:
+            raise ValueError(
+                "session metadata is missing Spike-phase inputs: "
+                + ", ".join(availability.missing_inputs)
+            )
+        return build_metadata_spike_phase_config(
+            session,
+            probe_id=probe_label,
+            cache_directory=cache_directory,
+            shuffle_count=shuffle_count,
+            worker_count=worker_count,
+            cluster_metadata_loader=lambda sorter: pd.read_csv(
+                sorter / "cluster_info.tsv",
+                sep="\t",
+            ),
+            channel_metadata_loader=load_channel_quality,
         )
 
     def repository_state() -> RepositoryState:
@@ -3585,6 +3656,7 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         process_tree_sampler=_LinuxProcessTreeSampler,
         terminal_write=lambda message: print(message, flush=True),
         repository_commit_is_ancestor=repository_commit_is_ancestor,
+        load_metadata_config=load_metadata_config,
     )
 
 
