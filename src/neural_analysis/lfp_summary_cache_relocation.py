@@ -21,12 +21,12 @@ import tempfile
 import time
 from typing import Any, Callable, Mapping, Sequence
 
-from src.neural_analysis import lfp_summary_models
-from src.neural_analysis.lfp_summary_io import (
+from src.neural_analysis.lfp_summary import models as lfp_summary_models
+from src.neural_analysis.lfp_summary.cache import (
     assess_component_status,
     rebind_power_synchrony_manifest,
 )
-from src.neural_analysis.lfp_summary_models import (
+from src.neural_analysis.lfp_summary.models import (
     LFPSummaryConfig,
     canonical_config_json,
     component_fingerprint,

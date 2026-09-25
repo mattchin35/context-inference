@@ -30,11 +30,11 @@ from src.neural_analysis.lfp.power import (
     mean_band_power_linear,
     normalize_psd_db,
 )
-from src.neural_analysis.lfp_summary_io import (
+from src.neural_analysis.lfp_summary.cache import (
     load_or_initialize_manifest,
     write_component_transaction,
 )
-from src.neural_analysis.lfp_summary_models import (
+from src.neural_analysis.lfp_summary.models import (
     LFPSummaryConfig,
     LFPSiteConfig,
     ProgressEvent,
@@ -42,8 +42,8 @@ from src.neural_analysis.lfp_summary_models import (
     fingerprint_source_files,
     validate_lfp_summary_config,
 )
-from src.neural_analysis.lfp_summary_payloads import build_component_payload
-from src.neural_analysis.lfp_summary_work_cache import (
+from src.neural_analysis.lfp_summary.payloads import build_component_payload
+from src.neural_analysis.lfp_summary.work_cache import (
     PreparedPhaseCache,
     cleanup_ppc_run,
     load_prepared_phase_cache,
@@ -51,12 +51,12 @@ from src.neural_analysis.lfp_summary_work_cache import (
 )
 from src.neural_analysis.spike_lfp import hilbert as spike_lfp_hilbert_phase
 from src.neural_analysis.spike_lfp import ppc as spike_lfp_summary
-from src.neural_analysis.lfp_summary_pipeline import (
+from src.neural_analysis.lfp_summary.pipeline import (
     ComponentPayload,
     PPCWorkCleanupTarget,
     PipelineDependencies,
 )
-from src.neural_analysis.lfp_summary_preparation import (
+from src.neural_analysis.lfp_summary.preparation import (
     PreparedSiteTraces,
     PreparedTrials,
     TrialRelativeSpikeTrains,

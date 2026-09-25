@@ -18,14 +18,14 @@ import pandas as pd
 
 from src.neural_analysis import lfp_summary_runtime
 from src.neural_analysis.lfp_power_validation import build_ct026_power_config
-from src.neural_analysis.lfp_summary_io import ComponentStatus
-from src.neural_analysis.lfp_summary_models import (
+from src.neural_analysis.lfp_summary.cache import ComponentStatus
+from src.neural_analysis.lfp_summary.models import (
     LFPSummaryConfig,
     UnitPopulationConfig,
     canonical_config_json,
     validate_lfp_summary_config,
 )
-from src.neural_analysis.lfp_summary_pipeline import ComponentRunResult, PipelineDependencies
+from src.neural_analysis.lfp_summary.pipeline import ComponentRunResult, PipelineDependencies
 from src.neural_analysis.lfp_summary_plotting import (
     PPCExemplarPanel,
     PlotContext,
@@ -363,12 +363,12 @@ def make_production_spike_phase_preview_dependencies(
 
     def load_manifest(directory: Path, config: LFPSummaryConfig) -> dict[str, object]:
         """Load the manifest matching the immutable active configuration."""
-        from src.neural_analysis.lfp_summary_io import load_or_initialize_manifest
+        from src.neural_analysis.lfp_summary.cache import load_or_initialize_manifest
         return load_or_initialize_manifest(directory, config)
 
     def load_arrays(directory: Path, manifest: Mapping[str, Any]) -> dict[str, np.ndarray]:
         """Load the validated Spike NPZ without pickle or raw recordings."""
-        from src.neural_analysis.lfp_summary_io import load_component_arrays
+        from src.neural_analysis.lfp_summary.cache import load_component_arrays
         return load_component_arrays(directory / "spike_phase.npz", manifest, "spike_phase")
 
     return SpikePhasePreviewValidationDependencies(
@@ -1599,7 +1599,7 @@ def _compute_spike(config: LFPSummaryConfig, pipeline: object) -> ComponentRunRe
     ComponentRunResult
         Atomic Spike-phase pipeline outcome; no Power or Synchrony is invoked.
     """
-    from src.neural_analysis.lfp_summary_pipeline import compute_spike_phase_component
+    from src.neural_analysis.lfp_summary.pipeline import compute_spike_phase_component
     return compute_spike_phase_component(
         config,
         pipeline,
@@ -1631,7 +1631,7 @@ def _assess_spike(
     ComponentStatus
         Compatibility state without loading raw recordings.
     """
-    from src.neural_analysis.lfp_summary_io import assess_component_status
+    from src.neural_analysis.lfp_summary.cache import assess_component_status
     return assess_component_status(directory, component, config, manifest)
 
 

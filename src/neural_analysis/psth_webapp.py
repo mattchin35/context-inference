@@ -31,7 +31,7 @@ from src.neural_analysis.spike_behavior import loading as spike_behavior_pynappl
 from src.neural_analysis.spike_behavior import loading as unit_spike_loading
 from src.neural_analysis.spike_lfp import hilbert as spike_lfp_hilbert_phase
 from src.neural_analysis.spike_lfp import phase_locking as spike_lfp_phase_locking
-from src.neural_analysis.lfp_summary_session import (
+from src.neural_analysis.lfp_summary.session import (
     LFPSummarySessionRequest,
     build_lfp_summary_config,
 )

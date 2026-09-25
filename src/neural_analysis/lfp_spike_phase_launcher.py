@@ -28,7 +28,7 @@ import threading
 import time
 from typing import Callable, Iterator, Mapping, Sequence
 
-from src.neural_analysis.lfp_summary_models import (
+from src.neural_analysis.lfp_summary.models import (
     LFPSummaryConfig,
     ProgressEvent,
     UnitPopulationConfig,
@@ -38,11 +38,11 @@ from src.neural_analysis.lfp_summary_models import (
     lfp_summary_config_from_json,
     validate_lfp_summary_config,
 )
-from src.neural_analysis.lfp_summary_io import (
+from src.neural_analysis.lfp_summary.cache import (
     assess_component_status,
     load_or_initialize_manifest,
 )
-from src.neural_analysis.lfp_summary_pipeline import (
+from src.neural_analysis.lfp_summary.pipeline import (
     ComponentRunResult,
     PPCWorkCleanupTarget,
 )
@@ -3452,16 +3452,16 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         make_production_spike_phase_preview_dependencies,
         render_cached_spike_phase_report,
     )
-    from src.neural_analysis.lfp_summary_io import load_component_arrays
-    from src.neural_analysis.lfp_summary_pipeline import (
+    from src.neural_analysis.lfp_summary.cache import load_component_arrays
+    from src.neural_analysis.lfp_summary.pipeline import (
         compute_spike_phase_component,
     )
     from src.neural_analysis.lfp_summary_runtime import (
         load_configured_trial_table,
         make_spike_phase_pipeline_dependencies,
     )
-    from src.neural_analysis.lfp_summary_work_cache import cleanup_ppc_run
-    from src.neural_analysis.lfp_summary_session import (
+    from src.neural_analysis.lfp_summary.work_cache import cleanup_ppc_run
+    from src.neural_analysis.lfp_summary.session import (
         build_metadata_spike_phase_config,
     )
     from src.neural_analysis.session_metadata import (

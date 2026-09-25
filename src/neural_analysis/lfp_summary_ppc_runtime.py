@@ -32,7 +32,7 @@ from src.neural_analysis.spike_lfp.ppc_kernel import (
     estimate_segmented_kernel_allocation,
     reduce_segmented_schedule_to_ppc,
 )
-from src.neural_analysis.lfp_summary_models import (
+from src.neural_analysis.lfp_summary.models import (
     LFPSummaryConfig,
     PPCExecutionConfig,
     ProgressEvent,
@@ -40,7 +40,7 @@ from src.neural_analysis.lfp_summary_models import (
     component_fingerprint,
     fingerprint_source_files,
 )
-from src.neural_analysis.lfp_summary_work_cache import (
+from src.neural_analysis.lfp_summary.work_cache import (
     _ownership_record,
     _write_lock_exclusive,
     load_valid_ppc_checkpoint,

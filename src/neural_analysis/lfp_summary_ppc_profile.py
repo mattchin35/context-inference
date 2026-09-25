@@ -16,7 +16,7 @@ from typing import Callable, Mapping
 import numpy as np
 
 from src.neural_analysis import lfp_summary_ppc_runtime
-from src.neural_analysis.lfp_summary_models import LFPSummaryConfig, PPCExecutionConfig
+from src.neural_analysis.lfp_summary.models import LFPSummaryConfig, PPCExecutionConfig
 
 
 _SAFE_WORKLOAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")

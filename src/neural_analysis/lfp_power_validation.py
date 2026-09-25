@@ -15,13 +15,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src.neural_analysis import lfp_summary_runtime
-from src.neural_analysis.lfp_summary_io import (
+from src.neural_analysis.lfp_summary.cache import (
     ComponentStatus,
     assess_component_status,
     load_component_arrays,
     load_or_initialize_manifest,
 )
-from src.neural_analysis.lfp_summary_models import (
+from src.neural_analysis.lfp_summary.models import (
     LFPSiteConfig,
     LFPSummaryConfig,
     TrialFilterConfig,
@@ -29,7 +29,7 @@ from src.neural_analysis.lfp_summary_models import (
     default_lfp_summary_config,
     validate_lfp_summary_config,
 )
-from src.neural_analysis.lfp_summary_pipeline import (
+from src.neural_analysis.lfp_summary.pipeline import (
     ComponentRunResult,
     PipelineDependencies,
     compute_power_component,

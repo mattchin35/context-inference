@@ -17,15 +17,16 @@ from typing import Callable, Mapping
 
 import numpy as np
 
-from src.neural_analysis import lfp_summary_ppc_runtime, lfp_summary_runtime, lfp_summary_work_cache
+from src.neural_analysis import lfp_summary_ppc_runtime, lfp_summary_runtime
+from src.neural_analysis.lfp_summary import work_cache as lfp_summary_work_cache
 from src.neural_analysis.spike_behavior import loading as spike_behavior_pynapple
 from src.neural_analysis.spike_behavior import loading as unit_spike_loading
 from src.neural_analysis.lfp_spike_phase_validation import build_ct026_default_active_population, build_ct026_spike_phase_preview_config
 from src.neural_analysis.lfp_summary_ct026_profile_locks import acquire_ct026_profile_run_lock
 from src.neural_analysis.lfp_summary_ct026_profile_runner import run_ct026_ppc_profile
-from src.neural_analysis.lfp_summary_models import PPCExecutionConfig, canonical_config_json, fingerprint_source_files
+from src.neural_analysis.lfp_summary.models import PPCExecutionConfig, canonical_config_json, fingerprint_source_files
 from src.neural_analysis.lfp_summary_ppc_profile import RepresentativePPCProfileJob, profile_grouped_ppc_component, profile_production_ppc_job, select_representative_ppc_profile_job
-from src.neural_analysis.lfp_summary_preparation import PreparedTrials, TrialRelativeSpikeTrains
+from src.neural_analysis.lfp_summary.preparation import PreparedTrials, TrialRelativeSpikeTrains
 
 _SCENARIO_UNITS = {"low": lambda job: (job.low_unit_id,), "median": lambda job: (job.median_unit_id,), "high": lambda job: (job.high_unit_id,), "combined": lambda job: (job.low_unit_id, job.median_unit_id, job.high_unit_id)}
 _RSS_SOURCE = "resource.getrusage(RUSAGE_SELF).ru_maxrss_kib"
