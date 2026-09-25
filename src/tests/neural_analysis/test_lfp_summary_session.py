@@ -13,6 +13,7 @@ from src.neural_analysis.lfp_summary_session import (
     LFPSummarySessionRequest,
     build_active_unit_population,
     build_lfp_summary_config,
+    build_metadata_spike_phase_config,
 )
 from src.neural_analysis.session_metadata import load_session_metadata, resolve_session_metadata
 
@@ -285,3 +286,40 @@ def test_metadata_population_requires_one_declared_population_for_probe(
             cluster_metadata_loader=lambda _path: None,
             channel_metadata_loader=lambda _path: None,
         )
+
+
+def test_metadata_spike_phase_config_keeps_user_choices_explicit(tmp_path: Path) -> None:
+    """The launcher adapter changes only population, cache, and execution counts."""
+    session = _write_resolved_session(tmp_path)
+    probe = session.probes[1]
+    quality_path = tmp_path / "ephys/rear/channel_quality.csv"
+    quality_path.write_text(
+        "channel_id,label,inside_brain\nCH7,good,true\nCH8,bad,true\nCH9,good,true\n",
+        encoding="ascii",
+    )
+    session = replace(
+        session,
+        probes=(session.probes[0], replace(probe, channel_quality_file=quality_path)),
+    )
+    clusters = __import__("pandas").DataFrame(
+        {"cluster_id": [4, 8], "ch": [7, 9], "group": ["good", "mua"]}
+    )
+    cache = tmp_path / "processed/new-cache"
+
+    config = build_metadata_spike_phase_config(
+        session,
+        probe_id="rear-probe",
+        cache_directory=cache,
+        shuffle_count=100,
+        worker_count=3,
+        cluster_metadata_loader=lambda _path: clusters,
+        channel_metadata_loader=lambda path: __import__("pandas").read_csv(path),
+    )
+
+    assert config.output_directory == cache
+    assert config.ppc.shuffle_count == 100
+    assert config.ppc_execution.worker_count == 3
+    assert config.ppc_execution.checkpoint_enabled is True
+    assert config.ppc_execution.checkpoint_retention == "incomplete_only"
+    assert config.unit_population is not None
+    assert config.unit_population.stable_unit_ids == ("rear-probe:4", "rear-probe:8")

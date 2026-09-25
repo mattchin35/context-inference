@@ -822,7 +822,16 @@ def test_legacy_population_json_defaults_new_source_paths_to_none() -> None:
         stable_unit_ids=("probe-x:2",),
     )
     config = replace(default_lfp_summary_config(), unit_population=population)
-    encoded = canonical_config_json(config)
+    payload = json.loads(canonical_config_json(config))
+    assert payload["unit_population"] is not None
+    for field in (
+        "spike_times_path",
+        "spike_clusters_path",
+        "cluster_info_path",
+        "channel_quality_path",
+    ):
+        payload["unit_population"].pop(field)
+    encoded = json.dumps(payload)
 
     decoded = lfp_summary_config_from_json(encoded)
 
