@@ -2,9 +2,9 @@
 
 ## Status and authority
 
-**Current status:** U1-U4, R0, R1, R2A, and R2B are complete. R2C was
+**Current status:** U1-U4, R0, R1, and R2A-R2D are complete. R2D was
 authorized on 2026-09-25, implemented tests-first, and verified locally; user
-review is pending. R2D requires separate approval.
+review is pending. R3 requires separate approval.
 
 This plan supersedes the former NR2-NR18 package roadmap and the former broad
 layered target architecture. Historical execution details, reviews, paths,
@@ -657,11 +657,39 @@ Tests written first:
   missingness, and overwrite behavior remain unchanged; and
 - old imports remain compatible.
 
+#### R2D implementation result
+
+R2D tests were committed first in `01891f3`, with 19 expected RED failures for
+the absent canonical package and 67 passing focused tests. The tests define
+ownership and compatibility without freezing the hardcoded mouse, session,
+date, region, or filesystem examples in the legacy cross-session entry point.
+
+The implementation was committed in `d9c9982`. It creates the minimal
+`population` package with `pca.py`, `decoding.py`,
+`switch_trajectories.py`, and `cross_session.py`. PCA is an exact legacy module
+alias. The mixed decoding, switch-trajectory, and cross-session modules
+forward their moved numerical and table functions while retaining plotting;
+the cross-session module also retains its current examples, defaults, and
+direct dispatch. The webapp imports canonical PCA while continuing to use the
+mixed legacy facades where it also needs their plots.
+
+The focused R2D suite passed 86 tests, the directly affected webapp and unit-
+plotting suite passed 99 tests, and the complete neural suite passed 1,750
+tests with the 22 previously inventoried warnings. All original function and
+class bodies were partitioned between canonical and retained modules without
+AST changes, and the canonical package has no dependency cycle back to legacy
+mixtures, workflows, or UI. No experimental data, cache, report, external
+system, or scheduler was accessed.
+
 ### R2 completion
 
 Each slice receives focused and affected integration tests plus the complete
 neural suite. R2 is complete only when all four accepted slices are green and
 their package boundaries do not introduce cycles back to workflows or UI.
+
+R2A-R2D are green. Their canonical packages have no dependency cycles back to
+workflow or UI modules, so the R2 completion gate is satisfied. Plot movement
+remains deferred to R3 and requires separate approval.
 
 ## 12. Work package R3 - Plotting organization
 
