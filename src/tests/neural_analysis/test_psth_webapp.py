@@ -1886,6 +1886,8 @@ def test_saved_spike_phase_locking_exploration_records_open_ephys_provenance(
 
     metadata = captured["metadata"]
     assert isinstance(metadata, dict)
+    assert metadata["generator"] == "src.neural_analysis.spike_lfp_phase_locking"
+    assert metadata["analysis_version"] == "0.2.0"
     assert metadata["phase_units"] == "radians"
     if lfp_format == psth_webapp.LFP_FORMAT_OPEN_EPHYS_DERIVED:
         assert metadata["amplitude_units"] == "uV"
@@ -2105,6 +2107,8 @@ def test_saved_hilbert_exploration_uses_truthful_units_and_open_ephys_only_prove
 
     metadata = captured["metadata"]
     assert isinstance(metadata, dict)
+    assert metadata["generator"] == "src.neural_analysis.spike_lfp_hilbert_phase"
+    assert metadata["analysis_version"] == "0.1.0"
     assert captured["lfp_y_label"] == "LFP (uV)"
     assert metadata["raw_lfp_units"] == "uV"
     assert metadata["filtered_lfp_units"] == "uV"
