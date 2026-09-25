@@ -18,26 +18,15 @@ from src.neural_analysis.session_metadata import (
 
 
 def _skeleton() -> dict[str, object]:
-    """Return the deterministic, intentionally incomplete version-1 skeleton."""
+    """Return the deterministic, intentionally incomplete version-2 skeleton."""
     return {
-        "schema_version": "1",
-        "subject_id": "",
-        "session_id": "",
-        "session_date": None,
-        "session_label": None,
-        "behavior": {
-            "session_directory": "",
-            "trial_table_file": "",
-            "event_table_file": None,
-            "treadmill_file": None,
-        },
-        "probes": [],
-        "sites": [],
+        "schema_version": "2",
+        "session": "",
+        "acquisition": "open_ephys",
+        "behavior": {"trials": "", "events": None},
+        "probes": {},
         "site_pairs": [],
-        "channel_groups": [],
-        "populations": [],
-        "lfp_summary_cache_directory": None,
-        "lfp_summary_snapshot_directory": None,
+        "cache": None,
     }
 
 

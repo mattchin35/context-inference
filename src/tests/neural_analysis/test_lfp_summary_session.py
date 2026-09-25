@@ -257,7 +257,8 @@ def test_omitted_unit_channels_uses_all_quality_approved_channels(
         channel_metadata_loader=lambda path: __import__("pandas").read_csv(path),
     )
 
-    assert population.selected_channels == (0, 7)
+    assert population.selected_channels == (0, 7, 9)
+    assert population.stable_unit_ids == ("front-probe:1", "front-probe:2")
 
 
 def test_metadata_spike_phase_config_keeps_user_choices_explicit(tmp_path: Path) -> None:
