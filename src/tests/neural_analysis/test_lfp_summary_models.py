@@ -808,3 +808,59 @@ def test_legacy_canonical_configuration_deserializes_without_value_semantics_fie
 
     assert decoded == default_lfp_summary_config()
     assert "source_value_semantics" not in encoded
+
+
+def test_legacy_population_json_defaults_new_source_paths_to_none() -> None:
+    """Historical saved configurations remain readable after source identity grows."""
+    population = UnitPopulationConfig(
+        label="active",
+        probe_label="probe-x",
+        sorter_path=Path("sorter"),
+        aligned_spike_path=Path("aligned.npz"),
+        selected_channels=(1,),
+        quality_settings=(),
+        stable_unit_ids=("probe-x:2",),
+    )
+    config = replace(default_lfp_summary_config(), unit_population=population)
+    encoded = canonical_config_json(config)
+
+    decoded = lfp_summary_config_from_json(encoded)
+
+    assert decoded.unit_population is not None
+    assert decoded.unit_population.spike_times_path is None
+    assert decoded.unit_population.spike_clusters_path is None
+    assert decoded.unit_population.cluster_info_path is None
+    assert decoded.unit_population.channel_quality_path is None
+
+
+def test_spike_source_fingerprint_includes_explicit_population_files(tmp_path: Path) -> None:
+    """Spike reuse identity includes each small or consumed population source path."""
+    paths = {
+        name: tmp_path / name
+        for name in (
+            "spike_times.npy",
+            "spike_clusters.npy",
+            "cluster_info.tsv",
+            "channel_quality.csv",
+        )
+    }
+    for path in paths.values():
+        path.write_bytes(b"source")
+    population = UnitPopulationConfig(
+        label="active",
+        probe_label="probe-x",
+        sorter_path=tmp_path,
+        aligned_spike_path=tmp_path / "aligned.npz",
+        selected_channels=(1,),
+        quality_settings=(),
+        stable_unit_ids=("probe-x:2",),
+        spike_times_path=paths["spike_times.npy"],
+        spike_clusters_path=paths["spike_clusters.npy"],
+        cluster_info_path=paths["cluster_info.tsv"],
+        channel_quality_path=paths["channel_quality.csv"],
+    )
+    config = replace(default_lfp_summary_config(), unit_population=population)
+
+    fingerprints = fingerprint_source_files(config, component="spike_phase")
+
+    assert {str(path.resolve()) for path in paths.values()} <= set(fingerprints)

@@ -278,6 +278,41 @@ def test_hpc_ppc_forwards_exact_arguments_and_fixed_uv_environment(
         assert label in result.stdout
 
 
+def test_hpc_ppc_forwards_metadata_driven_new_request(tmp_path: Path) -> None:
+    """The existing Slurm wrapper forwards the metadata entry point unchanged."""
+    repository, wrapper = _temporary_repository(tmp_path)
+    fake_bin, capture = _fake_uv(tmp_path)
+    environment = _environment(fake_bin, capture, repository)
+    arguments = (
+        "new",
+        "--session-metadata",
+        "/cluster/mouse-z/neural_session.json",
+        "--cache-directory",
+        "/cluster/mouse-z/processed/summary-cache",
+        "--probe",
+        "rear-probe",
+        "--shuffles",
+        "100",
+        "--workers",
+        "8",
+    )
+
+    result = _run_wrapper(wrapper, environment, *arguments)
+
+    assert result.returncode == 0, result.stderr
+    fields = _capture_fields(capture)
+    assert fields[9::2] == [
+        "run",
+        "--frozen",
+        "--no-sync",
+        "--offline",
+        "python",
+        "-m",
+        "src.neural_analysis.lfp_spike_phase_launcher",
+        *arguments,
+    ]
+
+
 @pytest.mark.parametrize(
     ("cpu_value", "worker_arguments", "expected_message"),
     (

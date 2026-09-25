@@ -733,6 +733,57 @@ def test_parser_requires_explicit_cache_probe_and_final_confirmation() -> None:
             launcher.parse_launcher_command(arguments)
 
 
+def test_parser_accepts_metadata_as_new_run_session_source() -> None:
+    """A new run accepts one metadata file and arbitrary stable probe ID."""
+    launcher = _launcher()
+
+    command = launcher.parse_launcher_command(
+        [
+            "new",
+            "--session-metadata",
+            "/data/mouse-z/neural_session.json",
+            "--cache-directory",
+            "/data/mouse-z/processed/summary-cache",
+            "--probe",
+            "rear-probe",
+            "--shuffles",
+            "100",
+        ]
+    )
+
+    assert command.session_path is None
+    assert command.session_metadata == Path("/data/mouse-z/neural_session.json")
+    assert command.probe_label == "rear-probe"
+    assert command.analysis_root is None
+
+
+def test_parser_requires_exactly_one_new_run_session_source() -> None:
+    """Metadata and the legacy session directory are mutually exclusive."""
+    launcher = _launcher()
+    common = [
+        "--cache-directory",
+        "/data/mouse-z/processed/summary-cache",
+        "--probe",
+        "rear-probe",
+        "--shuffles",
+        "100",
+    ]
+
+    with pytest.raises(SystemExit):
+        launcher.parse_launcher_command(["new", *common])
+    with pytest.raises(SystemExit):
+        launcher.parse_launcher_command(
+            [
+                "new",
+                "--session-path",
+                "/data/mouse-z",
+                "--session-metadata",
+                "/data/mouse-z/neural_session.json",
+                *common,
+            ]
+        )
+
+
 @pytest.mark.parametrize("mode", ("resume", "recover-report", "rerender-report"))
 def test_parser_rejects_cache_replacement_for_every_recovery_mode(mode: str) -> None:
     """Only a new run may name a cache; recovery is bound to saved identity."""

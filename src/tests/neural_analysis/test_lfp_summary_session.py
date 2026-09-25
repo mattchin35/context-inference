@@ -11,6 +11,7 @@ import pytest
 
 from src.neural_analysis.lfp_summary_session import (
     LFPSummarySessionRequest,
+    build_active_unit_population,
     build_lfp_summary_config,
 )
 from src.neural_analysis.session_metadata import load_session_metadata, resolve_session_metadata
@@ -231,3 +232,56 @@ def test_config_build_reads_metadata_but_never_loads_scientific_arrays(
     monkeypatch.setattr(np, "load", forbidden_load)
 
     assert build_lfp_summary_config(session, LFPSummarySessionRequest()).sites
+
+
+def test_active_population_uses_metadata_paths_and_existing_quality_rules(
+    tmp_path: Path,
+) -> None:
+    """Launcher population selection is generic and records every consumed source."""
+    session = _write_resolved_session(tmp_path)
+    probe = session.probes[1]
+    quality_path = tmp_path / "ephys/rear/channel_quality.csv"
+    quality_path.write_text(
+        "channel_id,label,inside_brain\nCH7,good,true\nCH8,bad,true\nCH9,good,true\n",
+        encoding="ascii",
+    )
+    session = replace(
+        session,
+        probes=(session.probes[0], replace(probe, channel_quality_file=quality_path)),
+    )
+    clusters = __import__("pandas").DataFrame(
+        {
+            "cluster_id": [4, 5, 8],
+            "ch": [7, 8, 9],
+            "group": ["good", "good", "mua"],
+        }
+    )
+
+    population = build_active_unit_population(
+        session,
+        "rear-probe",
+        cluster_metadata_loader=lambda _path: clusters,
+        channel_metadata_loader=lambda path: __import__("pandas").read_csv(path),
+    )
+
+    assert population.stable_unit_ids == ("rear-probe:4", "rear-probe:8")
+    assert population.selected_channels == (7, 9)
+    assert population.spike_times_path == probe.sorter_directory / "spike_times.npy"
+    assert population.spike_clusters_path == probe.sorter_directory / "spike_clusters.npy"
+    assert population.cluster_info_path == probe.sorter_directory / "cluster_info.tsv"
+    assert population.channel_quality_path == quality_path
+
+
+def test_metadata_population_requires_one_declared_population_for_probe(
+    tmp_path: Path,
+) -> None:
+    """Probe selection fails clearly rather than silently choosing a population."""
+    session = _write_resolved_session(tmp_path)
+
+    with pytest.raises(ValueError, match="no population.*front-probe"):
+        build_active_unit_population(
+            session,
+            "front-probe",
+            cluster_metadata_loader=lambda _path: None,
+            channel_metadata_loader=lambda _path: None,
+        )
