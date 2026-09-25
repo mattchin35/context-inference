@@ -2,15 +2,16 @@
 
 ## Status and purpose
 
-U1-U4 are implemented. The repository now has one session-metadata path for
-the existing webapp and Spike-phase/PPC launcher, plus a concise operational
-guide and example metadata. U4 still awaits explicit usability acceptance.
+U1-U4 are implemented. The repository now has one compact version-2 session-
+metadata path for the existing webapp and Spike-phase/PPC launcher, plus a
+concise operational guide and example metadata. The user explicitly accepted
+the current version-2 U4 workflow on 2026-09-25.
 
 This document defines the approved design for the next phase: reorganizing the
 whole `src/neural_analysis` package for scientific readability. It describes
 ownership and dependency boundaries, not an instruction to begin coding.
-Implementation remains gated by U4 acceptance and approval of the tests-first
-work package being started.
+R0 and every source work package remain separately gated; acceptance of this
+design does not authorize implementation.
 
 The refactor changes organization only. It adds no scientific method, source
 format, metadata field, command, plot, report, cache behavior, recovery mode,
@@ -45,10 +46,13 @@ The principal user-facing files are:
 - `src/neural_analysis/lfp_spike_phase_launcher.py`; and
 - `src/shell_scripts/hpc_ppc.sh`.
 
-Session metadata contains identity, labels, and source paths. Scientific
-settings remain in versioned code and explicit run arguments. Resume, report
-recovery, and report rerender use saved run configuration rather than rereading
-live session metadata.
+Session metadata contains one session name, one acquisition family, and
+probe-owned source paths, site names, saved-channel indices, and optional unit-
+channel restrictions. Probe dictionary keys and site names are their display
+labels; the file does not duplicate separate label, population, or channel-
+group records. Scientific settings remain in versioned code and explicit run
+arguments. Resume, report recovery, and report rerender use saved run
+configuration rather than rereading live session metadata.
 
 ### Preserved scientific baseline
 
@@ -76,7 +80,7 @@ separately. At the planning baseline:
 
 | Module | Lines | Main mixed responsibilities |
 | --- | ---: | --- |
-| `psth_webapp.py` | 6,662 | session inputs, cached loading, computations, controls, and all interactive views |
+| `psth_webapp.py` | 6,750 | session inputs, cached loading, computations, controls, and all interactive views |
 | `lfp_summary_ppc_runtime.py` | 6,103 | PPC planning, allocation, execution, checkpointing, parallel workers, and reduction |
 | `lfp_spike_phase_launcher.py` | 3,717 | parsing, preflight, state, execution, recovery, persistence, and resource measurement |
 | `unit_spike_plotting.py` | 3,082 | unit, trial, LFP, Spike-LFP, and population plots plus computations |
@@ -255,10 +259,19 @@ re-export requires an intentionally approved public API.
 
 ### Session metadata
 
-`session_metadata.py` remains the direct user-facing metadata API. Its current
-loading, structural validation, contained path resolution, probe lookup, and
-action-availability responsibilities are cohesive. It should not be converted
-into a multi-file schema framework merely to match the rest of the tree.
+`session_metadata.py` remains the direct user-facing metadata API. Its compact
+version-2 loading, structural validation, contained path resolution, probe
+lookup, and action-availability responsibilities are cohesive. Version 1 was
+explicitly replaced and rejected before the organization refactor; it is not a
+compatibility target. The module should not be converted into a multi-file
+schema framework merely to match the rest of the tree.
+
+Some version-1-shaped records and properties currently derive populations,
+channel groups, duplicate labels, and absent fields for existing internal
+callers. R0 classifies those surfaces before R4/R5 migrate internal callers to
+the direct version-2 probe/site model. Test-only or repository-private adapters
+should be removed through the approved cleanup gate rather than defining the
+target architecture.
 
 ### Synchronization
 
@@ -307,7 +320,9 @@ artifact or execution infrastructure.
 `webapp` owns Streamlit caching, controls, rendering, and composition of the
 existing views. `app.py` is a direct application coordinator, not a route or
 plugin framework. Domain view modules call the established scientific and
-plotting functions; they do not reimplement analyses.
+plotting functions; they do not reimplement analyses. The metadata route uses
+the direct version-2 probe/site model, while the existing manual route remains
+an explicitly separate compatibility path.
 
 ## Dependency direction
 
@@ -377,6 +392,7 @@ promise that every current module attribute remains patchable forever.
 | --- | --- |
 | Documented command | Preserve permanently. |
 | Documented/public Python import | Preserve with a forwarding module through migration; removal requires a fresh audit and explicit approval. |
+| Session metadata JSON | Preserve compact schema version 2 exactly. Version 1 is intentionally rejected and receives no migration layer. |
 | Repository-private import or helper | Migrate the repository caller to the canonical owner; no external compatibility promise is inferred. |
 | Serialized module-qualified class | Preserve the old loading path or provide a tested compatibility reader. |
 | Multiprocessing worker | Keep it as an importable top-level callable in the canonical module and test process spawning. |
@@ -447,23 +463,33 @@ changing behavior. These are candidates, not blanket authorization:
 
 1. Delete modules and callables proven unused through the approved cleanup
    gate.
-2. Remove temporary import wrappers after repository and external-use audits.
-3. Consolidate genuinely identical spike/behavior loading, channel-selection,
+2. Retire version-1-shaped metadata adapters after R0 classifies their callers.
+   Current candidates include the derived `ChannelGroupMetadata` and
+   `PopulationMetadata` records, derived population/channel-group collections,
+   duplicate identity/label properties, always-absent compatibility fields,
+   and the test-only `MetadataPopulationInputs` path. Do not remove a semantic
+   path alias when it still makes an active caller clearer.
+3. Remove temporary import wrappers after repository and external-use audits.
+4. Consolidate genuinely identical spike/behavior loading, channel-selection,
    and trial-mask functions behind one existing tested implementation. The two
    small region-name normalization functions are textually identical, but do
    not add cross-domain coupling or a generic naming module merely to remove
    those few lines. Consolidate them only if R2 reveals a natural existing
    owner used by both callers.
-4. Replace repeated pass-through functions with a direct call when the wrapper
+5. Replace repeated pass-through functions with a direct call when the wrapper
    adds no validation, naming value, caching boundary, or compatibility value.
-5. Extract exact duplicate LFP-summary report-writing or size/accounting code
+6. Extract exact duplicate LFP-summary report-writing or size/accounting code
    only when its filesystem and failure contracts are the same. Similar-looking
    atomic writers with different safety requirements remain separate.
-6. Remove the current LFP-summary runtime/PPC-runtime back-import by moving the
+7. Remove the current LFP-summary runtime/PPC-runtime back-import by moving the
    already shared validation or preparation function to its natural owner.
-7. Retire superseded legacy webapp path-entry branches only after the user
+8. Let the metadata webapp path pass version-2 probe and site records directly
+   to its views instead of translating the first two probes through legacy PFC/
+   HPC variable names. Keep the manual legacy path isolated until its separate
+   retirement gate is approved.
+9. Retire superseded legacy webapp path-entry branches only after the user
    confirms that session metadata fully replaces that existing capability.
-8. Remove an older PPC executor, profile path, CT-specific adapter, or legacy
+10. Remove an older PPC executor, profile path, CT-specific adapter, or legacy
    CLI only when the R0/R7 audit proves it has no required reproduction,
    resume, profiling, or external caller.
 
@@ -475,8 +501,8 @@ control flow; creating a generic helper used once is not simplification.
 
 The organization refactor does not add or broaden:
 
-- metadata fields, schema versions, path-placement modes, or acquisition
-  families;
+- compact metadata schema version 2, its fields, path-placement rules, or
+  acquisition families;
 - analyses, statistical tests, scientific defaults, trial conditions, or
   population definitions;
 - plots, reports, webapp views, controls, or live operations;
