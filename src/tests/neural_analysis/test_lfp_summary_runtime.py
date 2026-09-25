@@ -52,7 +52,7 @@ from src.neural_analysis.lfp_summary_runtime import (
     make_power_pipeline_dependencies,
     prepare_power_run,
 )
-from src.neural_analysis.lfp_summary import synchrony_runtime
+from src.neural_analysis.lfp_summary import spike_phase_runtime, synchrony_runtime
 
 
 def _config(output_directory: Path):
@@ -451,7 +451,7 @@ def test_prepared_phase_producer_identity_rejects_a_legacy_open_ephys_source_rec
         },
     }
     monkeypatch.setattr(
-        lfp_summary_runtime,
+        synchrony_runtime,
         "fingerprint_source_files",
         lambda *_args, **_kwargs: legacy_sources,
     )
@@ -459,7 +459,7 @@ def test_prepared_phase_producer_identity_rejects_a_legacy_open_ephys_source_rec
         config, trial_indices, alignment_times_s
     )
     monkeypatch.setattr(
-        lfp_summary_runtime,
+        synchrony_runtime,
         "fingerprint_source_files",
         lambda *_args, **_kwargs: corrected_sources,
     )
@@ -1123,7 +1123,7 @@ def test_spike_phase_payload_uses_one_grouped_executor_without_legacy_or_histogr
         forbidden_legacy_executor,
     )
     monkeypatch.setattr(
-        lfp_summary_runtime,
+        spike_phase_runtime,
         "_sample_observed_trial_phase",
         forbidden_histogram_resampling,
     )
