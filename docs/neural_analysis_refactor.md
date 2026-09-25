@@ -130,14 +130,16 @@ silently improve, generalize, or reinterpret them.
 
 ### 5. Preserve recognizable user entry points
 
-The documented root commands remain easy to find:
+Existing root entry modules remain easy to find:
 
 - `psth_webapp.py` for the Streamlit application;
 - `lfp_spike_phase_launcher.py` for Spike-phase/PPC execution; and
-- `sync_ephys.py` for synchronization commands.
+- `sync_ephys.py` for its current hardcoded synchronization script and callable
+  workflows.
 
-These may become thin forwarding modules, but their documented invocations do
-not change during this refactor.
+These may become thin forwarding modules. Documented command invocations remain
+unchanged, and `sync_ephys.py` retains its current direct module dispatch and
+callable behavior. This refactor does not invent a synchronization CLI.
 
 ### 6. Delete only code proven unused
 
@@ -173,6 +175,7 @@ src/neural_analysis/
 
   lfp/
     __init__.py
+    config.py
     loading.py
     power.py
     spectrogram.py
@@ -281,10 +284,12 @@ load scientific signals for analysis or choose downstream analyses.
 
 ### LFP
 
-`lfp` owns LFP source loading and reusable Power, spectrogram, phase, and
-Synchrony calculations. Numerical functions operate on explicit inputs. The
-package does not know about Streamlit, launchers, cache publication, or CT026
-run directories.
+`lfp` owns the small immutable configuration records directly consumed by LFP
+calculations, LFP source loading, and reusable Power, spectrogram, phase, and
+Synchrony calculations. In particular, `AnalysisWindowConfig`,
+`FrequencyBandConfig`, and `PowerAnalysisConfig` belong in `lfp/config.py`.
+Numerical functions operate on explicit inputs. The package does not know about
+Streamlit, launchers, cache publication, or CT026 run directories.
 
 ### Spike behavior
 
@@ -308,12 +313,14 @@ become a generic artifact framework.
 
 ### LFP summary
 
-`lfp_summary` owns the existing production summary workflow: configuration,
-preparation, component assembly, caches, checkpoint work, Power/Synchrony/
-Spike-phase runtime composition, validation reports, snapshot inspection,
-cache relocation, launcher internals, and profiling. These concerns remain
-workflow-specific because no second current workflow justifies generic
-artifact or execution infrastructure.
+`lfp_summary` owns the existing production summary workflow: workflow-specific
+session and execution configuration, preparation, component assembly, caches,
+checkpoint work, Power/Synchrony/Spike-phase runtime composition, validation
+reports, snapshot inspection, cache relocation, launcher internals, and
+profiling. It imports the three shared LFP configuration records from `lfp`
+rather than defining competing records. These concerns remain workflow-specific
+because no second current workflow justifies generic artifact or execution
+infrastructure.
 
 ### Webapp
 
@@ -337,7 +344,7 @@ LFP-summary workflow
        |
        +----------------+
        v                v
-    webapp         command entry points
+    webapp          root entry modules
 ```
 
 The following rules make that diagram concrete:
@@ -348,12 +355,16 @@ The following rules make that diagram concrete:
   when the dependency is real.
 - Scientific-domain modules never import Streamlit, command modules, or the
   LFP-summary workflow.
+- `lfp.config` owns `AnalysisWindowConfig`, `FrequencyBandConfig`, and
+  `PowerAnalysisConfig`. LFP calculations import them from that lower-level
+  owner; LFP-summary models may expose compatibility aliases to the same class
+  objects but do not redefine them.
 - `lfp_summary` may depend on session metadata, synchronization, and scientific
   domains.
 - `webapp` may depend on session metadata, scientific domains, and
   `lfp_summary`.
-- Root command modules may assemble concrete dependencies and delegate inward.
-- No foundational package imports the webapp or a root command module.
+- Root entry modules may assemble concrete dependencies and delegate inward.
+- No foundational package imports the webapp or a root entry module.
 
 Protocols are introduced only when two current implementations already share
 one behavior and a plain callable would be less readable. No registry, base-
@@ -367,12 +378,12 @@ planned.
 | `session_metadata.py`, `session_metadata_cli.py` | Remain top-level and direct. |
 | `ephys_sync_utils.py`, `manual_session_synchronization.py`, `spikeglx_sync_io.py` | Move or split under `synchronization` at existing source/alignment boundaries. |
 | `analog_treadmill_decode.py` | Keep in place pending R0 callable-level review. Current repository evidence shows one test-only conversion function and three signal-analysis functions with no callers; do not create a synchronization module merely to house them. |
-| `lfp_loading.py`, `lfp_power_summary.py`, `lfp_spectrogram.py`, `lfp_phase_clustering.py`, `lfp_synchrony_summary.py` | Move under `lfp`; separate plotting or persistence only where currently mixed. |
+| `lfp_loading.py`, `lfp_power_summary.py`, `lfp_spectrogram.py`, `lfp_phase_clustering.py`, `lfp_synchrony_summary.py` | Move under `lfp`; move the three LFP-facing configuration records currently in `lfp_summary_models.py` to `lfp/config.py`; separate plotting or persistence only where currently mixed. |
 | `spike_behavior_pynapple.py`, `unit_spike_loading.py`, `psth_behavior.py` | Split under `spike_behavior` by loading, trials, binning, decoding, PSTH, plotting, and publication. |
 | `spike_lfp_hilbert_phase.py`, `spike_lfp_phase_locking.py`, `spike_lfp_summary.py`, `lfp_summary_ppc_kernel.py` | Move numerical responsibilities under `spike_lfp`. |
 | `population_pca.py`, `population_pca_decoding.py`, `population_pca_switch_trajectories.py`, `plot_cross_session_analysis.py` | Move or split under `population`. |
 | `unit_spike_plotting.py` | Split among the scientific domains represented by its current plots. |
-| `lfp_summary_models.py`, `lfp_summary_session.py`, `lfp_summary_preparation.py`, `lfp_summary_pipeline.py`, `lfp_summary_payloads.py`, `lfp_summary_io.py`, `lfp_summary_work_cache.py` | Move under `lfp_summary` without changing contracts. |
+| `lfp_summary_models.py`, `lfp_summary_session.py`, `lfp_summary_preparation.py`, `lfp_summary_pipeline.py`, `lfp_summary_payloads.py`, `lfp_summary_io.py`, `lfp_summary_work_cache.py` | Move workflow-specific responsibilities under `lfp_summary` without changing contracts. `lfp_summary_models.py` retains compatibility aliases for the three records moved to `lfp/config.py`. |
 | `lfp_summary_runtime.py` | Split into Power, Synchrony, Spike-phase, and the smallest genuinely shared preparation/runtime code. |
 | `lfp_summary_ppc_runtime.py` | Separate planning/allocation from execution/checkpoint behavior; keep parallel worker details with execution unless a measured readability problem remains. |
 | `lfp_power_validation.py`, `lfp_synchrony_validation.py`, `lfp_spike_phase_validation.py` | Move under `lfp_summary`; split report construction only when it makes the existing flow clearer. |
@@ -380,6 +391,7 @@ planned.
 | `lfp_summary_webapp.py` | Move snapshot inspection to `lfp_summary/snapshot.py` and UI composition to `webapp/summary_view.py`. |
 | `psth_webapp.py` | Become the thin documented entry point over domain view modules in `webapp`. |
 | `lfp_spike_phase_launcher.py` | Remain the documented entry point; move only established preflight/state/execution groups under `lfp_summary`. |
+| `sync_ephys.py` | Remain the current root script/function entry point over synchronization modules. Preserve its callable signatures, defaults, and direct module dispatch; do not add a parser. |
 | `lfp_summary_cache_relocation.py` | Move under `lfp_summary`; do not generalize it. |
 | `lfp_summary_ppc_profile.py`, `lfp_summary_ct026_profile_adapter.py`, `lfp_summary_ct026_profile_locks.py`, `lfp_summary_ct026_profile_runner.py` | Move initially to like-named modules under `lfp_summary`; remain visibly profile- and dataset-specific. Consolidation requires a later concrete readability case. |
 
@@ -391,6 +403,7 @@ promise that every current module attribute remains patchable forever.
 | Surface | Policy |
 | --- | --- |
 | Documented command | Preserve permanently. |
+| Current root script/function entry point | Preserve its inventoried module dispatch and callable behavior; do not infer a CLI contract. |
 | Documented/public Python import | Preserve with a forwarding module through migration; removal requires a fresh audit and explicit approval. |
 | Session metadata JSON | Preserve compact schema version 2 exactly. Version 1 is intentionally rejected and receives no migration layer. |
 | Repository-private import or helper | Migrate the repository caller to the canonical owner; no external compatibility promise is inferred. |
@@ -401,9 +414,10 @@ promise that every current module attribute remains patchable forever.
 A forwarding module preserves only the inventoried public names and
 signatures. It contains no duplicated implementation and need not reproduce
 arbitrary private globals, module-level monkeypatch behavior, or private helper
-locations. The three documented root command modules remain permanent entry
-points. Any other compatibility removal occurs only in the final cleanup phase
-after a fresh audit and explicit approval.
+locations. The two documented command modules remain permanent entry points;
+the current `sync_ephys.py` root script remains subject to its separately
+inventoried script/function contract. Any other compatibility removal occurs
+only in the final cleanup phase after a fresh audit and explicit approval.
 
 ## Unused-code policy and current candidates
 

@@ -104,7 +104,7 @@ The detailed contracts remain in `docs/Tasks_neural.md` and the execution log.
 
 The organization is shallow and domain-oriented:
 
-- root session metadata and stable command entry points;
+- root session metadata and stable entry modules;
 - `synchronization`;
 - `lfp`;
 - `spike_behavior`;
@@ -180,6 +180,7 @@ R0 classifies compatibility before movement:
 | Surface | Migration policy |
 | --- | --- |
 | Documented command | Preserve permanently. |
+| Current root script/function entry point | Preserve its inventoried module dispatch and callable behavior; do not infer a CLI contract. |
 | Documented/public Python import | Forward through migration; removal requires a fresh audit and explicit approval. |
 | Session metadata JSON | Preserve compact schema version 2 exactly; do not add version-1 migration or compatibility. |
 | Repository-private import or helper | Update the repository caller; do not imply an external compatibility promise. |
@@ -295,7 +296,7 @@ implementation steps remain sequential.
 | Work package | Sol task | Terra worker tasks |
 | --- | --- | --- |
 | R0 | Freeze the baseline; reconcile classifications; write and obtain review of the inventory. | `R0-T1`: scientific-domain modules; `R0-T2`: LFP-summary, saved artifacts, process workers, and profiling; `R0-T3`: metadata, webapp, commands, compatibility, and deletion candidates. These are parallel read-only audits that return inventory rows and import edges. |
-| R1 | Freeze synchronization ownership and integrate the root command/forwards. | Sequential `R1-tests` and `R1-move` tasks for the approved synchronization files. |
+| R1 | Freeze synchronization ownership and integrate the root entry/forwards. | Sequential `R1-tests` and `R1-move` tasks for the approved synchronization files. |
 | R2 | Approve and integrate one scientific slice at a time. | For each of R2A-R2D, one tests-only task followed by one implementation task. Different slices may be audited in parallel but do not mutate the shared tree concurrently. |
 | R3 | Own the shared plotting source and compatibility surface. | Domain-specific plotting inventories may run in parallel; tests and moves are serialized by destination because `unit_spike_plotting.py` is shared. |
 | R4 | Own saved-artifact compatibility and integrate R4A-R4D in order. | One tests-only/implementation pair per slice. R4C stays with one worker context at a time because planning, workers, checkpoints, and reduction share invariants. |
@@ -345,11 +346,24 @@ For the compact metadata path, explicitly classify:
 The inventory distinguishes useful semantic aliases from version-1 scaffolding.
 A passing test alone does not make a test-only adapter public.
 
+For the current LFP configuration records, explicitly classify
+`AnalysisWindowConfig`, `FrequencyBandConfig`, and `PowerAnalysisConfig` for
+repository and possible external imports, module-qualified serialization,
+configuration JSON, and fingerprint identity. R0 must confirm whether aliases
+from `lfp_summary_models.py` are sufficient before R2A changes their canonical
+module identity.
+
+Classify `sync_ephys.py` as a current root script/function entry point. Record
+its callable signatures and defaults plus the workflow selected by its
+`__main__` block. It has no argument parser or documented CLI contract.
+
 R0 also records the current internal dependency graph for
 `src/neural_analysis` with a small repository or standard-library AST audit.
 The inventory identifies current cycles and back-imports, including the
-LFP-summary runtime/PPC-runtime dependency, and compares every edge with the
-approved dependency direction. Do not add a graph-analysis dependency.
+LFP-summary runtime/PPC-runtime dependency and the current reusable-LFP to
+`lfp_summary_models` to LFP-loading ownership inversion, and compares every
+edge with the approved dependency direction. Do not add a graph-analysis
+dependency.
 
 The inventory uses the module disposition in the design document as its
 starting point, not as proof that a move is safe.
@@ -396,10 +410,11 @@ Move the relatively self-contained synchronization responsibilities first:
 - `spikeglx_sync_io.py` digital-line reading;
 - reusable mapping/alignment behavior from `ephys_sync_utils.py`;
 - `manual_session_synchronization.py`;
-- the existing `sync_ephys.py` command.
+- the existing `sync_ephys.py` root script and callable workflows.
 
 Create only the `synchronization` modules needed by those current
-responsibilities. Keep `sync_ephys.py` as a thin root command entry point.
+responsibilities. Keep `sync_ephys.py` as a thin root script/function entry
+point.
 
 ### Tests written and committed first
 
@@ -409,12 +424,17 @@ responsibilities. Keep `sync_ephys.py` as a thin root command entry point.
 - time zones, bounds, extrapolation warnings, and missingness are unchanged;
 - written synchronization NPZ/note content is equivalent;
 - Open Ephys and SpikeGLX current paths retain their existing behavior;
-- the existing CLI accepts and rejects the same arguments; and
+- the callable workflow signatures, defaults, return values, writes, and
+  dependency calls are unchanged;
+- direct module execution selects the same current hardcoded workflow when its
+  real-data dependencies are stubbed; and
 - old import paths forward to the new implementations.
 
 ### Implementation constraints
 
 - Do not add another synchronization method or source format.
+- Do not add an argument parser or turn the hardcoded root script into a new
+  configurable CLI; that would be a separate feature.
 - Do not redesign IRIG code outside `src/neural_analysis`.
 - Do not combine synchronization cleanup with a change in time semantics.
 - Split source-specific I/O from reusable mapping only where the current code
@@ -442,11 +462,21 @@ path until R3, so each plotting responsibility moves only once.
 
 Move or split:
 
+- the `AnalysisWindowConfig`, `FrequencyBandConfig`, and
+  `PowerAnalysisConfig` records currently in `lfp_summary_models.py`;
 - `lfp_loading.py`;
 - `lfp_power_summary.py`;
 - `lfp_spectrogram.py`;
 - `lfp_phase_clustering.py`; and
 - `lfp_synchrony_summary.py`.
+
+Move those three records first to the small `lfp/config.py` module so reusable
+LFP calculations do not import the LFP-summary workflow. Preserve the current
+`lfp_summary_models.py` names as aliases to the same class objects; do not copy
+or redefine the records. If R0 finds a module-qualified serialized or public
+contract that aliases do not preserve, stop and define the smallest explicit
+compatibility mechanism before movement. Keep LFP-summary-wide validation in
+the workflow models; do not create a general configuration framework.
 
 Loading, reusable numerical calculations, and result persistence are separated
 only where currently mixed. Open Ephys and SpikeGLX loading may remain together
@@ -456,11 +486,16 @@ Plotting movement is deferred to R3.
 Tests written first:
 
 - canonical `lfp` imports produce RED before the move;
+- canonical LFP configuration imports produce RED, while compatibility tests
+  require the old names to resolve to the same class objects after the move;
+- configuration defaults, equality, JSON, fingerprints, and any inventoried
+  serialized representation are exact;
 - current loader values, sample indices, sample rates, voltage units, and time
   coordinates are exact;
 - Power, spectrogram, phase, relative-phase, PLV, and Synchrony arrays are
   exact or retain their existing reviewed tolerance;
-- saved result behavior is unchanged; and
+- saved result behavior is unchanged;
+- no module under `lfp` imports `lfp_summary`; and
 - old module imports forward correctly.
 
 ### R2B - Spike behavior
@@ -833,7 +868,8 @@ After all repository callers use canonical imports:
 - inventory every root forwarding module;
 - search source, tests, shell scripts, notebooks, and documentation;
 - identify likely external imports with the user;
-- retain the three documented root command modules; and
+- retain the two documented root command modules and the current
+  `sync_ephys.py` root script; and
 - propose each other wrapper removal separately.
 
 No wrapper is removed merely because repository tests no longer import it.
@@ -957,6 +993,7 @@ easier to review.
 | Cache/artifact move | Same schemas, identities, publication, validation, and recovery |
 | PPC move | Numerical equivalence, seeds/schedules/checkpoints, serial/parallel behavior, runtime and peak memory |
 | CLI/launcher move | Same parsing, state transitions, failure/recovery behavior, command path |
+| Root script move | Same `__main__` dispatch, callable signatures/defaults, return values, and stubbed dependency calls; no parser added |
 | Deletion | Fresh no-caller audit, external-use confirmation, RED removal test, explicit approval |
 
 After each accepted work package:
