@@ -328,6 +328,113 @@ def test_metadata_view_availability_disables_only_views_missing_their_sources(
     assert availability[psth_webapp.PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING].available is False
 
 
+def test_main_metadata_launch_reaches_summary_route_without_legacy_path_controls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The documented Streamlit argument launches the metadata summary route directly."""
+    from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
+
+    session = _write_resolved_session(tmp_path)
+    calls: list[object] = []
+
+    class Sidebar:
+        """Minimal sidebar selecting the cached-summary view."""
+
+        def button(self, *_: object, **__: object) -> bool:
+            return False
+
+        def selectbox(self, label: str, **_: object) -> str:
+            assert label == "Plot view"
+            return psth_webapp.PLOT_VIEW_LFP_SUMMARY
+
+        def caption(self, message: str) -> None:
+            calls.append(message)
+
+    class Streamlit:
+        """Minimal metadata-startup host with no legacy text inputs."""
+
+        sidebar = Sidebar()
+
+        def set_page_config(self, **_: object) -> None:
+            pass
+
+        def title(self, _: str) -> None:
+            pass
+
+    monkeypatch.setattr(psth_webapp, "st", Streamlit())
+    monkeypatch.setattr(psth_webapp, "load_webapp_session", lambda _: session)
+    monkeypatch.setattr(
+        psth_webapp,
+        "render_metadata_lfp_summary_view",
+        lambda streamlit, active_session: calls.append((streamlit, active_session)),
+    )
+    monkeypatch.setattr(
+        psth_webapp,
+        "_initialize_path_input_state",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy path controls were initialized")),
+    )
+
+    psth_webapp.main(["--session-metadata", str(tmp_path / "neural_session.json")])
+
+    assert any(isinstance(call, tuple) and call[1] is session for call in calls)
+
+
+def test_main_metadata_launch_stops_before_unavailable_view_loaders(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An unavailable metadata view explains its missing source before data loading."""
+    from dataclasses import replace
+    from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
+
+    session = _write_resolved_session(tmp_path)
+    session = replace(
+        session,
+        probes=(session.probes[0], replace(session.probes[1], sorter_directory=None)),
+    )
+    warnings: list[str] = []
+
+    class Sidebar:
+        """Minimal sidebar selecting a spike-only view."""
+
+        def button(self, *_: object, **__: object) -> bool:
+            return False
+
+        def selectbox(self, label: str, **_: object) -> str:
+            assert label == "Plot view"
+            return psth_webapp.PLOT_VIEW_UNIT_RASTER
+
+        def caption(self, _: str) -> None:
+            pass
+
+    class Streamlit:
+        """Minimal host recording the useful unavailability message."""
+
+        sidebar = Sidebar()
+
+        def set_page_config(self, **_: object) -> None:
+            pass
+
+        def title(self, _: str) -> None:
+            pass
+
+        def warning(self, message: str) -> None:
+            warnings.append(message)
+
+    monkeypatch.setattr(psth_webapp, "st", Streamlit())
+    monkeypatch.setattr(psth_webapp, "load_webapp_session", lambda _: session)
+    monkeypatch.setattr(
+        psth_webapp,
+        "load_viewer_data_cached",
+        lambda **_: (_ for _ in ()).throw(AssertionError("viewer data loaded")),
+    )
+
+    psth_webapp.main(["--session-metadata", str(tmp_path / "neural_session.json")])
+
+    assert warnings and "rear-probe" in warnings[0]
+
+
 def test_real_summary_route_builds_usable_production_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
