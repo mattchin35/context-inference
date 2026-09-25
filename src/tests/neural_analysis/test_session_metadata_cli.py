@@ -32,7 +32,9 @@ def test_create_writes_one_deterministic_structurally_valid_skeleton(
         "unrelated-recording.bin",
     ]
     metadata = load_session_metadata(first_path)
-    assert metadata.schema_version == "1"
+    assert metadata.schema_version == "2"
+    assert metadata.session == ""
+    assert metadata.acquisition == "open_ephys"
     assert metadata.probes == ()
 
 
@@ -112,13 +114,18 @@ def test_validate_malformed_metadata_returns_nonzero_without_traceback(
     assert "traceback" not in captured.err.lower()
 
 
-def test_create_skeleton_keeps_missing_null_and_empty_fields_visible(tmp_path: Path) -> None:
-    """The editable skeleton shows required blanks and optional null values."""
+def test_create_skeleton_is_compact_and_keeps_optional_fields_visible(tmp_path: Path) -> None:
+    """The editable skeleton contains only the probe-centered version-2 fields."""
     assert main(["create", "--session-root", str(tmp_path)]) == 0
 
     payload = json.loads((tmp_path / "neural_session.json").read_text(encoding="ascii"))
 
-    assert payload["subject_id"] == ""
-    assert payload["behavior"]["trial_table_file"] == ""
-    assert payload["behavior"]["treadmill_file"] is None
-    assert payload["lfp_summary_cache_directory"] is None
+    assert payload == {
+        "schema_version": "2",
+        "session": "",
+        "acquisition": "open_ephys",
+        "behavior": {"trials": "", "events": None},
+        "probes": {},
+        "site_pairs": [],
+        "cache": None,
+    }
