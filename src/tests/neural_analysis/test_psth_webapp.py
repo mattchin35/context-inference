@@ -286,6 +286,102 @@ def test_metadata_population_inputs_keep_hardware_anatomy_and_paths_separate(
     assert selection.lfp_file == (tmp_path / "ephys/rear/lfp.dat").resolve()
 
 
+class _MetadataPopulationSidebar:
+    """Record the restored metadata-driven scientific population controls."""
+
+    def __init__(self, probe_id: str, channel_source: str) -> None:
+        self.probe_id = probe_id
+        self.channel_source = channel_source
+        self.control_labels: list[str] = []
+
+    def header(self, label: str) -> None:
+        """Record one sidebar section label."""
+        self.control_labels.append(label)
+
+    def selectbox(self, label: str, *, options: object, **_: object) -> object:
+        """Select the requested probe and channel-source mode."""
+        del options
+        self.control_labels.append(label)
+        if label == "Probe / region":
+            return self.probe_id
+        if label == "Channel source":
+            return self.channel_source
+        raise AssertionError(f"unexpected selectbox: {label}")
+
+    def multiselect(self, label: str, *, default: object, **_: object) -> object:
+        """Keep the default quality-label selection."""
+        self.control_labels.append(label)
+        return default
+
+    def checkbox(self, label: str, *, value: bool, **_: object) -> bool:
+        """Keep the established inside-brain default."""
+        self.control_labels.append(label)
+        return value
+
+    def text_area(self, label: str, *, value: str, **_: object) -> str:
+        """Keep the metadata-derived editable manual channel text."""
+        self.control_labels.append(label)
+        return value
+
+    def caption(self, _: str) -> None:
+        """Accept explanatory captions."""
+
+    def warning(self, _: str) -> None:
+        """Accept quality-consistency warnings."""
+
+
+def test_metadata_population_controls_restore_quality_dropdowns_and_default_all_good_channels(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Omitted unit_channels keeps the old quality controls and selects good channels."""
+    from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
+
+    session = _write_resolved_session(tmp_path)
+    sidebar = _MetadataPopulationSidebar(
+        "front-probe", psth_webapp.CHANNEL_SOURCE_CHANNEL_QUALITY
+    )
+    monkeypatch.setattr(psth_webapp, "st", SimpleNamespace(sidebar=sidebar))
+
+    selection = psth_webapp._metadata_population_controls(session)
+
+    assert selection[0] == "front-probe"
+    assert selection[1] == "front-probe"
+    assert selection[2] == str((tmp_path / "ephys/front/kilosort4").resolve())
+    assert selection[3] == str((tmp_path / "ephys/front_sync.npz").resolve())
+    assert selection[4] == str((tmp_path / "ephys/front/lfp.dat").resolve())
+    assert selection[5].tolist() == [0, 7, 9]
+    assert selection[6] == psth_webapp.CHANNEL_SOURCE_CHANNEL_QUALITY
+    assert {
+        "Region and Units",
+        "Probe / region",
+        "Channel source",
+        "Channel labels",
+        "Inside brain only",
+    }.issubset(sidebar.control_labels)
+
+
+def test_metadata_population_controls_apply_optional_channels_without_hiding_controls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """unit_channels restricts the default quality result but does not replace its UI."""
+    from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
+
+    session = _write_resolved_session(tmp_path)
+    sidebar = _MetadataPopulationSidebar(
+        "rear-probe", psth_webapp.CHANNEL_SOURCE_CHANNEL_QUALITY
+    )
+    monkeypatch.setattr(psth_webapp, "st", SimpleNamespace(sidebar=sidebar))
+
+    selection = psth_webapp._metadata_population_controls(session)
+
+    assert selection[0] == "rear-probe"
+    assert selection[5].tolist() == [7, 9]
+    assert "Channel labels" in sidebar.control_labels
+    assert "Inside brain only" in sidebar.control_labels
+
+
 def test_metadata_lfp_site_inputs_preserve_user_order_and_saved_channels(tmp_path: Path) -> None:
     """LFP controls come from site records rather than CT-specific presets."""
     from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
