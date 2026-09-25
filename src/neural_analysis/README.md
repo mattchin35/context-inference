@@ -80,11 +80,12 @@ uv run streamlit run src/neural_analysis/psth_webapp.py -- \
 
 The app gets the session name, probe sources, LFP sites and pairs, implicit
 per-probe populations, behavior tables, and optional summary cache from that
-one file. Startup reads metadata and checks paths but does not
-load LFP or spike arrays. Selecting a spike-dependent view loads only its
-selected population; selecting a cached summary keeps the existing saved
-provenance. A missing optional source disables the affected view and explains
-which source is unavailable.
+one file. Metadata validation and resolution do not load numerical arrays.
+The default Unit raster/PSTH view is spike-dependent, so its initial render
+loads the selected population's sorter and aligned-spike arrays. Other views
+retain their existing view-specific loading behavior; selecting a cached
+summary keeps the existing saved provenance. A missing optional source
+disables the affected view and explains which source is unavailable.
 
 ## Run Spike-phase/PPC computation
 

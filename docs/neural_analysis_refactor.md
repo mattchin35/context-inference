@@ -391,7 +391,7 @@ planned.
 | `lfp_summary_webapp.py` | Move snapshot inspection to `lfp_summary/snapshot.py` and UI composition to `webapp/summary_view.py`. |
 | `psth_webapp.py` | Become the thin documented entry point over domain view modules in `webapp`. |
 | `lfp_spike_phase_launcher.py` | Remain the documented entry point; move only established preflight/state/execution groups under `lfp_summary`. |
-| `sync_ephys.py` | Remain the current root script/function entry point over synchronization modules. Preserve its callable signatures, defaults, and direct module dispatch; do not add a parser. |
+| `sync_ephys.py` | Remain the current root script/function entry point over synchronization modules. Preserve its callable signatures and direct module dispatch; its hardcoded session, recording, and sorter paths are replaceable local examples rather than strict compatibility contracts. Do not add a parser. |
 | `lfp_summary_cache_relocation.py` | Move under `lfp_summary`; do not generalize it. |
 | `lfp_summary_ppc_profile.py`, `lfp_summary_ct026_profile_adapter.py`, `lfp_summary_ct026_profile_locks.py`, `lfp_summary_ct026_profile_runner.py` | Move initially to like-named modules under `lfp_summary`; remain visibly profile- and dataset-specific. Consolidation requires a later concrete readability case. |
 
@@ -414,8 +414,10 @@ promise that every current module attribute remains patchable forever.
 A forwarding module preserves only the inventoried public names and
 signatures. It contains no duplicated implementation and need not reproduce
 arbitrary private globals, module-level monkeypatch behavior, or private helper
-locations. The two documented command modules remain permanent entry points;
-the current `sync_ephys.py` root script remains subject to its separately
+locations. All three documented command modules remain permanent entry paths:
+`session_metadata_cli.py` stays direct at the root, while `psth_webapp.py` and
+`lfp_spike_phase_launcher.py` become thin entries over moved implementations.
+The current `sync_ephys.py` root script remains subject to its separately
 inventoried script/function contract. Any other compatibility removal occurs
 only in the final cleanup phase after a fresh audit and explicit approval.
 

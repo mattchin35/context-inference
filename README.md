@@ -35,9 +35,9 @@ together on a single figure so the model trajectory can be inspected alongside t
 # Neural data analysis
 
 ## Synchronization
-DAQ signals, LFPs, and spikes have to be synchronized in order to be used with behavior. There are two entry points to synchronization:
+DAQ signals, LFPs, and spikes have to be synchronized in order to be used with behavior. Current synchronization scripts are:
 - sync_ephys.py, which is based around IRIG synchronization to UTC.
-- preprocess_daq.py, which is based around manual synchronization of a sync line recorded in the DAQ, probes, and behavior.
+- manual_session_synchronization.py, which contains the manual synchronization workflow.
 
 ## Running tests
 
@@ -48,5 +48,4 @@ uv run pytest
 ```
 
 Pytest collection is intentionally scoped to `src/tests` in the initial packaging cleanup pass.
-
 

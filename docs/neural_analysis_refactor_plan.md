@@ -3,9 +3,9 @@
 ## Status and authority
 
 **Current status:** U1-U4 are implemented, and the user explicitly accepted
-the current version-2 U4 workflow on 2026-09-25. The organization refactor
-described here is planned but not authorized to begin. R0 inventory work and
-R1 source movement each require separate approval.
+the current version-2 U4 workflow on 2026-09-25. R0 inventory work was
+authorized on 2026-09-25 and is under review. R1 source movement requires
+separate approval.
 
 This plan supersedes the former NR2-NR18 package roadmap and the former broad
 layered target architecture. Historical execution details, reviews, paths,
@@ -218,8 +218,12 @@ the owning function's contract.
 Clarity has priority unless an existing path is performance-sensitive.
 
 - An ordinary import move requires correctness tests, not a benchmark.
-- Webapp startup must remain metadata/small-table only and must not load full
-  LFP, phase, or spike arrays.
+- Preserve the webapp's current loading behavior. Metadata validation and
+  metadata/summary-source resolution do not load numerical arrays, but the
+  default Unit raster/PSTH view loads the selected population's sorter and
+  aligned-spike arrays on its initial render. Do not introduce additional
+  eager loading or make the existing default view lazy without separate
+  approval.
 - Scientific moves must not introduce new full-array copies or eager loading.
 - Existing vectorized NumPy/SciPy/Pynapple operations remain unchanged.
 - Worker counts, memory maps, chunk/block sizes, checkpoint representation, and
@@ -354,8 +358,10 @@ from `lfp_summary_models.py` are sufficient before R2A changes their canonical
 module identity.
 
 Classify `sync_ephys.py` as a current root script/function entry point. Record
-its callable signatures and defaults plus the workflow selected by its
-`__main__` block. It has no argument parser or documented CLI contract.
+its callable signatures plus the workflow selected by its `__main__` block.
+Its hardcoded session, recording, and sorter paths are replaceable local
+examples, not strict compatibility contracts. It has no argument parser or
+documented CLI contract.
 
 R0 also records the current internal dependency graph for
 `src/neural_analysis` with a small repository or standard-library AST audit.
@@ -424,8 +430,9 @@ point.
 - time zones, bounds, extrapolation warnings, and missingness are unchanged;
 - written synchronization NPZ/note content is equivalent;
 - Open Ephys and SpikeGLX current paths retain their existing behavior;
-- the callable workflow signatures, defaults, return values, writes, and
-  dependency calls are unchanged;
+- the callable workflow signatures, return values, writes, and dependency
+  calls are unchanged;
+- tests do not freeze hardcoded session, recording, or sorter example paths;
 - direct module execution selects the same current hardcoded workflow when its
   real-data dependencies are stubbed; and
 - old import paths forward to the new implementations.
@@ -774,7 +781,11 @@ cleanup gate instead.
   change is approved;
 - cached and live provenance remain distinct;
 - missing inputs disable the same affected views with the same meaning;
-- startup and unrelated rerenders load no large numerical arrays;
+- metadata validation and metadata/summary-source resolution load no large
+  numerical arrays, while the default Unit raster/PSTH render retains its
+  current selected-population spike loading;
+- unrelated rerenders add no new eager numerical loading compared with the
+  baseline;
 - expensive existing actions occur only after the same explicit user action;
 - Streamlit cache inputs and invalidation semantics remain equivalent; a
   one-time in-memory cache miss caused by deployment of moved code is allowed;
@@ -989,11 +1000,11 @@ easier to review.
 | Numerical function move | Exact deterministic results or existing reviewed tolerance; shapes, axes, units, missingness |
 | Loader move | Same paths read, same records/arrays, same lazy/eager behavior |
 | Plot move | Same plotted data, structure, labels, captions, filenames, rendering smoke |
-| Webapp move | Same controls/actions, no startup computation, metadata/legacy routing, cached/live provenance |
+| Webapp move | Same controls/actions and current view-specific loading behavior, metadata/legacy routing, cached/live provenance |
 | Cache/artifact move | Same schemas, identities, publication, validation, and recovery |
 | PPC move | Numerical equivalence, seeds/schedules/checkpoints, serial/parallel behavior, runtime and peak memory |
 | CLI/launcher move | Same parsing, state transitions, failure/recovery behavior, command path |
-| Root script move | Same `__main__` dispatch, callable signatures/defaults, return values, and stubbed dependency calls; no parser added |
+| Root script move | Same `__main__` dispatch, callable signatures, return values, and stubbed dependency calls; hardcoded local example paths are not frozen; no parser added |
 | Deletion | Fresh no-caller audit, external-use confirmation, RED removal test, explicit approval |
 
 After each accepted work package:
