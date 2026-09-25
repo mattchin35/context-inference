@@ -125,7 +125,7 @@ _CONSTANT_SURFACES = (
     ),
 )
 
-_HELD_BACK_LEGACY_FUNCTIONS = {
+_PLOTTING_FUNCTIONS = {
     "src.neural_analysis.population_pca_decoding": (
         "plot_pca_decoding_pre_post_scores",
         "plot_average_pca_scores_by_condition_and_target",
@@ -140,7 +140,6 @@ _HELD_BACK_LEGACY_FUNCTIONS = {
         "plot_cross_session_decoder_accuracy",
         "plot_cross_session_decoder_superplot",
         "plot_cross_session_decoder_session_means",
-        "main",
     ),
     "src.neural_analysis.unit_spike_plotting": (
         "plot_trial_behavior_and_population_pca",
@@ -291,13 +290,17 @@ def test_canonical_population_modules_do_not_import_legacy_workflow_or_ui_module
     )
 
 
-def test_population_plotting_and_cross_session_dispatch_remain_legacy() -> None:
-    """R2D moves calculations and tables while R3 retains plots and dispatch."""
+def test_population_plotting_has_one_owner_and_cross_session_dispatch_remains_legacy() -> None:
+    """R3 owns population plots without moving cross-session execution policy."""
 
-    for legacy_module_name, held_names in _HELD_BACK_LEGACY_FUNCTIONS.items():
+    canonical_plotting = importlib.import_module("src.neural_analysis.population.plotting")
+    for legacy_module_name, function_names in _PLOTTING_FUNCTIONS.items():
         legacy_module = importlib.import_module(legacy_module_name)
-        for held_name in held_names:
-            assert getattr(legacy_module, held_name).__module__ == legacy_module_name
+        for function_name in function_names:
+            assert getattr(legacy_module, function_name) is getattr(
+                canonical_plotting,
+                function_name,
+            )
 
     for canonical_module_name in _CANONICAL_MODULE_NAMES:
         canonical_module = importlib.import_module(canonical_module_name)
@@ -308,7 +311,5 @@ def test_population_plotting_and_cross_session_dispatch_remain_legacy() -> None:
     legacy_cross_session = importlib.import_module(
         "src.neural_analysis.plot_cross_session_analysis"
     )
+    assert legacy_cross_session.main.__module__ == legacy_cross_session.__name__
     assert _has_direct_main_dispatch(legacy_cross_session)
-
-    with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("src.neural_analysis.population.plotting")

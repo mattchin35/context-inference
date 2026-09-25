@@ -17,6 +17,7 @@ _CANONICAL_MODULE_NAMES = (
     "src.neural_analysis.spike_behavior.decoding",
     "src.neural_analysis.spike_behavior.psth",
     "src.neural_analysis.spike_behavior.publication",
+    "src.neural_analysis.spike_behavior.plotting",
 )
 
 _MODULE_SURFACES = (
@@ -128,14 +129,13 @@ _MODULE_SURFACES = (
     ),
 )
 
-_HELD_BACK_LEGACY_FUNCTIONS = {
-    "src.neural_analysis.spike_behavior_pynapple": ("plot_trial_raster", "main"),
+_PLOTTING_FUNCTIONS = {
+    "src.neural_analysis.spike_behavior_pynapple": ("plot_trial_raster",),
     "src.neural_analysis.psth_behavior": (
         "plot_lick_peth",
         "plot_single_unit_spike_peth",
         "save_figure_with_message",
         "plot_peth",
-        "main",
     ),
 }
 
@@ -226,21 +226,24 @@ def test_canonical_spike_behavior_modules_do_not_import_legacy_mixed_modules(
     )
 
 
-def test_plotting_remains_implemented_only_at_legacy_paths() -> None:
-    """R2B moves calculations and publication while R3 retains plotting."""
+def test_spike_behavior_plotting_has_one_owner_and_legacy_forwards() -> None:
+    """R3 owns behavior plots while legacy example modules keep dispatch."""
 
-    for legacy_module_name, held_names in _HELD_BACK_LEGACY_FUNCTIONS.items():
+    canonical_plotting = importlib.import_module("src.neural_analysis.spike_behavior.plotting")
+    for legacy_module_name, function_names in _PLOTTING_FUNCTIONS.items():
         legacy_module = importlib.import_module(legacy_module_name)
-        for held_name in held_names:
-            assert getattr(legacy_module, held_name).__module__ == legacy_module_name
+        for function_name in function_names:
+            assert getattr(legacy_module, function_name) is getattr(
+                canonical_plotting,
+                function_name,
+            )
+        assert legacy_module.main.__module__ == legacy_module_name
 
     for canonical_module_name in _CANONICAL_MODULE_NAMES:
         canonical_module = importlib.import_module(canonical_module_name)
         imported_names = _imported_module_names(canonical_module)
-        assert "matplotlib.pyplot" not in imported_names
-        for held_names in _HELD_BACK_LEGACY_FUNCTIONS.values():
-            for held_name in held_names:
-                assert not hasattr(canonical_module, held_name)
-
-    with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("src.neural_analysis.spike_behavior.plotting")
+        if canonical_module is not canonical_plotting:
+            assert "matplotlib.pyplot" not in imported_names
+            for function_names in _PLOTTING_FUNCTIONS.values():
+                for function_name in function_names:
+                    assert not hasattr(canonical_module, function_name)

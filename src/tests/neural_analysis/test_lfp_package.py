@@ -216,11 +216,12 @@ def test_canonical_lfp_modules_do_not_import_lfp_summary(
     )
 
 
-def test_phase_plotting_remains_implemented_only_at_legacy_path() -> None:
-    """R2A moves phase calculations but leaves plotting for the R3 owner."""
+def test_phase_plotting_has_one_domain_owner_and_legacy_forward() -> None:
+    """R3 owns phase plotting without adding it to the numerical module."""
 
     legacy_phase = importlib.import_module("src.neural_analysis.lfp_phase_clustering")
     canonical_phase = importlib.import_module("src.neural_analysis.lfp.phase")
+    canonical_plotting = importlib.import_module("src.neural_analysis.lfp.plotting")
 
     assert not hasattr(canonical_phase, "plot_phase_clustering")
-    assert legacy_phase.plot_phase_clustering.__module__ == legacy_phase.__name__
+    assert legacy_phase.plot_phase_clustering is canonical_plotting.plot_phase_clustering

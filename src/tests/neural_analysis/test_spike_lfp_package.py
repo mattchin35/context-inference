@@ -257,15 +257,16 @@ def test_canonical_spike_lfp_modules_do_not_import_workflows_ui_or_legacy_owners
     )
 
 
-def test_spike_lfp_plotting_remains_at_the_legacy_plot_owner() -> None:
-    """R2C moves calculations while R3 retains the current plotting owner."""
+def test_spike_lfp_plotting_has_one_domain_owner_and_legacy_forwards() -> None:
+    """R3 owns Spike-LFP plots while preserving their old import path."""
 
     unit_plotting = importlib.import_module("src.neural_analysis.unit_spike_plotting")
+    canonical_plotting = importlib.import_module("src.neural_analysis.spike_lfp.plotting")
     for plot_name in (
         "plot_spike_lfp_phase_locking",
         "plot_trial_spike_lfp_hilbert_phase_and_behavior",
     ):
-        assert getattr(unit_plotting, plot_name).__module__ == unit_plotting.__name__
+        assert getattr(unit_plotting, plot_name) is getattr(canonical_plotting, plot_name)
 
     for canonical_module_name in _CANONICAL_MODULE_NAMES:
         canonical_module = importlib.import_module(canonical_module_name)
@@ -274,6 +275,3 @@ def test_spike_lfp_plotting_remains_at_the_legacy_plot_owner() -> None:
             canonical_module,
             "plot_trial_spike_lfp_hilbert_phase_and_behavior",
         )
-
-    with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("src.neural_analysis.spike_lfp.plotting")
