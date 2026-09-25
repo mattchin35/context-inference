@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import inspect
 from pathlib import Path
+import runpy
 
 import numpy as np
 import pandas as pd
@@ -218,47 +219,22 @@ def test_sync_open_ephys_kilosort_spikes_to_utc_saves_expected_npz_schema_and_me
 
 def test_main_open_ephys_workflow_syncs_probe_a_and_probe_b_with_expected_paths(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ):
-    session_data_home = tmp_path / "CT026_20260801_latent_inference"
-    raw_recording_dir = (
-        session_data_home
-        / "ephys"
-        / "raw"
-        / "2026-08-01_13-08-22"
-        / "Record Node 101"
-        / "experiment1"
-        / "recording1"
-    )
-    for probe_name in ("ProbeA", "ProbeB"):
-        processor_name = f"Neuropix-PXI-110.{probe_name}"
-        (raw_recording_dir / "continuous" / processor_name).mkdir(parents=True)
-        (raw_recording_dir / "events" / processor_name / "TTL").mkdir(parents=True)
-        (
-            session_data_home
-            / "ephys"
-            / "derived"
-            / f"Record_Node_101_{processor_name}"
-            / "kilosort4"
-        ).mkdir(parents=True)
-
-    hardcoded_session_path = (
-        "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/"
-        "CT026_20260801_latent_inference"
-    )
-
-    def fake_path(path_value: str | Path) -> Path:
-        if str(path_value) == hardcoded_session_path:
-            return session_data_home
-        return Path(path_value)
-
     calls: list[dict[str, object]] = []
+    alignment_notes: list[tuple[Path, float]] = []
 
     def fake_sync_open_ephys_kilosort_spikes_to_utc(**kwargs):
         calls.append(kwargs)
         return pd.DataFrame(), pd.DataFrame()
 
-    monkeypatch.setattr(sync_ephys, "Path", fake_path)
+    monkeypatch.setattr(sync_ephys, "_require_existing_dir", lambda directory: directory)
+    monkeypatch.setattr(
+        ephys_sync_utils,
+        "write_alignment_note",
+        lambda *, output_root, utc_offset_hours: alignment_notes.append(
+            (output_root, utc_offset_hours)
+        ),
+    )
     monkeypatch.setattr(
         ephys_sync_utils,
         "sync_open_ephys_kilosort_spikes_to_utc",
@@ -270,16 +246,56 @@ def test_main_open_ephys_workflow_syncs_probe_a_and_probe_b_with_expected_paths(
     assert inspect.signature(sync_ephys.main_open_ephys_workflow).parameters == {}
     assert set(result.keys()) == {"ProbeA", "ProbeB"}
     assert [Path(call["output_file"]).name for call in calls] == ["probeA_sync.npz", "probeB_sync.npz"]
+    ephys_root = Path(calls[0]["output_file"]).parents[2]
+    assert alignment_notes == [(ephys_root / "aligned", 0.0)]
+    assert Path(calls[0]["kilosort_dir"]).name == Path(calls[1]["kilosort_dir"]).name
     for call, probe_name in zip(calls, ("ProbeA", "ProbeB"), strict=True):
-        processor_name = f"Neuropix-PXI-110.{probe_name}"
-        assert call["kilosort_dir"] == (
-            session_data_home
-            / "ephys"
-            / "derived"
-            / f"Record_Node_101_{processor_name}"
-            / "kilosort4"
-        )
-        assert call["ttl_dir"] == raw_recording_dir / "events" / processor_name / "TTL"
-        assert call["continuous_dir"] == raw_recording_dir / "continuous" / processor_name
+        kilosort_dir = Path(call["kilosort_dir"])
+        ttl_dir = Path(call["ttl_dir"])
+        continuous_dir = Path(call["continuous_dir"])
+        output_file = Path(call["output_file"])
+        assert kilosort_dir.parent.name.endswith(f".{probe_name}")
+        assert ttl_dir.name == "TTL"
+        assert ttl_dir.parent.name.endswith(f".{probe_name}")
+        assert continuous_dir.name.endswith(f".{probe_name}")
+        assert ephys_root in kilosort_dir.parents
+        assert ephys_root in ttl_dir.parents
+        assert ephys_root in continuous_dir.parents
+        assert output_file.parent == ephys_root / "aligned" / "aligned_open_ephys"
         assert call["utc_offset_hours"] == 0.0
         assert call["probe_name"] == probe_name
+
+
+def test_direct_module_execution_dispatches_open_ephys_workflow_without_real_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct execution must keep selecting the hardcoded Open Ephys workflow."""
+
+    synchronized_probes: list[str] = []
+    alignment_notes: list[tuple[Path, float]] = []
+
+    monkeypatch.setattr(Path, "is_dir", lambda _path: True)
+    monkeypatch.setattr(
+        sync_ephys.ephys_sync_utils,
+        "write_alignment_note",
+        lambda *, output_root, utc_offset_hours: alignment_notes.append(
+            (output_root, utc_offset_hours)
+        ),
+    )
+
+    def fake_sync_open_ephys_kilosort_spikes_to_utc(**kwargs):
+        synchronized_probes.append(str(kwargs["probe_name"]))
+        return pd.DataFrame(), pd.DataFrame()
+
+    monkeypatch.setattr(
+        sync_ephys.ephys_sync_utils,
+        "sync_open_ephys_kilosort_spikes_to_utc",
+        fake_sync_open_ephys_kilosort_spikes_to_utc,
+    )
+
+    runpy.run_path(sync_ephys.__file__, run_name="__main__")
+
+    assert synchronized_probes == ["ProbeA", "ProbeB"]
+    assert len(alignment_notes) == 1
+    assert alignment_notes[0][0].name == "aligned"
+    assert alignment_notes[0][1] == 0.0
