@@ -30,6 +30,7 @@ from src.neural_analysis.webapp.lfp_views import (
     LFP_SPECTROGRAM_NOTCH_QUALITY_FACTOR,
     LFP_SPECTROGRAM_PRECISION,
     LFP_SPECTROGRAM_WINDOW_LENGTH,
+    resolve_lfp_view_sites,
 )
 from src.neural_analysis.webapp.session_inputs import (
     ACTION_OPTIONS,
@@ -40,6 +41,7 @@ from src.neural_analysis.webapp.session_inputs import (
     LFP_DROPDOWN_LABEL_PFC,
     LFP_FORMAT_OPEN_EPHYS_DERIVED,
     LFP_FORMAT_OPTIONS,
+    MetadataLFPSiteInputs,
 )
 
 
@@ -543,10 +545,12 @@ def render_spike_lfp_phase_locking_view(
     spike_group: object,
     unit_ids: np.ndarray,
     active_probe_label: str,
-    hpc_v1_lfp_path: str,
-    pfc_lfp_path: str,
-    hpc_v1_aligned_spike_path: str,
-    pfc_aligned_spike_path: str,
+    hpc_v1_lfp_path: str = "",
+    pfc_lfp_path: str = "",
+    hpc_v1_aligned_spike_path: str = "",
+    pfc_aligned_spike_path: str = "",
+    *,
+    metadata_lfp_sites: tuple[MetadataLFPSiteInputs, ...] = (),
 ) -> None:
     """
     Render and optionally save pooled trial-aligned spike-LFP phase locking.
@@ -571,6 +575,9 @@ def render_spike_lfp_phase_locking_view(
         Probe-specific continuous LFP binary paths.
     hpc_v1_aligned_spike_path, pfc_aligned_spike_path : str
         Probe-specific aligned sync paths for Open Ephys-derived LFP.
+    metadata_lfp_sites : tuple[MetadataLFPSiteInputs, ...]
+        Direct version-2 site records. Nonempty records replace legacy manual
+        paths while retaining probe ids and zero-based saved channels.
 
     Returns
     -------
@@ -621,11 +628,31 @@ def render_spike_lfp_phase_locking_view(
     utc_offset_hours = float(
         st.sidebar.number_input("LFP UTC offset (hours)", value=0, step=1, format="%d")
     )
-    probe_options = [LFP_DROPDOWN_LABEL_HPC_V1, LFP_DROPDOWN_LABEL_PFC]
-    default_probe_index = 0 if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1 else 1
+    lfp_sites = resolve_lfp_view_sites(
+        metadata_sites=metadata_lfp_sites,
+        hpc_v1_lfp_path=hpc_v1_lfp_path,
+        pfc_lfp_path=pfc_lfp_path,
+        hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
+        pfc_aligned_spike_path=pfc_aligned_spike_path,
+    )
+    probe_sources = {site.display_label: site for site in lfp_sites}
+    probe_options = list(probe_sources)
+    default_probe_index = next(
+        (
+            index
+            for index, site in enumerate(lfp_sites)
+            if site.probe_id == active_probe_label
+        ),
+        0,
+    )
     lfp_probe_label = st.sidebar.selectbox("LFP probe", options=probe_options, index=default_probe_index)
     lfp_saved_channel_index = int(
-        st.sidebar.number_input("LFP saved channel", min_value=0, value=0, step=1)
+        st.sidebar.number_input(
+            "LFP saved channel",
+            min_value=0,
+            value=int(probe_sources[lfp_probe_label].saved_channel_index),
+            step=1,
+        )
     )
 
     minimum_frequency_hz = float(
@@ -698,11 +725,9 @@ def render_spike_lfp_phase_locking_view(
             )
         )
 
-    probe_sources = {
-        LFP_DROPDOWN_LABEL_HPC_V1: (hpc_v1_lfp_path, hpc_v1_aligned_spike_path),
-        LFP_DROPDOWN_LABEL_PFC: (pfc_lfp_path, pfc_aligned_spike_path),
-    }
-    raw_lfp_path, raw_sync_path = probe_sources[lfp_probe_label]
+    selected_lfp_site = probe_sources[lfp_probe_label]
+    raw_lfp_path = str(selected_lfp_site.lfp_file or "")
+    raw_sync_path = str(selected_lfp_site.synchronization_file or "")
     lfp_source = Path(str(raw_lfp_path)).expanduser()
     if not str(raw_lfp_path).strip() or not lfp_source.is_file():
         st.error(f"LFP path for {lfp_probe_label} does not exist: {lfp_source}")
@@ -918,10 +943,12 @@ def render_single_trial_spike_lfp_hilbert_view(
     spike_group: object,
     unit_ids: np.ndarray,
     active_probe_label: str,
-    hpc_v1_lfp_path: str,
-    pfc_lfp_path: str,
-    hpc_v1_aligned_spike_path: str,
-    pfc_aligned_spike_path: str,
+    hpc_v1_lfp_path: str = "",
+    pfc_lfp_path: str = "",
+    hpc_v1_aligned_spike_path: str = "",
+    pfc_aligned_spike_path: str = "",
+    *,
+    metadata_lfp_sites: tuple[MetadataLFPSiteInputs, ...] = (),
 ) -> None:
     """Render and optionally save one unit's trial-level Hilbert phase trace.
 
@@ -945,6 +972,9 @@ def render_single_trial_spike_lfp_hilbert_view(
         Probe-specific continuous LFP source paths.
     hpc_v1_aligned_spike_path, pfc_aligned_spike_path : str
         Probe-specific aligned sync paths required by derived Open Ephys LFP.
+    metadata_lfp_sites : tuple[MetadataLFPSiteInputs, ...]
+        Direct version-2 site records. Nonempty records replace legacy manual
+        paths while retaining probe ids and zero-based saved channels.
 
     Returns
     -------
@@ -1005,21 +1035,39 @@ def render_single_trial_spike_lfp_hilbert_view(
     utc_offset_hours = float(
         st.sidebar.number_input("LFP UTC offset (hours)", value=0, step=1, format="%d")
     )
-    probe_options = [LFP_DROPDOWN_LABEL_HPC_V1, LFP_DROPDOWN_LABEL_PFC]
-    default_probe_index = 0 if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1 else 1
+    lfp_sites = resolve_lfp_view_sites(
+        metadata_sites=metadata_lfp_sites,
+        hpc_v1_lfp_path=hpc_v1_lfp_path,
+        pfc_lfp_path=pfc_lfp_path,
+        hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
+        pfc_aligned_spike_path=pfc_aligned_spike_path,
+    )
+    probe_sources = {site.display_label: site for site in lfp_sites}
+    probe_options = list(probe_sources)
+    default_probe_index = next(
+        (
+            index
+            for index, site in enumerate(lfp_sites)
+            if site.probe_id == active_probe_label
+        ),
+        0,
+    )
     lfp_probe_label = st.sidebar.selectbox("LFP probe", options=probe_options, index=default_probe_index)
     lfp_saved_channel_index = int(
-        st.sidebar.number_input("LFP saved channel", min_value=0, value=0, step=1)
+        st.sidebar.number_input(
+            "LFP saved channel",
+            min_value=0,
+            value=int(probe_sources[lfp_probe_label].saved_channel_index),
+            step=1,
+        )
     )
     st.sidebar.caption(
         "Phase band is fixed at 6--10 Hz: Pynapple Butterworth bandpass followed by SciPy Hilbert."
     )
 
-    probe_sources = {
-        LFP_DROPDOWN_LABEL_HPC_V1: (hpc_v1_lfp_path, hpc_v1_aligned_spike_path),
-        LFP_DROPDOWN_LABEL_PFC: (pfc_lfp_path, pfc_aligned_spike_path),
-    }
-    raw_lfp_path, raw_sync_path = probe_sources[lfp_probe_label]
+    selected_lfp_site = probe_sources[lfp_probe_label]
+    raw_lfp_path = str(selected_lfp_site.lfp_file or "")
+    raw_sync_path = str(selected_lfp_site.synchronization_file or "")
     lfp_source = Path(str(raw_lfp_path)).expanduser()
     if not str(raw_lfp_path).strip() or not lfp_source.is_file():
         st.error(f"LFP path for {lfp_probe_label} does not exist: {lfp_source}")

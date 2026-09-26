@@ -30,7 +30,69 @@ from src.neural_analysis.webapp.session_inputs import (
     LFP_DROPDOWN_LABEL_PFC,
     LFP_FORMAT_OPEN_EPHYS_DERIVED,
     LFP_FORMAT_OPTIONS,
+    MetadataLFPSiteInputs,
 )
+
+
+def resolve_lfp_view_sites(
+    *,
+    metadata_sites: tuple[MetadataLFPSiteInputs, ...] = (),
+    hpc_v1_lfp_path: str = "",
+    pfc_lfp_path: str = "",
+    hpc_v1_aligned_spike_path: str = "",
+    pfc_aligned_spike_path: str = "",
+) -> tuple[MetadataLFPSiteInputs, ...]:
+    """Return direct metadata sites or the equivalent two legacy view sites.
+
+    Parameters
+    ----------
+    metadata_sites : tuple[MetadataLFPSiteInputs, ...]
+        Version-2 site records in declared display order. Each record keeps its
+        probe id, saved-channel index, source path, and synchronization path.
+    hpc_v1_lfp_path, pfc_lfp_path : str
+        Legacy manual continuous-LFP paths used only when ``metadata_sites`` is
+        empty.
+    hpc_v1_aligned_spike_path, pfc_aligned_spike_path : str
+        Legacy manual synchronization paths used only when ``metadata_sites``
+        is empty.
+
+    Returns
+    -------
+    tuple[MetadataLFPSiteInputs, ...]
+        The original metadata records unchanged, or two records that preserve
+        the established manual HPC/V1 and PFC labels and zero-based default
+        saved channel. No source array is opened.
+    """
+    if metadata_sites:
+        return tuple(metadata_sites)
+    return (
+        MetadataLFPSiteInputs(
+            site_id=LFP_DROPDOWN_LABEL_HPC_V1,
+            display_label=LFP_DROPDOWN_LABEL_HPC_V1,
+            probe_id=LFP_DROPDOWN_LABEL_HPC_V1,
+            acquisition_family="legacy",
+            saved_channel_index=0,
+            lfp_file=Path(hpc_v1_lfp_path) if str(hpc_v1_lfp_path).strip() else None,
+            synchronization_file=(
+                Path(hpc_v1_aligned_spike_path)
+                if str(hpc_v1_aligned_spike_path).strip()
+                else None
+            ),
+        ),
+        MetadataLFPSiteInputs(
+            site_id=LFP_DROPDOWN_LABEL_PFC,
+            display_label=LFP_DROPDOWN_LABEL_PFC,
+            probe_id=LFP_DROPDOWN_LABEL_PFC,
+            acquisition_family="legacy",
+            saved_channel_index=0,
+            lfp_file=Path(pfc_lfp_path) if str(pfc_lfp_path).strip() else None,
+            synchronization_file=(
+                Path(pfc_aligned_spike_path)
+                if str(pfc_aligned_spike_path).strip()
+                else None
+            ),
+        ),
+    )
 
 
 LFP_FILTER_BANDS = {
@@ -1052,10 +1114,12 @@ def render_single_trial_relative_phase_view(
     trial_df: pd.DataFrame,
     event_df: pd.DataFrame,
     session: spike_behavior_pynapple.Session,
-    hpc_v1_lfp_path: str,
-    pfc_lfp_path: str,
-    hpc_v1_aligned_spike_path: str,
-    pfc_aligned_spike_path: str,
+    hpc_v1_lfp_path: str = "",
+    pfc_lfp_path: str = "",
+    hpc_v1_aligned_spike_path: str = "",
+    pfc_aligned_spike_path: str = "",
+    *,
+    metadata_lfp_sites: tuple[MetadataLFPSiteInputs, ...] = (),
 ) -> None:
     """
     Render and optionally save one trial's two-site relative-phase view.
@@ -1074,6 +1138,10 @@ def render_single_trial_relative_phase_view(
         Probe-specific continuous LFP binary paths.
     hpc_v1_aligned_spike_path, pfc_aligned_spike_path : str
         Probe-specific aligned sync paths for Open Ephys-derived LFP.
+    metadata_lfp_sites : tuple[MetadataLFPSiteInputs, ...]
+        Direct version-2 site records. When nonempty, their probe identities,
+        saved channels, LFP paths, and synchronization paths replace the
+        legacy manual path arguments.
 
     Returns
     -------
@@ -1126,11 +1194,36 @@ def render_single_trial_relative_phase_view(
     utc_offset_hours = float(
         st.sidebar.number_input("LFP UTC offset (hours)", value=0, step=1, format="%d")
     )
-    probe_options = [LFP_DROPDOWN_LABEL_HPC_V1, LFP_DROPDOWN_LABEL_PFC]
+    lfp_sites = resolve_lfp_view_sites(
+        metadata_sites=metadata_lfp_sites,
+        hpc_v1_lfp_path=hpc_v1_lfp_path,
+        pfc_lfp_path=pfc_lfp_path,
+        hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
+        pfc_aligned_spike_path=pfc_aligned_spike_path,
+    )
+    probe_sources = {site.display_label: site for site in lfp_sites}
+    probe_options = list(probe_sources)
+    if len(probe_options) < 2:
+        st.warning("At least two LFP sites are required for relative phase.")
+        st.stop()
     probe_a = st.sidebar.selectbox("Site A probe", options=probe_options, index=0)
-    channel_a = int(st.sidebar.number_input("Site A saved channel", min_value=0, value=0, step=1))
+    channel_a = int(
+        st.sidebar.number_input(
+            "Site A saved channel",
+            min_value=0,
+            value=int(probe_sources[probe_a].saved_channel_index),
+            step=1,
+        )
+    )
     probe_b = st.sidebar.selectbox("Site B probe", options=probe_options, index=1)
-    channel_b = int(st.sidebar.number_input("Site B saved channel", min_value=0, value=0, step=1))
+    channel_b = int(
+        st.sidebar.number_input(
+            "Site B saved channel",
+            min_value=0,
+            value=int(probe_sources[probe_b].saved_channel_index),
+            step=1,
+        )
+    )
     if (probe_a, channel_a) == (probe_b, channel_b):
         st.error("Site A and site B must be distinct probe/channel selections.")
         st.stop()
@@ -1255,12 +1348,12 @@ def render_single_trial_relative_phase_view(
             st.sidebar.number_input("Site B magnitude threshold", min_value=0.0, value=0.0, format="%.6g")
         )
 
-    probe_sources = {
-        LFP_DROPDOWN_LABEL_HPC_V1: (hpc_v1_lfp_path, hpc_v1_aligned_spike_path),
-        LFP_DROPDOWN_LABEL_PFC: (pfc_lfp_path, pfc_aligned_spike_path),
-    }
-    source_path_a, sync_path_a = probe_sources[probe_a]
-    source_path_b, sync_path_b = probe_sources[probe_b]
+    source_site_a = probe_sources[probe_a]
+    source_site_b = probe_sources[probe_b]
+    source_path_a = str(source_site_a.lfp_file or "")
+    sync_path_a = str(source_site_a.synchronization_file or "")
+    source_path_b = str(source_site_b.lfp_file or "")
+    sync_path_b = str(source_site_b.synchronization_file or "")
     source_a = Path(str(source_path_a)).expanduser()
     source_b = Path(str(source_path_b)).expanduser()
     for probe_label, raw_source, source in (
@@ -1497,10 +1590,12 @@ def render_single_trial_relative_phase_view(
 def render_lfp_phase_clustering_view(
     trial_df: pd.DataFrame,
     session: spike_behavior_pynapple.Session,
-    hpc_v1_lfp_path: str,
-    pfc_lfp_path: str,
-    hpc_v1_aligned_spike_path: str,
-    pfc_aligned_spike_path: str,
+    hpc_v1_lfp_path: str = "",
+    pfc_lfp_path: str = "",
+    hpc_v1_aligned_spike_path: str = "",
+    pfc_aligned_spike_path: str = "",
+    *,
+    metadata_lfp_sites: tuple[MetadataLFPSiteInputs, ...] = (),
 ) -> None:
     """
     Render and optionally save one-session LFP phase-clustering results.
@@ -1517,6 +1612,9 @@ def render_lfp_phase_clustering_view(
         Probe-specific continuous LFP binary paths.
     hpc_v1_aligned_spike_path, pfc_aligned_spike_path : str
         Probe-specific aligned sync paths used for Open Ephys-derived LFP.
+    metadata_lfp_sites : tuple[MetadataLFPSiteInputs, ...]
+        Direct version-2 site records. Nonempty records replace the legacy
+        manual path arguments without translating probe or site identities.
 
     Returns
     -------
@@ -1595,7 +1693,15 @@ def render_lfp_phase_clustering_view(
         st.error("Maximum frequency must be greater than minimum frequency.")
         st.stop()
 
-    probe_options = [LFP_DROPDOWN_LABEL_HPC_V1, LFP_DROPDOWN_LABEL_PFC]
+    lfp_sites = resolve_lfp_view_sites(
+        metadata_sites=metadata_lfp_sites,
+        hpc_v1_lfp_path=hpc_v1_lfp_path,
+        pfc_lfp_path=pfc_lfp_path,
+        hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
+        pfc_aligned_spike_path=pfc_aligned_spike_path,
+    )
+    probe_sources = {site.display_label: site for site in lfp_sites}
+    probe_options = list(probe_sources)
     requested_pairs: list[tuple[tuple[str, int], tuple[str, int]]] = []
     requested_sites: list[tuple[str, int]] = []
     if metric == "ITPC":
@@ -1610,7 +1716,7 @@ def render_lfp_phase_clustering_view(
                 st.sidebar.number_input(
                     f"Site {site_number + 1} saved channel",
                     min_value=0,
-                    value=site_number,
+                    value=int(probe_sources[probe_label].saved_channel_index),
                     step=1,
                     key=f"phase_itpc_channel_{site_number}",
                 )
@@ -1631,7 +1737,7 @@ def render_lfp_phase_clustering_view(
                     st.sidebar.number_input(
                         f"Pair {pair_number + 1} site {member_label} saved channel",
                         min_value=0,
-                        value=pair_number,
+                        value=int(probe_sources[probe_label].saved_channel_index),
                         step=1,
                         key=f"phase_ispc_channel_{pair_number}_{member_label}",
                     )
@@ -1644,10 +1750,6 @@ def render_lfp_phase_clustering_view(
             requested_sites.extend(pair_sites)
 
     unique_sites = list(dict.fromkeys(requested_sites))
-    probe_sources = {
-        LFP_DROPDOWN_LABEL_HPC_V1: (hpc_v1_lfp_path, hpc_v1_aligned_spike_path),
-        LFP_DROPDOWN_LABEL_PFC: (pfc_lfp_path, pfc_aligned_spike_path),
-    }
     condition_masks = lfp_phase_clustering.make_phase_condition_masks(trial_df)
     event_values = pd.to_numeric(trial_df[alignment_event], errors="coerce").to_numpy(dtype=float)
     preprocessing_mask = condition_masks["all"] & np.isfinite(event_values)
@@ -1662,7 +1764,9 @@ def render_lfp_phase_clustering_view(
     source_paths = []
     open_ephys_tokens_by_source: dict[tuple[str, str], OpenEphysCacheToken] = {}
     for probe_label, saved_channel_index in unique_sites:
-        source_path, aligned_sync_path = probe_sources[probe_label]
+        source_site = probe_sources[probe_label]
+        source_path = str(source_site.lfp_file or "")
+        aligned_sync_path = str(source_site.synchronization_file or "")
         source = Path(str(source_path)).expanduser()
         if not str(source_path).strip() or not source.exists():
             st.error(f"LFP path for {probe_label} does not exist: {source_path}")

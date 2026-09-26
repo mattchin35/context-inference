@@ -105,6 +105,7 @@ from src.neural_analysis.webapp.lfp_views import (
     render_lfp_phase_clustering_view,
     render_single_trial_relative_phase_view,
     resolve_lfp_filter_band,
+    resolve_lfp_view_sites,
 )
 from src.neural_analysis.webapp.population_views import (
     CONCATENATED_PCA_FIGURE_SIZE,
@@ -686,6 +687,13 @@ def main(argv: Sequence[str] = ()) -> None:
 
     arguments = parse_webapp_arguments(argv)
     metadata_session: ResolvedSession | None = None
+    metadata_lfp_sites: tuple[MetadataLFPSiteInputs, ...] = ()
+    hpc_v1_sorter_output_path = ""
+    hpc_v1_aligned_spike_path = ""
+    hpc_v1_lfp_path = ""
+    pfc_sorter_output_path = ""
+    pfc_aligned_spike_path = ""
+    pfc_lfp_path = ""
     if arguments.session_metadata is not None:
         try:
             metadata_session = load_webapp_session(arguments.session_metadata)
@@ -698,21 +706,7 @@ def main(argv: Sequence[str] = ()) -> None:
         plot_view = selected_metadata_view
         session_data_home = str(metadata_session.session_root)
         sess_id_full = metadata_session.session_id
-        site_probe_ids = tuple(dict.fromkeys(site.probe_id for site in metadata_session.sites))
-        if not site_probe_ids:
-            site_probe_ids = tuple(probe.probe_id for probe in metadata_session.probes)
-        first_probe = resolve_probe_sources(metadata_session, site_probe_ids[0])
-        second_probe = (
-            resolve_probe_sources(metadata_session, site_probe_ids[1])
-            if len(site_probe_ids) > 1
-            else first_probe
-        )
-        pfc_sorter_output_path = str(first_probe.sorter_directory or "")
-        pfc_aligned_spike_path = str(first_probe.aligned_spike_file or "")
-        pfc_lfp_path = str(first_probe.lfp_file or "")
-        hpc_v1_sorter_output_path = str(second_probe.sorter_directory or "")
-        hpc_v1_aligned_spike_path = str(second_probe.aligned_spike_file or "")
-        hpc_v1_lfp_path = str(second_probe.lfp_file or "")
+        metadata_lfp_sites = metadata_lfp_site_inputs(metadata_session)
     else:
         _initialize_path_input_state()
         st.sidebar.header("Session")
@@ -797,6 +791,7 @@ def main(argv: Sequence[str] = ()) -> None:
                 trial_df=phase_trial_df,
                 event_df=phase_event_df,
                 session=phase_session,
+                metadata_lfp_sites=metadata_lfp_sites,
                 hpc_v1_lfp_path=hpc_v1_lfp_path,
                 pfc_lfp_path=pfc_lfp_path,
                 hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
@@ -806,6 +801,7 @@ def main(argv: Sequence[str] = ()) -> None:
             render_lfp_phase_clustering_view(
                 trial_df=phase_trial_df,
                 session=phase_session,
+                metadata_lfp_sites=metadata_lfp_sites,
                 hpc_v1_lfp_path=hpc_v1_lfp_path,
                 pfc_lfp_path=pfc_lfp_path,
                 hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
@@ -899,6 +895,7 @@ def main(argv: Sequence[str] = ()) -> None:
             spike_group=spike_group,
             unit_ids=unit_ids,
             active_probe_label=active_probe_label,
+            metadata_lfp_sites=metadata_lfp_sites,
             hpc_v1_lfp_path=hpc_v1_lfp_path,
             pfc_lfp_path=pfc_lfp_path,
             hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
@@ -913,6 +910,7 @@ def main(argv: Sequence[str] = ()) -> None:
             spike_group=spike_group,
             unit_ids=unit_ids,
             active_probe_label=active_probe_label,
+            metadata_lfp_sites=metadata_lfp_sites,
             hpc_v1_lfp_path=hpc_v1_lfp_path,
             pfc_lfp_path=pfc_lfp_path,
             hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
@@ -1567,25 +1565,38 @@ def main(argv: Sequence[str] = ()) -> None:
                     index=0,
                 )
                 lfp_filter_band = resolve_lfp_filter_band(lfp_filter_label)
-            lfp_dropdown_options = build_lfp_dropdown_options(
+            lfp_view_sites = resolve_lfp_view_sites(
+                metadata_sites=metadata_lfp_sites,
                 hpc_v1_lfp_path=hpc_v1_lfp_path,
                 pfc_lfp_path=pfc_lfp_path,
+                hpc_v1_aligned_spike_path=hpc_v1_aligned_spike_path,
+                pfc_aligned_spike_path=pfc_aligned_spike_path,
             )
-            default_lfp_label = (
-                LFP_DROPDOWN_LABEL_HPC_V1
-                if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1
-                else LFP_DROPDOWN_LABEL_PFC
+            lfp_view_sites_by_label = {
+                site.display_label: site for site in lfp_view_sites
+            }
+            lfp_dropdown_options = list(lfp_view_sites_by_label)
+            default_lfp_index = next(
+                (
+                    index
+                    for index, site in enumerate(lfp_view_sites)
+                    if site.probe_id == active_probe_label
+                ),
+                (
+                    0
+                    if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1
+                    else min(1, len(lfp_view_sites) - 1)
+                ),
             )
             selected_lfp_label = st.sidebar.selectbox(
                 "Active LFP file",
-                options=list(lfp_dropdown_options.keys()),
-                index=list(lfp_dropdown_options.keys()).index(default_lfp_label),
+                options=lfp_dropdown_options,
+                index=default_lfp_index,
             )
-            selected_lfp_path = lfp_dropdown_options[selected_lfp_label]
-            default_aligned_sync_path = (
-                hpc_v1_aligned_spike_path
-                if selected_lfp_label == LFP_DROPDOWN_LABEL_HPC_V1
-                else pfc_aligned_spike_path
+            selected_lfp_site = lfp_view_sites_by_label[selected_lfp_label]
+            selected_lfp_path = str(selected_lfp_site.lfp_file or "")
+            default_aligned_sync_path = str(
+                selected_lfp_site.synchronization_file or ""
             )
             selected_aligned_sync_path = default_aligned_sync_path
             if lfp_format == LFP_FORMAT_OPEN_EPHYS_DERIVED:
@@ -1597,7 +1608,14 @@ def main(argv: Sequence[str] = ()) -> None:
                 lfp_y_label = "LFP (uV)"
                 lfp_power_unit_label = "dB re 1 uV^2"
             st.sidebar.caption(selected_lfp_path or "No LFP path entered for this selection.")
-            if channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY and region_channels.size > 0:
+            if metadata_lfp_sites:
+                lfp_saved_channel_index = st.sidebar.number_input(
+                    "LFP saved channel index",
+                    min_value=0,
+                    value=int(selected_lfp_site.saved_channel_index),
+                    step=1,
+                )
+            elif channel_source == CHANNEL_SOURCE_CHANNEL_QUALITY and region_channels.size > 0:
                 lfp_saved_channel_index = st.sidebar.selectbox(
                     "LFP saved channel index",
                     options=region_channels.tolist(),
