@@ -63,6 +63,8 @@ def test_legacy_modules_keep_their_established_source_shapes() -> None:
     """Retain the exploratory callables and intentionally empty placeholder."""
     expected_definitions = {
         "behavior_pynap": {
+            "_validate_event_df",
+            "_ts_from_events",
             "prepare_trial_starts",
             "prepare_led_on",
             "prepare_led_off",
