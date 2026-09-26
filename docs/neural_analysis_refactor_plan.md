@@ -3,8 +3,10 @@
 ## Status and authority
 
 **Current status:** U1-U4 and R0-R6 are complete. R7 was authorized on
-2026-09-26. Its compatibility audit and approved legacy move are complete;
-final documentation, repository verification, and user acceptance remain.
+2026-09-26. Its audit, approved legacy move, final documentation, and neural
+verification are complete. Final user acceptance remains; the repository-wide
+gate is not green because of unrelated behavior/main test failures and one
+undeclared test dependency recorded below.
 
 This plan supersedes the former NR2-NR18 package roadmap and the former broad
 layered target architecture. Historical execution details, reviews, paths,
@@ -1196,6 +1198,34 @@ Run the complete neural and repository suites. Review the final tree from the
 perspective of a scientist locating each supported calculation, plot, webapp
 view, and production workflow. The user explicitly approves completion even if
 some large cohesive modules remain.
+
+### R7 implementation result
+
+R7 is implementation-complete. The no-caller and compatibility audit retained
+all forwarding paths because removing them offered little readability benefit
+and would narrow existing imports. At the user's direction, the five unused
+exploratory modules were moved under the non-eager `legacy` package instead of
+being deleted. Their root paths remain compatibility/direct-execution entries.
+`analog_treadmill_decode.py` remains at the root. The realized organization and
+legacy decision are recorded in `docs/neural_analysis_refactor.md`; the
+operational README needed no change because legacy modules are not maintained
+user workflows.
+
+The new legacy boundary passed 7 tests. The complete neural suite passed 1,855
+tests with the same 22 previously inventoried warnings, and compile-only
+validation passed for the whole neural package. No hardcoded legacy data script
+was imported or executed, and no experimental data or external system was
+accessed.
+
+The repository-wide command `uv run pytest -q --tb=short` stopped during
+collection because the untracked
+`src/tests/behavior_analysis/test_project_utils.py` imports the undeclared
+`autograd` package. Re-running with that one file excluded produced 2,509
+passes, 18 failures, and 63 warnings. All failures are outside
+`neural_analysis` in pre-existing behavior/main code or tests. Focused reruns
+confirmed that residualization passes in isolation while several tracked
+behavior/main failures also reproduce in isolation. R7 did not modify those
+unrelated modules, tests, or dependencies.
 
 ## 17. Behavior-preserving simplification candidates
 
