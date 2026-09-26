@@ -45,6 +45,35 @@ from src.neural_analysis.webapp.session_inputs import (
 )
 
 
+def _default_lfp_site_index(
+    lfp_sites: tuple[MetadataLFPSiteInputs, ...],
+    active_probe_label: str,
+) -> int:
+    """Return the zero-based LFP-site default for one active unit probe.
+
+    Parameters
+    ----------
+    lfp_sites : tuple[MetadataLFPSiteInputs, ...]
+        Ordered selectable LFP sites. Metadata records retain their exact probe
+        ids; legacy records retain the established HPC/V1 and PFC display order.
+    active_probe_label : str
+        Exact metadata probe id or established manual probe label.
+
+    Returns
+    -------
+    int
+        Zero-based selectable-site position. Exact probe-id matches win;
+        otherwise manual HPC/V1 selects zero and manual PFC selects one when
+        available.
+    """
+    for index, site in enumerate(lfp_sites):
+        if site.probe_id == active_probe_label:
+            return index
+    if active_probe_label == unit_spike_loading.PROBE_LABEL_HPC_V1:
+        return 0
+    return min(1, len(lfp_sites) - 1)
+
+
 SPIKE_LFP_PHASE_DEFAULT_WINDOW = (-0.5, 0.5)
 
 SPIKE_LFP_PHASE_MIN_FREQUENCY_HZ = 2.0
@@ -637,14 +666,7 @@ def render_spike_lfp_phase_locking_view(
     )
     probe_sources = {site.display_label: site for site in lfp_sites}
     probe_options = list(probe_sources)
-    default_probe_index = next(
-        (
-            index
-            for index, site in enumerate(lfp_sites)
-            if site.probe_id == active_probe_label
-        ),
-        0,
-    )
+    default_probe_index = _default_lfp_site_index(lfp_sites, active_probe_label)
     lfp_probe_label = st.sidebar.selectbox("LFP probe", options=probe_options, index=default_probe_index)
     lfp_saved_channel_index = int(
         st.sidebar.number_input(
@@ -1044,14 +1066,7 @@ def render_single_trial_spike_lfp_hilbert_view(
     )
     probe_sources = {site.display_label: site for site in lfp_sites}
     probe_options = list(probe_sources)
-    default_probe_index = next(
-        (
-            index
-            for index, site in enumerate(lfp_sites)
-            if site.probe_id == active_probe_label
-        ),
-        0,
-    )
+    default_probe_index = _default_lfp_site_index(lfp_sites, active_probe_label)
     lfp_probe_label = st.sidebar.selectbox("LFP probe", options=probe_options, index=default_probe_index)
     lfp_saved_channel_index = int(
         st.sidebar.number_input(
