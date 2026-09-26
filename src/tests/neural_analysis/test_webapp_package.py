@@ -96,9 +96,47 @@ def test_lfp_view_helpers_have_one_canonical_owner() -> None:
             "render_single_trial_relative_phase_view",
             "render_lfp_phase_clustering_view",
             "build_lfp_dropdown_options",
+            "resolve_lfp_view_sites",
             "resolve_lfp_filter_band",
         ),
     )
+
+
+def test_metadata_lfp_sites_bypass_the_legacy_two_probe_bridge(tmp_path: Path) -> None:
+    """Arbitrary probe/site identities reach LFP views without PFC/HPC translation."""
+    lfp_views = _canonical_module("lfp_views")
+    session_inputs = _canonical_module("session_inputs")
+    front = session_inputs.MetadataLFPSiteInputs(
+        site_id="cortex-contact",
+        display_label="Cortex contact",
+        probe_id="front-probe",
+        acquisition_family="open_ephys",
+        saved_channel_index=11,
+        lfp_file=tmp_path / "front.lfp",
+        synchronization_file=tmp_path / "front_sync.npz",
+    )
+    rear = session_inputs.MetadataLFPSiteInputs(
+        site_id="depth-contact",
+        display_label="Depth contact",
+        probe_id="rear-probe",
+        acquisition_family="open_ephys",
+        saved_channel_index=23,
+        lfp_file=tmp_path / "rear.lfp",
+        synchronization_file=tmp_path / "rear_sync.npz",
+    )
+
+    resolved = lfp_views.resolve_lfp_view_sites(
+        metadata_sites=(front, rear),
+        hpc_v1_lfp_path="legacy-hpc",
+        pfc_lfp_path="legacy-pfc",
+        hpc_v1_aligned_spike_path="legacy-hpc-sync",
+        pfc_aligned_spike_path="legacy-pfc-sync",
+    )
+
+    assert resolved == (front, rear)
+    app_source = (PACKAGE_ROOT / "app.py").read_text(encoding="utf-8")
+    assert "first_probe" not in app_source
+    assert "second_probe" not in app_source
 
 
 def test_spike_lfp_view_helpers_have_one_canonical_owner() -> None:
@@ -185,4 +223,3 @@ def test_root_module_keeps_direct_streamlit_dispatch() -> None:
         and any(isinstance(child, ast.Name) and child.id == "__name__" for child in ast.walk(node.test))
         for node in tree.body
     )
-
