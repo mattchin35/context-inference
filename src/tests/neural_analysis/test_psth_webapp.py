@@ -17,6 +17,12 @@ import pytest
 from src.neural_analysis import lfp_phase_clustering, psth_webapp
 from src.neural_analysis import lfp_summary_webapp
 from src.neural_analysis.lfp_summary_models import component_fingerprint
+from src.neural_analysis.webapp import (
+    data_loading,
+    lfp_views,
+    spike_lfp_views,
+    summary_view,
+)
 
 
 def _population_metadata() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -642,13 +648,13 @@ def test_summary_route_forwards_sorter_and_aligned_paths_for_both_probes(
     )
     monkeypatch.setattr(psth_webapp.lfp_summary_webapp, "render_lfp_summary_view", fake_render)
     monkeypatch.setattr(
-        psth_webapp,
+        summary_view,
         "load_summary_cluster_metadata",
         fail_cluster_loader,
         raising=False,
     )
     monkeypatch.setattr(
-        psth_webapp,
+        summary_view,
         "load_summary_channel_metadata",
         fail_channel_loader,
         raising=False,
@@ -729,14 +735,14 @@ def test_summary_metadata_helpers_use_selected_sorter_and_existing_cached_reader
         channel_calls.append(probe_directory)
         return expected_channels
 
-    monkeypatch.setattr(psth_webapp, "load_cluster_info_cached", load_cluster_info_cached, raising=False)
+    monkeypatch.setattr(data_loading, "load_cluster_info_cached", load_cluster_info_cached, raising=False)
     monkeypatch.setattr(
         psth_webapp.unit_spike_loading,
         "infer_probe_derived_dir",
         infer_probe_derived_dir,
     )
     monkeypatch.setattr(
-        psth_webapp,
+        data_loading,
         "load_channel_quality_cached",
         load_channel_quality_cached,
     )
@@ -1009,7 +1015,7 @@ def _assert_open_ephys_semantics_token_recomputes(
     """
     active_tokens: dict[str, object] = {}
     for lfp_path, sync_path in sources:
-        token = psth_webapp.build_open_ephys_cache_token(lfp_path, sync_path)
+        token = data_loading.build_open_ephys_cache_token(lfp_path, sync_path)
         active_tokens[str(lfp_path.resolve())] = token
     changed_path = str(sources[0][0].resolve())
     changed_token = replace(
@@ -1025,7 +1031,7 @@ def _assert_open_ephys_semantics_token_recomputes(
 
     with monkeypatch.context() as scoped:
         scoped.setattr(
-            psth_webapp,
+            data_loading,
             "build_open_ephys_cache_token",
             selected_source_builder,
         )
@@ -1052,7 +1058,7 @@ def test_public_open_ephys_trace_cache_derives_identity_before_keying_and_invali
         calls.append("load")
         return np.array([-0.1, 0.0]), np.array([1.95, 3.9])
 
-    monkeypatch.setattr(psth_webapp, "load_trial_lfp_trace_for_format", fake_loader)
+    monkeypatch.setattr(data_loading, "load_trial_lfp_trace_for_format", fake_loader)
     original_stat = sidecar_path.stat()
 
     _assert_open_ephys_semantics_token_recomputes(
@@ -1140,7 +1146,7 @@ def test_open_ephys_spectrogram_cache_reuses_then_recomputes_after_same_length_s
             log_power_db=np.zeros((2, 1)),
         )
 
-    monkeypatch.setattr(psth_webapp, "load_trial_lfp_trace_for_format_with_sample_rate", fake_load_with_rate)
+    monkeypatch.setattr(lfp_views, "load_trial_lfp_trace_for_format_with_sample_rate", fake_load_with_rate)
     monkeypatch.setattr(psth_webapp.lfp_spectrogram, "compute_morlet_log_power", fake_morlet)
     psth_webapp.compute_trial_lfp_spectrogram_cached.clear()
     kwargs = _open_ephys_spectrogram_kwargs(lfp_path, sync_path)
@@ -1180,7 +1186,7 @@ def test_open_ephys_shared_power_cache_reuses_one_nested_token_and_recomputes_af
         nested_calls.append(kwargs)
         return SimpleNamespace(log_power_db=np.zeros((1, 1)))
 
-    monkeypatch.setattr(psth_webapp, "compute_trial_lfp_spectrogram_cached", fake_spectrogram)
+    monkeypatch.setattr(lfp_views, "compute_trial_lfp_spectrogram_cached", fake_spectrogram)
     psth_webapp.compute_shared_lfp_power_limits_cached.clear()
     kwargs = {
         "reference_alignment_times_s": (100.0, 101.0),
@@ -1231,7 +1237,7 @@ def test_open_ephys_continuous_phase_cache_reuses_then_recomputes_after_sidecar_
         block_values.append(values_uv)
         return SimpleNamespace(phase_tensor=np.ones((1, 1, 1, 1), dtype=np.complex64))
 
-    monkeypatch.setattr(psth_webapp, "load_trial_lfp_trace_for_format_with_sample_rate", fake_load_with_rate)
+    monkeypatch.setattr(lfp_views, "load_trial_lfp_trace_for_format_with_sample_rate", fake_load_with_rate)
     monkeypatch.setattr(psth_webapp.lfp_phase_clustering, "compute_site_phase_trial_tensor", fake_phase_tensor)
     psth_webapp.compute_lfp_phase_site_cached.clear()
     kwargs = {
@@ -1297,7 +1303,7 @@ def test_open_ephys_relative_phase_cache_reuses_then_recomputes_after_sidecar_ed
         load_values.append(values_uv)
         return np.array([-0.1, 0.0, 0.1]), values_uv, 10.0
 
-    monkeypatch.setattr(psth_webapp, "load_trial_lfp_trace_for_format_with_sample_rate", fake_load_with_rate)
+    monkeypatch.setattr(lfp_views, "load_trial_lfp_trace_for_format_with_sample_rate", fake_load_with_rate)
     monkeypatch.setattr(
         psth_webapp.lfp_phase_clustering,
         "compute_wavelet_coefficients",
@@ -1379,7 +1385,7 @@ def test_open_ephys_spike_phase_caches_reuse_then_recompute_after_sidecar_edit(
         loaded_values.append(values_uv)
         return np.array([-0.1, 0.0, 0.1]), values_uv, 10.0
 
-    monkeypatch.setattr(psth_webapp, "load_trial_lfp_trace_for_format_with_sample_rate", fake_load_with_rate)
+    monkeypatch.setattr(spike_lfp_views, "load_trial_lfp_trace_for_format_with_sample_rate", fake_load_with_rate)
     common = {
         "lfp_format": psth_webapp.LFP_FORMAT_OPEN_EPHYS_DERIVED,
         "lfp_path": str(lfp_path),
@@ -1484,7 +1490,7 @@ def test_spikeglx_trace_cache_keeps_its_existing_value_and_identity_path(
         """Fail if a SpikeGLX route accidentally builds Open Ephys provenance."""
         raise AssertionError("SpikeGLX must not build an Open Ephys cache token")
 
-    monkeypatch.setattr(psth_webapp, "load_trial_lfp_trace_for_format", fake_loader)
+    monkeypatch.setattr(data_loading, "load_trial_lfp_trace_for_format", fake_loader)
     monkeypatch.setattr(
         psth_webapp,
         "build_open_ephys_cache_token",
@@ -1704,9 +1710,9 @@ def test_saved_relative_phase_exploration_records_physical_units_and_open_ephys_
         support_relative_phase_complex=np.ones((1, 2), dtype=np.complex64),
     )
 
-    monkeypatch.setattr(psth_webapp, "st", streamlit)
+    monkeypatch.setattr(lfp_views, "st", streamlit)
     monkeypatch.setattr(psth_webapp.unit_spike_plotting, "filter_trials_for_unit_plot", lambda **_: np.array([0]))
-    monkeypatch.setattr(psth_webapp, "compute_single_trial_relative_phase_cached", lambda **_: result)
+    monkeypatch.setattr(lfp_views, "compute_single_trial_relative_phase_cached", lambda **_: result)
     monkeypatch.setattr(
         psth_webapp.lfp_phase_clustering,
         "make_relative_phase_display_mask",
@@ -1788,13 +1794,13 @@ def test_saved_phase_clustering_exploration_records_open_ephys_provenance_withou
     )
     source_reopens: list[str] = []
 
-    monkeypatch.setattr(psth_webapp, "st", streamlit)
+    monkeypatch.setattr(lfp_views, "st", streamlit)
     monkeypatch.setattr(
         psth_webapp.lfp_phase_clustering,
         "make_phase_condition_masks",
         lambda _: {**{name: np.array([True]) for name in psth_webapp.CONDITION_OPTIONS}, "all": np.array([True])},
     )
-    monkeypatch.setattr(psth_webapp, "compute_lfp_phase_site_cached", lambda **_: object())
+    monkeypatch.setattr(lfp_views, "compute_lfp_phase_site_cached", lambda **_: object())
     monkeypatch.setattr(psth_webapp.lfp_phase_clustering, "combine_phase_trial_tensors", lambda _: combined)
     monkeypatch.setattr(psth_webapp.lfp_phase_clustering, "select_tensor_trial_mask", lambda *_: np.array([True]))
     monkeypatch.setattr(psth_webapp.lfp_phase_clustering, "compute_itpc", lambda *_args, **_kwargs: all_site_result)
@@ -1810,7 +1816,7 @@ def test_saved_phase_clustering_exploration_records_open_ephys_provenance_withou
         source_reopens.append("read")
         raise AssertionError("phase-clustering save reopened raw LFP")
 
-    monkeypatch.setattr(psth_webapp, "load_trial_lfp_trace_for_format_with_sample_rate", forbidden_reopen)
+    monkeypatch.setattr(lfp_views, "load_trial_lfp_trace_for_format_with_sample_rate", forbidden_reopen)
 
     psth_webapp.render_lfp_phase_clustering_view(
         trial_df=_one_valid_phase_trial(),
@@ -1860,10 +1866,10 @@ def test_saved_spike_phase_locking_exploration_records_open_ephys_provenance(
         minimum_mean_spikes_per_bin=1.0,
     )
 
-    monkeypatch.setattr(psth_webapp, "st", streamlit)
+    monkeypatch.setattr(spike_lfp_views, "st", streamlit)
     monkeypatch.setattr(psth_webapp.unit_spike_plotting, "filter_trials_for_unit_plot", lambda **_: np.array([0]))
     monkeypatch.setattr(psth_webapp.unit_spike_loading, "get_unit_spike_times", lambda *_: np.array([100.0]))
-    monkeypatch.setattr(psth_webapp, "compute_spike_lfp_phase_locking_cached", lambda **_: result)
+    monkeypatch.setattr(spike_lfp_views, "compute_spike_lfp_phase_locking_cached", lambda **_: result)
     monkeypatch.setattr(psth_webapp.unit_spike_plotting, "plot_spike_lfp_phase_locking", lambda **_: (plt.figure(), {}))
     monkeypatch.setattr(psth_webapp.spike_lfp_phase_locking, "assess_phase_rate_sparsity", lambda **_: sparsity)
     monkeypatch.setattr(
@@ -2060,7 +2066,7 @@ def test_saved_hilbert_exploration_uses_truthful_units_and_open_ephys_only_prove
         source_sample_rate_hz=2500.0,
     )
 
-    monkeypatch.setattr(psth_webapp, "st", streamlit)
+    monkeypatch.setattr(spike_lfp_views, "st", streamlit)
     monkeypatch.setattr(
         psth_webapp.unit_spike_plotting,
         "filter_trials_for_unit_plot",
@@ -2068,7 +2074,7 @@ def test_saved_hilbert_exploration_uses_truthful_units_and_open_ephys_only_prove
     )
     monkeypatch.setattr(psth_webapp.unit_spike_loading, "get_unit_spike_times", lambda *_: np.array([100.0]))
     monkeypatch.setattr(psth_webapp.spike_behavior_pynapple, "build_lick_time_dict", lambda _: {})
-    monkeypatch.setattr(psth_webapp, "compute_single_trial_spike_lfp_hilbert_cached", lambda **_: result)
+    monkeypatch.setattr(spike_lfp_views, "compute_single_trial_spike_lfp_hilbert_cached", lambda **_: result)
 
     def fake_plot(**kwargs: object) -> tuple[object, dict[str, object]]:
         """Capture the raw/filtered voltage label passed to the real plotting boundary."""
@@ -2130,7 +2136,7 @@ def test_open_ephys_nested_cache_paths_construct_one_source_token_and_reuse_it_w
     second_root.mkdir()
     lfp_path_b, sync_path_b, _ = _write_open_ephys_cache_sources(second_root)
     build_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
-    real_builder = getattr(psth_webapp, "build_open_ephys_cache_token", None)
+    real_builder = data_loading.build_open_ephys_cache_token
 
     def counted_builder(*args: object, **kwargs: object) -> object:
         """Count source-boundary identity construction while retaining a hashable token."""
@@ -2139,12 +2145,7 @@ def test_open_ephys_nested_cache_paths_construct_one_source_token_and_reuse_it_w
             return real_builder(*args, **kwargs)
         return (tuple(map(str, args)), tuple(sorted((str(key), str(value)) for key, value in kwargs.items())))
 
-    monkeypatch.setattr(
-        psth_webapp,
-        "build_open_ephys_cache_token",
-        counted_builder,
-        raising=False,
-    )
+    monkeypatch.setattr(data_loading, "build_open_ephys_cache_token", counted_builder)
     spectrogram_calls: list[dict[str, object]] = []
 
     def fake_spectrogram(**kwargs: object) -> SimpleNamespace:
@@ -2152,7 +2153,7 @@ def test_open_ephys_nested_cache_paths_construct_one_source_token_and_reuse_it_w
         spectrogram_calls.append(kwargs)
         return SimpleNamespace(log_power_db=np.zeros((1, 1)))
 
-    monkeypatch.setattr(psth_webapp, "compute_trial_lfp_spectrogram_cached", fake_spectrogram)
+    monkeypatch.setattr(lfp_views, "compute_trial_lfp_spectrogram_cached", fake_spectrogram)
     psth_webapp.compute_shared_lfp_power_limits_cached(
         reference_alignment_times_s=(100.0, 101.0),
         lfp_format=psth_webapp.LFP_FORMAT_OPEN_EPHYS_DERIVED,
@@ -2219,8 +2220,9 @@ def test_open_ephys_nested_cache_paths_construct_one_source_token_and_reuse_it_w
         """Return a tiny source-rate uV signal for relative phase and Hilbert wrappers."""
         return np.array([-0.1, 0.0, 0.1]), np.array([1.0, 2.0, 3.0]), 10.0
 
+    monkeypatch.setattr(lfp_views, "load_trial_lfp_trace_for_format_with_sample_rate", fake_load_with_rate)
     monkeypatch.setattr(
-        psth_webapp,
+        spike_lfp_views,
         "load_trial_lfp_trace_for_format_with_sample_rate",
         fake_load_with_rate,
     )
@@ -2301,7 +2303,7 @@ def test_single_trial_spike_lfp_hilbert_cache_loads_one_padded_source_rate_trace
         time_s = np.arange(kwargs["window_start_s"], kwargs["window_end_s"], 0.01)
         return time_s, np.sin(2.0 * np.pi * 8.0 * time_s), 100.0
 
-    monkeypatch.setattr(psth_webapp, "load_trial_lfp_trace_for_format_with_sample_rate", fake_loader)
+    monkeypatch.setattr(spike_lfp_views, "load_trial_lfp_trace_for_format_with_sample_rate", fake_loader)
     psth_webapp.compute_single_trial_spike_lfp_hilbert_cached.clear()
     result = psth_webapp.compute_single_trial_spike_lfp_hilbert_cached(
         lfp_format=psth_webapp.LFP_FORMAT_SPIKEGLX,
@@ -2502,7 +2504,7 @@ def test_single_trial_relative_phase_cache_loads_only_two_padded_trial_segments(
         )
 
     monkeypatch.setattr(
-        psth_webapp,
+        lfp_views,
         "load_trial_lfp_trace_for_format_with_sample_rate",
         fake_load_trial_lfp_trace_for_format_with_sample_rate,
     )
