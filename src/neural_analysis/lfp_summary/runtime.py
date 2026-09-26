@@ -86,6 +86,7 @@ from src.neural_analysis.lfp_summary.work_cache import (
     load_prepared_phase_cache,
     write_prepared_phase_cache,
 )
+from src.neural_analysis.spike_lfp import hilbert as spike_lfp_hilbert_phase
 from src.neural_analysis.spike_lfp import ppc as spike_lfp_summary
 
 

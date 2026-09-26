@@ -69,6 +69,7 @@ from src.neural_analysis.spike_lfp.ppc_kernel import (
     compute_observed_trial_segmented_ppc_statistics,
     compute_selected_observed_trial_segmented_ppc_statistics,
     compute_segmented_edge_statistics,
+    estimate_segmented_kernel_allocation,
     reduce_segmented_schedule_to_ppc,
 )
 
