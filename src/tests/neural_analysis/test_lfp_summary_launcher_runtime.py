@@ -69,3 +69,11 @@ def test_canonical_launcher_runtime_does_not_import_root_entrypoint() -> None:
     )
 
     assert ROOT_MODULE not in imported_modules
+
+
+def test_production_launcher_records_repository_top_level() -> None:
+    """Production launcher identity uses the repository root, not its ``src`` child."""
+    runtime = importlib.import_module(RUNTIME_MODULE)
+    repository = runtime.make_production_launcher_dependencies().repository_state()
+
+    assert repository.repository_root.resolve() == Path(__file__).resolve().parents[3]
