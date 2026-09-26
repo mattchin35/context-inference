@@ -1093,6 +1093,40 @@ Run focused launcher, relocation, profiling, shell-wrapper, LFP-summary, and
 complete neural suites. No real-data run, cache mutation, external copy, or
 Slurm action is authorized.
 
+### R6 result
+
+R6 is complete. Launcher ownership was frozen in tests-only commit `dc8a8fb`
+and implemented in `1d95adf`. The documented
+`lfp_spike_phase_launcher.py` command still owns request parsing, top-level mode
+dispatch, and direct execution. Its established retained-work preflight,
+launcher-state/report lifecycle, execution, locking, signal, cleanup, and
+resource-measurement helpers now have the single launcher-specific canonical
+owner `lfp_summary/launcher_runtime.py`. A caller/helper review found these
+groups share one transaction state and error path; keeping them together
+avoids artificial dependency bundles or new generic execution/state packages.
+The temporary copied entry logic used during the mechanical move was removed
+in `78faf81`.
+
+Cache-relocation ownership was frozen in `0366507` and moved in `a67488c`.
+`lfp_summary/cache_relocation.py` is canonical, while the old import and
+documented `python -m src.neural_analysis.lfp_summary_cache_relocation` command
+remain exact compatibility paths. Component bytes, rollback behavior,
+checksums, receipt content, and the persisted legacy command identity are
+unchanged.
+
+Profiling ownership was frozen in `fb8c853` and moved in `d8b3ead`.
+`ppc_profile.py`, `ct026_profile_adapter.py`, `ct026_profile_locks.py`, and
+`ct026_profile_runner.py` now live under `lfp_summary`; the old modules are
+exact aliases. The grouped and legacy PPC profile paths both remain, and the
+adapter, locks, and runner remain separate and explicitly CT026-specific.
+
+The combined launcher/relocation/profiling/LFP-summary gate passed 1,097 tests
+with the six previously inventoried warnings. The complete neural suite passed
+1,848 tests with the same 22 previously inventoried warnings. The final
+launcher cleanup was rechecked with 160 focused tests. No experimental data,
+real cache, report, external destination, scheduler, or Slurm job was accessed
+or mutated during R6.
+
 ## 16. Work package R7 - Compatibility cleanup and unused-code deletion
 
 ### R7A - Compatibility audit
