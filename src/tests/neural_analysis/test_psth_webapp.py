@@ -208,7 +208,7 @@ def test_metadata_summary_route_forwards_arbitrary_probe_sources_lazily(
         received["streamlit"] = args[0]
         received.update(kwargs)
 
-    monkeypatch.setattr(psth_webapp, "build_lfp_summary_config", fake_build)
+    monkeypatch.setattr(summary_view, "build_lfp_summary_config", fake_build)
     monkeypatch.setattr(psth_webapp.lfp_summary_webapp, "render_lfp_summary_view", fake_render)
     sentinel_streamlit = object()
 
