@@ -2,9 +2,9 @@
 
 ## Status and authority
 
-**Current status:** U1-U4 and R0-R4 are complete. R4 was authorized on
-2026-09-25, implemented tests-first, and verified locally; user review is
-pending. R5 requires separate approval.
+**Current status:** U1-U4 and R0-R5 are complete. R5 was authorized on
+2026-09-26, implemented tests-first, and verified locally; user review is
+pending. R6 requires separate approval.
 
 This plan supersedes the former NR2-NR18 package roadmap and the former broad
 layered target architecture. Historical execution details, reviews, paths,
@@ -982,6 +982,46 @@ Run the existing noninteractive startup smoke before and after the move. No new
 cache layer, background worker, eager preprocessing, or page capability is
 added. Focused webapp tests, directly used domain tests, summary integration
 tests, and the complete neural suite pass.
+
+### R5 implementation result
+
+The canonical package-boundary tests were committed first in `d66c825`, with
+nine expected RED failures for the absent `webapp` package. Repository-private
+monkeypatch seams were redirected to their canonical owners in tests-only
+commits `39e93a4` and `bc1dfb1`. The main decomposition was implemented in
+`ab5759d`.
+
+The documented `psth_webapp.py` path is now a 15-line compatibility and direct-
+execution entry point over `webapp/app.py`. Session inputs, Streamlit-cached
+loading, unit presentation, LFP views, Spike-LFP views, population views, and
+LFP-summary composition have direct modules. The compatibility-only
+`MetadataPopulationInputs` adapter remains in the app module rather than being
+promoted into the package; its deletion remains subject to the R7 cleanup
+gate.
+
+A focused audit caught the remaining first/second-probe-to-PFC/HPC metadata
+bridge. RED commit `7563cf7` and implementation commit `e128a31` replace it
+with direct version-2 `MetadataLFPSiteInputs` records carrying the declared
+probe id, site/display identity, LFP and synchronization paths, and zero-based
+saved channel. The separately supported manual route retains its established
+HPC/V1 and PFC labels and behavior. RED commit `f6bc428` and fix `35cf187`
+preserve the manual PFC default while selecting metadata sites by exact probe
+id.
+
+Of 68 pre-R5 definitions moved under `webapp`, 62 retain exact function-body
+ASTs. The six intentional changes are the app composition function, four
+interactive LFP/Spike-LFP renderers that now accept direct metadata site
+records, and metadata availability, which now checks version-2 probes instead
+of the derived compatibility population collection. Every function and class
+in the new package retains a data-contract docstring.
+
+The focused webapp/domain/summary integration set passed 404 tests. The same
+three-test noninteractive startup smoke passed in 1.50 seconds before the move
+and 1.44 seconds after it; metadata resolution still opens no scientific array.
+The complete neural suite passed 1,839 tests with the 22 previously inventoried
+warnings. No new cache, worker, eager preprocessing, control, view, or command
+was added, and no experimental data, cache, report, external system, or
+scheduler was accessed or mutated during R5.
 
 ## 15. Work package R6 - Launcher, relocation, and profiling
 
