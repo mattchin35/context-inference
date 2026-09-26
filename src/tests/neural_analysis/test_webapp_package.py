@@ -139,6 +139,33 @@ def test_metadata_lfp_sites_bypass_the_legacy_two_probe_bridge(tmp_path: Path) -
     assert "second_probe" not in app_source
 
 
+def test_lfp_site_default_preserves_manual_labels_and_matches_metadata_probe_ids(
+    tmp_path: Path,
+) -> None:
+    """Site defaults keep legacy PFC selection while metadata uses exact probe ids."""
+    lfp_views = _canonical_module("lfp_views")
+    spike_lfp_views = _canonical_module("spike_lfp_views")
+    session_inputs = _canonical_module("session_inputs")
+    legacy_sites = lfp_views.resolve_lfp_view_sites(
+        hpc_v1_lfp_path="hpc.lf.bin",
+        pfc_lfp_path="pfc.lf.bin",
+    )
+    metadata_sites = (
+        session_inputs.MetadataLFPSiteInputs(
+            "front-site", "Front", "front-probe", "open_ephys", 1,
+            tmp_path / "front.lfp", tmp_path / "front_sync.npz",
+        ),
+        session_inputs.MetadataLFPSiteInputs(
+            "rear-site", "Rear", "rear-probe", "open_ephys", 2,
+            tmp_path / "rear.lfp", tmp_path / "rear_sync.npz",
+        ),
+    )
+
+    assert spike_lfp_views._default_lfp_site_index(legacy_sites, "HPC/V1") == 0
+    assert spike_lfp_views._default_lfp_site_index(legacy_sites, "PFC") == 1
+    assert spike_lfp_views._default_lfp_site_index(metadata_sites, "rear-probe") == 1
+
+
 def test_spike_lfp_view_helpers_have_one_canonical_owner() -> None:
     """Spike-LFP cached calculations and rendered views share one direct owner."""
     _assert_exact_owner(
