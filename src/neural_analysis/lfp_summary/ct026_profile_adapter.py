@@ -718,7 +718,7 @@ def production_git_fingerprint(*, repository_root: Path | None = None, head_read
     scalar commit string and path-to-source-text mapping. The returned SHA-256
     hexadecimal string is categorical metadata with no physical units or axes.
     """
-    root = Path(repository_root) if repository_root is not None else Path(__file__).resolve().parents[2]
+    root = Path(repository_root) if repository_root is not None else Path(__file__).resolve().parents[3]
     head = (head_reader or (lambda: subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()))()
     if tracked_source_reader is None:
         files = subprocess.check_output(["git", "ls-files", "src/neural_analysis"], cwd=root, text=True).splitlines()

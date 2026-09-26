@@ -3250,7 +3250,7 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
 
     def repository_state() -> RepositoryState:
         """Read the containing repository's commit and tracked cleanliness."""
-        repository_root = Path(__file__).resolve().parents[2]
+        repository_root = Path(__file__).resolve().parents[3]
         commit = subprocess.run(
             ("git", "-C", str(repository_root), "rev-parse", "HEAD"),
             check=True,
@@ -3270,7 +3270,7 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
 
     def repository_commit_is_ancestor(original: str, current: str) -> bool:
         """Return whether ``original`` is a Git ancestor of ``current``."""
-        repository_root = Path(__file__).resolve().parents[2]
+        repository_root = Path(__file__).resolve().parents[3]
         result = subprocess.run(
             (
                 "git",
