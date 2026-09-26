@@ -2,9 +2,9 @@
 
 ## Status and authority
 
-**Current status:** U1-U4 and R0-R3 are complete. R3 was authorized on
+**Current status:** U1-U4 and R0-R4 are complete. R4 was authorized on
 2026-09-25, implemented tests-first, and verified locally; user review is
-pending. R4 requires separate approval.
+pending. R5 requires separate approval.
 
 This plan supersedes the former NR2-NR18 package roadmap and the former broad
 layered target architecture. Historical execution details, reviews, paths,
@@ -873,6 +873,50 @@ Tests written first:
 Run focused tests after each slice, the full LFP-summary/Power/Synchrony/Spike/
 PPC/launcher/webapp integration set after R4D, and the complete neural suite at
 R4 completion.
+
+#### R4 implementation result
+
+R4A tests were committed first in `2bb1add`, and the implementation was
+committed in `a09c979`. It creates the stable `lfp_summary` foundation modules
+for models, session configuration, preparation, pipeline coordination, payload
+contracts, final-cache I/O, and work-cache I/O. The session builder now reads
+version-2 probes, `unit_channels`, and cache paths directly without restoring
+the removed population or channel-group metadata models. The focused suite
+passed 236 tests, and the broader workflow suite passed 1,098 tests.
+
+R4B tests were committed in `ac0b636` and `d7ba113`, followed by implementation
+commit `dae57a9`. The former mixed runtime is split into the smallest shared
+runtime owner plus Power, Synchrony, and Spike-phase runtimes. Moving the three
+already shared validation/membership helpers to the common owner removes the
+runtime/PPC back-import without adding an interface layer. All 60 original
+runtime definitions retain exact function-body ASTs, and the affected workflow
+suite passed 1,115 tests.
+
+R4C tests were committed in `b1e8fe5` and `250520d`, followed by implementation
+commit `14991a6`. PPC planning/allocation now has a separate canonical owner
+from execution/checkpoint behavior. Grouped and legacy execution remain
+together, serial and parallel paths are preserved, and spawn workers remain
+top-level callables in the canonical execution module. All 90 original PPC
+runtime definitions retain exact function-body ASTs. The focused planning,
+execution, checkpoint, profile, and real-spawn suite passed 301 tests. The
+deterministic injected workload remained exactly 10.0 injected seconds and 500
+sampled bytes before and after the move; production profiling still records
+positive elapsed time and resident memory. No CT026 or other real-session
+profile was run.
+
+R4D tests were committed in `8462030`, followed by implementation commit
+`7755d6e`. Validation, workflow plotting, and immutable snapshot inspection now
+have canonical `lfp_summary` owners. The Streamlit summary module forwards the
+same snapshot objects, historical report source identifiers remain at their
+legacy values, and old validation/plotting paths remain exact module aliases.
+The focused report, plot, and snapshot suite passed 361 tests.
+
+Integration commit `0002100` restores two tested module-level compatibility
+seams without changing computation. The complete neural suite passed 1,827
+tests with the 22 previously inventoried warnings. Existing configuration,
+fingerprint, manifest, payload, checkpoint, report, snapshot, worker, seed,
+array, axis, and unit contracts remain unchanged. No experimental data, cache,
+report, external system, or scheduler was accessed or mutated during R4.
 
 ## 14. Work package R5 - Webapp decomposition
 
