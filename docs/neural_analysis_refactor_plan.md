@@ -2,9 +2,9 @@
 
 ## Status and authority
 
-**Current status:** U1-U4 and R0-R5 are complete. R5 was authorized on
-2026-09-26, implemented tests-first, and verified locally; user review is
-pending. R6 requires separate approval.
+**Current status:** U1-U4 and R0-R6 are complete. R7 was authorized on
+2026-09-26. Its compatibility audit and approved legacy move are complete;
+final documentation, repository verification, and user acceptance remain.
 
 This plan supersedes the former NR2-NR18 package roadmap and the former broad
 layered target architecture. Historical execution details, reviews, paths,
@@ -1136,11 +1136,17 @@ After all repository callers use canonical imports:
 - inventory every root forwarding module;
 - search source, tests, shell scripts, notebooks, and documentation;
 - identify likely external imports with the user;
-- retain the two documented root command modules and the current
+- retain the three documented root command paths and the current
   `sync_ephys.py` root script; and
 - propose each other wrapper removal separately.
 
 No wrapper is removed merely because repository tests no longer import it.
+
+The fresh audit found no clear need to remove a compatibility wrapper. Their
+small forwarding cost is outweighed by preserving possible external imports,
+so all root compatibility paths remain. The three permanent documented paths
+are `session_metadata_cli.py`, `psth_webapp.py`, and
+`lfp_spike_phase_launcher.py`.
 
 ### R7B - Unused candidates
 
@@ -1158,22 +1164,19 @@ test but no production caller, while `analyze_treadmill_signal`,
 callers. This evidence is not yet enough to delete the module because external
 use has not been ruled out.
 
-Immediately before deletion:
+The R7 audit repeated exact module-name, filename, distinctive-symbol,
+command, notebook, dynamic-import, and package-entry-point searches and found
+no repository consumer. The user declined deletion and explicitly approved a
+compatibility-preserving move under `neural_analysis/legacy`. RED commit
+`f9e8833`, corrected inventory commit `6923359`, and implementation commit
+`3ecbcd4` retain the five modules under that package. Their old paths remain
+thin forwarders, direct execution remains routed to the retained source, and
+the package initializer imports nothing eagerly. The two hardcoded scripts
+were not imported or executed during verification.
 
-1. repeat exact module-name, filename, distinctive-symbol, command, notebook,
-   dynamic-import, and package-entry-point searches;
-2. verify that any useful-looking responsibility is either obsolete or already
-   covered by a retained tested implementation;
-3. obtain user confirmation that no script outside the repository depends on
-   the module;
-4. add and commit a removal test that is RED while the approved obsolete
-   modules remain present; and
-5. obtain explicit deletion approval.
-
-Delete approved unused modules rather than moving them to `legacy`. Git history
-retains their source. Do not delete the active and heavily used
-`spike_behavior_pynapple.py`; its similar name is not evidence that it is a
-candidate.
+`analog_treadmill_decode.py` remains at the root. The audit found no clear need
+to remove its tested conversion or three uncalled signal-analysis functions.
+The active `spike_behavior_pynapple.py` remains unchanged.
 
 ### R7C - Final documentation
 

@@ -141,19 +141,19 @@ These may become thin forwarding modules. Documented command invocations remain
 unchanged, and `sync_ephys.py` retains its current direct module dispatch and
 callable behavior. This refactor does not invent a synchronization CLI.
 
-### 6. Delete only code proven unused
+### 6. Isolate retained exploratory code explicitly
 
-Unused prototypes and scratch modules should be deleted rather than moved into
-a permanent `legacy` package. Repository search is necessary but not
-sufficient: deletion also requires a fresh audit, explicit confirmation that
-no external script depends on the module, tests for the intentional removal,
-and separate approval.
+Repository search is necessary but not sufficient to delete an old prototype
+or scratch module. The R7 audit found five modules without repository callers,
+but the user chose to retain them. Their implementations therefore live under
+`legacy`, with thin old-path compatibility entries. The maintained scientific
+packages do not import this code, and `legacy/__init__.py` imports nothing
+eagerly.
 
-## Approved target organization
+## Realized organization
 
-The target is deliberately shallower than the former proposed architecture.
-Exact filenames may be refined during the owning work package, but the domain
-boundaries are approved.
+The realized tree is deliberately shallow. Root compatibility modules that
+forward historical imports are omitted from this navigation view.
 
 ```text
 src/neural_analysis/
@@ -233,6 +233,7 @@ src/neural_analysis/
     ct026_profile_adapter.py
     ct026_profile_locks.py
     ct026_profile_runner.py
+    launcher_runtime.py
 
   webapp/
     __init__.py
@@ -244,15 +245,18 @@ src/neural_analysis/
     spike_lfp_views.py
     population_views.py
     summary_view.py
+
+  legacy/
+    __init__.py
+    behavior_pynap.py
+    spike_behavior_analysis.py
+    spike_behavior_binning.py
+    modified_sinc_smoother.py
+    plot_single_session_analysis.py
 ```
 
-This tree is a responsibility map, not a mandate to create every file before it
-has content. A work package creates only the modules needed for its current
-split. Empty scaffolding and symmetry-only modules are forbidden.
-
-The R6 launcher-internal filenames are intentionally omitted until its caller
-and helper-group review identifies the smallest readable split. That review
-may also retain cohesive launcher code in the root entry point.
+The tree contains only modules justified by existing responsibilities. It does
+not add symmetry-only scaffolding or generic workflow infrastructure.
 
 Each created package has a minimal `__init__.py`, normally containing only a
 package docstring. Do not add wildcard imports or broad convenience re-exports.
@@ -332,6 +336,14 @@ plotting functions; they do not reimplement analyses. The metadata route uses
 the direct version-2 probe/site model, while the existing manual route remains
 an explicitly separate compatibility path.
 
+### Legacy
+
+`legacy` contains the five exploratory modules the user chose to retain after
+the R7 no-caller audit. They are not maintained workflow dependencies. The
+package initializer is deliberately non-eager because two scripts perform
+hardcoded file I/O at import time. Their former root paths remain thin
+compatibility entries.
+
 ## Dependency direction
 
 ```text
@@ -372,29 +384,30 @@ one behavior and a plain callable would be less readable. No registry, base-
 analysis hierarchy, dependency-injection container, or plugin discovery is
 planned.
 
-## Current-module disposition
+## Realized module disposition
 
-| Current modules | Approved direction |
+| Original modules | Realized disposition |
 | --- | --- |
 | `session_metadata.py`, `session_metadata_cli.py` | Remain top-level and direct. |
-| `ephys_sync_utils.py`, `manual_session_synchronization.py`, `spikeglx_sync_io.py` | Move or split under `synchronization` at existing source/alignment boundaries. |
-| `analog_treadmill_decode.py` | Keep in place pending R0 callable-level review. Current repository evidence shows one test-only conversion function and three signal-analysis functions with no callers; do not create a synchronization module merely to house them. |
-| `lfp_loading.py`, `lfp_power_summary.py`, `lfp_spectrogram.py`, `lfp_phase_clustering.py`, `lfp_synchrony_summary.py` | Move under `lfp`; move the three LFP-facing configuration records currently in `lfp_summary_models.py` to `lfp/config.py`; separate plotting or persistence only where currently mixed. |
-| `spike_behavior_pynapple.py`, `unit_spike_loading.py`, `psth_behavior.py` | Split under `spike_behavior` by loading, trials, binning, decoding, PSTH, plotting, and publication. |
-| `spike_lfp_hilbert_phase.py`, `spike_lfp_phase_locking.py`, `spike_lfp_summary.py`, `lfp_summary_ppc_kernel.py` | Move numerical responsibilities under `spike_lfp`. |
-| `population_pca.py`, `population_pca_decoding.py`, `population_pca_switch_trajectories.py`, `plot_cross_session_analysis.py` | Move or split under `population`. |
-| `unit_spike_plotting.py` | Split among the scientific domains represented by its current plots. |
-| `lfp_summary_models.py`, `lfp_summary_session.py`, `lfp_summary_preparation.py`, `lfp_summary_pipeline.py`, `lfp_summary_payloads.py`, `lfp_summary_io.py`, `lfp_summary_work_cache.py` | Move workflow-specific responsibilities under `lfp_summary` without changing contracts. `lfp_summary_models.py` retains compatibility aliases for the three records moved to `lfp/config.py`. |
-| `lfp_summary_runtime.py` | Split into Power, Synchrony, Spike-phase, and the smallest genuinely shared preparation/runtime code. |
-| `lfp_summary_ppc_runtime.py` | Separate planning/allocation from execution/checkpoint behavior; keep parallel worker details with execution unless a measured readability problem remains. |
-| `lfp_power_validation.py`, `lfp_synchrony_validation.py`, `lfp_spike_phase_validation.py` | Move under `lfp_summary`; split report construction only when it makes the existing flow clearer. |
-| `lfp_summary_plotting.py` | Remain workflow-specific plotting under `lfp_summary`. |
-| `lfp_summary_webapp.py` | Move snapshot inspection to `lfp_summary/snapshot.py` and UI composition to `webapp/summary_view.py`. |
-| `psth_webapp.py` | Become the thin documented entry point over domain view modules in `webapp`. |
-| `lfp_spike_phase_launcher.py` | Remain the documented entry point; move only established preflight/state/execution groups under `lfp_summary`. |
+| `ephys_sync_utils.py`, `manual_session_synchronization.py`, `spikeglx_sync_io.py` | Canonical implementations live under `synchronization`; old paths forward. |
+| `analog_treadmill_decode.py` | Retained at the root after the R7 audit; no artificial synchronization dependency was added. |
+| `lfp_loading.py`, `lfp_power_summary.py`, `lfp_spectrogram.py`, `lfp_phase_clustering.py`, `lfp_synchrony_summary.py` | Canonical calculations live under `lfp`; retained plots and compatibility paths remain explicit. |
+| `spike_behavior_pynapple.py`, `unit_spike_loading.py`, `psth_behavior.py` | Reusable responsibilities live under `spike_behavior`; old mixed entries preserve plots/direct execution or forward imports. |
+| `spike_lfp_hilbert_phase.py`, `spike_lfp_phase_locking.py`, `spike_lfp_summary.py`, `lfp_summary_ppc_kernel.py` | Canonical numerical implementations live under `spike_lfp`; old paths forward. |
+| `population_pca.py`, `population_pca_decoding.py`, `population_pca_switch_trajectories.py`, `plot_cross_session_analysis.py` | Canonical calculations and plots live under `population`; mixed direct-execution facades remain where required. |
+| `unit_spike_plotting.py` | Domain plots live under their owning scientific packages; the root facade preserves historical imports. |
+| `lfp_summary_models.py`, `lfp_summary_session.py`, `lfp_summary_preparation.py`, `lfp_summary_pipeline.py`, `lfp_summary_payloads.py`, `lfp_summary_io.py`, `lfp_summary_work_cache.py` | Canonical workflow implementations live under `lfp_summary`; old paths forward. |
+| `lfp_summary_runtime.py` | Canonical composition is split among Power, Synchrony, Spike-phase, and shared runtime modules under `lfp_summary`. |
+| `lfp_summary_ppc_runtime.py` | Planning and execution have separate canonical owners; serial and parallel execution remain together. |
+| `lfp_power_validation.py`, `lfp_synchrony_validation.py`, `lfp_spike_phase_validation.py` | Canonical report workflows live under `lfp_summary`; old paths forward. |
+| `lfp_summary_plotting.py` | Canonical workflow-specific plotting lives under `lfp_summary`; the old path forwards. |
+| `lfp_summary_webapp.py` | Snapshot inspection lives in `lfp_summary/snapshot.py`; retained summary compatibility and UI composition delegate into `webapp/summary_view.py`. |
+| `psth_webapp.py` | Thin permanent documented entry over `webapp`. |
+| `lfp_spike_phase_launcher.py` | Permanent documented parser/dispatcher; launcher internals live in `lfp_summary/launcher_runtime.py`. |
 | `sync_ephys.py` | Remain the current root script/function entry point over synchronization modules. Preserve its callable signatures and direct module dispatch; its hardcoded session, recording, and sorter paths are replaceable local examples rather than strict compatibility contracts. Do not add a parser. |
-| `lfp_summary_cache_relocation.py` | Move under `lfp_summary`; do not generalize it. |
-| `lfp_summary_ppc_profile.py`, `lfp_summary_ct026_profile_adapter.py`, `lfp_summary_ct026_profile_locks.py`, `lfp_summary_ct026_profile_runner.py` | Move initially to like-named modules under `lfp_summary`; remain visibly profile- and dataset-specific. Consolidation requires a later concrete readability case. |
+| `lfp_summary_cache_relocation.py` | Canonical implementation lives under `lfp_summary`; the old import/command path remains compatible. |
+| `lfp_summary_ppc_profile.py`, `lfp_summary_ct026_profile_adapter.py`, `lfp_summary_ct026_profile_locks.py`, `lfp_summary_ct026_profile_runner.py` | Canonical like-named modules live under `lfp_summary`; old paths forward and CT026 remains explicit. |
+| `behavior_pynap.py`, `spike_behavior_analysis.py`, `spike_behavior_binning.py`, `modified_sinc_smoother.py`, `plot_single_session_analysis.py` | Retained unchanged in `legacy` by explicit user decision; old module paths remain compatible. |
 
 ## Compatibility policy
 
@@ -422,7 +435,7 @@ The current `sync_ephys.py` root script remains subject to its separately
 inventoried script/function contract. Any other compatibility removal occurs
 only in the final cleanup phase after a fresh audit and explicit approval.
 
-## Unused-code policy and current candidates
+## Retained legacy decision
 
 A repository-wide planning audit found no consumer, command, prior
 documentation reference outside these planning documents, notebook reference,
@@ -434,30 +447,20 @@ dynamic import, or package entry point for:
 - `modified_sinc_smoother.py`; and
 - the empty `plot_single_session_analysis.py`.
 
-This is not deletion authorization. Immediately before deletion, the cleanup
-work package must:
-
-1. repeat the repository-wide audit at the implementation commit;
-2. compare any apparently duplicated behavior with the retained tested path;
-3. ask the user to confirm that no script outside this repository imports or
-   invokes the candidate;
-4. add and commit a tests-first removal contract that is RED while the
-   candidate modules still exist; and
-5. obtain explicit deletion approval.
-
-Git history is the archive. Do not create a permanent `legacy` package for
-code confirmed unused.
+The R7 audit repeated those searches and found no repository consumer. The
+user declined deletion and approved moving all five under `legacy` while
+preserving their old paths. This explicit decision supersedes the planning
+preference to use Git history as the only archive.
 
 R0 also audits top-level functions and classes in modules that will be split.
 An active module can contain an unused callable. Such a callable follows the
 same fresh-search, external-use confirmation, tests-first removal, and explicit
 approval gates as an unused module.
 
-`analog_treadmill_decode.py` is a separate audit candidate rather than an
-already proven unused module: `volts2speed` currently has a direct repository
-test but no production caller, while its other three top-level analysis
-functions have no repository caller. R0 must decide whether any externally used
-surface remains before proposing callable or module deletion.
+`analog_treadmill_decode.py` remains at the root. `volts2speed` has a direct
+repository test, while its other three top-level analysis functions have no
+repository caller. The R7 audit found no need that justified removing those
+callables or moving the module.
 
 ## Documentation policy
 
