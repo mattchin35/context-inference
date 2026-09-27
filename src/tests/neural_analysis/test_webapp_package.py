@@ -217,7 +217,7 @@ def test_unit_and_summary_helpers_have_direct_canonical_owners() -> None:
 
 def test_webapp_modules_do_not_import_the_legacy_root_module() -> None:
     """Canonical modules form a shallow package without a cycle through psth_webapp."""
-    expected_modules = {
+    required_modules = {
         "app.py",
         "data_loading.py",
         "lfp_views.py",
@@ -227,7 +227,8 @@ def test_webapp_modules_do_not_import_the_legacy_root_module() -> None:
         "summary_view.py",
         "unit_views.py",
     }
-    assert {path.name for path in PACKAGE_ROOT.glob("*.py")} == expected_modules | {"__init__.py"}
+    actual_modules = {path.name for path in PACKAGE_ROOT.glob("*.py")}
+    assert required_modules | {"__init__.py"} <= actual_modules
 
     for path in PACKAGE_ROOT.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))

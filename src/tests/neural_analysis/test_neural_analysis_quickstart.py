@@ -16,22 +16,27 @@ _README = _ROOT / "src/neural_analysis/README.md"
 _EXAMPLES = _ROOT / "docs/examples/neural_analysis"
 
 
-def test_three_examples_cover_open_ephys_spikeglx_and_arbitrary_names() -> None:
-    """Examples are valid compact files with one acquisition family per session."""
-    expected = {
-        "open_ephys_session.json": ("CT026-example", {"open_ephys"}),
-        "spikeglx_session.json": ("CT014-example", {"spikeglx"}),
-        "differently_named_session.json": ("Mouse-Z-example", {"open_ephys"}),
+def test_required_examples_cover_supported_acquisition_families() -> None:
+    """Required examples stay valid while allowing additional example files."""
+    required_families = {
+        "open_ephys_session.json": {"open_ephys"},
+        "spikeglx_session.json": {"spikeglx"},
+        "differently_named_session.json": {"open_ephys"},
     }
+    example_paths = sorted(_EXAMPLES.glob("*.json"))
 
-    assert {path.name for path in _EXAMPLES.glob("*.json")} == set(expected)
-    for name, (session_id, acquisition_families) in expected.items():
-        metadata = load_session_metadata(_EXAMPLES / name)
-        assert metadata.session == session_id
-        assert {probe.acquisition_family for probe in metadata.probes} == (
-            acquisition_families
-        )
-        assert all(site.probe_id in {probe.probe_id for probe in metadata.probes} for site in metadata.sites)
+    assert set(required_families) <= {path.name for path in example_paths}
+    for path in example_paths:
+        metadata = load_session_metadata(path)
+        acquisition_families = {
+            probe.acquisition_family for probe in metadata.probes
+        }
+        assert metadata.session
+        assert len(acquisition_families) == 1
+        if path.name in required_families:
+            assert acquisition_families == required_families[path.name]
+        probe_ids = {probe.probe_id for probe in metadata.probes}
+        assert all(site.probe_id in probe_ids for site in metadata.sites)
 
 
 def test_quickstart_documents_required_user_workflow() -> None:

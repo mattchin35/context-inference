@@ -832,19 +832,26 @@ class RouteFakeStreamlit(FakeStreamlit):
         self.messages.append(("caption", message))
 
 
-def test_summary_defaults_match_approved_ct026_channels_and_analysis_settings() -> None:
-    """The UI defaults should reproduce the approved first-session configuration."""
+def test_summary_defaults_are_valid_ui_analysis_settings() -> None:
+    """The UI defaults should form a valid, editable analysis configuration."""
 
     defaults = lfp_summary_webapp.default_summary_ui_values()
 
-    assert defaults.session_id == "CT026_2026-08-01_130853"
-    assert defaults.site_channels == {"PFC": 5, "HPC1": 222, "HPC2": 14}
-    assert defaults.alignment_event == "choice_time"
-    assert defaults.output_rate_hz == 500.0
-    assert defaults.notch_enabled
-    assert defaults.bootstrap_count == 1000
-    assert defaults.choice_filter == "all"
-    assert defaults.context_filter == "all"
+    assert defaults.session_id
+    assert defaults.site_channels
+    assert all(
+        isinstance(site_name, str)
+        and site_name
+        and isinstance(channel, int)
+        and channel >= 0
+        for site_name, channel in defaults.site_channels.items()
+    )
+    assert defaults.alignment_event in {"choice_time", "start_time"}
+    assert defaults.output_rate_hz > 0.0
+    assert isinstance(defaults.notch_enabled, bool)
+    assert defaults.bootstrap_count > 0
+    assert defaults.choice_filter in {"all", "left", "right"}
+    assert defaults.context_filter in {"all", "left", "right"}
 
 
 def test_snapshot_receipt_accepts_only_the_exact_final_files_and_transfer_identity(

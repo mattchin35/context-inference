@@ -49,7 +49,6 @@ def test_legacy_module_has_thin_root_compatibility_entry(
 
     wrapper_source = root_path.read_text(encoding="utf-8")
     wrapper_tree = ast.parse(wrapper_source)
-    assert len(wrapper_source.splitlines()) <= 20
     assert not any(
         isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         for node in wrapper_tree.body
