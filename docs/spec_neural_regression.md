@@ -1,6 +1,7 @@
 # Inter-Regional Prediction Analysis Spec
 
 ## Goal
+
 Measure directed predictive relationships between PFC and HPC population activity.
 
 The core question is:
@@ -26,6 +27,7 @@ Interpret all results as predictive, not as proof of mechanistic causality.
 Allow two representations.
 
 ### 1. Unit activity
+
 Use binned unit activity within each region.
 
 For linear models, activity may be represented as firing rate or spike count.
@@ -34,7 +36,7 @@ For Poisson GLMs, use **spike counts per bin** as the response.
 
 For PFC:
 
-\[
+$$
 \mathbf{x}_{PFC}(t)
 =
 [
@@ -43,18 +45,19 @@ r_2(t),
 \ldots,
 r_N(t)
 ]
-\]
+$$
 
 and analogously for HPC.
 
 Prediction performance should be calculated separately for each target-region unit so that the distribution of predictability across units is preserved.
 
 ### 2. Principal components
+
 Allow PCA as a dimensionality-reduced transformation of the same regional population activity.
 
 For each region:
 
-\[
+$$
 \mathbf{z}(t)
 =
 [
@@ -63,7 +66,7 @@ PC_2(t),
 \ldots,
 PC_K(t)
 ]
-\]
+$$
 
 PCs are simply a transformed representation of firing-rate population activity.
 
@@ -101,6 +104,7 @@ The restricted/full predictor structure must remain identical across model famil
 Three parameters define the predictive model.
 
 ### Neural bin size
+
 Default:
 
 - **100 ms**
@@ -113,6 +117,7 @@ Other available values:
 - 20 ms
 
 ### Prediction lag
+
 Default:
 
 - **1 timestep**
@@ -125,6 +130,7 @@ With 100-ms bins:
 - lag = 2 → 200 ms earlier
 
 ### Model order
+
 Default:
 
 - **1**
@@ -139,138 +145,126 @@ Examples using 100-ms bins:
 
 ---
 
-# Linear Inter-Regional Prediction
+## Linear Inter-Regional Prediction
 
-## HPC → PFC
+### HPC → PFC
 
 For each target PFC unit or PC, fit a restricted model using only prior PFC activity:
 
-\[
+$$
 \mathrm{PFC}(t)
 \sim
 \mathrm{PFC}(t-\mathrm{history})
-\]
+$$
 
 Then fit a full model:
 
-\[
+$$
 \mathrm{PFC}(t)
 \sim
-\mathrm{PFC}(t-\mathrm{history})
-+
+\mathrm{PFC}(t-\mathrm{history}) +
 \mathrm{HPC}(t-\mathrm{history})
-\]
+$$
 
 With the default parameters:
 
-\[
+$$
 \mathrm{PFC}(t)
 \sim
 \mathrm{PFC}(t-1)
-\]
+$$
 
 versus:
 
-\[
+$$
 \mathrm{PFC}(t)
 \sim
-\mathrm{PFC}(t-1)
-+
+\mathrm{PFC}(t-1) +
 \mathrm{HPC}(t-1)
-\]
+$$
 
 where one timestep is 100 ms.
 
 Calculate held-out:
 
-\[
+$$
 R^2_{\mathrm{restricted},j}
-\]
+$$
 
 and:
 
-\[
+$$
 R^2_{\mathrm{full},j}
-\]
+$$
 
-for each target unit or PC \(j\).
+for each target unit or PC $j$.
 
 Define:
 
-\[
+$$
 \Delta R^2_{\mathrm{HPC}\rightarrow\mathrm{PFC},j}
 =
-R^2_{\mathrm{full},j}
--
-R^2_{\mathrm{restricted},j}
-\]
+R^2_{\mathrm{full},j} - R^2_{\mathrm{restricted},j}
+$$
 
-## PFC → HPC
+### PFC → HPC
 
 Analogously:
 
-\[
+$$
 \Delta R^2_{\mathrm{PFC}\rightarrow\mathrm{HPC},j}
 =
-R^2_{\mathrm{full},j}
--
-R^2_{\mathrm{restricted},j}
-\]
+R^2_{\mathrm{full},j} - R^2_{\mathrm{restricted},j}
+$$
 
-All \(R^2\) values must be calculated on held-out data.
+All $R^2$ values must be calculated on held-out data.
 
-Negative \(\Delta R^2\) values should be preserved.
+Negative $\Delta R^2$ values should be preserved.
 
 ---
 
-# Poisson GLM Inter-Regional Prediction
+## Poisson GLM Inter-Regional Prediction
 
 Use Poisson GLMs for unit spike-count responses.
 
 For target unit \(j\):
 
-\[
+$$
 y_j(t)
 \sim
 \mathrm{Poisson}(\lambda_j(t))
-\]
+$$
 
 with a log link.
 
 For HPC → PFC, the restricted model is:
 
-\[
+$$
 \log \lambda_j(t)
 =
-\beta_0
-+
-\boldsymbol{\beta}_{PFC}^{T}
-\mathbf{x}_{PFC}(t-\mathrm{history})
-\]
+\beta_0 + \mathbf{b}_{\mathrm{PFC}}^{T}
+\mathbf{x}_{\mathrm{PFC}}(t-\mathrm{history})
+$$
 
 The full model is:
 
-\[
+$$
 \log \lambda_j(t)
-=
-\beta_0
-+
-\boldsymbol{\beta}_{PFC}^{T}
-\mathbf{x}_{PFC}(t-\mathrm{history})
-+
-\boldsymbol{\beta}_{HPC}^{T}
+=  
+\beta_0 + \mathbf{b}_{PFC}^{T} 
+\mathbf{x}_{PFC}(t-\mathrm{history}) + \mathbf{b}_{HPC}^{T}
 \mathbf{x}_{HPC}(t-\mathrm{history})
-\]
+$$
 
 and vice versa for PFC → HPC.
 
-## Poisson Predictive Metric
+### Poisson Predictive Metric
 
 Use **cross-validated deviance explained** rather than \(R^2\).
 
 For held-out data:
 
-\[
+$$
 D_{\mathrm{explained}}
 =
 1-
@@ -279,54 +273,48 @@ D_{\mathrm{model}}
 }{
 D_{\mathrm{null}}
 }
-\]
+$$
 
 where:
 
-- \(D_{\mathrm{model}}\) is the Poisson deviance of the fitted model on held-out data
-- \(D_{\mathrm{null}}\) is the deviance of a baseline model predicting the mean spike count
+- $D_{\mathrm{model}}$ is the Poisson deviance of the fitted model on held-out data
+- $D_{\mathrm{null}}$ is the deviance of a baseline model predicting the mean spike count
 
 Poisson deviance is:
 
-\[
-D
-=
-2
-\sum_i
+$$
+D = 2 \sum_i
 \left[
-y_i
-\log
-\left(
+y_i \log 
+\left( 
 \frac{y_i}{\hat{\mu}_i}
-\right)
--
+\right) - 
 (y_i-\hat{\mu}_i)
 \right]
-\]
+$$
 
-with the \(y_i\log(y_i/\hat{\mu}_i)\) term defined as zero when \(y_i=0\).
+with the $y_i\log(y_i/\hat{\mu}_i)$ term defined as zero when $y_i=0$.
 
 Calculate:
 
-\[
+$$
 D_{\mathrm{explained,restricted},j}
-\]
+$$
 
 and:
 
-\[
+$$
 D_{\mathrm{explained,full},j}
-\]
+$$
 
 Then define incremental source-region prediction as:
 
-\[
+$$
 \Delta D_{\mathrm{explained},j}
 =
-D_{\mathrm{explained,full},j}
--
+D_{\mathrm{explained,full},j} -
 D_{\mathrm{explained,restricted},j}
-\]
+$$
 
 for both:
 
@@ -345,15 +333,15 @@ Allow linear and Poisson results to be viewed with the same predictor structure 
 
 Do not directly interpret:
 
-\[
+$$
 \Delta R^2
-\]
+$$
 
 and:
 
-\[
+$$
 \Delta D_{\mathrm{explained}}
-\]
+$$
 
 as numerically equivalent effect sizes.
 
@@ -377,27 +365,29 @@ Where appropriate, use temporally grouped or block-aware CV rather than randomly
 
 ---
 
-# Population Prediction Summary
+## Population Prediction Summary
 
 Retain the full target-unit or target-PC distribution rather than immediately pooling the region into one value.
 
 For each direction and condition:
 
 ### Linear model
+
 retain:
 
-\[
+$$
 \Delta R^2_j
-\]
+$$
 
 ### Poisson model
+
 retain:
 
-\[
+$$
 \Delta D_{\mathrm{explained},j}
-\]
+$$
 
-## Summary visualization
+### Summary visualization
 
 For each behavioral condition and prediction direction, show:
 
@@ -415,7 +405,7 @@ Absolute restricted and full-model predictive performance should also remain ins
 
 ---
 
-# Main Prediction Figure
+## Main Prediction Figure
 
 Show all behavioral conditions together.
 
@@ -433,23 +423,29 @@ For each direction show:
 Allow controls for:
 
 ### Representation
+
 - Units
 - PCs
 
 ### Model
+
 For units:
+
 - Linear
 - Poisson GLM
 
 For PCs:
+
 - Linear only
 
 ### Temporal parameters
+
 - Bin size
 - Prediction lag
 - Model order
 
 ### Behavioral condition
+
 - Trial condition and other existing behavioral splits
 
 The y-axis label should automatically reflect the selected model:
@@ -459,63 +455,57 @@ The y-axis label should automatically reflect the selected model:
 
 ---
 
-# Granger Prediction
+## Granger Prediction
 
 Granger analysis should use the same temporal structure as the incremental-prediction analysis.
 
-## Linear Granger
+### Linear Granger
 
 For target activity \(Y\) and source activity \(X\):
 
 Restricted model:
 
-\[
+$$
 Y_t
 =
-\sum_i A_iY_{t-i}
-+
-\epsilon_t
-\]
+\sum_i A_iY_{t-i} + \epsilon_t
+$$
 
 Full model:
 
-\[
+$$
 Y_t
 =
-\sum_i A_iY_{t-i}
-+
-\sum_i B_iX_{t-i}
-+
-\epsilon'_t
-\]
+\sum_i A_iY_{t-i} + \sum_i B_iX_{t-i} + \epsilon'_t
+$$
 
 Calculate both:
 
-\[
+$$
 GC_{\mathrm{HPC}\rightarrow\mathrm{PFC}}
-\]
+$$
 
 and:
 
-\[
+$$
 GC_{\mathrm{PFC}\rightarrow\mathrm{HPC}}
-\]
+$$
 
-## Poisson / GLM Granger-Style Prediction
+### Poisson / GLM Granger-Style Prediction
 
 For spike-count responses, use the analogous restricted-versus-full Poisson GLM comparison.
 
 The conceptual test remains:
 
-\[
+$$
 \text{target-region history}
-\]
+$$
 
 versus:
 
-\[
+$$
 \text{target-region history + source-region history}
-\]
+$$
 
 but model improvement should be quantified using Poisson likelihood/deviance rather than the classical Gaussian autoregressive statistic.
 
@@ -527,7 +517,7 @@ rather than treating it as numerically identical to classical linear Granger cau
 
 ---
 
-# Granger Summary Figure
+## Granger Summary Figure
 
 Create a separate figure from the incremental predictive-performance plot.
 
