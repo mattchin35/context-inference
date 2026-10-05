@@ -323,7 +323,7 @@ for both:
 
 Negative values should be preserved.
 
-Do not label deviance explained as \(R^2\).
+Do not label deviance explained as $R^2$.
 
 ---
 
