@@ -1,4 +1,4 @@
-# Task-Variable Decoding Analysis Spec
+    # Task-Variable Decoding Analysis Spec
 
 **Status:** Revision 4. The user has accepted the remaining O5 inspection defaults, including the evaluation folds, optional tuning folds/grid, complete-fold scoring rule, and coefficient-counting tolerance. These are now implementation settings, not pending proposals. Earlier preprocessing, target, and trial-window decisions remain unchanged. **Codebase Checks** identify source definitions and implementation details to verify rather than invent. This document review has not inspected the implementation code or DV-generation code.
 
