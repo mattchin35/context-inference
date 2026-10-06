@@ -412,6 +412,19 @@ def test_target_metadata_persists_binary_positive_class_mappings(tmp_path):
     assert metadata["current_choice_switch_stay"]["positive_class"] == 1
     assert metadata["current_choice_switch_stay"]["positive_label"] == "switch"
 
+    expected_class_labels = {
+        "current_state": {"0": "right", "1": "left"},
+        "current_action": {"0": "right", "1": "left"},
+        "current_action_is_correct": {"0": "incorrect", "1": "correct"},
+        "previous_action": {"0": "right", "1": "left"},
+        "previous_action_was_rewarded": {"0": "unrewarded", "1": "rewarded"},
+        "next_action": {"0": "right", "1": "left"},
+        "current_choice_switch_stay": {"0": "stay", "1": "switch"},
+        "next_choice_switch_stay": {"0": "stay", "1": "switch"},
+    }
+    for target_name, class_labels in expected_class_labels.items():
+        assert metadata[target_name]["class_labels"] == class_labels
+
 
 def test_numerical_targets_retain_exact_native_numeric_source_values(tmp_path):
     """Numerical targets should equal their stored source values without target scaling."""

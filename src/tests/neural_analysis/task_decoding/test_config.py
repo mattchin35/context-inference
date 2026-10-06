@@ -338,6 +338,7 @@ def test_inner_fold_count_accepts_only_integer_three(tmp_path, inner_fold_count)
         ("trusted_utc_bounds", {"probe-a": [1.0, 1.0]}),
         ("trusted_utc_bounds", {"probe-a": [2.0, 1.0]}),
         ("trusted_utc_bounds", {"probe-a": [1.0, float("inf")]}),
+        ("trusted_utc_bounds", {"probe-a": [True, 2.0]}),
         ("trusted_utc_bounds", {"probe-a": ["bad", 2.0]}),
         ("trusted_utc_bounds", {"unknown-probe": [1.0, 2.0]}),
         ("window_start_s", -1.0),
@@ -394,6 +395,52 @@ def test_moving_the_complete_session_tree_preserves_scientific_payload(tmp_path)
     )
 
     assert decoding_config.scientific_config_payload(moved_config) == original_payload
+
+
+def test_metadata_path_must_name_the_canonical_session_file(tmp_path):
+    """The metadata-parent session root should come from ``neural_session.json`` only."""
+    payload = make_config_payload()
+    payload["session_metadata_path"] = "metadata.json"
+    config_path, session_root = write_config_file(tmp_path, payload)
+    (session_root / "metadata.json").write_text("{}\n", encoding="ascii")
+
+    with pytest.raises(ValueError, match="neural_session.json|metadata"):
+        decoding_config.load_task_decoding_config(config_path)
+
+
+def test_config_outside_session_uses_session_default_output_root(tmp_path):
+    """An external config should still default output to the metadata session root."""
+    session_root = tmp_path / "session"
+    processed_path = session_root / "processed"
+    processed_path.mkdir(parents=True)
+    (session_root / "neural_session.json").write_text("{}\n", encoding="ascii")
+    (processed_path / "augmented_trials.csv").write_text("cur_trial\n0\n", encoding="ascii")
+    (processed_path / "trial_feature_params.json").write_text("{}\n", encoding="ascii")
+    config_directory = tmp_path / "configuration"
+    config_directory.mkdir()
+    payload = make_config_payload()
+    payload["session_metadata_path"] = "../session/neural_session.json"
+    payload["augmented_trial_path"] = "../session/processed/augmented_trials.csv"
+    payload["trial_feature_parameter_path"] = (
+        "../session/processed/trial_feature_params.json"
+    )
+    payload.pop("output_root")
+    config_path = config_directory / "task_decoding_config.json"
+    config_path.write_text(json.dumps(payload), encoding="ascii")
+
+    config = decoding_config.load_task_decoding_config(config_path)
+
+    assert config.output_root == session_root / "analysis_runs"
+
+
+def test_validated_config_does_not_expose_mutable_scientific_bounds(tmp_path):
+    """A frozen configuration should not permit in-place scientific mutation."""
+    payload = make_config_payload()
+    payload["trusted_utc_bounds"] = {"probe-a": [1.0, 2.0]}
+    config, _, _ = load_config(tmp_path, payload)
+
+    with pytest.raises(TypeError):
+        config.trusted_utc_bounds["probe-a"] = (3.0, 4.0)
 
 
 @pytest.mark.parametrize(
@@ -461,3 +508,8 @@ def test_scientific_payload_excludes_execution_fields_and_records_frozen_control
     assert "LogisticRegression" in serialized
     assert "ElasticNet" in serialized
     assert "PCA" in serialized
+
+    estimator_controls = payload["frozen_controls"]["estimators"]
+    assert estimator_controls["LogisticRegression"]["random_state"] == 0
+    assert "penalty" not in estimator_controls["LogisticRegression"]
+    assert estimator_controls["PCA"]["random_state"] == 0
