@@ -1,8 +1,8 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP1 RED is committed and GREEN is next. This does
-not authorize experimental-data mutation, decoding runs, benchmarks, transfer,
-or scheduler actions, which retain their separate gates below.
+**Status:** Implementation authorized; WP1 is GREEN and WP2 tests are next. This
+does not authorize experimental-data mutation, decoding runs, benchmarks,
+transfer, or scheduler actions, which retain their separate gates below.
 
 **Scientific contract:** `docs/task_variable_spec_v5.md`.
 
@@ -10,18 +10,19 @@ or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-06
 
-**Current phase:** WP0 is complete. WP1 behavioral-feature tests are committed
-at `acf24ae`; the bounded WP1 production implementation is the single active
-package. No experimental-data mutation, decoding output, benchmark, transfer,
-local long run, or cluster action is authorized.
+**Current phase:** WP0 and WP1 are complete. WP1 tests are committed at
+`acf24ae` and implementation at `8ea4d24`; the WP2 tests-only RED phase is the
+single next package. No experimental-data mutation, decoding output,
+benchmark, transfer, local long run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local tests-only HEAD: `acf24ae334ba518a0beab020f7b40a895bbecb6b`;
+- local implementation HEAD:
+  `8ea4d24cb4aba2e5718ccd15a40c35ae0944f5ba`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
-- local documentation handoff commit: `39ba0db`; and
-- the tracked worktree is clean before the WP1 implementation assignment; and
+- prior local documentation handoff commits: `39ba0db` and `3104c59`;
+- the tracked worktree is clean after the WP1 implementation commit; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -50,9 +51,9 @@ local long run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this RED-gate handoff separately, then authorize
-the same bounded worker to implement only WP1 in `session_analysis.py` and
-`gather_trial_features.py` and drive the committed tests to GREEN.
+**Next exact action:** commit this WP1 GREEN handoff separately, then assign
+only the WP2 configuration/target tests and stop at a genuine RED result before
+any WP2 production implementation.
 
 ### Authority order
 
@@ -73,8 +74,8 @@ When resuming, use this order:
 | Package | State at snapshot | Next gate |
 | --- | --- | --- |
 | WP0 documentation approval | Complete at pushed `b69c70a` | None |
-| WP1 behavioral feature | RED committed at `acf24ae`; GREEN implementation next | Focused and affected behavior tests pass before implementation commit |
-| WP2 configuration and targets | Pending prerequisite | WP1 GREEN and recorded handoff |
+| WP1 behavioral feature | Complete: RED `acf24ae`, GREEN `8ea4d24` | None; CT026 backfill remains separately gated at WP9A |
+| WP2 configuration and targets | Ready for tests-only RED | Commit WP1 GREEN handoff, then commit genuine RED tests before implementation |
 | WP3 activity loading and coverage | Pending prerequisite | WP2 GREEN and recorded handoff |
 | WP4 grouped modeling | Pending prerequisite | WP3 GREEN and independent numerical test-design review |
 | WP5 results and session pipeline | Pending prerequisite | WP4 GREEN and saved-schema freeze |
@@ -358,6 +359,52 @@ Use this template for each appended record:
   No production file changed during RED.
 - Exact next action: the same worker implements only the two WP1 behavior
   modules, then reports focused GREEN without committing.
+
+#### 2026-10-06 - WP1 GREEN gate
+
+- State: WP1 implementation complete; WP2 tests-only RED is next.
+- Authorization: project implementation was authorized. The work remained
+  limited to source code and tests; CT026 mutation, neural loading,
+  benchmarking, transfer, and scheduler actions remain unauthorized.
+- Sol / Terra / reviewer: primary Sol supervisor / the same
+  `gpt-5.6-terra` high worker / Sol independent diff review and test
+  reproduction.
+- Start HEAD / end HEAD: `3104c59` / implementation commit
+  `8ea4d24cb4aba2e5718ccd15a40c35ae0944f5ba`.
+- Owned files: modified `src/behavior_analysis/session_analysis.py` and
+  `src/behavior_analysis/gather_trial_features.py`. The committed WP1 tests
+  remained unchanged. All pre-existing untracked files were preserved.
+- RED command and result: the committed WP1 RED evidence remains 25 expected
+  failures, 7 passes, and 77 deselections from the preceding record.
+- GREEN/regression commands and results: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
+  src/tests/behavior_analysis/test_session_analysis.py
+  src/tests/behavior_analysis/test_task_decoding_backfill.py -q -k
+  'rewards_in_block or strict_decision_variable or backfill'` passed with 32
+  tests and 77 deselections. The same two files with the three independently
+  established baseline `formulaic.model_matrix`-stub failures deselected
+  passed with 106 tests, 3 deselections, and one expected warning.
+  `git diff --check` also passed.
+- Commits: tests-only `acf24ae`; implementation `8ea4d24`.
+- Real-data or external actions: none. In particular, the CT026 augmented CSV
+  was not opened for writing and the backfill below was not executed.
+- Findings and unresolved risks: the general augmentation now emits an
+  entering-trial integer `rewards_in_block` series while preserving the input
+  index; the shared parser rejects fractional/non-finite choices and
+  non-finite rewards; non-default indices no longer break decision-variable
+  counting; and the migration validates a unique sibling temporary CSV before
+  `os.replace`, with cleanup failures surfaced. The exact proposed WP9A
+  invocation from the repository root is:
+
+  ```bash
+  uv run python -c 'from pathlib import Path; from src.behavior_analysis.gather_trial_features import backfill_rewards_in_block_csv; backfill_rewards_in_block_csv(Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference/processed/CT026_2026-08-03_111938_augmented_trials.csv"))'
+  ```
+
+  It is a proposal only and requires the WP9A prerequisite, backup, and
+  explicit user approval before execution.
+- Exact next action: commit this documentation-only GREEN handoff, then write
+  only the WP2 config/target tests, reproduce RED, and commit those tests
+  before any WP2 implementation.
 
 ## 1. Objective
 
