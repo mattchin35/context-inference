@@ -1,6 +1,6 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP1 RED phase in progress. This does
+**Status:** Implementation authorized; WP1 RED is committed and GREEN is next. This does
 not authorize experimental-data mutation, decoding runs, benchmarks, transfer,
 or scheduler actions, which retain their separate gates below.
 
@@ -10,19 +10,18 @@ or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-06
 
-**Current phase:** WP0 is complete and WP1 behavioral-feature tests are the
-single active package. The user explicitly authorized implementation after
-pushing the accepted documentation. No experimental-data mutation, decoding
-output, benchmark, transfer, local long run, or cluster action is authorized.
+**Current phase:** WP0 is complete. WP1 behavioral-feature tests are committed
+at `acf24ae`; the bounded WP1 production implementation is the single active
+package. No experimental-data mutation, decoding output, benchmark, transfer,
+local long run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD and `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`
-  (`updated specs`);
-- that commit contains both task-variable documents through the fifth WP0
-  readiness correction;
-- the tracked worktree was clean when WP1 preparation began; and
+- local tests-only HEAD: `acf24ae334ba518a0beab020f7b40a895bbecb6b`;
+- `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
+- local documentation handoff commit: `39ba0db`; and
+- the tracked worktree is clean before the WP1 implementation assignment; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -51,9 +50,9 @@ output, benchmark, transfer, local long run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** the Sol supervisor commits this authorization/handoff
-update separately, then assigns the bounded WP1 tests-only RED task. No
-production implementation begins before Sol verifies and commits those tests.
+**Next exact action:** commit this RED-gate handoff separately, then authorize
+the same bounded worker to implement only WP1 in `session_analysis.py` and
+`gather_trial_features.py` and drive the committed tests to GREEN.
 
 ### Authority order
 
@@ -74,7 +73,7 @@ When resuming, use this order:
 | Package | State at snapshot | Next gate |
 | --- | --- | --- |
 | WP0 documentation approval | Complete at pushed `b69c70a` | None |
-| WP1 behavioral feature | RED phase authorized and active | Sol verifies and commits tests before GREEN authorization |
+| WP1 behavioral feature | RED committed at `acf24ae`; GREEN implementation next | Focused and affected behavior tests pass before implementation commit |
 | WP2 configuration and targets | Pending prerequisite | WP1 GREEN and recorded handoff |
 | WP3 activity loading and coverage | Pending prerequisite | WP2 GREEN and recorded handoff |
 | WP4 grouped modeling | Pending prerequisite | WP3 GREEN and independent numerical test-design review |
@@ -324,6 +323,41 @@ Use this template for each appended record:
   were clean at WP1 start; expected historical untracked files are preserved.
 - Exact next action: commit this handoff, assign only the WP1 behavior tests,
   reproduce genuine RED, and commit those tests before implementation.
+
+#### 2026-10-06 - WP1 tests-only RED gate
+
+- State: WP1 RED complete and committed; bounded GREEN implementation is next.
+- Authorization: implementation is authorized, but this gate changed tests
+  only and performed no experimental-data or external action.
+- Sol / Terra / reviewer: primary Sol supervisor / `gpt-5.6-terra` high tests
+  worker / Sol independent reproduction; no additional reviewer required for
+  WP1.
+- Start HEAD / end HEAD: `39ba0db0fbbaa73845bbd2780ae8428d4ff0488e` /
+  `acf24ae334ba518a0beab020f7b40a895bbecb6b`.
+- Owned files: modified
+  `src/tests/behavior_analysis/test_session_analysis.py`; created
+  `src/tests/behavior_analysis/test_task_decoding_backfill.py`. The originally
+  planned `test_gather_trial_features.py` was already a user-owned untracked
+  file, so it was preserved and the focused backfill tests use a new file.
+- RED command and result: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
+  src/tests/behavior_analysis/test_session_analysis.py
+  src/tests/behavior_analysis/test_task_decoding_backfill.py -q -k
+  'rewards_in_block or strict_decision_variable or backfill'` produced 25
+  expected WP1 failures, 7 passes, and 77 deselections. Failures cover the
+  missing helper/backfill, permissive parser, and non-default-index behavior.
+- GREEN/regression commands and results: not applicable before implementation.
+  The pre-existing unfiltered session-analysis baseline remains 74 passes and
+  3 unrelated failures caused by its existing `model_matrix` test stub.
+- Commits: tests-only commit
+  `acf24ae334ba518a0beab020f7b40a895bbecb6b`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: tests freeze entering-trial reward counts,
+  strict finite parsing, index preservation, shared-helper reuse, verified
+  atomic publication, no-write failure behavior, and visible cleanup failure.
+  No production file changed during RED.
+- Exact next action: the same worker implements only the two WP1 behavior
+  modules, then reports focused GREEN without committing.
 
 ## 1. Objective
 
