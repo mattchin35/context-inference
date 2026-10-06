@@ -375,6 +375,8 @@ def test_inner_fold_count_accepts_only_integer_three(tmp_path, inner_fold_count)
     ("field", "value"),
     [
         ("alignment", "stimulus_time"),
+        ("alignment", ["choice_time"]),
+        ("regularization_mode", ["fixed"]),
         ("bin_width_ms", 75),
         ("pfc_pc_count", 0),
         ("hpc_pc_count", -1),
@@ -395,7 +397,9 @@ def test_config_rejects_invalid_or_frozen_scientific_knobs(tmp_path, field, valu
     payload = make_config_payload()
     payload[field] = value
 
-    error_pattern = "alignment|bin|pc|bound|window|seed|tolerance|tuning|unknown"
+    error_pattern = (
+        "alignment|mode|bin|pc|bound|window|seed|tolerance|tuning|unknown"
+    )
     with pytest.raises(ValueError, match=error_pattern):
         load_config(tmp_path, payload)
 
@@ -513,6 +517,17 @@ def test_config_rejects_paths_outside_or_overlapping_session_inputs(
 
     with pytest.raises(ValueError, match=error_match):
         load_config(tmp_path, payload)
+
+
+def test_config_rejects_existing_file_as_output_root(tmp_path):
+    """The dedicated output path cannot be an existing non-directory file."""
+    payload = make_config_payload()
+    payload["output_root"] = "existing-output-file"
+    config_path, session_root = write_config_file(tmp_path, payload)
+    (session_root / "existing-output-file").write_text("not a directory\n", encoding="ascii")
+
+    with pytest.raises(ValueError, match="output|directory"):
+        decoding_config.load_task_decoding_config(config_path)
 
 
 def test_scientific_payload_excludes_execution_fields_and_records_frozen_controls(tmp_path):

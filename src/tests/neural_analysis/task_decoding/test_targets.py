@@ -204,6 +204,7 @@ def test_validate_augmented_trials_rejects_noncontiguous_block_reuse(tmp_path):
         ("choice_time", "bad"),
         ("choice_time", np.inf),
         ("experimenter_reward_given", "bad"),
+        ("experimenter_reward_given", np.inf),
         ("reward", "bad"),
         ("consecutive_rewards", "bad"),
         ("relative_doubt_index", np.inf),
