@@ -1,8 +1,9 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP1 is GREEN and WP2 tests are next. This
-does not authorize experimental-data mutation, decoding runs, benchmarks,
-transfer, or scheduler actions, which retain their separate gates below.
+**Status:** Implementation authorized; WP2 RED is committed and WP2 GREEN is
+next. This does not authorize experimental-data mutation, decoding runs,
+benchmarks, transfer, or scheduler actions, which retain their separate gates
+below.
 
 **Scientific contract:** `docs/task_variable_spec_v5.md`.
 
@@ -10,19 +11,20 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-06
 
-**Current phase:** WP0 and WP1 are complete. WP1 tests are committed at
-`acf24ae` and implementation at `8ea4d24`; the WP2 tests-only RED phase is the
-single next package. No experimental-data mutation, decoding output,
+**Current phase:** WP0 and WP1 are complete. WP2 configuration/target tests are
+committed at `3ccae6c`; the bounded WP2 production implementation is the
+single active package. No experimental-data mutation, decoding output,
 benchmark, transfer, local long run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local implementation HEAD:
-  `8ea4d24cb4aba2e5718ccd15a40c35ae0944f5ba`;
+- local tests-only HEAD:
+  `3ccae6c65912eba6dd696a18ee393ab45db1bee5`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
-- prior local documentation handoff commits: `39ba0db` and `3104c59`;
-- the tracked worktree is clean after the WP1 implementation commit; and
+- prior local documentation handoff commits: `39ba0db`, `3104c59`, and
+  `38b2854`;
+- the tracked worktree is clean after the WP2 tests-only commit; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -51,9 +53,9 @@ benchmark, transfer, local long run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this WP1 GREEN handoff separately, then assign
-only the WP2 configuration/target tests and stop at a genuine RED result before
-any WP2 production implementation.
+**Next exact action:** commit this WP2 RED handoff separately, then authorize
+the same bounded worker to implement only `config.py`, `targets.py`, and the
+package marker and drive the committed tests to GREEN.
 
 ### Authority order
 
@@ -75,7 +77,7 @@ When resuming, use this order:
 | --- | --- | --- |
 | WP0 documentation approval | Complete at pushed `b69c70a` | None |
 | WP1 behavioral feature | Complete: RED `acf24ae`, GREEN `8ea4d24` | None; CT026 backfill remains separately gated at WP9A |
-| WP2 configuration and targets | Ready for tests-only RED | Commit WP1 GREEN handoff, then commit genuine RED tests before implementation |
+| WP2 configuration and targets | RED committed at `3ccae6c`; GREEN implementation next | Focused tests and affected regressions pass before implementation commit |
 | WP3 activity loading and coverage | Pending prerequisite | WP2 GREEN and recorded handoff |
 | WP4 grouped modeling | Pending prerequisite | WP3 GREEN and independent numerical test-design review |
 | WP5 results and session pipeline | Pending prerequisite | WP4 GREEN and saved-schema freeze |
@@ -405,6 +407,44 @@ Use this template for each appended record:
 - Exact next action: commit this documentation-only GREEN handoff, then write
   only the WP2 config/target tests, reproduce RED, and commit those tests
   before any WP2 implementation.
+
+#### 2026-10-06 - WP2 tests-only RED gate
+
+- State: WP2 RED complete and committed; bounded GREEN implementation is next.
+- Authorization: implementation is authorized, but this gate changed tests
+  only and performed no experimental-data or external action.
+- Sol / Terra / reviewer: primary Sol supervisor / the same
+  `gpt-5.6-terra` high tests worker / Sol test-design correction and
+  independent RED reproduction; no additional reviewer is required for WP2.
+- Start HEAD / end HEAD: `38b2854a334fb4a6bd2373264c0d86f8fa6a8cfc`
+  / `3ccae6c65912eba6dd696a18ee393ab45db1bee5`.
+- Owned files: created
+  `src/tests/neural_analysis/task_decoding/__init__.py`, `test_config.py`, and
+  `test_targets.py`. All pre-existing untracked files were preserved.
+- RED command and result: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
+  src/tests/neural_analysis/task_decoding/test_config.py
+  src/tests/neural_analysis/task_decoding/test_targets.py -q` produced two
+  collection errors, both the expected missing
+  `src.neural_analysis.task_decoding` production package. Both test modules
+  separately passed `uv run python -m py_compile`.
+- GREEN/regression commands and results: not applicable before implementation.
+- Commits: tests-only commit
+  `3ccae6c65912eba6dd696a18ee393ab45db1bee5`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: Sol corrected one repeated-fixture directory
+  bug and added missing approved edge cases before committing. Because the
+  prose freezes semantics but not every JSON key spelling, the initial tests
+  use direct snake-case dataclass-aligned keys: `session_metadata_path`,
+  `augmented_trial_path`, `trial_feature_parameter_path`, `pfc_region`,
+  `hpc_region`, `alignment`, `bin_width_ms`, `pfc_pc_count`, `hpc_pc_count`,
+  `target_names`, `regularization_mode`, fold counts,
+  `trusted_utc_bounds`, and `output_root`. No aliases or extra user knobs are
+  accepted. Path/source-manifest hashing remains owned by later `results.py`;
+  WP2 covers portable configured paths, containment, overlap, and scientific
+  payload separation only.
+- Exact next action: the same worker implements only the new package marker,
+  `config.py`, and `targets.py`, then reports focused GREEN without committing.
 
 ## 1. Objective
 
