@@ -81,6 +81,11 @@ relative_doubt_index
 This is deliberately a small schema check. Do not introduce a general dataframe
 schema framework.
 
+For a selected target subset, require the shared identity, alignment, and
+baseline columns plus only those targets' source columns. The default complete
+target set requires the full list above. Report all missing required columns in
+one error.
+
 The feature-parameter file must exist, decode to a JSON object, and be copied
 verbatim into result provenance. Validation does not attempt to reconstruct or
 rerun behavioral models.
@@ -203,6 +208,9 @@ not let a library's finite-value convenience behavior replace it with 0 or 1.
 Add `rewards_in_block` to the general augmented trial table rather than
 creating a decoder-only copy.
 
+Adding it must preserve row count, chronological order, index, and every
+existing column.
+
 The value on row i is the number of earlier valid animal-choice trials in the
 same `cur_block` with numeric `reward > 0`. Therefore:
 
@@ -282,6 +290,12 @@ selected windows, so no additional overlap exclusion is required.
 
 ## 9. Neural representations
 
+The initial implementation computes both representations below for all three
+region configurations: PFC, HPC, and PFC + HPC. Region and representation
+selectors in the saved-results view are display controls, not computation
+controls. Selective computation can be considered later only if benchmarking
+shows a concrete need.
+
 ### 9.1 Shared temporal regional PCA
 
 PCA is the default representation. Within each relevant training subset and
@@ -295,7 +309,8 @@ region:
    them from the fitted transform; do not label them as penalty-selected zeros.
 4. Apply the training-derived standardization unchanged to validation/test
    trials.
-5. Fit one regional PCA with `whiten=False`.
+5. Fit one regional PCA with `whiten=False`, `svd_solver="auto"`, and the
+   configured random seed.
 6. Use PC scores directly, without a second PC scaler.
 
 PFC and HPC always receive separate PCA fits. PFC + HPC concatenates the two
@@ -329,9 +344,19 @@ Use the same family for both representations:
 Fixed mode is the default:
 
 - logistic regression: `C=1.0`, `l1_ratio=0.5`,
-  `solver="saga"`;
-- numerical ElasticNet: `alpha=1.0`, `l1_ratio=0.5`; and
+  `solver="saga"`, `tol=1e-4`, `max_iter=100`,
+  `fit_intercept=True`, `class_weight=None`, `warm_start=False`, and
+  `n_jobs=None`;
+- numerical ElasticNet: `alpha=1.0`, `l1_ratio=0.5`,
+  `tol=1e-4`, `max_iter=1000`, `fit_intercept=True`,
+  `selection="cyclic"`, `positive=False`, and
+  `warm_start=False`; and
 - random seed 0 where an estimator or PCA solver uses randomness.
+
+These are the inspected scikit-learn 1.8 defaults for the otherwise
+unspecified numerical controls. Freeze and record them rather than exposing
+additional configuration knobs in the initial implementation. A later change
+to one of these controls requires an analysis-version change.
 
 The installed scikit-learn API must be checked during implementation. In the
 currently inspected scikit-learn 1.8 environment, logistic `penalty` is
@@ -401,7 +426,11 @@ is the unweighted arithmetic mean of the requested fold scores.
 Display a primary cell only when every requested outer fold is valid. Otherwise
 show the cell as unavailable, preserve valid fold records, and show the
 valid/expected fold count and reason. A failed cell must not stop unrelated
-targets or time bins.
+targets or time bins when the failure is a declared scientific invalidity:
+insufficient folds/classes, a constant target, an unavailable feature set, a
+convergence warning, or a non-finite fit/score. Unexpected programming,
+schema, or I/O exceptions must fail the run, preserve completed checkpoints,
+and remain visible rather than being converted into scientific missingness.
 
 Inner scores select parameters and are never mixed into the displayed outer
 score.
@@ -489,6 +518,11 @@ Benchmark the default fixed analysis before optional tuned mode. Tuned mode has
 a much larger fit count and must be estimated from a bounded representative
 subset before any full-session tuned run.
 
+The local benchmark used to project Slurm resources must use the same explicit
+single-thread OpenMP, MKL, and OpenBLAS limits as the initial one-CPU Slurm
+job. Record those limits with the benchmark so runtime comparisons are not
+confounded by implicit library threading.
+
 ## 15. Interpretation limits
 
 - Regional results compare the recorded populations supplied; they are not
@@ -518,9 +552,14 @@ Relative to revision 4, revision 5:
 - requires explicit PFC/HPC configuration and stable probe-qualified unit IDs;
 - defines IRIG and manual-alignment coverage checks;
 - makes requested/effective PC capping and convergence failures visible;
+- computes all six initial region/representation combinations and makes their
+  selectors display-only;
+- freezes the remaining estimator/PCA numerical controls;
+- distinguishes declared scientific invalidity from unexpected run failures;
 - uses an integrated read-only view in the existing webapp;
 - records the installed scikit-learn 1.8 logistic-interface consideration;
-- adds reproducible saved-run and benchmark requirements; and
+- adds reproducible saved-run and like-for-like single-thread benchmark
+  requirements; and
 - retains the accepted revision-4 estimator, CV, timing, and visualization
   decisions unless explicitly corrected above.
 

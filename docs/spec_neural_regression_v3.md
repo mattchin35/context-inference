@@ -60,6 +60,17 @@ a second condition ontology. Switch and stay labels retain the codebase's establ
 they compare the current unrewarded trial's action with the next valid row's action and do not
 mean a context transition.
 
+The accepted saved condition names, in canonical order, are:
+
+```text
+all, correct_rewarded, incorrect, omission, switch, stay,
+omission_switch, omission_stay, incorrect_switch, incorrect_stay
+```
+
+The default request is `all`, `correct_rewarded`, `incorrect`, `omission`, `switch`, and `stay`.
+The existing helper's `rewarded` alias is not a regression configuration name because it duplicates
+`correct_rewarded` without adding a distinct scientific condition.
+
 The `all` condition has one authoritative meaning for this analysis:
 
 ```text
@@ -75,9 +86,18 @@ A named behavioral condition intersects this `all` mask with its existing condit
 separate models for each requested condition and window. Do not fit one all-condition model and
 only score subsets afterward.
 
-Choice and context filters use the existing LFP-summary semantics. Condition masks may overlap;
+Choice and context filters use the existing LFP-summary semantics: choice reads `action`, context
+reads `state_int`, left is numeric 1, and right is numeric 0 after numeric coercion. Nonfinite values
+do not match left/right; `all` does not require that filter column. Condition masks may overlap;
 when multiple requested conditions contribute to a shared PCA fitting pool, use the union of
 eligible trials so that a trial is included at most once.
+
+Construct the fold mapping from every trial-table row with nonmissing `cur_block` before applying
+alignment, condition, choice/context, or user-exclusion filters. A missing-block row remains in
+provenance with no fold and reason `missing_block`, but it is not part of `all`. The session must
+still contain at least five distinct nonmissing blocks. If a non-`all` choice or context filter is
+requested and its required trial column is absent, fail validation instead of silently returning an
+empty selection.
 
 An unavailable condition, target, window, representation, model, or direction must not prevent
 independent valid results from being computed.
@@ -89,8 +109,9 @@ Supported alignments are:
 - Choice, the default.
 - Trial start.
 
-The application must provide regression-specific window controls. Do not claim that the current
-web application already exposes all required controls.
+The validated computation configuration must provide regression-specific window settings. The
+read-only application displays the saved bounds and lets the user select among already-computed
+before, after, and whole result rows; it does not edit or recompute them.
 
 Defaults are:
 
@@ -100,12 +121,14 @@ Defaults are:
 | After | `[0, 2)` seconds |
 | Whole | `[-2, 2)` seconds |
 
-Window bounds are configurable, but before and after must exactly partition whole at the selected
+Window bounds are configurable through `whole_start_s`, `split_s`, and `whole_stop_s`, but
+`split_s` is exactly zero seconds and before and after must exactly partition whole at the selected
 event boundary. The configured whole window is the full analysis interval used to fit shared
 regional PCA bases. The selected before, after, or whole window determines the prediction rows.
 
 All neural bins and analysis windows are half-open. Record the configured bounds and generated bin
-edges in results.
+edges in results. Every window duration divided by bin size must be integer-valued within absolute
+tolerance `1e-9` and zero relative tolerance; otherwise configuration validation fails.
 
 ## First-pass neural coverage assumption
 
@@ -140,6 +163,21 @@ for display, but it is not an alternative response mode.
 Reuse the established event-alignment and half-open binning conventions. Add a regression-specific
 count-tensor preparation function rather than routing the analysis through classifier helpers that
 concatenate trials or discard trial/time identity.
+
+The count function follows the existing aligned Pynapple tensor convention locally, obtains trial
+metadata by zero-based positional indexing, validates finite nonnegative integer-valued output, and
+casts to `int64`. It does not modify or extract a helper from the existing PCA module and does not
+derive counts by rounding rates. A spike on a bin's left edge is included; a spike at the final
+right edge of the configured window is excluded.
+
+Generate the whole-window edge array once from the validated integer bin count, setting its two end
+values exactly to the configured bounds. Select before/after by validated integer edge positions so
+both regions and every downstream window share identical bin geometry.
+
+The count-tensor trial axis is exactly the ascending zero-based rows in the authoritative `all`
+base mask, whether or not `all` is requested as an output condition. Named-condition selection is a
+submask on that fixed axis. Excluded/invalid rows remain in provenance tables but are not passed to
+the spike-binning call.
 
 Use unsmoothed activity. Do not use centered or future-looking smoothing.
 
@@ -190,6 +228,9 @@ Histories must remain inside the original trial and selected window. Never:
 
 Drop initial target bins lacking the required history. With 100-ms bins, lag 1, and order 1, a
 2-second window contributes 19 rows per eligible trial and a 4-second window contributes 39.
+In general, if a selected window has `B` bins, its first target-bin position is
+`ell + p - 1` and it contributes `B - (ell + p - 1)` rows per eligible trial. A nonpositive result
+makes that condition/window configuration unavailable with `history_exceeds_window`.
 
 Pool eligible trial by target-bin rows within a condition/window and fit one coefficient set per
 target. Do not fit separate coefficients by trial or event-relative bin. Held-out predictors are
@@ -225,9 +266,17 @@ For each outer training fold, alignment, bin size, and selected regional unit se
 No held-out observation may affect scaling, unit omission, component directions, or retained
 component count. Never fit a joint PFC-plus-HPC PCA.
 
+All PCA calculations use `float64`, population standard deviation (`ddof=0`), and scikit-learn PCA
+with `svd_solver="full"` and `whiten=False`. The actual component count is
+`min(requested_count, training_observation_count, retained_unit_count)`. This path uses no random
+number generator; results record `randomness_used=false` and `random_seed=null`. Do not add PC sign
+matching, cross-fold alignment, or post-PCA scaling. Downstream metrics are invariant to a component
+sign flip.
+
 Target PC scores are summarized by fold-specific component rank. Restricted and full models in a
 fold share axes, but PC1 is not treated as one fixed session-wide trajectory across folds. A rank
-missing in any requested fold has no primary complete CV summary.
+missing in any requested fold has no primary complete CV summary. Emit an explicit unavailable fold
+row for each missing requested rank rather than omitting its key.
 
 For descriptive Granger analysis only, fit one separate all-eligible-data PCA basis per region over
 the configured whole window. Reuse that descriptive basis across conditions, windows, and
@@ -240,16 +289,23 @@ PC responses use OLS only because scores are continuous and may be negative.
 Use exactly five deterministic `GroupKFold` folds based on the trial-table column `cur_block`.
 There is no existing neural-regression fold implementation to reuse; create and test one.
 
-Build one session-level mapping from zero-based trial row to fold before condition-specific
-filtering. Requirements are:
+Build one session-level mapping from zero-based trial row to fold using one sample for each complete-
+session row with nonmissing `cur_block`, before any alignment, condition, choice/context, or user-
+exclusion filtering. Call `GroupKFold(n_splits=5, shuffle=False)` and number folds by split
+enumeration from 0 through 4. Requirements are:
 
-- every CV-eligible row has a nonmissing `cur_block`;
-- the session has at least five distinct eligible blocks;
+- every CV-eligible row has a nonmissing `cur_block`; missing rows are retained only as excluded
+  provenance;
+- the session has at least five distinct nonmissing blocks in the unfiltered row universe;
 - an entire block belongs to one test fold;
 - all bins from a trial remain in its trial's fold;
 - the mapping is reused across directions, conditions, windows, representations, and model
   families; and
 - grouping is deterministic and nonshuffled.
+
+Nonmissing block labels may be strings, non-Boolean integers, or finite floats. Canonical JSON
+encoding supplies both the GroupKFold group values and persisted provenance, preserving type and
+allowing deterministic mixed scalar labels. Other values are invalid.
 
 Do not infer blocks, fall back to random splitting, split individual bins, reduce the fold count,
 or search random seeds. If a requested condition has no train or test rows in one of the five
@@ -301,6 +357,7 @@ SSE_m = sum((y - y_hat_m)^2)
 SST_test = sum((y - y_bar)^2)
 R2_m = 1 - SSE_m / SST_test
 delta_R2 = R2_full - R2_restricted
+MSE_m = SSE_m / n_test_rows
 ```
 
 The held-out mean is a scoring reference, not fitted-model input. Preserve negative finite scores
@@ -316,8 +373,14 @@ Poisson responses are nonnegative integer counts per bin. Do not z-score them or
 rates. Predicted means must be positive and finite.
 
 For observations `y_i` and expected counts `mu_i`, calculate Poisson deviance with the conventional
-zero-count term equal to zero. The null scoring prediction is the mean of the evaluated held-out
-counts.
+zero-count logarithmic term equal to zero:
+
+```text
+D(y, mu) = 2 * sum(y_i * log(y_i / mu_i) - (y_i - mu_i))
+```
+
+For `y_i = 0`, define `y_i * log(y_i / mu_i) = 0`, so that observation contributes `2 * mu_i`.
+The null scoring prediction is the mean of the evaluated held-out counts, repeated for every row.
 
 ```text
 deviance_explained_m = 1 - D_m / D_null_test
@@ -348,6 +411,8 @@ For each target, condition, window, direction, representation, and model family:
 
 Across complete targets, report individual target values, median, 25th percentile, 75th
 percentile, and contributing count. IQR describes target variability, not a confidence interval.
+Calculate quartiles with NumPy's `method="linear"` over complete target means; never pool fold
+values before computing the target distribution.
 
 ## Descriptive Granger analyses
 
@@ -415,6 +480,64 @@ response has undefined R-squared but may still have valid MSE.
 Failures are data, not exceptions to hide. Preserve a machine-readable status and reason for each
 independent result.
 
+Use these numerical comparison constants throughout the implementation:
+
+```text
+BIN_GEOMETRY_ATOL = 1e-9
+METRIC_RTOL = 1e-9
+METRIC_ATOL = 1e-12
+```
+
+Use `numpy.linalg.matrix_rank` with its documented default SVD tolerance for estimability; tests
+must avoid ambiguous near-threshold matrices. Treat held-out SST or null deviance as zero under
+`isclose(value, 0, rtol=METRIC_RTOL, atol=METRIC_ATOL)`. For theoretically nonnegative nested-fit
+improvements, tolerate a negative value only up to
+`METRIC_ATOL + METRIC_RTOL * max(abs(restricted), abs(full), 1)`; record it as zero with a roundoff
+diagnostic. A more negative value is a fit inconsistency. Use the same tolerance for Poisson
+likelihood-ratio/deviance-difference agreement. Do not round persisted scientific metrics.
+
+## Frozen configuration contract
+
+Use these exact version identifiers:
+
+```text
+config_schema_version = "1"
+result_schema_version = "1"
+analysis_version = "interregional-regression-v1"
+coverage_assumption_version = "implicit-complete-v1"
+```
+
+The one portable JSON file contains the scientific configuration plus a separate `run` section.
+The scientific part contains: absolute `session_metadata_path`; explicit `PFC`
+and `HPC` population selections (`probe_id`, channel source, zero-based channels, inside-brain rule,
+channel-quality labels, unit-quality column, and unit-quality labels); alignment; the three window
+boundary values; requested prediction windows; bin size, lag, and order;
+conditions, choice/context, and zero-based excluded trial rows; requested PC counts per region;
+representations; and requested analysis stages. The `run` section may contain only optional
+`output_root`. Unknown keys are errors.
+
+Excluded trial rows must be unique, nonnegative, and within the loaded trial-table row count.
+
+Allowed representations are `units` and `pcs`; the default is `units`. Allowed stages, in fixed
+execution order, are `ols_cv`, `poisson_cv`, `linear_granger`, and `poisson_granger`; the default is
+`ols_cv`. Poisson stages require units. `poisson_cv` requires `ols_cv` so their count-MSE comparison
+is available; linear Granger follows OLS; Poisson Granger follows Poisson CV. Exactly five folds and
+the group column `cur_block` are specification constants, not configurable fields.
+
+Allowed prediction-window names are `before`, `after`, and `whole`; all three are requested by
+default and each receives a separate fit.
+
+Channel source is either `metadata_quality` or `explicit`. Metadata-quality selection uses the
+requested channel labels and inside-brain rule, intersected with metadata `unit_channels` when
+present; explicit selection requires a nonempty channel list. Unit-quality filtering always
+applies. Defaults are channel label `good`, inside-brain required, unit-quality column `group`, and
+unit labels `good,mua`.
+
+Unresolved population selections do not contain cluster IDs. Loading produces a separate resolved
+population record with ordered selected channels, cluster IDs, and qualified unit IDs, and only
+then validates that both sets are nonempty and PFC/HPC are disjoint. Output root, rerun, and worker
+count are execution choices, not scientific configuration fields.
+
 ## Result records
 
 The computational core returns ordinary typed records and tidy pandas DataFrames in memory. The
@@ -436,33 +559,66 @@ At minimum retain:
 - model family and whether a result is held-out or in-sample; and
 - Poisson convergence information where applicable.
 
+Use the exact named tables and column/key/status contracts in
+`docs/neural_regression_plan.md`: `fold_assignments`, `trial_membership`, `fold_scores`,
+`target_summaries`, `population_summaries`, `pca_fits`, and `granger_scores`. Later-stage tables are
+present with empty frozen schemas before those stages are implemented. This prevents OLS, Poisson,
+and Granger additions from silently changing earlier saved records.
+
+The only saved statuses are `ok`, `metric_unavailable`, `fit_unavailable`, `incomplete_folds`, and
+`not_applicable`. Machine-readable reason codes are frozen in the implementation plan. An expected
+scientific unavailability uses one of them; an unexpected data-contract/programming failure remains
+an exception at the run boundary.
+
 Do not store one opaque nested result dictionary when a small number of explicit tables provides a
 clearer scientific record.
 
-Persist intermediate results as one project-generated pickle record in a subdirectory of the
-original session data directory. The saved record contains the named tables above plus metadata
-identifying the generating functions, analysis version, complete parameters, units and axis
-conventions, and random seed or an explicit statement that no randomness was used. Loading is
-restricted to project-generated local files; pickle files from untrusted sources are unsupported.
+Persist each execution as one immutable project run directory, normally:
 
-Analysis version and a deterministic configuration fingerprint are part of the output path. A
-changed version or parameter set creates a new result rather than overwriting an earlier one. An
-identical completed result is reused unless the user explicitly requests rerunning it.
+```text
+<session_root>/analysis_runs/
+    interregional_regression_<YYYYMMDD>T<HHMMSSffffff>Z_<fingerprint12>/
+```
 
-Each execution also creates a human-readable run directory named with the analysis, date, and time.
-It contains the session and batch runner scripts used, a configuration record, a log, a short
-Markdown summary, and generated figures. The summary states the analysis goal, included sessions,
-scripts run, output locations, warnings, unavailable-result counts, and scientific interpretation.
-The log records runtime environment, parameters, session IDs, warnings or errors, and execution
-time.
-Outputs must be placed in the session data hierarchy or another user-designated nonrepository
-directory.
+The timestamp is UTC with microseconds and directory creation is exclusive.
+
+It contains `config.json`, `input_manifest.json`, `run_state.json`, `result.pkl`, `run.log`,
+`summary.md`, exact copies of the session and batch runner scripts, and `figures/`. There is no
+second mutable or canonical result tree. Outputs must remain in the session data hierarchy or a
+user-designated nonrepository directory.
+
+The pickle contains the named tables plus generating functions, versions, complete scientific
+parameters, units/axes, resolved populations, input/code identity, and explicit randomness fields.
+Loading is restricted to project-generated local run directories; untrusted pickle files are
+unsupported.
+
+The SHA-256 scientific fingerprint covers versions, canonical scientific configuration, session
+ID, ordered resolved unit IDs, normalized path/size/streamed SHA-256 content identity for every
+consumed metadata, trial, spike, sorter, cluster, and channel-quality input, and Git HEAD. Timestamp, output root,
+rerun, worker count, and display choices do not affect it. An identical validated complete run is
+reused by default. Explicit rerun creates a second immutable timestamped directory with the same
+fingerprint and never overwrites the first.
+
+Because Git HEAD is the code identity, real `new` runs require a clean tracked worktree. Dry-run
+reports any dirty tracked paths; untracked files do not change the fingerprint.
+
+Run state is exactly `initialized`, `running`, `failed`, or `complete`. Artifacts are installed by
+same-directory atomic replacement and `complete` is written last, after validation. Interrupted or
+failed directories remain evidence but are not resumed or displayed in this first pass; retrying
+starts a new run from the beginning. The summary states the analysis goal, included session,
+scripts, configuration, output, warnings, unavailable counts, coverage assumption, and scientific
+interpretation. The log records runtime environment, parameters, session, stages, warnings/errors,
+and execution time.
 
 Provide one single-session runner and one batch runner. The batch runner calls the single-session
 pipeline independently for each session, offers a dry-run mode, and parallelizes across sessions by
-default. It never pools unit columns or observations across sessions.
+default. Its initial worker count is the lesser of available CPU cores, session count, and any lower
+override, then is capped by the implementation plan's explicit 80%-of-physical-RAM estimate. Dry-run
+reports every per-session/concurrent estimate and rejects a session estimated not to fit. Actual
+batch execution requires a separately approved worker count after the representative single-session
+inspection. It never pools unit columns or observations across sessions.
 
-## Figures and application controls
+## Figures, computation configuration, and application display
 
 The main CV figure displays all requested conditions horizontally. Within each condition, show HPC
 to PFC and PFC to HPC with individual target points and median/IQR overlays. Use stable point-to-
@@ -481,9 +637,9 @@ in-sample/descriptive labeling. Do not place Granger and CV metrics on the same 
 Export figures as PNG by default. Each figure has a readable caption summarizing its contents,
 contributing targets, and scientific interpretation; no inferential result is implied.
 
-Regression-specific controls are required for:
+Regression-specific computation settings are required in the validated JSON/CLI workflow:
 
-| Control | Options/default |
+| Setting | Options/default |
 |---|---|
 | PFC population | Explicit metadata population selection |
 | HPC population | Explicit metadata population selection |
@@ -491,8 +647,8 @@ Regression-specific controls are required for:
 | Model family | OLS default; Poisson for units only |
 | Alignment | Choice default; trial start |
 | Window bounds | Configurable whole/before/after partition |
-| Displayed window | Before; after; whole |
-| Conditions | Existing condition definitions, multiselect |
+| Analyzed windows | Before; after; whole |
+| Conditions | Canonical condition list; default set above |
 | Choice filter | All; left; right |
 | Context filter | All; left; right |
 | Neural bin size | 500, 100, 50, or 20 ms; default 100 ms |
@@ -500,8 +656,20 @@ Regression-specific controls are required for:
 | Model order | Positive integer; default 1 |
 | PCA count | Positive integer per region; default up to 10 |
 
-The application may reuse existing widget semantics and lower-level selection functions, but it must
-not reuse one mutable single-population UI state for both regional roles.
+The Streamlit application is a read-only viewer for atomically completed saved runs. It does not
+load raw spike data, edit computation settings, launch/resume analysis, or use transient widget
+state as the scientific record. It provides display-only selectors for conditions, windows,
+representations, model families, and metrics present in the selected saved result. It also shows
+the saved population selections, computation configuration, input/code identity, warnings, and
+unavailable reasons. If no completed run exists, it shows the documented CLI dry-run/new commands.
+The first-pass viewer discovers only the selected session's default `<session_root>/analysis_runs`
+directory. A deliberately nondefault CLI output root remains valid but is inspected outside the
+webapp.
+
+This boundary deliberately favors reproducibility and operational simplicity over in-app
+computation. A new population, bin size, lag/order, condition set, or analysis stage requires an
+edited validated configuration and an explicit CLI run; Streamlit never silently computes a new
+result during rerender.
 
 Every relevant figure or description includes:
 
@@ -523,6 +691,10 @@ Use existing project dependencies only:
 
 Verify each external API against the installed package source or official documentation before its
 first implementation use. Do not inherit estimator defaults without an explicit test.
+
+For the audited statsmodels 0.15.0 environment, Poisson uses `GLM` with an explicit design
+intercept, `Poisson(Log())`, `missing="raise"`, and IRLS (`maxiter=100`, `tol=1e-8`), with no
+weights, exposure, offset, or regularized fit. Recheck this contract if the environment changes.
 
 Keep data preparation, folds, PCA, OLS, Poisson, Granger, aggregation, plotting, and Streamlit
 integration as focused components with documented array shapes, axis meanings, units, and return
@@ -561,11 +733,12 @@ version 3](https://www.biorxiv.org/content/10.1101/2020.11.29.402719v3.full), DO
 | Windows | Before `[-2, 0)`, after `[0, 2)`, whole `[-2, 2)` seconds |
 | Bin size | 100 ms |
 | Lag/order | 1/1 |
-| Conditions | Separate requested-condition fits; `all` means valid filtered trials |
+| Conditions | `all`, correct rewarded, incorrect, omission, switch, stay; separate fits |
 | CV | Five deterministic `cur_block` GroupKFold folds |
 | PCA | Separate training-only regional bases, up to 10 PCs, no whitening/rescaling |
 | Coverage | Loaded spike data implicitly cover requested windows |
-| Persistence | Versioned session result plus timestamped summary/log/figure run directory |
+| Persistence | One immutable timestamp/fingerprint run directory; atomic complete state |
+| Application | Read-only viewer for validated completed runs; computation through CLI |
 | Population display | Individual targets, median, IQR |
 | Formal inference | None |
 
@@ -579,8 +752,9 @@ conventions.
 Version 3 resolves codebase-integration ambiguities identified after reviewing the existing neural
 analysis package. It names `cur_block` as the required CV group, introduces a new deterministic
 fold implementation, requires explicit dual-population selection, restricts the first pass to the
-metadata route, defines `all` and trial identity precisely, makes regression-specific controls
-explicit, requires a regression count tensor rather than classifier binning, separates new PCA
-preprocessing from the existing PCA API, documents strict rank-related unavailability, and records
-the temporary complete-coverage assumption. It also specifies minimal versioned persistence and
-session/batch runners, and fixes the implementation sequence as OLS, then Poisson, then Granger.
+metadata route, defines the canonical conditions, `all`, trial identity, and prefilter fold universe
+precisely, freezes the computation configuration, requires a local regression count tensor rather
+than classifier binning, separates deterministic full-SVD PCA from the existing PCA API, documents
+strict rank/tolerance-related unavailability, and records the temporary complete-coverage
+assumption. It also specifies one atomic immutable run directory, a read-only saved-result webapp,
+session/batch runners, and the fixed implementation sequence OLS, then Poisson, then Granger.

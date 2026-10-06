@@ -9,20 +9,21 @@ repository audit.
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-06 14:52 EDT.
+**Snapshot date:** 2026-10-06 16:36 EDT.
 
-**Current phase:** WP0, documentation architecture and implementation planning. The v3 scientific
-specification and this plan exist as new untracked documentation files. No implementation or test
-work has begun, and the user has explicitly prohibited implementation in this chat.
+**Current phase:** WP0 documentation contract freeze complete; awaiting user review. The v3
+scientific specification and this plan are tracked documentation files with plan-owned working-tree
+changes. No implementation or test work has begun, and the user has explicitly prohibited
+implementation in this chat.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
 - HEAD before this documentation revision: `6131d8e`;
 - plan-owned files: `docs/neural_regression_plan.md` and
-  `docs/spec_neural_regression_v3.md`;
-- both plan-owned files are currently untracked;
-- the worktree contains many unrelated pre-existing untracked files and directories; and
+  `docs/spec_neural_regression_v3.md`, both currently tracked and modified;
+- the worktree also contains an unrelated modified `docs/task_variable_implementation_plan.md` and
+  many unrelated pre-existing untracked files/directories; and
 - none of those unrelated entries belongs to this plan or may be staged, changed, removed, or
   absorbed into a later package.
 
@@ -34,13 +35,16 @@ work has begun, and the user has explicitly prohibited implementation in this ch
 - v3 records the approved scientific and first-pass data-validity decisions;
 - the current plan contains module responsibilities, explicit array/result contracts, a phased
   tests-first inventory, performance considerations, and reproducible run outputs; and
+- the implementation-readiness correction froze the JSON configuration, condition/fold universe,
+  count/PCA determinism, result/status schema, numerical tolerances, atomic run identity,
+  read-only webapp boundary, and batch-memory rule; and
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** finish this documentation revision and return it for user review. Do not
-create tests or production files in this chat. A later implementation chat begins only after the
-user approves the plan and explicitly requests implementation; the incoming Sol supervisor then
-performs the resume checklist below and starts WP1, not source edits from WP2 or later.
+**Next exact action:** return the corrected plan/spec for user review. Do not create tests or
+production files in this chat. A later implementation chat begins only after the user approves the
+plan and explicitly requests implementation; the incoming Sol supervisor then performs the resume
+checklist below and starts WP1, not source edits from WP2 or later.
 
 ### Authority order
 
@@ -64,7 +68,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 
 | Package | Scope | State at snapshot | Next gate |
 |---|---|---|---|
-| WP0 | Specification, architecture, orchestration, and handoff plan | Active; documentation only | User review; no implementation in this chat |
+| WP0 | Specification, architecture, orchestration, and handoff plan | Contract freeze complete; documentation only | User review; no implementation in this chat |
 | WP1 | Configuration and result contracts | Not authorized | Explicit implementation request and fresh Sol preflight |
 | WP2 | Counts, masks, folds, windows, and histories | Not authorized | WP1 GREEN and recorded handoff |
 | WP3 | Direct-unit OLS fitting, scoring, and aggregation | Not authorized | WP2 GREEN and numerical test-design gate |
@@ -167,6 +171,38 @@ Use this template:
 - Exact next action and authorization: return the revised plan for user review; implementation
   requires a later explicit request in a new or resumed chat.
 
+#### 2026-10-06 16:36 EDT - WP0 implementation-readiness correction
+
+- State: documentation contracts frozen; WP0 awaits user review and remains implementation-
+  inactive.
+- Authorization: documentation changes only; no source, tests, commits, or analysis runs.
+- Sol / Terra / reviewer: primary documentation agent only; no worker or independent reviewer.
+- Start HEAD / end HEAD: `6131d8e` / `6131d8e`.
+- Worktree and owned files: changed only `docs/neural_regression_plan.md` and
+  `docs/spec_neural_regression_v3.md`; both are tracked plan-owned files. This corrects the earlier
+  14:52 record's mistaken `untracked` label; `git ls-files --stage` confirms both were already
+  tracked. The unrelated modified `docs/task_variable_implementation_plan.md` and existing untracked
+  entries were not changed.
+- RED command and result: not applicable; no tests were written or run.
+- GREEN/regression commands and results: `git diff --check -- docs/neural_regression_plan.md
+  docs/spec_neural_regression_v3.md` passed; `LC_ALL=C rg -n '[^ -~]'` over both files returned no
+  matches; Markdown-fence counts were even (50 plan, 30 spec); targeted `rg` contradiction searches
+  returned no stale compute-in-webapp, dual-result-tree, or weak file-identity language. No production
+  verification is claimed.
+- Commits: none.
+- Real-data, filesystem, or external actions: no experimental-data, network, benchmark, batch, or
+  external action. Only the two authorized Markdown files were edited; a local `uv run` inspection
+  read installed library versions/signatures using a temporary cache under `/tmp`.
+- Findings and unresolved risks: froze the exact configuration and defaults, unfiltered fold
+  universe, local positional count tensor, deterministic PCA settings, saved-table/status/reason
+  contracts, numerical tolerances, immutable atomic run state/fingerprint/rerun behavior,
+  read-only completed-run webapp, and explicit batch memory estimate/cap. The deliberately strict
+  direct-unit rank policy and implicit coverage assumption remain scientific limitations, not
+  implementation gaps. Light-mode plotting remains the documented default.
+- Exact next action and authorization: user reviews the corrected plan/spec. A later explicit
+  implementation request authorizes only a fresh WP1 preflight; real-session and batch execution
+  remain separately unauthorized.
+
 ## Plan objective and status
 
 This plan implements `docs/spec_neural_regression_v3.md`. It is a proposal for review, not
@@ -244,7 +280,10 @@ Preparation -> regional PCA -> linear / Poisson / Granger numerics
 Pure session pipeline and tidy in-memory results
                     |
                     v
-Persistence/runners and plotting/webapp adapters
+Persistence/runners and plotting
+                    |
+                    v
+Read-only webapp adapter over completed runs
 ```
 
 Dependency rules:
@@ -252,8 +291,8 @@ Dependency rules:
 1. Scientific numerical modules never import Streamlit, filesystem runners, or plotting code.
 2. Plotting consumes completed result tables and never prepares data or fits a model.
 3. Persistence serializes validated records but never recalculates a metric.
-4. The webapp builds configuration, invokes the run boundary, and renders saved/in-memory results;
-   it does not construct design matrices or call estimator libraries directly.
+4. The webapp discovers and renders completed saved runs only. It does not load raw spikes, build
+   computation configurations, invoke runners, construct design matrices, or call estimators.
 5. `run_session.py` is the composition root: it joins existing loaders, the pure pipeline,
    persistence, plots, logging, and summaries.
 6. `run_batch.py` delegates one independent session at a time to the single-session entry point;
@@ -301,6 +340,7 @@ Add tests alongside the existing neural-analysis tests:
 
 ```text
 src/tests/neural_analysis/test_interregional_configuration.py
+src/tests/neural_analysis/test_interregional_records.py
 src/tests/neural_analysis/test_interregional_preparation.py
 src/tests/neural_analysis/test_interregional_pca.py
 src/tests/neural_analysis/test_interregional_linear.py
@@ -338,7 +378,7 @@ src/neural_analysis/README.md
 | Numerical engines | `linear.py`, `poisson.py`, `granger.py` | Fit validity, coefficients, predictions, model-specific metrics | Trial-condition interpretation, file I/O, UI state |
 | Orchestration | `pipeline.py` | Ordered condition/window/fold/direction execution and local failure isolation | Raw path discovery, plotting, serialization format |
 | Run boundary | `persistence.py`, `run_session.py`, `run_batch.py` | Versioned outputs, skip/rerun behavior, logs, summaries, session-level parallelism | New scientific formulas |
-| Presentation | `plotting.py`, `webapp/interregional_views.py`, small `app.py`/`session_inputs.py` routes | Figures, controls, status tables, explicit run action | Direct estimator or design-matrix calls |
+| Presentation | `plotting.py`, `webapp/interregional_views.py`, small `app.py`/`session_inputs.py` routes | Figures and read-only saved-result selectors/status tables | Raw-data loading, run actions, estimators, or design matrices |
 
 ### End-to-end data flow
 
@@ -346,9 +386,10 @@ The ordinary single-session flow is:
 
 1. Resolve one metadata session and two explicit, disjoint PFC/HPC population selections.
 2. Validate configuration and trial-table columns without loading large arrays in dry-run mode.
-3. Load aligned spikes once per selected probe/population.
-4. Build aligned regional count tensors over the configured whole interval.
-5. Build the authoritative trial masks and one session-level `cur_block` fold assignment.
+3. Build the complete-session fold assignment and authoritative trial masks from the trial table.
+4. Load aligned spikes once per selected probe/population.
+5. Build aligned regional count tensors over the configured whole interval for the authoritative
+   base-mask (`all`) trial rows, in ascending zero-based row order.
 6. For each fold, fit regional PCA once when PCs are requested, using only fold-training trials.
 7. For each direction, condition, and window, build history matrices once and reuse them for every
    target sharing the design.
@@ -358,7 +399,8 @@ The ordinary single-session flow is:
 10. Return `InterregionalResults` without writing or plotting.
 11. At the run boundary, persist the validated result, render figures, and write the run log and
     scientific summary.
-12. The webapp displays the same result tables and figures and never redefines a metric.
+12. The webapp discovers only atomically completed run directories, loads the same persisted
+    tables, and displays them without starting or resuming computation.
 
 Stage ordering applies inside this flow: standard OLS outputs become stable first, Poisson tables
 are added only afterward, and descriptive Granger tables are added last.
@@ -394,20 +436,121 @@ stop-and-replan condition. The Sol supervisor records the evidence here before e
 
 ### `configuration.py`
 
-Define small frozen dataclasses and validation functions. Proposed records are:
+Define small frozen dataclasses and side-effect-free validation functions. The exact constants are:
 
-- `AnalysisWindows`: whole, before, and after half-open bounds in seconds.
-- `TemporalConfig`: bin size in seconds, positive lag in bins, and positive order in bins.
-- `PCAConfig`: requested component counts for PFC and HPC.
-- `FilterConfig`: requested conditions, choice filter, context filter, and excluded trial rows.
-- `PopulationSelection`: anatomical role, probe ID, qualified unit IDs, and channel/unit-selection
-  metadata.
-- `InterregionalConfig`: alignment, the two regional selections, windows, temporal configuration,
-  PCA configuration, exactly five folds, and the coverage-assumption version.
+```text
+CONFIG_SCHEMA_VERSION = "1"
+RESULT_SCHEMA_VERSION = "1"
+ANALYSIS_VERSION = "interregional-regression-v1"
+COVERAGE_ASSUMPTION_VERSION = "implicit-complete-v1"
+N_CV_FOLDS = 5
+CV_GROUP_COLUMN = "cur_block"
+ALLOWED_BIN_SIZES_S = (0.5, 0.1, 0.05, 0.02)
+CANONICAL_CONDITIONS = (
+    "all", "correct_rewarded", "incorrect", "omission", "switch", "stay",
+    "omission_switch", "omission_stay", "incorrect_switch", "incorrect_stay",
+)
+DEFAULT_CONDITIONS = ("all", "correct_rewarded", "incorrect", "omission", "switch", "stay")
+```
 
-Validation is explicit and side-effect free. It rejects overlapping PFC/HPC unit identities,
-unsupported bin sizes, nonpositive lag/order, an invalid window partition, an empty condition list,
-and Poisson with a PC response. It does not load data or inspect Streamlit state.
+`rewarded` remains an internal legacy alias returned by an existing helper; it is not accepted as a
+saved regression condition. Requested conditions must be unique and are normalized to canonical
+order.
+
+The exact frozen records are:
+
+- `RegionalPopulationConfig`: `role` (`"PFC"` or `"HPC"`), nonempty `probe_id`,
+  `channel_source="metadata_quality"` (`"metadata_quality"` or `"explicit"`), sorted unique zero-
+  based `selected_channels`, `require_inside_brain=true`, nonempty sorted unique
+  `channel_quality_labels=("good",)`, `unit_quality_column="group"` (`"group"` or `"KSLabel"`), and
+  nonempty sorted unique `unit_quality_labels=("good", "mua")`. For `metadata_quality`,
+  `selected_channels` is empty and the resolver selects the stated quality labels/inside-brain rows,
+  intersected with metadata `unit_channels` when present. For `explicit`, `selected_channels` must be
+  nonempty and channel-quality fields are retained as provenance but do not further filter channels.
+  Unit-quality filtering always applies. This unresolved record contains no cluster IDs.
+- `ResolvedRegionalPopulation`: all normalized selection fields plus ordered `selected_channels`,
+  ordered `cluster_ids`, and equally sized ordered qualified `unit_ids`. Resolution validates that
+  every unit belongs to the stated probe/channel/unit-quality selection and that the PFC/HPC
+  qualified unit sets are nonempty and disjoint. Selected channels and integer cluster IDs are
+  ascending; qualified unit IDs follow that cluster order.
+- `AnalysisWindows`: `whole_start_s=-2.0`, `split_s=0.0`, and `whole_stop_s=2.0`. Before is
+  `[whole_start_s, split_s)`, after is `[split_s, whole_stop_s)`, and whole is
+  `[whole_start_s, whole_stop_s)`. All values are finite, `whole_start_s < split_s < whole_stop_s`,
+  and `split_s` is exactly the selected alignment boundary at zero seconds.
+- `TemporalConfig`: `bin_size_s=0.1`, `lag_bins=1`, and `order_bins=1`. The bin size must be one of
+  `ALLOWED_BIN_SIZES_S`; lag and order are positive integers. A window whose available bin count is
+  not greater than `lag_bins + order_bins - 1` is recorded unavailable for that window rather than
+  invalidating unrelated windows.
+- `PCAConfig`: `pfc_components=10` and `hpc_components=10`, both positive integers.
+- `FilterConfig`: requested conditions, `choice="all"`, `context="all"`, and an empty tuple of
+  `excluded_trial_rows`. Choice/context values are `"all"`, `"left"`, or `"right"`; exclusions are
+  sorted unique nonnegative zero-based row positions. Session preparation rejects an exclusion that
+  is greater than or equal to the trial-table row count.
+- `InterregionalAnalysisConfig`: schema/analysis/coverage versions, `session_metadata_path`, PFC and
+  HPC population configurations, `alignment="choice_time"` (`"choice_time"` or `"start_time"`),
+  windows, `prediction_windows=("before", "after", "whole")`, temporal/PCA/filter records,
+  `representations=("units",)`, and
+  `analyses=("ols_cv",)`. Allowed representations are `"units"` and `"pcs"`; allowed analysis
+  stages in canonical order are `"ols_cv"`, `"poisson_cv"`, `"linear_granger"`, and
+  `"poisson_granger"`.
+- `RunOptions`: non-scientific execution fields `output_root`, `rerun`, and optional batch-worker
+  override. These fields are not part of `InterregionalAnalysisConfig` or its scientific
+  fingerprint.
+
+The analysis dependency validator requires `ols_cv` before `linear_granger`, requires units and
+`ols_cv` when `poisson_cv` is requested, and requires units and `poisson_cv` before
+`poisson_granger`. Request order is normalized to canonical stage order. PCs never enter either
+Poisson stage. Prediction windows, representations, and stages must be nonempty and unique and are
+normalized to their documented canonical order.
+
+Window/bin compatibility is tested with
+`isclose(duration_s / bin_size_s, round(...), rtol=0, atol=1e-9)`. The resolved integer bin count is
+the rounded quotient. Validation rejects incompatible window geometry, empty selections, duplicate
+or overlapping unit identities after resolution, unsupported values, and invalid stage
+dependencies. It does not load data or inspect Streamlit state.
+`session_metadata_path` and a nonnull `output_root` must be normalized absolute paths; relative
+paths are rejected so fingerprints and handoffs do not depend on a caller's working directory.
+
+The one portable JSON format maps directly to these records and has no undocumented keys:
+
+```json
+{
+  "config_schema_version": "1",
+  "analysis_version": "interregional-regression-v1",
+  "coverage_assumption_version": "implicit-complete-v1",
+  "session_metadata_path": "/absolute/path/to/session_metadata.json",
+  "populations": {
+    "PFC": {
+      "probe_id": "probe_a", "channel_source": "metadata_quality", "selected_channels": [],
+      "require_inside_brain": true, "channel_quality_labels": ["good"],
+      "unit_quality_column": "group", "unit_quality_labels": ["good", "mua"]
+    },
+    "HPC": {
+      "probe_id": "probe_b", "channel_source": "metadata_quality", "selected_channels": [],
+      "require_inside_brain": true, "channel_quality_labels": ["good"],
+      "unit_quality_column": "group", "unit_quality_labels": ["good", "mua"]
+    }
+  },
+  "alignment": "choice_time",
+  "windows": {"whole_start_s": -2.0, "split_s": 0.0, "whole_stop_s": 2.0},
+  "prediction_windows": ["before", "after", "whole"],
+  "temporal": {"bin_size_s": 0.1, "lag_bins": 1, "order_bins": 1},
+  "filters": {
+    "conditions": ["all", "correct_rewarded", "incorrect", "omission", "switch", "stay"],
+    "choice": "all", "context": "all", "excluded_trial_rows": []
+  },
+  "pca": {"pfc_components": 10, "hpc_components": 10},
+  "representations": ["units"],
+  "analyses": ["ols_cv"],
+  "run": {"output_root": null}
+}
+```
+
+`output_root=null` resolves to `<session_root>/analysis_runs`. CLI `--output-root` overrides it.
+`rerun` and batch workers are CLI invocation choices and are never written as scientific settings.
+The loader rejects unknown keys at every level so a typo cannot silently change an analysis. The
+run boundary rejects an output root inside the Git repository; analysis outputs must stay in the
+session hierarchy or another explicit nonrepository path.
 
 All public functions and dataclasses document input types, array shapes, axes, physical units, and
 return contracts.
@@ -426,28 +569,113 @@ Define simple data containers without fitting behavior:
 - `InterregionalResults`, containing a small set of tidy DataFrames rather than one deeply nested
   dictionary.
 
-The result tables have stable, documented columns:
+Every textual identifier/status/reason/JSON column uses pandas `string`; every flag uses `boolean`;
+every potentially unavailable integer diagnostic uses nullable `Int64`; every metric uses nullable
+`Float64`. Nonnullable `trial_row`, CV `fold_id`, and always-defined requested/count columns use
+`int64`. JSON-list/scalar columns are canonical compact JSON strings, not Python object values.
+Every table is sorted by its primary key before save. The exact result tables are:
 
-1. `fold_assignments`
-   - session, trial row, original index label, block, and test fold.
-2. `fold_scores`
-   - analysis keys, target ID/rank, fold, status/reason, trial and row counts, design dimensions,
-     rank, residual degrees of freedom, restricted/full metrics, paired increment, and optional MSE.
-3. `target_summaries`
-   - analysis keys, target, completeness, number of valid/requested folds, and mean fold metrics.
-4. `population_summaries`
-   - analysis keys, metric, contributing targets, median, 25th percentile, and 75th percentile.
-5. `pca_fits`
-   - fold or descriptive scope, region, requested/actual components, retained/omitted unit IDs, and
-     training-observation counts.
-6. `granger_scores`, added only in the Granger phase.
+1. `fold_assignments`, primary key `session_id, trial_row`: `original_index_repr`,
+   `block_value_json`, `block_present`, `fold_id`, `status`, `reason`. Missing-block rows have
+   nullable `fold_id` and `not_applicable/missing_block`; assigned rows are `ok` with empty reason.
+2. `trial_membership`, primary key `session_id, trial_row, alignment, condition`: provenance plus
+   `original_index_repr`, `reward_status_valid`, `alignment_valid`, `choice_match`,
+   `context_match`, `user_included`, `block_present`, `condition_match`, `included`, and
+   `exclusion_reasons_json`.
+3. `fold_scores`, primary key
+   `session_id, direction, representation, model_family, condition, window, target_id, fold_id`:
+   `evaluation_scope`, `target_rank`, `restricted_status`, `restricted_reason`, `full_status`,
+   `full_reason`, paired `status`, paired `reason`, `n_train_trials`, `n_test_trials`,
+   `n_train_rows`, `n_test_rows`, `restricted_feature_count`, `full_feature_count`,
+   `restricted_rank`, `full_rank`, `restricted_df_resid`, `full_df_resid`, plus nullable
+   `r2_restricted`, `r2_full`, `delta_r2`, `mse_restricted`, `mse_full`,
+   `deviance_restricted`, `deviance_full`, `null_deviance`,
+   `deviance_explained_restricted`, `deviance_explained_full`, and
+   `delta_deviance_explained`. Metrics not belonging to the model family are null.
+4. `target_summaries`, primary key
+   `session_id, evaluation_scope, direction, representation, model_family, condition, window,
+   target_id, metric_name`: `target_rank`, `status`, `reason`, `requested_folds`, `valid_folds`, and
+   nullable `mean_value`. This table is long by metric so valid MSE is retained when R-squared or
+   deviance explained is unavailable. A mean is present only when all five values for that metric
+   are defined; otherwise status is `incomplete_folds`, reason is `incomplete_requested_folds`, and
+   `mean_value` is null.
+5. `population_summaries`, primary key
+   `session_id, evaluation_scope, direction, representation, model_family, condition, window,
+   metric_name`: `status`, `reason`, `n_targets`, `q25`, `median`, and `q75`. With no complete
+   contributing targets, quartiles are null and the row is `not_applicable/no_complete_targets`.
+6. `pca_fits`, primary key `session_id, scope, fold_id, region`: `status`, `reason`, requested and
+   actual component counts as `requested_components`, `actual_components`,
+   `n_training_trials`, `n_training_observations`, `retained_unit_ids_json`, and
+   `omitted_unit_ids_json`. The final two are canonical JSON arrays. `fold_id` is null only for
+   `scope="descriptive"`.
+7. `granger_scores`, primary key
+   `session_id, direction, representation, model_family, condition, window, target_id`:
+   `evaluation_scope="in_sample"`, `target_rank`, `restricted_status`, `restricted_reason`,
+   `full_status`, `full_reason`, paired `status`, paired `reason`, `diagnostic`, `n_trials`, `n_rows`,
+   `restricted_feature_count`, `full_feature_count`, `restricted_rank`, `full_rank`,
+   `restricted_df_resid`, `full_df_resid`, nullable
+   `sse_restricted`, `sse_full`, `linear_granger`, `llf_restricted`, `llf_full`,
+   `deviance_restricted`, `deviance_full`, `likelihood_ratio`, and
+   `mean_deviance_improvement`.
+
+`direction` is exactly `"HPC_to_PFC"` or `"PFC_to_HPC"`; `representation` is `"units"` or
+`"pcs"`; `model_family` is `"ols"` or `"poisson"`; windows are `"before"`, `"after"`, or
+`"whole"`. Unit `target_id` is qualified; PC `target_id` is `PFC:PC01`, `HPC:PC01`, and so on, with
+one-based display rank in nullable `target_rank`. CV fold/target/population rows use
+`evaluation_scope="held_out_cv"`; Granger rows use `"in_sample"`. Fold IDs are zero-based 0-4.
+CV `metric_name` values are exactly the metric-column names from `fold_scores`; Granger population
+summaries use `linear_granger`, `likelihood_ratio`, or `mean_deviance_improvement` as applicable.
+Materialize the complete applicable requested key grid: five folds for every requested unit target
+or requested PC rank, direction, representation, supported model family, condition, and prediction
+window. Unavailable cells are rows with null metrics, never absent keys. Granger materializes the
+analogous grid without fold. Poisson/PC combinations are inapplicable and are not grid members. This
+invariant makes reruns, stage additions, and user inspection comparable.
+
+The exact status vocabulary is `ok`, `metric_unavailable`, `fit_unavailable`,
+`incomplete_folds`, and `not_applicable`. An `ok` row uses an empty reason string. Stable reason
+codes are:
+
+```text
+missing_block, invalid_reward_status, invalid_alignment, choice_filter_mismatch,
+context_filter_mismatch, user_excluded, condition_mismatch, no_eligible_trials,
+no_train_trials, no_test_trials, no_train_rows, no_test_rows, history_exceeds_window,
+no_units, pca_no_variable_units,
+pca_insufficient_components, constant_training_target, rank_deficient_restricted,
+rank_deficient_full, nonpositive_df_restricted, nonpositive_df_full, nonfinite_coefficients,
+nonfinite_predictions, constant_test_target, zero_null_deviance,
+poisson_nonconverged_restricted, poisson_nonconverged_full, nonpositive_poisson_mean,
+zero_granger_residual, nested_fit_inconsistency, incomplete_requested_folds,
+no_complete_targets
+```
+
+Only reasons from this vocabulary may be persisted. Unexpected programming/data-contract failures
+remain exceptions and are logged at the run boundary rather than converted to an invented reason.
+Restricted/full status fields report each fit independently. Paired status is `fit_unavailable` if
+either fit is unavailable (restricted reason takes precedence if both fail), otherwise
+`metric_unavailable` when the primary paired metric is undefined, otherwise `ok`; the numeric
+diagnostic columns still expose both fits. This precedence is presentation only and never discards
+the model-specific status/reason fields. Restricted/full fit statuses use only `ok` or
+`fit_unavailable`; summary-only `incomplete_folds` and `not_applicable` never appear there.
+`granger_scores.diagnostic` is either empty or `nested_roundoff`; it records the one tolerated
+near-zero nested-fit correction without mislabeling a valid row as unavailable.
+
+`trial_membership.exclusion_reasons_json` is a canonical JSON array in this fixed order:
+`invalid_reward_status`, `invalid_alignment`, `choice_filter_mismatch`,
+`context_filter_mismatch`, `user_excluded`, `missing_block`, `condition_mismatch`. It is empty iff
+`included=true`. Run/loader errors such as `insufficient_blocks`, `unsupported_saved_version`, and
+`corrupt_saved_result` are exceptions recorded in `run_state.json`/the log, not result-row reasons.
 
 Configuration and coverage-assumption metadata remain attached to the top-level result record.
 Large per-bin design matrices and fitted estimator objects are not retained after scoring.
 
-The result record also carries an analysis version, deterministic configuration fingerprint,
-generating function names, units/axis conventions, and a random-seed field. Deterministic paths
-record that no random seed was used rather than inventing one.
+`InterregionalResults` has exactly: `schema_version=RESULT_SCHEMA_VERSION`, `analysis_version`,
+`coverage_assumption_version`, canonical `configuration`, `scientific_fingerprint`, `session_id`,
+`resolved_populations`, `bin_edges_s`, `units_and_axes`, `generating_functions`,
+`randomness_used`, nullable `random_seed`, and the seven named tables. Tables for stages not yet
+implemented are present with their frozen empty schemas, which keeps later additions backward
+compatible. Large per-bin count/design arrays and fitted estimator objects are not retained.
+Deterministic paths record `randomness_used=false` and `random_seed=null` rather than inventing a
+seed.
 
 ### `preparation.py`
 
@@ -472,14 +700,46 @@ select_window_bins(...)
 build_history_matrices(...)
 ```
 
-`build_regional_count_tensor` should use the same Pynapple/event-alignment conventions as the
-existing population tensor builder but return raw integer counts. It must not obtain counts by
-rounding displayed firing rates. If a common lower-level bin-count operation can be extracted
-without changing existing public behavior, use it; otherwise implement the small regression-
-specific function locally and test boundary equivalence.
+`build_regional_count_tensor` is a new regression-local implementation. It uses Pynapple's aligned
+tensor construction with the existing population builder's event/window conventions, then
+transposes explicitly to `(trial, time_bin, unit)`, verifies finite nonnegative integer-valued
+counts within the `int64` range, and casts to `int64`. It obtains trial metadata with `trial_df.iloc[trial_rows]`, never
+`.loc`, because `trial_rows` are positions. It must not round rates, extract or change a helper in
+the existing PCA module, or change any existing binning API. Spikes at a bin's left edge are
+included; the configured final right edge is excluded. Tests compare these boundaries directly.
 
-`build_block_fold_assignment` receives one block value per zero-based trial row and returns exactly
-one test-fold ID per row with a nonmissing block. It is built once before condition filtering.
+The prepared regional tensor trial axis contains exactly the ascending trial rows where the
+authoritative base mask is true, even when `all` is not itself a requested output condition. Named
+condition masks are then indexed onto this fixed base trial axis. Invalid-alignment, missing-block,
+filtered, and user-excluded rows remain in provenance tables but are never passed to Pynapple.
+
+Construct whole-window edges as
+`whole_start_s + arange(n_whole_bins + 1, dtype=float64) * bin_size_s`, then assign the first and
+last values exactly to `whole_start_s` and `whole_stop_s`. Before/after selection uses integer edge
+positions derived during validation, not repeated floating comparisons. Thus both regions and all
+windows share byte-identical bin-edge arrays.
+
+`build_block_fold_assignment` receives the complete session trial table, constructs one sample per
+zero-based row with nonmissing `cur_block`, and calls `GroupKFold(n_splits=5, shuffle=False)` on that
+unfiltered row universe. Split enumeration defines fold IDs 0 through 4. Missing-block rows retain
+no fold and are excluded from the base CV mask. At least five distinct nonmissing blocks are
+required at session preparation time. The mapping is built once before alignment, choice/context,
+condition, or user-exclusion filtering and is reused by every analysis stage.
+
+Each nonmissing block value must be a string, non-Boolean integer, or finite float scalar. Convert
+NumPy scalars to their Python scalar, encode each with canonical JSON, and pass that encoded string
+to `GroupKFold`. This keeps numeric and string labels distinct, makes mixed scalar types sortable,
+and gives `fold_assignments.block_value_json` its exact persisted value. Reject arrays, mappings,
+Booleans, infinities, and NaNs as invalid block labels.
+
+The authoritative base mask is existing `valid` reward-status mask AND finite selected-alignment
+time AND choice/context matches AND not user-excluded AND block present. A named condition is this
+base mask AND the corresponding existing canonical condition mask. If a non-`all` choice/context
+filter is requested and its required trial column is absent, preparation raises a configuration/
+input error instead of silently producing an empty analysis.
+The existing LFP mapping is explicit: choice uses `action` and context uses `state_int`; for each,
+`left` is numeric 1 and `right` is numeric 0 after numeric coercion. `all` does not require that
+filter's column. Nonfinite values fail a selected left/right filter.
 
 `build_history_matrices` receives tensors already aligned on trial and bin axes. Its contracts are:
 
@@ -516,15 +776,27 @@ fit_fold_regional_pcas(...)
 fit_descriptive_regional_pcas(...)
 ```
 
-The fitted transform records the training mean and standard deviation before omission, retained and
-omitted unit IDs, unwhitened component matrix, actual component count, and observation count.
+The fitted transform records the training mean and population standard deviation (`ddof=0`) before
+omission, retained and omitted unit IDs, unwhitened component matrix, actual component count, and
+observation count. Calculations use `float64`. Omit a unit when its training standard deviation is
+zero or nonfinite. Fit scikit-learn PCA with
+`n_components=min(requested_components, n_training_observations, n_retained_units)`,
+`svd_solver="full"`, and `whiten=False`. This path uses no random number generator and records
+`random_seed=null` plus `randomness_used=false`.
 
 Fold PCA uses only training trials pooled over the configured whole interval and union of requested
 conditions. The same fitted regional transforms are reused for both directions and every requested
 condition/window in that fold. Descriptive all-data PCA has a distinct scope label and cannot be
 passed to CV pipeline functions.
 
+Expected PC target ranks run from 1 through the requested count for the target region. When a
+fold's actual PCA dimension is smaller, emit each missing rank's `fold_scores` row as
+`fit_unavailable/pca_insufficient_components` rather than omitting the key. This makes incomplete-
+fold summaries and saved-schema comparisons explicit.
+
 Do not add PC sign matching, cross-fold component alignment, whitening, or a post-PCA scaler.
+Downstream scores are sign-invariant; component loadings and scores retain scikit-learn's
+deterministic full-SVD sign convention.
 
 ### `linear.py`
 
@@ -546,9 +818,13 @@ calculate target-specific constant-response and score status separately.
 
 Do not use `sklearn.LinearRegression` merely to obtain functionality already explicit in
 `numpy.linalg.lstsq`. Record the coefficient count, rank, and residual degrees of freedom.
+Call `numpy.linalg.lstsq(design, responses, rcond=None)` explicitly after the shared rank/degree-
+of-freedom validation; all fitting arrays are `float64`.
 
 OLS score functions implement held-out R-squared and MSE from the specification without library
 replacement values for constant targets. Negative finite R-squared and increments are preserved.
+Population summaries use `numpy.quantile(complete_target_values, [0.25, 0.5, 0.75],
+method="linear")`; `median` is that 0.5 quantile. They never pool fold rows before quantiling.
 
 ### `poisson.py`
 
@@ -564,9 +840,15 @@ score_poisson_predictions(...)
 compare_count_prediction_mse(...)
 ```
 
-Use statsmodels GLM with the Poisson family and log link, explicitly confirming unpenalized fitting,
-intercept handling, convergence attributes, and prediction semantics against installed statsmodels
-source or official documentation immediately before implementation.
+The audited environment currently provides statsmodels 0.15.0. Use
+`statsmodels.api.GLM(y, design, family=sm.families.Poisson(link=sm.families.links.Log()),
+missing="raise")` and `.fit(method="IRLS", maxiter=100, tol=1e-8, scale=None,
+cov_type="nonrobust", full_output=True, disp=False)`. The design already contains the one explicit
+intercept; do not call `add_constant`, `fit_regularized`, or pass weights/exposure/offset. Require
+`result.converged is True`, finite `result.params`, and finite `result.llf`. Calculate test means as
+`exp(test_design @ params)` and require them to be positive and finite. Reconfirm these signatures
+and result attributes against the installed source immediately before WP9 in case the environment
+changed.
 
 Fit one target at a time because convergence and constant-response validity are target-specific.
 The module returns plain parameters/diagnostics needed for scoring, not statsmodels result objects in
@@ -597,6 +879,29 @@ CV result types must not be accepted by the Granger summary functions. PC Grange
 separately labeled descriptive all-data PCA scores.
 
 No significance tests or p-value fields are added.
+
+### Numerical comparison policy
+
+Use named constants shared by linear, Poisson, and Granger tests:
+
+```text
+BIN_GEOMETRY_ATOL = 1e-9
+METRIC_RTOL = 1e-9
+METRIC_ATOL = 1e-12
+```
+
+`numpy.linalg.matrix_rank` with its documented default SVD tolerance decides design rank; tests use
+clearly full-rank or deficient matrices rather than near-threshold examples. Training-response
+constancy is exact for integer unit counts and uses zero variance under the same `ddof=0`
+calculation for floating PC responses. Held-out `SST` and Poisson null deviance are treated as zero
+when `isclose(value, 0, rtol=METRIC_RTOL, atol=METRIC_ATOL)`.
+
+For a quantity theoretically nonnegative under a nested in-sample fit, a negative value within
+`METRIC_ATOL + METRIC_RTOL * max(abs(restricted_value), abs(full_value), 1.0)` is recorded as zero
+with `diagnostic="nested_roundoff"`; a more negative value is `nested_fit_inconsistency`. Poisson likelihood-
+ratio and deviance-difference equivalence uses the same scale-aware tolerance. Tests assert exact
+hand calculations where feasible and use these constants only for floating comparisons; no
+scientific score is rounded before persistence.
 
 ### `pipeline.py`
 
@@ -656,16 +961,25 @@ Keep Streamlit-specific code out of the analysis package.
 
 Responsibilities:
 
-- Render separate PFC and HPC metadata-population selectors with unique widget keys.
-- Reuse existing unit-quality/channel-selection behavior independently for each role.
-- Render regression-specific alignment, window, condition, choice/context, bin, lag/order, PCA, and
-  model controls.
-- Convert widget values into validated `InterregionalConfig` and `PopulationSelection` records.
-- Invoke cached preparation/analysis entry points.
-- Display configuration errors, unavailable-result reasons, tables, and figures.
+- Accept the selected metadata session, derive `<session_root>/analysis_runs` with the same session
+  resolver as the CLI, and discover completed interregional run directories only there.
+- Reject incomplete, failed, corrupt, or unsupported-version runs through the validated loader.
+- Render a completed-run selector labeled with timestamp, analysis version, short fingerprint, PFC
+  and HPC population descriptions, and completed stages.
+- Render display-only selectors for the conditions, windows, representations, model families, and
+  metrics actually present in that saved result.
+- Display the saved scientific configuration read-only, including population roles, channels,
+  qualities, alignment, filters, bin/lag/order, PCA counts, coverage version, input/code identity,
+  warnings, unavailable reasons, tables, and figures.
+- If no completed run exists, show the exact documented `dry-run` and `new` CLI commands; do not
+  offer an in-app compute button.
 
-The UI must state that the metadata route is required and loaded spike coverage is assumed. It must
-not mutate the existing single-population state and then attempt to use it for both regions.
+This saved-only boundary is intentional: long scientific computation is explicit, logged, and
+restartable from the command line, while Streamlit rerenders remain read-only. Computation settings
+are edited in the validated JSON configuration, not in transient widget state. The UI states that
+the metadata route is required and loaded spike coverage is assumed. A nondefault CLI output root
+remains valid but is not auto-discovered by the first-pass webapp; its saved figures/tables are
+inspected directly.
 
 Integrate the view through a small branch in `src/neural_analysis/webapp/app.py`. Avoid placing the
 new scientific pipeline directly in that already-large file.
@@ -677,35 +991,24 @@ Keep file I/O and run orchestration outside fitting and plotting functions.
 `persistence.py` provides explicit functions such as:
 
 ```text
-configuration_fingerprint(config, analysis_version)
-result_path(session_root, config, analysis_version)
+input_fingerprint(config, resolved_inputs, code_identity)
+create_run_directory(output_root, timestamp, short_fingerprint)
 save_interregional_result(result, path)
 load_interregional_result(path)
-create_run_directory(output_root, timestamp)
 write_run_summary(...)
 write_run_log(...)
 ```
 
-Save the complete named-table result as a project-generated pickle under the original session data
-hierarchy, for example:
-
-```text
-<session_root>/analysis/interregional_regression/
-    <analysis_version>/<configuration_fingerprint>/result.pkl
-```
-
-The pickle contains only project-generated configuration records, metadata, and pandas/NumPy data.
-Document that untrusted pickle files must never be loaded. A parameter or analysis-version change
-produces a different path. An existing complete matching result is reused unless `rerun=True`.
-
-Each execution also creates a human-readable directory outside the repository, normally under the
-session data hierarchy:
+Use one immutable run directory as both the machine-readable and human-readable output. There is no
+second version/fingerprint result tree and no mutable canonical result file:
 
 ```text
 <session_root>/analysis_runs/
-    interregional_regression_<YYYYMMDD>_<HHMMSS>/
+    interregional_regression_<YYYYMMDD>T<HHMMSSffffff>Z_<fingerprint12>/
         config.json
-        result_location.txt
+        input_manifest.json
+        run_state.json
+        result.pkl
         run.log
         summary.md
         run_session.py
@@ -713,20 +1016,65 @@ session data hierarchy:
         figures/
 ```
 
-The copied scripts are the exact runner files used. `summary.md` records the goal, sessions,
+The timestamp is UTC with microseconds; directory creation is exclusive and a collision is an
+error rather than permission to reuse or overwrite a path.
+
+The pickle contains only project-generated configuration records, metadata, and pandas/NumPy data.
+Untrusted pickle files must never be loaded. The copied scripts are the exact runner files used.
+`summary.md` records the goal, sessions,
 scripts, configuration, warnings, unavailable-result counts, output locations, and a scientific
-summary. It explicitly states the complete-coverage and causal limitations.
+summary. That summary names the compared direction/condition/window, contributing target count,
+median/IQR of the primary metric, and whether the metric is held-out or in-sample; it does not turn
+descriptive values into significance claims. It explicitly states the complete-coverage and causal
+limitations.
 `run.log` records the runtime environment, parameters, processed session IDs, warnings or errors,
 and execution time.
+
+The scientific fingerprint is SHA-256 over canonical JSON containing the configuration/result
+schema, analysis, and
+coverage versions; all `InterregionalAnalysisConfig` fields; session ID; resolved ordered unit IDs;
+normalized absolute path, byte size, and streamed SHA-256 content hash for every consumed metadata,
+trial, aligned-spike, sorter, cluster, and channel-quality input file; and Git HEAD for code identity. It
+excludes timestamp, output root, rerun, worker count, and presentation-only choices. `config.json`
+and `input_manifest.json` retain the complete expanded values rather than only the hash. Real runs
+require a clean tracked worktree so Git HEAD fully identifies all reused code; dry-run reports dirty
+tracked paths and refuses `new` until they are committed or otherwise resolved by the user.
+Untracked files do not change code identity.
+
+`input_manifest.json` has exact top-level keys `manifest_schema_version="1"`,
+`scientific_fingerprint`, `session_id`, `git_head`, `resolved_populations`, and `files`. Each file
+entry has `logical_role`, normalized absolute `resolved_path`, `size_bytes`, and `sha256`. Entries
+are sorted by `logical_role` then path before hashing/writing. Hash large files in fixed-size chunks
+without deserializing them; dry-run may therefore perform substantial sequential I/O while keeping
+memory bounded. Missing or changed inputs between dry-run and `new` invalidate the fingerprint and
+stop before fitting.
+
+`run_state.json` uses exactly `initialized`, `running`, `failed`, or `complete`, with timestamps,
+fingerprint, current/last stage, warnings, and any exception summary. Every JSON and pickle file is
+flushed and `fsync`ed in a same-directory temporary file and installed with `os.replace`;
+`run_state.json` is
+changed to `complete` only after the result, manifest, log, summary, script copies, and figures are
+present and validated. Only a `complete` run whose fingerprint and saved versions validate may be
+reused or displayed. Interrupted/failed runs are retained as evidence but are never resumed in this
+first pass; a new invocation recomputes from the beginning.
+
+Run-stage names are exactly `input_validation`, `input_hashing`, `preparation`, `ols_cv`,
+`poisson_cv`, `linear_granger`, `poisson_granger`, `persistence`, `figures`, and `summary`; skip
+stages not requested. The CLI logs a start/end record and elapsed seconds for each entered stage.
+This is the progress contract; there is no background-task or Streamlit progress protocol.
 
 `run_session.py` loads one metadata session, applies skip/rerun logic, runs the requested completed
 analysis stages, saves the result, and writes figures/log/summary. `run_batch.py` reads a session
 list, supports a dry-run mode, calls the same single-session function, and parallelizes across
-sessions. Its default worker count is the available CPU-core count, with an explicit override for
-RAM- or I/O-constrained runs. Results remain session-separated.
+sessions with `concurrent.futures.ProcessPoolExecutor`. Its starting worker count is the available
+CPU-core/session minimum, with the documented explicit and memory caps. Each process receives one
+configuration path and returns a small status/run-path record; results and arrays are never passed
+between workers. Results remain session-separated.
 
-The web app invokes the same run-boundary functions only when the user presses an explicit run
-action. Ordinary Streamlit rerenders do not create duplicate run directories.
+For `new`, the runner scans completed directories below the output root and skips computation when
+one has the same fingerprint, printing that run path. `--rerun` always creates a new immutable
+timestamped directory and recomputes even when the fingerprint matches; it never overwrites or
+mutates the earlier run. The webapp is read-only and never creates a run directory.
 
 ### Offline command and documentation surface
 
@@ -751,13 +1099,17 @@ uv run python -m src.neural_analysis.interregional.run_batch new \
 
 `dry-run` validates paths, metadata roles, trial columns, filters, block count, selected units,
 window/bin compatibility, requested feature counts, output paths, and a work/memory estimate without
-loading full spike arrays or fitting models. `new` reuses a completed matching fingerprint by
-default. `--rerun` creates a new timestamped human-readable run directory while leaving the
-versioned intermediate result intact or creating a new result when its identity changes.
+deserializing full spike arrays or fitting models; it does stream every consumed file to compute its
+content hash. `new` reuses a completed matching fingerprint by
+default. `--rerun` creates a new complete immutable run with the same scientific fingerprint.
 
 The batch config list contains one UTF-8 configuration path per nonblank, non-comment line. Batch
-parallelism is across sessions only. A per-session failure is logged without merging or deleting
-successful session results.
+parallelism is across sessions only. Start from
+`min(os.cpu_count() or 1, number_of_sessions, --workers when supplied)` and apply the exact memory
+cap in the performance section. Before an actual batch, dry-run reports every estimate and the
+planned concurrency. After WP8 measures a representative session peak, the user must explicitly
+approve the exact batch worker count; no batch is implied by single-session approval. A per-session
+failure is logged without merging or deleting successful session results.
 
 Do not add a notebook-only launcher, generic workflow engine, database, automatic cluster wrapper,
 or a second scientific configuration format.
@@ -791,15 +1143,17 @@ No new dependencies are proposed.
 | NumPy | count arrays, histories, OLS, metrics | Explicit `float64` fitting; counts remain integer until design conversion |
 | pandas | trial columns and tidy result tables | Preserve row-position/index distinction |
 | Pynapple/current spike helpers | aligned bin counts | Verify half-open bin behavior against existing tests/source |
-| scikit-learn | `GroupKFold`, PCA | Five nonshuffled groups; `whiten=False`; no default scaler |
+| scikit-learn | `GroupKFold`, PCA | Five nonshuffled groups; full-SVD, `whiten=False`; no default scaler |
 | statsmodels | Poisson GLM | Explicit Poisson/log/unpenalized settings and convergence checks |
 | Matplotlib | figures | Plotting consumes records only |
-| Streamlit | controls/caching/display | Thin integration layer only |
+| Streamlit | completed-run discovery and display | Read-only adapter; no raw loading or computation |
 | Python standard library | paths, JSON metadata, pickle, logging, timestamps, process pool | No new serialization or workflow dependency |
 
 Before first use in production code, inspect the installed API for `GroupKFold`, PCA, and
 statsmodels GLM. Record important estimator assumptions in docstrings and tests. All Python commands
-use `uv run`.
+use `uv run`. The documentation audit observed NumPy 2.4.3, scikit-learn 1.8.0, statsmodels 0.15.0,
+and Pynapple 0.11.0; implementation preflight records the versions again and stops if changed APIs
+invalidate a frozen call contract.
 
 ## Implementation orchestration - Sol supervisor and Terra workers
 
@@ -961,7 +1315,7 @@ handoff.
 | Package | Primary files/responsibility | Terra assignment | Independent Sol gate | Package completion evidence |
 |---|---|---|---|---|
 | WP0 | v3, this plan, architecture, handoff state | None; Sol documentation only | User approval | Approved documents and documentation-only baseline commit |
-| WP1 | `configuration.py`, `records.py`, configuration tests | High, tests-only then implementation | High final contract review | Validated records/status schema; focused GREEN; separate commits |
+| WP1 | `configuration.py`, `records.py`, configuration/record tests | High, tests-only then implementation | High final contract review | Validated records/status schema; focused GREEN; separate commits |
 | WP2 | `preparation.py`, preparation tests | Xhigh, tests-only then implementation | Xhigh test-design and final identity review | Count/mask/fold/history contracts GREEN; 19/39 examples verified |
 | WP3 | `linear.py`, unit-only `pipeline.py`, linear/pipeline tests | Xhigh, tests-only then implementation | Xhigh test-design and numerical final review | Bidirectional direct-unit OLS synthetic results and complete fold evidence |
 | WP4 | `pca.py`, PC pipeline extensions, PCA/pipeline tests | Xhigh, tests-only then implementation | Xhigh leakage test-design and final review | Held-out perturbation leakage tests GREEN; unit OLS unchanged |
@@ -1006,7 +1360,7 @@ code package is not authorization to run experimental data.
 - **Purpose:** establish readable immutable settings, shape/unit records, stable status/reason codes,
   and table schemas without loading or fitting data.
 - **Owned source/tests:** `configuration.py`, `records.py`, package initializer exports limited to
-  these records, and `test_interregional_configuration.py`.
+  these records, `test_interregional_configuration.py`, and `test_interregional_records.py`.
 - **Terra:** high, tests-only then implementation.
 - **Sol gate:** public names, validation policy, dataclass immutability, documentation contracts, and
   no premature model/persistence behavior.
@@ -1080,12 +1434,13 @@ code package is not authorization to run experimental data.
   scientist-facing README section, and example configuration.
 - **Terra:** high. Plot/UI tests come first; implementation follows their commit. Documentation is a
   separate bounded task/commit after interfaces stabilize.
-- **Independent Sol:** high final review for view routing, separate population state, metric labels,
-  unavailable counts, output-only plotting, and no duplicated scientific logic.
+- **Independent Sol:** high final review for view routing, completed-run validation, read-only
+  behavior, metric labels, unavailable counts, output-only plotting, and no duplicated scientific
+  logic.
 - **Completion:** all documented help/dry-run commands work against temporary fixtures; standard
   plots and UI pass; existing views remain compatible.
-- **Handoff to WP7:** record exact user-visible view name, controls, command examples, and output
-  paths.
+- **Handoff to WP7:** record exact user-visible view name, saved-result selectors, command examples,
+  and output paths.
 
 #### WP7 - Standard synthetic integration and bounded benchmark
 
@@ -1187,12 +1542,31 @@ PCA, Poisson, Granger, plotting, or Streamlit code is included yet.
 
 `test_interregional_configuration.py`:
 
-1. Accept the documented defaults.
-2. Reject unsupported bin sizes and nonpositive lag/order.
-3. Reject before/after bounds that do not exactly partition whole.
-4. Reject overlapping qualified PFC/HPC unit identities.
-5. Reject an empty condition request.
-6. Preserve the coverage-assumption version in the validated configuration.
+1. Load the exact documented JSON into the frozen records and round-trip canonical JSON.
+2. Accept the documented defaults and reject unknown keys at every JSON level.
+3. Reject unsupported bin sizes, nonpositive lag/order, and nonintegral window/bin geometry under
+   the named tolerance.
+4. Reject bounds that do not exactly partition whole at zero.
+5. Keep unresolved selection fields separate from resolved qualified unit identities and reject
+   overlapping resolved PFC/HPC identities.
+6. Reject an empty condition request, noncanonical/duplicate conditions, and the legacy `rewarded`
+   alias; preserve canonical condition order.
+7. Validate analysis-stage dependencies, reject Poisson when `units` is absent, and keep Poisson
+   rows unit-only when units and PCs are both requested.
+8. Preserve schema, analysis, and coverage versions while excluding run options from the scientific
+   fingerprint input.
+
+`test_interregional_records.py`:
+
+1. Construct all seven empty tables with the exact frozen columns and dtypes.
+2. Reject missing/extra columns, wrong dtypes, duplicate primary keys, unsorted keys, and unknown
+   status/reason/diagnostic values.
+3. Accept the complete applicable unit/PC key grid and require explicit unavailable rows rather
+   than missing keys.
+4. Preserve valid metric-specific target summaries when another metric is incomplete.
+5. Validate canonical JSON scalar/list columns and the fixed membership-exclusion order.
+6. Validate exact `InterregionalResults` versions, metadata fields, axes/units, randomness fields,
+   and empty future-stage schemas without importing fitting or persistence code.
 
 `test_interregional_preparation.py`:
 
@@ -1209,8 +1583,8 @@ PCA, Poisson, Granger, plotting, or Streamlit code is included yet.
    provenance.
 8. Assign all trials in one `cur_block` to one test fold.
 9. Produce exactly five deterministic folds and the same assignment on repeated calls.
-10. Reject missing block values for otherwise CV-eligible trials and fewer than five distinct
-    eligible blocks; never fall back to random splitting.
+10. Leave missing-block rows unassigned/excluded with reason `missing_block`, reject fewer than five
+    distinct nonmissing session blocks, and never fall back to random splitting.
 11. Reuse one session fold mapping when condition masks select different trial subsets.
 12. Build lag-1/order-1 histories with 19 rows for a two-second 100-ms window and 39 for a
     four-second window.
@@ -1218,6 +1592,11 @@ PCA, Poisson, Granger, plotting, or Streamlit code is included yet.
 14. Never cross trial or selected-window boundaries.
 15. Keep response, target history, source history, trial row, and target-bin identities aligned.
 16. Derive restricted and full designs from one shared full-comparison row mask.
+17. Build folds from the complete nonmissing-block row universe before alignment, condition,
+    choice/context, or user-exclusion filters, using one sample per trial row.
+18. Use positional trial-table indexing with a deliberately nontrivial original DataFrame index.
+19. Raise a clear input error when a requested non-`all` choice/context filter lacks its required
+    trial column.
 
 `test_interregional_linear.py`:
 
@@ -1288,6 +1667,10 @@ contracts. Unit OLS behavior remains unchanged.
 10. Reuse fold transforms across requested conditions and windows.
 11. Mark a component rank incomplete if it is missing in any requested fold.
 12. Keep descriptive all-data PCA scope structurally distinct from fold PCA scope.
+13. Use population standard deviation (`ddof=0`), `float64`, `svd_solver="full"`, and
+    `whiten=False`, with no random state or randomized solver.
+14. Set the actual component count to the minimum of request, training observations, and retained
+    units.
 
 `test_interregional_pipeline.py` gains PC cases:
 
@@ -1335,41 +1718,58 @@ standard-regression milestone before Poisson work.
 
 `test_interregional_webapp.py`:
 
-1. Build distinct PFC and HPC population selections from metadata controls.
-2. Use unique widget keys and independent unit/channel-quality selections.
-3. Reject overlapping selected unit IDs.
-4. Expose the documented bin sizes, positive lag/order, conditions, choice/context filters, and
-   partitioned windows.
-5. Default to units, OLS, choice alignment, 100 ms, lag 1, and order 1.
-6. Hide or disable Poisson and Granger actions before their phases are implemented.
-7. Explain that legacy manual loading is unsupported and loaded coverage is assumed.
-8. Convert controls into a validated configuration without performing numerical work in the view.
-9. Display independent valid results when another configuration row is unavailable.
-10. Create outputs only from an explicit run action, not an ordinary widget rerender.
+1. Discover only completed interregional run directories for the selected metadata session.
+2. Exclude initialized, running, failed, corrupt, fingerprint-mismatched, and unsupported-version
+   directories.
+3. Label each saved run with timestamp, version, short fingerprint, two regional selections, and
+   completed stages.
+4. Offer display selectors only for conditions, windows, representations, model families, and
+   metrics present in the loaded result.
+5. Show population roles/selections, scientific configuration, input/code identity, coverage
+   assumption, warnings, and unavailable reasons read-only.
+6. Explain that legacy manual loading is unsupported and loaded coverage is assumed.
+7. Display independent valid rows when another result row is unavailable.
+8. Show documented CLI instructions when no completed result exists.
+9. Import no raw-spike loader, pipeline run function, design helper, or estimator and expose no run,
+   resume, or recompute action.
+10. Prove an ordinary widget rerender creates or modifies no filesystem path.
 
 `test_interregional_persistence.py`:
 
-1. Produce the same configuration fingerprint for semantically identical configurations.
-2. Change the fingerprint when a scientific parameter or analysis version changes.
-3. Save intermediate results beneath a temporary session data root, never the repository.
-4. Round-trip every named result table, configuration field, coverage version, units/axes metadata,
-   and seed/no-randomness declaration.
-5. Reuse an identical complete result unless rerun is explicitly requested.
-6. Never overwrite a result from a different version or parameter set.
-7. Reject incomplete/corrupt records with an actionable error.
-8. Refuse to load a record with an unsupported analysis version without explicit migration logic.
-9. Create a timestamped run directory containing config, result location, log, summary, copied
-   session/batch scripts, and figure directory.
+1. Produce the same SHA-256 fingerprint for semantically identical canonical configurations and
+   resolved input/code identities.
+2. Change the fingerprint when a scientific parameter, version, selected unit order, small-file
+   or large-file path/size/content hash, or Git HEAD changes; ignore timestamp, output root,
+   rerun, and worker count.
+3. Create one immutable timestamp/fingerprint run directory beneath a temporary session data root,
+   never the repository; reject repository-contained output roots and do not create a second result
+   tree.
+4. Round-trip every named table with exact columns, dtypes, primary-key order, configuration,
+   coverage, units/axes, input/code identity, and no-randomness declaration.
+5. Reuse an identical validated `complete` run by default; make `--rerun` create a different
+   directory with the same fingerprint and never overwrite the first.
+6. Exercise `initialized -> running -> complete` and `running -> failed` transitions.
+7. Install JSON/pickle artifacts atomically and never recognize a run as complete before every
+   required artifact validates.
+8. Retain but never reuse/resume incomplete, failed, corrupt, fingerprint-mismatched, or
+   unsupported-version records.
+9. Copy the exact session/batch runner files and create config, manifest, state, result, log,
+   summary, and figure directory.
 10. Include goal, session, scripts, warnings, unavailable counts, scientific interpretation, and
     coverage/causal caveats in the Markdown summary.
+11. Reject duplicate primary keys, wrong columns/dtypes, unknown status/reason values, and unsafe
+    load targets outside a discovered project run directory.
 
 `test_interregional_scripts.py`:
 
-1. Run one synthetic metadata session through the same public single-session function as the UI.
+1. Run one synthetic metadata session through the public single-session composition root; the UI
+   only loads its completed output.
 2. Skip an existing matching result by default and honor an explicit rerun request.
 3. Print planned sessions, stages, and output paths without computation in batch dry-run mode.
 4. Keep independent session results separate and never combine unit columns.
-5. Default batch workers to available CPU cores and honor a lower explicit worker count.
+5. Start batch workers at the lesser of CPU cores, session count, and an explicit lower override;
+   apply the documented 80%-RAM cap, report every estimate in dry-run, and reject even one session
+   that cannot fit.
 6. Propagate a failed session as a logged per-session failure without discarding successful sessions.
 7. Accept the portable example configuration through the production configuration loader.
 8. Keep documented `--help`, dry-run, new, and rerun command syntax synchronized with the CLI.
@@ -1387,12 +1787,12 @@ standard-regression milestone before Poisson work.
 
 ### Implementation sequence
 
-1. WP5 adds versioned result persistence plus single-session and batch runners.
+1. WP5 adds immutable versioned run-directory persistence plus single-session and batch runners.
 2. WP5 adds run logging, summary generation, figure-output paths, skip/rerun behavior, and batch
    dry-run.
 3. WP6 adds plotting functions over immutable result tables.
-4. WP6 adds population-selection/control rendering in `interregional_views.py`, cached metadata
-   loading adapters, and one small navigation branch in `webapp/app.py`.
+4. WP6 adds completed-run discovery and read-only result selectors in
+   `interregional_views.py`, plus one small navigation branch in `webapp/app.py`.
 5. WP6 adds fold-detail, target-summary, PCA-omission, and unavailability tables plus the package
    README, user quickstart, and portable example configuration.
 6. WP7 runs the seeded full standard-regression synthetic integration and bounded timing/memory
@@ -1404,7 +1804,8 @@ standard-regression milestone before Poisson work.
 
 ### Acceptance gate
 
-- The UI loads two populations simultaneously and never infers their anatomical roles.
+- The CLI configuration resolves two explicit populations and never infers their anatomical roles;
+  the UI faithfully displays those saved selections without recomputation.
 - Unit and PC OLS results and diagnostics are inspectable without Poisson/Granger code.
 - Figures visibly distinguish direction, condition, target identity, and unavailable counts.
 - A completed standard-regression run is reproducible from its saved configuration, result record,
@@ -1458,7 +1859,7 @@ held-out count-MSE comparison with OLS. PCs remain OLS-only.
 3. Add independent deviance/null-deviance scoring.
 4. Extend the CV pipeline only for direct units.
 5. Add paired model-family MSE tables and plots.
-6. Enable the Poisson UI option only for unit representation.
+6. Extend saved-result display selectors/labels for Poisson unit results; add no compute action.
 7. Run all OLS tests unchanged, then the Poisson and UI suites.
 8. Inspect runtime and convergence on the same designated session before Phase 5.
 
@@ -1502,16 +1903,16 @@ Add separate in-sample Granger-style tables and figures after all CV analyses ar
 
 `test_interregional_webapp.py` gains:
 
-1. Granger actions become available only after the CV configuration is valid.
+1. Granger display options appear only when present in a validated completed saved result.
 2. Descriptive PCA and in-sample status are visible.
-3. No inference/significance language appears.
+3. No inference/significance language or compute action appears.
 
 ### Implementation sequence
 
 1. Add descriptive regional PCA fitting for PC Granger.
 2. Add linear and Poisson Granger calculations over existing fit functions.
 3. Add nested-fit consistency checks and explicit unavailable reasons.
-4. Add separate Granger result table, aggregation, figure, and UI action.
+4. Add separate Granger result table, aggregation, figure, and saved-result UI display.
 5. Run every CV test unchanged to prove scope separation.
 6. Inspect one designated session before any cross-session or publication use.
 
@@ -1560,12 +1961,33 @@ Correctness and auditability take priority, but avoid obvious repeated work:
 - Fit fold PCA once per region/fold and reuse it across directions, conditions, and windows.
 - Use one multi-target NumPy least-squares solve for targets sharing one valid OLS design.
 - Keep Poisson target-wise because convergence/status are target-specific.
-- Cache prepared tensors, fold assignments, and PCA transforms at the Streamlit adapter boundary
-  with keys containing every scientific input that changes them.
-- Do not cache opaque fitted model objects or use UI state as a scientific cache key substitute.
+- Streamlit may cache only validated completed-result loading by immutable run path plus manifest
+  identity; it never caches prepared tensors, transforms, designs, or fitted models.
 - Do not retain large repeated design matrices in result records.
-- In batch runs, parallelize across sessions rather than within a session. Default to available CPU
-  cores, but retain a worker override when memory or storage throughput is limiting.
+- In batch runs, parallelize across sessions rather than within a session. Default to the lesser of
+  available CPU cores and session count, then cap that value by the memory rule below. A worker
+  override is an upper bound, not permission to exceed the memory cap. No batch run occurs until WP8
+  supplies a measured session peak and the user explicitly approves the worker count.
+
+For dry-run session dimensions `T` trials, `B` whole-window bins, `N` total selected units,
+`R = T * max_window(B_window - (lag + order - 1))` as the conservative maximum design rows,
+`P = 1 + order * N` full-design columns, and
+`Y = max(PFC units, HPC units, requested PFC PCs, requested HPC PCs)`, report:
+
+```text
+count_bytes = 8 * T * B * N
+design_bytes = 8 * R * P
+response_bytes = 8 * R * Y
+estimated_session_peak_bytes = 256 MiB + 3 * count_bytes + 4 * (design_bytes + response_bytes)
+```
+
+This is a conservative planning estimate, not a measured peak. Determine the default memory budget
+as 80% of physical RAM using standard-library `os.sysconf`; if unavailable, batch `new` requires an
+explicit `--memory-budget-bytes`. The automatic worker cap is
+`floor(memory_budget / max_session_estimate)`, with minimum one only when one session fits. Reject a
+batch before computation if even one estimated session does not fit. Dry-run prints every term,
+the CPU cap, memory cap, chosen workers, and that WP8's measured peak supersedes this estimate for
+later approval.
 
 At 20-ms bins and large unit populations, direct full designs may be both wide and rank-invalid.
 The implementation reports that outcome rather than allocating recovery searches. Before adding
@@ -1634,23 +2056,25 @@ Grouped CV does not remove common event drive, movement, slow trends, or other t
 The first-pass result remains predictive. Additional controls require a later scientific
 specification rather than silent expansion of this pipeline.
 
-### UI runtime
+### Offline runtime
 
-Unpenalized Poisson fits over many targets and configurations may be slow. The first response is
-cache reuse and clear progress/status reporting. Parallel fitting is considered only after
-profiling, because it adds failure-handling and memory complexity.
+Unpenalized Poisson fits over many targets and configurations may be slow. Computation therefore
+runs through the logged CLI boundary, while the UI reads only complete outputs. The first response
+to runtime pressure is fingerprint reuse, explicit CLI stage logging, and measured profiling.
+Within-session parallel fitting is considered only after profiling because it adds failure and
+memory complexity.
 
 ## Approval gate
 
 Implementation should begin only after the user approves:
 
 - the layered package/module boundaries and one-way dependency rules;
-- the in-memory result-table schema and isolated versioned persistence/run-directory design;
+- the in-memory result-table schema and single immutable atomic run-directory design;
 - the WP0-WP11 order and separate tests-only, implementation, review, and handoff commits;
 - one Sol/high supervisor, one bounded Terra writer, independent Sol review at the listed gates,
   and the one-writer shared-worktree rule;
 - this plan as the authoritative live progress/handoff record, updated at every package gate;
-- metadata-only UI support;
+- metadata-only, read-only completed-run UI support;
 - the complete-coverage assumption; and
 - inspection of one designated session after the standard OLS milestone and before later stages;
   and
