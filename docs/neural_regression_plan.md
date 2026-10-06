@@ -9,9 +9,10 @@ repository audit.
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-06 16:36 EDT.
+**Snapshot date:** 2026-10-06 17:53 EDT.
 
-**Current phase:** WP0 documentation contract freeze complete; awaiting user review. The v3
+**Current phase:** WP0 third correctness/completeness/conciseness pass complete; its post-fix pass
+found no further substantive issue, and the documents await user review. The v3
 scientific specification and this plan are tracked documentation files with plan-owned working-tree
 changes. No implementation or test work has begun, and the user has explicitly prohibited
 implementation in this chat.
@@ -19,11 +20,12 @@ implementation in this chat.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this documentation revision: `6131d8e`;
+- HEAD at this revision's preflight: `787aadb`;
 - plan-owned files: `docs/neural_regression_plan.md` and
   `docs/spec_neural_regression_v3.md`, both currently tracked and modified;
-- the worktree also contains an unrelated modified `docs/task_variable_implementation_plan.md` and
-  many unrelated pre-existing untracked files/directories; and
+- the worktree also contains modified `docs/task_variable_implementation_plan.md` and
+  `docs/task_variable_spec_v5.md`, which the user confirmed are owned by another chat, plus many
+  unrelated pre-existing untracked files/directories; and
 - none of those unrelated entries belongs to this plan or may be staged, changed, removed, or
   absorbed into a later package.
 
@@ -35,9 +37,16 @@ implementation in this chat.
 - v3 records the approved scientific and first-pass data-validity decisions;
 - the current plan contains module responsibilities, explicit array/result contracts, a phased
   tests-first inventory, performance considerations, and reproducible run outputs; and
-- the implementation-readiness correction froze the JSON configuration, condition/fold universe,
+- the implementation-readiness correction froze the JSON configuration, scientific/CV eligibility,
   count/PCA determinism, result/status schema, numerical tolerances, atomic run identity,
-  read-only webapp boundary, and batch-memory rule; and
+  read-only webapp boundary, and advisory batch-memory policy;
+- the second readiness review removed staged-schema and runtime-dependency contradictions, defined
+  paired MSE comparison/aggregation, moved run identity out of the pure result, and removed a
+  redundant package-gate layer; and
+- the third review clarified scientific/condition/CV eligibility, canonical row identity,
+  descriptive PCA scope, and minimal Poisson diagnostics; added runtime-version provenance; and
+  replaced the run-state protocol with a same-parent incomplete-directory/final-rename boundary;
+  and
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
@@ -124,7 +133,7 @@ Each record must contain:
 - starting and ending HEAD plus worktree ownership state;
 - exact files inspected and changed;
 - exact RED, GREEN, regression, or benchmark commands and outcomes;
-- test-only, implementation, and documentation commit IDs;
+- test-only and implementation commit IDs, plus any separate corrective documentation commit;
 - scientific/configuration decisions and unresolved risks;
 - real-data, filesystem, or external actions taken;
 - output/run paths and measured performance when authorized; and
@@ -203,6 +212,67 @@ Use this template:
   implementation request authorizes only a fresh WP1 preflight; real-session and batch execution
   remain separately unauthorized.
 
+#### 2026-10-06 17:13 EDT - WP0 correctness and conciseness revision
+
+- State: documentation revision complete; implementation remains inactive.
+- Authorization: documentation changes only in response to the user's readiness review; no source,
+  tests, commits, analysis runs, or benchmarks.
+- Sol / Terra / reviewer: primary documentation agent only; no worker or independent reviewer.
+- Start HEAD / end HEAD: `787aadb` / `787aadb`.
+- Worktree and owned files: changed only `docs/neural_regression_plan.md` and
+  `docs/spec_neural_regression_v3.md`; preserved the unrelated modified
+  `docs/task_variable_implementation_plan.md` and pre-existing untracked entries.
+- RED command and result: not applicable; no tests were written or run.
+- GREEN/regression commands and results: `git diff --check -- docs/neural_regression_plan.md
+  docs/spec_neural_regression_v3.md` passed; `LC_ALL=C rg -n '[^ -~]'` over both files found no
+  non-ASCII text; Markdown-fence counts remained even (50 plan, 30 spec); stale-contract searches
+  found no old scientific-fingerprint, automatic-memory-cap, combined-mask, absent-future-table, or
+  Granger-runtime-dependency language. No production verification is claimed.
+- Commits: none.
+- Real-data, filesystem, or external actions: only the two authorized Markdown files were edited;
+  no experimental data, network, benchmark, batch, or external action.
+- Findings and unresolved risks: scientific and CV masks are now distinct; block IDs normalize
+  integral numeric values; Granger stages are runtime-independent from CV; raw Poisson deviance is
+  fold-only; paired MSE has an exact derived contract; run provenance is outside the pure result;
+  dry-run avoids full-file hashing; memory estimates are advisory; future-stage tables are
+  consistently present but empty. The first pass still assumes complete loaded data coverage.
+- Exact next action and authorization: user reviews the revised documents. A later explicit
+  implementation request authorizes a fresh WP1 preflight only.
+
+#### 2026-10-06 17:53 EDT - WP0 third readiness review
+
+- State: documentation revision complete; implementation remains inactive.
+- Authorization: review and documentation corrections only; no source, tests, commits, experimental-
+  data runs, or benchmarks.
+- Sol / Terra / reviewer: primary documentation agent only; no worker or independent reviewer.
+- Start HEAD / end HEAD: `787aadb` / `787aadb`.
+- Worktree and owned files: changed only `docs/neural_regression_plan.md` and
+  `docs/spec_neural_regression_v3.md`. The user confirmed that concurrent changes to
+  `docs/task_variable_implementation_plan.md` and `docs/task_variable_spec_v5.md` belong to another
+  chat; they and all untracked entries were left untouched.
+- RED command and result: not applicable; no tests were written or run.
+- GREEN/regression commands and results: documentation-only checks passed:
+  `git diff --check -- docs/neural_regression_plan.md docs/spec_neural_regression_v3.md`;
+  `LC_ALL=C rg -n '[^ -~]'` returned no matches; Markdown fence counts were even (52 plan, 30
+  spec); and stale current-contract searches returned no old run-state, scientific-base-mask,
+  generating-functions, or next-valid-row language. A read-only
+  `UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run python -c ...` API probe confirmed
+  statsmodels 0.15.0, Boolean `GLMResults.converged`, integer `fit_history["iteration"]`, and the
+  expected convergence/perfect-separation warning/error classes. No production verification is
+  claimed.
+- Commits: none.
+- Real-data, filesystem, or external actions: only the two authorized Markdown files were edited;
+  no experimental data, network, batch, benchmark, or external action.
+- Findings and unresolved risks: scientific eligibility, named-condition membership, and CV
+  eligibility are now separate; PCA pool scope and whole-window bin identity are explicit;
+  train/test row-set hashes make OLS/Poisson pairing auditable; Poisson diagnostics are limited to
+  convergence, iterations, status, and reason; runtime versions enter run identity; and one hidden
+  incomplete directory plus atomic final rename replaces the prior state/per-file transaction
+  machinery. A final post-fix pass found no further correctness, completeness, or proportionality
+  issue. The deliberate implicit-complete-coverage assumption remains clearly deferred work.
+- Exact next action and authorization: user reviews the revised documents. A later explicit
+  implementation request authorizes a fresh WP1 preflight only.
+
 ## Plan objective and status
 
 This plan implements `docs/spec_neural_regression_v3.md`. It is a proposal for review, not
@@ -229,8 +299,9 @@ The plan treats the following as settled requirements:
   no inferred-block or random-split fallback.
 - The user explicitly assigns metadata populations to PFC and HPC. Region roles are never inferred
   from probe names.
-- The analysis-wide `all` condition means valid experimenter-reward status intersected with valid
-  alignment, choice/context filters, user exclusions, and a nonmissing block for CV.
+- The scientific `all` condition means valid experimenter-reward status intersected with valid
+  alignment, choice/context filters, and user exclusions. CV additionally requires a nonmissing
+  block; descriptive Granger does not.
 - Zero-based trial-table row positions are the internal trial identity. Original DataFrame index
   labels are retained only as provenance.
 - The configured whole interval supplies the shared PCA fitting interval. Before and after exactly
@@ -264,8 +335,8 @@ No existing PCA API will be changed to satisfy the regression-specific zero-vari
 ### Architecture goals
 
 The architecture must make the scientific calculation readable from top to bottom without forcing
-a reviewer through Streamlit, filesystem, or estimator-framework machinery. It therefore uses five
-layers with one-way dependencies:
+a reviewer through Streamlit, filesystem, or estimator-framework machinery. It therefore uses
+one-way dependencies:
 
 ```text
 Existing metadata/loaders/condition definitions
@@ -386,11 +457,14 @@ The ordinary single-session flow is:
 
 1. Resolve one metadata session and two explicit, disjoint PFC/HPC population selections.
 2. Validate configuration and trial-table columns without loading large arrays in dry-run mode.
-3. Build the complete-session fold assignment and authoritative trial masks from the trial table.
+3. Build the scientific eligibility and requested-condition masks. Build the complete-session fold assignment
+   only when a CV stage is requested.
 4. Load aligned spikes once per selected probe/population.
-5. Build aligned regional count tensors over the configured whole interval for the authoritative
-   base-mask (`all`) trial rows, in ascending zero-based row order.
-6. For each fold, fit regional PCA once when PCs are requested, using only fold-training trials.
+5. Build aligned regional count tensors over the configured whole interval for scientifically eligible
+   trial rows, in ascending zero-based row order.
+6. When PC CV is requested, fit regional PCA once per fold using only fold-training trials. When PC
+   Granger is requested, fit the separate descriptive basis over all scientifically eligible rows
+   in the union of requested conditions.
 7. For each direction, condition, and window, build history matrices once and reuse them for every
    target sharing the design.
 8. Fit and score matched restricted/full models, preserving target and row identity.
@@ -493,15 +567,17 @@ The exact frozen records are:
   `analyses=("ols_cv",)`. Allowed representations are `"units"` and `"pcs"`; allowed analysis
   stages in canonical order are `"ols_cv"`, `"poisson_cv"`, `"linear_granger"`, and
   `"poisson_granger"`.
-- `RunOptions`: non-scientific execution fields `output_root`, `rerun`, and optional batch-worker
-  override. These fields are not part of `InterregionalAnalysisConfig` or its scientific
-  fingerprint.
+- `RunOptions`: the non-scientific `output_root` loaded from the JSON `run` section plus CLI-only
+  `rerun` and optional batch-worker override. These fields are not part of
+  `InterregionalAnalysisConfig` or the run fingerprint.
 
-The analysis dependency validator requires `ols_cv` before `linear_granger`, requires units and
-`ols_cv` when `poisson_cv` is requested, and requires units and `poisson_cv` before
-`poisson_granger`. Request order is normalized to canonical stage order. PCs never enter either
-Poisson stage. Prediction windows, representations, and stages must be nonempty and unique and are
-normalized to their documented canonical order.
+The analysis dependency validator requires units and `ols_cv` when `poisson_cv` is requested,
+because its matched OLS/Poisson MSE comparison is required. Both Poisson stages require units.
+Granger stages have no runtime dependency on CV stages: their later position describes
+implementation order and canonical execution order when stages are combined, not a requirement to
+rerun an earlier analysis. PCs never enter either Poisson stage. Prediction windows,
+representations, and stages must be nonempty and unique and are normalized to their documented
+canonical order.
 
 Window/bin compatibility is tested with
 `isclose(duration_s / bin_size_s, round(...), rtol=0, atol=1e-9)`. The resolved integer bin count is
@@ -509,7 +585,7 @@ the rounded quotient. Validation rejects incompatible window geometry, empty sel
 or overlapping unit identities after resolution, unsupported values, and invalid stage
 dependencies. It does not load data or inspect Streamlit state.
 `session_metadata_path` and a nonnull `output_root` must be normalized absolute paths; relative
-paths are rejected so fingerprints and handoffs do not depend on a caller's working directory.
+paths are rejected so input resolution and handoffs do not depend on a caller's working directory.
 
 The one portable JSON format maps directly to these records and has no undocumented keys:
 
@@ -570,9 +646,10 @@ Define simple data containers without fitting behavior:
   dictionary.
 
 Every textual identifier/status/reason/JSON column uses pandas `string`; every flag uses `boolean`;
-every potentially unavailable integer diagnostic uses nullable `Int64`; every metric uses nullable
-`Float64`. Nonnullable `trial_row`, CV `fold_id`, and always-defined requested/count columns use
-`int64`. JSON-list/scalar columns are canonical compact JSON strings, not Python object values.
+every potentially unavailable integer field uses nullable `Int64`; every metric uses nullable
+`Float64`. Nonnullable `trial_row`, `fold_scores.fold_id`, and always-defined requested/count
+columns use `int64`; nullable fold IDs in provenance/PCA tables use `Int64`. JSON-list/scalar
+columns are canonical compact JSON strings, not Python object values.
 Every table is sorted by its primary key before save. The exact result tables are:
 
 1. `fold_assignments`, primary key `session_id, trial_row`: `original_index_repr`,
@@ -580,14 +657,19 @@ Every table is sorted by its primary key before save. The exact result tables ar
    nullable `fold_id` and `not_applicable/missing_block`; assigned rows are `ok` with empty reason.
 2. `trial_membership`, primary key `session_id, trial_row, alignment, condition`: provenance plus
    `original_index_repr`, `reward_status_valid`, `alignment_valid`, `choice_match`,
-   `context_match`, `user_included`, `block_present`, `condition_match`, `included`, and
-   `exclusion_reasons_json`.
+   `context_match`, `user_included`, `block_present`, `condition_match`, `scientific_eligible`,
+   `condition_included`, `cv_included`, and `scientific_exclusion_reasons_json`.
+   `scientific_eligible` is the condition-independent mask; `condition_included` additionally
+   requires `condition_match`; `cv_included` additionally requires `block_present`. A missing
+   block's CV reason is recorded by `fold_assignments`.
 3. `fold_scores`, primary key
    `session_id, direction, representation, model_family, condition, window, target_id, fold_id`:
    `evaluation_scope`, `target_rank`, `restricted_status`, `restricted_reason`, `full_status`,
    `full_reason`, paired `status`, paired `reason`, `n_train_trials`, `n_test_trials`,
-   `n_train_rows`, `n_test_rows`, `restricted_feature_count`, `full_feature_count`,
+   `n_train_rows`, `n_test_rows`, `train_row_set_sha256`, `test_row_set_sha256`,
+   `restricted_feature_count`, `full_feature_count`,
    `restricted_rank`, `full_rank`, `restricted_df_resid`, `full_df_resid`, plus nullable
+   `restricted_converged`, `full_converged`, `restricted_iterations`, `full_iterations`,
    `r2_restricted`, `r2_full`, `delta_r2`, `mse_restricted`, `mse_full`,
    `deviance_restricted`, `deviance_full`, `null_deviance`,
    `deviance_explained_restricted`, `deviance_explained_full`, and
@@ -595,10 +677,12 @@ Every table is sorted by its primary key before save. The exact result tables ar
 4. `target_summaries`, primary key
    `session_id, evaluation_scope, direction, representation, model_family, condition, window,
    target_id, metric_name`: `target_rank`, `status`, `reason`, `requested_folds`, `valid_folds`, and
-   nullable `mean_value`. This table is long by metric so valid MSE is retained when R-squared or
+   nullable `mean_value`. This is a CV-only table: `evaluation_scope` is always `held_out_cv` and
+   `requested_folds` is five. It is long by metric so valid MSE is retained when R-squared or
    deviance explained is unavailable. A mean is present only when all five values for that metric
    are defined; otherwise status is `incomplete_folds`, reason is `incomplete_requested_folds`, and
-   `mean_value` is null.
+   `mean_value` is null. Granger target values remain in `granger_scores` and feed population
+   summaries directly.
 5. `population_summaries`, primary key
    `session_id, evaluation_scope, direction, representation, model_family, condition, window,
    metric_name`: `status`, `reason`, `n_targets`, `q25`, `median`, and `q75`. With no complete
@@ -613,7 +697,8 @@ Every table is sorted by its primary key before save. The exact result tables ar
    `evaluation_scope="in_sample"`, `target_rank`, `restricted_status`, `restricted_reason`,
    `full_status`, `full_reason`, paired `status`, paired `reason`, `diagnostic`, `n_trials`, `n_rows`,
    `restricted_feature_count`, `full_feature_count`, `restricted_rank`, `full_rank`,
-   `restricted_df_resid`, `full_df_resid`, nullable
+   `restricted_df_resid`, `full_df_resid`, nullable `restricted_converged`, `full_converged`,
+   `restricted_iterations`, `full_iterations`,
    `sse_restricted`, `sse_full`, `linear_granger`, `llf_restricted`, `llf_full`,
    `deviance_restricted`, `deviance_full`, `likelihood_ratio`, and
    `mean_deviance_improvement`.
@@ -623,8 +708,14 @@ Every table is sorted by its primary key before save. The exact result tables ar
 `"whole"`. Unit `target_id` is qualified; PC `target_id` is `PFC:PC01`, `HPC:PC01`, and so on, with
 one-based display rank in nullable `target_rank`. CV fold/target/population rows use
 `evaluation_scope="held_out_cv"`; Granger rows use `"in_sample"`. Fold IDs are zero-based 0-4.
-CV `metric_name` values are exactly the metric-column names from `fold_scores`; Granger population
-summaries use `linear_granger`, `likelihood_ratio`, or `mean_deviance_improvement` as applicable.
+CV `metric_name` is restricted to metrics that are comparable across folds. OLS uses
+`r2_restricted`, `r2_full`, `delta_r2`, `mse_restricted`, and `mse_full`. Poisson uses
+`deviance_explained_restricted`, `deviance_explained_full`,
+`delta_deviance_explained`, `mse_restricted`, and `mse_full`. Raw restricted/full/null deviance
+remains fold-level diagnostic evidence and is never aggregated. Granger population summaries use
+`linear_granger`, `likelihood_ratio`, or `mean_deviance_improvement` as applicable.
+Train/test row-set hashes are lowercase 64-character hexadecimal strings whenever the corresponding
+row set was constructed, and null when no such rows exist.
 Materialize the complete applicable requested key grid: five folds for every requested unit target
 or requested PC rank, direction, representation, supported model family, condition, and prediction
 window. Unavailable cells are rows with null metrics, never absent keys. Granger materializes the
@@ -637,13 +728,14 @@ codes are:
 
 ```text
 missing_block, invalid_reward_status, invalid_alignment, choice_filter_mismatch,
-context_filter_mismatch, user_excluded, condition_mismatch, no_eligible_trials,
+context_filter_mismatch, user_excluded, no_eligible_trials,
 no_train_trials, no_test_trials, no_train_rows, no_test_rows, history_exceeds_window,
 no_units, pca_no_variable_units,
 pca_insufficient_components, constant_training_target, rank_deficient_restricted,
 rank_deficient_full, nonpositive_df_restricted, nonpositive_df_full, nonfinite_coefficients,
 nonfinite_predictions, constant_test_target, zero_null_deviance,
-poisson_nonconverged_restricted, poisson_nonconverged_full, nonpositive_poisson_mean,
+poisson_nonconverged_restricted, poisson_nonconverged_full,
+poisson_fit_error_restricted, poisson_fit_error_full, nonpositive_poisson_mean,
 zero_granger_residual, nested_fit_inconsistency, incomplete_requested_folds,
 no_complete_targets
 ```
@@ -659,21 +751,44 @@ the model-specific status/reason fields. Restricted/full fit statuses use only `
 `granger_scores.diagnostic` is either empty or `nested_roundoff`; it records the one tolerated
 near-zero nested-fit correction without mislabeling a valid row as unavailable.
 
-`trial_membership.exclusion_reasons_json` is a canonical JSON array in this fixed order:
+For OLS rows, all convergence/iteration fields are null. For a Poisson fit that returns,
+`*_converged` is true only when its Boolean convergence result is true and no convergence warning
+was captured; `*_iterations` is the integer IRLS iteration count from
+`fit_history["iteration"]`. A fit that raises before returning has both fields null and a model-
+specific `poisson_fit_error_*` reason. These four fields, together with status and reason, are the
+complete persisted convergence diagnostic; warning histories and estimator objects are not saved.
+
+`trial_membership.scientific_exclusion_reasons_json` is a canonical JSON array in this fixed order:
 `invalid_reward_status`, `invalid_alignment`, `choice_filter_mismatch`,
-`context_filter_mismatch`, `user_excluded`, `missing_block`, `condition_mismatch`. It is empty iff
-`included=true`. Run/loader errors such as `insufficient_blocks`, `unsupported_saved_version`, and
-`corrupt_saved_result` are exceptions recorded in `run_state.json`/the log, not result-row reasons.
+`context_filter_mismatch`, `user_excluded`. It is empty iff `scientific_eligible=true`.
+`condition_included` additionally requires the named `condition_match`; `cv_included` additionally
+requires `block_present`. The corresponding `fold_assignments` row uses `missing_block` when absent.
+Run/loader errors such as
+`insufficient_blocks`, `unsupported_saved_version`, and `corrupt_saved_result` are exceptions
+recorded in the log and, for a failed run, `failure.json`; they are not result-row reasons.
 
 Configuration and coverage-assumption metadata remain attached to the top-level result record.
 Large per-bin design matrices and fitted estimator objects are not retained after scoring.
 
 `InterregionalResults` has exactly: `schema_version=RESULT_SCHEMA_VERSION`, `analysis_version`,
-`coverage_assumption_version`, canonical `configuration`, `scientific_fingerprint`, `session_id`,
-`resolved_populations`, `bin_edges_s`, `units_and_axes`, `generating_functions`,
-`randomness_used`, nullable `random_seed`, and the seven named tables. Tables for stages not yet
-implemented are present with their frozen empty schemas, which keeps later additions backward
-compatible. Large per-bin count/design arrays and fitted estimator objects are not retained.
+`coverage_assumption_version`, canonical `configuration`, `session_id`, `resolved_populations`,
+`whole_bin_edges_s`, `units_and_axes`, `randomness_used`, nullable `random_seed`, and the seven named
+tables. `units_and_axes` is a plain canonical mapping with exactly these entries:
+
+```text
+count_tensor: axes [trial, time_bin, unit], value_unit spike_count_per_bin
+whole_bin_edges_s: axis [time_bin_edge], unit seconds_relative_to_alignment
+history_row_identity: axis [observation], fields [trial_row, target_bin_position]
+```
+
+`whole_bin_edges_s` is `float64` with shape `(n_whole_bins + 1,)` and the exact validated end
+points from configuration.
+
+The persisted run manifest records the generating entry point. Apart from the configured
+`session_metadata_path`, expanded consumed-file paths, file hashes, runtime versions, and Git
+identity do not enter this pure computational record. Tables for stages not yet implemented are
+present with their frozen empty schemas, which keeps later additions backward compatible. Large
+per-bin count/design arrays and fitted estimator objects are not retained.
 Deterministic paths record `randomness_used=false` and `random_seed=null` rather than inventing a
 seed.
 
@@ -685,7 +800,7 @@ Responsibilities:
 - Enforce identical trial-row and bin-edge axes between the regions.
 - Produce the authoritative base trial mask and requested condition masks using existing trial
   definitions and LFP-style choice/context filters.
-- Create the deterministic session-level five-fold `cur_block` assignment.
+- Create the deterministic session-level five-fold `cur_block` assignment when CV is requested.
 - Select a condition/window without losing original trial identity.
 - Construct within-trial, within-window lag histories.
 - Return shared full-comparison eligibility rows for restricted and full fits.
@@ -698,6 +813,7 @@ build_analysis_trial_masks(...)
 build_block_fold_assignment(...)
 select_window_bins(...)
 build_history_matrices(...)
+fingerprint_row_identities(...)
 ```
 
 `build_regional_count_tensor` is a new regression-local implementation. It uses Pynapple's aligned
@@ -709,9 +825,10 @@ the existing PCA module, or change any existing binning API. Spikes at a bin's l
 included; the configured final right edge is excluded. Tests compare these boundaries directly.
 
 The prepared regional tensor trial axis contains exactly the ascending trial rows where the
-authoritative base mask is true, even when `all` is not itself a requested output condition. Named
-condition masks are then indexed onto this fixed base trial axis. Invalid-alignment, missing-block,
-filtered, and user-excluded rows remain in provenance tables but are never passed to Pynapple.
+scientific eligibility mask is true, even when `all` is not itself a requested output condition. Named
+condition masks are indexed onto this fixed axis. Invalid-alignment, filtered, and user-excluded
+rows remain in provenance tables but are never passed to Pynapple. Missing-block rows remain in the
+tensor for descriptive Granger but are excluded by the CV mask.
 
 Construct whole-window edges as
 `whole_start_s + arange(n_whole_bins + 1, dtype=float64) * bin_size_s`, then assign the first and
@@ -722,24 +839,28 @@ windows share byte-identical bin-edge arrays.
 `build_block_fold_assignment` receives the complete session trial table, constructs one sample per
 zero-based row with nonmissing `cur_block`, and calls `GroupKFold(n_splits=5, shuffle=False)` on that
 unfiltered row universe. Split enumeration defines fold IDs 0 through 4. Missing-block rows retain
-no fold and are excluded from the base CV mask. At least five distinct nonmissing blocks are
-required at session preparation time. The mapping is built once before alignment, choice/context,
-condition, or user-exclusion filtering and is reused by every analysis stage.
+no fold and are excluded from the CV mask. At least five distinct nonmissing blocks are required
+when any CV stage is requested. The mapping is built once before alignment, choice/context,
+condition, or user-exclusion filtering and is reused by every requested CV stage. A Granger-only
+run neither requires five blocks nor constructs folds.
 
 Each nonmissing block value must be a string, non-Boolean integer, or finite float scalar. Convert
-NumPy scalars to their Python scalar, encode each with canonical JSON, and pass that encoded string
-to `GroupKFold`. This keeps numeric and string labels distinct, makes mixed scalar types sortable,
-and gives `fold_assignments.block_value_json` its exact persisted value. Reject arrays, mappings,
-Booleans, infinities, and NaNs as invalid block labels.
+NumPy scalars to Python scalars and normalize integral finite floats to integers before canonical
+JSON encoding, so `1` and `1.0` cannot split one logical block. Pass the encoded strings to
+`GroupKFold` and persist them as `fold_assignments.block_value_json`. Strings remain distinct from
+numbers; nonintegral finite floats remain floats. Reject arrays, mappings, Booleans, infinities, and
+NaNs.
 
-The authoritative base mask is existing `valid` reward-status mask AND finite selected-alignment
-time AND choice/context matches AND not user-excluded AND block present. A named condition is this
-base mask AND the corresponding existing canonical condition mask. If a non-`all` choice/context
-filter is requested and its required trial column is absent, preparation raises a configuration/
-input error instead of silently producing an empty analysis.
-The existing LFP mapping is explicit: choice uses `action` and context uses `state_int`; for each,
-`left` is numeric 1 and `right` is numeric 0 after numeric coercion. `all` does not require that
-filter's column. Nonfinite values fail a selected left/right filter.
+The scientific eligibility mask is the existing `valid` reward-status mask AND finite selected-
+alignment time AND choice/context matches AND not user-excluded. The `all` condition equals this
+mask. Every other named condition intersects it with the corresponding existing canonical condition
+mask. The CV mask additionally requires block present; Granger uses condition eligibility without
+that CV-only requirement. If a non-`all` choice/context filter is requested and its required
+trial column is absent, preparation raises a configuration/input error instead of silently
+producing an empty analysis. The analysis reuses the LFP column names and side encoding: choice
+uses `action`, context uses `state_int`, `left` is numeric 1, and `right` is numeric 0 after numeric
+coercion. It intentionally strengthens the existing helper's absent-column behavior to an error.
+`all` does not require that filter's column. Nonfinite values fail a selected left/right filter.
 
 `build_history_matrices` receives tensors already aligned on trial and bin axes. Its contracts are:
 
@@ -753,11 +874,21 @@ returns:
     target_history:  (observation, order * target_feature)
     source_history:  (observation, order * source_feature)
     row_trial:       (observation,)
-    row_target_bin:  (observation,)
+    row_target_bin:  (observation,), zero-based position on the whole-window bin axis
 ```
 
 History-column ordering is most-recent lag first, then stable feature order. The response matrix is
 kept multi-target so all targets sharing one design do not require repeated history construction.
+Before/after selection preserves whole-window bin positions rather than renumbering selected bins.
+
+`fingerprint_row_identities` makes saved row provenance compact and comparable. It rejects duplicate
+observation identities, sorts the integer `(trial_row, target_bin_position)` pairs
+lexicographically, encodes them as an ASCII JSON list of two-element lists with separators `,` and
+`:`, and returns the SHA-256 of the UTF-8 bytes. Thus a fingerprint describes the row set rather
+than incidental array order.
+Restricted and full fits must still receive identical ordered row arrays in memory. Persist both
+training and test row-set fingerprints for every fold; OLS/Poisson comparison requires both hashes
+to match.
 
 The first-pass coverage assumption is represented in configuration/result metadata. Preparation
 does not infer missing coverage. It still rejects nonfinite arrays and mismatched axes.
@@ -785,8 +916,9 @@ zero or nonfinite. Fit scikit-learn PCA with
 `random_seed=null` plus `randomness_used=false`.
 
 Fold PCA uses only training trials pooled over the configured whole interval and union of requested
-conditions. The same fitted regional transforms are reused for both directions and every requested
-condition/window in that fold. Descriptive all-data PCA has a distinct scope label and cannot be
+conditions after scientific eligibility. The same fitted regional transforms are reused for both
+directions and every requested condition/window in that fold. Descriptive PCA uses all rows in that
+same scientifically eligible requested-condition union, has a distinct scope label, and cannot be
 passed to CV pipeline functions.
 
 Expected PC target ranks run from 1 through the requested count for the target region. When a
@@ -845,10 +977,20 @@ The audited environment currently provides statsmodels 0.15.0. Use
 missing="raise")` and `.fit(method="IRLS", maxiter=100, tol=1e-8, scale=None,
 cov_type="nonrobust", full_output=True, disp=False)`. The design already contains the one explicit
 intercept; do not call `add_constant`, `fit_regularized`, or pass weights/exposure/offset. Require
-`result.converged is True`, finite `result.params`, and finite `result.llf`. Calculate test means as
-`exp(test_design @ params)` and require them to be positive and finite. Reconfirm these signatures
-and result attributes against the installed source immediately before WP9 in case the environment
-changed.
+`result.converged is True`, an integer `result.fit_history["iteration"]`, finite `result.params`, and
+finite `result.llf`. Calculate test means as `exp(test_design @ params)` and require them to be
+positive and finite. Reconfirm these signatures and result attributes against the installed source
+immediately before WP9 in case the environment changed.
+
+Validate shapes, values, rank, and degrees of freedom before entering the estimator call. Around
+`.fit(...)` only, capture `statsmodels` convergence and perfect-separation warnings and catch known
+data-dependent fitting failures (`PerfectSeparationError`, `FloatingPointError`,
+`numpy.linalg.LinAlgError`, and `ValueError`). A convergence warning or returned
+`converged=false` becomes `poisson_nonconverged_*`; perfect separation or a caught fitting exception
+becomes `poisson_fit_error_*`. The run log records only the warning/exception class and concise
+message with the affected result key. Other exceptions propagate as programming or API-contract
+failures. These failures are local to the affected target/model; they do not abort independent
+targets.
 
 Fit one target at a time because convergence and constant-response validity are target-specific.
 The module returns plain parameters/diagnostics needed for scoring, not statsmodels result objects in
@@ -857,6 +999,14 @@ the public result record.
 The deviance function is independently implemented and tested against hand calculations, including
 zero counts. This prevents estimator-specific pseudo-R-squared conventions from entering the
 analysis.
+
+`compare_count_prediction_mse` is a pure derived view over `fold_scores`. It inner-joins OLS and
+Poisson unit rows on session, direction, condition, window, target, fold, and evaluation scope,
+requires identical train- and test-row-set fingerprints, and defines
+`mse_advantage_poisson = mse_ols - mse_poisson`. Positive values therefore favor Poisson on
+held-out error. It returns a target mean only when all five fold differences exist. The full-model
+comparison is primary; the restricted comparison remains available for inspection. No additional
+saved table is introduced.
 
 ### `granger.py`
 
@@ -991,8 +1141,9 @@ Keep file I/O and run orchestration outside fitting and plotting functions.
 `persistence.py` provides explicit functions such as:
 
 ```text
-input_fingerprint(config, resolved_inputs, code_identity)
-create_run_directory(output_root, timestamp, short_fingerprint)
+run_fingerprint(config, resolved_inputs, content_hashes, code_identity, runtime_versions)
+create_working_run_directory(output_root, timestamp)
+finalize_run_directory(working_path, short_fingerprint)
 save_interregional_result(result, path)
 load_interregional_result(path)
 write_run_summary(...)
@@ -1004,10 +1155,11 @@ second version/fingerprint result tree and no mutable canonical result file:
 
 ```text
 <session_root>/analysis_runs/
+    .interregional_regression_<YYYYMMDD>T<HHMMSSffffff>Z.incomplete/
+        ...work in progress...
     interregional_regression_<YYYYMMDD>T<HHMMSSffffff>Z_<fingerprint12>/
         config.json
         input_manifest.json
-        run_state.json
         result.pkl
         run.log
         summary.md
@@ -1016,11 +1168,16 @@ second version/fingerprint result tree and no mutable canonical result file:
         figures/
 ```
 
-The timestamp is UTC with microseconds; directory creation is exclusive and a collision is an
-error rather than permission to reuse or overwrite a path.
+The timestamp is UTC with microseconds. After input hashing and reuse detection, a new computation
+creates the hidden `.incomplete` directory exclusively in the same parent as its final path. On
+success, close all files, validate every required artifact, then atomically rename that directory to
+the final timestamp/fingerprint name. A collision is an error rather than permission to reuse or
+overwrite a path. Final-run discovery ignores every `.incomplete` directory.
 
-The pickle contains only project-generated configuration records, metadata, and pandas/NumPy data.
-Untrusted pickle files must never be loaded. The copied scripts are the exact runner files used.
+The pickle contains the pure `InterregionalResults` computational record only. Execution
+provenance, paths, content hashes, runtime versions, generating entry point, and Git identity remain
+in the manifest. It still contains only project-generated records and pandas/NumPy data; untrusted
+pickle files must never be loaded. The copied scripts are the exact runner files used.
 `summary.md` records the goal, sessions,
 scripts, configuration, warnings, unavailable-result counts, output locations, and a scientific
 summary. That summary names the compared direction/condition/window, contributing target count,
@@ -1030,51 +1187,61 @@ limitations.
 `run.log` records the runtime environment, parameters, processed session IDs, warnings or errors,
 and execution time.
 
-The scientific fingerprint is SHA-256 over canonical JSON containing the configuration/result
-schema, analysis, and
-coverage versions; all `InterregionalAnalysisConfig` fields; session ID; resolved ordered unit IDs;
-normalized absolute path, byte size, and streamed SHA-256 content hash for every consumed metadata,
-trial, aligned-spike, sorter, cluster, and channel-quality input file; and Git HEAD for code identity. It
-excludes timestamp, output root, rerun, worker count, and presentation-only choices. `config.json`
-and `input_manifest.json` retain the complete expanded values rather than only the hash. Real runs
-require a clean tracked worktree so Git HEAD fully identifies all reused code; dry-run reports dirty
-tracked paths and refuses `new` until they are committed or otherwise resolved by the user.
-Untracked files do not change code identity.
+The `run_fingerprint` is SHA-256 over canonical JSON containing the configuration/result schema,
+analysis and coverage versions; all `InterregionalAnalysisConfig` fields except the location-only
+`session_metadata_path`; session ID; resolved ordered unit IDs; logical role, byte size, and
+streamed SHA-256 content hash for every consumed metadata, trial, aligned-spike, sorter, cluster,
+and channel-quality input file; Git HEAD; and the exact computation runtime versions listed below.
+Absolute paths are recorded in the manifest but excluded from the hash, so relocating identical
+data does not change run identity. Timestamp, output root, rerun, worker count, and Streamlit
+version are excluded. `config.json` and `input_manifest.json` retain expanded values rather than
+only the hash. Real runs require a clean tracked worktree so Git HEAD identifies the code; dry-run
+reports dirty tracked paths and refuses `new` until the user resolves them. `new` also rejects
+untracked Python files under `src/neural_analysis`, because imported untracked code would not be
+identified by Git HEAD. Other untracked files do not change code identity.
 
-`input_manifest.json` has exact top-level keys `manifest_schema_version="1"`,
-`scientific_fingerprint`, `session_id`, `git_head`, `resolved_populations`, and `files`. Each file
-entry has `logical_role`, normalized absolute `resolved_path`, `size_bytes`, and `sha256`. Entries
-are sorted by `logical_role` then path before hashing/writing. Hash large files in fixed-size chunks
-without deserializing them; dry-run may therefore perform substantial sequential I/O while keeping
-memory bounded. Missing or changed inputs between dry-run and `new` invalidate the fingerprint and
-stop before fitting.
+`input_manifest.json` has exact top-level keys `manifest_schema_version="1"`, `run_fingerprint`,
+`session_id`, `git_head`, `entrypoint`, `runtime_versions`, `resolved_populations`, and `files`.
+`entrypoint` is exactly
+`src.neural_analysis.interregional.run_session.run_single_session`. `runtime_versions` has exactly
+`python`, `numpy`, `pandas`, `scipy`, `pynapple`, `scikit_learn`, `statsmodels`, and `matplotlib`;
+all enter the fingerprint because they can affect the persisted numerical or figure artifacts. Each
+file entry has `logical_role`, normalized absolute `resolved_path`, `size_bytes`, and `sha256`.
+Entries are sorted by `logical_role` then path before writing; fingerprint input is sorted by
+logical role and content identity, excluding the path. `new` hashes large files in fixed-size chunks
+without deserializing them, before reuse detection or fitting. Dry-run validates each path and
+reports file sizes and runtime versions but does not compute full content hashes or claim a final
+fingerprint.
 
-`run_state.json` uses exactly `initialized`, `running`, `failed`, or `complete`, with timestamps,
-fingerprint, current/last stage, warnings, and any exception summary. Every JSON and pickle file is
-flushed and `fsync`ed in a same-directory temporary file and installed with `os.replace`;
-`run_state.json` is
-changed to `complete` only after the result, manifest, log, summary, script copies, and figures are
-present and validated. Only a `complete` run whose fingerprint and saved versions validate may be
-reused or displayed. Interrupted/failed runs are retained as evidence but are never resumed in this
-first pass; a new invocation recomputes from the beginning.
+If computation fails after the working directory exists, append the failure to `run.log`, write a
+small `failure.json` containing timestamp, last entered stage, and exception class/message, and
+leave the directory with its `.incomplete` suffix. An abrupt interruption may leave only partial
+artifacts; this is still unambiguous because the suffix excludes it from reuse and display. The
+first pass neither resumes nor automatically removes incomplete directories. A retry recomputes
+from the beginning in a new timestamped working directory. This directory-level completion marker
+is sufficient; do not add a status state machine or per-file durability protocol.
 
 Run-stage names are exactly `input_validation`, `input_hashing`, `preparation`, `ols_cv`,
 `poisson_cv`, `linear_granger`, `poisson_granger`, `persistence`, `figures`, and `summary`; skip
 stages not requested. The CLI logs a start/end record and elapsed seconds for each entered stage.
-This is the progress contract; there is no background-task or Streamlit progress protocol.
+For a new computation, the working-directory log begins by recording the already measured
+validation/hash timings; a reuse-only invocation reports its preflight and matching path to the
+console without mutating the prior run. This is the progress contract; there is no background-task
+or Streamlit progress protocol.
 
 `run_session.py` loads one metadata session, applies skip/rerun logic, runs the requested completed
 analysis stages, saves the result, and writes figures/log/summary. `run_batch.py` reads a session
 list, supports a dry-run mode, calls the same single-session function, and parallelizes across
-sessions with `concurrent.futures.ProcessPoolExecutor`. Its starting worker count is the available
-CPU-core/session minimum, with the documented explicit and memory caps. Each process receives one
+sessions with `concurrent.futures.ProcessPoolExecutor`. Its proposed worker count is the available
+CPU-core/session minimum or an explicit lower override. Each process receives one
 configuration path and returns a small status/run-path record; results and arrays are never passed
 between workers. Results remain session-separated.
 
-For `new`, the runner scans completed directories below the output root and skips computation when
-one has the same fingerprint, printing that run path. `--rerun` always creates a new immutable
-timestamped directory and recomputes even when the fingerprint matches; it never overwrites or
-mutates the earlier run. The webapp is read-only and never creates a run directory.
+For `new`, the runner computes input hashes, scans finalized directories below the output root, and
+skips computation when one has the same fingerprint, printing that run path. `--rerun` always
+creates a new immutable timestamped directory and recomputes even when the fingerprint matches; it
+never overwrites or mutates the earlier run. The webapp is read-only and never creates a run
+directory.
 
 ### Offline command and documentation surface
 
@@ -1097,19 +1264,20 @@ uv run python -m src.neural_analysis.interregional.run_batch new \
   --config-list /path/to/interregional_regression_configs.txt --workers 4
 ```
 
-`dry-run` validates paths, metadata roles, trial columns, filters, block count, selected units,
+`dry-run` validates paths, metadata roles, trial columns, filters, CV block count when applicable,
+selected units,
 window/bin compatibility, requested feature counts, output paths, and a work/memory estimate without
-deserializing full spike arrays or fitting models; it does stream every consumed file to compute its
-content hash. `new` reuses a completed matching fingerprint by
-default. `--rerun` creates a new complete immutable run with the same scientific fingerprint.
+deserializing full spike arrays, hashing every large input, or fitting models. `new` computes the
+content hashes and reuses a completed matching run fingerprint by default. `--rerun` creates a new
+complete immutable run with the same run fingerprint.
 
 The batch config list contains one UTF-8 configuration path per nonblank, non-comment line. Batch
 parallelism is across sessions only. Start from
-`min(os.cpu_count() or 1, number_of_sessions, --workers when supplied)` and apply the exact memory
-cap in the performance section. Before an actual batch, dry-run reports every estimate and the
-planned concurrency. After WP8 measures a representative session peak, the user must explicitly
-approve the exact batch worker count; no batch is implied by single-session approval. A per-session
-failure is logged without merging or deleting successful session results.
+`min(os.cpu_count() or 1, number_of_sessions, --workers when supplied)` as the proposed count and
+report the advisory memory estimate and planned concurrency. After WP8 measures a representative
+session peak, the user must explicitly approve the exact batch worker count; no batch is implied by
+single-session approval, and the rough estimate never automatically certifies or rejects a run. A
+per-session failure is logged without merging or deleting successful session results.
 
 Do not add a notebook-only launcher, generic workflow engine, database, automatic cluster wrapper,
 or a second scientific configuration format.
@@ -1142,6 +1310,7 @@ No new dependencies are proposed.
 |---|---|---|
 | NumPy | count arrays, histories, OLS, metrics | Explicit `float64` fitting; counts remain integer until design conversion |
 | pandas | trial columns and tidy result tables | Preserve row-position/index distinction |
+| SciPy | numerical backend used by scientific dependencies | No new direct algorithm when NumPy/statsmodels already provides it |
 | Pynapple/current spike helpers | aligned bin counts | Verify half-open bin behavior against existing tests/source |
 | scikit-learn | `GroupKFold`, PCA | Five nonshuffled groups; full-SVD, `whiten=False`; no default scaler |
 | statsmodels | Poisson GLM | Explicit Poisson/log/unpenalized settings and convergence checks |
@@ -1165,36 +1334,20 @@ implementation start; never silently substitute a different model, effort, or ag
 
 **Lead Sol supervisor - `gpt-5.6-sol`, high reasoning**
 
-- owns user communication, scientific/architectural decisions, authorization checks, package
-  order, the live handoff snapshot, and final package acceptance;
-- re-reads relevant source, callers, tests, specification, and worktree state before each package;
-- freezes the exact task, file allowlist, data contracts, tests, expected RED, and stopping gate;
-- independently inspects every worker diff and reproduces RED/GREEN commands;
-- owns shared integration surfaces, including package exports, `webapp/app.py`,
-  `webapp/session_inputs.py`, this plan, and final cross-package documentation, unless it assigns one
-  of those files to a single bounded worker;
-- stages and commits reviewed package files, keeping tests-only, implementation, and
-  documentation/handoff commits separate;
-- resolves worker/reviewer conflicts or asks the user when the issue is scientific or expands
-  scope; and
-- is the only role permitted to mark a work package complete.
-
-The lead does not treat a worker summary as evidence and does not bypass the Terra tests-first
-assignment merely to move faster.
+- owns authorization, scientific/architectural decisions, package order, shared integration files,
+  the live handoff, commits, and final package acceptance;
+- audits relevant code and worktree state, freezes each package's allowlist/tests/contracts, and
+  independently reproduces RED and GREEN rather than accepting worker summaries as evidence; and
+- resolves review conflicts or asks the user when a decision changes science or scope.
 
 **Terra package worker - `gpt-5.6-terra`, high by default, xhigh where assigned**
 
-- receives exactly one bounded read-only, tests-only, implementation-only, documentation-only, or
-  command-only assignment;
-- edits only its explicit allowlist and stops if another file or public-interface change appears
-  necessary;
-- writes tests first, runs the named focused command, reports genuine expected RED, and stops;
-- resumes implementation only after Sol has independently verified and committed those RED tests;
-- makes the smallest readable in-scope implementation, runs focused tests to GREEN, and stops;
-- does not commit, amend, reset, clean, run unauthorized experimental data, launch batch/external
-  work, modify tests merely to pass, or spawn another agent; and
-- returns inspected/changed files, command output, expected-versus-actual RED/GREEN, risks,
-  questions, and confirmation that no out-of-scope action occurred.
+- receives one bounded task and exact file allowlist;
+- writes tests and stops at RED, then implements only after Sol verifies and commits those tests;
+- makes the smallest readable change, reports exact commands/results and risks, and stops at GREEN;
+  and
+- never commits, expands scope, changes tests merely to pass, runs unauthorized data/batch/external
+  work, or spawns agents.
 
 Use Terra xhigh for fold/history identity, numerical model validity, PCA leakage, persistence/run
 identity, Poisson, Granger, and full synthetic integration. Use Terra high for straightforward
@@ -1202,18 +1355,12 @@ configuration records, plotting, UI adapters, documentation, and authorized comm
 
 **Independent Sol gate reviewer - `gpt-5.6-sol`, high or xhigh as assigned**
 
-- reviews a stable tests-only design or stable GREEN diff read-only;
-- checks scientific drift, leakage, array axes/units, matched-row identity, estimator settings,
-  saved-schema identity, failure handling, and missing tests;
-- does not edit, commit, spawn agents, broaden scope, or replace the lead's final gate; and
-- is mandatory at the high-risk WP2-WP5, WP7, WP9-WP11 gates described below.
+- read-only reviews stable test designs and GREEN diffs for scientific drift, leakage, axes/units,
+  row identity, estimator settings, saved-schema identity, failure handling, and missing tests; and
+- is mandatory at WP2-WP5, WP7, and WP9-WP11 but never edits or replaces the lead's final gate.
 
-**Optional Terra scout - `gpt-5.6-terra`, medium, read-only**
-
-- may inspect independent call sites, installed-library source, or a bounded failure log;
-- returns file/line evidence and uncertainty, not design authority;
-- performs no edits or generated-artifact/external mutation; and
-- is used only when the evidence task is genuinely independent of the active writer's work.
+An optional `gpt-5.6-terra` medium read-only scout may inspect an independent call site, installed
+API, or bounded failure log. It supplies evidence only and performs no mutation.
 
 No `max` or `ultra` assignment is planned. If a scientific or architectural discrepancy cannot be
 resolved at the assigned level, stop and ask the user rather than escalating model effort or scope
@@ -1221,47 +1368,27 @@ silently.
 
 ### Shared-worktree and concurrency rules
 
-- Use at most four active agents including the lead: one lead Sol, one write-enabled Terra package
-  worker, one read-only Sol reviewer, and at most one optional read-only Terra scout.
-- Only one agent may edit the shared worktree at a time. Tests-only and implementation stages are
-  sequential.
-- Read-only scouting may overlap stable independent work, but a reviewer never audits a changing
-  diff.
-- No two agents edit the same source, test, package initializer, shared fixture, README, webapp
-  router, specification, or plan concurrently.
-- The lead records HEAD and `git status --short` before and after every assignment. Unexpected or
-  unowned changes stop the package immediately.
-- The Terra allowlist names exact files or one narrow responsibility group. A newly discovered file
-  need is reported to Sol; the worker does not expand its own scope.
-- The lead commits only while the writer is idle, stages only reviewed package paths, inspects the
-  staged diff, and leaves unrelated user changes unstaged.
-- Subagents do not create subagents. The lead alone spawns, follows up, interrupts, or replaces
-  workers and reviewers.
-- Documentation/handoff updates are separate from tests-only and implementation commits so the TDD
-  boundary remains auditable.
+- At most one Terra worker edits at once; tests and implementation are sequential. Reviewers inspect
+  only stable diffs, and only Sol manages agents or commits.
+- Sol records HEAD/status around assignments, stages only reviewed package paths while the worker is
+  idle, and stops on unexpected or uncertain ownership. Workers report any new file need rather
+  than expanding their allowlist.
+- The package handoff update normally accompanies the implementation commit and identifies it as
+  `this commit`; Git supplies the hash. Use a separate documentation commit only for a substantive
+  later correction, not as routine package ceremony.
 
 ### Mandatory package sequence
 
 For every implementation package:
 
-1. Sol performs the resume/preflight audit, confirms authorization, re-reads relevant code and
-   usages, and freezes the package contract and file allowlist.
-2. If needed, a Terra scout performs a bounded read-only evidence task. Sol decides whether any
-   finding changes the assignment.
-3. Sol assigns the Terra writer a tests-only task with exact tests, command, expected RED, forbidden
-   actions, and return format.
-4. Terra adds tests only, runs the focused command, reports RED, and stops.
-5. Sol inspects the diff, independently reproduces RED, obtains the required independent Sol
-   test-design review, and commits tests only.
-6. Sol follows up with the same Terra worker to authorize implementation of the committed contract.
-7. Terra implements the smallest in-scope change, runs focused tests to GREEN, reports, and stops
-   without committing.
-8. Sol inspects the full diff and runs focused plus affected regression suites. The assigned Sol
-   reviewer audits the stable GREEN diff.
-9. Specific accepted review findings return to the same Terra worker. Sol repeats verification and
-   creates the separate implementation commit only after every required gate is green.
-10. Sol updates the live snapshot and appends the package record, including commits and exact next
-    action, in a separate documentation commit before starting another package.
+1. Sol audits authorization, code/usages, worktree ownership, package contract, and allowlist.
+2. Terra writes only the named tests, demonstrates RED, and stops.
+3. Sol inspects and reproduces RED, obtains the required test-design review, and commits tests only.
+4. The same Terra worker implements the committed contract and demonstrates focused GREEN.
+5. Sol inspects the diff, runs focused and affected suites, and obtains the required stable-diff
+   review; accepted fixes return to Terra.
+6. Sol updates the live handoff, stages reviewed implementation/handoff files only, and creates the
+   implementation commit after every gate passes.
 
 A test change after the tests-only commit requires an explicit dated explanation that the
 requirement changed or the test was genuinely wrong. It is never changed merely to accommodate an
@@ -1269,18 +1396,9 @@ implementation.
 
 ### Terra assignment contract
 
-Every worker prompt must be self-contained and include:
-
-- package ID, unique task name, exact model and effort, and task mode;
-- one objective and exact file allowlist;
-- relevant v3 decisions, array shapes/units, public and saved-data contracts, and compatibility
-  requirements;
-- exact tests/commands, expected RED or GREEN, and stop gate;
-- prohibited files/actions, including implementation during a tests-only task, commits, real-data
-  runs, and scope expansion;
-- current HEAD/worktree ownership facts required to avoid absorbing unrelated changes; and
-- required return fields: files inspected/changed, concise findings/diff summary, exact commands
-  and results, expected-versus-actual gate, risks/questions, and scope confirmation.
+Every worker prompt states the package, model/effort, one objective, exact allowlist, relevant v3
+data/scientific contracts, tests and commands, expected gate, prohibited actions, current ownership
+facts, and required evidence return. It must be sufficient without relying on chat memory.
 
 When explicit model overrides are available, spawn Terra with `model="gpt-5.6-terra"` and the effort
 listed in the package map, and spawn the reviewer with `model="gpt-5.6-sol"`. Use a bounded context
@@ -1288,27 +1406,16 @@ fork rather than relying on full inherited history; the prompt carries the autho
 If an override is rejected or reports a different model/effort, the agent must not edit and Sol
 must ask the user how to proceed.
 
-Use follow-up tasks to move the same Terra writer from tests-only to implementation after the
-external RED/commit gate. Do not create a replacement implementation agent merely to avoid a clean
-handoff.
+Use a follow-up to move the same Terra worker from tests to implementation after the RED commit.
 
 ### Interruption and recovery contract
 
-- An interrupted agent report is not a gate. Sol records the last independently verified HEAD,
-  worktree, diff, command, and whether tests or source changes remain uncommitted.
-- If a Terra worker becomes unavailable, Sol re-audits its bounded diff and reproduces its last
-  claimed result. A replacement receives the same model, effort, allowlist, role, and stopping gate,
-  plus the recovery record. It does not rely on the previous worker's summary.
-- If an independent reviewer is interrupted, discard the partial review and restart the review with
-  a fresh reviewer only after the diff is stable.
-- If the lead chat is interrupted, the replacement lead must satisfy the Sol/high role, complete the
-  resume checklist, inspect staged and unstaged changes, and establish the last completed gate from
-  Git and commands before assigning work.
-- If ownership cannot be established, stop without changing, staging, or committing the uncertain
-  files and ask the user.
-- Conflicting agent reports, irreproducible failures, uncertain library behavior, near-tolerance
-  numerical discrepancies, or a required interface outside the approved plan are stop-and-escalate
-  conditions.
+- An interrupted report is not a gate. Sol records and reproduces the last verified HEAD, diff, and
+  command before assigning a replacement with the same role, effort, allowlist, and stop gate.
+- A replacement lead completes the resume checklist and establishes state from Git and reproduced
+  commands, not summaries. Restart an interrupted review only against a stable diff.
+- Stop for the user when ownership is uncertain, evidence conflicts, a numerical/API contract is
+  uncertain, or the required solution expands the approved scientific/interface scope.
 
 ### Work-package Sol/Terra map
 
@@ -1330,186 +1437,6 @@ handoff.
 WP8 and the real-session portion of WP11 are command-only packages requiring separate explicit user
 approval of the exact session, configuration, command, and output root. Completion of a preceding
 code package is not authorization to run experimental data.
-
-### Phase-to-package mapping
-
-| Scientific phase | Work packages | Exit condition |
-|---|---|---|
-| Standard OLS foundation | WP1-WP4 | Unit and PC OLS core contracts GREEN |
-| Standard OLS delivery | WP5-WP7 | Reproducible saved results, figures, UI, docs, and synthetic integration GREEN |
-| Standard scientific inspection | WP8 | User inspects one designated session and authorizes moving on |
-| Poisson regression | WP9 | CV deviance/MSE behavior GREEN and inspected without OLS regression |
-| Descriptive Granger | WP10 | Linear/Poisson in-sample outputs structurally separate and GREEN |
-| Final integration and inspection | WP11 | Full suite and separately authorized one-session evidence accepted |
-
-### Package gates and handoffs
-
-#### WP0 - Documentation approval
-
-- **Purpose:** freeze v3, the complete architecture, tests, agent ownership, package order, and live
-  handoff format.
-- **Owned files:** `docs/spec_neural_regression_v3.md` and this plan only.
-- **Terra work:** none.
-- **Gate:** user approves the documents and later explicitly requests implementation. A
-  documentation-only baseline commit exists before WP1 tests are edited.
-- **Handoff:** record approval, baseline commit, current HEAD/worktree inventory, and WP1 as the one
-  next package. The existence of the commit does not itself authorize WP1.
-
-#### WP1 - Configuration and result contracts
-
-- **Purpose:** establish readable immutable settings, shape/unit records, stable status/reason codes,
-  and table schemas without loading or fitting data.
-- **Owned source/tests:** `configuration.py`, `records.py`, package initializer exports limited to
-  these records, `test_interregional_configuration.py`, and `test_interregional_records.py`.
-- **Terra:** high, tests-only then implementation.
-- **Sol gate:** public names, validation policy, dataclass immutability, documentation contracts, and
-  no premature model/persistence behavior.
-- **Completion:** focused GREEN plus existing package-import tests; test-only and implementation
-  commits recorded.
-- **Handoff to WP2:** freeze exact field names, status/reason vocabulary, array-axis notation, and
-  any config JSON representation used later.
-
-#### WP2 - Activity, eligibility, folds, and histories
-
-- **Purpose:** create the shared scientific rows used by every later model.
-- **Owned source/tests:** `preparation.py` and `test_interregional_preparation.py`; existing condition,
-  PCA, loading, and metadata modules are read-only dependencies.
-- **Terra:** xhigh, tests-only then implementation.
-- **Independent Sol:** xhigh review before the tests-only commit and after GREEN, focused on
-  half-open bins, zero-based row identity, `cur_block`, shared masks, history ordering, and no
-  cross-trial/window leakage.
-- **Completion:** 19/39 examples, deterministic five-fold identity, condition semantics, qualified
-  unit IDs, and regional tensor-axis equality are independently verified.
-- **Handoff to WP3:** record exact count dtype, tensor shapes, history column order, fold-assignment
-  table, and unavailable reasons. No model code is present.
-
-#### WP3 - Direct-unit OLS
-
-- **Purpose:** implement the first complete scientific model using WP2 rows.
-- **Owned source/tests:** `linear.py`, the unit-only portion of `pipeline.py`,
-  `test_interregional_linear.py`, and unit-only additions to `test_interregional_pipeline.py`.
-- **Terra:** xhigh, tests-only then implementation.
-- **Independent Sol:** xhigh numerical test-design/final review covering intercepts, rank, residual
-  degrees of freedom, constants, matched restricted/full rows, R-squared, MSE, fold completeness,
-  and population aggregation.
-- **Completion:** seeded bidirectional direct-unit synthetic OLS is deterministic and every local
-  unavailable target remains explicit.
-- **Handoff to WP4:** freeze the unit OLS result columns and prove later PCA work cannot change them.
-
-#### WP4 - Fold-local regional PCA and PC OLS
-
-- **Purpose:** add the second standard representation without held-out leakage or changing existing
-  population PCA behavior.
-- **Owned source/tests:** `pca.py`, PC extensions to `pipeline.py`,
-  `test_interregional_pca.py`, and bounded pipeline-test additions.
-- **Terra:** xhigh, tests-only then implementation.
-- **Independent Sol:** xhigh leakage test-design/final review, including held-out perturbation,
-  training-condition union, zero-variance omission, regional separation, no whitening/rescaling,
-  and fold-specific rank identity.
-- **Completion:** unit OLS regression suite remains unchanged and GREEN; PC OLS is reproducible by
-  rank with correct incomplete-fold behavior.
-- **Handoff to WP5:** freeze standard in-memory result schemas, PCA metadata, and exact result version
-  inputs before any serialization.
-
-#### WP5 - Persistence and offline runners
-
-- **Purpose:** make standard OLS outputs reproducible and runnable without embedding scientific
-  logic in file or CLI code.
-- **Owned source/tests:** `persistence.py`, `run_session.py`, `run_batch.py`,
-  `test_interregional_persistence.py`, and `test_interregional_scripts.py` excluding later docs/UI
-  cases.
-- **Terra:** xhigh, tests-only then implementation.
-- **Independent Sol:** xhigh saved-identity, skip/rerun, corruption, session isolation, logs,
-  summaries, and worker-policy review.
-- **Completion:** trusted-local result round-trip, configuration fingerprinting, dry-run, new/rerun,
-  batch isolation, and timestamped artifacts are GREEN under temporary directories.
-- **Handoff to WP6:** freeze file layout, result version, CLI arguments, and loader entry point. WP6
-  may consume them but not redesign them silently.
-
-#### WP6 - Standard plots, webapp, and documentation
-
-- **Purpose:** expose stable unit/PC OLS results without placing science in presentation code.
-- **Owned source/tests:** `plotting.py`, `webapp/interregional_views.py`, one serialized bounded edit
-  to `webapp/session_inputs.py` and `webapp/app.py`, plotting/webapp tests, package README,
-  scientist-facing README section, and example configuration.
-- **Terra:** high. Plot/UI tests come first; implementation follows their commit. Documentation is a
-  separate bounded task/commit after interfaces stabilize.
-- **Independent Sol:** high final review for view routing, completed-run validation, read-only
-  behavior, metric labels, unavailable counts, output-only plotting, and no duplicated scientific
-  logic.
-- **Completion:** all documented help/dry-run commands work against temporary fixtures; standard
-  plots and UI pass; existing views remain compatible.
-- **Handoff to WP7:** record exact user-visible view name, saved-result selectors, command examples,
-  and output paths.
-
-#### WP7 - Standard synthetic integration and bounded benchmark
-
-- **Purpose:** prove all standard OLS layers compose and collect interpretable performance evidence
-  before touching real data.
-- **Owned tests/fixes:** end-to-end additions to `test_interregional_pipeline.py`; any source fix is
-  limited to a separately identified owning package/file and receives a RED test first.
-- **Terra:** xhigh integration-test author, then bounded fix work only after Sol gates each failure.
-- **Independent Sol:** xhigh review of scientific signal timing, fold leakage, identity after
-  round-trip, unavailable results, figures, stage timings, and memory measurement method.
-- **Completion:** deterministic saved synthetic unit/PC OLS output and plots; focused and affected
-  existing neural suites GREEN; measured synthetic timing/memory recorded without claiming real-
-  session performance.
-- **Handoff to WP8:** propose, but do not execute, one exact metadata-session configuration, dry-run
-  command, output root, expected work count, and stop conditions.
-
-#### WP8 - Standard one-session inspection
-
-- **Purpose:** let the user inspect the first standard-regression scientific output before Poisson.
-- **Authorization:** separate explicit approval of the exact session, config, command, output path,
-  and whether computation may write results under that session.
-- **Terra:** high command runner only; no source/test/config changes.
-- **Sol/reviewer:** Sol validates inputs and interprets raw run evidence; high read-only reviewer
-  checks commands, logs, row/fold/unit counts, runtime/memory, and figures.
-- **Completion:** user reviews the run and explicitly authorizes proceeding to WP9. A poor result is
-  evidence for scientific replanning, not permission to tune parameters silently.
-- **Handoff to WP9:** record immutable run paths, commit/config identity, warnings, unavailable rates,
-  runtime/memory, and user decision.
-
-#### WP9 - Poisson regression
-
-- **Purpose:** add unit-only unpenalized Poisson CV and matched OLS/Poisson count-MSE comparison after
-  standard OLS is accepted.
-- **Owned source/tests:** `poisson.py`; bounded pipeline/result/persistence/plot/UI extensions;
-  `test_interregional_poisson.py`; and Poisson additions to integration, plot, and webapp tests.
-- **Terra:** xhigh, tests-only then implementation.
-- **Independent Sol:** xhigh test-design/final review of installed statsmodels API, unpenalized fit,
-  convergence, positive means, deviance formula, same null denominator, same OLS rows/folds, and
-  schema backward compatibility.
-- **Completion:** every pre-existing OLS test remains GREEN; Poisson saved round-trip and synthetic
-  integration pass; any designated-session Poisson inspection requires a new exact user approval.
-- **Handoff to WP10:** freeze Poisson result fields and record convergence/unavailable evidence plus
-  any separately authorized inspection result.
-
-#### WP10 - Descriptive Granger analyses
-
-- **Purpose:** add the final requested model family without mixing in-sample results with CV output
-  or adding significance inference.
-- **Owned source/tests:** `granger.py`; descriptive-PCA and bounded pipeline/result/persistence/plot/UI
-  extensions; `test_interregional_granger.py`; and Granger integration tests.
-- **Terra:** xhigh, tests-only then implementation.
-- **Independent Sol:** xhigh scientific/formula/final review covering same-row nested fits,
-  `log(SSE_R/SSE_F)`, likelihood/deviance equivalence, per-row normalization, lag restriction,
-  descriptive PCA isolation, and absence of p-value/joint-causality fields.
-- **Completion:** all OLS and Poisson CV tests remain GREEN; Granger tables/figures are separately
-  labeled and saved.
-- **Handoff to WP11:** freeze the complete schema and exact final integration matrix.
-
-#### WP11 - Final integration, documentation, and scientific inspection
-
-- **Purpose:** verify the complete staged system; this package adds no new scientific method.
-- **Terra:** xhigh for final synthetic tests/bounded fixes, then high command runner only for an
-  explicitly approved session.
-- **Independent Sol:** xhigh final stable-diff review and high run-evidence review.
-- **Completion:** complete interregional tests, affected full neural suite, package imports,
-  documented commands, saved round-trip, figures, timing/memory, and worktree scope all pass.
-  User separately inspects one complete session before any batch of sessions is considered.
-- **Final handoff:** append commit IDs, exact commands, run paths, warnings, deferred coverage-mask
-  work, user acceptance, and whether batch work remains unauthorized or is proposed separately.
 
 ## Test-driven workflow
 
@@ -1552,9 +1479,10 @@ PCA, Poisson, Granger, plotting, or Streamlit code is included yet.
 6. Reject an empty condition request, noncanonical/duplicate conditions, and the legacy `rewarded`
    alias; preserve canonical condition order.
 7. Validate analysis-stage dependencies, reject Poisson when `units` is absent, and keep Poisson
-   rows unit-only when units and PCs are both requested.
-8. Preserve schema, analysis, and coverage versions while excluding run options from the scientific
-   fingerprint input.
+   rows unit-only when units and PCs are both requested; allow either Granger stage without its CV
+   counterpart.
+8. Preserve schema, analysis, and coverage versions while excluding run options from run-identity
+   input.
 
 `test_interregional_records.py`:
 
@@ -1564,9 +1492,11 @@ PCA, Poisson, Granger, plotting, or Streamlit code is included yet.
 3. Accept the complete applicable unit/PC key grid and require explicit unavailable rows rather
    than missing keys.
 4. Preserve valid metric-specific target summaries when another metric is incomplete.
-5. Validate canonical JSON scalar/list columns and the fixed membership-exclusion order.
-6. Validate exact `InterregionalResults` versions, metadata fields, axes/units, randomness fields,
-   and empty future-stage schemas without importing fitting or persistence code.
+5. Validate canonical JSON scalar/list columns, the fixed scientific-exclusion order, and distinct
+   scientific-eligibility, condition-membership, and CV-membership fields.
+6. Validate exact `InterregionalResults` versions, metadata fields, whole-window edges, the frozen
+   axes/units mapping, randomness fields, and empty future-stage schemas without importing fitting,
+   persistence, or run-provenance code.
 
 `test_interregional_preparation.py`:
 
@@ -1575,16 +1505,17 @@ PCA, Poisson, Granger, plotting, or Streamlit code is included yet.
 2. Return `(trial, bin, unit)` integer counts with qualified unit order preserved.
 3. Produce matching trial/bin axes for PFC and HPC and reject mismatches.
 4. Treat an empty bin as observed zero under the complete-coverage assumption.
-5. Define `all` as valid alignment plus experimenter-reward validity, choice/context filters, user
-   exclusions, and nonmissing `cur_block`.
-6. Intersect named conditions with the authoritative base mask without changing existing condition
+5. Define scientific `all` as valid alignment plus experimenter-reward validity, choice/context
+   filters, and user exclusions; define CV eligibility by additionally requiring `cur_block`.
+6. Intersect named conditions with the scientific eligibility mask without changing existing condition
    definitions.
 7. Use zero-based row positions for masks while preserving nontrivial original DataFrame indexes as
    provenance.
 8. Assign all trials in one `cur_block` to one test fold.
 9. Produce exactly five deterministic folds and the same assignment on repeated calls.
-10. Leave missing-block rows unassigned/excluded with reason `missing_block`, reject fewer than five
-    distinct nonmissing session blocks, and never fall back to random splitting.
+10. Leave missing-block rows unassigned and excluded from CV with reason `missing_block`, reject
+    fewer than five distinct nonmissing session blocks when CV is requested, and never fall back to
+    random splitting.
 11. Reuse one session fold mapping when condition masks select different trial subsets.
 12. Build lag-1/order-1 histories with 19 rows for a two-second 100-ms window and 39 for a
     four-second window.
@@ -1597,6 +1528,11 @@ PCA, Poisson, Granger, plotting, or Streamlit code is included yet.
 18. Use positional trial-table indexing with a deliberately nontrivial original DataFrame index.
 19. Raise a clear input error when a requested non-`all` choice/context filter lacks its required
     trial column.
+20. Normalize integral numeric block labels so `1` and `1.0` remain in one fold while strings remain
+    distinct from numbers.
+21. Retain a scientifically eligible missing-block trial for Granger while excluding it from CV.
+22. Make row-set fingerprints independent of pair order, sensitive to either identity coordinate,
+    and invalid for duplicate `(trial_row, target_bin_position)` pairs.
 
 `test_interregional_linear.py`:
 
@@ -1609,7 +1545,8 @@ PCA, Poisson, Granger, plotting, or Streamlit code is included yet.
 7. Match hand-calculated held-out SSE, SST, R-squared, MSE, and incremental R-squared.
 8. Preserve negative finite absolute and incremental R-squared.
 9. Mark R-squared unavailable for constant held-out responses while retaining defined MSE.
-10. Require restricted/full scores to have identical held-out row identities.
+10. Require restricted/full scores to have identical ordered held-out row identities and persist
+    canonical train/test row-set fingerprints.
 11. Require all five paired folds for the primary target mean; retain incomplete fold rows without
     presenting a partial mean as complete.
 12. Calculate population median and quartiles from target means, not from pooled fold values.
@@ -1620,7 +1557,7 @@ PCA, Poisson, Granger, plotting, or Streamlit code is included yet.
 2. Detect stronger incremental prediction in the deliberately coupled synthetic direction without
    asserting a publication-style significance threshold.
 3. Reuse the identical fold assignment and row identities across directions and restricted/full
-   pairs.
+   pairs, and preserve their canonical train/test fingerprints in fold rows.
 4. Keep condition/window failures local while returning unrelated valid results.
 5. Retain qualified target unit IDs and the complete configuration in result records.
 
@@ -1686,7 +1623,7 @@ contracts. Unit OLS behavior remains unchanged.
 2. Add fit/transform functions with explicit zero-variance omission.
 3. Add fold-level shared PCA construction outside condition/window loops.
 4. Extend the OLS pipeline to PC-rank responses and histories.
-5. Extend result schemas with PCA scope and effective-dimension metadata.
+5. Populate the already-frozen PCA scope and effective-dimension fields.
 6. Run targeted tests plus all existing population PCA/decoding tests.
 
 ### Acceptance gate
@@ -1718,9 +1655,9 @@ standard-regression milestone before Poisson work.
 
 `test_interregional_webapp.py`:
 
-1. Discover only completed interregional run directories for the selected metadata session.
-2. Exclude initialized, running, failed, corrupt, fingerprint-mismatched, and unsupported-version
-   directories.
+1. Discover only finalized interregional run directories for the selected metadata session.
+2. Ignore `.incomplete` directories and reject corrupt, fingerprint-mismatched, or unsupported-
+   version finalized directories.
 3. Label each saved run with timestamp, version, short fingerprint, two regional selections, and
    completed stages.
 4. Offer display selectors only for conditions, windows, representations, model families, and
@@ -1736,29 +1673,34 @@ standard-regression milestone before Poisson work.
 
 `test_interregional_persistence.py`:
 
-1. Produce the same SHA-256 fingerprint for semantically identical canonical configurations and
+1. Produce the same SHA-256 run fingerprint for semantically identical canonical configurations and
    resolved input/code identities.
-2. Change the fingerprint when a scientific parameter, version, selected unit order, small-file
-   or large-file path/size/content hash, or Git HEAD changes; ignore timestamp, output root,
-   rerun, and worker count.
-3. Create one immutable timestamp/fingerprint run directory beneath a temporary session data root,
-   never the repository; reject repository-contained output roots and do not create a second result
-   tree.
+2. Change the fingerprint when a scientific parameter, version, selected unit order, file
+   size/content hash, Git HEAD, or computation runtime version changes; ignore relocated absolute
+   paths, timestamp, output root, rerun, and worker count.
+3. Create one hidden `.incomplete` working directory beneath a temporary session data root, never
+   the repository; reject repository-contained output roots and do not create a second result tree.
 4. Round-trip every named table with exact columns, dtypes, primary-key order, configuration,
-   coverage, units/axes, input/code identity, and no-randomness declaration.
-5. Reuse an identical validated `complete` run by default; make `--rerun` create a different
+   coverage, units/axes, and no-randomness declaration; keep input/code identity in the manifest
+   rather than `InterregionalResults`.
+5. Reuse an identical validated finalized run by default; make `--rerun` create a different
    directory with the same fingerprint and never overwrite the first.
-6. Exercise `initialized -> running -> complete` and `running -> failed` transitions.
-7. Install JSON/pickle artifacts atomically and never recognize a run as complete before every
-   required artifact validates.
-8. Retain but never reuse/resume incomplete, failed, corrupt, fingerprint-mismatched, or
-   unsupported-version records.
-9. Copy the exact session/batch runner files and create config, manifest, state, result, log,
-   summary, and figure directory.
+6. Atomically rename the same-parent working directory only after every required artifact validates;
+   never discover it under the final name earlier.
+7. Leave a caught failure as `.incomplete` with `run.log` and `failure.json`; ignore and never
+   resume either caught-failure or abruptly partial working directories.
+8. Retain but never reuse corrupt, fingerprint-mismatched, or unsupported-version finalized runs.
+9. Copy the exact session/batch runner files and create config, manifest, result, log, summary, and
+   figure directory.
 10. Include goal, session, scripts, warnings, unavailable counts, scientific interpretation, and
     coverage/causal caveats in the Markdown summary.
 11. Reject duplicate primary keys, wrong columns/dtypes, unknown status/reason values, and unsafe
     load targets outside a discovered project run directory.
+12. Let dry-run validate paths and report sizes without hashing large files; require `new` to hash
+    every consumed file before fitting.
+13. Refuse `new` for dirty tracked files or untracked Python files under `src/neural_analysis` while
+    ignoring unrelated untracked data/artifacts for code identity; record the exact manifest entry
+    point and runtime-version keys.
 
 `test_interregional_scripts.py`:
 
@@ -1768,8 +1710,7 @@ standard-regression milestone before Poisson work.
 3. Print planned sessions, stages, and output paths without computation in batch dry-run mode.
 4. Keep independent session results separate and never combine unit columns.
 5. Start batch workers at the lesser of CPU cores, session count, and an explicit lower override;
-   apply the documented 80%-RAM cap, report every estimate in dry-run, and reject even one session
-   that cannot fit.
+   report the advisory estimate in dry-run without treating it as an automatic cap or fit verdict.
 6. Propagate a failed session as a logged per-session failure without discarding successful sessions.
 7. Accept the portable example configuration through the production configuration loader.
 8. Keep documented `--help`, dry-run, new, and rerun command syntax synchronized with the CLI.
@@ -1781,7 +1722,8 @@ standard-regression milestone before Poisson work.
 2. Reproduce identical scientific tables from identical inputs and configuration.
 3. Preserve target/fold/trial/bin identities after save/load.
 4. Keep unavailable cells explicit while completing independent valid cells.
-5. Confirm no Poisson or Granger table/action is present before its package.
+5. Confirm the frozen Poisson/Granger-capable tables exist but remain empty, and no Poisson or
+   Granger compute/display action is present before its package.
 6. Record stage timings, synthetic dimensions, peak-memory measurement method, and output size for
    the bounded performance gate without imposing a brittle wall-clock unit-test threshold.
 
@@ -1828,8 +1770,10 @@ held-out count-MSE comparison with OLS. PCs remain OLS-only.
 1. Reject negative, fractional, or nonfinite count responses.
 2. Verify the statsmodels model uses an explicit Poisson family, log link, intercept column, and
    unpenalized fitting path.
-3. Recover finite expected means on a seeded synthetic Poisson dataset.
-4. Detect nonconvergence, nonfinite parameters, and nonpositive/nonfinite predicted means.
+3. Recover finite expected means on a seeded synthetic Poisson dataset and retain only convergence
+   Boolean plus integer IRLS iteration count.
+4. Detect nonconvergence, convergence/perfect-separation warnings, known fitting exceptions,
+   nonfinite parameters, and nonpositive/nonfinite predicted means with stable local reasons.
 5. Match hand-calculated Poisson deviance, including zero-count terms.
 6. Match hand-calculated null deviance and deviance explained.
 7. Preserve negative finite deviance-explained values and increments.
@@ -1838,13 +1782,20 @@ held-out count-MSE comparison with OLS. PCs remain OLS-only.
 10. Calculate OLS and Poisson MSE on identical unit-count responses without rounding or clipping.
 11. Keep restricted/restricted and full/full model-family comparisons paired.
 12. Reject Poisson for PC targets.
+13. Build comparisons by an exact inner join on session, direction, condition, window, unit target,
+    fold, and evaluation scope; reject differing train- or test-row-set fingerprints.
+14. Mark a target comparison unavailable unless all five OLS/Poisson fold pairs are defined.
+15. Match hand-calculated `mse_advantage_poisson = mse_ols - mse_poisson` and its five-fold target
+    mean for full and restricted models.
 
 `test_interregional_pipeline.py` gains Poisson cases:
 
 1. Reuse exactly the OLS fold assignments, target IDs, histories, and test rows.
-2. Continue other targets after one target fails convergence.
+2. Continue other targets after one target fails convergence or raises a recognized data-dependent
+   fit error, while allowing unexpected exceptions to reach the run boundary.
 3. Require five valid paired folds for a primary Poisson target summary.
-4. Retain Poisson fit diagnostics and both model families' fold-level MSE.
+4. Retain only Poisson convergence/iteration diagnostics plus both model families' fold-level MSE.
+5. Never aggregate raw restricted/full/null deviance into target or population summaries.
 
 `test_interregional_plotting.py` gains:
 
@@ -1858,7 +1809,8 @@ held-out count-MSE comparison with OLS. PCs remain OLS-only.
 2. Add target-wise Poisson fitting and plain diagnostic records.
 3. Add independent deviance/null-deviance scoring.
 4. Extend the CV pipeline only for direct units.
-5. Add paired model-family MSE tables and plots.
+5. Add a pure derived model-family MSE comparison view and plots; do not add a redundant saved
+   table.
 6. Extend saved-result display selectors/labels for Poisson unit results; add no compute action.
 7. Run all OLS tests unchanged, then the Poisson and UI suites.
 8. Inspect runtime and convergence on the same designated session before Phase 5.
@@ -1893,6 +1845,9 @@ Add separate in-sample Granger-style tables and figures after all CV analyses ar
     from entering CV.
 11. Add no p-value, significance, or joint-multivariate regional fields.
 12. Preserve lag-restricted history exactly when lag exceeds one.
+13. Include a scientifically eligible missing-block trial and require no fold construction in a
+    Granger-only run.
+14. Allow linear or Poisson Granger to run without requesting its CV counterpart.
 
 `test_interregional_plotting.py` gains:
 
@@ -1965,9 +1920,9 @@ Correctness and auditability take priority, but avoid obvious repeated work:
   identity; it never caches prepared tensors, transforms, designs, or fitted models.
 - Do not retain large repeated design matrices in result records.
 - In batch runs, parallelize across sessions rather than within a session. Default to the lesser of
-  available CPU cores and session count, then cap that value by the memory rule below. A worker
-  override is an upper bound, not permission to exceed the memory cap. No batch run occurs until WP8
-  supplies a measured session peak and the user explicitly approves the worker count.
+  available CPU cores and session count, with an optional lower worker override. No batch run occurs
+  until WP8 supplies a measured session peak and the user explicitly approves the exact worker
+  count.
 
 For dry-run session dimensions `T` trials, `B` whole-window bins, `N` total selected units,
 `R = T * max_window(B_window - (lag + order - 1))` as the conservative maximum design rows,
@@ -1981,13 +1936,12 @@ response_bytes = 8 * R * Y
 estimated_session_peak_bytes = 256 MiB + 3 * count_bytes + 4 * (design_bytes + response_bytes)
 ```
 
-This is a conservative planning estimate, not a measured peak. Determine the default memory budget
-as 80% of physical RAM using standard-library `os.sysconf`; if unavailable, batch `new` requires an
-explicit `--memory-budget-bytes`. The automatic worker cap is
-`floor(memory_budget / max_session_estimate)`, with minimum one only when one session fits. Reject a
-batch before computation if even one estimated session does not fit. Dry-run prints every term,
-the CPU cap, memory cap, chosen workers, and that WP8's measured peak supersedes this estimate for
-later approval.
+This is a rough planning estimate, not a trustworthy upper bound: NumPy/LAPACK workspaces,
+statsmodels allocations, Python/process overhead, and concurrent system use are not modeled.
+Dry-run prints every term and the proposed worker count but does not automatically cap, certify, or
+reject a run from this estimate. WP8 measures representative peak memory; the user then approves an
+exact batch worker count. Any later automatic memory policy requires its own measured design and is
+outside this first pass.
 
 At 20-ms bins and large unit populations, direct full designs may be both wide and rank-invalid.
 The implementation reports that outcome rather than allocating recovery searches. Before adding

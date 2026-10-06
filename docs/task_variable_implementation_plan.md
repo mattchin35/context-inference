@@ -20,10 +20,11 @@ authorized.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD and `origin/refactor`: `740aceac8b63d01e9529bb7c8842b8afe29221db`
+- HEAD and `origin/refactor`: `787aadbc2843c9ec2e8b03410f8a201f19f67c37`
   (`updated specs`);
-- this plan contains the uncommitted WP0 documentation revision awaiting user
-  approval/commit;
+- that commit contains the prior WP0 task-variable documentation revision;
+- this plan and revision 5 now contain an uncommitted third readiness
+  correction awaiting user review/commit;
 - concurrently modified neural-regression documents are owned by another user
   task and were not edited or incorporated into this readiness pass; and
 - all other pre-existing dirty/untracked files remain outside this plan's
@@ -45,7 +46,9 @@ authorized.
   benchmark-derived task-decoding resources rather than copied PPC values; and
 - a second correctness pass resolved tuned-transform reuse, error boundaries,
   portable path/source identity, comparable benchmark threading, and
-  measurement-based memory/resource decisions.
+  measurement-based memory/resource decisions; and
+- a third pass cross-checked the revised contracts against the current loaders,
+  augmentation helpers, run lifecycle, and resource handoff.
 
 **Next exact action:** the user reviews this ready plan. Before a later
 implementation begins, the accepted WP0 documents must be committed and their
@@ -200,6 +203,43 @@ Use this template for each appended record:
 - Exact next action: user reviews the corrected documents, then separately
   approves implementation if satisfied.
 
+#### 2026-10-06 - WP0 third readiness correction
+
+- State: third correctness/completeness/conciseness correction complete. A
+  fresh pass after the final correction found no additional issue; WP0 is
+  ready for user review and remains documentation only.
+- Authorization: documentation changes only.
+- Sol / Terra / reviewer: primary Codex review; no worker was used.
+- Start HEAD / end HEAD: `787aadbc2843c9ec2e8b03410f8a201f19f67c37` /
+  `787aadbc2843c9ec2e8b03410f8a201f19f67c37`.
+- Owned files: `docs/task_variable_spec_v5.md` and this plan only. Concurrent
+  neural-regression documentation remains owned by another user task.
+- RED command and result: not applicable; no implementation was authorized.
+- GREEN/regression commands and results: `git diff --check --
+  docs/task_variable_spec_v5.md docs/task_variable_implementation_plan.md`
+  passed; Markdown fence counts were even (2 and 28); `test -f`/`rg` checks
+  found every referenced existing source file and function; the documented
+  fixed, tuned, and bounded fit counts independently recomputed as 21,600,
+  993,600, and 2,400; and `git rev-parse HEAD` matched
+  `git rev-parse origin/refactor` at the recorded commit.
+- Commits: the previous task-variable documentation is present in
+  `787aadbc2843c9ec2e8b03410f8a201f19f67c37`; the current correction is
+  uncommitted.
+- Real-data or external actions: read-only inspection confirmed the designated
+  CT026 table's categorical encodings and the two aligned archives' member
+  names. No table, neural array, source code, test, benchmark, transfer, or
+  scheduler state was changed.
+- Findings and unresolved risks: corrected safe one-column CSV publication,
+  exact binary/no-choice validation, mechanical IRIG/manual coverage
+  selection, verbatim feature-parameter provenance, tensor-row identity,
+  custom-results-root discovery, output/Git containment, validated reuse of
+  completed runs, resource-envelope detail, and scoped dirty-source gates. No
+  known correctness, completeness, concision, or implementation-contract
+  blocker remains after the final fresh pass.
+- Exact next action: user reviews the corrected documents. If accepted, commit
+  them and record the new HEAD; implementation still requires a separate
+  explicit request.
+
 ## 1. Objective
 
 Implement a readable, single-session task-variable decoding pipeline that:
@@ -275,9 +315,11 @@ benchmark, not a full tuned analysis.
 | `spike_behavior.loading.load_aligned_spikes` | Load aligned UTC spike timestamps. Extend validation outside this function rather than changing its public contract unnecessarily. |
 | `spike_behavior.loading.validate_aligned_spike_inputs` | Confirm spike/cluster one-to-one length. |
 | `spike_behavior.loading.build_spike_tsgroup` | Construct Pynapple unit spike series. |
-| `spike_behavior.loading.select_units_by_channels` | Retain curated `good`/`mua` clusters on selected channels. |
+| `spike_behavior.loading.load_channel_quality` and `select_channels_from_quality` | Load channel metadata and apply existing quality/inside-brain selection. |
+| `spike_behavior.loading.select_units_by_channels` | Retain configured curated cluster groups on selected channels. Add one backward-compatible `accepted_groups` keyword under WP3; existing callers retain the `good`/`mua` default. |
 | `population.pca.build_trial_unit_rate_tensor` | Produce trial x time x unit unsmoothed firing rates in Hz. |
 | `behavior_analysis.session_analysis.make_augmented_trial_df` | Add the general `rewards_in_block` feature at the existing augmentation boundary. |
+| `behavior_analysis.project_utils.is_present_value`, `is_zero_flag`, and `make_no_choice_action_mask` | Reuse project missing-sentinel, manual-flag, and no-choice semantics in target validation instead of defining decoder-only variants. |
 | `webapp.session_inputs` | Own the new view name and availability entry. |
 | `webapp.app._start_metadata_webapp` | Existing early view-selection boundary. Route saved decoding results before population controls and raw spike loading. |
 
@@ -322,9 +364,35 @@ binning is reused at the lower boundary.
 - Add a small, independently tested function that computes
   `rewards_in_block` from `cur_block`, `action`,
   `reward`, and normalized experimenter-reward flags.
+- Reuse `should_skip_decision_variable_update(...)` and
+  `parse_decision_variable_update_values(...)` so manual/no-choice and
+  malformed-value semantics are not duplicated.
+- Strengthen that shared parser to require finite rewards and exact 0/1
+  actions; the current `int(float(action))` path otherwise accepts fractional
+  actions, and non-finite rewards can be silently treated as unrewarded.
 - Call it from `make_augmented_trial_df`.
-- Preserve row count, row order, index, and every existing column; append one
-  public column.
+- The helper preserves row count, row order, index, and every existing column;
+  integration appends one public column without changing
+  `make_augmented_trial_df`'s existing experimenter-reward alias normalization
+  or other outputs.
+
+`src/behavior_analysis/gather_trial_features.py`
+
+- Add one thin, tested `backfill_rewards_in_block_csv(path) -> None` migration
+  function for already saved augmented tables. It loads with the project's CSV
+  sentinel convention, requires the canonical `cur_block`, `action`, `reward`,
+  and `experimenter_reward_given` source columns, refuses a table that already
+  has the destination column, and calls the same general helper. It writes a
+  sibling temporary CSV, reloads it with the same convention, verifies that
+  its row order and every prior loaded column/value are unchanged and only the
+  new column was added, and only then publishes with `os.replace`. A missing
+  source or failed round-trip check leaves the original file untouched.
+- It does not recompute model-derived features, rewrite
+  `trial_feature_params.json`, create a decoder-specific table, or contain a
+  second counting implementation. The top-level neural README documents the
+  exact `uv run` invocation only as recovery for an older table that fails
+  lightweight validation solely because `rewards_in_block` is absent. Tables
+  with other schema gaps must use the normal behavior-processing path.
 
 The helper should iterate once in chronological row order. A dataframe groupby
 expression is not preferred if it obscures the entering-trial update order or
@@ -362,7 +430,13 @@ Add `src/neural_analysis/webapp/task_decoding_views.py`.
 
 This module:
 
-- discovers completed decoding-run directories below the selected session;
+- lists direct child run directories under the selected results root, default
+  `<session_root>/analysis_runs`;
+- accepts one optional session-relative results-root locator for a run that
+  used a nondefault configured output root, rejects paths outside the selected
+  metadata session, and never recursively scans the full session tree;
+- ignores hidden incoming transfers and any run not both marked complete and
+  valid under the saved-result loader;
 - loads only saved result/config files;
 - renders selectors, heatmaps, fold details, and coefficients; and
 - contains no estimator or raw-spike loading call.
@@ -376,7 +450,7 @@ view immediately after the metadata session and view are selected, before
 The initial result view is metadata-session-only. The legacy manual-path route
 does not have a reliable session root/run directory contract and should show a
 short message directing the user to launch with `neural_session.json`
-rather than adding another path browser.
+rather than adding an unrestricted filesystem browser.
 
 For a metadata session, keep the view selectable even when no completed run
 exists or raw behavior/spike sources are currently unavailable. The view itself
@@ -394,18 +468,22 @@ Update `src/neural_analysis/README.md` with a short
 
 - required metadata, augmented-trial, feature-parameter, and configuration
   files;
-- how the normal behavior-processing path creates the augmented table and how
-  to regenerate it when lightweight validation reports a missing required
-  column such as `rewards_in_block`, without hand-editing the CSV;
+- how the normal behavior-processing path creates the augmented table; when
+  `rewards_in_block` is its only schema gap, how to add that column with the
+  tested behavior-side backfill after making a timestamped backup; and why any
+  other schema gap requires normal behavior regeneration rather than
+  hand-editing the CSV or rerunning unrelated models unnecessarily;
 - how to copy and edit the example configuration;
 - the exact local `dry-run`, foreground and detached `new`, detached
   `resume`, and read-only `status` commands;
 - how to start an unattended run, close the terminal/Codex task, and inspect
   its durable state and logs once later without polling;
-- how to perform a batch dry run and batch launch;
+- how to perform a batch dry run and batch launch, including the one-worker
+  default and optional explicit measured-run evidence for safe parallelism;
 - where run directories, checkpoints, logs, NPZ results, summaries, and PNGs
   are written;
-- how to open the saved results in the existing webapp;
+- how to open the saved results in the existing webapp, including the
+  session-relative locator for a nondefault output root;
 - the difference between fixed and tuned mode, including the large tuned-mode
   work-count warning;
 - the bounded two-target benchmark recipe, recorded timing/memory fields, and
@@ -420,7 +498,8 @@ Update `src/neural_analysis/README.md` with a short
 Create `src/neural_analysis/task_decoding/README.md` with:
 
 - one concise paragraph describing the package and its dependency direction;
-- a table describing every Python file and its public entry points;
+- a table describing every package Python file and its public entry points,
+  plus the new webapp view, optional Slurm wrapper, and example configuration;
 - input dataframe columns and rate/result array shapes, axes, and units;
 - configuration and result-schema summaries;
 - which existing modules are deliberately reused;
@@ -473,7 +552,10 @@ process: validate small inputs, create the immutable run directory, write the
 saved configuration/manifests/state and exact follow-up commands, start one
 detached child with its console streams redirected into the run directory, and
 return. It prints the run directory, local PID, log paths, and exact status and
-resume commands. It does not poll the child.
+resume commands. Before printing success, it atomically writes a separate
+`local_launch.json` receipt with the child PID and process-start token so an
+immediate resume cannot race the child's guard creation or overwrite
+child-owned execution state. It does not poll the child.
 
 The matching unattended resume command is:
 
@@ -536,17 +618,50 @@ uv run python -m src.neural_analysis.task_decoding.run_batch dry-run \
   --config-list /path/to/task_decoding_configs.txt
 
 uv run python -m src.neural_analysis.task_decoding.run_batch new \
-  --config-list /path/to/task_decoding_configs.txt --workers 4
+  --config-list /path/to/task_decoding_configs.txt
+```
+
+Without explicit measured resource evidence, `run_batch new` caps execution at
+one session at a time even when a larger `--workers` value is requested. To
+permit parallel sessions, add
+`--resource-run-directory /path/to/completed/measured/run`. That directory,
+not an implicitly discovered "latest" run, must contain a complete run with
+measured peak RSS. Its analysis version, scoped source, dependency versions,
+platform/architecture, regularization mode, and thread limits must match, and
+each planned session's trial, regional-unit, time-bin, result-array, and fit
+dimensions, including categorical and numerical fit counts separately, must be
+no larger than the measured envelope. For an admitted session, use the measured
+peak unchanged as its conservative memory estimate;
+do not invent a scaling law. Cap workers by requested workers, available CPUs,
+and the number whose summed estimates stay within 50% of `MemAvailable`.
+Record the evidence run and calculation. An explicitly supplied but invalid
+evidence run is an error; omitting it intentionally selects the one-worker
+safe path. If `--workers` is omitted, the requested count is the available CPU
+count before these caps. One session failure does not cancel independent
+sessions already running; after all launched work ends, the batch command
+prints every session outcome and returns nonzero if any session failed.
+
+After a matching completed evidence run exists, an explicit parallel launch
+is:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_batch new \
+  --config-list /path/to/task_decoding_configs.txt --workers 4 \
+  --resource-run-directory /path/to/completed/measured/run
 ```
 
 `dry-run` validates metadata, configuration, selected-target columns, feature
 parameters, output paths, small `cluster_info.tsv`/channel metadata, and
 planned work count without calling `load_sorter_metadata`, loading
-`spike_clusters.npy` or aligned spike arrays, or fitting models. `new` creates
-the run directory and resume
-record before large-array loading. `resume` accepts only the exact run
-directory and saved configuration; it does not reconstruct settings from the
-current command line.
+`spike_clusters.npy` or the large `spike_utc_unix` members, or fitting models.
+It inspects aligned-archive member names. A present `irig_utc_unix` member is
+the authoritative coverage source and is read and validated; configured bounds
+for that probe are rejected rather than ignored. When the member is absent,
+dry run requires the configured trusted bounds. It never substitutes
+first/last spike times. `new` creates the run directory and resume record
+before large-array loading.
+`resume` accepts only the exact run directory and saved configuration; it does
+not reconstruct settings from the current command line.
 
 The batch config list is a UTF-8 text file with one configuration path per
 nonblank, non-comment line. Batch resume is deliberately per-session through
@@ -566,7 +681,8 @@ computation.
 
 ### 4.6 Routine single-session cluster path
 
-WP10 first measures the default fixed-mode workload locally. Cluster use does
+WP10 first measures the bounded fixed-mode workload locally and projects the
+full default fixed run. Cluster use does
 not require proof that local execution is impossible: the user may choose WP11
 because the projected run is expensive, occupies the workstation, or is more
 convenient to leave on the cluster. There is no automatic duration threshold.
@@ -603,6 +719,15 @@ script to modify or call. Reuse its reviewed operational pattern:
   `OPENBLAS_NUM_THREADS` limits; and
 - `exec` of the Python process so scheduler signals and exit codes propagate.
 
+Login-node setup checks out and records the exact user-approved pushed commit.
+The wrapper rejects all tracked changes plus untracked Python files inside the
+task-decoding package; every explicit dependency file in the scoped source
+list must be tracked. Unrelated untracked files elsewhere in this historically
+dirty repository do not block submission. The compute job does not fetch.
+Before submission, verify the prepared frozen environment and record the same
+runtime package versions captured by `execution.json`; any needed
+`uv sync --frozen` happens on the login node before the offline job.
+
 Do not copy PPC's eight CPUs, 32 GB, or 72-hour request without evidence.
 Those values serve only as a known high-resource reference. Task decoding has
 no initial within-session process pool, so the expected starting CPU request
@@ -611,8 +736,11 @@ threaded path exists. After WP10, Sol proposes the exact memory and wall-time
 values, the user approves them, and the tests freeze all top-of-script Slurm
 fields before wrapper implementation.
 
-The self-submission layer contains no scientific defaults or duplicate
-configuration parsing. `submit-new` runs the lightweight cluster dry run,
+The self-submitting script has two explicit branches: login-node commands may
+prepare/status/submit, while the scheduled private execution branch may only
+`exec` `_execute-prepared` and can never call `sbatch`. The layer contains no
+scientific defaults or duplicate configuration parsing. `submit-new` runs the
+lightweight cluster dry run,
 calls the runner's private `_prepare` interface to create one immutable cluster
 run directory, submits that exact directory to `_execute-prepared`, and
 returns. `submit-resume` submits the same `_execute-prepared` interface for one
@@ -620,18 +748,23 @@ existing run directory. Both private modes call the public Python preparation
 and execution functions above. Preparation is an implementation detail rather
 than a fifth scientist-facing Python workflow.
 
-On successful submission, write `slurm_submission.json` with the job ID,
+Immediately before `sbatch`, atomically set lifecycle to
+`submission-pending`. On submission failure, set `failed`. On success, write
+`slurm_submission.json` atomically with the job ID,
 submission time, requested partition/tasks/CPUs/memory/time, code commit,
 scheduler log path, and exact status/resume commands. The wrapper prints the
-same receipt and returns immediately. It never selects a latest run, submits a
-replacement job, or retries automatically.
+same receipt and returns immediately, but does not write `run_state.json`
+after `sbatch`; the possibly fast-starting compute process owns the next state
+transition. This prevents a late submitter write from overwriting a `running`
+or terminal compute-owned state. The wrapper never selects a latest run,
+submits a replacement job, or retries automatically.
 
 Cluster `status` reads small run files and performs at most one
-`sacct` query. Preserve at least `State`, `Elapsed`,
-`TotalCPU`, `AllocCPUS`, `MaxRSS`, `ReqMem`,
-`Timelimit`, and `ExitCode` when available. It presents scheduler
-and pipeline state side by side rather than guessing which is authoritative or
-polling for a transition.
+`sacct` query. It reports `State`, `Elapsed`, `TotalCPU`, `AllocCPUS`,
+`MaxRSS`, `ReqMem`, `Timelimit`, and `ExitCode` when available, alongside the
+pipeline state. It does not write them back into the completed run, guess which
+state is authoritative, or poll for a transition. The later benchmark handoff
+records this one-shot output with the resource decision.
 
 The Python pipeline handles `SIGTERM`/`SIGINT` by stopping at the
 safest available boundary, flushing logs and state, and preserving completed
@@ -663,17 +796,26 @@ rsync -a --info=progress2 --exclude='/analysis_runs/' /local/session/ \
   user@cluster:/cluster/session/
 ```
 
+This example assumes the documented default output root
+`<session_root>/analysis_runs`. If a different contained output root is
+configured, substitute its validated session-relative path in both the
+`--exclude` rule and result-return paths. Dry run prints that exact relative
+path. Never run input synchronization without excluding the active output
+root.
+
 The workstation copy is authoritative, so updating its corresponding cluster
-input files is intentional. Excluding `analysis_runs/` is mandatory: input
-synchronization must never overwrite cluster run state, checkpoints, logs, or
-results. First run the same command with `-n` added when the destination has
-not been inspected recently. Do not use broad `--delete`, and do not submit
-while local preprocessing files are changing. After transfer, the cluster `dry-run` revalidates
-the configuration, required augmented columns, source identities, probe files,
-output path, and planned work count before `sbatch`. The Git repository is
-handled separately: the cluster uses a tracked-clean checkout of the exact
-pushed commit rather than an rsynced dirty source tree, and its uv environment
-is prepared explicitly on the login node before offline jobs run.
+input files is intentional. Excluding the configured output root is mandatory:
+input synchronization must never overwrite cluster run state, checkpoints,
+logs, or results. First run the same command with `-n` added when the
+destination has not been inspected recently. Do not use broad `--delete`, and
+do not submit
+while local preprocessing files are changing. After transfer, the cluster
+`dry-run` revalidates the configuration, required augmented columns, source
+identities, probe files, output path, planned work count, and exact tensor
+bytes against 50% of the approved Slurm memory request before `sbatch`. The Git
+repository is handled separately: the cluster uses a tracked-clean checkout of
+the exact pushed commit rather than an rsynced dirty source tree, and its uv
+environment is prepared explicitly on the login node before offline jobs run.
 
 Only a terminally complete run directory is returned. Transfer it first to a
 hidden, uniquely named directory on the same local filesystem:
@@ -710,6 +852,8 @@ The intended extension is mechanically narrow:
 
 - one Slurm array element per session configuration, using the same
   single-session wrapper and Python runner;
+- an explicit `--resource-run-directory` naming the completed measured cluster
+  run that owns the approved per-element resource block and admission envelope;
 - one immutable mapping/receipt from array index to configuration, run
   directory, job ID, and log;
 - one explicit array concurrency cap;
@@ -724,17 +868,17 @@ The intended extension is mechanically narrow:
 
 WP13 begins with mocked array tests and a two-session synthetic smoke test. A
 real multi-session array remains separately authorized. A later session may
-reuse a finalized single-session Slurm profile only when a benchmark-derived
-projection is available and both `max(1.5 * projected_peak_RSS,
-projected_peak_RSS + 2 GiB) <= approved_memory` and `2 * projected_upper_wall
-time <= approved_wall_time`. Otherwise stop for a new resource decision.
-Trial, unit, tensor-byte, time-bin, and fit-count ratios to CT026 are reported
-as context, not treated as fixed scaling laws or arbitrary admission cutoffs.
+reuse the finalized resource block only when it matches the completed measured
+cluster run's analysis/source/environment/platform/mode/threading identity and
+none of its trial, regional-unit, time-bin, result-array, or categorical and
+numerical fit-count dimensions exceeds that evidence run. The dry run reports
+those comparisons. Otherwise stop for a new bounded benchmark and resource
+decision; do not extrapolate a scaling law from CT026.
 
 ## 5. Configuration contract
 
-`TaskDecodingConfig` contains explicit scientific settings plus two execution
-settings. Keep one typed configuration object for a simple user experience,
+`TaskDecodingConfig` contains explicit scientific settings plus one execution
+setting. Keep one typed configuration object for a simple user experience,
 but classify its fields explicitly so execution-host choices do not alter
 scientific identity.
 
@@ -745,23 +889,16 @@ Scientific fields are:
 - trial-feature-parameter path;
 - PFC and HPC `RegionConfig` records;
 - alignment;
-- window and bin width;
+- bin width;
 - requested PFC/HPC PC counts;
 - target names;
 - fixed or tuned regularization mode;
 - outer and inner fold counts;
-- optional tuning grid;
-- random seed;
-- coefficient nonzero tolerance;
 - optional trusted UTC bounds per manually aligned probe.
 
-Execution-only fields are:
-
-- output root; and
-- worker count for batch session parallelism.
-
-The command-line `--workers` value, when present, is an explicit execution-only
-override of the configured batch worker count. It never changes a session's
+The configuration's execution-only field is the output root. Batch worker
+count belongs only to the batch command's `--workers` option because it spans
+sessions rather than describing any one session. It never changes a session's
 scientific fingerprint or saved scientific configuration. Resolved absolute
 paths, local/detached/Slurm mode, PIDs/job IDs, Slurm resources, log paths, and
 plot display selections are also execution provenance rather than scientific
@@ -778,35 +915,50 @@ include/exclude lists.
 
 - canonical display region, exactly `PFC` or `HPC`;
 - metadata probe ID;
-- channel selection mode;
 - channel labels;
 - `inside_brain` requirement;
 - cluster groups; and
-- optional explicit channel IDs when manual selection is intentionally used.
+- optional explicit channel IDs, applied as an additional intersection after
+  the quality/inside-brain rules and the probe metadata's optional
+  `unit_channels` restriction.
 
 Avoid a dictionary of arbitrary settings. Typed fields make the scientific
 choices discoverable and testable.
 
-Defaults match revision 5: choice alignment, [-2, 2] s, 100 ms, 10 PCs per
-region, fixed regularization, five outer folds, three inactive inner folds,
-seed 0, and `1e-8` coefficient tolerance. The exact LogisticRegression,
-ElasticNet, and PCA controls listed in revision 5 are code constants recorded
-in the scientific payload; the initial JSON does not expose extra knobs for
-them. Changing one requires an analysis-version bump.
+Configurable defaults match revision 5: choice alignment, 100 ms, 10 PCs per
+region, fixed regularization, five outer folds, and three inactive inner folds.
+The [-2, 2] s window, seed 0, `1e-8` coefficient tolerance, 15-candidate tuning
+grid, and exact LogisticRegression, ElasticNet, and PCA controls are code
+constants recorded in the scientific payload; the initial JSON does not expose
+extra knobs for them. Changing one requires an analysis-version bump.
 
 Configuration validation checks values and cross-field consistency without
 opening large arrays. Input/path validation is a separate pipeline stage.
-Augmented-table validation always requires shared identity/alignment/baseline
-columns plus only the source columns needed by the selected targets. The
-default full target list therefore requires the complete revision-5 set. One
-validation error reports every missing required column together.
+Augmented-table validation requires the shared identity/baseline columns, the
+selected alignment column, and only the source columns needed by the selected
+targets. It also requires finite integer-valued `cur_trial` values equal to the
+complete zero-based row sequence, nonmissing `cur_block` values, and one
+contiguous segment per block label. Missing-sentinel `cur_block` values are
+treated as missing. Required numeric columns reject
+malformed/non-finite values that remain present under the existing project
+missing-sentinel rules and, for `action`, after recognized no-choice labels are
+excluded; the selected alignment and every selected numeric target need at
+least one finite value. One validation error reports every missing required
+column together.
 
 Resolve relative JSON paths against the configuration file's parent directory.
 The resolved `neural_session.json` parent is the canonical `session_root`.
 Require the metadata file, augmented-trial CSV, feature-parameter JSON, every
-explicit neural input, and output root to be inside that root; reject required
-data or output paths that escape it. The configuration file itself may live
-elsewhere, although the documented workflow places it in the session root.
+required sorter/alignment/channel-quality input for the two configured probes,
+and output root to be inside that root; reject required data or output paths
+that escape it. LFP files in session metadata are not decoding inputs and do
+not gate this analysis. Require the output root to be a proper, dedicated
+subdirectory: it must not equal the session root, contain a required input, or
+contain the configuration file, or sit inside an explicitly required input
+directory such as a sorter directory. Preparation also rejects an output root
+inside the Git checkout that owns the executing task-decoding source. The
+configuration file itself may live elsewhere, although the documented
+workflow places it in the session root.
 Save execution-host absolute paths only as provenance. Scientific
 configuration and input identities use canonical paths relative to
 `session_root`, so copying the same tree under a different workstation or
@@ -867,6 +1019,8 @@ neural_session.json + explicit augmented table/config
 `build_target_table(...)` returns a dataframe with one row per
 original trial and:
 
+- a zero-based `row_position` in chronological table order, independent of the
+  caller's pandas index labels;
 - `trial_id` copied from `cur_trial`;
 - `block_id` copied from `cur_block`;
 - one canonical numeric-encoding column per target; numerical targets retain
@@ -876,7 +1030,9 @@ original trial and:
 - baseline validity/reason fields.
 
 Shifted targets are built before baseline filtering. The function must not
-modify its input dataframe.
+modify its input dataframe. Rate-tensor calls use a RangeIndex working view and
+`row_position`; they never pass arbitrary source index labels to the existing
+`.loc`-based tensor builder.
 
 ### 6.2 Rate tensors
 
@@ -884,28 +1040,39 @@ PFC and HPC tensors use:
 
 - axis 0: the same ordered common neural-eligible trial subset for both
   regions, accompanied by `trial_row_indices` mapping each tensor row to the
-  original target-table row and stable `cur_trial` identity;
+  zero-based target-table `row_position` and stable `cur_trial` identity;
 - axis 1: common event-relative time-bin centers;
 - axis 2: region-specific stable units; and
 - values: float firing rates in Hz.
 
 Do not build separate rate tensors for targets. Build each regional tensor once
-per alignment/bin-width run over rows with finite alignment and a complete
-window on every configured probe, then project each target's eligibility mask
-through `trial_row_indices`. Rows excluded from the tensor are never represented
-as zero-rate observations. Preserve full-original-row eligibility and outer-fold
-arrays separately in results so trial matching remains inspectable.
+per alignment/bin-width run over rows passing the target-independent baseline:
+valid animal choice, no manual reward, present block/alignment, and a complete
+window on every configured probe. Then project each target's additional
+eligibility mask through `trial_row_indices`. Rows excluded from the tensor are
+never represented as zero-rate observations. Preserve full-original-row
+eligibility and outer-fold arrays separately in results so trial matching
+remains inspectable.
+
+If channel/unit selection yields zero units for PFC or HPC, input validation
+fails before tensor allocation. Do not treat a missing configured population
+as a fold-level unavailable feature set or let a combined model silently
+collapse to the surviving region.
 
 The initial implementation may hold both regional tensors in memory. Dry run
 reports their exact float64 allocation as
 `n_tensor_trials * n_time_bins * (n_pfc_units + n_hpc_units) * 8`, and reports
 source file sizes separately as I/O/provenance facts. Compressed or on-disk
 file sizes are not RAM estimates. The only pre-benchmark hard stop is when the
-exact tensor allocation alone exceeds 50% of Linux `MemAvailable` (injectable
-in tests), or available memory cannot be determined. Otherwise do not claim
-that dry run predicts peak RSS. The bounded CT026 benchmark's measured peak
-RSS is authoritative for later local concurrency and Slurm sizing; do not add
-disk-backed arrays or streaming without measured need and a revised plan.
+exact tensor allocation alone exceeds 50% of the applicable memory budget, or
+that budget cannot be determined. Locally the budget is Linux `MemAvailable`.
+In a scheduled Slurm process it is the lower of `MemAvailable` and the parsed
+scheduler/cgroup allocation limit; login-side submission also uses the
+approved `--mem` request. These sources are injectable in tests. Otherwise do
+not claim that dry run predicts peak RSS. The bounded CT026 benchmark's
+measured peak RSS is authoritative for later local concurrency and Slurm
+sizing; do not add disk-backed arrays or streaming without measured need and a
+revised plan.
 
 ### 6.3 Feature preprocessing
 
@@ -982,14 +1149,15 @@ For each target and outer fold:
 1. create three grouped inner folds from only the outer-training rows, using
    deterministic `StratifiedGroupKFold(shuffle=False)` for categorical targets
    and deterministic `GroupKFold(shuffle=False)` for numerical targets;
-2. for each inner fold, fit the PFC/HPC training transforms once and cache the
-   transformed train/validation tensors for reuse across all time bins,
-   representations, region configurations, and 15 candidates;
-3. for each time-bin/region/representation cell, evaluate all candidates on
-   those transformed inner folds, invalidating a candidate if any required
-   inner fit/metric is invalid;
-4. select the highest mean inner balanced accuracy or $R^2$, resolving exact
-   ties by declared candidate order; and
+2. initialize compact candidate score/status accumulators for every
+   time-bin/region/representation cell;
+3. for each inner fold, fit the PFC/HPC training transforms once, evaluate all
+   cells and 15 candidates from those transformed train/validation tensors,
+   append only scores/status, and release the transformed tensors before the
+   next inner fold;
+4. invalidate a candidate if any required inner fit/metric is invalid, then
+   select the highest mean inner balanced accuracy or $R^2$ for each cell,
+   resolving exact ties by declared candidate order; and
 5. fit the PFC/HPC transforms once on all outer-training rows, reuse them for
    every outer cell, refit each selected estimator, and evaluate once on the
    outer-test rows.
@@ -999,8 +1167,8 @@ search object: the pipeline must fit PCA inside each inner training split and
 retain failure reasons and selected settings. Validate that blocks never cross
 inner train/validation partitions and that both partitions contain both classes
 for categorical targets. If the requested valid inner folds cannot be formed,
-the tuned cell is unavailable rather than falling back to trial-wise splitting
-or a different fold count.
+all tuned cells for that target/outer-fold are unavailable rather than falling
+back to trial-wise splitting or a different fold count.
 
 ### 7.4 Complete-fold aggregation
 
@@ -1010,7 +1178,12 @@ surviving fold records but have no primary mean.
 
 Only declared scientific invalidities become unavailable cells and allow
 unrelated work to continue: invalid grouped folds/class coverage, a constant
-target, no usable features, a convergence warning, or a non-finite fit/score.
+target, no usable fold-training features after constant-feature removal, a
+convergence warning, or a non-finite fit/score. Missing required inputs or zero
+session-level units in a configured region are preflight errors, not scientific
+missingness. If one component region has no usable fold-training features, its
+standalone and combined cells are unavailable; the combined cell never falls
+back to the surviving region.
 Unexpected programming, schema, or I/O exceptions fail the run, flush state
 and logs, preserve already-published target checkpoints, and return nonzero.
 They are never caught by a broad exception handler and relabeled as missing
@@ -1021,25 +1194,31 @@ scientific results.
 Each execution creates an immutable session-local directory:
 
 ```
-<session_root>/analysis_runs/
+<output_root>/  # documented default: <session_root>/analysis_runs
     task_variable_decoding_<YYYY-MM-DDTHH-MM-SSZ>/
         config.json
+        trial_feature_params.json  # exact copied input bytes
         input_manifest.json
         run_state.json
         resume_command.txt
         status_command.txt
         execution.json
+        local_launch.json      # latest detached-local launch receipt only
         execution_guard.json  # present only while an execution owns the run
         results.npz
         run.log
-        console.log
+        console.log             # detached local runs only
         summary.md
         run_session.py
         run_batch.py
-        slurm_submission.json  # only when submitted through WP11
+        slurm_submission.json   # only when submitted through WP11
         checkpoints/
         figures/
 ```
+
+Create the run directory with an exclusive `mkdir`. If two preparations share
+the same second, append the first available zero-padded numeric suffix; never
+reuse or clear an existing path.
 
 The script files are snapshots of the two launch modules used for the run.
 Human-readable plots and report material remain in the run directory. No output
@@ -1054,23 +1233,29 @@ A stable run fingerprint is computed from:
   workstation or cluster root prefixes;
 - session ID;
 - `neural_session.json`, augmented-table, and feature-parameter identities;
-- portable alignment/sorter/quality identities using the Section 5 policy; and
-- explicit region/unit-selection rules.
+- portable alignment/sorter/quality identities using the Section 5 policy.
 
 The normalized scientific configuration contains only the scientific fields
-listed in Section 5. Output roots, batch worker counts, resolved absolute path
+listed in Section 5. Output roots, batch worker requests, resolved absolute path
 prefixes, foreground/detached/Slurm mode, scheduler resources, logs, and display
-choices are excluded. `scientific_source_fingerprint(...)` hashes file paths
-and contents for every `.py` file in `src/neural_analysis/task_decoding/`, the
+choices are excluded. `scientific_source_fingerprint(...)` hashes
+repository-relative paths and contents for every `.py` file in
+`src/neural_analysis/task_decoding/`, the
 direct runtime dependencies
+`src/__init__.py`, `src/neural_analysis/__init__.py`,
 `src/neural_analysis/session_metadata.py`,
-`src/neural_analysis/spike_behavior/loading.py`, and
-`src/neural_analysis/population/pca.py`, plus `pyproject.toml` and `uv.lock`.
+`src/neural_analysis/spike_behavior/__init__.py`,
+`src/neural_analysis/spike_behavior/loading.py`,
+`src/neural_analysis/population/__init__.py`, and
+`src/neural_analysis/population/pca.py`, plus
+`src/behavior_analysis/__init__.py`,
+`src/behavior_analysis/project_utils.py`, `pyproject.toml`, and `uv.lock`.
 The initial list is explicit and reviewed whenever a new direct dependency is
 introduced. A local persistent `new`/`resume` requires only these relevant
-tracked files to be clean and rejects relevant untracked source; unrelated
-documentation or source changes do not block it. The full Git HEAD and dirty
-summary are recorded as execution provenance, not scientific identity.
+tracked files to be clean, rejects untracked Python inside the task-decoding
+package, and requires each explicit outside dependency file to be tracked;
+unrelated documentation or source changes do not block it. The full Git HEAD
+and dirty summary are recorded as execution provenance, not scientific identity.
 `dry-run` may report relevant source dirtiness but performs no run preparation.
 The cluster wrapper retains the stronger whole-checkout tracked-clean,
 exact-pushed-commit gate for operational reproducibility.
@@ -1081,34 +1266,57 @@ HEAD when unrelated repository files changed. Any scientific-code change must
 also bump `ANALYSIS_VERSION`; tests enforce that the version and scoped source
 identity are both saved, while review/commit discipline enforces the bump.
 
-The default single-session runner searches for a completed matching
-fingerprint and reports/skips it. `--rerun` creates a new timestamped
-directory rather than overwriting. A changed version, scoped source, input, or
-scientific configuration always creates a different fingerprint.
+The default single-session runner deterministically lists every directory with
+a matching fingerprint. A completed match requires both lifecycle `complete`
+and successful directory-level result validation. If any valid completed match
+exists, the runner skips and reports it. If none does but one or more matches
+are nonterminal, interrupted, failed, or marked complete with invalid/missing
+artifacts, it refuses `new` and prints every state plus the applicable
+status/resume or explicit-rerun command. It never chooses an implicit "latest"
+run or mutates a corrupt one. `--rerun` explicitly creates a new timestamped
+directory without overwriting an old run. A changed version, scoped source,
+input, or scientific configuration creates a different fingerprint.
 
 Use small JSON manifests and ordinary NPZ files. No database, lock service, or
 content-addressed object store is needed.
 
 ### 8.2 Launch, interruption, and resume state
 
-`new` writes the run directory, immutable saved configuration,
-input/code identity, initial `run_state.json`, and exact
+`new` writes the run directory, immutable saved configuration, an exact
+byte-for-byte copy of `trial_feature_params.json`, input/code identity, initial
+`run_state.json`, and exact
 `resume_command.txt` and `status_command.txt` before loading large
 spike arrays. `execution.json` records foreground/detached/Slurm mode
-and the local PID or scheduler identity as advisory execution metadata. Run
-state uses a small explicit lifecycle such as initialized, submitted,
-preflight complete, running, interrupted, failed, and complete.
+and the local PID or scheduler identity as advisory execution metadata. It also
+records host, OS/platform, machine architecture, available CPU count, explicit
+thread limits, and Python, NumPy, SciPy, pandas, scikit-learn, Pynapple, and
+Matplotlib versions. The scientific fingerprint's `uv.lock` identity remains
+the environment contract. Batch-launched runs also record the
+requested/effective worker count and, when parallel execution is admitted, the
+exact measured evidence-run directory, fingerprint, envelope, peak RSS, and
+memory calculation. Run state
+uses the small lifecycle `initialized`,
+`submission-pending`, `preflight_complete`, `running`, `interrupted`, `failed`,
+and `complete`.
 
 Only one process may execute a run directory. Before entering the foreground
 pipeline, atomically create a small `execution_guard.json` containing mode,
-host, PID, start time, and Slurm job ID when applicable. `resume` refuses when
-the recorded same-host PID is alive or the recorded Slurm job is pending or
-running. A dead same-host PID or terminal scheduler state is a stale guard that
-may be replaced only after this bounded liveness check is recorded. An
-unresolvable foreign-host guard stops with an actionable message rather than
-guessing. Remove the guard on orderly exit; retain enough execution history in
-`execution.json` for diagnosis. This is a single atomic file, not a lock
-service or heartbeat system.
+host, PID, process-start token, start time, and Slurm job ID when applicable.
+`resume` refuses when the recorded same-host process identity is alive or the
+recorded Slurm job is pending or running. A dead/reused local process identity
+or terminal scheduler state is a stale guard that may be replaced only after
+this bounded liveness check is recorded. An unresolvable foreign-host guard
+stops with an actionable message rather than guessing. Remove the guard on
+orderly exit; retain enough execution history in `execution.json` for
+diagnosis. This is a single atomic file, not a lock service or heartbeat
+system.
+
+During detached launch, the live child identity in `local_launch.json` owns the
+run even before the child finishes creating `execution_guard.json`. A child
+that dies during that handoff leaves an `initialized` run that is resumable
+only after the saved process identity is verified dead. The receipt is not a
+second lock and never changes lifecycle state; it prevents parent/child file
+writer races while reusing the same bounded liveness check.
 
 The state file includes started, last-updated, and completed timestamps;
 current stage; completed and total target names; the last error/warning; and
@@ -1122,17 +1330,20 @@ Update the state file atomically at package-defined boundaries and flush the
 log before returning a failure/interruption code. A resumed run trusts only its
 saved configuration/fingerprint and valid target checkpoints. It must not use
 new command-line scientific overrides or infer the latest run directory.
-Before claiming the execution guard, it also verifies that the current scoped
-scientific-source fingerprint and analysis version equal the saved values; a
-difference requires a new run rather than resuming old checkpoints with changed
-scientific code.
+Before claiming the execution guard, every prepared execution or resume
+rebuilds the lightweight input manifest and verifies it against the saved
+manifest, then verifies the scoped scientific-source fingerprint and analysis
+version and the saved Python/numerical-library version mapping. Any mismatch
+fails before large-array loading and requires a new run; queued or detached
+work must not silently consume changed inputs or environments after
+preparation.
 
 The summary and live handoff record distinguish an interrupted resumable run
 from a completed result. A missing final `results.npz` is never
-presented as complete. `console.log` captures detached-process or
-scheduler standard streams, while `run.log` is the pipeline log; both
-are flushed at stage/target boundaries so later inspection does not depend on
-the original terminal or Codex task.
+presented as complete. `console.log` captures detached-local standard streams;
+Slurm standard streams remain in the recorded site scheduler log.
+`run.log` is the pipeline log and is flushed at stage/target boundaries so
+later inspection does not depend on the original terminal or Codex task.
 
 ### 8.3 Checkpoint boundary
 
@@ -1147,9 +1358,13 @@ checkpoint, final NPZ, summary, and required default PNG to a uniquely named
 temporary file in its destination directory, flush/close it, and publish it
 with `os.replace`. Set `final_results_published=true` and lifecycle
 `complete` only after `results.npz`, `summary.md`, and the required default
-heatmaps have all been published and validated. Optional coefficient figures
-are not part of the completion gate. A failure during final reporting remains
-resumable from target checkpoints and must never expose a false complete run.
+heatmaps for every target family present have all been published and the
+directory-level loader has validated the saved configuration, manifests, exact
+feature-parameter copy, NPZ, and required figures.
+Categorical-only or numerical-only runs do not create or require an empty
+other-family figure. Optional coefficient figures are not part of the
+completion gate. A failure during final reporting remains resumable from target
+checkpoints and must never expose a false complete run.
 
 ### 8.4 NPZ arrays
 
@@ -1162,23 +1377,32 @@ use named arrays and include at least:
 - fit status and compact reason-code arrays;
 - requested/effective feature counts;
 - train/test and class counts;
-- target eligibility masks and outer-fold assignment;
-- direct-unit and PC coefficients grouped by region configuration;
+- full-table row positions, trial IDs, block IDs, the ordered
+  `trial_row_indices` mapping from common neural-tensor rows to full-table
+  positions, encoded target values, eligibility masks/reasons, and outer-fold
+  assignments;
+- for tuned runs, inner-fold assignments plus compact candidate-by-inner-fold
+  score/status arrays and the selected candidate index for each outer cell;
+- direct-unit and PC coefficients plus fitted intercepts, grouped by region
+  configuration;
 - selected fixed/tuned parameters;
 - stable unit/feature identities;
 - stage timings; and
 - a dictionary named `meta` containing version, seed, units, axes,
   paths, parameters, provenance, and warning text.
 
-The loader validates the `meta` schema/version before exposing result
-arrays. The NPZ is a trusted local analysis artifact, matching the project's
-existing metadata convention.
+The directory-level loader validates required supporting files and verifies
+the copied feature-parameter file against its small-file SHA-256 input-manifest
+identity. It then validates the NPZ `meta` schema/version before exposing
+result arrays. The NPZ is a trusted local analysis artifact, matching the
+project's existing metadata convention.
 
 `summary.md` records the analysis goal, analysis name, UTC date/time, included
-session, the snapshotted main and batch scripts, scientific configuration,
-eligibility/fold coverage, warnings and unavailable results, stage and total
-timings, and a concise scientific description of the saved outputs. It does
-not claim a scientific conclusion that the saved metrics do not support.
+session, exact launch mode/command and scripts actually run, the snapshotted
+main and batch scripts, scientific configuration, eligibility/fold coverage,
+warnings and unavailable results, stage and total timings, and a concise
+scientific description of the saved outputs. It does not claim a scientific
+conclusion that the saved metrics do not support.
 
 If dense coefficient arrays would waste unreasonable space after real
 preflight, use parallel long-form primitive arrays inside the same NPZ. Do not
@@ -1188,7 +1412,7 @@ switch to a new storage dependency.
 
 ### 9.1 Offline figures
 
-Generate from saved results:
+Generate from saved results when that target family is present:
 
 1. categorical heatmap for balanced accuracy;
 2. categorical heatmap for ROC AUC;
@@ -1198,7 +1422,9 @@ Generate from saved results:
 
 Plots use opaque white backgrounds, black text/axes, readable fonts, complete
 labels, and captions. Unavailable cells use a mask/color distinct from chance
-or zero.
+or zero. Each default metric figure uses a fixed 3-region by
+2-representation panel layout, with target rows and time-bin columns, so it
+shows all six computed combinations without an arbitrary default selection.
 
 The pipeline does not generate every combination as a PNG by default. Saved
 arrays support interactive inspection; default report figures should remain a
@@ -1209,6 +1435,8 @@ choices, not scientific configuration fields or run-completion requirements.
 
 The new existing-webapp view provides:
 
+- a session-relative completed-results-root locator, defaulting to
+  `analysis_runs`, that is validated inside the selected metadata session;
 - saved-run selector, completion/fingerprint/config summary;
 - region and representation selectors;
 - alignment/bin-width information from the run, not recomputation controls;
@@ -1315,13 +1543,27 @@ WP0-WP13 descriptions below.
 Add to `src/tests/behavior_analysis/test_session_analysis.py`:
 
 1. `rewards_in_block` is recorded before the current trial update.
-2. Counts reset at a block change.
+2. Counts reset at every block change, including when the first new-block row
+   is manual/no-choice.
 3. Positive numeric rewards increment; zero rewards do not.
 4. Numeric-string actions/rewards are handled consistently.
-5. Manual rewards and no-choice rows neither increment nor reset.
-6. A malformed reward on a valid animal choice raises a clear error.
-7. `make_augmented_trial_df` preserves existing columns and adds the
-   new column.
+5. Manual rewards and no-choice rows within an unchanged block neither
+   increment nor reset.
+6. Fractional/non-finite actions, non-finite/malformed rewards on valid animal
+   choices, and missing block identities raise clear errors; strengthening the
+   shared parser retains its existing valid-value behavior.
+7. On a normalized fixture, `make_augmented_trial_df` preserves row count,
+   order, index, and prior output columns/values while adding the new column;
+   legacy experimenter-reward alias behavior remains unchanged.
+
+Add a focused test in
+`src/tests/behavior_analysis/test_gather_trial_features.py`: the file backfill
+uses the same helper, requires the four canonical source columns, reloads and
+validates its temporary serialization before publication, atomically adds only
+`rewards_in_block`, preserves row order and all prior loaded values/columns,
+and leaves the original untouched if a source is missing or the round-trip
+check fails. It leaves the feature-parameter file and unrelated artifacts
+untouched; an existing destination column is a clear no-write error.
 
 ### 10.2 Config and input tests
 
@@ -1330,23 +1572,34 @@ Create `src/tests/neural_analysis/task_decoding/test_config.py` and
 
 1. Defaults exactly match revision 5.
 2. Region mappings require distinct configured probes and recognized regions.
-3. Invalid alignment, bin size, folds, PC counts, bounds, and grids fail
-   clearly.
+3. Invalid alignment, bin size, folds, PC counts, bounds, and empty,
+   duplicate, or unknown target names fail clearly; frozen
+   window/seed/tolerance/tuning-grid fields are not accepted as JSON overrides.
 4. Missing augmented columns are reported together; a selected subset requires
-   shared baseline/alignment columns plus only its target sources, while the
-   default target set requires the complete revision-5 set.
-5. Empty/duplicate `cur_trial` values fail.
+   shared baseline columns, its selected alignment, and only its target
+   sources. Choice-aligned runs do not require `start_time`.
+5. Empty, nonnumeric, non-finite, fractional, non-zero-based, duplicated, or
+   gapped `cur_trial` sequences; missing `cur_block` values; noncontiguous reuse
+   of a block label; and malformed/non-finite present numeric values fail,
+   while established project missing sentinels remain row-level missingness.
 6. Feature-parameter JSON must be an object.
 7. HMM display labels describe signed belief, while source columns remain
    unchanged.
-8. Paths resolve from the config parent to the canonical metadata-parent
+8. Present `action`/`correct` labels other than exact numeric 0/1 and
+   `state_int` labels outside 0/1/known dark-state 2 fail rather than becoming
+   extra classes; recognized missing sentinels remain row-ineligible.
+9. Paths resolve from the config parent to the canonical metadata-parent
    session root; required inputs and output root outside it are rejected, while
-   moving the whole tree preserves portable identities.
-9. Scientific fingerprint payload includes every scientific field but excludes
-   output root, worker count, execution mode, scheduler resources, resolved root
-   prefix, and display choices.
-10. Frozen LogisticRegression, ElasticNet, and PCA controls match revision 5,
-    are recorded, and are not extra initial JSON knobs.
+   moving the whole tree preserves portable identities. Output root equal to
+   the session root or overlapping a required input path/directory or the
+   configuration file is rejected, as is an output root inside the executing
+   source-code Git checkout.
+10. Scientific fingerprint payload includes every scientific field but excludes
+   output root, batch worker requests, execution mode, scheduler resources,
+   resolved root prefix, and display choices.
+11. The frozen window, seed, coefficient tolerance, tuning grid,
+    LogisticRegression, ElasticNet, and PCA controls match revision 5, are
+    recorded, and are not extra initial JSON knobs.
 
 ### 10.3 Target and eligibility tests
 
@@ -1356,9 +1609,11 @@ Create `src/tests/neural_analysis/task_decoding/test_config.py` and
 4. Dark state 2 is excluded only from binary current-state eligibility.
 5. Target-specific missingness does not leak into unrelated masks.
 6. Baseline manual/no-choice/current-alignment exclusions are correct.
-7. PFC/HPC/combined representations receive identical target trial rows.
-8. Class labels and positive-class mappings are persisted.
-9. Numerical target values equal their source values exactly after numeric
+7. Only exact numeric 0/1 actions are valid choices; unrecognized action and
+   categorical labels never become classes through truncation or truthiness.
+8. PFC/HPC/combined representations receive identical target trial rows.
+9. Class labels and positive-class mappings are persisted.
+10. Numerical target values equal their source values exactly after numeric
    coercion; no normalization or standardization is applied.
 
 ### 10.4 Activity and unit-selection tests
@@ -1366,25 +1621,41 @@ Create `src/tests/neural_analysis/task_decoding/test_config.py` and
 Create `test_activity.py`:
 
 1. Explicit PFC/HPC probe mapping is used instead of probe-name inference.
-2. Channel selection combines channel-quality label, inside-brain status, and
-   manual channel restriction correctly.
-3. Cluster selection accepts `good`/`mua` and rejects
-   noise.
+2. Channel selection combines channel-quality label, inside-brain status,
+   optional metadata `unit_channels`, and optional additional config channels
+   by intersection, and persists the rules and selected IDs.
+3. Cluster selection honors configured accepted groups; its backward-compatible
+   default accepts `good`/`mua` and rejects noise without changing existing
+   callers.
 4. Stable unit IDs include probe IDs and preserve axis order.
 5. Spike and cluster length mismatch fails.
-6. Standard alignment coverage uses finite `irig_utc_unix` bounds.
-7. Manual alignment without explicit trusted bounds fails.
-8. Full event window, not only the alignment timestamp, must be covered.
-9. Both regional tensors share trial/time axes and retain Hz units.
-10. Existing Pynapple and NumPy reference binning agree on a small fixture.
-11. Invalid or uncovered original rows are absent from tensors rather than
-    represented as zeros, and `trial_row_indices` maps every tensor row back to
-    the full target table and `cur_trial` identity.
-12. Projecting different target masks through `trial_row_indices` preserves
+6. Duplicate selected cluster IDs, selected IDs absent from spike-cluster
+   assignments, and non-finite selected spike timestamps fail as input errors.
+7. A present `irig_utc_unix` member must be one-dimensional, nonempty, and
+   finite and supplies standard alignment coverage; configured bounds for that
+   probe are rejected rather than ignored or allowed to mask a malformed
+   member.
+8. Absence of `irig_utc_unix` requires finite ordered trusted bounds, matching
+   the current manual-alignment archive; first/last spikes are never used.
+9. Dry validation rejects an aligned archive missing `spike_utc_unix` without
+   loading that large member.
+10. Full event window, not only the alignment timestamp, must be covered on both
+   probes; failure on either removes the row from every region configuration.
+11. Both regional tensors share trial/time axes and retain Hz units.
+12. Existing Pynapple and NumPy reference binning agree on a small fixture.
+13. Manual/no-choice/missing-alignment/uncovered original rows are absent from
+    tensors rather than represented as zeros, and `trial_row_indices` maps
+    every tensor row back to zero-based table position and `cur_trial` identity
+    even when the input dataframe has non-default index labels.
+14. Projecting different target masks through `trial_row_indices` preserves
     matched PFC/HPC/combined trial order.
-13. Dry run reports exact tensor allocation bytes and source file sizes
-    separately; only tensor bytes participate in the pre-benchmark 50%-of-
-    `MemAvailable` guard.
+15. Dry run reports exact tensor allocation bytes and source file sizes
+    separately; it may read `irig_utc_unix` coverage but not
+    `spike_utc_unix`, and only tensor bytes participate in the pre-benchmark
+    50%-of-budget guard. Local, Slurm allocation/cgroup, and approved
+    login-side memory sources choose the documented applicable minimum.
+16. Zero selected channels/units in either configured region is a preflight
+    error; combined decoding never collapses to one surviving region.
 
 ### 10.5 Split, preprocessing, and model tests
 
@@ -1394,7 +1665,8 @@ Create `test_modeling.py`:
 2. Categorical folds contain both classes or return a declared unavailable
    result.
 3. Numerical folds do not discretize targets.
-4. Outer assignments are reused across time/region/representation.
+4. Outer assignments are reused across time/region/representation and between
+   fixed/tuned runs with otherwise identical scientific inputs.
 5. Scaling statistics come only from training rows.
 6. PCA directions and effective rank come only from training rows.
 7. PFC + HPC PC features are concatenated separate regional projections.
@@ -1404,23 +1676,29 @@ Create `test_modeling.py`:
 11. Tuned mode never passes outer-test rows into inner splitting,
     preprocessing, or selection.
 12. Inner folds use the declared grouped splitter, never split a block, and
-    validate categorical train/validation class coverage.
+    validate categorical train/validation class coverage; one assignment is
+    reused across all candidates, time bins, regions, and representations for
+    that target/outer fold.
 13. Invalid requested inner folds make the tuned cell unavailable without
     changing fold count or falling back to trial-wise splitting.
 14. Instrumented transform fit counts are invariant to time-bin and candidate
     count: one PFC/HPC transform per outer fold and one per inner fold, reused
     across representations and standalone/combined results.
 15. Candidate tie resolution follows declared order.
-16. Balanced accuracy uses threshold 0.5 and AUC uses the same fit's scores.
+16. Balanced accuracy uses threshold 0.5 and AUC uses the same fit's scores
+    oriented to the saved positive class.
 17. $R^2$ uses native targets and returns unavailable for constant/singleton
     test targets.
 18. Negative $R^2$ and below-chance categorical scores remain valid.
 19. A convergence warning invalidates the fit; a converged all-zero solution
     remains valid.
-20. Coefficient signs, scales, selection frequencies, and `1e-8`
-    threshold are correct.
-21. Primary means require all requested valid outer folds.
-22. Results are deterministic for the configured seed.
+20. If one region has no usable fold-training features, its standalone and
+    combined cells are unavailable while the other standalone region may
+    proceed.
+21. Coefficient signs, scales, selection frequencies, and `1e-8` threshold are
+    correct; fitted intercepts round-trip but are excluded from feature counts.
+22. Primary means require all requested valid outer folds.
+23. Results are deterministic for the fixed seed.
 
 Include a direct installed-API test for the supported scikit-learn 1.8
 logistic configuration so implementation does not depend on the deprecated
@@ -1430,60 +1708,84 @@ logistic configuration so implementation does not depend on the deprecated
 
 Create `test_results.py` and `test_pipeline.py`:
 
-1. NPZ round trip preserves arrays, labels, axes, units, and metadata.
+1. NPZ round trip preserves arrays, full-table trial/block/target identity,
+   the common neural-tensor row mapping, eligibility reasons, labels, axes,
+   units, and metadata.
 2. The named `meta` dictionary preserves required provenance.
-3. Schema/version mismatch fails clearly.
-4. The input manifest includes `neural_session.json`; small structured inputs
+3. The run directory preserves an exact byte-for-byte copy of the manifested
+   `trial_feature_params.json`, including after portable result transfer; a
+   missing or altered copy fails directory-level result validation.
+4. Schema/version mismatch fails clearly.
+5. Tuned-result round trip preserves inner assignments, every candidate's
+   fold scores/status, deterministic order, and selected index; fixed runs mark
+   these arrays not applicable without fabricating inner results.
+6. The input manifest includes `neural_session.json`; small structured inputs
    use SHA-256 identities and large binaries use portable path/size/mtime
    without reading their contents.
-5. Scoped scientific-source identity changes when a relevant package/direct
-   dependency or environment lock changes, but not for an unrelated document;
-   relevant dirty/untracked source blocks persistent local preparation.
-6. Fingerprints change with scientific input/config/analysis-version/scoped
+7. Scoped scientific-source identity changes when a relevant package/direct
+   dependency (including `project_utils.py`) or environment lock changes, but
+   not for an unrelated document; relevant dirty/untracked source blocks
+   persistent local preparation.
+8. Fingerprints change with scientific input/config/analysis-version/scoped
    source changes, remain stable across execution-only/unrelated-repository
    changes and root-prefix moves, and use the documented input identities.
-7. An identical completed run is skipped by default.
-8. Explicit rerun creates a new path without overwrite.
-9. `new` writes saved config, run state, and exact resume/status
+9. An identical run causes a default skip only when lifecycle and
+   directory-level result validation both pass; otherwise every incomplete,
+   failed, or falsely-complete/corrupt match is listed with exact recovery or
+   explicit-rerun guidance, and no implicit latest run is chosen or mutated.
+10. Explicit rerun creates a new path without overwrite; same-second run-ID
+   collisions are resolved by exclusive creation and a deterministic suffix.
+11. `new` writes saved config, run state, and exact resume/status
    commands before an injected large-array/long-running stage.
-10. Matching target checkpoints resume; mismatched checkpoints or a different
+12. Matching target checkpoints resume; mismatched checkpoints or a different
    scoped source fingerprint/analysis version are rejected.
-11. Interrupted/failed foreground states return nonzero, preserve
+13. Interrupted/failed foreground states return nonzero, preserve
    logs/checkpoints, and do not publish a complete result; detached/submission
    exit codes report launch acceptance rather than later scientific outcome.
-12. Each declared scientific invalidity is recorded unavailable without
-    aborting unrelated cells, time bins, or targets; an injected unexpected
-    programming, schema, or I/O exception fails the run, preserves completed
-    checkpoints, returns nonzero, and is not masked as unavailable.
-13. Log and summary contain the analysis goal/name/date, session, snapshotted
-    scripts, parameters, eligibility/folds, warnings, scientific output
-    description, and timing information.
-14. Dry-run loads metadata/small tables and directly inspects small cluster and
-    channel metadata without calling `load_sorter_metadata`, loading
-    `spike_clusters.npy`/aligned spikes, or fitting models.
-15. Detached `new` and `resume` return after bounded setup, redirect
-    child output, save execution identity, and run the same foreground pipeline
-    without a shell-dependent scientific path.
-16. One-shot `status` reads only small saved files, reports progress and
-    result completeness, and never loads spikes, fits, resumes, or polls.
-17. A simulated abrupt child death leaves checkpoints resumable and is
-    reported without automatic restart or a false `complete` state.
-18. A Linux integration smoke test confirms that a detached synthetic child
-    survives the launcher process and completes with no open terminal. Before
-    relying on Codex as the launcher, repeat that smoke through the actual
-    Codex command environment because a host may clean up child processes.
-19. `status --verify-results` additionally validates a completed NPZ
-    through the saved-result loader without opening source data or mutating the
-    run.
-20. Foreground, detached, and mocked Slurm paths use the same prepare/execute
-    functions and the private CLI bridge does not re-parse scientific settings.
-21. A second execution refuses a live same-host PID or pending/running Slurm
-    job; a verified stale guard can be replaced without a lock service.
-22. Checkpoints, NPZ, summary, PNGs, and state are atomically published, and
-    `complete` is written last only after required artifacts validate.
-23. Session and batch entrypoints set and record one-thread OpenMP/MKL/OpenBLAS
-    values before lazily importing numerical modules; local benchmark and
-    mocked Slurm execution identities match.
+14. Each declared scientific invalidity is recorded unavailable without
+   aborting unrelated cells, time bins, or targets; an injected unexpected
+   programming, schema, or I/O exception fails the run, preserves completed
+   checkpoints, returns nonzero, and is not masked as unavailable.
+15. Log and summary contain the analysis goal/name/date, session, snapshotted
+   scripts, parameters, eligibility/folds, warnings, scientific output
+   description, and timing information.
+16. Dry-run loads metadata/small tables and directly inspects small cluster and
+   channel metadata without calling `load_sorter_metadata`, loading
+   `spike_clusters.npy`/`spike_utc_unix`, or fitting models; ordinary IRIG
+   coverage may read only `irig_utc_unix`.
+17. Changing any manifested input after preparation makes foreground,
+   detached, and mocked Slurm execution fail before large-array loading;
+   changing an injected runtime package version does the same, while unchanged
+   inputs/environments resume normally.
+18. Detached `new` and `resume` return after bounded setup, redirect
+   child output, atomically save the child PID/start token in the separate
+   launch receipt before returning, prevent immediate-resume and
+   parent/child-writer races, and run the same foreground pipeline without a
+   shell-dependent scientific path.
+19. One-shot `status` reads only small saved files, reports progress and
+   result completeness, and never loads spikes, fits, resumes, or polls.
+20. A simulated abrupt child death leaves checkpoints resumable and is
+   reported without automatic restart or a false `complete` state.
+21. A Linux integration smoke test confirms that a detached synthetic child
+   survives the launcher process and completes with no open terminal. Before
+   relying on Codex as the launcher, repeat that smoke through the actual
+   Codex command environment because a host may clean up child processes.
+22. `status --verify-results` additionally validates a completed NPZ
+   through the saved-result loader without opening source data or mutating the
+   run.
+23. Foreground, detached, and mocked Slurm paths use the same prepare/execute
+   functions and the private CLI bridge does not re-parse scientific settings.
+24. A second execution refuses a matching live same-host process identity or
+   pending/running Slurm job; a dead or PID-reused stale guard can be replaced
+   without a lock service.
+25. Checkpoints, NPZ, summary, applicable-family PNGs, and state are atomically
+   published, and `complete` is written last only after required artifacts
+   validate.
+26. Session and batch entrypoints set and record one-thread OpenMP/MKL/OpenBLAS
+   values before lazily importing numerical modules; local benchmark and
+   mocked Slurm execution identities match.
+27. Execution provenance records the host/platform/architecture/CPU/thread
+   identity and declared runtime package versions.
 
 ### 10.7 Batch-runner tests
 
@@ -1492,16 +1794,24 @@ Create `test_run_batch.py`:
 1. The config list ignores blank/comment lines and preserves declared session
    order.
 2. Dry-run reports every session, planned fits, exact tensor bytes, and selected
-   worker count without loading spike arrays or fitting.
-3. Before a measured benchmark profile exists, batch execution is capped at one
-   worker. With projected peak-RSS values, default/explicit workers are capped
-   so their summed projected peaks remain within 50% of injected
-   `MemAvailable`.
-4. One session whose exact tensor allocation fails the single-session guard is rejected rather
-   than launched with one forced worker.
-5. Sessions use independent run directories/state and invoke the same
+   worker count without loading `spike_utc_unix` or fitting; it may read the
+   small IRIG coverage member.
+3. Without `--resource-run-directory`, batch execution is capped at one
+   worker. Explicit evidence must be a complete measured run with matching
+   analysis/source/environment/platform/mode/threading and an envelope at
+   least as large as every admitted trial/unit/bin/result/fit dimension. An
+   invalid explicit directory errors rather than falling back silently.
+4. With valid evidence, each admitted session uses the measured peak RSS
+   unchanged, and default/explicit workers are capped by requested workers,
+   available CPUs, and 50% of injected `MemAvailable`; the evidence identity,
+   envelope, and calculation are saved.
+5. One session whose exact tensor allocation fails the single-session guard is
+   rejected rather than launched with one forced worker.
+6. Sessions use independent run directories/state and invoke the same
    single-session preparation/execution path without within-session
    parallelism.
+7. One session failure does not cancel independent launched sessions; the
+   final summary lists all outcomes and the batch exit code is nonzero.
 
 ### 10.8 Plot and webapp tests
 
@@ -1511,15 +1821,22 @@ Create `test_plotting.py` and extend
 1. Heatmaps preserve negative and below-reference values.
 2. Unavailable cells are visually/data-wise distinct.
 3. Reference values, labels, captions, trial counts, and fold coverage appear.
-4. Saved PNGs have opaque light backgrounds.
+4. Saved PNGs have opaque light backgrounds, facet all six
+   region/representation combinations, and are required only for target
+   families present in the run.
 5. Coefficient plots distinguish zero, unavailable, and excluded features.
 6. The new view has one canonical module owner.
 7. Metadata availability keeps the result view selectable without raw-spike
    readiness and presents the no-saved-run state cleanly.
-8. The app routes the decoding-results view before population controls and raw
+8. Default discovery inspects only direct children of `analysis_runs`; an
+   optional nondefault results root is session-relative and contained, while
+   traversal outside the selected session and recursive whole-session scans
+   are rejected.
+9. Hidden incoming directories and incomplete/corrupt runs are never listed.
+10. The app routes the decoding-results view before population controls and raw
    spike loading.
-9. The view loads a saved fixture and never invokes computation.
-10. Metric/selector changes only re-render saved data.
+11. The view loads a saved fixture and never invokes computation.
+12. Metric/selector changes only re-render saved data.
 
 ### 10.9 Documentation and command tests
 
@@ -1528,7 +1845,8 @@ Create `test_task_decoding_documentation.py`:
 1. The reusable example configuration loads and validates without CT026 or
    another machine-specific absolute path.
 2. Every Python file in `task_decoding`, including `__init__.py`, is described
-   in the in-package README.
+   in the in-package README; the README also describes the new webapp view,
+   example configuration, and Slurm wrapper when present.
 3. The top-level neural README contains local dry-run, foreground/detached
    new-run, detached resume, one-shot status, batch, output-location, and
    webapp instructions.
@@ -1542,8 +1860,12 @@ Create `test_task_decoding_documentation.py`:
    than describing obsolete paths.
 8. The quickstart explicitly permits the terminal or Codex task to close after
    detached launch and documents later one-shot state/log inspection.
-9. The quickstart explains how to regenerate an incomplete augmented table
-   through normal behavior processing and explicitly rejects hand-editing it.
+9. The quickstart limits the tested one-column backfill to a table whose sole
+   schema gap is `rewards_in_block`, requires a backup, directs other schema
+   gaps to normal behavior regeneration, and rejects hand-editing or unrelated
+   model reruns.
+10. Batch documentation names the explicit measured resource-run option and
+    does not imply that a profile is discovered automatically.
 
 Documentation tests should validate stable commands and file ownership, not
 word-for-word prose.
@@ -1573,34 +1895,43 @@ Write these only after WP10 evidence and explicit WP11 approval:
    to the same foreground pipeline without changing scientific settings.
 2. `submit-resume` forwards one exact saved cluster run directory
    without re-parsing or overriding its scientific configuration.
-3. Unknown modes, missing paths, wrong repository roots, and tracked-dirty
-   checkouts return nonzero before launch.
+3. Unknown modes, missing paths, wrong repository roots, tracked-dirty
+   checkouts, untracked Python inside the task-decoding package, and untracked
+   explicit dependency files return nonzero before launch; unrelated untracked
+   files do not.
 4. The top-of-script partition/task/CPU/memory/time/signal/log/mail fields match
    the user-approved WP10 resource record. Tests do not assume PPC's eight
    CPUs, 32 GB, or 72 hours.
-5. The job uses the exact submitted commit, explicit thread limits, and
+5. Login dry run rejects an approved memory request whose 50% tensor guard
+   fails; scheduled execution uses the lower of mocked `MemAvailable` and
+   Slurm/cgroup memory limits rather than whole-node memory.
+6. The scheduled private branch never invokes `sbatch`; it uses the exact
+   submitted commit, explicit thread limits, and
    `uv run --frozen --no-sync --offline`; arguments, exit status, and
    scheduler signals reach the Python process.
-6. A simulated `SIGTERM` leaves no false complete result, flushes
+7. A simulated `SIGTERM` leaves no false complete result, flushes
    state/logs, and preserves only valid completed-target checkpoints.
-7. Resume requires one exact run directory and never searches for a latest
+8. Resume requires one exact run directory and never searches for a latest
    run.
-8. A mocked submission failure is returned, recorded in the initialized run,
+9. A mocked submission failure is returned, recorded in the prepared run,
    and never triggers automatic resubmission.
-9. Cluster `status` combines saved pipeline state with at most one
+10. A mocked immediately-starting job cannot have its `running` state regressed
+   by the submitter; scheduler streams use the recorded Slurm log while
+   `console.log` remains local-detach-only.
+11. Cluster `status` combines saved pipeline state with at most one
    mocked `sacct` lookup, reports the required accounting fields, and
    never polls or mutates the run.
-10. Moving the same session/config tree between local and cluster root prefixes
+12. Moving the same session/config tree between local and cluster root prefixes
     preserves the scientific fingerprint while recording both resolved
     execution paths.
-11. A completed returned fixture loads from `.incoming-<run_id>`
+13. A completed returned fixture loads from `.incoming-<run_id>`
     without cluster source access; an incomplete/corrupt fixture fails before
     final promotion.
-12. Documentation contains non-destructive input/result `rsync`
-    commands, excludes `analysis_runs/` from input synchronization, prohibits
-    broad `--delete`, uses an incoming directory, and explains
+14. Documentation contains non-destructive input/result `rsync`
+    commands, excludes the configured output root from input synchronization,
+    prohibits broad `--delete`, uses an incoming directory, and explains
     exact-commit/offline-environment preparation.
-13. No test invokes a real scheduler, SSH, rsync, network, or scientific data.
+15. No test invokes a real scheduler, SSH, rsync, network, or scientific data.
 
 ### 10.12 Deferred cluster batch-array tests
 
@@ -1615,8 +1946,9 @@ Write these only in WP13, after WP12 acceptance:
    per-session status checks; it never polls.
 6. Resume instructions name individual failed run directories and never
    resubmit the whole array automatically.
-7. A dry run rejects sessions lacking the measured projection/admission checks
-   required by Section 4.8 and reports trial/unit/tensor/fit-count context.
+7. A dry run rejects sessions that do not match the measured resource-run
+   identity/envelope required by Section 4.8 and reports every admission
+   comparison.
 8. A two-session synthetic array smoke passes with a fake scheduler; no test
    submits a real job or touches experimental data.
 
@@ -1635,11 +1967,14 @@ Write these only in WP13, after WP12 acceptance:
 
 - Terra high writes RED tests for `rewards_in_block` and stops.
 - Sol verifies/commits tests, then the same Terra worker implements the additive
-  augmented-table feature.
+  augmented-table feature and the bounded exact-0/1/finite-value correction to
+  the shared decision-variable parser, plus the thin atomic backfill in
+  `gather_trial_features.py`.
 - Sol runs focused and affected behavior tests.
-- Gate: existing augmented columns/output remain compatible.
-- Handoff: record test/implementation commits and the exact normal command that
-  will later regenerate an augmented table; do not run it on CT026 here.
+- Gate: new behavior processing emits the column, and the backfill changes only
+  that column in an older table without touching feature parameters.
+- Handoff: record test/implementation commits and the exact proposed backfill
+  invocation for later CT026 preparation; do not run it on CT026 here.
 
 ### WP2: Configuration and targets
 
@@ -1656,7 +1991,8 @@ Write these only in WP13, after WP12 acceptance:
 - Terra high writes RED activity/unit/coverage tests.
 - After Sol's tests-only commit, Terra implements explicit region loading,
   stable IDs, trusted bounds, matched trial windows, and regional tensors using
-  existing loaders/binning.
+  existing loaders/binning, plus the backward-compatible configured-group
+  keyword on `select_units_by_channels`.
 - Gate: shapes, axes, Hz units, coverage, original-row mapping, exact tensor
   allocation guard,
   and unit identities are verified; invalid alignment rows cannot appear as
@@ -1680,16 +2016,14 @@ Write these only in WP13, after WP12 acceptance:
 
 ### WP5: Results and single-session pipeline
 
-- Terra xhigh writes RED NPZ, input/scoped-source fingerprint, checkpoint,
-  failure-boundary, atomic-publication,
-  prepare/execute, single-writer, dry-run, interruption, exact-resume,
-  detached-launch, and read-only-status tests.
-- Independent Sol xhigh review approves the saved schema/state-machine tests
-  before the tests-only commit.
-- Terra implements results, pipeline, run directory, logging, summary,
-  `dry-run`/`new`/`resume`/`status`, optional
-  local detachment, internal prepared-run execution, single-writer protection,
-  and exact resume/status command persistence.
+- Use two bounded RED/commit/GREEN slices rather than one oversized worker
+  assignment. WP5A covers NPZ/schema, input/scoped-source identity,
+  checkpoints, and atomic result publication in `results.py`. WP5B then covers
+  `pipeline.py` and the session CLI: prepare/revalidate/execute,
+  failure boundaries, logging/summary, single-writer state, interruption,
+  exact resume, optional detachment, and read-only status.
+- Terra xhigh handles each slice separately. Independent Sol xhigh review
+  approves each tests-only design and each stable GREEN diff before proceeding.
 - Gate: synthetic small target runs resume and round-trip; a detached fixture
   returns immediately, completes without its launcher, and is inspectable once
   later without computation or polling.
@@ -1701,12 +2035,13 @@ Write these only in WP13, after WP12 acceptance:
 - Terra high writes RED dry-run, skip/rerun, and session-isolation tests.
 - After Sol's tests-only commit, Terra implements the session-list runner with
   parallelism across sessions only.
-- Before benchmark-derived projected peak RSS is available, cap batch execution
-  at one worker. Afterwards start from available CPUs/requested workers and
-  reduce until summed projected peaks are at most 50% of
-  `MemAvailable`. A session whose exact tensor allocation fails Section 6.2
-  still stops before allocation. Print the profile source, worker count, and
-  calculation in dry-run and the run log.
+- Without explicit completed measured evidence, cap batch execution at one
+  worker. Parallel execution requires a
+  `--resource-run-directory` satisfying Section 4.5; use its peak RSS unchanged
+  for every admitted session, then cap by available CPUs/requested workers and
+  50% of `MemAvailable`. A session whose exact tensor allocation fails Section
+  6.2 still stops before allocation. Print and save the evidence identity,
+  envelope, worker count, and calculation.
 - Gate: no within-session parallelism and no shared mutable session state.
 - Handoff: record batch input format and exact documented commands.
 
@@ -1722,11 +2057,12 @@ Write these only in WP13, after WP12 acceptance:
 
 ### WP8: User and maintainer documentation
 
-- Terra high updates `src/neural_analysis/README.md`, creates
-  `src/neural_analysis/task_decoding/README.md`, and creates the
-  portable example configuration after WP1-WP7 interfaces are stable.
-- Terra adds only the stable documentation/command tests listed in Section
-  10.9; documentation changes are committed separately.
+- After WP1-WP7 interfaces are stable, Terra high first writes the stable
+  documentation/command tests in Section 10.9 and stops at RED. Sol commits
+  them, then the same worker updates `src/neural_analysis/README.md`, creates
+  `src/neural_analysis/task_decoding/README.md`, and creates the portable
+  example configuration. Documentation changes remain a separate GREEN
+  commit.
 - Sol runs every documented `--help` and dry-run command against a
   temporary fixture, exercises detached start plus one later status check, and
   checks every Python file is described.
@@ -1752,26 +2088,31 @@ Write these only in WP13, after WP12 acceptance:
 
 ### WP9A: CT026 augmented-table preparation
 
-- This package requires separate explicit user approval for the exact normal
-  behavior-processing command recorded by WP1. It authorizes preparation of
-  the augmented table only, not neural loading, benchmarking, or decoding.
-- Sol first records the source raw/augmented paths, current augmented-table
-  identity, expected output path, and whether the normal command overwrites the
-  existing CSV. If it overwrites, make one timestamped backup beside the input
-  before running so the change is recoverable.
-- Terra high acts as a command runner only: run the approved existing behavior
-  augmentation/feature-save path that now produces `rewards_in_block`; never
-  patch the experimental CSV by hand. Record the exact command, exit status,
-  output identity, and log, then stop.
+- This package requires separate explicit user approval for the exact tested
+  behavior-side backfill invocation recorded by WP1. It authorizes one
+  augmented-table rewrite only, not neural loading, model/feature
+  recomputation, benchmarking, or decoding.
+- Sol first re-runs lightweight validation. If the column now exists, compare
+  it read-only with the general helper: an exact match records a no-write skip,
+  while a mismatch stops for user direction. Do not invoke a backfill that
+  would overwrite an existing column.
+- Sol records the augmented-table and feature-parameter identities, confirms
+  the command can write only the augmented CSV, and makes a timestamped backup
+  of that CSV beside it.
+- Terra high acts as a command runner only: run the approved
+  `backfill_rewards_in_block_csv` invocation, record its exit status, output
+  identity, and log, then stop. It never hand-edits the CSV or invokes the
+  broader behavior/model workflow.
 - Sol performs read-only post-write validation: all revision-5 required columns
-  exist, row count and ordered `cur_trial` identities match the pre-run table,
-  feature-parameter JSON remains present/valid, and the new column passes the
-  WP1 semantic checks on the produced rows.
+  exist; row count, order, and every previous loaded column/value match the
+  pre-run table; the feature-parameter identity is unchanged; no undeclared
+  file changed; and the new column passes the WP1 semantic checks.
 - Gate: the regenerated CT026 table passes validation and the user is shown the
   backup/output identities. A mismatch stops before WP10 and does not trigger
   an ad hoc repair.
-- Handoff: record the approved command, backup path when used, old/new file
-  identities, validation output, and the exact proposed read-only WP10 dry-run.
+- Handoff: record the approved command, one-file write set, backup path,
+  old/new file identities, validation output, and the exact proposed read-only
+  WP10 dry-run.
 
 ### WP10: CT026 2026-08-03 preflight and benchmark
 
@@ -1801,8 +2142,10 @@ Write these only in WP13, after WP12 acceptance:
   run.
 - Handoff: update the live snapshot with exact config/run directory, launch and
   status commands, logs, fit counts, stage timings, peak RSS, output size,
-  full fixed/tuned projections, CPU efficiency, and the proposed Slurm CPU,
-  memory, and wall-time request with its safety factors.
+  the full fixed-mode projection, CPU efficiency, and the proposed Slurm CPU,
+  memory, and wall-time request with its safety factors and explicit evidence
+  envelope. Record the tuned fit count and that no tuned runtime projection is
+  valid until its separately approved representative subset is measured.
 
 ### WP11: Single-session cluster execution and transfer
 
@@ -1810,11 +2153,12 @@ Write these only in WP13, after WP12 acceptance:
   approves wrapper/transfer implementation. Technical local feasibility does
   not preclude this choice.
 - Sol records the benchmark-derived resource proposal. Use one CPU unless
-  measured evidence justifies more. Proposed memory is the larger of 1.5 times
-  projected peak RSS or projected peak plus 2 GiB, rounded upward; proposed
-  wall time is twice the conservative projected full-run duration, rounded
-  upward to an hour. These are first-job safety rules, not permanent defaults,
-  and the user approves the exact final directives before tests are written.
+  measured evidence justifies more. Proposed memory is the largest of 1.5
+  times projected peak RSS, projected peak plus 2 GiB, or twice the exact
+  tensor allocation, rounded upward; proposed wall time is twice the
+  conservative projected full-run duration, rounded upward to an hour. These
+  are first-job safety rules, not permanent defaults, and the user approves the
+  exact final directives before tests are written.
 - Terra high writes the Section 10.11 mocked wrapper, portability, signal,
   transfer-validation, and documentation tests and stops at RED. After Sol's
   tests-only gate, the same worker implements the thin wrapper and bounded
@@ -1835,6 +2179,11 @@ Write these only in WP13, after WP12 acceptance:
 
 - This package requires explicit approval of the exact fixed-mode CT026
   configuration and local command or the exact input rsync plus Slurm command.
+- If the user chooses Slurm, first submit the separately approved tiny
+  synthetic Slurm smoke proposed by WP11, end the initiating task, and inspect
+  it once later. A wrapper/environment/logging failure stops before any CT026
+  transfer or submission; a successful smoke does not itself authorize the
+  experimental job.
 - Terra high acts as command runner only. It launches the detached local run or
   Slurm job, records the receipt/run directory, and stops. Sol does not monitor
   or alter parameters mid-run.
@@ -1847,15 +2196,15 @@ Write these only in WP13, after WP12 acceptance:
   exact result-return rsync into a hidden local incoming directory. Validate
   before atomic promotion.
 - Compare requested versus actual resources and freeze the normal
-  single-session resource profile for later sessions. Do not reduce safety
-  margins or generalize beyond the observed workload without recording the
-  decision.
+  single-session resource block and exact completed evidence run for later
+  sessions. Do not reduce safety margins or generalize beyond the observed
+  workload without recording the decision.
 - User inspects saved heatmaps, fold coverage, warnings, and coefficients.
 - Only after user approval should a batch of additional sessions be considered.
 - Handoff: record immutable run paths, configuration, commit, launch and status
   commands, transfer commands, requested versus measured timing/CPU/memory,
-  finalized resource profile, warnings/errors, and user acceptance. Do not
-  treat completion as permission for other sessions.
+  finalized resource block/evidence run, warnings/errors, and user acceptance.
+  Do not treat completion as permission for other sessions.
 
 ### WP13: Deferred cluster batch array
 
@@ -1947,7 +2296,9 @@ Persist these measurements in structured result metadata as well as
 flush the stage timing and peak-RSS-so-far at every target checkpoint. The
 measurement approach must be the same in foreground, detached local, and Slurm
 execution so the comparison is meaningful. A Slurm result additionally records
-requested and actual scheduler resources from the one-shot accounting query.
+its requested scheduler resources and job ID; the later read-only one-shot
+accounting output is retained in the live benchmark handoff rather than
+mutating the completed run.
 
 ### 12.4 Benchmark tiers
 
@@ -1970,16 +2321,25 @@ requested and actual scheduler resources from the one-shot accounting query.
 4. **Projection:** separate fixed loading/tensor/serialization costs from model
    costs. Project the 8 categorical and 10 numerical targets from their own
    observed per-fit/per-target timings, scale saved-result size by target count,
-   and carry forward measured peak tensor memory. Report both the estimate and
-   its assumptions and a conservative range because target eligibility and fit
-   convergence can change cost; do not multiply total bounded wall time by
-   nine.
+   and calculate exact planned tensor/result-array bytes. For the same session,
+   project peak RSS as measured bounded-benchmark peak plus only positive
+   growth in planned in-memory result arrays; the full tensor is already
+   present in the bounded benchmark. For a later session, reuse evidence only
+   when analysis/source/environment/platform/mode/threading identity matches
+   and every resource-driving dimension, including categorical and numerical
+   fit counts separately, is within the measured envelope; use the measured
+   peak RSS unchanged rather than scaling it. Otherwise run another bounded
+   benchmark. Report timing estimates and a conservative range because
+   eligibility and convergence affect cost; do not multiply total bounded wall
+   time by nine.
 5. **Full default benchmark/run:** only after the user authorizes the exact
    local or cluster path. A local run uses `new --detach`; a cluster run
    uses the approved rsync, dry-run, and `submit-new` sequence. End the
    initiating task and inspect once later. Compare measured versus projected
    wall time, CPU time, peak RSS, fit throughput, and output size.
-6. **Tuned estimate:** representative subset only unless separately authorized.
+6. **Tuned estimate:** representative subset only unless separately authorized;
+   measure its peak RSS as well as fit time because inner-fold preprocessing
+   workspace is not inferred from the fixed-mode profile.
 7. **Local/cluster decision:** Sol reports whether ordinary local use is
    practical and proposes cluster resources. The user may still choose the
    cluster to avoid occupying the workstation. There is no automatic duration
@@ -2014,21 +2374,20 @@ After the bounded local benchmark, Sol produces a resource table containing:
 - the safety-factor calculation and benchmark session/config identity.
 
 For the first task-decoding cluster job, request one task and one CPU unless
-measurement supports a revised parallel plan. Propose memory as the larger of
-1.5 times projected peak RSS or projected peak plus 2 GiB, rounded upward.
-Propose wall time as twice the upper-bound full-run projection, rounded upward
-to a whole hour. If these requests exceed site limits, stop for a new plan;
-do not reduce them silently.
+measurement supports a revised parallel plan. Propose memory as the largest of
+1.5 times projected peak RSS, projected peak plus 2 GiB, or twice the exact
+tensor allocation, rounded upward. Propose wall time as twice the upper-bound
+full-run projection, rounded upward to a whole hour. If these requests exceed
+site limits, stop for a new plan; do not reduce them silently.
 
 After the first completed cluster run, compare the request with Slurm
 `Elapsed`, `TotalCPU`, `AllocCPUS`, `MaxRSS`,
 `ReqMem`, and `Timelimit`. Record and user-approve the resulting
-normal single-session resource block. A later session can reuse it only when
-its benchmark-derived projection satisfies both the memory and wall-time
-admission inequalities in Section 4.8. Otherwise stop for another explicit
-estimate. Report trials, units, tensor bytes, time bins, and fit-count ratios
-to CT026 as explanatory context. WP13 uses the approved per-session profile for
-each element rather than creating a larger shared allocation.
+normal single-session resource block and its exact completed evidence run. A
+later session can reuse it only under the identity and no-larger-envelope rule
+in Section 4.8. Otherwise stop for another bounded benchmark and explicit
+estimate. WP13 uses the approved per-session block for each admitted element
+rather than creating a larger shared allocation.
 
 ## 13. CT026 2026-08-03 validation fixture
 
@@ -2063,10 +2422,10 @@ Read-only audit observations:
   path is explicit in the decoding configuration.
 
 WP1 implements the general feature but does not touch CT026. In separately
-approved WP9A, create the missing column by rerunning the exact normal
-behavioral augmentation/feature-save path recorded by WP1, with the recoverable
-backup and post-write checks defined there. Do not patch the experimental CSV
-ad hoc.
+approved WP9A, create the missing column with the tested behavior-side backfill
+recorded by WP1, with the recoverable backup and post-write checks defined
+there. Do not hand-edit the experimental CSV or rerun the broader behavior/model
+workflow.
 
 These counts are preflight facts, not authorization to mutate the table or run
 decoding.
@@ -2077,6 +2436,7 @@ Use existing project dependencies only:
 
 - Python standard library;
 - NumPy;
+- SciPy;
 - pandas;
 - scikit-learn;
 - Pynapple;
@@ -2100,9 +2460,9 @@ interfaces.
 
 | Risk | Planned response |
 | --- | --- |
-| Fixed/tuned fit cost is large | Reuse fold transforms, benchmark fixed mode, project tuned mode, and checkpoint targets. |
+| Fixed/tuned fit cost is large | Reuse fold transforms, benchmark fixed mode, measure a tuned subset before projection, and checkpoint targets. |
 | Leakage or invalid grouped folds distort results | Fit preprocessing only within each training subset; test fold membership, transform call counts, and declared invalidity behavior. |
-| Dry-run memory guesses are misleading | Guard only exact tensor allocation; use measured CT026 peak RSS for concurrency and Slurm sizing. |
+| Dry-run memory guesses are misleading | Guard only exact tensor allocation against the applicable local/job/request budget; use measured CT026 peak RSS for concurrency and Slurm sizing. |
 | Scientific identity changes across hosts or unrelated edits | Use session-relative input identities and scoped scientific-source hashes; keep host paths/full Git state as provenance. |
 | A long run is interrupted or resumed twice | Publish atomically, checkpoint targets, keep durable state/logs, and enforce one bounded execution guard without a service. |
 | Unexpected defects are hidden as unavailable science | Limit unavailable results to enumerated invalidities; fail and preserve checkpoints on unexpected exceptions. |
@@ -2125,8 +2485,9 @@ Before implementation, confirm:
   are covered by tests before modeling code;
 - session-root containment, portable input identities, scoped source identity,
   and analysis-version rules are frozen;
-- dry-run guards exact tensor bytes only, the local benchmark uses recorded
-  one-thread limits, and measured peak RSS/runtime drive local and Slurm sizing;
+- dry-run guards exact tensor bytes only against the applicable local or Slurm
+  memory budget, the local benchmark uses recorded one-thread limits, and
+  measured peak RSS/runtime drive local and Slurm sizing;
 - one prepared-run path provides immutable outputs, atomic target checkpoints,
   detached launch, exact resume, and one-shot status without active monitoring;
 - the only UI is an integrated saved-results view, with scientist quickstart,
@@ -2134,7 +2495,9 @@ Before implementation, confirm:
 - Sol/Terra work follows the documented RED-commit-GREEN sequence and updates
   this live handoff at every gate; and
 - CT026 table preparation, benchmark/full run, cluster transfer/submission, and
-  final batch-array follow-up each retain their separate user gates.
+  final batch-array follow-up each retain their separate user gates; a chosen
+  cluster path also passes a separately approved synthetic scheduler smoke
+  before experimental submission.
 
 Approval of this document should be followed by a separate implementation
 request. Until then, no code, tests, augmented data, or neural results should be

@@ -37,7 +37,9 @@ One run requires explicit paths to:
 1. `neural_session.json`;
 2. the session's augmented-trial CSV;
 3. `trial_feature_params.json`; and
-4. an output location under the session data directory.
+4. a dedicated output subdirectory under the session data directory, disjoint
+   from required input files/directories and outside the source-code Git
+   checkout.
 
 The metadata document remains authoritative for probe, sorter, channel-quality,
 and aligned-spike paths. Revision 5 does not change the metadata schema merely
@@ -51,9 +53,18 @@ Before loading large neural arrays, verify that the augmented table:
 
 - exists and has at least one row;
 - contains every source column required by the targets and selected alignment;
-- contains a unique trial identity in `cur_trial`; and
-- can coerce the selected alignment and required numeric target columns to
-  numeric values on at least some rows.
+- contains finite, integer-valued `cur_trial` values equal to the complete
+  zero-based row sequence `0, 1, ..., n_rows - 1`;
+- contains a `cur_block` value considered present by the same project sentinel
+  rules on every row; and
+- contains each `cur_block` label in one contiguous row segment.
+
+After applying the project's existing missing-value sentinel rules, plus its
+recognized no-choice labels for `action`, every remaining present value in a
+required numeric source column must be coercible to a finite number. The
+selected alignment and each selected numeric target must also contain at least
+one finite value. Recognized missing/no-choice values may still make individual
+rows target-ineligible; malformed or infinite present values are input errors.
 
 The required columns for the complete revision-5 target set are:
 
@@ -81,10 +92,12 @@ relative_doubt_index
 This is deliberately a small schema check. Do not introduce a general dataframe
 schema framework.
 
-For a selected target subset, require the shared identity, alignment, and
-baseline columns plus only those targets' source columns. The default complete
-target set requires the full list above. Report all missing required columns in
-one error.
+The list above is the superset for all targets and both supported alignments.
+Each run selects a nonempty, duplicate-free subset of the declared targets.
+For one run, require the shared identity/baseline columns, the selected
+alignment column, and only the selected targets' source columns. The default
+complete target set with choice alignment therefore does not require
+`start_time`. Report all missing required columns in one error.
 
 The feature-parameter file must exist, decode to a JSON object, and be copied
 verbatim into result provenance. Validation does not attempt to reconstruct or
@@ -100,9 +113,11 @@ A baseline decoding row must:
 
 - contain a valid animal choice, right `0` or left `1`;
 - not be an experimenter/manual-reward row;
+- contain a nonmissing block identity in `cur_block`;
 - have a finite selected alignment timestamp;
-- have a complete requested neural window on every probe needed by the selected
-  region configuration; and
+- have a complete requested neural window on both configured probes, because
+  the initial run computes and directly compares all three region
+  configurations; and
 - have a valid value for the selected target.
 
 Target-specific rules may exclude additional rows. A missing next-action label,
@@ -129,6 +144,13 @@ Different targets may have different eligible rows.
 
 All current categorical targets are binary. Record the original labels, numeric
 mapping, and positive class in result metadata.
+
+For source-coded binary fields, recognized missing sentinels make a row
+ineligible; the project's recognized no-choice action labels do the same for
+`action`. Otherwise `action` and `correct` must encode exactly 0 or 1 after
+numeric conversion. `state_int` likewise accepts 0 or 1 for this target, while
+the known dark-state value 2 is valid input but target-ineligible. Any other
+present finite label is an input error rather than a third class.
 
 | Display target | Source/derivation | Eligibility details |
 | --- | --- | --- |
@@ -216,19 +238,25 @@ same `cur_block` with numeric `reward > 0`. Therefore:
 
 - the first row of every block has value 0;
 - the current row's reward is not included;
-- a manual/experimenter reward neither increments nor resets the count;
-- a no-choice row neither increments nor resets the count; and
+- within an unchanged block, a manual/experimenter reward neither increments
+  nor resets the count;
+- within an unchanged block, a no-choice row neither increments nor resets the
+  count; and
 - a block change resets the count before the new row is recorded.
 
 This definition is independent of whether reward is encoded as an integer,
 float, or numeric string. Malformed reward values on otherwise valid animal
-choices are errors during augmentation rather than silently counted as zero.
+choices, including non-finite numeric values, are errors during augmentation
+rather than silently counted as zero. Nonmissing actions must encode exactly
+0 or 1 after numeric conversion; values such as 0.5 are not valid choices.
+Missing block identities are augmentation errors because reset semantics would
+otherwise be undefined.
 
 ## 7. Neural inputs and regional populations
 
 ### 7.1 Explicit region configuration
 
-The run configuration maps exactly one probe to PFC and one probe to HPC. Do
+The run configuration maps one probe to PFC and a distinct probe to HPC. Do
 not infer brain regions from probe names or site ordering.
 
 For each region, the configuration records:
@@ -239,6 +267,13 @@ For each region, the configuration records:
 - whether `inside_brain` must be true, initially yes; and
 - accepted cluster groups, initially `good` and `mua`.
 
+Channel selection starts from the requested channel-quality labels and
+`inside_brain` rule, intersects the probe's optional metadata
+`unit_channels` restriction when present, and then intersects any additional
+explicit channel restriction in the decoding configuration. All such channel
+IDs are zero-based saved-channel indices. Save the selected channel IDs and
+every contributing rule.
+
 The initial implementation supports one probe per region. General multi-probe
 regions are out of scope.
 
@@ -246,17 +281,30 @@ Unit identity is `<probe_id>:<cluster_id>`. Preserve that identifier,
 region, cluster ID, channel, and quality in results. Never assume that bare
 cluster IDs are unique across probes.
 
+Selected cluster IDs must be unique in the selected metadata and present in
+the loaded spike-cluster assignments. Selected aligned spike timestamps must
+be finite. These are input-integrity checks, not fold-level missingness.
+
+Selecting zero channels or zero units for either configured region is an input
+error and fails before fitting. It is not a scientifically unavailable decoder
+cell. Fold-level loss of all usable features after training-only constant
+feature checks remains a declared scientific invalidity.
+
 ### 7.2 Alignment coverage
 
-For ordinary IRIG-aligned files, define trusted coverage as the minimum and
-maximum finite values in `irig_utc_unix`. A trial is eligible only if
-its entire event-relative window lies within those bounds for every required
-probe.
+Classify coverage mechanically from the aligned archive. If it contains
+`irig_utc_unix`, treat it as IRIG-covered and require that array to be
+one-dimensional, nonempty, and finite; its minimum and maximum are the trusted
+bounds. Configured trusted bounds are invalid for an archive with this member;
+do not retain an ignored override or let one hide a malformed IRIG array. If
+the member is absent, as in the current manual-alignment output, trusted finite
+UTC bounds with `start < end` must be supplied explicitly in the run
+configuration or stored in a future authoritative alignment field. Without
+them, fail validation. Never use the first and last spike as recording-coverage
+bounds.
 
-For a manually aligned file, trusted UTC bounds must be explicitly supplied in
-the run configuration or stored in a future authoritative alignment field.
-Without explicit trusted bounds, fail validation. Do not use the first and last
-spike as recording-coverage bounds.
+A trial is eligible only if its entire event-relative window lies within the
+trusted bounds for every required probe.
 
 ### 7.3 Activity representation
 
@@ -277,6 +325,10 @@ Supported alignments:
 
 - choice time, source `choice_time`; and
 - trial start, source `start_time`.
+
+Both source columns are UTC Unix timestamps in seconds, in the same coordinate
+system as aligned spike times and trusted coverage bounds. The decoder performs
+no implicit time-unit or clock conversion.
 
 The window is [-2 s, +2 s]. Supported bin widths are 500, 100, 50, and 20 ms;
 100 ms is the default.
@@ -315,6 +367,11 @@ region:
 
 PFC and HPC always receive separate PCA fits. PFC + HPC concatenates the two
 regional PC score matrices; it does not fit a joint cross-region PCA.
+
+If a fold has no usable training features in either required component region,
+that region's standalone cell and the combined cell are unavailable. The
+combined decoder never silently collapses to a one-region decoder; the other
+region's standalone cell may still proceed.
 
 Default retained counts are 10 PFC PCs and 10 HPC PCs. Cap a requested count at
 the usable training rank. Record requested and effective counts and surface a
@@ -428,9 +485,12 @@ show the cell as unavailable, preserve valid fold records, and show the
 valid/expected fold count and reason. A failed cell must not stop unrelated
 targets or time bins when the failure is a declared scientific invalidity:
 insufficient folds/classes, a constant target, an unavailable feature set, a
-convergence warning, or a non-finite fit/score. Unexpected programming,
-schema, or I/O exceptions must fail the run, preserve completed checkpoints,
-and remain visible rather than being converted into scientific missingness.
+convergence warning, or a non-finite fit/score. Here an unavailable feature set
+means no usable features remain in that fold after training-only checks; zero
+session-level channels/units is the input error defined in Section 7.1.
+Unexpected programming, schema, or I/O exceptions must fail the run, preserve
+completed checkpoints, and remain visible rather than being converted into
+scientific missingness.
 
 Inner scores select parameters and are never mixed into the displayed outer
 score.
@@ -451,6 +511,9 @@ outer-fold coefficients:
 Nonzero means `abs(coef) > 1e-8` on the fitted standardized-feature
 scale, excluding intercepts. This is a numerical counting tolerance, not a
 biological or statistical threshold.
+
+Retain each fitted intercept in results for model provenance, but do not treat
+it as a unit/PC coefficient or include it in nonzero-feature counts.
 
 For classification, orient coefficient signs to the recorded positive class
 and label them as log-odds change per pooled training standard deviation. For
@@ -485,20 +548,29 @@ caption. Categorical heatmaps show a 0.5 reference; numerical heatmaps show 0.
 Preserve below-reference classifications, negative $R^2$, and a distinct
 appearance for unavailable cells.
 
-The primary controls are representation, bin width, alignment, region,
-categorical metric, regional PC counts, regularization mode, outer folds, and
-inner folds. A display-only control must not cause computation.
+Run configuration controls are target subset, bin width, alignment, regional
+PC counts, regularization mode, and outer/inner fold counts. Saved-results
+display controls are the session-relative results root, run, representation,
+region, target, and categorical metric. The results-root locator defaults to
+`analysis_runs`, must remain inside the selected metadata session, and only
+changes where completed runs are listed. Display controls must never cause
+computation; changing a run setting requires an offline run rather than an
+interactive refit.
 
 ## 14. Reproducibility and performance
 
 Every saved run records:
 
 - analysis version;
+- Python and numerical-library versions;
 - complete configuration and feature-generation parameters;
 - random seed;
 - source paths and stable file identities;
+- an exact copy of `trial_feature_params.json`;
 - unit identities and selection rules;
-- target mappings, eligibility counts, and fold assignments;
+- trial/block identities, the common neural-tensor row mapping, encoded target
+  values, target mappings, eligibility counts/reasons, outer assignments, and
+  tuned-mode inner assignments/candidate scores;
 - array shapes, axis names, physical units, and time-bin edges;
 - estimator settings and selected hyperparameters;
 - warnings, invalid reasons, and requested/effective PC counts; and
@@ -506,6 +578,11 @@ Every saved run records:
 
 Changing code version, scientific parameters, or inputs creates a new run and
 must not overwrite prior results.
+
+A prepared, detached, queued, or resumed execution must verify its saved input
+identities and recorded Python/numerical-library versions again before loading
+large arrays. Changed inputs or runtime versions must fail visibly rather than
+run under stale provenance.
 
 The implementation must reuse rate tensors, fold assignments, and fold-level
 regional transforms where the scientific inputs are identical. Clarity takes
@@ -549,6 +626,8 @@ Relative to revision 4, revision 5:
   odds;
 - defines baseline and target-specific eligibility, including manual and
   no-choice handling;
+- validates chronological trial/block identity and uses a common two-probe
+  coverage intersection for matched regional comparisons;
 - requires explicit PFC/HPC configuration and stable probe-qualified unit IDs;
 - defines IRIG and manual-alignment coverage checks;
 - makes requested/effective PC capping and convergence failures visible;
@@ -559,7 +638,7 @@ Relative to revision 4, revision 5:
 - uses an integrated read-only view in the existing webapp;
 - records the installed scikit-learn 1.8 logistic-interface consideration;
 - adds reproducible saved-run and like-for-like single-thread benchmark
-  requirements; and
+  requirements, including pre-execution input revalidation; and
 - retains the accepted revision-4 estimator, CV, timing, and visualization
   decisions unless explicitly corrected above.
 
