@@ -1,9 +1,8 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Ready for user approval; planning only. This document does not
-authorize implementation, test creation, data mutation, or decoding runs.
-Implementation may begin only after the user separately approves the plan and
-requests code changes.
+**Status:** Implementation authorized; WP1 RED phase in progress. This does
+not authorize experimental-data mutation, decoding runs, benchmarks, transfer,
+or scheduler actions, which retain their separate gates below.
 
 **Scientific contract:** `docs/task_variable_spec_v5.md`.
 
@@ -11,23 +10,19 @@ requests code changes.
 
 **Snapshot date:** 2026-10-06
 
-**Current phase:** WP0 readiness review complete; awaiting user approval. The
-revision-5 specification and this implementation plan exist, but the user has
-authorized documentation work only. No production code, tests, experimental
-data, decoding output, benchmark, local long run, or cluster action is
-authorized.
+**Current phase:** WP0 is complete and WP1 behavioral-feature tests are the
+single active package. The user explicitly authorized implementation after
+pushing the accepted documentation. No experimental-data mutation, decoding
+output, benchmark, transfer, local long run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD and `origin/refactor`: `ed9a79b3d98505c757c75f93061e3f08b91fb360`
+- HEAD and `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`
   (`updated specs`);
-- that commit contains both task-variable documents through the third WP0
+- that commit contains both task-variable documents through the fifth WP0
   readiness correction;
-- this plan and revision 5 now contain uncommitted fourth and fifth readiness
-  corrections awaiting user review/commit;
-- the tracked worktree was clean when the fourth correction began, and the
-  fifth began with only the expected document modifications; and
+- the tracked worktree was clean when WP1 preparation began; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -56,13 +51,9 @@ authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** the user reviews these readiness corrections. Before a
-later implementation begins, these accepted WP0 document changes must be
-committed and their new HEAD recorded; implementation then requires a separate
-explicit user request.
-At that point the Sol supervisor starts WP1 with a fresh worktree/HEAD audit;
-it must not infer implementation authority from the existence or staging of
-these documents.
+**Next exact action:** the Sol supervisor commits this authorization/handoff
+update separately, then assigns the bounded WP1 tests-only RED task. No
+production implementation begins before Sol verifies and commits those tests.
 
 ### Authority order
 
@@ -82,16 +73,16 @@ When resuming, use this order:
 
 | Package | State at snapshot | Next gate |
 | --- | --- | --- |
-| WP0 documentation approval | Ready for user review; documentation only | User approval, documentation commit/HEAD, and explicit implementation request |
-| WP1 behavioral feature | Not authorized | Sol freezes scope and assigns tests-only Terra task |
-| WP2 configuration and targets | Not authorized | WP1 GREEN and recorded handoff |
-| WP3 activity loading and coverage | Not authorized | WP2 GREEN and recorded handoff |
-| WP4 grouped modeling | Not authorized | WP3 GREEN and independent numerical test-design review |
-| WP5 results and session pipeline | Not authorized | WP4 GREEN and saved-schema freeze |
-| WP6 batch runner | Not authorized | WP5 GREEN |
-| WP7 plotting and webapp | Not authorized | WP5 saved loader stable; WP4 metrics stable |
-| WP8 documentation and examples | Not authorized | CLI/webapp interfaces stable through WP7 |
-| WP9 synthetic integration | Not authorized | WP1-WP8 focused gates GREEN |
+| WP0 documentation approval | Complete at pushed `b69c70a` | None |
+| WP1 behavioral feature | RED phase authorized and active | Sol verifies and commits tests before GREEN authorization |
+| WP2 configuration and targets | Pending prerequisite | WP1 GREEN and recorded handoff |
+| WP3 activity loading and coverage | Pending prerequisite | WP2 GREEN and recorded handoff |
+| WP4 grouped modeling | Pending prerequisite | WP3 GREEN and independent numerical test-design review |
+| WP5 results and session pipeline | Pending prerequisite | WP4 GREEN and saved-schema freeze |
+| WP6 batch runner | Pending prerequisite | WP5 GREEN |
+| WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
+| WP8 documentation and examples | Pending prerequisite | CLI/webapp interfaces stable through WP7 |
+| WP9 synthetic integration | Pending prerequisite | WP1-WP8 focused gates GREEN |
 | WP9A CT026 augmented-table preparation | Not authorized | WP9 GREEN plus explicit approval of the exact behavior-processing command |
 | WP10 CT026 preflight/benchmark | Not authorized | WP9A validation passes plus explicit real-session benchmark approval |
 | WP11 single-session cluster path | Not authorized | WP10 evidence and user choice justify cluster convenience/cost; user approves wrapper/transfer work |
@@ -308,6 +299,31 @@ Use this template for each appended record:
   TDD readiness issue remains.
 - Exact next action: the user reviews, commits, and pushes the documentation.
   Implementation remains separately authorized and has not begun.
+
+#### 2026-10-06 - WP0 approval and WP1 start
+
+- State: WP0 complete at the pushed documentation commit; WP1 tests-only RED
+  phase is the single active implementation package.
+- Authorization: the user reported the documents pushed and explicitly asked
+  implementation to begin with this plan kept current. This does not authorize
+  CT026 mutation/computation, benchmarking, transfer, or scheduler actions.
+- Sol / Terra / reviewer: primary Sol supervisor; the bounded WP1 Terra worker
+  has not yet been assigned.
+- Start HEAD / end HEAD: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f` /
+  `b69c70a618284aef86f73b8f3d12ac8df2dbea9f` before this handoff commit.
+- Owned files: this plan only. The many pre-existing untracked files remain
+  outside task-variable ownership.
+- RED command and result: pending the WP1 tests-only assignment.
+- GREEN/regression commands and results: not applicable; production work has
+  not begun.
+- Commits: pushed WP0 authority is
+  `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`; this live handoff update will be
+  committed separately before worker assignment.
+- Real-data or external actions: none.
+- Findings and unresolved risks: HEAD equals `origin/refactor`; tracked files
+  were clean at WP1 start; expected historical untracked files are preserved.
+- Exact next action: commit this handoff, assign only the WP1 behavior tests,
+  reproduce genuine RED, and commit those tests before implementation.
 
 ## 1. Objective
 
