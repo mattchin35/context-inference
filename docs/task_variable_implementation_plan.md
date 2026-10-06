@@ -1,6 +1,7 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP2 is GREEN and WP3 tests are next.
+**Status:** Implementation authorized; WP3 tests are committed RED and its
+activity implementation is next.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -10,21 +11,21 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-06
 
-**Current phase:** WP0-WP2 are complete. WP2 tests begin at `3ccae6c`, review
-regressions end at `f13d31b`, and implementation is committed at `2899502`;
-the WP3 tests-only RED phase is the single next package. No experimental-data
-mutation, decoding output, benchmark, transfer, local long run, or cluster
-action is authorized.
+**Current phase:** WP0-WP2 are complete. WP3's reviewed synthetic activity
+suite is committed at `6e45ebf` and is genuinely RED solely because
+`activity.py` does not yet exist. The WP3 implementation is the single next
+package. No experimental-data mutation, decoding output, benchmark, transfer,
+local long run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
 - local implementation HEAD:
-  `289950223a4a383e459cdfce17c0d4417b180510`;
+  `6e45ebfb17074a332f41502dbf48e1fc756f3d61`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
-  and `fda0399`;
-- the tracked worktree is clean after the WP2 implementation commit; and
+  `fda0399`, and `ceb9b28`;
+- the tracked worktree is clean after the WP3 tests-only commit; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -53,9 +54,9 @@ action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this WP2 GREEN handoff separately, then assign
-only the WP3 activity/unit/coverage tests and stop at a genuine RED result
-before any WP3 production implementation.
+**Next exact action:** commit this WP3 RED handoff separately, then assign the
+same worker only `activity.py`; reproduce focused GREEN and affected loader /
+tensor regressions before any WP4 work.
 
 ### Authority order
 
@@ -78,7 +79,7 @@ When resuming, use this order:
 | WP0 documentation approval | Complete at pushed `b69c70a` | None |
 | WP1 behavioral feature | Complete: RED `acf24ae`, GREEN `8ea4d24` | None; CT026 backfill remains separately gated at WP9A |
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
-| WP3 activity loading and coverage | Ready for tests-only RED | Commit WP2 GREEN handoff, then commit genuine RED tests before implementation |
+| WP3 activity loading and coverage | RED tests committed at `6e45ebf` | Implement only `activity.py`, then verify focused and affected tests |
 | WP4 grouped modeling | Pending prerequisite | WP3 GREEN and independent numerical test-design review |
 | WP5 results and session pipeline | Pending prerequisite | WP4 GREEN and saved-schema freeze |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
@@ -491,6 +492,43 @@ Use this template for each appended record:
 - Exact next action: commit this documentation-only GREEN handoff, then write
   only the WP3 activity/unit/coverage tests, reproduce RED, and commit those
   tests before any WP3 implementation.
+
+#### 2026-10-06 - WP3 RED gate
+
+- State: WP3 activity/unit/coverage tests are committed RED; implementation is
+  next.
+- Authorization: project implementation was authorized. Work remained limited
+  to source-controlled synthetic tests; no experimental-data, decoding,
+  benchmark, transfer, or scheduler action was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / the same Terra high worker /
+  Sol independent test-contract and existing-loader review.
+- Start HEAD / end HEAD: `ceb9b28` / tests-only commit
+  `6e45ebfb17074a332f41502dbf48e1fc756f3d61`.
+- Owned files: created only
+  `src/tests/neural_analysis/task_decoding/test_activity.py`; all pre-existing
+  untracked files were preserved.
+- RED command and result: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
+  src/tests/neural_analysis/task_decoding/test_activity.py -q` stops at one
+  collection error solely because
+  `src.neural_analysis.task_decoding.activity` does not yet exist. The test
+  file separately passes `uv run python -m py_compile` and the staged diff
+  passed `git diff --cached --check`.
+- GREEN/regression commands and results: not applicable before implementation.
+- Commits: tests-only commit `6e45ebf`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: review replaced a parallel probe-path record
+  with the existing `ResolvedProbeSources` contract, corrected the on-disk
+  channel-quality fixture schema, and added independent label/inside-brain
+  filters, duplicate cluster IDs, bilateral full-window coverage, missing and
+  non-finite trusted bounds, dry-run array-read sentinels, source-size versus
+  tensor-memory accounting, applicable memory-source selection, and the
+  unknown-budget hard stop. The tests freeze small helper interfaces needed by
+  later preflight code but do not authorize opening a real neural archive.
+- Exact next action: commit this documentation-only RED handoff, then have the
+  same worker implement only
+  `src/neural_analysis/task_decoding/activity.py` and report focused GREEN
+  without committing.
 
 ## 1. Objective
 
