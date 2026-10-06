@@ -9,7 +9,7 @@ changes.
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-05
+**Snapshot date:** 2026-10-06
 
 **Current phase:** WP0 documentation revision. The revision-5 specification
 and this implementation plan exist, but the user has authorized documentation
@@ -31,9 +31,12 @@ benchmark, local long run, or cluster action is authorized.
 - `src/neural_analysis`, `docs/SoftwareDesign.md`, and revision 4 were audited;
 - revision 5 records the resolved scientific/data contracts;
 - CT026 2026-08-03 input presence and small-table/alignment metadata were
-  inspected read-only; and
+  inspected read-only;
 - the implementation architecture, tests-first sequence, saved-run contract,
-  integrated webapp view, and benchmark strategy are drafted below.
+  integrated webapp view, and benchmark strategy are drafted below; and
+- the offline contract now includes unattended local launch, one-shot
+  read-only status inspection, and a conditional unattended Slurm path. It
+  explicitly does not require active Codex monitoring or polling.
 
 **Next exact action:** finish and review this documentation revision. A later
 implementation begins only after the user explicitly approves the plan and
@@ -275,7 +278,7 @@ Create `src/neural_analysis/task_decoding/` with:
 | `results.py` | In-memory result record, NPZ/config/log save-load contract, completion state, and compatible-run discovery. | `save_task_decoding_run(...)`, `load_task_decoding_run(...)` |
 | `plotting.py` | Light-mode heatmaps, coefficient summaries, captions, and PNG export from saved results. | `plot_decoding_heatmap(...)`, `plot_unit_coefficients(...)` |
 | `pipeline.py` | Assemble loading, targets, activity, decoding, checkpoints, logging, and reporting for one session. | `run_task_decoding_session(...)`, `plan_task_decoding_session(...)` |
-| `run_session.py` | Thin single-session offline CLI with explicit `dry-run`, `new`, and `resume` modes. | `main(...)` |
+| `run_session.py` | Thin single-session offline CLI with `dry-run`, `new`, `resume`, and read-only `status` modes; `new`/`resume` optionally detach for unattended local work. | `main(...)` |
 | `run_batch.py` | Thin session-list offline CLI with `dry-run` and `new` modes; session-level parallelism only. | `main(...)` |
 | `README.md` | File-by-file ownership, dependency direction, public entry points, array/result contracts, and developer extension notes. | Documentation only |
 
@@ -322,17 +325,21 @@ Update `src/neural_analysis/README.md` with a short
 - required metadata, augmented-trial, feature-parameter, and configuration
   files;
 - how to copy and edit the example configuration;
-- the exact local `dry-run`, `new`, and `resume`
-  commands;
+- the exact local `dry-run`, foreground and detached `new`, detached
+  `resume`, and read-only `status` commands;
+- how to start an unattended run, close the terminal/Codex task, and inspect
+  its durable state and logs once later without polling;
 - how to perform a batch dry run and batch launch;
 - where run directories, checkpoints, logs, NPZ results, summaries, and PNGs
   are written;
 - how to open the saved results in the existing webapp;
 - the difference between fixed and tuned mode, including the large tuned-mode
   work-count warning;
+- the bounded two-target benchmark recipe, recorded timing/memory fields, and
+  how to use its projection before choosing a full local or Slurm run;
 - how matching completed runs are skipped and how an explicit rerun creates a
   new immutable directory; and
-- the cluster path only if WP11 is activated.
+- the one-command Slurm submit/resume/status path only if WP11 is activated.
 
 Create `src/neural_analysis/task_decoding/README.md` with:
 
@@ -360,7 +367,8 @@ the complete scientific specification.
 
 ### 4.5 Straightforward offline command surface
 
-The planned local workflow is:
+The single-session CLI is the primary offline interface. A normal local
+workflow is:
 
 ```bash
 cp docs/examples/neural_analysis/task_decoding_config.json \
@@ -370,21 +378,55 @@ uv run python -m src.neural_analysis.task_decoding.run_session dry-run \
   --config /path/to/session/task_decoding_config.json
 
 uv run python -m src.neural_analysis.task_decoding.run_session new \
-  --config /path/to/session/task_decoding_config.json
+  --config /path/to/session/task_decoding_config.json --detach
 
+uv run python -m src.neural_analysis.task_decoding.run_session status \
+  --run-directory /path/to/session/analysis_runs/task_variable_decoding_<timestamp>
+```
+
+Omit `--detach` when an intentionally small run should remain in the
+foreground. A detached `new` launch must do only bounded setup in the calling
+process: validate small inputs, create the immutable run directory, write the
+saved configuration/manifests/state and exact follow-up commands, start one
+detached child with its console streams redirected into the run directory, and
+return. It prints the run directory, local PID, log paths, and exact status and
+resume commands. It does not poll the child.
+
+The matching unattended resume command is:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session resume \
+  --run-directory /path/to/session/analysis_runs/task_variable_decoding_<timestamp> \
+  --detach
+```
+
+The detached child uses the same foreground pipeline, saved configuration,
+and target checkpoints as an ordinary invocation. Use the Python standard
+library process launcher with a new process session and explicit file handles;
+do not require `nohup`, a terminal multiplexer, a notebook, Streamlit, or a
+resident Codex task.
+
+`status` is a one-shot, read-only inspection. It reports the saved lifecycle,
+current stage, completed/total targets, start/update/end times, last warning or
+error, result completeness, local PID or Slurm job identity when present, and
+the tail location of durable logs. It neither loads spike arrays nor fits,
+resumes, kills, or continuously watches anything. PID liveness is advisory:
+after an abrupt process or machine failure, saved checkpoints and files are
+authoritative, and the user must explicitly run the exact resume command.
+
+This is also the Codex operating contract. Codex may start an authorized
+detached run, report the path and commands, and end its task. The user can ask
+Codex later for one fresh status/log inspection. No recurring wait, background
+agent, or token-consuming polling is part of the computation plan.
+
+The separate batch interface remains:
+
+```bash
 uv run python -m src.neural_analysis.task_decoding.run_batch dry-run \
   --config-list /path/to/task_decoding_configs.txt
 
 uv run python -m src.neural_analysis.task_decoding.run_batch new \
   --config-list /path/to/task_decoding_configs.txt --workers 4
-```
-
-Every successful `new` launch prints and saves its exact resume
-command:
-
-```bash
-uv run python -m src.neural_analysis.task_decoding.run_session resume \
-  --run-directory /path/to/session/analysis_runs/task_variable_decoding_<timestamp>
 ```
 
 `dry-run` validates metadata, configuration, augmented columns,
@@ -397,7 +439,9 @@ current command line.
 The batch config list is a UTF-8 text file with one configuration path per
 nonblank, non-comment line. Batch resume is deliberately per-session through
 the printed single-session resume commands; do not add a second batch
-checkpoint format.
+checkpoint format. Do not add detached batch supervision during the first
+implementation: prove the simpler single-session unattended path on CT026
+before deciding whether batch detachment is actually needed.
 
 The CLI returns nonzero on invalid configuration or failed execution and
 prints a short actionable error plus the run directory/resume command when one
@@ -409,36 +453,55 @@ Do not build cluster support preemptively. WP10 first measures the default
 fixed-mode workload locally. If the measured/projected runtime or memory makes
 local use impractical, the user decides whether to activate WP11.
 
-If activated, add one thin Slurm wrapper:
+If activated, add one thin Slurm submit wrapper:
 
 `src/shell_scripts/task_variable_decoding_slurm.sh`
 
-It forwards the same Python CLI and supports only:
+Its public commands are deliberately parallel to the local flow:
 
 ```bash
-sbatch src/shell_scripts/task_variable_decoding_slurm.sh new \
+bash src/shell_scripts/task_variable_decoding_slurm.sh submit-new \
   --config /path/to/session/task_decoding_config.json
 
-sbatch src/shell_scripts/task_variable_decoding_slurm.sh resume \
+bash src/shell_scripts/task_variable_decoding_slurm.sh submit-resume \
+  --run-directory /path/to/session/analysis_runs/task_variable_decoding_<timestamp>
+
+bash src/shell_scripts/task_variable_decoding_slurm.sh status \
   --run-directory /path/to/session/analysis_runs/task_variable_decoding_<timestamp>
 ```
 
 The wrapper:
 
 - contains no scientific defaults or duplicate configuration parsing;
-- invokes the same `run_session.py` entry point used locally;
+- runs the same lightweight local dry run before a new submission;
+- asks the Python runner to prepare the immutable run directory, then submits
+  the same foreground resume pipeline used locally;
+- writes `slurm_submission.json` with the job ID, exact resource request,
+  submission time, and scheduler log path, and immediately prints the run
+  directory and later status/resume commands;
 - keeps CPU, memory, wall-time, environment activation, repository commit, and
   Slurm log location visible;
+- performs at most one read-only scheduler query when its `status` command is
+  invoked; it never polls;
 - never submits another job automatically;
 - never selects the latest run implicitly;
 - preserves exact target checkpoints and resume semantics;
-- requires a successful local dry run before submission; and
 - receives focused forwarding/failure tests plus README instructions.
+
+The preparation operation used by `submit-new` is an implementation detail,
+not another scientist-facing workflow. If submission fails, the initialized
+run directory records the failure and remains explicitly resumable. Scheduler
+timeout, cancellation, or out-of-memory termination can prevent the Python
+process from updating its final state; the one-shot cluster `status` command
+therefore presents both saved pipeline state and the current `sacct` result
+when available, without trying to reconcile or restart them automatically.
 
 If the benchmark instead identifies a need for within-session parallel model
 fitting, stop and revise this plan. A scheduler wrapper provides unattended
 wall time and memory; it does not itself justify a new parallel algorithm.
-No `sbatch` command is run without separate explicit user approval.
+No `sbatch` command is run without separate explicit user approval. Once an
+authorized job is submitted, neither the user nor Codex needs to remain
+connected; a later one-shot status/log check is the normal workflow.
 
 ## 5. Configuration contract
 
@@ -643,11 +706,15 @@ Each execution creates an immutable session-local directory:
         input_manifest.json
         run_state.json
         resume_command.txt
+        status_command.txt
+        execution.json
         results.npz
         run.log
+        console.log
         summary.md
         run_session.py
         run_batch.py
+        slurm_submission.json  # only when submitted through WP11
         checkpoints/
         figures/
 ```
@@ -679,10 +746,19 @@ content-addressed object store is needed.
 
 `new` writes the run directory, immutable saved configuration,
 input/code identity, initial `run_state.json`, and exact
-`resume_command.txt` before loading large spike arrays. Run state uses
-a small explicit lifecycle such as initialized, preflight complete, running,
-interrupted, failed, and complete, with completed target names and the last
-error/warning.
+`resume_command.txt` and `status_command.txt` before loading large
+spike arrays. `execution.json` records foreground/detached/Slurm mode
+and the local PID or scheduler identity as advisory execution metadata. Run
+state uses a small explicit lifecycle such as initialized, submitted,
+preflight complete, running, interrupted, failed, and complete.
+
+The state file includes started, last-updated, and completed timestamps;
+current stage; completed and total target names; the last error/warning; and
+whether final results were published. Update it at stage transitions and
+completed-target boundaries. Do not add a heartbeat daemon or a monitoring
+database. A long target can legitimately leave the timestamp unchanged, so
+`status` reports facts rather than declaring a run stale from elapsed time
+alone.
 
 Update the state file atomically at package-defined boundaries and flush the
 log before returning a failure/interruption code. A resumed run trusts only its
@@ -691,7 +767,10 @@ new command-line scientific overrides or infer the latest run directory.
 
 The summary and live handoff record distinguish an interrupted resumable run
 from a completed result. A missing final `results.npz` is never
-presented as complete.
+presented as complete. `console.log` captures detached-process or
+scheduler standard streams, while `run.log` is the pipeline log; both
+are flushed at stage/target boundaries so later inspection does not depend on
+the original terminal or Codex task.
 
 ### 8.3 Checkpoint boundary
 
@@ -895,13 +974,13 @@ effort, allowlist, and stop gate.
 | WP2 | Freeze config/target public contracts and positive-class mappings | High: tests-only then `config.py`/`targets.py` | High final review |
 | WP3 | Freeze probe/region, unit-ID, coverage, shape, and Hz contracts | High: tests-only then `activity.py` using existing loaders/binning | High final review |
 | WP4 | Own leakage/CV/model validity decisions and installed sklearn verification | Xhigh: tests-only then fixed modeling; separate follow-up for tuned modeling | Xhigh test-design and final numerical review |
-| WP5 | Freeze NPZ/meta/fingerprint/checkpoint/CLI state machine | Xhigh: tests-only then results/pipeline/session CLI | Xhigh test-design and final restart/provenance review |
+| WP5 | Freeze NPZ/meta/fingerprint/checkpoint/CLI state machine, detached launch, and one-shot status | Xhigh: tests-only then results/pipeline/session CLI | Xhigh test-design and final restart/provenance/unattended-run review |
 | WP6 | Freeze session-isolation, memory, dry-run, and worker-count policy | High: tests-only then batch CLI | High final review |
 | WP7 | Own shared webapp router and saved-loader boundary | High: plotting/view tests then implementation; Sol or one assigned worker alone edits shared router | High final read-only/UI-boundary review |
-| WP8 | Freeze exact commands and stable public file descriptions | High: README/example/`--help` documentation task only after interfaces stabilize | Sol runs every documented dry-run/help command |
+| WP8 | Freeze exact commands and stable public file descriptions | High: README/example/`--help` documentation task only after interfaces stabilize | Sol runs every documented dry-run/help/status command and verifies start-and-leave instructions |
 | WP9 | Own end-to-end scientific assertions and full focused regression gate | Xhigh: synthetic integration tests and bounded fixes only | Xhigh scientific/leakage review |
-| WP10 | Authorize exact CT026 read-only/preflight commands and interpret timing/memory | High command runner: execute only approved benchmark commands; no source edits | Xhigh independent benchmark interpretation |
-| WP11 | Decide whether cluster support is needed; freeze wrapper resources/forwarding | High: wrapper tests/documentation, then thin shell implementation | Xhigh safety/resume/Slurm review; actual submission still user-gated |
+| WP10 | Authorize exact CT026 read-only/preflight commands and interpret timing/memory | High command runner: start only approved benchmark commands, detached if needed, then stop; no source edits or polling | Xhigh independent benchmark interpretation from completed state/logs |
+| WP11 | Decide whether cluster support is needed; freeze one-command submission, resources, status, and forwarding | High: mocked submit/status/resume tests and documentation, then thin shell implementation | Xhigh safety/resume/Slurm review; actual submission still user-gated |
 | WP12 | Freeze exact real-session config and stop conditions; present output to user | High command runner only; no source edits or parameter changes | High evidence review plus user scientific inspection |
 
 ## 10. Tests to write before implementation
@@ -1005,8 +1084,8 @@ Create `test_results.py` and `test_pipeline.py`:
 4. Fingerprints change with scientific input/config/version changes.
 5. An identical completed run is skipped by default.
 6. Explicit rerun creates a new path without overwrite.
-7. `new` writes saved config, run state, and exact resume command
-   before an injected large-array/long-running stage.
+7. `new` writes saved config, run state, and exact resume/status
+   commands before an injected large-array/long-running stage.
 8. Matching target checkpoints resume; mismatched ones are ignored/rejected.
 9. Interrupted/failed states return nonzero, preserve logs/checkpoints, and do
    not publish a complete result.
@@ -1015,6 +1094,17 @@ Create `test_results.py` and `test_pipeline.py`:
    information.
 12. Dry-run loads metadata/small tables and reports planned work without loading
     spike arrays or fitting models.
+13. Detached `new` and `resume` return after bounded setup, redirect
+    child output, save execution identity, and run the same foreground pipeline
+    without a shell-dependent scientific path.
+14. One-shot `status` reads only small saved files, reports progress and
+    result completeness, and never loads spikes, fits, resumes, or polls.
+15. A simulated abrupt child death leaves checkpoints resumable and is
+    reported without automatic restart or a false `complete` state.
+16. A Linux integration smoke test confirms that a detached synthetic child
+    survives the launcher process and completes with no open terminal. Before
+    relying on Codex as the launcher, repeat that smoke through the actual
+    Codex command environment because a host may clean up child processes.
 
 ### 10.7 Plot and webapp tests
 
@@ -1042,16 +1132,19 @@ Create `test_task_decoding_documentation.py`:
    another machine-specific absolute path.
 2. Every public Python file in `task_decoding` is described in the
    in-package README.
-3. The top-level neural README contains local dry-run, new-run, resume, batch,
-   output-location, and webapp instructions.
+3. The top-level neural README contains local dry-run, foreground/detached
+   new-run, detached resume, one-shot status, batch, output-location, and
+   webapp instructions.
 4. `run_session --help` and `run_batch --help` exit
    successfully and show the documented modes.
 5. The documented single-session dry-run works against a small temporary
    metadata/config fixture without loading spike arrays.
-6. The exact resume command is written to run state before an injected
-   long-running stage.
+6. Exact resume and status commands are written before an injected long-running
+   stage.
 7. README result paths and CLI mode names match implementation constants rather
    than describing obsolete paths.
+8. The quickstart explicitly permits the terminal or Codex task to close after
+   detached launch and documents later one-shot state/log inspection.
 
 Documentation tests should validate stable commands and file ownership, not
 word-for-word prose.
@@ -1075,18 +1168,24 @@ Create `test_synthetic_integration.py`:
 
 Write these only if WP11 is activated:
 
-1. The wrapper forwards `new` and `resume` arguments to the
-   same Python CLI without changing scientific settings.
-2. Unknown modes and missing required paths return nonzero before launch.
-3. Resource/log directives are explicit and match the documented benchmark
+1. `submit-new` runs a lightweight dry run, prepares one exact run
+   directory through the Python runner, and submits that directory to the same
+   foreground pipeline without changing scientific settings.
+2. `submit-resume` forwards one exact saved run directory without
+   re-parsing or overriding its scientific configuration.
+3. Unknown modes and missing required paths return nonzero before launch.
+4. Resource/log directives are explicit and match the documented benchmark
    decision.
-4. Resume requires one exact run directory and never searches for a latest
+5. Resume requires one exact run directory and never searches for a latest
    run.
-5. A mocked submission/launcher failure is returned rather than hidden.
-6. The top-level README includes local dry-run, `sbatch new`,
-   `sbatch resume`, log location, environment, and tracked-commit
-   requirements.
-7. No test invokes a real scheduler or reads scientific arrays.
+6. A mocked submission failure is returned, recorded in the initialized run,
+   and never triggers automatic resubmission.
+7. The cluster `status` command combines saved pipeline state with at
+   most one mocked `sacct` lookup and never polls or mutates the run.
+8. The top-level README includes local dry-run, wrapper `submit-new`,
+   `submit-resume`, one-shot `status`, log location,
+   environment, and tracked-commit requirements.
+9. No test invokes a real scheduler or reads scientific arrays.
 
 ## 11. Work packages and gates
 
@@ -1144,15 +1243,17 @@ Write these only if WP11 is activated:
 ### WP5: Results and single-session pipeline
 
 - Terra xhigh writes RED NPZ, fingerprint, checkpoint, dry-run, interruption,
-  and exact-resume tests.
+  exact-resume, detached-launch, and read-only-status tests.
 - Independent Sol xhigh review approves the saved schema/state-machine tests
   before the tests-only commit.
 - Terra implements results, pipeline, run directory, logging, summary,
-  `dry-run`/`new`/`resume`, and exact resume
-  command persistence.
-- Gate: synthetic small target runs resume and round-trip.
-- Handoff: freeze CLI modes, output paths, schema version, and resume behavior
-  before batch, webapp, or README work.
+  `dry-run`/`new`/`resume`/`status`, optional
+  local detachment, and exact resume/status command persistence.
+- Gate: synthetic small target runs resume and round-trip; a detached fixture
+  returns immediately, completes without its launcher, and is inspectable once
+  later without computation or polling.
+- Handoff: freeze CLI modes, output paths, schema version, detachment behavior,
+  and resume/status semantics before batch, webapp, or README work.
 
 ### WP6: Batch runner
 
@@ -1182,10 +1283,12 @@ Write these only if WP11 is activated:
 - Terra adds only the stable documentation/command tests listed in Section
   10.8; documentation changes are committed separately.
 - Sol runs every documented `--help` and dry-run command against a
-  temporary fixture and checks every Python file is described.
-- Gate: a scientist can configure, dry-run, start, resume, locate outputs, and
-  open results without reading implementation source; a maintainer can identify
-  every file's role from the package README.
+  temporary fixture, exercises detached start plus one later status check, and
+  checks every Python file is described.
+- Gate: a scientist can configure, dry-run, start and leave a run, inspect its
+  state/log once later, resume it, locate outputs, and open results without
+  reading implementation source; a maintainer can identify every file's role
+  from the package README.
 - Handoff: record exact commands and note whether cluster documentation remains
   intentionally absent pending WP10.
 
@@ -1206,31 +1309,40 @@ Write these only if WP11 is activated:
 
 - This package requires separate explicit user approval for the exact CT026
   commands.
+- Before real data, repeat the detached synthetic smoke through the intended
+  launcher. If the Codex execution host cleans up detached children, use the
+  same documented command from the user's ordinary terminal; do not keep a
+  Codex task alive as a workaround.
 - Terra high acts as a command runner only: read-only validation, dry-run, and
-  the approved bounded representative fixed-mode benchmark. It makes no source
-  edits or parameter changes.
+  the approved bounded representative fixed-mode benchmark. It starts the
+  benchmark detached if it is not expected to finish promptly, records the run
+  directory and follow-up commands, and stops; it makes no source edits,
+  parameter changes, or monitoring loop.
 - Sol confirms selected channels/units, eligible trials, block/class coverage,
   tensor memory, exact model-fit count, stage timings, and peak memory.
 - An independent Sol xhigh reviewer checks raw evidence and the local/full/tuned
   runtime projection.
-- Gate: user reviews the benchmark and authorizes any longer single-session
-  scientific run.
-- Handoff: update the live snapshot with exact run directory, commands, logs,
-  results, resource measurements, and recommendation.
+- Gate: after the process has finished, one explicit later task reads
+  `status`, logs, and saved results once. The user reviews the evidence
+  and chooses a detached full local fixed run or activation of WP11. There is
+  no automatic threshold and no implicit long run.
+- Handoff: update the live snapshot with exact config/run directory, launch and
+  status commands, logs, fit counts, stage timings, peak RSS, output size,
+  full fixed/tuned projections, and local-versus-Slurm recommendation.
 
 ### WP11: Conditional cluster wrapper
 
 - Skip this package entirely if WP10 supports practical local use.
 - If WP10 shows cluster use is warranted, stop for user approval of the wrapper
   and later separate approval of any submission.
-- Terra high writes mocked forwarding/failure/resume tests, then implements the
-  thin Slurm wrapper and cluster README section after the tests-only gate.
+- Terra high writes mocked submit/status/failure/resume tests, then implements
+  the thin Slurm wrapper and cluster README section after the tests-only gate.
 - Independent Sol xhigh review checks exact-run resume, resource visibility,
-  environment/commit identity, no automatic submission, and no duplicated
-  scientific settings.
+  environment/commit identity, one-shot scheduler inspection, no automatic
+  submission/resubmission, and no duplicated scientific settings.
 - Gate: local dry-run plus mocked wrapper tests pass and documentation contains
-  exact `sbatch new`/`resume` commands. No real job is part
-  of this gate.
+  exact one-command `submit-new`, `submit-resume`, and
+  `status` commands. No real job is part of this gate.
 - Handoff: record wrapper commit and proposed resource request; actual
   submission remains unperformed until explicitly approved.
 
@@ -1238,13 +1350,17 @@ Write these only if WP11 is activated:
 
 - This package requires explicit approval of the exact fixed-mode CT026
   configuration and local or Slurm command.
-- Terra high acts as command runner only; Sol monitors only as requested and
-  does not alter parameters mid-run.
+- Terra high acts as command runner only. It launches the detached local run or
+  Slurm job, records the receipt/run directory, and stops. Sol does not monitor
+  or alter parameters mid-run.
+- In a later user-requested task, Terra or Sol performs one read-only
+  status/log/result inspection. If the run is interrupted, resumption is a new
+  explicit action using the saved exact command; it is never automatic.
 - User inspects saved heatmaps, fold coverage, warnings, and coefficients.
 - Only after user approval should a batch of additional sessions be considered.
-- Handoff: record immutable run paths, configuration, commit, commands, timing,
-  warnings/errors, and user acceptance. Do not treat completion as permission
-  for other sessions.
+- Handoff: record immutable run paths, configuration, commit, launch and status
+  commands, projected versus measured timing, peak memory, warnings/errors, and
+  user acceptance. Do not treat completion as permission for other sessions.
 
 ## 12. Performance plan
 
@@ -1288,7 +1404,11 @@ measure a representative subset and report the projected duration.
 
 ### 12.3 Benchmark stages
 
-Record with `perf_counter` and a documented memory measurement:
+Record wall time with `time.perf_counter`. On the planned Linux hosts,
+record and normalize peak RSS with the standard-library
+`resource.getrusage` API; if WP11 is activated, also preserve Slurm's
+reported `MaxRSS` for comparison. No profiling dependency is needed for
+this first benchmark. Record:
 
 1. configuration/metadata/table validation;
 2. sorter/alignment loading and unit selection;
@@ -1303,21 +1423,70 @@ Record with `perf_counter` and a documented memory measurement:
 Report number of trials, blocks, units, time bins, requested/valid folds, model
 fits, invalid cells, and output size so timing is interpretable.
 
+Persist these measurements in structured result metadata as well as
+`summary.md`; do not rely on a terminal transcript. For detached work,
+flush the stage timing and peak-RSS-so-far at every target checkpoint. The
+measurement approach must be the same in foreground, detached local, and Slurm
+execution so the comparison is meaningful.
+
 ### 12.4 Benchmark tiers
 
 1. **Synthetic microbenchmark:** catches pathological overhead and produces a
    stable regression fixture; it is not a production-time estimate.
 2. **CT026 bounded benchmark:** choice alignment, 100 ms, fixed mode, one
-   representative categorical target and one numerical target, both
-   representations and all regions. Include exact loading/binning once.
-3. **Projection:** extrapolate model time using observed fit counts and separate
-   fixed costs. Clearly label it as an estimate.
-4. **Full default benchmark:** run only if the projection is acceptable and the
-   user authorizes it. Compare measured vs projected time.
-5. **Tuned estimate:** representative subset only unless separately authorized.
-6. **Local/cluster decision:** Sol reports whether ordinary local use is
+   categorical target (`Current action`) and one numerical target
+   (`Relative doubt`), both representations and all regions. This is
+   2,400 requested outer fits and
+   includes exact loading/binning once, so it exercises the real session path
+   rather than only timing estimators in isolation. Launch it detached if it is
+   not expected to finish promptly. The dry run must first confirm that both
+   targets have sufficient eligible rows and valid grouped folds; if either
+   fails, stop and choose a replacement explicitly rather than silently
+   changing the benchmark.
+3. **One-shot benchmark inspection:** after launch, the initiating user or
+   Codex task ends. In a later task, run `status` once and read the
+   completed log/result metadata. If it is still running, report that fact and
+   stop; do not begin a watch loop.
+4. **Projection:** separate fixed loading/tensor/serialization costs from model
+   costs. Project the 8 categorical and 10 numerical targets from their own
+   observed per-fit/per-target timings, scale saved-result size by target count,
+   and carry forward measured peak tensor memory. Report both the estimate and
+   its assumptions and a conservative range because target eligibility and fit
+   convergence can change cost; do not multiply total bounded wall time by
+   nine.
+5. **Full default local benchmark/run:** only if the projection fits the user's
+   acceptable workstation time and RAM and the user authorizes the exact
+   command. Start it with `new --detach`, end the initiating task, and
+   inspect it once later with `status`. Compare measured versus projected
+   wall time, peak RSS, fit throughput, and output size.
+6. **Tuned estimate:** representative subset only unless separately authorized.
+7. **Local/cluster decision:** Sol reports whether ordinary local use is
    practical. The user decides whether to skip WP11 or authorize the thin
    wrapper. There is no automatic duration threshold or cluster submission.
+
+### 12.5 Unattended local-to-cluster decision path
+
+Use this order:
+
+1. Complete the documented local dry run.
+2. Start the bounded CT026 benchmark locally, detached when useful, then end
+   the initiating Codex/user interaction.
+3. Later, inspect the saved status/log once and produce the full fixed and tuned
+   projections.
+4. If the full fixed run is acceptable locally, explicitly authorize and start
+   it detached. Later inspect its final status/results once.
+5. If local wall time, RAM, or machine availability is unacceptable, activate
+   WP11, test/document the wrapper, and separately authorize one Slurm
+   submission with benchmark-derived resources.
+6. End the submission task after the wrapper returns the job ID, run directory,
+   log path, and status command. Later invoke the wrapper's one-shot status
+   command and inspect the same saved pipeline state/checkpoints/results.
+
+Local and Slurm execution therefore differ only in process scheduling and the
+additional scheduler receipt. They use the same configuration, scientific
+pipeline, run directory, target checkpoints, logs, and result files. A failed
+or interrupted run is not silently retried; the saved exact resume command is
+presented for a new explicit decision.
 
 ## 13. CT026 2026-08-03 validation fixture
 
@@ -1397,9 +1566,12 @@ interfaces.
 | Results UI could accidentally recompute | Route early and test that the view imports/uses result loading only. |
 | Result schema becomes elaborate | Use one documented NPZ plus small JSON manifests; avoid databases/new dependencies. |
 | Dense coefficients become large | Measure first; use primitive long-form NPZ arrays only if justified. |
-| Offline use is difficult or tribal knowledge | Provide a portable config, three-mode session CLI, exact resume command, top-level quickstart, and package file map. |
-| Long execution is interrupted | Create run state/resume command before large work and checkpoint at target boundaries. |
-| Cluster support duplicates science or becomes another launcher | Add only a conditional thin wrapper around the same CLI after benchmark/user approval. |
+| Offline use is difficult or tribal knowledge | Provide a portable config, four-mode session CLI, detached option, exact resume/status commands, top-level quickstart, and package file map. |
+| A detached process dies without updating final state | Keep atomic stage/target state, durable logs, advisory PID/job identity, one-shot status, and explicit checkpoint resume; never infer completion or restart automatically. |
+| The Codex execution host cleans up detached children | Smoke-test the actual launch environment before real data; if it cannot preserve the process, Codex prepares the exact command and the user launches it from an ordinary terminal. Do not add a resident service. |
+| Active Codex monitoring wastes usage | Launcher returns immediately; Codex reports the receipt and stops, and a later task performs one read-only inspection only when requested. |
+| Long execution is interrupted | Create run state/resume/status commands before large work, flush logs, and checkpoint at target boundaries. |
+| Cluster support duplicates science or becomes another launcher | Add only a conditional submit/status wrapper around the same foreground CLI after benchmark/user approval. |
 | Agent handoff loses authorization or TDD state | Maintain the live snapshot/package records and require the Sol resume checklist. |
 | Parallel agents contend over shared files | One Terra writer at a time; parallelism is read-only or on frozen disjoint files. |
 
@@ -1413,8 +1585,11 @@ Before implementation, confirm:
 - PFC/HPC are explicitly mapped to probes in config;
 - manual alignment without explicit trusted bounds fails;
 - outputs are offline, immutable timestamped runs;
-- the session CLI uses documented `dry-run`, `new`, and
-  exact-directory `resume` modes;
+- the session CLI uses documented `dry-run`, `new`, exact-directory
+  `resume`, and read-only `status` modes, with an optional
+  detached local launch;
+- detached local and Slurm runs return a durable receipt and require no active
+  Codex monitoring; later inspection is one-shot and read-only;
 - the only UI is an integrated read-only existing-webapp view;
 - top-level user documentation, an in-package file map, and a portable example
   config are required implementation deliverables;
@@ -1423,7 +1598,8 @@ Before implementation, confirm:
   tests-only then implementation sequence;
 - fixed mode is the first/default production path;
 - tuned mode remains optional and benchmark-gated;
-- cluster wrapping is conditional on WP10 evidence and separately authorized;
+- cluster wrapping is conditional on WP10 evidence, uses the same saved
+  pipeline/checkpoints, and is separately authorized;
 - initial plots are light mode; and
 - CT026 2026-08-03 is the first real-session benchmark, not an automatically
   authorized full analysis.
