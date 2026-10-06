@@ -424,6 +424,10 @@ def test_target_metadata_persists_binary_positive_class_mappings(tmp_path):
     }
     for target_name, class_labels in expected_class_labels.items():
         assert metadata[target_name]["class_labels"] == class_labels
+    assert metadata["previous_action"]["derivation"] == "previous_valid_action"
+    assert metadata["next_choice_switch_stay"]["derivation"] == (
+        "next_vs_current_action"
+    )
 
 
 def test_numerical_targets_retain_exact_native_numeric_source_values(tmp_path):

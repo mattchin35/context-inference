@@ -238,24 +238,66 @@ def test_valid_trusted_bounds_are_finite_ordered_and_recorded_portably(tmp_path)
 
 
 EXPECTED_TARGET_METADATA = (
-    ("current_state", "categorical", "Current state", "state_int"),
-    ("current_action", "categorical", "Current action", "action"),
-    ("current_action_is_correct", "categorical", "Current action is correct", "correct"),
-    ("previous_action", "categorical", "Previous action", "action"),
-    ("previous_action_was_rewarded", "categorical", "Previous action was rewarded", "reward"),
-    ("next_action", "categorical", "Next action", "action"),
-    ("current_choice_switch_stay", "categorical", "Current choice switch/stay", "action"),
-    ("next_choice_switch_stay", "categorical", "Next choice switch/stay", "action"),
-    ("consecutive_omissions", "numerical", "Consecutive omissions", "consecutive_omissions"),
-    ("consecutive_rewards", "numerical", "Consecutive rewards", "consecutive_rewards"),
-    ("session_trial_index", "numerical", "Session trial index", "cur_trial"),
-    ("trial_index_in_block", "numerical", "Trial index in block", "cur_trial_in_block"),
-    ("rewards_in_block", "numerical", "Rewards in block", "rewards_in_block"),
-    ("qlearning_relative_value", "numerical", "Q-learning relative value", "Qlearning_rel_value"),
-    ("forgetting_q_relative_value", "numerical", "Forgetting-Q relative value", "FQlearning_rel_value"),
-    ("hmm_signed_belief", "numerical", "HMM signed belief", "HMM_rel_value_logodds"),
-    ("hmm_decay_signed_belief", "numerical", "HMM-decay signed belief", "HMM_rel_value_logodds_decay"),
-    ("relative_doubt", "numerical", "Relative doubt", "relative_doubt_index"),
+    ("current_state", "categorical", "Current state", "state_int", "source"),
+    ("current_action", "categorical", "Current action", "action", "source"),
+    ("current_action_is_correct", "categorical", "Current action is correct", "correct", "source"),
+    ("previous_action", "categorical", "Previous action", "action", "previous_valid_action"),
+    (
+        "previous_action_was_rewarded",
+        "categorical",
+        "Previous action was rewarded",
+        "reward",
+        "previous_valid_action_reward",
+    ),
+    ("next_action", "categorical", "Next action", "action", "next_valid_action"),
+    (
+        "current_choice_switch_stay",
+        "categorical",
+        "Current choice switch/stay",
+        "action",
+        "current_vs_previous_action",
+    ),
+    (
+        "next_choice_switch_stay",
+        "categorical",
+        "Next choice switch/stay",
+        "action",
+        "next_vs_current_action",
+    ),
+    (
+        "consecutive_omissions",
+        "numerical",
+        "Consecutive omissions",
+        "consecutive_omissions",
+        "source",
+    ),
+    ("consecutive_rewards", "numerical", "Consecutive rewards", "consecutive_rewards", "source"),
+    ("session_trial_index", "numerical", "Session trial index", "cur_trial", "source"),
+    ("trial_index_in_block", "numerical", "Trial index in block", "cur_trial_in_block", "source"),
+    ("rewards_in_block", "numerical", "Rewards in block", "rewards_in_block", "source"),
+    (
+        "qlearning_relative_value",
+        "numerical",
+        "Q-learning relative value",
+        "Qlearning_rel_value",
+        "source",
+    ),
+    (
+        "forgetting_q_relative_value",
+        "numerical",
+        "Forgetting-Q relative value",
+        "FQlearning_rel_value",
+        "source",
+    ),
+    ("hmm_signed_belief", "numerical", "HMM signed belief", "HMM_rel_value_logodds", "source"),
+    (
+        "hmm_decay_signed_belief",
+        "numerical",
+        "HMM-decay signed belief",
+        "HMM_rel_value_logodds_decay",
+        "source",
+    ),
+    ("relative_doubt", "numerical", "Relative doubt", "relative_doubt_index", "source"),
 )
 
 
@@ -267,6 +309,7 @@ def test_target_definitions_freeze_each_identifier_metadata_and_order():
             definition.family,
             definition.display_label,
             definition.source_column,
+            definition.derivation,
         )
         for definition in decoding_config.TARGET_DEFINITIONS
     )
@@ -352,7 +395,8 @@ def test_config_rejects_invalid_or_frozen_scientific_knobs(tmp_path, field, valu
     payload = make_config_payload()
     payload[field] = value
 
-    with pytest.raises(ValueError, match="alignment|bin|pc|bound|window|seed|tolerance|tuning|unknown"):
+    error_pattern = "alignment|bin|pc|bound|window|seed|tolerance|tuning|unknown"
+    with pytest.raises(ValueError, match=error_pattern):
         load_config(tmp_path, payload)
 
 
@@ -374,7 +418,9 @@ def test_config_resolves_paths_against_config_parent_and_keeps_portable_payload(
 
     assert config.session_metadata_path == session_root / "neural_session.json"
     assert config.augmented_trial_path == session_root / "processed/augmented_trials.csv"
-    assert config.trial_feature_parameter_path == session_root / "processed/trial_feature_params.json"
+    assert config.trial_feature_parameter_path == (
+        session_root / "processed/trial_feature_params.json"
+    )
     assert config.output_root == session_root / "analysis_runs"
     assert config_path.parent == session_root
     assert json.dumps(scientific_payload)
