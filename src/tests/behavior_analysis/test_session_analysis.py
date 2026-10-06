@@ -603,6 +603,136 @@ def test_parse_decision_variable_update_values_rejects_invalid_action_after_skip
         )
 
 
+@pytest.mark.parametrize(
+    ("action", "reward", "expected"),
+    [
+        (0, 1, (0, 1)),
+        (1.0, 0.0, (1, 0)),
+        ("0", "2.5", (0, 1)),
+        ("1.0", "-3", (1, 0)),
+    ],
+)
+def test_strict_decision_variable_parser_accepts_exact_finite_values(
+    action,
+    reward,
+    expected,
+):
+    """The shared parser should retain valid integer, float, and CSV-string encodings."""
+    assert session_analysis.parse_decision_variable_update_values(action, reward) == expected
+
+
+@pytest.mark.parametrize("action", [0.5, "0.5", np.nan, np.inf, "bad"])
+def test_strict_decision_variable_parser_rejects_non_binary_or_nonfinite_actions(action):
+    """The shared parser should reject fractional, nonfinite, and malformed choices."""
+    with pytest.raises(ValueError, match="action must be 0 or 1"):
+        session_analysis.parse_decision_variable_update_values(action, reward=1)
+
+
+@pytest.mark.parametrize("reward", [np.nan, np.inf, -np.inf, "nan", "inf", "bad"])
+def test_strict_decision_variable_parser_rejects_nonfinite_or_malformed_rewards(reward):
+    """The shared parser should reject nonfinite or malformed valid-choice rewards."""
+    with pytest.raises(ValueError, match="reward"):
+        session_analysis.parse_decision_variable_update_values(action=0, reward=reward)
+
+
+def test_rewards_in_block_counts_prior_valid_rewards_and_preserves_index():
+    """Block reward counts should exclude the current row and skip manual/no-choice rows.
+
+    The fixture has shape ``(7, 4)`` and a non-default chronological index.
+    """
+    trial_df = pd.DataFrame(
+        {
+            "cur_block": [7, 7, 7, 8, 8, 9, 9],
+            "action": [0, 1, "no_choice", 0, 1, "no_choice", 0],
+            "reward": ["1", 0, "malformed", 1.0, "ignored", "ignored", -1],
+            "experimenter_reward_given": [0, 0, 0, 0, 1, 1, 0],
+        },
+        index=pd.Index([11, 13, 17, 19, 23, 29, 31], name="trial_id"),
+    )
+
+    rewards_in_block = session_analysis.compute_rewards_in_block(trial_df)
+
+    expected = pd.Series(
+        [0, 1, 1, 0, 1, 0, 0],
+        index=trial_df.index,
+        name="rewards_in_block",
+        dtype="int64",
+    )
+    pd.testing.assert_series_equal(rewards_in_block, expected)
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "error_match"),
+    [
+        ("cur_block", np.nan, "cur_block"),
+        ("cur_block", "None", "cur_block"),
+        ("action", 0.5, "action must be 0 or 1"),
+        ("action", np.inf, "action must be 0 or 1"),
+        ("action", "bad", "action must be 0 or 1"),
+        ("reward", np.nan, "reward"),
+        ("reward", np.inf, "reward"),
+        ("reward", "bad", "reward"),
+    ],
+)
+def test_rewards_in_block_rejects_missing_blocks_and_invalid_unskipped_outcomes(
+    column,
+    value,
+    error_match,
+):
+    """Block counting should fail rather than coerce undefined valid-choice inputs."""
+    trial_df = pd.DataFrame(
+        {
+            "cur_block": [0, 0],
+            "action": [0, 1],
+            "reward": [1, 1],
+            "experimenter_reward_given": [0, 0],
+        }
+    )
+    trial_df = trial_df.astype(
+        {"cur_block": "object", "action": "object", "reward": "object"}
+    )
+    trial_df.loc[1, column] = value
+
+    with pytest.raises(ValueError, match=error_match):
+        session_analysis.compute_rewards_in_block(trial_df)
+
+
+def test_make_augmented_trial_df_adds_rewards_in_block_without_mutating_input_rows():
+    """Augmentation should retain normalized source rows, order, and a non-default index.
+
+    The fixture has shape ``(4, 9)`` and uses the legacy ``give_reward`` alias,
+    which must retain its established normalization behavior.
+    """
+    trial_df = pd.DataFrame(
+        {
+            "state": ["right", "right", "left", "left"],
+            "model_stimulus": [0, -1, 1, -1],
+            "action": [0, "no_choice", 1, 0],
+            "reward": ["1", "ignored", 1.0, 0],
+            "correct": [1, 0, 1, 0],
+            "cur_block": [0, 0, 1, 1],
+            "cur_trial": [0, 1, 2, 3],
+            "cur_trial_in_block": [0, 1, 0, 1],
+            "give_reward": [0, 1, 0, 0],
+        },
+        index=pd.Index([101, 103, 107, 109], name="trial_id"),
+    )
+    normalized_input = session_analysis.normalize_experimenter_reward_column(trial_df)
+
+    augmented_trial_df = session_analysis.make_augmented_trial_df(trial_df)
+
+    assert augmented_trial_df.index.equals(trial_df.index)
+    pd.testing.assert_frame_equal(
+        augmented_trial_df.loc[:, normalized_input.columns],
+        normalized_input,
+    )
+    assert "give_reward" not in augmented_trial_df.columns
+    pd.testing.assert_series_equal(
+        augmented_trial_df["rewards_in_block"],
+        session_analysis.compute_rewards_in_block(normalized_input),
+    )
+
+
 def test_count_decision_variables_uses_experimenter_reward_given_column():
     """New trial tables should skip manual rewards using the explicit flag name."""
     trial_df = pd.DataFrame(
