@@ -1,9 +1,8 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP2 RED is committed and WP2 GREEN is
-next. This does not authorize experimental-data mutation, decoding runs,
-benchmarks, transfer, or scheduler actions, which retain their separate gates
-below.
+**Status:** Implementation authorized; WP2 is GREEN and WP3 tests are next.
+This does not authorize experimental-data mutation, decoding runs, benchmarks,
+transfer, or scheduler actions, which retain their separate gates below.
 
 **Scientific contract:** `docs/task_variable_spec_v5.md`.
 
@@ -11,20 +10,21 @@ below.
 
 **Snapshot date:** 2026-10-06
 
-**Current phase:** WP0 and WP1 are complete. WP2 configuration/target tests are
-committed at `3ccae6c`; the bounded WP2 production implementation is the
-single active package. No experimental-data mutation, decoding output,
-benchmark, transfer, local long run, or cluster action is authorized.
+**Current phase:** WP0-WP2 are complete. WP2 tests begin at `3ccae6c`, review
+regressions end at `f13d31b`, and implementation is committed at `2899502`;
+the WP3 tests-only RED phase is the single next package. No experimental-data
+mutation, decoding output, benchmark, transfer, local long run, or cluster
+action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local tests-only HEAD:
-  `3ccae6c65912eba6dd696a18ee393ab45db1bee5`;
+- local implementation HEAD:
+  `289950223a4a383e459cdfce17c0d4417b180510`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
-- prior local documentation handoff commits: `39ba0db`, `3104c59`, and
-  `38b2854`;
-- the tracked worktree is clean after the WP2 tests-only commit; and
+- prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
+  and `fda0399`;
+- the tracked worktree is clean after the WP2 implementation commit; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -53,9 +53,9 @@ benchmark, transfer, local long run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this WP2 RED handoff separately, then authorize
-the same bounded worker to implement only `config.py`, `targets.py`, and the
-package marker and drive the committed tests to GREEN.
+**Next exact action:** commit this WP2 GREEN handoff separately, then assign
+only the WP3 activity/unit/coverage tests and stop at a genuine RED result
+before any WP3 production implementation.
 
 ### Authority order
 
@@ -77,8 +77,8 @@ When resuming, use this order:
 | --- | --- | --- |
 | WP0 documentation approval | Complete at pushed `b69c70a` | None |
 | WP1 behavioral feature | Complete: RED `acf24ae`, GREEN `8ea4d24` | None; CT026 backfill remains separately gated at WP9A |
-| WP2 configuration and targets | RED committed at `3ccae6c`; GREEN implementation next | Focused tests and affected regressions pass before implementation commit |
-| WP3 activity loading and coverage | Pending prerequisite | WP2 GREEN and recorded handoff |
+| WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
+| WP3 activity loading and coverage | Ready for tests-only RED | Commit WP2 GREEN handoff, then commit genuine RED tests before implementation |
 | WP4 grouped modeling | Pending prerequisite | WP3 GREEN and independent numerical test-design review |
 | WP5 results and session pipeline | Pending prerequisite | WP4 GREEN and saved-schema freeze |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
@@ -445,6 +445,52 @@ Use this template for each appended record:
   payload separation only.
 - Exact next action: the same worker implements only the new package marker,
   `config.py`, and `targets.py`, then reports focused GREEN without committing.
+
+#### 2026-10-06 - WP2 GREEN gate
+
+- State: WP2 implementation complete; WP3 tests-only RED is next.
+- Authorization: project implementation was authorized. Work remained limited
+  to source and synthetic temporary test fixtures; no experimental-data,
+  decoding, benchmark, transfer, or scheduler action was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / the same
+  `gpt-5.6-terra` high worker / Sol independent contract and source review.
+- Start HEAD / end HEAD: `fda0399` / implementation commit
+  `289950223a4a383e459cdfce17c0d4417b180510`.
+- Owned files: created `src/neural_analysis/task_decoding/__init__.py`,
+  `config.py`, and `targets.py`; review-only test corrections modified the two
+  committed WP2 test files. All pre-existing untracked files were preserved.
+- RED command and result: the initial committed gate produced two expected
+  missing-package collection errors. Independent source review then added
+  three tests-only correction commits before production was finalized:
+  `d3cd613` produced 6 failures and 112 passes, `67a18cf` produced 2 failures
+  and 116 passes, and `f13d31b` produced 4 failures and 118 passes. These froze
+  canonical metadata naming, external-config output defaults, immutable
+  scientific bounds, categorical label/derivation metadata, estimator seed
+  provenance, strict validation error boundaries, output-directory kind, and
+  finite experimenter flags.
+- GREEN/regression commands and results: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
+  src/tests/neural_analysis/task_decoding/test_config.py
+  src/tests/neural_analysis/task_decoding/test_targets.py -q` passed 122 tests.
+  `env UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
+  src/tests/neural_analysis/test_session_metadata.py -q` passed 17 tests.
+  `uv run python -m py_compile` for all three new modules, `git diff --check`,
+  and the new-source line-length check also passed.
+- Commits: initial tests `3ccae6c`; review regression tests `d3cd613`,
+  `67a18cf`, and `f13d31b`; implementation `2899502`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: the installed scikit-learn API was verified
+  read-only as version 1.8.0 before implementation; its LogisticRegression,
+  ElasticNet, and PCA signatures match the recorded controls, and no
+  deprecated logistic `penalty` value is emitted. The minimal JSON keys listed
+  in the RED record are now the initial exact interface; no aliases or extra
+  user knobs are accepted. Configuration/path validation opens only the three
+  small declared inputs. Neural metadata membership, sorter/alignment files,
+  channel/unit selection, and coverage remain WP3 responsibilities, and input
+  identity hashing remains owned by later `results.py`.
+- Exact next action: commit this documentation-only GREEN handoff, then write
+  only the WP3 activity/unit/coverage tests, reproduce RED, and commit those
+  tests before any WP3 implementation.
 
 ## 1. Objective
 
