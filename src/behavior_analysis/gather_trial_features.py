@@ -1,7 +1,15 @@
+import json
+import os
+import tempfile
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Optional
+
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass, asdict
-from pathlib import Path
+
+from src.behavior_analysis import session_analysis
+from src.behavior_analysis import residualization
 import src.behavior_analysis.trial_features as trial_features
 from src.behavior_analysis.project_utils import (
     EXPERIMENTER_REWARD_GIVEN_COLUMN,
@@ -10,9 +18,6 @@ from src.behavior_analysis.project_utils import (
     make_no_choice_action_mask,
     normalize_experimenter_reward_column,
 )
-import json
-from typing import Optional
-from src.behavior_analysis import residualization
 from src.behavior_modeling.expectant_switching import (
     ExpectancyCurveParams,
     ExpectancyPersistenceDoubtParams,
@@ -150,6 +155,145 @@ def save_trial_features(augmented_trial_df: pd.DataFrame, params: TaskParams, pr
 
     assert_saved_file(augmented_trial_df_path)
     assert_saved_file(json_fname)
+
+
+def _validate_rewards_in_block_backfill_source(trial_df: pd.DataFrame) -> None:
+    """Validate that one saved table can receive the general block-reward feature.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        CSV-loaded trial table with shape ``(n_trials, n_columns)``.
+
+    Returns
+    -------
+    None
+        Raises ValueError when a required source column is absent or the
+        destination feature already exists.
+    """
+    required_columns = (
+        "cur_block",
+        "action",
+        "reward",
+        EXPERIMENTER_REWARD_GIVEN_COLUMN,
+    )
+    missing_columns = [column for column in required_columns if column not in trial_df]
+    if missing_columns:
+        raise ValueError(
+            "Saved augmented trial table is missing required backfill columns: "
+            f"{missing_columns}."
+        )
+    if "rewards_in_block" in trial_df.columns:
+        raise ValueError(
+            "Saved augmented trial table already contains 'rewards_in_block'."
+        )
+
+
+def _validate_rewards_in_block_backfill_roundtrip(
+    original_trial_df: pd.DataFrame,
+    reloaded_trial_df: pd.DataFrame,
+    expected_rewards_in_block: pd.Series,
+) -> None:
+    """Ensure a temporary CSV changed only by appending the intended feature.
+
+    Parameters
+    ----------
+    original_trial_df : pd.DataFrame
+        Source CSV table with shape ``(n_trials, n_columns)``.
+    reloaded_trial_df : pd.DataFrame
+        Reloaded temporary CSV table with shape ``(n_trials, n_columns + 1)``.
+    expected_rewards_in_block : pd.Series
+        Integer entering-trial reward counts with shape ``(n_trials,)``.
+
+    Returns
+    -------
+    None
+        Raises ValueError if row order, pre-existing columns, or the appended
+        feature differs from the intended backfill result.
+    """
+    expected_columns = [*original_trial_df.columns, "rewards_in_block"]
+    if list(reloaded_trial_df.columns) != expected_columns:
+        raise ValueError("Backfill round-trip validation found unexpected columns.")
+    if reloaded_trial_df.shape != (original_trial_df.shape[0], len(expected_columns)):
+        raise ValueError("Backfill round-trip validation changed the table shape.")
+
+    try:
+        pd.testing.assert_frame_equal(
+            reloaded_trial_df.loc[:, original_trial_df.columns],
+            original_trial_df,
+        )
+        pd.testing.assert_series_equal(
+            reloaded_trial_df["rewards_in_block"],
+            expected_rewards_in_block.reset_index(drop=True),
+        )
+    except AssertionError as exc:
+        raise ValueError(
+            "Backfill round-trip validation changed existing values or rewards_in_block."
+        ) from exc
+
+
+def backfill_rewards_in_block_csv(path: Path | str) -> None:
+    """Append the general entering-trial reward count to one saved augmented CSV.
+
+    Parameters
+    ----------
+    path : Path or str
+        Existing augmented-trials CSV. It must have shape
+        ``(n_trials, n_columns)`` and contain the canonical ``cur_block``,
+        ``action``, ``reward``, and ``experimenter_reward_given`` columns. It
+        must not already contain ``rewards_in_block``.
+
+    Returns
+    -------
+    None
+        Atomically replaces ``path`` only after a uniquely named sibling
+        temporary CSV has reloaded successfully with all prior rows and values
+        unchanged and exactly one appended integer ``rewards_in_block`` column.
+    """
+    csv_path = Path(path)
+    if not csv_path.is_file():
+        raise FileNotFoundError(f"Augmented trial CSV was not found: {csv_path}")
+
+    original_trial_df = pd.read_csv(csv_path, na_filter=False)
+    _validate_rewards_in_block_backfill_source(original_trial_df)
+    rewards_in_block = session_analysis.compute_rewards_in_block(original_trial_df)
+    backfilled_trial_df = original_trial_df.copy()
+    backfilled_trial_df["rewards_in_block"] = rewards_in_block
+
+    temporary_path: Path | None = None
+    active_error: BaseException | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=csv_path.parent,
+            prefix=f".{csv_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+
+        backfilled_trial_df.to_csv(temporary_path, index=False, na_rep="None")
+        reloaded_trial_df = pd.read_csv(temporary_path, na_filter=False)
+        _validate_rewards_in_block_backfill_roundtrip(
+            original_trial_df,
+            reloaded_trial_df,
+            rewards_in_block,
+        )
+        os.replace(temporary_path, csv_path)
+    except BaseException as exc:
+        active_error = exc
+        raise
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            try:
+                temporary_path.unlink()
+            except OSError as cleanup_error:
+                message = (
+                    "Could not remove temporary rewards-in-block backfill file "
+                    f"{temporary_path}: {cleanup_error}"
+                )
+                if active_error is not None:
+                    raise OSError(message) from active_error
+                raise OSError(message) from cleanup_error
 
 
 def add_observer_value_feature(augmented_trial_df: pd.DataFrame) -> pd.DataFrame:

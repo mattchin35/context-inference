@@ -1527,8 +1527,25 @@ def compute_block_transition_metrics(
 
 
 def make_augmented_trial_df(trial_df: pd.DataFrame) -> pd.DataFrame:
+    """Add general trialwise features while preserving the input trial rows.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Chronological trial table with shape ``(n_trials, n_columns)``. It
+        must contain the columns used by the existing augmentation features,
+        including ``cur_block``, ``action``, and ``reward``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Augmented trial table with shape ``(n_trials, n_columns + features)``.
+        It retains row order and index, normalizes the legacy experimenter
+        reward alias, and adds entering-trial behavioral features.
+    """
     trial_df = normalize_experimenter_reward_column(trial_df)
     augmented_trial_df = trial_df.copy(deep=True)
+    augmented_trial_df['rewards_in_block'] = compute_rewards_in_block(trial_df)
     block_types = get_block_types(trial_df)
     augmented_trial_df['block_type'] = block_types
     augmented_trial_df['time_to_choice'] = _get_choice_latency(trial_df)
@@ -1871,22 +1888,89 @@ def parse_decision_variable_update_values(action, reward) -> tuple[int, int]:
         `reward_int` is binary reward status in `{0, 1}`.
     """
     try:
-        action_int = int(float(action))
-    except (TypeError, ValueError) as exc:
+        action_value = float(action)
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(
             f"action must be 0 or 1 after skip filtering, got {action!r}."
         ) from exc
-    if action_int not in (0, 1):
+    if not np.isfinite(action_value) or action_value not in (0.0, 1.0):
         raise ValueError(
             f"action must be 0 or 1 after skip filtering, got {action!r}."
         )
 
     try:
-        reward_int = int(float(reward) > 0)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"reward must be numeric, got {reward!r}.") from exc
+        reward_value = float(reward)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"reward must be finite numeric, got {reward!r}.") from exc
+    if not np.isfinite(reward_value):
+        raise ValueError(f"reward must be finite numeric, got {reward!r}.")
 
-    return action_int, reward_int
+    return int(action_value), int(reward_value > 0)
+
+
+def compute_rewards_in_block(trial_df: pd.DataFrame) -> pd.Series:
+    """Count valid rewarded animal choices preceding each chronological trial.
+
+    Parameters
+    ----------
+    trial_df : pd.DataFrame
+        Chronological trial table with shape ``(n_trials, n_columns)``. It
+        must contain ``cur_block``, ``action``, and ``reward``. The optional
+        legacy ``give_reward`` flag is normalized to
+        ``experimenter_reward_given``; when neither flag is present, rows are
+        treated as animal-controlled for compatibility with simulated tables.
+        Block identities must be present. Non-skipped actions must be exact
+        finite numeric 0 or 1, and their rewards must be finite numeric.
+
+    Returns
+    -------
+    pd.Series
+        Integer series named ``rewards_in_block`` with shape ``(n_trials,)``
+        and the same index as ``trial_df``. Each value is the number of prior
+        valid positive animal rewards in the current block.
+    """
+    trial_df = normalize_experimenter_reward_column(trial_df)
+    required_columns = ("cur_block", "action", "reward")
+    missing_columns = [column for column in required_columns if column not in trial_df]
+    if missing_columns:
+        raise ValueError(
+            "Trial dataframe is missing required rewards-in-block columns: "
+            f"{missing_columns}."
+        )
+
+    block_values = trial_df["cur_block"]
+    if not is_present_value(block_values).all():
+        raise ValueError("cur_block must be present for every trial.")
+
+    experimenter_reward_flags = _get_experimenter_reward_given_array(trial_df)
+    rewards_in_block = np.zeros(trial_df.shape[0], dtype=int)
+    prior_block = None
+    current_block_rewards = 0
+
+    for row_position in range(trial_df.shape[0]):
+        block = block_values.iloc[row_position]
+        if row_position == 0 or block != prior_block:
+            current_block_rewards = 0
+        rewards_in_block[row_position] = current_block_rewards
+
+        action = trial_df["action"].iloc[row_position]
+        if not should_skip_decision_variable_update(
+            experimenter_reward_flags[row_position],
+            action,
+        ):
+            _, reward = parse_decision_variable_update_values(
+                action=action,
+                reward=trial_df["reward"].iloc[row_position],
+            )
+            current_block_rewards += reward
+        prior_block = block
+
+    return pd.Series(
+        rewards_in_block,
+        index=trial_df.index,
+        name="rewards_in_block",
+        dtype="int64",
+    )
 
 
 def increment_reward_history_decision_vars(
@@ -2088,13 +2172,13 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
     for i in range(trial_df.shape[0]):
         append_decision_variables(decision_variable_dict, state)
 
-        action = trial_df.loc[i, 'action']
+        action = trial_df['action'].iloc[i]
         if should_skip_decision_variable_update(experimenter_reward_flags[i], action):
             continue
 
         action, reward = parse_decision_variable_update_values(
             action=action,
-            reward=trial_df.loc[i, 'reward'],
+            reward=trial_df['reward'].iloc[i],
         )
         state = update_decision_variable_state(
             state,
@@ -2102,7 +2186,7 @@ def count_decision_variables(trial_df: pd.DataFrame) -> pd.DataFrame:
             reward=reward,
         )
 
-    return pd.DataFrame(decision_variable_dict)
+    return pd.DataFrame(decision_variable_dict, index=trial_df.index)
 
 
 def summarize_block_switches(block_performance: pd.DataFrame, min_counts=0) -> tuple:
