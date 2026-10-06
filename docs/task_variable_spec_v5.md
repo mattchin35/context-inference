@@ -145,6 +145,11 @@ Different targets may have different eligible rows.
 All current categorical targets are binary. Record the original labels, numeric
 mapping, and positive class in result metadata.
 
+The `target_names` JSON field uses the exact, case-sensitive identifiers in
+the first column of the two target tables below. These identifiers are also
+the stable saved-array target labels. Display labels and source-column names
+are not accepted as configuration aliases.
+
 For source-coded binary fields, recognized missing sentinels make a row
 ineligible; the project's recognized no-choice action labels do the same for
 `action`. Otherwise `action` and `correct` must encode exactly 0 or 1 after
@@ -152,16 +157,16 @@ numeric conversion. `state_int` likewise accepts 0 or 1 for this target, while
 the known dark-state value 2 is valid input but target-ineligible. Any other
 present finite label is an input error rather than a third class.
 
-| Display target | Source/derivation | Eligibility details |
-| --- | --- | --- |
-| Current state | `state_int` | Right context `0` vs left context `1`. Exclude dark state `2` and unknown states. |
-| Current action | `action` | Right `0` vs left `1`. |
-| Current action is correct | `correct` | Correctness relative to task context, not reward delivery. |
-| Previous action | Shifted valid `action` | Immediately preceding chronological row only. |
-| Previous action was rewarded | Shifted `reward > 0` | Requires a valid, non-manual previous choice. |
-| Next action | Shifted valid `action` | Immediately following chronological row only. |
-| Current choice switch/stay | `action[i] != action[i-1]` | Requires valid current and previous choices. |
-| Next choice switch/stay | `action[i+1] != action[i]` | Requires valid current and next choices. |
+| JSON identifier | Display target | Source/derivation | Eligibility details |
+| --- | --- | --- | --- |
+| `current_state` | Current state | `state_int` | Right context `0` vs left context `1`. Exclude dark state `2` and unknown states. |
+| `current_action` | Current action | `action` | Right `0` vs left `1`. |
+| `current_action_is_correct` | Current action is correct | `correct` | Correctness relative to task context, not reward delivery. |
+| `previous_action` | Previous action | Shifted valid `action` | Immediately preceding chronological row only. |
+| `previous_action_was_rewarded` | Previous action was rewarded | Shifted `reward > 0` | Requires a valid, non-manual previous choice. |
+| `next_action` | Next action | Shifted valid `action` | Immediately following chronological row only. |
+| `current_choice_switch_stay` | Current choice switch/stay | `action[i] != action[i-1]` | Requires valid current and previous choices. |
+| `next_choice_switch_stay` | Next choice switch/stay | `action[i+1] != action[i]` | Requires valid current and next choices. |
 
 Choice switching is not a task-context transition. Each switch/stay row above is
 one binary target, not separate switch and stay models.
@@ -193,18 +198,18 @@ over/undersampling. Record train/test class counts for every fold.
 All numerical targets use regression and held-out $R^2$. Predictions are not
 rounded, including for integer-valued targets.
 
-| Display target | Source column | Meaning and scale |
-| --- | --- | --- |
-| Consecutive omissions | `consecutive_omissions` | Count of consecutive valid unrewarded animal choices entering trial i, including incorrect unrewarded choices; excludes trial i and ignores manual/no-choice rows. |
-| Consecutive rewards | `consecutive_rewards` | Count of consecutive valid positively rewarded animal choices entering trial i; excludes trial i and ignores manual/no-choice rows. |
-| Session trial index | `cur_trial` | Existing zero-based session trial index. |
-| Trial index in block | `cur_trial_in_block` | Existing zero-based block-relative index. |
-| Rewards in block | `rewards_in_block` | Count of valid positive animal rewards earlier in the same block; excludes trial i. |
-| Q-learning relative value | `Qlearning_rel_value` | Pre-update left-minus-right value. |
-| Forgetting-Q relative value | `FQlearning_rel_value` | Pre-update left-minus-right value. |
-| HMM signed belief | `HMM_rel_value_logodds` | Pre-update `tanh(tanh_scale * log odds)`, not raw log odds. |
-| HMM-decay signed belief | `HMM_rel_value_logodds_decay` | Pre-update tanh-transformed signed belief, not raw log odds. |
-| Relative doubt | `relative_doubt_index` | Pre-update, unitless, left-positive value in [-1, 1]. |
+| JSON identifier | Display target | Source column | Meaning and scale |
+| --- | --- | --- | --- |
+| `consecutive_omissions` | Consecutive omissions | `consecutive_omissions` | Count of consecutive valid unrewarded animal choices entering trial i, including incorrect unrewarded choices; excludes trial i and ignores manual/no-choice rows. |
+| `consecutive_rewards` | Consecutive rewards | `consecutive_rewards` | Count of consecutive valid positively rewarded animal choices entering trial i; excludes trial i and ignores manual/no-choice rows. |
+| `session_trial_index` | Session trial index | `cur_trial` | Existing zero-based session trial index. |
+| `trial_index_in_block` | Trial index in block | `cur_trial_in_block` | Existing zero-based block-relative index. |
+| `rewards_in_block` | Rewards in block | `rewards_in_block` | Count of valid positive animal rewards earlier in the same block; excludes trial i. |
+| `qlearning_relative_value` | Q-learning relative value | `Qlearning_rel_value` | Pre-update left-minus-right value. |
+| `forgetting_q_relative_value` | Forgetting-Q relative value | `FQlearning_rel_value` | Pre-update left-minus-right value. |
+| `hmm_signed_belief` | HMM signed belief | `HMM_rel_value_logodds` | Pre-update `tanh(tanh_scale * log odds)`, not raw log odds. |
+| `hmm_decay_signed_belief` | HMM-decay signed belief | `HMM_rel_value_logodds_decay` | Pre-update tanh-transformed signed belief, not raw log odds. |
+| `relative_doubt` | Relative doubt | `relative_doubt_index` | Pre-update, unitless, left-positive value in [-1, 1]. |
 
 The existing HMM column names are retained for compatibility, but figures and
 captions must not call their values raw log odds.
@@ -273,6 +278,12 @@ Channel selection starts from the requested channel-quality labels and
 explicit channel restriction in the decoding configuration. All such channel
 IDs are zero-based saved-channel indices. Save the selected channel IDs and
 every contributing rule.
+
+An explicit configuration channel restriction must be a duplicate-free
+sequence of nonnegative JSON integers. Reject booleans, floats (including
+integer-valued floats), and numeric strings rather than coercing them to
+channel IDs. Normalize an accepted restriction into ascending order before
+building the scientific configuration payload and fingerprint.
 
 The initial implementation supports one probe per region. General multi-probe
 regions are out of scope.
@@ -373,9 +384,23 @@ that region's standalone cell and the combined cell are unavailable. The
 combined decoder never silently collapses to a one-region decoder; the other
 region's standalone cell may still proceed.
 
-Default retained counts are 10 PFC PCs and 10 HPC PCs. Cap a requested count at
-the usable training rank. Record requested and effective counts and surface a
-visible warning; do not silently change the count.
+Default retained counts are 10 PFC PCs and 10 HPC PCs. After training-only
+removal of unavailable or zero-variance unit columns, define the deterministic
+component limit as:
+
+$$
+K_{\max} = \min(n_{\mathrm{usable\ units}},
+                 n_{\mathrm{training\ trials}} \times n_{\mathrm{time\ bins}}).
+$$
+
+The effective count is `min(requested_count, K_max)`. This is the dimensional
+limit accepted by scikit-learn PCA and matches the existing project PCA code;
+revision 5 does not add `matrix_rank`, a singular-value tolerance, or another
+numerical-rank policy. Record requested/effective counts and surface a visible
+warning whenever they differ. Zero usable unit columns remain the unavailable
+feature-set case defined above. Exactly one usable unit column is valid and
+yields one retained component; do not inherit an older helper's stricter
+two-unit minimum.
 
 Within the same target, fold, alignment, bin size, and eligible-trial set, the
 regional scaling and PCA basis are shared across time-bin decoders. They are
@@ -439,10 +464,13 @@ silently weaken regularization or change estimator family.
 
 ### 11.1 Fold roles
 
-- Outer evaluation: five grouped folds, one deterministic pass, in fixed and
-  tuned modes.
-- Inner tuning: three grouped folds inside each outer training set, tuned mode
-  only.
+- `outer_fold_count`: allowed values are exactly `5` (default) and `3`
+  (explicit fallback), with one deterministic pass in fixed and tuned modes.
+- `inner_fold_count`: the only revision-5 value is `3`; it is used inside each
+  outer training set in tuned mode and recorded but inactive in fixed mode.
+
+Reject booleans, fractional values, other integers, and numeric strings for
+both JSON fields rather than silently coercing them.
 
 Behavioral blocks from `cur_block` are indivisible groups. Prefer
 multiple blocks in each test fold, but treat this as a goal rather than an
@@ -454,20 +482,21 @@ targets and deterministic `GroupKFold(shuffle=False)` for numerical
 targets. Validate the resulting folds rather than assuming the splitter has
 satisfied class coverage.
 
-If five valid grouped outer folds cannot be constructed, mark the target
-unavailable and report the reason. An explicitly configured three-fold rerun is
-allowed. Do not automatically search fold counts/seeds or fall back to random
-trial splitting.
+If the configured grouped outer folds cannot be constructed, mark the target
+unavailable and report the reason. After a five-fold result is unavailable, a
+separate run may explicitly set `outer_fold_count` to `3`. Do not automatically
+change fold count, search seeds, or fall back to random trial splitting.
 
-If inner folds are invalid, tuned mode is unavailable for that configuration;
-do not relabel fixed results as tuned.
+If a valid three-fold inner split cannot be constructed, tuned mode is
+unavailable for that configuration; do not try another inner count or relabel
+fixed results as tuned.
 
 ### 11.2 Leakage prevention
 
 The outer test rows are excluded from:
 
 - unit scaling and constant-feature decisions;
-- PCA fitting and effective-rank decisions;
+- PCA fitting and effective-component-limit decisions;
 - inner splits and hyperparameter selection; and
 - every other learned preprocessing quantity.
 
@@ -633,6 +662,10 @@ Relative to revision 4, revision 5:
 - makes requested/effective PC capping and convergence failures visible;
 - computes all six initial region/representation combinations and makes their
   selectors display-only;
+- freezes the 18 public target identifiers and the legal outer/inner fold-count
+  values;
+- defines the deterministic PCA component cap as the existing dimensional
+  limit rather than an unspecified numerical-rank tolerance;
 - freezes the remaining estimator/PCA numerical controls;
 - distinguishes declared scientific invalidity from unexpected run failures;
 - uses an integrated read-only view in the existing webapp;

@@ -20,15 +20,15 @@ authorized.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD and `origin/refactor`: `787aadbc2843c9ec2e8b03410f8a201f19f67c37`
+- HEAD and `origin/refactor`: `ed9a79b3d98505c757c75f93061e3f08b91fb360`
   (`updated specs`);
-- that commit contains the prior WP0 task-variable documentation revision;
-- this plan and revision 5 now contain an uncommitted third readiness
-  correction awaiting user review/commit;
-- concurrently modified neural-regression documents are owned by another user
-  task and were not edited or incorporated into this readiness pass; and
-- all other pre-existing dirty/untracked files remain outside this plan's
-  ownership.
+- that commit contains both task-variable documents through the third WP0
+  readiness correction;
+- this plan and revision 5 now contain uncommitted fourth and fifth readiness
+  corrections awaiting user review/commit;
+- the tracked worktree was clean when the fourth correction began, and the
+  fifth began with only the expected document modifications; and
+- all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
 
@@ -48,11 +48,18 @@ authorized.
   portable path/source identity, comparable benchmark threading, and
   measurement-based memory/resource decisions; and
 - a third pass cross-checked the revised contracts against the current loaders,
-  augmentation helpers, run lifecycle, and resource handoff.
+  augmentation helpers, run lifecycle, and resource handoff; and
+- a fourth readiness correction synchronized the committed handoff, reused the
+  existing cluster-metadata filter, froze target/fold vocabularies and the PCA
+  component-limit rule, and completed temporary-file cleanup semantics; and
+- a fifth readiness correction froze exact configured channel-ID validation,
+  added the missing cleanup-failure test, and locked the valid one-usable-unit
+  PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** the user reviews this ready plan. Before a later
-implementation begins, the accepted WP0 documents must be committed and their
-HEAD recorded; implementation then requires a separate explicit user request.
+**Next exact action:** the user reviews these readiness corrections. Before a
+later implementation begins, these accepted WP0 document changes must be
+committed and their new HEAD recorded; implementation then requires a separate
+explicit user request.
 At that point the Sol supervisor starts WP1 with a fresh worktree/HEAD audit;
 it must not infer implementation authority from the existence or staging of
 these documents.
@@ -240,6 +247,68 @@ Use this template for each appended record:
   them and record the new HEAD; implementation still requires a separate
   explicit request.
 
+#### 2026-10-06 - WP0 fourth readiness correction
+
+- State: implementation-chat findings resolved; a fresh consistency pass found
+  no additional blocker. WP0 remains documentation only and ready for review.
+- Authorization: documentation changes only.
+- Sol / Terra / reviewer: primary Codex review of the reported findings; no
+  worker was used.
+- Start HEAD / end HEAD: `ed9a79b3d98505c757c75f93061e3f08b91fb360` /
+  `ed9a79b3d98505c757c75f93061e3f08b91fb360`.
+- Owned files: `docs/task_variable_spec_v5.md` and this plan only. Both were
+  tracked and clean at the start of this correction.
+- RED command and result: not applicable; no implementation was authorized.
+- GREEN/regression commands and results: `git diff --check --
+  docs/task_variable_spec_v5.md docs/task_variable_implementation_plan.md`
+  passed; Markdown fence counts were even (2 and 30); extracted specification
+  and plan target vocabularies each contained the same 18 identifiers; stale
+  searches confirmed that no proposed unit-selector extension or ambiguous
+  rank contract remains; and HEAD matched `origin/refactor` at the recorded
+  commit.
+- Commits: `ed9a79b3d98505c757c75f93061e3f08b91fb360` contains both documents
+  through the prior correction; this fourth correction is uncommitted.
+- Real-data or external actions: none.
+- Findings and unresolved risks: corrected the stale handoff, replaced the
+  proposed unit-selector API change with existing `filter_cluster_metadata`
+  reuse, froze all target identifiers and legal fold counts, defined the PCA
+  dimensional component limit, and required temporary-file cleanup on every
+  backfill path. No known blocker remains from the reported findings or the
+  subsequent consistency pass.
+- Exact next action: user reviews this correction. If accepted, commit the two
+  documents and record the new HEAD before separately authorized WP1 work.
+
+#### 2026-10-06 - WP0 fifth readiness correction
+
+- State: final TDD completeness findings resolved; WP0 remains documentation
+  only and ready for user review/commit.
+- Authorization: the user explicitly requested resolution of the reported TDD
+  issues and required work to stop before implementation.
+- Sol / Terra / reviewer: primary Codex documentation correction; no worker was
+  used.
+- Start HEAD / end HEAD: `ed9a79b3d98505c757c75f93061e3f08b91fb360` /
+  `ed9a79b3d98505c757c75f93061e3f08b91fb360`.
+- Owned files: `docs/task_variable_spec_v5.md` and this plan only. Existing
+  uncommitted readiness corrections in both files were preserved.
+- RED command and result: not applicable; no tests or implementation were
+  authorized.
+- GREEN/regression commands and results: documentation-only checks passed:
+  `git diff --check -- docs/task_variable_spec_v5.md
+  docs/task_variable_implementation_plan.md`; Markdown fence counts remained
+  even (2 and 30); the target vocabularies remained the same ordered 18
+  identifiers; and source inspection reconfirmed both the legacy PCA helper's
+  two-unit minimum and the configurable cluster filter's integer coercion.
+- Commits: none; these documentation changes are intentionally left for the
+  user's requested commit/push.
+- Real-data or external actions: none.
+- Findings and unresolved risks: explicit channel restrictions now reject
+  lossy type coercion and normalize deterministically; the backfill tests now
+  inject cleanup failure; and a one-usable-unit fold is explicitly valid and
+  tested without routing through the incompatible legacy PCA fitter. No known
+  TDD readiness issue remains.
+- Exact next action: the user reviews, commits, and pushes the documentation.
+  Implementation remains separately authorized and has not begun.
+
 ## 1. Objective
 
 Implement a readable, single-session task-variable decoding pipeline that:
@@ -316,7 +385,8 @@ benchmark, not a full tuned analysis.
 | `spike_behavior.loading.validate_aligned_spike_inputs` | Confirm spike/cluster one-to-one length. |
 | `spike_behavior.loading.build_spike_tsgroup` | Construct Pynapple unit spike series. |
 | `spike_behavior.loading.load_channel_quality` and `select_channels_from_quality` | Load channel metadata and apply existing quality/inside-brain selection. |
-| `spike_behavior.loading.select_units_by_channels` | Retain configured curated cluster groups on selected channels. Add one backward-compatible `accepted_groups` keyword under WP3; existing callers retain the `good`/`mua` default. |
+| `spike_behavior.loading.filter_cluster_metadata` | Apply configured cluster-quality groups to selected channels and retain sorted cluster/channel/normalized-quality metadata. Reuse it unchanged. |
+| `spike_behavior.loading.select_units_by_channels` | Existing fixed `good`/`mua` convenience API for older callers. Leave it unchanged; the new decoder uses `filter_cluster_metadata`. |
 | `population.pca.build_trial_unit_rate_tensor` | Produce trial x time x unit unsmoothed firing rates in Hz. |
 | `behavior_analysis.session_analysis.make_augmented_trial_df` | Add the general `rewards_in_block` feature at the existing augmentation boundary. |
 | `behavior_analysis.project_utils.is_present_value`, `is_zero_flag`, and `make_no_choice_action_mask` | Reuse project missing-sentinel, manual-flag, and no-choice semantics in target validation instead of defining decoder-only variants. |
@@ -335,6 +405,12 @@ accuracy/permutation scoring, and one-probe PCA controls. Its model-fitting
 functions do not meet revision-5 targets, grouping, metrics, regional, or
 saved-result contracts.
 
+`src/neural_analysis/population/pca.py::fit_population_pca` is also not the
+fold-local modeling interface. It requires at least two units, whereas
+revision 5 explicitly permits one usable training unit and one retained
+component. The new modeling package owns its fold-local scikit-learn PCA fit;
+only the existing dimensional-cap formula is shared.
+
 Do not stretch those functions with many flags. Leave their public behavior
 unchanged and build the revision-5 pipeline in a focused package. Shared rate
 binning is reused at the lower boundary.
@@ -350,7 +426,7 @@ binning is reused at the lower boundary.
 | Region identity could be inferred from probe names | Require explicit PFC/HPC probe and channel-selection configuration. |
 | Cluster IDs can collide across probes | Persist `probe_id:cluster_id` identities. |
 | Trial and alignment eligibility were incomplete | Define baseline, target-specific, matched-trial, and full-window coverage masks. |
-| PC count could be silently reduced | Record requested/effective count and visible cap status. |
+| PC count could be silently reduced | Use the exact dimensional component cap and record requested/effective count plus visible cap status. |
 | Solver warnings could be ignored | Treat nonconvergence as an invalid candidate/fold. |
 | Separate result viewer was proposed | Use one integrated, read-only existing-webapp view. |
 | Runtime was unknown | Add bounded synthetic and CT026 benchmark gates. |
@@ -383,10 +459,14 @@ binning is reused at the lower boundary.
   sentinel convention, requires the canonical `cur_block`, `action`, `reward`,
   and `experimenter_reward_given` source columns, refuses a table that already
   has the destination column, and calls the same general helper. It writes a
-  sibling temporary CSV, reloads it with the same convention, verifies that
-  its row order and every prior loaded column/value are unchanged and only the
-  new column was added, and only then publishes with `os.replace`. A missing
-  source or failed round-trip check leaves the original file untouched.
+  uniquely named sibling temporary CSV, reloads it with the same convention,
+  verifies that its row order and every prior loaded column/value are unchanged
+  and only the new column was added, and only then publishes with `os.replace`.
+  A missing source or failed round-trip check leaves the original file
+  untouched. Use `try`/`finally` around temporary-file creation, serialization,
+  reload, and validation. Remove the sibling temporary file if it still exists
+  after any success or failure path, and surface a cleanup failure rather than
+  silently leaving an undeclared artifact.
 - It does not recompute model-derived features, rewrite
   `trial_feature_params.json`, create a decoder-specific table, or contain a
   second counting implementation. The top-level neural README documents the
@@ -405,7 +485,7 @@ Create `src/neural_analysis/task_decoding/` with:
 | Module | Responsibility | Principal public interface |
 | --- | --- | --- |
 | `__init__.py` | Mark the focused package boundary without broad re-exports. | Package marker only |
-| `config.py` | Frozen user settings, analysis version, region definitions, defaults, scientific/execution separation, JSON serialization, and lightweight value validation. | `ANALYSIS_VERSION`, `TaskDecodingConfig`, `RegionConfig`, `load_task_decoding_config(...)`, `scientific_config_payload(...)` |
+| `config.py` | Frozen user settings, analysis version, region definitions, target/fold vocabularies, defaults, scientific/execution separation, JSON serialization, and lightweight value validation. | `ANALYSIS_VERSION`, `TARGET_IDENTIFIERS`, `TaskDecodingConfig`, `RegionConfig`, `load_task_decoding_config(...)`, `scientific_config_payload(...)` |
 | `targets.py` | Augmented-table validation, chronological shifted targets, source mappings, and target-specific eligibility. | `build_target_table(...)`, `validate_augmented_trials(...)` |
 | `activity.py` | Probe loading, channel/unit selection, trusted coverage, matched trial windows, rate tensors, stable feature identities. | `load_region_activity(...)`, `build_session_rate_tensors(...)` |
 | `modeling.py` | Grouped splits, fold-local standardization/PCA, fixed/tuned elastic-net fits, metrics, coefficients, and validity. | `make_outer_splits(...)`, `decode_target(...)` |
@@ -891,10 +971,42 @@ Scientific fields are:
 - alignment;
 - bin width;
 - requested PFC/HPC PC counts;
-- target names;
+- `target_names`;
 - fixed or tuned regularization mode;
-- outer and inner fold counts;
+- `outer_fold_count` and `inner_fold_count`;
 - optional trusted UTC bounds per manually aligned probe.
+
+Freeze the public, case-sensitive `target_names` vocabulary in this canonical
+order:
+
+```text
+current_state
+current_action
+current_action_is_correct
+previous_action
+previous_action_was_rewarded
+next_action
+current_choice_switch_stay
+next_choice_switch_stay
+consecutive_omissions
+consecutive_rewards
+session_trial_index
+trial_index_in_block
+rewards_in_block
+qlearning_relative_value
+forgetting_q_relative_value
+hmm_signed_belief
+hmm_decay_signed_belief
+relative_doubt
+```
+
+The default is the complete list. A supplied list must be nonempty and
+duplicate-free; display-label and source-column aliases are rejected. Normalize
+accepted subsets to this canonical order so equivalent subsets have identical
+target axes and scientific fingerprints. `outer_fold_count` accepts only
+integer `5` (default) or `3`; `inner_fold_count` accepts only integer `3` and
+remains inactive in fixed mode. Reject booleans, fractional values, and numeric
+strings rather than coercing them.
 
 The configuration's execution-only field is the output root. Batch worker
 count belongs only to the batch command's `--workers` option because it spans
@@ -922,11 +1034,18 @@ include/exclude lists.
   the quality/inside-brain rules and the probe metadata's optional
   `unit_channels` restriction.
 
+Explicit configured channel IDs must be a duplicate-free sequence of
+nonnegative JSON integers. Reject booleans, floats (including integer-valued
+floats), numeric strings, and negative values rather than relying on the
+existing downstream `dtype=int` coercion. Normalize an accepted restriction
+into ascending order before serialization and scientific fingerprinting.
+
 Avoid a dictionary of arbitrary settings. Typed fields make the scientific
 choices discoverable and testable.
 
-Configurable defaults match revision 5: choice alignment, 100 ms, 10 PCs per
-region, fixed regularization, five outer folds, and three inactive inner folds.
+Configurable defaults match revision 5: the complete canonical target list,
+choice alignment, 100 ms, 10 PCs per region, fixed regularization,
+`outer_fold_count=5`, and inactive `inner_fold_count=3`.
 The [-2, 2] s window, seed 0, `1e-8` coefficient tolerance, 15-candidate tuning
 grid, and exact LogisticRegression, ElasticNet, and PCA controls are code
 constants recorded in the scientific payload; the initial JSON does not expose
@@ -1080,6 +1199,12 @@ Within one target and outer fold:
 
 - determine constant/unavailable units from the outer training observations;
 - pool training trials and time bins for regional mean/scale;
+- after removing those unit columns, set each region's PCA component limit to
+  `min(n_usable_units, n_training_trials * n_time_bins)` and its effective
+  count to the smaller of that limit and the requested count; do not call
+  `matrix_rank` or introduce a singular-value tolerance;
+- treat exactly one usable unit as a valid one-component PCA input; only zero
+  usable units is the unavailable feature-set case;
 - reuse that transform across all time-bin decoders in the fold;
 - fit one PCA per selected region and fold when PCA is requested;
 - reuse PFC/HPC transforms for standalone and combined results; and
@@ -1166,9 +1291,9 @@ Keep tuned mode mechanically explicit rather than hiding it inside a generic
 search object: the pipeline must fit PCA inside each inner training split and
 retain failure reasons and selected settings. Validate that blocks never cross
 inner train/validation partitions and that both partitions contain both classes
-for categorical targets. If the requested valid inner folds cannot be formed,
-all tuned cells for that target/outer-fold are unavailable rather than falling
-back to trial-wise splitting or a different fold count.
+for categorical targets. If a valid three-fold inner split cannot be
+constructed, all tuned cells for that target/outer-fold are unavailable rather
+than falling back to trial-wise splitting or a different fold count.
 
 ### 7.4 Complete-fold aggregation
 
@@ -1562,19 +1687,34 @@ uses the same helper, requires the four canonical source columns, reloads and
 validates its temporary serialization before publication, atomically adds only
 `rewards_in_block`, preserves row order and all prior loaded values/columns,
 and leaves the original untouched if a source is missing or the round-trip
-check fails. It leaves the feature-parameter file and unrelated artifacts
-untouched; an existing destination column is a clear no-write error.
+check fails. Successful and injected serialization/validation failures leave
+no sibling temporary file. It leaves the feature-parameter file and unrelated
+artifacts untouched; an existing destination column is a clear no-write error.
+Inject a temporary-file removal failure separately and assert that it is
+raised with the temporary path visible. If cleanup follows an earlier
+serialization or validation failure, preserve that original failure as
+exception context; do not claim the temporary artifact was removed when the
+operating system refused its removal.
 
 ### 10.2 Config and input tests
 
 Create `src/tests/neural_analysis/task_decoding/test_config.py` and
 `test_targets.py`:
 
-1. Defaults exactly match revision 5.
+1. Defaults exactly match revision 5, including the ordered 18-identifier
+   target vocabulary and `outer_fold_count=5`, `inner_fold_count=3`.
 2. Region mappings require distinct configured probes and recognized regions.
-3. Invalid alignment, bin size, folds, PC counts, bounds, and empty,
-   duplicate, or unknown target names fail clearly; frozen
-   window/seed/tolerance/tuning-grid fields are not accepted as JSON overrides.
+   Explicit channel restrictions accept only duplicate-free nonnegative JSON
+   integers and normalize them into ascending order; booleans, floats
+   (including integer-valued floats), numeric strings, negative values, and
+   duplicates fail before the downstream cluster filter can coerce them.
+3. Every canonical target identifier maps to its frozen family, display label,
+   source/derivation, and order; equivalent subsets normalize to canonical
+   order. Empty, duplicate, wrong-case, display-label, source-column, or unknown
+   names fail. Outer counts other than integer 5 or 3 and inner counts other
+   than integer 3 fail, including booleans, fractional values, and numeric
+   strings. Invalid alignment, bin size, PC counts, bounds, and frozen
+   window/seed/tolerance/tuning-grid overrides also fail clearly.
 4. Missing augmented columns are reported together; a selected subset requires
    shared baseline columns, its selected alignment, and only its target
    sources. Choice-aligned runs do not require `start_time`.
@@ -1624,9 +1764,10 @@ Create `test_activity.py`:
 2. Channel selection combines channel-quality label, inside-brain status,
    optional metadata `unit_channels`, and optional additional config channels
    by intersection, and persists the rules and selected IDs.
-3. Cluster selection honors configured accepted groups; its backward-compatible
-   default accepts `good`/`mua` and rejects noise without changing existing
-   callers.
+3. Cluster selection passes configured groups to the existing
+   `filter_cluster_metadata`, retains its cluster/channel/normalized-quality
+   columns and stable sorted order, and leaves `select_units_by_channels`
+   unchanged for existing callers.
 4. Stable unit IDs include probe IDs and preserve axis order.
 5. Spike and cluster length mismatch fails.
 6. Duplicate selected cluster IDs, selected IDs absent from spike-cluster
@@ -1668,10 +1809,17 @@ Create `test_modeling.py`:
 4. Outer assignments are reused across time/region/representation and between
    fixed/tuned runs with otherwise identical scientific inputs.
 5. Scaling statistics come only from training rows.
-6. PCA directions and effective rank come only from training rows.
+6. PCA directions and the dimensional component limit come only from training
+   rows; the limit is exactly
+   `min(n_usable_units, n_training_trials * n_time_bins)` with no
+   `matrix_rank` or singular-value tolerance.
 7. PFC + HPC PC features are concatenated separate regional projections.
 8. Direct combined features preserve regional/stable-unit order.
-9. Requested PC count is capped visibly and deterministically.
+9. Requested PC count is capped visibly and deterministically by that exact
+   component-limit formula. A fold with exactly one usable unit remains valid,
+   returns one component, and does not call the legacy
+   `fit_population_pca` helper that requires at least two units; zero usable
+   units remains unavailable.
 10. Fixed mode performs outer evaluation without inner fits.
 11. Tuned mode never passes outer-test rows into inner splitting,
     preprocessing, or selection.
@@ -1679,8 +1827,9 @@ Create `test_modeling.py`:
     validate categorical train/validation class coverage; one assignment is
     reused across all candidates, time bins, regions, and representations for
     that target/outer fold.
-13. Invalid requested inner folds make the tuned cell unavailable without
-    changing fold count or falling back to trial-wise splitting.
+13. Failure to construct a valid three-fold inner split makes the tuned cell
+    unavailable without changing fold count or falling back to trial-wise
+    splitting.
 14. Instrumented transform fit counts are invariant to time-bin and candidate
     count: one PFC/HPC transform per outer fold and one per inner fold, reused
     across representations and standalone/combined results.
@@ -1972,7 +2121,8 @@ Write these only in WP13, after WP12 acceptance:
   `gather_trial_features.py`.
 - Sol runs focused and affected behavior tests.
 - Gate: new behavior processing emits the column, and the backfill changes only
-  that column in an older table without touching feature parameters.
+  that column in an older table without touching feature parameters or leaving
+  a temporary artifact on success or injected failure.
 - Handoff: record test/implementation commits and the exact proposed backfill
   invocation for later CT026 preparation; do not run it on CT026 here.
 
@@ -1991,8 +2141,9 @@ Write these only in WP13, after WP12 acceptance:
 - Terra high writes RED activity/unit/coverage tests.
 - After Sol's tests-only commit, Terra implements explicit region loading,
   stable IDs, trusted bounds, matched trial windows, and regional tensors using
-  existing loaders/binning, plus the backward-compatible configured-group
-  keyword on `select_units_by_channels`.
+  existing loaders/binning and the existing configurable
+  `filter_cluster_metadata` API. It does not modify
+  `select_units_by_channels`.
 - Gate: shapes, axes, Hz units, coverage, original-row mapping, exact tensor
   allocation guard,
   and unit identities are verified; invalid alignment rows cannot appear as
@@ -2096,23 +2247,25 @@ Write these only in WP13, after WP12 acceptance:
   it read-only with the general helper: an exact match records a no-write skip,
   while a mismatch stops for user direction. Do not invoke a backfill that
   would overwrite an existing column.
-- Sol records the augmented-table and feature-parameter identities, confirms
-  the command can write only the augmented CSV, and makes a timestamped backup
-  of that CSV beside it.
+- Sol records the augmented-table and feature-parameter identities and confirms
+  that the backfill command's sole persistent write is replacement of the
+  augmented CSV. As a separate, declared safety action, Sol makes the approved
+  timestamped backup of that CSV beside it before invoking the helper.
 - Terra high acts as a command runner only: run the approved
   `backfill_rewards_in_block_csv` invocation, record its exit status, output
   identity, and log, then stop. It never hand-edits the CSV or invokes the
   broader behavior/model workflow.
 - Sol performs read-only post-write validation: all revision-5 required columns
   exist; row count, order, and every previous loaded column/value match the
-  pre-run table; the feature-parameter identity is unchanged; no undeclared
-  file changed; and the new column passes the WP1 semantic checks.
+  pre-run table; the feature-parameter identity is unchanged; no file changed
+  beyond the target replacement and declared backup; and the new column passes
+  the WP1 semantic checks.
 - Gate: the regenerated CT026 table passes validation and the user is shown the
   backup/output identities. A mismatch stops before WP10 and does not trigger
   an ad hoc repair.
-- Handoff: record the approved command, one-file write set, backup path,
-  old/new file identities, validation output, and the exact proposed read-only
-  WP10 dry-run.
+- Handoff: record the approved command, the helper's one-file persistent write
+  set, the separately created backup path, old/new file identities, validation
+  output, and the exact proposed read-only WP10 dry-run.
 
 ### WP10: CT026 2026-08-03 preflight and benchmark
 
@@ -2304,9 +2457,9 @@ mutating the completed run.
 
 1. **Synthetic microbenchmark:** catches pathological overhead and produces a
    stable regression fixture; it is not a production-time estimate.
-2. **CT026 bounded benchmark:** choice alignment, 100 ms, fixed mode, one
-   categorical target (`Current action`) and one numerical target
-   (`Relative doubt`), both representations and all regions. This is
+2. **CT026 bounded benchmark:** choice alignment, 100 ms, fixed mode, canonical
+   categorical target `current_action` and canonical numerical target
+   `relative_doubt`, both representations and all regions. This is
    2,400 requested outer fits and
    includes exact loading/binning once, so it exercises the real session path
    rather than only timing estimators in isolation. Launch it detached if it is
