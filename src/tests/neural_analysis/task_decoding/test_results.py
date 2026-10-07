@@ -9,7 +9,9 @@ neural loading remain WP5B work.
 from __future__ import annotations
 
 import builtins
+from dataclasses import replace
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -47,8 +49,8 @@ _BLOCK_VALUES = (
     "two",
     200,
     200,
-    "four",
-    "four",
+    "\u00b5-block-\u00e4",
+    "\u00b5-block-\u00e4",
     300,
     300,
     "singleton-shared-label-longer-than-thirty-two-characters",
@@ -58,7 +60,8 @@ _BLOCK_VALUES = (
     "not-common",
 )
 _BLOCK_ID_JSON_BYTES = tuple(
-    json.dumps(value, separators=(",", ":")).encode("utf-8") for value in _BLOCK_VALUES
+    json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    for value in _BLOCK_VALUES
 )
 _BLOCK_ID_BYTE_COUNT = sum(len(value) for value in _BLOCK_ID_JSON_BYTES)
 _DIRECT_RUNTIME_PATHS = (
@@ -221,7 +224,7 @@ def make_config(
             cluster_groups=("good",),
         ),
         alignment="choice_time",
-        bin_width_ms=100,
+        bin_width_ms=500,
         pfc_pc_count=2,
         hpc_pc_count=2,
         target_names=_TARGETS,
@@ -344,7 +347,7 @@ def make_result_arrays(
         rows, four outer-test rows per fold, and eight outer-training rows.
     """
     target_count, region_count, representation_count = 2, 3, 2
-    metric_count, time_count, fold_count, feature_capacity = 3, 2, 3, 4
+    metric_count, time_count, fold_count, feature_capacity = 3, 8, 3, 4
     full_row_count, common_row_count = 15, 13
     score_shape = (
         target_count,
@@ -369,8 +372,8 @@ def make_result_arrays(
         "region_labels": np.array(_REGIONS, dtype="U16"),
         "representation_labels": np.array(_REPRESENTATIONS, dtype="U16"),
         "metric_labels": np.array(_METRICS, dtype="U32"),
-        "time_bin_edges_s": np.array([-0.2, -0.1, 0.0], dtype=np.float64),
-        "time_bin_centers_s": np.array([-0.15, -0.05], dtype=np.float64),
+        "time_bin_edges_s": np.linspace(-2.0, 2.0, time_count + 1, dtype=np.float64),
+        "time_bin_centers_s": np.linspace(-1.75, 1.75, time_count, dtype=np.float64),
         "fold_labels": np.arange(fold_count, dtype=np.int64),
         "fold_scores": np.full(score_shape, np.nan, dtype=np.float64),
         "fit_status": np.full(fit_shape, "valid", dtype="U16"),
@@ -711,6 +714,7 @@ def make_meta(
     scientific_config: Mapping[str, object],
     *,
     regularization_mode: str,
+    run_fingerprint: str = "run-fingerprint-test",
 ) -> dict[str, object]:
     """Create the named required schema/version/axis/units/provenance mapping.
 
@@ -722,6 +726,9 @@ def make_meta(
         Sole serializer-owned scientific payload saved beside the NPZ.
     regularization_mode : {"fixed", "tuned"}
         Mode matching all config and mode-specific array contracts.
+    run_fingerprint : str, default="run-fingerprint-test"
+        Complete opaque scientific run identity required to agree with the
+        separate immutable-save argument.
 
     Returns
     -------
@@ -767,7 +774,7 @@ def make_meta(
             "regularization_mode": regularization_mode,
             "outer_fold_count": 3,
             "inner_fold_count": 3,
-            "bin_width_ms": 100,
+            "bin_width_ms": 500,
             "candidate_selection_metrics": {
                 "current_action": "balanced_accuracy",
                 "relative_doubt": "r2",
@@ -779,6 +786,7 @@ def make_meta(
             "scientific_config_identity": hashlib.sha256(
                 json.dumps(scientific_config, sort_keys=True).encode("utf-8")
             ).hexdigest(),
+            "run_fingerprint": run_fingerprint,
         },
         "warnings": ["synthetic warning retained for provenance"],
     }
@@ -819,7 +827,12 @@ def save_run_fixture(
     )
     scientific_config = scientific_config_payload(config)
     arrays = make_result_arrays(scientific_config, regularization_mode=regularization_mode)
-    meta = make_meta(arrays, scientific_config, regularization_mode=regularization_mode)
+    meta = make_meta(
+        arrays,
+        scientific_config,
+        regularization_mode=regularization_mode,
+        run_fingerprint=run_fingerprint,
+    )
     manifest = build_manifest(input_paths)
     results.save_task_decoding_run(
         run_directory,
@@ -859,7 +872,12 @@ def make_run_save_arguments(
         make_config(input_paths, regularization_mode=regularization_mode)
     )
     arrays = make_result_arrays(scientific_config, regularization_mode=regularization_mode)
-    meta = make_meta(arrays, scientific_config, regularization_mode=regularization_mode)
+    meta = make_meta(
+        arrays,
+        scientific_config,
+        regularization_mode=regularization_mode,
+        run_fingerprint=run_fingerprint,
+    )
     return {
         "arrays": arrays,
         "meta": meta,
@@ -907,9 +925,9 @@ def expected_array_contract(
     dict[str, tuple[tuple[int, ...], numpy.dtype]]
         Required member name mapped to complete primitive shape and dtype.
     """
-    fit_shape = (2, 3, 2, 2, 3)
-    score_shape = (2, 3, 2, 3, 2, 3)
-    parameter_shape = (2, 3, 3, 2, 2)
+    fit_shape = (2, 3, 2, 8, 3)
+    score_shape = (2, 3, 2, 3, 8, 3)
+    parameter_shape = (2, 3, 3, 2, 8)
     feature_shape = (3, 2, 4)
     contract = {
         "target_labels": ((2,), np.dtype("U32")),
@@ -920,8 +938,8 @@ def expected_array_contract(
         "region_labels": ((3,), np.dtype("U16")),
         "representation_labels": ((2,), np.dtype("U16")),
         "metric_labels": ((3,), np.dtype("U32")),
-        "time_bin_edges_s": ((3,), np.dtype(np.float64)),
-        "time_bin_centers_s": ((2,), np.dtype(np.float64)),
+        "time_bin_edges_s": ((9,), np.dtype(np.float64)),
+        "time_bin_centers_s": ((8,), np.dtype(np.float64)),
         "fold_labels": ((3,), np.dtype(np.int64)),
         "fold_scores": (score_shape, np.dtype(np.float64)),
         "fit_status": (fit_shape, np.dtype("U16")),
@@ -967,7 +985,7 @@ def expected_array_contract(
             }
         )
     else:
-        audit_shape = (2, 3, 3, 2, 2, 15, 3)
+        audit_shape = (2, 3, 3, 2, 8, 15, 3)
         contract.update(
             {
                 "candidate_parameter_json": ((2, 15), np.dtype("U48")),
@@ -1096,9 +1114,27 @@ def assert_primitive_schema(
     assert arrays["representation_labels"].tolist() == list(_REPRESENTATIONS)
     assert arrays["metric_labels"].tolist() == list(_METRICS)
     assert arrays["metric_labels"].dtype.kind == "U"
-    assert arrays["fold_scores"].shape == (2, 3, 2, 3, 2, 3)
+    assert arrays["time_bin_edges_s"].tolist() == [
+        -2.0,
+        -1.5,
+        -1.0,
+        -0.5,
+        0.0,
+        0.5,
+        1.0,
+        1.5,
+        2.0,
+    ]
+    np.testing.assert_allclose(
+        arrays["time_bin_centers_s"],
+        (arrays["time_bin_edges_s"][:-1] + arrays["time_bin_edges_s"][1:]) / 2.0,
+    )
+    assert scientific_config["bin_width_ms"] == 500
+    assert scientific_config["frozen_controls"]["window_start_s"] == -2.0
+    assert scientific_config["frozen_controls"]["window_end_s"] == 2.0
+    assert arrays["fold_scores"].shape == (2, 3, 2, 3, 8, 3)
     assert arrays["fold_scores"].dtype == np.dtype(np.float64)
-    assert arrays["fit_status"].shape == (2, 3, 2, 2, 3)
+    assert arrays["fit_status"].shape == (2, 3, 2, 8, 3)
     assert arrays["fit_status"].dtype.kind == "U"
     assert arrays["fit_reason_codes"].shape == arrays["fit_status"].shape
     assert arrays["train_counts"].shape == arrays["fit_status"].shape
@@ -1115,6 +1151,8 @@ def assert_primitive_schema(
     assert encoded_block_labels(arrays) == _BLOCK_ID_JSON_BYTES
     assert isinstance(decoded_block_labels(arrays)[0], int)
     assert isinstance(decoded_block_labels(arrays)[2], str)
+    assert decoded_block_labels(arrays)[6:8] == ("\u00b5-block-\u00e4", "\u00b5-block-\u00e4")
+    assert encoded_block_labels(arrays)[6] == b'"\xc2\xb5-block-\xc3\xa4"'
     assert decoded_block_labels(arrays)[10] == _BLOCK_VALUES[10]
     assert len(decoded_block_labels(arrays)[10]) > 32
     assert arrays["trial_row_indices"].tolist() == list(range(13))
@@ -1169,14 +1207,14 @@ def assert_primitive_schema(
         "probe-hpc:17",
     ]
     assert arrays["fitted_intercepts"].shape == arrays["fit_status"].shape
-    assert arrays["fixed_parameters_json"].shape == (2, 3, 3, 2, 2)
+    assert arrays["fixed_parameters_json"].shape == (2, 3, 3, 2, 8)
     assert '"C"' in arrays["fixed_parameters_json"][0, 0, 0, 0, 0]
     assert '"alpha"' in arrays["fixed_parameters_json"][1, 0, 0, 0, 0]
     assert arrays["stage_timing_labels"].shape == arrays["stage_timing_seconds"].shape
     assert arrays["total_timing_seconds"].ndim == 0
     assert meta["analysis_version"] == ANALYSIS_VERSION
     assert meta["parameters"]["regularization_mode"] == regularization_mode
-    assert meta["parameters"]["bin_width_ms"] == scientific_config["bin_width_ms"] == 100
+    assert meta["parameters"]["bin_width_ms"] == scientific_config["bin_width_ms"] == 500
     assert meta["parameters"]["candidate_selection_metrics"] == {
         "current_action": "balanced_accuracy",
         "relative_doubt": "r2",
@@ -1226,7 +1264,7 @@ def assert_primitive_schema(
             assert meta["axes"][array_name] == ["not_applicable"]
         assert not np.any(arrays["selected_parameters_json"] != "")
     else:
-        expected_audit_shape = (2, 3, 3, 2, 2, 15, 3)
+        expected_audit_shape = (2, 3, 3, 2, 8, 15, 3)
         assert arrays["candidate_parameter_json"].shape == (2, 15)
         assert arrays["inner_selection_fold_ids"].shape == (2, 3, 13)
         assert arrays["candidate_inner_scores"].shape == expected_audit_shape
@@ -1258,7 +1296,7 @@ def assert_primitive_schema(
         assert np.all((0.0 <= finite_audit_scores) & (finite_audit_scores <= 1.0))
         assert np.unique(finite_audit_scores).size == finite_audit_scores.size
         for target_index in range(2):
-            for indexes in np.ndindex(3, 3, 2, 2):
+            for indexes in np.ndindex(3, 3, 2, 8):
                 outer_fold, region_index, representation_index, time_index = indexes
                 selected_index = arrays["selected_candidate_indices"][
                     target_index,
@@ -2179,3 +2217,1617 @@ def test_result_publication_cleanup_failure_keeps_temp_visible_and_chains_errors
         exception = exception.__context__ or exception.__cause__
     assert any("primary publication failure" in message for message in messages)
     assert any("cleanup failure" in message for message in messages)
+
+
+def test_run_fingerprint_round_trips_from_meta_and_rejects_a_mismatched_load(tmp_path):
+    """An arbitrary full run fingerprint is persisted in meta provenance and identity-gated.
+
+    The fixed synthetic arrays retain their documented axes; the fingerprint is
+    an opaque SHA-256-like scientific identity rather than execution metadata.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    run_directory = tmp_path / "fingerprint-run"
+    fingerprint = "f" * 64
+    save_run_fixture(
+        run_directory,
+        input_paths,
+        regularization_mode="fixed",
+        run_fingerprint=fingerprint,
+    )
+
+    loaded = results.load_task_decoding_run(
+        run_directory,
+        expected_run_fingerprint=fingerprint,
+    )
+
+    assert loaded["run_fingerprint"] == fingerprint
+    assert loaded["meta"]["provenance"]["run_fingerprint"] == fingerprint
+    with pytest.raises(ValueError, match="fingerprint|identity|run"):
+        results.load_task_decoding_run(
+            run_directory,
+            expected_run_fingerprint="other" * 16,
+        )
+
+
+def test_save_rejects_run_fingerprint_disagreement_with_predeclared_meta(tmp_path):
+    """Save rejects an argument whose identity disagrees with immutable provenance."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(
+        input_paths,
+        regularization_mode="fixed",
+        run_fingerprint="declared-fingerprint",
+    )
+    meta = json.loads(json.dumps(arguments["meta"]))
+    assert meta["provenance"]["run_fingerprint"] == "declared-fingerprint"
+    run_directory = tmp_path / "fingerprint-disagreement"
+
+    with pytest.raises(ValueError, match="fingerprint|provenance|identity"):
+        results.save_task_decoding_run(
+            run_directory,
+            arrays=arguments["arrays"],
+            meta=meta,
+            input_manifest=arguments["input_manifest"],
+            scientific_config=arguments["scientific_config"],
+            feature_parameter_source=arguments["feature_parameter_source"],
+            run_fingerprint="different-fingerprint",
+        )
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+def test_final_result_and_checkpoint_destinations_are_immutable_after_publication(tmp_path):
+    """Second result/checkpoint saves fail without changing already-published safe bytes."""
+    input_paths = write_input_fixture(tmp_path)
+    run_directory = tmp_path / "immutable-run"
+    save_arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    results.save_task_decoding_run(run_directory, **save_arguments)
+    result_bytes = (run_directory / _RESULT_FILE).read_bytes()
+
+    with pytest.raises(FileExistsError, match="immutable|exists|destination"):
+        results.save_task_decoding_run(run_directory, **save_arguments)
+    assert (run_directory / _RESULT_FILE).read_bytes() == result_bytes
+
+    checkpoint_path = tmp_path / "checkpoints" / "current_action.npz"
+    checkpoint_arrays = {"scores": np.array([0.75], dtype=np.float64)}
+    results.save_target_checkpoint(
+        checkpoint_path,
+        target_label="current_action",
+        target_arrays=checkpoint_arrays,
+        full_run_fingerprint="checkpoint-fingerprint",
+    )
+    checkpoint_bytes = checkpoint_path.read_bytes()
+    with pytest.raises(FileExistsError, match="immutable|exists|destination"):
+        results.save_target_checkpoint(
+            checkpoint_path,
+            target_label="current_action",
+            target_arrays=checkpoint_arrays,
+            full_run_fingerprint="checkpoint-fingerprint",
+        )
+    assert checkpoint_path.read_bytes() == checkpoint_bytes
+
+
+def test_small_binary_npy_manifest_identity_does_not_open_or_hash_content(tmp_path, monkeypatch):
+    """Small binary NumPy inputs use portable metadata rather than content hashing.
+
+    The fixture has a tiny ``.npy`` path to prove the classification depends on
+    binary type, not only the 64-MiB threshold used for structured sources.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    binary_path = input_paths["session_root"] / "processed" / "small_binary.npy"
+    binary_path.write_bytes(b"\x93NUMPY synthetic bytes")
+    original_open = Path.open
+
+    def forbid_binary_open(path: Path, *args, **kwargs):
+        """Forbid any content read of the small binary input identity."""
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if path == binary_path and "r" in mode:
+            raise AssertionError("Small binary content must not be opened for manifest identity.")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", forbid_binary_open)
+    manifest = results.build_input_manifest(
+        session_root=input_paths["session_root"],
+        files={"small_binary": binary_path},
+        file_lists={},
+    )
+    identity = manifest["files"]["small_binary"]
+    assert identity["relative_path"] == "processed/small_binary.npy"
+    assert identity["size_bytes"] == binary_path.stat().st_size
+    assert identity["mtime_seconds"] == int(binary_path.stat().st_mtime)
+    assert "sha256" not in identity
+
+
+def make_dynamic_tuned_payload(
+    input_paths: Mapping[str, Path],
+    *,
+    run_fingerprint: str = "dynamic-run-fingerprint",
+) -> tuple[dict[str, np.ndarray], dict[str, object], dict[str, object]]:
+    """Build a one-target tuned payload whose dimensions are not fixture constants.
+
+    Parameters
+    ----------
+    input_paths : mapping[str, pathlib.Path]
+        Contained source inputs used to create a real scientific config.
+    run_fingerprint : str, default="dynamic-run-fingerprint"
+        Opaque full scientific identity stored in provenance before publication.
+
+    Returns
+    -------
+    tuple[dict[str, numpy.ndarray], dict[str, object], dict[str, object]]
+        Complete tuned arrays, matching JSON meta, and serializer-owned config.
+        There are 19 full-table rows, 14 common rows, five unequal block-safe
+        outer tests, eight 500-ms time bins, and five padded feature slots.
+    """
+    config = replace(
+        make_config(input_paths, regularization_mode="tuned"),
+        target_names=("relative_doubt",),
+        outer_fold_count=5,
+    )
+    scientific_config = scientific_config_payload(config)
+    target_n, region_n, representation_n = 1, 3, 2
+    metric_n, time_n, fold_n, feature_n = 3, 8, 5, 5
+    full_n, common_n = 19, 14
+    fit_shape = (target_n, region_n, representation_n, time_n, fold_n)
+    score_shape = (target_n, region_n, representation_n, metric_n, time_n, fold_n)
+    parameter_shape = (target_n, fold_n, region_n, representation_n, time_n)
+    trial_rows = np.array(
+        [0, 1, 3, 4, 6, 7, 9, 10, 12, 13, 15, 16, 17, 18],
+        dtype=np.int64,
+    )
+    block_values: tuple[object, ...] = (
+        "alpha",
+        "alpha",
+        "not-common-2",
+        "beta",
+        "beta",
+        "not-common-5",
+        "gamma",
+        "gamma",
+        "not-common-8",
+        "delta",
+        "delta",
+        "not-common-11",
+        "delta",
+        "epsilon",
+        "not-common-14",
+        "epsilon",
+        "epsilon",
+        "target-ineligible-zero",
+        "target-ineligible-one",
+    )
+    block_bytes = tuple(
+        json.dumps(value, separators=(",", ":")).encode("utf-8")
+        for value in block_values
+    )
+    arrays: dict[str, np.ndarray] = {
+        "target_labels": np.array(["relative_doubt"], dtype="U32"),
+        "target_families": np.array(["numerical"], dtype="U16"),
+        "target_source_labels": np.array(["relative_doubt_index"], dtype="U32"),
+        "target_positive_classes": np.array([-1], dtype=np.int64),
+        "target_label_mappings_json": np.array(['{"native_target":true}'], dtype="U48"),
+        "region_labels": np.array(_REGIONS, dtype="U16"),
+        "representation_labels": np.array(_REPRESENTATIONS, dtype="U16"),
+        "metric_labels": np.array(_METRICS, dtype="U32"),
+        "time_bin_edges_s": np.linspace(-2.0, 2.0, time_n + 1, dtype=np.float64),
+        "time_bin_centers_s": np.linspace(-1.75, 1.75, time_n, dtype=np.float64),
+        "fold_labels": np.arange(fold_n, dtype=np.int64),
+        "fold_scores": np.full(score_shape, np.nan, dtype=np.float64),
+        "fit_status": np.full(fit_shape, "valid", dtype="U16"),
+        "fit_reason_codes": np.full(fit_shape, "", dtype="U32"),
+        "requested_feature_counts": np.empty(fit_shape, dtype=np.int64),
+        "effective_feature_counts": np.empty(fit_shape, dtype=np.int64),
+        "train_counts": np.empty(fit_shape, dtype=np.int64),
+        "test_counts": np.empty(fit_shape, dtype=np.int64),
+        "train_class_counts": np.full((*fit_shape, 2), -1, dtype=np.int64),
+        "test_class_counts": np.full((*fit_shape, 2), -1, dtype=np.int64),
+        "full_table_row_positions": np.arange(full_n, dtype=np.int64),
+        "full_table_trial_ids": np.arange(full_n, dtype=np.int64),
+        "full_table_block_ids_utf8": np.frombuffer(
+            b"".join(block_bytes), dtype=np.uint8
+        ).copy(),
+        "full_table_block_id_offsets": np.r_[
+            np.array([0], dtype=np.int64),
+            np.cumsum([len(value) for value in block_bytes], dtype=np.int64),
+        ],
+        "encoded_target_values": np.full((target_n, full_n), np.nan, dtype=np.float64),
+        "eligibility_masks": np.zeros((target_n, full_n), dtype=np.bool_),
+        "eligibility_reason_codes": np.full(
+            (target_n, full_n), "not_common", dtype="U32"
+        ),
+        "eligibility_counts": np.array([12], dtype=np.int64),
+        "trial_row_indices": trial_rows,
+        "outer_fold_ids": np.array(
+            [[0, 0, 1, 1, 2, 2, 3, 3, 3, 4, 4, 4, -1, -1]],
+            dtype=np.int64,
+        ),
+        "unit_selection_rules_json": np.array(
+            ['{"PFC":"good_inside_brain"}', '{"HPC":"good_inside_brain"}'],
+            dtype="U48",
+        ),
+        "coefficient_values": np.full((*fit_shape, feature_n), np.nan, dtype=np.float64),
+        "coefficient_feature_ids": np.full(
+            (region_n, representation_n, feature_n), "", dtype="U32"
+        ),
+        "coefficient_feature_regions": np.full(
+            (region_n, representation_n, feature_n), "", dtype="U16"
+        ),
+        "coefficient_feature_statuses": np.full(
+            (region_n, representation_n, feature_n), "padding", dtype="U16"
+        ),
+        "coefficient_active_masks": np.zeros(
+            (region_n, representation_n, feature_n), dtype=np.bool_
+        ),
+        "fitted_intercepts": np.zeros(fit_shape, dtype=np.float64),
+        "fixed_parameters_json": np.full(parameter_shape, "", dtype="U48"),
+        "candidate_parameter_json": np.empty((target_n, 15), dtype="U48"),
+        "selected_parameters_json": np.empty(parameter_shape, dtype="U48"),
+        "inner_selection_fold_ids": np.full(
+            (target_n, fold_n, common_n), -1, dtype=np.int64
+        ),
+        "candidate_inner_scores": np.empty(
+            (target_n, fold_n, region_n, representation_n, time_n, 15, 3),
+            dtype=np.float64,
+        ),
+        "candidate_inner_statuses": np.full(
+            (target_n, fold_n, region_n, representation_n, time_n, 15, 3),
+            "valid",
+            dtype="U16",
+        ),
+        "candidate_inner_reasons": np.full(
+            (target_n, fold_n, region_n, representation_n, time_n, 15, 3),
+            "",
+            dtype="U48",
+        ),
+        "selected_candidate_indices": np.empty(parameter_shape, dtype=np.int64),
+        "stage_timing_labels": np.array(["targets", "activity", "modeling"], dtype="U16"),
+        "stage_timing_seconds": np.array([0.01, 0.02, 0.03], dtype=np.float64),
+        "total_timing_seconds": np.array(0.06, dtype=np.float64),
+    }
+    eligible_full_rows = trial_rows[:12]
+    arrays["encoded_target_values"][0, eligible_full_rows] = np.linspace(
+        -1.0, 1.0, eligible_full_rows.size
+    )
+    arrays["eligibility_masks"][0, eligible_full_rows] = True
+    arrays["eligibility_reason_codes"][0, eligible_full_rows] = ""
+    arrays["eligibility_reason_codes"][0, trial_rows[12:]] = "target_ineligible"
+    test_sizes = np.array([2, 2, 2, 3, 3], dtype=np.int64)
+    for fold_index, test_size in enumerate(test_sizes):
+        arrays["train_counts"][..., fold_index] = 12 - test_size
+        arrays["test_counts"][..., fold_index] = test_size
+    feature_map = {
+        ("PFC", "pca"): (("PFC:PC1",), ("PFC",), 2),
+        ("PFC", "units"): (("probe-pfc:1", "probe-pfc:2"), ("PFC", "PFC"), 2),
+        ("HPC", "pca"): (("HPC:PC1", "HPC:PC2"), ("HPC", "HPC"), 2),
+        ("HPC", "units"): (("probe-hpc:1", "probe-hpc:2"), ("HPC", "HPC"), 2),
+        ("PFC+HPC", "pca"): (("PFC:PC1", "HPC:PC1", "HPC:PC2"), ("PFC", "HPC", "HPC"), 4),
+        ("PFC+HPC", "units"): (
+            ("probe-pfc:1", "probe-pfc:2", "probe-hpc:1", "probe-hpc:2"),
+            ("PFC", "PFC", "HPC", "HPC"),
+            4,
+        ),
+    }
+    for region_index, region in enumerate(_REGIONS):
+        for representation_index, representation in enumerate(_REPRESENTATIONS):
+            ids, regions, requested = feature_map[(region, representation)]
+            width = len(ids)
+            arrays["coefficient_feature_ids"][region_index, representation_index, :width] = ids
+            arrays["coefficient_feature_regions"][
+                region_index, representation_index, :width
+            ] = regions
+            arrays["coefficient_feature_statuses"][
+                region_index, representation_index, :width
+            ] = "available"
+            arrays["coefficient_active_masks"][region_index, representation_index, :width] = True
+            arrays["coefficient_values"][:, region_index, representation_index, :, :, :width] = 0.5
+            arrays["requested_feature_counts"][:, region_index, representation_index] = requested
+            arrays["effective_feature_counts"][:, region_index, representation_index] = width
+    arrays["fold_scores"][0, :, :, 2, :, :] = 0.25
+    arrays["fixed_parameters_json"][0, ...] = json.dumps(
+        {"alpha": 0.1, "l1_ratio": 0.5},
+        sort_keys=True,
+    )
+    candidates = declared_candidates(scientific_config, "numerical")
+    arrays["candidate_parameter_json"][0] = [
+        json.dumps(candidate, sort_keys=True) for candidate in candidates
+    ]
+    common_blocks = tuple(block_bytes[row] for row in trial_rows)
+    for outer_fold in range(fold_n):
+        block_to_inner: dict[bytes, int] = {}
+        for common_row, block in enumerate(common_blocks):
+            if arrays["outer_fold_ids"][0, common_row] != outer_fold and common_row < 12:
+                block_to_inner.setdefault(block, len(block_to_inner) % 3)
+                arrays["inner_selection_fold_ids"][0, outer_fold, common_row] = (
+                    block_to_inner[block]
+                )
+        assert set(block_to_inner.values()) == {0, 1, 2}
+    for index in np.ndindex(parameter_shape):
+        _, outer_fold, region, representation, time = index
+        selected = (outer_fold + region + representation + time) % 14
+        arrays["selected_candidate_indices"][index] = selected
+        arrays["selected_parameters_json"][index] = arrays["candidate_parameter_json"][0, selected]
+        for candidate in range(15):
+            arrays["candidate_inner_scores"][index + (candidate, slice(None))] = (
+                0.10 + candidate / 100.0
+            )
+        arrays["candidate_inner_scores"][index + (selected, slice(None))] = 0.95
+        invalid_index = index + (14, 2)
+        arrays["candidate_inner_scores"][invalid_index] = np.nan
+        arrays["candidate_inner_statuses"][invalid_index] = "invalid"
+        arrays["candidate_inner_reasons"][invalid_index] = "nonfinite_inner_score"
+    meta = make_meta(
+        arrays,
+        scientific_config,
+        regularization_mode="tuned",
+        run_fingerprint=run_fingerprint,
+    )
+    meta["parameters"] = {
+        "regularization_mode": "tuned",
+        "outer_fold_count": fold_n,
+        "inner_fold_count": 3,
+        "bin_width_ms": 500,
+        "candidate_selection_metrics": {"relative_doubt": "r2"},
+    }
+    meta["units"] = {
+        "encoded_target_values": {"relative_doubt": "unitless"},
+        "fold_scores": {"relative_doubt": {"r2": "coefficient_of_determination"}},
+        "candidate_inner_scores": {
+            "relative_doubt": {"r2": "coefficient_of_determination"}
+        },
+        "coefficient_values": {"relative_doubt": "unitless per pooled training standard deviation"},
+        "fitted_intercepts": {"relative_doubt": "unitless"},
+        "time_bin_edges_s": "s",
+        "time_bin_centers_s": "s",
+        "stage_timing_seconds": "s",
+        "total_timing_seconds": "s",
+    }
+    return arrays, meta, scientific_config
+
+
+def rebuild_dynamic_inner_assignments(arrays: Mapping[str, np.ndarray]) -> np.ndarray:
+    """Build grouped inner IDs after an intentional dynamic-fixture outer mutation.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Dynamic tuned result members with global common-to-full row positions.
+
+    Returns
+    -------
+    numpy.ndarray
+        Int64 ``(target, outer_fold, common_row)`` assignment. Outer-test and
+        target-ineligible common rows are -1; every retained group is assigned
+        one inner fold without splitting that block.
+    """
+    payload = arrays["full_table_block_ids_utf8"].tobytes()
+    offsets = arrays["full_table_block_id_offsets"]
+    blocks = tuple(payload[start:stop] for start, stop in zip(offsets[:-1], offsets[1:]))
+    outer = arrays["outer_fold_ids"]
+    assignments = np.full(
+        (outer.shape[0], arrays["fold_labels"].size, outer.shape[1]),
+        -1,
+        dtype=np.int64,
+    )
+    for target, outer_fold in np.ndindex(outer.shape[0], arrays["fold_labels"].size):
+        group_ids: dict[bytes, int] = {}
+        training_rows = np.flatnonzero((outer[target] >= 0) & (outer[target] != outer_fold))
+        for common_row in training_rows:
+            full_row = int(arrays["trial_row_indices"][common_row])
+            group_ids.setdefault(blocks[full_row], len(group_ids) % 3)
+            assignments[target, outer_fold, common_row] = group_ids[blocks[full_row]]
+    return assignments
+
+
+def synchronize_selected_dynamic_parameters(arrays: Mapping[str, np.ndarray]) -> None:
+    """Match each nonnegative selected index to its target-family candidate JSON.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Mutable dynamic tuned payload with target-first candidate and selection
+        arrays. Candidate text is canonical JSON and selection uses the
+        ``(target, outer_fold, region, representation, time)`` order.
+
+    Returns
+    -------
+    None
+        Updates only ``selected_parameters_json`` in place.
+    """
+    selected = arrays["selected_candidate_indices"]
+    parameters = arrays["selected_parameters_json"]
+    candidates = arrays["candidate_parameter_json"]
+    for index in np.ndindex(selected.shape):
+        choice = int(selected[index])
+        parameters[index] = "" if choice < 0 else candidates[index[0], choice]
+
+
+def make_inner_plan_unavailable_tuned_payload(
+    input_paths: Mapping[str, Path],
+    *,
+    run_fingerprint: str = "inner-plan-unavailable",
+) -> tuple[dict[str, np.ndarray], dict[str, object], dict[str, object]]:
+    """Build a valid outer-CV numerical payload whose inner three-fold plan is impossible.
+
+    Parameters
+    ----------
+    input_paths : mapping[str, pathlib.Path]
+        Contained source inputs used to create a real scientific config.
+    run_fingerprint : str, default="inner-plan-unavailable"
+        Opaque full scientific identity stored in provenance before publication.
+
+    Returns
+    -------
+    tuple[dict[str, numpy.ndarray], dict[str, object], dict[str, object]]
+        Complete tuned arrays, matching JSON meta, and serializer-owned config.
+        Three two-row behavioral blocks form valid outer folds, but every
+        outer-training universe contains exactly two blocks, fewer than the
+        required three grouped inner folds.
+    """
+    config = replace(
+        make_config(input_paths, regularization_mode="tuned"),
+        target_names=("relative_doubt",),
+        outer_fold_count=3,
+    )
+    scientific_config = scientific_config_payload(config)
+    base = make_result_arrays(scientific_config, regularization_mode="tuned")
+    arrays = {name: value.copy() for name, value in base.items()}
+    target_members = (
+        "target_labels",
+        "target_families",
+        "target_source_labels",
+        "target_positive_classes",
+        "target_label_mappings_json",
+        "fold_scores",
+        "fit_status",
+        "fit_reason_codes",
+        "requested_feature_counts",
+        "effective_feature_counts",
+        "train_counts",
+        "test_counts",
+        "train_class_counts",
+        "test_class_counts",
+        "encoded_target_values",
+        "eligibility_masks",
+        "eligibility_reason_codes",
+        "eligibility_counts",
+        "outer_fold_ids",
+        "coefficient_values",
+        "fitted_intercepts",
+        "fixed_parameters_json",
+        "candidate_parameter_json",
+        "selected_parameters_json",
+        "inner_selection_fold_ids",
+        "candidate_inner_scores",
+        "candidate_inner_statuses",
+        "candidate_inner_reasons",
+        "selected_candidate_indices",
+    )
+    for name in target_members:
+        arrays[name] = arrays[name][1:2].copy()
+
+    full_rows = 7
+    common_rows = 6
+    block_json = _BLOCK_ID_JSON_BYTES[:full_rows]
+    arrays["full_table_row_positions"] = np.arange(full_rows, dtype=np.int64)
+    arrays["full_table_trial_ids"] = np.arange(full_rows, dtype=np.int64)
+    arrays["full_table_block_ids_utf8"] = np.frombuffer(
+        b"".join(block_json),
+        dtype=np.uint8,
+    ).copy()
+    arrays["full_table_block_id_offsets"] = np.r_[
+        np.array([0], dtype=np.int64),
+        np.cumsum([len(value) for value in block_json], dtype=np.int64),
+    ]
+    arrays["trial_row_indices"] = np.arange(common_rows, dtype=np.int64)
+    arrays["encoded_target_values"] = np.full((1, full_rows), np.nan, dtype=np.float64)
+    arrays["encoded_target_values"][0, :common_rows] = np.linspace(
+        -1.0,
+        1.0,
+        common_rows,
+        dtype=np.float64,
+    )
+    arrays["eligibility_masks"] = np.zeros((1, full_rows), dtype=np.bool_)
+    arrays["eligibility_masks"][0, :common_rows] = True
+    arrays["eligibility_reason_codes"] = np.full((1, full_rows), "not_common", dtype="U32")
+    arrays["eligibility_reason_codes"][0, :common_rows] = ""
+    arrays["eligibility_counts"] = np.array([common_rows], dtype=np.int64)
+    arrays["outer_fold_ids"] = np.array([[0, 0, 1, 1, 2, 2]], dtype=np.int64)
+    arrays["inner_selection_fold_ids"] = np.full(
+        (1, 3, common_rows),
+        -1,
+        dtype=np.int64,
+    )
+
+    unavailable_reason = "inner_plan_unavailable"
+    arrays["fit_status"].fill("unavailable")
+    arrays["fit_reason_codes"].fill(unavailable_reason)
+    arrays["train_counts"].fill(4)
+    arrays["test_counts"].fill(2)
+    arrays["effective_feature_counts"].fill(0)
+    arrays["fold_scores"].fill(np.nan)
+    arrays["coefficient_values"].fill(np.nan)
+    arrays["fitted_intercepts"].fill(np.nan)
+    arrays["candidate_inner_scores"].fill(np.nan)
+    arrays["candidate_inner_statuses"].fill("invalid")
+    arrays["candidate_inner_reasons"].fill(unavailable_reason)
+    arrays["selected_candidate_indices"].fill(-1)
+    arrays["selected_parameters_json"].fill("")
+
+    meta = make_meta(
+        arrays,
+        scientific_config,
+        regularization_mode="tuned",
+        run_fingerprint=run_fingerprint,
+    )
+    meta["parameters"] = {
+        "regularization_mode": "tuned",
+        "outer_fold_count": 3,
+        "inner_fold_count": 3,
+        "bin_width_ms": 500,
+        "candidate_selection_metrics": {"relative_doubt": "r2"},
+    }
+    meta["units"] = {
+        "encoded_target_values": {"relative_doubt": "unitless"},
+        "fold_scores": {"relative_doubt": {"r2": "coefficient_of_determination"}},
+        "candidate_inner_scores": {
+            "relative_doubt": {"r2": "coefficient_of_determination"}
+        },
+        "coefficient_values": {
+            "relative_doubt": "unitless per pooled training standard deviation"
+        },
+        "fitted_intercepts": {"relative_doubt": "unitless"},
+        "time_bin_edges_s": "s",
+        "time_bin_centers_s": "s",
+        "stage_timing_seconds": "s",
+        "total_timing_seconds": "s",
+    }
+    return arrays, meta, scientific_config
+
+
+def test_dynamic_numerical_tuned_round_trip_uses_saved_dimensions_and_global_row_map(tmp_path):
+    """A valid tuned run is not limited to the small two-target fixture dimensions.
+
+    One numerical target has 19 full rows, 14 gapped common tensor rows, five
+    unequal block-safe outer folds, eight 500-ms bins, and five padded feature
+    slots. ``trial_row_indices`` are global full-table positions, not a
+    positional assumption about the common neural tensor.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    arrays, meta, scientific_config = make_dynamic_tuned_payload(input_paths)
+    run_directory = tmp_path / "dynamic-tuned-run"
+    results.save_task_decoding_run(
+        run_directory,
+        arrays=arrays,
+        meta=meta,
+        input_manifest=build_manifest(input_paths),
+        scientific_config=scientific_config,
+        feature_parameter_source=input_paths["feature_parameters"],
+        run_fingerprint="dynamic-run-fingerprint",
+    )
+
+    loaded = results.load_task_decoding_run(
+        run_directory,
+        expected_run_fingerprint="dynamic-run-fingerprint",
+    )
+    saved = loaded["arrays"]
+    assert saved["target_labels"].tolist() == ["relative_doubt"]
+    assert saved["fold_labels"].tolist() == [0, 1, 2, 3, 4]
+    assert saved["time_bin_centers_s"].shape == (8,)
+    assert saved["time_bin_edges_s"].tolist() == [
+        -2.0,
+        -1.5,
+        -1.0,
+        -0.5,
+        0.0,
+        0.5,
+        1.0,
+        1.5,
+        2.0,
+    ]
+    assert scientific_config["bin_width_ms"] == 500
+    assert saved["coefficient_values"].shape[-1] == 5
+    assert saved["trial_row_indices"].tolist() == [
+        0,
+        1,
+        3,
+        4,
+        6,
+        7,
+        9,
+        10,
+        12,
+        13,
+        15,
+        16,
+        17,
+        18,
+    ]
+    assert saved["full_table_trial_ids"].tolist() == list(range(19))
+    assert [np.count_nonzero(saved["outer_fold_ids"][0] == fold) for fold in range(5)] == [
+        2,
+        2,
+        2,
+        3,
+        3,
+    ]
+    assert np.isnan(saved["fold_scores"][0, :, :, :2]).all()
+    assert np.all(np.isfinite(saved["fold_scores"][0, :, :, 2]))
+    assert np.all(
+        saved["fixed_parameters_json"]
+        == json.dumps({"alpha": 0.1, "l1_ratio": 0.5}, sort_keys=True)
+    )
+    offsets = saved["full_table_block_id_offsets"]
+    block_bytes = saved["full_table_block_ids_utf8"]
+    assert block_bytes.dtype == np.dtype(np.uint8)
+    assert block_bytes.ndim == 1
+    assert offsets.shape == (saved["full_table_trial_ids"].size + 1,)
+    payload = block_bytes.tobytes()
+    blocks = [
+        json.loads(payload[start:stop].decode("utf-8"))
+        for start, stop in zip(offsets[:-1], offsets[1:], strict=True)
+    ]
+    assert blocks[0:2] == ["alpha", "alpha"]
+    assert blocks[17:] == ["target-ineligible-zero", "target-ineligible-one"]
+    assert payload[offsets[0] : offsets[1]] == json.dumps(
+        "alpha", separators=(",", ":")
+    ).encode("utf-8")
+    outer = saved["outer_fold_ids"][0]
+    inner = saved["inner_selection_fold_ids"][0]
+    for outer_fold in range(5):
+        outer_test = outer == outer_fold
+        assert np.all(inner[outer_fold, outer_test] == -1)
+        assert np.all(inner[outer_fold, outer < 0] == -1)
+        assert set(inner[outer_fold, inner[outer_fold] >= 0]) == {0, 1, 2}
+        inner_counts = np.bincount(inner[outer_fold, inner[outer_fold] >= 0], minlength=3)
+        assert np.all(inner_counts >= 2)
+        for common_row, full_row in enumerate(saved["trial_row_indices"]):
+            grouped_rows = [
+                row
+                for row, row_full in enumerate(saved["trial_row_indices"])
+                if blocks[row_full] == blocks[full_row] and inner[outer_fold, row] >= 0
+            ]
+            if grouped_rows:
+                assert len({int(inner[outer_fold, row]) for row in grouped_rows}) == 1
+    for common_row, full_row in enumerate(saved["trial_row_indices"]):
+        same_block = [
+            row
+            for row, row_full in enumerate(saved["trial_row_indices"])
+            if blocks[row_full] == blocks[full_row] and outer[row] >= 0
+        ]
+        assert len({int(outer[row]) for row in same_block}) == 1
+    expected_candidates = [
+        json.dumps(candidate, sort_keys=True)
+        for candidate in declared_candidates(scientific_config, "numerical")
+    ]
+    assert saved["candidate_parameter_json"][0].tolist() == expected_candidates
+    candidate_scores = saved["candidate_inner_scores"]
+    candidate_statuses = saved["candidate_inner_statuses"]
+    assert candidate_scores.shape == (1, 5, 3, 2, 8, 15, 3)
+    assert set(np.unique(candidate_statuses)) == {"invalid", "valid"}
+    for fit_index in np.ndindex(saved["selected_candidate_indices"].shape):
+        valid_candidates = np.all(candidate_statuses[fit_index] == "valid", axis=1)
+        means = np.mean(candidate_scores[fit_index], axis=1)
+        means[~valid_candidates] = -np.inf
+        selected = int(saved["selected_candidate_indices"][fit_index])
+        assert selected == int(np.argmax(means))
+        assert saved["selected_parameters_json"][fit_index] == saved[
+            "candidate_parameter_json"
+        ][0, selected]
+    assert loaded["meta"]["provenance"]["run_fingerprint"] == "dynamic-run-fingerprint"
+
+
+def test_save_rejects_outer_group_leakage_using_gapped_common_to_full_mapping(tmp_path):
+    """Outer leakage is checked through full-table block IDs, not common-row positions.
+
+    The two ``"alpha"`` common rows map to full rows 0 and 1. Swapping one
+    with the single ``"beta"`` fold preserves every fold cardinality, so the
+    only violated scientific invariant is the split behavioral block.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    arrays, meta, scientific_config = make_dynamic_tuned_payload(
+        input_paths,
+        run_fingerprint="gapped-leakage-fingerprint",
+    )
+    arrays["outer_fold_ids"] = arrays["outer_fold_ids"].copy()
+    arrays["outer_fold_ids"][0, [1, 2]] = arrays["outer_fold_ids"][0, [2, 1]]
+    arrays["inner_selection_fold_ids"] = rebuild_dynamic_inner_assignments(arrays)
+    run_directory = tmp_path / "gapped-leakage-run"
+
+    with pytest.raises(ValueError, match="[Oo]uter.*[Bb]lock|[Bb]lock.*[Ll]eakage"):
+        results.save_task_decoding_run(
+            run_directory,
+            arrays=arrays,
+            meta=meta,
+            input_manifest=build_manifest(input_paths),
+            scientific_config=scientific_config,
+            feature_parameter_source=input_paths["feature_parameters"],
+            run_fingerprint="gapped-leakage-fingerprint",
+        )
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+def test_save_rejects_inner_group_leakage_using_gapped_common_to_full_mapping(tmp_path):
+    """Inner validation blocks cannot split after mapping common rows to full-table groups."""
+    input_paths = write_input_fixture(tmp_path)
+    arrays, meta, scientific_config = make_dynamic_tuned_payload(
+        input_paths,
+        run_fingerprint="gapped-inner-leakage-fingerprint",
+    )
+    arrays["inner_selection_fold_ids"] = arrays["inner_selection_fold_ids"].copy()
+    arrays["inner_selection_fold_ids"][0, 0, 3] = 1
+    run_directory = tmp_path / "gapped-inner-leakage-run"
+
+    with pytest.raises(ValueError, match="[Ii]nner.*[Bb]lock|[Bb]lock.*[Ll]eakage"):
+        results.save_task_decoding_run(
+            run_directory,
+            arrays=arrays,
+            meta=meta,
+            input_manifest=build_manifest(input_paths),
+            scientific_config=scientific_config,
+            feature_parameter_source=input_paths["feature_parameters"],
+            run_fingerprint="gapped-inner-leakage-fingerprint",
+        )
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+def test_tuned_audit_requires_declared_grid_and_never_selects_an_invalid_candidate(tmp_path):
+    """Tuned audit JSON follows the frozen family grid and excludes invalid candidates.
+
+    A candidate with one invalid inner fold has a NaN score, ``"invalid"``
+    status, and a nonempty reason. It cannot be selected even when its
+    parameter JSON matches the selected-parameter cell exactly.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(
+        input_paths,
+        regularization_mode="tuned",
+        run_fingerprint="invalid-candidate-selection",
+    )
+    arrays = arguments["arrays"]
+    assert isinstance(arrays, dict)
+    config = arguments["scientific_config"]
+    assert isinstance(config, dict)
+    for target, family in enumerate(("categorical", "numerical")):
+        expected = [
+            json.dumps(item, sort_keys=True)
+            for item in declared_candidates(config, family)
+        ]
+        assert arrays["candidate_parameter_json"][target].tolist() == expected
+    statuses = arrays["candidate_inner_statuses"]
+    assert set(np.unique(statuses)) == {"invalid", "valid"}
+    invalid_scores = arrays["candidate_inner_scores"][statuses == "invalid"]
+    assert np.isnan(invalid_scores).all()
+    assert np.all(arrays["candidate_inner_reasons"][statuses == "invalid"] != "")
+
+    altered = {name: value.copy() for name, value in arrays.items()}
+    altered["selected_candidate_indices"][0, 0, 0, 0, 0] = 14
+    altered["selected_parameters_json"][0, 0, 0, 0, 0] = altered[
+        "candidate_parameter_json"
+    ][0, 14]
+    run_directory = tmp_path / "invalid-selected-candidate"
+    with pytest.raises(ValueError, match="candidate|invalid|selected"):
+        results.save_task_decoding_run(
+            run_directory,
+            arrays=altered,
+            meta=arguments["meta"],
+            input_manifest=arguments["input_manifest"],
+            scientific_config=config,
+            feature_parameter_source=arguments["feature_parameter_source"],
+            run_fingerprint="invalid-candidate-selection",
+        )
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "failure_pattern"),
+    (
+        ("reordered_grid", "candidate|grid|order"),
+        ("changed_grid", "candidate|grid|parameter"),
+        ("wrong_family_grid", "candidate|family|parameter"),
+        ("noncanonical_grid_json", "candidate|canonical|JSON"),
+        ("nonbest_selection", "selected|candidate|best|mean"),
+        ("finite_invalid_score", "candidate|invalid|nonfinite"),
+        ("unknown_status", "candidate|status"),
+        ("valid_nonempty_reason", "candidate|reason|valid"),
+        ("missing_inner_training_assignment", "inner|training|assignment"),
+        ("minus_one_selection_with_valid_candidate", "selected|candidate|valid"),
+    ),
+)
+def test_save_rejects_causal_tuned_candidate_audit_violations(
+    kind,
+    failure_pattern,
+    tmp_path,
+):
+    """Each malformed tuned audit state fails before publication for its own reason."""
+    input_paths = write_input_fixture(tmp_path)
+    fingerprint = f"candidate-audit-{kind}"
+    arrays, meta, scientific_config = make_dynamic_tuned_payload(
+        input_paths,
+        run_fingerprint=fingerprint,
+    )
+    arrays = {name: value.copy() for name, value in arrays.items()}
+    selection_index = (0, 0, 0, 0, 0)
+    candidate_index = selection_index + (slice(None), slice(None))
+    if kind == "reordered_grid":
+        arrays["candidate_parameter_json"][0, [0, 1]] = arrays["candidate_parameter_json"][
+            0, [1, 0]
+        ]
+        synchronize_selected_dynamic_parameters(arrays)
+    elif kind == "changed_grid":
+        arrays["candidate_parameter_json"][0, 0] = json.dumps(
+            {"alpha": 0.123, "l1_ratio": 0.1},
+            sort_keys=True,
+        )
+        synchronize_selected_dynamic_parameters(arrays)
+    elif kind == "wrong_family_grid":
+        arrays["candidate_parameter_json"][0, 0] = json.dumps(
+            {"C": 0.01, "l1_ratio": 0.1},
+            sort_keys=True,
+        )
+        synchronize_selected_dynamic_parameters(arrays)
+    elif kind == "noncanonical_grid_json":
+        arrays["candidate_parameter_json"][0, 0] = '{"l1_ratio":0.1,"alpha":0.001}'
+        synchronize_selected_dynamic_parameters(arrays)
+    elif kind == "nonbest_selection":
+        arrays["selected_candidate_indices"][selection_index] = 1
+        synchronize_selected_dynamic_parameters(arrays)
+        assert np.all(arrays["candidate_inner_statuses"][candidate_index][1] == "valid")
+    elif kind == "finite_invalid_score":
+        arrays["candidate_inner_scores"][selection_index + (14, 2)] = 0.50
+    elif kind == "unknown_status":
+        arrays["candidate_inner_statuses"][selection_index + (0, 0)] = "unknown"
+        arrays["candidate_inner_reasons"][selection_index + (0, 0)] = "unknown_status"
+    elif kind == "valid_nonempty_reason":
+        arrays["candidate_inner_reasons"][selection_index + (0, 0)] = "unexpected_reason"
+    elif kind == "missing_inner_training_assignment":
+        arrays["inner_selection_fold_ids"][0, 0, 2] = -1
+    else:
+        arrays["selected_candidate_indices"][selection_index] = -1
+        synchronize_selected_dynamic_parameters(arrays)
+    run_directory = tmp_path / kind
+
+    with pytest.raises(ValueError, match=failure_pattern):
+        results.save_task_decoding_run(
+            run_directory,
+            arrays=arrays,
+            meta=meta,
+            input_manifest=build_manifest(input_paths),
+            scientific_config=scientific_config,
+            feature_parameter_source=input_paths["feature_parameters"],
+            run_fingerprint=fingerprint,
+        )
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    "array_name",
+    tuple(name for name in required_array_names() if name != "fold_scores"),
+)
+def test_save_requires_exact_declared_axes_for_every_non_score_array(array_name, tmp_path):
+    """Every NPZ member has an exact named axis contract, not only fold scores."""
+    input_paths = write_input_fixture(tmp_path)
+    fingerprint = f"bad-axis-{array_name}"
+    arrays, meta, scientific_config = make_dynamic_tuned_payload(
+        input_paths,
+        run_fingerprint=fingerprint,
+    )
+    meta = json.loads(json.dumps(meta))
+    original_axes = meta["axes"][array_name]
+    if original_axes:
+        meta["axes"][array_name] = list(reversed(original_axes))
+        if meta["axes"][array_name] == original_axes:
+            meta["axes"][array_name] = [f"wrong_{original_axes[0]}"]
+    else:
+        meta["axes"][array_name] = ["not_a_scalar"]
+    run_directory = tmp_path / array_name
+
+    with pytest.raises(ValueError, match="axis|axes|metadata"):
+        results.save_task_decoding_run(
+            run_directory,
+            arrays=arrays,
+            meta=meta,
+            input_manifest=build_manifest(input_paths),
+            scientific_config=scientific_config,
+            feature_parameter_source=input_paths["feature_parameters"],
+            run_fingerprint=fingerprint,
+        )
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "failure_pattern"),
+    (
+        ("missing_units", "meta|unit|required"),
+        ("wrong_target_units", "unit|target|relative_doubt"),
+        ("wrong_score_units", "unit|score|r2"),
+        ("wrong_candidate_score_units", "unit|candidate|score|r2"),
+        ("wrong_coefficient_units", "unit|coefficient|relative_doubt"),
+        ("wrong_intercept_units", "unit|intercept|relative_doubt"),
+        ("wrong_edge_time_units", "unit|time"),
+        ("wrong_center_time_units", "unit|time"),
+        ("wrong_stage_timing_units", "unit|timing|stage"),
+        ("wrong_total_timing_units", "unit|timing|total"),
+        ("missing_provenance", "meta|provenance|required"),
+        ("missing_parameters", "meta|parameter|required"),
+        ("missing_paths", "path|meta|required"),
+        ("missing_schema_version", "meta|schema|required"),
+        ("missing_random_seed", "meta|seed|required"),
+        ("nonportable_paths", "path|meta|portable"),
+        ("missing_warnings", "warning|meta|required"),
+        ("outer_fold_parameter_mismatch", "outer|fold|parameter|config"),
+        ("inner_fold_parameter_mismatch", "inner|fold|parameter|config"),
+        ("bin_width_parameter_mismatch", "bin|width|parameter|config"),
+        ("selection_metric_parameter_mismatch", "selection|metric|parameter"),
+    ),
+)
+def test_save_rejects_missing_or_target_misaligned_required_meta(kind, failure_pattern, tmp_path):
+    """Meta is complete and units are keyed by the concrete saved target label."""
+    input_paths = write_input_fixture(tmp_path)
+    fingerprint = f"bad-meta-{kind}"
+    arrays, meta, scientific_config = make_dynamic_tuned_payload(
+        input_paths,
+        run_fingerprint=fingerprint,
+    )
+    meta = json.loads(json.dumps(meta))
+    if kind == "missing_units":
+        meta.pop("units")
+    elif kind == "wrong_target_units":
+        meta["units"]["encoded_target_values"]["relative_doubt"] = "encoded class"
+    elif kind == "wrong_score_units":
+        meta["units"]["fold_scores"]["relative_doubt"] = {"r2": "fraction"}
+    elif kind == "wrong_candidate_score_units":
+        meta["units"]["candidate_inner_scores"]["relative_doubt"] = {"r2": "fraction"}
+    elif kind == "wrong_coefficient_units":
+        meta["units"]["coefficient_values"]["relative_doubt"] = "log-odds per SD"
+    elif kind == "wrong_intercept_units":
+        meta["units"]["fitted_intercepts"]["relative_doubt"] = "log-odds"
+    elif kind == "wrong_edge_time_units":
+        meta["units"]["time_bin_edges_s"] = "ms"
+    elif kind == "wrong_center_time_units":
+        meta["units"]["time_bin_centers_s"] = "ms"
+    elif kind == "wrong_stage_timing_units":
+        meta["units"]["stage_timing_seconds"] = "minutes"
+    elif kind == "wrong_total_timing_units":
+        meta["units"]["total_timing_seconds"] = "minutes"
+    elif kind == "missing_provenance":
+        meta.pop("provenance")
+    elif kind == "missing_parameters":
+        meta.pop("parameters")
+    elif kind == "missing_paths":
+        meta.pop("paths")
+    elif kind == "missing_schema_version":
+        meta.pop("schema_version")
+    elif kind == "missing_random_seed":
+        meta.pop("random_seed")
+    elif kind == "nonportable_paths":
+        meta["paths"]["session_root"] = "../another-session"
+    elif kind == "missing_warnings":
+        meta.pop("warnings")
+    elif kind == "outer_fold_parameter_mismatch":
+        meta["parameters"]["outer_fold_count"] = 3
+    elif kind == "inner_fold_parameter_mismatch":
+        meta["parameters"]["inner_fold_count"] = 2
+    elif kind == "bin_width_parameter_mismatch":
+        meta["parameters"]["bin_width_ms"] = 100
+    else:
+        meta["parameters"]["candidate_selection_metrics"] = {
+            "relative_doubt": "balanced_accuracy"
+        }
+    run_directory = tmp_path / kind
+
+    with pytest.raises(ValueError, match=failure_pattern):
+        results.save_task_decoding_run(
+            run_directory,
+            arrays=arrays,
+            meta=meta,
+            input_manifest=build_manifest(input_paths),
+            scientific_config=scientific_config,
+            feature_parameter_source=input_paths["feature_parameters"],
+            run_fingerprint=fingerprint,
+        )
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "failure_pattern"),
+    (
+        ("encoded", "unit|target|current_action"),
+        ("score", "unit|score|current_action"),
+        ("auc_score", "unit|score|auc|current_action"),
+        ("candidate_score", "unit|candidate|score|current_action"),
+        ("coefficient", "unit|coefficient|current_action"),
+        ("intercept", "unit|intercept|current_action"),
+    ),
+)
+def test_save_rejects_current_action_target_specific_unit_mismatches(
+    kind,
+    failure_pattern,
+    tmp_path,
+):
+    """Categorical target units remain distinct from numerical native-target units."""
+    input_paths = write_input_fixture(tmp_path)
+    fingerprint = f"bad-current-action-units-{kind}"
+    arguments = make_run_save_arguments(
+        input_paths,
+        regularization_mode="tuned",
+        run_fingerprint=fingerprint,
+    )
+    meta = json.loads(json.dumps(arguments["meta"]))
+    if kind == "encoded":
+        meta["units"]["encoded_target_values"]["current_action"] = "unitless"
+    elif kind == "score":
+        meta["units"]["fold_scores"]["current_action"]["balanced_accuracy"] = "unitless"
+    elif kind == "auc_score":
+        meta["units"]["fold_scores"]["current_action"]["auc"] = "unitless"
+    elif kind == "candidate_score":
+        meta["units"]["candidate_inner_scores"]["current_action"][
+            "balanced_accuracy"
+        ] = "unitless"
+    elif kind == "coefficient":
+        meta["units"]["coefficient_values"]["current_action"] = "unitless per SD"
+    else:
+        meta["units"]["fitted_intercepts"]["current_action"] = "unitless"
+    run_directory = tmp_path / kind
+
+    with pytest.raises(ValueError, match=failure_pattern):
+        results.save_task_decoding_run(
+            run_directory,
+            arrays=arguments["arrays"],
+            meta=meta,
+            input_manifest=arguments["input_manifest"],
+            scientific_config=arguments["scientific_config"],
+            feature_parameter_source=arguments["feature_parameter_source"],
+            run_fingerprint=fingerprint,
+        )
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    ("array_name", "replacement"),
+    (
+        ("train_class_counts", (3, 5)),
+        ("test_class_counts", (1, 3)),
+    ),
+)
+def test_save_rejects_categorical_class_counts_inconsistent_with_target_fold_rows(
+    array_name,
+    replacement,
+    tmp_path,
+):
+    """Categorical train/test class counts must equal the labels in each grouped fold."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    arrays[array_name][0, 0, 0, 0, 0] = replacement
+    run_directory = tmp_path / f"wrong-{array_name}"
+
+    with pytest.raises(ValueError, match="class|count|fold"):
+        results.save_task_decoding_run(run_directory, arrays=arrays, **{
+            key: value for key, value in arguments.items() if key != "arrays"
+        })
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "failure_pattern"),
+    (
+        ("eligible_nan", "eligibility|target|finite"),
+        ("ineligible_finite", "eligibility|target|sentinel"),
+        ("eligible_reason", "eligibility|reason"),
+        ("ineligible_empty_reason", "eligibility|reason"),
+        ("mask_outer_disagreement", "eligibility|outer|fold"),
+    ),
+)
+def test_save_rejects_eligibility_value_reason_and_outer_sentinel_disagreements(
+    kind,
+    failure_pattern,
+    tmp_path,
+):
+    """Target values, masks, reasons, and outer -1 sentinels describe one state."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    if kind == "eligible_nan":
+        arrays["encoded_target_values"][1, 0] = np.nan
+    elif kind == "ineligible_finite":
+        arrays["encoded_target_values"][0, 11] = 0.0
+    elif kind == "eligible_reason":
+        arrays["eligibility_reason_codes"][1, 0] = "unexpected"
+    elif kind == "ineligible_empty_reason":
+        arrays["eligibility_reason_codes"][0, 11] = ""
+    else:
+        moved_value = arrays["encoded_target_values"][1, 0]
+        arrays["eligibility_masks"][1, 0] = False
+        arrays["encoded_target_values"][1, 0] = np.nan
+        arrays["eligibility_reason_codes"][1, 0] = "target_ineligible"
+        arrays["eligibility_masks"][1, 12] = True
+        arrays["encoded_target_values"][1, 12] = moved_value
+        arrays["eligibility_reason_codes"][1, 12] = ""
+    run_directory = tmp_path / kind
+
+    with pytest.raises(ValueError, match=failure_pattern):
+        results.save_task_decoding_run(run_directory, arrays=arrays, **{
+            key: value for key, value in arguments.items() if key != "arrays"
+        })
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "failure_pattern"),
+    (
+        ("valid_nonempty_reason", "fit|status|reason"),
+        ("unknown_fit_status", "fit|status"),
+        ("unavailable_empty_reason", "fit|status|reason"),
+        ("unavailable_finite_score", "fit|status|score"),
+        ("unavailable_finite_coefficient", "fit|status|coefficient"),
+        ("unavailable_finite_intercept", "fit|status|intercept"),
+        ("valid_nan_metric", "fit|score|nonfinite"),
+        ("valid_nan_active_coefficient", "coefficient|fit|nonfinite"),
+    ),
+)
+def test_save_rejects_fit_status_reason_metric_coefficient_and_intercept_disagreements(
+    kind,
+    failure_pattern,
+    tmp_path,
+):
+    """Fit status controls whether scores, active coefficients, and intercepts exist."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    fit_index = (0, 0, 0, 0, 0)
+    if kind == "valid_nonempty_reason":
+        arrays["fit_reason_codes"][fit_index] = "unexpected"
+    elif kind == "unknown_fit_status":
+        arrays["fit_status"][fit_index] = "mystery"
+        arrays["fit_reason_codes"][fit_index] = "unknown_status"
+    elif kind == "unavailable_empty_reason":
+        arrays["fit_status"][fit_index] = "unavailable"
+        arrays["fold_scores"][0, 0, 0, :, 0, 0] = np.nan
+        arrays["coefficient_values"][fit_index] = np.nan
+        arrays["fitted_intercepts"][fit_index] = np.nan
+    elif kind == "unavailable_finite_score":
+        arrays["fit_status"][fit_index] = "unavailable"
+        arrays["fit_reason_codes"][fit_index] = "no_features"
+        arrays["coefficient_values"][fit_index] = np.nan
+        arrays["fitted_intercepts"][fit_index] = np.nan
+    elif kind == "unavailable_finite_coefficient":
+        arrays["fit_status"][fit_index] = "unavailable"
+        arrays["fit_reason_codes"][fit_index] = "no_features"
+        arrays["fold_scores"][0, 0, 0, :, 0, 0] = np.nan
+        arrays["fitted_intercepts"][fit_index] = np.nan
+    elif kind == "unavailable_finite_intercept":
+        arrays["fit_status"][fit_index] = "unavailable"
+        arrays["fit_reason_codes"][fit_index] = "no_features"
+        arrays["fold_scores"][0, 0, 0, :, 0, 0] = np.nan
+        arrays["coefficient_values"][fit_index] = np.nan
+    elif kind == "valid_nan_metric":
+        arrays["fold_scores"][0, 0, 0, 0, 0, 0] = np.nan
+    else:
+        arrays["coefficient_values"][0, 0, 0, 0, 0, 0] = np.nan
+    run_directory = tmp_path / kind
+
+    with pytest.raises(ValueError, match=failure_pattern):
+        results.save_task_decoding_run(run_directory, arrays=arrays, **{
+            key: value for key, value in arguments.items() if key != "arrays"
+        })
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "failure_pattern"),
+    (
+        ("empty_active_id", "feature|identifier|active"),
+        ("wrong_active_region", "feature|region"),
+        ("active_padding_status", "feature|status|padding"),
+        ("inactive_available_status", "feature|mask|status"),
+        ("padding_nonempty_id", "feature|padding|identifier"),
+        ("padding_nonempty_region", "feature|padding|region"),
+    ),
+)
+def test_save_rejects_feature_identity_region_status_and_active_mask_disagreements(
+    kind,
+    failure_pattern,
+    tmp_path,
+):
+    """Feature metadata describes active padded coefficient columns without ambiguity."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    if kind == "empty_active_id":
+        arrays["coefficient_feature_ids"][0, 0, 0] = ""
+    elif kind == "wrong_active_region":
+        arrays["coefficient_feature_regions"][0, 0, 0] = "HPC"
+    elif kind == "active_padding_status":
+        arrays["coefficient_feature_statuses"][0, 0, 0] = "padding"
+    elif kind == "inactive_available_status":
+        arrays["coefficient_feature_statuses"][0, 0, 1] = "available"
+    elif kind == "padding_nonempty_id":
+        arrays["coefficient_feature_ids"][0, 0, 1] = "unexpected-padding-id"
+    else:
+        arrays["coefficient_feature_regions"][0, 0, 1] = "PFC"
+    run_directory = tmp_path / kind
+
+    with pytest.raises(ValueError, match=failure_pattern):
+        results.save_task_decoding_run(run_directory, arrays=arrays, **{
+            key: value for key, value in arguments.items() if key != "arrays"
+        })
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    ("array_name", "bad_dtype"),
+    (
+        ("candidate_parameter_json", np.dtype(np.float64)),
+        ("inner_selection_fold_ids", np.dtype(np.float64)),
+        ("candidate_inner_scores", np.dtype(np.int64)),
+        ("candidate_inner_statuses", np.dtype(np.float64)),
+        ("candidate_inner_reasons", np.dtype(np.float64)),
+        ("selected_candidate_indices", np.dtype(np.float64)),
+    ),
+)
+def test_save_requires_portable_empty_tuned_member_dtypes_in_fixed_mode(
+    array_name,
+    bad_dtype,
+    tmp_path,
+):
+    """Fixed-mode not-applicable tuned arrays retain their declared safe dtypes."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    arrays[array_name] = np.empty((0,), dtype=bad_dtype)
+    run_directory = tmp_path / array_name
+
+    with pytest.raises(ValueError, match="dtype|fixed|candidate|inner"):
+        results.save_task_decoding_run(run_directory, arrays=arrays, **{
+            key: value for key, value in arguments.items() if key != "arrays"
+        })
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+def replace_dynamic_block_payloads(
+    arrays: Mapping[str, np.ndarray],
+    payloads: Sequence[bytes],
+) -> None:
+    """Replace dynamic full-table block scalar bytes and recompute int64 offsets.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Mutable dynamic result payload containing full-table block members.
+    payloads : sequence[bytes]
+        One UTF-8 JSON byte sequence per full-table row, in row order.
+
+    Returns
+    -------
+    None
+        Updates the one-dimensional uint8 payload and ``(full_row + 1,)``
+        int64 boundary offsets in place.
+    """
+    arrays["full_table_block_ids_utf8"] = np.frombuffer(
+        b"".join(payloads),
+        dtype=np.uint8,
+    ).copy()
+    arrays["full_table_block_id_offsets"] = np.r_[
+        np.array([0], dtype=np.int64),
+        np.cumsum([len(payload) for payload in payloads], dtype=np.int64),
+    ]
+
+
+def dynamic_block_payloads(arrays: Mapping[str, np.ndarray]) -> list[bytes]:
+    """Return the exact saved canonical JSON byte sequence for each full row.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Dynamic result payload with concatenated block bytes and int64 offsets.
+
+    Returns
+    -------
+    list[bytes]
+        One raw block-label JSON value per full-table row, preserving type text.
+    """
+    payload = arrays["full_table_block_ids_utf8"].tobytes()
+    offsets = arrays["full_table_block_id_offsets"]
+    return [payload[start:stop] for start, stop in zip(offsets[:-1], offsets[1:])]
+
+
+@pytest.mark.parametrize(
+    ("kind", "failure_pattern"),
+    (
+        ("two_dimensional_payload", "block|payload|dimension|axis|schema"),
+        ("noncanonical_json", "block|canonical|JSON"),
+        ("bad_offset_start", "block|offset"),
+        ("bad_offset_end", "block|offset"),
+        ("descending_offsets", "block|offset"),
+        ("empty_offset_segment", "block|offset|empty"),
+        ("wrong_offset_length", "block|offset|shape"),
+        ("nonscalar_block_label", "block|scalar|label"),
+    ),
+)
+def test_save_rejects_isolated_dynamic_block_payload_and_offset_violations(
+    kind,
+    failure_pattern,
+    tmp_path,
+):
+    """Dynamic behavioral block storage is 1-D canonical scalar JSON with exact offsets."""
+    input_paths = write_input_fixture(tmp_path)
+    fingerprint = f"bad-block-{kind}"
+    arrays, meta, scientific_config = make_dynamic_tuned_payload(
+        input_paths,
+        run_fingerprint=fingerprint,
+    )
+    arrays = {name: value.copy() for name, value in arrays.items()}
+    if kind == "two_dimensional_payload":
+        arrays["full_table_block_ids_utf8"] = arrays["full_table_block_ids_utf8"].reshape(1, -1)
+    elif kind == "noncanonical_json":
+        payloads = dynamic_block_payloads(arrays)
+        payloads[0] = b'"alpha" '
+        replace_dynamic_block_payloads(arrays, payloads)
+    elif kind == "bad_offset_start":
+        arrays["full_table_block_id_offsets"][0] = 1
+    elif kind == "bad_offset_end":
+        arrays["full_table_block_id_offsets"][-1] -= 1
+    elif kind == "descending_offsets":
+        arrays["full_table_block_id_offsets"][2] = (
+            arrays["full_table_block_id_offsets"][1] - 1
+        )
+    elif kind == "empty_offset_segment":
+        arrays["full_table_block_id_offsets"][1] = 0
+    elif kind == "wrong_offset_length":
+        arrays["full_table_block_id_offsets"] = arrays["full_table_block_id_offsets"][:-1]
+    else:
+        payloads = dynamic_block_payloads(arrays)
+        payloads[0] = b"[]"
+        replace_dynamic_block_payloads(arrays, payloads)
+    run_directory = tmp_path / kind
+
+    with pytest.raises(ValueError, match=failure_pattern):
+        results.save_task_decoding_run(
+            run_directory,
+            arrays=arrays,
+            meta=meta,
+            input_manifest=build_manifest(input_paths),
+            scientific_config=scientific_config,
+            feature_parameter_source=input_paths["feature_parameters"],
+            run_fingerprint=fingerprint,
+        )
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "build_input_manifest",
+        "scientific_source_fingerprint",
+        "validate_scientific_source_cleanliness",
+        "build_run_fingerprint",
+        "save_target_checkpoint",
+        "load_target_checkpoint",
+        "save_task_decoding_run",
+        "load_task_decoding_run",
+    ),
+)
+def test_public_result_helpers_have_explicit_parameters_and_returns_docstrings(function_name):
+    """Every public WP5A seam states input and output contracts for scientific review."""
+    docstring = inspect.getdoc(getattr(results, function_name))
+    assert docstring is not None
+    assert "Parameters" in docstring
+    assert "Returns" in docstring
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "save_target_checkpoint",
+        "load_target_checkpoint",
+        "save_task_decoding_run",
+        "load_task_decoding_run",
+    ),
+)
+def test_array_bearing_public_helpers_document_shapes_axes_and_units(function_name):
+    """Array persistence helpers state shape/axis conventions and scientific units."""
+    docstring = inspect.getdoc(getattr(results, function_name))
+    assert docstring is not None
+    lowered = docstring.lower()
+    assert "shape" in lowered
+    assert "axis" in lowered
+    assert "unit" in lowered
+
+
+@pytest.mark.parametrize("function_name", ("_require", "_write_json_if_matching"))
+def test_private_validation_and_sidecar_helpers_document_returns(function_name):
+    """Private validation/publication helpers state their explicit return contract."""
+    docstring = inspect.getdoc(getattr(results, function_name))
+    assert docstring is not None
+    assert "Parameters" in docstring
+    assert "Returns" in docstring
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    ("_atomic_npz", "_decode_blocks", "_require", "_validate_arrays"),
+)
+def test_array_bearing_private_helpers_document_shapes_and_axes(function_name):
+    """Private array helpers state shape and axis contracts even without physical units."""
+    docstring = inspect.getdoc(getattr(results, function_name))
+    assert docstring is not None
+    lowered = docstring.lower()
+    assert "shape" in lowered
+    assert "axis" in lowered
+
+
+@pytest.mark.parametrize("function_name", ("_validate_arrays",))
+def test_scientific_private_array_helpers_document_applicable_units(function_name):
+    """Private schema helpers describe units when they interpret scientific arrays."""
+    docstring = inspect.getdoc(getattr(results, function_name))
+    assert docstring is not None
+    assert "unit" in docstring.lower()
+
+
+def test_tuned_no_valid_candidate_uses_explicit_unavailable_cell_sentinels(tmp_path):
+    """No-valid tuning cells retain invalid audit rows and an explicit unavailable fit.
+
+    The selected-index sentinel is -1 and the selected parameter text is empty;
+    this is distinct from a successful candidate zero and avoids fictional
+    fitted coefficients, intercepts, or outer scores.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(
+        input_paths,
+        regularization_mode="tuned",
+        run_fingerprint="no-valid-candidate",
+    )
+    arrays = arguments["arrays"]
+    assert isinstance(arrays, dict)
+    altered = {name: value.copy() for name, value in arrays.items()}
+    fit_index = (0, 0, 0, 0, 0)
+    audit_index = fit_index + (slice(None), slice(None))
+    altered["fit_status"][fit_index] = "unavailable"
+    altered["fit_reason_codes"][fit_index] = "no_valid_tuning_candidate"
+    altered["fold_scores"][0, 0, 0, :, 0, 0] = np.nan
+    altered["coefficient_values"][fit_index] = np.nan
+    altered["fitted_intercepts"][fit_index] = np.nan
+    requested_count = int(altered["requested_feature_counts"][fit_index])
+    altered["effective_feature_counts"][fit_index] = 0
+    altered["candidate_inner_scores"][audit_index] = np.nan
+    altered["candidate_inner_statuses"][audit_index] = "invalid"
+    altered["candidate_inner_reasons"][audit_index] = "candidate_fit_failed"
+    altered["selected_candidate_indices"][fit_index] = -1
+    altered["selected_parameters_json"][fit_index] = ""
+    run_directory = tmp_path / "no-valid-candidate"
+    results.save_task_decoding_run(
+        run_directory,
+        arrays=altered,
+        meta=arguments["meta"],
+        input_manifest=arguments["input_manifest"],
+        scientific_config=arguments["scientific_config"],
+        feature_parameter_source=arguments["feature_parameter_source"],
+        run_fingerprint="no-valid-candidate",
+    )
+    loaded = results.load_task_decoding_run(run_directory)
+    saved = loaded["arrays"]
+    assert saved["fit_status"][fit_index] == "unavailable"
+    assert saved["requested_feature_counts"][fit_index] == requested_count
+    assert saved["effective_feature_counts"][fit_index] == 0
+    assert saved["selected_candidate_indices"][fit_index] == -1
+    assert saved["selected_parameters_json"][fit_index] == ""
+    assert np.isnan(saved["candidate_inner_scores"][audit_index]).all()
+    assert set(saved["candidate_inner_statuses"][audit_index].flat) == {"invalid"}
+    assert set(saved["candidate_inner_reasons"][audit_index].flat) == {"candidate_fit_failed"}
+
+
+def test_tuned_inner_plan_unavailable_preserves_complete_invalid_audit_without_outputs(tmp_path):
+    """Unavailable grouped inner plans are distinct from evaluated no-valid candidates.
+
+    Every outer/refit cell is unavailable because no inner partition can be
+    formed. The candidate audit remains shaped and diagnosable, but contains no
+    finite score, selected setting, fitted score, coefficient, or intercept.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    fingerprint = "inner-plan-unavailable"
+    arrays, meta, scientific_config = make_inner_plan_unavailable_tuned_payload(
+        input_paths,
+        run_fingerprint=fingerprint,
+    )
+    requested_feature_counts = arrays["requested_feature_counts"].copy()
+    unavailable_reason = "inner_plan_unavailable"
+    blocks = encoded_block_labels(arrays)
+    outer_ids = arrays["outer_fold_ids"][0]
+    assert arrays["fold_labels"].tolist() == [0, 1, 2]
+    assert [np.count_nonzero(outer_ids == fold) for fold in range(3)] == [2, 2, 2]
+    for outer_fold in arrays["fold_labels"]:
+        test_rows = np.flatnonzero(outer_ids == outer_fold)
+        train_rows = np.flatnonzero(outer_ids != outer_fold)
+        test_blocks = {blocks[arrays["trial_row_indices"][row]] for row in test_rows}
+        train_blocks = {blocks[arrays["trial_row_indices"][row]] for row in train_rows}
+        assert len(test_blocks) == 1
+        assert len(train_blocks) == 2
+        assert len(train_blocks) < meta["parameters"]["inner_fold_count"]
+    run_directory = tmp_path / "inner-plan-unavailable"
+    results.save_task_decoding_run(
+        run_directory,
+        arrays=arrays,
+        meta=meta,
+        input_manifest=build_manifest(input_paths),
+        scientific_config=scientific_config,
+        feature_parameter_source=input_paths["feature_parameters"],
+        run_fingerprint=fingerprint,
+    )
+
+    loaded = results.load_task_decoding_run(
+        run_directory,
+        expected_run_fingerprint=fingerprint,
+    )
+    saved = loaded["arrays"]
+    assert np.all(saved["inner_selection_fold_ids"] == -1)
+    assert set(saved["fit_status"].flat) == {"unavailable"}
+    assert set(saved["fit_reason_codes"].flat) == {unavailable_reason}
+    np.testing.assert_array_equal(saved["requested_feature_counts"], requested_feature_counts)
+    assert np.all(saved["effective_feature_counts"] == 0)
+    assert np.isnan(saved["fold_scores"]).all()
+    assert np.isnan(saved["coefficient_values"]).all()
+    assert np.isnan(saved["fitted_intercepts"]).all()
+    assert np.isnan(saved["candidate_inner_scores"]).all()
+    assert set(saved["candidate_inner_statuses"].flat) == {"invalid"}
+    assert set(saved["candidate_inner_reasons"].flat) == {unavailable_reason}
+    assert np.all(saved["selected_candidate_indices"] == -1)
+    assert not np.any(saved["selected_parameters_json"] != "")
+
+
+def test_save_validates_schema_before_creating_a_result_npz(tmp_path):
+    """Malformed fit-array dtypes fail before an NPZ can look complete on disk."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(
+        input_paths,
+        regularization_mode="fixed",
+        run_fingerprint="invalid-before-publication",
+    )
+    arrays = arguments["arrays"]
+    assert isinstance(arrays, dict)
+    altered = {name: value.copy() for name, value in arrays.items()}
+    altered["fit_status"] = altered["fit_status"].astype(object)
+    run_directory = tmp_path / "prevalidation-run"
+
+    with pytest.raises(ValueError, match="dtype|schema|fit"):
+        results.save_task_decoding_run(
+            run_directory,
+            arrays=altered,
+            meta=arguments["meta"],
+            input_manifest=arguments["input_manifest"],
+            scientific_config=arguments["scientific_config"],
+            feature_parameter_source=arguments["feature_parameter_source"],
+            run_fingerprint="invalid-before-publication",
+        )
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    "status_output",
+    (
+        "R  docs/unrelated.md -> src/neural_analysis/task_decoding/renamed_model.py\n",
+        '?? "src/neural_analysis/task_decoding/new science.py"\n',
+    ),
+)
+def test_cleanliness_rejects_renamed_and_quoted_task_package_paths(
+    status_output,
+    tmp_path,
+    monkeypatch,
+):
+    """Git porcelain parsing identifies relevant paths after rename and quoting syntax."""
+    repository_root = write_scoped_source_tree(tmp_path, name="repository")
+    patch_git_commands(monkeypatch, status_output=status_output)
+
+    with pytest.raises(ValueError, match="clean|source|dirty|untracked"):
+        results.validate_scientific_source_cleanliness(repository_root)
+
+
+def test_cleanliness_requires_tracking_for_an_added_task_decoding_python_module(
+    tmp_path,
+    monkeypatch,
+):
+    """A dynamically discovered task package module is part of clean scientific source."""
+    repository_root = write_scoped_source_tree(tmp_path, name="repository")
+    added_module = repository_root / "src/neural_analysis/task_decoding/added_science.py"
+    added_module.write_text("# dynamically discovered scientific module\n", encoding="ascii")
+    patch_git_commands(monkeypatch, status_output="")
+
+    with pytest.raises(ValueError, match="tracked|source|scientific"):
+        results.validate_scientific_source_cleanliness(repository_root)
