@@ -124,7 +124,7 @@ def test_maintainer_readme_owns_every_package_file_and_external_entrypoint():
 
 def test_scientist_quickstart_documents_all_current_cli_routes():
     """The scientist guide gives copyable single-session and batch workflows."""
-    readme = _read_required_text(SCIENTIST_README)
+    readme = " ".join(_read_required_text(SCIENTIST_README).split())
     required_fragments = (
         f"python -m {SESSION_MODULE} dry-run",
         f"python -m {SESSION_MODULE} new",
@@ -230,7 +230,7 @@ def test_quickstart_paths_match_implementation_constants():
 
 def test_quickstart_defines_safe_unattended_and_backfill_workflows():
     """The guide makes unattended ownership and narrow CSV migration explicit."""
-    readme = _read_required_text(SCIENTIST_README).lower()
+    readme = " ".join(_read_required_text(SCIENTIST_README).lower().split())
     for fragment in (
         "close the terminal",
         "close the codex task",
