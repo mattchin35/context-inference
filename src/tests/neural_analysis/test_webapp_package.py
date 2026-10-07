@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import ast
 import importlib
+import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from src.neural_analysis import psth_webapp as legacy_webapp
+from src.tests.neural_analysis.task_decoding.test_results import (
+    save_run_fixture,
+    write_input_fixture,
+)
 
 
 PACKAGE_ROOT = Path(__file__).parents[2] / "neural_analysis" / "webapp"
@@ -251,3 +259,176 @@ def test_root_module_keeps_direct_streamlit_dispatch() -> None:
         and any(isinstance(child, ast.Name) and child.id == "__name__" for child in ast.walk(node.test))
         for node in tree.body
     )
+
+
+def _mark_complete(run_directory: Path) -> None:
+    """Write the small lifecycle record required for completed-run discovery.
+
+    Parameters
+    ----------
+    run_directory : pathlib.Path
+        Synthetic saved-result directory.
+
+    Returns
+    -------
+    None
+        Writes only a pytest-owned ``state.json`` file.
+    """
+    (run_directory / "state.json").write_text(
+        json.dumps({"lifecycle": "complete", "final_results_published": True}),
+        encoding="ascii",
+    )
+
+
+def test_task_decoding_view_has_one_saved_result_only_owner() -> None:
+    """Discovery, rendering, and coefficient presentation share one canonical owner."""
+    task_view = _canonical_module("task_decoding_views")
+
+    for object_name in (
+        "resolve_task_decoding_results_root",
+        "discover_task_decoding_runs",
+        "render_task_decoding_view",
+    ):
+        assert getattr(task_view, object_name).__module__ == task_view.__name__
+    source = (PACKAGE_ROOT / "task_decoding_views.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert "src.neural_analysis.task_decoding.results" in imported_modules
+    assert not any(
+        name.endswith(
+            ("task_decoding.modeling", "task_decoding.pipeline", "task_decoding.activity")
+        )
+        for name in imported_modules
+    )
+
+
+def test_task_decoding_results_root_is_session_relative_and_contained(tmp_path: Path) -> None:
+    """The display locator cannot traverse or resolve outside the selected session."""
+    task_view = _canonical_module("task_decoding_views")
+    session_root = tmp_path / "session"
+    session_root.mkdir()
+
+    assert task_view.resolve_task_decoding_results_root(session_root, "analysis_runs") == (
+        session_root / "analysis_runs"
+    ).resolve()
+    assert task_view.resolve_task_decoding_results_root(session_root, "reports/decoding") == (
+        session_root / "reports" / "decoding"
+    ).resolve()
+    for locator in ("../outside", str(tmp_path / "absolute"), "."):
+        with pytest.raises(ValueError, match="session|relative|root"):
+            task_view.resolve_task_decoding_results_root(session_root, locator)
+
+
+def test_discovery_lists_only_direct_valid_completed_children(tmp_path: Path) -> None:
+    """Hidden, nested, incomplete, and corrupt runs never enter the selector."""
+    task_view = _canonical_module("task_decoding_views")
+    inputs = write_input_fixture(tmp_path)
+    results_root = inputs["session_root"] / "analysis_runs"
+    valid = results_root / "20261007_120000_task_decoding"
+    save_run_fixture(valid, inputs, regularization_mode="fixed")
+    _mark_complete(valid)
+    hidden = results_root / ".incoming-transfer"
+    save_run_fixture(hidden, inputs, regularization_mode="fixed")
+    _mark_complete(hidden)
+    incomplete = results_root / "incomplete"
+    incomplete.mkdir()
+    (incomplete / "state.json").write_text(
+        json.dumps({"lifecycle": "running", "final_results_published": False}),
+        encoding="ascii",
+    )
+    corrupt = results_root / "corrupt"
+    corrupt.mkdir()
+    _mark_complete(corrupt)
+    nested = results_root / "group" / "nested-complete"
+    save_run_fixture(nested, inputs, regularization_mode="fixed")
+    _mark_complete(nested)
+
+    discovered = task_view.discover_task_decoding_runs(inputs["session_root"])
+
+    assert [item.run_directory for item in discovered] == [valid.resolve()]
+    assert discovered[0].run_fingerprint == "run-fingerprint-test"
+
+
+def test_metadata_keeps_saved_result_view_available_without_raw_sources(tmp_path: Path) -> None:
+    """Saved inspection remains selectable when live spike and behavior inputs disappear."""
+    from dataclasses import replace
+    from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
+
+    session_inputs = _canonical_module("session_inputs")
+    session = _write_resolved_session(tmp_path)
+    session = replace(
+        session,
+        behavior=replace(
+            session.behavior,
+            trial_table_file=None,
+        ),
+        probes=tuple(
+            replace(probe, sorter_directory=None, alignment_file=None)
+            for probe in session.probes
+        ),
+    )
+
+    availability = session_inputs.metadata_view_availability(session)
+
+    assert session_inputs.PLOT_VIEW_TASK_DECODING in session_inputs.PLOT_VIEW_OPTIONS
+    assert availability[session_inputs.PLOT_VIEW_TASK_DECODING].available is True
+
+
+def test_metadata_route_renders_saved_results_before_population_or_raw_loading(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Selecting the saved view returns before population controls and raw loaders."""
+    from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
+
+    app = _canonical_module("app")
+    session_inputs = _canonical_module("session_inputs")
+    session = _write_resolved_session(tmp_path)
+    calls: list[tuple[str, object]] = []
+
+    class Sidebar:
+        """Minimal metadata sidebar selecting only the WP7 saved-results route."""
+
+        def button(self, *_args: object, **_kwargs: object) -> bool:
+            return False
+
+        def caption(self, message: str) -> None:
+            calls.append(("caption", message))
+
+        def selectbox(self, label: str, **_kwargs: object) -> str:
+            assert label == "Plot view"
+            return session_inputs.PLOT_VIEW_TASK_DECODING
+
+    fake_streamlit = SimpleNamespace(
+        sidebar=Sidebar(),
+        set_page_config=lambda **kwargs: calls.append(("page", kwargs)),
+        title=lambda value: calls.append(("title", value)),
+        cache_resource=SimpleNamespace(clear=lambda: None),
+        cache_data=SimpleNamespace(clear=lambda: None),
+        rerun=lambda: None,
+        warning=lambda message: calls.append(("warning", message)),
+    )
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("saved-results routing must precede raw/population loading")
+
+    monkeypatch.setattr(app, "st", fake_streamlit)
+    monkeypatch.setattr(app, "parse_webapp_arguments", lambda _argv: SimpleNamespace(
+        session_metadata=tmp_path / "neural_session.json"
+    ))
+    monkeypatch.setattr(app, "load_webapp_session", lambda _path: session)
+    monkeypatch.setattr(
+        app,
+        "render_task_decoding_view",
+        lambda st_module, selected: calls.append(("task-view", (st_module, selected))),
+    )
+    monkeypatch.setattr(app, "_metadata_population_controls", forbidden)
+    monkeypatch.setattr(app, "load_metadata_viewer_data_cached", forbidden)
+
+    app.main(())
+
+    assert [name for name, _value in calls].count("task-view") == 1
