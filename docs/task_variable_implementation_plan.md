@@ -1,10 +1,8 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP5A production review found shared
-split-label and regional-transform invariants after the 358-case suite passed.
-The corrected 363-case persistence contract plus 16 modeling split cases are
-committed and independently approved under a staged RED gate. Production
-correction remains uncommitted.
+**Status:** Implementation authorized; WP5A result persistence, portable
+identity, checkpointing, and atomic publication are complete and independently
+approved. WP5B single-session lifecycle and CLI tests are the next package.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -21,24 +19,23 @@ is committed at `a8787aa`; complete tuned production and provenance are
 committed at `b844f26` after independent approval. WP5A base saved-results
 tests are committed at `4a5664a`; independently approved dynamic-schema,
 semantic, and frozen-control corrections are committed at `bc628c4` and
-`2c5f086`. Real-state RED coverage is committed at `dedde7d`, and the final
-fold-transform/split-causality correction is committed at `7f8373b`; the
-shared-split and exact-transform correction is committed at `3b69f97`. Their
-bounded `modeling.py` and `results.py` correction is the single next package.
-No experimental-data mutation, decoding output, benchmark, transfer, local
-long run, or cluster action is authorized.
+`2c5f086`. Real-state RED coverage is committed at `dedde7d`; later transform,
+shared-split, exact-PCA, and sparse-tuning corrections are committed through
+`c7c2912`. WP5A production is committed at `1bd0f69` after independent
+approval. WP5B tests for `pipeline.py` and the session CLI are next. No
+experimental-data mutation, decoding output, benchmark, transfer, local long
+run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local implementation HEAD: `3b69f97`;
+- local implementation HEAD: `1bd0f69`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
-- WP4 is complete and its handoff is committed at `01f8b0f`; WP5A base,
-  first supplemental, real-state, transform-causality, and shared-split tests
-  are committed, while the uncommitted `results.py` candidate remains rejected
-  until it satisfies the final persistence and modeling contracts; and
+- WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
+  production are complete through `1bd0f69`, including the final sparse tuned
+  transform-evidence review; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -67,13 +64,11 @@ long run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** add one shared type-preserving group-label normalizer to
-the grouped splitter path in `src/neural_analysis/task_decoding/modeling.py`,
-remove the results-only scientific fork, then correct the staged regional
-availability, per-region PCA masks, exact PCA-width, and cross-selected-cell
-checks in `src/neural_analysis/task_decoding/results.py` without changing
-committed tests. Stop for independent production review before declaring WP5A
-GREEN.
+**Next exact action:** write the bounded WP5B RED tests in
+`src/tests/neural_analysis/task_decoding/test_pipeline.py` for preparation,
+revalidation, execution/resume, single-writer state, failure boundaries,
+logging/summary, detachment, and read-only status. Obtain independent tests-only
+approval and commit them before creating `pipeline.py` or `run_session.py`.
 
 ### Authority order
 
@@ -98,7 +93,7 @@ When resuming, use this order:
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
 | WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
 | WP4 grouped modeling | Complete: fixed GREEN `a8787aa`, tuned GREEN `b844f26` | None |
-| WP5 results and session pipeline | WP5A 363-case persistence plus 16-case shared-split RED contract committed through `3b69f97`; production correction in progress | WP5A corrected GREEN plus independent production approval |
+| WP5 results and session pipeline | WP5A complete: final tests `c7c2912`, GREEN `1bd0f69` | WP5B lifecycle/CLI RED tests and independent approval |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
 | WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
 | WP8 documentation and examples | Pending prerequisite | CLI/webapp interfaces stable through WP7 |
@@ -1068,6 +1063,54 @@ Use this template for each appended record:
   staggered selected-cell reconciliation, run both full modules and the full
   task-decoding suite, and obtain fresh independent production approval before
   the WP5A GREEN commit.
+
+#### 2026-10-07 - WP5A saved-results GREEN handoff
+
+- State: WP5A is complete. The saved-result schema, portable input and scoped
+  source identities, run fingerprints, target checkpoints, atomic sidecars and
+  final NPZ publication, and strict loader validation are GREEN. Grouped split
+  semantics and persisted fold-transform evidence now use the same scientific
+  contracts as WP4.
+- Authorization: project implementation remains authorized. Work used only
+  deterministic temporary files and synthetic arrays; no experimental data,
+  decoding run, benchmark, transfer, or scheduler action was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / same Terra xhigh production
+  worker / independent Sol xhigh modeling-to-persistence reviewer.
+- Start HEAD / end HEAD: shared-split RED handoff `646e49b` / WP5A GREEN
+  production commit `1bd0f69`.
+- Owned files: added
+  `src/neural_analysis/task_decoding/results.py` and modified
+  `src/neural_analysis/task_decoding/modeling.py`. Two genuine stale or missing
+  test contracts found during production review were corrected first in
+  `src/tests/neural_analysis/task_decoding/test_results.py` and committed
+  separately at `072b921` and `c7c2912`.
+- GREEN/regression commands and results: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest -q
+  src/tests/neural_analysis/task_decoding/test_modeling.py` passed 96 tests with
+  two expected sklearn class-size warnings. The result suite passed 366 tests.
+  `env UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest -q
+  src/tests/neural_analysis/task_decoding` passed 605 tests with five existing
+  dependency warnings: three Pynapple interval-rounding warnings and the same
+  two sklearn class-size warnings. Pycompile, the 100-column check,
+  `git diff --check`, and generated-bytecode cleanup passed.
+- Commits: exact regional-PCA test correction `072b921`; sparse tuned-transform
+  RED `c7c2912`; independently approved WP5A production `1bd0f69`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: one shared type-preserving sortable identity
+  now governs categorical/numerical outer and inner grouped splitting while
+  retaining homogeneous numeric ordering. Saved-result validation derives
+  underlying PFC/HPC transform evidence from both standalone cells and valid
+  combined segments, including sparse tuned selections; it does not invent
+  segment masks from post-estimator failures. Regional availability, combined
+  counts, mask identity, and exact PCA component counts are checked against
+  reusable direct-unit and training-observation evidence. No WP5A blocker
+  remains after the final independent review.
+- Exact next action: begin WP5B with tests only. Freeze the shared
+  prepare/revalidate/execute contract, immutable run directory and lifecycle,
+  checkpoint resume and unexpected-failure behavior, durable logs and summary,
+  single-writer guard, standard-library detached launcher, and one-shot
+  read-only status interface. Commit an independently approved RED suite before
+  implementing `pipeline.py` or `run_session.py`.
 
 ## 1. Objective
 
