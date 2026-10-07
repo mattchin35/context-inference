@@ -1341,6 +1341,7 @@ def test_unexpected_error_marks_failed_flushes_and_keeps_checkpoints(monkeypatch
         completed_target,
         prepared_full_fingerprint(run_directory),
     )
+    patch_coherent_execution(monkeypatch, make_coherent_model_records(paths))
     monkeypatch.setattr(
         pipeline.modeling,
         "decode_target",
@@ -1369,6 +1370,7 @@ def test_interruption_records_resumable_state_and_nonzero_cli(monkeypatch, tmp_p
         completed_target,
         prepared_full_fingerprint(run_directory),
     )
+    patch_coherent_execution(monkeypatch, make_coherent_model_records(paths))
     monkeypatch.setattr(
         pipeline.modeling,
         "decode_target",
