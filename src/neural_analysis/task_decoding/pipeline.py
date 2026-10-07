@@ -27,7 +27,13 @@ import pandas as pd
 
 from src.neural_analysis.session_metadata import load_session_metadata, resolve_session_metadata
 from src.neural_analysis.task_decoding import activity, config as decoding_config
-from src.neural_analysis.task_decoding import modeling, plotting, results, targets
+from src.neural_analysis.task_decoding import (
+    modeling,
+    plotting,
+    resource_usage,
+    results,
+    targets,
+)
 
 
 _RUN_PREFIX = "task_variable_decoding_"
@@ -530,6 +536,76 @@ def _resource_envelope(
     }
 
 
+def _target_diagnostics(
+    config: decoding_config.TaskDecodingConfig,
+    target_table: pd.DataFrame,
+    trial_row_indices: np.ndarray,
+) -> list[dict[str, object]]:
+    """Describe target eligibility and grouped outer-split feasibility.
+
+    Parameters
+    ----------
+    config : TaskDecodingConfig
+        Frozen target and grouped-fold settings.
+    target_table : pandas.DataFrame
+        Full chronological table shaped ``(full_trial, columns)``.
+    trial_row_indices : numpy.ndarray
+        One-dimensional zero-based full-table row positions with bilateral
+        neural coverage, shape ``(tensor_trial,)``.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Ordered JSON-safe target diagnostics. Counts are dimensionless and
+        numerical minima/maxima retain the target's native units.
+    """
+    common_rows = np.asarray(trial_row_indices, dtype=np.int64)
+    diagnostics: list[dict[str, object]] = []
+    for target_identifier in config.target_names:
+        target_family = _family_for_label(target_identifier)
+        common_valid = activity.project_target_mask_to_tensor_rows(
+            common_rows,
+            target_table[f"{target_identifier}_valid"].to_numpy(dtype=bool),
+        )
+        eligible_rows = common_rows[common_valid]
+        values = target_table.iloc[eligible_rows][target_identifier].to_numpy(
+            dtype=float
+        )
+        blocks = target_table.iloc[eligible_rows]["block_id"].to_numpy(copy=True)
+        split_plan = modeling.make_outer_splits(
+            values,
+            blocks,
+            target_family=target_family,
+            fold_count=config.outer_fold_count,
+        )
+        class_counts: dict[str, int] = {}
+        value_min: float | None = None
+        value_max: float | None = None
+        if target_family == "categorical":
+            unique_values, counts = np.unique(values, return_counts=True)
+            class_counts = {
+                str(int(value)) if float(value).is_integer() else str(float(value)): int(count)
+                for value, count in zip(unique_values, counts, strict=True)
+            }
+        elif values.size:
+            value_min = float(np.min(values))
+            value_max = float(np.max(values))
+        diagnostics.append(
+            {
+                "target_identifier": target_identifier,
+                "target_family": target_family,
+                "eligible_trial_count": int(eligible_rows.size),
+                "block_count": int(np.unique(blocks).size),
+                "class_counts": class_counts,
+                "value_min": value_min,
+                "value_max": value_max,
+                "outer_split_available": split_plan.is_available,
+                "outer_split_unavailable_reason": split_plan.unavailable_reason,
+            }
+        )
+    return diagnostics
+
+
 def plan_task_decoding_session(config_path: Path | str) -> dict[str, object]:
     """Inspect one session's bounded inputs without loading spikes or fitting models.
 
@@ -590,6 +666,11 @@ def plan_task_decoding_session(config_path: Path | str) -> dict[str, object]:
         },
         "regularization_mode": config.regularization_mode,
         "resource_envelope": _resource_envelope(config, target_table, report),
+        "target_diagnostics": _target_diagnostics(
+            config,
+            target_table,
+            report.trial_row_indices,
+        ),
     }
 
 
@@ -2333,6 +2414,42 @@ def _region_metadata(region_activity: activity.RegionActivity) -> dict[str, obje
     }
 
 
+def _target_measurement_counts(
+    config: decoding_config.TaskDecodingConfig,
+    result: modeling.TargetDecodingResult,
+    *,
+    time_bin_count: int,
+) -> tuple[int, int, int]:
+    """Return planned fits and valid/invalid outer cells for one target.
+
+    Parameters
+    ----------
+    config : TaskDecodingConfig
+        Frozen fold and regularization controls.
+    result : TargetDecodingResult
+        Newly decoded or checkpoint-restored target record.
+    time_bin_count : int
+        Common dimensionless event-relative time-bin count.
+
+    Returns
+    -------
+    tuple[int, int, int]
+        Requested estimator fits, valid outer cells, and invalid outer cells.
+        An outer-unavailable target counts every planned outer cell as invalid.
+    """
+    outer_cell_count = config.outer_fold_count * time_bin_count * 3 * 2
+    fits_per_cell = (
+        15 * config.inner_fold_count + 1
+        if config.regularization_mode == "tuned"
+        else 1
+    )
+    valid_outer_cells = sum(record.is_valid for record in result.fold_records)
+    if valid_outer_cells > outer_cell_count or len(result.fold_records) > outer_cell_count:
+        raise ValueError("Target result contains more outer cells than configured.")
+    invalid_outer_cells = outer_cell_count - valid_outer_cells
+    return outer_cell_count * fits_per_cell, valid_outer_cells, invalid_outer_cells
+
+
 def _decode_remaining_targets(
     *,
     config: decoding_config.TaskDecodingConfig,
@@ -2343,6 +2460,7 @@ def _decode_remaining_targets(
     existing: Mapping[str, modeling.TargetDecodingResult],
     run_directory: Path,
     full_fingerprint: str,
+    resource_tracker: resource_usage.ResourceUsageTracker,
 ) -> list[modeling.TargetDecodingResult]:
     """Restore valid target checkpoints and decode only configured missing targets.
 
@@ -2362,6 +2480,9 @@ def _decode_remaining_targets(
         Run directory where new complete target checkpoints are published.
     full_fingerprint : str
         Exact prepared scientific identity required by target checkpoints.
+    resource_tracker : ResourceUsageTracker
+        Run-local cumulative measurement owner. It publishes one atomic
+        snapshot after every newly saved target checkpoint.
 
     Returns
     -------
@@ -2374,8 +2495,21 @@ def _decode_remaining_targets(
     pfc_ids = tuple(pfc_activity.unit_metadata["unit_id"].astype(str))
     hpc_ids = tuple(hpc_activity.unit_metadata["unit_id"].astype(str))
     for label in config.target_names:
+        target_family = _family_for_label(label)
         restored = existing.get(label)
         if restored is not None:
+            requested, valid, invalid = _target_measurement_counts(
+                config,
+                restored,
+                time_bin_count=rate_tensors.pfc_rate_tensor_hz.shape[1],
+            )
+            resource_tracker.record_restored_target(
+                target_label=label,
+                target_family=target_family,
+                requested_fit_count=requested,
+                valid_outer_cell_count=valid,
+                invalid_outer_cell_count=invalid,
+            )
             output.append(restored)
             continue
         common_valid = activity.project_target_mask_to_tensor_rows(
@@ -2385,9 +2519,10 @@ def _decode_remaining_targets(
         selected_rows = common_rows[common_valid]
         target_values = target_table.loc[selected_rows, label].to_numpy(dtype=float)
         block_ids = target_table.loc[selected_rows, "block_id"].to_numpy(copy=True)
+        target_started = time.perf_counter()
         result = modeling.decode_target(
             target_identifier=label,
-            target_family=_family_for_label(label),
+            target_family=target_family,
             target_values=target_values,
             block_ids=block_ids,
             pfc_rate_tensor_hz=rate_tensors.pfc_rate_tensor_hz[common_valid],
@@ -2399,7 +2534,18 @@ def _decode_remaining_targets(
             outer_fold_count=config.outer_fold_count,
             inner_fold_count=config.inner_fold_count,
             regularization_mode=config.regularization_mode,
+            timing_callback=lambda event, target_label=label, family=target_family: (
+                resource_tracker.record_model_event(
+                    target_label=target_label,
+                    target_family=family,
+                    operation=str(event["operation"]),
+                    region_configuration=event["region_configuration"],
+                    representation=event["representation"],
+                    elapsed_seconds=float(event["elapsed_seconds"]),
+                )
+            ),
         )
+        target_seconds = time.perf_counter() - target_started
         results.save_target_checkpoint(
             run_directory / "checkpoints" / f"{label}.npz",
             target_label=label,
@@ -2416,6 +2562,20 @@ def _decode_remaining_targets(
             current_stage="modeling",
             completed_targets=completed,
         )
+        requested, valid, invalid = _target_measurement_counts(
+            config,
+            result,
+            time_bin_count=rate_tensors.pfc_rate_tensor_hz.shape[1],
+        )
+        resource_tracker.finish_target(
+            target_label=label,
+            target_family=target_family,
+            total_seconds=target_seconds,
+            requested_fit_count=requested,
+            valid_outer_cell_count=valid,
+            invalid_outer_cell_count=invalid,
+        )
+        resource_tracker.snapshot(status="running", completed_targets=completed)
         _append_log(run_directory, f"target complete {label}")
     return output
 
@@ -2510,6 +2670,7 @@ def _write_run_summary(
     execution: Mapping[str, object],
     session_id: str,
     total_seconds: float,
+    resource_evidence: Mapping[str, object],
 ) -> None:
     """Write one immutable concise human-readable completion summary.
 
@@ -2529,6 +2690,9 @@ def _write_run_summary(
         Canonical resolved session identifier, independent of local paths.
     total_seconds : float
         Total elapsed pipeline duration in seconds.
+    resource_evidence : mapping[str, object]
+        Current validated resource snapshot. RSS/output sizes are bytes and
+        wall/user/system timings are seconds.
 
     Returns
     -------
@@ -2577,6 +2741,12 @@ def _write_run_summary(
         )
         + ".",
         f"Total timing: {total_seconds:.6f} s.",
+        "Resource measurement: resource.getrusage.",
+        f"Peak RSS: {int(resource_evidence['peak_rss_bytes'])} bytes.",
+        "CPU time: "
+        f"user={float(resource_evidence['user_cpu_seconds']):.6f} s, "
+        f"system={float(resource_evidence['system_cpu_seconds']):.6f} s.",
+        "Detailed per-target operation timings: resource_usage.json.",
         "Saved output: results.npz plus "
         + (
             "categorical BA/AUC"
@@ -2651,6 +2821,14 @@ def _validate_published_run_directory(run_directory: Path) -> None:
         raise ValueError("Required completion summary is missing.") from error
     if not summary_text.strip():
         raise ValueError("Required completion summary is empty.")
+    try:
+        usage_payload = _read_json(run_directory / resource_usage.RESOURCE_USAGE_FILE)
+        resource_usage.validate_resource_usage_payload(
+            usage_payload,
+            require_complete=True,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError("Required completion resource evidence is missing or invalid.") from error
     fingerprint = (run_directory / "run_fingerprint.txt").read_text(encoding="ascii").strip()
     loaded = results.load_task_decoding_run(
         run_directory,
@@ -2675,6 +2853,47 @@ def _validate_published_run_directory(run_directory: Path) -> None:
             raise ValueError(f"Completion figure is invalid or corrupt: {name}") from error
         if decoded.ndim < 2 or decoded.size == 0:
             raise ValueError(f"Completion figure is invalid or corrupt: {name}")
+
+
+def _snapshot_terminal_resource_state(
+    tracker: resource_usage.ResourceUsageTracker | None,
+    run_directory: Path,
+    *,
+    status: str,
+) -> None:
+    """Best-effort publish failure/interruption measurements without masking errors.
+
+    Parameters
+    ----------
+    tracker : ResourceUsageTracker or None
+        Initialized measurement owner, or None when failure preceded preflight.
+    run_directory : pathlib.Path
+        Run directory containing durable lifecycle state.
+    status : {"failed", "interrupted"}
+        Terminal non-complete resource status.
+
+    Returns
+    -------
+    None
+        Publishes cumulative evidence when possible. Measurement-publication
+        errors are logged so the original pipeline exception still propagates.
+    """
+    if tracker is None:
+        return
+    try:
+        tracker.snapshot(
+            status=status,
+            completed_targets=tracker.completed_target_labels,
+        )
+    except BaseException as measurement_error:
+        try:
+            _append_log(
+                run_directory,
+                "resource snapshot failed "
+                f"{type(measurement_error).__name__}: {measurement_error}",
+            )
+        except BaseException:
+            pass
 
 
 def run_prepared_task_decoding(run_directory: Path | str) -> None:
@@ -2705,6 +2924,7 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
     """
     directory = Path(run_directory)
     owner: dict[str, object] | None = None
+    resource_tracker: resource_usage.ResourceUsageTracker | None = None
     began = time.monotonic()
     try:
         initial_state = _read_json(directory / _STATE_FILE)
@@ -2750,6 +2970,28 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
         target_table = identity["target_table"]
         resolved = identity["resolved_session"]
         fingerprint = str(identity["fingerprint"])
+        dry_report = activity.inspect_activity_dry_run(
+            target_table,
+            config.pfc_region,
+            config.hpc_region,
+            resolved.probes,
+            alignment_event=config.alignment,
+            window_s=(
+                decoding_config.WINDOW_START_SECONDS,
+                decoding_config.WINDOW_END_SECONDS,
+            ),
+            bin_width_s=config.bin_width_ms / 1000.0,
+            pfc_trusted_utc_bounds=config.trusted_utc_bounds.get(
+                config.pfc_region.probe_id
+            ),
+            hpc_trusted_utc_bounds=config.trusted_utc_bounds.get(
+                config.hpc_region.probe_id
+            ),
+        )
+        resource_tracker = resource_usage.ResourceUsageTracker(
+            directory,
+            _resource_envelope(config, target_table, dry_report),
+        )
         # Validate compact checkpoints before loading any potentially large spike
         # inputs, so a stale scientific identity cannot trigger analysis work.
         existing = _load_existing_checkpoints(directory, config.target_names, fingerprint)
@@ -2787,6 +3029,7 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
             existing=existing,
             run_directory=directory,
             full_fingerprint=fingerprint,
+            resource_tracker=resource_tracker,
         )
         modeling_seconds = time.monotonic() - modeling_started
         stage_seconds = {
@@ -2830,7 +3073,13 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
                 feature_parameter_source=config.trial_feature_parameter_path,
                 run_fingerprint=fingerprint,
             )
+        reporting_started = time.perf_counter()
         _update_state(directory, current_stage="reporting", final_results_published=False)
+        resource_evidence = resource_tracker.snapshot(
+            status="running",
+            completed_targets=config.target_names,
+            stage_timing_seconds=stage_seconds,
+        )
         _write_run_summary(
             directory,
             config=config,
@@ -2839,8 +3088,17 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
             execution=_read_json(directory / _EXECUTION_FILE),
             session_id=resolved.session_id,
             total_seconds=elapsed,
+            resource_evidence=resource_evidence,
         )
         _write_minimal_family_heatmaps(directory, arrays=arrays)
+        resource_tracker.snapshot(
+            status="complete",
+            completed_targets=config.target_names,
+            stage_timing_seconds={
+                **stage_seconds,
+                "reporting": time.perf_counter() - reporting_started,
+            },
+        )
         _validate_published_run_directory(directory)
         guard_to_remove = (
             _record_guard_release_before_completion(directory, owner=owner)
@@ -2868,6 +3126,11 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
                 final_results_published=False,
             )
             _append_log(directory, "interrupted")
+            _snapshot_terminal_resource_state(
+                resource_tracker,
+                directory,
+                status="interrupted",
+            )
         finally:
             if owner is not None:
                 _release_execution_guard(directory, owner=owner)
@@ -2882,6 +3145,11 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
                 final_results_published=False,
             )
             _append_log(directory, f"failed {type(error).__name__}: {error}")
+            _snapshot_terminal_resource_state(
+                resource_tracker,
+                directory,
+                status="failed",
+            )
         finally:
             if owner is not None:
                 _release_execution_guard(directory, owner=owner)

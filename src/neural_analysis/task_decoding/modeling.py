@@ -7,10 +7,12 @@ fixed and leakage-safe nested tuned regularization with audit-ready records.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 import math
 import numbers
+import time
+from typing import Any
 import warnings
 
 import numpy as np
@@ -29,6 +31,52 @@ from src.neural_analysis.task_decoding.config import (
 
 _REGION_CONFIGURATIONS = ("PFC", "HPC", "PFC+HPC")
 _REPRESENTATIONS = ("pca", "units")
+
+
+def _timed_call(
+    function: Callable[..., Any],
+    *args: object,
+    timing_callback: Callable[[dict[str, object]], None] | None,
+    timing_operation: str,
+    timing_region: str | None,
+    timing_representation: str | None,
+    **kwargs: object,
+) -> Any:
+    """Call one existing modeling operation and optionally report its duration.
+
+    Parameters
+    ----------
+    function : callable
+        Existing split, transform, feature, or estimator function.
+    *args, **kwargs : object
+        Arguments forwarded unchanged to ``function``.
+    timing_callback : callable or None
+        Consumer receiving one JSON-safe timing event after successful return.
+    timing_operation : str
+        Stable operation label.
+    timing_region : str or None
+        Regional transform/cell identity, or None for split construction.
+    timing_representation : str or None
+        ``pca``/``units`` for cell operations, otherwise None.
+
+    Returns
+    -------
+    object
+        Exact value returned by ``function``.
+    """
+    started = time.perf_counter()
+    value = function(*args, **kwargs)
+    elapsed_seconds = time.perf_counter() - started
+    if timing_callback is not None:
+        timing_callback(
+            {
+                "operation": timing_operation,
+                "region_configuration": timing_region,
+                "representation": timing_representation,
+                "elapsed_seconds": elapsed_seconds,
+            }
+        )
+    return value
 
 
 @dataclass(frozen=True)
@@ -2012,6 +2060,7 @@ def _decode_tuned_target(
     outer_split_plan: SplitPlan,
     outer_fold_count: int,
     inner_fold_count: int,
+    timing_callback: Callable[[dict[str, object]], None] | None,
 ) -> TargetDecodingResult:
     """Run leakage-safe nested grouped CV for one already validated target.
 
@@ -2034,6 +2083,9 @@ def _decode_tuned_target(
         Available deterministic grouped outer plan expressed in global rows.
     outer_fold_count, inner_fold_count : int
         Configured grouped-CV counts. Inner folds are exactly three.
+    timing_callback : callable or None
+        Optional consumer of successful split, transform, feature-construction,
+        and estimator timing events measured in seconds.
 
     Returns
     -------
@@ -2061,12 +2113,17 @@ def _decode_tuned_target(
     for outer_split in outer_split_plan.splits:
         train_targets = target_values[outer_split.train_indices]
         test_targets = target_values[outer_split.test_indices]
-        inner_plan = make_inner_splits(
+        inner_plan = _timed_call(
+            make_inner_splits,
             target_values,
             block_ids,
             outer_split.train_indices,
             target_family=target_family,
             fold_count=inner_fold_count,
+            timing_callback=timing_callback,
+            timing_operation="split",
+            timing_region=None,
+            timing_representation=None,
         )
         inner_split_plans[outer_split.fold_id] = inner_plan
         audit_scores = {
@@ -2130,13 +2187,23 @@ def _decode_tuned_target(
             continue
 
         for inner_split in inner_plan.splits:
-            pfc_inner_transform = fit_region_transform(
+            pfc_inner_transform = _timed_call(
+                fit_region_transform,
                 pfc_rate_tensor_hz[inner_split.train_indices],
                 pfc_requested_pc_count,
+                timing_callback=timing_callback,
+                timing_operation="regional_transform",
+                timing_region="PFC",
+                timing_representation=None,
             )
-            hpc_inner_transform = fit_region_transform(
+            hpc_inner_transform = _timed_call(
+                fit_region_transform,
                 hpc_rate_tensor_hz[inner_split.train_indices],
                 hpc_requested_pc_count,
+                timing_callback=timing_callback,
+                timing_operation="regional_transform",
+                timing_region="HPC",
+                timing_representation=None,
             )
             inner_train_targets = target_values[inner_split.train_indices]
             inner_test_targets = target_values[inner_split.test_indices]
@@ -2159,7 +2226,8 @@ def _decode_tuned_target(
                     for candidate_index in range(len(candidates)):
                         audit_reasons[cell][candidate_index][inner_split.fold_id] = invalid_reason
                     continue
-                inner_train_features = build_region_features(
+                inner_train_features = _timed_call(
+                    build_region_features,
                     pfc_inner_transform,
                     hpc_inner_transform,
                     pfc_rate_tensor_hz[inner_split.train_indices],
@@ -2169,8 +2237,13 @@ def _decode_tuned_target(
                     representation=representation,
                     pfc_unit_ids=pfc_unit_ids,
                     hpc_unit_ids=hpc_unit_ids,
+                    timing_callback=timing_callback,
+                    timing_operation="feature_construction",
+                    timing_region=region_configuration,
+                    timing_representation=representation,
                 )
-                inner_test_features = build_region_features(
+                inner_test_features = _timed_call(
+                    build_region_features,
                     pfc_inner_transform,
                     hpc_inner_transform,
                     pfc_rate_tensor_hz[inner_split.test_indices],
@@ -2180,19 +2253,28 @@ def _decode_tuned_target(
                     representation=representation,
                     pfc_unit_ids=pfc_unit_ids,
                     hpc_unit_ids=hpc_unit_ids,
+                    timing_callback=timing_callback,
+                    timing_operation="feature_construction",
+                    timing_region=region_configuration,
+                    timing_representation=representation,
                 )
                 for candidate_index, candidate in enumerate(candidates):
                     estimator = make_estimator(
                         target_family=target_family,
                         parameters=candidate,
                     )
-                    fit_result = fit_and_score(
+                    fit_result = _timed_call(
+                        fit_and_score,
                         estimator,
                         inner_train_features.values,
                         inner_train_targets,
                         inner_test_features.values,
                         inner_test_targets,
                         target_family=target_family,
+                        timing_callback=timing_callback,
+                        timing_operation="estimator",
+                        timing_region=region_configuration,
+                        timing_representation=representation,
                     )
                     score = fit_result.metrics.get(primary_metric)
                     score_is_valid = (
@@ -2208,13 +2290,23 @@ def _decode_tuned_target(
                             fit_result.reason or "non-finite inner score"
                         )
 
-        pfc_outer_transform = fit_region_transform(
+        pfc_outer_transform = _timed_call(
+            fit_region_transform,
             pfc_rate_tensor_hz[outer_split.train_indices],
             pfc_requested_pc_count,
+            timing_callback=timing_callback,
+            timing_operation="regional_transform",
+            timing_region="PFC",
+            timing_representation=None,
         )
-        hpc_outer_transform = fit_region_transform(
+        hpc_outer_transform = _timed_call(
+            fit_region_transform,
             hpc_rate_tensor_hz[outer_split.train_indices],
             hpc_requested_pc_count,
+            timing_callback=timing_callback,
+            timing_operation="regional_transform",
+            timing_region="HPC",
+            timing_representation=None,
         )
         for time_bin_index, region_configuration, representation in cell_definitions:
             cell = (time_bin_index, region_configuration, representation)
@@ -2308,7 +2400,8 @@ def _decode_tuned_target(
                     )
                 )
                 continue
-            outer_train_features = build_region_features(
+            outer_train_features = _timed_call(
+                build_region_features,
                 pfc_outer_transform,
                 hpc_outer_transform,
                 pfc_rate_tensor_hz[outer_split.train_indices],
@@ -2318,8 +2411,13 @@ def _decode_tuned_target(
                 representation=representation,
                 pfc_unit_ids=pfc_unit_ids,
                 hpc_unit_ids=hpc_unit_ids,
+                timing_callback=timing_callback,
+                timing_operation="feature_construction",
+                timing_region=region_configuration,
+                timing_representation=representation,
             )
-            outer_test_features = build_region_features(
+            outer_test_features = _timed_call(
+                build_region_features,
                 pfc_outer_transform,
                 hpc_outer_transform,
                 pfc_rate_tensor_hz[outer_split.test_indices],
@@ -2329,18 +2427,27 @@ def _decode_tuned_target(
                 representation=representation,
                 pfc_unit_ids=pfc_unit_ids,
                 hpc_unit_ids=hpc_unit_ids,
+                timing_callback=timing_callback,
+                timing_operation="feature_construction",
+                timing_region=region_configuration,
+                timing_representation=representation,
             )
             estimator = make_estimator(
                 target_family=target_family,
                 parameters=selected_parameters,
             )
-            fit_result = fit_and_score(
+            fit_result = _timed_call(
+                fit_and_score,
                 estimator,
                 outer_train_features.values,
                 train_targets,
                 outer_test_features.values,
                 test_targets,
                 target_family=target_family,
+                timing_callback=timing_callback,
+                timing_operation="estimator",
+                timing_region=region_configuration,
+                timing_representation=representation,
             )
             records.append(
                 FoldRecord(
@@ -2425,6 +2532,7 @@ def decode_target(
     outer_fold_count: int,
     inner_fold_count: int,
     regularization_mode: str,
+    timing_callback: Callable[[dict[str, object]], None] | None = None,
 ) -> TargetDecodingResult:
     """Decode one matched target across all regions and representations.
 
@@ -2453,6 +2561,10 @@ def decode_target(
         Fixed mode performs one outer fit per cell. Tuned mode fits transforms
         and candidates inside grouped inner folds, then refits the selected
         candidate on the complete outer-training partition.
+    timing_callback : callable or None, default=None
+        Optional consumer receiving JSON-safe events for successful split,
+        transform, feature-construction, and estimator operations. Durations
+        are seconds; omitting the callback preserves the prior interface.
 
     Returns
     -------
@@ -2494,11 +2606,16 @@ def decode_target(
         raise ValueError("PFC and HPC tensors must share trial and time-bin axes.")
     pfc_ids = _validate_unit_ids(pfc_unit_ids, pfc_tensor.shape[2], "pfc_unit_ids")
     hpc_ids = _validate_unit_ids(hpc_unit_ids, hpc_tensor.shape[2], "hpc_unit_ids")
-    split_plan = make_outer_splits(
+    split_plan = _timed_call(
+        make_outer_splits,
         target,
         blocks,
         target_family=target_family,
         fold_count=outer_fold_count,
+        timing_callback=timing_callback,
+        timing_operation="split",
+        timing_region=None,
+        timing_representation=None,
     )
     if not split_plan.is_available:
         return TargetDecodingResult(
@@ -2527,19 +2644,30 @@ def decode_target(
             outer_split_plan=split_plan,
             outer_fold_count=outer_fold_count,
             inner_fold_count=approved_inner_fold_count,
+            timing_callback=timing_callback,
         )
 
     records: list[FoldRecord] = []
     for split in split_plan.splits:
         train_targets = target[split.train_indices]
         test_targets = target[split.test_indices]
-        pfc_transform = fit_region_transform(
+        pfc_transform = _timed_call(
+            fit_region_transform,
             pfc_tensor[split.train_indices],
             approved_pfc_pc_count,
+            timing_callback=timing_callback,
+            timing_operation="regional_transform",
+            timing_region="PFC",
+            timing_representation=None,
         )
-        hpc_transform = fit_region_transform(
+        hpc_transform = _timed_call(
+            fit_region_transform,
             hpc_tensor[split.train_indices],
             approved_hpc_pc_count,
+            timing_callback=timing_callback,
+            timing_operation="regional_transform",
+            timing_region="HPC",
+            timing_representation=None,
         )
         for time_bin_index in range(pfc_tensor.shape[1]):
             for region_configuration in _REGION_CONFIGURATIONS:
@@ -2578,7 +2706,8 @@ def decode_target(
                             )
                         )
                         continue
-                    train_features = build_region_features(
+                    train_features = _timed_call(
+                        build_region_features,
                         pfc_transform,
                         hpc_transform,
                         pfc_tensor[split.train_indices],
@@ -2588,8 +2717,13 @@ def decode_target(
                         representation=representation,
                         pfc_unit_ids=pfc_ids,
                         hpc_unit_ids=hpc_ids,
+                        timing_callback=timing_callback,
+                        timing_operation="feature_construction",
+                        timing_region=region_configuration,
+                        timing_representation=representation,
                     )
-                    test_features = build_region_features(
+                    test_features = _timed_call(
+                        build_region_features,
                         pfc_transform,
                         hpc_transform,
                         pfc_tensor[split.test_indices],
@@ -2599,15 +2733,24 @@ def decode_target(
                         representation=representation,
                         pfc_unit_ids=pfc_ids,
                         hpc_unit_ids=hpc_ids,
+                        timing_callback=timing_callback,
+                        timing_operation="feature_construction",
+                        timing_region=region_configuration,
+                        timing_representation=representation,
                     )
                     estimator = make_estimator(target_family=target_family)
-                    fit_result = fit_and_score(
+                    fit_result = _timed_call(
+                        fit_and_score,
                         estimator,
                         train_features.values,
                         train_targets,
                         test_features.values,
                         test_targets,
                         target_family=target_family,
+                        timing_callback=timing_callback,
+                        timing_operation="estimator",
+                        timing_region=region_configuration,
+                        timing_representation=representation,
                     )
                     records.append(
                         FoldRecord(

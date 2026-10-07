@@ -120,6 +120,9 @@ class ActivityDryRunReport:
     source_file_sizes_bytes : dict[Path, int]
         Individual source-file byte sizes. These are reported separately and do
         not contribute to ``tensor_allocation_bytes``.
+    trial_row_indices : np.ndarray
+        One-dimensional zero-based full-table row positions with bilateral
+        full-window coverage, shape ``(tensor_trial,)``.
     tensor_trial_count : int
         Number of target-independent bilateral full-window trial rows.
     time_bin_count : int
@@ -130,6 +133,7 @@ class ActivityDryRunReport:
 
     tensor_allocation_bytes: int
     source_file_sizes_bytes: dict[Path, int]
+    trial_row_indices: np.ndarray
     tensor_trial_count: int
     time_bin_count: int
     pfc_unit_count: int
@@ -1012,6 +1016,7 @@ def inspect_activity_dry_run(
     return ActivityDryRunReport(
         tensor_allocation_bytes=tensor_allocation_bytes,
         source_file_sizes_bytes=source_file_sizes_bytes,
+        trial_row_indices=np.array(trial_positions, dtype=np.int64, copy=True),
         tensor_trial_count=int(trial_positions.size),
         time_bin_count=time_bin_count,
         pfc_unit_count=int(len(pfc_clusters)),

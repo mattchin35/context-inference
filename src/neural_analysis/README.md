@@ -353,7 +353,7 @@ uv run python -m src.neural_analysis.task_decoding.run_batch dry-run \
 ```
 
 The evidence is not discovered automatically. It must contain the atomic
-`resource_usage.json` produced by an authorized measurement workflow and must
+`resource_usage.json` produced automatically by task-decoding execution and must
 match the scientific source, runtime, platform, thread limits, analysis mode,
 and a resource envelope that is not exceeded by any planned session. The
 runner then caps cross-session workers by the request, CPU count, session
@@ -373,6 +373,7 @@ suffix when necessary). Important members are:
 | `run.log`, `console.log` | Stage log and detached stdout/stderr |
 | `resume_command.txt`, `status_command.txt` | Exact shell-safe follow-up commands |
 | `checkpoints/` | Fingerprint-bound, target-local primitive NPZ checkpoints |
+| `resource_usage.json` | Atomic wall/CPU/peak-RSS, per-target operation timing, fit-count, envelope, and output-size evidence |
 | `results.npz` | Final validated non-pickle arrays and JSON metadata |
 | `summary.md` | Session, settings, availability, timing, and output summary |
 | `figures/` | `categorical_balanced_accuracy.png`, `categorical_auc.png`, and/or `numerical_r2.png` |

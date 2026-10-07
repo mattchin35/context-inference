@@ -11,28 +11,15 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from src.neural_analysis.task_decoding import resource_usage
+
 
 for _thread_variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
     os.environ[_thread_variable] = "1"
 
 
-_RESOURCE_USAGE_SCHEMA_VERSION = 1
-_RESOURCE_ENVELOPE_KEYS = frozenset(
-    {
-        "full_trial_count",
-        "tensor_trial_count",
-        "pfc_unit_count",
-        "hpc_unit_count",
-        "time_bin_count",
-        "target_count",
-        "outer_fold_count",
-        "inner_fold_count",
-        "coefficient_feature_capacity",
-        "categorical_fit_count",
-        "numerical_fit_count",
-        "tensor_allocation_bytes",
-    }
-)
+_RESOURCE_USAGE_SCHEMA_VERSION = resource_usage.RESOURCE_USAGE_SCHEMA_VERSION
+_RESOURCE_ENVELOPE_KEYS = resource_usage.RESOURCE_ENVELOPE_KEYS
 
 
 def _pipeline_module():
@@ -231,31 +218,6 @@ def _positive_builtin_int(value: object, name: str) -> int:
     return value
 
 
-def _nonnegative_builtin_int(value: object, name: str) -> int:
-    """Validate one nonnegative built-in integer evidence field.
-
-    Parameters
-    ----------
-    value : object
-        Decoded JSON scalar.
-    name : str
-        Field name used in validation errors.
-
-    Returns
-    -------
-    int
-        Nonnegative integer value.
-
-    Raises
-    ------
-    ValueError
-        If the value is Boolean, noninteger, or negative.
-    """
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError(f"Resource evidence {name} must be a nonnegative integer.")
-    return value
-
-
 def _validate_resource_envelope(value: object, description: str) -> dict[str, int]:
     """Validate the exact comparable resource-envelope vocabulary.
 
@@ -276,19 +238,10 @@ def _validate_resource_envelope(value: object, description: str) -> dict[str, in
     ValueError
         If keys differ or any member is not a positive built-in integer.
     """
-    if not isinstance(value, Mapping) or set(value) != _RESOURCE_ENVELOPE_KEYS:
-        raise ValueError(f"{description} resource envelope has missing or unexpected fields.")
-    envelope: dict[str, int] = {}
-    for key in sorted(_RESOURCE_ENVELOPE_KEYS):
-        validator = (
-            _nonnegative_builtin_int
-            if key in {"categorical_fit_count", "numerical_fit_count"}
-            else _positive_builtin_int
-        )
-        envelope[key] = validator(value[key], f"resource_envelope.{key}")
-    if envelope["categorical_fit_count"] + envelope["numerical_fit_count"] <= 0:
-        raise ValueError(f"{description} resource envelope must include planned fits.")
-    return envelope
+    try:
+        return resource_usage.validate_resource_envelope(value)
+    except ValueError as error:
+        raise ValueError(f"{description} resource envelope is invalid: {error}") from error
 
 
 def _validate_planned_session(plan: object, config_path: Path) -> dict[str, object]:
@@ -386,13 +339,16 @@ def _load_resource_evidence(
     config = _read_json_object(directory / "config.json", "scientific config")
     source = _read_json_object(directory / "scientific_source.json", "source identity")
     execution = _read_json_object(directory / "execution.json", "execution identity")
-    usage = _read_json_object(directory / "resource_usage.json", "resource usage")
-    if usage.get("schema_version") != _RESOURCE_USAGE_SCHEMA_VERSION:
-        raise ValueError("Resource evidence usage schema version is invalid.")
-    method = usage.get("measurement_method")
-    if method != "resource.getrusage":
-        raise ValueError("Resource evidence measurement method is invalid.")
-    peak_rss_bytes = _positive_builtin_int(usage.get("peak_rss_bytes"), "peak_rss_bytes")
+    raw_usage = _read_json_object(directory / "resource_usage.json", "resource usage")
+    try:
+        usage = resource_usage.validate_resource_usage_payload(
+            raw_usage,
+            require_complete=True,
+        )
+    except ValueError as error:
+        raise ValueError(f"Resource evidence usage is invalid: {error}") from error
+    method = usage["measurement_method"]
+    peak_rss_bytes = int(usage["peak_rss_bytes"])
     evidence_envelope = _validate_resource_envelope(
         usage.get("resource_envelope"),
         "Evidence",

@@ -23,6 +23,7 @@ This file is the maintainer map, not a duplicate specification.
 | `modeling.py` | Grouped split, transform, fit, fold, and target result records; public split/feature/estimator/scoring/aggregation functions and `decode_target`. |
 | `results.py` | Input/source/run fingerprints, source-cleanliness validation, target checkpoints, and validated atomic `save_task_decoding_run` / `load_task_decoding_run`. |
 | `plotting.py` | `plot_decoding_heatmap`, `save_default_decoding_figures`, `summarize_unit_coefficients`, and `plot_unit_coefficients` operating on validated saved results. |
+| `resource_usage.py` | `ResourceUsageTracker`, RSS normalization, shared resource-envelope validation, and atomic resumable `resource_usage.json` evidence. |
 | `pipeline.py` | `plan_task_decoding_session`, `prepare_task_decoding_run`, `run_prepared_task_decoding`, and `inspect_task_decoding_status`; all launch paths share these preparation/execution seams. |
 | `run_session.py` | Standard-library CLI `main` for public `dry-run`, `new`, `resume`, and `status` modes; numerical imports occur only after one-thread environment variables are set. |
 | `run_batch.py` | Standard-library CLI `main` plus `read_config_list`; bounded multi-session `dry-run` and foreground `new`, with evidence-gated cross-session workers. |
@@ -173,10 +174,15 @@ fingerprint is skipped; `--rerun` allocates a new directory rather than
 overwriting it.
 
 Dry-run resource provenance includes trial/unit/time/fold/fit dimensions,
-exact tensor allocation bytes, runtime/platform/thread identity, and source
-sizes. Batch execution remains one worker unless an explicit compatible
-completed measurement supplies atomic `resource_usage.json` evidence with
-peak RSS. That evidence is not inferred from an arbitrary run.
+per-target common-row/class/block/grouped-fold diagnostics, exact tensor
+allocation bytes, runtime/platform/thread identity, and source sizes. Every
+execution atomically updates `resource_usage.json` after target checkpoints
+and at terminal completion/failure/interruption. The evidence records
+normalized peak RSS bytes, cumulative wall/user/system seconds across resume,
+per-target split/transform/feature/estimator timings, fit counts, and output
+bytes. Batch execution remains one worker unless an explicit compatible
+completed measurement is supplied; evidence is never inferred from an
+arbitrary run.
 
 There is no cluster execution path in WP8. WP11 must add and test an optional
 single-session wrapper, exact-commit/offline environment checks, safe transfer,
@@ -191,6 +197,7 @@ future wrappers thin: preparation/execution and saved state remain in Python.
 | `targets.py` | `task_decoding/test_targets.py` |
 | `activity.py` | `task_decoding/test_activity.py` |
 | `modeling.py` | `task_decoding/test_modeling.py` |
+| `resource_usage.py` | `task_decoding/test_resource_usage.py` |
 | `results.py` | `task_decoding/test_results.py` |
 | `pipeline.py`, `run_session.py` | `task_decoding/test_pipeline.py` |
 | `run_batch.py` | `task_decoding/test_run_batch.py` |
