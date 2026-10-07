@@ -272,9 +272,9 @@ def _mark_complete(run_directory: Path) -> None:
     Returns
     -------
     None
-        Writes only a pytest-owned ``state.json`` file.
+        Writes only a pytest-owned ``run_state.json`` file.
     """
-    (run_directory / "state.json").write_text(
+    (run_directory / "run_state.json").write_text(
         json.dumps({"lifecycle": "complete", "final_results_published": True}),
         encoding="ascii",
     )
@@ -336,7 +336,7 @@ def test_discovery_lists_only_direct_valid_completed_children(tmp_path: Path) ->
     _mark_complete(hidden)
     incomplete = results_root / "incomplete"
     incomplete.mkdir()
-    (incomplete / "state.json").write_text(
+    (incomplete / "run_state.json").write_text(
         json.dumps({"lifecycle": "running", "final_results_published": False}),
         encoding="ascii",
     )
@@ -351,6 +351,23 @@ def test_discovery_lists_only_direct_valid_completed_children(tmp_path: Path) ->
 
     assert [item.run_directory for item in discovered] == [valid.resolve()]
     assert discovered[0].run_fingerprint == "run-fingerprint-test"
+
+
+def test_discovery_rejects_a_direct_child_symlink_resolving_outside_session(
+    tmp_path: Path,
+) -> None:
+    """A lexical direct child cannot bypass session containment through a symlink."""
+    task_view = _canonical_module("task_decoding_views")
+    inputs = write_input_fixture(tmp_path / "inside")
+    outside_inputs = write_input_fixture(tmp_path / "outside")
+    outside_run = outside_inputs["session_root"] / "external-complete"
+    save_run_fixture(outside_run, outside_inputs, regularization_mode="fixed")
+    _mark_complete(outside_run)
+    results_root = inputs["session_root"] / "analysis_runs"
+    results_root.mkdir()
+    (results_root / "linked-complete").symlink_to(outside_run, target_is_directory=True)
+
+    assert task_view.discover_task_decoding_runs(inputs["session_root"]) == ()
 
 
 def test_task_decoding_view_explains_the_no_saved_run_state(tmp_path: Path) -> None:
