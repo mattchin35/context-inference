@@ -1,9 +1,9 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP5A result persistence and WP5B
-single-session lifecycle/CLI execution are complete and independently
-approved. WP6 batch-runner planning is next and requires a tests-first plan
-approved by the user before implementation.
+**Status:** Implementation authorized; WP5 result persistence/session execution
+and the WP6 batch runner are complete. WP7 plotting and the saved-results
+webapp view are next and require a tests-first plan approved by the user before
+implementation.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -13,7 +13,7 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-07
 
-**Current phase:** WP0-WP5 are complete. WP4 grouped-modeling tests are
+**Current phase:** WP0-WP6 are complete. WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
@@ -26,21 +26,24 @@ shared-split, exact-PCA, and sparse-tuning corrections are committed through
 approval. The independently approved WP5B lifecycle/CLI RED suite is committed
 at `449f7c9`, its production-review supplement is committed at `4215c82`, the
 final tests-first corrections are committed through `77f2cc8`, and WP5B GREEN
-is committed at `8b9232d` after independent approval. No
+is committed at `8b9232d` after independent approval. The WP6 tests-first
+contracts are committed through `827989c`, and WP6 GREEN is committed at
+`7d6b4a8`. No
 experimental-data mutation, decoding output, benchmark, transfer, local long
 run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local implementation HEAD: `8b9232d`;
-- `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
+- local implementation HEAD: `7d6b4a8`;
+- `origin/refactor`: `134106053afa1ac356bd168cfc9845f7dac2106e`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
   production are complete through `1bd0f69`, including the final sparse tuned
   transform-evidence review; WP5B single-session lifecycle/CLI production is
-  complete through independently approved GREEN commit `8b9232d`; and
+  complete through independently approved GREEN commit `8b9232d`; WP6 batch
+  planning/execution is complete through GREEN commit `7d6b4a8`; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -69,10 +72,10 @@ run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** draft the bounded WP6 batch-runner architecture, tests,
-dependencies, and performance considerations, then obtain user approval before
-writing WP6 tests or implementation. Do not run experimental data, benchmarks,
-transfers, or scheduler actions under this handoff.
+**Next exact action:** draft the bounded WP7 plotting and saved-results webapp
+architecture, tests, dependencies, and rendering constraints, then obtain user
+approval before writing WP7 tests or implementation. Do not run experimental
+data, benchmarks, transfers, or scheduler actions under this handoff.
 
 ### Authority order
 
@@ -98,8 +101,8 @@ When resuming, use this order:
 | WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
 | WP4 grouped modeling | Complete: fixed GREEN `a8787aa`, tuned GREEN `b844f26` | None |
 | WP5 results and session pipeline | Complete: WP5A GREEN `1bd0f69`; WP5B GREEN `8b9232d` after tests through `77f2cc8` | None |
-| WP6 batch runner | Ready for tests-first planning | User approves the WP6 implementation plan |
-| WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
+| WP6 batch runner | Complete: RED `9727ec8` plus reviews through `827989c`; GREEN `7d6b4a8` | None |
+| WP7 plotting and webapp | Ready for tests-first planning | User approves the WP7 implementation plan |
 | WP8 documentation and examples | Pending prerequisite | CLI/webapp interfaces stable through WP7 |
 | WP9 synthetic integration | Pending prerequisite | WP1-WP8 focused gates GREEN |
 | WP9A CT026 augmented-table preparation | Not authorized | WP9 GREEN plus explicit approval of the exact behavior-processing command |
@@ -1250,6 +1253,49 @@ Use this template for each appended record:
 - Exact next action: propose the WP6 batch-runner implementation plan, including
   architecture, dependencies, tests to write first, and session-level parallel
   performance limits. Obtain user approval before writing WP6 code.
+
+#### 2026-10-07 - WP6 batch-runner GREEN gate
+
+- State: WP6 is complete. The standard-library batch entrypoint supports
+  ordered `dry-run` and foreground `new`, explicit reruns, independent session
+  outcomes, one-worker safe execution, and evidence-gated process parallelism.
+- Authorization: implementation and verification used only deterministic
+  temporary files, synthetic plans, process fakes, and a two-process failure
+  smoke against empty temporary run directories. No experimental data,
+  decoding run, benchmark, transfer, or scheduler action was performed.
+- Start HEAD / end HEAD: WP5B handoff `1341060` / WP6 GREEN production commit
+  `7d6b4a8`.
+- Owned files: added `src/neural_analysis/task_decoding/run_batch.py`; extended
+  bounded activity dry-run dimensions in `activity.py`; and extended
+  `pipeline.py` planning, batch provenance, and immutable source snapshots.
+  Tests were committed first at `9727ec8`, with evidence-fingerprint and
+  admission-edge supplements at `a49a74f` and `827989c`.
+- RED evidence: the base batch suite initially failed collection because
+  `run_batch.py` did not exist. Separate causal checks failed for missing
+  activity dimensions, resource-envelope identity, evidence fingerprint,
+  one-family zero fit counts, full printed memory calculation, and the exact
+  `run_batch.py` snapshot.
+- GREEN/regression evidence: the final batch suite passed 22 tests; the full
+  activity/pipeline/batch group passed 190 tests with four known warnings; and
+  the full task-decoding package passed 782 tests with six known warnings.
+  `git diff --check`, the 100-column audit, source compilation, both CLI help
+  paths, and a real two-worker process-executor failure smoke passed.
+- Contract decisions: config-list-relative paths are resolved portably and
+  duplicates are rejected; `new --rerun` mirrors the single-session runner;
+  no evidence means one worker regardless of request; parallel admission uses
+  explicit complete evidence, an exact run fingerprint, matching scientific/
+  runtime/platform/thread identities, a non-exceeded resource envelope, and
+  measured peak RSS unchanged under CPU/session/50%-MemAvailable caps.
+- Resource measurement boundary: WP6 defines and validates the atomic
+  `resource_usage.json` evidence schema but does not fabricate measurements.
+  Parallel use therefore remains unavailable until an authorized benchmark
+  records `resource.getrusage` peak RSS for a completed compatible run.
+- Review findings: a manual post-GREEN review added causal coverage for the
+  absent-family zero-fit case, printed memory/CPU calculation, and direct
+  process-executor routing. No remaining correctness blocker was found.
+- Exact next action: propose the WP7 plotting and saved-results webapp plan,
+  including light-mode rendering, saved-loader-only routing, tests to write
+  first, and shared `webapp/app.py` ownership. Obtain user approval before code.
 
 ## 1. Objective
 
