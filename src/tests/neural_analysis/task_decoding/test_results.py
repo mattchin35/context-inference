@@ -486,7 +486,7 @@ def make_result_arrays(
             requested_widths[region_index, representation_index]
         )
     categorical_fixed = json.dumps({"C": 1.0, "l1_ratio": 0.5}, sort_keys=True)
-    numerical_fixed = json.dumps({"alpha": 0.1, "l1_ratio": 0.5}, sort_keys=True)
+    numerical_fixed = json.dumps({"alpha": 1.0, "l1_ratio": 0.5}, sort_keys=True)
     arrays["fixed_parameters_json"][0, ...] = categorical_fixed
     arrays["fixed_parameters_json"][1, ...] = numerical_fixed
     if regularization_mode == "tuned":
@@ -2522,7 +2522,7 @@ def make_dynamic_tuned_payload(
             arrays["effective_feature_counts"][:, region_index, representation_index] = width
     arrays["fold_scores"][0, :, :, 2, :, :] = 0.25
     arrays["fixed_parameters_json"][0, ...] = json.dumps(
-        {"alpha": 0.1, "l1_ratio": 0.5},
+        {"alpha": 1.0, "l1_ratio": 0.5},
         sort_keys=True,
     )
     candidates = declared_candidates(scientific_config, "numerical")
@@ -2852,7 +2852,7 @@ def test_dynamic_numerical_tuned_round_trip_uses_saved_dimensions_and_global_row
     assert np.all(np.isfinite(saved["fold_scores"][0, :, :, 2]))
     assert np.all(
         saved["fixed_parameters_json"]
-        == json.dumps({"alpha": 0.1, "l1_ratio": 0.5}, sort_keys=True)
+        == json.dumps({"alpha": 1.0, "l1_ratio": 0.5}, sort_keys=True)
     )
     offsets = saved["full_table_block_id_offsets"]
     block_bytes = saved["full_table_block_ids_utf8"]
@@ -3446,6 +3446,57 @@ def test_save_rejects_feature_identity_region_status_and_active_mask_disagreemen
     run_directory = tmp_path / kind
 
     with pytest.raises(ValueError, match=failure_pattern):
+        results.save_task_decoding_run(run_directory, arrays=arrays, **{
+            key: value for key, value in arguments.items() if key != "arrays"
+        })
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    ("regularization_mode", "target_index", "replacement"),
+    (
+        ("fixed", 0, '{"C": 0.1, "l1_ratio": 0.5}'),
+        ("fixed", 1, '{"alpha": 0.1, "l1_ratio": 0.5}'),
+        ("tuned", 0, '{"C": 0.1, "l1_ratio": 0.5}'),
+        ("tuned", 1, '{"alpha": 0.1, "l1_ratio": 0.5}'),
+        ("tuned", 0, '{"C": 1.0, "l1_ratio": 0.9}'),
+        ("fixed", 1, '{"l1_ratio": 0.5, "alpha": 1.0}'),
+    ),
+)
+def test_save_rejects_fixed_parameters_that_disagree_with_frozen_controls(
+    regularization_mode,
+    target_index,
+    replacement,
+    tmp_path,
+):
+    """Saved fixed controls match the exact family defaults in every mode and cell."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(
+        input_paths,
+        regularization_mode=regularization_mode,
+    )
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    arrays["fixed_parameters_json"][target_index, 0, 0, 0, 0] = replacement
+    run_directory = tmp_path / f"wrong-fixed-{regularization_mode}-{target_index}"
+
+    with pytest.raises(ValueError, match="fixed|parameter|control|family"):
+        results.save_task_decoding_run(run_directory, arrays=arrays, **{
+            key: value for key, value in arguments.items() if key != "arrays"
+        })
+    assert not (run_directory / _RESULT_FILE).exists()
+
+
+def test_save_rejects_selected_parameters_in_fixed_mode(tmp_path):
+    """Fixed-mode records do not fabricate tuned selected-parameter values."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    arrays["selected_parameters_json"][0, 0, 0, 0, 0] = arrays[
+        "fixed_parameters_json"
+    ][0, 0, 0, 0, 0]
+    run_directory = tmp_path / "fixed-selected-parameter"
+
+    with pytest.raises(ValueError, match="fixed|selected|parameter|mode"):
         results.save_task_decoding_run(run_directory, arrays=arrays, **{
             key: value for key, value in arguments.items() if key != "arrays"
         })
