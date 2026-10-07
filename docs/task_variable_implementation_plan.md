@@ -1,7 +1,8 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP5A saved-results/schema RED tests are
-committed and the bounded `results.py` implementation is next.
+**Status:** Implementation authorized; the independently approved WP5A
+supplemental saved-results/schema RED correction is committed and the bounded
+`results.py` correction is next.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -9,28 +10,29 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-06
+**Snapshot date:** 2026-10-07
 
 **Current phase:** WP0-WP4 are complete. WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
-committed at `b844f26` after independent approval. WP5A saved-results/schema
-RED tests are committed at `4a5664a` after independent approval. The bounded
-`results.py` implementation is the single next package. No
+committed at `b844f26` after independent approval. WP5A base saved-results
+tests are committed at `4a5664a`; independently approved dynamic-schema and
+semantic correction tests are committed at `bc628c4`. The bounded
+`results.py` correction is the single next package. No
 experimental-data mutation, decoding output, benchmark, transfer, local long
 run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local implementation HEAD:
-  `4a5664af49a782639e5303847c66a8ce2a748f73`;
+- local implementation HEAD: `bc628c4`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
-- WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests are
-  committed RED and `results.py` does not yet exist; and
+- WP4 is complete and its handoff is committed at `01f8b0f`; WP5A base and
+  supplemental tests are committed RED, while the uncommitted `results.py`
+  candidate remains under correction after production-review rejection; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -864,6 +866,49 @@ Use this template for each appended record:
   `src/neural_analysis/task_decoding/results.py` without changing committed
   tests, run WP5A plus affected task-decoding regressions, and obtain
   independent Sol xhigh production approval before WP5A GREEN.
+
+#### 2026-10-07 - WP5A supplemental saved-results RED correction
+
+- State: the first `results.py` candidate passed the original 143 tests but was
+  rejected by independent production review. The missing dynamic and semantic
+  contracts are now committed as a supplemental RED gate; production remains
+  uncommitted.
+- Authorization: project implementation remains authorized. Work used only
+  deterministic temporary files and synthetic arrays; no experimental data,
+  decoding run, benchmark, transfer, or scheduler action was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / same Terra xhigh worker /
+  independent Sol xhigh tests-only reviewer across correction cycles.
+- Start HEAD / end HEAD: original WP5A RED handoff `87fe0b1` / supplemental
+  tests-only commit `bc628c4`.
+- Owned files: modified only
+  `src/tests/neural_analysis/task_decoding/test_results.py`. The existing
+  untracked `src/neural_analysis/task_decoding/results.py` stayed byte-identical
+  throughout the RED correction, with SHA-256
+  `5799a44418c12777fe054a238994e4503a7ca9bd54165bab1693d7cd60f20a38`.
+- RED command and result: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
+  src/tests/neural_analysis/task_decoding/test_results.py -q` executes 295
+  cases and reports 145 failed / 150 passed against the unchanged production
+  candidate. The 143 committed baseline cases remain GREEN; seven supplemental
+  docstring controls already pass. Pycompile, the 100-column check, and
+  `git diff --check` pass.
+- Commits: base tests `4a5664a`; original RED handoff `87fe0b1`; supplemental
+  tests `bc628c4`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: review exposed hard-coded fixture dimensions,
+  a discarded run fingerprint, common-row/full-row leakage indexing, incomplete
+  tuning-audit and schema semantics, noncanonical block acceptance, binary
+  over-hashing, overwriteable immutable artifacts, incomplete scoped-source
+  tracking, and incomplete data-contract docstrings. The correction suite now
+  covers dynamic one-target/five-fold and genuinely unavailable-inner-plan
+  records, configuration-coherent time bins, exact axes/units/provenance,
+  causal eligibility/class/fit/feature/candidate sentinels, canonical UTF-8
+  blocks, immutable publication, and save-before-publication validation.
+- Exact next action: modify only
+  `src/neural_analysis/task_decoding/results.py` until all 295 result tests and
+  the full task-decoding regression suite pass without changing committed
+  tests, then obtain independent Sol xhigh production approval before the
+  WP5A GREEN commit and handoff.
 
 ## 1. Objective
 
