@@ -748,7 +748,8 @@ def test_actual_detached_launcher_can_publish_resource_evidence(tmp_path):
             f"sys.path.insert(0, {str(repository_root)!r})",
             "from src.neural_analysis.task_decoding.resource_usage import ResourceUsageTracker",
             f"tracker = ResourceUsageTracker({str(run_directory)!r}, json.loads({json.dumps(envelope)!r}))",
-            "tracker.snapshot(status='complete', completed_targets=())",
+            "tracker.record_restored_target(target_label='synthetic_action', target_family='categorical', requested_fit_count=18, valid_outer_cell_count=18, invalid_outer_cell_count=0)",
+            "tracker.snapshot(status='complete', completed_targets=('synthetic_action',))",
         )
     )
 

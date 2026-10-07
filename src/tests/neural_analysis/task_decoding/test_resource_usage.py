@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib
 import json
 from pathlib import Path
@@ -219,7 +220,33 @@ def test_complete_payload_validation_rejects_partial_or_malformed_evidence(tmp_p
         usage_reader=lambda: next(usage_values),
         platform_name="linux",
     )
-    payload = tracker.snapshot(status="complete", completed_targets=())
+    tracker.record_model_event(
+        target_label="current_action",
+        target_family="categorical",
+        operation="estimator",
+        region_configuration="PFC",
+        representation="units",
+        elapsed_seconds=0.1,
+    )
+    tracker.finish_target(
+        target_label="current_action",
+        target_family="categorical",
+        total_seconds=0.5,
+        requested_fit_count=144,
+        valid_outer_cell_count=144,
+        invalid_outer_cell_count=0,
+    )
+    tracker.record_restored_target(
+        target_label="relative_doubt",
+        target_family="numerical",
+        requested_fit_count=144,
+        valid_outer_cell_count=0,
+        invalid_outer_cell_count=144,
+    )
+    payload = tracker.snapshot(
+        status="complete",
+        completed_targets=("current_action", "relative_doubt"),
+    )
 
     assert resource_usage.validate_resource_usage_payload(
         payload,
@@ -231,3 +258,19 @@ def test_complete_payload_validation_rejects_partial_or_malformed_evidence(tmp_p
     malformed = dict(payload, peak_rss_bytes=0)
     with pytest.raises(ValueError, match="peak_rss_bytes"):
         resource_usage.validate_resource_usage_payload(malformed, require_complete=True)
+    negative_nested_count = copy.deepcopy(payload)
+    negative_nested_count["target_measurements"]["current_action"][
+        "operation_counts"
+    ]["estimator"]["PFC|units"] = -1
+    with pytest.raises(ValueError, match="operation|count|nonnegative"):
+        resource_usage.validate_resource_usage_payload(
+            negative_nested_count,
+            require_complete=True,
+        )
+    inconsistent_aggregate = copy.deepcopy(payload)
+    inconsistent_aggregate["fit_counts"]["requested"] += 1
+    with pytest.raises(ValueError, match="fit_counts|aggregate|requested"):
+        resource_usage.validate_resource_usage_payload(
+            inconsistent_aggregate,
+            require_complete=True,
+        )
