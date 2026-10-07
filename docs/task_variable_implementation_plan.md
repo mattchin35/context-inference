@@ -1,7 +1,7 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP4 fixed mode is GREEN and optional
-tuned-mode implementation is next.
+**Status:** Implementation authorized; WP4 tuned-mode provenance correction is
+in progress against committed supplemental RED tests.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -13,9 +13,11 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 **Current phase:** WP0-WP3 are complete. WP4 grouped-modeling tests are
 committed at `6ee6355`, with supplemental audit tests at `c85a00c` and
-`fab38b8`. Fixed-mode production is committed at `a8787aa` after all 70
-non-tuned modeling cases and independent review passed. Optional tuned-mode
-implementation is the single next package. No
+`fab38b8`. Fixed-mode production is committed at `a8787aa`. Tuned modeling
+passes its scientific/orchestration tests but failed final audit because tuned
+records omitted their global selection-row provenance; supplemental RED tests
+are committed at `c1b183c`. That bounded correction and repeat review are the
+single next package. No
 experimental-data mutation, decoding output, benchmark, transfer, local long
 run, or cluster action is authorized.
 
@@ -23,12 +25,12 @@ run, or cluster action is authorized.
 
 - branch: `refactor`;
 - local implementation HEAD:
-  `a8787aaa4ce172e48746690e05e9ab73f3d635f8`;
+  `c1b183c57f3aac37b26ab80d7af03c07441647cc`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
-- the bounded WP4 fixed-mode production and all modeling tests are committed;
-  owned files are clean before tuned-mode work; and
+- the final tuned-provenance tests are committed; the bounded tuned production
+  diff remains uncommitted under correction; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -57,9 +59,9 @@ run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this fixed-mode GREEN handoff separately, then
-have the same Terra xhigh worker implement only tuned-mode orchestration and
-obtain independent Sol xhigh approval before declaring WP4 complete.
+**Next exact action:** commit this tuned-provenance RED handoff separately,
+correct only selection-row provenance and stale documentation, then obtain
+independent Sol xhigh approval before declaring WP4 complete.
 
 ### Authority order
 
@@ -83,7 +85,7 @@ When resuming, use this order:
 | WP1 behavioral feature | Complete: RED `acf24ae`, GREEN `8ea4d24` | None; CT026 backfill remains separately gated at WP9A |
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
 | WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
-| WP4 grouped modeling | Fixed mode GREEN `a8787aa`; tuned mode next | Terra xhigh tuned implementation plus independent Sol xhigh review |
+| WP4 grouped modeling | Fixed GREEN `a8787aa`; tuned provenance RED `c1b183c`; correction in progress | Tuned GREEN plus independent Sol xhigh approval |
 | WP5 results and session pipeline | Pending prerequisite | WP4 GREEN and saved-schema freeze |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
 | WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
@@ -737,6 +739,45 @@ Use this template for each appended record:
 - Exact next action: commit this documentation-only GREEN handoff, then have
   the same Terra xhigh worker implement tuned mode without changing tests.
   Independent Sol xhigh review must approve the complete WP4 diff.
+
+#### 2026-10-06 - WP4 tuned-mode provenance RED gate
+
+- State: tuned scientific/orchestration behavior is GREEN, but final audit
+  rejected missing selection-row provenance. Two supplemental provenance tests
+  are committed RED; the bounded correction is in progress.
+- Authorization: project implementation remains authorized. Work used only
+  source-controlled code and synthetic arrays; no experimental data, decoding
+  run, benchmark, transfer, or scheduler action was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / same Terra xhigh worker /
+  independent Sol xhigh tuned leakage, numerical, and audit-schema review.
+- Start HEAD / end HEAD: fixed GREEN handoff `44b6343` / tuned-provenance
+  tests-only commit `c1b183c57f3aac37b26ab80d7af03c07441647cc`.
+- Owned files: the commit adds 95 lines only to
+  `src/tests/neural_analysis/task_decoding/test_modeling.py`. The tuned source
+  draft remains unstaged in `modeling.py` and `config.py`.
+- RED command and result: the two new focused tests both fail only because
+  tuned `FoldRecord.inner_selection_indices` is empty instead of the global
+  outer-training row positions. Before that final assertion, they pass the
+  complete valid 15-by-3 and unavailable 15-by-0 candidate audit mapping
+  checks, selected-index alignment, fixed-mode empty-index control, and the
+  no-fit inner-unavailable control. Seventy-seven other modeling cases were
+  deselected. Test pycompile, 100-column, and whitespace checks pass.
+- GREEN/regression commands and results: before the audit rejection, the full
+  task-decoding suite passed 220 tests with five existing fixture/split
+  warnings. Tuned evidence was 24 transform fits for both one and two time
+  bins, 828/1656 estimator fits respectively, and three inner-split calls.
+  Those results are not the final GREEN gate until row provenance is fixed and
+  independently re-reviewed.
+- Commits: fixed production `a8787aa`; tuned-provenance tests-only `c1b183c`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: tuned outer-test exclusion, exact inner plans,
+  preprocessing reuse, candidate invalidation/ties, unavailable Cartesian
+  records, selected outer refit, grid order, and fixed regressions were
+  approved. Production must populate each tuned record with the outer-training
+  global selection universe and update stale fixed-only docstrings.
+- Exact next action: commit this documentation-only tuned RED handoff, make
+  only the provenance/documentation correction without changing tests, then
+  rerun all WP4 gates and obtain independent Sol xhigh approval.
 
 ## 1. Objective
 
