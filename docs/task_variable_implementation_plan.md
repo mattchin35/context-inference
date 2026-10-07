@@ -1,9 +1,9 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP5 result persistence/session execution,
-the WP6 batch runner, and WP7 plotting/saved-results webapp view are complete.
-WP8 user and maintainer documentation is next and requires a tests-first plan
-approved by the user before implementation.
+**Status:** Implementation authorized; WP1-WP8 are complete, including the
+single-session and batch CLIs, saved-result webapp, portable example, and user/
+maintainer documentation. WP9 synthetic integration is next and requires a
+tests-first plan approved by the user before implementation.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -13,7 +13,7 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-07
 
-**Current phase:** WP0-WP7 are complete. WP4 grouped-modeling tests are
+**Current phase:** WP0-WP8 are complete. WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
@@ -29,15 +29,16 @@ final tests-first corrections are committed through `77f2cc8`, and WP5B GREEN
 is committed at `8b9232d` after independent approval. The WP6 tests-first
 contracts are committed through `827989c`, and WP6 GREEN is committed at
 `7d6b4a8`. WP7 plotting/webapp contracts and review supplements are committed
-through `0c6ce07`, and WP7 GREEN is committed at `ef7ad55`. No experimental-data
-mutation, decoding output, benchmark, transfer, local long run, or cluster
-action is authorized.
+through `0c6ce07`, and WP7 GREEN is committed at `ef7ad55`. WP8 tests are
+committed through `a1c1f5c`, the dry-run JSON correction is `b2b3dde`, and the
+documentation/example GREEN commit is `8b92c4f`. No experimental-data
+mutation, benchmark, transfer, local long run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local WP7 implementation HEAD: `ef7ad558d3bc09289d20ab4af04ed038673be6d6`;
-- `origin/refactor`: `5fb25efd18a7d69d0409255f305bb27924b485f2`;
+- local WP8 implementation HEAD: `8b92c4f`;
+- `origin/refactor`: `3281d01bd4cf65e381e986cda8ad50c4db360383`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -46,7 +47,8 @@ action is authorized.
   complete through independently approved GREEN commit `8b9232d`; WP6 batch
   planning/execution is complete through GREEN commit `7d6b4a8`; WP7 plotting
   and the read-only saved-results webapp view are complete through GREEN commit
-  `ef7ad55`; and
+  `ef7ad55`; WP8 documentation and portable examples are complete through
+  GREEN commit `8b92c4f`; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -75,10 +77,11 @@ action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** draft the bounded WP8 user/maintainer documentation and
-portable-example plan, including documentation/command tests, then obtain user
-approval before writing WP8 tests or documentation. Do not run experimental
-data, benchmarks, transfers, or scheduler actions under this handoff.
+**Next exact action:** propose the bounded WP9 seeded synthetic-integration
+plan from Section 10.10 and the WP9 package gate, then obtain user approval
+before writing WP9 tests or implementation fixes. Do not run experimental
+data, CT026 preparation, benchmarks, transfers, or scheduler actions under
+this handoff.
 
 ### Authority order
 
@@ -106,8 +109,8 @@ When resuming, use this order:
 | WP5 results and session pipeline | Complete: WP5A GREEN `1bd0f69`; WP5B GREEN `8b9232d` after tests through `77f2cc8` | None |
 | WP6 batch runner | Complete: RED `9727ec8` plus reviews through `827989c`; GREEN `7d6b4a8` | None |
 | WP7 plotting and webapp | Complete: RED `c027f2c` plus reviews through `0c6ce07`; GREEN `ef7ad55` | None |
-| WP8 documentation and examples | Ready for tests-first planning | User approves the WP8 implementation plan |
-| WP9 synthetic integration | Pending prerequisite | WP1-WP8 focused gates GREEN |
+| WP8 documentation and examples | Complete: RED `c1cda3b`, corrections through `a1c1f5c`, JSON fix `b2b3dde`, GREEN `8b92c4f` | None |
+| WP9 synthetic integration | Ready for tests-first planning | User approves the WP9 implementation plan |
 | WP9A CT026 augmented-table preparation | Not authorized | WP9 GREEN plus explicit approval of the exact behavior-processing command |
 | WP10 CT026 preflight/benchmark | Not authorized | WP9A validation passes plus explicit real-session benchmark approval |
 | WP11 single-session cluster path | Not authorized | WP10 evidence and user choice justify cluster convenience/cost; user approves wrapper/transfer work |
@@ -1352,6 +1355,62 @@ Use this template for each appended record:
 - Exact next action: propose the WP8 user/maintainer documentation and portable
   example plan from Sections 4.4, 10.9, and the WP8 package gate. Obtain user
   approval before writing documentation tests or artifacts.
+
+#### 2026-10-07 - WP8 documentation and portable example GREEN gate
+
+- State: WP8 is complete. The scientist quickstart now covers portable input
+  preparation, the narrow behavior-side backfill, local and batch commands,
+  unattended ownership, output discovery, the saved-result webapp, fixed/
+  tuned work, benchmark planning, and the explicit WP11/WP13 cluster gates.
+  The package README maps every Python file, data/result contracts, leakage
+  boundaries, lifecycle guarantees, tests, extension steps, and non-goals.
+- Authorization: the user approved the bounded WP8 tests-first plan. Work used
+  repository text, small temporary files, and one temporary synthetic session.
+  No experimental data, CT026 mutation, real benchmark, transfer, scheduler
+  action, or persistent analysis output was used.
+- Start HEAD / end HEAD: pushed WP7 handoff `3281d01` / WP8 documentation
+  GREEN `8b92c4f` (this handoff commit follows separately).
+- Owned files: added
+  `src/tests/neural_analysis/test_task_decoding_documentation.py`,
+  `docs/examples/neural_analysis/task_decoding_config.json`, and
+  `src/neural_analysis/task_decoding/README.md`; extended
+  `src/neural_analysis/README.md`; and made one bounded JSON-boundary change in
+  `pipeline.py` so dry-run source-size mapping keys are strings.
+- RED command and result: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
+  src/tests/neural_analysis/test_task_decoding_documentation.py -q` reported
+  six expected failures and two passes. Five failures identified the missing
+  WP8 artifacts. The sixth causally exposed the existing real dry-run CLI
+  failure: `json.dumps(..., default=str)` did not convert `Path` mapping keys.
+- GREEN/regression commands and results: the focused WP8 suite passed 8 tests.
+  The full task-decoding package plus WP8 contracts passed 797 tests with the
+  same six known synthetic/library warnings in 84.78 seconds. Both exact CLI
+  help commands passed. Real single-session and batch dry runs against one
+  temporary fixture returned valid JSON; the batch reported one effective
+  worker without evidence. Source compilation and `git diff --check` passed.
+- Commits: tests-only `c1cda3b`; genuine Markdown-whitespace test correction
+  `52729fc`; test formatting `a1c1f5c`; dry-run JSON fix `b2b3dde`; and
+  documentation/example GREEN `8b92c4f`.
+- Real-data or external actions: none. The bounded detached command created a
+  temporary run beneath `/tmp/context-inference-wp8-vF9gCf`, printed its
+  receipt/log and exact resume/status commands, and returned. One later status
+  call reported the durable initialized state, dead receipt, and recovery
+  command without polling.
+- Findings and unresolved risks: the command sandbox reaped its detached child
+  when the parent tool invocation ended, so this environment cannot prove
+  terminal-independent child completion even though the receipt/status/
+  recovery lifecycle behaved correctly and focused lifecycle tests pass. A
+  foreground recovery attempt reached neural loading but the planning-only
+  fixture's two isolated spikes produced an empty Pynapple time-support union;
+  no production change was made to disguise that inadequate execution
+  fixture. WP9 must supply the seeded, fully executable synthetic session that
+  tests end-to-end completion. Operational Slurm instructions remain
+  intentionally absent pending WP11, and array commands remain gated by WP13.
+- Exact next action: propose the WP9 seeded synthetic end-to-end test plan,
+  including expected signal timing, all region/representation/target-family
+  coverage, one unavailable target, saved reload/plots, and leakage checks.
+  Obtain user approval before writing WP9 tests. Do not execute CT026 or a real
+  benchmark.
 
 ## 1. Objective
 
