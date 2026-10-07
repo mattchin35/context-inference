@@ -120,10 +120,20 @@ class ActivityDryRunReport:
     source_file_sizes_bytes : dict[Path, int]
         Individual source-file byte sizes. These are reported separately and do
         not contribute to ``tensor_allocation_bytes``.
+    tensor_trial_count : int
+        Number of target-independent bilateral full-window trial rows.
+    time_bin_count : int
+        Number of event-relative time bins per trial.
+    pfc_unit_count, hpc_unit_count : int
+        Stable selected unit counts on the two regional tensor axes.
     """
 
     tensor_allocation_bytes: int
     source_file_sizes_bytes: dict[Path, int]
+    tensor_trial_count: int
+    time_bin_count: int
+    pfc_unit_count: int
+    hpc_unit_count: int
 
 
 def _require_source_path(
@@ -953,7 +963,9 @@ def inspect_activity_dry_run(
     Returns
     -------
     ActivityDryRunReport
-        Exact tensor allocation bytes and separate source-file byte sizes.
+        Exact tensor dimensions/allocation bytes and separate source-file byte
+        sizes. Trial and unit counts are dimensionless; allocation and source
+        sizes are bytes.
 
     Raises
     ------
@@ -988,12 +1000,20 @@ def inspect_activity_dry_run(
     )
     if trial_positions.size == 0:
         raise ValueError("No baseline-valid trials have bilateral full-window coverage.")
+    time_bin_count = _n_time_bins(window_s, bin_width_s)
     tensor_allocation_bytes = estimate_rate_tensor_bytes(
         n_tensor_trials=trial_positions.size,
-        n_time_bins=_n_time_bins(window_s, bin_width_s),
+        n_time_bins=time_bin_count,
         n_pfc_units=len(pfc_clusters),
         n_hpc_units=len(hpc_clusters),
     )
     source_paths = _source_paths(pfc_source) + _source_paths(hpc_source)
     source_file_sizes_bytes = {path: path.stat().st_size for path in source_paths}
-    return ActivityDryRunReport(tensor_allocation_bytes, source_file_sizes_bytes)
+    return ActivityDryRunReport(
+        tensor_allocation_bytes=tensor_allocation_bytes,
+        source_file_sizes_bytes=source_file_sizes_bytes,
+        tensor_trial_count=int(trial_positions.size),
+        time_bin_count=time_bin_count,
+        pfc_unit_count=int(len(pfc_clusters)),
+        hpc_unit_count=int(len(hpc_clusters)),
+    )

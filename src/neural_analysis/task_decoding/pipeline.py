@@ -477,6 +477,59 @@ def _fit_count(config: decoding_config.TaskDecodingConfig) -> int:
     return len(config.target_names) * config.outer_fold_count * time_bins * 3 * 2
 
 
+def _resource_envelope(
+    config: decoding_config.TaskDecodingConfig,
+    target_table: pd.DataFrame,
+    report: activity.ActivityDryRunReport,
+) -> dict[str, int]:
+    """Return comparable resource-driving dimensions for one bounded plan.
+
+    Parameters
+    ----------
+    config : TaskDecodingConfig
+        Frozen target, fold, bin-width, and regularization settings.
+    target_table : pandas.DataFrame
+        Full chronological target table, shape ``(full_trial, columns)``.
+    report : ActivityDryRunReport
+        Target-independent bilateral tensor dimensions and exact allocation.
+
+    Returns
+    -------
+    dict[str, int]
+        Nonnegative dimensionless counts plus ``tensor_allocation_bytes``.
+        Family fit counts include inner candidates and outer refits in tuned
+        mode and outer fits only in fixed mode.
+    """
+    family_counts = {"categorical": 0, "numerical": 0}
+    for target_name in config.target_names:
+        family = decoding_config.TARGET_DEFINITION_BY_IDENTIFIER[target_name].family
+        family_counts[family] += 1
+    cells_per_target = config.outer_fold_count * report.time_bin_count * 3 * 2
+    fits_per_cell = (
+        15 * config.inner_fold_count + 1
+        if config.regularization_mode == "tuned"
+        else 1
+    )
+    return {
+        "full_trial_count": int(target_table.shape[0]),
+        "tensor_trial_count": report.tensor_trial_count,
+        "pfc_unit_count": report.pfc_unit_count,
+        "hpc_unit_count": report.hpc_unit_count,
+        "time_bin_count": report.time_bin_count,
+        "target_count": len(config.target_names),
+        "outer_fold_count": config.outer_fold_count,
+        "inner_fold_count": config.inner_fold_count,
+        "coefficient_feature_capacity": report.pfc_unit_count + report.hpc_unit_count,
+        "categorical_fit_count": family_counts["categorical"]
+        * cells_per_target
+        * fits_per_cell,
+        "numerical_fit_count": family_counts["numerical"]
+        * cells_per_target
+        * fits_per_cell,
+        "tensor_allocation_bytes": report.tensor_allocation_bytes,
+    }
+
+
 def plan_task_decoding_session(config_path: Path | str) -> dict[str, object]:
     """Inspect one session's bounded inputs without loading spikes or fitting models.
 
@@ -488,14 +541,16 @@ def plan_task_decoding_session(config_path: Path | str) -> dict[str, object]:
     Returns
     -------
     dict[str, object]
-        Target names, outer-cell fit count, tensor allocation bytes, source-file
-        size facts, and scientific-source cleanliness text. Firing-rate units
+        Target names, identity/environment facts, outer-cell fit count, exact
+        tensor allocation bytes, source-file size facts, comparable resource
+        dimensions, and scientific-source cleanliness text. Firing-rate arrays
         are not allocated or returned.
     """
     identity = _build_preparation_identity(config_path)
     config = identity["config"]
     resolved = identity["resolved_session"]
     target_table = identity["target_table"]
+    scientific_source = identity["scientific_source"]
     report = activity.inspect_activity_dry_run(
         target_table,
         config.pfc_region,
@@ -514,11 +569,25 @@ def plan_task_decoding_session(config_path: Path | str) -> dict[str, object]:
     else:
         source_cleanliness = "clean"
     return {
+        "config_path": str(Path(config_path).resolve()),
+        "session_id": resolved.session_id,
         "target_names": config.target_names,
         "fit_count": _fit_count(config),
         "tensor_allocation_bytes": report.tensor_allocation_bytes,
         "source_file_sizes_bytes": report.source_file_sizes_bytes,
         "source_cleanliness": source_cleanliness,
+        "analysis_version": decoding_config.ANALYSIS_VERSION,
+        "scientific_source_fingerprint": scientific_source["fingerprint"],
+        "runtime_versions": _runtime_version_mapping(),
+        "platform": platform.platform(),
+        "architecture": platform.machine(),
+        "thread_limits": {
+            "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS", ""),
+            "MKL_NUM_THREADS": os.environ.get("MKL_NUM_THREADS", ""),
+            "OPENBLAS_NUM_THREADS": os.environ.get("OPENBLAS_NUM_THREADS", ""),
+        },
+        "regularization_mode": config.regularization_mode,
+        "resource_envelope": _resource_envelope(config, target_table, report),
     }
 
 
@@ -666,6 +735,10 @@ def _write_prepared_sidecars(
         run_directory / "run_session.py",
         Path(__file__).with_name("run_session.py").read_bytes(),
     )
+    _atomic_bytes(
+        run_directory / "run_batch.py",
+        Path(__file__).with_name("run_batch.py").read_bytes(),
+    )
     _atomic_bytes(run_directory / "pipeline.py", Path(__file__).read_bytes())
     (run_directory / "checkpoints").mkdir(exist_ok=True)
     (run_directory / "figures").mkdir(exist_ok=True)
@@ -690,6 +763,32 @@ def _write_prepared_sidecars(
     }
     _write_json(run_directory / _STATE_FILE, state)
     _append_log(run_directory, "stage prepared")
+
+
+def _record_batch_execution_provenance(
+    run_directory: Path,
+    batch_provenance: Mapping[str, object],
+) -> None:
+    """Atomically add batch-only worker and resource evidence to a prepared run.
+
+    Parameters
+    ----------
+    run_directory : pathlib.Path
+        Newly prepared immutable scientific run directory.
+    batch_provenance : mapping[str, object]
+        JSON-safe config-list, worker-cap, memory, and optional evidence facts.
+        Byte-valued members explicitly end in ``_bytes``.
+
+    Returns
+    -------
+    None
+        Updates only execution provenance; scientific identity is unchanged.
+    """
+    execution = _read_json(run_directory / _EXECUTION_FILE)
+    if "batch" in execution:
+        raise ValueError("Prepared execution already contains batch provenance.")
+    execution["batch"] = dict(batch_provenance)
+    _write_json(run_directory / _EXECUTION_FILE, execution)
 
 
 def _validate_complete_prepared_run(run_directory: Path) -> bool:
