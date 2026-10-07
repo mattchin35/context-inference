@@ -1,6 +1,7 @@
 """Tests for the narrow legacy-table rewards-in-block backfill migration."""
 
 from pathlib import Path
+import stat
 
 import pandas as pd
 import pytest
@@ -109,6 +110,17 @@ def test_backfill_rewards_in_block_csv_adds_only_column_and_publishes_atomically
     assert published_paths[0][1] == csv_path
     assert published_paths[0][0].parent == csv_path.parent
     assert published_paths[0][0] != csv_path
+
+
+def test_backfill_rewards_in_block_csv_preserves_source_permission_mode(tmp_path):
+    """Atomic publication should retain the source CSV's Unix permission bits."""
+    csv_path = tmp_path / "session_augmented_trials.csv"
+    write_csv_with_project_sentinels(csv_path, make_saved_augmented_table())
+    csv_path.chmod(0o664)
+
+    gather_trial_features.backfill_rewards_in_block_csv(csv_path)
+
+    assert stat.S_IMODE(csv_path.stat().st_mode) == 0o664
 
 
 def test_backfill_rewards_in_block_csv_reuses_general_behavior_helper(
