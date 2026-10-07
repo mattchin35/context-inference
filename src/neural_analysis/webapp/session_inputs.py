@@ -53,6 +53,8 @@ PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT = "Single-trial spike-LFP phase"
 
 PLOT_VIEW_LFP_SUMMARY = "Cached LFP summary"
 
+PLOT_VIEW_TASK_DECODING = "Task-variable decoding results"
+
 PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_UNIT_RASTER,
     PLOT_VIEW_TRIAL_SPIKES,
@@ -63,6 +65,7 @@ PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING,
     PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT,
     PLOT_VIEW_LFP_SUMMARY,
+    PLOT_VIEW_TASK_DECODING,
 ]
 
 CHANNEL_SOURCE_MANUAL = "Manual / preset"
@@ -199,7 +202,9 @@ def metadata_view_availability(
     lfp_only = {PLOT_VIEW_LFP_PHASE_CLUSTERING, PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE}
     combined = {PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING, PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT}
     for view in PLOT_VIEW_OPTIONS:
-        if not behavior_ready:
+        if view == PLOT_VIEW_TASK_DECODING:
+            availability[view] = MetadataViewAvailability(True, "available")
+        elif not behavior_ready:
             availability[view] = MetadataViewAvailability(False, behavior_reason)
         elif view in lfp_only and not lfp_ready:
             availability[view] = MetadataViewAvailability(False, lfp_reason)

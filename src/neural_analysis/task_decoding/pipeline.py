@@ -27,7 +27,7 @@ import pandas as pd
 
 from src.neural_analysis.session_metadata import load_session_metadata, resolve_session_metadata
 from src.neural_analysis.task_decoding import activity, config as decoding_config
-from src.neural_analysis.task_decoding import modeling, results, targets
+from src.neural_analysis.task_decoding import modeling, plotting, results, targets
 
 
 _RUN_PREFIX = "task_variable_decoding_"
@@ -2592,88 +2592,12 @@ def _write_run_summary(
     _atomic_bytes(destination, "\n".join(lines).encode("utf-8"))
 
 
-def _write_png_atomic(
-    destination: Path,
-    values: np.ndarray,
-    title: str,
-    *,
-    metric_reference: float,
-) -> None:
-    """Render and atomically publish one small completion-gate PNG.
-
-    Parameters
-    ----------
-    destination : pathlib.Path
-        New figure path below the run's ``figures`` directory.
-    values : numpy.ndarray
-        Score tensor on axes ``(family_target, region, representation,
-        time_bin)``. Values are dimensionless balanced-accuracy, AUC, or R2
-        scores averaged across outer folds.
-    title : str
-        Human-readable family/metric caption.
-    metric_reference : float
-        Chance baseline (0.5 for categorical fractions, 0.0 for R2) placed at
-        the midpoint of each panel's diverging score normalization.
-
-    Returns
-    -------
-    None
-        Publishes a valid PNG only when the immutable destination is absent.
-    """
-    if destination.exists():
-        return
-    import matplotlib.pyplot as pyplot
-    from matplotlib.colors import TwoSlopeNorm
-
-    temporary: Path | None = None
-    figure, axes = pyplot.subplots(3, 2, figsize=(8.0, 8.5), squeeze=False)
-    try:
-        score_panels = np.asarray(values, dtype=float)
-        if score_panels.ndim != 4 or score_panels.shape[1:3] != (3, 2):
-            raise ValueError("Completion heatmaps require region x representation x time values.")
-        normalization = TwoSlopeNorm(
-            vcenter=metric_reference,
-            vmin=metric_reference - 0.5,
-            vmax=metric_reference + 0.5,
-        )
-        for region_index, region in enumerate(_REGIONS):
-            for representation_index, representation in enumerate(_REPRESENTATIONS):
-                axis = axes[region_index, representation_index]
-                panel = score_panels[:, region_index, representation_index, :]
-                axis.imshow(panel, aspect="auto", norm=normalization)
-                axis.set_title(f"{region} {representation}")
-                axis.set_xlabel("time bin")
-                axis.set_yticks([])
-        figure.suptitle(title)
-        figure.tight_layout()
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            dir=destination.parent,
-            suffix=".png",
-            delete=False,
-        ) as stream:
-            temporary = Path(stream.name)
-        figure.savefig(temporary, format="png", dpi=100)
-        with temporary.open("rb") as stream:
-            os.fsync(stream.fileno())
-        os.replace(temporary, destination)
-    except BaseException as publication_error:
-        if temporary is not None and temporary.exists():
-            try:
-                temporary.unlink()
-            except BaseException as cleanup_error:
-                raise cleanup_error from publication_error
-        raise
-    finally:
-        pyplot.close(figure)
-
-
 def _write_minimal_family_heatmaps(
     run_directory: Path,
     *,
     arrays: Mapping[str, np.ndarray],
 ) -> None:
-    """Publish only the three required categorical/numerical completion PNGs.
+    """Publish the bounded completion PNG set through the WP7 plotting owner.
 
     Parameters
     ----------
@@ -2685,57 +2609,23 @@ def _write_minimal_family_heatmaps(
     Returns
     -------
     None
-        Writes categorical balanced-accuracy/AUC and numerical R2 figures only
-        for target families present in the configured run.
+        Loads the just-published saved run for ordinary execution. The fallback
+        adapter exists only for the older direct private-helper test seam and
+        uses the same plotting implementation without loading neural sources.
     """
-    def mean_over_outer_folds(values: np.ndarray) -> np.ndarray:
-        """Average score values over the final outer-fold axis without NaN warnings.
-
-        Parameters
-        ----------
-        values : numpy.ndarray
-            Score values with outer fold on the final axis. Entries may be NaN
-            for unavailable fits; all-NaN cells remain NaN.
-
-        Returns
-        -------
-        numpy.ndarray
-            Float64 values on all leading axes, with unavailable all-NaN cells
-            preserved as NaN rather than producing a runtime warning.
-        """
-        numeric = np.asarray(values, dtype=np.float64)
-        finite = np.isfinite(numeric)
-        counts = np.sum(finite, axis=-1)
-        total = np.sum(np.where(finite, numeric, 0.0), axis=-1)
-        output = np.full(total.shape, np.nan, dtype=np.float64)
-        np.divide(total, counts, out=output, where=counts > 0)
-        return output
-
-    labels = arrays["target_families"].tolist()
-    scores = arrays["fold_scores"]
-    figures = run_directory / "figures"
-    if "categorical" in labels:
-        categorical = np.flatnonzero(arrays["target_families"] == "categorical")
-        _write_png_atomic(
-            figures / "categorical_balanced_accuracy.png",
-            mean_over_outer_folds(scores[categorical, :, :, 0]),
-            "Categorical balanced accuracy",
-            metric_reference=0.5,
-        )
-        _write_png_atomic(
-            figures / "categorical_auc.png",
-            mean_over_outer_folds(scores[categorical, :, :, 1]),
-            "Categorical AUC",
-            metric_reference=0.5,
-        )
-    if "numerical" in labels:
-        numerical = np.flatnonzero(arrays["target_families"] == "numerical")
-        _write_png_atomic(
-            figures / "numerical_r2.png",
-            mean_over_outer_folds(scores[numerical, :, :, 2]),
-            "Numerical R2",
-            metric_reference=0.0,
-        )
+    directory = Path(run_directory)
+    if (directory / _RESULT_FILE).is_file():
+        plotting.save_default_decoding_figures(directory)
+        return
+    saved_run = {
+        "arrays": arrays,
+        "scientific_config": {"alignment": "choice_time"},
+    }
+    plotting.save_default_decoding_figures(
+        directory,
+        saved_run=saved_run,
+        _legacy_panel_titles=True,
+    )
 
 
 def _validate_published_run_directory(run_directory: Path) -> None:

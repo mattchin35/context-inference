@@ -161,6 +161,7 @@ from src.neural_analysis.webapp.session_inputs import (
     PLOT_VIEW_SINGLE_TRIAL_RELATIVE_PHASE,
     PLOT_VIEW_SINGLE_TRIAL_SPIKE_LFP_HILBERT,
     PLOT_VIEW_SPIKE_LFP_PHASE_LOCKING,
+    PLOT_VIEW_TASK_DECODING,
     PLOT_VIEW_TRIAL_SPIKES,
     PLOT_VIEW_UNIT_RASTER,
     load_webapp_session,
@@ -192,6 +193,7 @@ from src.neural_analysis.webapp.summary_view import (
     render_lfp_summary_view,
     render_metadata_lfp_summary_view,
 )
+from src.neural_analysis.webapp.task_decoding_views import render_task_decoding_view
 from src.neural_analysis.webapp.unit_views import (
     PAGE_SIZE_OPTIONS,
     POPULATION_PSTH_UNIT_SCOPE_OPTIONS,
@@ -657,6 +659,9 @@ def _start_metadata_webapp(session: ResolvedSession) -> str | None:
     if plot_view == PLOT_VIEW_LFP_SUMMARY:
         render_metadata_lfp_summary_view(st, session)
         return None
+    if plot_view == PLOT_VIEW_TASK_DECODING:
+        render_task_decoding_view(st, session)
+        return None
     return plot_view
 
 
@@ -746,6 +751,13 @@ def main(argv: Sequence[str] = ()) -> None:
         )
         _render_path_browser()
         plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+
+    if plot_view == PLOT_VIEW_TASK_DECODING:
+        st.info(
+            "Task-variable decoding results require a metadata session. Launch this webapp "
+            "with `--session-metadata <session_root>/neural_session.json`."
+        )
+        return
 
     if plot_view == PLOT_VIEW_LFP_SUMMARY:
         render_lfp_summary_view(
