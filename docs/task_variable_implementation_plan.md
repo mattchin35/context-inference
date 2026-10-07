@@ -1,9 +1,10 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP5A production review found a second
-set of persistence invariants after the 351-case suite passed. The corrected
-358-case tests-first contract is committed and independently approved under a
-staged RED gate. Production correction remains uncommitted.
+**Status:** Implementation authorized; WP5A production review found shared
+split-label and regional-transform invariants after the 358-case suite passed.
+The corrected 363-case persistence contract plus 16 modeling split cases are
+committed and independently approved under a staged RED gate. Production
+correction remains uncommitted.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -21,22 +22,23 @@ committed at `b844f26` after independent approval. WP5A base saved-results
 tests are committed at `4a5664a`; independently approved dynamic-schema,
 semantic, and frozen-control corrections are committed at `bc628c4` and
 `2c5f086`. Real-state RED coverage is committed at `dedde7d`, and the final
-fold-transform/split-causality correction is committed at `7f8373b`; their
-bounded `results.py` correction is the single next package. No
-experimental-data mutation, decoding output, benchmark, transfer, local long
-run, or cluster action is authorized.
+fold-transform/split-causality correction is committed at `7f8373b`; the
+shared-split and exact-transform correction is committed at `3b69f97`. Their
+bounded `modeling.py` and `results.py` correction is the single next package.
+No experimental-data mutation, decoding output, benchmark, transfer, local
+long run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local implementation HEAD: `7f8373b`;
+- local implementation HEAD: `3b69f97`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A base,
-  first supplemental, real-state, and transform-causality tests are committed,
-  while the uncommitted `results.py` candidate remains rejected until it
-  satisfies the final 358-case contract; and
+  first supplemental, real-state, transform-causality, and shared-split tests
+  are committed, while the uncommitted `results.py` candidate remains rejected
+  until it satisfies the final persistence and modeling contracts; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -65,12 +67,13 @@ run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** change only target-level full-reason versus compact
-cell-code handling in `src/neural_analysis/task_decoding/results.py`, rerun to
-expose the currently masked splittable-target causality failure, then implement
-fold-transform coherence, zero-width no-candidate cells, and decoded-scalar
-outer-split causality without changing committed tests. Stop for independent
-production review before declaring WP5A GREEN.
+**Next exact action:** add one shared type-preserving group-label normalizer to
+the grouped splitter path in `src/neural_analysis/task_decoding/modeling.py`,
+remove the results-only scientific fork, then correct the staged regional
+availability, per-region PCA masks, exact PCA-width, and cross-selected-cell
+checks in `src/neural_analysis/task_decoding/results.py` without changing
+committed tests. Stop for independent production review before declaring WP5A
+GREEN.
 
 ### Authority order
 
@@ -95,7 +98,7 @@ When resuming, use this order:
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
 | WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
 | WP4 grouped modeling | Complete: fixed GREEN `a8787aa`, tuned GREEN `b844f26` | None |
-| WP5 results and session pipeline | WP5A final 358-case RED contract committed through `7f8373b`; production correction in progress | WP5A corrected GREEN plus independent production approval |
+| WP5 results and session pipeline | WP5A 363-case persistence plus 16-case shared-split RED contract committed through `3b69f97`; production correction in progress | WP5A corrected GREEN plus independent production approval |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
 | WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
 | WP8 documentation and examples | Pending prerequisite | CLI/webapp interfaces stable through WP7 |
@@ -1010,6 +1013,61 @@ Use this template for each appended record:
   separation, reproduce the sixth causal RED failure, then correct the three
   remaining validator boundaries without changing committed tests. Obtain a
   fresh independent production approval before the WP5A GREEN commit.
+
+#### 2026-10-07 - WP5A shared-split and exact-transform RED correction
+
+- State: the 358-case result suite reached GREEN, but independent production
+  review found that persistence used a private block-label adapter that could
+  disagree with WP4, and that transform validation did not yet encode all
+  regional availability, PCA-width, and tuned cross-cell reuse invariants. The
+  corrected tests are committed under an independently approved staged RED
+  gate; production remains uncommitted.
+- Authorization: project implementation remains authorized. Work used only
+  deterministic temporary files and synthetic arrays; no experimental data,
+  decoding run, benchmark, transfer, or scheduler action was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / same Terra xhigh tests
+  worker / independent Sol xhigh modeling-to-persistence reviewer.
+- Start HEAD / end HEAD: preceding documentation handoff `856e5d8` / corrected
+  tests-only commit `3b69f97`.
+- Owned files: modified only
+  `src/tests/neural_analysis/task_decoding/test_modeling.py` and
+  `src/tests/neural_analysis/task_decoding/test_results.py`. The untracked
+  `src/neural_analysis/task_decoding/results.py` candidate remained byte-
+  identical throughout, with SHA-256
+  `294c866fd9f942035164946391c171868296890eb81b8b55a34521da7c34820e`
+  and Git blob ID `a6de8c34115742deefd30b096942fddbc6269b8c`.
+- RED commands and results: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest -q
+  src/tests/neural_analysis/task_decoding/test_modeling.py` reports 16 failed /
+  80 passed with two existing sklearn warnings; all failures are the four
+  scalar collision pairs crossed with categorical/numerical and outer/inner
+  grouped splits. `env UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run
+  pytest -q src/tests/neural_analysis/task_decoding/test_results.py` reports
+  three failed / 360 passed. The result failures are the valid regional-
+  unavailable state rejected by an invalid sum rule, the valid one-unit PFC
+  state rejected by a global rather than per-region combined-PCA prefix rule,
+  and a staggered tuned standalone/combined contradiction that is not rejected.
+  Pycompile, the 100-column check, and `git diff --check` pass.
+- Commits: shared-split and exact-transform tests `3b69f97`; preceding
+  transform/split correction `7f8373b`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: block identities are defined by scalar type
+  and value, so integer, string, floating-point, and Boolean aliases must stay
+  distinct while homogeneous numerical labels retain numerical ordering. One
+  regional transform governs both PCA and direct-unit representations. A
+  failed required region makes its standalone and combined cells unavailable,
+  but does not invalidate the other standalone region. Combined PCA masks use
+  separate regional prefixes, and each attempted regional PCA width is
+  `min(requested PCs, usable direct units, training trials * time bins)`.
+  Tuned transform evidence must reconcile selected standalone and combined
+  cells even when those selections occur at different time bins.
+- Exact next action: implement the single shared type-preserving group-label
+  normalizer in `modeling.py` and route decoded result scalars through it. Then
+  fix the two valid persistence states first so the staged cross-representation
+  and exact-PCA-count negatives become causal, implement those checks plus
+  staggered selected-cell reconciliation, run both full modules and the full
+  task-decoding suite, and obtain fresh independent production approval before
+  the WP5A GREEN commit.
 
 ## 1. Objective
 
