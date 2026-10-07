@@ -48,6 +48,10 @@ _REPRESENTATIONS = ("pca", "units")
 _METRICS = ("balanced_accuracy", "auc", "r2")
 
 
+class _ExecutionOwnershipConflict(RuntimeError):
+    """Signal that another invocation already owns a prepared run."""
+
+
 def _compact_reason_code(reason: str | None, *, inner: bool = False) -> str:
     """Map model prose to one documented compact saved reason code.
 
@@ -1614,7 +1618,9 @@ def _reject_live_owner(run_directory: Path, path: Path, description: str) -> Non
     state = _inspect_execution_owner(owner)
     _append_execution_history(run_directory, f"{description}_{state}")
     if state in {"live", "slurm_pending", "slurm_running", "foreign_unresolved"}:
-        raise RuntimeError(f"Existing {description} is active, live, Slurm-owned, or foreign.")
+        raise _ExecutionOwnershipConflict(
+            f"Existing {description} is active, live, Slurm-owned, or foreign."
+        )
     path.unlink()
 
 
@@ -2917,6 +2923,9 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
     ------
     ValueError
         For revalidation, checkpoint, scientific, or schema mismatches.
+    RuntimeError
+        If another invocation already owns the prepared run. Ownership
+        conflicts leave the active owner's lifecycle state unchanged.
     Exception
         Unexpected I/O/programming errors propagate after durable failed state.
     KeyboardInterrupt or SystemExit
@@ -2946,14 +2955,19 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
         if not matching_receipt:
             _reject_live_owner(directory, receipt_path, "receipt")
         _reject_live_owner(directory, directory / _GUARD_FILE, "guard")
-        # The prepared record describes the requestor.  Persist the actual
-        # worker before claim so checkpoints, result provenance, and status
-        # all name the same live owner.
+        # Claim first so a losing contender cannot overwrite the winner's
+        # execution provenance before exclusive ownership is established.
+        try:
+            _claim_execution_guard(directory, owner=owner)
+        except FileExistsError as error:
+            raise _ExecutionOwnershipConflict(
+                "Execution guard was claimed concurrently by another owner."
+            ) from error
+        execution = _read_json(directory / _EXECUTION_FILE)
         history = execution.get("history")
         execution.update(owner)
         execution["history"] = history if isinstance(history, list) else []
         _write_json(directory / _EXECUTION_FILE, execution)
-        _claim_execution_guard(directory, owner=owner)
         if matching_receipt:
             receipt_path.unlink()
         execution = _read_json(directory / _EXECUTION_FILE)
@@ -3112,11 +3126,14 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
             completed_at=_utc_now(),
             completed_targets=list(config.target_names),
             final_results_published=True,
+            last_error="",
         )
         _append_log(directory, "stage complete")
         if guard_to_remove is not None:
             guard_to_remove.unlink()
         owner = None
+    except _ExecutionOwnershipConflict:
+        raise
     except (KeyboardInterrupt, SystemExit):
         try:
             _update_state(
