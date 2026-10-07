@@ -1,7 +1,7 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP4 fixed-mode boundary-order
-corrections are in progress against a second committed supplemental RED slice.
+**Status:** Implementation authorized; WP4 fixed mode is GREEN and optional
+tuned-mode implementation is next.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -12,11 +12,10 @@ transfer, or scheduler actions, which retain their separate gates below.
 **Snapshot date:** 2026-10-06
 
 **Current phase:** WP0-WP3 are complete. WP4 grouped-modeling tests are
-committed at `6ee6355`. An initial fixed-mode implementation passed its focused
-cases but required two independent-audit correction rounds; supplemental RED
-tests are committed at `c85a00c` and `fab38b8`. The final fixed-mode boundary
-corrections and repeat independent review are the single next package; tuned
-mode remains gated behind approval. No
+committed at `6ee6355`, with supplemental audit tests at `c85a00c` and
+`fab38b8`. Fixed-mode production is committed at `a8787aa` after all 70
+non-tuned modeling cases and independent review passed. Optional tuned-mode
+implementation is the single next package. No
 experimental-data mutation, decoding output, benchmark, transfer, local long
 run, or cluster action is authorized.
 
@@ -24,12 +23,12 @@ run, or cluster action is authorized.
 
 - branch: `refactor`;
 - local implementation HEAD:
-  `fab38b8c6f333f2e149dddfec43df04d6fb474aa`;
+  `a8787aaa4ce172e48746690e05e9ab73f3d635f8`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
-- the bounded WP4 fixed-mode production files are uncommitted under correction;
-  no test change is permitted during that correction; and
+- the bounded WP4 fixed-mode production and all modeling tests are committed;
+  owned files are clean before tuned-mode work; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -58,9 +57,9 @@ run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this second supplemental RED handoff separately,
-finish the fixed-mode boundary corrections without changing tests, and obtain
-independent Sol xhigh approval before tuned-mode implementation is authorized.
+**Next exact action:** commit this fixed-mode GREEN handoff separately, then
+have the same Terra xhigh worker implement only tuned-mode orchestration and
+obtain independent Sol xhigh approval before declaring WP4 complete.
 
 ### Authority order
 
@@ -84,7 +83,7 @@ When resuming, use this order:
 | WP1 behavioral feature | Complete: RED `acf24ae`, GREEN `8ea4d24` | None; CT026 backfill remains separately gated at WP9A |
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
 | WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
-| WP4 grouped modeling | Base RED `6ee6355`; supplemental RED `c85a00c`, `fab38b8`; final fixed correction in progress | Fixed-mode GREEN plus independent Sol xhigh approval before tuned mode |
+| WP4 grouped modeling | Fixed mode GREEN `a8787aa`; tuned mode next | Terra xhigh tuned implementation plus independent Sol xhigh review |
 | WP5 results and session pipeline | Pending prerequisite | WP4 GREEN and saved-schema freeze |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
 | WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
@@ -694,6 +693,50 @@ Use this template for each appended record:
 - Exact next action: commit this documentation-only RED correction, make only
   the bounded production fixes without changing tests, then repeat all fixed
   and regression gates plus independent Sol xhigh review.
+
+#### 2026-10-06 - WP4 fixed-mode GREEN gate
+
+- State: fixed-mode grouped modeling and shared preprocessing/scoring helpers
+  are GREEN and independently approved. Optional tuned mode is next.
+- Authorization: project implementation remains authorized. Only
+  source-controlled code and deterministic synthetic tests were used; no
+  experimental data, decoding run, benchmark, transfer, or scheduler action
+  was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / same Terra xhigh worker /
+  independent Sol xhigh scientific, numerical, leakage, and boundary review.
+- Start HEAD / end HEAD: second RED handoff `b92446c` / fixed implementation
+  `a8787aaa4ce172e48746690e05e9ab73f3d635f8`.
+- Owned files: created
+  `src/neural_analysis/task_decoding/modeling.py` and modified
+  `src/neural_analysis/task_decoding/config.py` to expose one immutable
+  estimator/PCA control mapping used by both execution and serialization.
+  Committed tests were not changed during the GREEN correction.
+- RED command and result: the base suite originally failed collection because
+  `modeling.py` was absent. The two independently reviewed supplements then
+  exposed 25 and 14 production failures respectively, with their valid-control
+  cases already passing.
+- GREEN/regression commands and results: all 70 committed non-tuned modeling
+  cases pass: 24 original fixed/shared, 29 first-supplemental, and 17
+  second-supplemental cases. The 80 config tests and 63 activity/target tests
+  pass; the latter retain three existing tiny-epoch warnings. The full
+  modeling module passes 70 cases and has exactly seven expected tuned-only
+  failures: six immediate `NotImplementedError` paths and the absent tuned
+  selection helper. Source pycompile, 100-column, and staged whitespace checks
+  pass.
+- Commits: base tests `6ee6355`; supplemental tests `c85a00c` and `fab38b8`;
+  fixed production `a8787aa`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: fixed mode fits one PFC and one HPC transform
+  per outer fold, reuses them across time/region/representation cells, and
+  emits the complete record Cartesian product. Frozen scikit-learn 1.8.0
+  controls omit deprecated logistic `penalty`; estimator overrides are limited
+  to family-specific tuning parameters. Scientific unavailable states retain
+  reasons, while malformed configuration, shapes, and identities raise. The
+  independent reviewer found no remaining fixed-mode production issue. The
+  only open WP4 behavior is the already-committed tuned contract.
+- Exact next action: commit this documentation-only GREEN handoff, then have
+  the same Terra xhigh worker implement tuned mode without changing tests.
+  Independent Sol xhigh review must approve the complete WP4 diff.
 
 ## 1. Objective
 
