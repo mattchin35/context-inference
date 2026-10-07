@@ -1981,7 +1981,9 @@ def test_atomic_guard_claim_race_cannot_mutate_the_winning_run_state(monkeypatch
     paths = write_session_inputs(tmp_path)
     run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")
     state_path = run_directory / "run_state.json"
+    execution_path = run_directory / "execution.json"
     state_before = state_path.read_bytes()
+    execution_before = execution_path.read_bytes()
     monkeypatch.setattr(
         pipeline,
         "_claim_execution_guard",
@@ -1995,6 +1997,7 @@ def test_atomic_guard_claim_race_cannot_mutate_the_winning_run_state(monkeypatch
         pipeline.run_prepared_task_decoding(run_directory)
 
     assert state_path.read_bytes() == state_before
+    assert execution_path.read_bytes() == execution_before
     assert not (run_directory / "resource_usage.json").exists()
 
 
