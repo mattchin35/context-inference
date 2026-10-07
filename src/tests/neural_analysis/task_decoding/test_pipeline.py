@@ -1130,8 +1130,12 @@ def test_wp5b_private_assembly_requires_explicit_nonempty_session_id(tmp_path):
     assert signature.parameters["session_id"].default is inspect.Parameter.empty
     with pytest.raises(TypeError, match="session_id"):
         pipeline._assemble_run_result_payload(**assembly_kwargs)
-    with pytest.raises(ValueError, match="session_id|session"):
-        pipeline._assemble_run_result_payload(**assembly_kwargs, session_id="")
+    for invalid_session_id in ("", "   "):
+        with pytest.raises(ValueError, match="session_id|session"):
+            pipeline._assemble_run_result_payload(
+                **assembly_kwargs,
+                session_id=invalid_session_id,
+            )
 
 
 @pytest.mark.parametrize("inner", (False, True))
@@ -1144,6 +1148,20 @@ def test_wp5b_compact_reason_mapping_rejects_unknown_model_prose(inner):
     """
     with pytest.raises(ValueError, match="reason|unknown|unsupported"):
         pipeline._compact_reason_code("unrecognized model failure prose", inner=inner)
+
+
+@pytest.mark.parametrize(
+    ("reason", "inner"),
+    (
+        ("unexpected parser bug in regional training features: PFC", False),
+        ("unavailable regional training features: PFC, unexpected", False),
+        ("unavailable inner regional training features: PFC, unexpected", True),
+    ),
+)
+def test_wp5b_compact_reason_mapping_rejects_unreviewed_regional_prose(reason, inner):
+    """A familiar regional substring cannot disguise an unreviewed model reason."""
+    with pytest.raises(ValueError, match="reason|unknown|unsupported"):
+        pipeline._compact_reason_code(reason, inner=inner)
 
 
 @pytest.mark.parametrize(
@@ -3357,6 +3375,21 @@ def test_wp5b_completed_discovery_refuses_missing_or_corrupt_completion_artifact
             execution_mode="foreground",
         )
     assert run_session.main(["new", "--config", str(paths["config"])]) != 0
+
+
+def test_wp5b_complete_reentry_rejects_unpublished_terminal_state(monkeypatch, tmp_path):
+    """A complete lifecycle marker cannot bypass its final-publication flag."""
+    paths = write_session_inputs(tmp_path)
+    completed = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")
+    patch_coherent_execution(monkeypatch, make_coherent_model_records(paths))
+    pipeline.run_prepared_task_decoding(completed)
+    state_path = completed / "run_state.json"
+    state = read_json(state_path)
+    state["final_results_published"] = False
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    with pytest.raises(ValueError, match="complete|published|state"):
+        pipeline.run_prepared_task_decoding(completed)
+    assert run_session.main(["resume", "--run-directory", str(completed)]) != 0
 
 
 @pytest.mark.parametrize("corrupt_bytes", (b"", b"\x89PNG\r\n\x1a\n"))
