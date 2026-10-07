@@ -9,6 +9,7 @@ scheduler, or allocates a large neural array.
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from pathlib import Path
@@ -19,7 +20,7 @@ import subprocess
 import sys
 import time
 from dataclasses import replace
-from threading import Barrier, Thread
+from threading import Barrier, Event, Thread
 
 import numpy as np
 import pandas as pd
@@ -376,6 +377,33 @@ def prepare_with_clean_identity(
         lambda *_: {"files": [], "fingerprint": "synthetic-clean"},
     )
     return pipeline.prepare_task_decoding_run(paths["config"], rerun=True, execution_mode=mode)
+
+
+def write_matching_detached_receipt(run_directory: Path) -> None:
+    """Publish the receipt a real detached parent writes before child execution.
+
+    Parameters
+    ----------
+    run_directory : pathlib.Path
+        Prepared detached run directory receiving ``local_launch.json``.
+
+    Returns
+    -------
+    None
+        Atomically writes the current process identity used by in-process CLI
+        bridge tests. The values are execution facts without physical units.
+    """
+    run_session._atomic_receipt(
+        run_directory / "local_launch.json",
+        {
+            "mode": "detached",
+            "host": platform.node(),
+            "pid": os.getpid(),
+            "start_token": pipeline._process_start_token(os.getpid()),
+            "started_at": "2026-10-07T00:00:00Z",
+            "job_id": None,
+        },
+    )
 
 
 def prepared_full_fingerprint(run_directory: Path) -> str:
@@ -822,12 +850,17 @@ def test_prepare_writes_immutable_artifacts_and_complete_provenance(monkeypatch,
         "resume_command.txt",
         "status_command.txt",
         "run_session.py",
+        "pipeline.py",
         "checkpoints", "figures", "run.log",
     }
     assert required <= {member.name for member in run_directory.iterdir()}
     assert (run_directory / "trial_feature_params.json").read_bytes() == paths[
         "feature_parameters"
     ].read_bytes()
+    assert (run_directory / "run_session.py").read_bytes() == Path(
+        run_session.__file__
+    ).read_bytes()
+    assert (run_directory / "pipeline.py").read_bytes() == Path(pipeline.__file__).read_bytes()
     execution = read_json(run_directory / "execution.json")
     assert {
         "mode",
@@ -913,6 +946,8 @@ def test_shared_execution_revalidates_live_identity_before_guard_or_loader(
         "mocked_slurm": "slurm",
     }[route]
     run_directory = prepare_with_clean_identity(monkeypatch, paths, mode=execution_mode)
+    if route == "detached_private":
+        write_matching_detached_receipt(run_directory)
     calls: list[str] = []
     identity_calls: list[str] = []
     monkeypatch.setattr(
@@ -961,6 +996,8 @@ def test_shared_execution_identity_control_reaches_guard(monkeypatch, tmp_path, 
         "mocked_slurm": "slurm",
     }[route]
     run_directory = prepare_with_clean_identity(monkeypatch, paths, mode=execution_mode)
+    if route == "detached_private":
+        write_matching_detached_receipt(run_directory)
     events: list[str] = []
 
     def current_source_identity(*_args, **_kwargs):
@@ -1041,6 +1078,7 @@ def test_private_assembly_preserves_real_target_records_and_round_trips(monkeypa
         scientific_source={"fingerprint": "source-fingerprint-test"},
         execution_provenance={"mode": "foreground", "runtime_versions": {}},
         run_fingerprint="pipeline-assembly-test",
+        session_id="synthetic-session",
     )
     assert tuple(arrays["target_labels"]) == ("current_action", "relative_doubt")
     assert arrays["outer_fold_ids"].shape == (2, 12)
@@ -1061,6 +1099,136 @@ def test_private_assembly_preserves_real_target_records_and_round_trips(monkeypa
         expected_run_fingerprint="pipeline-assembly-test",
     )
     assert tuple(loaded["arrays"]["target_labels"]) == ("current_action", "relative_doubt")
+
+
+def test_wp5b_private_assembly_requires_explicit_nonempty_session_id(tmp_path):
+    """Assembly cannot invent session provenance when direct callers omit session ID.
+
+    The private seam receives the canonical resolved metadata session identifier
+    explicitly.  Its signature must not provide a fallback value, omitted
+    calls must be rejected by Python, and an empty identity must be rejected
+    before result metadata can claim a fabricated session.
+    """
+    paths = write_session_inputs(tmp_path)
+    model_inputs = make_coherent_model_records(paths)
+    assembly_kwargs = {
+        "config": model_inputs["config"],
+        "target_table": model_inputs["target_table"],
+        "rate_tensors": model_inputs["rate_tensors"],
+        "region_activity_metadata": {
+            "PFC": {"unit_ids": ["probe-pfc:1", "probe-pfc:2"], "selection_rules": {}},
+            "HPC": {"unit_ids": ["probe-hpc:1", "probe-hpc:2"], "selection_rules": {}},
+        },
+        "ordered_target_results": model_inputs["records"],
+        "stage_timing_seconds": {"targets": 0.1, "activity": 0.2, "modeling": 0.3},
+        "input_manifest": {"files": {"neural_session": {"relative_path": "neural_session.json"}}},
+        "scientific_source": {"fingerprint": "source"},
+        "execution_provenance": {"mode": "foreground"},
+        "run_fingerprint": "fingerprint",
+    }
+    signature = inspect.signature(pipeline._assemble_run_result_payload)
+    assert signature.parameters["session_id"].default is inspect.Parameter.empty
+    with pytest.raises(TypeError, match="session_id"):
+        pipeline._assemble_run_result_payload(**assembly_kwargs)
+    with pytest.raises(ValueError, match="session_id|session"):
+        pipeline._assemble_run_result_payload(**assembly_kwargs, session_id="")
+
+
+@pytest.mark.parametrize("inner", (False, True))
+def test_wp5b_compact_reason_mapping_rejects_unknown_model_prose(inner):
+    """Only reviewed model reasons may become persisted compact reason codes.
+
+    Parameters are deliberately unrecognized outer and inner prose so a future
+    model/API change cannot be silently mislabeled as an estimator or candidate
+    failure in the fixed saved schema.
+    """
+    with pytest.raises(ValueError, match="reason|unknown|unsupported"):
+        pipeline._compact_reason_code("unrecognized model failure prose", inner=inner)
+
+
+@pytest.mark.parametrize(
+    ("reason", "inner", "expected"),
+    (
+        ("convergence_warning", False, "fit_convergence_failure"),
+        ("convergence_warning", True, "candidate_fit_failed"),
+        ("invalid coefficient or intercept shape", False, "outer_estimator_failure"),
+        ("invalid coefficient or intercept shape", True, "candidate_fit_failed"),
+        ("non-finite coefficient or intercept", False, "outer_estimator_failure"),
+        ("non-finite coefficient or intercept", True, "candidate_fit_failed"),
+        (
+            "categorical estimator must expose binary classes including positive class 1",
+            False,
+            "outer_estimator_failure",
+        ),
+        (
+            "categorical estimator must expose binary classes including positive class 1",
+            True,
+            "candidate_fit_failed",
+        ),
+        ("invalid probability shape", False, "outer_estimator_failure"),
+        ("invalid probability shape", True, "candidate_fit_failed"),
+        ("non-finite probability or score", False, "outer_estimator_failure"),
+        ("non-finite probability or score", True, "candidate_fit_failed"),
+        ("positive class is ambiguous", False, "outer_estimator_failure"),
+        ("positive class is ambiguous", True, "candidate_fit_failed"),
+        (
+            "positive_scores must be finite and align with target_values.",
+            False,
+            "outer_estimator_failure",
+        ),
+        (
+            "positive_scores must be finite and align with target_values.",
+            True,
+            "candidate_fit_failed",
+        ),
+        (
+            "Categorical metrics require held-out values from both classes.",
+            False,
+            "outer_estimator_failure",
+        ),
+        (
+            "Categorical metrics require held-out values from both classes.",
+            True,
+            "candidate_fit_failed",
+        ),
+        ("non-finite prediction or score", False, "outer_estimator_failure"),
+        ("non-finite prediction or score", True, "candidate_fit_failed"),
+        (
+            "constant, singleton, or non-finite held-out numerical target",
+            False,
+            "outer_estimator_failure",
+        ),
+        (
+            "constant, singleton, or non-finite held-out numerical target",
+            True,
+            "candidate_fit_failed",
+        ),
+        ("inner split unavailable: constant target", False, "inner_plan_unavailable"),
+        ("inner split unavailable: constant target", True, "inner_plan_unavailable"),
+        (
+            "unavailable inner regional training features: PFC",
+            True,
+            "inner_candidate_unavailable",
+        ),
+        (
+            "unavailable outer regional training features: HPC",
+            False,
+            "outer_hpc_features_unavailable",
+        ),
+        (
+            "unavailable regional training features: PFC, HPC",
+            False,
+            "outer_features_unavailable",
+        ),
+        ("no valid inner tuning candidate", False, "no_valid_tuning_candidate"),
+        ("non-finite inner score", True, "nonfinite_inner_score"),
+    ),
+)
+def test_wp5b_reviewed_model_reasons_map_to_declared_compact_codes(reason, inner, expected):
+    """Every reviewed modeling invalidity maps losslessly to one declared code."""
+    compact = pipeline._compact_reason_code(reason, inner=inner)
+    assert compact == expected
+    assert compact in results._COMPACT_REASON_CODES
 
 
 def test_checkpoint_roundtrip_uses_real_results_api_and_configured_order(tmp_path):
@@ -2265,6 +2433,70 @@ def test_wp5b_detached_child_consumes_its_matching_receipt_before_guard(
     assert execution["mode"] == "detached"
 
 
+@pytest.mark.parametrize("initial_receipt", ("absent", "mismatched"))
+def test_wp5b_private_detached_child_waits_for_matching_launch_receipt(
+    monkeypatch,
+    tmp_path,
+    initial_receipt,
+):
+    """The private detached bridge cannot enter execution before its receipt exists.
+
+    The child runs in a thread only to make the parent/child interleaving
+    deterministic: the execution seam records entry, the test first proves no
+    entry without a receipt, then atomically publishes the current process's
+    matching PID/start-token receipt and requires a successful bridge return.
+    """
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="detached")
+    receipt_path = run_directory / "local_launch.json"
+    entered = Event()
+    observed_receipts: list[bool] = []
+    codes: list[int] = []
+
+    def record_execution(directory: Path) -> None:
+        """Record whether the private bridge entered only after receipt publication."""
+        assert directory == run_directory
+        observed_receipts.append(receipt_path.is_file())
+        entered.set()
+
+    monkeypatch.setattr(pipeline, "run_prepared_task_decoding", record_execution)
+    monkeypatch.setattr(run_session, "_pipeline_module", lambda: pipeline)
+    if initial_receipt == "mismatched":
+        run_session._atomic_receipt(
+            receipt_path,
+            {
+                "mode": "detached",
+                "host": platform.node(),
+                "pid": os.getpid(),
+                "start_token": "not-the-child-token",
+                "started_at": "2026-10-07T00:00:00Z",
+                "job_id": None,
+            },
+        )
+    child = Thread(
+        target=lambda: codes.append(
+            run_session.main(["_execute-prepared", "--run-directory", str(run_directory)])
+        )
+    )
+    child.start()
+    assert not entered.wait(timeout=0.2)
+    run_session._atomic_receipt(
+        receipt_path,
+        {
+            "mode": "detached",
+            "host": platform.node(),
+            "pid": os.getpid(),
+            "start_token": pipeline._process_start_token(os.getpid()),
+            "started_at": "2026-10-07T00:00:00Z",
+            "job_id": None,
+        },
+    )
+    child.join(timeout=1.0)
+    assert not child.is_alive()
+    assert codes == [0]
+    assert observed_receipts == [True]
+
+
 def test_wp5b_second_detached_resume_refuses_before_popen(monkeypatch, tmp_path):
     """An active detached receipt rejects immediate resume without starting another child."""
     paths = write_session_inputs(tmp_path)
@@ -3084,6 +3316,47 @@ def test_wp5b_completed_new_skips_foreground_execution_and_detached_popen(
     monkeypatch.setattr(run_session.subprocess, "Popen", fail_if_called)
     assert run_session.main(["new", "--config", str(paths["config"])]) == 0
     assert run_session.main(["new", "--config", str(paths["config"]), "--detach"]) == 0
+
+
+@pytest.mark.parametrize(
+    ("artifact", "replacement"),
+    (
+        ("summary.md", None),
+        ("figures/categorical_auc.png", None),
+        ("figures/categorical_auc.png", b"\x89PNG\r\n\x1a\n"),
+    ),
+)
+def test_wp5b_completed_discovery_refuses_missing_or_corrupt_completion_artifacts(
+    monkeypatch,
+    tmp_path,
+    artifact,
+    replacement,
+):
+    """Default discovery and CLI new refuse a complete state lacking final artifacts.
+
+    A lifecycle ``complete`` marker is insufficient: the immutable summary and
+    every applicable PNG are part of the directory-level completion contract.
+    The three small mutations cover a missing summary, a missing PNG, and a
+    PNG with only its signature rather than decodable image data.
+    """
+    paths = write_session_inputs(tmp_path)
+    completed = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")
+    patch_coherent_execution(monkeypatch, make_coherent_model_records(paths))
+    pipeline.run_prepared_task_decoding(completed)
+    damaged_path = completed / artifact
+    if replacement is None:
+        damaged_path.unlink()
+    else:
+        damaged_path.write_bytes(replacement)
+    monkeypatch.setattr(pipeline, "run_prepared_task_decoding", fail_if_called)
+    monkeypatch.setattr(run_session.subprocess, "Popen", fail_if_called)
+    with pytest.raises(RuntimeError, match="recovery|rerun|resume|matching"):
+        pipeline.prepare_task_decoding_run(
+            paths["config"],
+            rerun=False,
+            execution_mode="foreground",
+        )
+    assert run_session.main(["new", "--config", str(paths["config"])]) != 0
 
 
 @pytest.mark.parametrize("corrupt_bytes", (b"", b"\x89PNG\r\n\x1a\n"))

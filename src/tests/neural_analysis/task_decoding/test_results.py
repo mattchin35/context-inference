@@ -163,6 +163,12 @@ def test_wp5b_loader_rejects_unknown_compact_reason_codes(member, tmp_path):
         )
 
 
+def test_wp5b_declared_compact_reason_vocabulary_fits_fixed_fit_storage():
+    """Every declared reason code fits losslessly in the U32 fit-reason member."""
+    fit_reason_width = np.dtype("U32").itemsize // np.dtype("U1").itemsize
+    assert all(len(code) <= fit_reason_width for code in results._COMPACT_REASON_CODES)
+
+
 def write_input_fixture(
     tmp_path: Path,
     *,
@@ -4885,7 +4891,7 @@ def test_wp4_tuned_sparse_pca_and_direct_evidence_must_share_pfc_width(
             mark_fit_unavailable_without_features(
                 arrays,
                 pca_index,
-                reason="pfc_regional_transform_unavailable",
+                reason="pfc_transform_unavailable",
             )
         assert arrays["effective_feature_counts"][direct_index] in (2, 4)
 
