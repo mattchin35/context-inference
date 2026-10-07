@@ -119,6 +119,29 @@ def test_heatmap_facets_labels_and_caption_report_saved_coverage(tmp_path: Path)
         plt.close(figure)
 
 
+def test_heatmap_layout_reserves_colorbar_and_wrapped_caption_space(tmp_path: Path) -> None:
+    """Colorbar and caption remain legible without covering the six scientific panels."""
+    plotting = _plotting_module()
+    figure = plotting.plot_decoding_heatmap(
+        _saved_run(tmp_path),
+        family="categorical",
+        metric="balanced_accuracy",
+    )
+    try:
+        figure.canvas.draw()
+        heatmap_axes = [axis for axis in figure.axes if axis.images]
+        colorbar_axes = [axis for axis in figure.axes if not axis.images]
+        assert len(heatmap_axes) == 6
+        assert len(colorbar_axes) == 1
+        assert all(
+            not axis.get_position().overlaps(colorbar_axes[0].get_position())
+            for axis in heatmap_axes
+        )
+        assert "\n" in _figure_caption(figure)
+    finally:
+        plt.close(figure)
+
+
 def test_default_png_export_is_opaque_atomic_and_family_bounded(tmp_path: Path) -> None:
     """Default export writes only present-family files with opaque white backgrounds."""
     plotting = _plotting_module()
