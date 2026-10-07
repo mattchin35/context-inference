@@ -28,6 +28,25 @@ _REPRESENTATIONS = ("pca", "units")
 _METRICS = ("balanced_accuracy", "auc", "r2")
 _STRUCTURED_INPUT_SUFFIXES = frozenset({".csv", ".json", ".py", ".tsv", ".txt"})
 _TARGET_OUTER_UNAVAILABLE_CODE = "target_outer_unavailable"
+_COMPACT_REASON_CODES = frozenset(
+    {
+        _TARGET_OUTER_UNAVAILABLE_CODE,
+        "candidate_fit_failed",
+        "fit_convergence_failure",
+        "inner_candidate_unavailable",
+        "inner_class_coverage_unavailable",
+        "inner_plan_unavailable",
+        "no_features",
+        "no_valid_tuning_candidate",
+        "nonfinite_inner_score",
+        "outer_estimator_failure",
+        "outer_features_unavailable",
+        "outer_hpc_features_unavailable",
+        "outer_pfc_features_unavailable",
+        "pfc_pca_transform_unavailable",
+        "pfc_transform_unavailable",
+    }
+)
 _DIRECT_RUNTIME_PATHS = (
     "src/__init__.py",
     "src/neural_analysis/__init__.py",
@@ -417,6 +436,28 @@ def _require(
         raise ValueError(f"Schema dtype mismatch for {name}.")
     if array.shape != shape:
         raise ValueError(f"Schema shape mismatch for {name}.")
+
+
+def _validate_compact_reason_codes(array: np.ndarray, name: str) -> None:
+    """Require saved unavailable reasons to use one declared compact code.
+
+    Parameters
+    ----------
+    array : numpy.ndarray
+        Unicode reason array on any declared fit or candidate-audit axes. Empty
+        values are allowed only where the corresponding status is valid.
+    name : str
+        Schema member name used in a causal validation error.
+
+    Returns
+    -------
+    None
+        Raises ValueError for unknown or prose-like saved unavailable reasons.
+    """
+    values = {str(value) for value in array.flat if str(value)}
+    unknown = values - _COMPACT_REASON_CODES
+    if unknown:
+        raise ValueError(f"Unknown compact reason code in {name}: {sorted(unknown)!r}")
 
 
 def _expected_axes(mode: str) -> dict[str, list[str]]:
@@ -958,7 +999,6 @@ def _validate_arrays(
         "eligibility_counts": (np.dtype(np.int64), (target_n,)),
         "trial_row_indices": (np.dtype(np.int64), (common_n,)),
         "outer_fold_ids": (np.dtype(np.int64), (target_n, common_n)),
-        "unit_selection_rules_json": (np.dtype("U48"), (2,)),
         "coefficient_values": (np.dtype(np.float64), (*fit_shape, feature_n)),
         "coefficient_feature_ids": (np.dtype("U32"), (region_n, representation_n, feature_n)),
         "coefficient_feature_regions": (np.dtype("U16"), (region_n, representation_n, feature_n)),
@@ -979,6 +1019,21 @@ def _validate_arrays(
     }
     for name, (dtype, shape) in checks.items():
         _require(arrays[name], dtype, shape, name)
+    selection_rules = arrays["unit_selection_rules_json"]
+    if selection_rules.dtype.kind != "U" or selection_rules.shape != (2,):
+        raise ValueError("Selection-rule JSON schema dtype or shape is invalid.")
+    for value in selection_rules.tolist():
+        try:
+            decoded_rule = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise ValueError("Selection-rule JSON is invalid.") from error
+        if not isinstance(decoded_rule, dict) or _canonical_json(decoded_rule) != value:
+            raise ValueError("Selection-rule JSON must be a canonical object.")
+    _validate_compact_reason_codes(arrays["fit_reason_codes"], "fit_reason_codes")
+    _validate_compact_reason_codes(
+        arrays["candidate_inner_reasons"],
+        "candidate_inner_reasons",
+    )
     if not np.array_equal(arrays["full_table_row_positions"], np.arange(full_n, dtype=np.int64)):
         raise ValueError("Full-table row identity is invalid.")
     if not np.array_equal(arrays["full_table_trial_ids"], np.arange(full_n, dtype=np.int64)):
