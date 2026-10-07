@@ -1933,3 +1933,74 @@ def test_unavailable_inner_tuned_records_retain_global_selection_rows_and_audits
 
     for actual_indices, expected_indices in selection_rows:
         np.testing.assert_array_equal(actual_indices, expected_indices)
+
+
+@pytest.mark.parametrize(
+    ("regularization_mode", "expected_counts"),
+    (
+        (
+            "fixed",
+            {
+                "split": 1,
+                "regional_transform": 6,
+                "feature_construction": 36,
+                "estimator": 18,
+            },
+        ),
+        (
+            "tuned",
+            {
+                "split": 4,
+                "regional_transform": 24,
+                "feature_construction": 144,
+                "estimator": 828,
+            },
+        ),
+    ),
+)
+def test_decode_target_reports_operation_timings_without_changing_scientific_outputs(
+    monkeypatch,
+    regularization_mode,
+    expected_counts,
+):
+    """Fixed and tuned paths expose timings around their existing operations."""
+    fit_log: list[dict[str, object]] = []
+
+    def factory(*, target_family, parameters=None):
+        """Build a fast finite estimator while preserving every fit call."""
+        return RecordingEstimator(target_family, parameters, fit_log)
+
+    monkeypatch.setattr(modeling, "make_estimator", factory)
+    inputs = make_classification_inputs(n_time_bins=1, n_blocks=9)
+    inputs.update(
+        {
+            "outer_fold_count": 3,
+            "inner_fold_count": 3,
+            "regularization_mode": regularization_mode,
+        }
+    )
+    events: list[dict[str, object]] = []
+
+    result = modeling.decode_target(**inputs, timing_callback=events.append)
+
+    assert result.status == "available"
+    assert Counter(event["operation"] for event in events) == expected_counts
+    assert len(fit_log) == expected_counts["estimator"]
+    for event in events:
+        assert set(event) == {
+            "operation",
+            "region_configuration",
+            "representation",
+            "elapsed_seconds",
+        }
+        assert event["elapsed_seconds"] >= 0.0
+        if event["operation"] == "regional_transform":
+            assert event["region_configuration"] in {"PFC", "HPC"}
+            assert event["representation"] is None
+        elif event["operation"] in {"feature_construction", "estimator"}:
+            assert event["region_configuration"] in {"PFC", "HPC", "PFC+HPC"}
+            assert event["representation"] in {"pca", "units"}
+        else:
+            assert event["operation"] == "split"
+            assert event["region_configuration"] is None
+            assert event["representation"] is None

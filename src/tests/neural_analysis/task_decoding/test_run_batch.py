@@ -220,8 +220,28 @@ def write_resource_evidence(
             {
                 "schema_version": 1,
                 "measurement_method": "resource.getrusage",
+                "status": "complete",
                 "peak_rss_bytes": peak_rss_bytes,
+                "wall_time_seconds": 10.0,
+                "user_cpu_seconds": 4.0,
+                "system_cpu_seconds": 1.0,
+                "cpu_efficiency": 0.5,
                 "resource_envelope": envelope or resource_envelope(),
+                "completed_targets": ["current_action", "relative_doubt"],
+                "target_measurements": {},
+                "stage_timing_seconds": {
+                    "targets": 1.0,
+                    "activity": 2.0,
+                    "modeling": 6.0,
+                    "reporting": 1.0,
+                },
+                "fit_counts": {
+                    "requested": 288,
+                    "measured_estimator_calls": 288,
+                    "valid_outer_cells": 288,
+                    "invalid_outer_cells": 0,
+                },
+                "output_size_bytes": 1_024,
             }
         ),
         encoding="utf-8",
@@ -297,6 +317,7 @@ def test_dry_run_reports_ordered_sessions_and_safe_one_worker_without_evidence(
     (
         ("incomplete", "complete|evidence"),
         ("missing_usage", "resource|usage|evidence"),
+        ("partial_usage", "complete|status|evidence"),
         ("missing_fingerprint", "fingerprint|evidence"),
         ("source_mismatch", "source|identity|evidence"),
         ("runtime_mismatch", "runtime|identity|evidence"),
@@ -331,6 +352,11 @@ def test_explicit_invalid_resource_evidence_errors_without_fallback(
         pipeline.completed.clear()
     elif damage == "missing_usage":
         (evidence / "resource_usage.json").unlink()
+    elif damage == "partial_usage":
+        usage_path = evidence / "resource_usage.json"
+        usage = json.loads(usage_path.read_text(encoding="utf-8"))
+        usage["status"] = "running"
+        usage_path.write_text(json.dumps(usage), encoding="utf-8")
     elif damage == "missing_fingerprint":
         (evidence / "run_fingerprint.txt").unlink()
     elif damage in {"runtime_mismatch", "platform_mismatch", "thread_mismatch"}:

@@ -765,6 +765,30 @@ def test_plan_reads_only_small_inputs_and_reports_dirtiness(monkeypatch, tmp_pat
         "numerical_fit_count": 144,
         "tensor_allocation_bytes": plan["tensor_allocation_bytes"],
     }
+    assert plan["target_diagnostics"] == [
+        {
+            "target_identifier": "current_action",
+            "target_family": "categorical",
+            "eligible_trial_count": 12,
+            "block_count": 6,
+            "class_counts": {"0": 6, "1": 6},
+            "value_min": None,
+            "value_max": None,
+            "outer_split_available": True,
+            "outer_split_unavailable_reason": None,
+        },
+        {
+            "target_identifier": "relative_doubt",
+            "target_family": "numerical",
+            "eligible_trial_count": 12,
+            "block_count": 6,
+            "class_counts": {},
+            "value_min": 1.0,
+            "value_max": 1.0,
+            "outer_split_available": False,
+            "outer_split_unavailable_reason": "constant target",
+        },
+    ]
     assert not paths["output_root"].exists()
 
 
@@ -1450,6 +1474,45 @@ def test_execution_orders_real_module_owned_stages_and_resume(monkeypatch, tmp_p
     assert calls[-4:] == ["npz", "summary", "figures", "validate"]
 
 
+def test_each_target_checkpoint_publishes_partial_resource_evidence(monkeypatch, tmp_path):
+    """A completed checkpoint has matching atomic evidence before the next target starts."""
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")
+    model_inputs = make_coherent_model_records(paths)
+    patch_coherent_execution(monkeypatch, model_inputs)
+    records = {record.target_identifier: record for record in model_inputs["records"]}
+    observed_partial: dict[str, object] = {}
+
+    def decode_with_checkpoint_observation(*, target_identifier, **_kwargs):
+        """Inspect first-target evidence immediately before decoding the second."""
+        if target_identifier == "relative_doubt":
+            observed_partial.update(read_json(run_directory / "resource_usage.json"))
+        return records[target_identifier]
+
+    monkeypatch.setattr(pipeline.modeling, "decode_target", decode_with_checkpoint_observation)
+    reporting_events: list[str] = []
+    patch_final_reporting_boundaries(monkeypatch, reporting_events)
+    monkeypatch.setattr(pipeline, "_assemble_run_result_payload", lambda **_: ({}, {}))
+
+    pipeline.run_prepared_task_decoding(run_directory)
+
+    assert observed_partial["status"] == "running"
+    assert observed_partial["completed_targets"] == ["current_action"]
+    assert set(observed_partial["target_measurements"]) == {"current_action"}
+    assert observed_partial["target_measurements"]["current_action"]["timing_available"]
+    complete = read_json(run_directory / "resource_usage.json")
+    assert complete["status"] == "complete"
+    assert complete["completed_targets"] == ["current_action", "relative_doubt"]
+    assert set(complete["target_measurements"]) == {
+        "current_action",
+        "relative_doubt",
+    }
+    assert complete["peak_rss_bytes"] > 0
+    assert complete["wall_time_seconds"] >= 0.0
+    assert complete["user_cpu_seconds"] >= 0.0
+    assert complete["system_cpu_seconds"] >= 0.0
+
+
 @pytest.mark.parametrize("regularization_mode", ("fixed", "tuned"))
 def test_execution_resumes_matching_real_checkpoint_and_assembles_configured_order(
     monkeypatch,
@@ -1562,6 +1625,12 @@ def test_unexpected_error_marks_failed_flushes_and_keeps_checkpoints(monkeypatch
     assert checkpoint.read_bytes() == checkpoint_bytes
     assert (run_directory / "run.log").read_text(encoding="utf-8")
     assert not (run_directory / "results.npz").exists()
+    usage = read_json(run_directory / "resource_usage.json")
+    assert usage["status"] == "failed"
+    assert usage["completed_targets"] == ["current_action"]
+    restored = usage["target_measurements"]["current_action"]
+    assert restored["timing_available"] is False
+    assert restored["total_seconds"] is None
 
 
 @pytest.mark.parametrize("interrupt", (KeyboardInterrupt, SystemExit))
@@ -1587,6 +1656,10 @@ def test_interruption_records_resumable_state_and_nonzero_cli(monkeypatch, tmp_p
     assert read_json(run_directory / "run_state.json")["lifecycle"] == "interrupted"
     assert checkpoint.read_bytes() == checkpoint_bytes
     assert "interrupted" in (run_directory / "run.log").read_text(encoding="utf-8").lower()
+    usage = read_json(run_directory / "resource_usage.json")
+    assert usage["status"] == "interrupted"
+    assert usage["completed_targets"] == ["current_action"]
+    assert usage["target_measurements"]["current_action"]["timing_available"] is False
 
 
 @pytest.mark.parametrize("failure_stage", ("results", "summary", "figure", "complete"))
@@ -3360,6 +3433,8 @@ def test_wp5b_completed_new_skips_foreground_execution_and_detached_popen(
     ("artifact", "replacement"),
     (
         ("summary.md", None),
+        ("resource_usage.json", None),
+        ("resource_usage.json", b"{}"),
         ("figures/categorical_auc.png", None),
         ("figures/categorical_auc.png", b"\x89PNG\r\n\x1a\n"),
     ),
@@ -3374,8 +3449,8 @@ def test_wp5b_completed_discovery_refuses_missing_or_corrupt_completion_artifact
 
     A lifecycle ``complete`` marker is insufficient: the immutable summary and
     every applicable PNG are part of the directory-level completion contract.
-    The three small mutations cover a missing summary, a missing PNG, and a
-    PNG with only its signature rather than decodable image data.
+    The small mutations cover missing or invalid resource evidence, a missing
+    summary, a missing PNG, and a PNG signature without decodable image data.
     """
     paths = write_session_inputs(tmp_path)
     completed = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")

@@ -10,13 +10,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import sys
+import time
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
 
-from src.neural_analysis.task_decoding import modeling, pipeline, plotting, results
+from src.neural_analysis.task_decoding import (
+    modeling,
+    pipeline,
+    plotting,
+    results,
+    run_session,
+)
 
 
 _SEED = 20261007
@@ -505,6 +513,48 @@ def test_seeded_two_region_session_completes_and_publishes(synthetic_runs):
     }
     assert (run_directory / "results.npz").is_file()
     assert (run_directory / "summary.md").is_file()
+    usage = json.loads(
+        (run_directory / "resource_usage.json").read_text(encoding="utf-8")
+    )
+    assert usage["schema_version"] == 1
+    assert usage["measurement_method"] == "resource.getrusage"
+    assert usage["status"] == "complete"
+    assert usage["completed_targets"] == [
+        "current_state",
+        "current_action",
+        "relative_doubt",
+    ]
+    assert usage["resource_envelope"] == {
+        "full_trial_count": 72,
+        "tensor_trial_count": 72,
+        "pfc_unit_count": 4,
+        "hpc_unit_count": 4,
+        "time_bin_count": 8,
+        "target_count": 3,
+        "outer_fold_count": 3,
+        "inner_fold_count": 3,
+        "coefficient_feature_capacity": 8,
+        "categorical_fit_count": 288,
+        "numerical_fit_count": 144,
+        "tensor_allocation_bytes": 36_864,
+    }
+    assert set(usage["target_measurements"]) == {
+        "current_state",
+        "current_action",
+        "relative_doubt",
+    }
+    assert usage["fit_counts"]["requested"] == 432
+    assert usage["fit_counts"]["measured_estimator_calls"] == 288
+    assert usage["peak_rss_bytes"] > 0
+    assert usage["wall_time_seconds"] >= 0.0
+    assert usage["user_cpu_seconds"] >= 0.0
+    assert usage["system_cpu_seconds"] >= 0.0
+    assert usage["output_size_bytes"] > 0
+    summary = (run_directory / "summary.md").read_text(encoding="utf-8")
+    assert "resource.getrusage" in summary
+    assert "Peak RSS:" in summary
+    assert "CPU time:" in summary
+    assert "resource_usage.json" in summary
     assert {path.name for path in (run_directory / "figures").glob("*.png")} == {
         "categorical_balanced_accuracy.png",
         "categorical_auc.png",
@@ -670,3 +720,51 @@ def test_held_out_only_offset_does_not_change_training_derived_models(synthetic_
         atol=0.0,
         equal_nan=True,
     )
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux detached-session test")
+def test_actual_detached_launcher_can_publish_resource_evidence(tmp_path):
+    """The real detached process boundary preserves atomic measurement output."""
+    run_directory = tmp_path / "detached-resource-smoke"
+    run_directory.mkdir()
+    repository_root = Path(__file__).resolve().parents[4]
+    envelope = {
+        "full_trial_count": 1,
+        "tensor_trial_count": 1,
+        "pfc_unit_count": 1,
+        "hpc_unit_count": 1,
+        "time_bin_count": 1,
+        "target_count": 1,
+        "outer_fold_count": 3,
+        "inner_fold_count": 3,
+        "coefficient_feature_capacity": 2,
+        "categorical_fit_count": 18,
+        "numerical_fit_count": 0,
+        "tensor_allocation_bytes": 16,
+    }
+    child_code = "\n".join(
+        (
+            "import json, sys",
+            f"sys.path.insert(0, {str(repository_root)!r})",
+            "from src.neural_analysis.task_decoding.resource_usage import ResourceUsageTracker",
+            f"tracker = ResourceUsageTracker({str(run_directory)!r}, json.loads({json.dumps(envelope)!r}))",
+            "tracker.snapshot(status='complete', completed_targets=())",
+        )
+    )
+
+    run_session._launch_detached_prepared(
+        run_directory=run_directory,
+        child_argv=(sys.executable, "-c", child_code),
+    )
+    usage_path = run_directory / "resource_usage.json"
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and not usage_path.is_file():
+        time.sleep(0.02)
+
+    assert usage_path.is_file(), (run_directory / "console.log").read_text(
+        encoding="utf-8"
+    )
+    usage = json.loads(usage_path.read_text(encoding="utf-8"))
+    assert usage["status"] == "complete"
+    assert usage["resource_envelope"] == envelope
+    assert usage["peak_rss_bytes"] > 0

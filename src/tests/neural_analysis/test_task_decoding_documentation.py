@@ -135,6 +135,8 @@ def test_scientist_quickstart_documents_all_current_cli_routes():
         "--detach",
         "--rerun",
         "--resource-run-directory",
+        "resource_usage.json",
+        "peak RSS",
         "Task-variable decoding results",
     )
     for fragment in required_fragments:
