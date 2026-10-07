@@ -29,8 +29,11 @@ categorical stress gate also passed with all 9,600 cells valid. WP10 is now
 complete. The exact WP11 single-session Slurm resource block and tests-first
 architecture are implemented: RED is `a3dcdb9`, its handoff is `e91fa5f`, and
 GREEN production is `b9d8645`. WP12 one-session cluster validation and WP13
-per-session job arrays follow. Each real transfer or scheduler submission is
-still approved separately from source implementation.
+per-session job arrays follow. WP12's deterministic synthetic fixture has been
+transferred and passed matching local/cluster dry runs. Its first approved
+submission stopped before `sbatch` because generated Python bytecode was
+misclassified as untracked source; RED `849c7ea` and GREEN `db50e1a` repair
+that boundary. Each real scheduler submission remains separately approved.
 WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
@@ -67,9 +70,9 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local WP11 GREEN HEAD before this handoff:
-  `b9d86450cca4230b8fb6b74c88f452981f537244`;
-- `origin/refactor`: `e91fa5f4074a4b18de23a3573333cd67f3a6424f`;
+- local WP12 smoke-repair HEAD before this handoff:
+  `db50e1a`;
+- `origin/refactor`: `4238d52bfa164319fab3cb1aa89dea85247f28d1`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -111,11 +114,11 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** push `b9d8645` and this handoff commit, then separately
-plan and approve the exact WP12 synthetic Slurm smoke. The smoke must identify
-its cluster checkout/session paths and exact command before any transfer or
-`sbatch`. No real cluster, SSH, rsync, network, or experimental-data action was
-performed during WP11 implementation.
+**Next exact action:** push the WP12 bytecode repair and this handoff, remove
+only the generated remote package `__pycache__`, pull the exact pushed commit
+on the clean cluster checkout, and reverify cleanliness. Then present the
+corrected synthetic `submit-new` command for renewed approval; do not submit
+automatically.
 
 ### Authority order
 
@@ -152,7 +155,7 @@ When resuming, use this order:
 | WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence remains the WP10 gate |
 | WP10D competing-owner lifecycle repair and local acceptance | Complete: lifecycle repair through `77ff461`; clean 2,400-cell bounded run and 9,600-cell categorical stress run accepted | None |
 | WP11 single-session cluster path | Complete: RED `a3dcdb9`, handoff `e91fa5f`, GREEN `b9d8645`; mocked and local tests only | None; real execution belongs to WP12 |
-| WP12 CT026 one-session cluster validation | Required after WP11 | Separately approve synthetic smoke, exact transfer, and exact CT026 submission |
+| WP12 CT026 one-session cluster validation | In progress: synthetic transfer/dry-run passed; pre-sbatch bytecode defect repaired at `db50e1a` | Push/clean/reverify, then separately reapprove synthetic submission |
 | WP13 bounded cluster batch array | Required after WP12 acceptance; source not started | Implement tests-first per-session concurrency; authorize any real array separately |
 
 ### Resume checklist
@@ -1996,6 +1999,47 @@ Use this template for each appended record:
 - Exact next action: push the GREEN and handoff commits. Then plan the
   separately approved WP12 synthetic smoke using exact cluster paths and
   command; do not transfer or submit until that action is approved.
+
+#### 2026-10-07 - WP12 synthetic preflight and bytecode repair
+
+- Authorization: the user approved read-only HPC preflight, creation and
+  transfer of the deterministic synthetic fixture, local/cluster dry runs, the
+  exact synthetic submission, and the tests-first repair after that submission
+  attempt stopped before `sbatch`.
+- Preflight: the canonical checkout is
+  `/gs/gsfs0/home/mchin1/context-inference`, branch `refactor`, initially clean
+  at pushed `4238d52`. `uv`, `sbatch`, `sacct`, `rsync`, the executable wrapper,
+  frozen environment, writable log directory, and active `unlimited` partition
+  were present. Cluster Python is 3.14.7 versus local 3.12.12; locked numerical
+  and scientific package versions match.
+- Fixture: seed `20261007` base session was generated below a unique local
+  `/tmp` directory and transferred outside Git to
+  `/gs/gsfs0/users/mchin1/task_decoding_smoke/wp12-seed-20261007-4238d52/`.
+  All 17 files matched aggregate SHA-256
+  `2bdf2f9c74d04d5821b5ba3f2b0374a447b91cf0856a8911d48edc6816298ff2`.
+  Local and cluster dry runs matched: 72 trials, 3 targets, 432 outer cells,
+  36,864 tensor bytes, source fingerprint
+  `a3d504862ba519906ac41c57f15894381ed3df45676c23dd8dd17c4d707b52a6`,
+  expected unavailable `current_state`, and available `current_action` plus
+  `relative_doubt`.
+- Submission outcome: the exact approved `submit-new` entered Python but
+  preparation rejected package `__pycache__/*.pyc` as untracked scientific
+  source. Read-only confirmation found no prepared run, submission receipt, or
+  Slurm job. Ten generated `.pyc` files are the only remote package artifacts;
+  tracked state remains clean.
+- Repair: tests-only RED `849c7ea` produced seven intended failures while
+  retaining genuine untracked `.py` rejection. GREEN `db50e1a` makes both
+  source gates distinguish `.py` from `.pyc` and exports
+  `PYTHONDONTWRITEBYTECODE=1` before either wrapper Python path.
+- Verification: 12 focused repair contracts passed; complete Slurm/results
+  suites passed 390 tests; the full task-decoding package passed 834 tests with
+  the same six known warnings. Bash syntax and diff checks passed.
+- External effects: SSH preflight, one new synthetic transfer, cluster dry-run,
+  and one failed-before-scheduler submission attempt occurred. No experimental
+  data moved, no immutable run was prepared, and no Slurm job was submitted.
+- Exact next action: push the repair/handoff, remove only the generated remote
+  `task_decoding/__pycache__`, update the clean cluster checkout to the exact
+  pushed commit, reverify, and request renewed approval for one submission.
 
 ## 1. Objective
 
