@@ -749,6 +749,22 @@ def test_plan_reads_only_small_inputs_and_reports_dirtiness(monkeypatch, tmp_pat
     assert plan["fit_count"] == 2 * 3 * 8 * 3 * 2
     assert plan["tensor_allocation_bytes"] > 0
     assert "synthetic dirty source" in plan["source_cleanliness"]
+    assert plan["analysis_version"] == pipeline.decoding_config.ANALYSIS_VERSION
+    assert plan["regularization_mode"] == "fixed"
+    assert plan["resource_envelope"] == {
+        "full_trial_count": 12,
+        "tensor_trial_count": 12,
+        "pfc_unit_count": 2,
+        "hpc_unit_count": 2,
+        "time_bin_count": 8,
+        "target_count": 2,
+        "outer_fold_count": 3,
+        "inner_fold_count": 3,
+        "coefficient_feature_capacity": 4,
+        "categorical_fit_count": 144,
+        "numerical_fit_count": 144,
+        "tensor_allocation_bytes": plan["tensor_allocation_bytes"],
+    }
     assert not paths["output_root"].exists()
 
 
@@ -850,6 +866,7 @@ def test_prepare_writes_immutable_artifacts_and_complete_provenance(monkeypatch,
         "resume_command.txt",
         "status_command.txt",
         "run_session.py",
+        "run_batch.py",
         "pipeline.py",
         "checkpoints", "figures", "run.log",
     }
@@ -860,6 +877,9 @@ def test_prepare_writes_immutable_artifacts_and_complete_provenance(monkeypatch,
     assert (run_directory / "run_session.py").read_bytes() == Path(
         run_session.__file__
     ).read_bytes()
+    assert (run_directory / "run_batch.py").read_bytes() == Path(
+        pipeline.__file__
+    ).with_name("run_batch.py").read_bytes()
     assert (run_directory / "pipeline.py").read_bytes() == Path(pipeline.__file__).read_bytes()
     execution = read_json(run_directory / "execution.json")
     assert {

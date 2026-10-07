@@ -596,6 +596,10 @@ def test_dry_activity_inspection_reports_source_sizes_separately_from_tensor_byt
     }
     assert report.tensor_allocation_bytes == 3 * 4 * (2 + 2) * 8
     assert report.source_file_sizes_bytes == expected_sizes
+    assert report.tensor_trial_count == 3
+    assert report.time_bin_count == 4
+    assert report.pfc_unit_count == 2
+    assert report.hpc_unit_count == 2
     assert "spike_utc_unix" not in opened_members
 
 
