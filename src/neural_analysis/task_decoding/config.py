@@ -80,6 +80,26 @@ FROZEN_ESTIMATOR_CONTROLS = MappingProxyType(
     }
 )
 
+# Tuning candidates are frozen scientific controls rather than JSON knobs.
+# Modeling expands these ordered values directly, while payload serialization
+# creates fresh ordinary lists for stable JSON output.
+FROZEN_TUNING_GRID = MappingProxyType(
+    {
+        "LogisticRegression": MappingProxyType(
+            {
+                "C": (0.01, 0.1, 1.0, 10.0, 100.0),
+                "l1_ratio": (0.1, 0.5, 0.9),
+            }
+        ),
+        "ElasticNet": MappingProxyType(
+            {
+                "alpha": (0.001, 0.01, 0.1, 1.0, 10.0),
+                "l1_ratio": (0.1, 0.5, 0.9),
+            }
+        ),
+    }
+)
+
 
 @dataclass(frozen=True)
 class TargetDefinition:
@@ -891,14 +911,11 @@ def scientific_config_payload(config: TaskDecodingConfig) -> dict[str, object]:
             "seed": RANDOM_SEED,
             "coefficient_tolerance": COEFFICIENT_TOLERANCE,
             "tuning_grid": {
-                "LogisticRegression": {
-                    "C": [0.01, 0.1, 1.0, 10.0, 100.0],
-                    "l1_ratio": [0.1, 0.5, 0.9],
-                },
-                "ElasticNet": {
-                    "alpha": [0.001, 0.01, 0.1, 1.0, 10.0],
-                    "l1_ratio": [0.1, 0.5, 0.9],
-                },
+                estimator_name: {
+                    parameter_name: list(parameter_values)
+                    for parameter_name, parameter_values in estimator_grid.items()
+                }
+                for estimator_name, estimator_grid in FROZEN_TUNING_GRID.items()
             },
             "estimators": {
                 estimator_name: dict(estimator_controls)

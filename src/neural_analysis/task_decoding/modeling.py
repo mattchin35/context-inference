@@ -1,15 +1,14 @@
-"""Grouped fixed-mode task-variable decoder construction and auditing helpers.
+"""Grouped task-variable decoder construction and auditing helpers.
 
 This module operates on already matched PFC/HPC firing-rate tensors.  It does
-not load experimental files or modify trial eligibility.  The current slice
-implements fixed regularization only; tuned regularization is intentionally
-deferred until its separately reviewed work package.
+not load experimental files or modify trial eligibility. It implements both
+fixed and leakage-safe nested tuned regularization with audit-ready records.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import warnings
 
@@ -23,6 +22,7 @@ from sklearn.model_selection import GroupKFold, StratifiedGroupKFold
 from src.neural_analysis.task_decoding.config import (
     COEFFICIENT_TOLERANCE,
     FROZEN_ESTIMATOR_CONTROLS,
+    FROZEN_TUNING_GRID,
 )
 
 
@@ -242,13 +242,14 @@ class FoldRecord:
     target_identifier : str
         Original target name retained for result-table provenance.
     inner_fold_count : int
-        Configured three-fold inner-CV count, recorded even when fixed mode
-        performs no inner search.
+        Configured three-fold inner-CV count. It governs tuned selection and is
+        retained as inactive configuration provenance for fixed records.
     outer_fold_id, time_bin_index : int
         Zero-based grouped fold and event-relative time-bin positions.
     outer_test_indices, inner_selection_indices : np.ndarray
-        Dimensionless matched-trial row positions.  The latter is empty in
-        fixed mode and has shape ``(0,)``.
+        Dimensionless matched-trial row positions. The selection array is an
+        empty ``(0,)`` array for fixed records and a defensive global outer-
+        training-row copy shaped ``(n_outer_train,)`` for tuned records.
     region_configuration, representation, regularization_mode : str
         Requested region, feature representation, and decoder mode labels.
     is_valid : bool
@@ -282,6 +283,19 @@ class FoldRecord:
         Saved categorical positive class, or None for numerical targets.
     coefficient_scale_label : str
         Human-readable units for direct-unit coefficient interpretation.
+    candidate_inner_scores : tuple[tuple[float or None, ...], ...]
+        Tuned-mode primary metric values shaped
+        ``(candidate, inner_fold)``. None marks an invalid evaluation; fixed
+        records retain the empty tuple.
+    candidate_inner_statuses : tuple[tuple[str, ...], ...]
+        Tuned-mode ``"valid"``/``"invalid"`` status matrix aligned to scores;
+        fixed records retain the empty tuple.
+    candidate_inner_reasons : tuple[tuple[str or None, ...], ...]
+        Tuned-mode scientific invalidity reason matrix aligned to scores;
+        fixed records retain the empty tuple.
+    selected_candidate_index : int or None
+        Zero-based declared-grid index used for the outer refit, or None for
+        fixed records and cells without a valid tuned candidate.
     """
 
     record_key: tuple[int, int, str, str]
@@ -313,6 +327,10 @@ class FoldRecord:
     positive_class: int | float | None
     coefficient_scale_label: str
     selected_parameters: dict[str, object] | None
+    candidate_inner_scores: tuple[tuple[float | None, ...], ...] = ()
+    candidate_inner_statuses: tuple[tuple[str, ...], ...] = ()
+    candidate_inner_reasons: tuple[tuple[str | None, ...], ...] = ()
+    selected_candidate_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -365,15 +383,15 @@ class CoefficientSummary:
 
 @dataclass(frozen=True)
 class TargetDecodingResult:
-    """All fixed-mode fold records and complete summaries for one target.
+    """All fixed- or tuned-mode fold records and summaries for one target.
 
     Parameters
     ----------
     target_identifier : str
         Original target name retained unchanged for output provenance.
     inner_fold_count : int
-        Configured inner grouped-CV count. It remains three in fixed mode but
-        is inactive because no inner search is performed.
+        Configured three-fold inner-CV count. It is inactive in fixed mode and
+        governs nested tuning in tuned mode.
     is_available : bool
         Whether the requested outer grouped split plan was scientifically
         available for this target.
@@ -384,11 +402,22 @@ class TargetDecodingResult:
     outer_fold_ids : np.ndarray
         One-dimensional grouped outer assignment shaped ``(trial,)``.
     inner_split_plans : dict[int, SplitPlan]
-        Empty in fixed mode; reserved for a later tuned-mode implementation.
+        Empty in fixed mode. Tuned results map each outer-fold ID to its global
+        row-position inner split plan, including unavailable plans.
     fold_records : tuple[FoldRecord, ...]
         One record per outer fold, time bin, region, and representation.
     cell_summaries : dict[tuple[int, str, str], CellSummary]
         Complete-fold summaries keyed by ``(time_bin, region, representation)``.
+    candidate_inner_scores : dict[tuple[int, int, str, str], tuple]
+        Tuned per-outer-cell candidate-by-inner primary score tuples. Fixed
+        results keep an empty mapping rather than fabricating inner data.
+    candidate_inner_statuses : dict[tuple[int, int, str, str], tuple]
+        Tuned candidate-by-inner valid/invalid status tuples, aligned to scores.
+    candidate_inner_reasons : dict[tuple[int, int, str, str], tuple]
+        Tuned candidate-by-inner scientific invalidity reasons, aligned to scores.
+    selected_candidate_indices : dict[tuple[int, int, str, str], int or None]
+        Selected declared-grid index for each tuned outer cell, or None when no
+        candidate can be selected.
     """
 
     target_identifier: str
@@ -400,6 +429,18 @@ class TargetDecodingResult:
     inner_split_plans: dict[int, SplitPlan]
     fold_records: tuple[FoldRecord, ...]
     cell_summaries: dict[tuple[int, str, str], CellSummary]
+    candidate_inner_scores: dict[tuple[int, int, str, str], tuple] = field(
+        default_factory=dict
+    )
+    candidate_inner_statuses: dict[tuple[int, int, str, str], tuple] = field(
+        default_factory=dict
+    )
+    candidate_inner_reasons: dict[tuple[int, int, str, str], tuple] = field(
+        default_factory=dict
+    )
+    selected_candidate_indices: dict[tuple[int, int, str, str], int | None] = field(
+        default_factory=dict
+    )
 
 
 def _validate_vector(values: object, name: str) -> np.ndarray:
@@ -1015,7 +1056,7 @@ def make_estimator(
     target_family: str,
     parameters: Mapping[str, float] | None = None,
 ):
-    """Construct one frozen fixed-mode elastic-net decoder without deprecated APIs.
+    """Construct one frozen elastic-net decoder without deprecated APIs.
 
     Parameters
     ----------
@@ -1024,8 +1065,8 @@ def make_estimator(
     parameters : mapping[str, float] or None
         Optional family-specific tuning overrides. Categorical estimators
         permit only ``C`` and ``l1_ratio``; numerical estimators permit only
-        ``alpha`` and ``l1_ratio``. Fixed mode passes None and uses only the
-        immutable controls owned by ``task_decoding.config``.
+        ``alpha`` and ``l1_ratio``. None uses only immutable controls owned by
+        ``task_decoding.config``.
 
     Returns
     -------
@@ -1055,6 +1096,91 @@ def make_estimator(
     controls = dict(FROZEN_ESTIMATOR_CONTROLS[estimator_name])
     controls.update(override_parameters)
     return estimator_constructor(**controls)
+
+
+def tuning_candidates(target_family: str) -> tuple[dict[str, float], ...]:
+    """Expand the frozen 15-candidate grid in its declared deterministic order.
+
+    Parameters
+    ----------
+    target_family : {"categorical", "numerical"}
+        Chooses logistic ``C`` or ElasticNet ``alpha`` as the first tuning
+        dimension. The second dimension is always ``l1_ratio``.
+
+    Returns
+    -------
+    tuple[dict[str, float], ...]
+        Fifteen fresh candidate dictionaries ordered first by the estimator
+        strength sequence and then by the l1-ratio sequence. Values are
+        dimensionless regularization controls.
+
+    Raises
+    ------
+    ValueError
+        If ``target_family`` is unsupported.
+    """
+    if target_family == "categorical":
+        estimator_name = "LogisticRegression"
+        strength_name = "C"
+    elif target_family == "numerical":
+        estimator_name = "ElasticNet"
+        strength_name = "alpha"
+    else:
+        raise ValueError("target_family must be 'categorical' or 'numerical'.")
+    grid = FROZEN_TUNING_GRID[estimator_name]
+    return tuple(
+        {strength_name: strength, "l1_ratio": l1_ratio}
+        for strength in grid[strength_name]
+        for l1_ratio in grid["l1_ratio"]
+    )
+
+
+def select_tuning_candidate(
+    candidates: Sequence[Mapping[str, float]],
+    *,
+    candidate_scores: Sequence[Sequence[float | None]],
+    candidate_valid: Sequence[bool],
+) -> int | None:
+    """Select the earliest valid candidate with the highest mean inner score.
+
+    Parameters
+    ----------
+    candidates : sequence[mapping[str, float]]
+        Declared-order candidate controls. Values are dimensionless and are
+        returned only by index, so mappings remain unmodified.
+    candidate_scores : sequence[sequence[float or None]]
+        Candidate-by-inner-fold primary metric matrix. Each finite score is
+        balanced accuracy or native-target R2; None denotes invalidity.
+    candidate_valid : sequence[bool]
+        One all-inner-fold validity flag per candidate, aligned to
+        ``candidates`` and ``candidate_scores``.
+
+    Returns
+    -------
+    int or None
+        Zero-based declared-order winner, or None when no candidate has only
+        finite valid inner scores.
+
+    Raises
+    ------
+    ValueError
+        If score or validity sequences do not align with ``candidates``.
+    """
+    if len(candidate_scores) != len(candidates) or len(candidate_valid) != len(candidates):
+        raise ValueError("Candidate scores and validity flags must align with candidates.")
+    selected_index: int | None = None
+    selected_mean = float("-inf")
+    for candidate_index, (scores, is_valid) in enumerate(
+        zip(candidate_scores, candidate_valid, strict=True)
+    ):
+        score_array = np.asarray(scores, dtype=float)
+        if not is_valid or score_array.size == 0 or not np.isfinite(score_array).all():
+            continue
+        candidate_mean = float(np.mean(score_array))
+        if candidate_mean > selected_mean:
+            selected_index = candidate_index
+            selected_mean = candidate_mean
+    return selected_index
 
 
 def classification_metrics(
@@ -1586,6 +1712,31 @@ def _fixed_estimator_parameters(target_family: str) -> dict[str, object]:
     return dict(FROZEN_ESTIMATOR_CONTROLS[name])
 
 
+def _recorded_estimator_parameters(
+    target_family: str,
+    selected_parameters: Mapping[str, float] | None,
+) -> dict[str, object]:
+    """Return recorded estimator controls including an optional tuned candidate.
+
+    Parameters
+    ----------
+    target_family : {"categorical", "numerical"}
+        Chooses the frozen logistic or ElasticNet baseline controls.
+    selected_parameters : mapping[str, float] or None
+        Family-whitelisted selected tuning values. None preserves frozen
+        scientific controls unchanged.
+
+    Returns
+    -------
+    dict[str, object]
+        Fresh full estimator parameter mapping used for one recorded fit.
+    """
+    recorded_parameters = _fixed_estimator_parameters(target_family)
+    if selected_parameters is not None:
+        recorded_parameters.update(selected_parameters)
+    return recorded_parameters
+
+
 def _coefficient_scale_label(target_family: str) -> str:
     """Return the documented direct-feature coefficient-scale description.
 
@@ -1618,6 +1769,12 @@ def _unavailable_record(
     requested_feature_count: int,
     train_targets: np.ndarray,
     test_targets: np.ndarray,
+    regularization_mode: str = "fixed",
+    selected_parameters: dict[str, object] | None = None,
+    candidate_inner_scores: tuple[tuple[float | None, ...], ...] = (),
+    candidate_inner_statuses: tuple[tuple[str, ...], ...] = (),
+    candidate_inner_reasons: tuple[tuple[str | None, ...], ...] = (),
+    selected_candidate_index: int | None = None,
 ) -> FoldRecord:
     """Create one unavailable scientific cell record without fitting an estimator.
 
@@ -1628,7 +1785,8 @@ def _unavailable_record(
     target_identifier : str
         Original saved target name retained in the unavailable audit record.
     inner_fold_count : int
-        Configured inactive three-fold inner-CV count.
+        Configured three-fold inner-CV count. It is inactive for fixed records
+        and identifies the attempted tuned inner plan when relevant.
     time_bin_index, region_configuration, representation : object
         Cell identity values.
     target_family : {"categorical", "numerical"}
@@ -1639,23 +1797,36 @@ def _unavailable_record(
         Requested pre-removal direct/PCA feature count.
     train_targets, test_targets : np.ndarray
         Partition targets for count provenance.
+    regularization_mode : {"fixed", "tuned"}
+        Declared fit mode for the unavailable audit record.
+    selected_parameters : dict[str, object] or None
+        Selected tuning mapping when one exists before a later unavailable fit.
+    candidate_inner_scores, candidate_inner_statuses, candidate_inner_reasons : tuple
+        Compact tuned candidate-by-inner audit arrays, empty in fixed mode.
+    selected_candidate_index : int or None
+        Declared-grid selection index, or None when no candidate was selected.
 
     Returns
     -------
     FoldRecord
         Unavailable record retaining partition/count/identity audit fields.
     """
+    inner_selection_indices = (
+        np.array(split.train_indices, dtype=int, copy=True)
+        if regularization_mode == "tuned"
+        else np.empty(0, dtype=int)
+    )
     return FoldRecord(
         record_key=(split.fold_id, time_bin_index, region_configuration, representation),
         target_identifier=target_identifier,
         inner_fold_count=inner_fold_count,
         outer_fold_id=split.fold_id,
         outer_test_indices=split.test_indices,
-        inner_selection_indices=np.empty(0, dtype=int),
+        inner_selection_indices=inner_selection_indices,
         time_bin_index=time_bin_index,
         region_configuration=region_configuration,
         representation=representation,
-        regularization_mode="fixed",
+        regularization_mode=regularization_mode,
         is_valid=False,
         status="unavailable",
         reason=reason,
@@ -1666,7 +1837,10 @@ def _unavailable_record(
         requested_feature_count=requested_feature_count,
         effective_feature_count=0,
         estimator_class=None,
-        estimator_parameters=_fixed_estimator_parameters(target_family),
+        estimator_parameters=_recorded_estimator_parameters(
+            target_family,
+            selected_parameters,
+        ),
         convergence_status="not_run",
         metrics={},
         coefficients=np.empty(0, dtype=float),
@@ -1674,7 +1848,526 @@ def _unavailable_record(
         feature_ids=(),
         positive_class=1 if target_family == "categorical" else None,
         coefficient_scale_label=_coefficient_scale_label(target_family),
-        selected_parameters=None,
+        selected_parameters=selected_parameters,
+        candidate_inner_scores=candidate_inner_scores,
+        candidate_inner_statuses=candidate_inner_statuses,
+        candidate_inner_reasons=candidate_inner_reasons,
+        selected_candidate_index=selected_candidate_index,
+    )
+
+
+def _freeze_candidate_audit(
+    scores: Sequence[Sequence[float | None]],
+    statuses: Sequence[Sequence[str]],
+    reasons: Sequence[Sequence[str | None]],
+) -> tuple[
+    tuple[tuple[float | None, ...], ...],
+    tuple[tuple[str, ...], ...],
+    tuple[tuple[str | None, ...], ...],
+]:
+    """Convert one mutable candidate-by-inner audit into immutable tuples.
+
+    Parameters
+    ----------
+    scores : sequence[sequence[float or None]]
+        Candidate-by-inner primary metric values in balanced-accuracy or R2
+        units. None denotes an invalid inner evaluation.
+    statuses : sequence[sequence[str]]
+        Candidate-by-inner ``"valid"`` or ``"invalid"`` state labels aligned
+        exactly to ``scores``.
+    reasons : sequence[sequence[str or None]]
+        Candidate-by-inner scientific invalidity messages aligned exactly to
+        ``scores``.
+
+    Returns
+    -------
+    tuple
+        Immutable ``(scores, statuses, reasons)`` tuples retaining the shape
+        ``(candidate, inner_fold)`` for audit persistence.
+
+    Raises
+    ------
+    ValueError
+        If the three candidate-by-inner collections do not share one shape.
+    """
+    if len(scores) != len(statuses) or len(scores) != len(reasons):
+        raise ValueError("Candidate audit collections must have the same candidate count.")
+    frozen_scores: list[tuple[float | None, ...]] = []
+    frozen_statuses: list[tuple[str, ...]] = []
+    frozen_reasons: list[tuple[str | None, ...]] = []
+    for score_row, status_row, reason_row in zip(scores, statuses, reasons, strict=True):
+        if len(score_row) != len(status_row) or len(score_row) != len(reason_row):
+            raise ValueError("Candidate audit rows must have the same inner-fold count.")
+        frozen_scores.append(tuple(score_row))
+        frozen_statuses.append(tuple(status_row))
+        frozen_reasons.append(tuple(reason_row))
+    return tuple(frozen_scores), tuple(frozen_statuses), tuple(frozen_reasons)
+
+
+def _summarize_target_cells(
+    records: Sequence[FoldRecord],
+    *,
+    time_bin_count: int,
+    target_family: str,
+    expected_fold_count: int,
+) -> dict[tuple[int, str, str], CellSummary]:
+    """Aggregate complete outer-fold summaries from already recorded cell fits.
+
+    Parameters
+    ----------
+    records : sequence[FoldRecord]
+        Outer-fold audit records for one target. Record metrics use balanced
+        accuracy for categorical targets or native-target R2 for numerical ones.
+    time_bin_count : int
+        Number of common event-relative tensor bins, dimensionless.
+    target_family : {"categorical", "numerical"}
+        Chooses the requested primary metric.
+    expected_fold_count : int
+        Configured grouped outer-fold count.
+
+    Returns
+    -------
+    dict[tuple[int, str, str], CellSummary]
+        Complete-fold summaries for every time/region/representation cell.
+    """
+    summaries: dict[tuple[int, str, str], CellSummary] = {}
+    primary_metric = "balanced_accuracy" if target_family == "categorical" else "r2"
+    for time_bin_index in range(time_bin_count):
+        for region_configuration in _REGION_CONFIGURATIONS:
+            for representation in _REPRESENTATIONS:
+                cell_records = [
+                    record
+                    for record in records
+                    if record.time_bin_index == time_bin_index
+                    and record.region_configuration == region_configuration
+                    and record.representation == representation
+                ]
+                ordered_records = sorted(cell_records, key=lambda record: record.outer_fold_id)
+                scores = tuple(
+                    record.metrics.get(primary_metric) if record.is_valid else None
+                    for record in ordered_records
+                )
+                reasons = tuple(record.reason for record in ordered_records)
+                summaries[(time_bin_index, region_configuration, representation)] = (
+                    aggregate_complete_folds(
+                        scores,
+                        expected_fold_count=expected_fold_count,
+                        invalid_reasons=reasons,
+                    )
+                )
+    return summaries
+
+
+def _decode_tuned_target(
+    *,
+    target_identifier: str,
+    target_family: str,
+    target_values: np.ndarray,
+    block_ids: np.ndarray,
+    pfc_rate_tensor_hz: np.ndarray,
+    hpc_rate_tensor_hz: np.ndarray,
+    pfc_unit_ids: tuple[str, ...],
+    hpc_unit_ids: tuple[str, ...],
+    pfc_requested_pc_count: int,
+    hpc_requested_pc_count: int,
+    outer_split_plan: SplitPlan,
+    outer_fold_count: int,
+    inner_fold_count: int,
+) -> TargetDecodingResult:
+    """Run leakage-safe nested grouped CV for one already validated target.
+
+    Parameters
+    ----------
+    target_identifier : str
+        Stable target name retained on every result record.
+    target_family : {"categorical", "numerical"}
+        Chooses grouped split validation, estimator family, and primary metric.
+    target_values, block_ids : np.ndarray
+        Matched trial-aligned vectors shaped ``(trial,)``. Numerical targets
+        retain native units; blocks are dimensionless group identities.
+    pfc_rate_tensor_hz, hpc_rate_tensor_hz : np.ndarray
+        Finite matched rate tensors shaped ``(trial, time_bin, unit)`` in Hz.
+    pfc_unit_ids, hpc_unit_ids : tuple[str, ...]
+        Unique stable IDs aligned to the regional unit axes.
+    pfc_requested_pc_count, hpc_requested_pc_count : int
+        Positive separate regional PCA requests, dimensionless.
+    outer_split_plan : SplitPlan
+        Available deterministic grouped outer plan expressed in global rows.
+    outer_fold_count, inner_fold_count : int
+        Configured grouped-CV counts. Inner folds are exactly three.
+
+    Returns
+    -------
+    TargetDecodingResult
+        Tuned outer records, complete summaries, global inner plans, and
+        candidate-by-inner audit arrays. Inner preprocessing is fit only on
+        each inner training subset; outer preprocessing is refit on all outer
+        training rows before one held-out evaluation.
+    """
+    candidates = tuning_candidates(target_family)
+    primary_metric = "balanced_accuracy" if target_family == "categorical" else "r2"
+    records: list[FoldRecord] = []
+    inner_split_plans: dict[int, SplitPlan] = {}
+    candidate_scores_by_key: dict[tuple[int, int, str, str], tuple] = {}
+    candidate_statuses_by_key: dict[tuple[int, int, str, str], tuple] = {}
+    candidate_reasons_by_key: dict[tuple[int, int, str, str], tuple] = {}
+    selected_indices_by_key: dict[tuple[int, int, str, str], int | None] = {}
+    cell_definitions = tuple(
+        (time_bin_index, region_configuration, representation)
+        for time_bin_index in range(pfc_rate_tensor_hz.shape[1])
+        for region_configuration in _REGION_CONFIGURATIONS
+        for representation in _REPRESENTATIONS
+    )
+
+    for outer_split in outer_split_plan.splits:
+        train_targets = target_values[outer_split.train_indices]
+        test_targets = target_values[outer_split.test_indices]
+        inner_plan = make_inner_splits(
+            target_values,
+            block_ids,
+            outer_split.train_indices,
+            target_family=target_family,
+            fold_count=inner_fold_count,
+        )
+        inner_split_plans[outer_split.fold_id] = inner_plan
+        audit_scores = {
+            cell: [[None] * len(inner_plan.splits) for _candidate in candidates]
+            for cell in cell_definitions
+        }
+        audit_statuses = {
+            cell: [["invalid"] * len(inner_plan.splits) for _candidate in candidates]
+            for cell in cell_definitions
+        }
+        audit_reasons = {
+            cell: [[None] * len(inner_plan.splits) for _candidate in candidates]
+            for cell in cell_definitions
+        }
+
+        if not inner_plan.is_available:
+            inner_reason = f"inner split unavailable: {inner_plan.unavailable_reason}"
+            for time_bin_index, region_configuration, representation in cell_definitions:
+                record_key = (
+                    outer_split.fold_id,
+                    time_bin_index,
+                    region_configuration,
+                    representation,
+                )
+                frozen_audit = _freeze_candidate_audit(
+                    audit_scores[(time_bin_index, region_configuration, representation)],
+                    audit_statuses[(time_bin_index, region_configuration, representation)],
+                    audit_reasons[(time_bin_index, region_configuration, representation)],
+                )
+                candidate_scores_by_key[record_key] = frozen_audit[0]
+                candidate_statuses_by_key[record_key] = frozen_audit[1]
+                candidate_reasons_by_key[record_key] = frozen_audit[2]
+                selected_indices_by_key[record_key] = None
+                requested_count = _requested_feature_count(
+                    region_configuration,
+                    representation,
+                    pfc_unit_count=len(pfc_unit_ids),
+                    hpc_unit_count=len(hpc_unit_ids),
+                    pfc_requested_pc_count=pfc_requested_pc_count,
+                    hpc_requested_pc_count=hpc_requested_pc_count,
+                )
+                records.append(
+                    _unavailable_record(
+                        split=outer_split,
+                        target_identifier=target_identifier,
+                        inner_fold_count=inner_fold_count,
+                        time_bin_index=time_bin_index,
+                        region_configuration=region_configuration,
+                        representation=representation,
+                        target_family=target_family,
+                        reason=inner_reason,
+                        requested_feature_count=requested_count,
+                        train_targets=train_targets,
+                        test_targets=test_targets,
+                        regularization_mode="tuned",
+                        candidate_inner_scores=frozen_audit[0],
+                        candidate_inner_statuses=frozen_audit[1],
+                        candidate_inner_reasons=frozen_audit[2],
+                    )
+                )
+            continue
+
+        for inner_split in inner_plan.splits:
+            pfc_inner_transform = fit_region_transform(
+                pfc_rate_tensor_hz[inner_split.train_indices],
+                pfc_requested_pc_count,
+            )
+            hpc_inner_transform = fit_region_transform(
+                hpc_rate_tensor_hz[inner_split.train_indices],
+                hpc_requested_pc_count,
+            )
+            inner_train_targets = target_values[inner_split.train_indices]
+            inner_test_targets = target_values[inner_split.test_indices]
+            for time_bin_index, region_configuration, representation in cell_definitions:
+                cell = (time_bin_index, region_configuration, representation)
+                unavailable_regions = [
+                    region
+                    for region, transform in (
+                        ("PFC", pfc_inner_transform),
+                        ("HPC", hpc_inner_transform),
+                    )
+                    if region in _component_regions(region_configuration)
+                    and not transform.is_available
+                ]
+                if unavailable_regions:
+                    invalid_reason = (
+                        "unavailable inner regional training features: "
+                        f"{', '.join(unavailable_regions)}"
+                    )
+                    for candidate_index in range(len(candidates)):
+                        audit_reasons[cell][candidate_index][inner_split.fold_id] = invalid_reason
+                    continue
+                inner_train_features = build_region_features(
+                    pfc_inner_transform,
+                    hpc_inner_transform,
+                    pfc_rate_tensor_hz[inner_split.train_indices],
+                    hpc_rate_tensor_hz[inner_split.train_indices],
+                    time_bin_index=time_bin_index,
+                    region_configuration=region_configuration,
+                    representation=representation,
+                    pfc_unit_ids=pfc_unit_ids,
+                    hpc_unit_ids=hpc_unit_ids,
+                )
+                inner_test_features = build_region_features(
+                    pfc_inner_transform,
+                    hpc_inner_transform,
+                    pfc_rate_tensor_hz[inner_split.test_indices],
+                    hpc_rate_tensor_hz[inner_split.test_indices],
+                    time_bin_index=time_bin_index,
+                    region_configuration=region_configuration,
+                    representation=representation,
+                    pfc_unit_ids=pfc_unit_ids,
+                    hpc_unit_ids=hpc_unit_ids,
+                )
+                for candidate_index, candidate in enumerate(candidates):
+                    estimator = make_estimator(
+                        target_family=target_family,
+                        parameters=candidate,
+                    )
+                    fit_result = fit_and_score(
+                        estimator,
+                        inner_train_features.values,
+                        inner_train_targets,
+                        inner_test_features.values,
+                        inner_test_targets,
+                        target_family=target_family,
+                    )
+                    score = fit_result.metrics.get(primary_metric)
+                    score_is_valid = (
+                        fit_result.is_valid
+                        and score is not None
+                        and math.isfinite(score)
+                    )
+                    if score_is_valid:
+                        audit_scores[cell][candidate_index][inner_split.fold_id] = float(score)
+                        audit_statuses[cell][candidate_index][inner_split.fold_id] = "valid"
+                    else:
+                        audit_reasons[cell][candidate_index][inner_split.fold_id] = (
+                            fit_result.reason or "non-finite inner score"
+                        )
+
+        pfc_outer_transform = fit_region_transform(
+            pfc_rate_tensor_hz[outer_split.train_indices],
+            pfc_requested_pc_count,
+        )
+        hpc_outer_transform = fit_region_transform(
+            hpc_rate_tensor_hz[outer_split.train_indices],
+            hpc_requested_pc_count,
+        )
+        for time_bin_index, region_configuration, representation in cell_definitions:
+            cell = (time_bin_index, region_configuration, representation)
+            record_key = (
+                outer_split.fold_id,
+                time_bin_index,
+                region_configuration,
+                representation,
+            )
+            frozen_audit = _freeze_candidate_audit(
+                audit_scores[cell],
+                audit_statuses[cell],
+                audit_reasons[cell],
+            )
+            candidate_scores_by_key[record_key] = frozen_audit[0]
+            candidate_statuses_by_key[record_key] = frozen_audit[1]
+            candidate_reasons_by_key[record_key] = frozen_audit[2]
+            candidate_valid = tuple(
+                all(status == "valid" for status in status_row)
+                for status_row in frozen_audit[1]
+            )
+            selected_candidate_index = select_tuning_candidate(
+                candidates,
+                candidate_scores=frozen_audit[0],
+                candidate_valid=candidate_valid,
+            )
+            selected_indices_by_key[record_key] = selected_candidate_index
+            requested_count = _requested_feature_count(
+                region_configuration,
+                representation,
+                pfc_unit_count=len(pfc_unit_ids),
+                hpc_unit_count=len(hpc_unit_ids),
+                pfc_requested_pc_count=pfc_requested_pc_count,
+                hpc_requested_pc_count=hpc_requested_pc_count,
+            )
+            if selected_candidate_index is None:
+                invalid_reason = "no valid inner tuning candidate"
+                records.append(
+                    _unavailable_record(
+                        split=outer_split,
+                        target_identifier=target_identifier,
+                        inner_fold_count=inner_fold_count,
+                        time_bin_index=time_bin_index,
+                        region_configuration=region_configuration,
+                        representation=representation,
+                        target_family=target_family,
+                        reason=invalid_reason,
+                        requested_feature_count=requested_count,
+                        train_targets=train_targets,
+                        test_targets=test_targets,
+                        regularization_mode="tuned",
+                        candidate_inner_scores=frozen_audit[0],
+                        candidate_inner_statuses=frozen_audit[1],
+                        candidate_inner_reasons=frozen_audit[2],
+                    )
+                )
+                continue
+            selected_parameters = dict(candidates[selected_candidate_index])
+            unavailable_regions = [
+                region
+                for region, transform in (
+                    ("PFC", pfc_outer_transform),
+                    ("HPC", hpc_outer_transform),
+                )
+                if region in _component_regions(region_configuration) and not transform.is_available
+            ]
+            if unavailable_regions:
+                invalid_reason = (
+                    "unavailable outer regional training features: "
+                    f"{', '.join(unavailable_regions)}"
+                )
+                records.append(
+                    _unavailable_record(
+                        split=outer_split,
+                        target_identifier=target_identifier,
+                        inner_fold_count=inner_fold_count,
+                        time_bin_index=time_bin_index,
+                        region_configuration=region_configuration,
+                        representation=representation,
+                        target_family=target_family,
+                        reason=invalid_reason,
+                        requested_feature_count=requested_count,
+                        train_targets=train_targets,
+                        test_targets=test_targets,
+                        regularization_mode="tuned",
+                        selected_parameters=selected_parameters,
+                        candidate_inner_scores=frozen_audit[0],
+                        candidate_inner_statuses=frozen_audit[1],
+                        candidate_inner_reasons=frozen_audit[2],
+                        selected_candidate_index=selected_candidate_index,
+                    )
+                )
+                continue
+            outer_train_features = build_region_features(
+                pfc_outer_transform,
+                hpc_outer_transform,
+                pfc_rate_tensor_hz[outer_split.train_indices],
+                hpc_rate_tensor_hz[outer_split.train_indices],
+                time_bin_index=time_bin_index,
+                region_configuration=region_configuration,
+                representation=representation,
+                pfc_unit_ids=pfc_unit_ids,
+                hpc_unit_ids=hpc_unit_ids,
+            )
+            outer_test_features = build_region_features(
+                pfc_outer_transform,
+                hpc_outer_transform,
+                pfc_rate_tensor_hz[outer_split.test_indices],
+                hpc_rate_tensor_hz[outer_split.test_indices],
+                time_bin_index=time_bin_index,
+                region_configuration=region_configuration,
+                representation=representation,
+                pfc_unit_ids=pfc_unit_ids,
+                hpc_unit_ids=hpc_unit_ids,
+            )
+            estimator = make_estimator(
+                target_family=target_family,
+                parameters=selected_parameters,
+            )
+            fit_result = fit_and_score(
+                estimator,
+                outer_train_features.values,
+                train_targets,
+                outer_test_features.values,
+                test_targets,
+                target_family=target_family,
+            )
+            records.append(
+                FoldRecord(
+                    record_key=record_key,
+                    target_identifier=target_identifier,
+                    inner_fold_count=inner_fold_count,
+                    outer_fold_id=outer_split.fold_id,
+                    outer_test_indices=outer_split.test_indices,
+                    inner_selection_indices=np.array(
+                        outer_split.train_indices,
+                        dtype=int,
+                        copy=True,
+                    ),
+                    time_bin_index=time_bin_index,
+                    region_configuration=region_configuration,
+                    representation=representation,
+                    regularization_mode="tuned",
+                    is_valid=fit_result.is_valid,
+                    status="valid" if fit_result.is_valid else "unavailable",
+                    reason=fit_result.reason,
+                    train_count=outer_split.train_indices.size,
+                    test_count=outer_split.test_indices.size,
+                    train_class_counts=_class_counts(train_targets, target_family),
+                    test_class_counts=_class_counts(test_targets, target_family),
+                    requested_feature_count=requested_count,
+                    effective_feature_count=len(outer_train_features.feature_ids),
+                    estimator_class=type(estimator).__name__,
+                    estimator_parameters=_recorded_estimator_parameters(
+                        target_family,
+                        selected_parameters,
+                    ),
+                    convergence_status=fit_result.convergence_status,
+                    metrics=fit_result.metrics,
+                    coefficients=fit_result.coefficients,
+                    intercept=fit_result.intercept,
+                    feature_ids=outer_train_features.feature_ids,
+                    positive_class=fit_result.positive_class,
+                    coefficient_scale_label=_coefficient_scale_label(target_family),
+                    selected_parameters=selected_parameters,
+                    candidate_inner_scores=frozen_audit[0],
+                    candidate_inner_statuses=frozen_audit[1],
+                    candidate_inner_reasons=frozen_audit[2],
+                    selected_candidate_index=selected_candidate_index,
+                )
+            )
+
+    summaries = _summarize_target_cells(
+        records,
+        time_bin_count=pfc_rate_tensor_hz.shape[1],
+        target_family=target_family,
+        expected_fold_count=outer_fold_count,
+    )
+    return TargetDecodingResult(
+        target_identifier=target_identifier,
+        inner_fold_count=inner_fold_count,
+        is_available=True,
+        status="available",
+        unavailable_reason=None,
+        outer_fold_ids=outer_split_plan.fold_ids,
+        inner_split_plans=inner_split_plans,
+        fold_records=tuple(records),
+        cell_summaries=summaries,
+        candidate_inner_scores=candidate_scores_by_key,
+        candidate_inner_statuses=candidate_statuses_by_key,
+        candidate_inner_reasons=candidate_reasons_by_key,
+        selected_candidate_indices=selected_indices_by_key,
     )
 
 
@@ -1694,7 +2387,7 @@ def decode_target(
     inner_fold_count: int,
     regularization_mode: str,
 ) -> TargetDecodingResult:
-    """Decode one matched target across all fixed-mode regions and representations.
+    """Decode one matched target across all regions and representations.
 
     Parameters
     ----------
@@ -1715,29 +2408,27 @@ def decode_target(
     pfc_requested_pc_count, hpc_requested_pc_count : int
         Positive requested separate regional PCA counts.
     outer_fold_count, inner_fold_count : int
-        Requested grouped fold counts.  Inner count is recorded but inactive in
-        fixed mode.
+        Requested grouped fold counts. Inner count is recorded but inactive in
+        fixed mode and defines leakage-safe nested CV in tuned mode.
     regularization_mode : {"fixed", "tuned"}
-        Fixed mode is implemented. Tuned mode raises NotImplementedError at
-        orchestration entry until its dedicated work package.
+        Fixed mode performs one outer fit per cell. Tuned mode fits transforms
+        and candidates inside grouped inner folds, then refits the selected
+        candidate on the complete outer-training partition.
 
     Returns
     -------
     TargetDecodingResult
-        Complete fixed-mode outer assignments, audit fold records, and
-        complete-fold cell summaries.  Rate tensor inputs remain in Hz; model
-        features are pooled-training standardized direct units or PCA scores.
+        Outer assignments, audit fold records, complete-fold cell summaries,
+        and, for tuned runs, global inner plans plus candidate-by-inner audit
+        arrays. Rate tensors remain in Hz; model features are pooled-training
+        standardized direct units or PCA scores.
 
     Raises
     ------
-    NotImplementedError
-        If tuned regularization is requested.
     ValueError
         If array shape, unit identity, target family, or mode contracts fail.
     """
-    if regularization_mode == "tuned":
-        raise NotImplementedError("Tuned task decoding is not implemented in the fixed-mode slice.")
-    if regularization_mode != "fixed":
+    if regularization_mode not in {"fixed", "tuned"}:
         raise ValueError("regularization_mode must be 'fixed' or 'tuned'.")
     if target_family not in {"categorical", "numerical"}:
         raise ValueError("target_family must be 'categorical' or 'numerical'.")
@@ -1781,6 +2472,22 @@ def decode_target(
             inner_split_plans={},
             fold_records=(),
             cell_summaries={},
+        )
+    if regularization_mode == "tuned":
+        return _decode_tuned_target(
+            target_identifier=target_identifier,
+            target_family=target_family,
+            target_values=target,
+            block_ids=blocks,
+            pfc_rate_tensor_hz=pfc_tensor,
+            hpc_rate_tensor_hz=hpc_tensor,
+            pfc_unit_ids=pfc_ids,
+            hpc_unit_ids=hpc_ids,
+            pfc_requested_pc_count=approved_pfc_pc_count,
+            hpc_requested_pc_count=approved_hpc_pc_count,
+            outer_split_plan=split_plan,
+            outer_fold_count=outer_fold_count,
+            inner_fold_count=approved_inner_fold_count,
         )
 
     records: list[FoldRecord] = []
