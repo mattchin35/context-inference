@@ -1,7 +1,7 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP4 tuned-mode provenance correction is
-in progress against committed supplemental RED tests.
+**Status:** Implementation authorized; WP4 grouped modeling is complete and
+WP5A saved-results/schema tests are the next bounded RED slice.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -11,13 +11,12 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-06
 
-**Current phase:** WP0-WP3 are complete. WP4 grouped-modeling tests are
-committed at `6ee6355`, with supplemental audit tests at `c85a00c` and
-`fab38b8`. Fixed-mode production is committed at `a8787aa`. Tuned modeling
-passes its scientific/orchestration tests but failed final audit because tuned
-records omitted their global selection-row provenance; supplemental RED tests
-are committed at `c1b183c`. That bounded correction and repeat review are the
-single next package. No
+**Current phase:** WP0-WP4 are complete. WP4 grouped-modeling tests are
+committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
+`fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
+is committed at `a8787aa`; complete tuned production and provenance are
+committed at `b844f26` after independent approval. WP5A saved-results/schema
+RED tests are the single next package. No
 experimental-data mutation, decoding output, benchmark, transfer, local long
 run, or cluster action is authorized.
 
@@ -25,12 +24,12 @@ run, or cluster action is authorized.
 
 - branch: `refactor`;
 - local implementation HEAD:
-  `c1b183c57f3aac37b26ab80d7af03c07441647cc`;
+  `b844f26cf3ad81ac6e5ae77e64b3041e72f586e2`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
-- the final tuned-provenance tests are committed; the bounded tuned production
-  diff remains uncommitted under correction; and
+- WP4 production and all WP4 tests are committed; only the documentation
+  handoff recording its final GREEN gate remains uncommitted; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -59,9 +58,9 @@ run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this tuned-provenance RED handoff separately,
-correct only selection-row provenance and stale documentation, then obtain
-independent Sol xhigh approval before declaring WP4 complete.
+**Next exact action:** commit this WP4 GREEN handoff separately, then write only
+WP5A `results.py` RED tests for schema, identity, checkpoints, and atomic
+publication; stop for independent tests-only review before implementation.
 
 ### Authority order
 
@@ -85,8 +84,8 @@ When resuming, use this order:
 | WP1 behavioral feature | Complete: RED `acf24ae`, GREEN `8ea4d24` | None; CT026 backfill remains separately gated at WP9A |
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
 | WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
-| WP4 grouped modeling | Fixed GREEN `a8787aa`; tuned provenance RED `c1b183c`; correction in progress | Tuned GREEN plus independent Sol xhigh approval |
-| WP5 results and session pipeline | Pending prerequisite | WP4 GREEN and saved-schema freeze |
+| WP4 grouped modeling | Complete: fixed GREEN `a8787aa`, tuned GREEN `b844f26` | None |
+| WP5 results and session pipeline | WP5A ready for RED | Saved-schema tests-only freeze and independent approval |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
 | WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
 | WP8 documentation and examples | Pending prerequisite | CLI/webapp interfaces stable through WP7 |
@@ -778,6 +777,50 @@ Use this template for each appended record:
 - Exact next action: commit this documentation-only tuned RED handoff, make
   only the provenance/documentation correction without changing tests, then
   rerun all WP4 gates and obtain independent Sol xhigh approval.
+
+#### 2026-10-06 - WP4 tuned-mode GREEN gate
+
+- State: WP4 grouped modeling is complete. Fixed and tuned modes, shared
+  transforms, split audit records, tuning audits, and selection-row provenance
+  are GREEN and independently approved.
+- Authorization: project implementation remains authorized. Work used only
+  source-controlled code and deterministic synthetic arrays; no experimental
+  data, decoding run, benchmark, transfer, or scheduler action was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / same Terra xhigh worker /
+  independent Sol xhigh final production and provenance review.
+- Start HEAD / end HEAD: tuned-provenance handoff `8812a58` / tuned production
+  `b844f26cf3ad81ac6e5ae77e64b3041e72f586e2`.
+- Owned files: modified
+  `src/neural_analysis/task_decoding/config.py` and
+  `src/neural_analysis/task_decoding/modeling.py`. Committed tests were not
+  changed during GREEN implementation.
+- RED command and result: the two final focused provenance tests failed only
+  because tuned records held empty selection arrays instead of defensive
+  global outer-training row copies; 77 other modeling cases were deselected.
+- GREEN/regression commands and results: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
+  src/tests/neural_analysis/task_decoding -q` passed 222 tests with five
+  existing tiny-epoch/class-frequency warnings in 9.28 seconds. The final two
+  provenance tests pass; source pycompile and `git diff --check` pass. The
+  independent reviewer additionally reproduced 159 modeling/config cases with
+  only two expected class-frequency warnings. Tuned fit-count evidence remains
+  24 transform fits for both one and two time bins, 828/1656 estimator fits,
+  and three inner-split calls.
+- Commits: base tests `6ee6355`; fixed supplements `c85a00c` and `fab38b8`;
+  fixed production `a8787aa`; tuned-provenance tests `c1b183c`; tuned
+  production `b844f26`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: installed scikit-learn 1.8.0 behavior is
+  frozen in configuration and exercised without deprecated logistic
+  parameters. Tuned candidate order, invalidation, tie selection, nested
+  leakage boundaries, complete unavailable records, selected outer refits, and
+  global selection-row identity were approved. Fixed records intentionally
+  retain empty inner-selection arrays. No unresolved WP4 scientific or
+  numerical issue remains.
+- Exact next action: commit this documentation-only GREEN handoff, then begin
+  WP5A by writing bounded `results.py` RED tests for the frozen saved schema,
+  input/scoped-source identity, checkpoints, and atomic result publication.
+  Obtain independent tests-only approval before implementation.
 
 ## 1. Objective
 
