@@ -462,11 +462,14 @@ def make_result_arrays(
     arrays["train_class_counts"][0, ...] = (4, 4)
     arrays["test_class_counts"][0, ...] = (2, 2)
     feature_values = {
-        ("PFC", "pca"): (("PFC:PC1",), ("PFC",)),
+        ("PFC", "pca"): (("PFC:PC1", "PFC:PC2"), ("PFC", "PFC")),
         ("PFC", "units"): (("probe-pfc:11", "probe-pfc:19"), ("PFC", "PFC")),
-        ("HPC", "pca"): (("HPC:PC1",), ("HPC",)),
+        ("HPC", "pca"): (("HPC:PC1", "HPC:PC2"), ("HPC", "HPC")),
         ("HPC", "units"): (("probe-hpc:5", "probe-hpc:17"), ("HPC", "HPC")),
-        ("PFC+HPC", "pca"): (("PFC:PC1", "HPC:PC1"), ("PFC", "HPC")),
+        ("PFC+HPC", "pca"): (
+            ("PFC:PC1", "PFC:PC2", "HPC:PC1", "HPC:PC2"),
+            ("PFC", "PFC", "HPC", "HPC"),
+        ),
         ("PFC+HPC", "units"): (
             ("probe-pfc:11", "probe-pfc:19", "probe-hpc:5", "probe-hpc:17"),
             ("PFC", "PFC", "HPC", "HPC"),
@@ -1280,7 +1283,7 @@ def assert_primitive_schema(
         assert [np.count_nonzero(outer_folds == fold) for fold in range(3)] == [4, 4, 4]
         assert arrays["eligibility_counts"][target_index] - 4 == 8
     assert_grouped_split_integrity(arrays)
-    expected_widths = np.array([[1, 2], [1, 2], [2, 4]], dtype=np.int64)
+    expected_widths = np.array([[2, 2], [2, 2], [4, 4]], dtype=np.int64)
     expected_requested_widths = np.array([[2, 2], [2, 2], [4, 4]], dtype=np.int64)
     for region_index, representation_index in np.ndindex(expected_widths.shape):
         width = expected_widths[region_index, representation_index]
@@ -1304,9 +1307,14 @@ def assert_primitive_schema(
             arrays["requested_feature_counts"][:, region_index, representation_index]
             == expected_requested_widths[region_index, representation_index]
         )
-    assert arrays["coefficient_feature_ids"][0, 0, 0] == "PFC:PC1"
+    assert arrays["coefficient_feature_ids"][0, 0, :2].tolist() == ["PFC:PC1", "PFC:PC2"]
     assert arrays["coefficient_feature_ids"][0, 1, :2].tolist() == ["probe-pfc:11", "probe-pfc:19"]
-    assert arrays["coefficient_feature_ids"][2, 0, :2].tolist() == ["PFC:PC1", "HPC:PC1"]
+    assert arrays["coefficient_feature_ids"][2, 0, :4].tolist() == [
+        "PFC:PC1",
+        "PFC:PC2",
+        "HPC:PC1",
+        "HPC:PC2",
+    ]
     assert arrays["coefficient_feature_ids"][2, 1].tolist() == [
         "probe-pfc:11",
         "probe-pfc:19",
@@ -1595,7 +1603,7 @@ def test_loader_rejects_invalid_schema_members_and_cross_array_inconsistencies(
     elif kind == "inner_block_leakage":
         altered_arrays["inner_selection_fold_ids"][0, 0, 5] = 1
     elif kind == "coefficient_padding_mismatch":
-        altered_arrays["coefficient_values"][0, 0, 0, 0, 0, 1] = 0.0
+        altered_arrays["coefficient_values"][0, 0, 0, 0, 0, 2] = 0.0
     else:
         altered_arrays["requested_feature_counts"][0, 0, 1, 0, 0] = 1
     write_raw_npz(run_directory, altered_arrays, altered_meta)
@@ -2603,11 +2611,15 @@ def make_dynamic_tuned_payload(
         arrays["train_counts"][..., fold_index] = 12 - test_size
         arrays["test_counts"][..., fold_index] = test_size
     feature_map = {
-        ("PFC", "pca"): (("PFC:PC1",), ("PFC",), 2),
+        ("PFC", "pca"): (("PFC:PC1", "PFC:PC2"), ("PFC", "PFC"), 2),
         ("PFC", "units"): (("probe-pfc:1", "probe-pfc:2"), ("PFC", "PFC"), 2),
         ("HPC", "pca"): (("HPC:PC1", "HPC:PC2"), ("HPC", "HPC"), 2),
         ("HPC", "units"): (("probe-hpc:1", "probe-hpc:2"), ("HPC", "HPC"), 2),
-        ("PFC+HPC", "pca"): (("PFC:PC1", "HPC:PC1", "HPC:PC2"), ("PFC", "HPC", "HPC"), 4),
+        ("PFC+HPC", "pca"): (
+            ("PFC:PC1", "PFC:PC2", "HPC:PC1", "HPC:PC2"),
+            ("PFC", "PFC", "HPC", "HPC"),
+            4,
+        ),
         ("PFC+HPC", "units"): (
             ("probe-pfc:1", "probe-pfc:2", "probe-hpc:1", "probe-hpc:2"),
             ("PFC", "PFC", "HPC", "HPC"),
@@ -3553,11 +3565,11 @@ def test_save_rejects_feature_identity_region_status_and_active_mask_disagreemen
     elif kind == "active_padding_status":
         arrays["coefficient_feature_statuses"][0, 0, 0] = "padding"
     elif kind == "inactive_available_status":
-        arrays["coefficient_feature_statuses"][0, 0, 1] = "available"
+        arrays["coefficient_feature_statuses"][0, 0, 2] = "available"
     elif kind == "padding_nonempty_id":
-        arrays["coefficient_feature_ids"][0, 0, 1] = "unexpected-padding-id"
+        arrays["coefficient_feature_ids"][0, 0, 2] = "unexpected-padding-id"
     else:
-        arrays["coefficient_feature_regions"][0, 0, 1] = "PFC"
+        arrays["coefficient_feature_regions"][0, 0, 2] = "PFC"
     run_directory = tmp_path / kind
 
     with pytest.raises(ValueError, match=failure_pattern):
@@ -4515,6 +4527,257 @@ def test_wp5a_fold_local_effective_features_allow_nan_dropped_columns(tmp_path):
         )
 
 
+def mark_fit_unavailable_without_features(
+    arrays: dict[str, np.ndarray],
+    fit_index: tuple[int, int, int, int, int],
+    *,
+    reason: str,
+) -> None:
+    """Record one fixed- or tuned-mode fit with no outer feature matrix.
+
+    Parameters
+    ----------
+    arrays : dict[str, numpy.ndarray]
+        Mutable result payload for either regularization mode. Fit members use axes
+        ``(target, region, representation, time, fold)`` and score members
+        insert the metric axis before time.
+    fit_index : tuple[int, int, int, int, int]
+        Address of one target/region/representation/time/fold cell.
+    reason : str
+        Nonempty compact unavailable-state code stored in ``fit_reason_codes``.
+
+    Returns
+    -------
+    None
+        Mutates only the addressed cell to an explicit unavailable, zero-feature
+        state with NaN scores, coefficients, and intercept. This represents a
+        failed regional transform or a tuned cell with no selected candidate.
+    """
+    target, region, representation, time, fold = fit_index
+    arrays["fit_status"][fit_index] = "unavailable"
+    arrays["fit_reason_codes"][fit_index] = reason
+    arrays["effective_feature_counts"][fit_index] = 0
+    arrays["fold_scores"][target, region, representation, :, time, fold] = np.nan
+    arrays["coefficient_values"][fit_index] = np.nan
+    arrays["fitted_intercepts"][fit_index] = np.nan
+
+
+def mark_tuned_cell_no_valid_candidate(
+    arrays: dict[str, np.ndarray],
+    fit_index: tuple[int, int, int, int, int],
+) -> None:
+    """Record one tuned cell with no valid inner-CV candidate.
+
+    Parameters
+    ----------
+    arrays : dict[str, numpy.ndarray]
+        Mutable tuned-mode result payload. Candidate audit axes are
+        ``(target, outer_fold, region, representation, time, candidate,
+        inner_fold)``.
+    fit_index : tuple[int, int, int, int, int]
+        Address using fit axes ``(target, region, representation, time, fold)``.
+
+    Returns
+    -------
+    None
+        Mutates the fit, selection, and every candidate audit member for the
+        addressed cell to the explicit unavailable/no-selection sentinels.
+    """
+    target, region, representation, time, fold = fit_index
+    reason = "no valid inner tuning candidate"
+    mark_fit_unavailable_without_features(arrays, fit_index, reason=reason)
+    selection_index = (target, fold, region, representation, time)
+    arrays["selected_candidate_indices"][selection_index] = -1
+    arrays["selected_parameters_json"][selection_index] = ""
+    audit_index = selection_index + (slice(None), slice(None))
+    arrays["candidate_inner_scores"][audit_index] = np.nan
+    arrays["candidate_inner_statuses"][audit_index] = "invalid"
+    arrays["candidate_inner_reasons"][audit_index] = reason
+
+
+def test_wp4_fixed_regional_transform_unavailability_round_trips_with_hpc_only_features(tmp_path):
+    """One regional transform failure leaves the other region usable after round-trip.
+
+    For one categorical target and outer fold, all eight time bins mark PFC
+    PCA/direct and both combined representations unavailable with zero
+    effective features. HPC PCA/direct retain their two usable features, so
+    combined failure is not incorrectly required to equal a regional sum.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    target, fold = 0, 0
+    reason = "pfc_transform_unavailable"
+    unavailable_cells = ((0, 0), (0, 1), (2, 0), (2, 1))
+    for time in range(arrays["time_bin_centers_s"].size):
+        for region, representation in unavailable_cells:
+            mark_fit_unavailable_without_features(
+                arrays,
+                (target, region, representation, time, fold),
+                reason=reason,
+            )
+
+    run_directory = tmp_path / "pfc-transform-unavailable"
+    results.save_task_decoding_run(
+        run_directory,
+        arrays=arrays,
+        **{key: value for key, value in arguments.items() if key != "arrays"},
+    )
+    saved = results.load_task_decoding_run(run_directory)["arrays"]
+    for time in range(saved["time_bin_centers_s"].size):
+        for region, representation in unavailable_cells:
+            fit_index = (target, region, representation, time, fold)
+            assert saved["fit_status"][fit_index] == "unavailable"
+            assert saved["fit_reason_codes"][fit_index] == reason
+            assert saved["effective_feature_counts"][fit_index] == 0
+            assert np.isnan(saved["coefficient_values"][fit_index]).all()
+        for representation in range(2):
+            hpc_index = (target, 1, representation, time, fold)
+            assert saved["fit_status"][hpc_index] == "valid"
+            assert saved["effective_feature_counts"][hpc_index] == 2
+
+
+def test_wp4_save_rejects_cross_representation_regional_availability_mismatch(tmp_path):
+    """PFC PCA/direct availability must agree with their combined counterparts.
+
+    This payload makes only PFC PCA and combined PCA unavailable at every time
+    bin, while PFC direct and combined direct remain usable. Each individual
+    representation is internally time-consistent, isolating cross-
+    representation regional availability as the rejected condition.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    for time in range(arrays["time_bin_centers_s"].size):
+        for region in (0, 2):
+            mark_fit_unavailable_without_features(
+                arrays,
+                (0, region, 0, time, 0),
+                reason="pfc_pca_transform_unavailable",
+            )
+
+    with pytest.raises(ValueError, match="representation|PCA|direct|region|combined|availability"):
+        results.save_task_decoding_run(
+            tmp_path / "cross-representation-availability",
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
+        )
+
+
+def test_wp4_fold_local_one_unit_region_pca_and_combined_masks_round_trip(tmp_path):
+    """A one-unit PFC transform retains one PCA/direct feature in both regions.
+
+    For all time bins in one target/fold, PFC direct and PFC PCA each retain
+    their first of two mapped features. Both combined representations retain
+    the matching PFC feature plus both usable HPC features. The resulting
+    regional PCA width is exactly ``min(2 requested, 1 direct, observations)``
+    and the combined width is three without imposing an invalid global PCA
+    prefix across the PFC/HPC segment boundary.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    target, fold = 0, 0
+    for time in range(arrays["time_bin_centers_s"].size):
+        for representation in range(2):
+            pfc_index = (target, 0, representation, time, fold)
+            combined_index = (target, 2, representation, time, fold)
+            arrays["effective_feature_counts"][pfc_index] = 1
+            arrays["effective_feature_counts"][combined_index] = 3
+            arrays["coefficient_values"][pfc_index + (1,)] = np.nan
+            arrays["coefficient_values"][combined_index + (1,)] = np.nan
+
+    run_directory = tmp_path / "fold-local-one-unit-pfc"
+    results.save_task_decoding_run(
+        run_directory,
+        arrays=arrays,
+        **{key: value for key, value in arguments.items() if key != "arrays"},
+    )
+    saved = results.load_task_decoding_run(run_directory)["arrays"]
+    pfc_mask = np.array([True, False])
+    combined_mask = np.array([True, False, True, True])
+    for time in range(saved["time_bin_centers_s"].size):
+        for representation in range(2):
+            pfc_index = (target, 0, representation, time, fold)
+            hpc_index = (target, 1, representation, time, fold)
+            combined_index = (target, 2, representation, time, fold)
+            assert saved["effective_feature_counts"][pfc_index] == 1
+            assert saved["effective_feature_counts"][hpc_index] == 2
+            assert saved["effective_feature_counts"][combined_index] == 3
+            np.testing.assert_array_equal(
+                np.isfinite(saved["coefficient_values"][pfc_index][:2]),
+                pfc_mask,
+            )
+            np.testing.assert_array_equal(
+                np.isfinite(saved["coefficient_values"][combined_index][:4]),
+                combined_mask,
+            )
+
+
+def test_wp4_save_rejects_pca_effective_count_below_transform_limit(tmp_path):
+    """A usable two-unit regional PCA must retain its exact two-PC transform width.
+
+    PFC and the PFC segment of combined PCA use finite prefix masks at every
+    time bin, so neither non-prefix nor direct/combined identity validation is
+    implicated. Their effective widths of one and three are below the required
+    ``min(requested_pcs, direct_width, train_trials * time_bins)`` limits of
+    two and four, respectively.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    for time in range(arrays["time_bin_centers_s"].size):
+        pfc_index = (0, 0, 0, time, 0)
+        combined_index = (0, 2, 0, time, 0)
+        arrays["effective_feature_counts"][pfc_index] = 1
+        arrays["effective_feature_counts"][combined_index] = 3
+        arrays["coefficient_values"][pfc_index + (1,)] = np.nan
+        arrays["coefficient_values"][combined_index + (1,)] = np.nan
+
+    with pytest.raises(ValueError, match="PCA|effective|requested|transform|component"):
+        results.save_task_decoding_run(
+            tmp_path / "pca-width-below-transform-limit",
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
+        )
+
+
+def test_wp4_tuned_staggered_selected_direct_masks_must_agree_across_regions(tmp_path):
+    """Selected direct transforms cannot imply incompatible PFC masks across times.
+
+    PFC direct has a selected one-feature fit only at time zero. Combined
+    direct has a selected full PFC segment only at time one. Their opposite
+    cells are complete no-valid-candidate sentinels, so rejection depends on
+    cross-selected-time evidence rather than simultaneous duplicate fits.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="tuned")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    pfc_time_zero = (0, 0, 1, 0, 0)
+    combined_time_one = (0, 2, 1, 1, 0)
+    arrays["effective_feature_counts"][pfc_time_zero] = 1
+    arrays["coefficient_values"][pfc_time_zero + (1,)] = np.nan
+    for time in range(arrays["time_bin_centers_s"].size):
+        mark_tuned_cell_no_valid_candidate(arrays, (0, 0, 0, time, 0))
+        mark_tuned_cell_no_valid_candidate(arrays, (0, 2, 0, time, 0))
+        if time != 0:
+            mark_tuned_cell_no_valid_candidate(arrays, (0, 0, 1, time, 0))
+        if time != 1:
+            mark_tuned_cell_no_valid_candidate(arrays, (0, 2, 1, time, 0))
+    selected = arrays["selected_candidate_indices"][0, 0]
+    assert np.flatnonzero(selected[0, 0] >= 0).tolist() == []
+    assert np.flatnonzero(selected[2, 0] >= 0).tolist() == []
+    assert np.flatnonzero(selected[0, 1] >= 0).tolist() == [0]
+    assert np.flatnonzero(selected[2, 1] >= 0).tolist() == [1]
+
+    with pytest.raises(ValueError, match="combined|direct|PFC|feature|selection|time"):
+        results.save_task_decoding_run(
+            tmp_path / "staggered-selected-direct-masks",
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
+        )
+
+
 def test_wp5a_save_rejects_time_varying_direct_feature_dropout_within_target_fold(tmp_path):
     """One fitted direct-unit transform cannot change its width across time bins."""
     input_paths = write_input_fixture(tmp_path)
@@ -4558,25 +4821,12 @@ def test_wp5a_save_rejects_nonprefix_pca_finite_coefficient_mask(tmp_path):
     input_paths = write_input_fixture(tmp_path)
     arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
     arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
-    arrays["coefficient_active_masks"][0, 0, 1] = True
-    arrays["coefficient_feature_ids"][0, 0, :2] = ("PFC:PC1", "PFC:PC2")
-    arrays["coefficient_feature_regions"][0, 0, :2] = ("PFC", "PFC")
-    arrays["coefficient_feature_statuses"][0, 0, :2] = "available"
-    arrays["coefficient_values"][:, 0, 0, :, :, :2] = 0.5
-    arrays["effective_feature_counts"][:, 0, 0] = 2
-
-    arrays["coefficient_active_masks"][2, 0, 2] = True
-    arrays["coefficient_feature_ids"][2, 0, :3] = ("PFC:PC1", "PFC:PC2", "HPC:PC1")
-    arrays["coefficient_feature_regions"][2, 0, :3] = ("PFC", "PFC", "HPC")
-    arrays["coefficient_feature_statuses"][2, 0, :3] = "available"
-    arrays["coefficient_values"][:, 2, 0, :, :, :3] = 0.5
-    arrays["effective_feature_counts"][:, 2, 0] = 3
 
     for time in range(arrays["time_bin_centers_s"].size):
         pfc_index = (0, 0, 0, time, 0)
         combined_index = (0, 2, 0, time, 0)
         arrays["effective_feature_counts"][pfc_index] = 1
-        arrays["effective_feature_counts"][combined_index] = 2
+        arrays["effective_feature_counts"][combined_index] = 3
         arrays["coefficient_values"][pfc_index + (0,)] = np.nan
         arrays["coefficient_values"][combined_index + (0,)] = np.nan
     fit_index = (0, 0, 0, 0, 0)

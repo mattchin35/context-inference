@@ -270,6 +270,25 @@ def selected_summary(result, time_bin: int, region: str, representation: str):
     return result.cell_summaries[(time_bin, region, representation)]
 
 
+def scalar_identity_key(value: object) -> tuple[type[object], str]:
+    """Return a collision-free assertion key for one scalar block identity.
+
+    Parameters
+    ----------
+    value : object
+        One scalar behavioral block label, which may be a numeric, string, or
+        boolean Python value.
+
+    Returns
+    -------
+    tuple[type[object], str]
+        The scalar's concrete Python type and ``repr`` text. This keeps
+        values such as ``1``, ``1.0``, and ``True`` distinct for test
+        assertions even though ordinary Python equality aliases them.
+    """
+    return (type(value), repr(value))
+
+
 def test_outer_splits_exactly_match_installed_stratified_group_kfold_assignments():
     """Categorical outer assignments must equal deterministic StratifiedGroupKFold."""
     inputs = make_classification_inputs()
@@ -334,6 +353,96 @@ def test_categorical_inner_split_with_pure_group_validation_is_explicitly_unavai
 
     assert not inner_plan.is_available
     assert "class" in inner_plan.unavailable_reason.lower()
+
+
+@pytest.mark.parametrize(
+    "collision_pair",
+    ((1, "1"), (1, 1.0), (1, True), (1.0, True)),
+)
+@pytest.mark.parametrize("target_family", ("categorical", "numerical"))
+@pytest.mark.parametrize("split_scope", ("outer", "inner"))
+def test_grouped_splits_preserve_mixed_scalar_block_type_identities(
+    collision_pair,
+    target_family,
+    split_scope,
+):
+    """Outer and inner grouped CV retain every type-distinct scalar block.
+
+    Three two-row behavioral groups comprise one potentially colliding scalar
+    pair and ``"third"``. Correct type-preserving normalization yields three
+    groups and an available three-fold plan. Coercing either pair to one group
+    leaves only two groups and makes the requested plan unavailable.
+    """
+    group_labels = (*collision_pair, "third")
+    block_ids = np.repeat(np.array(group_labels, dtype=object), 2)
+    identity_keys = {scalar_identity_key(label) for label in block_ids}
+    assert len(identity_keys) == 3
+    if target_family == "categorical":
+        target_values = np.tile(np.array([0, 1], dtype=int), 3)
+    else:
+        target_values = np.arange(6, dtype=float)
+    split_arguments = dict(
+        target_family=target_family,
+        fold_count=3,
+    )
+    if split_scope == "outer":
+        plan = modeling.make_outer_splits(target_values, block_ids, **split_arguments)
+        repeated = modeling.make_outer_splits(target_values, block_ids, **split_arguments)
+    else:
+        all_rows = np.arange(target_values.size, dtype=int)
+        plan = modeling.make_inner_splits(
+            target_values,
+            block_ids,
+            all_rows,
+            **split_arguments,
+        )
+        repeated = modeling.make_inner_splits(
+            target_values,
+            block_ids,
+            all_rows,
+            **split_arguments,
+        )
+
+    assert plan.is_available
+    assert len(plan.splits) == 3
+    np.testing.assert_array_equal(plan.fold_ids, repeated.fold_ids)
+    for key in identity_keys:
+        rows = np.array(
+            [scalar_identity_key(label) == key for label in block_ids],
+            dtype=bool,
+        )
+        assert np.unique(plan.fold_ids[rows]).size == 1
+    for split in plan.splits:
+        train_keys = {scalar_identity_key(block_ids[row]) for row in split.train_indices}
+        test_keys = {scalar_identity_key(block_ids[row]) for row in split.test_indices}
+        assert train_keys.isdisjoint(test_keys)
+        if target_family == "categorical":
+            assert set(target_values[split.train_indices]) == {0, 1}
+            assert set(target_values[split.test_indices]) == {0, 1}
+        else:
+            assert np.unique(target_values[split.test_indices]).size == 2
+
+
+def test_homogeneous_numeric_group_labels_keep_the_grouped_class_counterexample():
+    """Homogeneous numeric labels retain their existing categorical unavailable state.
+
+    The int64 blocks have shape ``(11,)`` and the binary target values have
+    shape ``(11,)``. Their deterministic three-fold grouped assignment has a
+    one-class held-out partition, so it remains explicitly unavailable.
+    """
+    block_ids = np.array([2, 3, 3, 3, 10, 10, 10, 11, 11, 11, 11], dtype=np.int64)
+    target_values = np.array([0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1], dtype=np.int64)
+
+    plan = modeling.make_outer_splits(
+        target_values,
+        block_ids,
+        target_family="categorical",
+        fold_count=3,
+    )
+
+    assert not plan.is_available
+    assert plan.unavailable_reason == "categorical grouped fold lacks both classes"
+    assert np.all(plan.fold_ids == -1)
 
 
 def test_numerical_outer_splits_exactly_match_group_kfold_without_discretization():
