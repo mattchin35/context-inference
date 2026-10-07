@@ -1,7 +1,7 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP4 grouped modeling is complete and
-WP5A saved-results/schema tests are the next bounded RED slice.
+**Status:** Implementation authorized; WP5A saved-results/schema RED tests are
+committed and the bounded `results.py` implementation is next.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -16,7 +16,8 @@ committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
 committed at `b844f26` after independent approval. WP5A saved-results/schema
-RED tests are the single next package. No
+RED tests are committed at `4a5664a` after independent approval. The bounded
+`results.py` implementation is the single next package. No
 experimental-data mutation, decoding output, benchmark, transfer, local long
 run, or cluster action is authorized.
 
@@ -24,12 +25,12 @@ run, or cluster action is authorized.
 
 - branch: `refactor`;
 - local implementation HEAD:
-  `b844f26cf3ad81ac6e5ae77e64b3041e72f586e2`;
+  `4a5664af49a782639e5303847c66a8ce2a748f73`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
-- WP4 production and all WP4 tests are committed; only the documentation
-  handoff recording its final GREEN gate remains uncommitted; and
+- WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests are
+  committed RED and `results.py` does not yet exist; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -58,9 +59,9 @@ run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this WP4 GREEN handoff separately, then write only
-WP5A `results.py` RED tests for schema, identity, checkpoints, and atomic
-publication; stop for independent tests-only review before implementation.
+**Next exact action:** commit this WP5A RED handoff separately, then implement
+only `src/neural_analysis/task_decoding/results.py` without changing committed
+tests; stop for independent production review before declaring WP5A GREEN.
 
 ### Authority order
 
@@ -85,7 +86,7 @@ When resuming, use this order:
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
 | WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
 | WP4 grouped modeling | Complete: fixed GREEN `a8787aa`, tuned GREEN `b844f26` | None |
-| WP5 results and session pipeline | WP5A ready for RED | Saved-schema tests-only freeze and independent approval |
+| WP5 results and session pipeline | WP5A RED `4a5664a`; implementation next | WP5A GREEN plus independent production approval |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
 | WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
 | WP8 documentation and examples | Pending prerequisite | CLI/webapp interfaces stable through WP7 |
@@ -821,6 +822,48 @@ Use this template for each appended record:
   WP5A by writing bounded `results.py` RED tests for the frozen saved schema,
   input/scoped-source identity, checkpoints, and atomic result publication.
   Obtain independent tests-only approval before implementation.
+
+#### 2026-10-06 - WP5A saved-results RED gate
+
+- State: WP5A saved-result persistence, scientific/input identity, target
+  checkpoint, and atomic-publication contracts are committed RED. Production
+  `results.py` is intentionally absent.
+- Authorization: project implementation remains authorized. Work used only
+  deterministic temporary files and synthetic arrays; no experimental data,
+  decoding run, benchmark, transfer, or scheduler action was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / same Terra xhigh worker /
+  independent Sol xhigh result-schema, portability, scientific-identity, and
+  atomicity review.
+- Start HEAD / end HEAD: WP4 GREEN handoff `01f8b0f` / WP5A tests-only
+  `4a5664af49a782639e5303847c66a8ce2a748f73`.
+- Owned files: created only
+  `src/tests/neural_analysis/task_decoding/test_results.py`. No production,
+  configuration, pipeline, CLI, documentation, or data file changed in the
+  tests-only commit.
+- RED command and result: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
+  src/tests/neural_analysis/task_decoding/test_results.py -q` fails collection
+  only because `src.neural_analysis.task_decoding.results` does not exist; no
+  test executes. The module pycompiles, contains no line over 100 columns, and
+  passes whitespace checks.
+- GREEN/regression commands and results: not applicable before implementation.
+- Commits: WP5A tests-only `4a5664a`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: four tests-only review cycles corrected
+  candidate-audit collisions/domain, impossible fold counts, group leakage,
+  feature-map ambiguity, incomplete axes/units/schema validation, manifest
+  boundary mocks, source-scope gaps, and false atomic-publication assumptions.
+  The approved schema contains 48 primitive arrays and 143 expected fixed,
+  tuned, invalid-schema, identity, checkpoint, and atomicity cases. Arbitrary
+  mixed-type block labels use canonical UTF-8 bytes plus int64 offsets rather
+  than pickle or fixed-width text. Prepared sidecars remain after a failed
+  final NPZ publication so the run remains resumable. WP5B lifecycle,
+  discovery, summaries, figures, detachment, status, and CLI behavior remain
+  explicitly outside this slice.
+- Exact next action: commit this documentation-only RED handoff, implement only
+  `src/neural_analysis/task_decoding/results.py` without changing committed
+  tests, run WP5A plus affected task-decoding regressions, and obtain
+  independent Sol xhigh production approval before WP5A GREEN.
 
 ## 1. Objective
 
