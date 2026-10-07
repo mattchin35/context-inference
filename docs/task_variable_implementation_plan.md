@@ -22,14 +22,14 @@ normative amendment `docs/task_variable_spec_v6.md`.
 **Current phase:** WP0-WP10D are complete. The first v2 bounded run proved the
 convergence repair but exposed a competing-resume lifecycle defect during
 diagnosis. The approved repair is committed through `77ff461`, pushed, and
-tracked-clean. A clean bounded v2 rerun was accepted from an ordinary terminal
-at `task_variable_decoding_2026-10-07T19-29-08Z`; its later one-shot
-validation remains pending. After that evidence and the approved local
-eight-target categorical stress gate, implementation proceeds through WP11
-single-session Slurm support, WP12 one-session cluster validation, and WP13
-per-session job arrays. The implementation path is selected; each real
-transfer or scheduler submission is still approved separately from source
-implementation.
+tracked-clean. The clean bounded v2 rerun
+`task_variable_decoding_2026-10-07T19-29-08Z` passed its one-shot lifecycle,
+result, and convergence validation. The approved local eight-target
+categorical stress gate is next; after that evidence, implementation proceeds
+through WP11 single-session Slurm support, WP12 one-session cluster validation,
+and WP13 per-session job arrays. The implementation path is selected; each
+real transfer or scheduler submission is still approved separately from
+source implementation.
 WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
@@ -66,8 +66,8 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local and remote WP10D handoff HEAD before this update:
-  `77ff4615017be5a8182c4581789280a452b0368e`;
+- local documentation HEAD before this evidence update:
+  `0778320`;
 - `origin/refactor`: `77ff4615017be5a8182c4581789280a452b0368e`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
@@ -110,15 +110,13 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** after the accepted bounded run finishes, inspect it once
-and require a valid complete state with empty `last_error` and all 2,400 cells
-valid. Then run the separately approved local eight-target categorical stress
-validation. Use those measurements to propose the exact WP11 resource block
-and tests-first implementation plan for user approval. Implement and validate
-WP11 locally with mocked scheduler/transfer seams before any real transfer or
-Slurm command. WP12 then proves one cluster session; WP13 implements bounded
-cross-session concurrency with one independently resumable array element per
-session.
+**Next exact action:** push the documentation/evidence handoff and verify exact
+remote equality. Then create and dry-run the separately approved CT026
+eight-target categorical stress configuration without changing any other
+scientific setting. If all target/split diagnostics pass, launch it detached
+from an ordinary terminal. Require every requested fit cell to be valid and no
+convergence-warning reason before using its measurements to propose the exact
+WP11 resource block and tests-first implementation plan for user approval.
 
 ### Authority order
 
@@ -153,7 +151,7 @@ When resuming, use this order:
 | WP10A measurement instrumentation | Complete: RED `fb0278a`, supplement `cc0cf7d`, GREEN `1153115` | None |
 | WP10B CT026 preflight/benchmark | Complete: v1 run validated; 2,400 calls measured; 687 categorical convergence failures exposed | Superseded by revision-6 evidence |
 | WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence remains the WP10 gate |
-| WP10D competing-owner lifecycle repair | Complete: RED `c1a64aa`, supplement `b201711`, GREEN `4f131f7`, handoff `77ff461` | Validate the launched clean bounded v2 run, then categorical stress |
+| WP10D competing-owner lifecycle repair | Complete: RED `c1a64aa`, supplement `b201711`, GREEN `4f131f7`, handoff `77ff461`; clean bounded run accepted | Run the approved eight-target categorical stress gate |
 | WP11 single-session cluster path | Required after WP10 local gates; architecture selected, source not started | Approve exact benchmark-derived directives and tests-first plan; implement with mocks only |
 | WP12 CT026 one-session cluster validation | Required after WP11 | Separately approve synthetic smoke, exact transfer, and exact CT026 submission |
 | WP13 bounded cluster batch array | Required after WP12 acceptance; source not started | Implement tests-first per-session concurrency; authorize any real array separately |
@@ -1838,6 +1836,37 @@ Use this template for each appended record:
   the approved categorical stress run, and then propose the exact WP11 Slurm
   directives, owned files, RED tests, and validation commands for user
   approval before implementation.
+
+#### 2026-10-07 - WP10D clean bounded v2 acceptance
+
+- State: the replacement run
+  `task_variable_decoding_2026-10-07T19-29-08Z` completed and passed the clean
+  bounded revision-6 acceptance gate.
+- One-shot validation: `status --verify-results` reported lifecycle
+  `complete`, `final_results_published=true`, empty `last_error`, valid result
+  validation, both expected completed targets, and no warnings. Direct NPZ
+  inspection found 2,400/2,400 `fit_status` cells equal to `valid` and no
+  nonempty fit-reason code.
+- Resource evidence: the run requested and measured 2,400 estimator calls,
+  completed in 1,008.113 seconds wall time, used 874.181 seconds user CPU and
+  120.207 seconds system CPU (0.986 CPU efficiency), peaked at 983,080,960
+  bytes RSS, and wrote 62,591,329 bytes. Activity construction took 4.420
+  seconds and modeling took 999.851 seconds.
+- Target evidence: `current_action` completed 1,200/1,200 valid cells in
+  902.309 seconds; `relative_doubt` completed 1,200/1,200 valid cells in
+  97.134 seconds. The categorical workload remains the dominant resource and
+  wall-time driver.
+- Inputs/outputs: the inspection was read-only and changed neither the run nor
+  experimental inputs. The immutable accepted run remains at
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference/analysis_runs/task_variable_decoding_2026-10-07T19-29-08Z`.
+- Gate decision: WP10D is accepted. The remaining pre-WP11 scientific gate is
+  the already approved local run containing exactly the eight canonical
+  categorical targets, with every other bounded configuration setting held
+  fixed. Its dry run must accept all targets and grouped folds; its completed
+  result must contain no convergence-warning cell.
+- Exact next action: push the documentation/evidence commits, prove exact
+  remote equality, create the stress configuration beside the bounded config,
+  run its read-only dry run, and present the exact detached launch command.
 
 ## 1. Objective
 
