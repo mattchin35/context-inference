@@ -1,7 +1,6 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP3 tests are committed RED and its
-activity implementation is next.
+**Status:** Implementation authorized; WP3 is GREEN and WP4 tests are next.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -11,21 +10,22 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-06
 
-**Current phase:** WP0-WP2 are complete. WP3's reviewed synthetic activity
-suite is committed at `6e45ebf` and is genuinely RED solely because
-`activity.py` does not yet exist. The WP3 implementation is the single next
-package. No experimental-data mutation, decoding output, benchmark, transfer,
-local long run, or cluster action is authorized.
+**Current phase:** WP0-WP3 are complete. WP3 tests are committed at `6e45ebf`
+and the activity implementation is committed at `d668250`; focused and
+affected loader/tensor regressions are GREEN. WP4 grouped-modeling RED tests
+and their independent numerical-design review are the single next package. No
+experimental-data mutation, decoding output, benchmark, transfer, local long
+run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
 - local implementation HEAD:
-  `6e45ebfb17074a332f41502dbf48e1fc756f3d61`;
+  `d6682504f5f42f1a46e40838597201619a446f77`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
-  `fda0399`, and `ceb9b28`;
-- the tracked worktree is clean after the WP3 tests-only commit; and
+  `fda0399`, `ceb9b28`, and `5c97d9a`;
+- the tracked worktree is clean after the WP3 implementation commit; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -54,9 +54,10 @@ local long run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this WP3 RED handoff separately, then assign the
-same worker only `activity.py`; reproduce focused GREEN and affected loader /
-tensor regressions before any WP4 work.
+**Next exact action:** commit this WP3 GREEN handoff separately, then have a
+Terra xhigh worker write only WP4 grouped-modeling RED tests. An independent
+Sol xhigh reviewer must audit leakage and validity coverage before the
+tests-only commit and before any `modeling.py` implementation.
 
 ### Authority order
 
@@ -79,8 +80,8 @@ When resuming, use this order:
 | WP0 documentation approval | Complete at pushed `b69c70a` | None |
 | WP1 behavioral feature | Complete: RED `acf24ae`, GREEN `8ea4d24` | None; CT026 backfill remains separately gated at WP9A |
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
-| WP3 activity loading and coverage | RED tests committed at `6e45ebf` | Implement only `activity.py`, then verify focused and affected tests |
-| WP4 grouped modeling | Pending prerequisite | WP3 GREEN and independent numerical test-design review |
+| WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
+| WP4 grouped modeling | Ready for tests-only RED | Terra xhigh tests plus independent Sol xhigh leakage/validity review before commit |
 | WP5 results and session pipeline | Pending prerequisite | WP4 GREEN and saved-schema freeze |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
 | WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
@@ -529,6 +530,48 @@ Use this template for each appended record:
   same worker implement only
   `src/neural_analysis/task_decoding/activity.py` and report focused GREEN
   without committing.
+
+#### 2026-10-06 - WP3 GREEN gate
+
+- State: WP3 activity loading and coverage are complete; WP4 tests and their
+  independent numerical-design review are next.
+- Authorization: project implementation was authorized. Work used only
+  source-controlled code and pytest temporary synthetic fixtures; no
+  experimental-data, decoding, benchmark, transfer, or scheduler action was
+  performed.
+- Sol / Terra / reviewer: primary Sol supervisor / the same Terra high worker /
+  Sol production, loader-API, and scientific-contract review.
+- Start HEAD / end HEAD: RED handoff `5c97d9a` / implementation commit
+  `d6682504f5f42f1a46e40838597201619a446f77`.
+- Owned files: created only
+  `src/neural_analysis/task_decoding/activity.py`; the committed WP3 test file
+  was not changed during GREEN and all pre-existing untracked files were
+  preserved.
+- RED command and result: the committed `test_activity.py` suite stopped at
+  one collection error because `activity.py` did not exist.
+- GREEN/regression commands and results: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
+  src/tests/neural_analysis/task_decoding -q` passed 143 tests. The affected
+  channel-quality/population-PCA/session-metadata group passed 57 tests, and
+  the affected unit-loading/spike-Pynapple/package group passed 90 tests.
+  `uv run python -m py_compile` for `activity.py`, `config.py`, and
+  `targets.py`, the staged whitespace check, and the new-source line-length
+  check also passed. Pynapple emitted only its existing tiny-fixture interval
+  and zero-duration time-support warnings.
+- Commits: tests-only `6e45ebf`; implementation `d668250`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: the synthetic representative tensors are
+  PFC `(3, 4, 2)` and HPC `(3, 4, 2)` on common trial/time axes. The dry
+  allocation inputs are 3 tensor trials, 4 bins, 2 PFC units, and 2 HPC units,
+  yielding exactly 384 float64 tensor bytes; eight source-file sizes remain
+  separate I/O/provenance facts. Injected budgets verified local-only 1000
+  bytes, scheduled minimum 800 bytes, login-approved 900 bytes, the inclusive
+  400-of-800-byte threshold, the 401-byte rejection, and unknown-budget
+  rejection. No claim about real-session memory or runtime is made.
+- Exact next action: commit this documentation-only GREEN handoff, then write
+  only WP4 grouped-modeling RED tests with Terra xhigh. An independent Sol
+  xhigh review must approve leakage, fit-reuse, validity, component-limit, and
+  coefficient coverage before the tests-only commit.
 
 ## 1. Objective
 
