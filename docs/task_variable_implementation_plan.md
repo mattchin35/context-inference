@@ -1,6 +1,6 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP1-WP10B are complete, including the
+**Status:** Implementation authorized; WP1-WP10C are complete, including the
 single-session and batch CLIs, saved-result webapp, portable example, user/
 maintainer documentation, seeded synthetic end-to-end gate, and the separately
 approved CT026 `rewards_in_block` table preparation. WP10B measured the bounded
@@ -16,10 +16,12 @@ normative amendment `docs/task_variable_spec_v6.md`.
 
 **Snapshot date:** 2026-10-07
 
-**Current phase:** WP0-WP10B are complete. WP10C revision-6 convergence repair
-is locally complete under explicit user approval: RED is committed at
-`ba47795` and GREEN production at `6f9c721`. The v2 bounded CT026 rerun has not
-started and remains gated on a clean pushed source identity. WP4 grouped-modeling tests are
+**Current phase:** WP0-WP10C are complete. The first v2 bounded run proved the
+convergence repair but exposed a competing-resume lifecycle defect during
+diagnosis. The approved WP10D lifecycle repair is locally complete: RED is
+committed at `c1a64aa` with race-provenance supplement `b201711`, and GREEN at
+`4f131f7`. One clean bounded v2 rerun remains gated on pushed clean source.
+WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
@@ -54,9 +56,9 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local WP10C production HEAD:
-  `6f9c72196e0ef9aa6d513db93cb2ac7a91740a11`;
-- `origin/refactor`: `b327d36c551ac154f038bb8b67f847d8d02af7bc`;
+- local WP10D production HEAD:
+  `4f131f7924e7d8a6349ab519aa8b33811ef08305`;
+- `origin/refactor`: `aade4cd701998e0394da624fa18a18e02a776dee`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -98,12 +100,12 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this handoff, push `ba47795`, `6f9c721`, and the
-handoff commit, and verify exact remote equality plus a tracked-clean source.
-Then dry-run and rerun the same bounded CT026 configuration under v2. Require
-all 1,200 `current_action` cells and all 1,200 `relative_doubt` cells to be
-valid before the separately approved local eight-target categorical stress
-validation. Do not begin WP11 cluster work.
+**Next exact action:** commit this handoff, push `c1a64aa`, `b201711`,
+`4f131f7`, and the handoff commit, and verify exact remote equality plus a
+tracked-clean source. Then dry-run and rerun the same bounded CT026
+configuration once under the repaired lifecycle. Require a valid complete
+state with empty `last_error` and all 2,400 cells valid before the separately
+approved local eight-target categorical stress validation. Do not begin WP11.
 
 ### Authority order
 
@@ -137,7 +139,8 @@ When resuming, use this order:
 | WP9A CT026 augmented-table preparation | Complete: mode RED `b322427`, fix `cdb04d9`, validated backup and table | None |
 | WP10A measurement instrumentation | Complete: RED `fb0278a`, supplement `cc0cf7d`, GREEN `1153115` | Push exact commits before real-session evidence |
 | WP10B CT026 preflight/benchmark | Complete: v1 run validated; 2,400 calls measured; 687 categorical convergence failures exposed | Revision-6 local repair and replacement benchmark |
-| WP10C revision-6 convergence repair | Locally complete: RED `ba47795`, GREEN `6f9c721` | Push exact commits, rerun bounded v2 gate, then local categorical stress gate |
+| WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence required before stress gate |
+| WP10D competing-owner lifecycle repair | Locally complete: RED `c1a64aa`, supplement `b201711`, GREEN `4f131f7` | Push exact commits and produce one clean bounded v2 run |
 | WP11 single-session cluster path | Not authorized | WP10 evidence and user choice justify cluster convenience/cost; user approves wrapper/transfer work |
 | WP12 CT026 scientific inspection | Not authorized | User accepts benchmark and authorizes exact run |
 | WP13 cluster batch-array follow-up | Deferred end-job and not authorized | WP12 accepted; resource profile finalized; user approves batch work |
@@ -1720,6 +1723,69 @@ Use this template for each appended record:
   terminal. Stop if any of its 2,400 cells is invalid; otherwise compare the
   overlapping v1/v2 valid cells and proceed to the separately approved local
   eight-target categorical stress configuration.
+
+#### 2026-10-07 - WP10C v2 evidence and WP10D ownership lifecycle repair
+
+- State: revision 6 solved the categorical convergence failure. The first v2
+  run is scientifically valid but is not the final operational benchmark
+  because a rejected competing resume wrote a false `last_error` while the
+  original owner remained active. The tests-first lifecycle repair is locally
+  complete; a clean replacement run has not started.
+- Authorization: the user approved local lifecycle debugging, a clean bounded
+  rerun, and continued deferral of cluster work.
+- Sol / Terra / reviewer: primary Codex implemented and reviewed this narrow
+  package directly; no subagent was used.
+- Start HEAD / end HEAD: pushed revision-6 handoff `aade4cd` / lifecycle GREEN
+  `4f131f7` before this documentation handoff.
+- Owned files: `test_pipeline.py` and `pipeline.py`; this handoff updates only
+  the implementation plan. Pre-existing untracked files remain untouched.
+- RED command and result: the focused selection passed three existing
+  post-ownership failure controls and failed four new cases as intended: live
+  receipt and live guard contenders mutated `run_state.json`, an atomic guard
+  race surfaced raw `FileExistsError` after writing contender provenance, and
+  successful completion retained a stale mid-run error. A supplement also
+  froze byte-for-byte preservation of the winner's `execution.json` during an
+  atomic claim loss.
+- GREEN/regression commands and results: the focused ownership matrix passed
+  17 tests; the complete pipeline module passed 156 tests with one known
+  warning; the full task-decoding plus documentation suite passed 823 tests
+  with six known warnings in 162.28 seconds. Package compilation and
+  `git diff --check` passed.
+- Commits: lifecycle RED `c1a64aa`; winner-provenance test supplement
+  `b201711`; GREEN `4f131f7`.
+- Implementation: `_ExecutionOwnershipConflict` distinguishes rejection by a
+  live/foreign owner from a failure owned by the current invocation. A worker
+  now claims the exclusive guard before publishing its PID/start token, so a
+  losing contender cannot overwrite winner provenance. Ownership conflicts
+  propagate without changing lifecycle/resource state. Genuine errors after
+  claim retain the existing failed/interrupted publication and guard release.
+  Valid final publication explicitly clears `last_error`.
+- V2 scientific evidence: run
+  `task_variable_decoding_2026-10-07T18-35-21Z` passed full result validation
+  and produced 2,400/2,400 valid cells. All 687 formerly unavailable
+  `current_action` cells converged. The 513 formerly valid categorical cells
+  had exactly equal scores, coefficients, intercepts, and NaN patterns under
+  v1/v2; the complete numerical target output was exactly equal. Stable
+  target, row, fold, count, and feature arrays were also exactly equal.
+- V2 measured resources: 896.584 seconds wall time, 803.954 seconds user CPU,
+  90.038 seconds system CPU, 0.997 CPU efficiency, 984,301,568 bytes peak RSS,
+  and 62,590,932 output bytes. `current_action` used 813.427 seconds and
+  `relative_doubt` 77.107 seconds.
+- Operational contamination: sandbox PID visibility initially classified the
+  user-launched owner as dead. The escalated competing resume correctly found
+  the live guard, but the old broad error handler marked the shared run failed;
+  the original owner later completed and published valid results while the
+  false `last_error` remained. No result array or scientific input was changed.
+- Real-data or external actions: the approved v2 bounded run read CT026 neural
+  inputs and wrote only its timestamped analysis directory. Subsequent work
+  read the two immutable benchmark runs for comparison. No behavior input,
+  transfer, network operation, or scheduler action occurred.
+- Exact next action: commit this handoff and push all four WP10D commits. After
+  exact remote equality and tracked cleanliness, repeat the bounded dry run
+  and launch one new v2 run. Accept it only if lifecycle is complete,
+  `final_results_published` is true, `last_error` is empty, result validation
+  is valid, and all 2,400 cells are valid. Then plan the already approved local
+  eight-target categorical stress run; do not begin WP11.
 
 ## 1. Objective
 
