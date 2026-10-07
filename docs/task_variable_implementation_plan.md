@@ -1,13 +1,13 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP1-WP9A are complete, including the
+**Status:** Implementation authorized; WP1-WP9A and WP10A are complete, including the
 single-session and batch CLIs, saved-result webapp, portable example, user/
 maintainer documentation, seeded synthetic end-to-end gate, and the separately
-approved CT026 `rewards_in_block` table preparation. WP9 required no production
-change because its final scientific contracts already passed. WP9A added only
-the approved backup and one validated column. This does not authorize neural
-loading, decoding runs, benchmarks, transfer, or scheduler actions, which
-retain their separate gates below.
+approved CT026 `rewards_in_block` table preparation. WP10A adds atomic runtime
+resource evidence and bounded dry-run target diagnostics but has not read CT026
+neural arrays. The approved WP10B bounded config/dry-run/benchmark procedure is
+next only after the exact WP10A commits are pushed. Full decoding, transfer,
+and scheduler actions retain their separate gates below.
 
 **Scientific contract:** `docs/task_variable_spec_v5.md`.
 
@@ -15,7 +15,7 @@ retain their separate gates below.
 
 **Snapshot date:** 2026-10-07
 
-**Current phase:** WP0-WP9A are complete. WP4 grouped-modeling tests are
+**Current phase:** WP0-WP9A and WP10A are complete. WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
@@ -33,17 +33,21 @@ contracts are committed through `827989c`, and WP6 GREEN is committed at
 `7d6b4a8`. WP7 plotting/webapp contracts and review supplements are committed
 through `0c6ce07`, and WP7 GREEN is committed at `ef7ad55`. WP8 tests are
 committed through `a1c1f5c`, the dry-run JSON correction is `b2b3dde`, and the
-documentation/example GREEN commit is `8b92c4f`. No experimental-data
-mutation, benchmark, transfer, local long run, or cluster action is authorized.
+documentation/example GREEN commit is `8b92c4f`. No further experimental-data
+mutation, full decoding run, transfer, or cluster action is authorized; only
+the approved bounded WP10B benchmark may proceed after the push/clean-source
+gate.
 WP9's characterization-only synthetic integration gate is committed at
 `9ea0109`. WP9A's permission regression and fix are committed at `b322427` and
 `cdb04d9`; the CT026 table and its exact backup passed post-write validation.
+WP10A resource-measurement RED contracts are committed at `fb0278a`, the
+schema-consistency supplement at `cc0cf7d`, and GREEN production at `1153115`.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local WP9A production HEAD: `cdb04d9`;
-- `origin/refactor`: `895be6825327e78af977a0489739665dbe38ed8c`;
+- local WP10A production HEAD: `115311551acbac4ab32d77b86dbbe5667b2bdaba`;
+- `origin/refactor`: `7c59e862019696d85a91e7639375521cf65effc5a`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -55,7 +59,8 @@ WP9's characterization-only synthetic integration gate is committed at
   `ef7ad55`; WP8 documentation and portable examples are complete through
   GREEN commit `8b92c4f`; WP9 synthetic integration is complete through
   characterization commit `9ea0109`; WP9A table preparation is complete after
-  permission-preservation commits `b322427` and `cdb04d9`; and
+  permission-preservation commits `b322427` and `cdb04d9`; WP10A measurement
+  instrumentation is complete through GREEN `1153115`; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -84,11 +89,13 @@ WP9's characterization-only synthetic integration gate is committed at
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** propose the exact WP10 bounded CT026 configuration,
-read-only dry run, detached synthetic launcher smoke, and 2,400-fit fixed-mode
-benchmark procedure, then obtain separate user approval before creating the
-configuration or executing any command. WP10 does not authorize a full run,
-transfer, or scheduler action.
+**Next exact action:** commit this handoff and push `fb0278a`, `cc0cf7d`,
+`1153115`, and the handoff commit to `origin/refactor`. After verifying exact
+remote equality, create the already approved external WP10 bounded config and
+run only its read-only dry run. Stop if either target lacks eligible rows or a
+valid grouped outer plan; otherwise run the synthetic detached smoke and then
+launch the authorized 2,400-fit fixed benchmark. WP10 does not authorize a
+full run, transfer, or scheduler action.
 
 ### Authority order
 
@@ -119,7 +126,8 @@ When resuming, use this order:
 | WP8 documentation and examples | Complete: RED `c1cda3b`, corrections through `a1c1f5c`, JSON fix `b2b3dde`, GREEN `8b92c4f` | None |
 | WP9 synthetic integration | Complete: characterization-only test gate `9ea0109` | None |
 | WP9A CT026 augmented-table preparation | Complete: mode RED `b322427`, fix `cdb04d9`, validated backup and table | None |
-| WP10 CT026 preflight/benchmark | Not authorized | WP9A validation passes plus explicit real-session benchmark approval |
+| WP10A measurement instrumentation | Complete: RED `fb0278a`, supplement `cc0cf7d`, GREEN `1153115` | Push exact commits before real-session evidence |
+| WP10B CT026 preflight/benchmark | Authorized, not started | Verify pushed clean source, then create bounded config and run dry-run stop conditions |
 | WP11 single-session cluster path | Not authorized | WP10 evidence and user choice justify cluster convenience/cost; user approves wrapper/transfer work |
 | WP12 CT026 scientific inspection | Not authorized | User accepts benchmark and authorizes exact run |
 | WP13 cluster batch-array follow-up | Deferred end-job and not authorized | WP12 accepted; resource profile finalized; user approves batch work |
@@ -1582,6 +1590,73 @@ Use this template for each appended record:
   resource-measurement contract, detached ownership behavior, and stop
   conditions. Obtain explicit user approval before creating the bounded config
   or reading CT026 neural inputs.
+
+#### 2026-10-07 - WP10A resource-measurement instrumentation GREEN gate
+
+- State: WP10A is complete. The pipeline now produces validated atomic
+  `resource_usage.json` snapshots after every target checkpoint and on
+  completion, failure, or interruption. No CT026 neural array was opened and
+  the bounded real-session benchmark has not started.
+- Authorization: the user approved the WP10A/WP10B plan, including tests-first
+  measurement instrumentation, a later external bounded config, read-only
+  dry-run stop conditions, one synthetic detached smoke, and the 2,400-fit
+  local fixed benchmark. Full 18-target decoding, tuned benchmarking, transfer,
+  and Slurm work remain outside this authorization.
+- Sol / Terra / reviewer: primary Codex implemented and reviewed this bounded
+  package directly; no subagent was used. The final suite and strict schema
+  consistency checks provide the executable gate for this slice.
+- Start HEAD / end HEAD: pushed WP9A handoff
+  `7c59e862019696d85a91e7639375521cf65effc5a` / WP10A production
+  `115311551acbac4ab32d77b86dbbe5667b2bdaba` before this documentation-only
+  handoff.
+- Owned files: added
+  `src/neural_analysis/task_decoding/resource_usage.py` and its focused test;
+  extended `activity.py`, `modeling.py`, `pipeline.py`, `run_batch.py`, the
+  activity/modeling/pipeline/batch/synthetic/documentation tests, and both
+  neural-analysis READMEs. Pre-existing untracked files remain untouched.
+- RED commands and results: the initial focused contract run reported ten
+  intended failures and nine passes: missing measurement module, missing dry
+  row/fold diagnostics, unsupported timing callback, and acceptance of partial
+  batch evidence. A later schema supplement independently failed on a negative
+  nested estimator count before the validator was tightened.
+- GREEN/regression commands and results: the focused WP10 selection passed 59
+  tests in 16.72 seconds. After schema tightening, resource/batch/detached
+  tests passed 29 tests and the seeded integration file passed eight tests.
+  The final complete task-decoding plus documentation suite passed 816 tests
+  with the same six known warnings in 90.08 seconds. Package compilation and
+  `git diff --check` passed.
+- Commits: initial RED `fb0278a`; evidence-consistency tests supplement
+  `cc0cf7d`; GREEN production and maintainer/scientist documentation `1153115`.
+- Measurement contract: Linux `ru_maxrss` is normalized from KiB to bytes;
+  wall/user/system CPU totals accumulate across resume while peak RSS uses the
+  maximum. Target records separate split, PFC/HPC transform, feature-building,
+  and estimator timing by region/representation. Restored checkpoints without
+  historical evidence are explicitly timing-unavailable rather than assigned
+  fabricated values. Completed evidence must cover the exact target envelope
+  and its nested/aggregate fit counts must agree before batch admission.
+- Dry-run contract: `ActivityDryRunReport` now exposes bilateral full-table row
+  positions. Planning reports, in configured order, target family, common
+  eligible row count, block count, categorical class counts or numerical
+  range, and grouped outer-plan availability/reason without reading sorter
+  spike arrays or fitting models.
+- Synthetic/detached evidence: three real seeded foreground runs published
+  complete measurement evidence, and an actual Linux detached child published
+  the same atomic schema through the production launcher. These were pytest
+  temporary outputs only.
+- Real-data or external actions: none. No CT026 config was created, no CT026
+  neural source was opened, and no benchmark, transfer, network, or scheduler
+  action occurred.
+- Findings and unresolved risks: the new evidence measures the exact executing
+  process and is suitable for the bounded local projection, but it does not
+  make a full-runtime projection by itself. WP10B must still verify both target
+  split diagnostics, then record observed target-family throughput, CPU
+  efficiency, peak RSS, and output bytes. The local commits are four commits
+  ahead only after this handoff and must be pushed before persistent evidence
+  is launched.
+- Exact next action: commit this handoff, have the user push the four WP10A
+  commits, verify `HEAD == origin/refactor`, then create the approved bounded
+  CT026 config and run only the recorded dry-run command. Stop on any target
+  diagnostic failure rather than substituting a target.
 
 ## 1. Objective
 
