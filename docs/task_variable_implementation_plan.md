@@ -25,11 +25,11 @@ diagnosis. The approved repair is committed through `77ff461`, pushed, and
 tracked-clean. The clean bounded v2 rerun
 `task_variable_decoding_2026-10-07T19-29-08Z` passed its one-shot lifecycle,
 result, and convergence validation. The approved local eight-target
-categorical stress gate is next; after that evidence, implementation proceeds
-through WP11 single-session Slurm support, WP12 one-session cluster validation,
-and WP13 per-session job arrays. The implementation path is selected; each
-real transfer or scheduler submission is still approved separately from
-source implementation.
+categorical stress gate also passed with all 9,600 cells valid. WP10 is now
+complete. The exact WP11 single-session Slurm resource block and tests-first
+implementation plan are ready for approval; WP12 one-session cluster
+validation and WP13 per-session job arrays follow. Each real transfer or
+scheduler submission is still approved separately from source implementation.
 WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
@@ -66,9 +66,9 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local documentation HEAD before this evidence update:
-  `0778320`;
-- `origin/refactor`: `77ff4615017be5a8182c4581789280a452b0368e`;
+- local and remote documentation/evidence HEAD before this update:
+  `12e548d7f47d2f9e3029679c1a806814d03cd70a`;
+- `origin/refactor`: `12e548d7f47d2f9e3029679c1a806814d03cd70a`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -110,13 +110,11 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** push the documentation/evidence handoff and verify exact
-remote equality. Then create and dry-run the separately approved CT026
-eight-target categorical stress configuration without changing any other
-scientific setting. If all target/split diagnostics pass, launch it detached
-from an ordinary terminal. Require every requested fit cell to be valid and no
-convergence-warning reason before using its measurements to propose the exact
-WP11 resource block and tests-first implementation plan for user approval.
+**Next exact action:** review and approve the exact WP11 resource block and
+tests-first implementation plan recorded below. After approval, write and
+commit the Section 10.11 mocked scheduler/transfer/signal RED tests before any
+production implementation. No cluster transfer, `sbatch`, `sacct`, SSH,
+network, or experimental computation is part of WP11 source implementation.
 
 ### Authority order
 
@@ -151,8 +149,8 @@ When resuming, use this order:
 | WP10A measurement instrumentation | Complete: RED `fb0278a`, supplement `cc0cf7d`, GREEN `1153115` | None |
 | WP10B CT026 preflight/benchmark | Complete: v1 run validated; 2,400 calls measured; 687 categorical convergence failures exposed | Superseded by revision-6 evidence |
 | WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence remains the WP10 gate |
-| WP10D competing-owner lifecycle repair | Complete: RED `c1a64aa`, supplement `b201711`, GREEN `4f131f7`, handoff `77ff461`; clean bounded run accepted | Run the approved eight-target categorical stress gate |
-| WP11 single-session cluster path | Required after WP10 local gates; architecture selected, source not started | Approve exact benchmark-derived directives and tests-first plan; implement with mocks only |
+| WP10D competing-owner lifecycle repair and local acceptance | Complete: lifecycle repair through `77ff461`; clean 2,400-cell bounded run and 9,600-cell categorical stress run accepted | None |
+| WP11 single-session cluster path | Required; measured resource block and tests-first plan ready, source not started | User approves exact directives and plan; implement with mocks only |
 | WP12 CT026 one-session cluster validation | Required after WP11 | Separately approve synthetic smoke, exact transfer, and exact CT026 submission |
 | WP13 bounded cluster batch array | Required after WP12 acceptance; source not started | Implement tests-first per-session concurrency; authorize any real array separately |
 
@@ -1867,6 +1865,70 @@ Use this template for each appended record:
 - Exact next action: push the documentation/evidence commits, prove exact
   remote equality, create the stress configuration beside the bounded config,
   run its read-only dry run, and present the exact detached launch command.
+
+#### 2026-10-07 - WP10 categorical stress acceptance and WP11 resource proposal
+
+- State: the exact eight-target categorical stress run
+  `task_variable_decoding_2026-10-07T19-50-38Z` completed and passed the final
+  pre-WP11 scientific gate. WP10 is complete; WP11 source has not started.
+- One-shot validation: `status --verify-results` reported lifecycle
+  `complete`, published valid results, empty `last_error`, all eight expected
+  completed targets, and no warnings. Direct NPZ inspection found
+  9,600/9,600 `fit_status` cells equal to `valid` and no nonempty reason code.
+- Determinism: every saved target-dependent scientific array for the shared
+  `current_action` target was byte-for-byte/value-for-value equal to the clean
+  bounded run, including scores, fold assignments, eligibility, coefficients,
+  intercepts, counts, statuses, and fixed parameters.
+- Measured resources: wall time was 6,352.307 seconds, user CPU 6,139.717
+  seconds, system CPU 200.960 seconds, CPU efficiency 0.998, peak RSS
+  978,534,400 bytes, and output size 293,248,510 bytes. Modeling used
+  6,346.161 seconds. Per-target totals ranged from 735.519 to 854.896 seconds.
+- Full fixed-mode projection: retain the measured complete eight-categorical
+  total and add ten times the measured 97.134-second representative numerical
+  target, yielding 7,323.649 seconds (2.034 hours). For the first-job
+  conservative bound, use eight times the slower independently measured
+  902.309-second categorical target plus ten numerical targets and bounded
+  overhead: 8,199.818 seconds (2.278 hours). Twice that bound rounded upward
+  to an hour gives a five-hour request.
+- Memory projection: the measured eight-target result arrays contain
+  43,232,976 target-dependent bytes. Scaling their exact per-target capacity to
+  all 18 targets adds 54,041,220 bytes to the measured peak, for a projected
+  peak of 1,032,575,620 bytes. The Section 12.6 candidates are 1,548,863,430
+  bytes at 1.5 times peak, 3,180,059,268 bytes at peak plus 2 GiB, and
+  193,903,360 bytes at twice the exact tensor allocation. The maximum rounds
+  upward to a 3 GiB Slurm request.
+- Proposed frozen directives: partition `unlimited`, job name
+  `task_decoding`, one task, one CPU per task, `--mem=3G`,
+  `--time=05:00:00`, `--signal=B:TERM@300`, log
+  `/gs/gsfs0/users/mchin1/logs/task_decoding_%j.log`, mail type `ALL`, and mail
+  user `matthew.chin@einsteinmed.edu`. OMP, MKL, and OpenBLAS remain one thread.
+- WP11 architecture: add a thin self-submitting
+  `src/shell_scripts/task_variable_decoding_slurm.sh`; add one standard-library
+  `task_decoding/slurm.py` operational module for immutable submission receipts,
+  `sbatch`/one-shot `sacct` interaction, effective Slurm/cgroup memory limits,
+  and JSON-safe status; extend `run_session.py` only for explicit Slurm
+  preparation and TERM-to-durable-interruption handling; keep bounded atomic
+  lifecycle transitions in `pipeline.py`; and update both neural READMEs.
+  Scientific configuration, fitting, checkpointing, and results remain in the
+  existing runner and are not duplicated.
+- Dependencies: no Python dependency is added. Runtime tools are Bash, Git,
+  existing `uv`, Slurm `sbatch`/`sacct`, and documented manual `rsync`.
+- RED ownership: create `test_slurm.py` for the Section 10.11 scheduler,
+  repository/environment, memory, receipt-race, status, and transfer-contract
+  cases; extend `test_pipeline.py` for signal durability and the private
+  prepare/execute seam; extend `test_task_decoding_documentation.py` for exact
+  commands and safe rsync prose. Tests use fake commands and temporary data;
+  they never invoke Slurm, SSH, rsync, network access, or experimental data.
+- Performance boundary: WP11 remains one CPU and one session per allocation.
+  It adds no within-session process/thread parallelism. Cross-session
+  concurrency remains required WP13 work after one cluster session validates
+  the wrapper and measured resource profile.
+- External effects: acceptance inspection was read-only. No transfer,
+  scheduler, SSH, network, or new computation occurred. The new stress config
+  and run remain beside the CT026 session; repository source is unchanged.
+- Exact next action: obtain user approval of the directives and tests-first
+  architecture, commit RED tests, reproduce the intended failures, and stop
+  for the tests-only gate before implementing production.
 
 ## 1. Objective
 
