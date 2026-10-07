@@ -2220,3 +2220,952 @@ assert any('pipeline' in name for name in seen)
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_wp5b_detached_child_consumes_its_matching_receipt_before_guard(
+    monkeypatch,
+    tmp_path,
+):
+    """A detached child must consume its own published receipt, then claim its guard."""
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="detached")
+    execution = read_json(run_directory / "execution.json")
+    owner = {
+        "mode": "detached",
+        "host": platform.node(),
+        "pid": os.getpid(),
+        "start_token": pipeline._process_start_token(os.getpid()),
+        "started_at": "2026-10-07T00:00:00Z",
+        "job_id": None,
+    }
+    (run_directory / "local_launch.json").write_text(json.dumps(owner), encoding="utf-8")
+    real_claim = pipeline._claim_execution_guard
+
+    def claim_after_receipt(directory, *, owner):
+        """Prove the receipt remains durable until its child claims the guard."""
+        assert (directory / "local_launch.json").exists()
+        claimed = real_claim(directory, owner=owner)
+        assert (directory / "execution_guard.json").exists()
+        assert (directory / "local_launch.json").exists()
+        return claimed
+
+    def fail_after_handoff(*_args, **_kwargs):
+        """Stop after checking that claim and receipt handoff leave no unowned gap."""
+        assert (run_directory / "execution_guard.json").exists()
+        assert not (run_directory / "local_launch.json").exists()
+        raise AssertionError("guarded operation")
+
+    monkeypatch.setattr(pipeline, "_current_owner", lambda _execution: owner)
+    monkeypatch.setattr(pipeline, "_claim_execution_guard", claim_after_receipt)
+    monkeypatch.setattr(pipeline.activity, "load_region_activity", fail_after_handoff)
+    with pytest.raises(AssertionError, match="guarded operation"):
+        pipeline.run_prepared_task_decoding(run_directory)
+    assert execution["mode"] == "detached"
+
+
+def test_wp5b_second_detached_resume_refuses_before_popen(monkeypatch, tmp_path):
+    """An active detached receipt rejects immediate resume without starting another child."""
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="detached")
+    (run_directory / "local_launch.json").write_text(
+        json.dumps(
+            {
+                "mode": "detached",
+                "host": platform.node(),
+                "pid": os.getpid(),
+                "start_token": pipeline._process_start_token(os.getpid()),
+                "started_at": "2026-10-07T00:00:00Z",
+                "job_id": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[object] = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: calls.append("popen"))
+    assert run_session.main(["resume", "--run-directory", str(run_directory), "--detach"]) != 0
+    assert calls == []
+
+
+@pytest.mark.parametrize("wait_timeout", (False, True))
+def test_wp5b_receipt_replace_failure_terminates_child(monkeypatch, tmp_path, wait_timeout):
+    """Receipt failure terminates/reaps a child, escalating to kill after bounded wait timeout."""
+    run_directory = tmp_path / "run"
+    run_directory.mkdir()
+    calls: list[str] = []
+
+    class FakeProcess:
+        """Bounded fake child recording termination and wait after receipt failure."""
+
+        pid = 4321
+
+        def terminate(self) -> None:
+            """Record child termination requested by failed parent handoff."""
+            calls.append("terminate")
+
+        def wait(self, timeout: float) -> int:
+            """Record bounded reaping of a child whose receipt could not publish."""
+            assert timeout > 0
+            calls.append("wait")
+            if wait_timeout and calls.count("wait") == 1:
+                raise subprocess.TimeoutExpired("child", timeout)
+            return 0
+
+        def kill(self) -> None:
+            """Record escalation when graceful bounded termination does not finish."""
+            calls.append("kill")
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: FakeProcess())
+    monkeypatch.setattr(run_session, "_pipeline_module", lambda: pipeline)
+    monkeypatch.setattr(
+        run_session,
+        "_atomic_receipt",
+        lambda *_a, **_k: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+    with pytest.raises(OSError, match="replace failed"):
+        run_session._launch_detached_prepared(
+            run_directory=run_directory,
+            child_argv=[sys.executable, "-c", "pass"],
+        )
+    expected_calls = (
+        ["terminate", "wait"]
+        if not wait_timeout
+        else ["terminate", "wait", "kill", "wait"]
+    )
+    assert calls == expected_calls
+
+
+def test_wp5b_preflight_never_checkpoints_before_common_tensor_rows(monkeypatch, tmp_path):
+    """Preflight cannot declare rows unavailable before bilateral common-row coverage."""
+    values = np.array([0, 0, 1, 1, 0, 1, 0, 1, 0, 1], dtype=float)
+    blocks = np.repeat(np.arange(5), 2)
+    assert not modeling.make_outer_splits(
+        values,
+        blocks,
+        target_family="categorical",
+        fold_count=3,
+    ).is_available
+    assert modeling.make_outer_splits(
+        values[2:],
+        blocks[2:],
+        target_family="categorical",
+        fold_count=3,
+    ).is_available
+    paths = write_session_inputs(tmp_path)
+    config = replace(decoding_config.load_task_decoding_config(paths["config"]), outer_fold_count=3)
+    table = pd.DataFrame(
+        {
+            "current_action": values,
+            "current_action_valid": np.ones(values.size, dtype=bool),
+            "relative_doubt": np.ones(values.size, dtype=float),
+            "relative_doubt_valid": np.ones(values.size, dtype=bool),
+            "block_id": blocks,
+        }
+    )
+    run_directory = tmp_path / "run"
+    (run_directory / "checkpoints").mkdir(parents=True)
+    existing = {"relative_doubt": make_coherent_model_records(paths)["records"][1]}
+    result = pipeline._preflight_structurally_unavailable_targets(
+        config=config,
+        target_table=table,
+        existing=existing,
+        run_directory=run_directory,
+        full_fingerprint="test",
+    )
+    assert "current_action" not in result
+    assert not list((run_directory / "checkpoints").iterdir())
+
+
+def test_wp5b_assembly_preserves_dynamic_selection_rules_and_explicit_session_id(tmp_path):
+    """Assembly receives lossless rules and session ID explicitly without filesystem reads."""
+    paths = write_session_inputs(tmp_path)
+    model_inputs = make_coherent_model_records(paths)
+    long_rules = {
+        "channel_labels": ["good"],
+        "require_inside_brain": True,
+        "metadata_unit_channels": [0, 1],
+        "config_channel_ids": [0, 1],
+        "cluster_groups": ["good"],
+    }
+    long_rules["long_explanation"] = "quality rule " * 40
+    canonical_rules = json.dumps(long_rules, sort_keys=True, separators=(",", ":"))
+    assert len(canonical_rules) > 256
+    arrays, meta = pipeline._assemble_run_result_payload(
+        config=model_inputs["config"],
+        target_table=model_inputs["target_table"],
+        rate_tensors=model_inputs["rate_tensors"],
+        region_activity_metadata={
+            "PFC": {"unit_ids": ["probe-pfc:1", "probe-pfc:2"], "selection_rules": long_rules},
+            "HPC": {"unit_ids": ["probe-hpc:1", "probe-hpc:2"], "selection_rules": long_rules},
+        },
+        ordered_target_results=model_inputs["records"],
+        stage_timing_seconds={"targets": 0.1, "activity": 0.2, "modeling": 0.3},
+        input_manifest={"files": {"neural_session": {"relative_path": "neural_session.json"}}},
+        scientific_source={"fingerprint": "source"},
+        execution_provenance={
+            "pid": 123,
+            "start_token": "token",
+            "mode": "foreground",
+            "history": [],
+        },
+        run_fingerprint="fingerprint",
+        session_id="synthetic-session",
+    )
+    assert arrays["unit_selection_rules_json"].dtype.kind == "U"
+    assert arrays["unit_selection_rules_json"].dtype.itemsize // 4 >= len(canonical_rules)
+    assert json.loads(arrays["unit_selection_rules_json"][0]) == long_rules
+    assert meta["provenance"]["session_id"] == "synthetic-session"
+
+
+def test_wp5b_eligibility_distinguishes_target_invalid_from_not_common_rows(tmp_path):
+    """Assembly labels target-invalid rows separately from target-valid rows absent from tensors."""
+    paths = write_session_inputs(tmp_path)
+    model_inputs = make_coherent_model_records(paths)
+    config = replace(model_inputs["config"], target_names=("relative_doubt",))
+    result = model_inputs["records"][1]
+    table = model_inputs["target_table"].copy()
+    table.loc[0, "relative_doubt_valid"] = False
+    tensors = replace(
+        model_inputs["rate_tensors"],
+        trial_row_indices=np.arange(2, 12, dtype=np.int64),
+        trial_ids=np.arange(2, 12, dtype=np.int64),
+        pfc_rate_tensor_hz=model_inputs["rate_tensors"].pfc_rate_tensor_hz[2:],
+        hpc_rate_tensor_hz=model_inputs["rate_tensors"].hpc_rate_tensor_hz[2:],
+    )
+    arrays, _meta = pipeline._assemble_run_result_payload(
+        config=config,
+        target_table=table,
+        rate_tensors=tensors,
+        region_activity_metadata={
+            "PFC": {"unit_ids": ["probe-pfc:1", "probe-pfc:2"], "selection_rules": {}},
+            "HPC": {"unit_ids": ["probe-hpc:1", "probe-hpc:2"], "selection_rules": {}},
+        },
+        ordered_target_results=(result,),
+        stage_timing_seconds={"targets": 0.1, "activity": 0.2, "modeling": 0.3},
+        input_manifest={"files": {"neural_session": {"relative_path": "neural_session.json"}}},
+        scientific_source={"fingerprint": "source"},
+        execution_provenance={},
+        run_fingerprint="fingerprint",
+        session_id="synthetic-session",
+    )
+    assert arrays["eligibility_reason_codes"][0, 0] == "target_ineligible"
+    assert arrays["eligibility_reason_codes"][0, 1] == "not_common"
+
+
+@pytest.mark.parametrize("state", ("UNKNOWN", ""))
+def test_wp5b_slurm_unknown_or_query_failure_never_allows_takeover(monkeypatch, tmp_path, state):
+    """Only explicit terminal Slurm states permit stale-owner replacement after bounded lookup."""
+    owner = {
+        "mode": "slurm",
+        "host": "submit-host",
+        "pid": None,
+        "start_token": None,
+        "started_at": "2026-10-07T00:00:00Z",
+        "job_id": "1234",
+    }
+    assert pipeline._inspect_execution_owner(
+        owner,
+        scheduler_state=lambda _job: state,
+    ) == "foreign_unresolved"
+
+
+@pytest.mark.parametrize("state", ("FAILED", "COMPLETED", "CANCELLED"))
+def test_wp5b_known_terminal_slurm_states_allow_stale_replacement(state):
+    """Explicit terminal scheduler states classify as replaceable rather than foreign/active."""
+    owner = {
+        "mode": "slurm",
+        "host": "submit-host",
+        "pid": None,
+        "start_token": None,
+        "started_at": "2026-10-07T00:00:00Z",
+        "job_id": "1234",
+    }
+    assert pipeline._inspect_execution_owner(
+        owner,
+        scheduler_state=lambda _job: state,
+    ) == "slurm_terminal"
+
+
+def test_wp5b_scheduler_lookup_uses_bounded_timeout(monkeypatch):
+    """A one-shot Slurm query supplies an explicit timeout rather than hanging ownership checks."""
+    observed: dict[str, object] = {}
+
+    def fake_run(*args, **kwargs):
+        """Capture scheduler invocation and return an explicit terminal state."""
+        observed.update(kwargs)
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="COMPLETED\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert pipeline._scheduler_state("1234") == "COMPLETED"
+    assert isinstance(observed.get("timeout"), (int, float))
+    assert observed["timeout"] > 0
+
+
+@pytest.mark.parametrize("failure", ("nonzero", "timeout"))
+def test_wp5b_scheduler_query_failures_are_unknown_and_refuse_takeover(monkeypatch, failure):
+    """Nonzero or timed-out scheduler lookup remains unknown rather than terminal/stale."""
+    if failure == "nonzero":
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args=args[0],
+                returncode=1,
+                stdout="",
+                stderr="scheduler unavailable",
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+            ),
+        )
+    owner = {
+        "mode": "slurm",
+        "host": "submit-host",
+        "pid": None,
+        "start_token": None,
+        "started_at": "2026-10-07T00:00:00Z",
+        "job_id": "1234",
+    }
+    assert pipeline._scheduler_state("1234") == "UNKNOWN"
+    assert pipeline._inspect_execution_owner(owner) == "foreign_unresolved"
+
+
+def test_wp5b_fallback_commands_shell_quote_special_run_paths(capsys, tmp_path):
+    """Status and detached-print fallbacks shell-quote paths when saved command files are absent."""
+    run_directory = tmp_path / "a path with spaces" / "$(unsafe)"
+    run_directory.mkdir(parents=True)
+    (run_directory / "run_state.json").write_text(json.dumps({"lifecycle": "initialized"}))
+    (run_directory / "execution.json").write_text(json.dumps({"mode": "detached"}))
+    (run_directory / "run.log").write_text("log\n")
+    status = pipeline.inspect_task_decoding_status(run_directory)
+    assert shlex.split(status["recovery_command"])[-1] == str(run_directory)
+    run_session._print_detached_success(run_directory, run_directory / "local_launch.json")
+    lines = capsys.readouterr().out.splitlines()
+    resume = next(line.removeprefix("Resume: ") for line in lines if line.startswith("Resume: "))
+    printed_status = next(
+        line.removeprefix("Status: ") for line in lines if line.startswith("Status: ")
+    )
+    assert shlex.split(resume)[-2:] == [str(run_directory), "--detach"]
+    assert shlex.split(printed_status)[-1] == str(run_directory)
+
+
+def test_wp5b_process_start_token_parses_proc_comm_with_spaces(monkeypatch):
+    """Linux /proc stat parsing must read field 22 after the final closing parenthesis."""
+    stat = "123 (name with spaces) S " + " ".join(str(value) for value in range(4, 31))
+
+    class FakeStatPath:
+        """Small /proc stat stand-in returning a command name with embedded spaces."""
+
+        def read_text(self, **_kwargs) -> str:
+            """Return one synthetic proc stat line."""
+            return stat
+
+    class FakeProcPath:
+        """Path-like stand-in that resolves a PID/stat lookup to FakeStatPath."""
+
+        def __truediv__(self, _component):
+            """Return self until the final stat member then provide synthetic text."""
+            return FakeStatPath() if _component == "stat" else self
+
+    monkeypatch.setattr(pipeline, "Path", lambda _path: FakeProcPath())
+    assert pipeline._process_start_token(123) == "22"
+
+
+def test_wp5b_direct_feature_axis_uses_full_region_metadata_order(tmp_path):
+    """Direct-unit arrays retain dropped stable IDs from region metadata rather than fit subsets."""
+    paths = write_session_inputs(tmp_path)
+    model_inputs = make_coherent_model_records(paths)
+    original = model_inputs["records"][0]
+    mutated_records = []
+    for record in original.fold_records:
+        if record.region_configuration == "PFC" and record.representation == "units":
+            mutated_records.append(
+                replace(
+                    record,
+                    feature_ids=("probe-pfc:2",),
+                    coefficients=np.asarray(record.coefficients[-1:], dtype=float),
+                    effective_feature_count=1,
+                )
+            )
+        elif record.region_configuration == "PFC+HPC" and record.representation == "units":
+            mutated_records.append(
+                replace(
+                    record,
+                    feature_ids=("probe-pfc:2", "probe-hpc:1", "probe-hpc:2"),
+                    coefficients=np.asarray(record.coefficients[[1, 2, 3]], dtype=float),
+                    effective_feature_count=3,
+                )
+            )
+        else:
+            mutated_records.append(record)
+    result = replace(original, fold_records=tuple(mutated_records))
+    arrays, _meta = pipeline._assemble_run_result_payload(
+        config=replace(model_inputs["config"], target_names=("current_action",)),
+        target_table=model_inputs["target_table"],
+        rate_tensors=model_inputs["rate_tensors"],
+        region_activity_metadata={
+            "PFC": {
+                "unit_ids": ["probe-pfc:1", "probe-pfc:2"],
+                "selection_rules": {},
+            },
+            "HPC": {"unit_ids": ["probe-hpc:1", "probe-hpc:2"], "selection_rules": {}},
+        },
+        ordered_target_results=(result,),
+        stage_timing_seconds={"targets": 0.1, "activity": 0.2, "modeling": 0.3},
+        input_manifest={"files": {"neural_session": {"relative_path": "neural_session.json"}}},
+        scientific_source={"fingerprint": "source"},
+        execution_provenance={},
+        run_fingerprint="fingerprint",
+        session_id="synthetic-session",
+    )
+    direct_ids = arrays["coefficient_feature_ids"][0, 1, :2].tolist()
+    assert direct_ids == ["probe-pfc:1", "probe-pfc:2"]
+    assert arrays["requested_feature_counts"][0, 0, 1, 0, 0] == 2
+    assert arrays["requested_feature_counts"][0, 1, 1, 0, 0] == 2
+    assert arrays["requested_feature_counts"][0, 2, 1, 0, 0] == 4
+    assert np.isnan(arrays["coefficient_values"][0, 0, 1, 0, 0, 0])
+    assert np.isfinite(arrays["coefficient_values"][0, 0, 1, 0, 0, 1])
+    assert np.isnan(arrays["coefficient_values"][0, 2, 1, 0, 0, 0])
+    assert np.isfinite(arrays["coefficient_values"][0, 2, 1, 0, 0, 1:4]).all()
+
+
+def test_wp5b_equal_width_fold_subsets_keep_distinct_metadata_feature_slots(tmp_path):
+    """Equal-size fold subsets map coefficients by stable full unit identity, not longest subset."""
+    paths = write_session_inputs(tmp_path)
+    model_inputs = make_coherent_model_records(paths)
+    original = model_inputs["records"][0]
+    changed = []
+    for record in original.fold_records:
+        if record.region_configuration == "PFC" and record.representation == "units":
+            unit_id = "probe-pfc:1" if record.outer_fold_id % 2 == 0 else "probe-pfc:2"
+            changed.append(
+                replace(
+                    record,
+                    feature_ids=(unit_id,),
+                    coefficients=np.asarray(record.coefficients[:1], dtype=float),
+                    effective_feature_count=1,
+                )
+            )
+        elif record.region_configuration == "PFC+HPC" and record.representation == "units":
+            unit_id = "probe-pfc:1" if record.outer_fold_id % 2 == 0 else "probe-pfc:2"
+            pfc_position = 0 if unit_id.endswith(":1") else 1
+            changed.append(
+                replace(
+                    record,
+                    feature_ids=(unit_id, "probe-hpc:1", "probe-hpc:2"),
+                    coefficients=np.asarray(
+                        record.coefficients[[pfc_position, 2, 3]],
+                        dtype=float,
+                    ),
+                    effective_feature_count=3,
+                )
+            )
+        else:
+            changed.append(record)
+    result = replace(original, fold_records=tuple(changed))
+    arrays, _meta = pipeline._assemble_run_result_payload(
+        config=replace(model_inputs["config"], target_names=("current_action",)),
+        target_table=model_inputs["target_table"],
+        rate_tensors=model_inputs["rate_tensors"],
+        region_activity_metadata={
+            "PFC": {"unit_ids": ["probe-pfc:1", "probe-pfc:2"], "selection_rules": {}},
+            "HPC": {"unit_ids": ["probe-hpc:1", "probe-hpc:2"], "selection_rules": {}},
+        },
+        ordered_target_results=(result,),
+        stage_timing_seconds={"targets": 0.1, "activity": 0.2, "modeling": 0.3},
+        input_manifest={"files": {"neural_session": {"relative_path": "neural_session.json"}}},
+        scientific_source={"fingerprint": "source"},
+        execution_provenance={},
+        run_fingerprint="fingerprint",
+        session_id="synthetic-session",
+    )
+    assert arrays["coefficient_feature_ids"][0, 1, :2].tolist() == [
+        "probe-pfc:1",
+        "probe-pfc:2",
+    ]
+    assert arrays["requested_feature_counts"][0, 0, 1, 0, 0] == 2
+    assert arrays["requested_feature_counts"][0, 1, 1, 0, 0] == 2
+    assert arrays["requested_feature_counts"][0, 2, 1, 0, 0] == 4
+    assert np.isfinite(arrays["coefficient_values"][0, 0, 1, 0, 0, 0])
+    assert np.isfinite(arrays["coefficient_values"][0, 0, 1, 0, 1, 1])
+
+
+def test_wp5b_guard_still_exists_during_atomic_complete_publication(monkeypatch, tmp_path):
+    """A second owner cannot interleave between directory validation and complete publication."""
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")
+    patch_coherent_execution(monkeypatch, make_coherent_model_records(paths))
+    observed: list[bool] = []
+    real_update = pipeline._update_state
+
+    def observe_complete(directory, **changes):
+        """Assert guard ownership while the final complete state is atomically written."""
+        if changes.get("lifecycle") == "complete":
+            observed.append((directory / "execution_guard.json").exists())
+        return real_update(directory, **changes)
+
+    monkeypatch.setattr(pipeline, "_update_state", observe_complete)
+    pipeline.run_prepared_task_decoding(run_directory)
+    assert observed == [True]
+
+
+def test_wp5b_valid_complete_reentry_skips_heavy_loading(monkeypatch, tmp_path):
+    """Reentering a validated complete run returns without loading activity or decoding again."""
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")
+    patch_coherent_execution(monkeypatch, make_coherent_model_records(paths))
+    pipeline.run_prepared_task_decoding(run_directory)
+    monkeypatch.setattr(pipeline.activity, "load_region_activity", fail_if_called)
+    monkeypatch.setattr(pipeline.modeling, "decode_target", fail_if_called)
+    assert pipeline.run_prepared_task_decoding(run_directory) is None
+
+
+def test_wp5b_final_meta_uses_actual_execution_owner_and_nonzero_target_timing(
+    monkeypatch,
+    tmp_path,
+):
+    """Published provenance and timings record the actual claimed owner and wall time.
+
+    The synthetic monotonic clock supplies seconds for the outer execution,
+    target preparation, activity, modeling, and reporting boundaries.  The
+    final result and ``execution.json`` must retain the detached child's
+    owner identity rather than the preparing parent's identity.
+    """
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="detached")
+    patch_coherent_execution(monkeypatch, make_coherent_model_records(paths))
+    owner = {
+        "mode": "detached",
+        "host": "child-host",
+        "pid": 4321,
+        "start_token": "child-token",
+        "started_at": "2026-10-07T00:00:00Z",
+        "job_id": None,
+    }
+    captured: dict[str, object] = {}
+    real_assemble = pipeline._assemble_run_result_payload
+
+    def capture_payload(**kwargs):
+        """Capture final meta/arrays while preserving the real assembly implementation."""
+        assert kwargs["session_id"] == "synthetic-session"
+        arrays, meta = real_assemble(**kwargs)
+        captured["arrays"] = arrays
+        captured["meta"] = meta
+        return arrays, meta
+
+    monkeypatch.setattr(pipeline, "_current_owner", lambda _execution: owner)
+    monkeypatch.setattr(pipeline, "_assemble_run_result_payload", capture_payload)
+    monotonic_values = iter(range(100))
+    monkeypatch.setattr(pipeline.time, "monotonic", lambda: float(next(monotonic_values)))
+    pipeline.run_prepared_task_decoding(run_directory)
+    arrays = captured["arrays"]
+    meta = captured["meta"]
+    assert meta["provenance"]["execution"]["pid"] == 4321
+    assert meta["provenance"]["execution"]["start_token"] == "child-token"
+    assert meta["provenance"]["execution"]["mode"] == "detached"
+    execution = read_json(run_directory / "execution.json")
+    assert execution["pid"] == 4321
+    assert execution["start_token"] == "child-token"
+    assert execution["mode"] == "detached"
+    event_names = [entry["event"] for entry in execution["history"]]
+    assert all(entry["timestamp"] for entry in execution["history"])
+    assert event_names.index("guard_claimed") < event_names.index("guard_released")
+    saved_history = meta["provenance"]["execution"]["history"]
+    assert saved_history
+    assert all(entry["timestamp"] for entry in saved_history)
+    saved_event_names = [entry["event"] for entry in saved_history]
+    assert saved_event_names[-1] == "guard_claimed"
+    assert "guard_released" not in saved_event_names
+    timing = dict(zip(arrays["stage_timing_labels"], arrays["stage_timing_seconds"], strict=True))
+    assert timing == {"targets": 1.0, "activity": 1.0, "modeling": 1.0}
+    assert arrays["total_timing_seconds"] == 5.0
+
+
+def test_wp5b_metric_figures_render_three_region_by_two_representation_panels(
+    monkeypatch,
+    tmp_path,
+):
+    """Completion heatmaps require six region/representation panels per metric with time columns."""
+    from matplotlib.figure import Figure
+
+    paths = write_session_inputs(tmp_path)
+    model_inputs = make_coherent_model_records(paths)
+    arrays, _meta = pipeline._assemble_run_result_payload(
+        config=model_inputs["config"],
+        target_table=model_inputs["target_table"],
+        rate_tensors=model_inputs["rate_tensors"],
+        region_activity_metadata={
+            "PFC": {"unit_ids": ["probe-pfc:1", "probe-pfc:2"], "selection_rules": {}},
+            "HPC": {"unit_ids": ["probe-hpc:1", "probe-hpc:2"], "selection_rules": {}},
+        },
+        ordered_target_results=model_inputs["records"],
+        stage_timing_seconds={"targets": 0.1, "activity": 0.2, "modeling": 0.3},
+        input_manifest={"files": {"neural_session": {"relative_path": "neural_session.json"}}},
+        scientific_source={"fingerprint": "source"},
+        execution_provenance={},
+        run_fingerprint="fingerprint",
+        session_id="synthetic-session",
+    )
+    observed_axes: list[tuple[tuple[tuple[str, np.ndarray, object], ...], str]] = []
+    real_savefig = Figure.savefig
+
+    def inspect_figure(figure, *args, **kwargs):
+        """Record panel count and labels immediately before the genuine PNG renderer runs."""
+        image_axes = tuple(
+            (
+                axis.get_title(),
+                np.asarray(axis.images[0].get_array()),
+                axis.images[0].norm,
+            )
+            for axis in figure.axes
+            if axis.images
+        )
+        observed_axes.append((image_axes, figure._suptitle.get_text() if figure._suptitle else ""))
+        return real_savefig(figure, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", inspect_figure)
+    pipeline._write_minimal_family_heatmaps(tmp_path, arrays=arrays)
+    expected_shape = (1, arrays["time_bin_centers_s"].size)
+    assert [len(image_axes) for image_axes, _caption in observed_axes] == [6, 6, 6]
+    expected_titles = {
+        f"{region} {representation}"
+        for region in ("PFC", "HPC", "PFC+HPC")
+        for representation in ("pca", "units")
+    }
+    assert all(
+        {title for title, _image, _norm in image_axes} == expected_titles
+        for image_axes, _ in observed_axes
+    )
+    assert all(
+        "categorical" in caption.lower() or "numerical" in caption.lower()
+        for _, caption in observed_axes
+    )
+    assert all(
+        all(
+            image.shape == expected_shape
+            for _title, image, _norm in image_axes
+        )
+        for image_axes, _caption in observed_axes
+    )
+    family_rows = ((np.array([0]), 0), (np.array([0]), 1), (np.array([1]), 2))
+    for (image_axes, _caption), (family_targets, metric) in zip(
+        observed_axes,
+        family_rows,
+        strict=True,
+    ):
+        by_title = {title: image for title, image, _norm in image_axes}
+        for region_index, region in enumerate(("PFC", "HPC", "PFC+HPC")):
+            for representation_index, representation in enumerate(("pca", "units")):
+                expected = np.nanmean(
+                    arrays["fold_scores"][
+                        family_targets,
+                        region_index,
+                        representation_index,
+                        metric,
+                    ],
+                    axis=-1,
+                )
+                np.testing.assert_allclose(
+                    by_title[f"{region} {representation}"],
+                    expected,
+                    equal_nan=True,
+                )
+        expected_reference = 0.0 if metric == 2 else 0.5
+        assert all(
+            np.isclose(float(norm(expected_reference)), 0.5)
+            for _title, _image, norm in image_axes
+        )
+
+
+def test_wp5b_long_model_reasons_map_to_compact_codes_without_truncation(tmp_path):
+    """Long fit and tuned-audit text must map to defined compact saved reason codes."""
+    paths = write_session_inputs(tmp_path)
+    fixed_inputs = make_coherent_model_records(paths)
+    first_record = fixed_inputs["records"][0].fold_records[0]
+    fixed_reason = "unavailable regional training features: PFC"
+    affected_fold = first_record.outer_fold_id
+
+    def rebuild_categorical_summaries(records):
+        """Recompute complete-fold summaries after replacing a shared transform family."""
+        summaries = {}
+        for time_index, region, representation in {
+            (record.time_bin_index, record.region_configuration, record.representation)
+            for record in records
+        }:
+            ordered = sorted(
+                (
+                    record
+                    for record in records
+                    if (
+                        record.time_bin_index,
+                        record.region_configuration,
+                        record.representation,
+                    )
+                    == (time_index, region, representation)
+                ),
+                key=lambda record: record.outer_fold_id,
+            )
+            summaries[(time_index, region, representation)] = modeling.aggregate_complete_folds(
+                [
+                    record.metrics.get("balanced_accuracy") if record.is_valid else None
+                    for record in ordered
+                ],
+                expected_fold_count=3,
+                invalid_reasons=[record.reason for record in ordered],
+            )
+        return summaries
+
+    def unavailable_fixed_record(record):
+        """Return one shared-PFC-transform unavailable fixed fit with exact sentinels."""
+        return replace(
+            record,
+            is_valid=False,
+            status="unavailable",
+            reason=fixed_reason,
+            effective_feature_count=0,
+            estimator_class=None,
+            estimator_parameters=record.estimator_parameters,
+            convergence_status="not_run",
+            metrics={},
+            coefficients=np.empty(0, dtype=float),
+            intercept=np.nan,
+            feature_ids=(),
+            selected_parameters=None,
+        )
+
+    fixed_records = [
+        unavailable_fixed_record(record)
+        if record.outer_fold_id == affected_fold
+        and record.region_configuration in {"PFC", "PFC+HPC"}
+        else record
+        for record in fixed_inputs["records"][0].fold_records
+    ]
+    fixed_result = replace(
+        fixed_inputs["records"][0],
+        fold_records=tuple(fixed_records),
+        cell_summaries=rebuild_categorical_summaries(fixed_records),
+    )
+    arrays, _meta = pipeline._assemble_run_result_payload(
+        config=replace(fixed_inputs["config"], target_names=("current_action",)),
+        target_table=fixed_inputs["target_table"],
+        rate_tensors=fixed_inputs["rate_tensors"],
+        region_activity_metadata={
+            "PFC": {"unit_ids": ["probe-pfc:1", "probe-pfc:2"], "selection_rules": {}},
+            "HPC": {"unit_ids": ["probe-hpc:1", "probe-hpc:2"], "selection_rules": {}},
+        },
+        ordered_target_results=(fixed_result,),
+        stage_timing_seconds={"targets": 0.1, "activity": 0.2, "modeling": 0.3},
+        input_manifest={"files": {"neural_session": {"relative_path": "neural_session.json"}}},
+        scientific_source={"fingerprint": "source"},
+        execution_provenance={},
+        run_fingerprint="fingerprint",
+        session_id="synthetic-session",
+    )
+    assert arrays["fit_reason_codes"][0, 0, 0, 0, 0] == "outer_pfc_features_unavailable"
+
+    tuned_inputs = make_coherent_model_records(paths, regularization_mode="tuned")
+    tuned = tuned_inputs["records"][0]
+    key = next(iter(tuned.candidate_inner_reasons))
+    inner_reason = "unavailable inner regional training features: PFC"
+    invalid_scores = tuple(tuple(None for _ in range(3)) for _ in range(15))
+    invalid_statuses = tuple(tuple("invalid" for _ in range(3)) for _ in range(15))
+    invalid_reasons = tuple(tuple(inner_reason for _ in range(3)) for _ in range(15))
+    matching_record = next(record for record in tuned.fold_records if record.record_key == key)
+    assert matching_record.estimator_parameters != first_record.estimator_parameters
+    tuned_fold = matching_record.outer_fold_id
+
+    def unavailable_tuned_record(record):
+        """Return a no-selection outer record after shared PFC inner-transform failure."""
+        return replace(
+            record,
+            is_valid=False,
+            status="unavailable",
+            reason="no valid inner tuning candidate",
+            effective_feature_count=0,
+            estimator_class=None,
+            estimator_parameters=dict(first_record.estimator_parameters),
+            convergence_status="not_run",
+            metrics={},
+            coefficients=np.empty(0, dtype=float),
+            intercept=np.nan,
+            feature_ids=(),
+            selected_parameters=None,
+            candidate_inner_scores=invalid_scores,
+            candidate_inner_statuses=invalid_statuses,
+            candidate_inner_reasons=invalid_reasons,
+            selected_candidate_index=None,
+        )
+
+    scores = dict(tuned.candidate_inner_scores)
+    statuses = dict(tuned.candidate_inner_statuses)
+    reasons = dict(tuned.candidate_inner_reasons)
+    selected = dict(tuned.selected_candidate_indices)
+    affected_keys = {
+        record.record_key
+        for record in tuned.fold_records
+        if record.outer_fold_id == tuned_fold
+        and record.region_configuration in {"PFC", "PFC+HPC"}
+    }
+    for affected_key in affected_keys:
+        scores[affected_key] = invalid_scores
+        statuses[affected_key] = invalid_statuses
+        reasons[affected_key] = invalid_reasons
+        selected[affected_key] = None
+    tuned = replace(
+        tuned,
+        fold_records=tuple(
+            unavailable_tuned_record(record)
+            if record.record_key in affected_keys
+            else record
+            for record in tuned.fold_records
+        ),
+        candidate_inner_scores=scores,
+        candidate_inner_statuses=statuses,
+        candidate_inner_reasons=reasons,
+        selected_candidate_indices=selected,
+        cell_summaries=rebuild_categorical_summaries(
+            tuple(
+                unavailable_tuned_record(record)
+                if record.record_key in affected_keys
+                else record
+                for record in tuned.fold_records
+            )
+        ),
+    )
+    tuned_arrays, _meta = pipeline._assemble_run_result_payload(
+        config=replace(tuned_inputs["config"], target_names=("current_action",)),
+        target_table=tuned_inputs["target_table"],
+        rate_tensors=tuned_inputs["rate_tensors"],
+        region_activity_metadata={
+            "PFC": {"unit_ids": ["probe-pfc:1", "probe-pfc:2"], "selection_rules": {}},
+            "HPC": {"unit_ids": ["probe-hpc:1", "probe-hpc:2"], "selection_rules": {}},
+        },
+        ordered_target_results=(tuned,),
+        stage_timing_seconds={"targets": 0.1, "activity": 0.2, "modeling": 0.3},
+        input_manifest={"files": {"neural_session": {"relative_path": "neural_session.json"}}},
+        scientific_source={"fingerprint": "source"},
+        execution_provenance={},
+        run_fingerprint="fingerprint",
+        session_id="synthetic-session",
+    )
+    fold, time_index, region, representation = key
+    region_index = ("PFC", "HPC", "PFC+HPC").index(region)
+    representation_index = ("pca", "units").index(representation)
+    assert (
+        tuned_arrays["candidate_inner_reasons"][
+            0,
+            fold,
+            region_index,
+            representation_index,
+            time_index,
+            0,
+            0,
+        ]
+        == "inner_candidate_unavailable"
+    )
+
+
+def test_wp5b_completed_new_skips_foreground_execution_and_detached_popen(
+    monkeypatch,
+    tmp_path,
+):
+    """A validated matching completed run is a CLI skip in both new launch modes."""
+    paths = write_session_inputs(tmp_path)
+    completed = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")
+    patch_coherent_execution(monkeypatch, make_coherent_model_records(paths))
+    pipeline.run_prepared_task_decoding(completed)
+    monkeypatch.setattr(pipeline, "run_prepared_task_decoding", fail_if_called)
+    monkeypatch.setattr(run_session.subprocess, "Popen", fail_if_called)
+    assert run_session.main(["new", "--config", str(paths["config"])]) == 0
+    assert run_session.main(["new", "--config", str(paths["config"]), "--detach"]) == 0
+
+
+@pytest.mark.parametrize("corrupt_bytes", (b"", b"\x89PNG\r\n\x1a\n"))
+def test_wp5b_completion_validation_rejects_empty_or_corrupt_png(
+    monkeypatch,
+    tmp_path,
+    corrupt_bytes,
+):
+    """Completion validation decodes PNG structure, not empty/signature-only files."""
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")
+    patch_coherent_execution(monkeypatch, make_coherent_model_records(paths))
+    pipeline.run_prepared_task_decoding(run_directory)
+    corrupt = run_directory / "figures" / "categorical_auc.png"
+    corrupt.write_bytes(corrupt_bytes)
+    with pytest.raises(ValueError, match="figure|PNG|invalid|corrupt"):
+        pipeline._validate_published_run_directory(run_directory)
+
+
+def test_wp5b_summary_uses_actual_launch_and_present_families_with_numeric_timings(
+    monkeypatch,
+    tmp_path,
+):
+    """Completion summary names only emitted families, actual mode, and numeric stage values."""
+    paths = write_session_inputs(tmp_path)
+    model_inputs = make_coherent_model_records(paths)
+    config_payload = read_json(paths["config"])
+    config_payload["target_names"] = ["current_action"]
+    paths["config"].write_text(json.dumps(config_payload), encoding="ascii")
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="detached")
+    patch_coherent_execution(
+        monkeypatch,
+        {
+            **model_inputs,
+        },
+    )
+    pipeline.run_prepared_task_decoding(run_directory)
+    summary = (run_directory / "summary.md").read_text(encoding="utf-8").lower()
+    assert "detached" in summary
+    command_line = next(
+        line.removeprefix("Launch command: ")
+        for line in (run_directory / "summary.md").read_text(encoding="utf-8").splitlines()
+        if line.startswith("Launch command: ")
+    )
+    assert shlex.split(command_line) == [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "src.neural_analysis.task_decoding.run_session",
+        "_execute-prepared",
+        "--run-directory",
+        str(run_directory),
+    ]
+    assert "run_session.py" in summary
+    assert "pipeline.py" in summary
+    assert "categorical ba/auc" in summary
+    assert "numerical r2" not in summary
+    for stage in ("targets", "activity", "modeling", "total"):
+        assert re.search(rf"{stage}[^\n]*\d+\.\d+", summary)
+
+
+def test_wp5b_status_exposes_saved_owner_identity_facts(monkeypatch, tmp_path):
+    """Read-only status returns saved PID, start-token, and scheduler-job owner facts."""
+    run_directory = tmp_path / "status-owner"
+    run_directory.mkdir()
+    (run_directory / "run_state.json").write_text(
+        json.dumps({"lifecycle": "running", "final_results_published": False}),
+        encoding="utf-8",
+    )
+    owner = {
+        "mode": "slurm",
+        "host": platform.node(),
+        "pid": 123,
+        "start_token": "saved-token",
+        "started_at": "2026-10-07T00:00:00Z",
+        "job_id": "777",
+        "history": [{"timestamp": "2026-10-07T00:00:00Z", "event": "guard_claimed"}],
+    }
+    (run_directory / "execution.json").write_text(json.dumps(owner), encoding="utf-8")
+    (run_directory / "execution_guard.json").write_text(json.dumps(owner), encoding="utf-8")
+    (run_directory / "run.log").write_text("running\n", encoding="utf-8")
+    monkeypatch.setattr(pipeline, "_inspect_execution_owner", lambda _owner: "slurm_running")
+    status = pipeline.inspect_task_decoding_status(run_directory, verify_results=False)
+    assert status["execution_owner"]["pid"] == 123
+    assert status["execution_owner"]["start_token"] == "saved-token"
+    assert status["execution_owner"]["job_id"] == "777"

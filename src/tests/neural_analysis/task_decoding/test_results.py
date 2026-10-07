@@ -88,6 +88,81 @@ _TASK_DECODING_FILES = (
 )
 
 
+def test_wp5b_selection_rules_json_uses_lossless_dynamic_unicode_width(tmp_path):
+    """Selection-rule JSON round-trips canonically at its actual Unicode width, not a fixed cap.
+
+    The two region values remain a ``(2,)`` Unicode array.  This bounded test
+    uses a canonical rule object longer than 256 characters to freeze that the
+    saved width is derived from content rather than a new arbitrary schema cap.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    rule = {
+        "channel_labels": ["good"],
+        "cluster_groups": ["good"],
+        "require_inside_brain": True,
+        "description": "lossless selected-channel provenance " * 12,
+    }
+    encoded = json.dumps(rule, sort_keys=True, separators=(",", ":"))
+    arrays["unit_selection_rules_json"] = np.asarray(
+        [encoded, encoded],
+        dtype=f"U{len(encoded)}",
+    )
+    directory = tmp_path / "dynamic-selection-rules"
+    results.save_task_decoding_run(
+        directory,
+        arrays=arrays,
+        **{key: value for key, value in arguments.items() if key != "arrays"},
+    )
+    saved = results.load_task_decoding_run(directory)["arrays"]
+    assert saved["unit_selection_rules_json"].shape == (2,)
+    assert saved["unit_selection_rules_json"].dtype.kind == "U"
+    assert saved["unit_selection_rules_json"].dtype.itemsize // 4 >= len(encoded)
+    assert [json.loads(value) for value in saved["unit_selection_rules_json"]] == [rule, rule]
+
+
+@pytest.mark.parametrize("rule_json", ('{"a":1,}', '{"b":1,"a":2}'))
+def test_wp5b_loader_rejects_malformed_or_noncanonical_selection_rules_json(rule_json, tmp_path):
+    """Saved region selection rules must be canonical JSON objects, not arbitrary Unicode text."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    arrays["unit_selection_rules_json"] = np.asarray([rule_json, rule_json], dtype="U48")
+    with pytest.raises(ValueError, match="selection|canonical|JSON"):
+        results.save_task_decoding_run(
+            tmp_path / f"bad-selection-{len(rule_json)}",
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
+        )
+
+
+@pytest.mark.parametrize("member", ("fit_reason_codes", "candidate_inner_reasons"))
+def test_wp5b_loader_rejects_unknown_compact_reason_codes(member, tmp_path):
+    """Saved compact reason fields reject unknown codes rather than accepting truncated prose."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="tuned")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    if member == "fit_reason_codes":
+        fit_index = (0, 0, 0, 0, 0)
+        arrays["fit_status"][fit_index] = "unavailable"
+        arrays[member][fit_index] = "unknown_compact_reason"
+        arrays["fold_scores"][0, 0, 0, :, 0, 0] = np.nan
+        arrays["coefficient_values"][fit_index] = np.nan
+        arrays["fitted_intercepts"][fit_index] = np.nan
+    else:
+        audit_index = (0, 0, 0, 0, 0, 14, 2)
+        assert arrays["candidate_inner_statuses"][audit_index] == "invalid"
+        assert arrays[member][audit_index] == "nonfinite_inner_score"
+        arrays[member][audit_index] = "unknown_compact_reason"
+    with pytest.raises(ValueError, match="reason|compact|unknown"):
+        results.save_task_decoding_run(
+            tmp_path / member,
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
+        )
+
+
 def write_input_fixture(
     tmp_path: Path,
     *,
