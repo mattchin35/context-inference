@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import math
+import numbers
 import warnings
 
 import numpy as np
@@ -619,6 +620,41 @@ def _unavailable_split_plan(length: int, reason: str) -> SplitPlan:
     )
 
 
+def _normalize_group_labels(block_ids: np.ndarray) -> np.ndarray:
+    """Create sortable, type-preserving behavioral-group identities.
+
+    Parameters
+    ----------
+    block_ids : numpy.ndarray
+        One-dimensional scalar behavioral-block labels with shape ``(trial,)``.
+        Labels are dimensionless identities and may mix Python scalar types.
+
+    Returns
+    -------
+    numpy.ndarray
+        One-dimensional object array with shape ``(trial,)``.  Each element is
+        a sortable tuple containing the scalar type's module/qualname, a sort
+        category, a native homogeneous numeric or text sort value, and
+        ``repr(value)``.  The final representation preserves identities such
+        as ``-0.0`` versus ``0.0`` without collapsing ``1``, ``1.0``, and
+        ``True``.
+    """
+    normalized = np.empty(block_ids.size, dtype=object)
+    for index, value in enumerate(block_ids):
+        scalar_type = type(value)
+        type_identity = f"{scalar_type.__module__}.{scalar_type.__qualname__}"
+        representation = repr(value)
+        if isinstance(value, bool):
+            normalized[index] = (type_identity, "bool", int(value), representation)
+        elif isinstance(value, numbers.Real):
+            normalized[index] = (type_identity, "real", value, representation)
+        elif isinstance(value, str):
+            normalized[index] = (type_identity, "text", value, representation)
+        else:
+            normalized[index] = (type_identity, "repr", representation, representation)
+    return normalized
+
+
 def _build_grouped_split_plan(
     target_values: np.ndarray,
     block_ids: np.ndarray,
@@ -649,7 +685,8 @@ def _build_grouped_split_plan(
         Valid global-index grouped folds, or a declared unavailable plan.
     """
     selected_values = target_values[row_indices]
-    selected_groups = block_ids[row_indices]
+    normalized_groups = _normalize_group_labels(block_ids)
+    selected_groups = normalized_groups[row_indices]
     if target_family == "categorical":
         if np.unique(selected_values).size < 2:
             return _unavailable_split_plan(full_length, "constant target")
@@ -686,7 +723,9 @@ def _build_grouped_split_plan(
     for fold_id, (local_train, local_test) in enumerate(local_splits):
         train_indices = row_indices[np.asarray(local_train, dtype=int)]
         test_indices = row_indices[np.asarray(local_test, dtype=int)]
-        if set(block_ids[train_indices]).intersection(block_ids[test_indices]):
+        train_groups = set(normalized_groups[train_indices])
+        test_groups = set(normalized_groups[test_indices])
+        if train_groups.intersection(test_groups):
             return _unavailable_split_plan(full_length, "grouped folds split a behavioral block")
         if target_family == "categorical":
             train_classes = np.unique(target_values[train_indices])
