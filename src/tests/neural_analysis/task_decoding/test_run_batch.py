@@ -226,6 +226,10 @@ def write_resource_evidence(
         ),
         encoding="utf-8",
     )
+    (run_directory / "run_fingerprint.txt").write_text(
+        "measured-run-fingerprint\n",
+        encoding="ascii",
+    )
 
 
 def parse_stdout_json(capsys: pytest.CaptureFixture[str]) -> dict[str, object]:
@@ -286,6 +290,7 @@ def test_dry_run_reports_ordered_sessions_and_safe_one_worker_without_evidence(
     (
         ("incomplete", "complete|evidence"),
         ("missing_usage", "resource|usage|evidence"),
+        ("missing_fingerprint", "fingerprint|evidence"),
         ("source_mismatch", "source|identity|evidence"),
         ("runtime_mismatch", "runtime|identity|evidence"),
         ("platform_mismatch", "platform|identity|evidence"),
@@ -319,6 +324,8 @@ def test_explicit_invalid_resource_evidence_errors_without_fallback(
         pipeline.completed.clear()
     elif damage == "missing_usage":
         (evidence / "resource_usage.json").unlink()
+    elif damage == "missing_fingerprint":
+        (evidence / "run_fingerprint.txt").unlink()
     elif damage in {"runtime_mismatch", "platform_mismatch", "thread_mismatch"}:
         execution_path = evidence / "execution.json"
         execution = json.loads(execution_path.read_text(encoding="utf-8"))
@@ -388,6 +395,7 @@ def test_valid_evidence_caps_workers_by_cpu_memory_and_session_count(
     assert report["memory_limit_bytes"] == 500
     assert report["per_session_peak_rss_bytes"] == 200
     assert report["resource_evidence"]["run_directory"] == str(evidence.resolve())
+    assert report["resource_evidence"]["run_fingerprint"] == "measured-run-fingerprint"
 
 
 def test_parallel_new_records_evidence_and_passes_only_capped_session_workers(
