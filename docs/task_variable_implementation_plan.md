@@ -1,11 +1,9 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP5A result persistence, portable
-identity, checkpointing, and atomic publication are complete and independently
-approved. The WP5B single-session lifecycle and CLI RED contract and its
-scientific/lifecycle integrity supplement are committed and independently
-approved; correcting `pipeline.py`, `run_session.py`, and the bounded
-`results.py` schema seam is the active package.
+**Status:** Implementation authorized; WP5A result persistence and WP5B
+single-session lifecycle/CLI execution are complete and independently
+approved. WP6 batch-runner planning is next and requires a tests-first plan
+approved by the user before implementation.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -15,7 +13,7 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-07
 
-**Current phase:** WP0-WP4 are complete. WP4 grouped-modeling tests are
+**Current phase:** WP0-WP5 are complete. WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
@@ -26,22 +24,23 @@ semantic, and frozen-control corrections are committed at `bc628c4` and
 shared-split, exact-PCA, and sparse-tuning corrections are committed through
 `c7c2912`. WP5A production is committed at `1bd0f69` after independent
 approval. The independently approved WP5B lifecycle/CLI RED suite is committed
-at `449f7c9`, and its production-review supplement is committed at `4215c82`;
-production correction is next. No
+at `449f7c9`, its production-review supplement is committed at `4215c82`, the
+final tests-first corrections are committed through `77f2cc8`, and WP5B GREEN
+is committed at `8b9232d` after independent approval. No
 experimental-data mutation, decoding output, benchmark, transfer, local long
 run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local implementation HEAD: `4215c82`;
+- local implementation HEAD: `8b9232d`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
   production are complete through `1bd0f69`, including the final sparse tuned
-  transform-evidence review; WP5B RED tests are complete through supplemental
-  lifecycle/scientific coverage at `4215c82`; and
+  transform-evidence review; WP5B single-session lifecycle/CLI production is
+  complete through independently approved GREEN commit `8b9232d`; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -70,16 +69,10 @@ run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** correct `pipeline.py`, the standard-library-only
-`run_session.py`, and the bounded `results.py` persistence seam against both
-committed WP5B RED contracts. Stage the explicit session-ID and dynamic
-selection-rule schema correction first so deeper causal failures become
-observable, then finish the ownership, common-row, feature-provenance,
-reporting, scheduler, and compact-reason boundaries. Keep the three public
-pipeline entry points minimal, preserve lazy numerical imports and one-thread
-entrypoint setup, run the focused lifecycle/results suites plus the full
-task-decoding regression suite, and obtain independent production approval
-before committing WP5B GREEN.
+**Next exact action:** draft the bounded WP6 batch-runner architecture, tests,
+dependencies, and performance considerations, then obtain user approval before
+writing WP6 tests or implementation. Do not run experimental data, benchmarks,
+transfers, or scheduler actions under this handoff.
 
 ### Authority order
 
@@ -104,8 +97,8 @@ When resuming, use this order:
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
 | WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
 | WP4 grouped modeling | Complete: fixed GREEN `a8787aa`, tuned GREEN `b844f26` | None |
-| WP5 results and session pipeline | WP5A GREEN `1bd0f69`; WP5B RED tests `449f7c9` plus integrity supplement `4215c82` | Correct and independently approve WP5B GREEN |
-| WP6 batch runner | Pending prerequisite | WP5 GREEN |
+| WP5 results and session pipeline | Complete: WP5A GREEN `1bd0f69`; WP5B GREEN `8b9232d` after tests through `77f2cc8` | None |
+| WP6 batch runner | Ready for tests-first planning | User approves the WP6 implementation plan |
 | WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
 | WP8 documentation and examples | Pending prerequisite | CLI/webapp interfaces stable through WP7 |
 | WP9 synthetic integration | Pending prerequisite | WP1-WP8 focused gates GREEN |
@@ -1217,6 +1210,46 @@ Use this template for each appended record:
   `results.py`; rerun the supplemental selector after the schema seam, then run
   the complete pipeline/results and full task-decoding suites. Obtain a fresh
   independent production review before any WP5B GREEN commit.
+
+#### 2026-10-07 - WP5B single-session lifecycle GREEN gate
+
+- State: WP5B is complete and independently approved. The package now owns
+  bounded preparation, immutable discovery, exact identity revalidation,
+  resumable target checkpoints, guarded foreground/detached execution,
+  portable result assembly, completion summaries/figures, and read-only status.
+- Authorization: implementation used only deterministic temporary session
+  trees, synthetic arrays/tables, and bounded process fakes. No experimental
+  data, decoding run, benchmark, transfer, or scheduler action was performed.
+- Start HEAD / end HEAD: corrected fixture handoff `957563d` / independently
+  approved WP5B GREEN production commit `8b9232d`.
+- Owned production files: added
+  `src/neural_analysis/task_decoding/pipeline.py` and `run_session.py`, and
+  modified the bounded schema validation in `results.py`. Final tests-first
+  contracts and fixture corrections were committed separately at `8f6c012`,
+  `2bd2666`, `eb3df73`, and `77f2cc8`.
+- RED evidence: the final focused contract initially reported 27 failures and
+  12 passes, covering source snapshots, explicit session identity, closed
+  reason-code mapping/storage, receipt ordering, and complete-directory
+  validation. Independent review then added causal RED coverage for adversarial
+  regional prose, inconsistent terminal publication, and whitespace identity.
+- GREEN/regression evidence: the focused final-review selector passed 36 tests.
+  The complete pipeline/results pair passed 517 tests with one expected
+  all-NaN fixture warning. The final full task-decoding package passed 760 tests
+  with six known warnings: three Pynapple interval-rounding warnings, two
+  sklearn small-class warnings, and the same all-NaN expected-value warning.
+  `git diff --check` passed.
+- Contract decisions: detached children wait for the matching atomic
+  PID/start-token receipt before execution; complete discovery validates the
+  summary and every applicable decodable PNG; result assembly requires the
+  resolved nonblank session ID; saved invalidities use an exact reviewed compact
+  vocabulary; and preparation snapshots both `run_session.py` and `pipeline.py`.
+- Independent review: the first production pass found permissive regional
+  reason parsing, inconsistent complete-state reentry, and whitespace session
+  identity. All three were corrected test-first. Re-review reported no P0-P2
+  findings or blockers.
+- Exact next action: propose the WP6 batch-runner implementation plan, including
+  architecture, dependencies, tests to write first, and session-level parallel
+  performance limits. Obtain user approval before writing WP6 code.
 
 ## 1. Objective
 
