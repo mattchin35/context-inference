@@ -12,7 +12,7 @@ from types import MappingProxyType
 from src.neural_analysis.session_metadata import CANONICAL_FILENAME
 
 
-ANALYSIS_VERSION = "task-variable-decoding-v1"
+ANALYSIS_VERSION = "task-variable-decoding-v2"
 TARGET_IDENTIFIERS = (
     "current_state",
     "current_action",
@@ -50,7 +50,7 @@ FROZEN_ESTIMATOR_CONTROLS = MappingProxyType(
                 "l1_ratio": 0.5,
                 "solver": "saga",
                 "tol": 1e-4,
-                "max_iter": 100,
+                "max_iter": 5000,
                 "fit_intercept": True,
                 "class_weight": None,
                 "warm_start": False,

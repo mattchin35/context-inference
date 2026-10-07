@@ -1,21 +1,24 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP1-WP9A and WP10A are complete, including the
+**Status:** Implementation authorized; WP1-WP10B are complete, including the
 single-session and batch CLIs, saved-result webapp, portable example, user/
 maintainer documentation, seeded synthetic end-to-end gate, and the separately
-approved CT026 `rewards_in_block` table preparation. WP10A adds atomic runtime
-resource evidence and bounded dry-run target diagnostics but has not read CT026
-neural arrays. The approved WP10B bounded config/dry-run/benchmark procedure is
-next only after the exact WP10A commits are pushed. Full decoding, transfer,
-and scheduler actions retain their separate gates below.
+approved CT026 `rewards_in_block` table preparation. WP10B measured the bounded
+CT026 workload and exposed categorical convergence failures under the original
+100-iteration ceiling. The user approved a local revision-6 repair and local
+validation before any cluster work. Full decoding, transfer, and scheduler
+actions retain their separate gates below.
 
-**Scientific contract:** `docs/task_variable_spec_v5.md`.
+**Scientific contract:** `docs/task_variable_spec_v5.md` plus the active
+normative amendment `docs/task_variable_spec_v6.md`.
 
 ## Live handoff snapshot
 
 **Snapshot date:** 2026-10-07
 
-**Current phase:** WP0-WP9A and WP10A are complete. WP4 grouped-modeling tests are
+**Current phase:** WP0-WP10B are complete. WP10C revision-6 convergence repair
+is in progress under explicit user approval; its RED contract is committed at
+`ba47795`. WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
@@ -42,6 +45,10 @@ WP9's characterization-only synthetic integration gate is committed at
 `cdb04d9`; the CT026 table and its exact backup passed post-write validation.
 WP10A resource-measurement RED contracts are committed at `fb0278a`, the
 schema-consistency supplement at `cc0cf7d`, and GREEN production at `1153115`.
+The WP10B bounded v1 run completed, validated, and recorded 2,400 estimator
+calls, 203.715 seconds wall time, 984,047,616 bytes peak RSS, and 53,932,914
+output bytes. It also recorded 687/1,200 unavailable `current_action` cells,
+all caused by convergence warnings at the frozen 100-iteration ceiling.
 
 **Repository state at this snapshot:**
 
@@ -89,19 +96,19 @@ schema-consistency supplement at `cc0cf7d`, and GREEN production at `1153115`.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this handoff and push `fb0278a`, `cc0cf7d`,
-`1153115`, and the handoff commit to `origin/refactor`. After verifying exact
-remote equality, create the already approved external WP10 bounded config and
-run only its read-only dry run. Stop if either target lacks eligible rows or a
-valid grouped outer plan; otherwise run the synthetic detached smoke and then
-launch the authorized 2,400-fit fixed benchmark. WP10 does not authorize a
-full run, transfer, or scheduler action.
+**Next exact action:** implement the approved revision-6 amendment by changing
+only the analysis version and logistic iteration ceiling, reproduce GREEN,
+then rerun the same bounded CT026 configuration locally. Require all 1,200
+`current_action` cells and all 1,200 `relative_doubt` cells to be valid before
+the separately approved local eight-target categorical stress validation.
+Do not begin WP11 cluster work.
 
 ### Authority order
 
 When resuming, use this order:
 
-1. `docs/task_variable_spec_v5.md` owns scientific definitions and defaults.
+1. `docs/task_variable_spec_v5.md` owns the base scientific definitions and
+   defaults; `docs/task_variable_spec_v6.md` is its active normative amendment.
 2. This document owns implementation order, file ownership, tests, agent
    assignments, documentation deliverables, and live status.
 3. `AGENTS.md` and `docs/SoftwareDesign.md` govern TDD, readability, data

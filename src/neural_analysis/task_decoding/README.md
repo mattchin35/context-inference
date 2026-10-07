@@ -8,9 +8,11 @@ population PCA modules; those modules do not depend on this package. The
 integrated webapp imports only the saved-result loader and plotting layer, not
 the fitting pipeline.
 
-The scientific requirements and work-package history remain in
-`docs/task_variable_spec_v5.md` and `docs/task_variable_implementation_plan.md`.
-This file is the maintainer map, not a duplicate specification.
+The scientific requirements are the revision-5 base contract plus its active
+revision-6 convergence amendment in `docs/task_variable_spec_v5.md` and
+`docs/task_variable_spec_v6.md`. Work-package history remains in
+`docs/task_variable_implementation_plan.md`. This file is the maintainer map,
+not a duplicate specification.
 
 ## File and entry-point map
 
