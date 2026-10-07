@@ -19,18 +19,18 @@ normative amendment `docs/task_variable_spec_v6.md`.
 
 **Snapshot date:** 2026-10-07
 
-**Current phase:** WP0-WP10D are complete. The first v2 bounded run proved the
+**Current phase:** WP0-WP11 are complete. The first v2 bounded run proved the
 convergence repair but exposed a competing-resume lifecycle defect during
 diagnosis. The approved repair is committed through `77ff461`, pushed, and
 tracked-clean. The clean bounded v2 rerun
 `task_variable_decoding_2026-10-07T19-29-08Z` passed its one-shot lifecycle,
 result, and convergence validation. The approved local eight-target
 categorical stress gate also passed with all 9,600 cells valid. WP10 is now
-complete. The user approved the exact WP11 single-session Slurm resource block
-and tests-first architecture. WP11 RED is committed at `a3dcdb9` and awaits
-the tests-only gate before production implementation. WP12 one-session cluster
-validation and WP13 per-session job arrays follow. Each real transfer or
-scheduler submission is still approved separately from source implementation.
+complete. The exact WP11 single-session Slurm resource block and tests-first
+architecture are implemented: RED is `a3dcdb9`, its handoff is `e91fa5f`, and
+GREEN production is `b9d8645`. WP12 one-session cluster validation and WP13
+per-session job arrays follow. Each real transfer or scheduler submission is
+still approved separately from source implementation.
 WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
@@ -67,9 +67,9 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local WP11 RED HEAD before this handoff:
-  `a3dcdb929f6cfb819f657c24f5542433c8c02b17`;
-- `origin/refactor`: `12e548d7f47d2f9e3029679c1a806814d03cd70a`;
+- local WP11 GREEN HEAD before this handoff:
+  `b9d86450cca4230b8fb6b74c88f452981f537244`;
+- `origin/refactor`: `e91fa5f4074a4b18de23a3573333cd67f3a6424f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -111,12 +111,11 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** review and approve the committed WP11 RED contracts.
-After tests-only approval, implement the thin wrapper, standard-library Slurm
-module, explicit private preparation mode, active-allocation memory guard,
-SIGTERM bridge, and documentation until the focused contracts pass. No cluster
-transfer, `sbatch`, `sacct`, SSH, network, or experimental computation is part
-of WP11 source implementation.
+**Next exact action:** push `b9d8645` and this handoff commit, then separately
+plan and approve the exact WP12 synthetic Slurm smoke. The smoke must identify
+its cluster checkout/session paths and exact command before any transfer or
+`sbatch`. No real cluster, SSH, rsync, network, or experimental-data action was
+performed during WP11 implementation.
 
 ### Authority order
 
@@ -152,7 +151,7 @@ When resuming, use this order:
 | WP10B CT026 preflight/benchmark | Complete: v1 run validated; 2,400 calls measured; 687 categorical convergence failures exposed | Superseded by revision-6 evidence |
 | WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence remains the WP10 gate |
 | WP10D competing-owner lifecycle repair and local acceptance | Complete: lifecycle repair through `77ff461`; clean 2,400-cell bounded run and 9,600-cell categorical stress run accepted | None |
-| WP11 single-session cluster path | RED committed at `a3dcdb9`; approved directives/architecture; production not started | User approves tests-only gate; implement with mocks only |
+| WP11 single-session cluster path | Complete: RED `a3dcdb9`, handoff `e91fa5f`, GREEN `b9d8645`; mocked and local tests only | None; real execution belongs to WP12 |
 | WP12 CT026 one-session cluster validation | Required after WP11 | Separately approve synthetic smoke, exact transfer, and exact CT026 submission |
 | WP13 bounded cluster batch array | Required after WP12 acceptance; source not started | Implement tests-first per-session concurrency; authorize any real array separately |
 
@@ -1960,6 +1959,43 @@ Use this template for each appended record:
 - Exact next action: after user approval of the tests-only commit, implement
   the bounded WP11 production files and documentation, then run focused and
   affected regression suites. Stop before any real cluster action.
+
+#### 2026-10-07 - WP11 single-session Slurm GREEN gate
+
+- Authorization: the user confirmed the tests-only push and approved WP11
+  production implementation. No real scheduler or transfer action was
+  authorized.
+- State: production is committed at `b9d8645`. The implementation adds the
+  executable `task_variable_decoding_slurm.sh`, standard-library `slurm.py`,
+  explicit Slurm preparation, durable TERM translation, an active
+  allocation/request memory guard before spike loading, and scientist/
+  maintainer operating instructions.
+- Source behavior: the login branch checks the exact repository root,
+  tracked-clean state, tracked direct dependencies, and untracked package
+  Python; it invokes only frozen/no-sync/offline `uv`. Submission records the
+  current commit before one `sbatch` call and exports it so the scheduled
+  branch refuses a checkout that moved while queued. The scheduled branch can
+  only execute one exact prepared directory. Status performs one read-only
+  `sacct` query. Submission never retries or selects a latest run.
+- Lifecycle behavior: `submission-pending` is durable before `sbatch`;
+  submission failure becomes `failed`; success writes only the atomic Slurm
+  receipt so a fast job retains ownership of later state. Slurm TERM becomes
+  the pipeline's existing `KeyboardInterrupt` boundary and preserves valid
+  checkpoints. Effective memory is the conservative minimum of available,
+  cgroup, and reviewed 3-GiB limits, with the existing 50-percent tensor guard.
+- Verification: the 20 focused WP11 contracts passed. The complete affected
+  runner/pipeline/documentation selection passed 185 tests with one known
+  empty-slice plotting warning. `test_results.py` passed 373 tests, and the
+  complete task-decoding package passed 833 tests with six known warnings.
+  Bash syntax, Python compilation, and cached-diff whitespace checks passed.
+- Start HEAD / end HEAD: `e91fa5f` / `b9d8645` before this documentation
+  handoff. Only the six WP11 production/documentation files were committed;
+  historical untracked workspace files were untouched.
+- Real-data or external actions: none. No real `sbatch`, `sacct`, SSH, rsync,
+  network access, cluster computation, or experimental computation occurred.
+- Exact next action: push the GREEN and handoff commits. Then plan the
+  separately approved WP12 synthetic smoke using exact cluster paths and
+  command; do not transfer or submit until that action is approved.
 
 ## 1. Objective
 
