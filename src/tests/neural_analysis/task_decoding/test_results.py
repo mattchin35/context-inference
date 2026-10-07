@@ -4483,12 +4483,13 @@ def test_wp5a_save_rejects_fold_local_feature_map_contract_violations(kind, tmp_
         )
 
 
-def test_wp5a_fold_local_effective_features_allow_nan_dropped_columns(tmp_path):
-    """One direct unit can be dropped consistently across one target/fold transform.
+def test_wp5a_save_rejects_direct_width_below_pca_transform_width(tmp_path):
+    """Direct-unit width cannot fall below the shared regional PCA width.
 
-    The PFC direct-unit transform and the PFC segment of its combined direct
-    transform share a fitted feature set, so every time bin for one target and
-    outer fold must retain identical finite/NaN coefficient masks and widths.
+    Across all time bins for one target/fold, PFC direct and its combined PFC
+    segment retain one reusable unit while PCA retains two components. A shared
+    regional transform requires ``effective_pca <= effective_direct``; the
+    corresponding combined widths of four and three preserve the same mismatch.
     """
     input_paths = write_input_fixture(tmp_path)
     arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
@@ -4502,28 +4503,11 @@ def test_wp5a_fold_local_effective_features_allow_nan_dropped_columns(tmp_path):
         arrays["effective_feature_counts"][combined_index] = 3
         arrays["coefficient_values"][pfc_index + (1,)] = np.nan
         arrays["coefficient_values"][combined_index + (1,)] = np.nan
-    run_directory = tmp_path / "fold-local-nan"
-
-    results.save_task_decoding_run(
-        run_directory,
-        arrays=arrays,
-        **{key: value for key, value in arguments.items() if key != "arrays"},
-    )
-    saved = results.load_task_decoding_run(run_directory)["arrays"]
-    pfc_mask = np.array([True, False])
-    combined_mask = np.array([True, False, True, True])
-    for time in range(time_count):
-        pfc_index = (target, 0, 1, time, fold)
-        combined_index = (target, 2, 1, time, fold)
-        assert saved["effective_feature_counts"][pfc_index] == pfc_mask.sum()
-        assert saved["effective_feature_counts"][combined_index] == combined_mask.sum()
-        np.testing.assert_array_equal(
-            np.isfinite(saved["coefficient_values"][pfc_index][:2]),
-            pfc_mask,
-        )
-        np.testing.assert_array_equal(
-            np.isfinite(saved["coefficient_values"][combined_index][:4]),
-            combined_mask,
+    with pytest.raises(ValueError, match="direct|PCA|effective|transform|feature"):
+        results.save_task_decoding_run(
+            tmp_path / "direct-width-below-pca-width",
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
         )
 
 
