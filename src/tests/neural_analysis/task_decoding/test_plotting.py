@@ -197,3 +197,38 @@ def test_coefficient_plot_uses_direct_units_and_explains_interpretation(tmp_path
         assert labels[0] in {"probe-pfc:11", "probe-pfc:19", "probe-hpc:5", "probe-hpc:17"}
     finally:
         plt.close(figure)
+
+
+def test_coefficient_plot_handles_a_saved_region_with_no_active_units(tmp_path: Path) -> None:
+    """A scientifically unavailable zero-unit region renders an explicit empty summary."""
+    plotting = _plotting_module()
+    saved_run = _saved_run(tmp_path)
+    arrays = saved_run["arrays"]
+    assert isinstance(arrays, Mapping)
+    arrays["coefficient_active_masks"][0, 1] = False
+    arrays["coefficient_feature_ids"][0, 1] = ""
+    arrays["coefficient_feature_regions"][0, 1] = ""
+    arrays["coefficient_feature_statuses"][0, 1] = "padding"
+    arrays["coefficient_values"][:, 0, 1] = np.nan
+    arrays["fit_status"][:, 0, 1] = "unavailable"
+    arrays["fit_reason_codes"][:, 0, 1] = "outer_pfc_features_unavailable"
+    arrays["effective_feature_counts"][:, 0, 1] = 0
+
+    feature_table, fold_table = plotting.summarize_unit_coefficients(
+        saved_run,
+        target="current_action",
+        region="PFC",
+        time_bin_index=0,
+    )
+    figure = plotting.plot_unit_coefficients(
+        saved_run,
+        target="current_action",
+        region="PFC",
+        time_bin_index=0,
+    )
+    try:
+        assert feature_table.empty
+        assert fold_table["fit_status"].tolist() == ["unavailable"] * 3
+        assert "No active direct-unit features" in _figure_caption(figure)
+    finally:
+        plt.close(figure)
