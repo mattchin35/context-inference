@@ -257,6 +257,13 @@ def test_config_list_rejects_duplicate_resolved_paths(tmp_path):
         run_batch.read_config_list(config_list)
 
 
+def test_resource_envelope_allows_zero_fits_for_an_absent_target_family():
+    """A categorical-only or numerical-only run has one legitimate zero fit count."""
+    envelope = resource_envelope()
+    envelope["numerical_fit_count"] = 0
+    assert run_batch._validate_resource_envelope(envelope, "test") == envelope
+
+
 def test_dry_run_reports_ordered_sessions_and_safe_one_worker_without_evidence(
     monkeypatch,
     tmp_path,
@@ -491,6 +498,9 @@ def test_new_uses_independent_single_session_seams_and_records_batch_provenance(
     assert pipeline.executed == [tmp_path / "run-one", tmp_path / "run-two"]
     assert len({path for path, _payload in pipeline.batch_provenance}) == 2
     assert all(payload["effective_workers"] == 1 for _path, payload in pipeline.batch_provenance)
+    assert report["available_cpu_count"] == 8
+    assert report["available_memory_bytes"] == 10_000
+    assert report["memory_limit_bytes"] == 5_000
     assert [item["outcome"] for item in report["sessions"]] == ["complete", "complete"]
 
 
@@ -539,6 +549,61 @@ def test_one_session_failure_does_not_cancel_later_sessions(monkeypatch, tmp_pat
         "complete",
     ]
     assert "synthetic failure" in report["sessions"][1]["error"]
+
+
+def test_parallel_execution_uses_only_the_admitted_process_count(monkeypatch, tmp_path):
+    """More than one admitted session uses processes, never an in-process thread pool."""
+    submitted: list[tuple[object, str]] = []
+    executor_counts: list[int] = []
+
+    class FakeFuture:
+        """Immediate fake process future returning one completed session."""
+
+        def result(self):
+            """Return one dimensionless completion outcome."""
+            return {"outcome": "complete", "error": ""}
+
+    class FakeExecutor:
+        """Context-managed process-executor stand-in recording submissions."""
+
+        def __init__(self, *, max_workers):
+            executor_counts.append(max_workers)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def submit(self, function, run_directory):
+            submitted.append((function, run_directory))
+            return FakeFuture()
+
+    class FailIfUsedPipeline:
+        """Reject accidental parent-process scientific execution."""
+
+        @staticmethod
+        def run_prepared_task_decoding(_run_directory):
+            raise AssertionError("parallel sessions executed in the parent process")
+
+    run_directories = (tmp_path / "run-one", tmp_path / "run-two", tmp_path / "run-three")
+    monkeypatch.setattr(run_batch, "ProcessPoolExecutor", FakeExecutor)
+    monkeypatch.setattr(run_batch, "as_completed", lambda futures: tuple(futures))
+    outcomes = run_batch._execute_sessions(
+        run_directories,
+        worker_count=2,
+        pipeline=FailIfUsedPipeline(),
+    )
+    assert executor_counts == [2]
+    assert submitted == [
+        (run_batch._execute_prepared_worker, str(run_directory))
+        for run_directory in run_directories
+    ]
+    assert outcomes == [
+        {"outcome": "complete", "error": ""},
+        {"outcome": "complete", "error": ""},
+        {"outcome": "complete", "error": ""},
+    ]
 
 
 def test_batch_entry_sets_thread_limits_before_lazy_pipeline_import():
