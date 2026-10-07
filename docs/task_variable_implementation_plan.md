@@ -1,12 +1,13 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP1-WP9 are complete, including the
+**Status:** Implementation authorized; WP1-WP9A are complete, including the
 single-session and batch CLIs, saved-result webapp, portable example, user/
-maintainer documentation, and seeded synthetic end-to-end gate. WP9 required
-no production change because its final scientific contracts already passed;
-the user explicitly approved recording it as a characterization-only gate.
-This does not authorize experimental-data mutation, decoding runs, benchmarks,
-transfer, or scheduler actions, which retain their separate gates below.
+maintainer documentation, seeded synthetic end-to-end gate, and the separately
+approved CT026 `rewards_in_block` table preparation. WP9 required no production
+change because its final scientific contracts already passed. WP9A added only
+the approved backup and one validated column. This does not authorize neural
+loading, decoding runs, benchmarks, transfer, or scheduler actions, which
+retain their separate gates below.
 
 **Scientific contract:** `docs/task_variable_spec_v5.md`.
 
@@ -14,7 +15,7 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-07
 
-**Current phase:** WP0-WP9 are complete. WP4 grouped-modeling tests are
+**Current phase:** WP0-WP9A are complete. WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
@@ -35,13 +36,14 @@ committed through `a1c1f5c`, the dry-run JSON correction is `b2b3dde`, and the
 documentation/example GREEN commit is `8b92c4f`. No experimental-data
 mutation, benchmark, transfer, local long run, or cluster action is authorized.
 WP9's characterization-only synthetic integration gate is committed at
-`9ea0109`; WP9A remains a separate experimental-table mutation gate.
+`9ea0109`. WP9A's permission regression and fix are committed at `b322427` and
+`cdb04d9`; the CT026 table and its exact backup passed post-write validation.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local WP9 test-gate HEAD: `9ea0109`;
-- `origin/refactor`: `3281d01bd4cf65e381e986cda8ad50c4db360383`;
+- local WP9A production HEAD: `cdb04d9`;
+- `origin/refactor`: `895be6825327e78af977a0489739665dbe38ed8c`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -52,7 +54,8 @@ WP9's characterization-only synthetic integration gate is committed at
   and the read-only saved-results webapp view are complete through GREEN commit
   `ef7ad55`; WP8 documentation and portable examples are complete through
   GREEN commit `8b92c4f`; WP9 synthetic integration is complete through
-  characterization commit `9ea0109`; and
+  characterization commit `9ea0109`; WP9A table preparation is complete after
+  permission-preservation commits `b322427` and `cdb04d9`; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -81,10 +84,11 @@ WP9's characterization-only synthetic integration gate is committed at
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** obtain separate user approval for WP9A's exact CT026
-backup and one-file `rewards_in_block` backfill procedure before reading the
-table for pre-write validation or making any experimental-data change. WP9A
-does not authorize neural loading, a benchmark, transfer, or scheduler action.
+**Next exact action:** propose the exact WP10 bounded CT026 configuration,
+read-only dry run, detached synthetic launcher smoke, and 2,400-fit fixed-mode
+benchmark procedure, then obtain separate user approval before creating the
+configuration or executing any command. WP10 does not authorize a full run,
+transfer, or scheduler action.
 
 ### Authority order
 
@@ -114,7 +118,7 @@ When resuming, use this order:
 | WP7 plotting and webapp | Complete: RED `c027f2c` plus reviews through `0c6ce07`; GREEN `ef7ad55` | None |
 | WP8 documentation and examples | Complete: RED `c1cda3b`, corrections through `a1c1f5c`, JSON fix `b2b3dde`, GREEN `8b92c4f` | None |
 | WP9 synthetic integration | Complete: characterization-only test gate `9ea0109` | None |
-| WP9A CT026 augmented-table preparation | Not authorized | WP9 complete plus explicit approval of the exact behavior-processing command |
+| WP9A CT026 augmented-table preparation | Complete: mode RED `b322427`, fix `cdb04d9`, validated backup and table | None |
 | WP10 CT026 preflight/benchmark | Not authorized | WP9A validation passes plus explicit real-session benchmark approval |
 | WP11 single-session cluster path | Not authorized | WP10 evidence and user choice justify cluster convenience/cost; user approves wrapper/transfer work |
 | WP12 CT026 scientific inspection | Not authorized | User accepts benchmark and authorizes exact run |
@@ -1500,6 +1504,84 @@ Use this template for each appended record:
   timestamped-backup and one-file `backfill_rewards_in_block_csv` procedure.
   Stop on any pre-write mismatch. Do not start the proposed WP10 dry run or
   benchmark under WP9A authority.
+
+#### 2026-10-07 - WP9A CT026 augmented-table preparation GREEN gate
+
+- State: WP9A is complete. The separately approved CT026 table preparation
+  created one recoverable backup and atomically appended the validated integer
+  `rewards_in_block` column. No neural array was opened, no decoder or
+  benchmark ran, and no transfer or scheduler action occurred.
+- Authorization: after WP9 was pushed, the user approved the exact source,
+  fixed backup path, backfill invocation, validation procedure, and stop
+  conditions. The first preflight stopped without writing when it found both a
+  LibreOffice lock and a source mode that the helper did not yet preserve. The
+  user closed the CSV and separately approved the tests-first permission fix
+  and stale-lock removal if needed. LibreOffice removed the lock on close; the
+  exact removal command found no path and deleted nothing.
+- Source-control commits: tests-only permission regression `b322427`; minimal
+  helper fix `cdb04d9` (this documentation handoff follows separately). The
+  fix records the source Unix permission bits and applies them to the validated
+  sibling temporary CSV before `os.replace`; ownership already matched the
+  executing user and parent directory.
+- RED/GREEN evidence: the new causal test failed because the atomic helper
+  published mode `0600` instead of source mode `0664`. After the production
+  fix, that test passed; the focused behavior selector passed 33 tests with 77
+  deselections; and the final backfill plus task-target suites passed 50 tests.
+  The broader two-file behavior run passed 107 tests and retained exactly the
+  three documented `formulaic.model_matrix`-stub baseline failures, with two
+  warnings. Source compilation and `git diff --check` passed.
+- Approved input:
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference/processed/CT026_2026-08-03_111938_augmented_trials.csv`.
+  Its pre-write identity was 399,173 bytes, SHA-256
+  `51d69a39483b454b31bbafa508d0d1726c48c1f7f7fb3c144faccf11ea7e1702`,
+  mode `0664`, owner/group `1000:1000`, 650 rows, and 75 columns.
+- Recoverable backup:
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference/processed/CT026_2026-08-03_111938_augmented_trials.csv.pre-wp9a-20261007T172053Z.bak`.
+  It is a separate inode and retains the exact pre-write hash, byte count,
+  permissions, ownership, and modification time.
+- Exact executed mutation: from the repository root, after backup verification,
+  WP9A ran:
+
+  ```bash
+  uv run python -c 'from pathlib import Path; from src.behavior_analysis.gather_trial_features import backfill_rewards_in_block_csv; backfill_rewards_in_block_csv(Path("/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference/processed/CT026_2026-08-03_111938_augmented_trials.csv"))'
+  ```
+
+- Output identity and validation: the augmented CSV is now 400,416 bytes with
+  SHA-256
+  `a0cf46386f55b0b7134cdfb67101d496b7ca17c33d7b57a38e645bbd04118383`,
+  mode `0664`, and owner/group `1000:1000`. It has 650 rows and 76 columns;
+  `rewards_in_block` is the sole appended column, has integer dtype and range
+  0 through 9, and exactly matches an independent recomputation from the
+  backup. Every prior loaded column/value and row order is identical to the
+  backup. Validation of the complete canonical task-decoding target set at
+  choice alignment passed. No sibling temporary file remains.
+- Bounded write-set evidence: the source replacement and declared backup are
+  the only WP9A-created or changed experimental-data paths. Metadata checks for
+  all 17 other pre-existing direct children matched the preflight snapshot,
+  and no unexpected directory entry remained. The feature-parameter file was
+  unchanged at SHA-256
+  `4df6dc6df127040be311b1e65caaadd9b79de55d9528bd10cefbf62fe480f9c1`.
+- Proposed WP10 command, not executed: create only after separate WP10 approval
+  the bounded config
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference/task_decoding_config_wp10_bounded.json`,
+  then run from the tracked-clean repository root:
+
+  ```bash
+  env UV_CACHE_DIR=/tmp/context-inference-uv-cache \
+    MPLCONFIGDIR=/tmp/context-inference-matplotlib \
+    uv run python -m src.neural_analysis.task_decoding.run_session dry-run \
+    --config "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference/task_decoding_config_wp10_bounded.json"
+  ```
+
+  The proposed config selects ProbeA/PFC and ProbeB/HPC, choice alignment,
+  100 ms bins, ten PCs per region, fixed regularization, five outer folds,
+  three inactive inner folds, and only `current_action` plus `relative_doubt`.
+  Config creation, dry run, neural loading, detached smoke, and benchmark all
+  remain unperformed.
+- Exact next action: propose the complete WP10 command sequence, identity and
+  resource-measurement contract, detached ownership behavior, and stop
+  conditions. Obtain explicit user approval before creating the bounded config
+  or reading CT026 neural inputs.
 
 ## 1. Objective
 
