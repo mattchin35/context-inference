@@ -287,9 +287,11 @@ def validate_scientific_source_cleanliness(repository_root: Path) -> None:
     ).stdout.splitlines()
     for line in status:
         path = line[3:].strip().split(" -> ")[-1].strip().strip('"')
-        relevant = path in scoped or path.startswith(
-            "src/neural_analysis/task_decoding/"
+        untracked_package_python = (
+            path.startswith("src/neural_analysis/task_decoding/")
+            and path.endswith(".py")
         )
+        relevant = path in scoped or untracked_package_python
         if relevant:
             raise ValueError(f"Relevant scientific source is not clean: {path}")
     tracked = set(

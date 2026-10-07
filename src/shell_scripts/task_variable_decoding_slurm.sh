@@ -68,11 +68,12 @@ tracked_status="$(git -C "$repository_root" status --porcelain --untracked-files
 if [[ -n "$tracked_status" ]]; then
     fail "repository has tracked changes; commit or restore them before submission"
 fi
-untracked_package="$(
-    git -C "$repository_root" status --porcelain --untracked-files=all -- \
-        src/neural_analysis/task_decoding
+untracked_python="$(
+    git -C "$repository_root" ls-files --others --exclude-standard -- \
+        ':(glob)src/neural_analysis/task_decoding/*.py' \
+        ':(glob)src/neural_analysis/task_decoding/**/*.py'
 )" || fail "unable to inspect untracked task-decoding source"
-if [[ "$untracked_package" == *"?? "*".py"* ]]; then
+if [[ -n "$untracked_python" ]]; then
     fail "task-decoding package contains untracked Python source"
 fi
 
@@ -80,6 +81,7 @@ command -v uv >/dev/null 2>&1 || fail "uv is unavailable on PATH"
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
+export PYTHONDONTWRITEBYTECODE=1
 cd -- "$repository_root"
 
 if [[ "$mode" == "scheduled" ]]; then
