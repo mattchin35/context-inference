@@ -17,8 +17,9 @@ committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
 committed at `b844f26` after independent approval. WP5A base saved-results
-tests are committed at `4a5664a`; independently approved dynamic-schema and
-semantic correction tests are committed at `bc628c4`. The bounded
+tests are committed at `4a5664a`; independently approved dynamic-schema,
+semantic, and frozen-control corrections are committed at `bc628c4` and
+`2c5f086`. The bounded
 `results.py` correction is the single next package. No
 experimental-data mutation, decoding output, benchmark, transfer, local long
 run, or cluster action is authorized.
@@ -26,7 +27,7 @@ run, or cluster action is authorized.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local implementation HEAD: `bc628c4`;
+- local implementation HEAD: `2c5f086`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
@@ -887,13 +888,13 @@ Use this template for each appended record:
   `5799a44418c12777fe054a238994e4503a7ca9bd54165bab1693d7cd60f20a38`.
 - RED command and result: `env
   UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
-  src/tests/neural_analysis/task_decoding/test_results.py -q` executes 295
-  cases and reports 145 failed / 150 passed against the unchanged production
-  candidate. The 143 committed baseline cases remain GREEN; seven supplemental
+  src/tests/neural_analysis/task_decoding/test_results.py -q` executes 302
+  cases and reports 152 failed / 150 passed against the unchanged production
+  candidate. The 143 original baseline cases remain GREEN; seven supplemental
   docstring controls already pass. Pycompile, the 100-column check, and
   `git diff --check` pass.
 - Commits: base tests `4a5664a`; original RED handoff `87fe0b1`; supplemental
-  tests `bc628c4`.
+  tests `bc628c4`; frozen fixed-control correction `2c5f086`.
 - Real-data or external actions: none.
 - Findings and unresolved risks: review exposed hard-coded fixture dimensions,
   a discarded run fingerprint, common-row/full-row leakage indexing, incomplete
@@ -903,9 +904,13 @@ Use this template for each appended record:
   covers dynamic one-target/five-fold and genuinely unavailable-inner-plan
   records, configuration-coherent time bins, exact axes/units/provenance,
   causal eligibility/class/fit/feature/candidate sentinels, canonical UTF-8
-  blocks, immutable publication, and save-before-publication validation.
+  blocks, immutable publication, and save-before-publication validation. A
+  final audit corrected the numerical fixed-control fixture from `alpha=0.1`
+  to the specification-owned `alpha=1.0` and added causal validation for both
+  family strengths, `l1_ratio`, canonical JSON, and fixed-mode selection
+  sentinels.
 - Exact next action: modify only
-  `src/neural_analysis/task_decoding/results.py` until all 295 result tests and
+  `src/neural_analysis/task_decoding/results.py` until all 302 result tests and
   the full task-decoding regression suite pass without changing committed
   tests, then obtain independent Sol xhigh production approval before the
   WP5A GREEN commit and handoff.
