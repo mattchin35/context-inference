@@ -40,6 +40,7 @@ _TARGETS = ("current_action", "relative_doubt")
 _REGIONS = ("PFC", "HPC", "PFC+HPC")
 _REPRESENTATIONS = ("pca", "units")
 _METRICS = ("balanced_accuracy", "auc", "r2")
+_TARGET_OUTER_UNAVAILABLE_CODE = "target_outer_unavailable"
 _SCORE_AXES = ("target", "region", "representation", "metric", "time", "fold")
 _FIT_AXES = ("target", "region", "representation", "time", "fold")
 _BLOCK_VALUES = (
@@ -3879,6 +3880,33 @@ def test_tuned_no_valid_candidate_uses_explicit_unavailable_cell_sentinels(tmp_p
     assert set(saved["candidate_inner_reasons"][audit_index].flat) == {"candidate_fit_failed"}
 
 
+def test_wp5a_save_rejects_no_valid_candidate_with_retained_effective_features(tmp_path):
+    """No-valid-candidate cells must not claim retained transformed features."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="tuned")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    fit_index = (0, 0, 0, 0, 0)
+    audit_index = fit_index + (slice(None), slice(None))
+    arrays["fit_status"][fit_index] = "unavailable"
+    arrays["fit_reason_codes"][fit_index] = "no_valid_tuning_candidate"
+    arrays["fold_scores"][0, 0, 0, :, 0, 0] = np.nan
+    arrays["coefficient_values"][fit_index] = np.nan
+    arrays["fitted_intercepts"][fit_index] = np.nan
+    arrays["effective_feature_counts"][fit_index] = 1
+    arrays["candidate_inner_scores"][audit_index] = np.nan
+    arrays["candidate_inner_statuses"][audit_index] = "invalid"
+    arrays["candidate_inner_reasons"][audit_index] = "candidate_fit_failed"
+    arrays["selected_candidate_indices"][fit_index] = -1
+    arrays["selected_parameters_json"][fit_index] = ""
+
+    with pytest.raises(ValueError, match="candidate|effective|unavailable|feature"):
+        results.save_task_decoding_run(
+            tmp_path / "no-valid-candidate-with-features",
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
+        )
+
+
 def test_tuned_inner_plan_unavailable_preserves_complete_invalid_audit_without_outputs(tmp_path):
     """Unavailable grouped inner plans are distinct from evaluated no-valid candidates.
 
@@ -4019,8 +4047,9 @@ def configure_real_outer_unavailable_target(
     -------
     str
         Exact nonempty unavailable reason returned by
-        ``modeling.make_outer_splits`` and copied into all target-level and
-        fold-level unavailable-reason members.
+        ``modeling.make_outer_splits`` and stored at target scope. Per-fit and
+        per-candidate arrays use the compact
+        ``target_outer_unavailable`` reason code instead.
     """
     family = str(arrays["target_families"][target])
     outer_before = arrays["outer_fold_ids"][target]
@@ -4046,7 +4075,7 @@ def configure_real_outer_unavailable_target(
     unavailable_outer_ids[eligible_common_rows] = plan.fold_ids
     arrays["outer_fold_ids"][target] = unavailable_outer_ids
     arrays["fit_status"][target].fill("unavailable")
-    arrays["fit_reason_codes"][target].fill(reason)
+    arrays["fit_reason_codes"][target].fill(_TARGET_OUTER_UNAVAILABLE_CODE)
     arrays["effective_feature_counts"][target].fill(0)
     arrays["train_counts"][target].fill(0)
     arrays["test_counts"][target].fill(0)
@@ -4060,7 +4089,7 @@ def configure_real_outer_unavailable_target(
         arrays["inner_selection_fold_ids"][target].fill(-1)
         arrays["candidate_inner_scores"][target].fill(np.nan)
         arrays["candidate_inner_statuses"][target].fill("invalid")
-        arrays["candidate_inner_reasons"][target].fill(reason)
+        arrays["candidate_inner_reasons"][target].fill(_TARGET_OUTER_UNAVAILABLE_CODE)
         arrays["selected_candidate_indices"][target].fill(-1)
         arrays["selected_parameters_json"][target].fill("")
     return reason
@@ -4123,7 +4152,7 @@ def test_wp5a_target_outer_unavailability_round_trips_with_explicit_target_axis(
     np.testing.assert_array_equal(saved["requested_feature_counts"][target], requested_counts)
     assert np.all(saved["outer_fold_ids"][target] == -1)
     assert set(saved["fit_status"][target].flat) == {"unavailable"}
-    assert set(saved["fit_reason_codes"][target].flat) == {reason}
+    assert set(saved["fit_reason_codes"][target].flat) == {_TARGET_OUTER_UNAVAILABLE_CODE}
     assert np.all(saved["train_counts"][target] == 0)
     assert np.all(saved["test_counts"][target] == 0)
     expected_class_counts = 0 if target == 0 else -1
@@ -4136,9 +4165,143 @@ def test_wp5a_target_outer_unavailability_round_trips_with_explicit_target_axis(
         assert np.all(saved["inner_selection_fold_ids"][target] == -1)
         assert np.isnan(saved["candidate_inner_scores"][target]).all()
         assert set(saved["candidate_inner_statuses"][target].flat) == {"invalid"}
-        assert set(saved["candidate_inner_reasons"][target].flat) == {reason}
+        assert set(saved["candidate_inner_reasons"][target].flat) == {
+            _TARGET_OUTER_UNAVAILABLE_CODE
+        }
         assert np.all(saved["selected_candidate_indices"][target] == -1)
         assert not np.any(saved["selected_parameters_json"][target] != "")
+
+
+def test_wp5a_save_rejects_unavailable_target_when_values_restore_a_splittable_plan(tmp_path):
+    """Unavailable sentinels cannot mask a categorical target with real outer splits."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    target = 0
+    original_values = arrays["encoded_target_values"][target].copy()
+    target_outer = arrays["outer_fold_ids"][target]
+    other_outer = arrays["outer_fold_ids"][1]
+    payloads = dynamic_block_payloads(arrays)
+    for common_row, full_row in enumerate(arrays["trial_row_indices"]):
+        fold = target_outer[common_row]
+        if fold < 0:
+            fold = other_outer[common_row]
+        label = f"fold-{int(fold)}" if fold >= 0 else f"ineligible-{int(full_row)}"
+        payloads[int(full_row)] = json.dumps(label).encode("ascii")
+    replace_dynamic_block_payloads(arrays, payloads)
+    assert_grouped_split_integrity(arrays)
+    configure_real_outer_unavailable_target(arrays, target=target)
+    arrays["encoded_target_values"][target] = original_values
+    trial_rows = arrays["trial_row_indices"]
+    eligible_common = arrays["eligibility_masks"][target, trial_rows]
+    decoded_blocks = np.asarray(decoded_block_labels(arrays), dtype=object)
+    plan = modeling.make_outer_splits(
+        arrays["encoded_target_values"][target, trial_rows[eligible_common]],
+        decoded_blocks[trial_rows[eligible_common]],
+        target_family="categorical",
+        fold_count=int(arrays["fold_labels"].size),
+    )
+    assert plan.is_available
+    assert np.any(plan.fold_ids >= 0)
+
+    with pytest.raises(ValueError, match="unavailable|outer|target|split"):
+        results.save_task_decoding_run(
+            tmp_path / "unavailable-with-splittable-values",
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
+        )
+
+
+def test_wp5a_save_rejects_available_numerical_target_with_constant_values(tmp_path):
+    """Available numerical target folds must remain constructible from saved values."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    target = 1
+    trial_rows = arrays["trial_row_indices"]
+    eligible_common = arrays["eligibility_masks"][target, trial_rows]
+    eligible_full_rows = trial_rows[eligible_common]
+    arrays["encoded_target_values"][target, eligible_full_rows] = 0.5
+    decoded_blocks = np.asarray(decoded_block_labels(arrays), dtype=object)
+    plan = modeling.make_outer_splits(
+        arrays["encoded_target_values"][target, eligible_full_rows],
+        decoded_blocks[eligible_full_rows],
+        target_family="numerical",
+        fold_count=int(arrays["fold_labels"].size),
+    )
+    assert not plan.is_available
+    assert plan.unavailable_reason == "constant target"
+    assert np.all(plan.fold_ids == -1)
+
+    with pytest.raises(ValueError, match="available|outer|target|constant|split"):
+        results.save_task_decoding_run(
+            tmp_path / "available-numerical-constant-target",
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
+        )
+
+
+def test_wp5a_scalar_block_labels_are_decoded_before_grouped_split_planning(tmp_path):
+    """Unavailable scalar numeric groups round-trip without byte-based recomputation.
+
+    The exact counterexample produces an unavailable plan for numeric labels,
+    but a different available plan for their canonical UTF-8 bytes. The saved
+    target therefore proves the serializer must preserve decoded scalar group
+    semantics if it recomputes outer availability in the future.
+    """
+    numeric_blocks = np.array([2, 3, 3, 3, 10, 10, 10, 11, 11, 11, 11], dtype=np.int64)
+    target_values = np.array([0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1], dtype=np.int64)
+    numeric_plan = modeling.make_outer_splits(
+        target_values,
+        numeric_blocks,
+        target_family="categorical",
+        fold_count=3,
+    )
+    byte_plan = modeling.make_outer_splits(
+        target_values,
+        np.array([str(value).encode("ascii") for value in numeric_blocks], dtype="S2"),
+        target_family="categorical",
+        fold_count=3,
+    )
+    assert not numeric_plan.is_available
+    assert numeric_plan.unavailable_reason == "categorical grouped fold lacks both classes"
+    assert np.all(numeric_plan.fold_ids == -1)
+    assert byte_plan.is_available
+    np.testing.assert_array_equal(
+        byte_plan.fold_ids,
+        np.array([0, 0, 0, 0, 2, 2, 2, 1, 1, 1, 1], dtype=int),
+    )
+
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    target = 0
+    configure_real_outer_unavailable_target(arrays, target=target)
+    payloads = dynamic_block_payloads(arrays)
+    for full_row, numeric_block in enumerate(numeric_blocks):
+        payloads[full_row] = json.dumps(int(numeric_block)).encode("ascii")
+    replace_dynamic_block_payloads(arrays, payloads)
+    configure_real_outer_unavailable_target(arrays, target=1)
+    arrays["eligibility_masks"][target, 12] = False
+    arrays["eligibility_reason_codes"][target, 12] = "target_ineligible"
+    arrays["eligibility_counts"][target] = 11
+    arrays["encoded_target_values"][target] = np.nan
+    arrays["encoded_target_values"][target, :11] = target_values
+    arrays["target_unavailable_reasons"][target] = numeric_plan.unavailable_reason
+    arrays["fit_reason_codes"][target].fill(_TARGET_OUTER_UNAVAILABLE_CODE)
+    run_directory = tmp_path / "numeric-scalar-unavailable"
+    results.save_task_decoding_run(
+        run_directory,
+        arrays=arrays,
+        **{key: value for key, value in arguments.items() if key != "arrays"},
+    )
+    saved = results.load_task_decoding_run(run_directory)["arrays"]
+    assert saved["target_status"][target] == "unavailable"
+    assert saved["target_unavailable_reasons"][target] == numeric_plan.unavailable_reason
+    assert set(saved["fit_reason_codes"][target].flat) == {_TARGET_OUTER_UNAVAILABLE_CODE}
+    assert np.all(saved["outer_fold_ids"][target] == -1)
+    assert decoded_block_labels(saved)[:11] == tuple(numeric_blocks.tolist())
+    np.testing.assert_array_equal(saved["encoded_target_values"][target, :11], target_values)
 
 
 @pytest.mark.parametrize(
@@ -4309,13 +4472,24 @@ def test_wp5a_save_rejects_fold_local_feature_map_contract_violations(kind, tmp_
 
 
 def test_wp5a_fold_local_effective_features_allow_nan_dropped_columns(tmp_path):
-    """One effective mapped feature may coexist with one NaN dropped coefficient column."""
+    """One direct unit can be dropped consistently across one target/fold transform.
+
+    The PFC direct-unit transform and the PFC segment of its combined direct
+    transform share a fitted feature set, so every time bin for one target and
+    outer fold must retain identical finite/NaN coefficient masks and widths.
+    """
     input_paths = write_input_fixture(tmp_path)
     arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
     arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
-    fit_index = (0, 0, 1, 0, 0)
-    arrays["effective_feature_counts"][fit_index] = 1
-    arrays["coefficient_values"][fit_index + (1,)] = np.nan
+    target, fold = 0, 0
+    time_count = arrays["time_bin_centers_s"].size
+    for time in range(time_count):
+        pfc_index = (target, 0, 1, time, fold)
+        combined_index = (target, 2, 1, time, fold)
+        arrays["effective_feature_counts"][pfc_index] = 1
+        arrays["effective_feature_counts"][combined_index] = 3
+        arrays["coefficient_values"][pfc_index + (1,)] = np.nan
+        arrays["coefficient_values"][combined_index + (1,)] = np.nan
     run_directory = tmp_path / "fold-local-nan"
 
     results.save_task_decoding_run(
@@ -4324,9 +4498,99 @@ def test_wp5a_fold_local_effective_features_allow_nan_dropped_columns(tmp_path):
         **{key: value for key, value in arguments.items() if key != "arrays"},
     )
     saved = results.load_task_decoding_run(run_directory)["arrays"]
-    assert saved["effective_feature_counts"][fit_index] == 1
-    assert np.isfinite(saved["coefficient_values"][fit_index + (0,)])
-    assert np.isnan(saved["coefficient_values"][fit_index + (1,)])
+    pfc_mask = np.array([True, False])
+    combined_mask = np.array([True, False, True, True])
+    for time in range(time_count):
+        pfc_index = (target, 0, 1, time, fold)
+        combined_index = (target, 2, 1, time, fold)
+        assert saved["effective_feature_counts"][pfc_index] == pfc_mask.sum()
+        assert saved["effective_feature_counts"][combined_index] == combined_mask.sum()
+        np.testing.assert_array_equal(
+            np.isfinite(saved["coefficient_values"][pfc_index][:2]),
+            pfc_mask,
+        )
+        np.testing.assert_array_equal(
+            np.isfinite(saved["coefficient_values"][combined_index][:4]),
+            combined_mask,
+        )
+
+
+def test_wp5a_save_rejects_time_varying_direct_feature_dropout_within_target_fold(tmp_path):
+    """One fitted direct-unit transform cannot change its width across time bins."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    pfc_index = (0, 0, 1, 0, 0)
+    combined_index = (0, 2, 1, 0, 0)
+    arrays["effective_feature_counts"][pfc_index] = 1
+    arrays["effective_feature_counts"][combined_index] = 3
+    arrays["coefficient_values"][pfc_index + (1,)] = np.nan
+    arrays["coefficient_values"][combined_index + (1,)] = np.nan
+
+    with pytest.raises(ValueError, match="time|feature|effective|transform|coefficient"):
+        results.save_task_decoding_run(
+            tmp_path / "time-varying-direct-dropout",
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
+        )
+
+
+def test_wp5a_save_rejects_direct_unit_subset_mismatch_with_combined_segment(tmp_path):
+    """Standalone PFC unit dropout must match the PFC segment of combined units."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    for time in range(arrays["time_bin_centers_s"].size):
+        pfc_index = (0, 0, 1, time, 0)
+        arrays["effective_feature_counts"][pfc_index] = 1
+        arrays["coefficient_values"][pfc_index + (1,)] = np.nan
+
+    with pytest.raises(ValueError, match="combined|direct|unit|segment|feature"):
+        results.save_task_decoding_run(
+            tmp_path / "inconsistent-combined-direct-segment",
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
+        )
+
+
+def test_wp5a_save_rejects_nonprefix_pca_finite_coefficient_mask(tmp_path):
+    """A retained second PCA component cannot coexist with a dropped first component."""
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="fixed")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    arrays["coefficient_active_masks"][0, 0, 1] = True
+    arrays["coefficient_feature_ids"][0, 0, :2] = ("PFC:PC1", "PFC:PC2")
+    arrays["coefficient_feature_regions"][0, 0, :2] = ("PFC", "PFC")
+    arrays["coefficient_feature_statuses"][0, 0, :2] = "available"
+    arrays["coefficient_values"][:, 0, 0, :, :, :2] = 0.5
+    arrays["effective_feature_counts"][:, 0, 0] = 2
+
+    arrays["coefficient_active_masks"][2, 0, 2] = True
+    arrays["coefficient_feature_ids"][2, 0, :3] = ("PFC:PC1", "PFC:PC2", "HPC:PC1")
+    arrays["coefficient_feature_regions"][2, 0, :3] = ("PFC", "PFC", "HPC")
+    arrays["coefficient_feature_statuses"][2, 0, :3] = "available"
+    arrays["coefficient_values"][:, 2, 0, :, :, :3] = 0.5
+    arrays["effective_feature_counts"][:, 2, 0] = 3
+
+    for time in range(arrays["time_bin_centers_s"].size):
+        pfc_index = (0, 0, 0, time, 0)
+        combined_index = (0, 2, 0, time, 0)
+        arrays["effective_feature_counts"][pfc_index] = 1
+        arrays["effective_feature_counts"][combined_index] = 2
+        arrays["coefficient_values"][pfc_index + (0,)] = np.nan
+        arrays["coefficient_values"][combined_index + (0,)] = np.nan
+    fit_index = (0, 0, 0, 0, 0)
+    assert np.array_equal(
+        np.isfinite(arrays["coefficient_values"][fit_index][:2]),
+        np.array([False, True]),
+    )
+
+    with pytest.raises(ValueError, match="PCA|prefix|component|feature|coefficient"):
+        results.save_task_decoding_run(
+            tmp_path / "nonprefix-pca-coefficient-mask",
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
+        )
 
 
 @pytest.mark.parametrize(
@@ -4378,38 +4642,26 @@ def test_wp5a_checkpoint_loader_rejects_missing_or_invalid_target_metadata(metad
 def test_wp5a_tuned_selected_candidate_survives_outer_feature_or_later_fit_failure(tmp_path):
     """Completed inner selection persists when later outer work cannot yield a score.
 
-    One unavailable cell has zero post-transform features; another has one
-    usable feature but fails later fitting/scoring. Both retain the selected
-    candidate and parameter JSON that their valid inner audit established.
+    A selected candidate persists if later estimator fitting or scoring fails
+    after a complete regional transform with its unchanged mapped width.
     """
     input_paths = write_input_fixture(tmp_path)
     arguments = make_run_save_arguments(input_paths, regularization_mode="tuned")
     arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
-    expected_cells: list[tuple[tuple[int, ...], str, int, str, int]] = []
-    for fit_index, reason, effective in (
-        ((0, 0, 0, 0, 0), "outer_feature_unavailable", 0),
-        ((0, 0, 0, 1, 0), "outer_fit_failed", 1),
-    ):
-        arrays["fit_status"][fit_index] = "unavailable"
-        arrays["fit_reason_codes"][fit_index] = reason
-        arrays["effective_feature_counts"][fit_index] = effective
-        arrays["fold_scores"][0, 0, 0, :, fit_index[3], fit_index[4]] = np.nan
-        arrays["coefficient_values"][fit_index] = np.nan
-        arrays["fitted_intercepts"][fit_index] = np.nan
-        selection_index = (
-            fit_index[0],
-            fit_index[4],
-            fit_index[1],
-            fit_index[2],
-            fit_index[3],
-        )
-        selected_index = int(arrays["selected_candidate_indices"][selection_index])
-        selected_parameters = arrays["selected_parameters_json"][selection_index]
-        assert selected_index >= 0
-        assert selected_parameters != ""
-        expected_cells.append(
-            (fit_index, reason, effective, selected_parameters, selected_index)
-        )
+    fit_index = (0, 0, 1, 0, 0)
+    reason = "outer_estimator_failure"
+    effective = int(arrays["effective_feature_counts"][fit_index])
+    assert effective == 2
+    arrays["fit_status"][fit_index] = "unavailable"
+    arrays["fit_reason_codes"][fit_index] = reason
+    arrays["fold_scores"][0, 0, 1, :, 0, 0] = np.nan
+    arrays["coefficient_values"][fit_index] = np.nan
+    arrays["fitted_intercepts"][fit_index] = np.nan
+    selection_index = (0, 0, 0, 1, 0)
+    selected_index = int(arrays["selected_candidate_indices"][selection_index])
+    selected_parameters = arrays["selected_parameters_json"][selection_index]
+    assert selected_index >= 0
+    assert selected_parameters != ""
 
     run_directory = tmp_path / "outer-failure-after-selection"
     results.save_task_decoding_run(
@@ -4418,30 +4670,14 @@ def test_wp5a_tuned_selected_candidate_survives_outer_feature_or_later_fit_failu
         **{key: value for key, value in arguments.items() if key != "arrays"},
     )
     saved = results.load_task_decoding_run(run_directory)["arrays"]
-    for fit_index, reason, effective, selected_parameters, selected_index in expected_cells:
-        selection_index = (
-            fit_index[0],
-            fit_index[4],
-            fit_index[1],
-            fit_index[2],
-            fit_index[3],
-        )
-        assert saved["fit_status"][fit_index] == "unavailable"
-        assert saved["fit_reason_codes"][fit_index] == reason
-        assert saved["effective_feature_counts"][fit_index] == effective
-        assert saved["selected_candidate_indices"][selection_index] == selected_index
-        assert saved["selected_parameters_json"][selection_index] == selected_parameters
-        score_index = (
-            fit_index[0],
-            fit_index[1],
-            fit_index[2],
-            slice(None),
-            fit_index[3],
-            fit_index[4],
-        )
-        assert np.isnan(saved["fold_scores"][score_index]).all()
-        assert np.isnan(saved["coefficient_values"][fit_index]).all()
-        assert np.isnan(saved["fitted_intercepts"][fit_index])
+    assert saved["fit_status"][fit_index] == "unavailable"
+    assert saved["fit_reason_codes"][fit_index] == reason
+    assert saved["effective_feature_counts"][fit_index] == effective
+    assert saved["selected_candidate_indices"][selection_index] == selected_index
+    assert saved["selected_parameters_json"][selection_index] == selected_parameters
+    assert np.isnan(saved["fold_scores"][0, 0, 1, :, 0, 0]).all()
+    assert np.isnan(saved["coefficient_values"][fit_index]).all()
+    assert np.isnan(saved["fitted_intercepts"][fit_index])
 
 
 def test_wp5a_tuned_inner_class_coverage_unavailability_round_trips(tmp_path):
@@ -4645,7 +4881,7 @@ def test_wp5a_fixed_post_transform_fit_failure_retains_effective_feature_count(t
     fit_index = (0, 0, 1, 0, 0)
     arrays["fit_status"][fit_index] = "unavailable"
     arrays["fit_reason_codes"][fit_index] = "fit_convergence_failure"
-    arrays["effective_feature_counts"][fit_index] = 1
+    assert arrays["effective_feature_counts"][fit_index] == 2
     arrays["fold_scores"][0, 0, 1, :, 0, 0] = np.nan
     arrays["coefficient_values"][fit_index] = np.nan
     arrays["fitted_intercepts"][fit_index] = np.nan
@@ -4659,7 +4895,7 @@ def test_wp5a_fixed_post_transform_fit_failure_retains_effective_feature_count(t
     saved = results.load_task_decoding_run(run_directory)["arrays"]
     assert saved["fit_status"][fit_index] == "unavailable"
     assert saved["fit_reason_codes"][fit_index] == "fit_convergence_failure"
-    assert saved["effective_feature_counts"][fit_index] == 1
+    assert saved["effective_feature_counts"][fit_index] == 2
     assert np.isnan(saved["fold_scores"][0, 0, 1, :, 0, 0]).all()
     assert np.isnan(saved["coefficient_values"][fit_index]).all()
     assert np.isnan(saved["fitted_intercepts"][fit_index])
