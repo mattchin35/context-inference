@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import matplotlib.pyplot as plt
+import pandas as pd
 import pytest
 
 from src.neural_analysis import psth_webapp as legacy_webapp
@@ -402,6 +404,104 @@ def test_task_decoding_view_explains_the_no_saved_run_state(tmp_path: Path) -> N
     assert str(session_root / "analysis_runs") in combined
     assert "run_session" in combined
     assert "offline" in combined.lower()
+
+
+def test_task_decoding_selectors_only_render_the_completed_saved_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Display changes call saved plotting/table paths without any fitting entry point."""
+    task_view = _canonical_module("task_decoding_views")
+    inputs = write_input_fixture(tmp_path)
+    run_directory = inputs["session_root"] / "analysis_runs" / "complete"
+    save_run_fixture(run_directory, inputs, regularization_mode="fixed")
+    _mark_complete(run_directory)
+    calls: list[tuple[str, object]] = []
+
+    class SavedViewStreamlit:
+        """Choose deterministic nondefault display controls and record outputs."""
+
+        def subheader(self, message: str) -> None:
+            calls.append(("subheader", message))
+
+        def text_input(self, _label: str, *, value: str) -> str:
+            return value
+
+        def selectbox(self, label: str, *, options: list[str]) -> str:
+            selected = {
+                "Categorical metric": "auc",
+                "Region": "PFC",
+                "Representation": "units",
+                "Target": "current_action",
+            }
+            if label == "Time bin":
+                return options[1]
+            return selected.get(label, options[0])
+
+        def caption(self, message: str) -> None:
+            calls.append(("caption", message))
+
+        def json(self, value: object, **_kwargs: object) -> None:
+            calls.append(("json", value))
+
+        def pyplot(self, figure: plt.Figure) -> None:
+            calls.append(("figure", figure))
+
+        def dataframe(self, table: pd.DataFrame, **_kwargs: object) -> None:
+            calls.append(("table", table.copy()))
+
+        def info(self, message: str) -> None:
+            raise AssertionError(message)
+
+        def error(self, message: str) -> None:
+            raise AssertionError(message)
+
+    def fake_heatmap(
+        _saved_run: object,
+        *,
+        family: str,
+        metric: str,
+    ) -> plt.Figure:
+        calls.append(("heatmap", (family, metric)))
+        return plt.figure()
+
+    def fake_summary(
+        _saved_run: object,
+        *,
+        target: str,
+        region: str,
+        time_bin_index: int,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        calls.append(("coefficient-summary", (target, region, time_bin_index)))
+        return pd.DataFrame({"feature_id": ["probe-pfc:11"]}), pd.DataFrame(
+            {"outer_fold": [0]}
+        )
+
+    def fake_coefficients(
+        _saved_run: object,
+        *,
+        target: str,
+        region: str,
+        time_bin_index: int,
+    ) -> plt.Figure:
+        calls.append(("coefficients", (target, region, time_bin_index)))
+        return plt.figure()
+
+    monkeypatch.setattr(task_view, "plot_decoding_heatmap", fake_heatmap)
+    monkeypatch.setattr(task_view, "summarize_unit_coefficients", fake_summary)
+    monkeypatch.setattr(task_view, "plot_unit_coefficients", fake_coefficients)
+
+    task_view.render_task_decoding_view(
+        SavedViewStreamlit(),
+        SimpleNamespace(session_root=inputs["session_root"]),
+    )
+
+    assert ("heatmap", ("categorical", "auc")) in calls
+    assert ("heatmap", ("numerical", "r2")) in calls
+    assert ("coefficient-summary", ("current_action", "PFC", 1)) in calls
+    assert ("coefficients", ("current_action", "PFC", 1)) in calls
+    assert sum(name == "json" for name, _value in calls) == 1
+    assert sum(name == "table" for name, _value in calls) == 3
 
 
 def test_metadata_keeps_saved_result_view_available_without_raw_sources(tmp_path: Path) -> None:
