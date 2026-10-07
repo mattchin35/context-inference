@@ -2033,6 +2033,10 @@ def test_preparation_cleanliness_rejects_every_dirty_direct_dependency(
         (" M docs/unrelated.md\n", False),
         (" M src/neural_analysis/task_decoding/modeling.py\n", True),
         ("?? src/neural_analysis/task_decoding/new_science.py\n", True),
+        (
+            "?? src/neural_analysis/task_decoding/__pycache__/pipeline.cpython-314.pyc\n",
+            False,
+        ),
     ),
 )
 def test_preparation_cleanliness_handles_package_untracked_missing_and_unrelated_state(
@@ -2041,7 +2045,7 @@ def test_preparation_cleanliness_handles_package_untracked_missing_and_unrelated
     tmp_path,
     monkeypatch,
 ):
-    """Relevant package dirtiness or untracked Python blocks; unrelated docs do not."""
+    """Scientific Python blocks while unrelated docs and bytecode do not."""
     repository_root = write_scoped_source_tree(tmp_path, name="repository")
     calls = patch_git_commands(
         monkeypatch,

@@ -237,6 +237,7 @@ fi
     printf 'omp\\0%s\\0' "${OMP_NUM_THREADS-}"
     printf 'mkl\\0%s\\0' "${MKL_NUM_THREADS-}"
     printf 'openblas\\0%s\\0' "${OPENBLAS_NUM_THREADS-}"
+    printf 'pybytecode\\0%s\\0' "${PYTHONDONTWRITEBYTECODE-}"
     for value in "$@"; do
         printf 'arg\\0%s\\0' "$value"
     done
@@ -311,7 +312,7 @@ def _captured_values(path: Path) -> list[str]:
         Values for alternating field/value entries.
     """
     fields = path.read_bytes().decode("ascii").rstrip("\0").split("\0")
-    assert fields[:8] == [
+    assert fields[:10] == [
         "cwd",
         fields[1],
         "omp",
@@ -320,9 +321,11 @@ def _captured_values(path: Path) -> list[str]:
         "1",
         "openblas",
         "1",
+        "pybytecode",
+        "1",
     ]
-    assert fields[8::2] == ["arg"] * len(fields[9::2])
-    return fields[9::2]
+    assert fields[10::2] == ["arg"] * len(fields[11::2])
+    return fields[11::2]
 
 
 def test_wp11_wrapper_has_exact_resources_and_valid_bash() -> None:
@@ -353,6 +356,7 @@ def test_wp11_wrapper_has_exact_resources_and_valid_bash() -> None:
     assert "OMP_NUM_THREADS=1" in text
     assert "MKL_NUM_THREADS=1" in text
     assert "OPENBLAS_NUM_THREADS=1" in text
+    assert "PYTHONDONTWRITEBYTECODE=1" in text
     assert "solver" not in text and "max_iter" not in text
     assert "conda activate" not in text
     assert "source ~/.bashrc" not in text
@@ -510,8 +514,10 @@ def test_wp11_wrapper_rejects_dirty_or_wrong_repository_before_python(tmp_path: 
     assert not capture.exists()
 
 
-def test_wp11_login_wrapper_allows_unrelated_untracked_file(tmp_path: Path) -> None:
-    """Historical unrelated untracked files do not block bounded submission."""
+def test_wp11_login_wrapper_allows_unrelated_untracked_file_and_package_bytecode(
+    tmp_path: Path,
+) -> None:
+    """Unrelated files and generated package bytecode do not mimic source."""
     repository, wrapper = _temporary_repository(tmp_path)
     fake_bin, capture = _fake_uv(tmp_path)
     environment = _wrapper_environment(
@@ -521,6 +527,9 @@ def test_wp11_login_wrapper_allows_unrelated_untracked_file(tmp_path: Path) -> N
         scheduled=False,
     )
     (repository / "notes.tmp").write_text("unrelated\n", encoding="ascii")
+    bytecode = repository / "src/neural_analysis/task_decoding/__pycache__/slurm.pyc"
+    bytecode.parent.mkdir()
+    bytecode.write_bytes(b"generated-bytecode")
 
     completed = subprocess.run(
         ("bash", str(wrapper), "status", "--run-directory", "/run"),
