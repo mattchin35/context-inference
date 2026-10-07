@@ -17,8 +17,9 @@ normative amendment `docs/task_variable_spec_v6.md`.
 **Snapshot date:** 2026-10-07
 
 **Current phase:** WP0-WP10B are complete. WP10C revision-6 convergence repair
-is in progress under explicit user approval; its RED contract is committed at
-`ba47795`. WP4 grouped-modeling tests are
+is locally complete under explicit user approval: RED is committed at
+`ba47795` and GREEN production at `6f9c721`. The v2 bounded CT026 rerun has not
+started and remains gated on a clean pushed source identity. WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
@@ -53,8 +54,9 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local WP10A production HEAD: `115311551acbac4ab32d77b86dbbe5667b2bdaba`;
-- `origin/refactor`: `7c59e862019696d85a91e7639375521cf65effc5a`;
+- local WP10C production HEAD:
+  `6f9c72196e0ef9aa6d513db93cb2ac7a91740a11`;
+- `origin/refactor`: `b327d36c551ac154f038bb8b67f847d8d02af7bc`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -96,12 +98,12 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** implement the approved revision-6 amendment by changing
-only the analysis version and logistic iteration ceiling, reproduce GREEN,
-then rerun the same bounded CT026 configuration locally. Require all 1,200
-`current_action` cells and all 1,200 `relative_doubt` cells to be valid before
-the separately approved local eight-target categorical stress validation.
-Do not begin WP11 cluster work.
+**Next exact action:** commit this handoff, push `ba47795`, `6f9c721`, and the
+handoff commit, and verify exact remote equality plus a tracked-clean source.
+Then dry-run and rerun the same bounded CT026 configuration under v2. Require
+all 1,200 `current_action` cells and all 1,200 `relative_doubt` cells to be
+valid before the separately approved local eight-target categorical stress
+validation. Do not begin WP11 cluster work.
 
 ### Authority order
 
@@ -134,7 +136,8 @@ When resuming, use this order:
 | WP9 synthetic integration | Complete: characterization-only test gate `9ea0109` | None |
 | WP9A CT026 augmented-table preparation | Complete: mode RED `b322427`, fix `cdb04d9`, validated backup and table | None |
 | WP10A measurement instrumentation | Complete: RED `fb0278a`, supplement `cc0cf7d`, GREEN `1153115` | Push exact commits before real-session evidence |
-| WP10B CT026 preflight/benchmark | Authorized, not started | Verify pushed clean source, then create bounded config and run dry-run stop conditions |
+| WP10B CT026 preflight/benchmark | Complete: v1 run validated; 2,400 calls measured; 687 categorical convergence failures exposed | Revision-6 local repair and replacement benchmark |
+| WP10C revision-6 convergence repair | Locally complete: RED `ba47795`, GREEN `6f9c721` | Push exact commits, rerun bounded v2 gate, then local categorical stress gate |
 | WP11 single-session cluster path | Not authorized | WP10 evidence and user choice justify cluster convenience/cost; user approves wrapper/transfer work |
 | WP12 CT026 scientific inspection | Not authorized | User accepts benchmark and authorizes exact run |
 | WP13 cluster batch-array follow-up | Deferred end-job and not authorized | WP12 accepted; resource profile finalized; user approves batch work |
@@ -143,7 +146,7 @@ When resuming, use this order:
 
 A new or returning Sol supervisor must:
 
-1. read revision 5, this complete plan, `AGENTS.md`,
+1. read revision 5, its revision-6 amendment, this complete plan, `AGENTS.md`,
    `docs/SoftwareDesign.md`, and the most recent package record;
 2. record current branch, HEAD, `git status --short`, staged diff, and unstaged
    diff without modifying either;
@@ -1664,6 +1667,59 @@ Use this template for each appended record:
   commits, verify `HEAD == origin/refactor`, then create the approved bounded
   CT026 config and run only the recorded dry-run command. Stop on any target
   diagnostic failure rather than substituting a target.
+
+#### 2026-10-07 - WP10B evidence and WP10C revision-6 convergence repair
+
+- State: the bounded CT026 v1 benchmark completed and passed saved-result
+  validation, but its categorical invalidity failed the scientific readiness
+  gate. The approved WP10C source repair is locally complete; replacement v2
+  real-session computation has not started.
+- Authorization: after reviewing the benchmark, the user explicitly chose to
+  fix convergence locally before any cluster work and approved
+  `max_iter=5000`, analysis v2, tests-first implementation, a repeated bounded
+  run, and a later local eight-target categorical stress run. WP11 remains
+  unauthorized.
+- Sol / Terra / reviewer: primary Codex implemented and reviewed the bounded
+  change directly; no subagent was used.
+- Start HEAD / end HEAD: pushed WP10A handoff `b327d36` / WP10C production
+  `6f9c721` before this documentation handoff.
+- Owned files: tests extended
+  `test_config.py`, `test_results.py`, and
+  `test_task_decoding_documentation.py`; production changed only
+  `config.py`; documentation added `task_variable_spec_v6.md` and updated this
+  plan plus the package README. Pre-existing untracked files remain untouched.
+- RED command and result: the four-test focused run produced the intended
+  three failures and one pass in 5.1 seconds. Failures were exactly v1 instead
+  of v2, the old 100-iteration scientific payload, and the absent revision-6
+  amendment. The existing convergence-warning-invalidity test passed.
+- GREEN/regression commands and results: the same focused selection passed
+  four tests; complete configuration/modeling/results/documentation coverage
+  passed 561 tests with two known warnings; the full task-decoding plus
+  documentation suite passed 819 tests with six known warnings in 137.26
+  seconds. Package compilation and `git diff --check` passed.
+- Commits: RED `ba47795`; GREEN `6f9c721`.
+- V1 benchmark evidence: run
+  `task_variable_decoding_2026-10-07T18-15-16Z` completed 2,400 estimator calls
+  in 203.715 seconds wall time with 984,047,616 bytes peak RSS, 0.995 CPU
+  efficiency, and 53,932,914 output bytes. All 1,200 numerical cells were
+  valid. Only 513/1,200 categorical cells were valid: all 600 direct-unit
+  cells and 87 PCA cells recorded `fit_convergence_failure` under
+  `max_iter=100`.
+- Scientific decision: revision 5 remains the immutable base contract;
+  revision 6 is a narrow normative amendment. It changes only the analysis
+  identity to `task-variable-decoding-v2` and the logistic ceiling to 5,000.
+  SAGA, tolerance, seed, scaling, PCA, folds, regularization, metrics, and the
+  rule that any convergence warning invalidates a fit are unchanged. V1 runs
+  remain readable but cannot be reused as v2.
+- Real-data or external actions: this package inspected the already completed
+  v1 run read-only. No new CT026 neural computation, input mutation, transfer,
+  network operation, or scheduler action occurred during WP10C implementation.
+- Exact next action: commit this handoff and push the RED, GREEN, and handoff
+  commits. After `HEAD == origin/refactor` and tracked cleanliness are proven,
+  repeat the bounded dry run and launch a new detached v2 run from an ordinary
+  terminal. Stop if any of its 2,400 cells is invalid; otherwise compare the
+  overlapping v1/v2 valid cells and proceed to the separately approved local
+  eight-target categorical stress configuration.
 
 ## 1. Objective
 
