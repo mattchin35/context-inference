@@ -1393,3 +1393,239 @@ def test_estimator_factory_uses_installed_sklearn_api_frozen_controls_and_omits_
     assert isinstance(numerical, ElasticNet)
     for parameter_name, expected_value in controls["ElasticNet"].items():
         assert getattr(numerical, parameter_name) == expected_value
+
+
+def test_outer_split_failure_returns_an_audit_ready_unavailable_target_result():
+    """An invalid outer plan must remain explainable in the principal result."""
+    inputs = make_classification_inputs(n_blocks=3)
+    inputs["target_values"] = np.array([0, 0, 1, 1, 0, 0] * 2)
+    inputs["block_ids"] = np.repeat(np.arange(3), 4)
+    inputs["outer_fold_count"] = 3
+    expected_plan = modeling.make_outer_splits(
+        np.asarray(inputs["target_values"]),
+        np.asarray(inputs["block_ids"]),
+        target_family="categorical",
+        fold_count=3,
+    )
+
+    result = modeling.decode_target(**inputs)
+
+    assert not expected_plan.is_available
+    assert not result.is_available
+    assert result.status == "unavailable"
+    assert result.unavailable_reason == expected_plan.unavailable_reason
+    assert "class" in result.unavailable_reason.lower()
+    assert np.all(result.outer_fold_ids == -1)
+
+
+@pytest.mark.parametrize("fold_count", (3, 5))
+def test_outer_splits_accept_only_the_configured_integer_fold_counts(fold_count):
+    """Outer CV accepts the two approved scientific fold counts, not any integer."""
+    inputs = make_classification_inputs(n_blocks=10)
+
+    split_plan = modeling.make_outer_splits(
+        np.asarray(inputs["target_values"]),
+        np.asarray(inputs["block_ids"]),
+        target_family="categorical",
+        fold_count=fold_count,
+    )
+
+    assert split_plan.is_available
+    assert len(split_plan.splits) == fold_count
+
+
+@pytest.mark.parametrize("fold_count", (True, 3.0, "3", 2, 4, 6))
+def test_outer_splits_reject_unapproved_fold_count_types_and_values(fold_count):
+    """Invalid outer fold settings are programming/configuration errors, not results."""
+    inputs = make_classification_inputs(n_blocks=10)
+
+    with pytest.raises(ValueError):
+        modeling.make_outer_splits(
+            np.asarray(inputs["target_values"]),
+            np.asarray(inputs["block_ids"]),
+            target_family="categorical",
+            fold_count=fold_count,
+        )
+
+
+@pytest.mark.parametrize("fold_count", (3, True, 3.0, "3", 2, 4, 5))
+def test_inner_splits_accept_only_three_and_reject_other_fold_count_settings(fold_count):
+    """Inner CV has one scientifically frozen three-fold contract."""
+    inputs = make_classification_inputs(n_blocks=6)
+    values = np.asarray(inputs["target_values"])
+    blocks = np.asarray(inputs["block_ids"])
+    indices = np.arange(values.size)
+
+    if type(fold_count) is int and fold_count == 3:
+        split_plan = modeling.make_inner_splits(
+            values,
+            blocks,
+            indices,
+            target_family="categorical",
+            fold_count=fold_count,
+        )
+        assert split_plan.is_available
+    else:
+        with pytest.raises(ValueError):
+            modeling.make_inner_splits(
+                values,
+                blocks,
+                indices,
+                target_family="categorical",
+                fold_count=fold_count,
+            )
+
+
+@pytest.mark.parametrize(
+    "outer_train_indices",
+    (
+        np.array([False, True]),
+        np.array([0.1, 1.2, 2.4, 3.6, 4.8, 5.9]),
+        np.array(["0", "1", "2", "3", "4", "5"]),
+    ),
+)
+def test_inner_splits_reject_noninteger_indices_without_coercion(outer_train_indices):
+    """Inner row identities must be supplied as native integer positions."""
+    inputs = make_classification_inputs(n_blocks=6)
+
+    with pytest.raises(ValueError):
+        modeling.make_inner_splits(
+            np.asarray(inputs["target_values"]),
+            np.asarray(inputs["block_ids"]),
+            outer_train_indices,
+            target_family="categorical",
+            fold_count=3,
+        )
+
+
+def test_fixed_results_and_records_retain_target_and_inactive_inner_configuration(monkeypatch):
+    """Fixed audit records preserve target identity and inactive inner-CV settings."""
+    patch_fast_classification_estimator(monkeypatch)
+    inputs = make_classification_inputs()
+    inputs["target_identifier"] = "persisted_synthetic_target"
+    inputs["inner_fold_count"] = 3
+
+    result = modeling.decode_target(**inputs)
+
+    assert result.target_identifier == "persisted_synthetic_target"
+    assert result.inner_fold_count == 3
+    assert result.fold_records
+    for record in result.fold_records:
+        assert record.record_key == (
+            record.outer_fold_id,
+            record.time_bin_index,
+            record.region_configuration,
+            record.representation,
+        )
+        assert record.target_identifier == "persisted_synthetic_target"
+        assert record.inner_fold_count == 3
+
+
+def test_estimator_factory_allows_only_family_tuning_overrides_and_keeps_fixed_defaults():
+    """Candidate overrides cannot alter frozen solver, weighting, or convergence controls."""
+    controls = frozen_controls()["estimators"]
+    categorical = modeling.make_estimator(
+        target_family="categorical",
+        parameters={"C": 0.25, "l1_ratio": 0.75},
+    )
+    numerical = modeling.make_estimator(
+        target_family="numerical",
+        parameters={"alpha": 0.25, "l1_ratio": 0.75},
+    )
+
+    assert categorical.C == pytest.approx(0.25)
+    assert categorical.l1_ratio == pytest.approx(0.75)
+    assert categorical.solver == controls["LogisticRegression"]["solver"]
+    assert numerical.alpha == pytest.approx(0.25)
+    assert numerical.l1_ratio == pytest.approx(0.75)
+    assert numerical.max_iter == controls["ElasticNet"]["max_iter"]
+
+    rejected_overrides = (
+        ("categorical", {"solver": "lbfgs"}),
+        ("categorical", {"class_weight": "balanced"}),
+        ("categorical", {"random_state": 9}),
+        ("categorical", {"penalty": "l2"}),
+        ("categorical", {"max_iter": 9}),
+        ("categorical", {"positive": True}),
+        ("categorical", {"alpha": 0.1}),
+        ("numerical", {"C": 0.1}),
+        ("numerical", {"max_iter": 9}),
+        ("numerical", {"selection": "random"}),
+        ("numerical", {"positive": True}),
+        ("numerical", {"random_state": 9}),
+        ("numerical", {"tol": 1e-3}),
+        ("numerical", {"unrecognized_control": 1.0}),
+    )
+    for target_family, parameters in rejected_overrides:
+        with pytest.raises(ValueError):
+            modeling.make_estimator(target_family=target_family, parameters=parameters)
+
+    fixed_categorical = modeling.make_estimator(target_family="categorical")
+    fixed_numerical = modeling.make_estimator(target_family="numerical")
+    assert fixed_categorical.C == controls["LogisticRegression"]["C"]
+    assert fixed_categorical.l1_ratio == controls["LogisticRegression"]["l1_ratio"]
+    assert fixed_numerical.alpha == controls["ElasticNet"]["alpha"]
+    assert fixed_numerical.l1_ratio == controls["ElasticNet"]["l1_ratio"]
+
+
+@pytest.mark.parametrize(
+    "target_values",
+    (
+        np.array([-1, 1, -1, 1, -1, 1]),
+        np.array([0, 1, 2, 0, 1, 2]),
+        np.array([False, True, False, True, False, True]),
+    ),
+)
+def test_categorical_splits_require_exact_nonboolean_numeric_zero_one_encoding(target_values):
+    """Categorical split labels are the frozen nonboolean numeric encoding {0, 1}."""
+    block_ids = np.repeat(np.arange(3), 2)
+
+    with pytest.raises(ValueError):
+        modeling.make_outer_splits(
+            target_values,
+            block_ids,
+            target_family="categorical",
+            fold_count=3,
+        )
+
+
+def test_categorical_splits_accept_float_coded_zero_one_labels():
+    """Target construction's numeric float-coded binary labels remain valid for CV."""
+    target_values = np.array([0.0, 1.0, 0.0, 1.0, 0.0, 1.0])
+    block_ids = np.repeat(np.arange(3), 2)
+
+    split_plan = modeling.make_outer_splits(
+        target_values,
+        block_ids,
+        target_family="categorical",
+        fold_count=3,
+    )
+
+    assert split_plan.is_available
+
+
+@pytest.mark.parametrize(
+    ("region_name", "invalid_unit_ids"),
+    (
+        ("pfc_unit_ids", ("", "probe-pfc:19")),
+        ("pfc_unit_ids", ("probe-pfc:11", "probe-pfc:11")),
+        ("hpc_unit_ids", ("", "probe-hpc:17")),
+        ("hpc_unit_ids", ("probe-hpc:5", "probe-hpc:5")),
+    ),
+)
+def test_decode_target_rejects_empty_or_duplicate_unit_ids_before_fitting(
+    monkeypatch,
+    region_name,
+    invalid_unit_ids,
+):
+    """Stable region IDs must be nonempty and unique before any fit can begin."""
+    inputs = make_classification_inputs()
+    inputs[region_name] = invalid_unit_ids
+
+    def fail_transform(*_args, **_kwargs):
+        """Fail if invalid stable IDs reach any training transform operation."""
+        raise AssertionError("Unit ID validation must happen before transform fitting.")
+
+    monkeypatch.setattr(modeling, "fit_region_transform", fail_transform)
+    with pytest.raises(ValueError):
+        modeling.decode_target(**inputs)
