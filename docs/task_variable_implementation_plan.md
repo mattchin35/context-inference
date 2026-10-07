@@ -1,13 +1,16 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP1-WP10C are complete, including the
+**Status:** Implementation authorized; WP1-WP10D are complete, including the
 single-session and batch CLIs, saved-result webapp, portable example, user/
 maintainer documentation, seeded synthetic end-to-end gate, and the separately
 approved CT026 `rewards_in_block` table preparation. WP10B measured the bounded
 CT026 workload and exposed categorical convergence failures under the original
 100-iteration ceiling. The user approved a local revision-6 repair and local
-validation before any cluster work. Full decoding, transfer, and scheduler
-actions retain their separate gates below.
+validation, then selected cluster execution as a required implementation path
+because approximately 15 minutes per session does not scale well across many
+sessions. WP11 single-session Slurm support and WP13 bounded per-session job
+arrays are therefore required packages. Experimental-data transfer and real
+scheduler submissions retain their separate exact-action gates below.
 
 **Scientific contract:** `docs/task_variable_spec_v5.md` plus the active
 normative amendment `docs/task_variable_spec_v6.md`.
@@ -16,11 +19,17 @@ normative amendment `docs/task_variable_spec_v6.md`.
 
 **Snapshot date:** 2026-10-07
 
-**Current phase:** WP0-WP10C are complete. The first v2 bounded run proved the
+**Current phase:** WP0-WP10D are complete. The first v2 bounded run proved the
 convergence repair but exposed a competing-resume lifecycle defect during
-diagnosis. The approved WP10D lifecycle repair is locally complete: RED is
-committed at `c1a64aa` with race-provenance supplement `b201711`, and GREEN at
-`4f131f7`. One clean bounded v2 rerun remains gated on pushed clean source.
+diagnosis. The approved repair is committed through `77ff461`, pushed, and
+tracked-clean. A clean bounded v2 rerun was accepted from an ordinary terminal
+at `task_variable_decoding_2026-10-07T19-29-08Z`; its later one-shot
+validation remains pending. After that evidence and the approved local
+eight-target categorical stress gate, implementation proceeds through WP11
+single-session Slurm support, WP12 one-session cluster validation, and WP13
+per-session job arrays. The implementation path is selected; each real
+transfer or scheduler submission is still approved separately from source
+implementation.
 WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
@@ -40,9 +49,10 @@ contracts are committed through `827989c`, and WP6 GREEN is committed at
 through `0c6ce07`, and WP7 GREEN is committed at `ef7ad55`. WP8 tests are
 committed through `a1c1f5c`, the dry-run JSON correction is `b2b3dde`, and the
 documentation/example GREEN commit is `8b92c4f`. No further experimental-data
-mutation, full decoding run, transfer, or cluster action is authorized; only
-the approved bounded WP10B benchmark may proceed after the push/clean-source
-gate.
+mutation, transfer, or real cluster action is authorized by this planning
+decision. The already launched bounded WP10 rerun may finish, and cluster
+source/tests may begin only after the local gates and the tests-first plan
+below.
 WP9's characterization-only synthetic integration gate is committed at
 `9ea0109`. WP9A's permission regression and fix are committed at `b322427` and
 `cdb04d9`; the CT026 table and its exact backup passed post-write validation.
@@ -56,9 +66,9 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local WP10D production HEAD:
-  `4f131f7924e7d8a6349ab519aa8b33811ef08305`;
-- `origin/refactor`: `aade4cd701998e0394da624fa18a18e02a776dee`;
+- local and remote WP10D handoff HEAD before this update:
+  `77ff4615017be5a8182c4581789280a452b0368e`;
+- `origin/refactor`: `77ff4615017be5a8182c4581789280a452b0368e`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -100,12 +110,15 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this handoff, push `c1a64aa`, `b201711`,
-`4f131f7`, and the handoff commit, and verify exact remote equality plus a
-tracked-clean source. Then dry-run and rerun the same bounded CT026
-configuration once under the repaired lifecycle. Require a valid complete
-state with empty `last_error` and all 2,400 cells valid before the separately
-approved local eight-target categorical stress validation. Do not begin WP11.
+**Next exact action:** after the accepted bounded run finishes, inspect it once
+and require a valid complete state with empty `last_error` and all 2,400 cells
+valid. Then run the separately approved local eight-target categorical stress
+validation. Use those measurements to propose the exact WP11 resource block
+and tests-first implementation plan for user approval. Implement and validate
+WP11 locally with mocked scheduler/transfer seams before any real transfer or
+Slurm command. WP12 then proves one cluster session; WP13 implements bounded
+cross-session concurrency with one independently resumable array element per
+session.
 
 ### Authority order
 
@@ -137,13 +150,13 @@ When resuming, use this order:
 | WP8 documentation and examples | Complete: RED `c1cda3b`, corrections through `a1c1f5c`, JSON fix `b2b3dde`, GREEN `8b92c4f` | None |
 | WP9 synthetic integration | Complete: characterization-only test gate `9ea0109` | None |
 | WP9A CT026 augmented-table preparation | Complete: mode RED `b322427`, fix `cdb04d9`, validated backup and table | None |
-| WP10A measurement instrumentation | Complete: RED `fb0278a`, supplement `cc0cf7d`, GREEN `1153115` | Push exact commits before real-session evidence |
-| WP10B CT026 preflight/benchmark | Complete: v1 run validated; 2,400 calls measured; 687 categorical convergence failures exposed | Revision-6 local repair and replacement benchmark |
-| WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence required before stress gate |
-| WP10D competing-owner lifecycle repair | Locally complete: RED `c1a64aa`, supplement `b201711`, GREEN `4f131f7` | Push exact commits and produce one clean bounded v2 run |
-| WP11 single-session cluster path | Not authorized | WP10 evidence and user choice justify cluster convenience/cost; user approves wrapper/transfer work |
-| WP12 CT026 scientific inspection | Not authorized | User accepts benchmark and authorizes exact run |
-| WP13 cluster batch-array follow-up | Deferred end-job and not authorized | WP12 accepted; resource profile finalized; user approves batch work |
+| WP10A measurement instrumentation | Complete: RED `fb0278a`, supplement `cc0cf7d`, GREEN `1153115` | None |
+| WP10B CT026 preflight/benchmark | Complete: v1 run validated; 2,400 calls measured; 687 categorical convergence failures exposed | Superseded by revision-6 evidence |
+| WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence remains the WP10 gate |
+| WP10D competing-owner lifecycle repair | Complete: RED `c1a64aa`, supplement `b201711`, GREEN `4f131f7`, handoff `77ff461` | Validate the launched clean bounded v2 run, then categorical stress |
+| WP11 single-session cluster path | Required after WP10 local gates; architecture selected, source not started | Approve exact benchmark-derived directives and tests-first plan; implement with mocks only |
+| WP12 CT026 one-session cluster validation | Required after WP11 | Separately approve synthetic smoke, exact transfer, and exact CT026 submission |
+| WP13 bounded cluster batch array | Required after WP12 acceptance; source not started | Implement tests-first per-session concurrency; authorize any real array separately |
 
 ### Resume checklist
 
@@ -1787,6 +1800,45 @@ Use this template for each appended record:
   is valid, and all 2,400 cells are valid. Then plan the already approved local
   eight-target categorical stress run; do not begin WP11.
 
+#### 2026-10-07 - Cluster throughput implementation decision
+
+- State: the clean bounded v2 rerun was accepted from an ordinary terminal as
+  `task_variable_decoding_2026-10-07T19-29-08Z` and may finish while this
+  documentation-only update is made. Its one-shot completion inspection and
+  the local categorical stress gate remain pending.
+- Authorization: the user selected cluster execution as a required
+  implementation path. This supersedes the earlier WP10B/WP10D records that
+  deferred or left WP11 unauthorized; those records remain above as historical
+  evidence of the decisions in force at their respective times.
+- Throughput decision: approximately 15 minutes is acceptable for one session
+  but undesirable when repeated serially over many sessions. A single-session
+  Slurm wrapper solves unattended execution and establishes a measured cluster
+  resource profile, but by itself does not shorten a multi-session batch.
+  Therefore both WP11 and the later WP13 per-session job array are required.
+- Concurrency architecture: WP13 uses one independently prepared and resumable
+  run per array element, with an explicit resource-evidence admission check and
+  concurrency cap. It does not place the existing local `run_batch` process
+  inside one large allocation, share mutable result state, or introduce
+  within-session parallel fitting.
+- Remaining approvals: this decision authorizes planning the required source
+  packages; it does not authorize an external transfer, synthetic scheduler
+  smoke, CT026 submission, or real multi-session array. Exact resource
+  directives and the tests-first WP11 implementation plan are approved after
+  the clean benchmark and categorical stress evidence. Every external action
+  retains the bounded approval gates in WP12 and WP13.
+- Performance evidence: the first scientifically valid v2 run measured
+  896.584 seconds wall time, 0.997 CPU efficiency, and 984,301,568 bytes peak
+  RSS. These values justify cross-session concurrency but are not yet the
+  finalized Slurm request because the clean lifecycle run and categorical
+  stress evidence are still pending.
+- Repository/external effects: this record changes documentation only. It does
+  not alter the active benchmark, scientific source, experimental inputs, or
+  any local or remote scheduler state.
+- Exact next action: validate the accepted clean run once it finishes, perform
+  the approved categorical stress run, and then propose the exact WP11 Slurm
+  directives, owned files, RED tests, and validation commands for user
+  approval before implementation.
+
 ## 1. Objective
 
 Implement a readable, single-session task-variable decoding pipeline that:
@@ -2050,8 +2102,8 @@ Update `src/neural_analysis/README.md` with a short
   new immutable directory;
 - the single-session Slurm submit/resume/status path, exact-commit/offline
   environment gates, safe input/result rsync, and finalized resource block
-  when WP11 is activated; and
-- the array batch command only after the separately gated WP13 follow-up.
+  implemented by WP11; and
+- the array batch command after the required, separately gated WP13 package.
 
 Create `src/neural_analysis/task_decoding/README.md` with:
 
@@ -2240,10 +2292,12 @@ computation.
 ### 4.6 Routine single-session cluster path
 
 WP10 first measures the bounded fixed-mode workload locally and projects the
-full default fixed run. Cluster use does
-not require proof that local execution is impossible: the user may choose WP11
-because the projected run is expensive, occupies the workstation, or is more
-convenient to leave on the cluster. There is no automatic duration threshold.
+full default fixed run. The user selected WP11 as a required implementation
+package because even a locally practical single-session runtime compounds over
+many sessions. Cluster use does not require proof that local execution is
+impossible, and there is no automatic duration threshold. WP11 first proves
+one session; WP13 supplies the cross-session concurrency that addresses batch
+throughput.
 
 Add one thin, self-submitting Slurm wrapper:
 
@@ -2399,12 +2453,14 @@ between local and cluster paths. The in-package README owns portability,
 fingerprint, termination, and resume semantics. No automatic SSH, rsync,
 remote deployment, or general workflow manager belongs in the first version.
 
-### 4.8 Deferred cluster batch-array follow-up
+### 4.8 Bounded cluster batch-array follow-up
 
-Cluster batch submission is WP13, deliberately the last implementation job.
-It starts only after the single-session CT026 result is accepted and the
-single-session Slurm resource profile is finalized from measured cluster
-usage. It is not part of WP11 or the first scientific cluster run.
+Cluster batch-array support is required WP13 work and remains deliberately the
+last implementation job. It starts only after the single-session CT026 result
+is accepted and the single-session Slurm resource profile is finalized from
+measured cluster usage. It is not part of WP11 or the first scientific cluster
+run because array concurrency should reuse a proven single-session execution
+unit rather than debug scheduler and scientific behavior simultaneously.
 
 The intended extension is mechanically narrow:
 
@@ -2424,14 +2480,16 @@ The intended extension is mechanically narrow:
 - manual resubmission of an exact failed session, never automatic array-wide
   retry.
 
-WP13 begins with mocked array tests and a two-session synthetic smoke test. A
-real multi-session array remains separately authorized. A later session may
-reuse the finalized resource block only when it matches the completed measured
-cluster run's analysis/source/environment/platform/mode/threading identity and
-none of its trial, regional-unit, time-bin, result-array, or categorical and
-numerical fit-count dimensions exceeds that evidence run. The dry run reports
-those comparisons. Otherwise stop for a new bounded benchmark and resource
-decision; do not extrapolate a scaling law from CT026.
+WP13 begins with mocked array tests and a two-session synthetic smoke test. Its
+source implementation no longer needs a new decision about whether arrays are
+in scope, but a real multi-session array remains separately authorized. A
+later session may reuse the finalized resource block only when it matches the
+completed measured cluster run's
+analysis/source/environment/platform/mode/threading identity and none of its
+trial, regional-unit, time-bin, result-array, or categorical and numerical
+fit-count dimensions exceeds that evidence run. The dry run reports those
+comparisons. Otherwise stop for a new bounded benchmark and resource decision;
+do not extrapolate a scaling law from CT026.
 
 ## 5. Configuration contract
 
@@ -3515,7 +3573,10 @@ Create `test_synthetic_integration.py`:
 
 ### 10.11 Single-session cluster-path tests
 
-Write these only after WP10 evidence and explicit WP11 approval:
+Write these in WP11 only after the clean WP10 evidence, categorical stress
+evidence, and user approval of the exact benchmark-derived resource directives
+and tests-first implementation plan. The cluster package itself is required;
+this gate resolves its concrete resource and interface details:
 
 1. `submit-new` runs a lightweight cluster dry run, prepares one exact
    cluster run directory through the Python runner, and submits that directory
@@ -3560,9 +3621,10 @@ Write these only after WP10 evidence and explicit WP11 approval:
     exact-commit/offline-environment preparation.
 15. No test invokes a real scheduler, SSH, rsync, network, or scientific data.
 
-### 10.12 Deferred cluster batch-array tests
+### 10.12 Bounded cluster batch-array tests
 
-Write these only in WP13, after WP12 acceptance:
+Write these in required WP13 after WP12 acceptance and finalization of the
+single-session cluster resource profile:
 
 1. A config list produces one immutable array-index-to-session/run mapping.
 2. Each array element invokes the proven single-session cluster path with its
@@ -3767,10 +3829,10 @@ Write these only in WP13, after WP12 acceptance:
   runtime projection.
 - Gate: after the process has finished, one explicit later task reads
   `status`, logs, and saved results once. The user reviews the evidence
-  and chooses a detached full local fixed run or activation of WP11. Cluster
-  preference may be based on cost/convenience even when local execution would
-  technically succeed. There is no automatic threshold and no implicit long
-  run.
+  and approves the exact resource proposal for the already selected WP11
+  path. Local execution remains available for individual sessions, but it is
+  no longer an alternative that can remove WP11 or WP13 from scope. There is
+  no automatic threshold and no implicit long run.
 - Handoff: update the live snapshot with exact config/run directory, launch and
   status commands, logs, fit counts, stage timings, peak RSS, output size,
   the full fixed-mode projection, CPU efficiency, and the proposed Slurm CPU,
@@ -3780,9 +3842,11 @@ Write these only in WP13, after WP12 acceptance:
 
 ### WP11: Single-session cluster execution and transfer
 
-- Start only when the user chooses cluster execution after WP10 and explicitly
-  approves wrapper/transfer implementation. Technical local feasibility does
-  not preclude this choice.
+- This is a required implementation package after the clean WP10 benchmark and
+  categorical stress gates. The user has selected the architecture in
+  principle; Sol must still present the exact resource directives, owned
+  files, RED tests, and verification commands for approval before writing
+  source.
 - Sol records the benchmark-derived resource proposal. Use one CPU unless
   measured evidence justifies more. Proposed memory is the largest of 1.5
   times projected peak RSS, projected peak plus 2 GiB, or twice the exact
@@ -3808,16 +3872,16 @@ Write these only in WP13, after WP12 acceptance:
 
 ### WP12: One-session scientific inspection
 
-- This package requires explicit approval of the exact fixed-mode CT026
-  configuration and local command or the exact input rsync plus Slurm command.
-- If the user chooses Slurm, first submit the separately approved tiny
-  synthetic Slurm smoke proposed by WP11, end the initiating task, and inspect
-  it once later. A wrapper/environment/logging failure stops before any CT026
-  transfer or submission; a successful smoke does not itself authorize the
-  experimental job.
-- Terra high acts as command runner only. It launches the detached local run or
-  Slurm job, records the receipt/run directory, and stops. Sol does not monitor
-  or alter parameters mid-run.
+- This required cluster-validation package needs explicit approval of the
+  exact fixed-mode CT026 configuration, input rsync, and Slurm command.
+- First submit the separately approved tiny synthetic Slurm smoke proposed by
+  WP11, end the initiating task, and inspect it once later. A
+  wrapper/environment/logging failure stops before any CT026 transfer or
+  submission; a successful smoke does not itself authorize the experimental
+  job.
+- Terra high acts as command runner only. It launches the approved Slurm job,
+  records the receipt/run directory, and stops. Sol does not monitor or alter
+  parameters mid-run.
 - In a later user-requested task, Terra or Sol performs one read-only
   status/log/result inspection. If the run is interrupted, resumption is a new
   explicit action using the saved exact command; it is never automatic.
@@ -3831,17 +3895,21 @@ Write these only in WP13, after WP12 acceptance:
   sessions. Do not reduce safety margins or generalize beyond the observed
   workload without recording the decision.
 - User inspects saved heatmaps, fold coverage, warnings, and coefficients.
-- Only after user approval should a batch of additional sessions be considered.
+- Only after user approval does WP13 begin implementing the batch-array path.
+  That approval accepts the single-session evidence; it does not authorize a
+  real multi-session submission.
 - Handoff: record immutable run paths, configuration, commit, launch and status
   commands, transfer commands, requested versus measured timing/CPU/memory,
   finalized resource block/evidence run, warnings/errors, and user acceptance.
   Do not treat completion as permission for other sessions.
 
-### WP13: Deferred cluster batch array
+### WP13: Bounded cluster batch array
 
-- This is the final package. It starts only after WP12 scientific acceptance,
-  finalized single-session cluster resources, completed documentation, and
-  separate user approval.
+- This required final package starts only after WP12 scientific acceptance,
+  finalized single-session cluster resources, and completed documentation.
+  No new decision about whether to implement arrays is needed; the user still
+  approves the exact tests-first implementation plan before source work and
+  every real array submission separately.
 - Terra high writes the Section 10.12 mocked array and two-session synthetic
   tests, stops at RED, and later implements only the narrow submission/status
   extension after Sol commits the tests.
@@ -3900,7 +3968,7 @@ measure a representative subset and report the projected duration.
 
 Record wall time with `time.perf_counter`. On the planned Linux hosts,
 record and normalize peak RSS with the standard-library
-`resource.getrusage` API; if WP11 is activated, also preserve Slurm's
+`resource.getrusage` API; during WP11/WP12, also preserve Slurm's
 reported `MaxRSS` for comparison. No profiling dependency is needed for
 this first benchmark. Also record process user/system CPU time so CPU
 utilization can distinguish a long single-core workload from a genuinely
@@ -3971,20 +4039,23 @@ mutating the completed run.
 6. **Tuned estimate:** representative subset only unless separately authorized;
    measure its peak RSS as well as fit time because inner-fold preprocessing
    workspace is not inferred from the fixed-mode profile.
-7. **Local/cluster decision:** Sol reports whether ordinary local use is
-   practical and proposes cluster resources. The user may still choose the
-   cluster to avoid occupying the workstation. There is no automatic duration
-   threshold, transfer, or submission.
+7. **Local/cluster resource decision:** Sol reports ordinary local practicality
+   and proposes cluster resources. The cluster implementation path is selected
+   because serial per-session runtime compounds over a multi-session dataset;
+   the decision does not itself authorize transfer or submission. Local
+   execution remains supported for bounded validation and individual sessions.
 
 ### 12.5 Unattended local-to-cluster decision path
 
 Follow WP9A-WP12: validate/regenerate the table when needed, dry-run, launch the
 bounded local benchmark and leave it unattended, inspect its durable state
-once later, then choose an explicitly authorized detached-local or Slurm run.
-The Slurm branch uses the Section 4.7 transfer and Section 4.6 wrapper; returned
-results are validated in the hidden incoming directory before promotion.
-Both paths use the same prepared run, checkpoints, logs, and result schema, and
-neither polls, retries, or resumes automatically.
+once later, then implement and validate the selected Slurm path. Each real
+cluster action remains explicitly authorized. The Slurm branch uses the
+Section 4.7 transfer and Section 4.6 wrapper; returned results are validated in
+the hidden incoming directory before promotion. Local and cluster execution
+use the same prepared-run, checkpoint, log, and result contracts, and neither
+polls, retries, nor resumes automatically. After one cluster session is
+accepted, WP13 adds explicitly capped cross-session job-array concurrency.
 
 ### 12.6 Slurm resource selection and finalization
 
