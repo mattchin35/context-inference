@@ -3389,6 +3389,9 @@ def test_wp5b_complete_reentry_rejects_unpublished_terminal_state(monkeypatch, t
     state_path.write_text(json.dumps(state), encoding="utf-8")
     with pytest.raises(ValueError, match="complete|published|state"):
         pipeline.run_prepared_task_decoding(completed)
+    state["lifecycle"] = "complete"
+    state["final_results_published"] = False
+    state_path.write_text(json.dumps(state), encoding="utf-8")
     assert run_session.main(["resume", "--run-directory", str(completed)]) != 0
 
 
