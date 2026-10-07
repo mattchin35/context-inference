@@ -29,6 +29,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 SCIENTIST_README = REPOSITORY_ROOT / "src" / "neural_analysis" / "README.md"
 PACKAGE_DIRECTORY = REPOSITORY_ROOT / "src" / "neural_analysis" / "task_decoding"
 PACKAGE_README = PACKAGE_DIRECTORY / "README.md"
+REVISION_FIVE_SPEC = REPOSITORY_ROOT / "docs" / "task_variable_spec_v5.md"
+REVISION_SIX_SPEC = REPOSITORY_ROOT / "docs" / "task_variable_spec_v6.md"
+IMPLEMENTATION_PLAN = REPOSITORY_ROOT / "docs" / "task_variable_implementation_plan.md"
 EXAMPLE_CONFIG = (
     REPOSITORY_ROOT
     / "docs"
@@ -120,6 +123,28 @@ def test_maintainer_readme_owns_every_package_file_and_external_entrypoint():
     assert "webapp/task_decoding_views.py" in readme
     assert "docs/examples/neural_analysis/task_decoding_config.json" in readme
     assert "WP11" in readme and "WP13" in readme
+
+
+def test_revision_six_spec_versions_the_local_convergence_repair():
+    """The active scientific contract should preserve v5 and amend one control."""
+    assert REVISION_FIVE_SPEC.is_file()
+    amendment = " ".join(_read_required_text(REVISION_SIX_SPEC).split())
+    maintainer_readme = _read_required_text(PACKAGE_README)
+    implementation_plan = _read_required_text(IMPLEMENTATION_PLAN)
+
+    for fragment in (
+        "normative amendment",
+        "task-variable-decoding-v2",
+        "max_iter=5000",
+        "solver=\"saga\"",
+        "tol=1e-4",
+        "max_iter=100",
+        "687",
+        "1200",
+    ):
+        assert fragment in amendment
+    assert "docs/task_variable_spec_v6.md" in maintainer_readme
+    assert "docs/task_variable_spec_v6.md" in implementation_plan
 
 
 def test_scientist_quickstart_documents_all_current_cli_routes():

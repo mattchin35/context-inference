@@ -129,6 +129,26 @@ def test_defaults_freeze_revision_five_target_order_and_fold_counts(tmp_path):
     assert config.inner_fold_count == 3
 
 
+def test_revision_six_versions_the_expanded_logistic_convergence_budget():
+    """Revision 6 should change only the logistic numerical iteration ceiling."""
+    assert decoding_config.ANALYSIS_VERSION == "task-variable-decoding-v2"
+    assert dict(decoding_config.FROZEN_ESTIMATOR_CONTROLS["LogisticRegression"]) == {
+        "C": 1.0,
+        "l1_ratio": 0.5,
+        "solver": "saga",
+        "tol": 1e-4,
+        "max_iter": 5000,
+        "fit_intercept": True,
+        "class_weight": None,
+        "warm_start": False,
+        "n_jobs": None,
+        "random_state": 0,
+    }
+    assert dict(decoding_config.FROZEN_ESTIMATOR_CONTROLS["ElasticNet"])[
+        "max_iter"
+    ] == 1000
+
+
 @pytest.mark.parametrize(
     "feature_parameter_text",
     ["[]\n", "null\n", '"text"\n', "{\n"],

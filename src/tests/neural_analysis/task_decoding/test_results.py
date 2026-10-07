@@ -2158,6 +2158,38 @@ def test_run_fingerprint_uses_real_scientific_payload_and_is_root_and_key_order_
         assert results.build_run_fingerprint(**changed_values) != baseline
 
 
+def test_revision_six_solver_budget_cannot_reuse_revision_five_fingerprint(tmp_path):
+    """The repaired logistic ceiling must allocate a new scientific run identity."""
+    input_paths = write_input_fixture(tmp_path, name="versioned-session")
+    current_config = scientific_config_payload(
+        make_config(input_paths, regularization_mode="fixed")
+    )
+    revision_five_config = json.loads(json.dumps(current_config))
+    revision_five_config["analysis_version"] = "task-variable-decoding-v1"
+    revision_five_config["frozen_controls"]["estimators"]["LogisticRegression"][
+        "max_iter"
+    ] = 100
+    common_identity = {
+        "scientific_source_fingerprint": "scoped-source-fingerprint",
+        "input_manifest": build_manifest(input_paths),
+        "session_id": "synthetic-01",
+    }
+
+    assert current_config["analysis_version"] == "task-variable-decoding-v2"
+    assert current_config["frozen_controls"]["estimators"]["LogisticRegression"][
+        "max_iter"
+    ] == 5000
+    assert results.build_run_fingerprint(
+        analysis_version=ANALYSIS_VERSION,
+        scientific_config=current_config,
+        **common_identity,
+    ) != results.build_run_fingerprint(
+        analysis_version="task-variable-decoding-v1",
+        scientific_config=revision_five_config,
+        **common_identity,
+    )
+
+
 def _directory_entries(directory: Path) -> set[str]:
     """Return the exact immediate visible directory members for atomicity assertions.
 
