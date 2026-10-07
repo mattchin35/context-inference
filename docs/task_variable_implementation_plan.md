@@ -1,9 +1,9 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP5 result persistence/session execution
-and the WP6 batch runner are complete. WP7 plotting and the saved-results
-webapp view are next and require a tests-first plan approved by the user before
-implementation.
+**Status:** Implementation authorized; WP5 result persistence/session execution,
+the WP6 batch runner, and WP7 plotting/saved-results webapp view are complete.
+WP8 user and maintainer documentation is next and requires a tests-first plan
+approved by the user before implementation.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -13,7 +13,7 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-07
 
-**Current phase:** WP0-WP6 are complete. WP4 grouped-modeling tests are
+**Current phase:** WP0-WP7 are complete. WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
@@ -28,22 +28,25 @@ at `449f7c9`, its production-review supplement is committed at `4215c82`, the
 final tests-first corrections are committed through `77f2cc8`, and WP5B GREEN
 is committed at `8b9232d` after independent approval. The WP6 tests-first
 contracts are committed through `827989c`, and WP6 GREEN is committed at
-`7d6b4a8`. No
-experimental-data mutation, decoding output, benchmark, transfer, local long
-run, or cluster action is authorized.
+`7d6b4a8`. WP7 plotting/webapp contracts and review supplements are committed
+through `0c6ce07`, and WP7 GREEN is committed at `ef7ad55`. No experimental-data
+mutation, decoding output, benchmark, transfer, local long run, or cluster
+action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local implementation HEAD: `7d6b4a8`;
-- `origin/refactor`: `134106053afa1ac356bd168cfc9845f7dac2106e`;
+- local WP7 implementation HEAD: `ef7ad558d3bc09289d20ab4af04ed038673be6d6`;
+- `origin/refactor`: `5fb25efd18a7d69d0409255f305bb27924b485f2`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
   production are complete through `1bd0f69`, including the final sparse tuned
   transform-evidence review; WP5B single-session lifecycle/CLI production is
   complete through independently approved GREEN commit `8b9232d`; WP6 batch
-  planning/execution is complete through GREEN commit `7d6b4a8`; and
+  planning/execution is complete through GREEN commit `7d6b4a8`; WP7 plotting
+  and the read-only saved-results webapp view are complete through GREEN commit
+  `ef7ad55`; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -72,9 +75,9 @@ run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** draft the bounded WP7 plotting and saved-results webapp
-architecture, tests, dependencies, and rendering constraints, then obtain user
-approval before writing WP7 tests or implementation. Do not run experimental
+**Next exact action:** draft the bounded WP8 user/maintainer documentation and
+portable-example plan, including documentation/command tests, then obtain user
+approval before writing WP8 tests or documentation. Do not run experimental
 data, benchmarks, transfers, or scheduler actions under this handoff.
 
 ### Authority order
@@ -102,8 +105,8 @@ When resuming, use this order:
 | WP4 grouped modeling | Complete: fixed GREEN `a8787aa`, tuned GREEN `b844f26` | None |
 | WP5 results and session pipeline | Complete: WP5A GREEN `1bd0f69`; WP5B GREEN `8b9232d` after tests through `77f2cc8` | None |
 | WP6 batch runner | Complete: RED `9727ec8` plus reviews through `827989c`; GREEN `7d6b4a8` | None |
-| WP7 plotting and webapp | Ready for tests-first planning | User approves the WP7 implementation plan |
-| WP8 documentation and examples | Pending prerequisite | CLI/webapp interfaces stable through WP7 |
+| WP7 plotting and webapp | Complete: RED `c027f2c` plus reviews through `0c6ce07`; GREEN `ef7ad55` | None |
+| WP8 documentation and examples | Ready for tests-first planning | User approves the WP8 implementation plan |
 | WP9 synthetic integration | Pending prerequisite | WP1-WP8 focused gates GREEN |
 | WP9A CT026 augmented-table preparation | Not authorized | WP9 GREEN plus explicit approval of the exact behavior-processing command |
 | WP10 CT026 preflight/benchmark | Not authorized | WP9A validation passes plus explicit real-session benchmark approval |
@@ -1296,6 +1299,59 @@ Use this template for each appended record:
 - Exact next action: propose the WP7 plotting and saved-results webapp plan,
   including light-mode rendering, saved-loader-only routing, tests to write
   first, and shared `webapp/app.py` ownership. Obtain user approval before code.
+
+#### 2026-10-07 - WP7 plotting and integrated webapp GREEN gate
+
+- State: WP7 is complete. Saved results now produce readable six-panel
+  categorical balanced-accuracy/AUC and numerical R2 heatmaps through one
+  plotting owner. Direct-unit selections provide per-fold coefficients,
+  median/IQR, selection frequency, nonzero-fit summaries, explicit excluded/
+  unavailable states, and scientifically bounded captions. The existing
+  metadata webapp has one early-routed read-only task-variable results view.
+- Authorization: the user approved the bounded WP7 plan before tests. Work
+  used only synthetic arrays, temporary saved-run fixtures, and rendered
+  temporary PNGs. No experimental data, decoding run, benchmark, transfer,
+  scheduler action, or long local computation was performed.
+- Start HEAD / end HEAD: pushed WP6 handoff `5fb25ef` / WP7 GREEN production
+  commit `ef7ad55`.
+- Owned files: added `src/neural_analysis/task_decoding/plotting.py` and
+  `src/neural_analysis/webapp/task_decoding_views.py`; replaced the private
+  pipeline renderer with the shared saved-result plotting owner; and extended
+  `webapp/session_inputs.py` plus the early route in `webapp/app.py`.
+- Tests-first history: base RED contracts are committed at `c027f2c`, with
+  empty-run guidance at `b3fff29`. Genuine test correction `b098021` replaced
+  an ambiguous NumPy RGB comparison. Supplemental tests committed before the
+  final production commit cover canonical `run_state.json` and symlink
+  containment (`6c2eb45`), zero-unit regions (`db91e54`), colorbar/caption
+  layout (`2dd91d6`), signed-time titles (`aa8d287`), and causal completed-run
+  selector rendering (`0c6ce07`).
+- RED evidence: the base focused command reported 10 expected failures and 12
+  existing passes because the plotting/view modules, view constant, and early
+  route did not exist. Review REDs separately reproduced the canonical-state
+  mismatch, the zero-unit coefficient-table failure, overlapping colorbar,
+  and ambiguous negative-time title.
+- GREEN/regression evidence: the final focused plotting/webapp contract passed
+  26 tests; the full task-decoding package passed 789 tests with six known
+  synthetic-fixture/library warnings; and the affected legacy/canonical
+  webapp suites passed 84 tests. Source compilation, whitespace checks, the
+  new-file 100-column audit, and installed Streamlit signature verification
+  passed.
+- Visual review: synthetic categorical/numerical PNGs were inspected at native
+  resolution. The first pass exposed a colorbar overlap and unreliable caption
+  wrapping; the test-first correction allocates a dedicated colorbar axis,
+  wraps captions, and suppresses redundant right-column target labels. A
+  second visual pass found the heatmaps and coefficient summary readable on
+  opaque white backgrounds.
+- Contract decisions: result discovery reads only direct children of the
+  contained session-relative root, rejects symlink escapes, ignores hidden,
+  incomplete, and loader-invalid runs, and uses canonical complete/final-
+  publication state. The view remains selectable without raw sources; all
+  selectors load/re-render validated saved arrays and never import fitting,
+  pipeline, or activity modules. Legacy manual-path launches receive concise
+  metadata-session guidance rather than an unrestricted filesystem browser.
+- Exact next action: propose the WP8 user/maintainer documentation and portable
+  example plan from Sections 4.4, 10.9, and the WP8 package gate. Obtain user
+  approval before writing documentation tests or artifacts.
 
 ## 1. Objective
 
