@@ -26,8 +26,9 @@ tracked-clean. The clean bounded v2 rerun
 `task_variable_decoding_2026-10-07T19-29-08Z` passed its one-shot lifecycle,
 result, and convergence validation. The approved local eight-target
 categorical stress gate also passed with all 9,600 cells valid. WP10 is now
-complete. The exact WP11 single-session Slurm resource block and tests-first
-implementation plan are ready for approval; WP12 one-session cluster
+complete. The user approved the exact WP11 single-session Slurm resource block
+and tests-first architecture. WP11 RED is committed at `a3dcdb9` and awaits
+the tests-only gate before production implementation. WP12 one-session cluster
 validation and WP13 per-session job arrays follow. Each real transfer or
 scheduler submission is still approved separately from source implementation.
 WP4 grouped-modeling tests are
@@ -66,8 +67,8 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local and remote documentation/evidence HEAD before this update:
-  `12e548d7f47d2f9e3029679c1a806814d03cd70a`;
+- local WP11 RED HEAD before this handoff:
+  `a3dcdb929f6cfb819f657c24f5542433c8c02b17`;
 - `origin/refactor`: `12e548d7f47d2f9e3029679c1a806814d03cd70a`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
@@ -110,11 +111,12 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** review and approve the exact WP11 resource block and
-tests-first implementation plan recorded below. After approval, write and
-commit the Section 10.11 mocked scheduler/transfer/signal RED tests before any
-production implementation. No cluster transfer, `sbatch`, `sacct`, SSH,
-network, or experimental computation is part of WP11 source implementation.
+**Next exact action:** review and approve the committed WP11 RED contracts.
+After tests-only approval, implement the thin wrapper, standard-library Slurm
+module, explicit private preparation mode, active-allocation memory guard,
+SIGTERM bridge, and documentation until the focused contracts pass. No cluster
+transfer, `sbatch`, `sacct`, SSH, network, or experimental computation is part
+of WP11 source implementation.
 
 ### Authority order
 
@@ -150,7 +152,7 @@ When resuming, use this order:
 | WP10B CT026 preflight/benchmark | Complete: v1 run validated; 2,400 calls measured; 687 categorical convergence failures exposed | Superseded by revision-6 evidence |
 | WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence remains the WP10 gate |
 | WP10D competing-owner lifecycle repair and local acceptance | Complete: lifecycle repair through `77ff461`; clean 2,400-cell bounded run and 9,600-cell categorical stress run accepted | None |
-| WP11 single-session cluster path | Required; measured resource block and tests-first plan ready, source not started | User approves exact directives and plan; implement with mocks only |
+| WP11 single-session cluster path | RED committed at `a3dcdb9`; approved directives/architecture; production not started | User approves tests-only gate; implement with mocks only |
 | WP12 CT026 one-session cluster validation | Required after WP11 | Separately approve synthetic smoke, exact transfer, and exact CT026 submission |
 | WP13 bounded cluster batch array | Required after WP12 acceptance; source not started | Implement tests-first per-session concurrency; authorize any real array separately |
 
@@ -1929,6 +1931,35 @@ Use this template for each appended record:
 - Exact next action: obtain user approval of the directives and tests-first
   architecture, commit RED tests, reproduce the intended failures, and stop
   for the tests-only gate before implementing production.
+
+#### 2026-10-07 - WP11 single-session Slurm RED gate
+
+- Authorization: the user approved the `unlimited` / one-task / one-CPU /
+  3-GiB / five-hour resource block and the tests-first WP11 architecture.
+- State: tests-only RED is committed at `a3dcdb9`; no WP11 production or
+  documentation implementation has started.
+- Owned tests: new `test_slurm.py` exercises the Bash wrapper through fake
+  `uv`, repository/source gates, exact public/private forwarding, frozen
+  resources, submission success/failure/race behavior, one-query read-only
+  accounting, exact resume, and login/active-allocation memory limits.
+  `test_pipeline.py` adds explicit Slurm preparation, TERM translation, and
+  pre-spike active-memory integration contracts.
+  `test_task_decoding_documentation.py` adds exact commands, offline setup,
+  safe rsync, hidden incoming validation, and resource documentation.
+- RED result: the focused WP11 selection failed 20 tests as intended. Causes
+  were exclusively the absent wrapper and `slurm.py`, absent
+  `--execution-mode slurm` private preparation, absent SIGTERM bridge and
+  active-allocation guard, and the intentionally stale WP8 cluster prose.
+- Existing controls: the pre-existing pipeline and documentation tests passed
+  165 tests with one known empty-slice plotting warning; three new WP11 tests
+  were excluded from that control command. Test modules compile, and
+  `git diff --check` passed.
+- Safety: fake executables and temporary repositories were used. No real
+  `sbatch`, `sacct`, SSH, rsync, network, cluster, or experimental-data action
+  occurred.
+- Exact next action: after user approval of the tests-only commit, implement
+  the bounded WP11 production files and documentation, then run focused and
+  affected regression suites. Stop before any real cluster action.
 
 ## 1. Objective
 
