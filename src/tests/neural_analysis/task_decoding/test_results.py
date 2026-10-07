@@ -4762,6 +4762,110 @@ def test_wp4_tuned_staggered_selected_direct_masks_must_agree_across_regions(tmp
         )
 
 
+@pytest.mark.parametrize(
+    "evidence_case",
+    (
+        "standalone_pca_to_combined_direct",
+        "combined_pca_to_standalone_direct",
+        "combined_only_unavailable_pca",
+    ),
+)
+def test_wp4_tuned_sparse_pca_and_direct_evidence_must_share_pfc_width(
+    evidence_case,
+    tmp_path,
+):
+    """Sparse tuned PFC PCA/direct evidence still constrains one shared width.
+
+    The first two cases retain a selected PFC-bearing PCA cell and selected
+    PFC-bearing direct-unit cell from complementary representations, while the
+    opposite cells are no-candidate sentinels. The third leaves only selected
+    combined representations, whose PCA transform is unavailable but direct
+    features remain usable. Every case is incompatible with one PFC transform.
+    """
+    input_paths = write_input_fixture(tmp_path)
+    arguments = make_run_save_arguments(input_paths, regularization_mode="tuned")
+    arrays = {name: value.copy() for name, value in arguments["arrays"].items()}
+    time_count = arrays["time_bin_centers_s"].size
+    all_times = list(range(time_count))
+    for time in all_times:
+        if evidence_case == "standalone_pca_to_combined_direct":
+            mark_tuned_cell_no_valid_candidate(arrays, (0, 0, 1, time, 0))
+            mark_tuned_cell_no_valid_candidate(arrays, (0, 2, 0, time, 0))
+            pca_index = (0, 0, 0, time, 0)
+            direct_index = (0, 2, 1, time, 0)
+            arrays["effective_feature_counts"][pca_index] = 1
+            arrays["coefficient_values"][pca_index + (1,)] = np.nan
+        elif evidence_case == "combined_pca_to_standalone_direct":
+            mark_tuned_cell_no_valid_candidate(arrays, (0, 0, 0, time, 0))
+            mark_tuned_cell_no_valid_candidate(arrays, (0, 2, 1, time, 0))
+            pca_index = (0, 2, 0, time, 0)
+            direct_index = (0, 0, 1, time, 0)
+            arrays["effective_feature_counts"][pca_index] = 3
+            arrays["coefficient_values"][pca_index + (1,)] = np.nan
+        else:
+            mark_tuned_cell_no_valid_candidate(arrays, (0, 0, 0, time, 0))
+            mark_tuned_cell_no_valid_candidate(arrays, (0, 0, 1, time, 0))
+            pca_index = (0, 2, 0, time, 0)
+            direct_index = (0, 2, 1, time, 0)
+            mark_fit_unavailable_without_features(
+                arrays,
+                pca_index,
+                reason="pfc_regional_transform_unavailable",
+            )
+        assert arrays["effective_feature_counts"][direct_index] in (2, 4)
+
+    selected = arrays["selected_candidate_indices"][0, 0]
+    if evidence_case == "standalone_pca_to_combined_direct":
+        assert np.flatnonzero(selected[0, 0] >= 0).tolist() == all_times
+        assert np.flatnonzero(selected[0, 1] >= 0).tolist() == []
+        assert np.flatnonzero(selected[2, 0] >= 0).tolist() == []
+        assert np.flatnonzero(selected[2, 1] >= 0).tolist() == all_times
+        np.testing.assert_array_equal(
+            np.isfinite(arrays["coefficient_values"][0, 0, 0, 0, 0, :2]),
+            np.array([True, False]),
+        )
+        np.testing.assert_array_equal(
+            np.isfinite(arrays["coefficient_values"][0, 2, 1, 0, 0, :2]),
+            np.array([True, True]),
+        )
+        assert arrays["effective_feature_counts"][0, 0, 0, 0, 0] == 1
+        assert arrays["effective_feature_counts"][0, 2, 1, 0, 0] == 4
+    elif evidence_case == "combined_pca_to_standalone_direct":
+        assert np.flatnonzero(selected[0, 0] >= 0).tolist() == []
+        assert np.flatnonzero(selected[0, 1] >= 0).tolist() == all_times
+        assert np.flatnonzero(selected[2, 0] >= 0).tolist() == all_times
+        assert np.flatnonzero(selected[2, 1] >= 0).tolist() == []
+        np.testing.assert_array_equal(
+            np.isfinite(arrays["coefficient_values"][0, 2, 0, 0, 0, :2]),
+            np.array([True, False]),
+        )
+        np.testing.assert_array_equal(
+            np.isfinite(arrays["coefficient_values"][0, 0, 1, 0, 0, :2]),
+            np.array([True, True]),
+        )
+        assert arrays["effective_feature_counts"][0, 2, 0, 0, 0] == 3
+        assert arrays["effective_feature_counts"][0, 0, 1, 0, 0] == 2
+    else:
+        assert np.flatnonzero(selected[0, 0] >= 0).tolist() == []
+        assert np.flatnonzero(selected[0, 1] >= 0).tolist() == []
+        assert np.flatnonzero(selected[2, 0] >= 0).tolist() == all_times
+        assert np.flatnonzero(selected[2, 1] >= 0).tolist() == all_times
+        pca_index = (0, 2, 0, 0, 0)
+        direct_index = (0, 2, 1, 0, 0)
+        assert arrays["fit_status"][pca_index] == "unavailable"
+        assert arrays["effective_feature_counts"][pca_index] == 0
+        assert np.isnan(arrays["coefficient_values"][pca_index]).all()
+        assert arrays["fit_status"][direct_index] == "valid"
+        assert arrays["effective_feature_counts"][direct_index] == 4
+
+    with pytest.raises(ValueError, match="PCA|direct|combined|transform|effective|feature"):
+        results.save_task_decoding_run(
+            tmp_path / f"sparse-{evidence_case}",
+            arrays=arrays,
+            **{key: value for key, value in arguments.items() if key != "arrays"},
+        )
+
+
 def test_wp5a_save_rejects_time_varying_direct_feature_dropout_within_target_fold(tmp_path):
     """One fitted direct-unit transform cannot change its width across time bins."""
     input_paths = write_input_fixture(tmp_path)
