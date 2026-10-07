@@ -1,7 +1,7 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP4 tests are committed RED and fixed-mode
-implementation is next.
+**Status:** Implementation authorized; WP4 fixed-mode audit corrections are in
+progress against committed supplemental RED tests.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -12,22 +12,23 @@ transfer, or scheduler actions, which retain their separate gates below.
 **Snapshot date:** 2026-10-06
 
 **Current phase:** WP0-WP3 are complete. WP4 grouped-modeling tests are
-committed RED at `6ee6355` after independent numerical-design approval. The
-RED run stops only because `task_decoding.modeling` does not yet exist.
-Fixed-mode modeling implementation and its independent review are the single
-next package; tuned mode remains gated behind that review. No experimental-data
-mutation, decoding output, benchmark, transfer, local long run, or cluster
-action is authorized.
+committed at `6ee6355`. An initial fixed-mode implementation passed 24 focused
+cases but failed independent audit; supplemental boundary tests are committed
+RED at `c85a00c`. Fixed-mode corrections and repeat independent review are the
+single next package; tuned mode remains gated behind approval. No
+experimental-data mutation, decoding output, benchmark, transfer, local long
+run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
 - local implementation HEAD:
-  `6ee63556944bf50f48a4fb51b6934136260fec30`;
+  `c85a00c7a84ce53d989925dcec1278b87bcbbebb`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
-- the tracked worktree is clean after the WP4 tests-only commit; and
+- the bounded WP4 fixed-mode production files are uncommitted under correction;
+  no test change is permitted during that correction; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -56,10 +57,9 @@ action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this WP4 RED handoff separately, then have the
-Terra xhigh worker implement only fixed-mode grouped modeling. An independent
-Sol xhigh reviewer must approve fixed-mode leakage, fit reuse, validity, and
-coefficient behavior before tuned-mode implementation is authorized.
+**Next exact action:** commit this supplemental RED handoff separately, finish
+the fixed-mode production corrections without changing tests, and obtain
+independent Sol xhigh approval before tuned-mode implementation is authorized.
 
 ### Authority order
 
@@ -83,7 +83,7 @@ When resuming, use this order:
 | WP1 behavioral feature | Complete: RED `acf24ae`, GREEN `8ea4d24` | None; CT026 backfill remains separately gated at WP9A |
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
 | WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
-| WP4 grouped modeling | Tests-only RED `6ee6355`; fixed mode next | Terra xhigh fixed implementation plus independent Sol xhigh review before tuned mode |
+| WP4 grouped modeling | Base RED `6ee6355`; supplemental fixed-audit RED `c85a00c`; correction in progress | Fixed-mode GREEN plus independent Sol xhigh approval before tuned mode |
 | WP5 results and session pipeline | Pending prerequisite | WP4 GREEN and saved-schema freeze |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
 | WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
@@ -613,6 +613,46 @@ Use this template for each appended record:
   Terra xhigh worker implement fixed mode and shared helpers without changing
   the committed tests. Independent Sol xhigh review must approve that slice
   before the separate tuned-mode follow-up.
+
+#### 2026-10-06 - WP4 fixed-mode supplemental RED gate
+
+- State: the first fixed-mode implementation passed its focused tests but was
+  rejected by independent production review. Supplemental audit-boundary tests
+  are committed RED; production correction is in progress.
+- Authorization: project implementation remains authorized. Work used only
+  source-controlled code and deterministic synthetic tests; no experimental
+  data, decoding run, benchmark, transfer, or scheduler action was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / same Terra xhigh worker /
+  independent Sol xhigh production and supplemental-test review.
+- Start HEAD / end HEAD: WP4 RED handoff `f064f9f` / supplemental tests-only
+  commit `c85a00c7a84ce53d989925dcec1278b87bcbbebb`.
+- Owned files: the commit changes only
+  `src/tests/neural_analysis/task_decoding/test_modeling.py`. The bounded
+  uncommitted production draft remains limited to `modeling.py` and the
+  approved shared-control refactor in `config.py`; it was not staged with the
+  tests.
+- RED command and result: the nine supplemental test nodes plus the legal
+  float-coded categorical case collect as 29 cases: 25 fail for missing
+  production contracts and four valid controls pass. The passing controls are
+  outer fold counts three/five, inner fold count three, and categorical
+  floating values exactly equal to zero/one. Test pycompile, 100-column, and
+  whitespace checks pass.
+- GREEN/regression commands and results: before audit, the initial production
+  draft passed 24 fixed/shared modeling cases, 80 config cases, and 143 other
+  task-decoding cases. These results are not a GREEN gate because the
+  independent audit found missing contracts.
+- Commits: base tests `6ee6355`; base RED handoff `f064f9f`; supplemental
+  tests-only `c85a00c`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: the rejected draft discarded outer-split
+  failure reasons, accepted unapproved fold counts and coercible inner row
+  indices, dropped target/inner-fold audit identity, permitted arbitrary
+  estimator-control overrides, and allowed ambiguous categorical/unit
+  identities. The independently approved supplemental tests cover each issue.
+  Tuned mode still exits immediately and remains outside this correction.
+- Exact next action: commit this documentation-only supplemental RED handoff,
+  correct only the fixed/shared production files without changing tests, then
+  repeat focused/regression commands and independent Sol xhigh review.
 
 ## 1. Objective
 
