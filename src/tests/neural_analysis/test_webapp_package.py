@@ -353,6 +353,40 @@ def test_discovery_lists_only_direct_valid_completed_children(tmp_path: Path) ->
     assert discovered[0].run_fingerprint == "run-fingerprint-test"
 
 
+def test_task_decoding_view_explains_the_no_saved_run_state(tmp_path: Path) -> None:
+    """An empty contained results root gives offline-run guidance without raw loading."""
+    task_view = _canonical_module("task_decoding_views")
+    session_root = tmp_path / "session"
+    session_root.mkdir()
+    messages: list[str] = []
+
+    class EmptyViewStreamlit:
+        """Expose only controls reachable before empty-run discovery returns."""
+
+        def subheader(self, message: str) -> None:
+            messages.append(message)
+
+        def text_input(self, _label: str, *, value: str) -> str:
+            return value
+
+        def info(self, message: str) -> None:
+            messages.append(message)
+
+        def error(self, message: str) -> None:
+            raise AssertionError(message)
+
+    task_view.render_task_decoding_view(
+        EmptyViewStreamlit(),
+        SimpleNamespace(session_root=session_root),
+    )
+
+    combined = " ".join(messages)
+    assert "No completed task-variable decoding runs" in combined
+    assert str(session_root / "analysis_runs") in combined
+    assert "run_session" in combined
+    assert "offline" in combined.lower()
+
+
 def test_metadata_keeps_saved_result_view_available_without_raw_sources(tmp_path: Path) -> None:
     """Saved inspection remains selectable when live spike and behavior inputs disappear."""
     from dataclasses import replace
