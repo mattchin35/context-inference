@@ -574,7 +574,9 @@ def plan_task_decoding_session(config_path: Path | str) -> dict[str, object]:
         "target_names": config.target_names,
         "fit_count": _fit_count(config),
         "tensor_allocation_bytes": report.tensor_allocation_bytes,
-        "source_file_sizes_bytes": report.source_file_sizes_bytes,
+        "source_file_sizes_bytes": {
+            str(path): size for path, size in report.source_file_sizes_bytes.items()
+        },
         "source_cleanliness": source_cleanliness,
         "analysis_version": decoding_config.ANALYSIS_VERSION,
         "scientific_source_fingerprint": scientific_source["fingerprint"],
