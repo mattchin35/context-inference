@@ -1937,6 +1937,67 @@ def test_execution_guard_matrix_is_bounded_and_owner_only(monkeypatch, tmp_path,
         assert read_json(run_directory / "execution.json")["history"]
 
 
+@pytest.mark.parametrize("owner_file", ("local_launch.json", "execution_guard.json"))
+def test_live_owner_rejection_cannot_mutate_an_active_run_state(
+    monkeypatch,
+    tmp_path,
+    owner_file,
+):
+    """A losing receipt/guard contender must not publish failure for the owner."""
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="detached")
+    active_owner = {
+        "mode": "detached",
+        "host": platform.node(),
+        "pid": 4321,
+        "start_token": "active-owner",
+        "started_at": "2026-10-07T00:00:00Z",
+        "job_id": None,
+    }
+    owner_path = run_directory / owner_file
+    owner_path.write_text(json.dumps(active_owner), encoding="ascii")
+    state_path = run_directory / "run_state.json"
+    state_before = state_path.read_bytes()
+    owner_before = owner_path.read_bytes()
+    monkeypatch.setattr(
+        pipeline,
+        "_inspect_execution_owner",
+        lambda *_args, **_kwargs: "live",
+    )
+    monkeypatch.setattr(pipeline.activity, "load_region_activity", fail_if_called)
+
+    with pytest.raises(RuntimeError, match="active|live|owner|receipt|guard"):
+        pipeline.run_prepared_task_decoding(run_directory)
+
+    assert state_path.read_bytes() == state_before
+    assert owner_path.read_bytes() == owner_before
+    assert not (run_directory / "resource_usage.json").exists()
+    expected_event = "receipt_live" if owner_file == "local_launch.json" else "guard_live"
+    assert read_json(run_directory / "execution.json")["history"][-1]["event"] == expected_event
+
+
+def test_atomic_guard_claim_race_cannot_mutate_the_winning_run_state(monkeypatch, tmp_path):
+    """Losing exclusive guard creation must leave the winner's lifecycle untouched."""
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")
+    state_path = run_directory / "run_state.json"
+    state_before = state_path.read_bytes()
+    monkeypatch.setattr(
+        pipeline,
+        "_claim_execution_guard",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            FileExistsError("synthetic guard race")
+        ),
+    )
+    monkeypatch.setattr(pipeline.activity, "load_region_activity", fail_if_called)
+
+    with pytest.raises(RuntimeError, match="guard|owner|race"):
+        pipeline.run_prepared_task_decoding(run_directory)
+
+    assert state_path.read_bytes() == state_before
+    assert not (run_directory / "resource_usage.json").exists()
+
+
 @pytest.mark.parametrize(
     ("start_token", "expected"),
     (("current", "live"), ("reused", "pid_reused"), (None, "dead")),
@@ -3056,6 +3117,35 @@ def test_wp5b_guard_still_exists_during_atomic_complete_publication(monkeypatch,
     monkeypatch.setattr(pipeline, "_update_state", observe_complete)
     pipeline.run_prepared_task_decoding(run_directory)
     assert observed == [True]
+
+
+def test_wp5b_successful_completion_clears_a_stale_midrun_error(monkeypatch, tmp_path):
+    """A valid final publication cannot retain an error from a losing contender."""
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")
+    patch_coherent_execution(monkeypatch, make_coherent_model_records(paths))
+    real_write_figures = pipeline._write_minimal_family_heatmaps
+
+    def write_figures_after_stale_error(directory, *, arrays):
+        """Inject a competing-invocation error after this owner has done its work."""
+        real_write_figures(directory, arrays=arrays)
+        pipeline._update_state(
+            directory,
+            last_error="RuntimeError: rejected competing owner",
+        )
+
+    monkeypatch.setattr(
+        pipeline,
+        "_write_minimal_family_heatmaps",
+        write_figures_after_stale_error,
+    )
+
+    pipeline.run_prepared_task_decoding(run_directory)
+
+    state = read_json(run_directory / "run_state.json")
+    assert state["lifecycle"] == "complete"
+    assert state["final_results_published"] is True
+    assert state["last_error"] == ""
 
 
 def test_wp5b_valid_complete_reentry_skips_heavy_loading(monkeypatch, tmp_path):
