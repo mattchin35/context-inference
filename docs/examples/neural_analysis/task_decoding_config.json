@@ -1,0 +1,60 @@
+{
+  "session_metadata_path": "neural_session.json",
+  "augmented_trial_path": "processed/augmented_trials.csv",
+  "trial_feature_parameter_path": "processed/trial_feature_params.json",
+  "pfc_region": {
+    "region": "PFC",
+    "probe_id": "replace-with-pfc-probe-id",
+    "channel_labels": [
+      "good"
+    ],
+    "require_inside_brain": true,
+    "cluster_groups": [
+      "good",
+      "mua"
+    ],
+    "channel_ids": []
+  },
+  "hpc_region": {
+    "region": "HPC",
+    "probe_id": "replace-with-hpc-probe-id",
+    "channel_labels": [
+      "good"
+    ],
+    "require_inside_brain": true,
+    "cluster_groups": [
+      "good",
+      "mua"
+    ],
+    "channel_ids": []
+  },
+  "alignment": "choice_time",
+  "bin_width_ms": 100,
+  "pfc_pc_count": 10,
+  "hpc_pc_count": 10,
+  "target_names": [
+    "current_state",
+    "current_action",
+    "current_action_is_correct",
+    "previous_action",
+    "previous_action_was_rewarded",
+    "next_action",
+    "current_choice_switch_stay",
+    "next_choice_switch_stay",
+    "consecutive_omissions",
+    "consecutive_rewards",
+    "session_trial_index",
+    "trial_index_in_block",
+    "rewards_in_block",
+    "qlearning_relative_value",
+    "forgetting_q_relative_value",
+    "hmm_signed_belief",
+    "hmm_decay_signed_belief",
+    "relative_doubt"
+  ],
+  "regularization_mode": "fixed",
+  "outer_fold_count": 5,
+  "inner_fold_count": 3,
+  "trusted_utc_bounds": {},
+  "output_root": "analysis_runs"
+}

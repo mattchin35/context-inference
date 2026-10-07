@@ -196,3 +196,239 @@ The small public surface for new-session use is:
 The dataclass and function docstrings specify path types, zero-based channel
 axes, seconds, Hz, and uV. Scientific calculations, plot definitions, cache
 formats, and scheduler behavior are unchanged by the metadata layer.
+
+## Task-variable decoding
+
+Task-variable decoding is an offline, single-session analysis. It constructs
+categorical and numerical behavioral targets, aligns them to PFC and HPC firing
+rates, and compares PFC, HPC, and PFC+HPC decoders using both regional PCA and
+direct-unit features. Start with `regularization_mode: "fixed"`; tuned mode is
+substantially more expensive and should be used only after a representative
+fixed-mode benchmark.
+
+### Prepare the session inputs
+
+Each session needs four small control files before neural arrays are loaded:
+
+1. `neural_session.json`, using the metadata format described above. It must
+   contain two distinct probe IDs selected as PFC and HPC in the decoding
+   configuration.
+2. The augmented chronological trial CSV produced by the normal behavior
+   processing workflow. It must include `cur_trial`, `cur_block`, `action`,
+   `experimenter_reward_given`, the selected alignment column (`choice_time` or
+   `start_time` in UTC Unix seconds), and the source column for every selected
+   target.
+3. The behavior workflow's trial-feature parameter JSON. The pipeline copies
+   its exact bytes into the run directory for provenance.
+4. A task-decoding JSON configuration copied from the portable example.
+
+Copy the example into the session root, then edit its relative paths, probe
+IDs, unit-selection rules, targets, and scientific settings:
+
+```bash
+cp docs/examples/neural_analysis/task_decoding_config.json \
+  /path/to/session/task_decoding_config.json
+```
+
+All input paths are resolved relative to the configuration. They must remain
+inside the metadata session root. `output_root` is also session-relative and
+must name a separate child directory outside the Git checkout. An empty
+`channel_ids` list means that the configured channel labels, inside-brain rule,
+and cluster groups select units; a nonempty list adds an explicit zero-based
+channel restriction. An empty `trusted_utc_bounds` object uses ordinary
+alignment coverage. Add a probe's `[start, end]` UTC-second bounds only when
+those bounds have been independently established.
+
+The normal behavior-processing path should create the complete augmented
+table. There is one narrow migration exception: if `rewards_in_block` is the
+sole missing column, first make a timestamped backup beside the CSV, then run
+the tested behavior-side backfill:
+
+```bash
+cp --preserve=all /path/to/augmented_trials.csv \
+  /path/to/augmented_trials.csv.backup-YYYYMMDDTHHMMSSZ
+
+uv run python -c 'from pathlib import Path; from src.behavior_analysis.gather_trial_features import backfill_rewards_in_block_csv; backfill_rewards_in_block_csv(Path("/path/to/augmented_trials.csv"))'
+```
+
+Confirm the backup exists before invoking the Python command. The helper
+refuses an existing destination column and atomically replaces the CSV only
+after round-trip validation. If any other required column is absent, use
+normal behavior regeneration. Do not hand-edit the CSV, and do not rerun
+unrelated models merely to add this derived column.
+
+### Inspect and start one session
+
+Run the bounded dry run first. It validates small metadata and table inputs,
+reports target/work/tensor dimensions and source sizes, and does not load
+sorter spike arrays or fit models:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session dry-run \
+  --config /path/to/session/task_decoding_config.json
+```
+
+A persistent `new` or `resume` requires the scoped scientific source files to
+be tracked and clean. Keep a deliberately small run in the foreground with:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session new \
+  --config /path/to/session/task_decoding_config.json
+```
+
+For an unattended local run, use the detached form:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session new \
+  --config /path/to/session/task_decoding_config.json --detach
+```
+
+The parent performs bounded preparation, prints the immutable run directory,
+and returns only after publishing the child ownership receipt. It also prints
+the exact status and resume commands. After that message, it is safe to close
+the terminal and close the Codex task; neither must remain resident. The child
+writes its console stream to `console.log` and durable stage messages to
+`run.log`. Do not poll it. Inspect it once later with the printed one-shot
+command:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session status \
+  --run-directory /path/to/session/analysis_runs/task_variable_decoding_<timestamp>
+```
+
+`status` is read-only and never polls a process or scheduler. Add
+`--verify-results` to validate a completed publication. You can also inspect
+`run_state.json`, `run.log`, and `console.log` directly after the one-shot
+status check. An interrupted or failed prepared run resumes from valid
+target-local checkpoints with:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session resume \
+  --run-directory /path/to/session/analysis_runs/task_variable_decoding_<timestamp> \
+  --detach
+```
+
+Only one matching owner may execute a run directory. A live receipt or guard
+causes another resume to refuse rather than create a second writer. Sending a
+normal termination or interrupt to a foreground worker records durable
+interrupted state and releases its guard; use `resume` afterward.
+
+A `new` request whose complete fingerprint already has a valid completed run
+prints that directory and skips computation. Use `--rerun` only when you
+intentionally want another immutable timestamped directory with the same
+scientific identity:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session new \
+  --config /path/to/session/task_decoding_config.json --rerun --detach
+```
+
+### Run a local batch
+
+Create a UTF-8 text file with one configuration path per line. Blank lines and
+lines beginning with `#` are ignored; relative entries resolve from the list
+file. Preview the ordered sessions and resource calculation with:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_batch dry-run \
+  --config-list /path/to/task_decoding_configs.txt
+```
+
+Launch the batch in the foreground with:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_batch new \
+  --config-list /path/to/task_decoding_configs.txt
+```
+
+Without measured evidence, the safe effective default is one worker even if
+more CPUs are available or `--workers` is supplied. A compatible completed
+resource run may later be supplied explicitly:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_batch dry-run \
+  --config-list /path/to/task_decoding_configs.txt \
+  --workers 2 \
+  --resource-run-directory /path/to/completed/measured-run
+```
+
+The evidence is not discovered automatically. It must contain the atomic
+`resource_usage.json` produced by an authorized measurement workflow and must
+match the scientific source, runtime, platform, thread limits, analysis mode,
+and a resource envelope that is not exceeded by any planned session. The
+runner then caps cross-session workers by the request, CPU count, session
+count, measured peak RSS, and 50% of current `MemAvailable`. Parallelism is
+across sessions only; each session fixes OMP, MKL, and OpenBLAS to one thread.
+
+### Outputs and saved-result view
+
+The default run parent is the session's `analysis_runs` directory. Each run is
+a direct child named `task_variable_decoding_<timestamp>` (with a collision
+suffix when necessary). Important members are:
+
+| Path | Content |
+| --- | --- |
+| `run_state.json` | Durable lifecycle, current stage, warnings, and completed targets |
+| `execution.json`, `local_launch.json` | Requested/actual owner and detached receipt |
+| `run.log`, `console.log` | Stage log and detached stdout/stderr |
+| `resume_command.txt`, `status_command.txt` | Exact shell-safe follow-up commands |
+| `checkpoints/` | Fingerprint-bound, target-local primitive NPZ checkpoints |
+| `results.npz` | Final validated non-pickle arrays and JSON metadata |
+| `summary.md` | Session, settings, availability, timing, and output summary |
+| `figures/` | `categorical_balanced_accuracy.png`, `categorical_auc.png`, and/or `numerical_r2.png` |
+
+Open the existing metadata-driven webapp and select **Task-variable decoding
+results**:
+
+```bash
+uv run streamlit run src/neural_analysis/psth_webapp.py -- \
+  --session-metadata /path/to/session/neural_session.json
+```
+
+The view defaults to the session-relative locator `analysis_runs`. If the
+configuration used a nondefault `output_root`, enter that relative locator in
+the view's **Results root (relative to session)** field. The selector considers
+only validated, completed direct-child runs. All controls load and re-render
+saved arrays; they never refit a decoder or load raw spikes.
+
+### Fixed, tuned, and benchmark planning
+
+Fixed mode performs one outer fit for each target x fold x time x region x
+representation cell. Tuned mode evaluates 15 candidates in each of three inner
+folds and then refits the selected candidate: 46 fits per outer cell instead of
+one with the default grid. That is a large tuned-mode work-count warning, not a
+minor option change. Memory is driven mainly by the common PFC and HPC rate
+tensors and coefficient capacity, while runtime scales with eligible targets,
+time bins, folds, regions, representations, and tuning fits.
+
+Before a full session or any cluster proposal, make a separate fixed-mode
+configuration containing exactly one representative categorical target and
+one representative numerical target, for example `current_action` and
+`relative_doubt`. Keep the intended bin width and unit selections. Run its
+dry-run, review the reported tensor allocation and categorical/numerical fit
+counts, then run that bounded configuration in the foreground only after the
+benchmark is explicitly authorized. Record:
+
+- run fingerprint, commit/source fingerprint, Python/library versions,
+  platform, CPU count, and one-thread environment;
+- full and common-neural trial counts, PFC/HPC units, time bins, fold counts,
+  coefficient capacity, and fit counts from the resource envelope;
+- `stage_timing_seconds` and `total_timing_seconds` from `results.npz` and
+  `summary.md`;
+- wall-clock time, peak RSS in bytes measured with `resource.getrusage`, and
+  the measurement method; and
+- success, warnings, unavailable targets, and checkpoint reuse.
+
+Project runtime by scaling the measured modeling time by the planned full fit
+count divided by the measured fit count; treat that as a planning estimate,
+not a guarantee. Use measured peak RSS plus the full dry-run tensor allocation
+to choose whether the full job fits safely under the local memory budget. Do
+not hand-author `resource_usage.json`; the gated WP10 measurement path owns its
+atomic schema. Until that evidence exists, batch execution remains at one
+worker.
+
+Single-session Slurm submission is intentionally unavailable pending WP11.
+That later gate must freeze the exact commit and offline environment, safe
+input/result transfer, submit/resume/status commands, and resource request
+from WP10 measurements. Do not invent an `sbatch` command from the local CLI.
+Slurm array batching is separately deferred until WP13.
