@@ -1729,3 +1729,98 @@ def test_decode_rejects_scalar_string_or_bytes_unit_id_containers_before_fitting
     monkeypatch.setattr(modeling, "fit_region_transform", fail_transform)
     with pytest.raises(ValueError):
         modeling.decode_target(**inputs)
+
+
+def test_tuned_records_retain_global_selection_rows_and_candidate_audits(monkeypatch):
+    """Tuned records retain global outer-train rows and aligned 15-by-3 audits."""
+    fit_log = []
+
+    def factory(*, target_family, parameters=None):
+        """Build deterministic finite fakes without iterative sklearn fitting."""
+        return RecordingEstimator(target_family, parameters, fit_log)
+
+    monkeypatch.setattr(modeling, "make_estimator", factory)
+    fixed_inputs = make_classification_inputs(n_time_bins=1, n_blocks=9)
+    fixed_inputs.update({"outer_fold_count": 3, "inner_fold_count": 3})
+    fixed_result = modeling.decode_target(**fixed_inputs)
+    tuned_inputs = dict(fixed_inputs)
+    tuned_inputs["regularization_mode"] = "tuned"
+    tuned_result = modeling.decode_target(**tuned_inputs)
+
+    assert all(record.inner_selection_indices.shape == (0,) for record in fixed_result.fold_records)
+    assert len(tuned_result.fold_records) == 3 * 1 * 3 * 2
+    selection_rows = []
+    for record in tuned_result.fold_records:
+        record_key = record.record_key
+        assert record.regularization_mode == "tuned"
+        assert len(record.candidate_inner_scores) == 15
+        assert len(record.candidate_inner_statuses) == 15
+        assert len(record.candidate_inner_reasons) == 15
+        assert all(len(scores) == 3 for scores in record.candidate_inner_scores)
+        assert all(len(statuses) == 3 for statuses in record.candidate_inner_statuses)
+        assert all(len(reasons) == 3 for reasons in record.candidate_inner_reasons)
+        assert tuned_result.candidate_inner_scores[record_key] == record.candidate_inner_scores
+        assert tuned_result.candidate_inner_statuses[record_key] == record.candidate_inner_statuses
+        assert tuned_result.candidate_inner_reasons[record_key] == record.candidate_inner_reasons
+        assert (
+            tuned_result.selected_candidate_indices[record_key]
+            == record.selected_candidate_index
+        )
+        selection_rows.append(
+            (
+                record.inner_selection_indices,
+                np.flatnonzero(tuned_result.outer_fold_ids != record.outer_fold_id),
+            )
+        )
+
+    for actual_indices, expected_indices in selection_rows:
+        np.testing.assert_array_equal(actual_indices, expected_indices)
+
+
+def test_unavailable_inner_tuned_records_retain_global_selection_rows_and_audits(monkeypatch):
+    """Unavailable inner tuning retains global selection provenance and 15-by-0 audits."""
+    fit_log = []
+
+    def factory(*, target_family, parameters=None):
+        """Build a fake proving that unavailable inner CV does not need model fitting."""
+        return RecordingEstimator(target_family, parameters, fit_log)
+
+    monkeypatch.setattr(modeling, "make_estimator", factory)
+    inputs = make_classification_inputs(n_time_bins=1, n_blocks=3)
+    inputs.update(
+        {
+            "outer_fold_count": 3,
+            "inner_fold_count": 3,
+            "regularization_mode": "tuned",
+        }
+    )
+    result = modeling.decode_target(**inputs)
+
+    assert len(fit_log) == 0
+    assert len(result.fold_records) == 3 * 1 * 3 * 2
+    assert set(result.inner_split_plans) == {0, 1, 2}
+    selection_rows = []
+    for record in result.fold_records:
+        record_key = record.record_key
+        inner_plan = result.inner_split_plans[record.outer_fold_id]
+        assert not inner_plan.is_available
+        assert record.selected_candidate_index is None
+        assert len(record.candidate_inner_scores) == 15
+        assert len(record.candidate_inner_statuses) == 15
+        assert len(record.candidate_inner_reasons) == 15
+        assert all(len(scores) == 0 for scores in record.candidate_inner_scores)
+        assert all(len(statuses) == 0 for statuses in record.candidate_inner_statuses)
+        assert all(len(reasons) == 0 for reasons in record.candidate_inner_reasons)
+        assert result.candidate_inner_scores[record_key] == record.candidate_inner_scores
+        assert result.candidate_inner_statuses[record_key] == record.candidate_inner_statuses
+        assert result.candidate_inner_reasons[record_key] == record.candidate_inner_reasons
+        assert result.selected_candidate_indices[record_key] is None
+        selection_rows.append(
+            (
+                record.inner_selection_indices,
+                np.flatnonzero(result.outer_fold_ids != record.outer_fold_id),
+            )
+        )
+
+    for actual_indices, expected_indices in selection_rows:
+        np.testing.assert_array_equal(actual_indices, expected_indices)
