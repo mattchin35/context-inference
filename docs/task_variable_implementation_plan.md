@@ -2,9 +2,10 @@
 
 **Status:** Implementation authorized; WP5A result persistence, portable
 identity, checkpointing, and atomic publication are complete and independently
-approved. The WP5B single-session lifecycle and CLI RED contract is committed
-and independently approved; `pipeline.py` and `run_session.py` implementation
-is the active package.
+approved. The WP5B single-session lifecycle and CLI RED contract and its
+scientific/lifecycle integrity supplement are committed and independently
+approved; correcting `pipeline.py`, `run_session.py`, and the bounded
+`results.py` schema seam is the active package.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -25,20 +26,22 @@ semantic, and frozen-control corrections are committed at `bc628c4` and
 shared-split, exact-PCA, and sparse-tuning corrections are committed through
 `c7c2912`. WP5A production is committed at `1bd0f69` after independent
 approval. The independently approved WP5B lifecycle/CLI RED suite is committed
-at `449f7c9`; production implementation is next. No
+at `449f7c9`, and its production-review supplement is committed at `4215c82`;
+production correction is next. No
 experimental-data mutation, decoding output, benchmark, transfer, local long
 run, or cluster action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local implementation HEAD: `449f7c9`;
+- local implementation HEAD: `4215c82`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
   production are complete through `1bd0f69`, including the final sparse tuned
-  transform-evidence review; WP5B RED tests are complete at `449f7c9`; and
+  transform-evidence review; WP5B RED tests are complete through supplemental
+  lifecycle/scientific coverage at `4215c82`; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -67,12 +70,16 @@ run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** implement `pipeline.py` and the standard-library-only
-`run_session.py` against the committed WP5B RED contract. Keep the three public
+**Next exact action:** correct `pipeline.py`, the standard-library-only
+`run_session.py`, and the bounded `results.py` persistence seam against both
+committed WP5B RED contracts. Stage the explicit session-ID and dynamic
+selection-rule schema correction first so deeper causal failures become
+observable, then finish the ownership, common-row, feature-provenance,
+reporting, scheduler, and compact-reason boundaries. Keep the three public
 pipeline entry points minimal, preserve lazy numerical imports and one-thread
-entrypoint setup, run the focused lifecycle suite plus the full task-decoding
-regression suite, and obtain independent production approval before committing
-WP5B GREEN.
+entrypoint setup, run the focused lifecycle/results suites plus the full
+task-decoding regression suite, and obtain independent production approval
+before committing WP5B GREEN.
 
 ### Authority order
 
@@ -97,7 +104,7 @@ When resuming, use this order:
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
 | WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
 | WP4 grouped modeling | Complete: fixed GREEN `a8787aa`, tuned GREEN `b844f26` | None |
-| WP5 results and session pipeline | WP5A GREEN `1bd0f69`; WP5B RED tests `449f7c9` | Implement and independently approve WP5B GREEN |
+| WP5 results and session pipeline | WP5A GREEN `1bd0f69`; WP5B RED tests `449f7c9` plus integrity supplement `4215c82` | Correct and independently approve WP5B GREEN |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
 | WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
 | WP8 documentation and examples | Pending prerequisite | CLI/webapp interfaces stable through WP7 |
@@ -1159,6 +1166,57 @@ Use this template for each appended record:
   tests-only commit. Run the focused lifecycle suite, all task-decoding tests,
   pycompile, line-length and diff checks, then obtain independent production
   approval before the WP5B GREEN commit.
+
+#### 2026-10-07 - WP5B lifecycle and scientific-integrity RED supplement
+
+- State: an independent review of the first source implementation found
+  uncovered ownership, resume-history, result-provenance, reporting, scheduler,
+  and completion-validation defects. The corrected supplemental RED contract
+  is independently approved and committed.
+- Authorization: project implementation remains authorized. All new coverage
+  uses deterministic temporary directories, synthetic tables/tensors, mocked
+  scheduler responses, and bounded child-process fakes. No experimental data,
+  real decoding, benchmark, transfer, or scheduler action was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / Terra xhigh tests worker /
+  independent Sol xhigh tests reviewer. Four review passes corrected receipt
+  atomicity, WP4-emittable transform/reason fixtures, causal candidate-code
+  corruption, exact execution timing/history, and no-selection estimator
+  provenance before approval.
+- Start HEAD / end HEAD: WP5B documentation handoff `9b4837c` / supplemental
+  tests-only commit `4215c82`.
+- Owned files: modified
+  `src/tests/neural_analysis/task_decoding/test_pipeline.py` and
+  `src/tests/neural_analysis/task_decoding/test_results.py`. The existing
+  uncommitted source implementation was frozen during this tests-first gate;
+  no production, configuration, data, or external file was changed by the
+  supplement.
+- RED command and result: `env UV_CACHE_DIR=/tmp/context-inference-uv-cache
+  uv run pytest -q src/tests/neural_analysis/task_decoding/test_pipeline.py
+  src/tests/neural_analysis/task_decoding/test_results.py -k wp5b_` reports
+  31 failed, 3 passed, and 445 deselected. Every failure is a causal missing
+  production boundary. The complementary legacy selector reports 445 passed
+  and 34 deselected. Pycompile, the 100-column audit, whitespace checks, and
+  generated-bytecode cleanup passed.
+- Contract decisions: detached receipt-to-guard handoff must never create an
+  unowned interval; terminal publication retains the guard; matching complete
+  runs are no-op reentries; Slurm uncertainty refuses takeover after bounded
+  lookup. Result assembly receives the resolved session ID explicitly, keeps
+  target-invalid and not-common rows distinct, derives direct feature axes
+  from stable selected metadata, maps exact modeling reasons to whitelisted
+  compact codes, and stores canonical selection-rule JSON at a content-derived
+  Unicode width rather than an arbitrary cap. Completion requires six real
+  region-by-representation heatmap panels per present metric family, accurate
+  launch/timing provenance, and decodable PNGs.
+- Findings and unresolved risks: the base source passed its original 79-test
+  lifecycle suite but was not acceptable under the supplemental scientific and
+  concurrency contract. The first GREEN step must add the explicit session-ID
+  seam and dynamic selection-rule validation so the remaining causal tests are
+  no longer masked. The direct feature, compact-reason, checkpoint preflight,
+  owner-history, summary/figure, and scheduler fixes then remain required.
+- Exact next action: correct only `pipeline.py`, `run_session.py`, and
+  `results.py`; rerun the supplemental selector after the schema seam, then run
+  the complete pipeline/results and full task-decoding suites. Obtain a fresh
+  independent production review before any WP5B GREEN commit.
 
 ## 1. Objective
 
