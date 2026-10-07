@@ -2886,10 +2886,14 @@ def test_dynamic_numerical_tuned_round_trip_uses_saved_dimensions_and_global_row
             ]
             if grouped_rows:
                 assert len({int(inner[outer_fold, row]) for row in grouped_rows}) == 1
-    for common_row, full_row in enumerate(saved["trial_row_indices"]):
+    common_rows = saved["trial_row_indices"]
+    common_eligibility = saved["eligibility_masks"][0, common_rows]
+    assert np.array_equal(outer >= 0, common_eligibility)
+    for common_row in np.flatnonzero(outer >= 0):
+        full_row = common_rows[common_row]
         same_block = [
             row
-            for row, row_full in enumerate(saved["trial_row_indices"])
+            for row, row_full in enumerate(common_rows)
             if blocks[row_full] == blocks[full_row] and outer[row] >= 0
         ]
         assert len({int(outer[row]) for row in same_block}) == 1
