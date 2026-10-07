@@ -40,6 +40,46 @@ RANDOM_SEED = 0
 COEFFICIENT_TOLERANCE = 1e-8
 SUPPORTED_BIN_WIDTH_MS = (500, 100, 50, 20)
 
+# Keep estimator/PCA controls in one immutable source so execution and saved
+# scientific configuration cannot drift apart.
+FROZEN_ESTIMATOR_CONTROLS = MappingProxyType(
+    {
+        "LogisticRegression": MappingProxyType(
+            {
+                "C": 1.0,
+                "l1_ratio": 0.5,
+                "solver": "saga",
+                "tol": 1e-4,
+                "max_iter": 100,
+                "fit_intercept": True,
+                "class_weight": None,
+                "warm_start": False,
+                "n_jobs": None,
+                "random_state": RANDOM_SEED,
+            }
+        ),
+        "ElasticNet": MappingProxyType(
+            {
+                "alpha": 1.0,
+                "l1_ratio": 0.5,
+                "tol": 1e-4,
+                "max_iter": 1000,
+                "fit_intercept": True,
+                "selection": "cyclic",
+                "positive": False,
+                "warm_start": False,
+            }
+        ),
+        "PCA": MappingProxyType(
+            {
+                "whiten": False,
+                "svd_solver": "auto",
+                "random_state": RANDOM_SEED,
+            }
+        ),
+    }
+)
+
 
 @dataclass(frozen=True)
 class TargetDefinition:
@@ -861,33 +901,8 @@ def scientific_config_payload(config: TaskDecodingConfig) -> dict[str, object]:
                 },
             },
             "estimators": {
-                "LogisticRegression": {
-                    "C": 1.0,
-                    "l1_ratio": 0.5,
-                    "solver": "saga",
-                    "tol": 1e-4,
-                    "max_iter": 100,
-                    "fit_intercept": True,
-                    "class_weight": None,
-                    "warm_start": False,
-                    "n_jobs": None,
-                    "random_state": RANDOM_SEED,
-                },
-                "ElasticNet": {
-                    "alpha": 1.0,
-                    "l1_ratio": 0.5,
-                    "tol": 1e-4,
-                    "max_iter": 1000,
-                    "fit_intercept": True,
-                    "selection": "cyclic",
-                    "positive": False,
-                    "warm_start": False,
-                },
-                "PCA": {
-                    "whiten": False,
-                    "svd_solver": "auto",
-                    "random_state": RANDOM_SEED,
-                },
+                estimator_name: dict(estimator_controls)
+                for estimator_name, estimator_controls in FROZEN_ESTIMATOR_CONTROLS.items()
             },
         },
     }
