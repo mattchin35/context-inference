@@ -1,9 +1,10 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP1-WP8 are complete, including the
-single-session and batch CLIs, saved-result webapp, portable example, and user/
-maintainer documentation. WP9 synthetic integration is next and requires a
-tests-first plan approved by the user before implementation.
+**Status:** Implementation authorized; WP1-WP9 are complete, including the
+single-session and batch CLIs, saved-result webapp, portable example, user/
+maintainer documentation, and seeded synthetic end-to-end gate. WP9 required
+no production change because its final scientific contracts already passed;
+the user explicitly approved recording it as a characterization-only gate.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -13,7 +14,7 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-07
 
-**Current phase:** WP0-WP8 are complete. WP4 grouped-modeling tests are
+**Current phase:** WP0-WP9 are complete. WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
 is committed at `a8787aa`; complete tuned production and provenance are
@@ -33,11 +34,13 @@ through `0c6ce07`, and WP7 GREEN is committed at `ef7ad55`. WP8 tests are
 committed through `a1c1f5c`, the dry-run JSON correction is `b2b3dde`, and the
 documentation/example GREEN commit is `8b92c4f`. No experimental-data
 mutation, benchmark, transfer, local long run, or cluster action is authorized.
+WP9's characterization-only synthetic integration gate is committed at
+`9ea0109`; WP9A remains a separate experimental-table mutation gate.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local WP8 implementation HEAD: `8b92c4f`;
+- local WP9 test-gate HEAD: `9ea0109`;
 - `origin/refactor`: `3281d01bd4cf65e381e986cda8ad50c4db360383`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
@@ -48,7 +51,8 @@ mutation, benchmark, transfer, local long run, or cluster action is authorized.
   planning/execution is complete through GREEN commit `7d6b4a8`; WP7 plotting
   and the read-only saved-results webapp view are complete through GREEN commit
   `ef7ad55`; WP8 documentation and portable examples are complete through
-  GREEN commit `8b92c4f`; and
+  GREEN commit `8b92c4f`; WP9 synthetic integration is complete through
+  characterization commit `9ea0109`; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -77,11 +81,10 @@ mutation, benchmark, transfer, local long run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** propose the bounded WP9 seeded synthetic-integration
-plan from Section 10.10 and the WP9 package gate, then obtain user approval
-before writing WP9 tests or implementation fixes. Do not run experimental
-data, CT026 preparation, benchmarks, transfers, or scheduler actions under
-this handoff.
+**Next exact action:** obtain separate user approval for WP9A's exact CT026
+backup and one-file `rewards_in_block` backfill procedure before reading the
+table for pre-write validation or making any experimental-data change. WP9A
+does not authorize neural loading, a benchmark, transfer, or scheduler action.
 
 ### Authority order
 
@@ -110,8 +113,8 @@ When resuming, use this order:
 | WP6 batch runner | Complete: RED `9727ec8` plus reviews through `827989c`; GREEN `7d6b4a8` | None |
 | WP7 plotting and webapp | Complete: RED `c027f2c` plus reviews through `0c6ce07`; GREEN `ef7ad55` | None |
 | WP8 documentation and examples | Complete: RED `c1cda3b`, corrections through `a1c1f5c`, JSON fix `b2b3dde`, GREEN `8b92c4f` | None |
-| WP9 synthetic integration | Ready for tests-first planning | User approves the WP9 implementation plan |
-| WP9A CT026 augmented-table preparation | Not authorized | WP9 GREEN plus explicit approval of the exact behavior-processing command |
+| WP9 synthetic integration | Complete: characterization-only test gate `9ea0109` | None |
+| WP9A CT026 augmented-table preparation | Not authorized | WP9 complete plus explicit approval of the exact behavior-processing command |
 | WP10 CT026 preflight/benchmark | Not authorized | WP9A validation passes plus explicit real-session benchmark approval |
 | WP11 single-session cluster path | Not authorized | WP10 evidence and user choice justify cluster convenience/cost; user approves wrapper/transfer work |
 | WP12 CT026 scientific inspection | Not authorized | User accepts benchmark and authorizes exact run |
@@ -1411,6 +1414,92 @@ Use this template for each appended record:
   coverage, one unavailable target, saved reload/plots, and leakage checks.
   Obtain user approval before writing WP9 tests. Do not execute CT026 or a real
   benchmark.
+
+#### 2026-10-07 - WP9 synthetic integration characterization gate
+
+- State: WP9 is complete as a user-approved characterization-only gate. The
+  final seven scientific integration contracts pass the existing production
+  pipeline, so no production edit was justified or made.
+- Authorization: the user approved the bounded fixed-mode WP9 plan and then
+  explicitly approved characterization-only completion after the valid final
+  tests produced no genuine production RED. Work used only seeded synthetic
+  data below pytest-owned `/tmp` directories. No experimental data, CT026
+  preparation, benchmark, transfer, scheduler action, or persistent analysis
+  output was used.
+- Start HEAD / end HEAD: WP8 handoff `36cbe76` / WP9 tests-only commit
+  `9ea0109` (this documentation handoff follows separately). The remote remains
+  `3281d01bd4cf65e381e986cda8ad50c4db360383` because GitHub rejected the prior
+  pushes with a server-side internal error; local implementation work remains
+  seven commits ahead before this handoff.
+- Owned file: added
+  `src/tests/neural_analysis/task_decoding/test_synthetic_integration.py`.
+  No production, configuration, dependency, experimental-data, or external
+  file changed.
+- TDD/characterization evidence: the first test draft reported two failures
+  and five passes, but both failures were test-fixture defects rather than
+  production defects: the held-out-offset fixture advanced the shared random
+  stream and therefore changed training spikes, and an assertion incorrectly
+  required every estimator cell to converge instead of accepting reviewed
+  cell-local scientific unavailability. The fixture was corrected with an
+  independent offset random stream and the assertion was aligned with the
+  saved validity contract. The resulting seven scientifically valid tests all
+  passed current production. The user approved stopping rather than inventing
+  a production failure merely to manufacture a RED/GREEN pair.
+- Synthetic fixture identity: seed `20261007`; 72 trials in six chronological
+  blocks; two probes with four selected units per region; choice alignment;
+  eight 500 ms bins across the frozen [-2, 2] s window; fixed regularization;
+  three outer folds; available categorical `current_action`; available
+  numerical `relative_doubt`; and grouped-impossible categorical
+  `current_state`. Seeded Poisson spikes include a local action signal in bin
+  four. A second session modifies only fold-zero held-out spikes using its own
+  random stream.
+- Gate coverage: the tests exercise real metadata and aligned-spike loading,
+  Pynapple rate binning, all PFC/HPC/combined by PCA/direct-unit cells,
+  cell-local unavailable fits, target checkpoints, immutable saved results,
+  summaries, all three required PNGs, validated reload without decoding,
+  coefficient summaries, exact scientific rerun determinism, the expected
+  signal interval, and an end-to-end held-out leakage control.
+- GREEN/regression evidence: the focused WP9 file passed 7 tests in 4.55
+  seconds. The full task-decoding package plus documentation contracts passed
+  804 tests with six known warnings in 86.87 seconds. Reused metadata,
+  spike-loading, population-PCA, saved-result webapp, cross-session plotting,
+  behavior backfill, and session-analysis regressions passed 400 tests with 23
+  known warnings in 10.76 seconds. Compilation, the 100-column audit, and
+  `git diff --check` passed. A separate pre-existing untracked legacy
+  `test_project_utils.py` could not collect because undeclared optional
+  `autograd` is absent; it is not part of the tracked WP9 surface and no
+  dependency was added to mask that repository issue.
+- Visual review: the seeded categorical balanced-accuracy and numerical R2
+  PNGs were inspected at original resolution. All six panel titles, axes,
+  target labels, descriptive-reference colorbars, unavailable-cell shading,
+  and scientific captions are readable on opaque white backgrounds. A
+  lower-detail combined preview briefly appeared to omit the numerical
+  first-row titles; original-resolution inspection and rendered artist bounds
+  confirmed that this was preview scaling rather than a saved-figure defect.
+- Proposed CT026 WP10 preflight command, not executed: after separately
+  approved WP9A has produced and validated the complete augmented table, use a
+  proposed immutable config at
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference/task_decoding_config_wp10_bounded.json`.
+  Its bounded scientific payload is choice alignment, 100 ms bins, ten PCs per
+  region, ProbeA as PFC, ProbeB as HPC, fixed regularization, five outer folds,
+  three inactive inner folds, and exactly `current_action` plus
+  `relative_doubt`. From the tracked-clean repository root, the exact proposed
+  read-only command is:
+
+  ```bash
+  env UV_CACHE_DIR=/tmp/context-inference-uv-cache \
+    MPLCONFIGDIR=/tmp/context-inference-matplotlib \
+    uv run python -m src.neural_analysis.task_decoding.run_session dry-run \
+    --config "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference/task_decoding_config_wp10_bounded.json"
+  ```
+
+  Creating that config, running this command, loading CT026 neural arrays, and
+  launching the 2,400-fit benchmark all remain unperformed and require their
+  later package approvals.
+- Exact next action: request explicit WP9A approval for the already recorded
+  timestamped-backup and one-file `backfill_rewards_in_block_csv` procedure.
+  Stop on any pre-write mismatch. Do not start the proposed WP10 dry run or
+  benchmark under WP9A authority.
 
 ## 1. Objective
 
