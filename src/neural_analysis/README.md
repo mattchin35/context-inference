@@ -428,8 +428,79 @@ not hand-author `resource_usage.json`; the gated WP10 measurement path owns its
 atomic schema. Until that evidence exists, batch execution remains at one
 worker.
 
-Single-session Slurm submission is intentionally unavailable pending WP11.
-That later gate must freeze the exact commit and offline environment, safe
-input/result transfer, submit/resume/status commands, and resource request
-from WP10 measurements. Do not invent an `sbatch` command from the local CLI.
-Slurm array batching is separately deferred until WP13.
+### Run one session on Slurm
+
+WP11 supports one session per job through the reviewed wrapper. It requests
+one CPU, `3G` memory, `05:00:00`, and a TERM warning five minutes before the
+limit. Submission is one-shot: neither the shell nor Python polls or retries
+`sbatch`. Slurm array batching remains separately deferred until WP13.
+
+First transfer a session without deleting any cluster data. Keep analysis runs
+out of the input synchronization so a workstation cannot erase or replace a
+cluster result:
+
+```bash
+rsync -a --info=progress2 --exclude='/analysis_runs/' \
+  /local/session/ user@cluster:/cluster/session/
+```
+
+On the cluster, use the exact approved Git commit in a tracked-clean checkout.
+Populate the locked environment once on a login node while dependency access
+is available; scheduled jobs then run the existing environment offline:
+
+```bash
+uv sync --frozen
+```
+
+From the repository root, preview the cluster-visible config with the local
+`dry-run`, then submit it through the wrapper:
+
+```bash
+bash src/shell_scripts/task_variable_decoding_slurm.sh submit-new --config \
+  /cluster/session/task_decoding_config.json
+```
+
+The wrapper checks the exact checkout, freezes all numerical thread counts to
+one, and executes `uv run --frozen --no-sync --offline`. It prints a JSON
+receipt containing the immutable run directory, Slurm job ID, exact commit,
+requested resources, scheduler log, and follow-up commands. Inspect durable
+pipeline state plus one `sacct` query with:
+
+```bash
+bash src/shell_scripts/task_variable_decoding_slurm.sh status --run-directory \
+  /cluster/session/analysis_runs/<run_id>
+```
+
+If the job is interrupted or fails after producing valid target checkpoints,
+resume only that exact directory:
+
+```bash
+bash src/shell_scripts/task_variable_decoding_slurm.sh submit-resume --run-directory \
+  /cluster/session/analysis_runs/<run_id>
+```
+
+Do not resubmit a pending or running directory. The wrapper makes no scientific
+overrides, and the active job rechecks effective cgroup/allocation memory
+before loading spike tensors.
+
+After the cluster status reports a durable complete lifecycle, copy that one
+run into a new local staging directory; never synchronize over an existing
+result:
+
+```bash
+mkdir -p /local/session/analysis_runs/.incoming-<run_id>
+rsync -a --info=progress2 \
+  user@cluster:/cluster/session/analysis_runs/<run_id>/ \
+  /local/session/analysis_runs/.incoming-<run_id>/
+
+uv run python -m src.neural_analysis.task_decoding.run_session status \
+  --run-directory /local/session/analysis_runs/.incoming-<run_id> \
+  --verify-results
+
+mv /local/session/analysis_runs/.incoming-<run_id> \
+  /local/session/analysis_runs/<run_id>
+```
+
+Promote the staged directory only after `status --verify-results` succeeds.
+If validation fails, leave the existing local results untouched and repeat a
+non-destructive copy into a fresh staging directory.

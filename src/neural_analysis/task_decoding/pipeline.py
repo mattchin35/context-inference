@@ -3002,6 +3002,13 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
                 config.hpc_region.probe_id
             ),
         )
+        if os.environ.get("SLURM_JOB_ID"):
+            from src.neural_analysis.task_decoding import slurm
+
+            activity.validate_tensor_memory_budget(
+                tensor_bytes=dry_report.tensor_allocation_bytes,
+                memory_budget_bytes=slurm.effective_memory_budget_bytes(),
+            )
         resource_tracker = resource_usage.ResourceUsageTracker(
             directory,
             _resource_envelope(config, target_table, dry_report),

@@ -13,9 +13,11 @@ import os
 from pathlib import Path
 import platform
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Sequence
 
@@ -210,6 +212,11 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("--verify-results", action="store_true")
     private_prepare = subparsers.add_parser("_prepare")
     private_prepare.add_argument("--config", required=True)
+    private_prepare.add_argument(
+        "--execution-mode",
+        choices=("foreground", "slurm"),
+        default="foreground",
+    )
     private_execute = subparsers.add_parser("_execute-prepared")
     private_execute.add_argument("--run-directory", required=True)
     return parser
@@ -274,6 +281,49 @@ def _print_detached_success(run_directory: Path, receipt_path: Path) -> None:
     print(f"Status: {status}")
 
 
+def _execute_prepared_with_signal_handling(run_directory: Path, pipeline: object) -> None:
+    """Execute one prepared run while translating Slurm TERM into interruption.
+
+    Parameters
+    ----------
+    run_directory : pathlib.Path
+        Exact immutable prepared run directory. The path has no physical units.
+    pipeline : module
+        Task-decoding pipeline exposing ``run_prepared_task_decoding``.
+
+    Returns
+    -------
+    None
+        Returns after successful pipeline completion. A received SIGTERM is
+        raised as ``KeyboardInterrupt`` so the existing durable interrupted
+        lifecycle and checkpoint boundary handles it.
+
+    Raises
+    ------
+    KeyboardInterrupt
+        If Slurm or another process sends SIGTERM during execution.
+    BaseException
+        Any pipeline failure propagates unchanged after restoring the previous
+        SIGTERM handler.
+    """
+
+    def handle_sigterm(_signal_number: int, _frame: object) -> None:
+        """Raise the interruption type already owned by the pipeline boundary."""
+        raise KeyboardInterrupt("SIGTERM")
+
+    # Python permits process-signal handlers only on the main interpreter
+    # thread. Real CLI and Slurm entry points always use that thread, while a
+    # library/test caller may exercise the private bridge from another thread.
+    if threading.current_thread() is not threading.main_thread():
+        pipeline.run_prepared_task_decoding(run_directory)
+        return
+    previous_handler = signal.signal(signal.SIGTERM, handle_sigterm)
+    try:
+        pipeline.run_prepared_task_decoding(run_directory)
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one bounded session CLI command and return a shell exit code.
 
@@ -296,12 +346,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(pipeline.plan_task_decoding_session(arguments.config), default=str))
             return 0
         if arguments.command == "_prepare":
-            pipeline.prepare_task_decoding_run(arguments.config, False, "foreground")
+            prepared = pipeline.prepare_task_decoding_run(
+                arguments.config,
+                False,
+                arguments.execution_mode,
+            )
+            print(prepared)
             return 0
         if arguments.command == "_execute-prepared":
             prepared = Path(arguments.run_directory)
             _wait_for_detached_launch_receipt(prepared, pipeline)
-            pipeline.run_prepared_task_decoding(prepared)
+            _execute_prepared_with_signal_handling(prepared, pipeline)
             return 0
         if arguments.command == "status":
             status = pipeline.inspect_task_decoding_status(

@@ -29,9 +29,10 @@ not a duplicate specification.
 | `pipeline.py` | `plan_task_decoding_session`, `prepare_task_decoding_run`, `run_prepared_task_decoding`, and `inspect_task_decoding_status`; all launch paths share these preparation/execution seams. |
 | `run_session.py` | Standard-library CLI `main` for public `dry-run`, `new`, `resume`, and `status` modes; numerical imports occur only after one-thread environment variables are set. |
 | `run_batch.py` | Standard-library CLI `main` plus `read_config_list`; bounded multi-session `dry-run` and foreground `new`, with evidence-gated cross-session workers. |
+| `slurm.py` | Standard-library one-shot `submit-new`, exact-directory `submit-resume`, and read-only `status` operations; it owns the fixed resource receipt and `sacct` parsing but no scientific computation. |
 | `../psth_webapp.py` and `../webapp/task_decoding_views.py` | Existing Streamlit entrypoint and early-routed **Task-variable decoding results** view. Discovery and rendering use completed saved runs only. |
 | `../../../docs/examples/neural_analysis/task_decoding_config.json` | Portable, explicit configuration template. Its repository path is `docs/examples/neural_analysis/task_decoding_config.json`. |
-| Slurm wrapper | None exists in WP8. Single-session Slurm is gated for WP11; array submission is gated for WP13. |
+| `../../shell_scripts/task_variable_decoding_slurm.sh` | Thin single-session Slurm wrapper with fixed one-CPU, 3-GiB, five-hour resources, tracked-clean checkout checks, offline locked execution, and direct TERM propagation. Its repository path is `src/shell_scripts/task_variable_decoding_slurm.sh`. |
 
 ## Data contracts
 
@@ -158,15 +159,20 @@ saves exact resume/status commands before neural loading begins. Persistent
 execution revalidates live inputs and scoped source identity against those
 sidecars.
 
-Foreground and detached local launches call the same
+Foreground, detached local, and scheduled Slurm launches call the same
 `run_prepared_task_decoding` function. A detached parent creates one child in a
 new process session and atomically publishes `local_launch.json`; the child
 waits briefly for its matching receipt before claiming the execution guard.
-The guard enforces a single writer. Normal interruption records `interrupted`,
-releases ownership, and leaves valid checkpoints for resume. CLI commands
-return only bounded status/acceptance or after the foreground computation;
-scientific results are returned through the immutable run directory, not as a
-large command value.
+The Slurm path prepares the same immutable sidecars, marks submission pending
+before one `sbatch` call, and writes only `slurm_submission.json` after
+acceptance so a fast job's running state cannot regress. The wrapper executes
+the private prepared-run seam with `uv run --frozen --no-sync --offline` and
+translates scheduler TERM into the existing interruption boundary. The guard
+enforces a single writer. Normal interruption records `interrupted`, releases
+ownership, and leaves valid checkpoints for resume. CLI commands return only
+bounded status/acceptance or after foreground computation; scientific results
+are returned through the immutable run directory, not as a large command
+value.
 
 State and JSON sidecars use sibling-temporary replacement. Target checkpoints,
 final `results.npz`, summary, and PNGs are validated before
@@ -186,10 +192,13 @@ bytes. Batch execution remains one worker unless an explicit compatible
 completed measurement is supplied; evidence is never inferred from an
 arbitrary run.
 
-There is no cluster execution path in WP8. WP11 must add and test an optional
-single-session wrapper, exact-commit/offline environment checks, safe transfer,
-and measured resources. WP13 separately owns any array wrapper. Keep those
-future wrappers thin: preparation/execution and saved state remain in Python.
+The WP11 cluster path is deliberately single-session. The fixed request is one
+CPU, `3G`, and `05:00:00`; login-side tensor memory and active cgroup memory are
+both guarded at 50 percent before large allocation. Status combines durable
+state with one `sacct` query and never polls. Exact-commit/offline checks and
+non-destructive staged transfer are documented in the scientist README. WP13
+separately owns any array wrapper; it must reuse this preparation/execution
+path rather than duplicate scientific logic.
 
 ## Focused test ownership
 
@@ -203,6 +212,7 @@ future wrappers thin: preparation/execution and saved state remain in Python.
 | `results.py` | `task_decoding/test_results.py` |
 | `pipeline.py`, `run_session.py` | `task_decoding/test_pipeline.py` |
 | `run_batch.py` | `task_decoding/test_run_batch.py` |
+| `slurm.py`, `task_variable_decoding_slurm.sh` | `task_decoding/test_slurm.py` |
 | `plotting.py` | `task_decoding/test_plotting.py` |
 | saved-result webapp | `test_webapp_task_decoding.py`, `test_webapp_task_decoding_rendering.py`, and routing tests |
 | READMEs, example, and command surface | `test_task_decoding_documentation.py` |
