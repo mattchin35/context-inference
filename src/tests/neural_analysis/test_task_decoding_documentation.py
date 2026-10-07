@@ -156,7 +156,13 @@ def test_cli_help_succeeds_and_lists_documented_public_modes():
             text=True,
         )
         assert completed.returncode == 0, completed.stderr
-        assert modes <= set(completed.stdout.replace("{", " ").replace("}", " ").replace(",", " ").split())
+        help_tokens = (
+            completed.stdout.replace("{", " ")
+            .replace("}", " ")
+            .replace(",", " ")
+            .split()
+        )
+        assert modes <= set(help_tokens)
 
 
 def test_documented_dry_run_uses_small_inputs_without_loading_spikes(
