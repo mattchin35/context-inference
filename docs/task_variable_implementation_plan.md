@@ -1,6 +1,7 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP3 is GREEN and WP4 tests are next.
+**Status:** Implementation authorized; WP4 tests are committed RED and fixed-mode
+implementation is next.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -10,22 +11,23 @@ transfer, or scheduler actions, which retain their separate gates below.
 
 **Snapshot date:** 2026-10-06
 
-**Current phase:** WP0-WP3 are complete. WP3 tests are committed at `6e45ebf`
-and the activity implementation is committed at `d668250`; focused and
-affected loader/tensor regressions are GREEN. WP4 grouped-modeling RED tests
-and their independent numerical-design review are the single next package. No
-experimental-data mutation, decoding output, benchmark, transfer, local long
-run, or cluster action is authorized.
+**Current phase:** WP0-WP3 are complete. WP4 grouped-modeling tests are
+committed RED at `6ee6355` after independent numerical-design approval. The
+RED run stops only because `task_decoding.modeling` does not yet exist.
+Fixed-mode modeling implementation and its independent review are the single
+next package; tuned mode remains gated behind that review. No experimental-data
+mutation, decoding output, benchmark, transfer, local long run, or cluster
+action is authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
 - local implementation HEAD:
-  `d6682504f5f42f1a46e40838597201619a446f77`;
+  `6ee63556944bf50f48a4fb51b6934136260fec30`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
-- the tracked worktree is clean after the WP3 implementation commit; and
+- the tracked worktree is clean after the WP4 tests-only commit; and
 - all pre-existing untracked files remain outside this plan's ownership.
 
 **Completed planning evidence:**
@@ -54,10 +56,10 @@ run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this WP3 GREEN handoff separately, then have a
-Terra xhigh worker write only WP4 grouped-modeling RED tests. An independent
-Sol xhigh reviewer must audit leakage and validity coverage before the
-tests-only commit and before any `modeling.py` implementation.
+**Next exact action:** commit this WP4 RED handoff separately, then have the
+Terra xhigh worker implement only fixed-mode grouped modeling. An independent
+Sol xhigh reviewer must approve fixed-mode leakage, fit reuse, validity, and
+coefficient behavior before tuned-mode implementation is authorized.
 
 ### Authority order
 
@@ -81,7 +83,7 @@ When resuming, use this order:
 | WP1 behavioral feature | Complete: RED `acf24ae`, GREEN `8ea4d24` | None; CT026 backfill remains separately gated at WP9A |
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
 | WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
-| WP4 grouped modeling | Ready for tests-only RED | Terra xhigh tests plus independent Sol xhigh leakage/validity review before commit |
+| WP4 grouped modeling | Tests-only RED `6ee6355`; fixed mode next | Terra xhigh fixed implementation plus independent Sol xhigh review before tuned mode |
 | WP5 results and session pipeline | Pending prerequisite | WP4 GREEN and saved-schema freeze |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
 | WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
@@ -572,6 +574,45 @@ Use this template for each appended record:
   only WP4 grouped-modeling RED tests with Terra xhigh. An independent Sol
   xhigh review must approve leakage, fit-reuse, validity, component-limit, and
   coefficient coverage before the tests-only commit.
+
+#### 2026-10-06 - WP4 RED gate
+
+- State: WP4 split, preprocessing, estimator, metric, aggregation, and
+  coefficient tests are committed RED; fixed-mode implementation is next.
+- Authorization: project implementation was authorized. Work remained limited
+  to source-controlled synthetic tests; no experimental-data, decoding,
+  benchmark, transfer, or scheduler action was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / Terra xhigh tests worker /
+  independent Sol xhigh numerical and leakage review.
+- Start HEAD / end HEAD: `deda1c6` / tests-only commit
+  `6ee63556944bf50f48a4fb51b6934136260fec30`.
+- Owned files: created only
+  `src/tests/neural_analysis/task_decoding/test_modeling.py`; all pre-existing
+  untracked files were preserved.
+- RED command and result: `env
+  UV_CACHE_DIR=/tmp/context-inference-uv-cache uv run pytest
+  src/tests/neural_analysis/task_decoding/test_modeling.py -q` stops at one
+  collection error solely because
+  `src.neural_analysis.task_decoding.modeling` does not yet exist. The test
+  file separately passes `uv run python -m py_compile`; the staged diff passed
+  `git diff --cached --check`; and all lines are at most 100 characters.
+- GREEN/regression commands and results: not applicable before implementation.
+- Commits: tests-only `6ee6355`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: two independent audit rounds closed leakage
+  and vacuity gaps before approval. The committed contract checks exact
+  installed grouped-fold assignments, outer and inner row identities, shared
+  transform and split reuse, exact 15-candidate grids and tie order, one-fold
+  candidate invalidation, complete Cartesian result records, positive-class
+  probability orientation, complete-fold aggregation, non-finite and warning
+  boundaries, stable feature ordering, and direct-unit coefficient metadata.
+  The installed API remains scikit-learn 1.8.0; logistic construction must omit
+  the deprecated `penalty` argument. Tuned mode is tested but remains
+  deliberately gated until fixed mode is independently verified.
+- Exact next action: commit this documentation-only RED handoff, then have the
+  Terra xhigh worker implement fixed mode and shared helpers without changing
+  the committed tests. Independent Sol xhigh review must approve that slice
+  before the separate tuned-mode follow-up.
 
 ## 1. Objective
 
