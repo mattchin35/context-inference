@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -249,11 +250,13 @@ def backfill_rewards_in_block_csv(path: Path | str) -> None:
         Atomically replaces ``path`` only after a uniquely named sibling
         temporary CSV has reloaded successfully with all prior rows and values
         unchanged and exactly one appended integer ``rewards_in_block`` column.
+        The replacement retains the source file's Unix permission bits.
     """
     csv_path = Path(path)
     if not csv_path.is_file():
         raise FileNotFoundError(f"Augmented trial CSV was not found: {csv_path}")
 
+    original_permission_mode = stat.S_IMODE(csv_path.stat().st_mode)
     original_trial_df = pd.read_csv(csv_path, na_filter=False)
     _validate_rewards_in_block_backfill_source(original_trial_df)
     rewards_in_block = session_analysis.compute_rewards_in_block(original_trial_df)
@@ -272,6 +275,7 @@ def backfill_rewards_in_block_csv(path: Path | str) -> None:
             temporary_path = Path(temporary_file.name)
 
         backfilled_trial_df.to_csv(temporary_path, index=False, na_rep="None")
+        temporary_path.chmod(original_permission_mode)
         reloaded_trial_df = pd.read_csv(temporary_path, na_filter=False)
         _validate_rewards_in_block_backfill_roundtrip(
             original_trial_df,
