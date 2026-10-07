@@ -1,7 +1,7 @@
 # Task-Variable Decoding Implementation Plan
 
-**Status:** Implementation authorized; WP4 fixed-mode audit corrections are in
-progress against committed supplemental RED tests.
+**Status:** Implementation authorized; WP4 fixed-mode boundary-order
+corrections are in progress against a second committed supplemental RED slice.
 This does not authorize experimental-data mutation, decoding runs, benchmarks,
 transfer, or scheduler actions, which retain their separate gates below.
 
@@ -12,10 +12,11 @@ transfer, or scheduler actions, which retain their separate gates below.
 **Snapshot date:** 2026-10-06
 
 **Current phase:** WP0-WP3 are complete. WP4 grouped-modeling tests are
-committed at `6ee6355`. An initial fixed-mode implementation passed 24 focused
-cases but failed independent audit; supplemental boundary tests are committed
-RED at `c85a00c`. Fixed-mode corrections and repeat independent review are the
-single next package; tuned mode remains gated behind approval. No
+committed at `6ee6355`. An initial fixed-mode implementation passed its focused
+cases but required two independent-audit correction rounds; supplemental RED
+tests are committed at `c85a00c` and `fab38b8`. The final fixed-mode boundary
+corrections and repeat independent review are the single next package; tuned
+mode remains gated behind approval. No
 experimental-data mutation, decoding output, benchmark, transfer, local long
 run, or cluster action is authorized.
 
@@ -23,7 +24,7 @@ run, or cluster action is authorized.
 
 - branch: `refactor`;
 - local implementation HEAD:
-  `c85a00c7a84ce53d989925dcec1278b87bcbbebb`;
+  `fab38b8c6f333f2e149dddfec43df04d6fb474aa`;
 - `origin/refactor`: `b69c70a618284aef86f73b8f3d12ac8df2dbea9f`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
@@ -57,8 +58,8 @@ run, or cluster action is authorized.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** commit this supplemental RED handoff separately, finish
-the fixed-mode production corrections without changing tests, and obtain
+**Next exact action:** commit this second supplemental RED handoff separately,
+finish the fixed-mode boundary corrections without changing tests, and obtain
 independent Sol xhigh approval before tuned-mode implementation is authorized.
 
 ### Authority order
@@ -83,7 +84,7 @@ When resuming, use this order:
 | WP1 behavioral feature | Complete: RED `acf24ae`, GREEN `8ea4d24` | None; CT026 backfill remains separately gated at WP9A |
 | WP2 configuration and targets | Complete: RED from `3ccae6c`, review tests through `f13d31b`, GREEN `2899502` | None |
 | WP3 activity loading and coverage | Complete: RED `6e45ebf`, GREEN `d668250` | None |
-| WP4 grouped modeling | Base RED `6ee6355`; supplemental fixed-audit RED `c85a00c`; correction in progress | Fixed-mode GREEN plus independent Sol xhigh approval before tuned mode |
+| WP4 grouped modeling | Base RED `6ee6355`; supplemental RED `c85a00c`, `fab38b8`; final fixed correction in progress | Fixed-mode GREEN plus independent Sol xhigh approval before tuned mode |
 | WP5 results and session pipeline | Pending prerequisite | WP4 GREEN and saved-schema freeze |
 | WP6 batch runner | Pending prerequisite | WP5 GREEN |
 | WP7 plotting and webapp | Pending prerequisite | WP5 saved loader stable; WP4 metrics stable |
@@ -653,6 +654,46 @@ Use this template for each appended record:
 - Exact next action: commit this documentation-only supplemental RED handoff,
   correct only the fixed/shared production files without changing tests, then
   repeat focused/regression commands and independent Sol xhigh review.
+
+#### 2026-10-06 - WP4 fixed-mode boundary-order RED correction
+
+- State: the first supplemental production correction passed 53 non-tuned
+  modeling cases but was rejected on three remaining validation-order edges.
+  A second supplemental tests-only slice is committed RED.
+- Authorization: project implementation remains authorized. Work used only
+  source-controlled code and synthetic arrays; no experimental data, decoding
+  run, benchmark, transfer, or scheduler action was performed.
+- Sol / Terra / reviewer: primary Sol supervisor / same Terra xhigh worker /
+  independent Sol xhigh production and test-design review.
+- Start HEAD / end HEAD: first supplemental handoff `11a4e35` / second
+  supplemental tests-only commit
+  `fab38b8c6f333f2e149dddfec43df04d6fb474aa`.
+- Owned files: the commit adds 100 lines only to
+  `src/tests/neural_analysis/task_decoding/test_modeling.py`. The bounded
+  production draft remains unstaged in `modeling.py` and `config.py`.
+- RED command and result: four new test nodes collect as 17 cases: 14 fail and
+  three valid controls pass. The failures prove malformed scalar/matrix inner
+  indices are mislabeled as scientific missingness, invalid regional PC counts
+  can reach outer splitting, and scalar strings can be iterated into fake unit
+  IDs. The passing controls are a genuinely empty one-dimensional integer
+  selection and scalar-byte rejection for both regions. Test pycompile,
+  100-column, and whitespace checks pass.
+- GREEN/regression commands and results: the prior corrected draft passed 29
+  first-supplemental cases, 24 original fixed/shared cases, 80 config cases,
+  and 63 activity/target cases. Full modeling passed 53 and retained exactly
+  seven deliberately deferred tuned failures. These are not yet a GREEN gate
+  because the independent review rejected the remaining edges.
+- Commits: second supplemental tests-only `fab38b8`; preceding supplemental
+  tests-only `c85a00c` and handoff `11a4e35`.
+- Real-data or external actions: none.
+- Findings and unresolved risks: production must distinguish malformed inner
+  index shape from a valid empty subset, validate both PC counts before any
+  outer-split unavailable return, reject scalar text/byte unit-ID containers,
+  and correct the documented invalid-coefficient shape. Tuned mode remains
+  outside this correction.
+- Exact next action: commit this documentation-only RED correction, make only
+  the bounded production fixes without changing tests, then repeat all fixed
+  and regression gates plus independent Sol xhigh review.
 
 ## 1. Objective
 
