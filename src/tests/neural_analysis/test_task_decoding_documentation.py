@@ -41,6 +41,7 @@ EXAMPLE_CONFIG = (
 )
 SESSION_MODULE = "src.neural_analysis.task_decoding.run_session"
 BATCH_MODULE = "src.neural_analysis.task_decoding.run_batch"
+SLURM_WRAPPER = "src/shell_scripts/task_variable_decoding_slurm.sh"
 
 
 def _read_required_text(path: Path) -> str:
@@ -279,3 +280,32 @@ def test_quickstart_defines_safe_unattended_and_backfill_workflows():
         "not discovered automatically",
     ):
         assert fragment in readme
+
+
+def test_wp11_documents_exact_slurm_and_non_destructive_transfer_workflow():
+    """Cluster instructions are copyable, offline, bounded, and promotion-safe."""
+    scientist_readme = " ".join(_read_required_text(SCIENTIST_README).split())
+    maintainer_readme = " ".join(_read_required_text(PACKAGE_README).split())
+    combined = f"{scientist_readme} {maintainer_readme}"
+
+    for fragment in (
+        f"bash {SLURM_WRAPPER} submit-new --config",
+        f"bash {SLURM_WRAPPER} submit-resume --run-directory",
+        f"bash {SLURM_WRAPPER} status --run-directory",
+        "uv sync --frozen",
+        "uv run --frozen --no-sync --offline",
+        "--exclude='/analysis_runs/'",
+        "rsync -a --info=progress2",
+        ".incoming-<run_id>",
+        "status --verify-results",
+        "3G",
+        "05:00:00",
+        "one CPU",
+        "one-shot",
+        "sacct",
+    ):
+        assert fragment in combined
+    assert "task_variable_decoding_slurm.sh" in maintainer_readme
+    assert "slurm.py" in maintainer_readme
+    assert "Single-session Slurm submission is intentionally unavailable" not in combined
+    assert "rsync --delete" not in combined

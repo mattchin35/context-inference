@@ -9,12 +9,14 @@ scheduler, or allocates a large neural array.
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import json
 import os
 from pathlib import Path
 import platform
 import re
+import signal
 import shlex
 import subprocess
 import sys
@@ -2530,6 +2532,97 @@ def test_cli_detached_and_mocked_slurm_submission_only_report_launch_acceptance(
     monkeypatch.setenv("SLURM_JOB_ID", "synthetic-job")
     assert run_session.main(["_execute-prepared", "--run-directory", str(prepared)]) == 0
     assert calls == ["execute"]
+
+
+def test_wp11_private_prepare_accepts_explicit_slurm_mode_and_prints_directory(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    """The cluster wrapper prepares through the same runner with Slurm provenance."""
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}\n", encoding="ascii")
+    prepared = tmp_path / "session with spaces" / "analysis_runs" / "exact-run"
+    calls: list[tuple[Path, bool, str]] = []
+    monkeypatch.setattr(
+        pipeline,
+        "prepare_task_decoding_run",
+        lambda path, rerun, execution_mode: calls.append(
+            (Path(path), rerun, execution_mode)
+        )
+        or prepared,
+    )
+
+    return_code = run_session.main(
+        [
+            "_prepare",
+            "--config",
+            str(config_path),
+            "--execution-mode",
+            "slurm",
+        ]
+    )
+
+    assert return_code == 0
+    assert calls == [(config_path, False, "slurm")]
+    assert capsys.readouterr().out.strip() == str(prepared)
+
+
+def test_wp11_sigterm_becomes_existing_keyboard_interruption_and_restores_handler(
+    monkeypatch,
+    tmp_path,
+):
+    """TERM reaches the durable pipeline interruption boundary, never false completion."""
+    prepared = tmp_path / "exact-run"
+    prepared.mkdir()
+    original_handler = object()
+    installed: dict[int, object] = {signal.SIGTERM: original_handler}
+    calls: list[Path] = []
+
+    def fake_signal(signal_number: int, handler: object) -> object:
+        """Install or restore a process handler without changing pytest signals."""
+        previous = installed.get(signal_number, signal.SIG_DFL)
+        installed[signal_number] = handler
+        return previous
+
+    class FakePipeline:
+        """Deliver TERM while execution is inside the prepared-run boundary."""
+
+        @staticmethod
+        def run_prepared_task_decoding(run_directory: Path) -> None:
+            calls.append(Path(run_directory))
+            handler = installed[signal.SIGTERM]
+            assert callable(handler)
+            handler(signal.SIGTERM, None)
+            raise AssertionError("SIGTERM handler returned")
+
+    monkeypatch.setattr(run_session.signal, "signal", fake_signal)
+
+    with pytest.raises(KeyboardInterrupt, match="SIGTERM"):
+        run_session._execute_prepared_with_signal_handling(prepared, FakePipeline)
+
+    assert calls == [prepared]
+    assert installed[signal.SIGTERM] is original_handler
+
+
+def test_wp11_slurm_execution_checks_effective_memory_before_spike_load(
+    monkeypatch,
+    tmp_path,
+):
+    """The active allocation guard uses its effective limit before large arrays."""
+    slurm = importlib.import_module("src.neural_analysis.task_decoding.slurm")
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="slurm")
+    monkeypatch.setenv("SLURM_JOB_ID", "12345")
+    monkeypatch.setattr(slurm, "effective_memory_budget_bytes", lambda: 1)
+    monkeypatch.setattr(pipeline.activity, "load_region_activity", fail_if_called)
+
+    with pytest.raises(ValueError, match="50%|memory"):
+        pipeline.run_prepared_task_decoding(run_directory)
+
+    state = read_json(run_directory / "run_state.json")
+    assert state["lifecycle"] == "failed"
+    assert not (run_directory / "results.npz").exists()
 
 
 def test_entry_sets_thread_limits_before_lazy_numerical_pipeline_import():
