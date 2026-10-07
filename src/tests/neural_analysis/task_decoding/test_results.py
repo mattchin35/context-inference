@@ -4649,7 +4649,7 @@ def mark_tuned_cell_no_valid_candidate(
         addressed cell to the explicit unavailable/no-selection sentinels.
     """
     target, region, representation, time, fold = fit_index
-    reason = "no valid inner tuning candidate"
+    reason = "no_valid_tuning_candidate"
     mark_fit_unavailable_without_features(arrays, fit_index, reason=reason)
     selection_index = (target, fold, region, representation, time)
     arrays["selected_candidate_indices"][selection_index] = -1
