@@ -82,7 +82,10 @@ def test_heatmaps_preserve_below_reference_negative_and_unavailable_cells(tmp_pa
         assert categorical.axes[0].images[0].norm.vcenter == 0.5
         assert numerical_values[0, 0] == -0.75
         assert numerical.axes[0].images[0].norm.vcenter == 0.0
-        assert categorical.axes[0].images[0].cmap.get_bad()[:3] != (1.0, 1.0, 1.0)
+        assert not np.allclose(
+            categorical.axes[0].images[0].cmap.get_bad()[:3],
+            (1.0, 1.0, 1.0),
+        )
     finally:
         plt.close(categorical)
         plt.close(numerical)
