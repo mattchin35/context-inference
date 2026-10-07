@@ -218,6 +218,7 @@ def test_coefficient_plot_uses_direct_units_and_explains_interpretation(tmp_path
         assert "zero" in {text.get_text().lower() for text in figure.axes[0].get_legend().texts}
         labels = [label.get_text() for label in figure.axes[0].get_yticklabels()]
         assert labels[0] in {"probe-pfc:11", "probe-pfc:19", "probe-hpc:5", "probe-hpc:17"}
+        assert figure.axes[0].get_title().endswith("at -1.75 s")
     finally:
         plt.close(figure)
 
