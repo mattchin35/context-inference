@@ -1629,3 +1629,103 @@ def test_decode_target_rejects_empty_or_duplicate_unit_ids_before_fitting(
     monkeypatch.setattr(modeling, "fit_region_transform", fail_transform)
     with pytest.raises(ValueError):
         modeling.decode_target(**inputs)
+
+
+@pytest.mark.parametrize(
+    "outer_train_indices",
+    (
+        np.array(0, dtype=int),
+        np.array([[0, 1]], dtype=int),
+    ),
+)
+def test_inner_splits_reject_scalar_or_matrix_index_arrays(outer_train_indices):
+    """Inner split row positions must be a one-dimensional native integer array."""
+    inputs = make_classification_inputs(n_blocks=6)
+
+    with pytest.raises(ValueError):
+        modeling.make_inner_splits(
+            np.asarray(inputs["target_values"]),
+            np.asarray(inputs["block_ids"]),
+            outer_train_indices,
+            target_family="categorical",
+            fold_count=3,
+        )
+
+
+def test_inner_splits_keep_an_empty_native_integer_selection_as_unavailable():
+    """A genuinely empty one-dimensional integer selection is a scientific state."""
+    inputs = make_classification_inputs(n_blocks=6)
+
+    split_plan = modeling.make_inner_splits(
+        np.asarray(inputs["target_values"]),
+        np.asarray(inputs["block_ids"]),
+        np.array([], dtype=int),
+        target_family="categorical",
+        fold_count=3,
+    )
+
+    assert not split_plan.is_available
+    assert "empty" in split_plan.unavailable_reason.lower()
+
+
+@pytest.mark.parametrize(
+    ("requested_count_name", "invalid_requested_count"),
+    (
+        ("pfc_requested_pc_count", True),
+        ("pfc_requested_pc_count", 2.5),
+        ("pfc_requested_pc_count", "2"),
+        ("pfc_requested_pc_count", 0),
+        ("pfc_requested_pc_count", -1),
+        ("hpc_requested_pc_count", True),
+        ("hpc_requested_pc_count", 2.5),
+        ("hpc_requested_pc_count", "2"),
+        ("hpc_requested_pc_count", 0),
+        ("hpc_requested_pc_count", -1),
+    ),
+)
+def test_decode_validates_requested_pc_counts_before_constructing_outer_splits(
+    monkeypatch,
+    requested_count_name,
+    invalid_requested_count,
+):
+    """Invalid requested PCs are configuration errors before any split decision."""
+    inputs = make_classification_inputs(n_blocks=3)
+    inputs["target_values"] = np.array([0, 0, 1, 1, 0, 0] * 2)
+    inputs["block_ids"] = np.repeat(np.arange(3), 4)
+    inputs["outer_fold_count"] = 3
+    inputs[requested_count_name] = invalid_requested_count
+
+    def fail_outer_split(*_args, **_kwargs):
+        """Fail if invalid requested PCs reach outer grouped-split construction."""
+        raise AssertionError("Requested PC counts must be validated before outer splitting.")
+
+    monkeypatch.setattr(modeling, "make_outer_splits", fail_outer_split)
+    with pytest.raises(ValueError):
+        modeling.decode_target(**inputs)
+
+
+@pytest.mark.parametrize(
+    ("region_name", "invalid_container"),
+    (
+        ("pfc_unit_ids", "ab"),
+        ("pfc_unit_ids", b"ab"),
+        ("hpc_unit_ids", "ab"),
+        ("hpc_unit_ids", b"ab"),
+    ),
+)
+def test_decode_rejects_scalar_string_or_bytes_unit_id_containers_before_fitting(
+    monkeypatch,
+    region_name,
+    invalid_container,
+):
+    """Scalar text/bytes containers must not be interpreted as unit-ID sequences."""
+    inputs = make_classification_inputs()
+    inputs[region_name] = invalid_container
+
+    def fail_transform(*_args, **_kwargs):
+        """Fail if scalar unit-ID containers reach regional transform fitting."""
+        raise AssertionError("Scalar unit-ID containers must fail before transform fitting.")
+
+    monkeypatch.setattr(modeling, "fit_region_transform", fail_transform)
+    with pytest.raises(ValueError):
+        modeling.decode_target(**inputs)
