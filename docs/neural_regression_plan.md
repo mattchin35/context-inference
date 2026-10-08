@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 14:39 EDT.
+**Snapshot date:** 2026-10-08 14:44 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -21,13 +21,14 @@ webapp presentation are code-complete and GREEN on seeded synthetic data. The de
 Poisson run `30989197` was OOM-killed after approximately 2 hours 44 minutes with a 32-GiB
 allocation. Reduced execution telemetry is implemented and GREEN. The separately approved bounded
 benchmark, Slurm job `30991145`, reproduced the OOM within the first Poisson cell after OLS completed;
-no scale test or full retry is authorized. WP9 scientific acceptance and WP10 remain blocked on an
-inspected completed output.
+the user has approved a minimal tests-first change from Statsmodels' default least-squares backend
+to its QR backend within the same unpenalized IRLS estimator. No scale test or full retry is
+authorized. WP9 scientific acceptance and WP10 remain blocked on an inspected completed output.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `25c94ba`;
+- HEAD before this handoff record: `8687bb4`;
 - plan-owned files: `docs/neural_regression_plan.md` and
   `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
@@ -57,9 +58,9 @@ inspected completed output.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** prepare a short tests-first plan for a memory-bounded Poisson fitting change
-using the benchmark evidence below. Do not implement that change or launch a scale test, full retry,
-or WP10 before separate approval.
+**Next exact action:** write and commit the approved QR contract and numerical-equivalence tests,
+confirm RED, then implement the minimal solver keyword and documentation update. Do not launch a
+CT026 rerun, scale test, full retry, or WP10 without separate approval.
 
 ### Authority order
 
@@ -92,7 +93,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Code and OOM telemetry GREEN; bounded benchmark reproduced first-cell Poisson OOM | Plan and approve a memory-bounded fit change before another run |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | QR-backed IRLS change approved; tests-first implementation active | RED tests, implementation, local verification, then separate data-run gate |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -861,6 +862,31 @@ Use this template:
 - Exact next action and authorization: prepare a short tests-first plan for a memory-bounded
   unpenalized Poisson fitting path, preserving the frozen scientific and result contracts. Do not
   implement it or submit another data run without separate approval.
+
+#### 2026-10-08 14:44 EDT - WP9 QR-backed IRLS correction activated
+
+- State and authorization: the user approved the proposed minimal fitting correction. This
+  authorizes tests, the source/specification change, local verification, commits, and push. It does
+  not authorize another CT026 job, a scale test, a full retry, or WP10.
+- Architecture: retain `fit_poisson_target(...)`, Statsmodels `GLM`, the explicit intercept,
+  Poisson/log family, unpenalized IRLS, convergence handling, and all pipeline/result interfaces.
+  Add only the explicit Statsmodels `wls_method="qr"` fit keyword so each IRLS weighted
+  least-squares step uses QR instead of the default `lstsq` path and final pseudoinverse path.
+- Dependency/API evidence: no dependency changes. Installed Statsmodels 0.15.0 source confirms
+  that `GLM.fit(...)` forwards extra keywords to `_fit_irls(...)`, which accepts `wls_method`; its
+  minimal WLS implementation supports `pinv`, `qr`, and `lstsq`. A seeded five-coefficient check
+  found default and QR parameters agreeing within `1.4e-16` with the same five iterations.
+- Tests to write before implementation: extend the mocked estimator-call contract to require
+  `wls_method="qr"`; add a seeded full-rank multivariable comparison requiring QR-backed public-fit
+  parameters, predictions, convergence, and iteration count to match the existing default IRLS
+  reference within explicit numerical tolerance. Existing warning, exception, validation, pipeline,
+  persistence, and telemetry tests remain unchanged.
+- Performance boundary: this is a targeted backend selection, not a custom solver, dependency,
+  parallelization change, or broad refactor. Local tests can establish correctness but cannot prove
+  the 32-GiB cluster outcome; after GREEN and push, the same bounded CT026 benchmark requires a new
+  explicit execution approval.
+- Exact next action: commit the tests before production code, demonstrate the missing QR keyword as
+  RED, then implement and run focused plus affected regression suites.
 
 ## Plan objective and status
 
