@@ -30,10 +30,14 @@ complete. The exact WP11 single-session Slurm resource block and tests-first
 architecture are implemented: RED is `a3dcdb9`, its handoff is `e91fa5f`, and
 GREEN production is `b9d8645`. WP12 one-session cluster validation and WP13
 per-session job arrays follow. WP12's deterministic synthetic fixture has been
-transferred and passed matching local/cluster dry runs. Its first approved
-submission stopped before `sbatch` because generated Python bytecode was
-misclassified as untracked source; RED `849c7ea` and GREEN `db50e1a` repair
-that boundary. Each real scheduler submission remains separately approved.
+transferred, passed matching local/cluster dry runs, and completed as Slurm job
+`30984881`. The generated-bytecode source-gate repair is RED `849c7ea` and
+GREEN `db50e1a`; the post-smoke accounting/summary repair is covered by tests
+`86fc413` and `5386a99` with GREEN `a1763bc`. Repaired one-shot status and
+independent result validation accepted the immutable synthetic run; acceptance
+is recorded at `484e784`. WP12 now waits at the separate CT026 input-transfer,
+cluster dry-run, and one-session submission approval gate. Each experimental
+transfer and real scheduler submission remains separately approved.
 WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
@@ -70,9 +74,10 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local WP12 smoke-repair HEAD before this handoff:
-  `db50e1a`;
-- `origin/refactor`: `4238d52bfa164319fab3cb1aa89dea85247f28d1`;
+- local/origin WP12 synthetic-acceptance HEAD:
+  `484e7843322fdf25504bab3d2d9105ff742cf0b5`;
+- clean cluster checkout HEAD:
+  `484e7843322fdf25504bab3d2d9105ff742cf0b5`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -114,11 +119,10 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** push the WP12 bytecode repair and this handoff, remove
-only the generated remote package `__pycache__`, pull the exact pushed commit
-on the clean cluster checkout, and reverify cleanliness. Then present the
-corrected synthetic `submit-new` command for renewed approval; do not submit
-automatically.
+**Next exact action:** present the WP12 CT026 destination, non-destructive input
+transfer preview, cluster dry-run comparison, and exact one-session
+`submit-new` command for user approval. Do not transfer experimental inputs or
+submit the scientific job automatically.
 
 ### Authority order
 
@@ -155,7 +159,7 @@ When resuming, use this order:
 | WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence remains the WP10 gate |
 | WP10D competing-owner lifecycle repair and local acceptance | Complete: lifecycle repair through `77ff461`; clean 2,400-cell bounded run and 9,600-cell categorical stress run accepted | None |
 | WP11 single-session cluster path | Complete: RED `a3dcdb9`, handoff `e91fa5f`, GREEN `b9d8645`; mocked and local tests only | None; real execution belongs to WP12 |
-| WP12 CT026 one-session cluster validation | In progress: synthetic transfer/dry-run passed; pre-sbatch bytecode defect repaired at `db50e1a` | Push/clean/reverify, then separately reapprove synthetic submission |
+| WP12 CT026 one-session cluster validation | In progress: synthetic Slurm smoke accepted through `484e784`; repaired status and result validation passed on the existing job | Approve CT026 destination, input transfer/dry run, then exact one-session submission |
 | WP13 bounded cluster batch array | Required after WP12 acceptance; source not started | Implement tests-first per-session concurrency; authorize any real array separately |
 
 ### Resume checklist
