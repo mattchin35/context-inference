@@ -9,6 +9,7 @@ from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
+from .poisson import derive_mse_comparison
 from .records import InterregionalResults
 
 
@@ -91,7 +92,8 @@ def plot_cv_increment_summary(
     ----------
     target_summaries : pandas.DataFrame
         Frozen target-summary rows. ``mean_value`` is dimensionless held-out
-        incremental R-squared; one row represents one stable target identity.
+        incremental R-squared for OLS or deviance explained for Poisson; one
+        row represents one stable target identity.
     population_summaries : pandas.DataFrame
         Frozen population-summary rows containing target quartiles.
     representation, model_family, window : str
@@ -105,12 +107,20 @@ def plot_cv_increment_summary(
         Light-mode figure and primary axis. Target artists carry ``target_id``
         as their Matplotlib ``gid`` for stable inspection.
     """
+    if model_family == "ols":
+        metric_name = "delta_r2"
+        y_label = "Incremental CV R-squared"
+    elif model_family == "poisson":
+        metric_name = "delta_deviance_explained"
+        y_label = "Incremental CV deviance explained"
+    else:
+        raise ValueError("model_family must be 'ols' or 'poisson'.")
     selected = _filtered_targets(
         target_summaries,
         representation=representation,
         model_family=model_family,
         window=window,
-        metric_names=("delta_r2",),
+        metric_names=(metric_name,),
     )
     conditions = tuple(dict.fromkeys(selected["condition"].astype(str)))
     figure, axis = plt.subplots(figsize=(max(8.0, 2.6 * len(conditions)), 6.5))
@@ -148,7 +158,7 @@ def plot_cv_increment_summary(
                 population_summaries["representation"].eq(representation)
                 & population_summaries["model_family"].eq(model_family)
                 & population_summaries["window"].eq(window)
-                & population_summaries["metric_name"].eq("delta_r2")
+                & population_summaries["metric_name"].eq(metric_name)
                 & population_summaries["condition"].eq(condition)
                 & population_summaries["direction"].eq(direction)
                 & population_summaries["status"].eq("ok")
@@ -186,7 +196,7 @@ def plot_cv_increment_summary(
         annotation.set_gid("availability-counts")
     axis.axhline(0.0, color="#666666", linestyle="--", linewidth=1.0)
     axis.set_xticks([index * 3.0 for index in range(len(conditions))], conditions)
-    axis.set_ylabel("Incremental CV R-squared")
+    axis.set_ylabel(y_label)
     axis.set_xlabel("Condition (blue: HPC to PFC; red: PFC to HPC)")
     axis.set_title(f"Held-out incremental prediction: {representation}, {window}")
     figure.text(
@@ -203,6 +213,91 @@ def plot_cv_increment_summary(
         wrap=True,
     )
     figure.subplots_adjust(left=0.12, right=0.97, bottom=0.30, top=0.91)
+    return figure, axis
+
+
+def plot_ols_poisson_mse_comparison(
+    fold_scores: pd.DataFrame,
+    *,
+    condition: str,
+    window: str,
+    coverage_assumption_version: str,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot matched target-mean OLS-minus-Poisson held-out count MSE.
+
+    Parameters
+    ----------
+    fold_scores : pandas.DataFrame
+        Saved direct-unit OLS and Poisson fold rows. MSE columns use squared
+        spike counts per bin and row fingerprints identify evaluated rows.
+    condition, window : str
+        Display-only labels already present in the saved fold rows.
+    coverage_assumption_version : str
+        Saved coverage declaration shown verbatim in the caption.
+
+    Returns
+    -------
+    tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]
+        A light-mode figure and primary axis. Positive target means indicate
+        lower Poisson MSE; target artists retain stable ``target_id`` gids.
+    """
+    _, target_comparison = derive_mse_comparison(fold_scores)
+    selected = target_comparison.loc[
+        target_comparison["condition"].eq(condition)
+        & target_comparison["window"].eq(window)
+    ]
+    if selected.empty:
+        raise ValueError("No matched OLS/Poisson MSE rows match the display selection.")
+    figure, axis = plt.subplots(figsize=(7.5, 6.0))
+    _style_light_figure(figure, axis)
+    comparison_positions = {"restricted": 0.0, "full": 1.0}
+    direction_offsets = {"HPC_to_PFC": -0.08, "PFC_to_HPC": 0.08}
+    for row in selected.loc[selected["status"].eq("ok")].itertuples(index=False):
+        x_value = (
+            comparison_positions[str(row.comparison)]
+            + direction_offsets[str(row.direction)]
+        )
+        (artist,) = axis.plot(
+            x_value,
+            float(row.mean_mse_advantage_poisson),
+            marker="o",
+            linestyle="none",
+            color=_DIRECTION_COLORS[str(row.direction)],
+            alpha=0.75,
+        )
+        artist.set_gid(str(row.target_id))
+    axis.axhline(0.0, color="#666666", linestyle="--", linewidth=1.0)
+    axis.set_xticks([0.0, 1.0], ["Restricted", "Full"])
+    axis.set_ylabel("OLS MSE - Poisson MSE (squared counts per bin)")
+    axis.set_title(f"Exploratory held-out count prediction: {condition}, {window}")
+    axis.legend(
+        handles=[
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="none",
+                color=_DIRECTION_COLORS[direction],
+                label=direction.replace("_", " ").replace("to", "to"),
+            )
+            for direction in _DIRECTIONS
+        ],
+        frameon=False,
+    )
+    figure.text(
+        0.5,
+        0.01,
+        _caption(
+            coverage_assumption_version,
+            "Exploratory prediction comparison only, not a formal test of model "
+            "superiority. Positive values mean lower Poisson held-out count MSE.",
+        ),
+        ha="center",
+        va="bottom",
+        fontsize=9,
+        wrap=True,
+    )
+    figure.subplots_adjust(left=0.17, right=0.97, bottom=0.20, top=0.88)
     return figure, axis
 
 
@@ -287,7 +382,7 @@ def save_standard_regression_figures(
     result: InterregionalResults,
     figures_directory: Path | str,
 ) -> tuple[Path, ...]:
-    """Save all applicable standard OLS inspection figures as opaque PNGs.
+    """Save all applicable OLS/Poisson CV inspection figures as opaque PNGs.
 
     Parameters
     ----------
@@ -322,7 +417,11 @@ def save_standard_regression_figures(
             & summaries["model_family"].eq(combination.model_family)
             & summaries["window"].eq(combination.window)
         ]
-        if cell["metric_name"].eq("delta_r2").any() and not result.population_summaries.empty:
+        increment_metrics = {"delta_r2", "delta_deviance_explained"}
+        if (
+            increment_metrics & set(cell["metric_name"].astype(str))
+            and not result.population_summaries.empty
+        ):
             figure, _ = plot_cv_increment_summary(
                 summaries,
                 result.population_summaries,
@@ -356,4 +455,21 @@ def save_standard_regression_figures(
                 figure.savefig(path, dpi=150, facecolor="white", transparent=False)
                 plt.close(figure)
                 saved.append(path)
+    if "poisson" in set(summaries["model_family"].astype(str)):
+        poisson_cells = (
+            summaries.loc[summaries["model_family"].eq("poisson"), ["condition", "window"]]
+            .drop_duplicates()
+            .sort_values(["condition", "window"])
+        )
+        for cell in poisson_cells.itertuples(index=False):
+            figure, _ = plot_ols_poisson_mse_comparison(
+                result.fold_scores,
+                condition=str(cell.condition),
+                window=str(cell.window),
+                coverage_assumption_version=result.coverage_assumption_version,
+            )
+            path = destination / f"cv_mse_ols_poisson_{cell.condition}_{cell.window}.png"
+            figure.savefig(path, dpi=150, facecolor="white", transparent=False)
+            plt.close(figure)
+            saved.append(path)
     return tuple(saved)
