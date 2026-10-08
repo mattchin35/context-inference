@@ -156,6 +156,10 @@ def test_single_session_new_reuses_matching_run_and_rerun_is_immutable(
         "run_batch.py",
         "figures",
     } <= {path.name for path in first.run_path.iterdir()}
+    summary = (first.run_path / "summary.md").read_text(encoding="utf-8")
+    assert f"Output directory: `{first.run_path}`" in summary
+    assert f'"output_root": "{plan.output_root}"' in summary
+    assert ".incomplete" not in summary
 
 
 def test_dry_run_reports_plan_without_hashing_or_creating_output(

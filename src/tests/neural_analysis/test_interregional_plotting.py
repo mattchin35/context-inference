@@ -104,8 +104,14 @@ def test_increment_plot_shows_targets_median_iqr_grouping_counts_and_caveats() -
     condition_centers = axis.get_xticks()
     assert condition_centers[1] - condition_centers[0] > 1.0
     visible_text = " ".join(text.get_text() for text in axis.texts + figure.texts)
-    assert "2 contributing" in visible_text
-    assert "1 unavailable" in visible_text
+    count_annotations = [
+        text for text in axis.texts if text.get_gid() == "availability-counts"
+    ]
+    assert len(count_annotations) == 2
+    assert [text.get_position()[0] for text in count_annotations] == list(condition_centers)
+    assert all("HPC->PFC: 2 / 1" in text.get_text() for text in count_annotations)
+    assert all("PFC->HPC: 2 / 1" in text.get_text() for text in count_annotations)
+    assert "contributing / unavailable" in visible_text
     assert "predictive, not causal" in visible_text
     assert "implicit-complete-v1" in visible_text
     assert figure.get_facecolor()[:3] == (1.0, 1.0, 1.0)
@@ -131,6 +137,12 @@ def test_absolute_plot_uses_saved_restricted_and_full_values_without_refitting()
         "Full",
     }
     assert len([line for line in axis.lines if line.get_gid()]) == 8
+    legend = axis.get_legend()
+    assert legend is not None
+    assert {text.get_text() for text in legend.get_texts()} == {
+        "HPC to PFC",
+        "PFC to HPC",
+    }
     caption = " ".join(text.get_text() for text in figure.texts)
     assert "No model was refit" in caption
     plt.close(figure)
