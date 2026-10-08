@@ -6,6 +6,7 @@ import argparse
 from dataclasses import replace
 import json
 from pathlib import Path
+import time
 
 import numpy as np
 import pandas as pd
@@ -251,8 +252,8 @@ def test_cli_parsers_expose_only_documented_commands() -> None:
     assert (batch_args.command, batch_args.workers) == ("dry-run", 2)
 
 
-def _write_synthetic_session(tmp_path: Path) -> Path:
-    """Write one small metadata-v2 session and return its analysis config path."""
+def _write_synthetic_session(tmp_path: Path, *, full_standard: bool = False) -> Path:
+    """Write one seeded metadata-v2 session and return its analysis config path."""
     session_root = tmp_path / "synthetic_session"
     session_root.mkdir()
     n_trials = 25
@@ -261,7 +262,7 @@ def _write_synthetic_session(tmp_path: Path) -> Path:
         {
             "experimenter_reward_given": 0,
             "correct": 1,
-            "reward": 1,
+            "reward": 0 if full_standard else 1,
             "action": 1,
             "state_int": 1,
             "choice_time": choice_times,
@@ -271,20 +272,37 @@ def _write_synthetic_session(tmp_path: Path) -> Path:
     trial_table.to_csv(session_root / "trials.csv", index=False)
     rng = np.random.default_rng(91)
     probes: dict[str, object] = {}
-    for probe_id, channel, cluster_id in (("pfc", 0, 1), ("hpc", 1, 2)):
+    probe_specs = (("pfc", 0, (1, 2)), ("hpc", 1, (3, 4)))
+    for probe_id, channel, available_cluster_ids in probe_specs:
+        cluster_ids = available_cluster_ids if full_standard else available_cluster_ids[:1]
         sorter = session_root / f"{probe_id}_sorter"
         sorter.mkdir()
-        spike_times = np.sort(
+        unit_times = [
             np.concatenate(
                 [
                     trial_time + rng.uniform(-1.9, 1.9, size=35)
                     for trial_time in choice_times
                 ]
             )
+            for _cluster_id in cluster_ids
+        ]
+        spike_times = np.concatenate(unit_times)
+        spike_clusters = np.concatenate(
+            [
+                np.full(times.size, cluster_id)
+                for times, cluster_id in zip(unit_times, cluster_ids)
+            ]
         )
-        np.save(sorter / "spike_clusters.npy", np.full(spike_times.size, cluster_id))
+        order = np.argsort(spike_times, kind="stable")
+        spike_times = spike_times[order]
+        spike_clusters = spike_clusters[order]
+        np.save(sorter / "spike_clusters.npy", spike_clusters)
         pd.DataFrame(
-            {"cluster_id": [cluster_id], "ch": [channel], "group": ["good"]}
+            {
+                "cluster_id": cluster_ids,
+                "ch": [channel] * len(cluster_ids),
+                "group": ["good"] * len(cluster_ids),
+            }
         ).to_csv(sorter / "cluster_info.tsv", sep="\t", index=False)
         np.savez(session_root / f"{probe_id}_sync.npz", spike_utc_unix=spike_times)
         probes[probe_id] = {
@@ -312,6 +330,14 @@ def _write_synthetic_session(tmp_path: Path) -> Path:
     )
     output_root = tmp_path / "analysis_outputs"
     config = _config(metadata_path.resolve(), output_root.resolve())
+    if full_standard:
+        config = replace(
+            config,
+            prediction_windows=("before", "after", "whole"),
+            pca=PCAConfig(pfc_components=3, hpc_components=3),
+            filters=FilterConfig(conditions=("all", "stay")),
+            representations=("units", "pcs"),
+        )
     config_path = tmp_path / "interregional_config.json"
     config_path.write_text(
         json.dumps(
@@ -355,6 +381,110 @@ def test_public_single_session_composition_runs_synthetic_metadata_to_reload(
     ):
         assert f"stage={stage}" in run_log
     assert tuple((report.run_path / "figures").glob("*.png"))
+
+
+def test_wp7_full_standard_synthetic_run_round_trips_and_records_evidence(
+    tmp_path: Path, monkeypatch, record_property
+) -> None:
+    """The seeded public workflow preserves results and emits bounded-run evidence."""
+    config_path = _write_synthetic_session(tmp_path, full_standard=True)
+    monkeypatch.setattr(run_session, "_git_identity", lambda root: ("1" * 40, ()))
+
+    started = time.perf_counter()
+    first_report = run_session.run_single_session(config_path, command="new")
+    second_report = run_session.run_single_session(
+        config_path, command="new", rerun=True
+    )
+    elapsed_seconds = time.perf_counter() - started
+
+    assert first_report.status == "completed", first_report.error
+    assert second_report.status == "completed", second_report.error
+    assert first_report.run_path is not None
+    assert second_report.run_path is not None
+    assert first_report.run_fingerprint == second_report.run_fingerprint
+    assert first_report.run_path != second_report.run_path
+    config, _ = load_interregional_config(config_path)
+    first = persistence.load_interregional_result(
+        first_report.run_path / "result.pkl",
+        config,
+        trusted_run_directory=first_report.run_path,
+    )
+    second = persistence.load_interregional_result(
+        second_report.run_path / "result.pkl",
+        config,
+        trusted_run_directory=second_report.run_path,
+    )
+    for table_name in records.RESULT_TABLE_DTYPES:
+        pd.testing.assert_frame_equal(
+            getattr(first, table_name), getattr(second, table_name)
+        )
+    np.testing.assert_array_equal(first.whole_bin_edges_s, second.whole_bin_edges_s)
+
+    assert {"units", "pcs"} == set(first.fold_scores["representation"])
+    assert set(first.fold_scores["model_family"]) == {"ols"}
+    assert not first.pca_fits.empty
+    unavailable_rank = first.fold_scores.loc[
+        first.fold_scores["representation"].eq("pcs")
+        & first.fold_scores["target_rank"].eq(3)
+    ]
+    assert len(unavailable_rank) == 60
+    assert unavailable_rank["status"].eq("fit_unavailable").all()
+    assert unavailable_rank["reason"].eq("pca_insufficient_components").all()
+    assert first.fold_scores.loc[
+        first.fold_scores["representation"].eq("units"), "status"
+    ].eq("ok").all()
+    assert first.granger_scores.empty
+    poisson_columns = (
+        "restricted_converged",
+        "full_converged",
+        "restricted_iterations",
+        "full_iterations",
+        "deviance_restricted",
+        "deviance_full",
+        "null_deviance",
+        "deviance_explained_restricted",
+        "deviance_explained_full",
+        "delta_deviance_explained",
+    )
+    assert first.fold_scores.loc[:, poisson_columns].isna().all().all()
+    assert first.fold_scores["train_row_set_sha256"].str.fullmatch(r"[0-9a-f]{64}").all()
+    assert first.fold_scores["test_row_set_sha256"].str.fullmatch(r"[0-9a-f]{64}").all()
+
+    figures = tuple((first_report.run_path / "figures").glob("*.png"))
+    assert figures
+    assert all(path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n") for path in figures)
+    run_log = (first_report.run_path / "run.log").read_text(encoding="utf-8")
+    assert "completed elapsed_seconds=" in run_log
+    assert all(
+        f"stage={stage} event=end elapsed_seconds=" in run_log
+        for stage in (
+            "input_validation",
+            "input_hashing",
+            "ols_cv",
+            "persistence",
+            "figures",
+            "summary",
+        )
+    )
+    output_bytes = sum(
+        path.stat().st_size for path in first_report.run_path.rglob("*") if path.is_file()
+    )
+    evidence = {
+        "seed": 91,
+        "trials": 25,
+        "whole_window_bins": 40,
+        "pfc_units": 2,
+        "hpc_units": 2,
+        "requested_components_per_region": 3,
+        "conditions": 2,
+        "prediction_windows": 3,
+        "fold_score_rows": len(first.fold_scores),
+        "figure_count": len(figures),
+        "first_run_output_bytes": output_bytes,
+        "two_run_elapsed_seconds": elapsed_seconds,
+    }
+    record_property("wp7_synthetic_evidence", json.dumps(evidence, sort_keys=True))
+    print(f"WP7_SYNTHETIC_EVIDENCE={json.dumps(evidence, sort_keys=True)}")
 
 
 def test_new_refuses_dirty_code_before_hashing(tmp_path: Path, monkeypatch) -> None:

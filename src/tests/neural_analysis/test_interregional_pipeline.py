@@ -388,3 +388,47 @@ def test_fold_pca_is_fit_once_per_fold_and_emits_frozen_metadata(monkeypatch) ->
     assert set(pca_fits["region"]) == {"PFC", "HPC"}
     assert pca_fits["status"].eq("ok").all()
     assert pca_fits["n_training_observations"].gt(0).all()
+
+
+def test_wp7_seeded_unit_and_pc_results_are_deterministic_with_explicit_gaps() -> None:
+    """The complete standard model set is repeatable without hiding missing ranks."""
+    prepared = _multiunit_prepared(("units", "pcs"))
+    prepared = replace(
+        prepared,
+        config=replace(
+            prepared.config,
+            pca=PCAConfig(pfc_components=3, hpc_components=3),
+        ),
+    )
+
+    def execute() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Fit fold-local transforms and return all standard OLS result tables."""
+        fold_pcas, pca_fits = pipeline.fit_cross_validation_pcas(prepared)
+        result_tables = pipeline.run_linear_cross_validation(
+            prepared, fold_pcas=fold_pcas
+        )
+        return (*result_tables, pca_fits)
+
+    first = execute()
+    second = execute()
+
+    for first_table, second_table in zip(first, second, strict=True):
+        pd.testing.assert_frame_equal(first_table, second_table)
+    fold_scores, target_summaries, population_summaries, pca_fits = first
+    assert {"units", "pcs"} == set(fold_scores["representation"])
+    assert set(fold_scores["model_family"]) == {"ols"}
+    unit_statuses = fold_scores.loc[
+        fold_scores["representation"].eq("units"), "status"
+    ]
+    assert unit_statuses.eq("ok").all()
+    unavailable_rank = fold_scores.loc[
+        fold_scores["representation"].eq("pcs") & fold_scores["target_rank"].eq(3)
+    ]
+    assert len(unavailable_rank) == 10
+    assert unavailable_rank["status"].eq("fit_unavailable").all()
+    assert unavailable_rank["reason"].eq("pca_insufficient_components").all()
+    assert target_summaries.loc[
+        target_summaries["target_rank"].eq(3), "status"
+    ].eq("incomplete_folds").all()
+    assert not population_summaries.empty
+    assert len(pca_fits) == 10
