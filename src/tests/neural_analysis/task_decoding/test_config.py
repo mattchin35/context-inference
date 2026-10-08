@@ -29,6 +29,14 @@ CANONICAL_TARGETS = (
     "hmm_decay_signed_belief",
     "relative_doubt",
 )
+CANONICAL_CONDITIONS = (
+    "all",
+    "correct_rewarded",
+    "omission",
+    "incorrect",
+    "switch",
+    "stay",
+)
 
 
 def make_config_payload() -> dict[str, object]:
@@ -120,6 +128,8 @@ def test_defaults_freeze_revision_five_target_order_and_fold_counts(tmp_path):
 
     assert decoding_config.TARGET_IDENTIFIERS == CANONICAL_TARGETS
     assert tuple(config.target_names) == CANONICAL_TARGETS
+    assert decoding_config.CONDITION_IDENTIFIERS == CANONICAL_CONDITIONS
+    assert tuple(config.condition_names) == ("all",)
     assert config.alignment == "choice_time"
     assert config.bin_width_ms == 100
     assert config.pfc_pc_count == 10
@@ -129,9 +139,9 @@ def test_defaults_freeze_revision_five_target_order_and_fold_counts(tmp_path):
     assert config.inner_fold_count == 3
 
 
-def test_revision_six_versions_the_expanded_logistic_convergence_budget():
-    """Revision 6 should change only the logistic numerical iteration ceiling."""
-    assert decoding_config.ANALYSIS_VERSION == "task-variable-decoding-v2"
+def test_revision_seven_versions_condition_resolved_decoding():
+    """Revision 7 should identify the new condition-resolved scientific contract."""
+    assert decoding_config.ANALYSIS_VERSION == "task-variable-decoding-v3"
     assert dict(decoding_config.FROZEN_ESTIMATOR_CONTROLS["LogisticRegression"]) == {
         "C": 1.0,
         "l1_ratio": 0.5,
@@ -351,6 +361,47 @@ def test_target_subset_normalizes_to_canonical_order(tmp_path):
     )
 
 
+def test_condition_subset_normalizes_to_canonical_order_and_enters_identity(tmp_path):
+    """Selected conditions should have one canonical order in scientific identity."""
+    payload = make_config_payload()
+    payload["condition_names"] = ["stay", "incorrect", "all", "omission"]
+
+    config, _, _ = load_config(tmp_path, payload)
+    scientific_payload = decoding_config.scientific_config_payload(config)
+
+    assert tuple(config.condition_names) == ("all", "omission", "incorrect", "stay")
+    assert scientific_payload["condition_names"] == [
+        "all",
+        "omission",
+        "incorrect",
+        "stay",
+    ]
+
+
+@pytest.mark.parametrize(
+    "condition_names",
+    [
+        [],
+        ["all", "all"],
+        ["correct rewarded"],
+        ["correct_omission"],
+        ["rewarded"],
+        ["unknown_condition"],
+        "all",
+    ],
+)
+def test_condition_names_reject_aliases_duplicates_and_unknown_values(
+    tmp_path,
+    condition_names,
+):
+    """Condition JSON names should use only canonical case-sensitive identifiers."""
+    payload = make_config_payload()
+    payload["condition_names"] = condition_names
+
+    with pytest.raises(ValueError, match="condition"):
+        load_config(tmp_path, payload)
+
+
 @pytest.mark.parametrize(
     "target_names",
     [
@@ -567,6 +618,7 @@ def test_scientific_payload_excludes_execution_fields_and_records_frozen_control
         "pfc_pc_count",
         "hpc_pc_count",
         "target_names",
+        "condition_names",
         "regularization_mode",
         "outer_fold_count",
         "inner_fold_count",

@@ -34,6 +34,12 @@ EXPECTED_RESOURCES = {
     "mail_type": "ALL",
     "mail_user": "matthew.chin@einsteinmed.edu",
 }
+CONDITION_VALIDATION_RESOURCES = {
+    **EXPECTED_RESOURCES,
+    "memory": "8G",
+    "memory_bytes": 8 * 1024**3,
+    "time": "3-00:00:00",
+}
 
 
 def _slurm_module():
@@ -368,6 +374,17 @@ def test_wp11_python_resource_contract_matches_wrapper() -> None:
     assert slurm.REQUESTED_RESOURCES == EXPECTED_RESOURCES
 
 
+def test_condition_validation_resource_profile_is_frozen_and_distinct() -> None:
+    """The first full condition run has a named 8-GiB, 72-hour safety profile."""
+    slurm = _slurm_module()
+
+    assert slurm.RESOURCE_PROFILES == {
+        "standard": EXPECTED_RESOURCES,
+        "condition_validation": CONDITION_VALIDATION_RESOURCES,
+    }
+    assert slurm.REQUESTED_RESOURCES == slurm.RESOURCE_PROFILES["standard"]
+
+
 @pytest.mark.parametrize(
     ("mode", "arguments"),
     (
@@ -649,6 +666,141 @@ def test_wp11_submission_receipt_cannot_regress_immediately_running_state(
     )
     assert _read_json(run_directory / "run_state.json")["lifecycle"] == "running"
     assert _read_json(run_directory / "slurm_submission.json") == receipt
+
+
+def test_condition_validation_submission_overrides_resources_and_records_profile(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """One explicit validation profile must govern sbatch, receipt, and resume."""
+    slurm = _slurm_module()
+    run_directory = _prepared_run(tmp_path)
+    commands: list[list[str]] = []
+
+    def accept(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        """Capture the exact one-shot scheduler request and return one job ID."""
+        commands.append(arguments)
+        return _completed_process(arguments, stdout="45678;cluster\n")
+
+    monkeypatch.setattr(slurm, "_run_command", accept)
+    monkeypatch.setattr(slurm, "_repository_commit", lambda: "condition-commit")
+
+    receipt = slurm.submit_prepared_run(
+        run_directory,
+        resource_profile="condition_validation",
+    )
+
+    assert len(commands) == 1
+    assert "--mem=8G" in commands[0]
+    assert "--time=3-00:00:00" in commands[0]
+    exported = next(value for value in commands[0] if value.startswith("--export="))
+    assert "TASK_DECODING_RESOURCE_PROFILE=condition_validation" in exported
+    assert receipt["resource_profile"] == "condition_validation"
+    assert receipt["requested_resources"] == CONDITION_VALIDATION_RESOURCES
+    assert "--resource-profile condition_validation" in receipt["resume_command"]
+
+
+def test_submit_new_uses_selected_profile_for_memory_guard_and_submission(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """The named profile should reach admission and submission without mutation."""
+    slurm = _slurm_module()
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}\n", encoding="ascii")
+    prepared = _prepared_run(tmp_path)
+    calls: list[object] = []
+
+    class FakePipeline:
+        """Expose a tensor that fits 8 GiB but would fail the standard profile."""
+
+        @staticmethod
+        def plan_task_decoding_session(_path: Path) -> dict[str, int]:
+            return {"tensor_allocation_bytes": 2 * 1024**3}
+
+        @staticmethod
+        def prepare_task_decoding_run(path: Path, rerun: bool, execution_mode: str) -> Path:
+            calls.append(("prepare", Path(path), rerun, execution_mode))
+            return prepared
+
+        @staticmethod
+        def _validate_complete_prepared_run(_directory: Path) -> bool:
+            return False
+
+    monkeypatch.setattr(slurm, "_pipeline_module", lambda: FakePipeline)
+    monkeypatch.setattr(
+        slurm,
+        "submit_prepared_run",
+        lambda directory, *, resource_profile: calls.append(
+            ("submit", Path(directory), resource_profile)
+        )
+        or {"job_id": "45678"},
+    )
+
+    receipt = slurm.submit_new(
+        config_path,
+        resource_profile="condition_validation",
+    )
+
+    assert receipt["job_id"] == "45678"
+    assert calls == [
+        ("prepare", config_path, False, "slurm"),
+        ("submit", prepared, "condition_validation"),
+    ]
+
+
+def test_resume_rejects_resource_profile_change_after_first_submission(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """An interrupted run must resume with the resource profile in its receipt."""
+    slurm = _slurm_module()
+    run_directory = _prepared_run(tmp_path)
+    _write_json(
+        run_directory / "slurm_submission.json",
+        {
+            "job_id": "45678",
+            "resource_profile": "condition_validation",
+            "requested_resources": CONDITION_VALIDATION_RESOURCES,
+        },
+    )
+    calls: list[object] = []
+    monkeypatch.setattr(
+        slurm,
+        "submit_prepared_run",
+        lambda directory, *, resource_profile: calls.append(
+            (Path(directory), resource_profile)
+        )
+        or {"job_id": "45679"},
+    )
+
+    with pytest.raises(ValueError, match="profile|condition_validation"):
+        slurm.submit_resume(run_directory, resource_profile="standard")
+
+    receipt = slurm.submit_resume(
+        run_directory,
+        resource_profile="condition_validation",
+    )
+    assert receipt["job_id"] == "45679"
+    assert calls == [(run_directory, "condition_validation")]
+
+
+def test_scheduled_memory_budget_uses_exported_resource_profile(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Scheduled admission should use the selected profile rather than static defaults."""
+    slurm = _slurm_module()
+    meminfo = tmp_path / "meminfo"
+    cgroup = tmp_path / "memory.max"
+    meminfo.write_text("MemAvailable:       16777216 kB\n", encoding="ascii")
+    cgroup.write_text(str(8 * 1024**3) + "\n", encoding="ascii")
+    monkeypatch.setenv("TASK_DECODING_RESOURCE_PROFILE", "condition_validation")
+
+    assert slurm.effective_memory_budget_bytes(
+        meminfo_path=meminfo,
+        cgroup_limit_paths=(cgroup,),
+    ) == 8 * 1024**3
 
 
 def test_wp11_submission_failure_is_durable_and_never_retried(monkeypatch, tmp_path: Path) -> None:
