@@ -8,20 +8,20 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 01:10 EDT.
+**Snapshot date:** 2026-10-08 01:13 EDT.
 
-**Current phase:** WP1-WP6 are complete and GREEN. The standard linear workflow now includes
+**Current phase:** WP1-WP7 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
 training-only fold-local regional PCA, bidirectional PC OLS, explicit unavailable PC ranks, and
 complete-fold summaries, immutable run persistence, single-session/batch command boundaries,
-standard saved-result PNGs, and a metadata-driven read-only webapp view. WP7 synthetic integration
-and its bounded performance check are authorized and active; tests-first integration evidence is
-next.
+standard saved-result PNGs, and a metadata-driven read-only webapp view. Its seeded full synthetic
+integration and bounded performance gate are recorded below. WP8 real-session scientific inspection
+is next but is not authorized.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `1a58ff3`;
+- HEAD before this handoff record: `673bc3f`;
 - plan-owned files: `docs/neural_regression_plan.md` and
   `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
@@ -51,8 +51,8 @@ next.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** write the WP7 full-standard-workflow integration tests, commit them before
-any bounded fix, then run the synthetic timing and peak-memory measurement.
+**Next exact action:** obtain the user's exact WP8 metadata session, configuration, command, and
+output-root approval before running or inspecting any experimental data.
 
 ### Authority order
 
@@ -83,8 +83,8 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP4 | Fold-local regional PCA and PC OLS | Complete | WP5 may begin after authorization |
 | WP5 | Saved results, run identity, session runner, and batch runner | Complete | WP6 complete |
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
-| WP7 | Standard-regression synthetic integration and bounded performance check | Active; tests next | Commit integration tests before any bounded fix |
-| WP8 | One-session standard-regression scientific inspection | Not authorized | WP7 GREEN plus explicit approval of the exact session/command |
+| WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
+| WP8 | One-session standard-regression scientific inspection | Ready; not authorized | Explicit approval of exact session, configuration, command, and output root |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Not authorized | WP8 user inspection/approval |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
@@ -504,11 +504,50 @@ Use this template:
 - Exact next action and authorization: do not begin WP7 until its scope is confirmed; then run the
   synthetic integration and bounded performance check without experimental data.
 
+#### 2026-10-08 01:13 EDT - WP7 GREEN synthetic integration and bounded performance
+
+- State: WP7 is complete; WP8 one-session scientific inspection is ready but remains separately
+  unauthorized.
+- Authorization: the user explicitly requested a push followed by WP7. This covered synthetic
+  integration tests and bounded performance evidence only, not experimental data.
+- Sol / Terra / reviewer: primary implementation agent and self-review; no worker.
+- Start HEAD / end HEAD: `dc4ad4e` / `673bc3f` before this handoff record.
+- Worktree and owned files: updated the authoritative plan and added WP7 cases to
+  `test_interregional_pipeline.py` and `test_interregional_scripts.py`. No production source file
+  required a change. Unrelated pre-existing untracked entries remained untouched.
+- RED command and result: the first full-path run rejected a duplicated metadata-v2
+  `unit_channels` fixture value. After correcting that fixture contract, the second run correctly
+  reported `no_train_rows` for `stay` because the fixture marked every trial rewarded; the fixture
+  was corrected to make the explicitly requested stay condition eligible. Neither failure exposed
+  a production defect, and no production fix was made.
+- GREEN/regression commands and results: both new WP7 tests passed. The affected suite passed 189
+  tests covering WP1-WP7 plus existing spike-behavior, population package/PCA, webapp, and session-
+  metadata behavior, with four existing Pynapple warnings and no new warnings.
+- Commits: WP7 authorization handoff `a472bb4`; synthetic integration tests `673bc3f`; no
+  implementation commit was needed.
+- Real-data, filesystem, or external actions: pushed completed WP6 history through `dc4ad4e` from
+  local `refactor` to `origin/refactor` at the user's request. The WP7 tests used only seeded data in
+  pytest temporary directories. No experimental-data or batch run was performed.
+- Bounded performance evidence: GNU `/usr/bin/time -v` measured the complete pytest process, so its
+  452,644-KiB maximum resident set includes Python, pytest, Pynapple, NumPy, plotting, and two
+  immutable production-path executions; it is not an isolated estimator measurement or upper
+  bound. The two executions took 3.013673 seconds inside the test (4.76-second measured command
+  wall time). The seed-91 fixture contained 25 trials, 40 whole-window bins, two units per region,
+  two conditions, three windows, and three requested PCs per region. It produced 300 fold-score
+  rows, 18 PNGs, and 1,493,247 bytes in the first finalized run directory.
+- Findings and unresolved risks: identical inputs/configuration produced exactly equal typed tables
+  across immutable reruns; fold/trial/bin hashes survived persistence; unavailable third PC ranks
+  remained explicit while unit rows completed; and Poisson/Granger fields remained inactive. No
+  new scientific or implementation issue was found. The measurement is deliberately bounded
+  evidence for this small fixture, not a real-session capacity claim.
+- Exact next action and authorization: obtain explicit approval of the exact WP8 metadata session,
+  configuration, command, and output root before touching experimental data.
+
 ## Plan objective and status
 
 This plan implements `docs/spec_neural_regression_v3.md`. It was approved and is now the
 authoritative phased implementation and handoff log. Package-specific authorization and data-run
-gates remain binding even though WP1-WP6 implementation is complete.
+gates remain binding even though WP1-WP7 implementation is complete.
 
 The implementation order is deliberately fixed:
 
