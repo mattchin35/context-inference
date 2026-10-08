@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 01:29 EDT.
+**Snapshot date:** 2026-10-08 01:36 EDT.
 
 **Current phase:** WP1-WP7 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -20,7 +20,8 @@ CT026 session `CT026_2026-08-03_111938` with ProbeA as PFC, ProbeB as HPC, the d
 OLS defaults, a session-local configuration, and the session's `analysis_runs` output root. The
 run and technical inspection are complete. The user approved a tests-first bounded correction for
 the observed figure-label, legend, and summary-provenance defects, followed by a fresh immutable
-rerun.
+rerun. That correction and rerun are complete; user scientific acceptance of the corrected output
+is pending.
 
 **Repository state at this snapshot:**
 
@@ -55,9 +56,8 @@ rerun.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit tests that reproduce the approved presentation/provenance defects,
-confirm RED, implement the bounded correction, run affected tests, and create a fresh immutable
-CT026 rerun without altering the original.
+**Next exact action:** present the corrected immutable CT026 run for user review. Do not begin WP9
+until the user accepts the standard-regression scientific output.
 
 ### Authority order
 
@@ -89,7 +89,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP5 | Saved results, run identity, session runner, and batch runner | Complete | WP6 complete |
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
-| WP8 | One-session standard-regression scientific inspection | Bounded correction authorized and active | Tests-first fix, affected suite, fresh immutable rerun, user review |
+| WP8 | One-session standard-regression scientific inspection | Corrected rerun complete; user review pending | User accepts or rejects standard-regression output before WP9 |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Not authorized | WP8 user inspection/approval |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
@@ -592,6 +592,45 @@ Use this template:
 - Exact next action and authorization: the user reviews the finalized output and decides whether to
   approve a tests-first bounded presentation correction. Do not begin WP9 before that review and
   the existing WP8 scientific gate are satisfied.
+
+#### 2026-10-08 01:36 EDT - WP8 bounded correction GREEN and immutable rerun
+
+- State: the user-approved presentation/provenance correction and fresh immutable CT026 rerun are
+  complete. WP8 scientific acceptance by the user is pending; WP9 remains unauthorized.
+- Authorization: the user approved the recommended tests-first correction and fresh immutable
+  rerun. The original run was retained unchanged.
+- Sol / Terra / reviewer: primary implementation agent and evidence reviewer; no worker.
+- Start HEAD / end HEAD: `79c5cd9` / `22cc4ed` before this handoff record.
+- Worktree and owned files: updated plotting, persistence final-path derivation, session-summary
+  composition, and their plotting/runner tests. No scientific preparation, fit, score, aggregation,
+  or result-schema code changed. Unrelated pre-existing entries remained untouched.
+- RED command and result: the first focused run failed all three tests because increment counts were
+  separate overlapping annotations, absolute plots had no legend, and summaries recorded the
+  incomplete working path. A dense-target test then reproduced condition-cell spillover (minimum
+  x=-2.78 for a cell bounded at -0.60). A follow-up test caught an implementation-time single-target
+  centering regression before the implementation commit.
+- GREEN/regression commands and results: six focused plotting/runner/persistence tests passed. The
+  affected suite passed 191 tests with the same four existing Pynapple warnings and no new warning.
+- Commits: correction authorization `5bd2a8a`; initial defect tests `1e284d9`; dense-jitter test
+  `67cdfa0`; single-target centering test `9109437`; implementation `22cc4ed`.
+- Real-data, filesystem, or external actions: the unchanged approved configuration passed dry-run
+  again with 274,440,585 input bytes. A new immutable run finalized at
+  `analysis_runs/interregional_regression_20261008T053259462655Z_983f52e6b4af` with fingerprint
+  `983f52e6b4af8f5279f5623c64ca3dc56eebb1beeaf8b277d3baab28883399df`. The original
+  `7b4d1a0fdbe1` run remains unchanged.
+- Runtime and memory: corrected-run validation took 0.036471 seconds, hashing 0.144654 seconds,
+  combined preparation/OLS 169.750858 seconds, persistence 0.415218 seconds, figures 15.224394
+  seconds, and the logged total 185.394685 seconds. GNU `/usr/bin/time -v` measured 3:07.27 command
+  wall time, 1,181,148-KiB maximum resident set size, and no swaps.
+- Findings and unresolved risks: trusted reload passed, the corrected summary records the exact
+  final directory and approved output root, all 42 figures were regenerated, and visual inspection
+  confirmed bounded direction-cell jitter, readable contributing/unavailable counts, and an
+  absolute-score direction legend. Every typed scientific result table and the bin-edge array are
+  exactly equal to the original run; only code identity and presentation/provenance artifacts
+  changed. No new issue was found. Predictive/coverage limitations and strict unit-rank
+  unavailability remain as previously reported.
+- Exact next action and authorization: present the corrected run to the user. Begin WP9 only after
+  explicit scientific acceptance and separate WP9 authorization.
 
 ## Plan objective and status
 
