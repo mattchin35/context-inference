@@ -546,6 +546,15 @@ def assemble_condition_result_payload(
             raise ValueError(f"Condition-independent result array disagrees: {array_name}")
         output[array_name] = values[0].copy()
 
+    condition_membership = output["condition_masks"][:, np.newaxis, :]
+    if np.any(output["eligibility_masks"] & ~condition_membership):
+        raise ValueError("Target eligibility extends outside its condition mask.")
+    excluded = np.broadcast_to(
+        ~condition_membership,
+        output["eligibility_reason_codes"].shape,
+    )
+    output["eligibility_reason_codes"][excluded] = "condition_excluded"
+
     metadata = json.loads(json.dumps(first_meta))
     metadata["schema_version"] = CONDITION_RESULT_SCHEMA_VERSION
     axes = {

@@ -430,11 +430,15 @@ def validate_resource_usage_payload(
     if fit_counts != aggregate_fit_counts:
         raise ValueError("Resource usage fit_counts do not match target aggregates.")
     if status == "complete":
-        if len(completed) != envelope["target_count"] or set(completed) != set(
+        expected_completed_count = (
+            envelope["condition_count"] * envelope["target_count"]
+        )
+        if len(completed) != expected_completed_count or set(completed) != set(
             target_measurements
         ):
             raise ValueError(
-                "Complete resource usage must cover every enveloped target exactly once."
+                "Complete resource usage must cover every enveloped condition-target "
+                "cell exactly once."
             )
         if any(
             measurement["timing_available"] and measurement["total_seconds"] is None

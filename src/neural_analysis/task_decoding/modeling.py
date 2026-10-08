@@ -832,14 +832,21 @@ def make_outer_splits(
         allowed_counts=(3, 5),
         name="outer_fold_count",
     )
-    values = _validate_vector(target_values, "target_values")
-    groups = _validate_vector(block_ids, "block_ids")
+    values = np.asarray(target_values)
+    groups = np.asarray(block_ids)
+    if values.ndim != 1:
+        raise ValueError("target_values must be a one-dimensional array.")
+    if groups.ndim != 1:
+        raise ValueError("block_ids must be a one-dimensional array.")
     if values.shape != groups.shape:
         raise ValueError("target_values and block_ids must have the same trial shape.")
     if target_family == "categorical":
-        _validate_categorical_target_encoding(values)
+        if values.size:
+            _validate_categorical_target_encoding(values)
     elif target_family != "numerical":
         raise ValueError("target_family must be 'categorical' or 'numerical'.")
+    if values.size == 0:
+        return _unavailable_split_plan(0, "no eligible trials")
     return _build_grouped_split_plan(
         values,
         groups,

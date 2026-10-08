@@ -663,6 +663,42 @@ def _condition_target_common_masks(
     return output
 
 
+def _target_table_for_condition(
+    target_table: pd.DataFrame,
+    condition_mask: np.ndarray,
+    target_names: Sequence[str],
+) -> pd.DataFrame:
+    """Intersect target validity with one full-table condition membership mask.
+
+    Parameters
+    ----------
+    target_table : pandas.DataFrame
+        Derived chronological table shaped ``(full_trial, column)``.
+    condition_mask : numpy.ndarray
+        Boolean membership shaped ``(full_trial,)`` on the identical row axis.
+    target_names : sequence[str]
+        Configured target identifiers whose ``<target>_valid`` columns are
+        intersected. Encoded target values and physical units are unchanged.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Independent table copy with condition-filtered target-valid columns.
+    """
+    mask = np.asarray(condition_mask)
+    if mask.dtype != np.bool_ or mask.shape != (len(target_table),):
+        raise ValueError("Condition membership must be a Boolean full-table vector.")
+    filtered = target_table.copy(deep=True)
+    for target_name in target_names:
+        valid_column = f"{target_name}_valid"
+        if valid_column not in filtered:
+            raise ValueError(f"Target validity column is missing: {valid_column}")
+        filtered[valid_column] = (
+            filtered[valid_column].to_numpy(dtype=np.bool_) & mask
+        )
+    return filtered
+
+
 def _condition_target_key(condition_name: str, target_name: str) -> str:
     """Return one stable state/resource identifier for a condition-target cell.
 
@@ -789,7 +825,7 @@ def _condition_target_diagnostics(
                 "outer_split_unavailable_reason": (
                     split_plan.unavailable_reason
                     if split_plan is not None
-                    else "no condition-eligible trials"
+                    else "no eligible trials"
                 ),
             }
         )
@@ -1440,7 +1476,11 @@ def _target_result_to_checkpoint_arrays(
     return {"target_result_json": np.array(_canonical_json(payload))}
 
 
-def _target_result_from_checkpoint(saved: Mapping[str, object]) -> modeling.TargetDecodingResult:
+def _target_result_from_checkpoint(
+    saved: Mapping[str, object],
+    *,
+    expected_target_identifier: str | None = None,
+) -> modeling.TargetDecodingResult:
     """Restore one full target result from a fingerprint-validated checkpoint.
 
     Parameters
@@ -1448,6 +1488,11 @@ def _target_result_from_checkpoint(saved: Mapping[str, object]) -> modeling.Targ
     saved : mapping[str, object]
         Value returned by :func:`results.load_target_checkpoint` with a safe
         Unicode payload and exact target fingerprint already checked.
+    expected_target_identifier : str or None, default=None
+        Base target identifier expected inside the result payload. None uses
+        the checkpoint metadata label for backward-compatible pooled targets;
+        condition checkpoints pass their base target explicitly because their
+        metadata label is the unambiguous ``condition::target`` cell key.
 
     Returns
     -------
@@ -1465,7 +1510,12 @@ def _target_result_from_checkpoint(saved: Mapping[str, object]) -> modeling.Targ
         raise ValueError("Target checkpoint result payload is invalid.") from error
     if not isinstance(value, Mapping):
         raise ValueError("Target checkpoint result payload is invalid.")
-    if str(value["target_identifier"]) != saved["target_label"]:
+    expected_identifier = (
+        str(saved["target_label"])
+        if expected_target_identifier is None
+        else expected_target_identifier
+    )
+    if str(value["target_identifier"]) != expected_identifier:
         raise ValueError("Target checkpoint label disagrees with payload.")
     plans = {
         int(key): _plan_from_payload(plan)
@@ -2210,6 +2260,9 @@ def _assemble_run_result_payload(
     execution_provenance: Mapping[str, object],
     run_fingerprint: str,
     session_id: str,
+    shared_regional_feature_maps: Mapping[
+        tuple[str, str], tuple[str, ...]
+    ] | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, object]]:
     """Assemble one complete WP5A primitive payload from decoded target records.
 
@@ -2234,6 +2287,11 @@ def _assemble_run_result_payload(
     session_id : str
         Nonempty canonical session identifier from resolved metadata. It is
         persisted directly rather than inferred from a portable file path.
+    shared_regional_feature_maps : mapping or None, default=None
+        Optional run-wide PFC/HPC feature identities keyed by
+        ``(region, representation)``. Multi-condition assembly supplies the
+        union selected across every condition so stable feature axes are not
+        duplicated or narrowed by an unavailable condition.
 
     Returns
     -------
@@ -2255,9 +2313,13 @@ def _assemble_run_result_payload(
     full_n = target_table.shape[0]
     trial_rows = np.asarray(rate_tensors.trial_row_indices, dtype=np.int64)
     common_n = trial_rows.size
-    regional_ids = _regional_feature_maps(
-        ordered_target_results,
-        region_activity_metadata,
+    regional_ids = (
+        _regional_feature_maps(
+            ordered_target_results,
+            region_activity_metadata,
+        )
+        if shared_regional_feature_maps is None
+        else dict(shared_regional_feature_maps)
     )
     feature_maps: dict[tuple[str, str], tuple[str, ...]] = {}
     for representation in _REPRESENTATIONS:
@@ -2662,6 +2724,7 @@ def _decode_remaining_targets(
     run_directory: Path,
     full_fingerprint: str,
     resource_tracker: resource_usage.ResourceUsageTracker,
+    condition_name: str | None = None,
 ) -> list[modeling.TargetDecodingResult]:
     """Restore valid target checkpoints and decode only configured missing targets.
 
@@ -2684,6 +2747,9 @@ def _decode_remaining_targets(
     resource_tracker : ResourceUsageTracker
         Run-local cumulative measurement owner. It publishes one atomic
         snapshot after every newly saved target checkpoint.
+    condition_name : str or None, default=None
+        Canonical condition identifier for schema-2 execution. None preserves
+        historical pooled checkpoint filenames and progress labels.
 
     Returns
     -------
@@ -2697,6 +2763,11 @@ def _decode_remaining_targets(
     hpc_ids = tuple(hpc_activity.unit_metadata["unit_id"].astype(str))
     for label in config.target_names:
         target_family = _family_for_label(label)
+        progress_label = (
+            label
+            if condition_name is None
+            else _condition_target_key(condition_name, label)
+        )
         restored = existing.get(label)
         if restored is not None:
             requested, valid, invalid = _target_measurement_counts(
@@ -2705,7 +2776,7 @@ def _decode_remaining_targets(
                 time_bin_count=rate_tensors.pfc_rate_tensor_hz.shape[1],
             )
             resource_tracker.record_restored_target(
-                target_label=label,
+                target_label=progress_label,
                 target_family=target_family,
                 requested_fit_count=requested,
                 valid_outer_cell_count=valid,
@@ -2721,43 +2792,67 @@ def _decode_remaining_targets(
         target_values = target_table.loc[selected_rows, label].to_numpy(dtype=float)
         block_ids = target_table.loc[selected_rows, "block_id"].to_numpy(copy=True)
         target_started = time.perf_counter()
-        result = modeling.decode_target(
-            target_identifier=label,
-            target_family=target_family,
-            target_values=target_values,
-            block_ids=block_ids,
-            pfc_rate_tensor_hz=rate_tensors.pfc_rate_tensor_hz[common_valid],
-            hpc_rate_tensor_hz=rate_tensors.hpc_rate_tensor_hz[common_valid],
-            pfc_unit_ids=pfc_ids,
-            hpc_unit_ids=hpc_ids,
-            pfc_requested_pc_count=config.pfc_pc_count,
-            hpc_requested_pc_count=config.hpc_pc_count,
-            outer_fold_count=config.outer_fold_count,
-            inner_fold_count=config.inner_fold_count,
-            regularization_mode=config.regularization_mode,
-            timing_callback=lambda event, target_label=label, family=target_family: (
-                resource_tracker.record_model_event(
-                    target_label=target_label,
-                    target_family=family,
-                    operation=str(event["operation"]),
-                    region_configuration=event["region_configuration"],
-                    representation=event["representation"],
-                    elapsed_seconds=float(event["elapsed_seconds"]),
-                )
-            ),
-        )
+        if target_values.size == 0:
+            result = modeling.TargetDecodingResult(
+                target_identifier=label,
+                inner_fold_count=config.inner_fold_count,
+                is_available=False,
+                status="unavailable",
+                unavailable_reason="no eligible trials",
+                outer_fold_ids=np.empty(0, dtype=np.int64),
+                inner_split_plans={},
+                fold_records=(),
+                cell_summaries={},
+            )
+        else:
+            result = modeling.decode_target(
+                target_identifier=label,
+                target_family=target_family,
+                target_values=target_values,
+                block_ids=block_ids,
+                pfc_rate_tensor_hz=rate_tensors.pfc_rate_tensor_hz[common_valid],
+                hpc_rate_tensor_hz=rate_tensors.hpc_rate_tensor_hz[common_valid],
+                pfc_unit_ids=pfc_ids,
+                hpc_unit_ids=hpc_ids,
+                pfc_requested_pc_count=config.pfc_pc_count,
+                hpc_requested_pc_count=config.hpc_pc_count,
+                outer_fold_count=config.outer_fold_count,
+                inner_fold_count=config.inner_fold_count,
+                regularization_mode=config.regularization_mode,
+                timing_callback=(
+                    lambda event, target_label=progress_label, family=target_family: (
+                        resource_tracker.record_model_event(
+                            target_label=target_label,
+                            target_family=family,
+                            operation=str(event["operation"]),
+                            region_configuration=event["region_configuration"],
+                            representation=event["representation"],
+                            elapsed_seconds=float(event["elapsed_seconds"]),
+                        )
+                    )
+                ),
+            )
         target_seconds = time.perf_counter() - target_started
+        checkpoint_path = (
+            run_directory / "checkpoints" / f"{label}.npz"
+            if condition_name is None
+            else _condition_target_checkpoint_path(
+                run_directory,
+                condition_name,
+                label,
+            )
+        )
         results.save_target_checkpoint(
-            run_directory / "checkpoints" / f"{label}.npz",
-            target_label=label,
+            checkpoint_path,
+            target_label=progress_label,
             target_arrays=_target_result_to_checkpoint_arrays(result),
             full_run_fingerprint=full_fingerprint,
         )
         output.append(result)
         state = _read_json(run_directory / _STATE_FILE)
         completed = list(state.get("completed_targets", []))
-        if label not in completed:
-            completed.append(label)
+        if progress_label not in completed:
+            completed.append(progress_label)
         _update_state(
             run_directory,
             current_stage="modeling",
@@ -2769,7 +2864,7 @@ def _decode_remaining_targets(
             time_bin_count=rate_tensors.pfc_rate_tensor_hz.shape[1],
         )
         resource_tracker.finish_target(
-            target_label=label,
+            target_label=progress_label,
             target_family=target_family,
             total_seconds=target_seconds,
             requested_fit_count=requested,
@@ -2777,7 +2872,7 @@ def _decode_remaining_targets(
             invalid_outer_cell_count=invalid,
         )
         resource_tracker.snapshot(status="running", completed_targets=completed)
-        _append_log(run_directory, f"target complete {label}")
+        _append_log(run_directory, f"target complete {progress_label}")
     return output
 
 
@@ -2819,6 +2914,62 @@ def _load_existing_checkpoints(
         if saved["target_label"] != label:
             raise ValueError("Checkpoint target label does not match configured target order.")
         output[label] = _target_result_from_checkpoint(saved)
+    return output
+
+
+def _load_existing_condition_checkpoints(
+    run_directory: Path,
+    condition_names: Sequence[str],
+    target_names: Sequence[str],
+    full_fingerprint: str,
+) -> dict[str, dict[str, modeling.TargetDecodingResult]]:
+    """Load present condition-target checkpoints with exact cell identities.
+
+    Parameters
+    ----------
+    run_directory : pathlib.Path
+        Prepared run directory containing the checkpoint subdirectory.
+    condition_names, target_names : sequence[str]
+        Canonical condition-major then target-major configured identities.
+    full_fingerprint : str
+        Exact full run fingerprint required for every reused cell.
+
+    Returns
+    -------
+    dict[str, dict[str, TargetDecodingResult]]
+        Nested condition then base-target mapping for present valid checkpoints.
+
+    Raises
+    ------
+    ValueError
+        If a checkpoint fingerprint, condition-target label, or payload target
+        identity differs from its configured cell.
+    """
+    output: dict[str, dict[str, modeling.TargetDecodingResult]] = {
+        condition_name: {} for condition_name in condition_names
+    }
+    for condition_name in condition_names:
+        for target_name in target_names:
+            path = _condition_target_checkpoint_path(
+                run_directory,
+                condition_name,
+                target_name,
+            )
+            if not path.exists():
+                continue
+            saved = results.load_target_checkpoint(
+                path,
+                expected_full_run_fingerprint=full_fingerprint,
+            )
+            expected_key = _condition_target_key(condition_name, target_name)
+            if saved["target_label"] != expected_key:
+                raise ValueError(
+                    "Checkpoint condition-target label does not match its configured cell."
+                )
+            output[condition_name][target_name] = _target_result_from_checkpoint(
+                saved,
+                expected_target_identifier=target_name,
+            )
     return output
 
 
@@ -3210,7 +3361,22 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
         )
         # Validate compact checkpoints before loading any potentially large spike
         # inputs, so a stale scientific identity cannot trigger analysis work.
-        existing = _load_existing_checkpoints(directory, config.target_names, fingerprint)
+        condition_axis_enabled = config.condition_names != ("all",)
+        if condition_axis_enabled:
+            existing_by_condition = _load_existing_condition_checkpoints(
+                directory,
+                config.condition_names,
+                config.target_names,
+                fingerprint,
+            )
+            existing: Mapping[str, modeling.TargetDecodingResult] = {}
+        else:
+            existing_by_condition = {}
+            existing = _load_existing_checkpoints(
+                directory,
+                config.target_names,
+                fingerprint,
+            )
 
         activity_started = time.monotonic()
         pfc_activity = activity.load_region_activity(
@@ -3236,17 +3402,51 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
         _append_log(directory, "stage activity")
 
         modeling_started = time.monotonic()
-        target_results = _decode_remaining_targets(
-            config=config,
-            target_table=target_table,
-            rate_tensors=rate_tensors,
-            pfc_activity=pfc_activity,
-            hpc_activity=hpc_activity,
-            existing=existing,
-            run_directory=directory,
-            full_fingerprint=fingerprint,
-            resource_tracker=resource_tracker,
+        condition_masks = conditions.build_condition_masks(
+            identity["trial_table"],
+            config.condition_names,
         )
+        condition_target_tables: dict[str, pd.DataFrame] = {}
+        condition_results: dict[str, list[modeling.TargetDecodingResult]] = {}
+        if condition_axis_enabled:
+            for condition_name in config.condition_names:
+                condition_table = _target_table_for_condition(
+                    target_table,
+                    condition_masks[condition_name],
+                    config.target_names,
+                )
+                condition_target_tables[condition_name] = condition_table
+                condition_results[condition_name] = _decode_remaining_targets(
+                    config=config,
+                    target_table=condition_table,
+                    rate_tensors=rate_tensors,
+                    pfc_activity=pfc_activity,
+                    hpc_activity=hpc_activity,
+                    existing=existing_by_condition[condition_name],
+                    run_directory=directory,
+                    full_fingerprint=fingerprint,
+                    resource_tracker=resource_tracker,
+                    condition_name=condition_name,
+                )
+            completed_labels = tuple(
+                _condition_target_key(condition_name, target_name)
+                for condition_name in config.condition_names
+                for target_name in config.target_names
+            )
+        else:
+            condition_results["all"] = _decode_remaining_targets(
+                config=config,
+                target_table=target_table,
+                rate_tensors=rate_tensors,
+                pfc_activity=pfc_activity,
+                hpc_activity=hpc_activity,
+                existing=existing,
+                run_directory=directory,
+                full_fingerprint=fingerprint,
+                resource_tracker=resource_tracker,
+            )
+            condition_target_tables["all"] = target_table
+            completed_labels = tuple(config.target_names)
         modeling_seconds = time.monotonic() - modeling_started
         stage_seconds = {
             "targets": activity_started - began,
@@ -3257,19 +3457,39 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
             "PFC": _region_metadata(pfc_activity),
             "HPC": _region_metadata(hpc_activity),
         }
-        arrays, metadata = _assemble_run_result_payload(
-            config=config,
-            target_table=target_table,
-            rate_tensors=rate_tensors,
-            region_activity_metadata=region_metadata,
-            ordered_target_results=target_results,
-            stage_timing_seconds=stage_seconds,
-            input_manifest=identity["input_manifest"],
-            scientific_source=identity["scientific_source"],
-            execution_provenance=execution,
-            run_fingerprint=fingerprint,
-            session_id=resolved.session_id,
+        shared_feature_maps = _regional_feature_maps(
+            [
+                target_result
+                for condition_name in config.condition_names
+                for target_result in condition_results[condition_name]
+            ],
+            region_metadata,
         )
+        condition_payloads = {
+            condition_name: _assemble_run_result_payload(
+                config=config,
+                target_table=condition_target_tables[condition_name],
+                rate_tensors=rate_tensors,
+                region_activity_metadata=region_metadata,
+                ordered_target_results=condition_results[condition_name],
+                stage_timing_seconds=stage_seconds,
+                input_manifest=identity["input_manifest"],
+                scientific_source=identity["scientific_source"],
+                execution_provenance=execution,
+                run_fingerprint=fingerprint,
+                session_id=resolved.session_id,
+                shared_regional_feature_maps=shared_feature_maps,
+            )
+            for condition_name in config.condition_names
+        }
+        if condition_axis_enabled:
+            arrays, metadata = results.assemble_condition_result_payload(
+                condition_names=config.condition_names,
+                condition_masks=condition_masks,
+                condition_payloads=condition_payloads,
+            )
+        else:
+            arrays, metadata = condition_payloads["all"]
         elapsed = time.monotonic() - began
         arrays["total_timing_seconds"] = np.asarray(elapsed, dtype=np.float64)
         result_path = directory / _RESULT_FILE
@@ -3293,13 +3513,13 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
         _update_state(directory, current_stage="reporting", final_results_published=False)
         resource_tracker.snapshot(
             status="running",
-            completed_targets=config.target_names,
+            completed_targets=completed_labels,
             stage_timing_seconds=stage_seconds,
         )
         _write_minimal_family_heatmaps(directory, arrays=arrays)
         resource_evidence = resource_tracker.snapshot(
             status="complete",
-            completed_targets=config.target_names,
+            completed_targets=completed_labels,
             stage_timing_seconds={
                 **stage_seconds,
                 "reporting": time.perf_counter() - reporting_started,
@@ -3326,7 +3546,7 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
             lifecycle="complete",
             current_stage="complete",
             completed_at=_utc_now(),
-            completed_targets=list(config.target_names),
+            completed_targets=list(completed_labels),
             final_results_published=True,
             last_error="",
         )
