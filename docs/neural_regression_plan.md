@@ -8,15 +8,16 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 01:13 EDT.
+**Snapshot date:** 2026-10-08 01:21 EDT.
 
 **Current phase:** WP1-WP7 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
 training-only fold-local regional PCA, bidirectional PC OLS, explicit unavailable PC ranks, and
 complete-fold summaries, immutable run persistence, single-session/batch command boundaries,
 standard saved-result PNGs, and a metadata-driven read-only webapp view. Its seeded full synthetic
-integration and bounded performance gate are recorded below. WP8 real-session scientific inspection
-is next but is not authorized.
+integration and bounded performance gate are recorded below. WP8 is authorized and active for
+CT026 session `CT026_2026-08-03_111938` with ProbeA as PFC, ProbeB as HPC, the documented 100-ms
+OLS defaults, a session-local configuration, and the session's `analysis_runs` output root.
 
 **Repository state at this snapshot:**
 
@@ -51,8 +52,8 @@ is next but is not authorized.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** obtain the user's exact WP8 metadata session, configuration, command, and
-output-root approval before running or inspecting any experimental data.
+**Next exact action:** commit this authorization record, create the approved session-local
+configuration, run the single-session `dry-run`, and run `new` only if validation passes.
 
 ### Authority order
 
@@ -84,7 +85,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP5 | Saved results, run identity, session runner, and batch runner | Complete | WP6 complete |
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
-| WP8 | One-session standard-regression scientific inspection | Ready; not authorized | Explicit approval of exact session, configuration, command, and output root |
+| WP8 | One-session standard-regression scientific inspection | Active; exact CT026 run authorized | Dry-run, then new only after successful validation |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Not authorized | WP8 user inspection/approval |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
