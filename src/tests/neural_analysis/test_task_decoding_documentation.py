@@ -299,7 +299,7 @@ def test_wp11_documents_exact_slurm_and_non_destructive_transfer_workflow():
         ".incoming-<run_id>",
         "status --verify-results",
         "3G",
-        "05:00:00",
+        "2-00:00:00",
         "one CPU",
         "one-shot",
         "sacct",

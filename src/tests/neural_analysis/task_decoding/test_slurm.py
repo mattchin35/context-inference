@@ -28,7 +28,7 @@ EXPECTED_RESOURCES = {
     "cpus_per_task": 1,
     "memory": "3G",
     "memory_bytes": 3 * 1024**3,
-    "time": "05:00:00",
+    "time": "2-00:00:00",
     "signal": "B:TERM@300",
     "output": "/gs/gsfs0/users/mchin1/logs/task_decoding_%j.log",
     "mail_type": "ALL",
@@ -329,7 +329,7 @@ def _captured_values(path: Path) -> list[str]:
 
 
 def test_wp11_wrapper_has_exact_resources_and_valid_bash() -> None:
-    """The wrapper freezes the approved one-CPU, 3-GiB, five-hour request."""
+    """The wrapper freezes the approved one-CPU, 3-GiB, 48-hour request."""
     syntax = subprocess.run(
         ("bash", "-n", str(WRAPPER)),
         capture_output=True,
@@ -345,7 +345,7 @@ def test_wp11_wrapper_has_exact_resources_and_valid_bash() -> None:
         "#SBATCH --ntasks=1",
         "#SBATCH --cpus-per-task=1",
         "#SBATCH --mem=3G",
-        "#SBATCH --time=05:00:00",
+        "#SBATCH --time=2-00:00:00",
         "#SBATCH --signal=B:TERM@300",
         "#SBATCH --output=/gs/gsfs0/users/mchin1/logs/task_decoding_%j.log",
         "#SBATCH --mail-type=ALL",
