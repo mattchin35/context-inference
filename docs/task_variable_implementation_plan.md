@@ -36,9 +36,10 @@ GREEN `db50e1a`; the post-smoke accounting/summary repair is covered by tests
 `86fc413` and `5386a99` with GREEN `a1763bc`. Repaired one-shot status and
 independent result validation accepted the immutable synthetic run; acceptance
 is recorded at `484e784`. The full fixed-mode CT026 config, grouped input
-transfer, and matching local/cluster dry runs are now complete. WP12 waits at
-the separate one-session `submit-new` approval gate. Each real scheduler
-submission remains separately approved.
+transfer, and matching local/cluster dry runs are now complete. The separately
+approved full CT026 run was accepted as Slurm job `30985392` at exact commit
+`c086bdf`. WP12 now waits for one later user-requested completion inspection;
+there is no monitoring or automatic resume.
 WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
@@ -75,8 +76,8 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local/origin/cluster HEAD before the CT026 preflight handoff:
-  `54ee2ca44eccb9f5518c7f622ab412d073928732`;
+- exact CT026 scheduled execution commit and cluster HEAD:
+  `c086bdf55e08d062bec0842ac453af8dd0d29710`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -118,9 +119,11 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** present the exact one-session CT026 `submit-new` command
-and frozen one-CPU/3-GiB/five-hour resource block for user approval. Do not
-submit automatically.
+**Next exact action:** leave job `30985392` unattended. In a later
+user-requested task, run the recorded one-shot status command and inspect the
+durable state/log/result once. Do not poll, automatically resume, or update the
+cluster checkout away from the job's exact commit while execution may depend
+on it.
 
 ### Authority order
 
@@ -157,7 +160,7 @@ When resuming, use this order:
 | WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence remains the WP10 gate |
 | WP10D competing-owner lifecycle repair and local acceptance | Complete: lifecycle repair through `77ff461`; clean 2,400-cell bounded run and 9,600-cell categorical stress run accepted | None |
 | WP11 single-session cluster path | Complete: RED `a3dcdb9`, handoff `e91fa5f`, GREEN `b9d8645`; mocked and local tests only | None; real execution belongs to WP12 |
-| WP12 CT026 one-session cluster validation | In progress: synthetic smoke accepted; full CT026 input subset transferred into the mirrored session and local/cluster dry runs match | Approve exact one-session `submit-new` command |
+| WP12 CT026 one-session cluster validation | In progress: full CT026 job `30985392` accepted at exact commit `c086bdf` after matching dry runs | One later user-requested status/log/result inspection; no monitoring |
 | WP13 bounded cluster batch array | Required after WP12 acceptance; source not started | Implement tests-first per-session concurrency; authorize any real array separately |
 
 ### Resume checklist
@@ -2147,9 +2150,17 @@ Use this template for each appended record:
   one numerical thread, and the established private log path. The fixed-mode
   projection remains approximately 2.03 hours nominal and 2.28 hours at the
   conservative bound; the request retains the approved margin.
-- Exact next action: obtain user approval for one wrapper `submit-new` against
-  the cluster config above. Record the immutable run directory and job ID, then
-  stop; completion inspection occurs once in a later user-requested task.
+- Submission receipt: with separate explicit user approval, the wrapper
+  accepted Slurm job `30985392` at
+  `2026-10-08T00:34:16Z` from exact commit
+  `c086bdf55e08d062bec0842ac453af8dd0d29710`. The immutable run directory is
+  `/gs/gsfs0/home/mchin1/contextProjectData/CT026/CT026_20260803_latent_inference/analysis_runs/task_variable_decoding_2026-10-08T00-34-15Z`;
+  its scheduler log is
+  `/gs/gsfs0/users/mchin1/logs/task_decoding_30985392.log`.
+- Exact next action: leave the submitted run unattended and do not change the
+  cluster checkout while the exact-commit job may run. In a later
+  user-requested task, issue the receipt's one-shot status command and inspect
+  durable state/log/results once. Do not poll or resume automatically.
 
 ## 1. Objective
 
