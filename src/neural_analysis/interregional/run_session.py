@@ -45,6 +45,7 @@ from .pipeline import (
     run_poisson_cross_validation,
 )
 from .plotting import save_standard_regression_figures
+from .poisson import derive_mse_comparison
 from .records import (
     SCIENTIFIC_EXCLUSION_REASON_ORDER,
     InterregionalResults,
@@ -525,6 +526,49 @@ def _write_summary(
                 lines.append(
                     f"- {row.direction}, {row.condition}, {row.window}, "
                     f"{row.representation}/{row.model_family}: unavailable ({row.reason})."
+                )
+    poisson_primary = result.population_summaries.loc[
+        result.population_summaries["metric_name"].eq(
+            "delta_deviance_explained"
+        )
+    ]
+    if not poisson_primary.empty:
+        lines.extend(["", "### Incremental CV deviance explained", ""])
+        for row in poisson_primary.itertuples(index=False):
+            if row.status == "ok":
+                lines.append(
+                    f"- {row.direction}, {row.condition}, {row.window}, units/poisson: "
+                    f"{row.n_targets} targets; median={float(row.median):.6g}, "
+                    f"IQR=[{float(row.q25):.6g}, {float(row.q75):.6g}] (held-out CV)."
+                )
+            else:
+                lines.append(
+                    f"- {row.direction}, {row.condition}, {row.window}, units/poisson: "
+                    f"unavailable ({row.reason})."
+                )
+        _, mse_targets = derive_mse_comparison(result.fold_scores)
+        lines.extend(
+            [
+                "",
+                "### Exploratory OLS/Poisson count-MSE comparison",
+                "",
+                "Positive OLS-minus-Poisson MSE means Poisson had lower held-out count "
+                "error. This is not a formal test of model superiority.",
+                "",
+            ]
+        )
+        full_targets = mse_targets.loc[mse_targets["comparison"].eq("full")]
+        for row in full_targets.itertuples(index=False):
+            if row.status == "ok":
+                lines.append(
+                    f"- {row.direction}, {row.condition}, {row.window}, {row.target_id}: "
+                    f"mean advantage={float(row.mean_mse_advantage_poisson):.6g} "
+                    "squared counts per bin."
+                )
+            else:
+                lines.append(
+                    f"- {row.direction}, {row.condition}, {row.window}, {row.target_id}: "
+                    f"unavailable ({row.reason})."
                 )
     lines.extend(["", "## Unavailable reasons", ""])
     if unavailable_reasons.empty:
