@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 import json
@@ -11,7 +12,6 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Mapping
 
 import matplotlib
 import numpy as np
@@ -55,6 +55,7 @@ from .records import (
     validate_fold_score_key_grid,
     validate_interregional_results,
 )
+from .resource_usage import ResourceMonitor
 
 
 @dataclass(frozen=True)
@@ -379,8 +380,49 @@ def _preparation_tables(
     )
 
 
-def compute_single_session(plan: SessionPlan) -> InterregionalResults:
-    """Load one resolved session and compute all currently implemented stages."""
+def compute_single_session(
+    plan: SessionPlan,
+    *,
+    progress_callback: Callable[[dict[str, object]], None] | None = None,
+) -> InterregionalResults:
+    """Load one resolved session and compute all requested scientific stages.
+
+    Parameters
+    ----------
+    plan : SessionPlan
+        Resolved paths, population identities, and scientific configuration.
+        Spike times are seconds; prepared arrays use
+        ``(trial, whole_window_bin, unit)`` count axes.
+    progress_callback : callable or None, optional
+        Execution-only receiver for JSON-compatible dictionaries. Stage and
+        cell counts are unitless; shapes are integer axis lengths; memory
+        fields are bytes. The callback cannot alter scientific inputs.
+
+    Returns
+    -------
+    InterregionalResults
+        Pure validated result tables with their existing units and axes.
+    """
+
+    def stage_start(stage: str) -> float:
+        """Emit one unitless stage boundary and return its monotonic start."""
+        started = time.perf_counter()
+        if progress_callback is not None:
+            progress_callback({"event": "stage_start", "stage": stage})
+        return started
+
+    def stage_end(stage: str, started: float) -> None:
+        """Emit one successful stage duration in seconds."""
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event": "stage_end",
+                    "stage": stage,
+                    "stage_elapsed_seconds": time.perf_counter() - started,
+                }
+            )
+
+    preparation_started = stage_start("preparation")
     trial_df = pd.read_csv(plan.input_files["trial_table"])
     pfc, hpc = plan.resolved_populations
     prepared = prepare_interregional_session(
@@ -392,15 +434,30 @@ def compute_single_session(plan: SessionPlan) -> InterregionalResults:
         trial_df,
         plan.config,
     )
+    stage_end("preparation", preparation_started)
+
     fold_pcas = None
     tables = make_empty_result_tables()
     if "pcs" in plan.config.representations:
+        pca_started = stage_start("pca")
         fold_pcas, tables["pca_fits"] = fit_cross_validation_pcas(prepared)
+        stage_end("pca", pca_started)
+
+    ols_started = stage_start("ols_cv")
     fold_scores, target_summaries, population_summaries = (
-        run_linear_cross_validation(prepared, fold_pcas=fold_pcas)
+        run_linear_cross_validation(
+            prepared,
+            fold_pcas=fold_pcas,
+            progress_callback=progress_callback,
+        )
     )
+    stage_end("ols_cv", ols_started)
+
     if "poisson_cv" in plan.config.analyses:
-        poisson_tables = run_poisson_cross_validation(prepared)
+        poisson_started = stage_start("poisson_cv")
+        poisson_tables = run_poisson_cross_validation(
+            prepared, progress_callback=progress_callback
+        )
         fold_scores = result_table_from_rows(
             "fold_scores",
             pd.concat((fold_scores, poisson_tables[0]), ignore_index=True).to_dict(
@@ -419,6 +476,9 @@ def compute_single_session(plan: SessionPlan) -> InterregionalResults:
                 (population_summaries, poisson_tables[2]), ignore_index=True
             ).to_dict("records"),
         )
+        stage_end("poisson_cv", poisson_started)
+
+    assembly_started = stage_start("result_assembly")
     tables["fold_scores"] = fold_scores
     tables["target_summaries"] = target_summaries
     tables["population_summaries"] = population_summaries
@@ -442,6 +502,7 @@ def compute_single_session(plan: SessionPlan) -> InterregionalResults:
         **tables,
     )
     validate_interregional_results(result, plan.config)
+    stage_end("result_assembly", assembly_started)
     return result
 
 
@@ -691,55 +752,64 @@ def run_single_session(
             "input_hashing": hashing_elapsed,
         },
     )
-    stage = "preparation"
+    monitor = ResourceMonitor(
+        working / "resource_trace.jsonl",
+        working / "resource_summary.json",
+    )
+    stage = "telemetry"
     started = time.perf_counter()
-    try:
-        compute_started = time.perf_counter()
+
+    def record_progress(payload: dict[str, object]) -> None:
+        """Persist one progress/resource sample and concise stage log line."""
+        nonlocal stage
+        event = str(payload["event"])
+        details = {key: value for key, value in payload.items() if key != "event"}
+        if event == "stage_start":
+            stage = str(details["stage"])
+        monitor.record_progress(event, **details)
+        if event not in {"stage_start", "stage_end"}:
+            return
+        stage_name = str(details["stage"])
         with (working / "run.log").open("a", encoding="utf-8") as stream:
-            stream.write("stage=preparation event=start\n")
-            stream.write("stage=ols_cv event=start\n")
-            if "poisson_cv" in plan.config.analyses:
-                stream.write("stage=poisson_cv event=start\n")
-        result = compute_single_session(plan)
-        compute_elapsed = time.perf_counter() - compute_started
-        with (working / "run.log").open("a", encoding="utf-8") as stream:
-            if "poisson_cv" in plan.config.analyses:
+            if event == "stage_start":
+                stream.write(f"stage={stage_name} event=start\n")
+            else:
+                elapsed_seconds = float(details["stage_elapsed_seconds"])
                 stream.write(
-                    "stage=poisson_cv event=end "
-                    f"elapsed_seconds={compute_elapsed:.9f}\n"
+                    f"stage={stage_name} event=end "
+                    f"elapsed_seconds={elapsed_seconds:.9f}\n"
                 )
-            stream.write(
-                f"stage=ols_cv event=end elapsed_seconds={compute_elapsed:.9f}\n"
-            )
-            stream.write(
-                f"stage=preparation event=end elapsed_seconds={compute_elapsed:.9f}\n"
-            )
-        stage = "persistence"
-        persistence_started = time.perf_counter()
-        with (working / "run.log").open("a", encoding="utf-8") as stream:
-            stream.write("stage=persistence event=start\n")
+
+    def stage_start(stage_name: str) -> float:
+        """Record a runner stage start and return monotonic seconds."""
+        record_progress({"event": "stage_start", "stage": stage_name})
+        return time.perf_counter()
+
+    def stage_end(stage_name: str, stage_started: float) -> None:
+        """Record a successful runner stage duration in seconds."""
+        record_progress(
+            {
+                "event": "stage_end",
+                "stage": stage_name,
+                "stage_elapsed_seconds": time.perf_counter() - stage_started,
+            }
+        )
+
+    try:
+        monitor.start()
+        result = compute_single_session(plan, progress_callback=record_progress)
+
+        persistence_started = stage_start("persistence")
         persistence.save_interregional_result(
             result, working / "result.pkl", plan.config
         )
-        with (working / "run.log").open("a", encoding="utf-8") as stream:
-            stream.write(
-                "stage=persistence event=end "
-                f"elapsed_seconds={time.perf_counter() - persistence_started:.9f}\n"
-            )
-        stage = "figures"
-        figures_started = time.perf_counter()
-        with (working / "run.log").open("a", encoding="utf-8") as stream:
-            stream.write("stage=figures event=start\n")
+        stage_end("persistence", persistence_started)
+
+        figures_started = stage_start("figures")
         save_standard_regression_figures(result, working / "figures")
-        with (working / "run.log").open("a", encoding="utf-8") as stream:
-            stream.write(
-                "stage=figures event=end "
-                f"elapsed_seconds={time.perf_counter() - figures_started:.9f}\n"
-            )
-        stage = "summary"
-        summary_started = time.perf_counter()
-        with (working / "run.log").open("a", encoding="utf-8") as stream:
-            stream.write("stage=summary event=start\n")
+        stage_end("figures", figures_started)
+
+        summary_started = stage_start("summary")
         final_run_directory = persistence.final_run_directory_path(
             working, fingerprint
         )
@@ -752,22 +822,24 @@ def run_single_session(
             final_run_directory=final_run_directory,
             executed_configuration=executed_configuration,
         )
-        with (working / "run.log").open("a", encoding="utf-8") as stream:
-            stream.write(
-                "stage=summary event=end "
-                f"elapsed_seconds={time.perf_counter() - summary_started:.9f}\n"
-            )
+        stage_end("summary", summary_started)
+
         elapsed = time.perf_counter() - started
+        record_progress(
+            {"event": "run_complete", "run_elapsed_seconds": elapsed}
+        )
         with (working / "run.log").open("a", encoding="utf-8") as stream:
             stream.write(f"completed elapsed_seconds={elapsed:.9f}\n")
         persistence.validate_complete_run_artifacts(
             working, plan.config, fingerprint
         )
+        monitor.stop(completed=True)
         final = persistence.finalize_run_directory(working, fingerprint)
         return SessionRunReport(
             plan.session_id, "completed", final, fingerprint, input_bytes, None
         )
     except Exception as error:
+        monitor.stop(completed=False)
         persistence.record_run_failure(working, stage=stage, error=error)
         return SessionRunReport(
             plan.session_id,

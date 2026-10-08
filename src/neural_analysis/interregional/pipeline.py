@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
 
@@ -45,6 +45,9 @@ from .records import (
     RegionalCountTensor,
     result_table_from_rows,
 )
+
+
+ProgressCallback = Callable[[dict[str, object]], None]
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,47 @@ class _FoldModelData:
     n_test_rows: int
     train_hash: str | None
     test_hash: str | None
+
+
+def _emit_progress(
+    callback: ProgressCallback | None,
+    event: str,
+    **details: object,
+) -> None:
+    """Emit one execution-only progress dictionary when a callback is present."""
+    if callback is not None:
+        callback({"event": event, **details})
+
+
+def _cell_progress_details(data: _FoldModelData) -> dict[str, object]:
+    """Return exact shapes, byte sizes, and row counts for one model cell."""
+    arrays = {
+        "train_response": data.train_responses,
+        "test_response": data.test_responses,
+        "restricted_train": data.restricted_train,
+        "full_train": data.full_train,
+        "restricted_test": data.restricted_test,
+        "full_test": data.full_test,
+    }
+    details: dict[str, object] = {
+        "n_train_trials": data.n_train_trials,
+        "n_test_trials": data.n_test_trials,
+        "n_train_rows": data.n_train_rows,
+        "n_test_rows": data.n_test_rows,
+    }
+    for name, array in arrays.items():
+        details[f"{name}_shape"] = [int(value) for value in array.shape]
+        details[f"{name}_bytes"] = int(array.nbytes)
+    return details
+
+
+def _target_progress_due(completed_targets: int, total_targets: int) -> bool:
+    """Return whether first, every-25th, or final target progress is due."""
+    return (
+        completed_targets == 1
+        or completed_targets % 25 == 0
+        or completed_targets == total_targets
+    )
 
 
 def prepare_interregional_session(
@@ -369,6 +413,9 @@ def _score_one_ols_fold(
     condition_trials: np.ndarray,
     fold_ids: np.ndarray,
     tensor_rows: np.ndarray,
+    progress_callback: ProgressCallback | None = None,
+    cell_index: int = 1,
+    total_cells: int = 1,
 ) -> list[dict[str, object]]:
     """Fit and score one representation/direction/condition/window/fold cell.
 
@@ -377,6 +424,18 @@ def _score_one_ols_fold(
     ``fold_scores`` schema; linear PC scores have arbitrary squared PCA-score
     units while unit scores have squared spike-count-per-bin units.
     """
+    cell_identity = {
+        "model_family": "ols",
+        "representation": representation,
+        "direction": direction,
+        "condition": condition,
+        "window": window,
+        "fold_id": fold_id,
+        "cell_index": cell_index,
+        "total_cells": total_cells,
+        "total_targets": len(target_ids),
+    }
+    _emit_progress(progress_callback, "analysis_cell_prepare", **cell_identity)
     data = _build_fold_model_data(
         prepared=prepared,
         window=window,
@@ -386,6 +445,12 @@ def _score_one_ols_fold(
         condition_trials=condition_trials,
         fold_ids=fold_ids,
         tensor_rows=tensor_rows,
+    )
+    _emit_progress(
+        progress_callback,
+        "analysis_cell_start",
+        **cell_identity,
+        **_cell_progress_details(data),
     )
     restricted_train = data.restricted_train
     full_train = data.full_train
@@ -402,6 +467,17 @@ def _score_one_ols_fold(
         data.n_test_rows,
     )
     rows: list[dict[str, object]] = []
+
+    def finish_cell() -> list[dict[str, object]]:
+        """Emit final unitless target counts and return accumulated score rows."""
+        _emit_progress(
+            progress_callback,
+            "analysis_cell_end",
+            **cell_identity,
+            completed_targets=len(rows),
+            unavailable_targets=sum(row["status"] != "ok" for row in rows),
+        )
+        return rows
 
     def append_unavailable(
         target_position: int,
@@ -439,7 +515,7 @@ def _score_one_ols_fold(
                 else row_reason
             )
             append_unavailable(target_position, reason, reason)
-        return rows
+        return finish_cell()
 
     restricted_reason = {
         "rank_deficient": "rank_deficient_restricted",
@@ -480,7 +556,7 @@ def _score_one_ols_fold(
             append_unavailable(
                 target_position, target_restricted_reason, target_full_reason
             )
-        return rows
+        return finish_cell()
 
     assert restricted_fit is not None and full_fit is not None
     restricted_predictions = predict_ols_targets(
@@ -561,7 +637,7 @@ def _score_one_ols_fold(
                 "delta_deviance_explained": None,
             }
         )
-    return rows
+    return finish_cell()
 
 
 def _poisson_side_reason(reason: str, side: str) -> str:
@@ -584,6 +660,9 @@ def _score_one_poisson_fold(
     condition_trials: np.ndarray,
     fold_ids: np.ndarray,
     tensor_rows: np.ndarray,
+    progress_callback: ProgressCallback | None = None,
+    cell_index: int = 1,
+    total_cells: int = 1,
 ) -> list[dict[str, object]]:
     """Fit target-wise direct-unit Poisson models for one held-out fold cell.
 
@@ -592,6 +671,18 @@ def _score_one_poisson_fold(
     follow the frozen ``fold_scores`` schema; deviance is dimensionless and MSE
     is in squared spike counts per bin.
     """
+    cell_identity = {
+        "model_family": "poisson",
+        "representation": "units",
+        "direction": direction,
+        "condition": condition,
+        "window": window,
+        "fold_id": fold_id,
+        "cell_index": cell_index,
+        "total_cells": total_cells,
+        "total_targets": len(target_ids),
+    }
+    _emit_progress(progress_callback, "analysis_cell_prepare", **cell_identity)
     data = _build_fold_model_data(
         prepared=prepared,
         window=window,
@@ -602,6 +693,12 @@ def _score_one_poisson_fold(
         fold_ids=fold_ids,
         tensor_rows=tensor_rows,
     )
+    _emit_progress(
+        progress_callback,
+        "analysis_cell_start",
+        **cell_identity,
+        **_cell_progress_details(data),
+    )
     counts = (
         data.n_train_trials,
         data.n_test_trials,
@@ -610,7 +707,7 @@ def _score_one_poisson_fold(
     )
     if data.n_train_rows == 0 or data.n_test_rows == 0:
         reason = "no_train_rows" if data.n_train_rows == 0 else "no_test_rows"
-        return [
+        unavailable_rows = [
             _empty_score_row(
                 prepared,
                 direction,
@@ -629,6 +726,14 @@ def _score_one_poisson_fold(
             )
             for target_id in target_ids
         ]
+        _emit_progress(
+            progress_callback,
+            "analysis_cell_end",
+            **cell_identity,
+            completed_targets=len(unavailable_rows),
+            unavailable_targets=len(unavailable_rows),
+        )
+        return unavailable_rows
 
     design_reasons = {
         "restricted": {
@@ -772,6 +877,23 @@ def _score_one_poisson_fold(
                 ),
             }
         )
+        completed_targets = target_position + 1
+        if _target_progress_due(completed_targets, len(target_ids)):
+            _emit_progress(
+                progress_callback,
+                "poisson_target_progress",
+                **cell_identity,
+                completed_targets=completed_targets,
+                unavailable_targets=sum(row["status"] != "ok" for row in rows),
+                last_target_id=target_id,
+            )
+    _emit_progress(
+        progress_callback,
+        "analysis_cell_end",
+        **cell_identity,
+        completed_targets=len(rows),
+        unavailable_targets=sum(row["status"] != "ok" for row in rows),
+    )
     return rows
 
 
@@ -877,6 +999,7 @@ def run_linear_cross_validation(
     prepared: PreparedInterregionalSession,
     *,
     fold_pcas: Mapping[int, RegionalPCATransforms] | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Run requested bidirectional unit and/or fold-local-PC five-fold OLS.
 
@@ -889,6 +1012,9 @@ def run_linear_cross_validation(
         Optional reusable fold-local transforms keyed by zero-based fold. A
         descriptive all-data transform is rejected. When omitted, transforms
         are fit once per fold if the PC representation is requested.
+    progress_callback : callable or None, optional
+        Execution-only receiver for dictionaries containing unitless cell
+        identities plus array shapes and byte sizes. It does not alter fits.
 
     Returns
     -------
@@ -943,6 +1069,14 @@ def run_linear_cross_validation(
         "PFC": prepared.config.pca.pfc_components,
         "HPC": prepared.config.pca.hpc_components,
     }
+    total_cells = (
+        len(direction_specs)
+        * len(prepared.config.representations)
+        * len(prepared.config.filters.conditions)
+        * len(prepared.config.prediction_windows)
+        * 5
+    )
+    cell_index = 0
     for direction, target_region in direction_specs:
         source_region = "HPC" if target_region == "PFC" else "PFC"
         for representation in prepared.config.representations:
@@ -952,6 +1086,7 @@ def run_linear_cross_validation(
                 ]
                 for window in prepared.config.prediction_windows:
                     for fold_id in range(5):
+                        cell_index += 1
                         if representation == "units":
                             target_activity = unit_activity[target_region]
                             source_activity = unit_activity[source_region]
@@ -983,6 +1118,9 @@ def run_linear_cross_validation(
                                 condition_trials=condition_trials,
                                 fold_ids=fold_ids,
                                 tensor_rows=tensor_rows,
+                                progress_callback=progress_callback,
+                                cell_index=cell_index,
+                                total_cells=total_cells,
                             )
                         )
     fold_scores = result_table_from_rows("fold_scores", score_rows)
@@ -992,6 +1130,8 @@ def run_linear_cross_validation(
 
 def run_poisson_cross_validation(
     prepared: PreparedInterregionalSession,
+    *,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Run bidirectional target-wise five-fold Poisson CV for direct units.
 
@@ -1000,6 +1140,9 @@ def run_poisson_cross_validation(
     prepared : PreparedInterregionalSession
         Shared activity with axes ``(trial, whole_window_bin, unit)`` in spike
         counts per bin, scientific condition masks, and grouped fold IDs.
+    progress_callback : callable or None, optional
+        Execution-only receiver for cell boundaries and coarse target progress.
+        Shape axes and byte fields describe the exact arrays used by each cell.
 
     Returns
     -------
@@ -1024,6 +1167,13 @@ def run_poisson_cross_validation(
         "HPC": prepared.hpc_counts.unit_ids,
     }
     score_rows: list[dict[str, object]] = []
+    total_cells = (
+        2
+        * len(prepared.config.filters.conditions)
+        * len(prepared.config.prediction_windows)
+        * 5
+    )
+    cell_index = 0
     for direction, target_region in (
         ("HPC_to_PFC", "PFC"),
         ("PFC_to_HPC", "HPC"),
@@ -1035,6 +1185,7 @@ def run_poisson_cross_validation(
             ]
             for window in prepared.config.prediction_windows:
                 for fold_id in range(5):
+                    cell_index += 1
                     score_rows.extend(
                         _score_one_poisson_fold(
                             prepared=prepared,
@@ -1048,6 +1199,9 @@ def run_poisson_cross_validation(
                             condition_trials=condition_trials,
                             fold_ids=fold_ids,
                             tensor_rows=tensor_rows,
+                            progress_callback=progress_callback,
+                            cell_index=cell_index,
+                            total_cells=total_cells,
                         )
                     )
     fold_scores = result_table_from_rows("fold_scores", score_rows)

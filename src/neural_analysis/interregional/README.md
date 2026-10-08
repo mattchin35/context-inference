@@ -1,10 +1,10 @@
 # Inter-regional neural regression
 
 This package runs reproducible, bidirectional PFC/HPC prediction analyses from
-one validated metadata-v2 neural session. The initial stable workflow supports
-held-out OLS for direct units and fold-local regional PCs. Poisson and
-descriptive Granger stages remain reserved by the result schema but are not yet
-implemented.
+one validated metadata-v2 neural session. The stable workflow supports held-out
+OLS for direct units and fold-local regional PCs plus target-wise held-out
+Poisson GLMs for direct-unit counts. Descriptive Granger stages remain reserved
+by the result schema but are not yet implemented.
 
 ## Module map
 
@@ -14,11 +14,15 @@ implemented.
   windows, and within-trial history matrices.
 - `pca.py`: training-fold-only regional standardization and unwhitened PCA.
 - `linear.py`: unpenalized OLS, held-out scores, and complete-fold summaries.
+- `poisson.py`: target-wise unpenalized Poisson fitting, deviance scoring, and
+  derived matched OLS/Poisson count-MSE comparisons.
 - `pipeline.py`: in-memory preparation and bidirectional unit/PC orchestration.
 - `records.py`: exact array and seven-table result schemas.
 - `persistence.py`: content fingerprints, manifests, trusted result loading, and
   atomic immutable run directories.
 - `plotting.py`: saved-table-only light-mode figures.
+- `resource_usage.py`: append-only process/cgroup telemetry and completion
+  summaries for long offline runs.
 - `run_session.py` and `run_batch.py`: offline composition roots. Batch workers
   receive configuration paths and remain session-separated.
 
@@ -38,6 +42,8 @@ presentation. The webapp imports saved results only and never starts analyses.
 - Times and bin edges are seconds relative to the configured alignment event.
 - R-squared and its increment are dimensionless. Unit MSE is squared spike
   count per bin; PC MSE is squared PCA-score units.
+- Poisson deviance and deviance explained are dimensionless. Poisson expected
+  values are counts per bin, and Poisson MSE is squared counts per bin.
 
 PCA uses training means, population standard deviations (`ddof=0`), full SVD,
 no whitening, and no random generator. The same regional fold transforms are
@@ -78,13 +84,38 @@ estimates without hashing large inputs, fitting, or creating output paths.
 `src/neural_analysis`, hashes every consumed file, and reuses a validated
 matching final run unless `--rerun` is supplied.
 
+The cluster wrapper runs the same session command in the frozen offline
+environment; it does not implement a separate computation path:
+
+```bash
+sbatch src/shell_scripts/interregional_regression_slurm.sh new \
+  --config /absolute/cluster/path/interregional_regression_config.json
+```
+
 ## Immutable output
 
 The default location is `<session_root>/analysis_runs`. Work remains in a
 hidden `.incomplete` directory until configuration, manifest, pure result,
 scripts, log, summary, and figures validate. One same-parent atomic rename then
-publishes the timestamped fingerprint directory. Failures retain `run.log` and
-`failure.json` under the `.incomplete` name and are never resumed or displayed.
+publishes the timestamped fingerprint directory. Failures retain `run.log`,
+`failure.json`, and any completed telemetry records under the `.incomplete`
+name and are never resumed or displayed.
+
+`resource_trace.jsonl` is appended throughout execution. Every record contains
+schema version, sequence, UTC and monotonic elapsed time, PID, process CPU and
+peak RSS, and cgroup-v2 current/peak/limit/OOM fields when the operating system
+provides them. A heartbeat is written every 30 seconds. Additional progress
+records identify actual stage boundaries, every OLS/Poisson analysis cell, the
+exact cell matrix shapes and byte sizes, and the first, every 25th, and final
+completed Poisson target. These records allow an interrupted run's last active
+cell and target range to be matched to its memory trajectory without per-fit
+I/O. Missing or unlimited resource values are JSON `null`.
+
+`resource_summary.json` is written atomically only after ordinary completion.
+It contains the observed record count and maximum process/cgroup memory fields.
+An OOM-killed run is therefore expected to retain a parseable trace without a
+summary. Telemetry is execution metadata and does not enter the scientific
+configuration, run fingerprint, result schema, folds, fits, or scores.
 
 The Streamlit option **Inter-regional regression results** discovers only
 validated final runs in the default session directory. It provides display-only
