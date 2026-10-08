@@ -1770,8 +1770,8 @@ def test_atomic_final_publication_failure_preserves_truthful_lifecycle(
     assert not state["final_results_published"]
     expected_presence = {
         "results": (False, False, False),
-        "summary": (True, False, False),
-        "figure": (True, True, False),
+        "summary": (True, False, True),
+        "figure": (True, False, False),
         "complete": (True, True, True),
     }[failure_stage]
     assert (run_directory / "results.npz").exists() is expected_presence[0]
@@ -1855,12 +1855,13 @@ def test_resume_after_final_reporting_failure_publishes_only_missing_artifacts(
     assert Path("results.npz") not in retry_final_destinations
     if failure_stage == "summary":
         assert Path("summary.md") in retry_final_destinations
-        assert len([path for path in retry_final_destinations if path.suffix == ".png"]) == 3
+        assert not [path for path in retry_final_destinations if path.suffix == ".png"]
     elif failure_stage == "figure":
         assert retry_final_destinations == {
             Path("figures/categorical_balanced_accuracy.png"),
             Path("figures/categorical_auc.png"),
             Path("figures/numerical_r2.png"),
+            Path("summary.md"),
         }
     else:
         assert retry_final_destinations == set()
