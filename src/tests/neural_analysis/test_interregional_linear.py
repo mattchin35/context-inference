@@ -120,3 +120,38 @@ def test_complete_fold_summaries_use_target_means_then_population_quantiles() ->
     assert pd.isna(incomplete["mean_value"])
     assert population.iloc[0]["n_targets"] == 1
     assert population.iloc[0]["median"] == 3.0
+
+
+def test_mse_summary_survives_constant_test_target_r2_unavailability() -> None:
+    """Metric-specific aggregation retains finite MSE from unavailable R-squared rows."""
+    fold_scores = pd.DataFrame(
+        [
+            {
+                "session_id": "s",
+                "direction": "HPC_to_PFC",
+                "representation": "units",
+                "model_family": "ols",
+                "condition": "all",
+                "window": "before",
+                "target_id": "pfc:1",
+                "fold_id": fold_id,
+                "evaluation_scope": "held_out_cv",
+                "restricted_status": "ok",
+                "full_status": "ok",
+                "status": "metric_unavailable",
+                "reason": "constant_test_target",
+                "r2_full": np.nan,
+                "mse_full": float(fold_id + 1),
+            }
+            for fold_id in range(5)
+        ]
+    )
+
+    targets, _ = linear.summarize_complete_cv_targets(
+        fold_scores, metric_names=("r2_full", "mse_full")
+    )
+
+    by_metric = targets.set_index("metric_name")
+    assert by_metric.loc["r2_full", "status"] == "incomplete_folds"
+    assert by_metric.loc["mse_full", "status"] == "ok"
+    assert by_metric.loc["mse_full", "mean_value"] == 3.0
