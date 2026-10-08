@@ -1814,6 +1814,55 @@ def test_condition_execution_is_condition_major_resumable_and_keeps_empty_cells(
     assert reporting_events == ["npz", "figures", "summary", "validate"]
 
 
+def test_condition_summary_reports_eligibility_and_unavailable_cells(tmp_path) -> None:
+    """The human summary names condition-target facts instead of flattening them."""
+    paths = write_session_inputs(tmp_path)
+    set_condition_names(paths, ("incorrect", "all"))
+    config = decoding_config.load_task_decoding_config(paths["config"])
+    run_directory = tmp_path / "summary-run"
+    run_directory.mkdir()
+    arrays = {
+        "condition_labels": np.asarray(["all", "incorrect"], dtype="U32"),
+        "target_labels": np.asarray(
+            ["current_action", "relative_doubt"], dtype="U32"
+        ),
+        "target_status": np.asarray(
+            [["available", "unavailable"], ["available", "unavailable"]],
+            dtype="U16",
+        ),
+        "eligibility_counts": np.asarray([[12, 12], [3, 3]], dtype=np.int64),
+        "stage_timing_labels": np.asarray(
+            ["targets", "activity", "modeling"], dtype="U16"
+        ),
+        "stage_timing_seconds": np.asarray([0.1, 0.2, 0.3], dtype=float),
+        "target_families": np.asarray(
+            ["categorical", "numerical"], dtype="U16"
+        ),
+    }
+
+    pipeline._write_run_summary(
+        run_directory,
+        config=config,
+        arrays=arrays,
+        state={"warnings": []},
+        execution={"mode": "slurm"},
+        session_id="synthetic-session",
+        total_seconds=0.7,
+        resource_evidence={
+            "peak_rss_bytes": 1024,
+            "user_cpu_seconds": 0.4,
+            "system_cpu_seconds": 0.1,
+        },
+    )
+
+    summary = (run_directory / "summary.md").read_text(encoding="utf-8")
+    assert "Conditions: all, incorrect." in summary
+    assert "all::current_action=12" in summary
+    assert "incorrect::relative_doubt=3" in summary
+    assert "all::relative_doubt" in summary
+    assert "incorrect::relative_doubt" in summary
+
+
 @pytest.mark.parametrize("regularization_mode", ("fixed", "tuned"))
 def test_execution_resumes_matching_real_checkpoint_and_assembles_configured_order(
     monkeypatch,

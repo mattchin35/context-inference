@@ -1050,6 +1050,15 @@ def test_condition_payload_stacks_only_condition_dependent_axes_and_round_trips(
         loaded["arrays"]["fold_scores"],
         stacked_arrays["fold_scores"],
     )
+    selected = results.select_condition_arrays(loaded, "incorrect")
+    assert selected["fold_scores"].shape == all_arrays["fold_scores"].shape
+    np.testing.assert_array_equal(
+        selected["fold_scores"],
+        stacked_arrays["fold_scores"][1],
+    )
+    assert selected["target_labels"] is loaded["arrays"]["target_labels"]
+    with pytest.raises(ValueError, match="condition"):
+        results.select_condition_arrays(loaded, "omission")
 
 
 def test_schema_one_pooled_result_remains_loadable_after_condition_extension(
@@ -1065,6 +1074,9 @@ def test_schema_one_pooled_result_remains_loadable_after_condition_extension(
     assert loaded["meta"]["schema_version"] == 1
     assert "condition_labels" not in loaded["arrays"]
     assert results.condition_labels(loaded) == ("all",)
+    assert results.select_condition_arrays(loaded, "all") is loaded["arrays"]
+    with pytest.raises(ValueError, match="condition"):
+        results.select_condition_arrays(loaded, "incorrect")
 
 
 def write_raw_npz(

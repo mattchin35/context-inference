@@ -428,8 +428,10 @@ def test_task_decoding_selectors_only_render_the_completed_saved_fixture(
             return value
 
         def selectbox(self, label: str, *, options: list[str]) -> str:
+            calls.append(("selectbox", (label, tuple(options))))
             selected = {
                 "Categorical metric": "auc",
+                "Condition": "all",
                 "Region": "PFC",
                 "Representation": "units",
                 "Target": "current_action",
@@ -461,8 +463,9 @@ def test_task_decoding_selectors_only_render_the_completed_saved_fixture(
         *,
         family: str,
         metric: str,
+        condition: str,
     ) -> plt.Figure:
-        calls.append(("heatmap", (family, metric)))
+        calls.append(("heatmap", (condition, family, metric)))
         return plt.figure()
 
     def fake_summary(
@@ -471,8 +474,11 @@ def test_task_decoding_selectors_only_render_the_completed_saved_fixture(
         target: str,
         region: str,
         time_bin_index: int,
+        condition: str,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        calls.append(("coefficient-summary", (target, region, time_bin_index)))
+        calls.append(
+            ("coefficient-summary", (condition, target, region, time_bin_index))
+        )
         return pd.DataFrame({"feature_id": ["probe-pfc:11"]}), pd.DataFrame(
             {"outer_fold": [0]}
         )
@@ -483,8 +489,9 @@ def test_task_decoding_selectors_only_render_the_completed_saved_fixture(
         target: str,
         region: str,
         time_bin_index: int,
+        condition: str,
     ) -> plt.Figure:
-        calls.append(("coefficients", (target, region, time_bin_index)))
+        calls.append(("coefficients", (condition, target, region, time_bin_index)))
         return plt.figure()
 
     monkeypatch.setattr(task_view, "plot_decoding_heatmap", fake_heatmap)
@@ -496,10 +503,11 @@ def test_task_decoding_selectors_only_render_the_completed_saved_fixture(
         SimpleNamespace(session_root=inputs["session_root"]),
     )
 
-    assert ("heatmap", ("categorical", "auc")) in calls
-    assert ("heatmap", ("numerical", "r2")) in calls
-    assert ("coefficient-summary", ("current_action", "PFC", 1)) in calls
-    assert ("coefficients", ("current_action", "PFC", 1)) in calls
+    assert ("selectbox", ("Condition", ("all",))) in calls
+    assert ("heatmap", ("all", "categorical", "auc")) in calls
+    assert ("heatmap", ("all", "numerical", "r2")) in calls
+    assert ("coefficient-summary", ("all", "current_action", "PFC", 1)) in calls
+    assert ("coefficients", ("all", "current_action", "PFC", 1)) in calls
     assert sum(name == "json" for name, _value in calls) == 1
     assert sum(name == "table" for name, _value in calls) == 3
 

@@ -9,6 +9,7 @@ from typing import Mapping
 import matplotlib.pyplot as plt
 import numpy as np
 
+from src.neural_analysis.task_decoding import results
 from src.tests.neural_analysis.task_decoding.test_results import (
     make_run_save_arguments,
     write_input_fixture,
@@ -50,6 +51,53 @@ def _saved_run(tmp_path: Path) -> dict[str, object]:
         "scientific_config": arguments["scientific_config"],
         "input_manifest": arguments["input_manifest"],
         "run_fingerprint": arguments["run_fingerprint"],
+    }
+
+
+def _condition_saved_run(tmp_path: Path) -> dict[str, object]:
+    """Stack two in-memory pooled payloads into one schema-2 plotting fixture.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-owned directory for tiny portable source fixtures.
+
+    Returns
+    -------
+    dict[str, object]
+        Loader-shaped run with ``all`` and ``incorrect`` conditions. The
+        incorrect scores and coefficients differ visibly from pooled values.
+    """
+    pooled = _saved_run(tmp_path)
+    pooled_arrays = pooled["arrays"]
+    assert isinstance(pooled_arrays, Mapping)
+    incorrect_arrays = {
+        name: value.copy() for name, value in pooled_arrays.items()
+    }
+    incorrect_arrays["fold_scores"][0, 0, 0, 0, 0, :] = 0.73
+    incorrect_arrays["coefficient_values"][0, 0, 1, 0, :, :2] = np.asarray(
+        [[0.8, 0.4], [0.6, 0.2], [1.0, 0.6]],
+        dtype=float,
+    )
+    full_count = int(pooled_arrays["full_table_row_positions"].size)
+    stacked_arrays, stacked_meta = results.assemble_condition_result_payload(
+        condition_names=("all", "incorrect"),
+        condition_masks={
+            "all": np.ones(full_count, dtype=np.bool_),
+            "incorrect": np.ones(full_count, dtype=np.bool_),
+        },
+        condition_payloads={
+            "all": (pooled_arrays, pooled["meta"]),
+            "incorrect": (incorrect_arrays, pooled["meta"]),
+        },
+    )
+    scientific_config = dict(pooled["scientific_config"])
+    scientific_config["condition_names"] = ["all", "incorrect"]
+    return {
+        **pooled,
+        "arrays": stacked_arrays,
+        "meta": stacked_meta,
+        "scientific_config": scientific_config,
     }
 
 
@@ -165,6 +213,92 @@ def test_default_png_export_is_opaque_atomic_and_family_bounded(tmp_path: Path) 
         if pixels.shape[-1] == 4:
             assert np.all(pixels[..., 3] == 1.0)
         assert np.allclose(pixels[0, 0, :3], 1.0)
+
+
+def test_condition_heatmap_selects_one_axis_and_labels_the_scientific_subset(
+    tmp_path: Path,
+) -> None:
+    """A schema-2 heatmap uses only the selected condition and names it visibly."""
+    plotting = _plotting_module()
+    figure = plotting.plot_decoding_heatmap(
+        _condition_saved_run(tmp_path),
+        family="categorical",
+        metric="balanced_accuracy",
+        condition="incorrect",
+    )
+    try:
+        values = figure.axes[0].images[0].get_array()
+        assert np.all(values[0, 0] == 0.73)
+        assert "Incorrect" in figure._suptitle.get_text()
+        assert "condition: incorrect" in _figure_caption(figure).lower()
+    finally:
+        plt.close(figure)
+
+
+def test_condition_default_png_export_is_complete_and_condition_qualified(
+    tmp_path: Path,
+) -> None:
+    """Schema-2 export writes every present-family plot once per condition."""
+    plotting = _plotting_module()
+    run_directory = tmp_path / "condition-run"
+    saved_run = _condition_saved_run(tmp_path)
+
+    written = plotting.save_default_decoding_figures(
+        run_directory,
+        saved_run=saved_run,
+    )
+
+    expected_names = {
+        f"{condition}--{name}"
+        for condition in ("all", "incorrect")
+        for name in (
+            "categorical_balanced_accuracy.png",
+            "categorical_auc.png",
+            "numerical_r2.png",
+        )
+    }
+    assert {path.name for path in written} == expected_names
+    assert plotting.required_default_figure_filenames(
+        saved_run,
+    ) == tuple(
+        f"{condition}--{name}"
+        for condition in ("all", "incorrect")
+        for name in (
+            "categorical_balanced_accuracy.png",
+            "categorical_auc.png",
+            "numerical_r2.png",
+        )
+    )
+
+
+def test_condition_coefficient_summary_uses_only_the_selected_condition(
+    tmp_path: Path,
+) -> None:
+    """Direct-unit tables and plots select the same schema-2 condition cell."""
+    plotting = _plotting_module()
+    saved_run = _condition_saved_run(tmp_path)
+
+    feature_table, _fold_table = plotting.summarize_unit_coefficients(
+        saved_run,
+        target="current_action",
+        region="PFC",
+        time_bin_index=0,
+        condition="incorrect",
+    )
+    figure = plotting.plot_unit_coefficients(
+        saved_run,
+        target="current_action",
+        region="PFC",
+        time_bin_index=0,
+        condition="incorrect",
+    )
+    try:
+        observed = feature_table.set_index("feature_id")
+        assert observed.loc["probe-pfc:11", "median_coefficient"] == 0.8
+        assert observed.loc["probe-pfc:19", "median_coefficient"] == 0.4
+        assert "Incorrect" in figure.axes[0].get_title()
+    finally:
+        plt.close(figure)
 
 
 def test_coefficient_summary_distinguishes_zero_excluded_and_unavailable(tmp_path: Path) -> None:
