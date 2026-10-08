@@ -256,7 +256,9 @@ def test_cli_parsers_expose_only_documented_commands() -> None:
     assert (batch_args.command, batch_args.workers) == ("dry-run", 2)
 
 
-def _write_synthetic_session(tmp_path: Path, *, full_standard: bool = False) -> Path:
+def _write_synthetic_session(
+    tmp_path: Path, *, full_standard: bool = False, poisson: bool = False
+) -> Path:
     """Write one seeded metadata-v2 session and return its analysis config path."""
     session_root = tmp_path / "synthetic_session"
     session_root.mkdir()
@@ -334,6 +336,8 @@ def _write_synthetic_session(tmp_path: Path, *, full_standard: bool = False) -> 
     )
     output_root = tmp_path / "analysis_outputs"
     config = _config(metadata_path.resolve(), output_root.resolve())
+    if poisson:
+        config = replace(config, analyses=("ols_cv", "poisson_cv"))
     if full_standard:
         config = replace(
             config,
@@ -385,6 +389,49 @@ def test_public_single_session_composition_runs_synthetic_metadata_to_reload(
     ):
         assert f"stage={stage}" in run_log
     assert tuple((report.run_path / "figures").glob("*.png"))
+
+
+def test_wp9_poisson_synthetic_run_round_trips_with_matched_ols_rows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The public runner persists complete matched unit OLS and Poisson folds."""
+    config_path = _write_synthetic_session(tmp_path, poisson=True)
+    monkeypatch.setattr(run_session, "_git_identity", lambda root: ("1" * 40, ()))
+
+    report = run_session.run_single_session(config_path, command="new")
+
+    assert report.status == "completed", report.error
+    assert report.run_path is not None
+    config, _ = load_interregional_config(config_path)
+    loaded = persistence.load_interregional_result(
+        report.run_path / "result.pkl",
+        config,
+        trusted_run_directory=report.run_path,
+    )
+    assert set(loaded.fold_scores["model_family"]) == {"ols", "poisson"}
+    poisson_rows = loaded.fold_scores.loc[
+        loaded.fold_scores["model_family"].eq("poisson")
+    ]
+    assert poisson_rows["status"].eq("ok").all()
+    assert poisson_rows["restricted_converged"].eq(True).all()
+    assert poisson_rows["full_converged"].eq(True).all()
+    identity = [
+        "direction",
+        "condition",
+        "window",
+        "target_id",
+        "fold_id",
+        "train_row_set_sha256",
+        "test_row_set_sha256",
+    ]
+    ols_rows = loaded.fold_scores.loc[loaded.fold_scores["model_family"].eq("ols")]
+    pd.testing.assert_frame_equal(
+        ols_rows.loc[:, identity].reset_index(drop=True),
+        poisson_rows.loc[:, identity].reset_index(drop=True),
+    )
+    run_log = (report.run_path / "run.log").read_text(encoding="utf-8")
+    assert "stage=poisson_cv event=start" in run_log
+    assert "stage=poisson_cv event=end" in run_log
 
 
 def test_wp7_full_standard_synthetic_run_round_trips_and_records_evidence(
