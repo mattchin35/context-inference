@@ -37,9 +37,12 @@ GREEN `db50e1a`; the post-smoke accounting/summary repair is covered by tests
 independent result validation accepted the immutable synthetic run; acceptance
 is recorded at `484e784`. The full fixed-mode CT026 config, grouped input
 transfer, and matching local/cluster dry runs are now complete. The separately
-approved full CT026 run was accepted as Slurm job `30985392` at exact commit
-`c086bdf`. WP12 now waits for one later user-requested completion inspection;
-there is no monitoring or automatic resume.
+approved full CT026 run completed as Slurm job `30985392` at exact commit
+`c086bdf`, passed result validation, and was returned through hidden local
+staging before atomic promotion. WP12 now waits for the user's scientific
+inspection/acceptance of the saved heatmaps. The observed 4-hour-41-minute
+runtime left only an 18-minute five-hour margin, so a longer reviewed Slurm
+limit is required before another full session.
 WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
@@ -78,6 +81,7 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 - branch: `refactor`;
 - exact CT026 scheduled execution commit and cluster HEAD:
   `c086bdf55e08d062bec0842ac453af8dd0d29710`;
+- local/origin HEAD before this completion handoff: `9169c34`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -119,11 +123,10 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** leave job `30985392` unattended. In a later
-user-requested task, run the recorded one-shot status command and inspect the
-durable state/log/result once. Do not poll, automatically resume, or update the
-cluster checkout away from the job's exact commit while execution may depend
-on it.
+**Next exact action:** have the user inspect the promoted CT026 heatmaps and
+saved-result view. If accepted, close WP12 and propose tests-first replacement
+of the unsafe five-hour wrapper limit with the user-requested 48-hour limit
+before WP13 or another full session. No new computation is implied.
 
 ### Authority order
 
@@ -160,7 +163,7 @@ When resuming, use this order:
 | WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence remains the WP10 gate |
 | WP10D competing-owner lifecycle repair and local acceptance | Complete: lifecycle repair through `77ff461`; clean 2,400-cell bounded run and 9,600-cell categorical stress run accepted | None |
 | WP11 single-session cluster path | Complete: RED `a3dcdb9`, handoff `e91fa5f`, GREEN `b9d8645`; mocked and local tests only | None; real execution belongs to WP12 |
-| WP12 CT026 one-session cluster validation | In progress: full CT026 job `30985392` accepted at exact commit `c086bdf` after matching dry runs | One later user-requested status/log/result inspection; no monitoring |
+| WP12 CT026 one-session cluster validation | In progress: full job `30985392` completed, validated, returned through hidden staging, and promoted locally | User scientific heatmap acceptance; then close WP12 |
 | WP13 bounded cluster batch array | Required after WP12 acceptance; source not started | Implement tests-first per-session concurrency; authorize any real array separately |
 
 ### Resume checklist
@@ -2157,10 +2160,41 @@ Use this template for each appended record:
   `/gs/gsfs0/home/mchin1/contextProjectData/CT026/CT026_20260803_latent_inference/analysis_runs/task_variable_decoding_2026-10-08T00-34-15Z`;
   its scheduler log is
   `/gs/gsfs0/users/mchin1/logs/task_decoding_30985392.log`.
-- Exact next action: leave the submitted run unattended and do not change the
-  cluster checkout while the exact-commit job may run. In a later
-  user-requested task, issue the receipt's one-shot status command and inspect
-  durable state/log/results once. Do not poll or resume automatically.
+- Completion evidence: a later user-requested inspection found lifecycle
+  `complete`, `final_results_published=true`, empty `last_error`, no pipeline
+  warnings, all 18 ordered targets complete, and saved-result validation
+  `valid`. All 21,600 requested cells were valid; none were unavailable. The
+  job completed at `2026-10-08T05:16:46Z` after 16,886.138 seconds
+  (4 hours 41 minutes 26 seconds) of measured wall time, 16,019.183 seconds
+  user CPU, 804.365 seconds system CPU, 0.996 CPU efficiency, 966,205,440 bytes
+  peak RSS, and 566,246,728 output bytes. Modeling used 16,861.884 seconds.
+- Wall-time correction: the five-hour limit left only about 18 minutes after
+  completion. An attempted in-place extension to 48 hours was rejected by the
+  scheduler with `Access/permission denied`, without changing or interrupting
+  the job. Although the run succeeded, the five-hour default is not a safe
+  routine limit. Before another full session, propose and approve a tests-first
+  48-hour wrapper change; do not generalize the undersized request merely
+  because this job narrowly completed.
+- Scheduler log: two transient Slurm `_handle_signal_container` messages
+  reported missing processes for signals 15 and 18. The worker continued,
+  completed every checkpoint, and published valid results; the messages are
+  recorded as non-blocking operational noise rather than scientific warnings.
+- Result return: with separate user approval, copied 566,278,128 bytes into
+  local hidden staging
+  `.incoming-task_variable_decoding_2026-10-08T00-34-15Z`, validated the staged
+  run, then atomically promoted it to
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference/analysis_runs/task_variable_decoding_2026-10-08T00-34-15Z`.
+  Final-path validation also returned `valid`; no existing local run was
+  overwritten.
+- Visual integrity: the categorical balanced-accuracy, categorical ROC-AUC,
+  and numerical R-squared PNGs all render with six region/representation
+  panels, readable target/time labels, color scales, and captions. Formal WP12
+  scientific acceptance remains the user's decision after inspecting those
+  saved outputs.
+- Exact next action: user inspects the promoted heatmaps or the saved-results
+  webapp. On acceptance, mark WP12 complete and separately plan the 48-hour
+  resource correction plus WP13; do not start either implementation under
+  result-return authority.
 
 ## 1. Objective
 
