@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from src.neural_analysis.interregional.configuration import (
@@ -18,8 +20,9 @@ from src.neural_analysis.interregional.configuration import (
     RunOptions,
     TemporalConfig,
     configuration_to_dict,
+    load_interregional_config,
 )
-from src.neural_analysis.interregional import records
+from src.neural_analysis.interregional import persistence, records
 from src.neural_analysis.interregional import run_batch, run_session
 
 
@@ -243,3 +246,97 @@ def test_cli_parsers_expose_only_documented_commands() -> None:
     assert isinstance(session_args, argparse.Namespace)
     assert (session_args.command, session_args.rerun) == ("new", True)
     assert (batch_args.command, batch_args.workers) == ("dry-run", 2)
+
+
+def _write_synthetic_session(tmp_path: Path) -> Path:
+    """Write one small metadata-v2 session and return its analysis config path."""
+    session_root = tmp_path / "synthetic_session"
+    session_root.mkdir()
+    n_trials = 25
+    choice_times = np.arange(n_trials, dtype=float) * 10.0 + 5.0
+    trial_table = pd.DataFrame(
+        {
+            "experimenter_reward_given": 0,
+            "correct": 1,
+            "reward": 1,
+            "action": 1,
+            "state_int": 1,
+            "choice_time": choice_times,
+            "cur_block": np.repeat(np.arange(5), 5),
+        }
+    )
+    trial_table.to_csv(session_root / "trials.csv", index=False)
+    rng = np.random.default_rng(91)
+    probes: dict[str, object] = {}
+    for probe_id, channel, cluster_id in (("pfc", 0, 1), ("hpc", 1, 2)):
+        sorter = session_root / f"{probe_id}_sorter"
+        sorter.mkdir()
+        spike_times = np.sort(
+            np.concatenate(
+                [
+                    trial_time + rng.uniform(-1.9, 1.9, size=35)
+                    for trial_time in choice_times
+                ]
+            )
+        )
+        np.save(sorter / "spike_clusters.npy", np.full(spike_times.size, cluster_id))
+        pd.DataFrame(
+            {"cluster_id": [cluster_id], "ch": [channel], "group": ["good"]}
+        ).to_csv(sorter / "cluster_info.tsv", sep="\t", index=False)
+        np.savez(session_root / f"{probe_id}_sync.npz", spike_utc_unix=spike_times)
+        probes[probe_id] = {
+            "lfp": "",
+            "alignment": f"{probe_id}_sync.npz",
+            "sorter": f"{probe_id}_sorter",
+            "quality": f"{probe_id}_quality.csv",
+            "sites": {},
+            "unit_channels": [channel],
+        }
+    metadata_path = session_root / "neural_session.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "2",
+                "session": "synthetic-session",
+                "acquisition": "open_ephys",
+                "behavior": {"trials": "trials.csv", "events": None},
+                "probes": probes,
+                "site_pairs": [],
+                "cache": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_root = tmp_path / "analysis_outputs"
+    config = _config(metadata_path.resolve(), output_root.resolve())
+    config_path = tmp_path / "interregional_config.json"
+    config_path.write_text(
+        json.dumps(
+            configuration_to_dict(config, RunOptions(output_root=output_root.resolve()))
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def test_public_single_session_composition_runs_synthetic_metadata_to_reload(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The production entry point composes real loaders, fitting, save, and reload."""
+    config_path = _write_synthetic_session(tmp_path)
+    monkeypatch.setattr(run_session, "_git_identity", lambda root: ("1" * 40, ()))
+
+    report = run_session.run_single_session(config_path, command="new")
+
+    assert report.status == "completed", report.error
+    assert report.run_path is not None
+    config, _ = load_interregional_config(config_path)
+    loaded = persistence.load_interregional_result(
+        report.run_path / "result.pkl",
+        config,
+        trusted_run_directory=report.run_path,
+    )
+    assert loaded.session_id == "synthetic-session"
+    assert not loaded.fold_scores.empty
+    assert loaded.fold_scores["representation"].eq("units").all()
+    assert loaded.pca_fits.empty
