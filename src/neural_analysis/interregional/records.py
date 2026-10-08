@@ -463,6 +463,11 @@ class RegionalPCATransform:
     explained_variance: np.ndarray
     explained_variance_ratio: np.ndarray
     n_training_observations: int
+    input_unit_ids: tuple[str, ...] = ()
+    svd_solver: str = "full"
+    whiten: bool = False
+    randomness_used: bool = False
+    random_seed: int | None = None
 
     def __post_init__(self) -> None:
         """Validate fitted PCA axes and finite standardization values."""
@@ -470,6 +475,15 @@ class RegionalPCATransform:
         omitted = tuple(str(value) for value in self.omitted_unit_ids)
         if not retained or len(set(retained + omitted)) != len(retained) + len(omitted):
             raise ValueError("Retained and omitted unit identities must be nonempty/disjoint.")
+        input_ids = tuple(str(value) for value in self.input_unit_ids)
+        if not input_ids:
+            input_ids = retained + omitted
+        if len(set(input_ids)) != len(input_ids) or set(input_ids) != set(retained + omitted):
+            raise ValueError("input_unit_ids must contain each retained and omitted unit once.")
+        if self.svd_solver != "full" or self.whiten is not False:
+            raise ValueError("Regional PCA requires svd_solver='full' and whiten=False.")
+        if self.randomness_used is not False or self.random_seed is not None:
+            raise ValueError("Regional full-SVD PCA must not use randomness.")
         mean = np.asarray(self.training_mean, dtype=np.float64)
         scale = np.asarray(self.training_scale, dtype=np.float64)
         components = np.asarray(self.components, dtype=np.float64)
@@ -507,6 +521,12 @@ class RegionalPCATransform:
             object.__setattr__(self, name, copy)
         object.__setattr__(self, "retained_unit_ids", retained)
         object.__setattr__(self, "omitted_unit_ids", omitted)
+        object.__setattr__(self, "input_unit_ids", input_ids)
+
+    @property
+    def actual_components(self) -> int:
+        """Return the number of fitted, unwhitened PCA components."""
+        return int(self.components.shape[0])
 
 
 def make_empty_result_tables() -> dict[str, pd.DataFrame]:
