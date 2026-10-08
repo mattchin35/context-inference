@@ -117,7 +117,9 @@ def test_table_validation_rejects_schema_dtype_key_and_sorting_errors() -> None:
     """Saved tables cannot drift in columns, dtypes, uniqueness, or key order."""
     tables = records.make_empty_result_tables()
     with pytest.raises(ValueError, match="columns"):
-        records.validate_result_table("fold_assignments", tables["fold_assignments"].drop(columns="reason"))
+        records.validate_result_table(
+            "fold_assignments", tables["fold_assignments"].drop(columns="reason")
+        )
 
     wrong_dtype = tables["fold_assignments"].copy()
     wrong_dtype["trial_row"] = pd.Series(dtype="Int64")
@@ -202,7 +204,9 @@ def test_trial_membership_enforces_exclusion_order_and_mask_relationships() -> N
             [
                 {
                     **valid,
-                    "scientific_exclusion_reasons_json": '["choice_filter_mismatch","invalid_reward_status"]',
+                    "scientific_exclusion_reasons_json": (
+                        '["choice_filter_mismatch","invalid_reward_status"]'
+                    ),
                 }
             ],
         )
@@ -263,7 +267,12 @@ def test_expected_cv_key_grid_includes_units_and_ols_pcs_but_not_poisson_pcs() -
 
     assert len(keys) == 40
     assert not any(key[2:4] == ("pcs", "poisson") for key in keys)
-    records.validate_fold_score_key_grid(pd.DataFrame(keys, columns=records.FOLD_SCORE_KEY), "session", config, populations)
+    records.validate_fold_score_key_grid(
+        pd.DataFrame(keys, columns=records.FOLD_SCORE_KEY),
+        "session",
+        config,
+        populations,
+    )
 
     with pytest.raises(ValueError, match="key grid"):
         records.validate_fold_score_key_grid(
