@@ -350,9 +350,11 @@ def test_public_single_session_composition_runs_synthetic_metadata_to_reload(
         "preparation",
         "ols_cv",
         "persistence",
+        "figures",
         "summary",
     ):
         assert f"stage={stage}" in run_log
+    assert tuple((report.run_path / "figures").glob("*.png"))
 
 
 def test_new_refuses_dirty_code_before_hashing(tmp_path: Path, monkeypatch) -> None:
