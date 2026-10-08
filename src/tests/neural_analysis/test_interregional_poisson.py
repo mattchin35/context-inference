@@ -14,7 +14,7 @@ from statsmodels.tools.sm_exceptions import (
     PerfectSeparationWarning,
 )
 
-from src.neural_analysis.interregional import poisson
+from src.neural_analysis.interregional import linear, poisson
 
 
 def _design(feature: np.ndarray) -> np.ndarray:
@@ -224,6 +224,9 @@ def test_nonfinite_or_nonpositive_predicted_means_are_local() -> None:
     with pytest.raises(poisson.PoissonFitUnavailable) as caught:
         poisson.predict_poisson_mean(np.array([[1.0, 1e308]]), np.array([0.0, 1.0]))
     assert caught.value.reason == "nonpositive_poisson_mean"
+    with pytest.raises(poisson.PoissonFitUnavailable) as caught:
+        poisson.predict_poisson_mean(np.array([[1.0, 1e308]]), np.array([0.0, -1.0]))
+    assert caught.value.reason == "nonpositive_poisson_mean"
 
 
 def test_poisson_deviance_matches_zero_count_hand_calculation() -> None:
@@ -311,6 +314,24 @@ def test_mse_comparison_is_exact_paired_join_for_both_models() -> None:
     assert set(target_comparison["status"]) == {"ok"}
     assert set(target_comparison["valid_folds"]) == {5}
     assert set(target_comparison["mean_mse_advantage_poisson"]) == {2.0}
+
+
+def test_count_mse_uses_raw_ols_and_poisson_predictions_without_adjustment() -> None:
+    """Count-MSE comparison neither clips OLS values nor rounds Poisson means."""
+    observed = np.array([[0.0], [2.0]])
+    raw_ols = np.array([[-1.25], [2.75]])
+    raw_poisson = np.array([0.6, 1.4])
+
+    ols_scores = linear.score_ols_predictions(observed, raw_ols, raw_ols)
+    poisson_scores = poisson.score_poisson_predictions(
+        observed[:, 0], raw_poisson, raw_poisson
+    )
+
+    assert ols_scores.mse_full[0] == pytest.approx((1.25**2 + 0.75**2) / 2.0)
+    assert poisson_scores.mse_full == pytest.approx((0.6**2 + 0.6**2) / 2.0)
+    assert ols_scores.mse_full[0] - poisson_scores.mse_full == pytest.approx(
+        0.7025
+    )
 
 
 def test_mse_comparison_requires_units_and_identical_row_hashes() -> None:
