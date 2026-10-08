@@ -179,6 +179,35 @@ Never point a new run at the protected historical `processed/lfp_summary_cache`
 unless it is already the intended compatible input. Use an explicit new cache
 directory for a new source/configuration identity.
 
+## Inter-regional PFC/HPC regression
+
+The inter-regional workflow performs bidirectional held-out OLS using direct
+units and optional fold-local regional PCs. Its scientific configuration is
+separate from session metadata; copy
+`docs/examples/neural_analysis/interregional_regression_config.json.example`,
+replace the absolute metadata path and explicit probe roles, then run:
+
+```bash
+uv run python -m src.neural_analysis.interregional.run_session dry-run \
+  --config /path/to/session/interregional_regression_config.json
+
+uv run python -m src.neural_analysis.interregional.run_session new \
+  --config /path/to/session/interregional_regression_config.json
+```
+
+Use `--rerun` only when a new immutable directory is wanted despite an existing
+matching fingerprint. Batch execution uses
+`src.neural_analysis.interregional.run_batch` with `dry-run` or `new`, a
+`--config-list`, and optional `--workers`.
+
+Completed outputs live under `<session_root>/analysis_runs` by default and
+include the exact configuration, content-hashed input manifest, typed result,
+copied runners, stage log, scientific summary, and PNG figures. Select
+**Inter-regional regression results** in the metadata-driven webapp to inspect
+these saved outputs. The view is read-only and never runs or resumes analysis.
+See `src/neural_analysis/interregional/README.md` for axes, units, module
+ownership, persistence details, and interpretation limits.
+
 ## Python API
 
 The small public surface for new-session use is:

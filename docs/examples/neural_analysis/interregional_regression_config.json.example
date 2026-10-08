@@ -1,0 +1,44 @@
+{
+  "config_schema_version": "1",
+  "analysis_version": "interregional-regression-v1",
+  "coverage_assumption_version": "implicit-complete-v1",
+  "session_metadata_path": "/absolute/path/to/session/neural_session.json",
+  "populations": {
+    "PFC": {
+      "probe_id": "replace-with-pfc-probe-id",
+      "channel_source": "metadata_quality",
+      "selected_channels": [],
+      "require_inside_brain": true,
+      "channel_quality_labels": ["good"],
+      "unit_quality_column": "group",
+      "unit_quality_labels": ["good", "mua"]
+    },
+    "HPC": {
+      "probe_id": "replace-with-hpc-probe-id",
+      "channel_source": "metadata_quality",
+      "selected_channels": [],
+      "require_inside_brain": true,
+      "channel_quality_labels": ["good"],
+      "unit_quality_column": "group",
+      "unit_quality_labels": ["good", "mua"]
+    }
+  },
+  "alignment": "choice_time",
+  "windows": {
+    "whole_start_s": -2.0,
+    "split_s": 0.0,
+    "whole_stop_s": 2.0
+  },
+  "prediction_windows": ["before", "after", "whole"],
+  "temporal": {"bin_size_s": 0.1, "lag_bins": 1, "order_bins": 1},
+  "filters": {
+    "conditions": ["all", "correct_rewarded", "incorrect", "omission", "switch", "stay"],
+    "choice": "all",
+    "context": "all",
+    "excluded_trial_rows": []
+  },
+  "pca": {"pfc_components": 10, "hpc_components": 10},
+  "representations": ["units", "pcs"],
+  "analyses": ["ols_cv"],
+  "run": {"output_root": null}
+}

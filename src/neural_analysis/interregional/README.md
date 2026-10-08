@@ -1,0 +1,96 @@
+# Inter-regional neural regression
+
+This package runs reproducible, bidirectional PFC/HPC prediction analyses from
+one validated metadata-v2 neural session. The initial stable workflow supports
+held-out OLS for direct units and fold-local regional PCs. Poisson and
+descriptive Granger stages remain reserved by the result schema but are not yet
+implemented.
+
+## Module map
+
+- `configuration.py`: immutable scientific configuration and explicit PFC/HPC
+  population contracts.
+- `preparation.py`: Pynapple spike-count tensors, scientific masks, block folds,
+  windows, and within-trial history matrices.
+- `pca.py`: training-fold-only regional standardization and unwhitened PCA.
+- `linear.py`: unpenalized OLS, held-out scores, and complete-fold summaries.
+- `pipeline.py`: in-memory preparation and bidirectional unit/PC orchestration.
+- `records.py`: exact array and seven-table result schemas.
+- `persistence.py`: content fingerprints, manifests, trusted result loading, and
+  atomic immutable run directories.
+- `plotting.py`: saved-table-only light-mode figures.
+- `run_session.py` and `run_batch.py`: offline composition roots. Batch workers
+  receive configuration paths and remain session-separated.
+
+The dependency direction is configuration/records, then preparation and model
+helpers, then pipeline, persistence/plotting, and finally command or webapp
+presentation. The webapp imports saved results only and never starts analyses.
+
+## Axes and units
+
+- Regional count tensors: `(trial, whole_window_bin, unit)`, values are integer
+  spike counts per configured bin.
+- PCA fitting pool: training `(trial, whole_window_bin)` axes are flattened to
+  observations; unit columns retain qualified IDs.
+- History rows: `(trial_row, target_bin_position)` identities are preserved and
+  fingerprinted. Feature order is most-recent lag first, then stable feature
+  order.
+- Times and bin edges are seconds relative to the configured alignment event.
+- R-squared and its increment are dimensionless. Unit MSE is squared spike
+  count per bin; PC MSE is squared PCA-score units.
+
+PCA uses training means, population standard deviations (`ddof=0`), full SVD,
+no whitening, and no random generator. The same regional fold transforms are
+used across directions, conditions, and windows. Descriptive all-data PCA is a
+separate scope and is rejected by cross-validation.
+
+## Commands
+
+Start from
+`docs/examples/neural_analysis/interregional_regression_config.json.example`,
+replace its absolute metadata path and probe IDs, and keep outputs outside the
+Git checkout.
+
+```bash
+uv run python -m src.neural_analysis.interregional.run_session dry-run \
+  --config /path/to/session/interregional_regression_config.json
+
+uv run python -m src.neural_analysis.interregional.run_session new \
+  --config /path/to/session/interregional_regression_config.json
+
+uv run python -m src.neural_analysis.interregional.run_session new \
+  --config /path/to/session/interregional_regression_config.json --rerun
+```
+
+Batch lists contain one configuration path per nonblank, non-comment line:
+
+```bash
+uv run python -m src.neural_analysis.interregional.run_batch dry-run \
+  --config-list /path/to/interregional_configs.txt
+
+uv run python -m src.neural_analysis.interregional.run_batch new \
+  --config-list /path/to/interregional_configs.txt --workers 4
+```
+
+`dry-run` validates metadata, population selections, paths, versions, and byte
+estimates without hashing large inputs, fitting, or creating output paths.
+`new` requires tracked-clean code and no untracked Python beneath
+`src/neural_analysis`, hashes every consumed file, and reuses a validated
+matching final run unless `--rerun` is supplied.
+
+## Immutable output
+
+The default location is `<session_root>/analysis_runs`. Work remains in a
+hidden `.incomplete` directory until configuration, manifest, pure result,
+scripts, log, summary, and figures validate. One same-parent atomic rename then
+publishes the timestamped fingerprint directory. Failures retain `run.log` and
+`failure.json` under the `.incomplete` name and are never resumed or displayed.
+
+The Streamlit option **Inter-regional regression results** discovers only
+validated final runs in the default session directory. It provides display-only
+selectors and shows saved configuration, code/input identity, unavailable rows,
+PCA fits, tables, and figures. It has no run, resume, or recompute action.
+
+All directional scores are predictive summaries, not causal evidence. The
+first-pass coverage contract assumes that loaded aligned spikes cover every
+requested trial window.
