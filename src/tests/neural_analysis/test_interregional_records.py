@@ -303,6 +303,18 @@ def test_array_records_enforce_shapes_axes_and_physical_units() -> None:
     )
     assert history.responses.shape == (4, 2)
 
+    with pytest.raises(ValueError, match="positive integer"):
+        records.RegionalPCATransform(
+            retained_unit_ids=("pfc:1",),
+            omitted_unit_ids=(),
+            training_mean=np.array([0.0]),
+            training_scale=np.array([1.0]),
+            components=np.array([[1.0]]),
+            explained_variance=np.array([1.0]),
+            explained_variance_ratio=np.array([1.0]),
+            n_training_observations=1.5,  # type: ignore[arg-type]
+        )
+
 
 def test_interregional_results_validate_exact_metadata_and_empty_future_schemas() -> None:
     """The pure result record contains canonical metadata and all seven tables."""

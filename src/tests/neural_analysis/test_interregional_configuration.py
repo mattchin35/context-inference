@@ -291,3 +291,12 @@ def test_versions_and_execution_paths_are_strict(tmp_path: Path) -> None:
     payload["run"]["output_root"] = "relative/results"  # type: ignore[index]
     with pytest.raises(ValueError, match="absolute"):
         _load(tmp_path, payload)
+
+
+def test_loader_reports_invalid_selection_container_as_configuration_error(tmp_path: Path) -> None:
+    """Malformed JSON value types raise the loader's documented ValueError."""
+    payload = _documented_payload((tmp_path / "neural_session.json").resolve())
+    payload["representations"] = None
+
+    with pytest.raises(ValueError, match="representations"):
+        _load(tmp_path, payload)
