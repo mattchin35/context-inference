@@ -8,17 +8,18 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 00:47 EDT.
+**Snapshot date:** 2026-10-08 00:56 EDT.
 
-**Current phase:** WP1-WP4 are complete and GREEN. The in-memory linear milestone now includes
+**Current phase:** WP1-WP5 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
 training-only fold-local regional PCA, bidirectional PC OLS, explicit unavailable PC ranks, and
-complete-fold summaries. WP5 is the next package and has not started.
+complete-fold summaries plus immutable run persistence and single-session/batch command boundaries.
+WP6 plotting and read-only webapp work is next and has not started.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `b7e57f8`;
+- HEAD before this handoff record: `9bab21b`;
 - plan-owned files: `docs/neural_regression_plan.md` and
   `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
@@ -48,8 +49,8 @@ complete-fold summaries. WP5 is the next package and has not started.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** obtain/confirm WP5 authorization, then write the bounded persistence and run-
-identity tests, confirm RED, and commit those tests before implementing saved-result or runner code.
+**Next exact action:** obtain/confirm WP6 authorization, then write plotting and saved-only webapp
+tests, confirm RED, and commit those tests before implementation.
 
 ### Authority order
 
@@ -78,8 +79,8 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP2 | Counts, masks, folds, windows, and histories | Complete | WP3 may begin |
 | WP3 | Direct-unit OLS fitting, scoring, and aggregation | Complete | WP4 may begin |
 | WP4 | Fold-local regional PCA and PC OLS | Complete | WP5 may begin after authorization |
-| WP5 | Saved results, run identity, session runner, and batch runner | Ready; not started | Explicit authorization, then tests-only RED commit |
-| WP6 | Standard-regression plotting, metadata webapp, and documentation | Not authorized | WP5 GREEN and stable standard-result schema |
+| WP5 | Saved results, run identity, session runner, and batch runner | Complete | WP6 may begin after authorization |
+| WP6 | Standard-regression plotting, metadata webapp, and documentation | Ready; not started | Explicit authorization, then tests-only RED commit |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Not authorized | WP1-WP6 focused gates GREEN |
 | WP8 | One-session standard-regression scientific inspection | Not authorized | WP7 GREEN plus explicit approval of the exact session/command |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Not authorized | WP8 user inspection/approval |
@@ -440,11 +441,41 @@ Use this template:
 - Exact next action and authorization: do not begin WP5 until its scope is confirmed; then commit
   persistence/run-boundary tests in RED before implementation.
 
+#### 2026-10-08 00:56 EDT - WP5 GREEN and immutable run boundary
+
+- State: WP5 is complete; WP6 plotting and saved-only webapp work is ready but not started.
+- Authorization: the user explicitly requested a push followed by the next implementation; work
+  remained within WP5 and used only synthetic pytest data.
+- Sol / Terra / reviewer: primary implementation agent and self-review; no worker.
+- Start HEAD / end HEAD: `408de4c` / `9bab21b`.
+- Worktree and owned files: added `persistence.py`, `run_session.py`, `run_batch.py`, persistence and
+  script tests, and bounded package exports. Unrelated pre-existing untracked entries remained
+  untouched.
+- RED command and result: persistence tests initially failed module import. Runner tests then failed
+  module import. Follow-up delivery tests failed for absent exact stage progress and batch byte
+  estimates before those fields were implemented.
+- GREEN/regression commands and results: all 70 WP1-WP5 focused tests passed before the final
+  delivery assertions; the final affected suite passed 162 tests covering interregional work plus
+  existing spike-behavior, population package/PCA, and session-metadata tests, with four existing
+  Pynapple warnings.
+- Commits: persistence tests `f3815db`; persistence implementation `a754637`; runner tests
+  `57c930a`; real composition test `447a516`; runner implementation `3de0662`; progress/estimate
+  tests `3567a1d`; progress/estimate implementation `9bab21b`.
+- External actions: pushed completed WP4 history through `408de4c` to `origin/refactor` at the
+  user's request. WP5 commits have not yet been pushed. No experimental-data or batch run was
+  performed.
+- Findings and unresolved risks: no new scientific issue was found. The production composition
+  path was exercised with generated metadata-v2 files and generated spike/trial inputs, including
+  Pynapple preparation, OLS, atomic finalization, and trusted reload. The quickstart JSON-glob
+  mismatch recorded under WP1 remains unrelated and unchanged.
+- Exact next action and authorization: do not begin WP6 until its scope is confirmed; then commit
+  plotting and saved-only webapp tests in RED before implementation.
+
 ## Plan objective and status
 
 This plan implements `docs/spec_neural_regression_v3.md`. It was approved and is now the
 authoritative phased implementation and handoff log. Package-specific authorization and data-run
-gates remain binding even though WP1-WP4 implementation is complete.
+gates remain binding even though WP1-WP5 implementation is complete.
 
 The implementation order is deliberately fixed:
 
