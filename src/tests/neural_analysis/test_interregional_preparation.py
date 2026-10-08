@@ -71,16 +71,16 @@ def test_pynapple_count_tensor_uses_half_open_bins_and_positional_rows() -> None
             dtype=np.int64,
         ),
     )
-    np.testing.assert_array_equal(
-        tensor.bin_edges_s,
-        np.array([-0.2, -0.1, 0.0, 0.1, 0.2], dtype=np.float64),
-    )
+    expected_edges = -0.2 + np.arange(5, dtype=np.float64) * 0.1
+    expected_edges[0], expected_edges[-1] = -0.2, 0.2
+    np.testing.assert_array_equal(tensor.bin_edges_s, expected_edges)
 
 
 def test_count_tensor_rejects_nonascending_rows_and_invalid_alignment() -> None:
     """Prepared trial identity is ascending, positional, unique, and finite."""
     trial_df = pd.DataFrame({"choice_time": [1.0, np.nan]}, index=[10, 20])
-    spike_group = nap.TsGroup({3: nap.Ts(t=np.array([1.0]))})
+    support = nap.IntervalSet(start=0.0, end=30.0)
+    spike_group = nap.TsGroup({3: nap.Ts(t=np.array([1.0]), time_support=support)})
     population = _resolved_population(cluster_ids=(3,))
     kwargs = {
         "spike_group": spike_group,
@@ -104,7 +104,8 @@ def test_count_tensor_rejects_nonascending_rows_and_invalid_alignment() -> None:
 def test_regional_tensors_require_identical_trial_and_bin_axes() -> None:
     """PFC and HPC comparisons share byte-identical trial and time axes."""
     trial_df = pd.DataFrame({"choice_time": [10.0]})
-    spike_group = nap.TsGroup({3: nap.Ts(t=np.array([10.0]))})
+    support = nap.IntervalSet(start=0.0, end=30.0)
+    spike_group = nap.TsGroup({3: nap.Ts(t=np.array([10.0]), time_support=support)})
     population = _resolved_population(cluster_ids=(3,))
     tensor = preparation.build_regional_count_tensor(
         spike_group,
@@ -198,7 +199,9 @@ def test_block_folds_are_deterministic_grouped_and_preserve_missing_rows() -> No
     blocks = pd.Series(
         [1, 1.0, "1", "1", 2.5, 2.5, "a", "a", 3, 3, None], dtype=object
     )
-    trial_df = pd.DataFrame({"cur_block": blocks}, index=np.arange(10, 21))
+    trial_df = pd.DataFrame(
+        {"cur_block": blocks.to_numpy()}, index=np.arange(10, 21)
+    )
 
     first = preparation.build_block_fold_assignment(trial_df)
     second = preparation.build_block_fold_assignment(trial_df)
