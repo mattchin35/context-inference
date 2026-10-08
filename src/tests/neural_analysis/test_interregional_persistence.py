@@ -223,12 +223,24 @@ def test_working_directory_is_hidden_same_parent_and_finalized_atomically(
     assert final.name.endswith("_aaaaaaaaaaaa")
     assert not working.exists()
     assert persistence.discover_finalized_runs(output_root) == (final,)
+    colliding_working = persistence.create_working_run_directory(
+        output_root,
+        repository_root=repository_root,
+        timestamp="20261008T010203123456Z",
+    )
+    for name in (
+        "config.json",
+        "input_manifest.json",
+        "result.pkl",
+        "run.log",
+        "summary.md",
+        "run_session.py",
+        "run_batch.py",
+    ):
+        (colliding_working / name).write_text("x", encoding="utf-8")
+    (colliding_working / "figures").mkdir()
     with pytest.raises(FileExistsError):
-        persistence.create_working_run_directory(
-            output_root,
-            repository_root=repository_root,
-            timestamp="20261008T010203123456Z",
-        )
+        persistence.finalize_run_directory(colliding_working, "a" * 64)
     with pytest.raises(ValueError, match="repository"):
         persistence.create_working_run_directory(
             repository_root / "analysis_runs", repository_root=repository_root
