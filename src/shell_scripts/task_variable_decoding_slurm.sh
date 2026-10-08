@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=3G
-#SBATCH --time=05:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --signal=B:TERM@300
 #SBATCH --output=/gs/gsfs0/users/mchin1/logs/task_decoding_%j.log
 #SBATCH --mail-type=ALL

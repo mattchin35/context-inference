@@ -460,9 +460,9 @@ worker.
 ### Run one session on Slurm
 
 WP11 supports one session per job through the reviewed wrapper. It requests
-one CPU, `3G` memory, `05:00:00`, and a TERM warning five minutes before the
-limit. Submission is one-shot: neither the shell nor Python polls or retries
-`sbatch`. Slurm array batching remains separately deferred until WP13.
+one CPU, `3G` memory, `2-00:00:00` (48 hours), and a TERM warning five minutes
+before the limit. Submission is one-shot: neither the shell nor Python polls or
+retries `sbatch`. Slurm array batching remains separately deferred until WP13.
 
 First transfer a session without deleting any cluster data. Keep analysis runs
 out of the input synchronization so a workstation cannot erase or replace a

@@ -24,7 +24,7 @@ REQUESTED_RESOURCES = {
     "cpus_per_task": 1,
     "memory": "3G",
     "memory_bytes": 3 * 1024**3,
-    "time": "05:00:00",
+    "time": "2-00:00:00",
     "signal": "B:TERM@300",
     "output": "/gs/gsfs0/users/mchin1/logs/task_decoding_%j.log",
     "mail_type": "ALL",

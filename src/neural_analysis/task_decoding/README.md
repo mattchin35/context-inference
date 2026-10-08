@@ -32,7 +32,7 @@ not a duplicate specification.
 | `slurm.py` | Standard-library one-shot `submit-new`, exact-directory `submit-resume`, and read-only `status` operations; it owns the fixed resource receipt and `sacct` parsing but no scientific computation. |
 | `../psth_webapp.py` and `../webapp/task_decoding_views.py` | Existing Streamlit entrypoint and early-routed **Task-variable decoding results** view. Discovery and rendering use completed saved runs only. |
 | `../../../docs/examples/neural_analysis/task_decoding_config.json` | Portable, explicit configuration template. Its repository path is `docs/examples/neural_analysis/task_decoding_config.json`. |
-| `../../shell_scripts/task_variable_decoding_slurm.sh` | Thin single-session Slurm wrapper with fixed one-CPU, 3-GiB, five-hour resources, tracked-clean checkout checks, offline locked execution, and direct TERM propagation. Its repository path is `src/shell_scripts/task_variable_decoding_slurm.sh`. |
+| `../../shell_scripts/task_variable_decoding_slurm.sh` | Thin single-session Slurm wrapper with fixed one-CPU, 3-GiB, 48-hour resources, tracked-clean checkout checks, offline locked execution, and direct TERM propagation. Its repository path is `src/shell_scripts/task_variable_decoding_slurm.sh`. |
 
 ## Data contracts
 
@@ -200,7 +200,7 @@ the provisional resource status and an explicit resume publishes only missing
 immutable artifacts.
 
 The WP11 cluster path is deliberately single-session. The fixed request is one
-CPU, `3G`, and `05:00:00`; login-side tensor memory and active cgroup memory are
+CPU, `3G`, and `2-00:00:00`; login-side tensor memory and active cgroup memory are
 both guarded at 50 percent before large allocation. Status combines durable
 state with one `sacct` query and never polls. If accounting fails or has no
 exact root-job row, status still returns the durable pipeline state with
