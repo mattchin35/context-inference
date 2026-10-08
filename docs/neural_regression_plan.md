@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 10:27 EDT.
+**Snapshot date:** 2026-10-08 14:08 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -18,9 +18,9 @@ standard saved-result PNGs, and a metadata-driven read-only webapp view. Its see
 integration, bounded performance gate, corrected CT026 inspection, and user acceptance are recorded
 below. WP9 unit-count Poisson CV, matched OLS/Poisson MSE, saved figures/reporting, and read-only
 webapp presentation are code-complete and GREEN on seeded synthetic data. The designated CT026
-Poisson run is active as a one-shot Slurm job `30989197` after a measured local attempt proved too
-slow for interactive execution. Inspection of its completed output remains required before WP9
-scientific acceptance or WP10 authorization.
+Poisson run `30989197` was OOM-killed after approximately 2 hours 44 minutes with a 32-GiB
+allocation. Reduced execution telemetry is authorized before any bounded benchmark or full retry.
+WP9 scientific acceptance and WP10 remain blocked on an inspected completed output.
 
 **Repository state at this snapshot:**
 
@@ -55,9 +55,9 @@ scientific acceptance or WP10 authorization.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** inspect Slurm job `30989197` after completion using `sacct`, its scheduler log,
-and the standard finalized-result loader. Do not begin WP10 before the completed run is inspected
-and accepted.
+**Next exact action:** write and commit RED tests for durable cgroup-v2/process resource telemetry,
+correct stage boundaries, coarse cell/target progress, killed-process trace durability, and
+scientific-output invariance. Do not launch a benchmark or begin WP10 beforehand.
 
 ### Authority order
 
@@ -90,7 +90,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Code GREEN; CT026 Slurm job `30989197` running | Complete and scientifically review the designated-session run |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Code GREEN; CT026 job `30989197` OOM; reduced telemetry authorized | Instrument, benchmark after separate approval, then complete scientific review |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -755,6 +755,52 @@ Use this template:
 - Exact next action and authorization: after job `30989197` leaves the queue, inspect `sacct`, the
   scheduler log, and the finalized immutable result with the standard loader. If the job fails or
   is preempted, diagnose the ordinary incomplete attempt before requesting a fresh submission.
+
+#### 2026-10-08 14:08 EDT - WP9 OOM confirmed; reduced telemetry activated
+
+- State: the scientific implementation remains unchanged and GREEN, but the designated full CT026
+  run did not complete. Resource instrumentation is now the active WP9 support package.
+- Authorization: after receiving the OOM handoff, the user approved a simplified instrumentation
+  plan and emphasized that the logs must contain enough information to diagnose the failure. This
+  authorizes tests and implementation, their commits and push, but not a real-data benchmark or a
+  full retry; benchmark execution remains a separate gate.
+- Sol / Terra / reviewer: primary implementation agent and self-review; no worker.
+- Start HEAD / end HEAD: `f53cc47` / pending. The intervening commits after the Slurm wrapper are
+  known task-decoding changes from the other task and are preserved unchanged. Tracked state was
+  clean before this record; known unrelated untracked files remain out of scope.
+- Failure evidence: job `30989197` used exact commit
+  `49f63fde644e36b15484aab8fc9727235bfde01e`, eight CPUs, and 32 GiB. Its scheduler log ends with
+  one `oom_kill` event. File timestamps bound execution from approximately 10:27 to 13:11 EDT,
+  about 2 hours 44 minutes. Slurm accounting exposes no usable RSS row. The hidden incomplete run
+  `.interregional_regression_20261008T142744818446Z.incomplete` contains only the existing config,
+  manifest, script copies, figures directory, and a run log whose simultaneous preparation/OLS/
+  Poisson starts do not localize the failure. No finalized result exists.
+- Interpretation: the job certainly exceeded 32 GiB, but current evidence cannot distinguish a
+  steady retained-allocation increase from one high-memory cell. The earlier 10-GiB local peak and
+  later cluster OOM justify trajectory measurement before increasing the allocation. The planned
+  84,420 restricted-plus-full fits are an upper bound, not an exact realized count, because rank,
+  constant-target, and fit-availability checks are data dependent.
+- Reduced architecture: add a standard-library `resource_usage.py` monitor that appends complete
+  JSONL records every 30 seconds and at progress boundaries, recording UTC and monotonic time,
+  sequence, PID, process CPU and peak RSS, and cgroup-v2 current/peak/limit/OOM counters. Write an
+  atomic summary only on normal completion. Add optional callbacks, defaulting to `None`, for actual
+  preparation/PCA/OLS/Poisson/result-assembly stages, every analysis-cell boundary, and the first,
+  every 25th, and final Poisson target. Progress samples include direction, representation,
+  condition, window, fold, row counts, relevant shapes/bytes, completed/total targets, and
+  unavailable counts. Do not change scientific configuration, fitting, results, or persistence
+  schemas; do not add cgroup-v1 support or an inaccurate "exact" dry-run fit estimate.
+- Tests written before implementation: Linux RSS byte normalization; cgroup-v2 parsing including
+  missing, malformed, and unlimited fields; stable increasing JSONL sequences and nonnegative
+  finite values; monitor shutdown on normal/exception paths; killed-subprocess trace durability;
+  atomic completion summary; actual stage order; correct analysis-cell identity/shapes/bytes;
+  Poisson first/every-25/final cadence; telemetry-on/off scientific equality; failure trace
+  retention; and compatibility with completed runs lacking telemetry.
+- Performance boundary: one 30-second heartbeat plus coarse progress events should remain a few
+  megabytes and must not add per-fit I/O. No dependency is added. A bounded production-path CT026
+  benchmark using only condition `all`, window `whole`, units, OLS, and Poisson will be proposed
+  after the instrumented test suite is GREEN.
+- Exact next action and authorization: commit this activation record, then write the tests-only RED
+  package. Do not run experimental data before separate benchmark approval.
 
 ## Plan objective and status
 
