@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 09:57 EDT.
+**Snapshot date:** 2026-10-08 10:19 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -17,8 +17,10 @@ complete-fold summaries, immutable run persistence, single-session/batch command
 standard saved-result PNGs, and a metadata-driven read-only webapp view. Its seeded full synthetic
 integration, bounded performance gate, corrected CT026 inspection, and user acceptance are recorded
 below. WP9 unit-count Poisson CV, matched OLS/Poisson MSE, saved figures/reporting, and read-only
-webapp presentation are code-complete and GREEN on seeded synthetic data. A separately approved
-one-session Poisson inspection remains before WP9 scientific acceptance or WP10 authorization.
+webapp presentation are code-complete and GREEN on seeded synthetic data. The designated CT026
+Poisson run is now authorized as a one-shot offline Slurm job after a measured local attempt proved
+too slow for interactive execution. Inspection of its completed output remains required before WP9
+scientific acceptance or WP10 authorization.
 
 **Repository state at this snapshot:**
 
@@ -53,8 +55,9 @@ one-session Poisson inspection remains before WP9 scientific acceptance or WP10 
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** obtain explicit approval for the exact designated-session Poisson
-configuration, command, and output root; do not run experimental data or begin WP10 beforehand.
+**Next exact action:** write and commit RED tests for a thin, one-shot inter-regional Slurm wrapper,
+then implement that wrapper, push it, validate the cluster-path CT026 configuration, and submit the
+approved run. Do not begin WP10 before the completed run is inspected and accepted.
 
 ### Authority order
 
@@ -87,7 +90,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Code GREEN on seeded synthetic data; inspection pending | User-approved designated-session Poisson run and scientific review |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Code GREEN; authorized CT026 Slurm inspection pending | Submit, complete, and scientifically review the designated-session run |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -696,6 +699,47 @@ Use this template:
   Real-session convergence and runtime remain intentionally unmeasured until separately approved.
 - Exact next action and authorization: ask the user to approve the exact CT026 Poisson config,
   command, and output root. Do not begin WP10 until that run is inspected and accepted.
+
+#### 2026-10-08 10:19 EDT - WP9 CT026 inspection replanned as one-shot Slurm execution
+
+- State: the WP9 code remains GREEN. The designated CT026 Poisson computation is authorized and
+  will run as one ordinary Slurm job; scientific inspection still follows only after a finalized
+  immutable result directory exists.
+- Authorization: the user first approved the CT026 Poisson configuration and local execution, then
+  directed that a long run be submitted for offline cluster completion and later inspection. The
+  user explicitly rejected resumability overengineering and approved the reduced one-shot Slurm
+  plan. This authorizes the wrapper, cluster-only config copy, push, dry-run, and one `sbatch`
+  submission. It does not authorize WP10.
+- Sol / Terra / reviewer: primary implementation agent and self-review; no worker.
+- Start HEAD / end HEAD: `40b2ab3` / pending.
+- Approved scientific scope: session `CT026_2026-08-03_111938`; ProbeA/PFC and ProbeB/HPC; 160 PFC
+  and 309 HPC units; all six configured conditions; before, after, and whole windows; units plus ten
+  fold-local PCs per region; `ols_cv` plus `poisson_cv`; and the session's existing `analysis_runs`
+  output root. The cluster config changes only the metadata and output-root path prefixes from the
+  local mount to `/gs/gsfs0/users/mchin1/contextProjectData/...`.
+- Measured local evidence: the approved command passed dry-run for 274,440,585 input bytes. The
+  real command was interrupted cleanly after 6:21.13 wall seconds because it remained in
+  statsmodels Poisson fitting; `/usr/bin/time -v` recorded 8,105.68 user-CPU seconds, 34.04 system-
+  CPU seconds, 2,135% CPU, and 10,000,472-KiB peak RSS. The 88-KiB incomplete directory
+  `.interregional_regression_20261008T140701151108Z.incomplete` is preserved as interruption
+  evidence and is not a completed result.
+- Architecture and performance decision: add only
+  `src/shell_scripts/interregional_regression_slurm.sh`, forwarding exact arguments to the existing
+  `src.neural_analysis.interregional.run_session` CLI through the repository's frozen offline `uv`
+  environment. Request one task, eight CPUs, 32 GiB, and 72 hours on `unlimited`; expose all eight
+  threads to OMP, MKL, and OpenBLAS because the measured single-process numerical path used threaded
+  linear algebra. Require an exact tracked-clean repository root. Do not add sharding,
+  checkpoints, a resume protocol, a Python scheduler layer, or within-session process workers.
+- Tests written before implementation: Bash syntax and exact Slurm directives; required tracked
+  dependencies; missing, malformed, or non-eight CPU metadata; missing, invalid, non-root, or
+  tracked-dirty submission checkout; exact argument forwarding including spaces; frozen offline
+  `uv`; eight-thread environment; stdout/stderr and exit propagation; and direct TERM propagation
+  through `exec`.
+- Failure policy: a failed or preempted job leaves its ordinary incomplete attempt for diagnosis;
+  a retry is a fresh immutable `new` run. This is intentionally simpler than resumable execution.
+- Exact next action and authorization: commit this record, add and commit the launcher tests in RED,
+  implement the wrapper in GREEN, run the affected tests, push, validate the cluster-path config,
+  and submit the single CT026 job.
 
 ## Plan objective and status
 
