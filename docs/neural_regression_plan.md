@@ -8,18 +8,19 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 00:56 EDT.
+**Snapshot date:** 2026-10-08 01:06 EDT.
 
-**Current phase:** WP1-WP5 are complete and GREEN. The standard linear workflow now includes
+**Current phase:** WP1-WP6 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
 training-only fold-local regional PCA, bidirectional PC OLS, explicit unavailable PC ranks, and
-complete-fold summaries plus immutable run persistence and single-session/batch command boundaries.
-WP6 plotting and read-only webapp work is next and has not started.
+complete-fold summaries, immutable run persistence, single-session/batch command boundaries,
+standard saved-result PNGs, and a metadata-driven read-only webapp view. WP7 synthetic integration
+and its bounded performance check are next and have not started.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `9bab21b`;
+- HEAD before this handoff record: `1a58ff3`;
 - plan-owned files: `docs/neural_regression_plan.md` and
   `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
@@ -49,8 +50,8 @@ WP6 plotting and read-only webapp work is next and has not started.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** obtain/confirm WP6 authorization, then write plotting and saved-only webapp
-tests, confirm RED, and commit those tests before implementation.
+**Next exact action:** obtain/confirm WP7 authorization, then run the planned standard-regression
+synthetic integration and bounded performance check without using experimental data.
 
 ### Authority order
 
@@ -79,9 +80,9 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP2 | Counts, masks, folds, windows, and histories | Complete | WP3 may begin |
 | WP3 | Direct-unit OLS fitting, scoring, and aggregation | Complete | WP4 may begin |
 | WP4 | Fold-local regional PCA and PC OLS | Complete | WP5 may begin after authorization |
-| WP5 | Saved results, run identity, session runner, and batch runner | Complete | WP6 may begin after authorization |
-| WP6 | Standard-regression plotting, metadata webapp, and documentation | Ready; not started | Explicit authorization, then tests-only RED commit |
-| WP7 | Standard-regression synthetic integration and bounded performance check | Not authorized | WP1-WP6 focused gates GREEN |
+| WP5 | Saved results, run identity, session runner, and batch runner | Complete | WP6 complete |
+| WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
+| WP7 | Standard-regression synthetic integration and bounded performance check | Ready; not started | Explicit authorization; WP1-WP6 focused gates are GREEN |
 | WP8 | One-session standard-regression scientific inspection | Not authorized | WP7 GREEN plus explicit approval of the exact session/command |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Not authorized | WP8 user inspection/approval |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
@@ -471,11 +472,42 @@ Use this template:
 - Exact next action and authorization: do not begin WP6 until its scope is confirmed; then commit
   plotting and saved-only webapp tests in RED before implementation.
 
+#### 2026-10-08 01:06 EDT - WP6 GREEN saved-result presentation
+
+- State: WP6 is complete; WP7 synthetic integration and bounded performance work is ready but has
+  not started.
+- Authorization: the user explicitly requested a push followed by resumed implementation. This
+  authorized WP6 source, tests, and documentation; no experimental-data or batch run was implied.
+- Sol / Terra / reviewer: primary implementation agent and self-review; no worker.
+- Start HEAD / end HEAD: `ef2ee0c` / `1a58ff3` before this handoff record.
+- Worktree and owned files: added plotting and saved-only webapp tests, `plotting.py`,
+  `interregional_views.py`, standard-figure generation in `run_session.py`, router integration,
+  package/user documentation, and an example scientific configuration. Unrelated pre-existing
+  untracked entries remained untouched.
+- RED command and result: plotting and webapp tests initially failed collection because their
+  modules did not exist. A follow-up composition test failed because completed runs did not yet log
+  a figures stage or contain PNG output.
+- GREEN/regression commands and results: 32 focused plotting, webapp, runner, and existing-webapp
+  tests passed. The affected suite passed 187 tests covering WP1-WP6 plus existing spike-behavior,
+  population package/PCA, webapp, and session-metadata behavior, with four existing Pynapple
+  warnings and no new warnings.
+- Commits: plotting/webapp tests `dce1743`; plotting implementation `dccf07c`; saved-figure test
+  `c8d47a9`; webapp and saved-figure implementation `a23370d`; workflow documentation `1a58ff3`.
+- Real-data, filesystem, or external actions: pushed completed WP5 history through `ef2ee0c` from
+  local `refactor` to `origin/refactor` at the user's request. WP6 commits have not been pushed. All
+  WP6 tests used generated or fixture data; no experimental-data or batch run was performed.
+- Findings and unresolved risks: no new scientific or implementation issue was found. Plotting and
+  the webapp consume validated saved tables only; the UI has no fit, resume, or recompute path.
+  Completed CLI runs now save opaque light-mode PNGs before atomic finalization. The quickstart
+  JSON-glob mismatch recorded under WP1 remains unrelated and unchanged.
+- Exact next action and authorization: do not begin WP7 until its scope is confirmed; then run the
+  synthetic integration and bounded performance check without experimental data.
+
 ## Plan objective and status
 
 This plan implements `docs/spec_neural_regression_v3.md`. It was approved and is now the
 authoritative phased implementation and handoff log. Package-specific authorization and data-run
-gates remain binding even though WP1-WP5 implementation is complete.
+gates remain binding even though WP1-WP6 implementation is complete.
 
 The implementation order is deliberately fixed:
 
