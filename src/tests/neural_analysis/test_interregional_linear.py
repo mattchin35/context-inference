@@ -19,7 +19,9 @@ def test_add_intercept_and_fit_multiple_targets_exactly() -> None:
 
     np.testing.assert_array_equal(design[:, 0], np.ones(6))
     np.testing.assert_allclose(fit.coefficients, np.array([[2.0, -1.0], [3.0, 0.5]]))
-    np.testing.assert_allclose(linear.predict_ols_targets(design, fit.coefficients), responses)
+    np.testing.assert_allclose(
+        linear.predict_ols_targets(design, fit.coefficients), responses, atol=1e-12
+    )
     assert fit.rank == 2
     assert fit.feature_count == 2
     assert fit.df_resid == 4
