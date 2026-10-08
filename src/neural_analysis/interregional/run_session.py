@@ -447,23 +447,82 @@ def _find_reusable_run(plan: SessionPlan, fingerprint: str) -> Path | None:
 def _write_summary(path: Path, result: InterregionalResults) -> None:
     """Write a concise scientific summary with coverage and causal caveats."""
     unavailable = int(result.fold_scores["status"].ne("ok").sum())
-    text = (
-        "# Inter-regional neural regression run\n\n"
-        f"Goal: quantify held-out predictive improvement between PFC and HPC.\n\n"
-        f"Session: `{result.session_id}`\n\n"
-        "Scripts: `run_session.py`, `run_batch.py`\n\n"
-        f"Unavailable fold rows: {unavailable}\n\n"
-        "Interpretation: reported cross-validated increments are predictive, not proof of "
-        "causality or anatomical direction. Spike coverage is assumed complete under the saved "
-        "coverage-assumption version.\n"
+    unavailable_reasons = (
+        result.fold_scores.loc[result.fold_scores["reason"].ne(""), "reason"]
+        .value_counts()
+        .sort_index()
     )
-    path.write_text(text, encoding="utf-8")
+    lines = [
+        "# Inter-regional neural regression run",
+        "",
+        "Goal: quantify held-out predictive improvement between PFC and HPC.",
+        "",
+        f"Session: `{result.session_id}`",
+        "",
+        "Scripts: `run_session.py`, `run_batch.py`",
+        "",
+        f"Output directory: `{path.parent}`",
+        "",
+        f"Unavailable fold rows: {unavailable}",
+        "",
+        "Warnings: none captured.",
+        "",
+        "## Scientific configuration",
+        "",
+        "```json",
+        json.dumps(result.configuration, sort_keys=True, indent=2),
+        "```",
+        "",
+        "## Primary held-out results",
+        "",
+    ]
+    primary = result.population_summaries.loc[
+        result.population_summaries["metric_name"].eq("delta_r2")
+    ]
+    if primary.empty:
+        lines.append("No complete incremental CV R-squared population summary was available.")
+    else:
+        for row in primary.itertuples(index=False):
+            if row.status == "ok":
+                lines.append(
+                    f"- {row.direction}, {row.condition}, {row.window}, "
+                    f"{row.representation}/{row.model_family}: {row.n_targets} targets; "
+                    f"median={float(row.median):.6g}, IQR=[{float(row.q25):.6g}, "
+                    f"{float(row.q75):.6g}] (held-out CV)."
+                )
+            else:
+                lines.append(
+                    f"- {row.direction}, {row.condition}, {row.window}, "
+                    f"{row.representation}/{row.model_family}: unavailable ({row.reason})."
+                )
+    lines.extend(["", "## Unavailable reasons", ""])
+    if unavailable_reasons.empty:
+        lines.append("None.")
+    else:
+        lines.extend(
+            f"- `{reason}`: {int(count)}"
+            for reason, count in unavailable_reasons.items()
+        )
+    lines.extend(
+        [
+            "",
+            "## Interpretation limits",
+            "",
+            "Reported cross-validated increments are predictive, not proof of causality or "
+            "anatomical direction. Spike coverage is assumed complete under the saved "
+            "coverage-assumption version. No significance claim is made from these descriptive "
+            "effect summaries.",
+            "",
+        ]
+    )
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def _write_initial_artifacts(
     working: Path,
     plan: SessionPlan,
     manifest: Mapping[str, object],
+    preflight_timings: Mapping[str, float],
 ) -> None:
     """Write reproducibility metadata and exact runner copies before computation."""
     config_payload = configuration_to_dict(
@@ -475,10 +534,14 @@ def _write_initial_artifacts(
     (working / "input_manifest.json").write_text(
         json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8"
     )
-    (working / "run.log").write_text(
-        f"session={plan.session_id} analysis_version={ANALYSIS_VERSION}\n",
-        encoding="utf-8",
-    )
+    log_lines = [
+        f"session={plan.session_id} analysis_version={ANALYSIS_VERSION}",
+        *(
+            f"stage={stage} event=end elapsed_seconds={preflight_timings[stage]:.9f}"
+            for stage in ("input_validation", "input_hashing")
+        ),
+    ]
+    (working / "run.log").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
     shutil.copy2(Path(__file__), working / "run_session.py")
     shutil.copy2(Path(__file__).with_name("run_batch.py"), working / "run_batch.py")
     (working / "figures").mkdir()
@@ -498,7 +561,9 @@ def run_single_session(
     """
     if command not in {"dry-run", "new"}:
         raise ValueError("command must be 'dry-run' or 'new'.")
+    validation_started = time.perf_counter()
     plan = plan_single_session(config_path, repository_root=repository_root)
+    validation_elapsed = time.perf_counter() - validation_started
     input_bytes = int(sum(plan.input_sizes.values()))
     if command == "dry-run":
         return SessionRunReport(
@@ -509,7 +574,9 @@ def run_single_session(
             "new requires clean tracked code and no untracked Python under "
             f"src/neural_analysis: {list(plan.code_dirty_paths)}"
         )
+    hashing_started = time.perf_counter()
     file_entries = persistence.hash_input_files(plan.input_files)
+    hashing_elapsed = time.perf_counter() - hashing_started
     fingerprint = persistence.run_fingerprint(
         plan.config,
         session_id=plan.session_id,
@@ -540,20 +607,59 @@ def run_single_session(
         resolved_populations=plan.resolved_populations,
         files=file_entries,
     )
-    _write_initial_artifacts(working, plan, manifest)
+    _write_initial_artifacts(
+        working,
+        plan,
+        manifest,
+        {
+            "input_validation": validation_elapsed,
+            "input_hashing": hashing_elapsed,
+        },
+    )
     stage = "preparation"
     started = time.perf_counter()
     try:
+        compute_started = time.perf_counter()
+        with (working / "run.log").open("a", encoding="utf-8") as stream:
+            stream.write("stage=preparation event=start\n")
+            stream.write("stage=ols_cv event=start\n")
         result = compute_single_session(plan)
+        compute_elapsed = time.perf_counter() - compute_started
+        with (working / "run.log").open("a", encoding="utf-8") as stream:
+            stream.write(
+                f"stage=ols_cv event=end elapsed_seconds={compute_elapsed:.9f}\n"
+            )
+            stream.write(
+                f"stage=preparation event=end elapsed_seconds={compute_elapsed:.9f}\n"
+            )
         stage = "persistence"
+        persistence_started = time.perf_counter()
+        with (working / "run.log").open("a", encoding="utf-8") as stream:
+            stream.write("stage=persistence event=start\n")
         persistence.save_interregional_result(
             result, working / "result.pkl", plan.config
         )
+        with (working / "run.log").open("a", encoding="utf-8") as stream:
+            stream.write(
+                "stage=persistence event=end "
+                f"elapsed_seconds={time.perf_counter() - persistence_started:.9f}\n"
+            )
         stage = "summary"
+        summary_started = time.perf_counter()
+        with (working / "run.log").open("a", encoding="utf-8") as stream:
+            stream.write("stage=summary event=start\n")
         _write_summary(working / "summary.md", result)
+        with (working / "run.log").open("a", encoding="utf-8") as stream:
+            stream.write(
+                "stage=summary event=end "
+                f"elapsed_seconds={time.perf_counter() - summary_started:.9f}\n"
+            )
         elapsed = time.perf_counter() - started
         with (working / "run.log").open("a", encoding="utf-8") as stream:
             stream.write(f"completed elapsed_seconds={elapsed:.9f}\n")
+        persistence.validate_complete_run_artifacts(
+            working, plan.config, fingerprint
+        )
         final = persistence.finalize_run_directory(working, fingerprint)
         return SessionRunReport(
             plan.session_id, "completed", final, fingerprint, input_bytes, None

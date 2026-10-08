@@ -17,6 +17,7 @@ from .configuration import (
     ResolvedRegionalPopulation,
     RunOptions,
     configuration_to_dict,
+    load_interregional_config,
 )
 from .records import InterregionalResults, validate_interregional_results
 
@@ -285,6 +286,44 @@ def _validate_required_artifacts(working_path: Path) -> None:
             raise ValueError(f"Missing required artifact: {name}")
     if not (working_path / "figures").is_dir():
         raise ValueError("Missing required artifact: figures/")
+
+
+def validate_complete_run_artifacts(
+    run_path: Path | str,
+    config: InterregionalAnalysisConfig,
+    expected_fingerprint: str,
+) -> None:
+    """Reopen and validate every machine-readable artifact before final rename."""
+    directory = Path(run_path).resolve(strict=True)
+    _validate_required_artifacts(directory)
+    saved_config, _ = load_interregional_config(directory / "config.json")
+    if saved_config != config:
+        raise ValueError("Saved configuration does not match the executed configuration.")
+    try:
+        manifest = json.loads(
+            (directory / "input_manifest.json").read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("Saved input manifest is unreadable.") from error
+    expected_keys = {
+        "manifest_schema_version",
+        "run_fingerprint",
+        "session_id",
+        "git_head",
+        "entrypoint",
+        "runtime_versions",
+        "resolved_populations",
+        "files",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != expected_keys:
+        raise ValueError("Saved input manifest has the wrong top-level schema.")
+    if manifest["manifest_schema_version"] != MANIFEST_SCHEMA_VERSION:
+        raise ValueError("Saved input manifest version is unsupported.")
+    if manifest["run_fingerprint"] != expected_fingerprint:
+        raise ValueError("Saved input manifest fingerprint does not match the run.")
+    load_interregional_result(
+        directory / "result.pkl", config, trusted_run_directory=directory
+    )
 
 
 def finalize_run_directory(working_path: Path | str, fingerprint: str) -> Path:

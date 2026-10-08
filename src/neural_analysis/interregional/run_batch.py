@@ -17,6 +17,8 @@ class BatchRunReport:
 
     worker_count: int
     reports: tuple[SessionRunReport, ...]
+    total_input_bytes: int
+    max_session_input_bytes: int
 
 
 def _positive_int(text: str) -> int:
@@ -99,7 +101,13 @@ def run_batch(
         reports = tuple(
             run_single_session(path, command="dry-run") for path in config_paths
         )
-        return BatchRunReport(worker_count, reports)
+        input_sizes = [report.input_bytes for report in reports]
+        return BatchRunReport(
+            worker_count,
+            reports,
+            sum(input_sizes),
+            max(input_sizes, default=0),
+        )
     reports_by_path: dict[Path, SessionRunReport] = {}
     with ProcessPoolExecutor(max_workers=worker_count) as executor:
         futures = {
@@ -118,8 +126,13 @@ def run_batch(
                     0,
                     f"{type(error).__name__}: {error}",
                 )
+    ordered = tuple(reports_by_path[path] for path in config_paths)
+    input_sizes = [report.input_bytes for report in ordered]
     return BatchRunReport(
-        worker_count, tuple(reports_by_path[path] for path in config_paths)
+        worker_count,
+        ordered,
+        sum(input_sizes),
+        max(input_sizes, default=0),
     )
 
 
