@@ -17,7 +17,7 @@ normative amendment `docs/task_variable_spec_v6.md`.
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-07
+**Snapshot date:** 2026-10-08
 
 **Current phase:** WP0-WP11 are complete. The first v2 bounded run proved the
 convergence repair but exposed a competing-resume lifecycle defect during
@@ -41,8 +41,9 @@ approved full CT026 run completed as Slurm job `30985392` at exact commit
 `c086bdf`, passed result validation, and was returned through hidden local
 staging before atomic promotion. WP12 now waits for the user's scientific
 inspection/acceptance of the saved heatmaps. The observed 4-hour-41-minute
-runtime left only an 18-minute five-hour margin, so a longer reviewed Slurm
-limit is required before another full session.
+runtime left only an 18-minute five-hour margin. The approved corrective RED
+contract is committed at `075581a`, and GREEN production at `506daa8` now
+requests 48 hours (`2-00:00:00`) for future single-session Slurm jobs.
 WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
@@ -124,9 +125,9 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   PCA edge against the older helper's stricter minimum.
 
 **Next exact action:** have the user inspect the promoted CT026 heatmaps and
-saved-result view. If accepted, close WP12 and propose tests-first replacement
-of the unsafe five-hour wrapper limit with the user-requested 48-hour limit
-before WP13 or another full session. No new computation is implied.
+saved-result view. If accepted, close WP12 and plan WP13 per-session job arrays.
+The 48-hour single-session correction is complete; no new computation is
+implied.
 
 ### Authority order
 
@@ -2192,9 +2193,11 @@ Use this template for each appended record:
   scientific acceptance remains the user's decision after inspecting those
   saved outputs.
 - Exact next action: user inspects the promoted heatmaps or the saved-results
-  webapp. On acceptance, mark WP12 complete and separately plan the 48-hour
-  resource correction plus WP13; do not start either implementation under
-  result-return authority.
+  webapp. The tests-first Slurm correction is approved: future single-session
+  submissions request 48 hours (`2-00:00:00`) while retaining one CPU, 3 GiB,
+  and the five-minute TERM warning. RED is committed at `075581a` and GREEN at
+  `506daa8`. On acceptance, mark WP12 complete and separately plan WP13; do not
+  start that implementation under result-return authority.
 
 ## 1. Objective
 
