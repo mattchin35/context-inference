@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -230,6 +231,8 @@ def test_batch_list_worker_count_and_dry_run_are_session_separated(
     assert paths == (first.resolve(), second.resolve())
     assert run_batch.choose_worker_count(2, requested=8, cpu_count=4) == 2
     assert result.worker_count == 2
+    assert result.total_input_bytes == 20
+    assert result.max_session_input_bytes == 10
     assert [report.session_id for report in result.reports] == ["first", "second"]
     assert calls == list(paths)
 
@@ -340,3 +343,27 @@ def test_public_single_session_composition_runs_synthetic_metadata_to_reload(
     assert not loaded.fold_scores.empty
     assert loaded.fold_scores["representation"].eq("units").all()
     assert loaded.pca_fits.empty
+    run_log = (report.run_path / "run.log").read_text(encoding="utf-8")
+    for stage in (
+        "input_validation",
+        "input_hashing",
+        "preparation",
+        "ols_cv",
+        "persistence",
+        "summary",
+    ):
+        assert f"stage={stage}" in run_log
+
+
+def test_new_refuses_dirty_code_before_hashing(tmp_path: Path, monkeypatch) -> None:
+    """Git-unidentified source changes stop a new run before input hashing."""
+    plan = replace(_plan(tmp_path), code_dirty_paths=("src/neural_analysis/new.py",))
+    monkeypatch.setattr(run_session, "plan_single_session", lambda *args, **kwargs: plan)
+    monkeypatch.setattr(
+        run_session.persistence,
+        "hash_input_files",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("hashed")),
+    )
+
+    with pytest.raises(ValueError, match="clean tracked code"):
+        run_session.run_single_session(plan.config_path, command="new")
