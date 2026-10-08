@@ -187,3 +187,32 @@ def test_increment_plot_keeps_dense_target_jitter_inside_its_direction_cell() ->
     assert min(dense_x) >= -0.60
     assert max(dense_x) <= -0.10
     plt.close(figure)
+
+
+def test_increment_plot_centers_a_single_target_in_its_direction_cell() -> None:
+    """A one-target cell uses its direction center without arbitrary offset."""
+    targets, populations = _summary_tables()
+    keep_target = targets["condition"].eq("all") & ~(
+        targets["status"].eq("ok") & targets["target_id"].str.endswith("unit2")
+    )
+    single_targets = records.result_table_from_rows(
+        "target_summaries", targets.loc[keep_target].to_dict("records")
+    )
+
+    figure, axis = plotting.plot_cv_increment_summary(
+        single_targets,
+        populations.loc[populations["condition"].eq("all")],
+        representation="units",
+        model_family="ols",
+        window="before",
+        coverage_assumption_version="implicit-complete-v1",
+    )
+
+    point_positions = {
+        artist.get_gid(): float(artist.get_xdata()[0])
+        for artist in axis.lines
+        if artist.get_gid()
+    }
+    assert point_positions["HPC_to_PFC:unit1"] == -0.35
+    assert point_positions["PFC_to_HPC:unit1"] == 0.35
+    plt.close(figure)
