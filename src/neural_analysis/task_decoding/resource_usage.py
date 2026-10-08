@@ -24,6 +24,7 @@ RESOURCE_ENVELOPE_KEYS = frozenset(
         "hpc_unit_count",
         "time_bin_count",
         "target_count",
+        "condition_count",
         "outer_fold_count",
         "inner_fold_count",
         "coefficient_feature_capacity",

@@ -28,6 +28,7 @@ import pandas as pd
 from src.neural_analysis.session_metadata import load_session_metadata, resolve_session_metadata
 from src.neural_analysis.task_decoding import activity, config as decoding_config
 from src.neural_analysis.task_decoding import (
+    conditions,
     modeling,
     plotting,
     resource_usage,
@@ -484,7 +485,14 @@ def _fit_count(config: decoding_config.TaskDecodingConfig) -> int:
             / config.bin_width_ms
         )
     )
-    return len(config.target_names) * config.outer_fold_count * time_bins * 3 * 2
+    return (
+        len(config.condition_names)
+        * len(config.target_names)
+        * config.outer_fold_count
+        * time_bins
+        * 3
+        * 2
+    )
 
 
 def _resource_envelope(
@@ -527,13 +535,16 @@ def _resource_envelope(
         "hpc_unit_count": report.hpc_unit_count,
         "time_bin_count": report.time_bin_count,
         "target_count": len(config.target_names),
+        "condition_count": len(config.condition_names),
         "outer_fold_count": config.outer_fold_count,
         "inner_fold_count": config.inner_fold_count,
         "coefficient_feature_capacity": report.pfc_unit_count + report.hpc_unit_count,
         "categorical_fit_count": family_counts["categorical"]
+        * len(config.condition_names)
         * cells_per_target
         * fits_per_cell,
         "numerical_fit_count": family_counts["numerical"]
+        * len(config.condition_names)
         * cells_per_target
         * fits_per_cell,
         "tensor_allocation_bytes": report.tensor_allocation_bytes,
@@ -610,6 +621,181 @@ def _target_diagnostics(
     return diagnostics
 
 
+def _condition_target_common_masks(
+    config: decoding_config.TaskDecodingConfig,
+    trial_table: pd.DataFrame,
+    target_table: pd.DataFrame,
+    common_rows: np.ndarray,
+) -> dict[tuple[str, str], np.ndarray]:
+    """Return condition-and-target eligibility on the common tensor row axis.
+
+    Parameters
+    ----------
+    config : TaskDecodingConfig
+        Canonical condition and target selections.
+    trial_table : pandas.DataFrame
+        Original chronological behavioral rows, shape ``(full_trial, column)``.
+    target_table : pandas.DataFrame
+        Derived target values and validity flags on the same full-trial axis.
+    common_rows : numpy.ndarray
+        Zero-based full-table positions with bilateral neural coverage, shape
+        ``(common_neural_tensor_row,)``.
+
+    Returns
+    -------
+    dict[tuple[str, str], numpy.ndarray]
+        Condition-major then target-major mapping to independent Boolean masks
+        shaped ``(common_neural_tensor_row,)``.
+    """
+    rows = np.asarray(common_rows, dtype=np.int64)
+    if rows.ndim != 1 or np.any(rows < 0) or np.any(rows >= len(target_table)):
+        raise ValueError("Common tensor row positions are invalid for condition masks.")
+    condition_masks = conditions.build_condition_masks(
+        trial_table,
+        config.condition_names,
+    )
+    output: dict[tuple[str, str], np.ndarray] = {}
+    for condition_name in config.condition_names:
+        condition_common = condition_masks[condition_name][rows]
+        for target_name in config.target_names:
+            target_valid = target_table[f"{target_name}_valid"].to_numpy(dtype=bool)
+            output[(condition_name, target_name)] = condition_common & target_valid[rows]
+    return output
+
+
+def _condition_target_key(condition_name: str, target_name: str) -> str:
+    """Return one stable state/resource identifier for a condition-target cell.
+
+    Parameters
+    ----------
+    condition_name, target_name : str
+        Canonical dimensionless condition and target identifiers.
+
+    Returns
+    -------
+    str
+        ``condition::target`` identifier used in durable progress records.
+    """
+    if condition_name not in decoding_config.CONDITION_IDENTIFIERS:
+        raise ValueError("Condition checkpoint identifier is invalid.")
+    if target_name not in decoding_config.TARGET_IDENTIFIERS:
+        raise ValueError("Target checkpoint identifier is invalid.")
+    return f"{condition_name}::{target_name}"
+
+
+def _condition_target_checkpoint_path(
+    run_directory: Path,
+    condition_name: str,
+    target_name: str,
+) -> Path:
+    """Return the immutable checkpoint path for one condition-target cell.
+
+    Parameters
+    ----------
+    run_directory : pathlib.Path
+        Prepared run directory containing the checkpoint subdirectory.
+    condition_name, target_name : str
+        Canonical dimensionless identifiers.
+
+    Returns
+    -------
+    pathlib.Path
+        Safe deterministic ``condition--target.npz`` destination.
+    """
+    _condition_target_key(condition_name, target_name)
+    return Path(run_directory) / "checkpoints" / f"{condition_name}--{target_name}.npz"
+
+
+def _condition_target_diagnostics(
+    config: decoding_config.TaskDecodingConfig,
+    trial_table: pd.DataFrame,
+    target_table: pd.DataFrame,
+    trial_row_indices: np.ndarray,
+) -> tuple[list[dict[str, object]], dict[str, int]]:
+    """Describe every configured condition-target grouped-split input.
+
+    Parameters
+    ----------
+    config : TaskDecodingConfig
+        Canonical condition, target, and fold controls.
+    trial_table, target_table : pandas.DataFrame
+        Original and derived chronological tables with shape
+        ``(full_trial, column)``.
+    trial_row_indices : numpy.ndarray
+        Bilateral neural-coverage row positions, shape ``(tensor_trial,)``.
+
+    Returns
+    -------
+    tuple[list[dict[str, object]], dict[str, int]]
+        Condition-major diagnostics plus condition-level common-row counts.
+        Counts are dimensionless; numerical ranges retain native target units.
+    """
+    common_rows = np.asarray(trial_row_indices, dtype=np.int64)
+    full_condition_masks = conditions.build_condition_masks(
+        trial_table,
+        config.condition_names,
+    )
+    pair_masks = _condition_target_common_masks(
+        config,
+        trial_table,
+        target_table,
+        common_rows,
+    )
+    condition_counts = {
+        name: int(np.count_nonzero(mask[common_rows]))
+        for name, mask in full_condition_masks.items()
+    }
+    diagnostics: list[dict[str, object]] = []
+    for (condition_name, target_name), common_mask in pair_masks.items():
+        target_family = _family_for_label(target_name)
+        rows = common_rows[common_mask]
+        values = target_table.iloc[rows][target_name].to_numpy(dtype=float)
+        blocks = target_table.iloc[rows]["block_id"].to_numpy(copy=True)
+        split_plan = (
+            modeling.make_outer_splits(
+                values,
+                blocks,
+                target_family=target_family,
+                fold_count=config.outer_fold_count,
+            )
+            if values.size
+            else None
+        )
+        class_counts: dict[str, int] = {}
+        value_min: float | None = None
+        value_max: float | None = None
+        if target_family == "categorical":
+            unique, counts = np.unique(values, return_counts=True)
+            class_counts = {
+                str(int(value)) if float(value).is_integer() else str(float(value)): int(count)
+                for value, count in zip(unique, counts, strict=True)
+            }
+        elif values.size:
+            value_min = float(np.min(values))
+            value_max = float(np.max(values))
+        diagnostics.append(
+            {
+                "condition_identifier": condition_name,
+                "target_identifier": target_name,
+                "target_family": target_family,
+                "eligible_trial_count": int(rows.size),
+                "block_count": int(np.unique(blocks).size),
+                "class_counts": class_counts,
+                "value_min": value_min,
+                "value_max": value_max,
+                "outer_split_available": (
+                    split_plan.is_available if split_plan is not None else False
+                ),
+                "outer_split_unavailable_reason": (
+                    split_plan.unavailable_reason
+                    if split_plan is not None
+                    else "no condition-eligible trials"
+                ),
+            }
+        )
+    return diagnostics, condition_counts
+
+
 def plan_task_decoding_session(config_path: Path | str) -> dict[str, object]:
     """Inspect one session's bounded inputs without loading spikes or fitting models.
 
@@ -648,10 +834,17 @@ def plan_task_decoding_session(config_path: Path | str) -> dict[str, object]:
         source_cleanliness = str(error)
     else:
         source_cleanliness = "clean"
+    condition_diagnostics, condition_counts = _condition_target_diagnostics(
+        config,
+        identity["trial_table"],
+        target_table,
+        report.trial_row_indices,
+    )
     return {
         "config_path": str(Path(config_path).resolve()),
         "session_id": resolved.session_id,
         "target_names": config.target_names,
+        "condition_names": config.condition_names,
         "fit_count": _fit_count(config),
         "tensor_allocation_bytes": report.tensor_allocation_bytes,
         "source_file_sizes_bytes": {
@@ -675,6 +868,8 @@ def plan_task_decoding_session(config_path: Path | str) -> dict[str, object]:
             target_table,
             report.trial_row_indices,
         ),
+        "condition_trial_counts": condition_counts,
+        "condition_target_diagnostics": condition_diagnostics,
     }
 
 

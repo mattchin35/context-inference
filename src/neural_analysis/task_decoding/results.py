@@ -18,6 +18,7 @@ from src.neural_analysis.task_decoding.targets import _CATEGORICAL_CLASS_LABELS
 
 
 RESULT_SCHEMA_VERSION = 1
+CONDITION_RESULT_SCHEMA_VERSION = 2
 _MEBIBYTE = 1024 * 1024
 _RESULT_FILE = "results.npz"
 _CONFIG_FILE = "config.json"
@@ -405,6 +406,362 @@ def _required_names() -> set[str]:
         "stage_timing_seconds",
         "total_timing_seconds",
     }
+
+
+_CONDITION_DEPENDENT_ARRAYS = frozenset(
+    {
+        "target_status",
+        "target_unavailable_reasons",
+        "fold_scores",
+        "fit_status",
+        "fit_reason_codes",
+        "requested_feature_counts",
+        "effective_feature_counts",
+        "train_counts",
+        "test_counts",
+        "train_class_counts",
+        "test_class_counts",
+        "eligibility_masks",
+        "eligibility_reason_codes",
+        "eligibility_counts",
+        "outer_fold_ids",
+        "coefficient_values",
+        "fitted_intercepts",
+        "fixed_parameters_json",
+        "selected_parameters_json",
+        "inner_selection_fold_ids",
+        "candidate_inner_scores",
+        "candidate_inner_statuses",
+        "candidate_inner_reasons",
+        "selected_candidate_indices",
+    }
+)
+
+
+def _arrays_equal(first: np.ndarray, second: np.ndarray) -> bool:
+    """Compare two candidate shared arrays without dtype or shape coercion.
+
+    Parameters
+    ----------
+    first, second : numpy.ndarray
+        Arrays proposed for one condition-independent schema member. Shapes,
+        axis conventions, and physical units must already be identical.
+
+    Returns
+    -------
+    bool
+        True only for identical dtype, shape, and values; corresponding
+        floating-point NaN sentinels compare equal.
+    """
+    if first.dtype != second.dtype or first.shape != second.shape:
+        return False
+    if first.dtype.kind in {"f", "c"}:
+        return bool(np.array_equal(first, second, equal_nan=True))
+    return bool(np.array_equal(first, second))
+
+
+def assemble_condition_result_payload(
+    *,
+    condition_names: Sequence[str],
+    condition_masks: Mapping[str, np.ndarray],
+    condition_payloads: Mapping[
+        str,
+        tuple[Mapping[str, np.ndarray], Mapping[str, object]],
+    ],
+) -> tuple[dict[str, np.ndarray], dict[str, object]]:
+    """Stack validated pooled-schema payloads into one condition-axis payload.
+
+    Parameters
+    ----------
+    condition_names : sequence[str]
+        Nonempty canonical condition order.
+    condition_masks : mapping[str, numpy.ndarray]
+        Full-table Boolean membership arrays with shape ``(full_trial,)``.
+        These preserve overlapping project conditions explicitly.
+    condition_payloads : mapping[str, tuple[mapping, mapping]]
+        One complete schema-1 ``(arrays, meta)`` pair per condition. Each pair
+        already represents condition-filtered target eligibility and folds.
+
+    Returns
+    -------
+    tuple[dict[str, numpy.ndarray], dict[str, object]]
+        Schema-2 arrays and metadata. Condition-dependent members gain a
+        leading condition axis; stable target, feature, time, and trial
+        identities remain single-copy.
+
+    Raises
+    ------
+    ValueError
+        If order, masks, per-condition schemas, or shared identities disagree.
+    """
+    names = tuple(condition_names)
+    if not names or len(set(names)) != len(names):
+        raise ValueError("Condition result names must be nonempty and unique.")
+    if set(condition_masks) != set(names) or set(condition_payloads) != set(names):
+        raise ValueError("Condition payload and mask keys must match condition order.")
+
+    validated: dict[str, tuple[Mapping[str, np.ndarray], Mapping[str, object]]] = {}
+    for name in names:
+        arrays, meta = condition_payloads[name]
+        if (
+            set(arrays) != _required_names()
+            or meta.get("schema_version") != RESULT_SCHEMA_VERSION
+        ):
+            raise ValueError("Each condition payload must use the complete pooled schema.")
+        validated[name] = (arrays, meta)
+
+    first_arrays, first_meta = validated[names[0]]
+    full_count = int(first_arrays["full_table_row_positions"].size)
+    normalized_masks: list[np.ndarray] = []
+    for name in names:
+        mask = np.asarray(condition_masks[name])
+        if mask.dtype != np.bool_ or mask.shape != (full_count,):
+            raise ValueError("Condition masks must be Boolean full-table vectors.")
+        normalized_masks.append(mask.copy())
+    if "all" in names and not np.all(normalized_masks[names.index("all")]):
+        raise ValueError("The all condition mask must contain every full-table row.")
+
+    output: dict[str, np.ndarray] = {
+        "condition_labels": np.asarray(names, dtype="U32"),
+        "condition_masks": np.stack(normalized_masks, axis=0),
+    }
+    merged_values = np.full_like(first_arrays["encoded_target_values"], np.nan)
+    for array_name in _required_names():
+        values = [validated[name][0][array_name] for name in names]
+        if array_name in _CONDITION_DEPENDENT_ARRAYS:
+            output[array_name] = np.stack(values, axis=0)
+            continue
+        if array_name == "encoded_target_values":
+            for values_for_condition in values:
+                finite = np.isfinite(values_for_condition)
+                conflict = finite & np.isfinite(merged_values) & (
+                    values_for_condition != merged_values
+                )
+                if np.any(conflict):
+                    raise ValueError("Condition payload target values disagree.")
+                merged_values[finite] = values_for_condition[finite]
+            output[array_name] = merged_values
+            continue
+        if any(not _arrays_equal(values[0], other) for other in values[1:]):
+            raise ValueError(f"Condition-independent result array disagrees: {array_name}")
+        output[array_name] = values[0].copy()
+
+    metadata = json.loads(json.dumps(first_meta))
+    metadata["schema_version"] = CONDITION_RESULT_SCHEMA_VERSION
+    axes = {
+        "condition_labels": ["condition"],
+        "condition_masks": ["condition", "full_table_row"],
+    }
+    base_axes = first_meta.get("axes")
+    if not isinstance(base_axes, Mapping):
+        raise ValueError("Condition payload metadata axes are invalid.")
+    for array_name, array_axes in base_axes.items():
+        axes[array_name] = (
+            ["condition", *array_axes]
+            if array_name in _CONDITION_DEPENDENT_ARRAYS
+            else list(array_axes)
+        )
+    metadata["axes"] = axes
+    parameters = metadata.get("parameters")
+    if not isinstance(parameters, dict):
+        raise ValueError("Condition payload parameters are invalid.")
+    parameters["condition_names"] = list(names)
+    return output, metadata
+
+
+def _condition_expected_axes(mode: str) -> dict[str, list[str]]:
+    """Return the schema-2 axes obtained from the pooled axis contract.
+
+    Parameters
+    ----------
+    mode : {"fixed", "tuned"}
+        Selects explicit not-applicable or nested-CV candidate axes.
+
+    Returns
+    -------
+    dict[str, list[str]]
+        Complete axis labels including the leading condition axis only for
+        arrays whose scientific values vary by condition.
+    """
+    axes = {
+        name: (
+            ["condition", *array_axes]
+            if name in _CONDITION_DEPENDENT_ARRAYS
+            else array_axes
+        )
+        for name, array_axes in _expected_axes(mode).items()
+    }
+    axes["condition_labels"] = ["condition"]
+    axes["condition_masks"] = ["condition", "full_table_row"]
+    return axes
+
+
+def _pooled_slice_from_condition_payload(
+    arrays: Mapping[str, np.ndarray],
+    meta: Mapping[str, object],
+    condition_index: int,
+) -> tuple[dict[str, np.ndarray], dict[str, object]]:
+    """Project one schema-2 condition into the existing pooled validator.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Complete schema-2 primitive arrays. Condition-dependent members have
+        leading ``condition`` axes; target values retain one shared
+        ``(target, full_table_row)`` copy.
+    meta : mapping[str, object]
+        Complete schema-2 metadata.
+    condition_index : int
+        Zero-based condition-axis position.
+
+    Returns
+    -------
+    tuple[dict[str, numpy.ndarray], dict[str, object]]
+        Independent schema-1 view suitable for the established scientific and
+        grouped-cross-validation validator.
+    """
+    pooled_arrays = {
+        name: (
+            np.asarray(arrays[name][condition_index]).copy()
+            if name in _CONDITION_DEPENDENT_ARRAYS
+            else np.asarray(arrays[name]).copy()
+        )
+        for name in _required_names()
+    }
+    # Values are stored once in schema 2. Restore the schema-1 NaN sentinel
+    # outside this condition's target-specific eligibility before validation.
+    pooled_values = pooled_arrays["encoded_target_values"]
+    pooled_values[~pooled_arrays["eligibility_masks"]] = np.nan
+
+    pooled_meta = json.loads(json.dumps(meta))
+    pooled_meta["schema_version"] = RESULT_SCHEMA_VERSION
+    pooled_meta["axes"] = _expected_axes(
+        str(pooled_meta.get("parameters", {}).get("regularization_mode"))
+    )
+    parameters = pooled_meta.get("parameters")
+    if not isinstance(parameters, dict):
+        raise ValueError("Condition result parameters are invalid.")
+    parameters.pop("condition_names", None)
+    return pooled_arrays, pooled_meta
+
+
+def _validate_condition_arrays(
+    arrays: Mapping[str, np.ndarray],
+    meta: Mapping[str, object],
+    config: Mapping[str, object],
+) -> None:
+    """Validate schema-2 condition axes through the pooled scientific contract.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Primitive schema-2 arrays. Score axes are ``(condition, target,
+        region, representation, metric, time, fold)``; stable identities omit
+        the condition axis. Times are seconds and scores are dimensionless.
+    meta : mapping[str, object]
+        Complete schema-2 metadata, units, axes, and provenance.
+    config : mapping[str, object]
+        Scientific serializer payload defining canonical condition order.
+
+    Returns
+    -------
+    None
+        Raises ValueError for condition identity, shape, membership, metadata,
+        or any existing pooled-result scientific-contract violation.
+    """
+    required_names = _required_names() | {"condition_labels", "condition_masks"}
+    if set(arrays) != required_names:
+        raise ValueError("Required condition result schema array is missing or unexpected.")
+    if (
+        not isinstance(meta, Mapping)
+        or meta.get("schema_version") != CONDITION_RESULT_SCHEMA_VERSION
+    ):
+        raise ValueError("Condition result schema version is invalid.")
+
+    configured_names = config.get("condition_names")
+    if not isinstance(configured_names, list) or not configured_names:
+        raise ValueError("Scientific config condition identity is invalid.")
+    condition_count = len(configured_names)
+    _require(
+        arrays["condition_labels"],
+        np.dtype("U32"),
+        (condition_count,),
+        "condition_labels",
+    )
+    labels = arrays["condition_labels"].tolist()
+    if labels != configured_names or len(set(labels)) != condition_count:
+        raise ValueError("Condition label identity disagrees with scientific config.")
+
+    full_count = int(arrays["full_table_row_positions"].size)
+    _require(
+        arrays["condition_masks"],
+        np.dtype(np.bool_),
+        (condition_count, full_count),
+        "condition_masks",
+    )
+    if "all" in labels and not np.all(
+        arrays["condition_masks"][labels.index("all")]
+    ):
+        raise ValueError("The all condition mask must contain every full-table row.")
+
+    mode = config.get("regularization_mode")
+    if mode not in {"fixed", "tuned"}:
+        raise ValueError("Scientific config regularization mode is invalid.")
+    if meta.get("axes") != _condition_expected_axes(str(mode)):
+        raise ValueError("Condition metadata axes order or schema is invalid.")
+    parameters = meta.get("parameters")
+    if (
+        not isinstance(parameters, Mapping)
+        or parameters.get("condition_names") != configured_names
+    ):
+        raise ValueError("Metadata condition parameters disagree with scientific config.")
+
+    eligibility = arrays["eligibility_masks"]
+    expected_eligibility_shape = (
+        condition_count,
+        int(arrays["target_labels"].size),
+        full_count,
+    )
+    if eligibility.dtype != np.bool_ or eligibility.shape != expected_eligibility_shape:
+        raise ValueError("Condition eligibility mask dtype or shape is invalid.")
+    if np.any(eligibility & ~arrays["condition_masks"][:, np.newaxis, :]):
+        raise ValueError("Target eligibility extends outside its condition mask.")
+
+    for condition_index in range(condition_count):
+        pooled_arrays, pooled_meta = _pooled_slice_from_condition_payload(
+            arrays,
+            meta,
+            condition_index,
+        )
+        _validate_arrays(pooled_arrays, pooled_meta, config)
+
+
+def _validate_saved_arrays(
+    arrays: Mapping[str, np.ndarray],
+    meta: Mapping[str, object],
+    config: Mapping[str, object],
+) -> None:
+    """Dispatch a saved result to its immutable schema validator.
+
+    Parameters
+    ----------
+    arrays : mapping[str, numpy.ndarray]
+        Complete schema-1 or schema-2 primitive result members.
+    meta, config : mapping[str, object]
+        Saved metadata and scientific configuration.
+
+    Returns
+    -------
+    None
+        Raises ValueError for an unsupported schema or validation failure.
+    """
+    schema_version = meta.get("schema_version") if isinstance(meta, Mapping) else None
+    if schema_version == RESULT_SCHEMA_VERSION:
+        _validate_arrays(arrays, meta, config)
+    elif schema_version == CONDITION_RESULT_SCHEMA_VERSION:
+        _validate_condition_arrays(arrays, meta, config)
+    else:
+        raise ValueError("Result schema version is invalid.")
 
 
 
@@ -2025,7 +2382,7 @@ def save_task_decoding_run(
         "run_fingerprint"
     ) != run_fingerprint:
         raise ValueError("Run fingerprint disagrees with metadata provenance.")
-    _validate_arrays(arrays, meta, scientific_config)
+    _validate_saved_arrays(arrays, meta, scientific_config)
     source_bytes = _feature_copy_bytes(input_manifest, Path(feature_parameter_source))
     directory = Path(run_directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -2086,7 +2443,7 @@ def load_task_decoding_run(
         except (ValueError, json.JSONDecodeError) as error:
             raise ValueError("NPZ meta JSON is invalid.") from error
         arrays = {name: archive[name].copy() for name in archive.files if name != "meta"}
-    _validate_arrays(arrays, meta, config)
+    _validate_saved_arrays(arrays, meta, config)
     fingerprint = meta["provenance"]["run_fingerprint"]
     if expected_run_fingerprint is not None and fingerprint != expected_run_fingerprint:
         raise ValueError("Saved run fingerprint does not match expected identity.")
@@ -2097,3 +2454,36 @@ def load_task_decoding_run(
         "scientific_config": config,
         "run_fingerprint": fingerprint,
     }
+
+
+def condition_labels(saved_run: Mapping[str, object]) -> tuple[str, ...]:
+    """Return condition labels for either supported immutable result schema.
+
+    Parameters
+    ----------
+    saved_run : mapping[str, object]
+        Mapping returned by :func:`load_task_decoding_run`. Schema-1 pooled
+        results contain no physical condition axis and are interpreted as the
+        historical ``all`` condition.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Nonempty condition identifiers in saved axis order.
+    """
+    meta = saved_run.get("meta")
+    arrays = saved_run.get("arrays")
+    if not isinstance(meta, Mapping) or not isinstance(arrays, Mapping):
+        raise ValueError("Saved run metadata or arrays are invalid.")
+    schema_version = meta.get("schema_version")
+    if schema_version == RESULT_SCHEMA_VERSION:
+        return ("all",)
+    if schema_version != CONDITION_RESULT_SCHEMA_VERSION:
+        raise ValueError("Result schema version is invalid.")
+    labels = arrays.get("condition_labels")
+    if not isinstance(labels, np.ndarray) or labels.dtype != np.dtype("U32"):
+        raise ValueError("Condition label array is invalid.")
+    values = tuple(str(value) for value in labels.tolist())
+    if not values or len(set(values)) != len(values):
+        raise ValueError("Condition labels must be nonempty and unique.")
+    return values
