@@ -252,7 +252,7 @@ Each session needs four small control files before neural arrays are loaded:
 4. A task-decoding JSON configuration copied from the portable example.
 
 Copy the example into the session root, then edit its relative paths, probe
-IDs, unit-selection rules, targets, and scientific settings:
+IDs, unit-selection rules, targets, conditions, and scientific settings:
 
 ```bash
 cp docs/examples/neural_analysis/task_decoding_config.json \
@@ -267,6 +267,18 @@ and cluster groups select units; a nonempty list adds an explicit zero-based
 channel restriction. An empty `trusted_utc_bounds` object uses ordinary
 alignment coverage. Add a probe's `[start, end]` UTC-second bounds only when
 those bounds have been independently established.
+
+`condition_names` selects which trial subsets are decoded. The portable
+example uses the canonical full set: `all`, `correct_rewarded`, `omission`,
+`incorrect`, `switch`, and `stay`. Every selected target is evaluated under
+every selected condition. Correct rewarded, omission, and incorrect use the
+existing project outcome definitions. Switch and stay use the existing rule
+that labels a valid unrewarded current trial according to whether the
+immediately following valid choice changes or repeats its action. These masks
+can overlap, and they do not shift neural activity to the following trial.
+Empty or constant condition-target cells remain visible as unavailable rather
+than being omitted. Nonpooled conditions require the augmented table's
+`correct`, `reward`, `action`, and `experimenter_reward_given` columns.
 
 The normal behavior-processing path should create the complete augmented
 table. There is one narrow migration exception: if `rewards_in_block` is the
@@ -401,11 +413,11 @@ suffix when necessary). Important members are:
 | `execution.json`, `local_launch.json` | Requested/actual owner and detached receipt |
 | `run.log`, `console.log` | Stage log and detached stdout/stderr |
 | `resume_command.txt`, `status_command.txt` | Exact shell-safe follow-up commands |
-| `checkpoints/` | Fingerprint-bound, target-local primitive NPZ checkpoints |
+| `checkpoints/` | Fingerprint-bound primitive NPZ checkpoints; condition-aware runs use `condition--target.npz` names |
 | `resource_usage.json` | Atomic wall/CPU/peak-RSS, per-target operation timing, fit-count, envelope, and output-size evidence |
 | `results.npz` | Final validated non-pickle arrays and JSON metadata |
 | `summary.md` | Session, settings, availability, timing, and output summary |
-| `figures/` | `categorical_balanced_accuracy.png`, `categorical_auc.png`, and/or `numerical_r2.png` |
+| `figures/` | Pooled metric PNGs for legacy runs; condition-aware runs use names such as `omission--categorical_auc.png` for every configured condition |
 
 Open the existing metadata-driven webapp and select **Task-variable decoding
 results**:
@@ -419,7 +431,10 @@ The view defaults to the session-relative locator `analysis_runs`. If the
 configuration used a nondefault `output_root`, enter that relative locator in
 the view's **Results root (relative to session)** field. The selector considers
 only validated, completed direct-child runs. All controls load and re-render
-saved arrays; they never refit a decoder or load raw spikes.
+saved arrays; they never refit a decoder or load raw spikes. Schema-2 runs add
+a **Condition** selector whose choice controls heatmaps, fold details, and
+coefficient summaries. Older pooled results remain available as condition
+`all`.
 
 ### Fixed, tuned, and benchmark planning
 
@@ -459,10 +474,16 @@ worker.
 
 ### Run one session on Slurm
 
-WP11 supports one session per job through the reviewed wrapper. It requests
-one CPU, `3G` memory, `2-00:00:00` (48 hours), and a TERM warning five minutes
-before the limit. Submission is one-shot: neither the shell nor Python polls or
-retries `sbatch`. Slurm array batching remains separately deferred until WP13.
+WP11 supports one session per job through the reviewed wrapper. The standard
+profile requests one CPU, `3G` memory, `2-00:00:00` (48 hours), and a TERM
+warning five minutes before the limit. Submission is one-shot: neither the
+shell nor Python polls or retries `sbatch`. Slurm array batching remains
+separately deferred until WP13.
+
+The first full six-condition validation is intentionally larger. Submit that
+run with the reviewed `condition_validation` profile, which keeps one CPU but
+requests `8G` and `3-00:00:00` (72 hours). Do not reduce it until the completed
+pipeline evidence and Slurm accounting establish the actual margin.
 
 First transfer a session without deleting any cluster data. Keep analysis runs
 out of the input synchronization so a workstation cannot erase or replace a
@@ -489,6 +510,14 @@ bash src/shell_scripts/task_variable_decoding_slurm.sh submit-new --config \
   /cluster/session/task_decoding_config.json
 ```
 
+For the first full condition-resolved validation, use:
+
+```bash
+bash src/shell_scripts/task_variable_decoding_slurm.sh submit-new --config \
+  /cluster/session/task_decoding_config.json \
+  --resource-profile condition_validation
+```
+
 The wrapper checks the exact checkout, freezes all numerical thread counts to
 one, and executes `uv run --frozen --no-sync --offline`. It prints a JSON
 receipt containing the immutable run directory, Slurm job ID, exact commit,
@@ -507,6 +536,11 @@ resume only that exact directory:
 bash src/shell_scripts/task_variable_decoding_slurm.sh submit-resume --run-directory \
   /cluster/session/analysis_runs/<run_id>
 ```
+
+The generated resume command preserves a nonstandard resource profile. If it
+must be reconstructed manually for the validation run, append
+`--resource-profile condition_validation`; the code refuses changing a
+profile already fixed by the submission receipt.
 
 Do not resubmit a pending or running directory. The wrapper makes no scientific
 overrides, and the active job rechecks effective cgroup/allocation memory

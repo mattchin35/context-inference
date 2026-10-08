@@ -8,9 +8,10 @@ population PCA modules; those modules do not depend on this package. The
 integrated webapp imports only the saved-result loader and plotting layer, not
 the fitting pipeline.
 
-The scientific requirements are the revision-5 base contract plus its active
-revision-6 convergence amendment in `docs/task_variable_spec_v5.md` and
-`docs/task_variable_spec_v6.md`. Work-package history remains in
+The scientific requirements are the revision-5 base contract plus the active
+revision-6 convergence and revision-7 condition amendments in
+`docs/task_variable_spec_v5.md`, `docs/task_variable_spec_v6.md`, and
+`docs/task_variable_spec_v7.md`. Work-package history remains in
 `docs/task_variable_implementation_plan.md`. This file is the maintainer map,
 not a duplicate specification.
 
@@ -21,18 +22,19 @@ not a duplicate specification.
 | `__init__.py` | Package marker; it deliberately re-exports no broad convenience API. |
 | `config.py` | Frozen constants and `TargetDefinition`, `RegionConfig`, `TaskDecodingConfig`; `load_task_decoding_config` validates portable JSON and `scientific_config_payload` freezes scientific identity. |
 | `targets.py` | `validate_augmented_trials` and `build_target_table` validate the full chronological table and construct encoded targets plus masks. |
+| `conditions.py` | `build_condition_masks` validates configured conditions and copies the established project-wide trial-condition masks without changing their semantics. |
 | `activity.py` | `ProbeCoverage`, `RegionActivity`, `SessionRateTensors`, and `ActivityDryRunReport`; probe inspection/loading, common tensor construction, target-mask projection, byte estimates, memory-budget selection, and dry-run inspection. |
 | `modeling.py` | Grouped split, transform, fit, fold, and target result records; public split/feature/estimator/scoring/aggregation functions and `decode_target`. |
-| `results.py` | Input/source/run fingerprints, source-cleanliness validation, target checkpoints, and validated atomic `save_task_decoding_run` / `load_task_decoding_run`. |
-| `plotting.py` | `plot_decoding_heatmap`, `save_default_decoding_figures`, `summarize_unit_coefficients`, and `plot_unit_coefficients` operating on validated saved results. |
+| `results.py` | Input/source/run fingerprints, source-cleanliness validation, condition-target checkpoints, schema-1/schema-2 compatibility, condition selection, and validated atomic `save_task_decoding_run` / `load_task_decoding_run`. |
+| `plotting.py` | Condition-aware `plot_decoding_heatmap`, `save_default_decoding_figures`, `summarize_unit_coefficients`, and `plot_unit_coefficients` operating on validated saved results. |
 | `resource_usage.py` | `ResourceUsageTracker`, RSS normalization, shared resource-envelope validation, and atomic resumable `resource_usage.json` evidence. |
 | `pipeline.py` | `plan_task_decoding_session`, `prepare_task_decoding_run`, `run_prepared_task_decoding`, and `inspect_task_decoding_status`; all launch paths share these preparation/execution seams. |
 | `run_session.py` | Standard-library CLI `main` for public `dry-run`, `new`, `resume`, and `status` modes; numerical imports occur only after one-thread environment variables are set. |
 | `run_batch.py` | Standard-library CLI `main` plus `read_config_list`; bounded multi-session `dry-run` and foreground `new`, with evidence-gated cross-session workers. |
-| `slurm.py` | Standard-library one-shot `submit-new`, exact-directory `submit-resume`, and read-only `status` operations; it owns the fixed resource receipt and `sacct` parsing but no scientific computation. |
+| `slurm.py` | Standard-library one-shot `submit-new`, exact-directory `submit-resume`, and read-only `status` operations; it owns reviewed `standard` and `condition_validation` resource receipts and `sacct` parsing but no scientific computation. |
 | `../psth_webapp.py` and `../webapp/task_decoding_views.py` | Existing Streamlit entrypoint and early-routed **Task-variable decoding results** view. Discovery and rendering use completed saved runs only. |
 | `../../../docs/examples/neural_analysis/task_decoding_config.json` | Portable, explicit configuration template. Its repository path is `docs/examples/neural_analysis/task_decoding_config.json`. |
-| `../../shell_scripts/task_variable_decoding_slurm.sh` | Thin single-session Slurm wrapper with fixed one-CPU, 3-GiB, 48-hour resources, tracked-clean checkout checks, offline locked execution, and direct TERM propagation. Its repository path is `src/shell_scripts/task_variable_decoding_slurm.sh`. |
+| `../../shell_scripts/task_variable_decoding_slurm.sh` | Thin single-session Slurm wrapper with one-CPU defaults, tracked-clean checkout checks, offline locked execution, and direct TERM propagation. Python submission applies either the standard 3-GiB/48-hour request or the 8-GiB/72-hour condition-validation override. Its repository path is `src/shell_scripts/task_variable_decoding_slurm.sh`. |
 
 ## Data contracts
 
@@ -77,16 +79,33 @@ not represented as artificial all-zero firing rates: zero-filling would make
 missing coverage look like measured silence and could bias both PCA and the
 decoder.
 
-The final `results.npz` contains primitive, non-object arrays and scalar JSON
-metadata. Central axes are:
+`condition_names` selects a nonempty canonical subset of `all`,
+`correct_rewarded`, `omission`, `incorrect`, `switch`, and `stay`. Every
+configured target is evaluated for every configured condition. The nonpooled
+conditions exactly reuse `spike_behavior.trials.make_trial_type_masks` and
+therefore additionally require `correct`, `reward`, and `action`. Switch/stay
+classify a valid unrewarded current trial using the immediately following
+valid choice. Condition membership is intersected with ordinary target and
+common-neural eligibility; filtering never changes chronological target
+derivations.
 
-- scores: `(target, region, representation, metric, time, fold)`;
-- fit status/counts: `(target, region, representation, time, fold)`;
-- encoded values and eligibility: `(target, full_table_row)`;
-- outer fold IDs: `(target, common_neural_tensor_row)`;
-- coefficients: `(target, region, representation, time, fold, feature)`; and
-- tuned candidate audit, when applicable: target, outer fold, region,
-  representation, time, candidate, and inner fold.
+The final `results.npz` contains primitive, non-object arrays and scalar JSON
+metadata. In condition-aware schema 2, condition-dependent arrays add a
+leading condition axis while shared identities remain single-copy. Central
+axes are:
+
+- condition masks: `(condition, full_table_row)`;
+- scores: `(condition, target, region, representation, metric, time, fold)`;
+- fit status/counts: `(condition, target, region, representation, time, fold)`;
+- encoded values: `(target, full_table_row)`;
+- eligibility: `(condition, target, full_table_row)`;
+- outer fold IDs: `(condition, target, common_neural_tensor_row)`;
+- coefficients: `(condition, target, region, representation, time, fold, feature)`; and
+- tuned candidate audit, when applicable: condition, target, outer fold,
+  region, representation, time, candidate, and inner fold.
+
+Legacy schema-1 pooled runs omit the leading condition axis and continue to
+load as the single condition `all`.
 
 Regions are `PFC`, `HPC`, and `PFC+HPC`; representations are `pca` and
 `units`. Metrics are balanced accuracy and AUC for categorical targets and R2
@@ -101,7 +120,8 @@ objects identify metadata, augmented trials, feature parameters, distinct PFC
 and HPC probes, channel labels, inside-brain policy, cluster groups, and
 optional zero-based channel IDs. User controls select alignment, supported bin
 width, regional PC counts, target subset, `fixed` or `tuned` regularization,
-legal fold counts, optional trusted UTC bounds, and the contained output root.
+canonical `condition_names`, legal fold counts, optional trusted UTC bounds,
+and the contained output root.
 Unknown fields and invalid cross-field combinations are rejected.
 
 `scientific_config_payload` adds the analysis version and code-owned constants:
@@ -110,12 +130,15 @@ It excludes execution-only output paths. The run fingerprint binds this
 scientific payload to input byte identities, the exact feature-parameter file,
 the scoped scientific source fingerprint, and session identity.
 
-`results.py` owns result schema version 1. `save_task_decoding_run` validates
-all names, dtypes, shapes, axes, units, target/fold coherence, transform reuse,
-tuning audit, and identity before atomic publication. `load_task_decoding_run`
-uses `allow_pickle=False`, repeats validation, and returns a mapping containing
+`results.py` owns pooled result schema version 1 and condition-aware schema
+version 2. `save_task_decoding_run` validates all names, dtypes, shapes, axes,
+units, condition/target/fold coherence, transform reuse, tuning audit, and
+identity before atomic publication. `load_task_decoding_run` uses
+`allow_pickle=False`, repeats validation, and returns a mapping containing
 `arrays`, `meta`, `scientific_config`, `input_manifest`, and the run
-fingerprint. Callers never treat arbitrary NPZ content as trusted.
+fingerprint. `condition_labels` and `select_condition_arrays` expose one
+validated presentation slice without fitting. Callers never treat arbitrary
+NPZ content as trusted.
 
 ## Scientific validity and leakage boundaries
 
@@ -131,10 +154,13 @@ features. Held-out rows are transformed with the corresponding training fold
 state. Tuned mode performs grouped inner selection strictly inside an outer
 training fold and refits the selected candidate before outer scoring.
 
-After each target finishes, `pipeline.py` serializes primitive target arrays
-through `save_target_checkpoint`. A checkpoint is reused only when its full
-run fingerprint, target identity, schema, and arrays validate. Resume therefore
-skips completed targets without accepting stale scientific work.
+After each condition-target cell finishes, `pipeline.py` serializes primitive
+arrays through `save_target_checkpoint`. Condition-aware progress uses
+`condition::target` labels and `condition--target.npz` filenames. A checkpoint
+is reused only when its full run fingerprint, condition-target identity,
+schema, and arrays validate. Resume therefore skips completed cells without
+accepting stale scientific work. Pooled `all`-only runs retain their original
+target-only names and schema.
 
 ## Existing code deliberately reused
 
@@ -199,9 +225,11 @@ If figure or summary publication fails, terminal failure evidence replaces
 the provisional resource status and an explicit resume publishes only missing
 immutable artifacts.
 
-The WP11 cluster path is deliberately single-session. The fixed request is one
-CPU, `3G`, and `2-00:00:00`; login-side tensor memory and active cgroup memory are
-both guarded at 50 percent before large allocation. Status combines durable
+The WP11 cluster path is deliberately single-session. The `standard` request
+is one CPU, `3G`, and `2-00:00:00`; the first full condition-resolved validation
+uses `--resource-profile condition_validation`, one CPU, `8G`, and
+`3-00:00:00`. Login-side tensor memory and active cgroup memory are both
+guarded at 50 percent before large allocation. Status combines durable
 state with one `sacct` query and never polls. If accounting fails or has no
 exact root-job row, status still returns the durable pipeline state with
 `scheduler: null` and an explicit `scheduler_error`; it does not infer a live
@@ -216,6 +244,7 @@ path rather than duplicate scientific logic.
 | --- | --- |
 | `config.py` | `task_decoding/test_config.py` |
 | `targets.py` | `task_decoding/test_targets.py` |
+| `conditions.py` | `task_decoding/test_conditions.py` |
 | `activity.py` | `task_decoding/test_activity.py` |
 | `modeling.py` | `task_decoding/test_modeling.py` |
 | `resource_usage.py` | `task_decoding/test_resource_usage.py` |
@@ -227,8 +256,10 @@ path rather than duplicate scientific logic.
 | saved-result webapp | `test_webapp_task_decoding.py`, `test_webapp_task_decoding_rendering.py`, and routing tests |
 | READMEs, example, and command surface | `test_task_decoding_documentation.py` |
 
-`test_synthetic_integration.py` is reserved for the later WP9 end-to-end gate.
-Run focused tests before the full task-decoding and affected webapp suites.
+`test_synthetic_integration.py` exercises both the legacy pooled path and a
+real six-condition schema-2 path through loading, fitting, checkpoints,
+publication, figures, and reentry. Run focused tests before the full
+task-decoding and affected webapp suites.
 
 ## Adding a future target
 

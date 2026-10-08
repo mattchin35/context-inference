@@ -52,6 +52,14 @@
     "hmm_decay_signed_belief",
     "relative_doubt"
   ],
+  "condition_names": [
+    "all",
+    "correct_rewarded",
+    "omission",
+    "incorrect",
+    "switch",
+    "stay"
+  ],
   "regularization_mode": "fixed",
   "outer_fold_count": 5,
   "inner_fold_count": 3,

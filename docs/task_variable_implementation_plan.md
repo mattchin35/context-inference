@@ -11,15 +11,25 @@ because approximately 15 minutes per session does not scale well across many
 sessions. WP11 single-session Slurm support and WP13 bounded per-session job
 arrays are therefore required packages. Experimental-data transfer and real
 scheduler submissions retain their separate exact-action gates below.
+The user inspected the completed pooled CT026 output, confirmed that the core
+analysis is functional, and approved a condition-resolved extension using the
+same 18 targets under `all`, `correct_rewarded`, `omission`, `incorrect`,
+`switch`, and `stay`.
 
 **Scientific contract:** `docs/task_variable_spec_v5.md` plus the active
-normative amendment `docs/task_variable_spec_v6.md`.
+normative amendments `docs/task_variable_spec_v6.md` and
+`docs/task_variable_spec_v7.md`.
 
 ## Live handoff snapshot
 
 **Snapshot date:** 2026-10-08
 
-**Current phase:** WP0-WP11 are complete. The first v2 bounded run proved the
+**Current phase:** WP0-WP11 are complete. The condition-resolved v3 extension
+is implemented tests-first through production commit `d7c6b1c`; its final
+documentation and real synthetic schema-2 gate began with RED commit
+`8138aeb`. The remaining local gate is the v7 documentation/example update and
+full affected test suite. No all-condition experimental job has been submitted.
+The first v2 bounded run proved the
 convergence repair but exposed a competing-resume lifecycle defect during
 diagnosis. The approved repair is committed through `77ff461`, pushed, and
 tracked-clean. The clean bounded v2 rerun
@@ -39,8 +49,9 @@ is recorded at `484e784`. The full fixed-mode CT026 config, grouped input
 transfer, and matching local/cluster dry runs are now complete. The separately
 approved full CT026 run completed as Slurm job `30985392` at exact commit
 `c086bdf`, passed result validation, and was returned through hidden local
-staging before atomic promotion. WP12 now waits for the user's scientific
-inspection/acceptance of the saved heatmaps. The observed 4-hour-41-minute
+staging before atomic promotion. Inspection of the pooled output exposed the
+need for condition-resolved results, so WP13 is deferred until the v3 output is
+validated and inspected. The observed 4-hour-41-minute
 runtime left only an 18-minute five-hour margin. The approved corrective RED
 contract is committed at `075581a`, and GREEN production at `506daa8` now
 requests 48 hours (`2-00:00:00`) for future single-session Slurm jobs.
@@ -62,11 +73,10 @@ contracts are committed through `827989c`, and WP6 GREEN is committed at
 `7d6b4a8`. WP7 plotting/webapp contracts and review supplements are committed
 through `0c6ce07`, and WP7 GREEN is committed at `ef7ad55`. WP8 tests are
 committed through `a1c1f5c`, the dry-run JSON correction is `b2b3dde`, and the
-documentation/example GREEN commit is `8b92c4f`. No further experimental-data
-mutation, transfer, or real cluster action is authorized by this planning
-decision. The already launched bounded WP10 rerun may finish, and cluster
-source/tests may begin only after the local gates and the tests-first plan
-below.
+documentation/example GREEN commit is `8b92c4f`. The condition-extension
+approval authorizes its local source, tests, documentation, and synthetic gate;
+it does not by itself authorize experimental-data transfer or a real cluster
+submission. Those remain exact-action gates below.
 WP9's characterization-only synthetic integration gate is committed at
 `9ea0109`. WP9A's permission regression and fix are committed at `b322427` and
 `cdb04d9`; the CT026 table and its exact backup passed post-write validation.
@@ -124,17 +134,76 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** have the user inspect the promoted CT026 heatmaps and
-saved-result view. If accepted, close WP12 and plan WP13 per-session job arrays.
-The 48-hour single-session correction is complete; no new computation is
-implied.
+**Next exact action:** complete and push the v3 documentation and synthetic
+gate. Then update the tracked-clean cluster checkout, create and verify the
+exact six-condition CT026 configuration, and run matching local/cluster dry
+runs. The first full condition submission must use one CPU, `8G`,
+`3-00:00:00`, and the `condition_validation` profile. A real submission remains
+a separately confirmed exact action; WP13 remains deferred until this output
+is inspected.
+
+## Condition-resolved extension
+
+### Approved scientific scope
+
+- One run contains the six canonical conditions `all`, `correct_rewarded`,
+  `omission`, `incorrect`, `switch`, and `stay`.
+- Each condition receives the same exact configured target list; the first
+  real run uses all 18 canonical targets.
+- Condition masks exactly reuse
+  `spike_behavior.trials.make_trial_type_masks`, including the existing
+  current-unrewarded/next-choice definition of switch and stay.
+- Condition membership intersects existing target and common-neural
+  eligibility. Empty and structurally constant cells are explicit unavailable
+  results, not omissions or fabricated scores.
+
+### Architecture and completed tests-first slices
+
+- `config.py` owns canonical condition identity and analysis version v3;
+  `conditions.py` adapts the shared masks.
+- `pipeline.py` executes condition-major, target-major cells and uses
+  `condition::target` durable labels with `condition--target.npz` checkpoints.
+- `results.py` owns schema 2 with a leading condition axis on dependent arrays
+  and keeps schema 1 readable as pooled `all`.
+- `plotting.py` and the saved-results webapp select an explicit condition and
+  require condition-qualified default PNGs.
+- `slurm.py` owns the conservative `condition_validation` resource profile.
+- RED and GREEN commits through `d7c6b1c` cover masks/configuration/resources,
+  schema, execution/resume, summaries/figures, and webapp selection. Final RED
+  `8138aeb` adds a real six-condition synthetic run plus documentation/example
+  contracts.
+
+### Performance and cluster validation
+
+Six conditions multiply the full fixed-mode requested outer-cell count from
+21,600 to 129,600 before unavailable cells reduce actual fitting. Neural rate
+tensors and shared target identities are not duplicated, but condition-
+dependent score, fit, coefficient, and audit arrays grow with the condition
+axis. The first full run is intentionally conservative: one task, one CPU,
+`8G`, `3-00:00:00` (72 hours), and `B:TERM@300`. After completion, compare
+pipeline wall/CPU/peak-RSS evidence with Slurm `Elapsed`, `TotalCPU`, `MaxRSS`,
+`ReqMem`, and `Timelimit` before proposing any smaller normal profile.
+
+### Remaining gates
+
+1. Complete revision 7, the portable six-condition example, and both READMEs.
+2. Pass the focused documentation and real synthetic condition gate, then the
+   full task-decoding and affected webapp suite.
+3. Push the exact commit and update the tracked-clean cluster checkout.
+4. Place the condition-resolved configuration with the real CT026 session,
+   confirm all 18 targets and six conditions by local and cluster dry run, and
+   present the exact submission command.
+5. Submit only the single approved `condition_validation` job, inspect it once
+   later, return it through hidden staging, validate it locally, and obtain
+   user scientific acceptance before WP13.
 
 ### Authority order
 
 When resuming, use this order:
 
 1. `docs/task_variable_spec_v5.md` owns the base scientific definitions and
-   defaults; `docs/task_variable_spec_v6.md` is its active normative amendment.
+   defaults; `docs/task_variable_spec_v6.md` and
+   `docs/task_variable_spec_v7.md` are its active normative amendments.
 2. This document owns implementation order, file ownership, tests, agent
    assignments, documentation deliverables, and live status.
 3. `AGENTS.md` and `docs/SoftwareDesign.md` govern TDD, readability, data
@@ -164,15 +233,17 @@ When resuming, use this order:
 | WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence remains the WP10 gate |
 | WP10D competing-owner lifecycle repair and local acceptance | Complete: lifecycle repair through `77ff461`; clean 2,400-cell bounded run and 9,600-cell categorical stress run accepted | None |
 | WP11 single-session cluster path | Complete: RED `a3dcdb9`, handoff `e91fa5f`, GREEN `b9d8645`; mocked and local tests only | None; real execution belongs to WP12 |
-| WP12 CT026 one-session cluster validation | In progress: full job `30985392` completed, validated, returned through hidden staging, and promoted locally | User scientific heatmap acceptance; then close WP12 |
+| WP12 CT026 one-session cluster validation | Pooled run `30985392` completed, validated, returned, and inspected; v3 condition-resolved follow-up is required | Complete the condition extension and inspect its full output |
+| Condition-resolved v3 extension | Production complete through `d7c6b1c`; final synthetic/docs RED is `8138aeb` | Complete local GREEN gate, then exact cluster config/dry-run/submission gates |
 | WP13 bounded cluster batch array | Required after WP12 acceptance; source not started | Implement tests-first per-session concurrency; authorize any real array separately |
 
 ### Resume checklist
 
 A new or returning Sol supervisor must:
 
-1. read revision 5, its revision-6 amendment, this complete plan, `AGENTS.md`,
-   `docs/SoftwareDesign.md`, and the most recent package record;
+1. read revision 5, its revision-6 and revision-7 amendments, this complete
+   plan, `AGENTS.md`, `docs/SoftwareDesign.md`, and the most recent package
+   record;
 2. record current branch, HEAD, `git status --short`, staged diff, and unstaged
    diff without modifying either;
 3. distinguish user/pre-existing changes from package-owned changes and stop
