@@ -8,25 +8,21 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 01:36 EDT.
+**Snapshot date:** 2026-10-08 09:44 EDT.
 
-**Current phase:** WP1-WP7 are complete and GREEN. The standard linear workflow now includes
+**Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
 training-only fold-local regional PCA, bidirectional PC OLS, explicit unavailable PC ranks, and
 complete-fold summaries, immutable run persistence, single-session/batch command boundaries,
 standard saved-result PNGs, and a metadata-driven read-only webapp view. Its seeded full synthetic
-integration and bounded performance gate are recorded below. WP8 is authorized and active for
-CT026 session `CT026_2026-08-03_111938` with ProbeA as PFC, ProbeB as HPC, the documented 100-ms
-OLS defaults, a session-local configuration, and the session's `analysis_runs` output root. The
-run and technical inspection are complete. The user approved a tests-first bounded correction for
-the observed figure-label, legend, and summary-provenance defects, followed by a fresh immutable
-rerun. That correction and rerun are complete; user scientific acceptance of the corrected output
-is pending.
+integration, bounded performance gate, corrected CT026 inspection, and user acceptance are recorded
+below. The user authorized WP9 unit-count Poisson CV and matched OLS/Poisson MSE implementation;
+core tests are next.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `673bc3f`;
+- HEAD before this handoff record: `04ab655`;
 - plan-owned files: `docs/neural_regression_plan.md` and
   `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
@@ -56,8 +52,8 @@ is pending.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** present the corrected immutable CT026 run for user review. Do not begin WP9
-until the user accepts the standard-regression scientific output.
+**Next exact action:** commit the WP9 activation record, then write and commit the core Poisson and
+matched-MSE tests in RED before implementing `poisson.py`.
 
 ### Authority order
 
@@ -89,8 +85,8 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP5 | Saved results, run identity, session runner, and batch runner | Complete | WP6 complete |
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
-| WP8 | One-session standard-regression scientific inspection | Corrected rerun complete; user review pending | User accepts or rejects standard-regression output before WP9 |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Not authorized | WP8 user inspection/approval |
+| WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Active; core tests next | Tests-only RED commit before implementation |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -632,11 +628,36 @@ Use this template:
 - Exact next action and authorization: present the corrected run to the user. Begin WP9 only after
   explicit scientific acceptance and separate WP9 authorization.
 
+#### 2026-10-08 09:44 EDT - WP8 accepted and WP9 activated
+
+- State: WP8 is complete and accepted; WP9 core tests are next.
+- Authorization: after reviewing the interpretation of absolute versus incremental CV R-squared,
+  the user requested a push and continued implementation. This accepts the corrected standard-
+  regression output and authorizes WP9; it does not authorize another experimental-data run.
+- Sol / Terra / reviewer: primary implementation agent; no worker.
+- Start HEAD / end HEAD: `04ab655` / `04ab655` before this activation record.
+- Worktree and owned files: no tracked modification before this record. Four known, noninterfering
+  task-decoding commits from another task advanced the shared branch after the WP8 handoff; the user
+  confirmed they are expected. They are preserved unchanged.
+- API verification: installed statsmodels is 0.15.0. Source inspection confirmed `GLM(endog, exog,
+  family, missing)`, `GLM.fit(method="IRLS", maxiter=100, tol=1e-8, scale=None,
+  cov_type="nonrobust", full_output=True, disp=False)`, `Poisson(Log())`, Boolean `converged`, and
+  integer `fit_history["iteration"]`. The installed source emits `PerfectSeparationWarning` and
+  exposes the frozen statsmodels warning/exception classes.
+- RED/GREEN commands and commits: pending WP9 tests-only work.
+- Real-data, filesystem, or external actions: `git push origin refactor` reported everything up to
+  date at `04ab655`. No experimental data were opened and no analysis output was created.
+- Findings and unresolved risks: no new blocker was found. WP9 remains target-wise because
+  convergence/status are target-specific; histories and designs will be reused within each fold.
+  No within-session parallel fitting will be added before measured profiling.
+- Exact next action and authorization: write and commit `test_interregional_poisson.py` in RED,
+  then implement only the core target-wise fitting, scoring, and derived matched-MSE layer.
+
 ## Plan objective and status
 
 This plan implements `docs/spec_neural_regression_v3.md`. It was approved and is now the
 authoritative phased implementation and handoff log. Package-specific authorization and data-run
-gates remain binding even though WP1-WP7 implementation is complete.
+gates remain binding even though WP1-WP8 implementation is complete.
 
 The implementation order is deliberately fixed:
 
