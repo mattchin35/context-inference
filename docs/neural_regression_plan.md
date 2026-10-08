@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 14:46 EDT.
+**Snapshot date:** 2026-10-08 14:50 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -22,14 +22,14 @@ Poisson run `30989197` was OOM-killed after approximately 2 hours 44 minutes wit
 allocation. Reduced execution telemetry is implemented and GREEN. The separately approved bounded
 benchmark, Slurm job `30991145`, reproduced the OOM within the first Poisson cell after OLS completed;
 the approved minimal change from Statsmodels' default least-squares backend to its QR backend within
-the same unpenalized IRLS estimator is implemented and locally GREEN. No CT026 rerun, scale test, or
-full retry is authorized. WP9 scientific acceptance and WP10 remain blocked on an inspected
-completed output.
+the same unpenalized IRLS estimator is implemented and locally GREEN. The separately approved repeat
+of the same bounded CT026 benchmark is running as Slurm job `30991248`; no scale test or full retry
+is authorized. WP9 scientific acceptance and WP10 remain blocked on an inspected completed output.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `c52bfd0`;
+- HEAD before this handoff record: `8806643`;
 - plan-owned files: `docs/neural_regression_plan.md` and
   `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
@@ -59,9 +59,9 @@ completed output.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** request separate approval to rerun the same bounded CT026 benchmark with the
-QR-backed commit, unchanged 32-GiB allocation, and distinct immutable output root. Do not launch
-that job, a scale test, full retry, or WP10 without approval.
+**Next exact action:** after job `30991248` leaves the queue, inspect its scheduler state, final
+telemetry, and either finalized result or retained incomplete attempt. Do not launch a replacement,
+scale test, full retry, or WP10 without separate approval.
 
 ### Authority order
 
@@ -94,7 +94,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | QR-backed IRLS correction locally GREEN | Separate approval for the same bounded CT026 benchmark |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | QR-backed bounded benchmark job `30991248` running | Inspect benchmark outcome; no automatic replacement |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -912,6 +912,30 @@ Use this template:
 - Exact next action and authorization: after commit and push, request approval for the same bounded
   CT026 benchmark configuration and 32-GiB allocation using the QR-backed commit. Do not submit it
   or any larger run without that separate approval.
+
+#### 2026-10-08 14:50 EDT - WP9 QR-backed bounded benchmark submitted
+
+- State and authorization: the user separately approved repeating the same bounded CT026 benchmark.
+  Exactly one job, Slurm `30991248`, was submitted with eight CPUs and 32 GiB. This does not
+  authorize a replacement, scale test, full retry, or WP10.
+- Reproducibility: the cluster checkout was tracked-clean apart from expected untracked Python cache
+  directories and was fast-forwarded to exact QR-backed commit
+  `88066433f4b3896c98b5b69dfb6b38133b0762ac`. The existing benchmark configuration was not changed:
+  session `CT026_2026-08-03_111938`, condition `all`, window `whole`, representation `units`, and
+  analyses `ols_cv` plus `poisson_cv`, with the distinct benchmark output root and original unit,
+  fold, bin, lag, and model settings. The repeated dry-run again planned one session from
+  274,440,585 input bytes.
+- Submission evidence: scheduler log
+  `/gs/gsfs0/users/mchin1/logs/interregional_regression_30991248.log` records node `cpu-755`, UTC
+  start `2026-10-08T18:49:16Z`, the exact commit, tracked-clean status, eight-thread numerical
+  limits, `uv 0.12.17`, and the exact benchmark configuration argument. The job entered `RUNNING`
+  with the requested allocation.
+- Telemetry startup: immutable attempt
+  `.interregional_regression_20261008T185005743728Z.incomplete` contains a parseable resource trace.
+  Its first inspected records show ordered OLS progress with approximately 1.04 GiB process peak
+  RSS. Cgroup fields remain unavailable on this node as documented for the preceding benchmark.
+- Exact next action and authorization: inspect job `30991248` after it leaves the queue, including
+  the scheduler log, trace, and saved artifacts. Do not submit another job automatically.
 
 ## Plan objective and status
 
