@@ -17,7 +17,11 @@ from src.neural_analysis.task_decoding.plotting import (
     plot_unit_coefficients,
     summarize_unit_coefficients,
 )
-from src.neural_analysis.task_decoding.results import load_task_decoding_run
+from src.neural_analysis.task_decoding.results import (
+    condition_labels,
+    load_task_decoding_run,
+    select_condition_arrays,
+)
 
 
 DEFAULT_TASK_DECODING_RESULTS_ROOT = "analysis_runs"
@@ -174,6 +178,7 @@ def _fold_detail_table(
     representation: str,
     metric: str,
     time_bin_index: int,
+    condition: str = "all",
 ) -> pd.DataFrame:
     """Build one selected-cell outer-fold score/count/failure table.
 
@@ -186,6 +191,8 @@ def _fold_detail_table(
         axes. Scores are dimensionless.
     time_bin_index : int
         Zero-based saved time-bin position.
+    condition : str, default="all"
+        Exact saved condition whose fold rows are displayed.
 
     Returns
     -------
@@ -193,7 +200,7 @@ def _fold_detail_table(
         One row per outer fold with score, fit status/reason, train/test counts,
         class counts where applicable, and requested/effective feature counts.
     """
-    arrays = saved_run["arrays"]
+    arrays = select_condition_arrays(saved_run, condition)
 
     def position(axis: str, label: str) -> int:
         """Return an exact saved label position for the local table builder.
@@ -333,6 +340,10 @@ def render_task_decoding_view(st_module: object, session: ResolvedSession) -> No
     st_module.caption("All controls below re-render saved arrays; none recompute a decoder.")
     st_module.json(saved_run["scientific_config"], expanded=False)
     arrays = saved_run["arrays"]
+    condition = st_module.selectbox(
+        "Condition",
+        options=list(condition_labels(saved_run)),
+    )
     families = set(arrays["target_families"].tolist())
     categorical_metric = "balanced_accuracy"
     if "categorical" in families:
@@ -344,13 +355,19 @@ def render_task_decoding_view(st_module: object, session: ResolvedSession) -> No
             saved_run,
             family="categorical",
             metric=categorical_metric,
+            condition=condition,
         )
         try:
             st_module.pyplot(figure)
         finally:
             plt.close(figure)
     if "numerical" in families:
-        figure = plot_decoding_heatmap(saved_run, family="numerical", metric="r2")
+        figure = plot_decoding_heatmap(
+            saved_run,
+            family="numerical",
+            metric="r2",
+            condition=condition,
+        )
         try:
             st_module.pyplot(figure)
         finally:
@@ -377,6 +394,7 @@ def render_task_decoding_view(st_module: object, session: ResolvedSession) -> No
         representation=representation,
         metric=metric,
         time_bin_index=time_bin_index,
+        condition=condition,
     )
     st_module.subheader("Selected-cell outer-fold details")
     st_module.dataframe(fold_table, use_container_width=True, hide_index=True)
@@ -386,12 +404,14 @@ def render_task_decoding_view(st_module: object, session: ResolvedSession) -> No
             target=target,
             region=region,
             time_bin_index=time_bin_index,
+            condition=condition,
         )
         coefficient_figure = plot_unit_coefficients(
             saved_run,
             target=target,
             region=region,
             time_bin_index=time_bin_index,
+            condition=condition,
         )
         try:
             st_module.pyplot(coefficient_figure)

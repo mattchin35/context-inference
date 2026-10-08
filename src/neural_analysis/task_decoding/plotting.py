@@ -13,7 +13,12 @@ from matplotlib.colors import TwoSlopeNorm
 import numpy as np
 import pandas as pd
 
-from src.neural_analysis.task_decoding.results import load_task_decoding_run
+from src.neural_analysis.task_decoding.results import (
+    CONDITION_RESULT_SCHEMA_VERSION,
+    condition_labels,
+    load_task_decoding_run,
+    select_condition_arrays,
+)
 
 
 NONZERO_COEFFICIENT_TOLERANCE = 1e-8
@@ -118,6 +123,23 @@ def _target_display_label(identifier: str) -> str:
     return label[0].upper() + label[1:] if label else label
 
 
+def _condition_display_label(identifier: str) -> str:
+    """Convert one stable condition identifier to a concise display label.
+
+    Parameters
+    ----------
+    identifier : str
+        Saved snake-case condition identifier.
+
+    Returns
+    -------
+    str
+        Human-readable title preserving the underlying saved identifier.
+    """
+    label = identifier.replace("_", " ")
+    return label[0].upper() + label[1:] if label else label
+
+
 def _heatmap_normalization(values: np.ndarray, reference: float) -> TwoSlopeNorm:
     """Build a reference-centered scale that never clips finite saved scores.
 
@@ -147,6 +169,7 @@ def _heatmap_caption(
     arrays: Mapping[str, np.ndarray],
     target_indices: np.ndarray,
     metric: str,
+    condition: str,
 ) -> str:
     """Compose a concise scientific caption from saved counts and fold coverage.
 
@@ -158,6 +181,8 @@ def _heatmap_caption(
         One-dimensional positions of targets shown in the heatmaps.
     metric : {"balanced_accuracy", "auc", "r2"}
         Saved held-out metric displayed.
+    condition : str
+        Exact saved condition whose scores and eligibility counts are shown.
 
     Returns
     -------
@@ -176,7 +201,8 @@ def _heatmap_caption(
     else:
         reference_text = "0 is a descriptive reference; negative R² values remain visible."
     return (
-        f"Held-out outer-fold {_METRIC_TITLES[metric].lower()}; {reference_text} "
+        f"Condition: {condition}. Held-out outer-fold "
+        f"{_METRIC_TITLES[metric].lower()}; {reference_text} "
         f"Gray cells are unavailable. {trial_summary}; {fold_count} outer folds."
     )
 
@@ -186,6 +212,7 @@ def plot_decoding_heatmap(
     *,
     family: str,
     metric: str,
+    condition: str = "all",
     _legacy_panel_titles: bool = False,
 ) -> plt.Figure:
     """Plot one saved metric across all region/representation combinations.
@@ -199,6 +226,9 @@ def plot_decoding_heatmap(
         Target family to facet on the heatmap row axis.
     metric : {"balanced_accuracy", "auc", "r2"}
         Held-out metric. Categorical metrics use a 0.5 reference; R² uses 0.
+    condition : str, default="all"
+        Exact saved condition to display. Historical schema-1 runs expose only
+        ``all``; schema-2 runs select one leading condition-axis cell.
     _legacy_panel_titles : bool, default=False
         Internal compatibility presentation for the pre-WP7 pipeline test seam.
         User-facing figures always use the clearer WP7 titles.
@@ -211,7 +241,7 @@ def plot_decoding_heatmap(
     """
     if family not in _FAMILY_METRICS or metric not in _FAMILY_METRICS[family]:
         raise ValueError("Metric is not valid for the requested target family.")
-    arrays = _saved_arrays(saved_run)
+    arrays = select_condition_arrays(saved_run, condition)
     target_indices = np.flatnonzero(arrays["target_families"] == family)
     if target_indices.size == 0:
         raise ValueError(f"Saved run has no {family} targets.")
@@ -264,8 +294,12 @@ def plot_decoding_heatmap(
             for spine in axis.spines.values():
                 spine.set_color("black")
     assert image is not None
-    figure.suptitle(_METRIC_TITLES[metric], color="black", fontsize=15)
-    caption = _heatmap_caption(arrays, target_indices, metric)
+    figure.suptitle(
+        f"{_METRIC_TITLES[metric]} - {_condition_display_label(condition)}",
+        color="black",
+        fontsize=15,
+    )
+    caption = _heatmap_caption(arrays, target_indices, metric, condition)
     figure.text(
         0.02,
         0.015,
@@ -351,23 +385,39 @@ def save_default_decoding_figures(
     loaded = load_task_decoding_run(directory) if saved_run is None else saved_run
     arrays = _saved_arrays(loaded)
     families = set(arrays["target_families"].tolist())
-    specifications: list[tuple[str, str, str]] = []
+    metric_specifications: list[tuple[str, str, str]] = []
     if "categorical" in families:
-        specifications.extend(
+        metric_specifications.extend(
             [
                 ("categorical", "balanced_accuracy", "categorical_balanced_accuracy.png"),
                 ("categorical", "auc", "categorical_auc.png"),
             ]
         )
     if "numerical" in families:
-        specifications.append(("numerical", "r2", "numerical_r2.png"))
+        metric_specifications.append(("numerical", "r2", "numerical_r2.png"))
+    schema_version = loaded.get("meta", {}).get("schema_version")
+    specifications = [
+        (
+            condition,
+            family,
+            metric,
+            (
+                f"{condition}--{filename}"
+                if schema_version == CONDITION_RESULT_SCHEMA_VERSION
+                else filename
+            ),
+        )
+        for condition in condition_labels(loaded)
+        for family, metric, filename in metric_specifications
+    ]
     paths = []
-    for family, metric, filename in specifications:
+    for condition, family, metric, filename in specifications:
         destination = directory / "figures" / filename
         figure = plot_decoding_heatmap(
             loaded,
             family=family,
             metric=metric,
+            condition=condition,
             _legacy_panel_titles=_legacy_panel_titles,
         )
         try:
@@ -378,12 +428,48 @@ def save_default_decoding_figures(
     return tuple(paths)
 
 
+def required_default_figure_filenames(
+    saved_run: Mapping[str, object],
+) -> tuple[str, ...]:
+    """Return the exact deterministic completion-gate PNG names for one run.
+
+    Parameters
+    ----------
+    saved_run : mapping[str, object]
+        Valid loader-shaped schema-1 or schema-2 run.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Present-family filenames in condition-major then metric order. Pooled
+        schema-1 names remain unchanged; schema-2 names use
+        ``condition--metric.png`` qualification.
+    """
+    arrays = _saved_arrays(saved_run)
+    families = set(arrays["target_families"].tolist())
+    base_names: list[str] = []
+    if "categorical" in families:
+        base_names.extend(
+            ["categorical_balanced_accuracy.png", "categorical_auc.png"]
+        )
+    if "numerical" in families:
+        base_names.append("numerical_r2.png")
+    if saved_run.get("meta", {}).get("schema_version") != CONDITION_RESULT_SCHEMA_VERSION:
+        return tuple(base_names)
+    return tuple(
+        f"{condition}--{filename}"
+        for condition in condition_labels(saved_run)
+        for filename in base_names
+    )
+
+
 def summarize_unit_coefficients(
     saved_run: Mapping[str, object],
     *,
     target: str,
     region: str,
     time_bin_index: int,
+    condition: str = "all",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Summarize selected direct-unit coefficients across saved outer folds.
 
@@ -398,6 +484,8 @@ def summarize_unit_coefficients(
         Exact saved regional configuration.
     time_bin_index : int
         Zero-based saved time-bin position.
+    condition : str, default="all"
+        Exact saved condition whose direct-unit folds are summarized.
 
     Returns
     -------
@@ -406,7 +494,7 @@ def summarize_unit_coefficients(
         with fit status, reason, counts, and nonzero coefficient fractions.
         Coefficients retain their saved model scale and unit labels.
     """
-    arrays = _saved_arrays(saved_run)
+    arrays = select_condition_arrays(saved_run, condition)
     target_index = _label_index(arrays["target_labels"], target, "target")
     region_index = _label_index(arrays["region_labels"], region, "region")
     representation_index = _label_index(
@@ -542,6 +630,7 @@ def plot_unit_coefficients(
     target: str,
     region: str,
     time_bin_index: int,
+    condition: str = "all",
 ) -> plt.Figure:
     """Plot direct-unit outer-fold coefficients with median and IQR summaries.
 
@@ -555,6 +644,8 @@ def plot_unit_coefficients(
         Selected regional configuration.
     time_bin_index : int
         Zero-based saved time-bin position.
+    condition : str, default="all"
+        Exact saved condition whose direct-unit coefficients are plotted.
 
     Returns
     -------
@@ -563,12 +654,13 @@ def plot_unit_coefficients(
         fold-local excluded features, and unavailable fits use distinct legend
         entries. IQR is descriptive across CV fits, not a confidence interval.
     """
-    arrays = _saved_arrays(saved_run)
+    arrays = select_condition_arrays(saved_run, condition)
     feature_table, fold_table = summarize_unit_coefficients(
         saved_run,
         target=target,
         region=region,
         time_bin_index=time_bin_index,
+        condition=condition,
     )
     target_index = _label_index(arrays["target_labels"], target, "target")
     region_index = _label_index(arrays["region_labels"], region, "region")
@@ -656,7 +748,10 @@ def plot_unit_coefficients(
     time_s = float(arrays["time_bin_centers_s"][time_bin_index])
     axis.set_xlabel(scale)
     axis.set_ylabel("Stable unit identity")
-    axis.set_title(f"{_target_display_label(target)} - {region} at {time_s:g} s")
+    axis.set_title(
+        f"{_target_display_label(target)} - {region} - "
+        f"{_condition_display_label(condition)} at {time_s:g} s"
+    )
     axis.legend(loc="best")
     axis.tick_params(colors="black")
     if feature_table.empty:
@@ -676,7 +771,7 @@ def plot_unit_coefficients(
         "Points are signed outer-fold coefficients; diamonds and bars show median and IQR. "
         "IQR is variation across CV fits, not a confidence interval. Coefficients describe "
         f"decoder reliance, not causal contribution. Scale: {scale}. "
-        f"Outer fits: {fold_table.shape[0]}."
+        f"Condition: {condition}. Outer fits: {fold_table.shape[0]}."
     )
     figure.text(0.02, 0.015, caption, color="black", fontsize=9, wrap=True)
     figure.subplots_adjust(left=0.26, right=0.90, top=0.90, bottom=0.18)

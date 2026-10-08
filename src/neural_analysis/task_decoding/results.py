@@ -2496,3 +2496,58 @@ def condition_labels(saved_run: Mapping[str, object]) -> tuple[str, ...]:
     if not values or len(set(values)) != len(values):
         raise ValueError("Condition labels must be nonempty and unique.")
     return values
+
+
+def select_condition_arrays(
+    saved_run: Mapping[str, object],
+    condition: str,
+) -> Mapping[str, np.ndarray]:
+    """Return a pooled-axis array view for one saved condition.
+
+    Parameters
+    ----------
+    saved_run : mapping[str, object]
+        Valid mapping returned by :func:`load_task_decoding_run`. Schema-2
+        arrays declare axis names in ``meta["axes"]``; schema-1 runs represent
+        only the historical pooled ``all`` condition.
+    condition : str
+        Exact saved condition identifier.
+
+    Returns
+    -------
+    mapping[str, numpy.ndarray]
+        Schema-1-shaped view: arrays whose leading metadata axis is
+        ``condition`` are sliced at the selected position, while stable shared
+        arrays retain their original shape, axis convention, units, and object
+        identity. Schema-1 ``all`` returns the original array mapping.
+
+    Raises
+    ------
+    ValueError
+        If the condition is absent or saved schema/axis metadata is invalid.
+    """
+    arrays = saved_run.get("arrays")
+    meta = saved_run.get("meta")
+    if not isinstance(arrays, Mapping) or not isinstance(meta, Mapping):
+        raise ValueError("Saved run metadata or arrays are invalid.")
+    labels = condition_labels(saved_run)
+    if condition not in labels:
+        raise ValueError(f"Unknown saved condition: {condition}")
+    if meta.get("schema_version") == RESULT_SCHEMA_VERSION:
+        return arrays
+
+    axes = meta.get("axes")
+    if not isinstance(axes, Mapping):
+        raise ValueError("Saved condition axis metadata is invalid.")
+    condition_index = labels.index(condition)
+    selected: dict[str, np.ndarray] = {}
+    for name, array in arrays.items():
+        array_axes = axes.get(name)
+        if not isinstance(array_axes, list):
+            raise ValueError(f"Saved condition axes are invalid for {name}.")
+        selected[name] = (
+            array[condition_index]
+            if array_axes and array_axes[0] == "condition"
+            else array
+        )
+    return selected

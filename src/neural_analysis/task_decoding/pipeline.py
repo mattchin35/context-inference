@@ -3055,7 +3055,31 @@ def _write_run_summary(
     if destination.exists():
         return
     warnings = state.get("warnings", [])
-    unavailable = arrays["target_labels"][arrays["target_status"] == "unavailable"].tolist()
+    target_labels = [str(value) for value in arrays["target_labels"].tolist()]
+    condition_axis_enabled = "condition_labels" in arrays
+    if condition_axis_enabled:
+        saved_conditions = [
+            str(value) for value in arrays["condition_labels"].tolist()
+        ]
+        eligibility = np.asarray(arrays["eligibility_counts"], dtype=np.int64)
+        statuses = np.asarray(arrays["target_status"])
+        eligibility_text = ", ".join(
+            f"{condition}::{target}={int(eligibility[condition_index, target_index])}"
+            for condition_index, condition in enumerate(saved_conditions)
+            for target_index, target in enumerate(target_labels)
+        )
+        unavailable = [
+            f"{condition}::{target}"
+            for condition_index, condition in enumerate(saved_conditions)
+            for target_index, target in enumerate(target_labels)
+            if statuses[condition_index, target_index] == "unavailable"
+        ]
+    else:
+        saved_conditions = ["all"]
+        eligibility_text = str(arrays["eligibility_counts"].tolist())
+        unavailable = arrays["target_labels"][
+            arrays["target_status"] == "unavailable"
+        ].tolist()
     lines = [
         "# Task-variable decoding summary",
         "",
@@ -3078,10 +3102,20 @@ def _write_run_summary(
         "Execution mode: " + str(execution.get("mode", "foreground")) + ".",
         "Snapshots: run_session.py, pipeline.py, and immutable config/manifest sidecars.",
         f"Parameters: mode={config.regularization_mode}, bins={config.bin_width_ms} ms.",
-        f"Eligibility: {arrays['eligibility_counts'].tolist()} target-valid common rows.",
+        *(
+            [f"Conditions: {', '.join(saved_conditions)}."]
+            if condition_axis_enabled
+            else []
+        ),
+        f"Eligibility: {eligibility_text} target-valid common rows.",
         f"Folds: outer={config.outer_fold_count}, inner={config.inner_fold_count}.",
         f"Warnings: {warnings if warnings else 'none'}.",
-        f"Unavailable targets: {unavailable if unavailable else 'none'}.",
+        (
+            "Unavailable condition-target cells: "
+            if condition_axis_enabled
+            else "Unavailable targets: "
+        )
+        + f"{unavailable if unavailable else 'none'}.",
         "Stage timing: "
         + ", ".join(
             f"{label}={float(value):.6f} s"
@@ -3143,6 +3177,7 @@ def _write_minimal_family_heatmaps(
         return
     saved_run = {
         "arrays": arrays,
+        "meta": {"schema_version": results.RESULT_SCHEMA_VERSION},
         "scientific_config": {"alignment": "choice_time"},
     }
     plotting.save_default_decoding_figures(
@@ -3186,12 +3221,7 @@ def _validate_published_run_directory(run_directory: Path) -> None:
         run_directory,
         expected_run_fingerprint=fingerprint,
     )
-    families = loaded["arrays"]["target_families"].tolist()
-    required: list[str] = []
-    if "categorical" in families:
-        required.extend(["categorical_balanced_accuracy.png", "categorical_auc.png"])
-    if "numerical" in families:
-        required.append("numerical_r2.png")
+    required = list(plotting.required_default_figure_filenames(loaded))
     missing = [name for name in required if not (run_directory / "figures" / name).is_file()]
     if missing:
         raise ValueError(f"Required completion figures are missing: {missing}")
