@@ -21,6 +21,7 @@ from src.neural_analysis.interregional.persistence import (
 from src.neural_analysis.interregional.plotting import (
     plot_absolute_cv_scores,
     plot_cv_increment_summary,
+    plot_ols_poisson_mse_comparison,
 )
 from src.neural_analysis.interregional.records import InterregionalResults
 
@@ -227,7 +228,7 @@ def render_interregional_view(st_module: object, session: ResolvedSession) -> No
     if not unavailable.empty:
         st_module.subheader("Unavailable fold rows")
         st_module.dataframe(unavailable)
-    if metric == "delta_r2" and not result.population_summaries.empty:
+    if metric in {"delta_r2", "delta_deviance_explained"} and not result.population_summaries.empty:
         figure, _ = plot_cv_increment_summary(
             result.target_summaries,
             result.population_summaries,
@@ -237,11 +238,27 @@ def render_interregional_view(st_module: object, session: ResolvedSession) -> No
             coverage_assumption_version=result.coverage_assumption_version,
         )
         st_module.pyplot(figure)
-    if {"r2_restricted", "r2_full"} <= set(selectors["metrics"]):
+    if model_family == "ols" and {"r2_restricted", "r2_full"} <= set(
+        selectors["metrics"]
+    ):
         figure, _ = plot_absolute_cv_scores(
             result.target_summaries,
             representation=representation,
             model_family=model_family,
+            condition=condition,
+            window=window,
+            coverage_assumption_version=result.coverage_assumption_version,
+        )
+        st_module.pyplot(figure)
+    if model_family == "poisson" and {"ols", "poisson"} <= set(
+        selectors["model_families"]
+    ):
+        st_module.caption(
+            "Exploratory OLS/Poisson held-out count-MSE comparison; this is not a "
+            "formal test of model superiority."
+        )
+        figure, _ = plot_ols_poisson_mse_comparison(
+            result.fold_scores,
             condition=condition,
             window=window,
             coverage_assumption_version=result.coverage_assumption_version,
