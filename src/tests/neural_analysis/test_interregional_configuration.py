@@ -6,6 +6,7 @@ from dataclasses import FrozenInstanceError
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from src.neural_analysis.interregional import configuration
@@ -221,6 +222,21 @@ def test_resolved_populations_require_ordered_disjoint_qualified_units() -> None
                 unit_ids=("probe_a:2",),
             ),
         )
+
+
+def test_resolved_populations_accept_numpy_integer_identifiers() -> None:
+    """Resolver outputs from pandas/NumPy retain their integer identities."""
+    population = configuration.ResolvedRegionalPopulation(
+        role="PFC",
+        probe_id="probe_a",
+        channel_source="explicit",
+        selected_channels=(np.int64(1),),
+        cluster_ids=(np.int64(2),),
+        unit_ids=("probe_a:2",),
+    )
+
+    assert population.selected_channels == (1,)
+    assert population.cluster_ids == (2,)
 
 
 def test_conditions_are_unique_canonical_and_exclude_legacy_rewarded(tmp_path: Path) -> None:

@@ -172,6 +172,86 @@ def test_status_reason_and_canonical_json_values_are_validated() -> None:
         )
 
 
+def test_trial_membership_enforces_exclusion_order_and_mask_relationships() -> None:
+    """Membership provenance cannot contradict the scientific and CV masks."""
+    valid = {
+        "session_id": "s",
+        "trial_row": 0,
+        "alignment": "choice_time",
+        "condition": "all",
+        "original_index_repr": "0",
+        "reward_status_valid": False,
+        "alignment_valid": True,
+        "choice_match": False,
+        "context_match": True,
+        "user_included": True,
+        "block_present": True,
+        "condition_match": True,
+        "scientific_eligible": False,
+        "condition_included": False,
+        "cv_included": False,
+        "scientific_exclusion_reasons_json": '["invalid_reward_status","choice_filter_mismatch"]',
+    }
+    records.validate_result_table(
+        "trial_membership", records.result_table_from_rows("trial_membership", [valid])
+    )
+
+    with pytest.raises(ValueError, match="fixed order"):
+        records.result_table_from_rows(
+            "trial_membership",
+            [
+                {
+                    **valid,
+                    "scientific_exclusion_reasons_json": '["choice_filter_mismatch","invalid_reward_status"]',
+                }
+            ],
+        )
+    with pytest.raises(ValueError, match="condition_included"):
+        records.result_table_from_rows(
+            "trial_membership", [{**valid, "condition_included": True}]
+        )
+
+
+def test_metric_specific_target_statuses_coexist_for_one_target() -> None:
+    """Defined MSE is retained when the same target's R-squared is incomplete."""
+    base = {
+        "session_id": "s",
+        "evaluation_scope": "held_out_cv",
+        "direction": "HPC_to_PFC",
+        "representation": "units",
+        "model_family": "ols",
+        "condition": "all",
+        "window": "before",
+        "target_id": "pfc:1",
+        "target_rank": None,
+        "requested_folds": 5,
+        "valid_folds": 5,
+    }
+    table = records.result_table_from_rows(
+        "target_summaries",
+        [
+            {
+                **base,
+                "metric_name": "mse_full",
+                "status": "ok",
+                "reason": "",
+                "mean_value": 1.5,
+            },
+            {
+                **base,
+                "metric_name": "r2_full",
+                "status": "incomplete_folds",
+                "reason": "incomplete_requested_folds",
+                "valid_folds": 4,
+                "mean_value": None,
+            },
+        ],
+    )
+
+    records.validate_result_table("target_summaries", table)
+    assert table.loc[table["metric_name"] == "mse_full", "mean_value"].iloc[0] == 1.5
+
+
 def test_expected_cv_key_grid_includes_units_and_ols_pcs_but_not_poisson_pcs() -> None:
     """Five folds are materialized for every applicable requested target."""
     config = _config(
