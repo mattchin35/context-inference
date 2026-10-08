@@ -726,6 +726,71 @@ def test_wp11_status_uses_one_sacct_query_and_never_writes(
         "Timelimit": "05:00:00",
         "ExitCode": "0:0",
     }
+    assert "scheduler_error" not in status
+    after = {path: path.read_bytes() for path in run_directory.iterdir() if path.is_file()}
+    assert after == before
+
+
+@pytest.mark.parametrize("accounting_outcome", ("empty", "failed"))
+def test_status_preserves_durable_state_when_accounting_is_unavailable(
+    monkeypatch,
+    tmp_path: Path,
+    accounting_outcome: str,
+) -> None:
+    """Empty or failed sacct remains read-only and does not hide pipeline state."""
+    slurm = _slurm_module()
+    run_directory = _prepared_run(tmp_path)
+    _write_json(
+        run_directory / "slurm_submission.json",
+        {
+            "job_id": "30984881",
+            "requested_resources": EXPECTED_RESOURCES,
+            "scheduler_log_path": "/tmp/task_decoding_30984881.log",
+        },
+    )
+    before = {path: path.read_bytes() for path in run_directory.iterdir() if path.is_file()}
+    commands: list[list[str]] = []
+
+    class FakePipeline:
+        """Return a completed durable status without reading scientific inputs."""
+
+        @staticmethod
+        def inspect_task_decoding_status(directory: Path, verify_results: bool = False):
+            """Return the immutable pipeline status for the requested run directory."""
+            assert Path(directory) == run_directory
+            assert verify_results is False
+            return {
+                "lifecycle": "complete",
+                "current_stage": "complete",
+                "final_results_published": True,
+            }
+
+    def unavailable_accounting(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        """Return one bounded empty or failed accounting response."""
+        commands.append(arguments)
+        if accounting_outcome == "empty":
+            return _completed_process(arguments, stdout="")
+        return _completed_process(
+            arguments,
+            stderr="Slurm accounting temporarily unavailable",
+            returncode=1,
+        )
+
+    monkeypatch.setattr(slurm, "_pipeline_module", lambda: FakePipeline)
+    monkeypatch.setattr(slurm, "_run_command", unavailable_accounting)
+
+    status = slurm.inspect_status(run_directory)
+
+    assert status["lifecycle"] == "complete"
+    assert status["current_stage"] == "complete"
+    assert status["final_results_published"] is True
+    assert status["scheduler"] is None
+    if accounting_outcome == "empty":
+        assert "no job-level record" in status["scheduler_error"]
+    else:
+        assert "temporarily unavailable" in status["scheduler_error"]
+    assert len(commands) == 1
+    assert commands[0][0] == "sacct"
     after = {path: path.read_bytes() for path in run_directory.iterdir() if path.is_file()}
     assert after == before
 

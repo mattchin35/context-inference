@@ -1473,7 +1473,64 @@ def test_execution_orders_real_module_owned_stages_and_resume(monkeypatch, tmp_p
         < calls.index("tensors")
         < calls.index("model")
     )
-    assert calls[-4:] == ["npz", "summary", "figures", "validate"]
+    assert calls[-4:] == ["npz", "figures", "summary", "validate"]
+
+
+def test_summary_receives_final_resource_snapshot_after_figures(monkeypatch, tmp_path):
+    """Human summary reports the complete post-figure resource measurement."""
+    paths = write_session_inputs(tmp_path)
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")
+    patch_coherent_execution(monkeypatch, make_coherent_model_records(paths))
+    events: list[str] = []
+    observed_summary_evidence: dict[str, object] = {}
+    original_snapshot = pipeline.resource_usage.ResourceUsageTracker.snapshot
+
+    def record_snapshot(self, *, status, completed_targets, stage_timing_seconds=None):
+        """Publish real evidence while recording its lifecycle order."""
+        payload = original_snapshot(
+            self,
+            status=status,
+            completed_targets=completed_targets,
+            stage_timing_seconds=stage_timing_seconds,
+        )
+        events.append(f"snapshot:{status}")
+        return payload
+
+    def record_summary(*_args, resource_evidence, **_kwargs):
+        """Capture the exact resource mapping supplied to the human summary."""
+        observed_summary_evidence.update(resource_evidence)
+        events.append("summary")
+
+    monkeypatch.setattr(
+        pipeline.resource_usage.ResourceUsageTracker,
+        "snapshot",
+        record_snapshot,
+    )
+    monkeypatch.setattr(
+        pipeline.results,
+        "save_task_decoding_run",
+        lambda *_args, **_kwargs: events.append("npz"),
+    )
+    monkeypatch.setattr(pipeline, "_write_run_summary", record_summary)
+    monkeypatch.setattr(
+        pipeline,
+        "_write_minimal_family_heatmaps",
+        lambda *_args, **_kwargs: events.append("figures"),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_validate_published_run_directory",
+        lambda *_args, **_kwargs: events.append("validate"),
+    )
+    monkeypatch.setattr(pipeline, "_assemble_run_result_payload", lambda **_: ({}, {}))
+
+    pipeline.run_prepared_task_decoding(run_directory)
+
+    assert observed_summary_evidence["status"] == "complete"
+    assert "reporting" in observed_summary_evidence["stage_timing_seconds"]
+    assert events.index("figures") < events.index("snapshot:complete")
+    assert events.index("snapshot:complete") < events.index("summary")
+    assert events.index("summary") < events.index("validate")
 
 
 def test_each_target_checkpoint_publishes_partial_resource_evidence(monkeypatch, tmp_path):
@@ -1554,7 +1611,7 @@ def test_execution_resumes_matching_real_checkpoint_and_assembles_configured_ord
     pipeline.run_prepared_task_decoding(run_directory)
     assert decoded == ["relative_doubt"]
     assert assembled == [("current_action", "relative_doubt")]
-    assert reporting_events == ["npz", "summary", "figures", "validate"]
+    assert reporting_events == ["npz", "figures", "summary", "validate"]
 
 
 @pytest.mark.parametrize("regularization_mode", ("fixed", "tuned"))
