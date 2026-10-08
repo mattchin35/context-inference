@@ -93,7 +93,7 @@ def _trial_table() -> pd.DataFrame:
     Returns
     -------
     pandas.DataFrame
-        Table shaped ``(72, 8)``. Choice times are UTC seconds, actions and
+        Table shaped ``(72, 9)``. Choice times are UTC seconds, actions and
         states are encoded classes, and relative doubt is unitless.
     """
     blocks = np.repeat(np.arange(_BLOCK_COUNT, dtype=int), _TRIALS_PER_BLOCK)
@@ -107,6 +107,9 @@ def _trial_table() -> pd.DataFrame:
         np.linspace(-1.0, 1.0, _TRIALS_PER_BLOCK, dtype=float),
         _BLOCK_COUNT,
     )
+    outcome_position = within_block % 6
+    correct = (outcome_position >= 2).astype(int)
+    reward = (outcome_position >= 4).astype(int)
     return pd.DataFrame(
         {
             "cur_trial": np.arange(_TRIAL_COUNT, dtype=int),
@@ -114,9 +117,10 @@ def _trial_table() -> pd.DataFrame:
             "action": actions,
             "state_int": states,
             "experimenter_reward_given": np.zeros(_TRIAL_COUNT, dtype=int),
+            "correct": correct,
             "choice_time": 10.0 + 6.0 * np.arange(_TRIAL_COUNT, dtype=float),
             "relative_doubt_index": relative_doubt,
-            "reward": actions,
+            "reward": reward,
         }
     )
 
@@ -305,6 +309,7 @@ def _write_synthetic_session(
     parent: Path,
     *,
     held_out_offset: bool,
+    condition_names: tuple[str, ...] = ("all",),
 ) -> SyntheticSession:
     """Write one portable, fully executable two-probe session.
 
@@ -314,6 +319,8 @@ def _write_synthetic_session(
         Pytest-owned directory receiving one session root.
     held_out_offset : bool
         Whether outer-fold-zero test trials receive a large neural-only offset.
+    condition_names : tuple[str, ...], default=("all",)
+        Canonical condition identifiers saved in the portable configuration.
 
     Returns
     -------
@@ -391,6 +398,7 @@ def _write_synthetic_session(
                 "pfc_pc_count": 2,
                 "hpc_pc_count": 2,
                 "target_names": ["current_state", "current_action", "relative_doubt"],
+                "condition_names": list(condition_names),
                 "regularization_mode": "fixed",
                 "outer_fold_count": 3,
                 "inner_fold_count": 3,
@@ -471,6 +479,49 @@ def synthetic_runs(tmp_path_factory: pytest.TempPathFactory) -> SyntheticRuns:
             repeat=repeat,
             offset=offset,
         )
+    finally:
+        patcher.undo()
+        plt.close("all")
+
+
+@pytest.fixture(scope="module")
+def condition_synthetic_run(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[Path, dict[str, object]]:
+    """Execute one real six-condition synthetic pipeline run.
+
+    Parameters
+    ----------
+    tmp_path_factory : pytest.TempPathFactory
+        Factory providing one module-owned temporary root.
+
+    Returns
+    -------
+    tuple[pathlib.Path, dict[str, object]]
+        Completed run directory and validated schema-2 saved-result mapping.
+    """
+    condition_names = (
+        "all",
+        "correct_rewarded",
+        "omission",
+        "incorrect",
+        "switch",
+        "stay",
+    )
+    root = tmp_path_factory.mktemp("wp-condition-synthetic")
+    session = _write_synthetic_session(
+        root,
+        held_out_offset=False,
+        condition_names=condition_names,
+    )
+    patcher = pytest.MonkeyPatch()
+    patcher.setattr(
+        pipeline.results,
+        "validate_scientific_source_cleanliness",
+        lambda _repository_root: None,
+    )
+    try:
+        yield _complete_run(session)
     finally:
         patcher.undo()
         plt.close("all")
@@ -561,6 +612,79 @@ def test_seeded_two_region_session_completes_and_publishes(synthetic_runs):
         "categorical_auc.png",
         "numerical_r2.png",
     }
+
+
+def test_condition_resolved_synthetic_run_completes_every_declared_cell(
+    condition_synthetic_run,
+) -> None:
+    """The real schema-2 path fits or records all condition-target cells."""
+    run_directory, saved_run = condition_synthetic_run
+    condition_names = (
+        "all",
+        "correct_rewarded",
+        "omission",
+        "incorrect",
+        "switch",
+        "stay",
+    )
+    target_names = ("current_state", "current_action", "relative_doubt")
+    expected_cells = [
+        f"{condition}::{target}"
+        for condition in condition_names
+        for target in target_names
+    ]
+    arrays = saved_run["arrays"]
+
+    assert saved_run["meta"]["schema_version"] == 2
+    assert results.condition_labels(saved_run) == condition_names
+    assert arrays["condition_labels"].tolist() == list(condition_names)
+    assert arrays["target_labels"].tolist() == list(target_names)
+    assert arrays["fold_scores"].shape[:2] == (6, 3)
+    np.testing.assert_array_equal(
+        np.count_nonzero(arrays["condition_masks"], axis=1),
+        np.array([72, 24, 24, 24, 48, 0], dtype=np.int64),
+    )
+    np.testing.assert_array_equal(
+        arrays["eligibility_counts"],
+        np.array(
+            [
+                [72, 72, 72],
+                [24, 24, 24],
+                [24, 24, 24],
+                [24, 24, 24],
+                [48, 48, 48],
+                [0, 0, 0],
+            ],
+            dtype=np.int64,
+        ),
+    )
+    assert arrays["target_status"][-1].tolist() == ["unavailable"] * 3
+    assert arrays["target_unavailable_reasons"][-1].tolist() == [
+        "no eligible trials"
+    ] * 3
+
+    state = json.loads((run_directory / "run_state.json").read_text(encoding="utf-8"))
+    assert state["lifecycle"] == "complete"
+    assert state["final_results_published"] is True
+    assert state["completed_targets"] == expected_cells
+    assert {path.name for path in (run_directory / "checkpoints").glob("*.npz")} == {
+        cell.replace("::", "--") + ".npz" for cell in expected_cells
+    }
+    usage = json.loads(
+        (run_directory / "resource_usage.json").read_text(encoding="utf-8")
+    )
+    assert usage["resource_envelope"]["condition_count"] == 6
+    assert usage["completed_targets"] == expected_cells
+    assert set(usage["target_measurements"]) == set(expected_cells)
+    assert {path.name for path in (run_directory / "figures").glob("*.png")} == set(
+        plotting.required_default_figure_filenames(saved_run)
+    )
+    assert len(plotting.required_default_figure_filenames(saved_run)) == 18
+    assert pipeline._validate_complete_prepared_run(run_directory)
+
+    # Complete-run reentry validates the immutable directory and returns
+    # without loading spikes or fitting another model.
+    pipeline.run_prepared_task_decoding(run_directory)
 
 
 def test_time_local_signal_is_strongest_in_the_injected_interval(synthetic_runs):

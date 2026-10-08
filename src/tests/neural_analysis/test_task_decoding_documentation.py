@@ -31,6 +31,7 @@ PACKAGE_DIRECTORY = REPOSITORY_ROOT / "src" / "neural_analysis" / "task_decoding
 PACKAGE_README = PACKAGE_DIRECTORY / "README.md"
 REVISION_FIVE_SPEC = REPOSITORY_ROOT / "docs" / "task_variable_spec_v5.md"
 REVISION_SIX_SPEC = REPOSITORY_ROOT / "docs" / "task_variable_spec_v6.md"
+REVISION_SEVEN_SPEC = REPOSITORY_ROOT / "docs" / "task_variable_spec_v7.md"
 IMPLEMENTATION_PLAN = REPOSITORY_ROOT / "docs" / "task_variable_implementation_plan.md"
 EXAMPLE_CONFIG = (
     REPOSITORY_ROOT
@@ -113,6 +114,14 @@ def test_portable_example_exposes_every_config_field_and_loads(tmp_path):
     assert config.session_metadata_path.name == "neural_session.json"
     assert config.output_root.is_relative_to(config.session_root)
     assert config.pfc_region.probe_id != config.hpc_region.probe_id
+    assert config.condition_names == (
+        "all",
+        "correct_rewarded",
+        "omission",
+        "incorrect",
+        "switch",
+        "stay",
+    )
 
 
 def test_maintainer_readme_owns_every_package_file_and_external_entrypoint():
@@ -148,6 +157,34 @@ def test_revision_six_spec_versions_the_local_convergence_repair():
     assert "docs/task_variable_spec_v6.md" in implementation_plan
 
 
+def test_revision_seven_spec_versions_condition_resolved_decoding_and_validation_resources():
+    """The active amendment should freeze condition axes and the first-run profile."""
+    amendment = " ".join(_read_required_text(REVISION_SEVEN_SPEC).split())
+    maintainer_readme = _read_required_text(PACKAGE_README)
+    scientist_readme = _read_required_text(SCIENTIST_README)
+    implementation_plan = _read_required_text(IMPLEMENTATION_PLAN)
+
+    for fragment in (
+        "task-variable-decoding-v3",
+        "correct_rewarded",
+        "omission",
+        "incorrect",
+        "switch",
+        "stay",
+        "condition axis",
+        "condition--target",
+        "8G",
+        "3-00:00:00",
+        "condition_validation",
+    ):
+        assert fragment in amendment
+    assert "docs/task_variable_spec_v7.md" in maintainer_readme
+    assert "condition_names" in maintainer_readme
+    assert "condition_validation" in maintainer_readme
+    assert "--resource-profile condition_validation" in scientist_readme
+    assert "Condition-resolved extension" in implementation_plan
+
+
 def test_scientist_quickstart_documents_all_current_cli_routes():
     """The scientist guide gives copyable single-session and batch workflows."""
     readme = " ".join(_read_required_text(SCIENTIST_README).split())
@@ -161,6 +198,7 @@ def test_scientist_quickstart_documents_all_current_cli_routes():
         "--detach",
         "--rerun",
         "--resource-run-directory",
+        "--resource-profile condition_validation",
         "resource_usage.json",
         "peak RSS",
         "Task-variable decoding results",
