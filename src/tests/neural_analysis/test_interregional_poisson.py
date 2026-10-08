@@ -196,7 +196,7 @@ def test_poisson_fit_collects_cyclic_statsmodels_result(monkeypatch) -> None:
 
 def test_poisson_fit_runs_cleanup_after_known_fit_error(monkeypatch) -> None:
     """A recognized estimator exception still crosses the cleanup boundary."""
-    cleanup_calls: list[str] = []
+    collected_generations: list[int] = []
 
     class ErrorModel:
         """Raise a recognized error from the external estimator."""
@@ -206,13 +206,13 @@ def test_poisson_fit_runs_cleanup_after_known_fit_error(monkeypatch) -> None:
             raise ValueError("bad data")
 
     monkeypatch.setattr(poisson.sm, "GLM", lambda *args, **kwargs: ErrorModel())
-    monkeypatch.setattr(gc, "collect", lambda: cleanup_calls.append("collect"))
+    monkeypatch.setattr(gc, "collect", collected_generations.append)
 
     with pytest.raises(poisson.PoissonFitUnavailable):
         poisson.fit_poisson_target(
             _design(np.arange(5)), np.array([0, 1, 2, 1, 3])
         )
-    assert cleanup_calls == ["collect"]
+    assert collected_generations == [0]
 
 
 def test_seeded_poisson_fit_returns_finite_positive_means() -> None:
