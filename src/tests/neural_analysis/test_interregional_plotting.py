@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
+import pandas as pd
 
 from src.neural_analysis.interregional import plotting, records
 
@@ -145,4 +146,44 @@ def test_absolute_plot_uses_saved_restricted_and_full_values_without_refitting()
     }
     caption = " ".join(text.get_text() for text in figure.texts)
     assert "No model was refit" in caption
+    plt.close(figure)
+
+
+def test_increment_plot_keeps_dense_target_jitter_inside_its_direction_cell() -> None:
+    """Many saved targets must not spill across directions or conditions."""
+    targets, populations = _summary_tables()
+    template = targets.loc[
+        targets["condition"].eq("all")
+        & targets["direction"].eq("HPC_to_PFC")
+        & targets["metric_name"].eq("delta_r2")
+        & targets["status"].eq("ok")
+    ].iloc[[0]]
+    additions = []
+    for target_index in range(80):
+        row = template.copy()
+        row.loc[:, "target_id"] = f"HPC_to_PFC:dense{target_index:03d}"
+        row.loc[:, "mean_value"] = 0.1 + target_index * 0.0001
+        additions.append(row)
+    dense_targets = records.result_table_from_rows(
+        "target_summaries",
+        pd.concat([targets, *additions], ignore_index=True).to_dict("records"),
+    )
+
+    figure, axis = plotting.plot_cv_increment_summary(
+        dense_targets,
+        populations,
+        representation="units",
+        model_family="ols",
+        window="before",
+        coverage_assumption_version="implicit-complete-v1",
+    )
+
+    dense_x = [
+        float(artist.get_xdata()[0])
+        for artist in axis.lines
+        if str(artist.get_gid()).startswith("HPC_to_PFC:dense")
+    ]
+    assert dense_x
+    assert min(dense_x) >= -0.60
+    assert max(dense_x) <= -0.10
     plt.close(figure)
