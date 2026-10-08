@@ -35,9 +35,10 @@ transferred, passed matching local/cluster dry runs, and completed as Slurm job
 GREEN `db50e1a`; the post-smoke accounting/summary repair is covered by tests
 `86fc413` and `5386a99` with GREEN `a1763bc`. Repaired one-shot status and
 independent result validation accepted the immutable synthetic run; acceptance
-is recorded at `484e784`. WP12 now waits at the separate CT026 input-transfer,
-cluster dry-run, and one-session submission approval gate. Each experimental
-transfer and real scheduler submission remains separately approved.
+is recorded at `484e784`. The full fixed-mode CT026 config, grouped input
+transfer, and matching local/cluster dry runs are now complete. WP12 waits at
+the separate one-session `submit-new` approval gate. Each real scheduler
+submission remains separately approved.
 WP4 grouped-modeling tests are
 committed at `6ee6355`, with fixed-mode supplements at `c85a00c` and
 `fab38b8`, and tuned-provenance coverage at `c1b183c`. Fixed-mode production
@@ -74,10 +75,8 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- local/origin WP12 synthetic-acceptance HEAD:
-  `484e7843322fdf25504bab3d2d9105ff742cf0b5`;
-- clean cluster checkout HEAD:
-  `484e7843322fdf25504bab3d2d9105ff742cf0b5`;
+- local/origin/cluster HEAD before the CT026 preflight handoff:
+  `54ee2ca44eccb9f5518c7f622ab412d073928732`;
 - prior local documentation handoff commits: `39ba0db`, `3104c59`, `38b2854`,
   `fda0399`, `ceb9b28`, and `5c97d9a`;
 - WP4 is complete and its handoff is committed at `01f8b0f`; WP5A tests and
@@ -119,10 +118,9 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** present the WP12 CT026 destination, non-destructive input
-transfer preview, cluster dry-run comparison, and exact one-session
-`submit-new` command for user approval. Do not transfer experimental inputs or
-submit the scientific job automatically.
+**Next exact action:** present the exact one-session CT026 `submit-new` command
+and frozen one-CPU/3-GiB/five-hour resource block for user approval. Do not
+submit automatically.
 
 ### Authority order
 
@@ -159,7 +157,7 @@ When resuming, use this order:
 | WP10C revision-6 convergence repair | Complete: RED `ba47795`, GREEN `6f9c721`; first v2 run made all 2,400 cells valid | Clean lifecycle evidence remains the WP10 gate |
 | WP10D competing-owner lifecycle repair and local acceptance | Complete: lifecycle repair through `77ff461`; clean 2,400-cell bounded run and 9,600-cell categorical stress run accepted | None |
 | WP11 single-session cluster path | Complete: RED `a3dcdb9`, handoff `e91fa5f`, GREEN `b9d8645`; mocked and local tests only | None; real execution belongs to WP12 |
-| WP12 CT026 one-session cluster validation | In progress: synthetic Slurm smoke accepted through `484e784`; repaired status and result validation passed on the existing job | Approve CT026 destination, input transfer/dry run, then exact one-session submission |
+| WP12 CT026 one-session cluster validation | In progress: synthetic smoke accepted; full CT026 input subset transferred into the mirrored session and local/cluster dry runs match | Approve exact one-session `submit-new` command |
 | WP13 bounded cluster batch array | Required after WP12 acceptance; source not started | Implement tests-first per-session concurrency; authorize any real array separately |
 
 ### Resume checklist
@@ -2105,6 +2103,53 @@ Use this template for each appended record:
   dry-run, and one-session submission plan for user approval. Do not infer
   authorization for experimental transfer or computation from synthetic-smoke
   acceptance.
+
+#### 2026-10-08 - WP12 full CT026 transfer and dry-run gate
+
+- Authorization: the user approved a full 18-target fixed-mode configuration,
+  preferred all cluster data grouped below the actual mirrored session root,
+  and separately approved the input transfer plus cluster dry run. Slurm
+  submission remains unapproved at this gate.
+- Configuration: created
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference/task_decoding_config_wp12_full_fixed.json`
+  with SHA-256
+  `cf682e381480ece5f00e63f7957baa47c5d5f24b0e833cc180fe745431c2032f`,
+  mode `0664`, and owner/group `1000:1000`. It differs from the accepted WP10
+  bounded config only by selecting the canonical ordered 18-target vocabulary.
+- Grouped destination: reused the pre-existing mirrored session at
+  `/gs/gsfs0/users/mchin1/contextProjectData/CT026/CT026_20260803_latent_inference`.
+  No new task-decoding data root was created. Future session inputs should use
+  the same `contextProjectData/<animal>/<session>` hierarchy; run directories
+  remain inside each session's `analysis_runs`.
+- Transfer decision: a non-writing whole-session preview found 9,825 changed
+  regular files and 4,417,205,615 bytes, almost entirely unrelated ephys
+  products. Size was not a cluster constraint, but the validated pipeline
+  source contract required only 12 files. The user approved that selective
+  source/config transfer. Checksum mode transferred seven genuinely changed or
+  absent files totaling 235,576,718 bytes, performed no deletion, and left
+  identical already-present files in place. A post-transfer checksum preview
+  reported zero created, deleted, or transferred files across the 12-file
+  274,713,572-byte source set.
+- Matching dry runs: local Python 3.12.12 and cluster Python 3.14.7 both
+  reported clean scientific source fingerprint
+  `d18b07fd1985cda2a8c1b3cd787b4f8e6aec99b6f07dc6fdaa693cf92c8fb8be`,
+  identical package versions, exact source sizes, ordered targets, and target
+  diagnostics. Both resource envelopes contain 650 full trials, 646 tensor
+  trials, 160 PFC units, 309 HPC units, 40 bins, 18 targets, five outer folds,
+  9,600 categorical fits, 12,000 numerical fits, 469 direct-unit coefficient
+  capacity, and 96,951,680 tensor bytes. Every target has an available grouped
+  outer split.
+- Read-only final checks: the cluster checkout remained clean at `54ee2ca`,
+  and the mirrored session has no `analysis_runs` directory. No prepared run,
+  submission receipt, scheduler job, or neural result was created.
+- Performance/resource boundary: the reviewed request remains partition
+  `unlimited`, one task, one CPU, 3 GiB, five hours, five-minute TERM notice,
+  one numerical thread, and the established private log path. The fixed-mode
+  projection remains approximately 2.03 hours nominal and 2.28 hours at the
+  conservative bound; the request retains the approved margin.
+- Exact next action: obtain user approval for one wrapper `submit-new` against
+  the cluster config above. Record the immutable run directory and job ID, then
+  stop; completion inspection occurs once in a later user-requested task.
 
 ## 1. Objective
 
