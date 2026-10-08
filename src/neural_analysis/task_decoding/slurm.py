@@ -30,6 +30,15 @@ REQUESTED_RESOURCES = {
     "mail_type": "ALL",
     "mail_user": "matthew.chin@einsteinmed.edu",
 }
+RESOURCE_PROFILES = {
+    "standard": REQUESTED_RESOURCES,
+    "condition_validation": {
+        **REQUESTED_RESOURCES,
+        "memory": "8G",
+        "memory_bytes": 8 * 1024**3,
+        "time": "3-00:00:00",
+    },
+}
 
 _WRAPPER = "src/shell_scripts/task_variable_decoding_slurm.sh"
 _RUNNER_MODULE = "src.neural_analysis.task_decoding.run_session"
@@ -258,7 +267,36 @@ def _parse_job_id(stdout: str) -> str:
     return job_id
 
 
-def _validate_login_memory_guard(tensor_bytes: object) -> None:
+def _resources_for_profile(resource_profile: str) -> dict[str, object]:
+    """Return a detached resource mapping for one reviewed profile.
+
+    Parameters
+    ----------
+    resource_profile : str
+        Exact profile identifier in :data:`RESOURCE_PROFILES`.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-safe scheduler resources. Memory fields are GiB text and bytes;
+        time uses Slurm duration syntax.
+
+    Raises
+    ------
+    ValueError
+        If the profile name is not reviewed.
+    """
+    if resource_profile not in RESOURCE_PROFILES:
+        raise ValueError(
+            f"Unknown task-decoding Slurm resource profile: {resource_profile!r}."
+        )
+    return dict(RESOURCE_PROFILES[resource_profile])
+
+
+def _validate_login_memory_guard(
+    tensor_bytes: object,
+    resource_profile: str = "standard",
+) -> None:
     """Enforce the reviewed 50-percent tensor/request guard before preparation.
 
     Parameters
@@ -270,7 +308,7 @@ def _validate_login_memory_guard(tensor_bytes: object) -> None:
     Returns
     -------
     None
-        Returns only when the allocation is at most half the 3-GiB request.
+        Returns only when the allocation is at most half the selected request.
 
     Raises
     ------
@@ -289,17 +327,25 @@ def _validate_login_memory_guard(tensor_bytes: object) -> None:
         raise ValueError("Dry-run tensor memory must be a nonnegative integer.") from error
     if not is_exact or normalized < 0:
         raise ValueError("Dry-run tensor memory must be a nonnegative integer.")
-    if normalized * 2 > int(REQUESTED_RESOURCES["memory_bytes"]):
+    resources = _resources_for_profile(resource_profile)
+    if normalized * 2 > int(resources["memory_bytes"]):
         raise ValueError("Tensor allocation exceeds 50% of requested Slurm memory.")
 
 
-def submit_prepared_run(run_directory: Path | str) -> dict[str, object]:
+def submit_prepared_run(
+    run_directory: Path | str,
+    *,
+    resource_profile: str = "standard",
+) -> dict[str, object]:
     """Submit one exact Slurm-prepared directory exactly once.
 
     Parameters
     ----------
     run_directory : pathlib.Path or str
         Exact immutable prepared run directory. No latest-run discovery occurs.
+    resource_profile : {"standard", "condition_validation"}, default="standard"
+        Reviewed scheduler request. The validation profile requests 8 GiB and
+        72 hours for the first full condition-resolved run.
 
     Returns
     -------
@@ -315,6 +361,7 @@ def submit_prepared_run(run_directory: Path | str) -> dict[str, object]:
         If the single ``sbatch`` call fails or returns no job identifier.
     """
     directory = Path(run_directory)
+    resources = _resources_for_profile(resource_profile)
     _require_slurm_prepared_run(directory)
     repository_commit = _repository_commit()
     _update_state(
@@ -326,12 +373,25 @@ def submit_prepared_run(run_directory: Path | str) -> dict[str, object]:
     arguments = [
         "sbatch",
         "--parsable",
-        f"--export=ALL,TASK_DECODING_EXPECTED_COMMIT={repository_commit}",
-        _WRAPPER,
-        "_execute-prepared",
-        "--run-directory",
-        str(directory),
     ]
+    if resource_profile != "standard":
+        arguments.extend(
+            [
+                f"--mem={resources['memory']}",
+                f"--time={resources['time']}",
+            ]
+        )
+    arguments.extend(
+        [
+            "--export=ALL,"
+            f"TASK_DECODING_EXPECTED_COMMIT={repository_commit},"
+            f"TASK_DECODING_RESOURCE_PROFILE={resource_profile}",
+            _WRAPPER,
+            "_execute-prepared",
+            "--run-directory",
+            str(directory),
+        ]
+    )
     try:
         completed = _run_command(arguments)
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -354,27 +414,39 @@ def submit_prepared_run(run_directory: Path | str) -> dict[str, object]:
         "job_id": job_id,
         "submitted_at": _utc_now(),
         "run_directory": str(directory),
-        "requested_resources": dict(REQUESTED_RESOURCES),
+        "resource_profile": resource_profile,
+        "requested_resources": resources,
         "repository_commit": repository_commit,
-        "scheduler_log_path": str(REQUESTED_RESOURCES["output"]).replace("%j", job_id),
+        "scheduler_log_path": str(resources["output"]).replace("%j", job_id),
         "status_command": (
             f"bash {_WRAPPER} status --run-directory {quoted_directory}"
         ),
         "resume_command": (
             f"bash {_WRAPPER} submit-resume --run-directory {quoted_directory}"
+            + (
+                f" --resource-profile {resource_profile}"
+                if resource_profile != "standard"
+                else ""
+            )
         ),
     }
     _write_json(directory / "slurm_submission.json", receipt)
     return receipt
 
 
-def submit_new(config_path: Path | str) -> dict[str, object]:
+def submit_new(
+    config_path: Path | str,
+    *,
+    resource_profile: str = "standard",
+) -> dict[str, object]:
     """Dry-run, prepare, and submit one new scientific configuration.
 
     Parameters
     ----------
     config_path : pathlib.Path or str
         Existing task-decoding JSON configuration on cluster-visible storage.
+    resource_profile : {"standard", "condition_validation"}, default="standard"
+        Reviewed resource profile used for admission and submission.
 
     Returns
     -------
@@ -390,7 +462,10 @@ def submit_new(config_path: Path | str) -> dict[str, object]:
     path = Path(config_path)
     pipeline = _pipeline_module()
     plan = pipeline.plan_task_decoding_session(path)
-    _validate_login_memory_guard(plan.get("tensor_allocation_bytes"))
+    _validate_login_memory_guard(
+        plan.get("tensor_allocation_bytes"),
+        resource_profile,
+    )
     prepared = Path(pipeline.prepare_task_decoding_run(path, False, "slurm"))
     if pipeline._validate_complete_prepared_run(prepared):
         return {
@@ -398,23 +473,50 @@ def submit_new(config_path: Path | str) -> dict[str, object]:
             "run_directory": str(prepared),
             "already_complete": True,
         }
-    return submit_prepared_run(prepared)
+    if resource_profile == "standard":
+        return submit_prepared_run(prepared)
+    return submit_prepared_run(prepared, resource_profile=resource_profile)
 
 
-def submit_resume(run_directory: Path | str) -> dict[str, object]:
+def submit_resume(
+    run_directory: Path | str,
+    *,
+    resource_profile: str | None = None,
+) -> dict[str, object]:
     """Submit only the exact saved prepared directory supplied by the caller.
 
     Parameters
     ----------
     run_directory : pathlib.Path or str
         Exact immutable run directory; parents and siblings are not searched.
+    resource_profile : {"standard", "condition_validation"} or None, default=None
+        Explicit reviewed profile. A prior receipt fixes this value for resume;
+        otherwise omission selects the standard profile.
 
     Returns
     -------
     dict[str, object]
         New Slurm submission receipt.
     """
-    return submit_prepared_run(Path(run_directory))
+    directory = Path(run_directory)
+    receipt_path = directory / "slurm_submission.json"
+    prior_profile: str | None = None
+    if receipt_path.is_file():
+        prior_receipt = _read_json(receipt_path)
+        saved_profile = prior_receipt.get("resource_profile", "standard")
+        if not isinstance(saved_profile, str):
+            raise ValueError("Prior Slurm receipt has an invalid resource profile.")
+        _resources_for_profile(saved_profile)
+        prior_profile = saved_profile
+    selected_profile = resource_profile or prior_profile or "standard"
+    _resources_for_profile(selected_profile)
+    if prior_profile is not None and selected_profile != prior_profile:
+        raise ValueError(
+            f"Resume resource profile must remain {prior_profile!r}."
+        )
+    if selected_profile == "standard" and resource_profile is None:
+        return submit_prepared_run(directory)
+    return submit_prepared_run(directory, resource_profile=selected_profile)
 
 
 def _read_mem_available_bytes(path: Path) -> int | None:
@@ -500,10 +602,12 @@ def effective_memory_budget_bytes(
     ValueError
         If no positive memory budget can be determined.
     """
+    resource_profile = os.environ.get("TASK_DECODING_RESOURCE_PROFILE", "standard")
+    resources = _resources_for_profile(resource_profile)
     candidates = [
         _read_mem_available_bytes(Path(meminfo_path)),
         _read_cgroup_limit_bytes(tuple(Path(path) for path in cgroup_limit_paths)),
-        int(REQUESTED_RESOURCES["memory_bytes"]),
+        int(resources["memory_bytes"]),
     ]
     positive = [value for value in candidates if value is not None and value > 0]
     if not positive:
@@ -584,8 +688,18 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     submit_new_parser = subparsers.add_parser("submit-new")
     submit_new_parser.add_argument("--config", required=True)
+    submit_new_parser.add_argument(
+        "--resource-profile",
+        choices=tuple(RESOURCE_PROFILES),
+        default="standard",
+    )
     submit_resume_parser = subparsers.add_parser("submit-resume")
     submit_resume_parser.add_argument("--run-directory", required=True)
+    submit_resume_parser.add_argument(
+        "--resource-profile",
+        choices=tuple(RESOURCE_PROFILES),
+        default=None,
+    )
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("--run-directory", required=True)
     return parser
@@ -607,9 +721,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     arguments = _parser().parse_args(argv)
     if arguments.command == "submit-new":
-        payload = submit_new(Path(arguments.config))
+        payload = submit_new(
+            Path(arguments.config),
+            resource_profile=arguments.resource_profile,
+        )
     elif arguments.command == "submit-resume":
-        payload = submit_resume(Path(arguments.run_directory))
+        payload = submit_resume(
+            Path(arguments.run_directory),
+            resource_profile=arguments.resource_profile,
+        )
     elif arguments.command == "status":
         payload = inspect_status(Path(arguments.run_directory))
     else:  # pragma: no cover - argparse owns this boundary.

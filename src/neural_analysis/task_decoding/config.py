@@ -12,7 +12,15 @@ from types import MappingProxyType
 from src.neural_analysis.session_metadata import CANONICAL_FILENAME
 
 
-ANALYSIS_VERSION = "task-variable-decoding-v2"
+ANALYSIS_VERSION = "task-variable-decoding-v3"
+CONDITION_IDENTIFIERS = (
+    "all",
+    "correct_rewarded",
+    "omission",
+    "incorrect",
+    "switch",
+    "stay",
+)
 TARGET_IDENTIFIERS = (
     "current_state",
     "current_action",
@@ -325,6 +333,9 @@ class TaskDecodingConfig:
         Absolute execution-only run-directory parent inside ``session_root``.
     session_root : Path
         Absolute canonical parent of ``session_metadata_path``.
+    condition_names : tuple[str, ...]
+        Nonempty selected condition identifiers in canonical order. The
+        default pooled-only condition preserves revision-6 configurations.
     """
 
     session_metadata_path: Path
@@ -343,6 +354,7 @@ class TaskDecodingConfig:
     trusted_utc_bounds: Mapping[str, tuple[float, float]]
     output_root: Path
     session_root: Path
+    condition_names: tuple[str, ...] = ("all",)
 
 
 _ALLOWED_TOP_LEVEL_FIELDS = {
@@ -356,6 +368,7 @@ _ALLOWED_TOP_LEVEL_FIELDS = {
     "pfc_pc_count",
     "hpc_pc_count",
     "target_names",
+    "condition_names",
     "regularization_mode",
     "outer_fold_count",
     "inner_fold_count",
@@ -555,6 +568,40 @@ def _parse_target_names(value: object) -> tuple[str, ...]:
         raise ValueError(f"Unknown target_names: {unknown_names}")
     selected_names = set(value)
     return tuple(name for name in TARGET_IDENTIFIERS if name in selected_names)
+
+
+def _parse_condition_names(value: object) -> tuple[str, ...]:
+    """Validate condition identifiers and normalize them to canonical order.
+
+    Parameters
+    ----------
+    value : object
+        Optional decoded JSON list of case-sensitive condition identifiers.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Nonempty canonical-order condition identifiers. An omitted value
+        preserves the historical pooled-only ``("all",)`` analysis.
+
+    Raises
+    ------
+    ValueError
+        If identifiers are duplicated, unknown, malformed, or empty.
+    """
+    if value is None:
+        return ("all",)
+    if not isinstance(value, list) or not value:
+        raise ValueError("condition_names must be a nonempty JSON list.")
+    if any(not isinstance(name, str) for name in value):
+        raise ValueError("condition_names must contain strings.")
+    if len(set(value)) != len(value):
+        raise ValueError("condition_names must not contain duplicates.")
+    unknown_names = [name for name in value if name not in CONDITION_IDENTIFIERS]
+    if unknown_names:
+        raise ValueError(f"Unknown condition_names: {unknown_names}")
+    selected_names = set(value)
+    return tuple(name for name in CONDITION_IDENTIFIERS if name in selected_names)
 
 
 def _parse_count(value: object, field_name: str, allowed_values: set[int], default: int) -> int:
@@ -818,6 +865,7 @@ def load_task_decoding_config(path: Path | str) -> TaskDecodingConfig:
         ),
         output_root=output_root,
         session_root=session_root,
+        condition_names=_parse_condition_names(payload.get("condition_names")),
     )
 
 
@@ -898,6 +946,7 @@ def scientific_config_payload(config: TaskDecodingConfig) -> dict[str, object]:
         "pfc_pc_count": config.pfc_pc_count,
         "hpc_pc_count": config.hpc_pc_count,
         "target_names": list(config.target_names),
+        "condition_names": list(config.condition_names),
         "regularization_mode": config.regularization_mode,
         "outer_fold_count": config.outer_fold_count,
         "inner_fold_count": config.inner_fold_count,
