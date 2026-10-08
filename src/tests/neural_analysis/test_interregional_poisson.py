@@ -103,6 +103,7 @@ def test_poisson_fit_uses_explicit_unpenalized_statsmodels_path(monkeypatch) -> 
     assert captured["missing"] == "raise"
     assert captured["fit_kwargs"] == {
         "method": "IRLS",
+        "wls_method": "qr",
         "maxiter": 100,
         "tol": 1e-8,
         "scale": None,
@@ -112,6 +113,43 @@ def test_poisson_fit_uses_explicit_unpenalized_statsmodels_path(monkeypatch) -> 
     }
     assert fit.converged is True
     assert fit.iterations == 3
+
+
+def test_qr_poisson_fit_matches_default_irls_reference() -> None:
+    """QR-backed IRLS preserves seeded parameters, predictions, and iterations."""
+    rng = np.random.default_rng(20261008)
+    features = rng.normal(size=(800, 4))
+    design = np.column_stack((np.ones(features.shape[0]), features))
+    true_parameters = np.array([-0.2, 0.15, -0.1, 0.08, 0.04])
+    counts = rng.poisson(np.exp(design @ true_parameters))
+
+    reference = poisson.sm.GLM(
+        counts,
+        design,
+        family=poisson.sm.families.Poisson(link=poisson.sm.families.links.Log()),
+        missing="raise",
+    ).fit(
+        method="IRLS",
+        maxiter=100,
+        tol=1e-8,
+        scale=None,
+        cov_type="nonrobust",
+        full_output=True,
+        disp=False,
+    )
+    qr_fit = poisson.fit_poisson_target(design, counts)
+
+    np.testing.assert_allclose(
+        qr_fit.parameters, reference.params, rtol=1e-12, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        poisson.predict_poisson_mean(design, qr_fit.parameters),
+        np.exp(design @ reference.params),
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    assert qr_fit.converged is True
+    assert qr_fit.iterations == reference.fit_history["iteration"]
 
 
 def test_seeded_poisson_fit_returns_finite_positive_means() -> None:
