@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 15:18 EDT.
+**Snapshot date:** 2026-10-08 15:26 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -24,16 +24,17 @@ benchmark, Slurm job `30991145`, reproduced the OOM within the first Poisson cel
 the approved minimal change from Statsmodels' default least-squares backend to its QR backend within
 the same unpenalized IRLS estimator is implemented and locally GREEN, but the separately approved
 repeat bounded benchmark, Slurm job `30991248`, was also OOM-killed. QR slowed rather than bounded
-the memory growth. The actual Statsmodels cyclic-retention cause is now reproduced, and the user has
-approved a tests-first project-side collection boundary. No replacement, scale test, or full retry
-is authorized. WP9 scientific acceptance and WP10 remain blocked on an inspected completed output.
+the memory growth. The actual Statsmodels cyclic-retention cause was reproduced, and the approved
+project-side collection boundary is implemented and locally GREEN. Repeated public-function fits
+now have flat post-fit RSS in the scaled synthetic check. No replacement CT026 benchmark, scale
+test, full retry, or WP10 is authorized. WP9 scientific acceptance and WP10 remain blocked on an
+inspected completed output.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `2164917`;
-- plan-owned files: `docs/neural_regression_plan.md` and
-  `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
+- HEAD before this handoff record: `101bec6`;
+- plan-owned files: `docs/neural_regression_plan.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
 - none of those unrelated entries belongs to this plan or may be staged, changed, removed, or
   absorbed into a later package.
@@ -61,9 +62,9 @@ is authorized. WP9 scientific acceptance and WP10 remain blocked on an inspected
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** write, demonstrate RED, and commit the approved lifecycle/default-solver
-tests before implementing the isolated Statsmodels helper and guaranteed post-fit cyclic garbage
-collection. Do not launch another run, scale test, full retry, or WP10 without separate approval.
+**Next exact action:** commit and push this final handoff record. A repeat of the same bounded CT026
+benchmark requires separate approval of its exact command and output path. Do not launch that
+benchmark, a scale test, a full retry, or WP10 automatically.
 
 ### Authority order
 
@@ -96,7 +97,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Cyclic-retention correction approved; tests-first implementation active | RED tests, implementation, local memory verification, then separate data-run gate |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Cyclic-retention correction locally GREEN | Separately approve and inspect one bounded CT026 benchmark |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -873,8 +874,10 @@ Use this template:
   not authorize another CT026 job, a scale test, a full retry, or WP10.
 - Architecture: retain `fit_poisson_target(...)`, Statsmodels `GLM`, the explicit intercept,
   Poisson/log family, unpenalized IRLS, convergence handling, and all pipeline/result interfaces.
-  Add only the explicit Statsmodels `wls_method="qr"` fit keyword so each IRLS weighted
-  least-squares step uses QR instead of the default `lstsq` path and final pseudoinverse path.
+  Add only the explicit Statsmodels `wls_method="qr"` fit keyword, which was expected to replace
+  the default iterative least-squares path. Later source inspection established that Statsmodels'
+  QR WLS finalization still computes a pseudoinverse; the experiment and its correction are recorded
+  below.
 - Dependency/API evidence: no dependency changes. Installed Statsmodels 0.15.0 source confirms
   that `GLM.fit(...)` forwards extra keywords to `_fit_irls(...)`, which accepts `wls_method`; its
   minimal WLS implementation supports `pinv`, `qr`, and `lstsq`. A seeded five-coefficient check
@@ -982,7 +985,7 @@ Use this template:
 - Architecture: keep the public `fit_poisson_target(...)` contract and the audited unpenalized
   Statsmodels Poisson/log IRLS estimator. Move external model/result lifetime into a private helper
   that returns only owned arrays and scalar diagnostics. The public boundary guarantees
-  `gc.collect()` after that helper frame exits on success, warning, nonconvergence, and recognized
+  `gc.collect(0)` after that helper frame exits on success, warning, nonconvergence, and recognized
   error paths. Revert the ineffective explicit QR keyword. Do not modify Statsmodels, add a
   dependency, invoke Linux-specific `malloc_trim`, or introduce subprocess fitting.
 - Tests to write before implementation: require the audited default IRLS call without QR; create a
@@ -997,6 +1000,47 @@ Use this template:
   not a scientific model change.
 - Exact next action: commit the RED tests before production edits, then implement the helper and
   collection boundary and run focused plus affected suites.
+
+#### 2026-10-08 15:26 EDT - WP9 cyclic-retention correction GREEN
+
+- State and authorization: the approved local correction is implemented and GREEN. The user
+  authorized tests, implementation, documentation, local synthetic verification, commits, and
+  push; no experimental-data or cluster run was performed or authorized by this gate.
+- Sol / Terra / reviewer: primary agent only; no delegated worker or independent reviewer.
+- Start HEAD / end HEAD: `cdec403` / `101bec6` before this handoff-only plan commit.
+- Worktree and owned files: the implementation changed
+  `src/neural_analysis/interregional/poisson.py`; the corrected scientific execution contract
+  changed `docs/spec_neural_regression_v3.md`; this record changes only the plan. Unrelated
+  pre-existing untracked files were preserved and excluded from every commit.
+- RED evidence: tests-only commit `83f1ef7` required default IRLS, release of a synthetic
+  Statsmodels-shaped self-cycle, and cleanup on an error path; its focused run failed three tests
+  and passed 25. Tests-only refinement `cdec403` required generation-0 collection; its focused run
+  failed one test and passed 27 before the production code changed.
+- Implementation: commit `101bec6` removes the ineffective explicit QR keyword, confines the
+  external model/result graph to `_fit_validated_poisson_target(...)`, copies only the owned
+  parameter vector and scalar diagnostics, and invokes `gc.collect(0)` after the helper exits on
+  every fit outcome. Public interfaces, estimator objective, convergence rules, units, shapes,
+  persistence, and result schemas are unchanged.
+- GREEN and regression evidence: the focused Poisson suite passed all 28 tests; final
+  `uv run pytest src/tests/neural_analysis/test_interregional_*.py` passed all 140 tests in
+  17.18 seconds. Ruff passed for `src/neural_analysis/interregional/poisson.py` and
+  `src/tests/neural_analysis/test_interregional_poisson.py`; `git diff --check` also passed.
+- Memory verification: four consecutive public `fit_poisson_target(...)` calls used an
+  8,000-by-200 float64 design and independently generated sparse count targets. Current RSS was
+  309,836 KiB before fitting, 325,152 KiB after the first fit, and 325,152 KiB after each of the
+  next three fits; maximum RSS was 515,356 KiB. This verifies that completed-fit cycles no longer
+  accumulate across targets in the scaled synthetic production path. It does not prove the CT026
+  job will complete under its allocation.
+- Documentation correction: v3 restores the default IRLS contract and documents the cycle-cleanup
+  boundary. This plan additionally records that Statsmodels 0.15.0's QR WLS finalization still
+  computes a pseudoinverse. Both documents classify generation-0 collection as execution-memory
+  hygiene, not a scientific estimator change.
+- Real-data, filesystem, or external actions: no experimental session was loaded, no Slurm job was
+  submitted, and no analysis output was written. Only local tests and a seeded synthetic memory
+  check ran.
+- Exact next action and authorization: push the committed correction and this handoff record. Then
+  obtain separate approval before repeating the same bounded CT026 benchmark and inspect its log,
+  trace, peak memory, target progress, and immutable output before any full retry or WP10 work.
 
 ## Plan objective and status
 
@@ -1699,13 +1743,20 @@ compare_count_prediction_mse(...)
 The audited environment currently provides statsmodels 0.15.0. Use
 `statsmodels.api.GLM(y, design, family=sm.families.Poisson(link=sm.families.links.Log()),
 missing="raise")` and `.fit(method="IRLS", maxiter=100, tol=1e-8, scale=None,
-cov_type="nonrobust", full_output=True, disp=False, wls_method="qr")`. The design already contains
-the one explicit intercept; do not call `add_constant`, `fit_regularized`, or pass
+cov_type="nonrobust", full_output=True, disp=False)`. The design already contains the one explicit
+intercept; do not call `add_constant`, `fit_regularized`, or pass
 weights/exposure/offset. Require
 `result.converged is True`, an integer `result.fit_history["iteration"]`, finite `result.params`, and
 finite `result.llf`. Calculate test means as `exp(test_design @ params)` and require them to be
 positive and finite. Reconfirm these signatures and result attributes against the installed source
 immediately before WP9 in case the environment changed.
+
+Isolate the Statsmodels model/result lifetime inside a private helper that returns only an owned
+parameter array and scalar diagnostics. After the helper frame exits, collect generation-0 cyclic
+garbage. In Statsmodels 0.15.0, each IRLS iteration returns a self-cyclic `Bunch` retaining its
+`_MinimalWLS` model and weighted design; explicit collection prevents those execution-only arrays
+from accumulating across target/model fits. This does not change the Poisson objective, convergence
+contract, or output schema. Do not patch Statsmodels or depend on platform-specific allocator calls.
 
 Validate shapes, values, rank, and degrees of freedom before entering the estimator call. Around
 `.fit(...)` only, capture `statsmodels` convergence and perfect-separation warnings and catch known
