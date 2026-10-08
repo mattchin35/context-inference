@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 01:21 EDT.
+**Snapshot date:** 2026-10-08 01:26 EDT.
 
 **Current phase:** WP1-WP7 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -17,7 +17,8 @@ complete-fold summaries, immutable run persistence, single-session/batch command
 standard saved-result PNGs, and a metadata-driven read-only webapp view. Its seeded full synthetic
 integration and bounded performance gate are recorded below. WP8 is authorized and active for
 CT026 session `CT026_2026-08-03_111938` with ProbeA as PFC, ProbeB as HPC, the documented 100-ms
-OLS defaults, a session-local configuration, and the session's `analysis_runs` output root.
+OLS defaults, a session-local configuration, and the session's `analysis_runs` output root. The
+run and technical inspection are complete; user scientific review is pending.
 
 **Repository state at this snapshot:**
 
@@ -52,8 +53,8 @@ OLS defaults, a session-local configuration, and the session's `analysis_runs` o
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit this authorization record, create the approved session-local
-configuration, run the single-session `dry-run`, and run `new` only if validation passes.
+**Next exact action:** present the finalized WP8 output and the two observed presentation defects
+for user review. Do not begin WP9 or alter the immutable run without a new approval.
 
 ### Authority order
 
@@ -85,7 +86,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP5 | Saved results, run identity, session runner, and batch runner | Complete | WP6 complete |
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
-| WP8 | One-session standard-regression scientific inspection | Active; exact CT026 run authorized | Dry-run, then new only after successful validation |
+| WP8 | One-session standard-regression scientific inspection | Run complete; user review pending | User reviews scientific output and presentation defects |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Not authorized | WP8 user inspection/approval |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
@@ -543,6 +544,51 @@ Use this template:
   evidence for this small fixture, not a real-session capacity claim.
 - Exact next action and authorization: obtain explicit approval of the exact WP8 metadata session,
   configuration, command, and output root before touching experimental data.
+
+#### 2026-10-08 01:26 EDT - WP8 CT026 run complete; user review pending
+
+- State: the approved WP8 command and technical inspection are complete. Scientific acceptance by
+  the user is pending, and WP9 remains unauthorized.
+- Authorization: the user approved session `CT026_2026-08-03_111938`, ProbeA as PFC, ProbeB as HPC,
+  metadata-quality good channels with good/MUA units, documented 100-ms unit/PC OLS defaults, a
+  session-local configuration, the existing `analysis_runs` root, and `new` only after a successful
+  dry-run.
+- Sol / Terra / reviewer: primary command runner and evidence reviewer; no worker.
+- Start HEAD / end HEAD: `fef9202` / `b6ca810` before this handoff record.
+- Worktree and owned files: committed only the plan authorization update. Created
+  `interregional_regression_config.json` in the approved external session root and one immutable
+  finalized analysis directory. Unrelated repository entries remained untouched.
+- Commands and results: the exact single-session `dry-run` passed with session ID
+  `CT026_2026-08-03_111938` and 274,440,585 input bytes. The exact `new` command completed with
+  fingerprint `7b4d1a0fdbe1d16b8316b37f52fcabbe94b62e8ef5568ae62c7526b96fdc0985` and no captured
+  warnings. Result reload through the trusted validator passed.
+- Commit: exact run authorization `b6ca810`; no source or test commit.
+- Real-data, filesystem, or external actions: pushed WP7 through `fef9202` before WP8. The finalized
+  run is `analysis_runs/interregional_regression_20261008T052234859222Z_7b4d1a0fdbe1` beneath the
+  CT026 session. It contains 49 files, 42 PNG figures, and approximately 38 MiB total output.
+- Runtime and memory: input validation took 0.032806 seconds, hashing 0.677029 seconds, combined
+  preparation/OLS 158.753958 seconds, persistence 0.431800 seconds, figures 14.276614 seconds, and
+  the logged post-directory-creation total was 173.465737 seconds. GNU `/usr/bin/time -v` measured
+  2:55.86 command wall time and 1,178,500-KiB maximum resident set size with no swaps.
+- Scientific inspection: resolved populations contain 160 ProbeA/PFC units from 315 selected good
+  inside-brain channels and 309 ProbeB/HPC units from 383 selected channels. Five folds contain 130
+  trials each; 646 of 650 trials are scientifically/CV eligible, with the same four rows carrying
+  invalid-alignment and invalid-reward-status reasons. All 1,800 PC fold rows completed with ten
+  components per region/fold. Unit rows contain 36,852 successful, 5,161 fit-unavailable, and 197
+  metric-unavailable rows; the saved reasons are 4,050 restricted-rank failures, 1,109 full-rank
+  failures, 197 constant test targets, and two constant training targets. These strict direct-unit
+  failures are expected and explicit, not silent fallback. PC median incremental held-out R-squared
+  is consistently larger for PFC-to-HPC than HPC-to-PFC in this run, while direct-unit population
+  medians are negative; these are predictive summaries without causal or significance claims.
+- Presentation findings: saved tables, hashes, PCA records, and figures validate, but the two
+  direction-specific count annotations overlap at the top of every increment plot. The absolute-
+  score plots also lack a self-contained direction/color legend. Separately, `summary.md` records
+  the hidden pre-finalization `.incomplete` path and shows a null run output root even though the
+  copied `config.json` records the approved final root. These are concrete presentation/provenance
+  defects; the immutable result tables were not altered.
+- Exact next action and authorization: the user reviews the finalized output and decides whether to
+  approve a tests-first bounded presentation correction. Do not begin WP9 before that review and
+  the existing WP8 scientific gate are satisfied.
 
 ## Plan objective and status
 
