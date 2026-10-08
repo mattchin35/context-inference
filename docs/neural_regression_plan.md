@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 15:26 EDT.
+**Snapshot date:** 2026-10-08 15:38 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -26,14 +26,17 @@ the same unpenalized IRLS estimator is implemented and locally GREEN, but the se
 repeat bounded benchmark, Slurm job `30991248`, was also OOM-killed. QR slowed rather than bounded
 the memory growth. The actual Statsmodels cyclic-retention cause was reproduced, and the approved
 project-side collection boundary is implemented and locally GREEN. Repeated public-function fits
-now have flat post-fit RSS in the scaled synthetic check. No replacement CT026 benchmark, scale
-test, full retry, or WP10 is authorized. WP9 scientific acceptance and WP10 remain blocked on an
-inspected completed output.
+had flat post-fit RSS in the scaled synthetic check. The separately approved bounded CT026
+benchmark is now running as Slurm job `30991341`; its first Poisson cell passed the prior OOM window,
+reached target 25, and held process peak RSS at approximately 8.17 GiB across repeated heartbeats.
+The user directed that continuous monitoring stop and the job run unattended. No scale test, full
+retry, or WP10 is authorized. WP9 scientific acceptance and WP10 remain blocked on an inspected
+completed output.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `101bec6`;
+- HEAD before this handoff record: `ce84903`;
 - plan-owned files: `docs/neural_regression_plan.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
 - none of those unrelated entries belongs to this plan or may be staged, changed, removed, or
@@ -62,9 +65,9 @@ inspected completed output.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit and push this final handoff record. A repeat of the same bounded CT026
-benchmark requires separate approval of its exact command and output path. Do not launch that
-benchmark, a scale test, a full retry, or WP10 automatically.
+**Next exact action:** leave Slurm job `30991341` unattended. After it finishes, inspect scheduler
+accounting, the log, complete resource trace/summary, unavailable-target counts, and the immutable
+result before proposing any scale test, full retry, or WP10 work. Do not poll continuously.
 
 ### Authority order
 
@@ -97,7 +100,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Cyclic-retention correction locally GREEN | Separately approve and inspect one bounded CT026 benchmark |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 benchmark running with early memory plateau | Let job `30991341` finish unattended, then inspect its complete output |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -1041,6 +1044,42 @@ Use this template:
 - Exact next action and authorization: push the committed correction and this handoff record. Then
   obtain separate approval before repeating the same bounded CT026 benchmark and inspect its log,
   trace, peak memory, target progress, and immutable output before any full retry or WP10 work.
+
+#### 2026-10-08 15:38 EDT - WP9 corrected bounded benchmark submitted; monitoring stopped
+
+- State and authorization: the user explicitly approved the exact bounded CT026 cluster command,
+  then directed continuous monitoring to stop once the memory issue was satisfactorily bounded.
+  Exactly one job, Slurm `30991341`, was submitted. This does not authorize a scale test, full
+  retry, replacement job, or WP10.
+- Reproducibility: the cluster checkout at `/gs/gsfs0/home/mchin1/context-inference` was
+  tracked-clean and fast-forwarded from `8806643` to exact approved commit
+  `ce84903fac3362bc1a4a2b3d2e26d7fa60d9d676`. The existing benchmark configuration was unchanged:
+  session `CT026_2026-08-03_111938`, condition `all`, window `whole`, representation `units`, and
+  analyses `ols_cv` plus `poisson_cv`. The dry-run planned that one session from 274,440,585 input
+  bytes.
+- Submission: the ordinary production wrapper requested one task, eight CPUs, 32 GiB, and 72 hours.
+  Its scheduler log is
+  `/gs/gsfs0/users/mchin1/logs/interregional_regression_30991341.log`; startup records node
+  `cpu-747`, tracked-clean commit `ce84903`, eight-thread numerical limits, `uv 0.12.17`, and the
+  exact approved configuration argument.
+- Output boundary: the running immutable attempt is
+  `/gs/gsfs0/users/mchin1/contextProjectData/CT026/CT026_20260803_latent_inference/analysis_runs/interregional_memory_benchmarks/.interregional_regression_20261008T193213443945Z.incomplete`.
+  It remains hidden and incomplete until the normal atomic finalization path succeeds.
+- Early execution evidence: all ten OLS cells completed in approximately 21 seconds of stage time
+  with process peak RSS approximately 1.04 GiB. Poisson cell 1 then completed 25 of 160 targets;
+  four targets were explicitly unavailable at that checkpoint. Process peak RSS reached
+  8,772,136,960 bytes (approximately 8.17 GiB) and remained exactly unchanged from elapsed seconds
+  90 through 330 while CPU time and target progress continued.
+- Interpretation: the run passed the prior QR job's approximately 5:46 OOM window and progressed to
+  target 25 with less than one-third of the prior 31.37-GiB peak. The stable high-water mark across
+  eight minutes of Poisson telemetry is sufficient to confirm that the diagnosed cross-fit cyclic
+  accumulation is no longer occurring in this first cell. It does not yet establish job completion,
+  later-cell peak memory, scientific acceptance, or full-workload runtime.
+- Monitoring decision: at the user's direction, no further continuous polling will occur. Slurm
+  job `30991341` remains running unattended on `cpu-747`.
+- Exact next action and authorization: after the job finishes, inspect `sacct`, the scheduler log,
+  the full resource trace and completion summary, unavailable-target counts, finalized result,
+  figures, and report. Do not submit anything else automatically.
 
 ## Plan objective and status
 
