@@ -9,23 +9,19 @@ repository audit.
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-06 17:53 EDT.
+**Snapshot date:** 2026-10-08 00:33 EDT.
 
-**Current phase:** WP0 third correctness/completeness/conciseness pass complete; its post-fix pass
-found no further substantive issue, and the documents await user review. The v3
-scientific specification and this plan are tracked documentation files with plan-owned working-tree
-changes. No implementation or test work has begun, and the user has explicitly prohibited
-implementation in this chat.
+**Current phase:** WP1-WP3 are complete and GREEN. The first direct-unit OLS milestone now includes
+validated contracts, Pynapple count preparation, deterministic block CV, bidirectional fitting,
+held-out scoring, and complete-fold summaries. WP4 fold-local PCA is next and has not started.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD at this revision's preflight: `787aadb`;
+- HEAD before this handoff record: `1fd0fa6`;
 - plan-owned files: `docs/neural_regression_plan.md` and
-  `docs/spec_neural_regression_v3.md`, both currently tracked and modified;
-- the worktree also contains modified `docs/task_variable_implementation_plan.md` and
-  `docs/task_variable_spec_v5.md`, which the user confirmed are owned by another chat, plus many
-  unrelated pre-existing untracked files/directories; and
+  `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
+- the worktree also contains many unrelated pre-existing untracked files/directories; and
 - none of those unrelated entries belongs to this plan or may be staged, changed, removed, or
   absorbed into a later package.
 
@@ -46,14 +42,14 @@ implementation in this chat.
 - the third review clarified scientific/condition/CV eligibility, canonical row identity,
   descriptive PCA scope, and minimal Poisson diagnostics; added runtime-version provenance; and
   replaced the run-state protocol with a same-parent incomplete-directory/final-rename boundary;
-  and
+- the empirical binning review found no default-window overlap in either available CT026 session,
+  so the frozen count contract retains the existing Pynapple tensor convention without a custom
+  NumPy counting path or cross-fold overlap machinery; and
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** return the corrected plan/spec for user review. Do not create tests or
-production files in this chat. A later implementation chat begins only after the user approves the
-plan and explicitly requests implementation; the incoming Sol supervisor then performs the resume
-checklist below and starts WP1, not source edits from WP2 or later.
+**Next exact action:** write the bounded WP4 fold-local PCA and PC-pipeline tests, confirm RED, and
+commit the tests before implementing `pca.py` or extending the pipeline.
 
 ### Authority order
 
@@ -78,10 +74,10 @@ reinterpret the scientific specification to fit an implementation convenience.
 | Package | Scope | State at snapshot | Next gate |
 |---|---|---|---|
 | WP0 | Specification, architecture, orchestration, and handoff plan | Contract freeze complete; documentation only | User review; no implementation in this chat |
-| WP1 | Configuration and result contracts | Not authorized | Explicit implementation request and fresh Sol preflight |
-| WP2 | Counts, masks, folds, windows, and histories | Not authorized | WP1 GREEN and recorded handoff |
-| WP3 | Direct-unit OLS fitting, scoring, and aggregation | Not authorized | WP2 GREEN and numerical test-design gate |
-| WP4 | Fold-local regional PCA and PC OLS | Not authorized | WP3 GREEN and leakage test-design gate |
+| WP1 | Configuration and result contracts | Complete | WP2 may begin |
+| WP2 | Counts, masks, folds, windows, and histories | Complete | WP3 may begin |
+| WP3 | Direct-unit OLS fitting, scoring, and aggregation | Complete | WP4 may begin |
+| WP4 | Fold-local regional PCA and PC OLS | Ready | Tests-only RED commit |
 | WP5 | Saved results, run identity, session runner, and batch runner | Not authorized | WP4 GREEN and saved-schema freeze |
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Not authorized | WP5 GREEN and stable standard-result schema |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Not authorized | WP1-WP6 focused gates GREEN |
@@ -272,6 +268,149 @@ Use this template:
   issue. The deliberate implicit-complete-coverage assumption remains clearly deferred work.
 - Exact next action and authorization: user reviews the revised documents. A later explicit
   implementation request authorizes a fresh WP1 preflight only.
+
+#### 2026-10-08 00:03 EDT - WP0 trial-local binning correction
+
+- State: documentation correction complete; implementation remains inactive.
+- Authorization: the user requested correction of the documentation after reviewing the identified
+  Pynapple multi-epoch behavior; no source, tests, commits, experimental-data runs, or benchmarks.
+- Sol / Terra / reviewer: primary documentation agent only; no worker or independent reviewer.
+- Start HEAD / end HEAD: `9169c34` / `9169c34`.
+- Worktree and owned files: changed only `docs/neural_regression_plan.md` and
+  `docs/spec_neural_regression_v3.md`; unrelated pre-existing untracked entries were left untouched.
+- RED command and result: not applicable; no tests were written or run.
+- GREEN/regression commands and results: documentation-only `git diff --check` and ASCII checks
+  passed. No production verification is claimed.
+- Commits: none.
+- Real-data, filesystem, or external actions: only the two authorized Markdown files were edited;
+  no experimental data, network, batch, benchmark, or external action.
+- Findings and unresolved risks: a bulk Pynapple `IntervalSet` can merge overlapping trial windows,
+  adjust touching endpoints, and sort epochs by time. The corrected contract uses per-trial NumPy
+  `searchsorted` counting, retains ascending trial-row identity, counts a recorded spike once in
+  each applicable overlapping trial-local window, and adds explicit overlap/order/boundary tests.
+  The documents now also disclose that unpurged windows on opposite sides of a block boundary may
+  reuse absolute-time spikes across CV folds. The deliberate implicit-complete-coverage assumption
+  remains unchanged.
+- Exact next action and authorization: user reviews the corrected documents. An explicit later
+  implementation request authorizes a fresh WP1 preflight only.
+
+#### 2026-10-08 00:11 EDT - WP0 Pynapple binning restoration
+
+- State: documentation correction complete; implementation remains inactive.
+- Authorization: after review of the practical overlap risk, the user explicitly directed the plan
+  to retain Pynapple rather than introduce custom spike counting.
+- Sol / Terra / reviewer: primary documentation agent only; no worker or independent reviewer.
+- Start HEAD / end HEAD: `9169c34` / `9169c34`.
+- Worktree and owned files: changed only `docs/neural_regression_plan.md`; restored
+  `docs/spec_neural_regression_v3.md` to its tracked Pynapple contract. Unrelated pre-existing
+  untracked entries were left untouched.
+- RED command and result: not applicable; no tests were written or run.
+- GREEN/regression commands and results: documentation-only structure, diff, and ASCII checks; no
+  production verification is claimed.
+- Commits: none.
+- Real-data, filesystem, or external actions: read-only timing checks inspected the two available
+  CT026 trial tables; no spike data were loaded and no outputs were written.
+- Findings and unresolved risks: the two sessions had zero overlapping eligible windows at the
+  default two- and four-second durations. Their minimum eligible alignment separations were
+  4.020457 seconds and 4.006259 seconds for choice time, and 4.020491 seconds and 4.006413 seconds
+  for start time. The custom NumPy counting path and overlap-specific warnings/tests were therefore
+  removed, and the existing Pynapple tensor convention remains the implementation contract.
+- Exact next action and authorization: user reviews the corrected documents. An explicit later
+  implementation request authorizes a fresh WP1 preflight only.
+
+#### 2026-10-08 00:17 EDT - WP1 implementation authorization and preflight
+
+- State: WP1 active; preflight complete and tests-only RED work is next.
+- Authorization: the user explicitly approved implementation after the Pynapple restoration. This
+  activates WP1 configuration and result contracts only; real-data and batch execution remain
+  unauthorized.
+- Sol / Terra / reviewer: primary implementation agent; no worker or independent reviewer.
+- Start HEAD / end HEAD: `9169c34` / `9169c34` at preflight.
+- Worktree and owned files: the existing plan edit is owned by this task. WP1 owns the new
+  `src/neural_analysis/interregional/` package files and the two planned interregional contract test
+  files. Unrelated pre-existing untracked entries remain untouched.
+- RED command and result: pending tests-only implementation.
+- GREEN/regression commands and results: pending.
+- Commits: pending tests-only and implementation commits.
+- Real-data, filesystem, or external actions: none.
+- Findings and unresolved risks: preflight found no additional implementation blocker. WP1 has no
+  spike loading, fitting, plotting, persistence, or experimental-data access.
+- Exact next action and authorization: write and run the WP1 configuration/record tests, confirm
+  their expected import/API failures, and commit the tests before source implementation.
+
+#### 2026-10-08 00:24 EDT - WP1 GREEN and WP2 handoff
+
+- State: WP1 complete; WP2 preparation tests are authorized and next.
+- Authorization: implementation remains within the user's approved plan. No real-data or batch
+  execution is authorized.
+- Sol / Terra / reviewer: primary implementation agent and self-review; no worker.
+- Start HEAD / end HEAD: `9169c34` / `a1b937b`.
+- Worktree and owned files: added only the interregional configuration/record package and its two
+  test files. The plan remains this task's only uncommitted tracked file; unrelated entries were
+  untouched.
+- RED command and result: the two new test modules initially failed collection because the package
+  did not exist. Two focused contract additions then failed for NumPy integer/provenance behavior,
+  and two input-type additions failed before their corresponding fixes.
+- GREEN/regression commands and results: 30 focused interregional tests passed. A combined 121-test
+  run covering those tests plus existing spike-behavior package, population package/PCA, and
+  session-metadata tests passed with four existing Pynapple warnings. Two separately run quickstart
+  tests fail on the pre-existing tracked `task_decoding_config.json` because that test globs every
+  JSON example as session metadata; WP1 did not change that file or test.
+- Commits: tests `7287bca`, `b7a95de`, and `691f31d`; test formatting `e8fb4db`;
+  implementation `a1b937b`.
+- Real-data, filesystem, or external actions: no experimental data, network, batch, or external
+  action. Test files used pytest temporary directories only.
+- Findings and unresolved risks: no WP1 contract issue remains. The quickstart glob failure is an
+  unrelated pre-existing test/repository mismatch and was not changed.
+- Exact next action and authorization: write WP2 preparation tests against the frozen contracts,
+  confirm RED, and commit them before implementing the Pynapple preparation module.
+
+#### 2026-10-08 00:28 EDT - WP2 GREEN and WP3 handoff
+
+- State: WP2 complete; WP3 direct-unit OLS tests are authorized and next.
+- Authorization: implementation remains within the approved plan; no real-data or batch execution.
+- Sol / Terra / reviewer: primary implementation agent and self-review; no worker.
+- Start HEAD / end HEAD: `a1b937b` / `c76a6c7`.
+- Worktree and owned files: added `preparation.py` and its test file only; the plan remains the only
+  uncommitted tracked file owned by this task.
+- RED command and result: preparation tests initially failed import because the module did not
+  exist. After implementation, four failures identified three test-fixture errors: float-edge
+  construction, zero-duration one-spike Pynapple support, and pandas index alignment.
+- GREEN/regression commands and results: all nine preparation tests passed after the documented
+  fixture corrections. A combined 94-test run covering all interregional tests plus existing
+  population-PCA and spike-behavior package tests passed with four existing Pynapple warnings.
+- Commits: tests `5fc6d16`; documented fixture correction `8de4b94`; implementation `c76a6c7`.
+- Real-data, filesystem, or external actions: no experimental data, network, batch, or external
+  action. All neural inputs were synthetic and hand checked.
+- Findings and unresolved risks: the count implementation uses the existing Pynapple aligned tensor
+  builder, preserves positional trial identity, and passes exact half-open-bin counts. No custom
+  spike counter or overlap machinery was introduced.
+- Exact next action and authorization: write and commit WP3 OLS and direct-unit pipeline tests,
+  confirm RED, then implement only the direct-unit OLS path.
+
+#### 2026-10-08 00:33 EDT - WP3 GREEN and direct-unit milestone
+
+- State: WP3 and the initial direct-unit OLS milestone are complete; WP4 is ready but not started.
+- Authorization: implementation remained within the approved plan; no real-data or batch execution.
+- Sol / Terra / reviewer: primary implementation agent and self-review; no worker.
+- Start HEAD / end HEAD: `c76a6c7` / `1fd0fa6`.
+- Worktree and owned files: added `linear.py`, `pipeline.py`, bounded package exports, and their two
+  test files. The plan is the only remaining tracked edit before this handoff record is committed.
+- RED command and result: linear and pipeline tests each initially failed import. Focused follow-up
+  tests failed before fixes for full-only rank availability and metric-specific MSE aggregation.
+- GREEN/regression commands and results: all 48 interregional tests passed. A combined 139-test run
+  covering all interregional work plus existing spike-behavior package, population package/PCA,
+  and session-metadata tests passed with four existing Pynapple warnings.
+- Commits: OLS tests `7e889fb`; tolerance correction `7f40f2a`; pipeline tests `d14d08f`;
+  nested-status test `2ca10de`; metric-specific-summary test `ea9795e`; implementation `1fd0fa6`.
+- Real-data, filesystem, or external actions: no experimental data, network, batch, or external
+  action. The integration input was generated with recorded NumPy seed 17.
+- Findings and unresolved risks: direct-unit OLS is complete for the in-memory path. Strict rank and
+  residual-degree rules are explicit; unavailable full models do not erase valid restricted-fit
+  diagnostics; constant held-out targets retain MSE while R-squared remains unavailable. No new
+  issue was found in the completed scope.
+- Exact next action and authorization: begin WP4 with committed fold-local PCA leakage tests before
+  any PCA implementation or pipeline extension.
 
 ## Plan objective and status
 
