@@ -2041,6 +2041,56 @@ Use this template for each appended record:
   `task_decoding/__pycache__`, update the clean cluster checkout to the exact
   pushed commit, reverify, and request renewed approval for one submission.
 
+#### 2026-10-07 - WP12 synthetic smoke completion and reporting repair
+
+- Authorization and execution: after the bytecode repair was pushed and the
+  cluster checkout was clean at `618a29a`, the user approved one corrected
+  synthetic submission. Slurm accepted job `30984881` for prepared run
+  `/gs/gsfs0/home/mchin1/task_decoding_smoke/wp12-seed-20261007-4238d52/base-session/analysis_runs/task_variable_decoding_2026-10-07T23-55-04Z`.
+- Scientific result: the run completed with `final_results_published=true`,
+  no warning or error, all expected files, three valid PNGs, and valid result
+  revalidation. It requested 432 outer cells: 288 were valid and the 144
+  `current_state` cells were unavailable exactly as declared by the synthetic
+  fixture; `current_action` and `relative_doubt` each contributed 144 valid
+  cells.
+- Durable resource evidence: `resource_usage.json` records 5.112 seconds wall
+  time, 1.824 seconds user CPU, 0.250 seconds system CPU, 339,750,912 bytes peak
+  RSS, 2,422,271 output bytes, and 288 measured estimator calls. The empty
+  scheduler log is consistent with a successful job that emitted no standard
+  stream output.
+- Scheduler-accounting limitation: the required one-shot exact-root `sacct`
+  query returned no row even though cluster Slurm is configured with
+  `accounting_storage/slurmdbd`; the completed job had already left `squeue`.
+  The old status command raised and hid the otherwise valid durable completion
+  state. Consequently the synthetic result is scientifically valid, but
+  cluster accounting fields such as Slurm `MaxRSS` are unavailable for this
+  evidence run and must not be fabricated.
+- Summary defect: immutable `summary.md` reported the earlier running snapshot
+  (290,217,984 bytes peak RSS and pre-figure CPU values), while the terminal
+  structured resource evidence correctly included figure generation. The
+  summary is therefore not authoritative for this run's resource totals.
+- Approved repair: tests-only commits `86fc413` and `5386a99` freeze graceful
+  empty/failed-accounting fallback, successful-accounting compatibility,
+  post-figure complete evidence in the summary, and the corresponding
+  late-publication/resume order. Production commit `a1763bc` returns durable
+  pipeline status plus `scheduler=null` and `scheduler_error` when the one-shot
+  accounting query is unavailable, and renders figures before taking the
+  terminal resource snapshot supplied to `summary.md`.
+- Verification: the focused GREEN selection passed seven tests; complete
+  pipeline/Slurm regression passed 178 tests with one known warning; and the
+  full task-decoding package passed 837 tests with the same six known warnings.
+  No scientific setting, result schema, or scheduler resource directive
+  changed.
+- External effects and immutability: inspection was read-only. The completed
+  synthetic run is not rewritten or rerun merely to update its immutable
+  summary; its `resource_usage.json` remains the authoritative resource record.
+- Exact next action: push the repair commits, update the clean cluster checkout
+  to the exact pushed commit, and run status once against job `30984881` to
+  prove the new explicit accounting-unavailable fallback while preserving the
+  completed durable state. If that validation passes, present the separate
+  WP12 CT026 transfer/dry-run/submission plan; do not infer authorization for
+  experimental transfer or computation.
+
 ## 1. Objective
 
 Implement a readable, single-session task-variable decoding pipeline that:

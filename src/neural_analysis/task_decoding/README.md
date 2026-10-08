@@ -192,10 +192,20 @@ bytes. Batch execution remains one worker unless an explicit compatible
 completed measurement is supplied; evidence is never inferred from an
 arbitrary run.
 
+Final reporting renders the applicable heatmaps before publishing the
+terminal resource snapshot. `summary.md` therefore receives the complete
+post-figure wall/CPU/RSS evidence rather than the earlier running checkpoint.
+If figure or summary publication fails, terminal failure evidence replaces
+the provisional resource status and an explicit resume publishes only missing
+immutable artifacts.
+
 The WP11 cluster path is deliberately single-session. The fixed request is one
 CPU, `3G`, and `05:00:00`; login-side tensor memory and active cgroup memory are
 both guarded at 50 percent before large allocation. Status combines durable
-state with one `sacct` query and never polls. Exact-commit/offline checks and
+state with one `sacct` query and never polls. If accounting fails or has no
+exact root-job row, status still returns the durable pipeline state with
+`scheduler: null` and an explicit `scheduler_error`; it does not infer a live
+scheduler state or hide completed results. Exact-commit/offline checks and
 non-destructive staged transfer are documented in the scientist README. WP13
 separately owns any array wrapper; it must reuse this preparation/execution
 path rather than duplicate scientific logic.
