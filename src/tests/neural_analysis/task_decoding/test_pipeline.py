@@ -239,6 +239,26 @@ def set_regularization_mode(paths: dict[str, Path], regularization_mode: str) ->
     paths["config"].write_text(json.dumps(payload), encoding="ascii")
 
 
+def set_condition_names(paths: dict[str, Path], condition_names: tuple[str, ...]) -> None:
+    """Persist a selected canonical condition list in one test configuration.
+
+    Parameters
+    ----------
+    paths : dict[str, pathlib.Path]
+        Session fixture mapping containing the JSON configuration path.
+    condition_names : tuple[str, ...]
+        Nonempty canonical condition identifiers in requested input order.
+
+    Returns
+    -------
+    None
+        Rewrites only the test-owned configuration JSON.
+    """
+    payload = read_json(paths["config"])
+    payload["condition_names"] = list(condition_names)
+    paths["config"].write_text(json.dumps(payload), encoding="ascii")
+
+
 def make_coherent_model_records(
     paths: dict[str, Path],
     *,
@@ -748,6 +768,7 @@ def test_plan_reads_only_small_inputs_and_reports_dirtiness(monkeypatch, tmp_pat
     plan = pipeline.plan_task_decoding_session(paths["config"])
 
     assert tuple(plan["target_names"]) == ("current_action", "relative_doubt")
+    assert tuple(plan["condition_names"]) == ("all",)
     assert plan["fit_count"] == 2 * 3 * 8 * 3 * 2
     assert plan["tensor_allocation_bytes"] > 0
     assert "synthetic dirty source" in plan["source_cleanliness"]
@@ -760,6 +781,7 @@ def test_plan_reads_only_small_inputs_and_reports_dirtiness(monkeypatch, tmp_pat
         "hpc_unit_count": 2,
         "time_bin_count": 8,
         "target_count": 2,
+        "condition_count": 1,
         "outer_fold_count": 3,
         "inner_fold_count": 3,
         "coefficient_feature_capacity": 4,
@@ -791,6 +813,98 @@ def test_plan_reads_only_small_inputs_and_reports_dirtiness(monkeypatch, tmp_pat
             "outer_split_unavailable_reason": "constant target",
         },
     ]
+
+
+def test_condition_resolved_plan_reports_expanded_fit_envelope_and_diagnostics(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Dry run should count every configured condition-target analysis cell."""
+    paths = write_session_inputs(tmp_path)
+    set_condition_names(
+        paths,
+        ("stay", "all", "incorrect", "correct_rewarded", "omission", "switch"),
+    )
+    monkeypatch.setattr(
+        pipeline.results,
+        "validate_scientific_source_cleanliness",
+        lambda *_args: None,
+    )
+
+    plan = pipeline.plan_task_decoding_session(paths["config"])
+
+    assert tuple(plan["condition_names"]) == (
+        "all",
+        "correct_rewarded",
+        "omission",
+        "incorrect",
+        "switch",
+        "stay",
+    )
+    assert plan["fit_count"] == 6 * 2 * 3 * 8 * 3 * 2
+    assert plan["resource_envelope"]["condition_count"] == 6
+    assert plan["resource_envelope"]["categorical_fit_count"] == 6 * 144
+    assert plan["resource_envelope"]["numerical_fit_count"] == 6 * 144
+    diagnostics = plan["condition_target_diagnostics"]
+    assert len(diagnostics) == 6 * 2
+    assert [
+        (entry["condition_identifier"], entry["target_identifier"])
+        for entry in diagnostics
+    ] == [
+        (condition, target)
+        for condition in plan["condition_names"]
+        for target in plan["target_names"]
+    ]
+    condition_counts = plan["condition_trial_counts"]
+    assert condition_counts["all"] == 12
+    assert set(condition_counts) == set(plan["condition_names"])
+
+
+def test_condition_target_common_masks_intersect_before_model_splitting(tmp_path) -> None:
+    """Each decoder should receive the condition/target/common-row intersection."""
+    paths = write_session_inputs(tmp_path)
+    set_condition_names(paths, ("all", "correct_rewarded", "incorrect"))
+    config = decoding_config.load_task_decoding_config(paths["config"])
+    trial_table = pd.read_csv(paths["augmented"])
+    target_table = targets.build_target_table(trial_table, config)
+    common_rows = np.array([0, 1, 2, 4, 5, 7, 8, 10, 11], dtype=np.int64)
+
+    observed = pipeline._condition_target_common_masks(
+        config,
+        trial_table,
+        target_table,
+        common_rows,
+    )
+
+    shared = pipeline.conditions.build_condition_masks(
+        trial_table,
+        config.condition_names,
+    )
+    assert tuple(observed) == tuple(
+        (condition, target)
+        for condition in config.condition_names
+        for target in config.target_names
+    )
+    for condition, target in observed:
+        expected = (
+            shared[condition][common_rows]
+            & target_table[f"{target}_valid"].to_numpy(dtype=bool)[common_rows]
+        )
+        np.testing.assert_array_equal(observed[(condition, target)], expected)
+
+
+def test_condition_target_checkpoint_identity_is_unambiguous(tmp_path) -> None:
+    """Condition-target checkpoints should have stable state keys and safe filenames."""
+    run_directory = tmp_path / "run"
+
+    assert pipeline._condition_target_key("correct_rewarded", "current_action") == (
+        "correct_rewarded::current_action"
+    )
+    assert pipeline._condition_target_checkpoint_path(
+        run_directory,
+        "correct_rewarded",
+        "current_action",
+    ) == run_directory / "checkpoints" / "correct_rewarded--current_action.npz"
     assert not paths["output_root"].exists()
 
 

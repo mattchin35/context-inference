@@ -979,6 +979,94 @@ def make_run_save_arguments(
     }
 
 
+def test_condition_payload_stacks_only_condition_dependent_axes_and_round_trips(
+    tmp_path: Path,
+) -> None:
+    """Schema 2 should save one validated condition axis without duplicating identities."""
+    input_paths = write_input_fixture(tmp_path)
+    typed_config = replace(
+        make_config(input_paths, regularization_mode="fixed"),
+        condition_names=("all", "incorrect"),
+    )
+    scientific_config = scientific_config_payload(typed_config)
+    all_arrays = make_result_arrays(scientific_config, regularization_mode="fixed")
+    incorrect_arrays = {name: value.copy() for name, value in all_arrays.items()}
+    incorrect_arrays["fold_scores"] = incorrect_arrays["fold_scores"].copy()
+    incorrect_arrays["fold_scores"][0, :, :, 0, :, :] = 0.61
+    all_meta = make_meta(
+        all_arrays,
+        scientific_config,
+        regularization_mode="fixed",
+    )
+    incorrect_meta = make_meta(
+        incorrect_arrays,
+        scientific_config,
+        regularization_mode="fixed",
+    )
+    full_count = all_arrays["full_table_row_positions"].size
+    condition_masks = {
+        "all": np.ones(full_count, dtype=np.bool_),
+        "incorrect": np.ones(full_count, dtype=np.bool_),
+    }
+
+    stacked_arrays, stacked_meta = results.assemble_condition_result_payload(
+        condition_names=("all", "incorrect"),
+        condition_masks=condition_masks,
+        condition_payloads={
+            "all": (all_arrays, all_meta),
+            "incorrect": (incorrect_arrays, incorrect_meta),
+        },
+    )
+
+    assert results.CONDITION_RESULT_SCHEMA_VERSION == 2
+    assert stacked_meta["schema_version"] == 2
+    assert stacked_arrays["condition_labels"].tolist() == ["all", "incorrect"]
+    assert stacked_arrays["condition_masks"].shape == (2, full_count)
+    assert stacked_arrays["fold_scores"].shape == (2, *all_arrays["fold_scores"].shape)
+    assert stacked_arrays["target_labels"].shape == all_arrays["target_labels"].shape
+    assert stacked_arrays["encoded_target_values"].shape == (
+        all_arrays["target_labels"].size,
+        full_count,
+    )
+    assert stacked_meta["axes"]["fold_scores"][0] == "condition"
+    assert stacked_meta["axes"]["target_labels"] == ["target"]
+
+    manifest = build_manifest(input_paths)
+    run_directory = tmp_path / "condition-run"
+    results.save_task_decoding_run(
+        run_directory,
+        arrays=stacked_arrays,
+        meta=stacked_meta,
+        input_manifest=manifest,
+        scientific_config=scientific_config,
+        feature_parameter_source=input_paths["feature_parameters"],
+        run_fingerprint="run-fingerprint-test",
+    )
+    loaded = results.load_task_decoding_run(run_directory)
+
+    assert loaded["meta"]["schema_version"] == 2
+    assert loaded["arrays"]["condition_labels"].tolist() == ["all", "incorrect"]
+    np.testing.assert_array_equal(
+        loaded["arrays"]["fold_scores"],
+        stacked_arrays["fold_scores"],
+    )
+
+
+def test_schema_one_pooled_result_remains_loadable_after_condition_extension(
+    tmp_path: Path,
+) -> None:
+    """The immutable completed pooled format must remain a supported read path."""
+    input_paths = write_input_fixture(tmp_path)
+    run_directory = tmp_path / "pooled-run"
+
+    save_run_fixture(run_directory, input_paths, regularization_mode="fixed")
+    loaded = results.load_task_decoding_run(run_directory)
+
+    assert loaded["meta"]["schema_version"] == 1
+    assert "condition_labels" not in loaded["arrays"]
+    assert results.condition_labels(loaded) == ("all",)
+
+
 def write_raw_npz(
     run_directory: Path,
     arrays: Mapping[str, np.ndarray],
