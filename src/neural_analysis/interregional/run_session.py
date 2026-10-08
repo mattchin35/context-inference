@@ -45,6 +45,7 @@ from .pipeline import (
     prepare_interregional_session,
     run_linear_cross_validation,
 )
+from .plotting import save_standard_regression_figures
 from .records import (
     SCIENTIFIC_EXCLUSION_REASON_ORDER,
     InterregionalResults,
@@ -643,6 +644,16 @@ def run_single_session(
             stream.write(
                 "stage=persistence event=end "
                 f"elapsed_seconds={time.perf_counter() - persistence_started:.9f}\n"
+            )
+        stage = "figures"
+        figures_started = time.perf_counter()
+        with (working / "run.log").open("a", encoding="utf-8") as stream:
+            stream.write("stage=figures event=start\n")
+        save_standard_regression_figures(result, working / "figures")
+        with (working / "run.log").open("a", encoding="utf-8") as stream:
+            stream.write(
+                "stage=figures event=end "
+                f"elapsed_seconds={time.perf_counter() - figures_started:.9f}\n"
             )
         stage = "summary"
         summary_started = time.perf_counter()

@@ -153,6 +153,7 @@ from src.neural_analysis.webapp.session_inputs import (
     LFP_FORMAT_SPIKEGLX,
     MetadataLFPSiteInputs,
     MetadataViewAvailability,
+    PLOT_VIEW_INTERREGIONAL,
     PLOT_VIEW_LFP_PHASE_CLUSTERING,
     PLOT_VIEW_LFP_SUMMARY,
     PLOT_VIEW_OPTIONS,
@@ -193,6 +194,7 @@ from src.neural_analysis.webapp.summary_view import (
     render_lfp_summary_view,
     render_metadata_lfp_summary_view,
 )
+from src.neural_analysis.webapp.interregional_views import render_interregional_view
 from src.neural_analysis.webapp.task_decoding_views import render_task_decoding_view
 from src.neural_analysis.webapp.unit_views import (
     PAGE_SIZE_OPTIONS,
@@ -661,6 +663,9 @@ def _start_metadata_webapp(session: ResolvedSession) -> str | None:
         return None
     if plot_view == PLOT_VIEW_TASK_DECODING:
         render_task_decoding_view(st, session)
+        return None
+    if plot_view == PLOT_VIEW_INTERREGIONAL:
+        render_interregional_view(st, session)
         return None
     return plot_view
 

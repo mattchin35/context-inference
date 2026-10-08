@@ -5,6 +5,9 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from pathlib import Path
+
+from .records import InterregionalResults
 
 
 _DIRECTIONS = ("HPC_to_PFC", "PFC_to_HPC")
@@ -190,7 +193,7 @@ def plot_cv_increment_summary(
         fontsize=9,
         wrap=True,
     )
-    figure.tight_layout(rect=(0.0, 0.09, 1.0, 1.0))
+    figure.subplots_adjust(left=0.12, right=0.97, bottom=0.18, top=0.88)
     return figure, axis
 
 
@@ -246,5 +249,81 @@ def plot_absolute_cv_scores(
         fontsize=9,
         wrap=True,
     )
-    figure.tight_layout(rect=(0.0, 0.08, 1.0, 1.0))
+    figure.subplots_adjust(left=0.14, right=0.97, bottom=0.17, top=0.88)
     return figure, axis
+
+
+def save_standard_regression_figures(
+    result: InterregionalResults,
+    figures_directory: Path | str,
+) -> tuple[Path, ...]:
+    """Save all applicable standard OLS inspection figures as opaque PNGs.
+
+    Parameters
+    ----------
+    result : InterregionalResults
+        Valid saved-result record. Only target and population summary tables are
+        read; no model is reconstructed or fit.
+    figures_directory : pathlib.Path or str
+        Existing output directory. PNG dimensions are controlled by the
+        plotting functions' figure sizes and saved at 150 dots per inch.
+
+    Returns
+    -------
+    tuple[pathlib.Path, ...]
+        Saved PNG paths in deterministic representation/model/window/condition
+        order. An empty tuple means no applicable summary rows were present.
+    """
+    destination = Path(figures_directory)
+    if not destination.is_dir():
+        raise ValueError("figures_directory must be an existing directory.")
+    summaries = result.target_summaries
+    if summaries.empty:
+        return ()
+    saved: list[Path] = []
+    combinations = (
+        summaries[["representation", "model_family", "window"]]
+        .drop_duplicates()
+        .sort_values(["representation", "model_family", "window"])
+    )
+    for combination in combinations.itertuples(index=False):
+        cell = summaries.loc[
+            summaries["representation"].eq(combination.representation)
+            & summaries["model_family"].eq(combination.model_family)
+            & summaries["window"].eq(combination.window)
+        ]
+        if cell["metric_name"].eq("delta_r2").any() and not result.population_summaries.empty:
+            figure, _ = plot_cv_increment_summary(
+                summaries,
+                result.population_summaries,
+                representation=str(combination.representation),
+                model_family=str(combination.model_family),
+                window=str(combination.window),
+                coverage_assumption_version=result.coverage_assumption_version,
+            )
+            path = destination / (
+                f"cv_increment_{combination.representation}_"
+                f"{combination.model_family}_{combination.window}.png"
+            )
+            figure.savefig(path, dpi=150, facecolor="white", transparent=False)
+            plt.close(figure)
+            saved.append(path)
+        absolute_metrics = set(cell["metric_name"].astype(str))
+        if {"r2_restricted", "r2_full"} <= absolute_metrics:
+            for condition in sorted(set(cell["condition"].astype(str))):
+                figure, _ = plot_absolute_cv_scores(
+                    summaries,
+                    representation=str(combination.representation),
+                    model_family=str(combination.model_family),
+                    condition=condition,
+                    window=str(combination.window),
+                    coverage_assumption_version=result.coverage_assumption_version,
+                )
+                path = destination / (
+                    f"cv_absolute_{condition}_{combination.representation}_"
+                    f"{combination.model_family}_{combination.window}.png"
+                )
+                figure.savefig(path, dpi=150, facecolor="white", transparent=False)
+                plt.close(figure)
+                saved.append(path)
+    return tuple(saved)
