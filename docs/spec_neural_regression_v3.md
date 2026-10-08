@@ -749,10 +749,13 @@ Verify each external API against the installed package source or official docume
 first implementation use. Do not inherit estimator defaults without an explicit test.
 
 For the audited statsmodels 0.15.0 environment, Poisson uses `GLM` with an explicit design
-intercept, `Poisson(Log())`, `missing="raise"`, and IRLS (`wls_method="qr"`, `maxiter=100`,
-`tol=1e-8`), with no weights, exposure, offset, or regularized fit. The explicit QR backend avoids
-the default repeated least-squares SVD/pseudoinverse path used by the bounded run that exceeded its
-memory allocation. Recheck this contract if the environment changes.
+intercept, `Poisson(Log())`, `missing="raise"`, and default-backend IRLS (`maxiter=100`,
+`tol=1e-8`), with no weights, exposure, offset, or regularized fit. Statsmodels 0.15.0 leaves one
+self-cyclic WLS result per IRLS iteration, each retaining its weighted design. The project fit
+boundary therefore copies only parameters and scalar diagnostics, releases external model/result
+references, and collects new generation-0 cycles after every fit. This is execution-memory hygiene
+and does not alter the estimator or result contract. Recheck this contract if the environment
+changes.
 
 Keep data preparation, folds, PCA, OLS, Poisson, Granger, aggregation, plotting, and Streamlit
 integration as focused components with documented array shapes, axis meanings, units, and return

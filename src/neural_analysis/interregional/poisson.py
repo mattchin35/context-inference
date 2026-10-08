@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import warnings
 from dataclasses import dataclass
 
@@ -118,6 +119,121 @@ class PoissonFitUnavailable(RuntimeError):
         self.detail = detail
 
 
+def _fit_validated_poisson_target(
+    design: np.ndarray,
+    count_response: np.ndarray,
+    *,
+    rank: int,
+    feature_count: int,
+    df_resid: int,
+) -> PoissonFit:
+    """Fit one already validated target and return only owned diagnostics.
+
+    Parameters
+    ----------
+    design : numpy.ndarray
+        Float64 matrix with shape ``(observation, coefficient)``. The first
+        column is an explicit intercept; other columns retain predictor units.
+    count_response : numpy.ndarray
+        Float64 vector with shape ``(observation,)`` in spike counts per bin.
+    rank : int
+        Full design rank, in coefficients.
+    feature_count : int
+        Number of design columns, in coefficients.
+    df_resid : int
+        Residual degrees of freedom, in observations minus coefficients.
+
+    Returns
+    -------
+    PoissonFit
+        Owned log-count parameters with shape ``(coefficient,)`` and unitless
+        fit diagnostics. No Statsmodels model or result escapes this helper.
+
+    Raises
+    ------
+    PoissonFitUnavailable
+        If fitting has a recognized numerical failure, emits a convergence or
+        separation warning, does not converge, or returns invalid parameters.
+    """
+    model = sm.GLM(
+        count_response,
+        design,
+        family=sm.families.Poisson(link=sm.families.links.Log()),
+        missing="raise",
+    )
+    result = None
+    try:
+        try:
+            with warnings.catch_warnings(record=True) as fit_warnings:
+                warnings.simplefilter("always", ConvergenceWarning)
+                warnings.simplefilter("always", PerfectSeparationWarning)
+                result = model.fit(
+                    method="IRLS",
+                    maxiter=100,
+                    tol=1e-8,
+                    scale=None,
+                    cov_type="nonrobust",
+                    full_output=True,
+                    disp=False,
+                )
+        except _KNOWN_FIT_ERRORS as error:
+            raise PoissonFitUnavailable(
+                "poisson_fit_error",
+                f"Poisson IRLS failed with {type(error).__name__}: {error}",
+            ) from error
+
+        warning_types = {type(item.message) for item in fit_warnings}
+        if any(issubclass(kind, PerfectSeparationWarning) for kind in warning_types):
+            raise PoissonFitUnavailable(
+                "poisson_fit_error",
+                "Poisson IRLS emitted a perfect-separation warning.",
+            )
+        if any(issubclass(kind, ConvergenceWarning) for kind in warning_types):
+            raise PoissonFitUnavailable(
+                "poisson_nonconverged",
+                "Poisson IRLS emitted a convergence warning.",
+            )
+
+        converged_value = result.converged
+        if not isinstance(converged_value, (bool, np.bool_)):
+            raise RuntimeError(
+                "statsmodels returned a non-Boolean convergence diagnostic."
+            )
+        if not bool(converged_value):
+            raise PoissonFitUnavailable(
+                "poisson_nonconverged", "Poisson IRLS did not converge."
+            )
+
+        iteration_value = result.fit_history["iteration"]
+        if not isinstance(iteration_value, (int, np.integer)) or int(
+            iteration_value
+        ) < 0:
+            raise RuntimeError(
+                "statsmodels returned an invalid IRLS iteration count."
+            )
+        parameters = np.asarray(result.params, dtype=np.float64)
+        if parameters.shape != (feature_count,) or not np.all(
+            np.isfinite(parameters)
+        ):
+            raise PoissonFitUnavailable(
+                "poisson_fit_error",
+                "Poisson IRLS returned invalid or nonfinite parameters.",
+            )
+        return PoissonFit(
+            parameters=_readonly_float_array(parameters),
+            rank=rank,
+            feature_count=feature_count,
+            df_resid=df_resid,
+            converged=True,
+            iterations=int(iteration_value),
+        )
+    finally:
+        # The external result graph must be unreachable before the public
+        # boundary collects Statsmodels' self-cyclic per-iteration Bunches.
+        result = None
+        model = None
+
+
 def fit_poisson_target(design: np.ndarray, count_response: np.ndarray) -> PoissonFit:
     """Fit one strict unpenalized Poisson GLM with a log link.
 
@@ -166,67 +282,19 @@ def fit_poisson_target(design: np.ndarray, count_response: np.ndarray) -> Poisso
             "constant_training_target",
             "Poisson count_response must vary in the training rows.",
         )
-
-    model = sm.GLM(
-        y,
-        x,
-        family=sm.families.Poisson(link=sm.families.links.Log()),
-        missing="raise",
-    )
     try:
-        with warnings.catch_warnings(record=True) as fit_warnings:
-            warnings.simplefilter("always", ConvergenceWarning)
-            warnings.simplefilter("always", PerfectSeparationWarning)
-            result = model.fit(
-                method="IRLS",
-                wls_method="qr",
-                maxiter=100,
-                tol=1e-8,
-                scale=None,
-                cov_type="nonrobust",
-                full_output=True,
-                disp=False,
-            )
-    except _KNOWN_FIT_ERRORS as error:
-        raise PoissonFitUnavailable(
-            "poisson_fit_error",
-            f"Poisson IRLS failed with {type(error).__name__}: {error}",
-        ) from error
-
-    warning_types = {type(item.message) for item in fit_warnings}
-    if any(issubclass(kind, PerfectSeparationWarning) for kind in warning_types):
-        raise PoissonFitUnavailable(
-            "poisson_fit_error", "Poisson IRLS emitted a perfect-separation warning."
+        return _fit_validated_poisson_target(
+            x,
+            y,
+            rank=rank,
+            feature_count=feature_count,
+            df_resid=df_resid,
         )
-    if any(issubclass(kind, ConvergenceWarning) for kind in warning_types):
-        raise PoissonFitUnavailable(
-            "poisson_nonconverged", "Poisson IRLS emitted a convergence warning."
-        )
-
-    converged_value = result.converged
-    if not isinstance(converged_value, (bool, np.bool_)):
-        raise RuntimeError("statsmodels returned a non-Boolean convergence diagnostic.")
-    if not bool(converged_value):
-        raise PoissonFitUnavailable(
-            "poisson_nonconverged", "Poisson IRLS did not converge."
-        )
-
-    iteration_value = result.fit_history["iteration"]
-    if not isinstance(iteration_value, (int, np.integer)) or int(iteration_value) < 0:
-        raise RuntimeError("statsmodels returned an invalid IRLS iteration count.")
-    parameters = np.asarray(result.params, dtype=np.float64)
-    if parameters.shape != (feature_count,) or not np.all(np.isfinite(parameters)):
-        raise PoissonFitUnavailable(
-            "poisson_fit_error", "Poisson IRLS returned invalid or nonfinite parameters."
-        )
-    return PoissonFit(
-        parameters=_readonly_float_array(parameters),
-        rank=rank,
-        feature_count=feature_count,
-        df_resid=df_resid,
-        converged=True,
-        iterations=int(iteration_value),
-    )
+    finally:
+        # Statsmodels 0.15.0 WLS iterations leave self-cyclic Bunch objects
+        # that retain full weighted designs. They are new generation-0 objects,
+        # so avoid scanning unrelated long-lived application state.
+        gc.collect(0)
 
 
 def predict_poisson_mean(design: np.ndarray, parameters: np.ndarray) -> np.ndarray:
