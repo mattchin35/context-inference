@@ -908,6 +908,35 @@ def test_condition_target_checkpoint_identity_is_unambiguous(tmp_path) -> None:
     ) == run_directory / "checkpoints" / "correct_rewarded--current_action.npz"
 
 
+def test_condition_checkpoint_loader_rejects_a_swapped_condition_identity(tmp_path) -> None:
+    """A valid run fingerprint cannot make a checkpoint reusable by another condition."""
+    paths = write_session_inputs(tmp_path)
+    record = make_coherent_model_records(paths)["records"][0]
+    run_directory = tmp_path / "run"
+    checkpoint_path = pipeline._condition_target_checkpoint_path(
+        run_directory,
+        "all",
+        record.target_identifier,
+    )
+    results.save_target_checkpoint(
+        checkpoint_path,
+        target_label=pipeline._condition_target_key(
+            "incorrect",
+            record.target_identifier,
+        ),
+        target_arrays=pipeline._target_result_to_checkpoint_arrays(record),
+        full_run_fingerprint="condition-fingerprint",
+    )
+
+    with pytest.raises(ValueError, match="condition|label|checkpoint"):
+        pipeline._load_existing_condition_checkpoints(
+            run_directory,
+            ("all", "incorrect"),
+            (record.target_identifier,),
+            "condition-fingerprint",
+        )
+
+
 def test_prepare_rejects_dirty_scientific_source(monkeypatch, tmp_path):
     """Preparation has one dedicated causal scientific-source cleanliness failure."""
     paths = write_session_inputs(tmp_path)
@@ -1684,6 +1713,105 @@ def test_each_target_checkpoint_publishes_partial_resource_evidence(monkeypatch,
     assert complete["wall_time_seconds"] >= 0.0
     assert complete["user_cpu_seconds"] >= 0.0
     assert complete["system_cpu_seconds"] >= 0.0
+
+
+def test_condition_execution_is_condition_major_resumable_and_keeps_empty_cells(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """One run decodes each condition/target cell and checkpoints unavailable cells."""
+    paths = write_session_inputs(tmp_path)
+    set_condition_names(paths, ("stay", "incorrect", "all"))
+    run_directory = prepare_with_clean_identity(monkeypatch, paths, mode="foreground")
+    model_inputs = make_coherent_model_records(paths)
+    patch_coherent_execution(monkeypatch, model_inputs)
+    records = {record.target_identifier: record for record in model_inputs["records"]}
+    decoded: list[tuple[str, int]] = []
+    assembled: list[tuple[list[int], list[str]]] = []
+    stacked: dict[str, object] = {}
+
+    def decode_condition_target(*, target_identifier, target_values, **_kwargs):
+        """Record condition-filtered trial counts before returning a real record."""
+        decoded.append((target_identifier, int(target_values.size)))
+        return records[target_identifier]
+
+    def assemble_condition(*, target_table, ordered_target_results, **_kwargs):
+        """Record per-condition validity and explicit target availability states."""
+        assembled.append(
+            (
+                [
+                    int(np.count_nonzero(target_table[f"{name}_valid"]))
+                    for name in ("current_action", "relative_doubt")
+                ],
+                [result.status for result in ordered_target_results],
+            )
+        )
+        marker = len(assembled) - 1
+        return {"condition_marker": np.asarray(marker)}, {"condition_marker": marker}
+
+    def stack_conditions(*, condition_names, condition_masks, condition_payloads):
+        """Capture the exact condition-major assembly contract."""
+        stacked["names"] = tuple(condition_names)
+        stacked["mask_counts"] = {
+            name: int(np.count_nonzero(condition_masks[name]))
+            for name in condition_names
+        }
+        stacked["payload_keys"] = tuple(condition_payloads)
+        return {"total_timing_seconds": np.asarray(0.0)}, {}
+
+    monkeypatch.setattr(pipeline.modeling, "decode_target", decode_condition_target)
+    monkeypatch.setattr(pipeline, "_assemble_run_result_payload", assemble_condition)
+    monkeypatch.setattr(
+        pipeline.results,
+        "assemble_condition_result_payload",
+        stack_conditions,
+    )
+    reporting_events: list[str] = []
+    patch_final_reporting_boundaries(monkeypatch, reporting_events)
+
+    pipeline.run_prepared_task_decoding(run_directory)
+
+    assert decoded == [
+        ("current_action", 12),
+        ("relative_doubt", 12),
+        ("current_action", 3),
+        ("relative_doubt", 3),
+    ]
+    assert assembled == [
+        ([12, 12], ["available", "unavailable"]),
+        ([3, 3], ["available", "unavailable"]),
+        ([0, 0], ["unavailable", "unavailable"]),
+    ]
+    assert stacked == {
+        "names": ("all", "incorrect", "stay"),
+        "mask_counts": {"all": 12, "incorrect": 3, "stay": 0},
+        "payload_keys": ("all", "incorrect", "stay"),
+    }
+    expected_keys = [
+        f"{condition}::{target}"
+        for condition in ("all", "incorrect", "stay")
+        for target in ("current_action", "relative_doubt")
+    ]
+    assert {path.name for path in (run_directory / "checkpoints").glob("*.npz")} == {
+        key.replace("::", "--") + ".npz" for key in expected_keys
+    }
+    state = read_json(run_directory / "run_state.json")
+    assert state["completed_targets"] == expected_keys
+    usage = read_json(run_directory / "resource_usage.json")
+    assert usage["completed_targets"] == expected_keys
+    assert set(usage["target_measurements"]) == set(expected_keys)
+    empty_saved = results.load_target_checkpoint(
+        run_directory / "checkpoints" / "stay--current_action.npz",
+        expected_full_run_fingerprint=prepared_full_fingerprint(run_directory),
+    )
+    assert empty_saved["target_label"] == "stay::current_action"
+    empty_result = pipeline._target_result_from_checkpoint(
+        empty_saved,
+        expected_target_identifier="current_action",
+    )
+    assert empty_result.status == "unavailable"
+    assert empty_result.unavailable_reason == "no eligible trials"
+    assert reporting_events == ["npz", "figures", "summary", "validate"]
 
 
 @pytest.mark.parametrize("regularization_mode", ("fixed", "tuned"))

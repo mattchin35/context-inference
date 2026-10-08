@@ -1527,6 +1527,22 @@ def test_outer_split_failure_returns_an_audit_ready_unavailable_target_result():
     assert np.all(result.outer_fold_ids == -1)
 
 
+def test_outer_split_empty_condition_is_an_explicit_unavailable_plan():
+    """A condition with no eligible trials remains a saved scientific cell."""
+    plan = modeling.make_outer_splits(
+        np.empty(0, dtype=float),
+        np.empty(0, dtype=np.int64),
+        target_family="categorical",
+        fold_count=3,
+    )
+
+    assert not plan.is_available
+    assert plan.unavailable_reason == "no eligible trials"
+    assert plan.fold_ids.dtype == np.dtype(np.int64)
+    assert plan.fold_ids.shape == (0,)
+    assert plan.splits == ()
+
+
 @pytest.mark.parametrize("fold_count", (3, 5))
 def test_outer_splits_accept_only_the_configured_integer_fold_counts(fold_count):
     """Outer CV accepts the two approved scientific fold counts, not any integer."""
