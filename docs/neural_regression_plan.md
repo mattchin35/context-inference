@@ -1,24 +1,24 @@
 # Inter-Regional Neural Regression Implementation Plan
 
-**Status:** Proposed documentation-only plan. This chat is planning-only and does not authorize
-production code, tests, commits, experimental-data runs, benchmarks, or other implementation
-actions. Implementation may begin only in a later chat after explicit user approval and a fresh
-repository audit.
+**Status:** Active phased implementation plan. The user authorized implementation in a later chat;
+the live snapshot and dated package records below define the completed and currently authorized
+scope. Experimental-data and batch runs still require their separately documented gates.
 
 **Scientific authority:** `docs/spec_neural_regression_v3.md`.
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 00:33 EDT.
+**Snapshot date:** 2026-10-08 00:47 EDT.
 
-**Current phase:** WP1-WP3 are complete and GREEN. The first direct-unit OLS milestone now includes
-validated contracts, Pynapple count preparation, deterministic block CV, bidirectional fitting,
-held-out scoring, and complete-fold summaries. WP4 fold-local PCA is next and has not started.
+**Current phase:** WP1-WP4 are complete and GREEN. The in-memory linear milestone now includes
+validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
+training-only fold-local regional PCA, bidirectional PC OLS, explicit unavailable PC ranks, and
+complete-fold summaries. WP5 is the next package and has not started.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `1fd0fa6`;
+- HEAD before this handoff record: `b7e57f8`;
 - plan-owned files: `docs/neural_regression_plan.md` and
   `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
@@ -48,8 +48,8 @@ held-out scoring, and complete-fold summaries. WP4 fold-local PCA is next and ha
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** write the bounded WP4 fold-local PCA and PC-pipeline tests, confirm RED, and
-commit the tests before implementing `pca.py` or extending the pipeline.
+**Next exact action:** obtain/confirm WP5 authorization, then write the bounded persistence and run-
+identity tests, confirm RED, and commit those tests before implementing saved-result or runner code.
 
 ### Authority order
 
@@ -77,8 +77,8 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP1 | Configuration and result contracts | Complete | WP2 may begin |
 | WP2 | Counts, masks, folds, windows, and histories | Complete | WP3 may begin |
 | WP3 | Direct-unit OLS fitting, scoring, and aggregation | Complete | WP4 may begin |
-| WP4 | Fold-local regional PCA and PC OLS | Ready | Tests-only RED commit |
-| WP5 | Saved results, run identity, session runner, and batch runner | Not authorized | WP4 GREEN and saved-schema freeze |
+| WP4 | Fold-local regional PCA and PC OLS | Complete | WP5 may begin after authorization |
+| WP5 | Saved results, run identity, session runner, and batch runner | Ready; not started | Explicit authorization, then tests-only RED commit |
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Not authorized | WP5 GREEN and stable standard-result schema |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Not authorized | WP1-WP6 focused gates GREEN |
 | WP8 | One-session standard-regression scientific inspection | Not authorized | WP7 GREEN plus explicit approval of the exact session/command |
@@ -412,12 +412,39 @@ Use this template:
 - Exact next action and authorization: begin WP4 with committed fold-local PCA leakage tests before
   any PCA implementation or pipeline extension.
 
+#### 2026-10-08 00:47 EDT - WP4 GREEN and fold-local PC milestone
+
+- State: WP4 and the in-memory unit/PC linear milestone are complete; WP5 is ready but not started.
+- Authorization: the user explicitly requested a push followed by the next implementation; work
+  remained within WP4 and used no experimental data or batch execution.
+- Sol / Terra / reviewer: primary implementation agent and self-review; no worker.
+- Start HEAD / end HEAD: `5b3aefd` / `b7e57f8`.
+- Worktree and owned files: added `pca.py`, extended the regional PCA record and linear pipeline,
+  and added/extended PCA and pipeline tests. Unrelated pre-existing untracked entries remained
+  untouched.
+- RED command and result: the core PCA tests initially failed collection because `pca.py` did not
+  exist. PC integration tests then failed because no PC rows or injectable fold transforms existed.
+  The provenance/reuse test finally failed because `fit_cross_validation_pcas` did not exist.
+- GREEN/regression commands and results: 59 focused interregional tests passed. A combined 150-test
+  run covering all interregional work plus existing spike-behavior package, population package/PCA,
+  and session-metadata tests passed with four existing Pynapple warnings.
+- Commits: core PCA tests `ca19b41`; core implementation `8365994`; PC-pipeline tests `9b0f9f1`;
+  PCA-provenance tests `1e67e28`; PC OLS/provenance implementation `b7e57f8`.
+- External actions: pushed the completed WP1-WP3 history through `5b3aefd` from local `refactor` to
+  `origin/refactor` at the user's request. WP4 commits have not yet been pushed. No experimental
+  data or batch command was run.
+- Findings and unresolved risks: no new issue was found in WP4. Fold transforms are trained from
+  the unique requested-condition union, shared across directions/conditions/windows, and kept
+  distinct from descriptive transforms. Requested unavailable ranks remain explicit. The separate
+  quickstart JSON-glob mismatch recorded under WP1 remains unrelated and unchanged.
+- Exact next action and authorization: do not begin WP5 until its scope is confirmed; then commit
+  persistence/run-boundary tests in RED before implementation.
+
 ## Plan objective and status
 
-This plan implements `docs/spec_neural_regression_v3.md`. It is a proposal for review, not
-authorization to begin coding. No production or test code should be written until the plan is
-approved. This document is also the authoritative progress and handoff log for future
-implementation.
+This plan implements `docs/spec_neural_regression_v3.md`. It was approved and is now the
+authoritative phased implementation and handoff log. Package-specific authorization and data-run
+gates remain binding even though WP1-WP4 implementation is complete.
 
 The implementation order is deliberately fixed:
 
