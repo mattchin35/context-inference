@@ -522,12 +522,9 @@ def inspect_status(run_directory: Path | str) -> dict[str, object]:
     Returns
     -------
     dict[str, object]
-        Pipeline status plus the parsed job-level scheduler accounting fields.
-
-    Raises
-    ------
-    RuntimeError
-        If the one-shot ``sacct`` query fails or lacks the requested job row.
+        Pipeline status plus parsed job-level scheduler accounting fields. If
+        accounting is unavailable, ``scheduler`` is None and
+        ``scheduler_error`` describes the one-shot query failure.
     """
     directory = Path(run_directory)
     submission = _read_json(directory / "slurm_submission.json")
@@ -538,6 +535,7 @@ def inspect_status(run_directory: Path | str) -> dict[str, object]:
         directory,
         verify_results=False,
     )
+    status = dict(pipeline_status)
     arguments = [
         "sacct",
         "--noheader",
@@ -549,10 +547,14 @@ def inspect_status(run_directory: Path | str) -> dict[str, object]:
     try:
         completed = _run_command(arguments)
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise RuntimeError(f"sacct failed: {error}") from error
+        status["scheduler"] = None
+        status["scheduler_error"] = f"sacct failed: {error}"
+        return status
     if completed.returncode != 0:
         detail = completed.stderr.strip() or "unknown scheduler error"
-        raise RuntimeError(f"sacct failed: {detail}")
+        status["scheduler"] = None
+        status["scheduler_error"] = f"sacct failed: {detail}"
+        return status
     scheduler: dict[str, str] | None = None
     for line in completed.stdout.splitlines():
         fields = line.rstrip("|").split("|")
@@ -561,8 +563,11 @@ def inspect_status(run_directory: Path | str) -> dict[str, object]:
         scheduler = dict(zip(_SACCT_FIELDS[1:], fields[1:], strict=True))
         break
     if scheduler is None:
-        raise RuntimeError(f"sacct returned no job-level record for {job_id}.")
-    status = dict(pipeline_status)
+        status["scheduler"] = None
+        status["scheduler_error"] = (
+            f"sacct returned no job-level record for {job_id}."
+        )
+        return status
     status["scheduler"] = scheduler
     return status
 

@@ -3096,10 +3096,19 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
             )
         reporting_started = time.perf_counter()
         _update_state(directory, current_stage="reporting", final_results_published=False)
-        resource_evidence = resource_tracker.snapshot(
+        resource_tracker.snapshot(
             status="running",
             completed_targets=config.target_names,
             stage_timing_seconds=stage_seconds,
+        )
+        _write_minimal_family_heatmaps(directory, arrays=arrays)
+        resource_evidence = resource_tracker.snapshot(
+            status="complete",
+            completed_targets=config.target_names,
+            stage_timing_seconds={
+                **stage_seconds,
+                "reporting": time.perf_counter() - reporting_started,
+            },
         )
         _write_run_summary(
             directory,
@@ -3110,15 +3119,6 @@ def run_prepared_task_decoding(run_directory: Path | str) -> None:
             session_id=resolved.session_id,
             total_seconds=elapsed,
             resource_evidence=resource_evidence,
-        )
-        _write_minimal_family_heatmaps(directory, arrays=arrays)
-        resource_tracker.snapshot(
-            status="complete",
-            completed_targets=config.target_names,
-            stage_timing_seconds={
-                **stage_seconds,
-                "reporting": time.perf_counter() - reporting_started,
-            },
         )
         _validate_published_run_directory(directory)
         guard_to_remove = (
