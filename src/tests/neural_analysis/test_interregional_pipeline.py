@@ -568,3 +568,87 @@ def test_poisson_fold_rows_keep_only_poisson_diagnostics_and_count_mse() -> None
             "delta_deviance_explained",
         ]
     ].notna().all().all()
+
+
+def test_progress_callbacks_preserve_ols_and_poisson_scientific_outputs() -> None:
+    """Execution-only callbacks do not alter any seeded result-table value."""
+    prepared = _poisson_prepared()
+    baseline_ols = pipeline.run_linear_cross_validation(prepared)
+    baseline_poisson = pipeline.run_poisson_cross_validation(prepared)
+    linear_events: list[dict[str, object]] = []
+    poisson_events: list[dict[str, object]] = []
+
+    instrumented_ols = pipeline.run_linear_cross_validation(
+        prepared, progress_callback=linear_events.append
+    )
+    instrumented_poisson = pipeline.run_poisson_cross_validation(
+        prepared, progress_callback=poisson_events.append
+    )
+
+    for baseline, instrumented in zip(
+        (*baseline_ols, *baseline_poisson),
+        (*instrumented_ols, *instrumented_poisson),
+        strict=True,
+    ):
+        pd.testing.assert_frame_equal(baseline, instrumented)
+    assert linear_events
+    assert poisson_events
+
+
+def test_poisson_progress_identifies_cells_shapes_bytes_and_target_ranges() -> None:
+    """Poisson progress has enough exact context to localize retained memory."""
+    events: list[dict[str, object]] = []
+
+    pipeline.run_poisson_cross_validation(
+        _poisson_prepared(), progress_callback=events.append
+    )
+
+    starts = [event for event in events if event["event"] == "analysis_cell_start"]
+    ends = [event for event in events if event["event"] == "analysis_cell_end"]
+    targets = [
+        event for event in events if event["event"] == "poisson_target_progress"
+    ]
+    assert len(starts) == 10
+    assert len(ends) == 10
+    first = starts[0]
+    assert first | {
+        "model_family": "poisson",
+        "representation": "units",
+        "direction": "HPC_to_PFC",
+        "condition": "all",
+        "window": "whole",
+        "fold_id": 0,
+        "cell_index": 1,
+        "total_cells": 10,
+        "total_targets": 2,
+    } == first
+    for shape_key, byte_key in (
+        ("train_response_shape", "train_response_bytes"),
+        ("test_response_shape", "test_response_bytes"),
+        ("restricted_train_shape", "restricted_train_bytes"),
+        ("full_train_shape", "full_train_bytes"),
+        ("restricted_test_shape", "restricted_test_bytes"),
+        ("full_test_shape", "full_test_bytes"),
+    ):
+        shape = first[shape_key]
+        assert isinstance(shape, list) and len(shape) == 2
+        assert first[byte_key] == int(np.prod(shape, dtype=np.int64)) * 8
+    assert [
+        event["completed_targets"]
+        for event in targets
+        if event["cell_index"] == 1
+    ] == [1, 2]
+    assert ends[0]["completed_targets"] == 2
+    assert isinstance(ends[0]["unavailable_targets"], int)
+    assert ends[0]["unavailable_targets"] >= 0
+
+
+def test_poisson_target_progress_cadence_is_first_every_25_and_final() -> None:
+    """The coarse target cadence avoids per-fit logging on large populations."""
+    reported = [
+        completed
+        for completed in range(1, 52)
+        if pipeline._target_progress_due(completed, 51)
+    ]
+
+    assert reported == [1, 25, 50, 51]

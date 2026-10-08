@@ -131,7 +131,11 @@ def test_single_session_new_reuses_matching_run_and_rerun_is_immutable(
     """Default new skips a matching fingerprint while rerun creates another run."""
     plan = _plan(tmp_path)
     monkeypatch.setattr(run_session, "plan_single_session", lambda *args, **kwargs: plan)
-    monkeypatch.setattr(run_session, "compute_single_session", lambda value: _result(value.config))
+    monkeypatch.setattr(
+        run_session,
+        "compute_single_session",
+        lambda value, **kwargs: _result(value.config),
+    )
 
     first = run_session.run_single_session(plan.config_path, command="new")
     reused = run_session.run_single_session(plan.config_path, command="new")
@@ -154,6 +158,8 @@ def test_single_session_new_reuses_matching_run_and_rerun_is_immutable(
         "summary.md",
         "run_session.py",
         "run_batch.py",
+        "resource_trace.jsonl",
+        "resource_summary.json",
         "figures",
     } <= {path.name for path in first.run_path.iterdir()}
     summary = (first.run_path / "summary.md").read_text(encoding="utf-8")
@@ -188,7 +194,7 @@ def test_failure_is_logged_per_session_without_finalizing(tmp_path: Path, monkey
     plan = _plan(tmp_path)
     monkeypatch.setattr(run_session, "plan_single_session", lambda *args, **kwargs: plan)
 
-    def fail(_plan: run_session.SessionPlan):
+    def fail(_plan: run_session.SessionPlan, **kwargs):
         raise RuntimeError("synthetic runner failure")
 
     monkeypatch.setattr(run_session, "compute_single_session", fail)
@@ -200,6 +206,14 @@ def test_failure_is_logged_per_session_without_finalizing(tmp_path: Path, monkey
     incomplete = tuple(plan.output_root.glob("*.incomplete"))
     assert len(incomplete) == 1
     assert (incomplete[0] / "failure.json").is_file()
+    trace_records = [
+        json.loads(line)
+        for line in (incomplete[0] / "resource_trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert trace_records
+    assert not (incomplete[0] / "resource_summary.json").exists()
     assert not tuple(plan.output_root.glob("interregional_regression_*"))
 
 
@@ -432,6 +446,30 @@ def test_wp9_poisson_synthetic_run_round_trips_with_matched_ols_rows(
     run_log = (report.run_path / "run.log").read_text(encoding="utf-8")
     assert "stage=poisson_cv event=start" in run_log
     assert "stage=poisson_cv event=end" in run_log
+    trace_records = [
+        json.loads(line)
+        for line in (report.run_path / "resource_trace.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    stage_events = [
+        (record["stage"], record["progress_event"])
+        for record in trace_records
+        if record.get("progress_event") in {"stage_start", "stage_end"}
+    ]
+    assert stage_events.index(("preparation", "stage_end")) < stage_events.index(
+        ("ols_cv", "stage_start")
+    )
+    assert stage_events.index(("ols_cv", "stage_end")) < stage_events.index(
+        ("poisson_cv", "stage_start")
+    )
+    assert stage_events.index(("poisson_cv", "stage_end")) < stage_events.index(
+        ("result_assembly", "stage_start")
+    )
+    resource_summary = json.loads(
+        (report.run_path / "resource_summary.json").read_text(encoding="utf-8")
+    )
+    assert resource_summary["completed"] is True
     summary = (report.run_path / "summary.md").read_text(encoding="utf-8")
     assert "Incremental CV deviance explained" in summary
     assert "Exploratory OLS/Poisson count-MSE comparison" in summary
