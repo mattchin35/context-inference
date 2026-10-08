@@ -6,7 +6,6 @@ import argparse
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,7 +19,6 @@ import pandas as pd
 import pynapple
 import scipy
 import sklearn
-import statsmodels
 
 from src.neural_analysis import session_metadata
 from src.neural_analysis.spike_behavior import loading as spike_loading
@@ -44,6 +42,7 @@ from .pipeline import (
     fit_cross_validation_pcas,
     prepare_interregional_session,
     run_linear_cross_validation,
+    run_poisson_cross_validation,
 )
 from .plotting import save_standard_regression_figures
 from .records import (
@@ -399,6 +398,26 @@ def compute_single_session(plan: SessionPlan) -> InterregionalResults:
     fold_scores, target_summaries, population_summaries = (
         run_linear_cross_validation(prepared, fold_pcas=fold_pcas)
     )
+    if "poisson_cv" in plan.config.analyses:
+        poisson_tables = run_poisson_cross_validation(prepared)
+        fold_scores = result_table_from_rows(
+            "fold_scores",
+            pd.concat((fold_scores, poisson_tables[0]), ignore_index=True).to_dict(
+                "records"
+            ),
+        )
+        target_summaries = result_table_from_rows(
+            "target_summaries",
+            pd.concat(
+                (target_summaries, poisson_tables[1]), ignore_index=True
+            ).to_dict("records"),
+        )
+        population_summaries = result_table_from_rows(
+            "population_summaries",
+            pd.concat(
+                (population_summaries, poisson_tables[2]), ignore_index=True
+            ).to_dict("records"),
+        )
     tables["fold_scores"] = fold_scores
     tables["target_summaries"] = target_summaries
     tables["population_summaries"] = population_summaries
@@ -635,9 +654,16 @@ def run_single_session(
         with (working / "run.log").open("a", encoding="utf-8") as stream:
             stream.write("stage=preparation event=start\n")
             stream.write("stage=ols_cv event=start\n")
+            if "poisson_cv" in plan.config.analyses:
+                stream.write("stage=poisson_cv event=start\n")
         result = compute_single_session(plan)
         compute_elapsed = time.perf_counter() - compute_started
         with (working / "run.log").open("a", encoding="utf-8") as stream:
+            if "poisson_cv" in plan.config.analyses:
+                stream.write(
+                    "stage=poisson_cv event=end "
+                    f"elapsed_seconds={compute_elapsed:.9f}\n"
+                )
             stream.write(
                 f"stage=ols_cv event=end elapsed_seconds={compute_elapsed:.9f}\n"
             )

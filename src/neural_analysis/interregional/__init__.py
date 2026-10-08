@@ -21,6 +21,7 @@ from .pipeline import (
     PreparedInterregionalSession,
     prepare_interregional_session,
     run_linear_cross_validation,
+    run_poisson_cross_validation,
 )
 
 
@@ -45,5 +46,6 @@ __all__ = [
     "load_interregional_result",
     "prepare_interregional_session",
     "run_linear_cross_validation",
+    "run_poisson_cross_validation",
     "save_interregional_result",
 ]
