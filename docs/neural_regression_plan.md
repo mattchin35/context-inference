@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 14:44 EDT.
+**Snapshot date:** 2026-10-08 14:46 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -21,14 +21,15 @@ webapp presentation are code-complete and GREEN on seeded synthetic data. The de
 Poisson run `30989197` was OOM-killed after approximately 2 hours 44 minutes with a 32-GiB
 allocation. Reduced execution telemetry is implemented and GREEN. The separately approved bounded
 benchmark, Slurm job `30991145`, reproduced the OOM within the first Poisson cell after OLS completed;
-the user has approved a minimal tests-first change from Statsmodels' default least-squares backend
-to its QR backend within the same unpenalized IRLS estimator. No scale test or full retry is
-authorized. WP9 scientific acceptance and WP10 remain blocked on an inspected completed output.
+the approved minimal change from Statsmodels' default least-squares backend to its QR backend within
+the same unpenalized IRLS estimator is implemented and locally GREEN. No CT026 rerun, scale test, or
+full retry is authorized. WP9 scientific acceptance and WP10 remain blocked on an inspected
+completed output.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `8687bb4`;
+- HEAD before this handoff record: `c52bfd0`;
 - plan-owned files: `docs/neural_regression_plan.md` and
   `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
@@ -58,9 +59,9 @@ authorized. WP9 scientific acceptance and WP10 remain blocked on an inspected co
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** write and commit the approved QR contract and numerical-equivalence tests,
-confirm RED, then implement the minimal solver keyword and documentation update. Do not launch a
-CT026 rerun, scale test, full retry, or WP10 without separate approval.
+**Next exact action:** request separate approval to rerun the same bounded CT026 benchmark with the
+QR-backed commit, unchanged 32-GiB allocation, and distinct immutable output root. Do not launch
+that job, a scale test, full retry, or WP10 without approval.
 
 ### Authority order
 
@@ -93,7 +94,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | QR-backed IRLS change approved; tests-first implementation active | RED tests, implementation, local verification, then separate data-run gate |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | QR-backed IRLS correction locally GREEN | Separate approval for the same bounded CT026 benchmark |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -888,6 +889,30 @@ Use this template:
 - Exact next action: commit the tests before production code, demonstrate the missing QR keyword as
   RED, then implement and run focused plus affected regression suites.
 
+#### 2026-10-08 14:46 EDT - WP9 QR-backed IRLS correction GREEN
+
+- State: the approved memory correction is implemented and locally GREEN. No experimental data was
+  read and no cluster job was submitted.
+- TDD evidence: tests-only commit `c52bfd0` added the explicit QR-call contract and seeded
+  multivariable numerical-equivalence test. The focused test file then had exactly one failure: the
+  production call omitted `wls_method="qr"`; its other 25 tests passed. Adding that one keyword made
+  all 26 focused Poisson tests pass.
+- Implementation: `fit_poisson_target(...)` now passes `wls_method="qr"` to the already frozen
+  Statsmodels IRLS call. Public interfaces, estimator family/link, regularization, iteration and
+  tolerance settings, validation, diagnostics, result schemas, pipeline control flow, and
+  dependencies are unchanged. The v3 specification and implementation plan now make the backend
+  explicit.
+- Regression evidence: all 138 inter-regional tests passed. The broader affected suite passed 303
+  tests across inter-regional analysis, Pynapple spike behavior, population PCA, session metadata,
+  webapp packaging, and import packaging, with the same six existing Pynapple warnings. Ruff and
+  `git diff --check` passed.
+- Bounded synthetic performance: the existing seeded end-to-end WP9 runner passed in 2.39 seconds
+  pytest time and 3.23 seconds measured wall time, with 432,124 KiB maximum resident set. This is a
+  correctness and fixture-capacity check, not evidence that CT026 will fit within 32 GiB.
+- Exact next action and authorization: after commit and push, request approval for the same bounded
+  CT026 benchmark configuration and 32-GiB allocation using the QR-backed commit. Do not submit it
+  or any larger run without that separate approval.
+
 ## Plan objective and status
 
 This plan implements `docs/spec_neural_regression_v3.md`. It was approved and is now the
@@ -1589,8 +1614,9 @@ compare_count_prediction_mse(...)
 The audited environment currently provides statsmodels 0.15.0. Use
 `statsmodels.api.GLM(y, design, family=sm.families.Poisson(link=sm.families.links.Log()),
 missing="raise")` and `.fit(method="IRLS", maxiter=100, tol=1e-8, scale=None,
-cov_type="nonrobust", full_output=True, disp=False)`. The design already contains the one explicit
-intercept; do not call `add_constant`, `fit_regularized`, or pass weights/exposure/offset. Require
+cov_type="nonrobust", full_output=True, disp=False, wls_method="qr")`. The design already contains
+the one explicit intercept; do not call `add_constant`, `fit_regularized`, or pass
+weights/exposure/offset. Require
 `result.converged is True`, an integer `result.fit_history["iteration"]`, finite `result.params`, and
 finite `result.llf`. Calculate test means as `exp(test_design @ params)` and require them to be
 positive and finite. Reconfirm these signatures and result attributes against the installed source

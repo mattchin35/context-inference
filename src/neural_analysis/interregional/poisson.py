@@ -179,6 +179,7 @@ def fit_poisson_target(design: np.ndarray, count_response: np.ndarray) -> Poisso
             warnings.simplefilter("always", PerfectSeparationWarning)
             result = model.fit(
                 method="IRLS",
+                wls_method="qr",
                 maxiter=100,
                 tol=1e-8,
                 scale=None,
