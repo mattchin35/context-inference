@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 
@@ -327,3 +329,55 @@ def test_descriptive_pca_transforms_are_rejected_by_cv() -> None:
         pipeline.run_linear_cross_validation(
             prepared, fold_pcas={fold_id: descriptive for fold_id in range(5)}
         )
+
+
+def test_requested_but_unavailable_pc_rank_has_explicit_incomplete_rows() -> None:
+    """A rank above the fold dimension remains visible rather than disappearing."""
+    prepared = _multiunit_prepared(("pcs",))
+    prepared = replace(
+        prepared,
+        config=replace(
+            prepared.config, pca=PCAConfig(pfc_components=3, hpc_components=3)
+        ),
+    )
+
+    fold_scores, target_summaries, _ = pipeline.run_linear_cross_validation(prepared)
+
+    missing = fold_scores.loc[fold_scores["target_rank"].eq(3)]
+    assert len(missing) == 10
+    assert missing["status"].eq("fit_unavailable").all()
+    assert missing["reason"].eq("pca_insufficient_components").all()
+    missing_summaries = target_summaries.loc[target_summaries["target_rank"].eq(3)]
+    assert missing_summaries["status"].eq("incomplete_folds").all()
+    assert missing_summaries["valid_folds"].eq(0).all()
+
+
+def test_fold_pca_is_fit_once_per_fold_and_emits_frozen_metadata(monkeypatch) -> None:
+    """Conditions and windows reuse one regional transform pair for each fold."""
+    prepared = _multiunit_prepared(("pcs",))
+    prepared = replace(
+        prepared,
+        config=replace(
+            prepared.config,
+            prediction_windows=("before", "after"),
+            filters=FilterConfig(conditions=("all", "switch")),
+        ),
+    )
+    original_fit = pipeline.fit_fold_regional_pcas
+    fitted_fold_ids: list[int] = []
+
+    def recording_fit(**kwargs):
+        fitted_fold_ids.append(kwargs["fold_id"])
+        return original_fit(**kwargs)
+
+    monkeypatch.setattr(pipeline, "fit_fold_regional_pcas", recording_fit)
+
+    fold_pcas, pca_fits = pipeline.fit_cross_validation_pcas(prepared)
+    pipeline.run_linear_cross_validation(prepared, fold_pcas=fold_pcas)
+
+    assert fitted_fold_ids == list(range(5))
+    assert len(pca_fits) == 10
+    assert pca_fits["scope"].eq("fold").all()
+    assert set(pca_fits["region"]) == {"PFC", "HPC"}
+    assert pca_fits["status"].eq("ok").all()
+    assert pca_fits["n_training_observations"].gt(0).all()
