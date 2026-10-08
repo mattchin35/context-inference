@@ -8,14 +8,15 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 01:06 EDT.
+**Snapshot date:** 2026-10-08 01:10 EDT.
 
 **Current phase:** WP1-WP6 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
 training-only fold-local regional PCA, bidirectional PC OLS, explicit unavailable PC ranks, and
 complete-fold summaries, immutable run persistence, single-session/batch command boundaries,
 standard saved-result PNGs, and a metadata-driven read-only webapp view. WP7 synthetic integration
-and its bounded performance check are next and have not started.
+and its bounded performance check are authorized and active; tests-first integration evidence is
+next.
 
 **Repository state at this snapshot:**
 
@@ -50,8 +51,8 @@ and its bounded performance check are next and have not started.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** obtain/confirm WP7 authorization, then run the planned standard-regression
-synthetic integration and bounded performance check without using experimental data.
+**Next exact action:** write the WP7 full-standard-workflow integration tests, commit them before
+any bounded fix, then run the synthetic timing and peak-memory measurement.
 
 ### Authority order
 
@@ -82,7 +83,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP4 | Fold-local regional PCA and PC OLS | Complete | WP5 may begin after authorization |
 | WP5 | Saved results, run identity, session runner, and batch runner | Complete | WP6 complete |
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
-| WP7 | Standard-regression synthetic integration and bounded performance check | Ready; not started | Explicit authorization; WP1-WP6 focused gates are GREEN |
+| WP7 | Standard-regression synthetic integration and bounded performance check | Active; tests next | Commit integration tests before any bounded fix |
 | WP8 | One-session standard-regression scientific inspection | Not authorized | WP7 GREEN plus explicit approval of the exact session/command |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Not authorized | WP8 user inspection/approval |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
