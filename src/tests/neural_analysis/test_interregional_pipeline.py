@@ -362,6 +362,13 @@ def test_fold_pca_is_fit_once_per_fold_and_emits_frozen_metadata(monkeypatch) ->
             prediction_windows=("before", "after"),
             filters=FilterConfig(conditions=("all", "switch")),
         ),
+        trial_masks=replace(
+            prepared.trial_masks,
+            condition_masks={
+                "all": prepared.trial_masks.condition_masks["all"],
+                "switch": prepared.trial_masks.condition_masks["all"],
+            },
+        ),
     )
     original_fit = pipeline.fit_fold_regional_pcas
     fitted_fold_ids: list[int] = []

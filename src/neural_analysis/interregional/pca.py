@@ -208,7 +208,7 @@ def _fit_paired_regional_pcas(
     fitting_trials: np.ndarray,
     condition_masks: Mapping[str, np.ndarray],
     requested_conditions: Sequence[str],
-    requested_components: int,
+    requested_components: int | Mapping[str, int],
     scope: str,
     fold_id: int | None,
 ) -> RegionalPCATransforms:
@@ -225,14 +225,22 @@ def _fit_paired_regional_pcas(
     )
     if not np.any(pooled_trials):
         raise ValueError("Regional PCA fitting pool contains no trials.")
+    if isinstance(requested_components, Mapping):
+        if set(requested_components) != {"PFC", "HPC"}:
+            raise ValueError("Regional component requests must contain PFC and HPC.")
+        pfc_components = requested_components["PFC"]
+        hpc_components = requested_components["HPC"]
+    else:
+        pfc_components = requested_components
+        hpc_components = requested_components
     return RegionalPCATransforms(
         scope=scope,
         fold_id=fold_id,
         pfc=fit_regional_pca(
-            pfc_values[pooled_trials], pfc_unit_ids, requested_components
+            pfc_values[pooled_trials], pfc_unit_ids, pfc_components
         ),
         hpc=fit_regional_pca(
-            hpc_values[pooled_trials], hpc_unit_ids, requested_components
+            hpc_values[pooled_trials], hpc_unit_ids, hpc_components
         ),
         n_training_trials=int(np.count_nonzero(pooled_trials)),
     )
@@ -247,7 +255,7 @@ def fit_fold_regional_pcas(
     training_trials: np.ndarray,
     condition_masks: Mapping[str, np.ndarray],
     requested_conditions: Sequence[str],
-    requested_components: int,
+    requested_components: int | Mapping[str, int],
     fold_id: int,
 ) -> RegionalPCATransforms:
     """Fit paired PCA transforms from one fold's training trials.
@@ -279,7 +287,7 @@ def fit_descriptive_regional_pcas(
     scientific_trials: np.ndarray,
     condition_masks: Mapping[str, np.ndarray],
     requested_conditions: Sequence[str],
-    requested_components: int,
+    requested_components: int | Mapping[str, int],
 ) -> RegionalPCATransforms:
     """Fit paired PCA transforms from all scientifically eligible trials.
 
