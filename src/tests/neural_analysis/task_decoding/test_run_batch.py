@@ -64,6 +64,7 @@ def resource_envelope(*, tensor_bytes: int = 100) -> dict[str, int]:
         "hpc_unit_count": 2,
         "time_bin_count": 8,
         "target_count": 2,
+        "condition_count": 1,
         "outer_fold_count": 3,
         "inner_fold_count": 3,
         "coefficient_feature_capacity": 4,

@@ -39,6 +39,7 @@ def _resource_envelope() -> dict[str, int]:
         "hpc_unit_count": 3,
         "time_bin_count": 8,
         "target_count": 2,
+        "condition_count": 1,
         "outer_fold_count": 3,
         "inner_fold_count": 3,
         "coefficient_feature_capacity": 5,

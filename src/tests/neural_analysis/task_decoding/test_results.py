@@ -2267,7 +2267,7 @@ def test_revision_six_solver_budget_cannot_reuse_revision_five_fingerprint(tmp_p
         "session_id": "synthetic-01",
     }
 
-    assert current_config["analysis_version"] == "task-variable-decoding-v2"
+    assert current_config["analysis_version"] == "task-variable-decoding-v3"
     assert current_config["frozen_controls"]["estimators"]["LogisticRegression"][
         "max_iter"
     ] == 5000
