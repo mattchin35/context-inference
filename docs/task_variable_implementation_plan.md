@@ -2084,12 +2084,23 @@ Use this template for each appended record:
 - External effects and immutability: inspection was read-only. The completed
   synthetic run is not rewritten or rerun merely to update its immutable
   summary; its `resource_usage.json` remains the authoritative resource record.
-- Exact next action: push the repair commits, update the clean cluster checkout
-  to the exact pushed commit, and run status once against job `30984881` to
-  prove the new explicit accounting-unavailable fallback while preserving the
-  completed durable state. If that validation passes, present the separate
-  WP12 CT026 transfer/dry-run/submission plan; do not infer authorization for
-  experimental transfer or computation.
+- Post-repair cluster validation: the four repair/handoff commits were pushed,
+  generated repository bytecode/egg metadata was removed with explicit user
+  approval, and the otherwise clean cluster checkout fast-forwarded to exact
+  commit `34da429`. The repaired wrapper status returned the durable completed
+  state, all three targets, no warnings, `scheduler=null`, and
+  `scheduler_error="sacct returned no job-level record for 30984881."` without
+  raising or writing. A separate `run_session status --verify-results` returned
+  `result_validation="valid"`; the checkout remained clean afterward.
+- Gate decision: the WP12 synthetic scheduler/environment/logging smoke is
+  accepted without rerunning its immutable computation. Missing Slurm
+  accounting remains an explicit site/accounting limitation, not a failed or
+  inferred job state. Future inspections retain the same one-query boundary
+  and use structured in-run resource evidence when no scheduler row exists.
+- Exact next action: present the separate WP12 CT026 input-transfer, cluster
+  dry-run, and one-session submission plan for user approval. Do not infer
+  authorization for experimental transfer or computation from synthetic-smoke
+  acceptance.
 
 ## 1. Objective
 
