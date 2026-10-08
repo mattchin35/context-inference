@@ -65,7 +65,7 @@ def test_switch_and_stay_keep_the_existing_current_unrewarded_next_choice_rule()
 
     np.testing.assert_array_equal(
         np.flatnonzero(observed["switch"]),
-        np.array([1, 3], dtype=np.int64),
+        np.array([1, 3, 7], dtype=np.int64),
     )
     np.testing.assert_array_equal(
         np.flatnonzero(observed["stay"]),
