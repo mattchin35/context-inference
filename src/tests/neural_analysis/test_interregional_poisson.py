@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import gc
 import warnings
 from types import SimpleNamespace
+import weakref
 
 import numpy as np
 import pandas as pd
@@ -103,7 +105,6 @@ def test_poisson_fit_uses_explicit_unpenalized_statsmodels_path(monkeypatch) -> 
     assert captured["missing"] == "raise"
     assert captured["fit_kwargs"] == {
         "method": "IRLS",
-        "wls_method": "qr",
         "maxiter": 100,
         "tol": 1e-8,
         "scale": None,
@@ -115,8 +116,8 @@ def test_poisson_fit_uses_explicit_unpenalized_statsmodels_path(monkeypatch) -> 
     assert fit.iterations == 3
 
 
-def test_qr_poisson_fit_matches_default_irls_reference() -> None:
-    """QR-backed IRLS preserves seeded parameters, predictions, and iterations."""
+def test_poisson_fit_matches_default_irls_reference() -> None:
+    """The public fit preserves default IRLS parameters, predictions, and iterations."""
     rng = np.random.default_rng(20261008)
     features = rng.normal(size=(800, 4))
     design = np.column_stack((np.ones(features.shape[0]), features))
@@ -137,19 +138,81 @@ def test_qr_poisson_fit_matches_default_irls_reference() -> None:
         full_output=True,
         disp=False,
     )
-    qr_fit = poisson.fit_poisson_target(design, counts)
+    fitted = poisson.fit_poisson_target(design, counts)
 
     np.testing.assert_allclose(
-        qr_fit.parameters, reference.params, rtol=1e-12, atol=1e-12
+        fitted.parameters, reference.params, rtol=1e-12, atol=1e-12
     )
     np.testing.assert_allclose(
-        poisson.predict_poisson_mean(design, qr_fit.parameters),
+        poisson.predict_poisson_mean(design, fitted.parameters),
         np.exp(design @ reference.params),
         rtol=1e-12,
         atol=1e-12,
     )
-    assert qr_fit.converged is True
-    assert qr_fit.iterations == reference.fit_history["iteration"]
+    assert fitted.converged is True
+    assert fitted.iterations == reference.fit_history["iteration"]
+
+
+def test_poisson_fit_collects_cyclic_statsmodels_result(monkeypatch) -> None:
+    """The public boundary releases a self-cyclic external result after success."""
+    result_reference: weakref.ReferenceType[object] | None = None
+
+    class CyclicResult:
+        """Mimic a Statsmodels result cycle retaining numerical workspace."""
+
+        def __init__(self) -> None:
+            self.params = np.array([0.2, -0.1])
+            self.converged = True
+            self.fit_history = {"iteration": 3}
+            self.llf = -4.0
+            self.retained_workspace = np.ones((32, 32))
+            self.self_reference = self
+
+    class FakeModel:
+        """Return one cyclic result and retain only a weak test reference."""
+
+        def fit(self, **kwargs):
+            del kwargs
+            nonlocal result_reference
+            result = CyclicResult()
+            result_reference = weakref.ref(result)
+            return result
+
+    monkeypatch.setattr(poisson.sm, "GLM", lambda *args, **kwargs: FakeModel())
+    gc.collect()
+    collection_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        poisson.fit_poisson_target(
+            _design(np.arange(5)), np.array([1, 2, 1, 3, 2])
+        )
+        assert result_reference is not None
+        assert result_reference() is None
+    finally:
+        if collection_was_enabled:
+            gc.enable()
+        gc.collect()
+
+
+def test_poisson_fit_runs_cleanup_after_known_fit_error(monkeypatch) -> None:
+    """A recognized estimator exception still crosses the cleanup boundary."""
+    cleanup_calls: list[str] = []
+
+    class ErrorModel:
+        """Raise a recognized error from the external estimator."""
+
+        def fit(self, **kwargs):
+            del kwargs
+            raise ValueError("bad data")
+
+    monkeypatch.setattr(poisson.sm, "GLM", lambda *args, **kwargs: ErrorModel())
+    monkeypatch.setattr(gc, "collect", lambda: cleanup_calls.append("collect"))
+
+    with pytest.raises(poisson.PoissonFitUnavailable):
+        poisson.fit_poisson_target(
+            _design(np.arange(5)), np.array([0, 1, 2, 1, 3])
+        )
+    assert cleanup_calls == ["collect"]
 
 
 def test_seeded_poisson_fit_returns_finite_positive_means() -> None:
