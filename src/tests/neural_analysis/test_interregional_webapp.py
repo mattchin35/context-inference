@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -197,3 +198,88 @@ def test_render_is_saved_only_and_no_run_guidance_is_cli_only(tmp_path: Path) ->
         "statsmodels",
     ):
         assert forbidden not in source
+
+
+def test_poisson_saved_view_uses_deviance_and_separate_exploratory_mse(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Saved Poisson rows select deviance plotting and an independent MSE view."""
+    session = _session(tmp_path)
+    run = _saved_run(session)
+    config, _ = interregional_views.load_interregional_config(run / "config.json")
+    result = persistence.load_interregional_result(
+        run / "result.pkl", config, trusted_run_directory=run
+    )
+    poisson_target = result.target_summaries.iloc[0].to_dict()
+    poisson_target.update(
+        model_family="poisson", metric_name="delta_deviance_explained"
+    )
+    poisson_population = {
+        "session_id": "session-a",
+        "evaluation_scope": "held_out_cv",
+        "direction": "HPC_to_PFC",
+        "representation": "units",
+        "model_family": "poisson",
+        "condition": "all",
+        "window": "before",
+        "metric_name": "delta_deviance_explained",
+        "status": "ok",
+        "reason": "",
+        "n_targets": 1,
+        "q25": 0.2,
+        "median": 0.2,
+        "q75": 0.2,
+    }
+    result = replace(
+        result,
+        target_summaries=records.result_table_from_rows(
+            "target_summaries",
+            [*result.target_summaries.to_dict("records"), poisson_target],
+        ),
+        population_summaries=records.result_table_from_rows(
+            "population_summaries", [poisson_population]
+        ),
+    )
+    option = interregional_views.InterregionalRunOption(
+        run, "a" * 64, result.analysis_version, result.session_id, "saved"
+    )
+    monkeypatch.setattr(
+        interregional_views, "discover_interregional_runs", lambda value: (option,)
+    )
+    monkeypatch.setattr(
+        interregional_views,
+        "_selected_result",
+        lambda value: (config, result, {"resolved_populations": [], "git_head": "1", "runtime_versions": {}, "entrypoint": "x"}),
+    )
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        interregional_views,
+        "plot_cv_increment_summary",
+        lambda *args, **kwargs: (
+            calls.append(("increment", kwargs["model_family"])) or object(),
+            object(),
+        ),
+    )
+    monkeypatch.setattr(
+        interregional_views,
+        "plot_ols_poisson_mse_comparison",
+        lambda *args, **kwargs: (calls.append(("mse", kwargs["condition"])) or object(), object()),
+    )
+
+    class SelectingStreamlit(_FakeStreamlit):
+        """Choose the Poisson family and its primary metric from saved options."""
+
+        def selectbox(self, label, options, **kwargs):
+            self.messages.append(str(label))
+            if label == "Model family":
+                return "poisson"
+            if label == "Metric":
+                return "delta_deviance_explained"
+            return options[0]
+
+    st = SelectingStreamlit()
+    interregional_views.render_interregional_view(st, session)
+
+    assert ("increment", "poisson") in calls
+    assert ("mse", "all") in calls
+    assert "exploratory" in " ".join(st.messages).lower()
