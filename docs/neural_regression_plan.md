@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 14:50 EDT.
+**Snapshot date:** 2026-10-08 14:55 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -22,14 +22,15 @@ Poisson run `30989197` was OOM-killed after approximately 2 hours 44 minutes wit
 allocation. Reduced execution telemetry is implemented and GREEN. The separately approved bounded
 benchmark, Slurm job `30991145`, reproduced the OOM within the first Poisson cell after OLS completed;
 the approved minimal change from Statsmodels' default least-squares backend to its QR backend within
-the same unpenalized IRLS estimator is implemented and locally GREEN. The separately approved repeat
-of the same bounded CT026 benchmark is running as Slurm job `30991248`; no scale test or full retry
-is authorized. WP9 scientific acceptance and WP10 remain blocked on an inspected completed output.
+the same unpenalized IRLS estimator is implemented and locally GREEN, but the separately approved
+repeat bounded benchmark, Slurm job `30991248`, was also OOM-killed. QR slowed rather than bounded
+the memory growth. No replacement, scale test, or full retry is authorized. WP9 scientific
+acceptance and WP10 remain blocked on an inspected completed output.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `8806643`;
+- HEAD before this handoff record: `54fc080`;
 - plan-owned files: `docs/neural_regression_plan.md` and
   `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
@@ -59,9 +60,9 @@ is authorized. WP9 scientific acceptance and WP10 remain blocked on an inspected
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** after job `30991248` leaves the queue, inspect its scheduler state, final
-telemetry, and either finalized result or retained incomplete attempt. Do not launch a replacement,
-scale test, full retry, or WP10 without separate approval.
+**Next exact action:** prepare and obtain approval for a new tests-first fitting plan that actually
+bounds per-target optimizer memory while preserving the unpenalized Poisson/log scientific model.
+Do not implement it or launch another run, scale test, full retry, or WP10 without approval.
 
 ### Authority order
 
@@ -94,7 +95,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | QR-backed bounded benchmark job `30991248` running | Inspect benchmark outcome; no automatic replacement |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | QR benchmark also OOM-killed; fitting approach requires replanning | Approve a genuinely memory-bounded optimizer before another run |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -936,6 +937,25 @@ Use this template:
   RSS. Cgroup fields remain unavailable on this node as documented for the preceding benchmark.
 - Exact next action and authorization: inspect job `30991248` after it leaves the queue, including
   the scheduler log, trace, and saved artifacts. Do not submit another job automatically.
+
+#### 2026-10-08 14:55 EDT - WP9 QR-backed bounded benchmark OOM
+
+- State: Slurm job `30991248` was OOM-killed at `2026-10-08T14:55:02.402` after approximately
+  5 minutes 46 seconds. No finalized result or completion summary exists; the ordinary incomplete
+  attempt and its 37,496-byte trace remain available for diagnosis.
+- Final evidence: all ten OLS cells completed near 1.04 GiB process peak RSS. Poisson cell 1 then
+  began for `HPC_to_PFC`, fold 0, and recorded completion of target 1 of 160. Subsequent 30-second
+  heartbeats recorded process peak RSS of 4.88, 8.65, 12.22, 16.15, 19.83, 23.14, 26.32, and
+  29.52 GiB before Slurm reported one `oom_kill`. Slurm `MaxRSS` reached approximately 31.37 GiB
+  while the job was still in that first Poisson cell. No target-25 checkpoint was reached.
+- Interpretation: QR approximately doubled the time to OOM and reduced the early memory-growth
+  rate, but it did not bound memory under the same 32-GiB allocation. The evidence rejects the QR
+  backend as a sufficient production fix. The trace still localizes failure to completed-target
+  range 1 through 24 and cannot determine whether one difficult target or retained allocations
+  across several targets dominate; do not claim a more precise cause from these records.
+- Exact next action and authorization: replan the target-wise optimizer around a method with bounded
+  working memory and validate numerical equivalence to the same unpenalized Poisson/log objective.
+  Do not implement or submit another job without separate approval.
 
 ## Plan objective and status
 
