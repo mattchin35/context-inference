@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 14:17 EDT.
+**Snapshot date:** 2026-10-08 14:38 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -19,14 +19,14 @@ integration, bounded performance gate, corrected CT026 inspection, and user acce
 below. WP9 unit-count Poisson CV, matched OLS/Poisson MSE, saved figures/reporting, and read-only
 webapp presentation are code-complete and GREEN on seeded synthetic data. The designated CT026
 Poisson run `30989197` was OOM-killed after approximately 2 hours 44 minutes with a 32-GiB
-allocation. Reduced execution telemetry is implemented and GREEN; a bounded benchmark now requires
-separate approval. WP9 scientific acceptance and WP10 remain blocked on an inspected completed
-output.
+allocation. Reduced execution telemetry is implemented and GREEN. The separately approved bounded
+benchmark is running as Slurm job `30991145`; no scale test or full retry is authorized. WP9
+scientific acceptance and WP10 remain blocked on an inspected completed output.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `f826d52`;
+- HEAD before this handoff record: `13f7f83`;
 - plan-owned files: `docs/neural_regression_plan.md` and
   `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
@@ -56,8 +56,9 @@ output.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** obtain approval for the exact bounded CT026 benchmark configuration,
-allocation, command, and output root. Do not launch it or begin WP10 beforehand.
+**Next exact action:** after job `30991145` leaves the queue, inspect its scheduler state, log,
+resource trace, and any finalized result or retained incomplete attempt. Do not launch a scale test,
+full retry, or WP10 beforehand.
 
 ### Authority order
 
@@ -90,7 +91,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Code and OOM telemetry GREEN; bounded benchmark pending approval | Benchmark, diagnose trajectory, then complete scientific review |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Code and OOM telemetry GREEN; bounded benchmark job `30991145` running | Inspect benchmark, diagnose trajectory, then complete scientific review |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -817,6 +818,38 @@ Use this template:
 - Exact next action and authorization: ask for approval of a distinct immutable CT026 benchmark
   config containing only condition `all`, window `whole`, representation `units`, and analyses
   `ols_cv` plus `poisson_cv`. Do not run experimental data before that approval.
+
+#### 2026-10-08 14:38 EDT - WP9 bounded CT026 memory benchmark submitted
+
+- State: the separately approved diagnostic benchmark is running as Slurm job `30991145` on
+  `cpu-755` with eight CPUs and 32 GiB. This receipt does not authorize a scale test, full retry,
+  or WP10.
+- Authorization and scope: the user approved one CT026 benchmark retaining the designated
+  session's units, folds, binning, lags, and model settings while restricting execution to condition
+  `all`, window `whole`, representation `units`, and analyses `ols_cv` plus `poisson_cv`. Its distinct
+  output root is
+  `/gs/gsfs0/users/mchin1/contextProjectData/CT026/CT026_20260803_latent_inference/analysis_runs/interregional_memory_benchmarks`.
+- Reproducibility evidence: the cluster checkout was tracked-clean apart from expected untracked
+  Python cache files and was fast-forwarded to exact commit
+  `13f7f832e02ac51631df9a0abf4fbe9c155d115e`. A programmatic comparison confirmed that the
+  benchmark configuration differs from the designated full configuration only in
+  `prediction_windows`, `filters.conditions`, `representations`, and `run.output_root`. The cluster
+  dry-run returned one planned session, `CT026_2026-08-03_111938`, with input size 274,440,585 bytes.
+- Submission evidence: scheduler log
+  `/gs/gsfs0/users/mchin1/logs/interregional_regression_30991145.log` records node `cpu-755`, start
+  time `2026-10-08T18:34:45Z`, the exact commit, tracked-clean status, eight-thread BLAS limits,
+  `uv 0.12.17`, and the benchmark configuration path. At 14:38 EDT the job remained `RUNNING`.
+- Telemetry startup evidence: the incomplete immutable attempt
+  `.interregional_regression_20261008T183535173307Z.incomplete` contains a parseable
+  `resource_trace.jsonl`. It records a 30-second heartbeat, ordered preparation and OLS completion,
+  Poisson cell 1 (`HPC_to_PFC`, fold 0) allocation shapes and byte counts, and first-target progress.
+  Process peak RSS rose from approximately 1.65 GiB at the first Poisson target to 17.0 GiB by the
+  next two heartbeats. The node does not expose a resolvable cgroup-v2 directory to the process, so
+  the cgroup fields are explicitly `null`; process peak RSS, CPU time, progress identity, and Slurm
+  memory accounting remain available for diagnosis.
+- Exact next action and authorization: wait for job `30991145` to leave the queue, then inspect
+  `sacct`, the scheduler log, the final trace records, and either the finalized result or retained
+  incomplete attempt. Do not automatically submit any larger or replacement run.
 
 ## Plan objective and status
 
