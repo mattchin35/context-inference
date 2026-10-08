@@ -1,4 +1,4 @@
-"""Focused orchestration for inter-regional preparation and linear CV."""
+"""Focused orchestration for inter-regional preparation and regression CV."""
 
 from __future__ import annotations
 
@@ -22,6 +22,13 @@ from .pca import (
     RegionalPCATransforms,
     fit_fold_regional_pcas,
     transform_regional_activity,
+)
+from .poisson import (
+    PoissonFit,
+    PoissonFitUnavailable,
+    fit_poisson_target,
+    predict_poisson_mean,
+    score_poisson_predictions,
 )
 from .preparation import (
     AnalysisTrialMasks,
@@ -74,6 +81,33 @@ class PreparedInterregionalSession:
             self.trial_masks.scientific_eligible
         ):
             raise ValueError("Fold assignment must cover the complete trial table.")
+
+
+@dataclass(frozen=True)
+class _FoldModelData:
+    """Shared train/test histories and designs for one CV fold cell.
+
+    Response matrices have shape ``(observation, target)``. Design matrices
+    have shape ``(observation, coefficient)`` and begin with one intercept.
+    Unit responses are spike counts per bin; PC responses use PCA-score units.
+    Trial counts, row counts, ranks, feature counts, and residual degrees of
+    freedom are unitless.
+    """
+
+    train_responses: np.ndarray
+    test_responses: np.ndarray
+    restricted_train: np.ndarray
+    full_train: np.ndarray
+    restricted_test: np.ndarray
+    full_test: np.ndarray
+    restricted_info: tuple[int, int, int, str | None]
+    full_info: tuple[int, int, int, str | None]
+    n_train_trials: int
+    n_test_trials: int
+    n_train_rows: int
+    n_test_rows: int
+    train_hash: str | None
+    test_hash: str | None
 
 
 def prepare_interregional_session(
@@ -150,6 +184,96 @@ def _design_diagnostics(design: np.ndarray) -> tuple[int, int, int, str | None]:
     return feature_count, rank, df_resid, None
 
 
+def _build_fold_model_data(
+    *,
+    prepared: PreparedInterregionalSession,
+    window: str,
+    fold_id: int,
+    target_activity: np.ndarray,
+    source_activity: np.ndarray,
+    condition_trials: np.ndarray,
+    fold_ids: np.ndarray,
+    tensor_rows: np.ndarray,
+) -> _FoldModelData:
+    """Build shared restricted/full train/test data for one fold cell.
+
+    Activity arrays have shape ``(trial, whole_window_bin, feature)`` in spike
+    counts per bin or PCA-score units. Trial selectors and ``fold_ids`` have
+    shape ``(trial,)`` on the same tensor trial axis; ``tensor_rows`` contains
+    the corresponding zero-based source-table rows. The returned response and
+    design matrices use observation rows formed from trial/bin histories.
+    """
+    target_window, bin_positions = select_window_bins(
+        target_activity,
+        window,
+        prepared.config.windows,
+        prepared.config.temporal,
+    )
+    source_window, source_bin_positions = select_window_bins(
+        source_activity,
+        window,
+        prepared.config.windows,
+        prepared.config.temporal,
+    )
+    if not np.array_equal(bin_positions, source_bin_positions):
+        raise ValueError("Target and source selected-window bin axes differ.")
+    block_present = np.asarray([value is not None for value in fold_ids], dtype=bool)
+    train_trials = condition_trials & block_present & (fold_ids != fold_id)
+    test_trials = condition_trials & (fold_ids == fold_id)
+    train_history = build_history_matrices(
+        target_window[train_trials],
+        source_window[train_trials],
+        tensor_rows[train_trials],
+        bin_positions,
+        prepared.config.temporal.lag_bins,
+        prepared.config.temporal.order_bins,
+    )
+    test_history = build_history_matrices(
+        target_window[test_trials],
+        source_window[test_trials],
+        tensor_rows[test_trials],
+        bin_positions,
+        prepared.config.temporal.lag_bins,
+        prepared.config.temporal.order_bins,
+    )
+    restricted_train = add_intercept(train_history.target_history)
+    full_train = add_intercept(
+        np.column_stack((train_history.target_history, train_history.source_history))
+    )
+    restricted_test = add_intercept(test_history.target_history)
+    full_test = add_intercept(
+        np.column_stack((test_history.target_history, test_history.source_history))
+    )
+    return _FoldModelData(
+        train_responses=train_history.responses,
+        test_responses=test_history.responses,
+        restricted_train=restricted_train,
+        full_train=full_train,
+        restricted_test=restricted_test,
+        full_test=full_test,
+        restricted_info=_design_diagnostics(restricted_train),
+        full_info=_design_diagnostics(full_train),
+        n_train_trials=int(np.unique(train_history.row_trial).size),
+        n_test_trials=int(np.unique(test_history.row_trial).size),
+        n_train_rows=int(train_history.responses.shape[0]),
+        n_test_rows=int(test_history.responses.shape[0]),
+        train_hash=(
+            fingerprint_row_identities(
+                train_history.row_trial, train_history.row_target_bin
+            )
+            if train_history.responses.shape[0]
+            else None
+        ),
+        test_hash=(
+            fingerprint_row_identities(
+                test_history.row_trial, test_history.row_target_bin
+            )
+            if test_history.responses.shape[0]
+            else None
+        ),
+    )
+
+
 def _empty_score_row(
     prepared: PreparedInterregionalSession,
     direction: str,
@@ -169,8 +293,9 @@ def _empty_score_row(
     full_diagnostics: tuple[int, int, int],
     representation: str = "units",
     target_rank: int | None = None,
+    model_family: str = "ols",
 ) -> dict[str, object]:
-    """Construct one explicit unavailable OLS fold row."""
+    """Construct one unavailable fold row in the frozen result-table schema."""
     restricted_features, restricted_rank, restricted_df = restricted_diagnostics
     full_features, full_rank, full_df = full_diagnostics
     paired_reason = restricted_reason or full_reason
@@ -180,7 +305,7 @@ def _empty_score_row(
         "session_id": prepared.session_id,
         "direction": direction,
         "representation": representation,
-        "model_family": "ols",
+        "model_family": model_family,
         "condition": condition,
         "window": window,
         "target_id": target_id,
@@ -252,64 +377,29 @@ def _score_one_ols_fold(
     ``fold_scores`` schema; linear PC scores have arbitrary squared PCA-score
     units while unit scores have squared spike-count-per-bin units.
     """
-    target_window, bin_positions = select_window_bins(
-        target_activity,
-        window,
-        prepared.config.windows,
-        prepared.config.temporal,
+    data = _build_fold_model_data(
+        prepared=prepared,
+        window=window,
+        fold_id=fold_id,
+        target_activity=target_activity,
+        source_activity=source_activity,
+        condition_trials=condition_trials,
+        fold_ids=fold_ids,
+        tensor_rows=tensor_rows,
     )
-    source_window, source_bin_positions = select_window_bins(
-        source_activity,
-        window,
-        prepared.config.windows,
-        prepared.config.temporal,
-    )
-    if not np.array_equal(bin_positions, source_bin_positions):
-        raise ValueError("Target and source selected-window bin axes differ.")
-    block_present = np.asarray([value is not None for value in fold_ids], dtype=bool)
-    train_trials = condition_trials & block_present & (fold_ids != fold_id)
-    test_trials = condition_trials & (fold_ids == fold_id)
-    train_history = build_history_matrices(
-        target_window[train_trials],
-        source_window[train_trials],
-        tensor_rows[train_trials],
-        bin_positions,
-        prepared.config.temporal.lag_bins,
-        prepared.config.temporal.order_bins,
-    )
-    test_history = build_history_matrices(
-        target_window[test_trials],
-        source_window[test_trials],
-        tensor_rows[test_trials],
-        bin_positions,
-        prepared.config.temporal.lag_bins,
-        prepared.config.temporal.order_bins,
-    )
-    restricted_train = add_intercept(train_history.target_history)
-    full_train = add_intercept(
-        np.column_stack((train_history.target_history, train_history.source_history))
-    )
-    restricted_test = add_intercept(test_history.target_history)
-    full_test = add_intercept(
-        np.column_stack((test_history.target_history, test_history.source_history))
-    )
-    restricted_info = _design_diagnostics(restricted_train)
-    full_info = _design_diagnostics(full_train)
-    train_hash = (
-        fingerprint_row_identities(train_history.row_trial, train_history.row_target_bin)
-        if train_history.responses.shape[0]
-        else None
-    )
-    test_hash = (
-        fingerprint_row_identities(test_history.row_trial, test_history.row_target_bin)
-        if test_history.responses.shape[0]
-        else None
-    )
+    restricted_train = data.restricted_train
+    full_train = data.full_train
+    restricted_test = data.restricted_test
+    full_test = data.full_test
+    restricted_info = data.restricted_info
+    full_info = data.full_info
+    train_hash = data.train_hash
+    test_hash = data.test_hash
     counts = (
-        int(np.unique(train_history.row_trial).size),
-        int(np.unique(test_history.row_trial).size),
-        int(train_history.responses.shape[0]),
-        int(test_history.responses.shape[0]),
+        data.n_train_trials,
+        data.n_test_trials,
+        data.n_train_rows,
+        data.n_test_rows,
     )
     rows: list[dict[str, object]] = []
 
@@ -339,7 +429,7 @@ def _score_one_ols_fold(
             )
         )
 
-    available_targets = train_history.responses.shape[1]
+    available_targets = data.train_responses.shape[1]
     if counts[2] == 0 or counts[3] == 0:
         row_reason = "no_train_rows" if counts[2] == 0 else "no_test_rows"
         for target_position in range(len(target_ids)):
@@ -360,12 +450,12 @@ def _score_one_ols_fold(
         "nonpositive_df": "nonpositive_df_full",
     }.get(full_info[3])
     restricted_fit = (
-        fit_ols_targets(restricted_train, train_history.responses)
+        fit_ols_targets(restricted_train, data.train_responses)
         if restricted_reason is None
         else None
     )
     full_fit = (
-        fit_ols_targets(full_train, train_history.responses)
+        fit_ols_targets(full_train, data.train_responses)
         if full_reason is None
         else None
     )
@@ -398,7 +488,7 @@ def _score_one_ols_fold(
     )
     full_predictions = predict_ols_targets(full_test, full_fit.coefficients)
     scores = score_ols_predictions(
-        test_history.responses, restricted_predictions, full_predictions
+        data.test_responses, restricted_predictions, full_predictions
     )
     for target_position, target_id in enumerate(target_ids):
         if target_position >= available_targets:
@@ -469,6 +559,217 @@ def _score_one_ols_fold(
                 "deviance_explained_restricted": None,
                 "deviance_explained_full": None,
                 "delta_deviance_explained": None,
+            }
+        )
+    return rows
+
+
+def _poisson_side_reason(reason: str, side: str) -> str:
+    """Map one target-local fit reason to a frozen restricted/full reason."""
+    if reason in {"poisson_nonconverged", "poisson_fit_error"}:
+        return f"{reason}_{side}"
+    return reason
+
+
+def _score_one_poisson_fold(
+    *,
+    prepared: PreparedInterregionalSession,
+    direction: str,
+    condition: str,
+    window: str,
+    fold_id: int,
+    target_activity: np.ndarray,
+    source_activity: np.ndarray,
+    target_ids: tuple[str, ...],
+    condition_trials: np.ndarray,
+    fold_ids: np.ndarray,
+    tensor_rows: np.ndarray,
+) -> list[dict[str, object]]:
+    """Fit target-wise direct-unit Poisson models for one held-out fold cell.
+
+    Activity arrays have shape ``(trial, whole_window_bin, unit)`` in spike
+    counts per bin. Trial selectors index the first axis. Returned dictionaries
+    follow the frozen ``fold_scores`` schema; deviance is dimensionless and MSE
+    is in squared spike counts per bin.
+    """
+    data = _build_fold_model_data(
+        prepared=prepared,
+        window=window,
+        fold_id=fold_id,
+        target_activity=target_activity,
+        source_activity=source_activity,
+        condition_trials=condition_trials,
+        fold_ids=fold_ids,
+        tensor_rows=tensor_rows,
+    )
+    counts = (
+        data.n_train_trials,
+        data.n_test_trials,
+        data.n_train_rows,
+        data.n_test_rows,
+    )
+    if data.n_train_rows == 0 or data.n_test_rows == 0:
+        reason = "no_train_rows" if data.n_train_rows == 0 else "no_test_rows"
+        return [
+            _empty_score_row(
+                prepared,
+                direction,
+                condition,
+                window,
+                target_id,
+                fold_id,
+                reason,
+                reason,
+                *counts,
+                data.train_hash,
+                data.test_hash,
+                data.restricted_info[:3],
+                data.full_info[:3],
+                model_family="poisson",
+            )
+            for target_id in target_ids
+        ]
+
+    design_reasons = {
+        "restricted": {
+            "rank_deficient": "rank_deficient_restricted",
+            "nonpositive_df": "nonpositive_df_restricted",
+        }.get(data.restricted_info[3]),
+        "full": {
+            "rank_deficient": "rank_deficient_full",
+            "nonpositive_df": "nonpositive_df_full",
+        }.get(data.full_info[3]),
+    }
+    designs = {
+        "restricted": (data.restricted_train, data.restricted_test),
+        "full": (data.full_train, data.full_test),
+    }
+    rows: list[dict[str, object]] = []
+    for target_position, target_id in enumerate(target_ids):
+        training_counts = data.train_responses[:, target_position]
+        test_counts = data.test_responses[:, target_position]
+        fits: dict[str, PoissonFit | None] = {"restricted": None, "full": None}
+        reasons = dict(design_reasons)
+        side_scores: dict[str, object | None] = {"restricted": None, "full": None}
+        for side in ("restricted", "full"):
+            if reasons[side] is not None:
+                continue
+            train_design, test_design = designs[side]
+            try:
+                fitted = fit_poisson_target(train_design, training_counts)
+                fits[side] = fitted
+                expected_counts = predict_poisson_mean(test_design, fitted.parameters)
+                side_scores[side] = score_poisson_predictions(
+                    test_counts, expected_counts, expected_counts
+                )
+            except PoissonFitUnavailable as error:
+                reasons[side] = _poisson_side_reason(error.reason, side)
+
+        restricted_fit = fits["restricted"]
+        full_fit = fits["full"]
+        restricted_scores = side_scores["restricted"]
+        full_scores = side_scores["full"]
+        paired_reason = reasons["restricted"] or reasons["full"]
+        normalized_available = (
+            paired_reason is None
+            and restricted_scores is not None
+            and full_scores is not None
+            and restricted_scores.normalized_available
+            and full_scores.normalized_available
+        )
+        row_status = (
+            "fit_unavailable"
+            if paired_reason is not None
+            else "ok" if normalized_available else "metric_unavailable"
+        )
+        row_reason = paired_reason or ("" if normalized_available else "zero_null_deviance")
+        rows.append(
+            {
+                "session_id": prepared.session_id,
+                "direction": direction,
+                "representation": "units",
+                "model_family": "poisson",
+                "condition": condition,
+                "window": window,
+                "target_id": target_id,
+                "fold_id": fold_id,
+                "evaluation_scope": "held_out_cv",
+                "target_rank": None,
+                "restricted_status": (
+                    "ok" if reasons["restricted"] is None else "fit_unavailable"
+                ),
+                "restricted_reason": reasons["restricted"] or "",
+                "full_status": "ok" if reasons["full"] is None else "fit_unavailable",
+                "full_reason": reasons["full"] or "",
+                "status": row_status,
+                "reason": row_reason,
+                "n_train_trials": counts[0],
+                "n_test_trials": counts[1],
+                "n_train_rows": counts[2],
+                "n_test_rows": counts[3],
+                "train_row_set_sha256": data.train_hash,
+                "test_row_set_sha256": data.test_hash,
+                "restricted_feature_count": data.restricted_info[0],
+                "full_feature_count": data.full_info[0],
+                "restricted_rank": data.restricted_info[1],
+                "full_rank": data.full_info[1],
+                "restricted_df_resid": data.restricted_info[2],
+                "full_df_resid": data.full_info[2],
+                "restricted_converged": (
+                    restricted_fit.converged if restricted_fit is not None else None
+                ),
+                "full_converged": full_fit.converged if full_fit is not None else None,
+                "restricted_iterations": (
+                    restricted_fit.iterations if restricted_fit is not None else None
+                ),
+                "full_iterations": (
+                    full_fit.iterations if full_fit is not None else None
+                ),
+                "r2_restricted": None,
+                "r2_full": None,
+                "delta_r2": None,
+                "mse_restricted": (
+                    restricted_scores.mse_restricted
+                    if restricted_scores is not None
+                    else None
+                ),
+                "mse_full": (
+                    full_scores.mse_restricted if full_scores is not None else None
+                ),
+                "deviance_restricted": (
+                    restricted_scores.deviance_restricted
+                    if restricted_scores is not None
+                    else None
+                ),
+                "deviance_full": (
+                    full_scores.deviance_restricted
+                    if full_scores is not None
+                    else None
+                ),
+                "null_deviance": (
+                    restricted_scores.null_deviance
+                    if restricted_scores is not None
+                    else full_scores.null_deviance
+                    if full_scores is not None
+                    else None
+                ),
+                "deviance_explained_restricted": (
+                    restricted_scores.deviance_explained_restricted
+                    if restricted_scores is not None
+                    and restricted_scores.normalized_available
+                    else None
+                ),
+                "deviance_explained_full": (
+                    full_scores.deviance_explained_restricted
+                    if full_scores is not None and full_scores.normalized_available
+                    else None
+                ),
+                "delta_deviance_explained": (
+                    full_scores.deviance_explained_restricted
+                    - restricted_scores.deviance_explained_restricted
+                    if normalized_available
+                    else None
+                ),
             }
         )
     return rows
@@ -686,4 +987,78 @@ def run_linear_cross_validation(
                         )
     fold_scores = result_table_from_rows("fold_scores", score_rows)
     target_summaries, population_summaries = summarize_complete_cv_targets(fold_scores)
+    return fold_scores, target_summaries, population_summaries
+
+
+def run_poisson_cross_validation(
+    prepared: PreparedInterregionalSession,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Run bidirectional target-wise five-fold Poisson CV for direct units.
+
+    Parameters
+    ----------
+    prepared : PreparedInterregionalSession
+        Shared activity with axes ``(trial, whole_window_bin, unit)`` in spike
+        counts per bin, scientific condition masks, and grouped fold IDs.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]
+        Exact typed Poisson fold scores, complete-five-fold target summaries,
+        and population quartiles. Deviance metrics are dimensionless and MSE
+        is in squared spike counts per bin. Raw deviance remains fold-only.
+    """
+    if "poisson_cv" not in prepared.config.analyses:
+        raise ValueError("run_poisson_cross_validation requires poisson_cv in analyses.")
+    if "units" not in prepared.config.representations:
+        raise ValueError("Poisson cross-validation requires direct units.")
+
+    fold_ids = _fold_ids_on_tensor(prepared)
+    tensor_rows = prepared.pfc_counts.trial_rows
+    unit_activity = {
+        "PFC": prepared.pfc_counts.counts,
+        "HPC": prepared.hpc_counts.counts,
+    }
+    unit_ids = {
+        "PFC": prepared.pfc_counts.unit_ids,
+        "HPC": prepared.hpc_counts.unit_ids,
+    }
+    score_rows: list[dict[str, object]] = []
+    for direction, target_region in (
+        ("HPC_to_PFC", "PFC"),
+        ("PFC_to_HPC", "HPC"),
+    ):
+        source_region = "HPC" if target_region == "PFC" else "PFC"
+        for condition in prepared.config.filters.conditions:
+            condition_trials = prepared.trial_masks.condition_masks[condition][
+                tensor_rows
+            ]
+            for window in prepared.config.prediction_windows:
+                for fold_id in range(5):
+                    score_rows.extend(
+                        _score_one_poisson_fold(
+                            prepared=prepared,
+                            direction=direction,
+                            condition=condition,
+                            window=window,
+                            fold_id=fold_id,
+                            target_activity=unit_activity[target_region],
+                            source_activity=unit_activity[source_region],
+                            target_ids=unit_ids[target_region],
+                            condition_trials=condition_trials,
+                            fold_ids=fold_ids,
+                            tensor_rows=tensor_rows,
+                        )
+                    )
+    fold_scores = result_table_from_rows("fold_scores", score_rows)
+    target_summaries, population_summaries = summarize_complete_cv_targets(
+        fold_scores,
+        metric_names=(
+            "deviance_explained_restricted",
+            "deviance_explained_full",
+            "delta_deviance_explained",
+            "mse_restricted",
+            "mse_full",
+        ),
+    )
     return fold_scores, target_summaries, population_summaries

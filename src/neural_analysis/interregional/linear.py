@@ -14,10 +14,13 @@ from .records import result_table_from_rows
 
 METRIC_RTOL = 1e-9
 METRIC_ATOL = 1e-12
-_OLS_METRICS = (
+_CV_METRICS = (
     "r2_restricted",
     "r2_full",
     "delta_r2",
+    "deviance_explained_restricted",
+    "deviance_explained_full",
+    "delta_deviance_explained",
     "mse_restricted",
     "mse_full",
 )
@@ -198,7 +201,13 @@ def score_ols_predictions(
 
 def summarize_complete_cv_targets(
     fold_scores: pd.DataFrame,
-    metric_names: Sequence[str] = _OLS_METRICS,
+    metric_names: Sequence[str] = (
+        "r2_restricted",
+        "r2_full",
+        "delta_r2",
+        "mse_restricted",
+        "mse_full",
+    ),
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Aggregate complete five-fold target means, then population quartiles.
 
@@ -209,7 +218,8 @@ def summarize_complete_cv_targets(
         ``reason``, and requested metric columns. Metrics are dimensionless or
         squared response units according to their names.
     metric_names : sequence of str
-        OLS metrics to summarize independently.
+        OLS or Poisson CV metrics to summarize independently. Raw Poisson
+        deviance is intentionally excluded.
 
     Returns
     -------
@@ -218,8 +228,8 @@ def summarize_complete_cv_targets(
         Population quartiles use complete target means, never pooled folds.
     """
     requested_metrics = tuple(metric_names)
-    if not requested_metrics or any(metric not in _OLS_METRICS for metric in requested_metrics):
-        raise ValueError(f"metric_names must be selected from {_OLS_METRICS}.")
+    if not requested_metrics or any(metric not in _CV_METRICS for metric in requested_metrics):
+        raise ValueError(f"metric_names must be selected from {_CV_METRICS}.")
     required = {
         "session_id",
         "direction",
@@ -257,7 +267,7 @@ def summarize_complete_cv_targets(
                 fit_valid = group["restricted_status"].eq("ok")
             elif metric_name.endswith("_full") and "full_status" in group:
                 fit_valid = group["full_status"].eq("ok")
-            elif metric_name == "delta_r2" and {
+            elif metric_name in {"delta_r2", "delta_deviance_explained"} and {
                 "restricted_status",
                 "full_status",
             } <= set(group.columns):
