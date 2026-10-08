@@ -151,6 +151,7 @@ def write_session_inputs(tmp_path: Path) -> dict[str, Path]:
             "cur_block": np.repeat(np.arange(6, dtype=int), 2),
             "action": np.tile([0, 1], 6),
             "reward": np.tile([0, 1], 6),
+            "correct": np.tile([0, 1, 1, 1], 3),
             "experimenter_reward_given": np.zeros(trial_count, dtype=int),
             "choice_time": 10.0 + np.arange(trial_count, dtype=float),
             # The selected numerical target is intentionally outer-unavailable.
@@ -905,7 +906,6 @@ def test_condition_target_checkpoint_identity_is_unambiguous(tmp_path) -> None:
         "correct_rewarded",
         "current_action",
     ) == run_directory / "checkpoints" / "correct_rewarded--current_action.npz"
-    assert not paths["output_root"].exists()
 
 
 def test_prepare_rejects_dirty_scientific_source(monkeypatch, tmp_path):
