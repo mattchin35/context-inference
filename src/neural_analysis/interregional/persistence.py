@@ -326,8 +326,21 @@ def validate_complete_run_artifacts(
     )
 
 
-def finalize_run_directory(working_path: Path | str, fingerprint: str) -> Path:
-    """Validate and atomically rename a same-parent incomplete run directory."""
+def final_run_directory_path(working_path: Path | str, fingerprint: str) -> Path:
+    """Return the final path implied by one incomplete run and fingerprint.
+
+    Parameters
+    ----------
+    working_path : pathlib.Path or str
+        Existing same-parent incomplete run directory.
+    fingerprint : str
+        Lowercase 64-character run-identity SHA-256.
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute final run-directory path. The path is not created or renamed.
+    """
     working = Path(working_path).resolve(strict=True)
     suffix = ".incomplete"
     prefix = ".interregional_regression_"
@@ -335,9 +348,15 @@ def finalize_run_directory(working_path: Path | str, fingerprint: str) -> Path:
         raise ValueError("working_path is not an interregional incomplete directory.")
     if re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
         raise ValueError("fingerprint must be a lowercase SHA-256 digest.")
-    _validate_required_artifacts(working)
     timestamp = working.name[len(prefix) : -len(suffix)]
-    final = working.parent / f"interregional_regression_{timestamp}_{fingerprint[:12]}"
+    return working.parent / f"interregional_regression_{timestamp}_{fingerprint[:12]}"
+
+
+def finalize_run_directory(working_path: Path | str, fingerprint: str) -> Path:
+    """Validate and atomically rename a same-parent incomplete run directory."""
+    working = Path(working_path).resolve(strict=True)
+    _validate_required_artifacts(working)
+    final = final_run_directory_path(working, fingerprint)
     if final.exists():
         raise FileExistsError(f"Final run directory already exists: {final}")
     os.replace(working, final)

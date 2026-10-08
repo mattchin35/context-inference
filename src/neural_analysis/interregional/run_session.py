@@ -445,8 +445,19 @@ def _find_reusable_run(plan: SessionPlan, fingerprint: str) -> Path | None:
     return None
 
 
-def _write_summary(path: Path, result: InterregionalResults) -> None:
-    """Write a concise scientific summary with coverage and causal caveats."""
+def _write_summary(
+    path: Path,
+    result: InterregionalResults,
+    *,
+    final_run_directory: Path,
+    executed_configuration: Mapping[str, object],
+) -> None:
+    """Write a scientific summary with exact final path and executed config.
+
+    ``path`` and ``final_run_directory`` are filesystem coordinates. The
+    configuration is the exact JSON-compatible mapping copied to ``config.json``;
+    result tables retain their documented units and axes without transformation.
+    """
     unavailable = int(result.fold_scores["status"].ne("ok").sum())
     unavailable_reasons = (
         result.fold_scores.loc[result.fold_scores["reason"].ne(""), "reason"]
@@ -462,7 +473,7 @@ def _write_summary(path: Path, result: InterregionalResults) -> None:
         "",
         "Scripts: `run_session.py`, `run_batch.py`",
         "",
-        f"Output directory: `{path.parent}`",
+        f"Output directory: `{final_run_directory}`",
         "",
         f"Unavailable fold rows: {unavailable}",
         "",
@@ -471,7 +482,7 @@ def _write_summary(path: Path, result: InterregionalResults) -> None:
         "## Scientific configuration",
         "",
         "```json",
-        json.dumps(result.configuration, sort_keys=True, indent=2),
+        json.dumps(executed_configuration, sort_keys=True, indent=2),
         "```",
         "",
         "## Primary held-out results",
@@ -659,7 +670,18 @@ def run_single_session(
         summary_started = time.perf_counter()
         with (working / "run.log").open("a", encoding="utf-8") as stream:
             stream.write("stage=summary event=start\n")
-        _write_summary(working / "summary.md", result)
+        final_run_directory = persistence.final_run_directory_path(
+            working, fingerprint
+        )
+        executed_configuration = configuration_to_dict(
+            plan.config, RunOptions(output_root=plan.output_root)
+        )
+        _write_summary(
+            working / "summary.md",
+            result,
+            final_run_directory=final_run_directory,
+            executed_configuration=executed_configuration,
+        )
         with (working / "run.log").open("a", encoding="utf-8") as stream:
             stream.write(
                 "stage=summary event=end "

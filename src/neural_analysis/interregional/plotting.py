@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
-from pathlib import Path
 
 from .records import InterregionalResults
 
@@ -114,25 +116,26 @@ def plot_cv_increment_summary(
     figure, axis = plt.subplots(figsize=(max(8.0, 2.6 * len(conditions)), 6.5))
     _style_light_figure(figure, axis)
     direction_offsets = {"HPC_to_PFC": -0.35, "PFC_to_HPC": 0.35}
-    cell_positions: list[float] = []
-    all_finite = pd.to_numeric(selected["mean_value"], errors="coerce").dropna()
-    text_y = float(all_finite.max()) if not all_finite.empty else 0.0
-    text_y += max(float(all_finite.max() - all_finite.min()), 0.1) * 0.12
     for condition_index, condition in enumerate(conditions):
         center = condition_index * 3.0
+        availability_counts: dict[str, tuple[int, int]] = {}
         for direction in _DIRECTIONS:
             position = center + direction_offsets[direction]
-            cell_positions.append(position)
             rows = selected.loc[
                 selected["condition"].eq(condition)
                 & selected["direction"].eq(direction)
             ]
             complete = rows.loc[rows["status"].eq("ok")]
             unavailable_count = int(len(rows) - len(complete))
+            availability_counts[direction] = (len(complete), unavailable_count)
+            jitter_values = (
+                np.linspace(-0.22, 0.22, len(complete))
+                if len(complete) > 1
+                else np.zeros(len(complete), dtype=np.float64)
+            )
             for target_index, row in enumerate(complete.itertuples(index=False)):
-                jitter = (target_index - (len(complete) - 1) / 2.0) * 0.06
                 (artist,) = axis.plot(
-                    position + jitter,
+                    position + float(jitter_values[target_index]),
                     float(row.mean_value),
                     marker="o",
                     linestyle="none",
@@ -167,15 +170,20 @@ def plot_cv_increment_summary(
                     linewidth=2.0,
                     zorder=4,
                 )
-            axis.text(
-                position,
-                text_y,
-                f"{len(complete)} contributing\n{unavailable_count} unavailable",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-                color="black",
-            )
+        hpc_counts = availability_counts["HPC_to_PFC"]
+        pfc_counts = availability_counts["PFC_to_HPC"]
+        annotation = axis.text(
+            center,
+            -0.12,
+            f"HPC->PFC: {hpc_counts[0]} / {hpc_counts[1]}\n"
+            f"PFC->HPC: {pfc_counts[0]} / {pfc_counts[1]}",
+            transform=axis.get_xaxis_transform(),
+            ha="center",
+            va="top",
+            fontsize=7,
+            color="black",
+        )
+        annotation.set_gid("availability-counts")
     axis.axhline(0.0, color="#666666", linestyle="--", linewidth=1.0)
     axis.set_xticks([index * 3.0 for index in range(len(conditions))], conditions)
     axis.set_ylabel("Incremental CV R-squared")
@@ -186,14 +194,15 @@ def plot_cv_increment_summary(
         0.01,
         _caption(
             coverage_assumption_version,
-            "Points are complete target means; black marks show population median and IQR.",
+            "Points are complete target means; black marks show population median and IQR. "
+            "Counts below each condition are contributing / unavailable.",
         ),
         ha="center",
         va="bottom",
         fontsize=9,
         wrap=True,
     )
-    figure.subplots_adjust(left=0.12, right=0.97, bottom=0.18, top=0.88)
+    figure.subplots_adjust(left=0.12, right=0.97, bottom=0.30, top=0.91)
     return figure, axis
 
 
@@ -237,6 +246,27 @@ def plot_absolute_cv_scores(
     axis.set_xticks([0.0, 1.0], ["Restricted", "Full"])
     axis.set_ylabel("Absolute held-out CV R-squared")
     axis.set_title(f"Absolute prediction scores: {condition}, {window}, {representation}")
+    axis.legend(
+        handles=[
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="none",
+                color=_DIRECTION_COLORS["HPC_to_PFC"],
+                label="HPC to PFC",
+            ),
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="none",
+                color=_DIRECTION_COLORS["PFC_to_HPC"],
+                label="PFC to HPC",
+            ),
+        ],
+        frameon=False,
+    )
     figure.text(
         0.5,
         0.01,
