@@ -23,6 +23,7 @@ from src.neural_analysis.interregional.preparation import (
 from src.neural_analysis.interregional.records import RegionalCountTensor
 from src.neural_analysis.interregional.pca import fit_descriptive_regional_pcas
 from src.neural_analysis.interregional import pipeline
+from src.neural_analysis.interregional.poisson import PoissonFitUnavailable
 
 
 def _resolved(role: str, probe: str, cluster_id: int) -> ResolvedRegionalPopulation:
@@ -432,3 +433,138 @@ def test_wp7_seeded_unit_and_pc_results_are_deterministic_with_explicit_gaps() -
     ].eq("incomplete_folds").all()
     assert not population_summaries.empty
     assert len(pca_fits) == 10
+
+
+def _poisson_prepared() -> pipeline.PreparedInterregionalSession:
+    """Return the multiunit fixture with matched OLS and Poisson CV requested."""
+    prepared = _multiunit_prepared(("units",))
+    return replace(
+        prepared,
+        config=replace(prepared.config, analyses=("ols_cv", "poisson_cv")),
+    )
+
+
+def test_poisson_cv_reuses_every_unit_ols_fold_and_history_identity() -> None:
+    """Poisson targets use the exact OLS unit folds, rows, and design dimensions."""
+    prepared = _poisson_prepared()
+
+    ols_scores, _, _ = pipeline.run_linear_cross_validation(prepared)
+    poisson_scores, _, _ = pipeline.run_poisson_cross_validation(prepared)
+
+    identity = [
+        "session_id",
+        "direction",
+        "condition",
+        "window",
+        "target_id",
+        "fold_id",
+        "evaluation_scope",
+        "n_train_trials",
+        "n_test_trials",
+        "n_train_rows",
+        "n_test_rows",
+        "train_row_set_sha256",
+        "test_row_set_sha256",
+        "restricted_feature_count",
+        "full_feature_count",
+        "restricted_rank",
+        "full_rank",
+        "restricted_df_resid",
+        "full_df_resid",
+    ]
+    pd.testing.assert_frame_equal(
+        ols_scores.loc[:, identity].sort_values(identity[:6]).reset_index(drop=True),
+        poisson_scores.loc[:, identity]
+        .sort_values(identity[:6])
+        .reset_index(drop=True),
+    )
+    assert poisson_scores["representation"].eq("units").all()
+    assert poisson_scores["model_family"].eq("poisson").all()
+
+
+def test_poisson_cv_local_fit_failure_does_not_abort_other_targets(monkeypatch) -> None:
+    """One recognized target fit error remains local while later fits continue."""
+    prepared = _poisson_prepared()
+    original_fit = pipeline.fit_poisson_target
+    call_count = 0
+
+    def fail_once(design, count_response):
+        """Fail the first target fit, then delegate every independent fit."""
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise PoissonFitUnavailable("poisson_nonconverged", "synthetic")
+        return original_fit(design, count_response)
+
+    monkeypatch.setattr(pipeline, "fit_poisson_target", fail_once)
+
+    fold_scores, _, _ = pipeline.run_poisson_cross_validation(prepared)
+
+    failures = fold_scores.loc[fold_scores["restricted_status"].ne("ok")]
+    assert len(failures) == 1
+    assert failures.iloc[0]["restricted_reason"] == "poisson_nonconverged_restricted"
+    assert fold_scores["full_status"].eq("ok").all()
+    assert call_count == 40
+
+
+def test_poisson_cv_allows_unexpected_fit_errors_to_reach_run_boundary(monkeypatch) -> None:
+    """Programming or API errors are not converted into scientific status rows."""
+    prepared = _poisson_prepared()
+
+    def unexpected_error(design, count_response):
+        """Represent an unexpected bug below the orchestration boundary."""
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(pipeline, "fit_poisson_target", unexpected_error)
+
+    with np.testing.assert_raises_regex(RuntimeError, "unexpected"):
+        pipeline.run_poisson_cross_validation(prepared)
+
+
+def test_poisson_cv_summaries_require_complete_folds_and_exclude_raw_deviance() -> None:
+    """Complete normalized metrics aggregate, while raw deviance stays fold-only."""
+    prepared = _poisson_prepared()
+
+    fold_scores, target_summaries, population_summaries = (
+        pipeline.run_poisson_cross_validation(prepared)
+    )
+
+    assert fold_scores["status"].eq("ok").all()
+    primary = target_summaries.loc[
+        target_summaries["metric_name"].eq("delta_deviance_explained")
+    ]
+    assert not primary.empty
+    assert primary["status"].eq("ok").all()
+    assert primary["valid_folds"].eq(5).all()
+    assert population_summaries.loc[
+        population_summaries["metric_name"].eq("delta_deviance_explained"),
+        "n_targets",
+    ].gt(0).all()
+    assert not {
+        "deviance_restricted",
+        "deviance_full",
+        "null_deviance",
+    } & set(target_summaries["metric_name"])
+
+
+def test_poisson_fold_rows_keep_only_poisson_diagnostics_and_count_mse() -> None:
+    """Poisson rows populate convergence/deviance/MSE fields but no OLS R-squared."""
+    fold_scores, _, _ = pipeline.run_poisson_cross_validation(_poisson_prepared())
+
+    assert fold_scores["restricted_converged"].eq(True).all()
+    assert fold_scores["full_converged"].eq(True).all()
+    assert fold_scores["restricted_iterations"].gt(0).all()
+    assert fold_scores["full_iterations"].gt(0).all()
+    assert fold_scores[["r2_restricted", "r2_full", "delta_r2"]].isna().all().all()
+    assert fold_scores[
+        [
+            "mse_restricted",
+            "mse_full",
+            "deviance_restricted",
+            "deviance_full",
+            "null_deviance",
+            "deviance_explained_restricted",
+            "deviance_explained_full",
+            "delta_deviance_explained",
+        ]
+    ].notna().all().all()
