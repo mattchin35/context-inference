@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 14:08 EDT.
+**Snapshot date:** 2026-10-08 14:17 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -19,8 +19,9 @@ integration, bounded performance gate, corrected CT026 inspection, and user acce
 below. WP9 unit-count Poisson CV, matched OLS/Poisson MSE, saved figures/reporting, and read-only
 webapp presentation are code-complete and GREEN on seeded synthetic data. The designated CT026
 Poisson run `30989197` was OOM-killed after approximately 2 hours 44 minutes with a 32-GiB
-allocation. Reduced execution telemetry is authorized before any bounded benchmark or full retry.
-WP9 scientific acceptance and WP10 remain blocked on an inspected completed output.
+allocation. Reduced execution telemetry is implemented and GREEN; a bounded benchmark now requires
+separate approval. WP9 scientific acceptance and WP10 remain blocked on an inspected completed
+output.
 
 **Repository state at this snapshot:**
 
@@ -55,9 +56,8 @@ WP9 scientific acceptance and WP10 remain blocked on an inspected completed outp
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** write and commit RED tests for durable cgroup-v2/process resource telemetry,
-correct stage boundaries, coarse cell/target progress, killed-process trace durability, and
-scientific-output invariance. Do not launch a benchmark or begin WP10 beforehand.
+**Next exact action:** obtain approval for the exact bounded CT026 benchmark configuration,
+allocation, command, and output root. Do not launch it or begin WP10 beforehand.
 
 ### Authority order
 
@@ -90,7 +90,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Code GREEN; CT026 job `30989197` OOM; reduced telemetry authorized | Instrument, benchmark after separate approval, then complete scientific review |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Code and OOM telemetry GREEN; bounded benchmark pending approval | Benchmark, diagnose trajectory, then complete scientific review |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -765,9 +765,10 @@ Use this template:
   authorizes tests and implementation, their commits and push, but not a real-data benchmark or a
   full retry; benchmark execution remains a separate gate.
 - Sol / Terra / reviewer: primary implementation agent and self-review; no worker.
-- Start HEAD / end HEAD: `f53cc47` / pending. The intervening commits after the Slurm wrapper are
-  known task-decoding changes from the other task and are preserved unchanged. Tracked state was
-  clean before this record; known unrelated untracked files remain out of scope.
+- Start HEAD / end HEAD: `f53cc47` / `9fe3b25` before this handoff update. The intervening commits
+  after the Slurm wrapper are known task-decoding changes from the other task and are preserved
+  unchanged. Tracked state was clean before this record; known unrelated untracked files remain out
+  of scope.
 - Failure evidence: job `30989197` used exact commit
   `49f63fde644e36b15484aab8fc9727235bfde01e`, eight CPUs, and 32 GiB. Its scheduler log ends with
   one `oom_kill` event. File timestamps bound execution from approximately 10:27 to 13:11 EDT,
@@ -799,8 +800,23 @@ Use this template:
   megabytes and must not add per-fit I/O. No dependency is added. A bounded production-path CT026
   benchmark using only condition `all`, window `whole`, units, OLS, and Poisson will be proposed
   after the instrumented test suite is GREEN.
-- Exact next action and authorization: commit this activation record, then write the tests-only RED
-  package. Do not run experimental data before separate benchmark approval.
+- RED/GREEN evidence and commits: `44b13fd` committed the tests before production code. The new
+  telemetry module initially failed import; the existing pipeline rejected the callback and cadence
+  contracts; and session tests lacked durable trace/summary artifacts. Implementation commit
+  `9fe3b25` made all 32 focused tests GREEN. The broader affected suite passed 315 tests spanning
+  inter-regional analysis, spike-behavior/Pynapple, population PCA, metadata, webapp packaging, and
+  shell launchers, with the same six existing Pynapple warnings. Ruff and `git diff --check` passed.
+- Diagnostic sufficiency: the trace records the resolved cgroup path and interval at monitor start.
+  Every heartbeat and progress event samples effective cgroup limit, current/peak bytes, high/max/
+  OOM/OOM-kill counters, process peak RSS, and process user/system CPU. A pre-allocation cell record
+  identifies model family, representation, direction, condition, window, fold, cell index, and
+  target total; a post-allocation record adds every response/design shape and byte count. Poisson
+  records then delimit completed target ranges at 1, every 25, and final target. A killed subprocess
+  retained complete parseable JSONL records in the test gate. This is sufficient to distinguish a
+  matrix-construction jump, a long individual fit, and progressive retention across targets/cells.
+- Exact next action and authorization: ask for approval of a distinct immutable CT026 benchmark
+  config containing only condition `all`, window `whole`, representation `units`, and analyses
+  `ols_cv` plus `poisson_cv`. Do not run experimental data before that approval.
 
 ## Plan objective and status
 
