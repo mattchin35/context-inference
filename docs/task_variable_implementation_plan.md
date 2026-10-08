@@ -27,8 +27,8 @@ normative amendments `docs/task_variable_spec_v6.md` and
 **Current phase:** WP0-WP11 are complete. The condition-resolved v3 extension
 is implemented tests-first through production commit `d7c6b1c`; its final
 documentation and real synthetic schema-2 gate began with RED commit
-`8138aeb`. The remaining local gate is the v7 documentation/example update and
-full affected test suite. No all-condition experimental job has been submitted.
+`8138aeb`; documentation GREEN is `e00653b`. The complete affected local suite
+passed 945 tests. No all-condition experimental job has been submitted.
 The first v2 bounded run proved the
 convergence repair but exposed a competing-resume lifecycle defect during
 diagnosis. The approved repair is committed through `77ff461`, pushed, and
@@ -134,8 +134,8 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** complete and push the v3 documentation and synthetic
-gate. Then update the tracked-clean cluster checkout, create and verify the
+**Next exact action:** push the completed v3 implementation and local gate.
+Then update the tracked-clean cluster checkout, create and verify the
 exact six-condition CT026 configuration, and run matching local/cluster dry
 runs. The first full condition submission must use one CPU, `8G`,
 `3-00:00:00`, and the `condition_validation` profile. A real submission remains
@@ -171,7 +171,7 @@ is inspected.
 - RED and GREEN commits through `d7c6b1c` cover masks/configuration/resources,
   schema, execution/resume, summaries/figures, and webapp selection. Final RED
   `8138aeb` adds a real six-condition synthetic run plus documentation/example
-  contracts.
+  contracts; documentation GREEN is `e00653b`.
 
 ### Performance and cluster validation
 
@@ -186,10 +186,10 @@ pipeline wall/CPU/peak-RSS evidence with Slurm `Elapsed`, `TotalCPU`, `MaxRSS`,
 
 ### Remaining gates
 
-1. Complete revision 7, the portable six-condition example, and both READMEs.
-2. Pass the focused documentation and real synthetic condition gate, then the
-   full task-decoding and affected webapp suite.
-3. Push the exact commit and update the tracked-clean cluster checkout.
+1. Completed: revision 7, the portable six-condition example, and both READMEs.
+2. Completed: the real synthetic condition gate and full 945-test affected
+   suite.
+3. Push the exact commits and update the tracked-clean cluster checkout.
 4. Place the condition-resolved configuration with the real CT026 session,
    confirm all 18 targets and six conditions by local and cluster dry run, and
    present the exact submission command.
@@ -234,7 +234,7 @@ When resuming, use this order:
 | WP10D competing-owner lifecycle repair and local acceptance | Complete: lifecycle repair through `77ff461`; clean 2,400-cell bounded run and 9,600-cell categorical stress run accepted | None |
 | WP11 single-session cluster path | Complete: RED `a3dcdb9`, handoff `e91fa5f`, GREEN `b9d8645`; mocked and local tests only | None; real execution belongs to WP12 |
 | WP12 CT026 one-session cluster validation | Pooled run `30985392` completed, validated, returned, and inspected; v3 condition-resolved follow-up is required | Complete the condition extension and inspect its full output |
-| Condition-resolved v3 extension | Production complete through `d7c6b1c`; final synthetic/docs RED is `8138aeb` | Complete local GREEN gate, then exact cluster config/dry-run/submission gates |
+| Condition-resolved v3 extension | Local implementation complete: production `d7c6b1c`, final RED `8138aeb`, docs GREEN `e00653b`, 945 tests passed | Push, then exact cluster config/dry-run/submission gates |
 | WP13 bounded cluster batch array | Required after WP12 acceptance; source not started | Implement tests-first per-session concurrency; authorize any real array separately |
 
 ### Resume checklist
@@ -2269,6 +2269,40 @@ Use this template for each appended record:
   and the five-minute TERM warning. RED is committed at `075581a` and GREEN at
   `506daa8`. On acceptance, mark WP12 complete and separately plan WP13; do not
   start that implementation under result-return authority.
+
+#### 2026-10-08 - Condition-resolved v3 local acceptance gate
+
+- State: the six-condition implementation, revision-7 contract, portable
+  example, maintainer map, scientist workflow, and real synthetic integration
+  gate are complete locally.
+- Authorization: the user approved the exact six conditions, the same target
+  set in every condition, explicit unavailable cells, and a conservative first
+  Slurm validation request of one CPU, `8G`, and 72 hours.
+- Sol / Terra / reviewer: primary Codex implementation and review; no separate
+  worker was used for this final documentation/integration slice.
+- Start HEAD / end HEAD: production existed through `d7c6b1c`; final RED is
+  `8138aeb`; documentation GREEN is `e00653b`.
+- Owned files: the condition implementation and focused tests recorded in the
+  cited commits, `docs/task_variable_spec_v7.md`, the portable example, both
+  neural-analysis READMEs, this plan, and the synthetic integration fixture.
+- RED command and result: the documentation plus condition-integration command
+  produced four expected documentation/example failures while the real
+  six-condition synthetic pipeline passed.
+- GREEN/regression commands and results: the focused gate passed 12 tests; the
+  full task-decoding, documentation, and affected webapp suite passed 945 tests
+  with 27 known non-failing warnings in 111.76 seconds. `git diff --check`
+  passed.
+- Commits: `8138aeb` (final tests) and `e00653b` (revision-7 documentation and
+  example), on top of production through `d7c6b1c`.
+- Real-data or external actions: none. No CT026 configuration was changed, no
+  cluster checkout was updated, and no Slurm job was submitted.
+- Findings and unresolved risks: the real schema-2 run produced every declared
+  condition-target checkpoint and required condition-qualified figure. Actual
+  CT026 runtime and peak RSS remain unmeasured for the six-condition workload;
+  therefore the first job must retain the `condition_validation` profile.
+- Exact next action: push these commits, update the tracked-clean cluster
+  checkout, prepare the exact CT026 six-condition config beside the session,
+  and compare local/cluster dry runs before presenting the submission command.
 
 ## 1. Objective
 
