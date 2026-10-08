@@ -711,7 +711,7 @@ Use this template:
   plan. This authorizes the wrapper, cluster-only config copy, push, dry-run, and one `sbatch`
   submission. It does not authorize WP10.
 - Sol / Terra / reviewer: primary implementation agent and self-review; no worker.
-- Start HEAD / end HEAD: `40b2ab3` / pending.
+- Start HEAD / end HEAD: `40b2ab3` / `b05d22e` before this handoff update.
 - Approved scientific scope: session `CT026_2026-08-03_111938`; ProbeA/PFC and ProbeB/HPC; 160 PFC
   and 309 HPC units; all six configured conditions; before, after, and whole windows; units plus ten
   fold-local PCs per region; `ols_cv` plus `poisson_cv`; and the session's existing `analysis_runs`
@@ -735,6 +735,11 @@ Use this template:
   tracked-dirty submission checkout; exact argument forwarding including spaces; frozen offline
   `uv`; eight-thread environment; stdout/stderr and exit propagation; and direct TERM propagation
   through `exec`.
+- RED/GREEN evidence and commits: the 13 launcher cases all failed because the approved wrapper was
+  absent, then passed after implementation. The tests-only commit is `7a2ab03`; the wrapper commit
+  is `b05d22e`. The broader affected suite passed 305 tests covering inter-regional analysis,
+  spike-behavior/Pynapple, population PCA, session metadata, webapp packaging, and both shell
+  wrappers, with six existing Pynapple warnings. Ruff and `git diff --check` passed.
 - Failure policy: a failed or preempted job leaves its ordinary incomplete attempt for diagnosis;
   a retry is a fresh immutable `new` run. This is intentionally simpler than resumable execution.
 - Exact next action and authorization: commit this record, add and commit the launcher tests in RED,
