@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 10:19 EDT.
+**Snapshot date:** 2026-10-08 10:27 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -18,8 +18,8 @@ standard saved-result PNGs, and a metadata-driven read-only webapp view. Its see
 integration, bounded performance gate, corrected CT026 inspection, and user acceptance are recorded
 below. WP9 unit-count Poisson CV, matched OLS/Poisson MSE, saved figures/reporting, and read-only
 webapp presentation are code-complete and GREEN on seeded synthetic data. The designated CT026
-Poisson run is now authorized as a one-shot offline Slurm job after a measured local attempt proved
-too slow for interactive execution. Inspection of its completed output remains required before WP9
+Poisson run is active as a one-shot Slurm job `30989197` after a measured local attempt proved too
+slow for interactive execution. Inspection of its completed output remains required before WP9
 scientific acceptance or WP10 authorization.
 
 **Repository state at this snapshot:**
@@ -55,9 +55,9 @@ scientific acceptance or WP10 authorization.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** write and commit RED tests for a thin, one-shot inter-regional Slurm wrapper,
-then implement that wrapper, push it, validate the cluster-path CT026 configuration, and submit the
-approved run. Do not begin WP10 before the completed run is inspected and accepted.
+**Next exact action:** inspect Slurm job `30989197` after completion using `sacct`, its scheduler log,
+and the standard finalized-result loader. Do not begin WP10 before the completed run is inspected
+and accepted.
 
 ### Authority order
 
@@ -90,7 +90,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Code GREEN; authorized CT026 Slurm inspection pending | Submit, complete, and scientifically review the designated-session run |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Code GREEN; CT026 Slurm job `30989197` running | Complete and scientifically review the designated-session run |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -740,11 +740,21 @@ Use this template:
   is `b05d22e`. The broader affected suite passed 305 tests covering inter-regional analysis,
   spike-behavior/Pynapple, population PCA, session metadata, webapp packaging, and both shell
   wrappers, with six existing Pynapple warnings. Ruff and `git diff --check` passed.
+- Cluster execution receipt: pushed `49f63fd` to `origin/refactor`, fast-forwarded the tracked-clean
+  cluster checkout to exact commit `49f63fde644e36b15484aab8fc9727235bfde01e`, and copied the
+  separately named cluster config without overwriting another file. A semantic comparison proved
+  that only the metadata and output-root prefixes differ from the approved local config. The
+  cluster dry-run returned planned session `CT026_2026-08-03_111938` and 274,440,585 input bytes.
+  `sbatch --parsable` returned job `30989197`; `squeue` showed it running on `cpu-743` with eight
+  CPUs. The startup log at
+  `/gs/gsfs0/users/mchin1/logs/interregional_regression_30989197.log` records the exact commit,
+  tracked-clean status, OMP/MKL/OpenBLAS limits of eight, `uv 0.12.17`, and the intended exact
+  `new --config` arguments.
 - Failure policy: a failed or preempted job leaves its ordinary incomplete attempt for diagnosis;
   a retry is a fresh immutable `new` run. This is intentionally simpler than resumable execution.
-- Exact next action and authorization: commit this record, add and commit the launcher tests in RED,
-  implement the wrapper in GREEN, run the affected tests, push, validate the cluster-path config,
-  and submit the single CT026 job.
+- Exact next action and authorization: after job `30989197` leaves the queue, inspect `sacct`, the
+  scheduler log, and the finalized immutable result with the standard loader. If the job fails or
+  is preempted, diagnose the ordinary incomplete attempt before requesting a fresh submission.
 
 ## Plan objective and status
 
