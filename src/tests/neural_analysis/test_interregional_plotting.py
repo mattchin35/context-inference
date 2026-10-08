@@ -216,3 +216,113 @@ def test_increment_plot_centers_a_single_target_in_its_direction_cell() -> None:
     assert point_positions["HPC_to_PFC:unit1"] == -0.35
     assert point_positions["PFC_to_HPC:unit1"] == 0.35
     plt.close(figure)
+
+
+def _poisson_summary_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Translate the summary fixture to dimensionless Poisson CV metrics."""
+    targets, populations = _summary_tables()
+    target_metric_names = targets["metric_name"].replace(
+        {
+            "delta_r2": "delta_deviance_explained",
+            "r2_restricted": "deviance_explained_restricted",
+            "r2_full": "deviance_explained_full",
+        }
+    )
+    population_metric_names = populations["metric_name"].replace(
+        {"delta_r2": "delta_deviance_explained"}
+    )
+    targets = targets.assign(
+        model_family="poisson", metric_name=target_metric_names
+    )
+    populations = populations.assign(
+        model_family="poisson", metric_name=population_metric_names
+    )
+    return (
+        records.result_table_from_rows("target_summaries", targets.to_dict("records")),
+        records.result_table_from_rows(
+            "population_summaries", populations.to_dict("records")
+        ),
+    )
+
+
+def _paired_mse_rows() -> pd.DataFrame:
+    """Return matched saved fold rows for an exploratory MSE display."""
+    rows = []
+    for direction in ("HPC_to_PFC", "PFC_to_HPC"):
+        for model_family in ("ols", "poisson"):
+            for fold_id in range(5):
+                rows.append(
+                    {
+                        "session_id": "session",
+                        "direction": direction,
+                        "representation": "units",
+                        "model_family": model_family,
+                        "condition": "all",
+                        "window": "before",
+                        "target_id": f"{direction}:unit1",
+                        "fold_id": fold_id,
+                        "evaluation_scope": "held_out_cv",
+                        "restricted_status": "ok",
+                        "full_status": "ok",
+                        "train_row_set_sha256": "a" * 64,
+                        "test_row_set_sha256": "b" * 64,
+                        "mse_restricted": (
+                            float(4 + fold_id)
+                            if model_family == "ols"
+                            else float(3 + fold_id)
+                        ),
+                        "mse_full": (
+                            float(3 + fold_id)
+                            if model_family == "ols"
+                            else float(1 + fold_id)
+                        ),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def test_poisson_increment_plot_uses_deviance_language_without_r_squared() -> None:
+    """The Poisson primary figure cannot be mislabeled as OLS R-squared."""
+    targets, populations = _poisson_summary_tables()
+
+    figure, axis = plotting.plot_cv_increment_summary(
+        targets,
+        populations,
+        representation="units",
+        model_family="poisson",
+        window="before",
+        coverage_assumption_version="implicit-complete-v1",
+    )
+
+    visible = " ".join(
+        [axis.get_ylabel(), axis.get_title()]
+        + [text.get_text() for text in figure.texts]
+    )
+    assert axis.get_ylabel() == "Incremental CV deviance explained"
+    assert "R-squared" not in visible
+    plt.close(figure)
+
+
+def test_mse_comparison_is_a_separate_exploratory_count_error_figure() -> None:
+    """OLS/Poisson prediction comparison has its own count-MSE axis and caveat."""
+    figure, axis = plotting.plot_ols_poisson_mse_comparison(
+        _paired_mse_rows(),
+        condition="all",
+        window="before",
+        coverage_assumption_version="implicit-complete-v1",
+    )
+
+    visible = " ".join(
+        [axis.get_ylabel(), axis.get_title()]
+        + [text.get_text() for text in figure.texts]
+    )
+    assert axis.get_ylabel() == "OLS MSE - Poisson MSE (squared counts per bin)"
+    assert {tick.get_text() for tick in axis.get_xticklabels()} == {
+        "Restricted",
+        "Full",
+    }
+    assert "exploratory" in visible.lower()
+    assert "model superiority" in visible.lower()
+    assert "R-squared" not in visible
+    assert len([line for line in axis.lines if line.get_gid()]) == 4
+    plt.close(figure)
