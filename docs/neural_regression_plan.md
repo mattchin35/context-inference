@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 09:44 EDT.
+**Snapshot date:** 2026-10-08 09:57 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -16,13 +16,14 @@ training-only fold-local regional PCA, bidirectional PC OLS, explicit unavailabl
 complete-fold summaries, immutable run persistence, single-session/batch command boundaries,
 standard saved-result PNGs, and a metadata-driven read-only webapp view. Its seeded full synthetic
 integration, bounded performance gate, corrected CT026 inspection, and user acceptance are recorded
-below. The user authorized WP9 unit-count Poisson CV and matched OLS/Poisson MSE implementation;
-core tests are next.
+below. WP9 unit-count Poisson CV, matched OLS/Poisson MSE, saved figures/reporting, and read-only
+webapp presentation are code-complete and GREEN on seeded synthetic data. A separately approved
+one-session Poisson inspection remains before WP9 scientific acceptance or WP10 authorization.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `04ab655`;
+- HEAD before this handoff record: `f826d52`;
 - plan-owned files: `docs/neural_regression_plan.md` and
   `docs/spec_neural_regression_v3.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
@@ -52,8 +53,8 @@ core tests are next.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit the WP9 activation record, then write and commit the core Poisson and
-matched-MSE tests in RED before implementing `poisson.py`.
+**Next exact action:** obtain explicit approval for the exact designated-session Poisson
+configuration, command, and output root; do not run experimental data or begin WP10 beforehand.
 
 ### Authority order
 
@@ -86,7 +87,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Active; core tests next | Tests-only RED commit before implementation |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Code GREEN on seeded synthetic data; inspection pending | User-approved designated-session Poisson run and scientific review |
 | WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
@@ -653,11 +654,54 @@ Use this template:
 - Exact next action and authorization: write and commit `test_interregional_poisson.py` in RED,
   then implement only the core target-wise fitting, scoring, and derived matched-MSE layer.
 
+#### 2026-10-08 09:57 EDT - WP9 code GREEN and synthetic integration complete
+
+- State: all WP9 source, tests, persistence integration, plotting, reporting, and saved-only webapp
+  work is GREEN. The required designated-session Poisson inspection is not yet authorized, so WP9
+  scientific acceptance and WP10 remain pending.
+- Authorization: the user requested a push and continued implementation after accepting WP8. This
+  authorized WP9 code and seeded synthetic testing, but the activation record explicitly excluded
+  another experimental-data run.
+- Sol / Terra / reviewer: primary implementation agent and self-review; no worker.
+- Start HEAD / end HEAD: `7a7db4b` / `f826d52` before this handoff record.
+- Architecture: added target-wise unpenalized statsmodels Poisson GLMs with explicit log link and
+  IRLS settings, direct deviance/null-deviance scoring, exact derived OLS/Poisson MSE pairing,
+  shared OLS/Poisson fold-history construction, typed pipeline/session integration, separate
+  deviance and exploratory count-MSE figures, Markdown reporting, and read-only webapp display.
+  PCs remain OLS-only and raw deviance remains fold-only.
+- RED evidence: the core suite first failed import because `poisson.py` did not exist; five pipeline
+  cases then failed because the Poisson CV entry point did not exist; the production-path synthetic
+  test failed the expected fold-key-grid validation while the runner still saved OLS only; plotting
+  tests failed the hard-coded `delta_r2` path and absent MSE figure; the saved-view test failed the
+  absent MSE display import; and the report test failed because the summary still omitted Poisson.
+- GREEN evidence: all 113 inter-regional tests passed. The broader affected suite passed 275 tests
+  covering inter-regional analysis, spike-behavior/Pynapple, population package/PCA, session
+  metadata, and webapp packaging, with six existing Pynapple warnings. Ruff passed on every edited
+  source/test group and `git diff --check` passed.
+- Commits: activation `7a7db4b`; core tests `a4377fe`; core implementation `aa5f4ba`; pipeline tests
+  `752acf0`; pipeline implementation `24248cb`; session test `a25d4e1`; session integration
+  `cf9d8e8`; plotting tests `a42a317`; plotting implementation `9dbbad3`; webapp test `bf6c2af`;
+  webapp implementation `fa650d2`; report test `0ad1714`; report implementation `187bc45`; and
+  strengthened raw-prediction checks `f826d52`.
+- Synthetic performance evidence: the production-path WP9 pytest completed in 2.85 seconds wall
+  time with 411,792 KiB maximum resident set for the complete Python/pytest/numerical/plotting
+  process. This is bounded fixture evidence, not an isolated estimator benchmark or a real-session
+  capacity claim.
+- Real-data, filesystem, or external actions: no experimental data or batch was opened or run. The
+  integration test used seed 91 and pytest temporary directories. Unrelated pre-existing untracked
+  files and the user-confirmed task-decoding commits were left untouched.
+- Findings and unresolved risks: the seeded public runner produced complete matched unit OLS and
+  Poisson folds with identical train/test fingerprints, converged fits, immutable reload, Poisson
+  figures, and a correctly caveated exploratory MSE report. No new implementation issue was found.
+  Real-session convergence and runtime remain intentionally unmeasured until separately approved.
+- Exact next action and authorization: ask the user to approve the exact CT026 Poisson config,
+  command, and output root. Do not begin WP10 until that run is inspected and accepted.
+
 ## Plan objective and status
 
 This plan implements `docs/spec_neural_regression_v3.md`. It was approved and is now the
 authoritative phased implementation and handoff log. Package-specific authorization and data-run
-gates remain binding even though WP1-WP8 implementation is complete.
+gates remain binding even though WP1-WP8 and WP9 code implementation are complete.
 
 The implementation order is deliberately fixed:
 
