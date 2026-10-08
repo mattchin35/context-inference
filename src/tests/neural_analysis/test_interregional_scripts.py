@@ -432,6 +432,13 @@ def test_wp9_poisson_synthetic_run_round_trips_with_matched_ols_rows(
     run_log = (report.run_path / "run.log").read_text(encoding="utf-8")
     assert "stage=poisson_cv event=start" in run_log
     assert "stage=poisson_cv event=end" in run_log
+    summary = (report.run_path / "summary.md").read_text(encoding="utf-8")
+    assert "Incremental CV deviance explained" in summary
+    assert "Exploratory OLS/Poisson count-MSE comparison" in summary
+    assert "not a formal test of model superiority" in summary
+    figure_names = {path.name for path in (report.run_path / "figures").glob("*.png")}
+    assert "cv_increment_units_poisson_before.png" in figure_names
+    assert "cv_mse_ols_poisson_all_before.png" in figure_names
 
 
 def test_wp7_full_standard_synthetic_run_round_trips_and_records_evidence(
