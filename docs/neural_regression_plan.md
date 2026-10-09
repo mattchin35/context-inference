@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-09 10:51 EDT.
+**Snapshot date:** 2026-10-09 11:00 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -71,10 +71,10 @@ saved-only webapp display are present. No experimental Granger data were loaded 
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit and push the WP11 documentation checkpoint. The code-only portion is
-complete; stop at the real-session/production gate. Leave Slurm job `30991341` unattended. Do not
-run experimental data, submit another job, change production worker policy, or treat WP9 as
-scientifically accepted.
+**Next exact action:** commit the 11:00 EDT authorization record below before any test edit. Then
+correct the neural quickstart discovery contract, verify and push it, and execute the two approved
+bounded Granger submissions from an isolated exact-commit cluster worktree. Leave Slurm job
+`30991341` and its checkout untouched.
 
 ### Authority order
 
@@ -109,7 +109,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 benchmark running with early memory plateau | Let job `30991341` finish unattended, then inspect its complete output |
 | WP10 | Linear and Poisson descriptive Granger analyses | Code-complete, synthetic-GREEN, and pushed through `9b87574` | Experimental data remains gated |
-| WP11 | Final synthetic integration, documentation, and one-session full inspection | Code-only portion complete and synthetic-GREEN; real-session portion not authorized | Commit/push docs; real command separately approved |
+| WP11 | Final synthetic integration, documentation, and one-session full inspection | Code-only portion complete; bounded CT026 Granger validation now authorized | Documentation-first checkpoint, neural-suite repair, then two one-shot bounded jobs |
 
 ### Resume checklist
 
@@ -1208,6 +1208,53 @@ Use this template:
 - Exact next action: commit and push this documentation checkpoint, then stop. Later, inspect the
   completed Poisson benchmark when requested and obtain separate approval for any experimental
   all-stage session command and output path.
+
+#### 2026-10-09 11:00 EDT - neural-suite repair and bounded Granger runs authorized
+
+- Documentation-first requirement: the user approved the complete plan but explicitly required
+  this handoff edit and its standalone commit before any test or code edit.
+- Confirmed test defect: `test_neural_analysis_quickstart.py` discovers every JSON file directly
+  under `docs/examples/neural_analysis` and therefore misclassifies the tracked other-task
+  `task_decoding_config.json` as session metadata. Correct discovery to `*_session.json`, retaining
+  all three required metadata examples and excluding unrelated analysis configurations. This is a
+  genuine test-contract correction; no production source or dependency change is planned.
+- Verification order: run the focused quickstart module, package import smoke test, complete
+  `src/tests/neural_analysis` suite, and Ruff. Commit and push the bounded correction before any
+  cluster mutation. Unexpected unrelated failures are recorded and not repaired automatically.
+- Checkout isolation: do not fast-forward or otherwise change the checkout that may still serve
+  Slurm job `30991341`. Fetch the pushed commit without changing that worktree, create a separate
+  detached exact-commit worktree at
+  `/gs/gsfs0/home/mchin1/context-inference-granger-validation`, and use the existing populated
+  environment read-only through that worktree. If frozen offline execution cannot be established,
+  stop rather than modify the live checkout or download dependencies.
+- Linear Granger benchmark: session `CT026_2026-08-03_111938`, ProbeA/PFC, ProbeB/HPC, condition
+  `all`, window `whole`, existing 100-ms/lag-1/order-1 and PCA settings, representations `units`
+  plus `pcs`, and analysis `linear_granger` only. Write the separate external config
+  `interregional_granger_linear_benchmark_config.json`; use output root
+  `analysis_runs/interregional_granger_linear_benchmarks`.
+- Poisson Granger benchmark: the same session/populations/condition/window/temporal settings,
+  representation `units`, and analysis `poisson_granger` only. Write the separate external config
+  `interregional_granger_poisson_benchmark_config.json`; use output root
+  `analysis_runs/interregional_granger_poisson_benchmarks`.
+- Configuration integrity: derive both configs from the existing bounded CT026 configuration and
+  programmatically prove that only `analyses`, the linear run's `representations`, and each
+  `run.output_root` differ. Run the production loader's `dry-run` for each from the isolated
+  worktree before submission.
+- Submission authorization: after successful dry-runs, submit exactly one linear job named
+  `interregional_granger_linear` and exactly one Poisson job named
+  `interregional_granger_poisson` through the existing eight-CPU, 32-GiB, 72-hour wrapper. Submit
+  linear first, verify its one-time startup receipt, then submit Poisson and verify its one-time
+  startup receipt. Slurm, not within-session parallelism, controls coexistence.
+- Monitoring/failure boundary: record job IDs, logs, commit, arguments, initial stage/resource
+  evidence, and hidden incomplete output paths, then leave both jobs unattended. Do not retry a
+  rejected or failed job automatically. A wrong commit/config/output root requires cancellation of
+  that new job. Do not poll, alter, or draw conclusions from job `30991341` in this package.
+- Interpretation boundary: these are bounded one-condition/one-window production validations, not
+  full six-condition validation, batch evidence, significance tests, causal evidence, or scientific
+  acceptance. Do not change Poisson fitting, memory cleanup, resource requests, worker policy, or
+  schemas based only on submission/startup.
+- Exact next action: commit this documentation-only authorization record. Then make the single
+  quickstart test correction and follow the verified/pushed/isolated-submission sequence above.
 
 ## Plan objective and status
 
