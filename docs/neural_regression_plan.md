@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-09 09:22 EDT.
+**Snapshot date:** 2026-10-09 10:43 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -71,10 +71,9 @@ saved-only webapp display are present. No experimental Granger data were loaded 
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit and push the locally GREEN WP10 source/documentation package, then
-stop at the WP11 and experimental-run gates. Leave Slurm job `30991341` unattended until the user
-requests its completed-output inspection. Do not run Granger on experimental data, submit another
-job, or treat WP9 as scientifically accepted.
+**Next exact action:** execute the approved code-only WP11 synthetic qualification described in the
+10:43 EDT record below. Leave Slurm job `30991341` unattended. Do not run experimental data,
+submit another job, change production worker policy, or treat WP9 as scientifically accepted.
 
 ### Authority order
 
@@ -108,8 +107,8 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 benchmark running with early memory plateau | Let job `30991341` finish unattended, then inspect its complete output |
-| WP10 | Linear and Poisson descriptive Granger analyses | Code-complete and GREEN on seeded synthetic data | Commit/push; experimental data remains gated |
-| WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
+| WP10 | Linear and Poisson descriptive Granger analyses | Code-complete, synthetic-GREEN, and pushed through `9b87574` | Experimental data remains gated |
+| WP11 | Final synthetic integration, documentation, and one-session full inspection | Code-only synthetic qualification authorized; real-session portion not authorized | RED tests, bounded implementation, full local suites; real command separately approved |
 
 ### Resume checklist
 
@@ -1152,6 +1151,33 @@ Use this template:
 - Exact next action: commit the bounded WP10 production/documentation diff without unrelated files
   and push. Then stop pending a user
   request to inspect the completed WP9 benchmark or separately authorize WP11 experimental work.
+
+#### 2026-10-09 10:43 EDT - WP11 code-only synthetic qualification activated
+
+- State and authorization: WP10 was pushed through `9b87574`. The user approved finishing as much
+  remaining coding as possible while the Poisson benchmark runs, with explicit acknowledgment that
+  the work is not production-verified. The user also warned that Codex usage may halt abruptly, so
+  this record and subsequent checkpoints must remain restartable.
+- Architecture: add a complete Granger primary-key-grid contract in `records.py`, enforce it at the
+  session result-assembly boundary, extend the existing synthetic session fixture to run all four
+  stages together, and correct the top-level neural-analysis documentation. Do not add another
+  inspection CLI because validated loading, logs, summaries, figures, and the saved-only webapp
+  already provide that boundary.
+- Dependencies: add none. Continue using the installed NumPy, SciPy, Statsmodels, Pynapple, pandas,
+  Matplotlib, and pytest stack.
+- Tests to write before implementation: expected Granger keys over directions, conditions,
+  windows, representations, model families, and targets; rejection of missing, duplicate, and
+  extra keys; and one immutable combined synthetic run covering OLS CV, Poisson CV, linear
+  Granger, Poisson Granger, both PCA scopes, stage logs, saved figures/report, reload, and viewer
+  compatibility.
+- Performance boundary: keep the seeded fixture small. Do not change Poisson estimation, garbage
+  collection, memory policy, worker counts, batch concurrency, or within-session parallelism
+  without completed production evidence.
+- Scope boundary: no experimental data, cluster submission or polling, production claim, or batch
+  run is authorized. The real-session portion of WP11 remains separately gated.
+- Exact next action: commit this activation record, commit failing tests before production edits,
+  demonstrate RED, then implement the smallest bounded changes and run the full neural-analysis
+  and import suites plus Ruff.
 
 ## Plan objective and status
 
