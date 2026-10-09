@@ -326,3 +326,104 @@ def test_mse_comparison_is_a_separate_exploratory_count_error_figure() -> None:
     assert "R-squared" not in visible
     assert len([line for line in axis.lines if line.get_gid()]) == 4
     plt.close(figure)
+
+
+def test_granger_plot_is_separate_descriptive_and_contains_no_inference() -> None:
+    """Saved Granger values use their own in-sample axis and causal caveat."""
+    score_rows = []
+    population_rows = []
+    for direction, offset in (("HPC_to_PFC", 0.0), ("PFC_to_HPC", 0.1)):
+        values = (0.2 + offset, 0.4 + offset)
+        for index, value in enumerate(values, start=1):
+            score_rows.append(
+                {
+                    "session_id": "session",
+                    "direction": direction,
+                    "representation": "units",
+                    "model_family": "ols",
+                    "condition": "all",
+                    "window": "whole",
+                    "target_id": f"{direction}:unit{index}",
+                    "evaluation_scope": "in_sample",
+                    "target_rank": None,
+                    "restricted_status": "ok",
+                    "restricted_reason": "",
+                    "full_status": "ok",
+                    "full_reason": "",
+                    "status": "ok",
+                    "reason": "",
+                    "diagnostic": "",
+                    "n_trials": 12,
+                    "n_rows": 72,
+                    "restricted_feature_count": 2,
+                    "full_feature_count": 3,
+                    "restricted_rank": 2,
+                    "full_rank": 3,
+                    "restricted_df_resid": 70,
+                    "full_df_resid": 69,
+                    "restricted_converged": None,
+                    "full_converged": None,
+                    "restricted_iterations": None,
+                    "full_iterations": None,
+                    "sse_restricted": 10.0,
+                    "sse_full": 8.0,
+                    "linear_granger": value,
+                    "llf_restricted": None,
+                    "llf_full": None,
+                    "deviance_restricted": None,
+                    "deviance_full": None,
+                    "likelihood_ratio": None,
+                    "mean_deviance_improvement": None,
+                }
+            )
+        population_rows.append(
+            {
+                "session_id": "session",
+                "evaluation_scope": "in_sample",
+                "direction": direction,
+                "representation": "units",
+                "model_family": "ols",
+                "condition": "all",
+                "window": "whole",
+                "metric_name": "linear_granger",
+                "status": "ok",
+                "reason": "",
+                "n_targets": 2,
+                "q25": values[0] * 0.75 + values[1] * 0.25,
+                "median": sum(values) / 2.0,
+                "q75": values[0] * 0.25 + values[1] * 0.75,
+            }
+        )
+    scores = records.result_table_from_rows("granger_scores", score_rows)
+    populations = records.result_table_from_rows(
+        "population_summaries", population_rows
+    )
+
+    figure, axis = plotting.plot_granger_summary(
+        scores,
+        populations,
+        representation="units",
+        model_family="ols",
+        window="whole",
+        coverage_assumption_version="implicit-complete-v1",
+    )
+
+    visible = " ".join(
+        [axis.get_ylabel(), axis.get_title()]
+        + [text.get_text() for text in figure.texts]
+    )
+    assert axis.get_ylabel() == (
+        "Linear Granger magnitude - in-sample log residual-variance ratio"
+    )
+    assert "descriptive" in visible.lower()
+    assert "in-sample" in visible.lower()
+    assert "not significance" in visible.lower()
+    assert "not causal" in visible.lower()
+    assert "R-squared" not in visible
+    assert {line.get_gid() for line in axis.lines if line.get_gid()} == {
+        "HPC_to_PFC:unit1",
+        "HPC_to_PFC:unit2",
+        "PFC_to_HPC:unit1",
+        "PFC_to_HPC:unit2",
+    }
+    plt.close(figure)

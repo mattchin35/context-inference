@@ -146,6 +146,7 @@ def test_saved_selectors_are_derived_only_from_present_result_rows(tmp_path: Pat
     selectors = interregional_views.available_display_values(result)
 
     assert selectors == {
+        "evaluation_scopes": ("held_out_cv",),
         "conditions": ("all",),
         "windows": ("before",),
         "representations": ("units",),
@@ -283,3 +284,131 @@ def test_poisson_saved_view_uses_deviance_and_separate_exploratory_mse(
     assert ("increment", "poisson") in calls
     assert ("mse", "all") in calls
     assert "exploratory" in " ".join(st.messages).lower()
+
+
+def test_granger_saved_view_appears_only_from_present_in_sample_rows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The viewer exposes saved Granger results without compute or inference controls."""
+    session = _session(tmp_path)
+    run = _saved_run(session)
+    config, _ = interregional_views.load_interregional_config(run / "config.json")
+    result = persistence.load_interregional_result(
+        run / "result.pkl", config, trusted_run_directory=run
+    )
+    granger_row = {
+        "session_id": "session-a",
+        "direction": "HPC_to_PFC",
+        "representation": "units",
+        "model_family": "ols",
+        "condition": "all",
+        "window": "before",
+        "target_id": "pfc:1",
+        "evaluation_scope": "in_sample",
+        "target_rank": None,
+        "restricted_status": "ok",
+        "restricted_reason": "",
+        "full_status": "ok",
+        "full_reason": "",
+        "status": "ok",
+        "reason": "",
+        "diagnostic": "",
+        "n_trials": 10,
+        "n_rows": 390,
+        "restricted_feature_count": 2,
+        "full_feature_count": 3,
+        "restricted_rank": 2,
+        "full_rank": 3,
+        "restricted_df_resid": 388,
+        "full_df_resid": 387,
+        "restricted_converged": None,
+        "full_converged": None,
+        "restricted_iterations": None,
+        "full_iterations": None,
+        "sse_restricted": 10.0,
+        "sse_full": 8.0,
+        "linear_granger": 0.223,
+        "llf_restricted": None,
+        "llf_full": None,
+        "deviance_restricted": None,
+        "deviance_full": None,
+        "likelihood_ratio": None,
+        "mean_deviance_improvement": None,
+    }
+    population_row = {
+        "session_id": "session-a",
+        "evaluation_scope": "in_sample",
+        "direction": "HPC_to_PFC",
+        "representation": "units",
+        "model_family": "ols",
+        "condition": "all",
+        "window": "before",
+        "metric_name": "linear_granger",
+        "status": "ok",
+        "reason": "",
+        "n_targets": 1,
+        "q25": 0.223,
+        "median": 0.223,
+        "q75": 0.223,
+    }
+    result = replace(
+        result,
+        granger_scores=records.result_table_from_rows(
+            "granger_scores", [granger_row]
+        ),
+        population_summaries=records.result_table_from_rows(
+            "population_summaries", [population_row]
+        ),
+    )
+    selectors = interregional_views.available_display_values(result)
+    assert selectors["evaluation_scopes"] == ("held_out_cv", "in_sample")
+    assert "linear_granger" in selectors["metrics"]
+
+    option = interregional_views.InterregionalRunOption(
+        run, "a" * 64, result.analysis_version, result.session_id, "saved"
+    )
+    monkeypatch.setattr(
+        interregional_views, "discover_interregional_runs", lambda value: (option,)
+    )
+    monkeypatch.setattr(
+        interregional_views,
+        "_selected_result",
+        lambda value: (
+            config,
+            result,
+            {
+                "resolved_populations": [],
+                "git_head": "1",
+                "runtime_versions": {},
+                "entrypoint": "x",
+            },
+        ),
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        interregional_views,
+        "plot_granger_summary",
+        lambda *args, **kwargs: (calls.append(kwargs["model_family"]) or object(), object()),
+    )
+
+    class GrangerStreamlit(_FakeStreamlit):
+        """Select the in-sample Granger rows from saved-only options."""
+
+        def selectbox(self, label, options, **kwargs):
+            self.messages.append(str(label))
+            selections = {
+                "Evaluation scope": "in_sample",
+                "Metric": "linear_granger",
+            }
+            return selections.get(label, options[0])
+
+    st = GrangerStreamlit()
+    interregional_views.render_interregional_view(st, session)
+
+    visible = " ".join(st.messages).lower()
+    assert calls == ["ols"]
+    assert "descriptive" in visible
+    assert "significance" in visible
+    assert "causal" in visible
+    source = inspect.getsource(interregional_views)
+    assert "run_descriptive_granger" not in source

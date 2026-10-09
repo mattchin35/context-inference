@@ -271,7 +271,11 @@ def test_cli_parsers_expose_only_documented_commands() -> None:
 
 
 def _write_synthetic_session(
-    tmp_path: Path, *, full_standard: bool = False, poisson: bool = False
+    tmp_path: Path,
+    *,
+    full_standard: bool = False,
+    poisson: bool = False,
+    granger: bool = False,
 ) -> Path:
     """Write one seeded metadata-v2 session and return its analysis config path."""
     session_root = tmp_path / "synthetic_session"
@@ -289,6 +293,8 @@ def _write_synthetic_session(
             "cur_block": np.repeat(np.arange(5), 5),
         }
     )
+    if granger:
+        trial_table = trial_table.drop(columns="cur_block")
     trial_table.to_csv(session_root / "trials.csv", index=False)
     rng = np.random.default_rng(91)
     probes: dict[str, object] = {}
@@ -352,6 +358,12 @@ def _write_synthetic_session(
     config = _config(metadata_path.resolve(), output_root.resolve())
     if poisson:
         config = replace(config, analyses=("ols_cv", "poisson_cv"))
+    if granger:
+        config = replace(
+            config,
+            analyses=("linear_granger", "poisson_granger"),
+            representations=("units",),
+        )
     if full_standard:
         config = replace(
             config,
@@ -477,6 +489,46 @@ def test_wp9_poisson_synthetic_run_round_trips_with_matched_ols_rows(
     figure_names = {path.name for path in (report.run_path / "figures").glob("*.png")}
     assert "cv_increment_units_poisson_before.png" in figure_names
     assert "cv_mse_ols_poisson_all_before.png" in figure_names
+
+
+def test_wp10_granger_only_synthetic_run_needs_no_blocks_or_cv(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The public runner persists independent in-sample Granger stages and figures."""
+    config_path = _write_synthetic_session(tmp_path, granger=True)
+    monkeypatch.setattr(run_session, "_git_identity", lambda root: ("1" * 40, ()))
+
+    report = run_session.run_single_session(config_path, command="new")
+
+    assert report.status == "completed", report.error
+    assert report.run_path is not None
+    config, _ = load_interregional_config(config_path)
+    loaded = persistence.load_interregional_result(
+        report.run_path / "result.pkl",
+        config,
+        trusted_run_directory=report.run_path,
+    )
+    assert loaded.fold_assignments.empty
+    assert loaded.fold_scores.empty
+    assert loaded.target_summaries.empty
+    assert not loaded.granger_scores.empty
+    assert set(loaded.granger_scores["model_family"]) == {"ols", "poisson"}
+    assert loaded.granger_scores["evaluation_scope"].eq("in_sample").all()
+    assert loaded.granger_scores["n_trials"].eq(25).all()
+    assert loaded.population_summaries["evaluation_scope"].eq("in_sample").all()
+    run_log = (report.run_path / "run.log").read_text(encoding="utf-8")
+    assert "stage=linear_granger event=start" in run_log
+    assert "stage=linear_granger event=end" in run_log
+    assert "stage=poisson_granger event=start" in run_log
+    assert "stage=poisson_granger event=end" in run_log
+    assert "stage=ols_cv" not in run_log
+    assert "stage=poisson_cv" not in run_log
+    summary = (report.run_path / "summary.md").read_text(encoding="utf-8")
+    assert "descriptive in-sample" in summary.lower()
+    assert "not significance tests" in summary.lower()
+    figure_names = {path.name for path in (report.run_path / "figures").glob("*.png")}
+    assert "granger_units_ols_before.png" in figure_names
+    assert "granger_units_poisson_before.png" in figure_names
 
 
 def test_wp7_full_standard_synthetic_run_round_trips_and_records_evidence(
