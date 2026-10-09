@@ -354,7 +354,33 @@ def test_granger_saved_view_appears_only_from_present_in_sample_rows(
     result = replace(
         result,
         granger_scores=records.result_table_from_rows(
-            "granger_scores", [granger_row]
+            "granger_scores",
+            [
+                granger_row,
+                {
+                    **granger_row,
+                    "representation": "pcs",
+                    "target_id": "PFC:PC01",
+                    "target_rank": 1,
+                },
+                {
+                    **granger_row,
+                    "model_family": "poisson",
+                    "sse_restricted": None,
+                    "sse_full": None,
+                    "linear_granger": None,
+                    "restricted_converged": True,
+                    "full_converged": True,
+                    "restricted_iterations": 4,
+                    "full_iterations": 5,
+                    "llf_restricted": -12.0,
+                    "llf_full": -10.0,
+                    "deviance_restricted": 8.0,
+                    "deviance_full": 4.0,
+                    "likelihood_ratio": 4.0,
+                    "mean_deviance_improvement": 4.0 / 390.0,
+                },
+            ],
         ),
         population_summaries=records.result_table_from_rows(
             "population_summaries", [population_row]
@@ -394,10 +420,17 @@ def test_granger_saved_view_appears_only_from_present_in_sample_rows(
     class GrangerStreamlit(_FakeStreamlit):
         """Select the in-sample Granger rows from saved-only options."""
 
+        def __init__(self) -> None:
+            super().__init__()
+            self.model_family_options: tuple[str, ...] = ()
+
         def selectbox(self, label, options, **kwargs):
             self.messages.append(str(label))
+            if label == "Model family":
+                self.model_family_options = tuple(options)
             selections = {
                 "Evaluation scope": "in_sample",
+                "Representation": "pcs",
                 "Metric": "linear_granger",
             }
             return selections.get(label, options[0])
@@ -410,5 +443,6 @@ def test_granger_saved_view_appears_only_from_present_in_sample_rows(
     assert "descriptive" in visible
     assert "significance" in visible
     assert "causal" in visible
+    assert st.model_family_options == ("ols",)
     source = inspect.getsource(interregional_views)
     assert "run_descriptive_granger" not in source

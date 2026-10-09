@@ -338,3 +338,29 @@ def test_lag_restricted_pipeline_preserves_requested_history_gap(monkeypatch) ->
     first_full = captured_full_designs[0]
     assert first_full.shape[0] == 60
     assert first_full.shape[1] == 5
+
+
+def test_granger_progress_records_exact_cell_array_sizes() -> None:
+    """Each descriptive cell exposes enough array detail for memory diagnosis."""
+    prepared = _prepared(analyses=("linear_granger", "poisson_granger"))
+    events: list[dict[str, object]] = []
+
+    pipeline.run_descriptive_granger(prepared, progress_callback=events.append)
+
+    starts = [event for event in events if event["event"] == "analysis_cell_start"]
+    assert len(starts) == 4
+    assert {(event["model_family"], event["direction"]) for event in starts} == {
+        ("ols", "HPC_to_PFC"),
+        ("ols", "PFC_to_HPC"),
+        ("poisson", "HPC_to_PFC"),
+        ("poisson", "PFC_to_HPC"),
+    }
+    for event in starts:
+        assert event["n_trials"] == 12
+        assert event["n_rows"] == 72
+        assert event["response_shape"] == [72, 2]
+        assert event["response_bytes"] > 0
+        assert event["restricted_design_shape"] == [72, 3]
+        assert event["restricted_design_bytes"] > 0
+        assert event["full_design_shape"] == [72, 5]
+        assert event["full_design_bytes"] > 0

@@ -526,6 +526,8 @@ def test_wp10_granger_only_synthetic_run_needs_no_blocks_or_cv(
     summary = (report.run_path / "summary.md").read_text(encoding="utf-8")
     assert "descriptive in-sample" in summary.lower()
     assert "not significance tests" in summary.lower()
+    assert "Primary held-out results" not in summary
+    assert "Goal: quantify descriptive in-sample" in summary
     figure_names = {path.name for path in (report.run_path / "figures").glob("*.png")}
     assert "granger_units_ols_before.png" in figure_names
     assert "granger_units_poisson_before.png" in figure_names
