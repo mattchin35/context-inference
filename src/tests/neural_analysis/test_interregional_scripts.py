@@ -26,6 +26,7 @@ from src.neural_analysis.interregional.configuration import (
 )
 from src.neural_analysis.interregional import persistence, records
 from src.neural_analysis.interregional import run_batch, run_session
+from src.neural_analysis.webapp import interregional_views
 
 
 def _config(metadata_path: Path, output_root: Path) -> InterregionalAnalysisConfig:
@@ -276,6 +277,7 @@ def _write_synthetic_session(
     full_standard: bool = False,
     poisson: bool = False,
     granger: bool = False,
+    combined: bool = False,
 ) -> Path:
     """Write one seeded metadata-v2 session and return its analysis config path."""
     session_root = tmp_path / "synthetic_session"
@@ -293,7 +295,7 @@ def _write_synthetic_session(
             "cur_block": np.repeat(np.arange(5), 5),
         }
     )
-    if granger:
+    if granger and not combined:
         trial_table = trial_table.drop(columns="cur_block")
     trial_table.to_csv(session_root / "trials.csv", index=False)
     rng = np.random.default_rng(91)
@@ -370,6 +372,17 @@ def _write_synthetic_session(
             prediction_windows=("before", "after", "whole"),
             pca=PCAConfig(pfc_components=3, hpc_components=3),
             filters=FilterConfig(conditions=("all", "stay")),
+            representations=("units", "pcs"),
+        )
+    if combined:
+        config = replace(
+            config,
+            analyses=(
+                "ols_cv",
+                "poisson_cv",
+                "linear_granger",
+                "poisson_granger",
+            ),
             representations=("units", "pcs"),
         )
     config_path = tmp_path / "interregional_config.json"
@@ -531,6 +544,57 @@ def test_wp10_granger_only_synthetic_run_needs_no_blocks_or_cv(
     figure_names = {path.name for path in (report.run_path / "figures").glob("*.png")}
     assert "granger_units_ols_before.png" in figure_names
     assert "granger_units_poisson_before.png" in figure_names
+
+
+def test_wp11_combined_synthetic_run_persists_every_stage_and_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """One immutable run composes all four stages without mixing PCA scopes."""
+    config_path = _write_synthetic_session(tmp_path, combined=True)
+    monkeypatch.setattr(run_session, "_git_identity", lambda root: ("1" * 40, ()))
+
+    report = run_session.run_single_session(config_path, command="new")
+
+    assert report.status == "completed", report.error
+    assert report.run_path is not None
+    config, _ = load_interregional_config(config_path)
+    loaded = persistence.load_interregional_result(
+        report.run_path / "result.pkl",
+        config,
+        trusted_run_directory=report.run_path,
+    )
+    assert len(loaded.fold_scores) == 30
+    assert len(loaded.granger_scores) == 6
+    assert set(loaded.fold_scores["evaluation_scope"]) == {"held_out_cv"}
+    assert set(loaded.granger_scores["evaluation_scope"]) == {"in_sample"}
+    assert set(loaded.pca_fits["scope"]) == {"fold", "descriptive"}
+    assert len(loaded.pca_fits) == 12
+    records.validate_fold_score_key_grid(
+        loaded.fold_scores, loaded.session_id, config, loaded.resolved_populations
+    )
+    records.validate_granger_score_key_grid(
+        loaded.granger_scores, loaded.session_id, config, loaded.resolved_populations
+    )
+    selectors = interregional_views.available_display_values(loaded)
+    assert selectors["evaluation_scopes"] == ("held_out_cv", "in_sample")
+
+    run_log = (report.run_path / "run.log").read_text(encoding="utf-8")
+    ordered_stages = ("pca", "ols_cv", "poisson_cv", "linear_granger", "poisson_granger")
+    starts = [run_log.index(f"stage={stage} event=start") for stage in ordered_stages]
+    assert starts == sorted(starts)
+    summary = (report.run_path / "summary.md").read_text(encoding="utf-8").lower()
+    assert "primary held-out results" in summary
+    assert "descriptive in-sample granger" in summary
+    assert "not significance tests" in summary
+    figure_names = {path.name for path in (report.run_path / "figures").glob("*.png")}
+    assert {
+        "cv_increment_units_ols_before.png",
+        "cv_increment_units_poisson_before.png",
+        "cv_increment_pcs_ols_before.png",
+        "granger_units_ols_before.png",
+        "granger_units_poisson_before.png",
+        "granger_pcs_ols_before.png",
+    } <= figure_names
 
 
 def test_wp7_full_standard_synthetic_run_round_trips_and_records_evidence(

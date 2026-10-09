@@ -283,6 +283,40 @@ def test_expected_cv_key_grid_includes_units_and_ols_pcs_but_not_poisson_pcs() -
         )
 
 
+def test_expected_granger_key_grid_is_complete_and_rejects_key_drift() -> None:
+    """Every applicable in-sample target has exactly one frozen result key."""
+    config = _config(
+        representations=("units", "pcs"),
+        analyses=("linear_granger", "poisson_granger"),
+    )
+    populations = (_population("PFC", "pfc", (1, 2)), _population("HPC", "hpc", (3,)))
+    keys = records.expected_granger_score_keys("session", config, populations)
+
+    assert len(keys) == 8
+    assert not any(key[2:4] == ("pcs", "poisson") for key in keys)
+    table = pd.DataFrame(keys, columns=records.GRANGER_SCORE_KEY)
+    records.validate_granger_score_key_grid(table, "session", config, populations)
+
+    for invalid in (
+        table.iloc[:-1],
+        pd.concat((table, table.iloc[[0]]), ignore_index=True),
+        pd.concat(
+            (
+                table,
+                pd.DataFrame(
+                    [(*keys[0][:-1], "unexpected-target")],
+                    columns=records.GRANGER_SCORE_KEY,
+                ),
+            ),
+            ignore_index=True,
+        ),
+    ):
+        with pytest.raises(ValueError, match="key grid"):
+            records.validate_granger_score_key_grid(
+                invalid, "session", config, populations
+            )
+
+
 def test_array_records_enforce_shapes_axes_and_physical_units() -> None:
     """Count and history arrays preserve their documented axes and integer counts."""
     tensor = records.RegionalCountTensor(
