@@ -297,6 +297,7 @@ def test_linear_granger_uses_only_descriptive_pca_scope() -> None:
 def test_linear_and_poisson_granger_stages_are_runtime_independent(monkeypatch) -> None:
     """Either descriptive model family runs without invoking its CV counterpart."""
     linear_prepared = _prepared(analyses=("linear_granger",))
+    original_poisson_fit = pipeline.fit_poisson_target
     monkeypatch.setattr(
         pipeline,
         "fit_poisson_target",
@@ -306,6 +307,7 @@ def test_linear_and_poisson_granger_stages_are_runtime_independent(monkeypatch) 
     )
     linear_scores, _, _ = pipeline.run_descriptive_granger(linear_prepared)
     assert linear_scores["model_family"].eq("ols").all()
+    monkeypatch.setattr(pipeline, "fit_poisson_target", original_poisson_fit)
 
     poisson_prepared = _prepared(analyses=("poisson_granger",))
     monkeypatch.setattr(
@@ -336,4 +338,3 @@ def test_lag_restricted_pipeline_preserves_requested_history_gap(monkeypatch) ->
     first_full = captured_full_designs[0]
     assert first_full.shape[0] == 60
     assert first_full.shape[1] == 5
-
