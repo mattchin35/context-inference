@@ -41,6 +41,7 @@ from .pipeline import (
     PreparedInterregionalSession,
     fit_cross_validation_pcas,
     prepare_interregional_session,
+    run_descriptive_granger,
     run_linear_cross_validation,
     run_poisson_cross_validation,
 )
@@ -304,27 +305,28 @@ def _preparation_tables(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Materialize fold and scientific-membership provenance from prepared masks."""
     fold_rows = []
-    for trial_row, (label, block_json, fold_id) in enumerate(
-        zip(
-            prepared.fold_assignment.original_index_labels,
-            prepared.fold_assignment.block_values_json,
-            prepared.fold_assignment.fold_ids,
-            strict=True,
-        )
-    ):
-        present = fold_id is not None
-        fold_rows.append(
-            {
-                "session_id": prepared.session_id,
-                "trial_row": trial_row,
-                "original_index_repr": label,
-                "block_value_json": block_json,
-                "block_present": present,
-                "fold_id": fold_id,
-                "status": "ok" if present else "not_applicable",
-                "reason": "" if present else "missing_block",
-            }
-        )
+    if prepared.fold_assignment is not None:
+        for trial_row, (label, block_json, fold_id) in enumerate(
+            zip(
+                prepared.fold_assignment.original_index_labels,
+                prepared.fold_assignment.block_values_json,
+                prepared.fold_assignment.fold_ids,
+                strict=True,
+            )
+        ):
+            present = fold_id is not None
+            fold_rows.append(
+                {
+                    "session_id": prepared.session_id,
+                    "trial_row": trial_row,
+                    "original_index_repr": label,
+                    "block_value_json": block_json,
+                    "block_present": present,
+                    "fold_id": fold_id,
+                    "status": "ok" if present else "not_applicable",
+                    "reason": "" if present else "missing_block",
+                }
+            )
     raw_conditions = (
         make_trial_type_masks(trial_df)
         if any(value != "all" for value in prepared.config.filters.conditions)
@@ -436,22 +438,24 @@ def compute_single_session(
     )
     stage_end("preparation", preparation_started)
 
-    fold_pcas = None
     tables = make_empty_result_tables()
-    if "pcs" in plan.config.representations:
+    fold_pcas = None
+    if "ols_cv" in plan.config.analyses and "pcs" in plan.config.representations:
         pca_started = stage_start("pca")
         fold_pcas, tables["pca_fits"] = fit_cross_validation_pcas(prepared)
         stage_end("pca", pca_started)
 
-    ols_started = stage_start("ols_cv")
-    fold_scores, target_summaries, population_summaries = (
-        run_linear_cross_validation(
+    fold_scores = tables["fold_scores"]
+    target_summaries = tables["target_summaries"]
+    population_summaries = tables["population_summaries"]
+    if "ols_cv" in plan.config.analyses:
+        ols_started = stage_start("ols_cv")
+        fold_scores, target_summaries, population_summaries = run_linear_cross_validation(
             prepared,
             fold_pcas=fold_pcas,
             progress_callback=progress_callback,
         )
-    )
-    stage_end("ols_cv", ols_started)
+        stage_end("ols_cv", ols_started)
 
     if "poisson_cv" in plan.config.analyses:
         poisson_started = stage_start("poisson_cv")
@@ -478,6 +482,37 @@ def compute_single_session(
         )
         stage_end("poisson_cv", poisson_started)
 
+    for granger_stage in ("linear_granger", "poisson_granger"):
+        if granger_stage not in plan.config.analyses:
+            continue
+        granger_started = stage_start(granger_stage)
+        granger_scores, granger_populations, descriptive_pca_fits = (
+            run_descriptive_granger(
+                prepared,
+                progress_callback=progress_callback,
+                stages=(granger_stage,),
+            )
+        )
+        tables["granger_scores"] = result_table_from_rows(
+            "granger_scores",
+            pd.concat(
+                (tables["granger_scores"], granger_scores), ignore_index=True
+            ).to_dict("records"),
+        )
+        population_summaries = result_table_from_rows(
+            "population_summaries",
+            pd.concat(
+                (population_summaries, granger_populations), ignore_index=True
+            ).to_dict("records"),
+        )
+        tables["pca_fits"] = result_table_from_rows(
+            "pca_fits",
+            pd.concat(
+                (tables["pca_fits"], descriptive_pca_fits), ignore_index=True
+            ).to_dict("records"),
+        )
+        stage_end(granger_stage, granger_started)
+
     assembly_started = stage_start("result_assembly")
     tables["fold_scores"] = fold_scores
     tables["target_summaries"] = target_summaries
@@ -485,9 +520,10 @@ def compute_single_session(
     tables["fold_assignments"], tables["trial_membership"] = _preparation_tables(
         prepared, trial_df
     )
-    validate_fold_score_key_grid(
-        fold_scores, plan.session_id, plan.config, plan.resolved_populations
-    )
+    if {"ols_cv", "poisson_cv"} & set(plan.config.analyses):
+        validate_fold_score_key_grid(
+            fold_scores, plan.session_id, plan.config, plan.resolved_populations
+        )
     result = InterregionalResults(
         schema_version=RESULT_SCHEMA_VERSION,
         analysis_version=ANALYSIS_VERSION,
@@ -539,16 +575,42 @@ def _write_summary(
     configuration is the exact JSON-compatible mapping copied to ``config.json``;
     result tables retain their documented units and axes without transformation.
     """
-    unavailable = int(result.fold_scores["status"].ne("ok").sum())
+    unavailable = int(
+        result.fold_scores["status"].ne("ok").sum()
+        + result.granger_scores["status"].ne("ok").sum()
+    )
     unavailable_reasons = (
-        result.fold_scores.loc[result.fold_scores["reason"].ne(""), "reason"]
+        pd.concat(
+            (
+                result.fold_scores.loc[
+                    result.fold_scores["reason"].ne(""), "reason"
+                ],
+                result.granger_scores.loc[
+                    result.granger_scores["reason"].ne(""), "reason"
+                ],
+            ),
+            ignore_index=True,
+        )
         .value_counts()
         .sort_index()
     )
+    has_cv = not result.fold_scores.empty
+    has_granger = not result.granger_scores.empty
+    if has_cv and has_granger:
+        goal = (
+            "quantify held-out predictive improvement and descriptive in-sample "
+            "nested-model improvement between PFC and HPC."
+        )
+    elif has_granger:
+        goal = (
+            "quantify descriptive in-sample nested-model improvement between PFC and HPC."
+        )
+    else:
+        goal = "quantify held-out predictive improvement between PFC and HPC."
     lines = [
         "# Inter-regional neural regression run",
         "",
-        "Goal: quantify held-out predictive improvement between PFC and HPC.",
+        f"Goal: {goal}",
         "",
         f"Session: `{result.session_id}`",
         "",
@@ -556,7 +618,7 @@ def _write_summary(
         "",
         f"Output directory: `{final_run_directory}`",
         "",
-        f"Unavailable fold rows: {unavailable}",
+        f"Unavailable fitted rows: {unavailable}",
         "",
         "Warnings: none captured.",
         "",
@@ -565,16 +627,16 @@ def _write_summary(
         "```json",
         json.dumps(executed_configuration, sort_keys=True, indent=2),
         "```",
-        "",
-        "## Primary held-out results",
-        "",
     ]
-    primary = result.population_summaries.loc[
-        result.population_summaries["metric_name"].eq("delta_r2")
-    ]
-    if primary.empty:
-        lines.append("No complete incremental CV R-squared population summary was available.")
-    else:
+    if has_cv:
+        lines.extend(["", "## Primary held-out results", ""])
+        primary = result.population_summaries.loc[
+            result.population_summaries["metric_name"].eq("delta_r2")
+        ]
+        if primary.empty:
+            lines.append(
+                "No complete incremental CV R-squared population summary was available."
+            )
         for row in primary.itertuples(index=False):
             if row.status == "ok":
                 lines.append(
@@ -629,6 +691,37 @@ def _write_summary(
             else:
                 lines.append(
                     f"- {row.direction}, {row.condition}, {row.window}, {row.target_id}: "
+                    f"unavailable ({row.reason})."
+                )
+    granger_primary = result.population_summaries.loc[
+        result.population_summaries["evaluation_scope"].eq("in_sample")
+        & result.population_summaries["metric_name"].isin(
+            ("linear_granger", "mean_deviance_improvement")
+        )
+    ]
+    if not granger_primary.empty:
+        lines.extend(
+            [
+                "",
+                "## Descriptive in-sample Granger magnitudes",
+                "",
+                "These values are descriptive in-sample nested-model improvements, not "
+                "significance tests or evidence of mechanistic causality.",
+                "",
+            ]
+        )
+        for row in granger_primary.itertuples(index=False):
+            if row.status == "ok":
+                lines.append(
+                    f"- {row.direction}, {row.condition}, {row.window}, "
+                    f"{row.representation}/{row.model_family}, {row.metric_name}: "
+                    f"{row.n_targets} targets; median={float(row.median):.6g}, "
+                    f"IQR=[{float(row.q25):.6g}, {float(row.q75):.6g}]."
+                )
+            else:
+                lines.append(
+                    f"- {row.direction}, {row.condition}, {row.window}, "
+                    f"{row.representation}/{row.model_family}, {row.metric_name}: "
                     f"unavailable ({row.reason})."
                 )
     lines.extend(["", "## Unavailable reasons", ""])

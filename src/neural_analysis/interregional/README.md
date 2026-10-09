@@ -3,8 +3,9 @@
 This package runs reproducible, bidirectional PFC/HPC prediction analyses from
 one validated metadata-v2 neural session. The stable workflow supports held-out
 OLS for direct units and fold-local regional PCs plus target-wise held-out
-Poisson GLMs for direct-unit counts. Descriptive Granger stages remain reserved
-by the result schema but are not yet implemented.
+Poisson GLMs for direct-unit counts. Independent descriptive stages fit
+in-sample linear and Poisson Granger-style restricted/full comparisons without
+requiring CV folds or their corresponding CV stages.
 
 ## Module map
 
@@ -16,6 +17,8 @@ by the result schema but are not yet implemented.
 - `linear.py`: unpenalized OLS, held-out scores, and complete-fold summaries.
 - `poisson.py`: target-wise unpenalized Poisson fitting, deviance scoring, and
   derived matched OLS/Poisson count-MSE comparisons.
+- `granger.py`: matched-row nested-fit checks plus linear log residual-variance
+  ratios and Poisson likelihood/deviance improvements.
 - `pipeline.py`: in-memory preparation and bidirectional unit/PC orchestration.
 - `records.py`: exact array and seven-table result schemas.
 - `persistence.py`: content fingerprints, manifests, trusted result loading, and
@@ -44,6 +47,11 @@ presentation. The webapp imports saved results only and never starts analyses.
   count per bin; PC MSE is squared PCA-score units.
 - Poisson deviance and deviance explained are dimensionless. Poisson expected
   values are counts per bin, and Poisson MSE is squared counts per bin.
+- Linear Granger magnitude is the dimensionless in-sample
+  `log(SSE_restricted / SSE_full)`. Poisson Granger-style output retains the
+  dimensionless likelihood ratio and reports its per-row mean deviance
+  improvement. These scales are not interchangeable with each other or with
+  held-out CV increments.
 
 PCA uses training means, population standard deviations (`ddof=0`), full SVD,
 no whitening, and no random generator. The same regional fold transforms are
@@ -84,6 +92,12 @@ estimates without hashing large inputs, fitting, or creating output paths.
 `src/neural_analysis`, hashes every consumed file, and reuses a validated
 matching final run unless `--rerun` is supplied.
 
+The configuration's `analyses` list independently selects `ols_cv`,
+`poisson_cv`, `linear_granger`, and `poisson_granger`. Granger-only runs use all
+scientifically eligible condition rows, including eligible trials whose block
+is missing, and do not construct folds. Linear PC Granger fits one separate
+session-wide descriptive PCA basis; it never reuses fold-local CV transforms.
+
 The cluster wrapper runs the same session command in the frozen offline
 environment; it does not implement a separate computation path:
 
@@ -120,8 +134,11 @@ configuration, run fingerprint, result schema, folds, fits, or scores.
 The Streamlit option **Inter-regional regression results** discovers only
 validated final runs in the default session directory. It provides display-only
 selectors and shows saved configuration, code/input identity, unavailable rows,
-PCA fits, tables, and figures. It has no run, resume, or recompute action.
+PCA fits, tables, and figures. Held-out CV and descriptive in-sample Granger
+results have separate evaluation scopes and figures. It has no run, resume, or
+recompute action.
 
-All directional scores are predictive summaries, not causal evidence. The
-first-pass coverage contract assumes that loaded aligned spikes cover every
-requested trial window.
+Held-out directional scores are predictive summaries. Granger magnitudes are
+descriptive in-sample nested-model improvements, not significance tests or
+evidence of mechanistic causality. The first-pass coverage contract assumes
+that loaded aligned spikes cover every requested trial window.

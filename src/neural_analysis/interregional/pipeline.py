@@ -11,6 +11,11 @@ import pandas as pd
 import pynapple as nap
 
 from .configuration import InterregionalAnalysisConfig, ResolvedRegionalPopulation
+from .granger import (
+    GrangerUnavailable,
+    compute_linear_granger,
+    compute_poisson_granger,
+)
 from .linear import (
     add_intercept,
     fit_ols_targets,
@@ -20,6 +25,7 @@ from .linear import (
 )
 from .pca import (
     RegionalPCATransforms,
+    fit_descriptive_regional_pcas,
     fit_fold_regional_pcas,
     transform_regional_activity,
 )
@@ -66,7 +72,7 @@ class PreparedInterregionalSession:
     pfc_counts: RegionalCountTensor
     hpc_counts: RegionalCountTensor
     trial_masks: AnalysisTrialMasks
-    fold_assignment: FoldAssignment
+    fold_assignment: FoldAssignment | None
 
     def __post_init__(self) -> None:
         """Validate roles and the shared prepared trial/time axes."""
@@ -80,9 +86,12 @@ class PreparedInterregionalSession:
             raise ValueError(
                 "Regional count trial rows must equal the scientific eligibility mask."
             )
-        if len(self.fold_assignment.fold_ids) != len(
-            self.trial_masks.scientific_eligible
-        ):
+        cv_requested = bool({"ols_cv", "poisson_cv"} & set(self.config.analyses))
+        if cv_requested and self.fold_assignment is None:
+            raise ValueError("A fold assignment is required for CV analyses.")
+        if self.fold_assignment is not None and len(
+            self.fold_assignment.fold_ids
+        ) != len(self.trial_masks.scientific_eligible):
             raise ValueError("Fold assignment must cover the complete trial table.")
 
 
@@ -113,6 +122,25 @@ class _FoldModelData:
     test_hash: str | None
 
 
+@dataclass(frozen=True)
+class _GrangerModelData:
+    """Shared in-sample histories and nested designs for one Granger cell.
+
+    ``responses`` has shape ``(observation, target)``. Both designs have shape
+    ``(observation, coefficient)`` and begin with an intercept. Unit values are
+    counts per bin and PC values are dimensionless PCA scores. Counts, ranks,
+    feature counts, and residual degrees of freedom are unitless.
+    """
+
+    responses: np.ndarray
+    restricted_design: np.ndarray
+    full_design: np.ndarray
+    restricted_info: tuple[int, int, int, str | None]
+    full_info: tuple[int, int, int, str | None]
+    n_trials: int
+    n_rows: int
+
+
 def _emit_progress(
     callback: ProgressCallback | None,
     event: str,
@@ -138,6 +166,23 @@ def _cell_progress_details(data: _FoldModelData) -> dict[str, object]:
         "n_test_trials": data.n_test_trials,
         "n_train_rows": data.n_train_rows,
         "n_test_rows": data.n_test_rows,
+    }
+    for name, array in arrays.items():
+        details[f"{name}_shape"] = [int(value) for value in array.shape]
+        details[f"{name}_bytes"] = int(array.nbytes)
+    return details
+
+
+def _granger_cell_progress_details(data: _GrangerModelData) -> dict[str, object]:
+    """Return exact shapes and byte sizes for one descriptive model cell."""
+    arrays = {
+        "response": data.responses,
+        "restricted_design": data.restricted_design,
+        "full_design": data.full_design,
+    }
+    details: dict[str, object] = {
+        "n_trials": data.n_trials,
+        "n_rows": data.n_rows,
     }
     for name, array in arrays.items():
         details[f"{name}_shape"] = [int(value) for value in array.shape]
@@ -212,7 +257,11 @@ def prepare_interregional_session(
         pfc_counts=pfc_counts,
         hpc_counts=hpc_counts,
         trial_masks=masks,
-        fold_assignment=build_block_fold_assignment(trial_df),
+        fold_assignment=(
+            build_block_fold_assignment(trial_df)
+            if {"ols_cv", "poisson_cv"} & set(config.analyses)
+            else None
+        ),
     )
 
 
@@ -318,6 +367,59 @@ def _build_fold_model_data(
     )
 
 
+def _build_granger_model_data(
+    *,
+    prepared: PreparedInterregionalSession,
+    window: str,
+    target_activity: np.ndarray,
+    source_activity: np.ndarray,
+    condition_trials: np.ndarray,
+    tensor_rows: np.ndarray,
+) -> _GrangerModelData:
+    """Build one matched all-eligible-row nested-design Granger cell.
+
+    Activity arrays have shape ``(trial, whole_window_bin, feature)`` in spike
+    counts per bin or PCA-score units. ``condition_trials`` selects the shared
+    trial axis and ``tensor_rows`` maps that axis to zero-based source rows.
+    Returned response/design rows preserve the configured lag and order.
+    """
+    target_window, bin_positions = select_window_bins(
+        target_activity,
+        window,
+        prepared.config.windows,
+        prepared.config.temporal,
+    )
+    source_window, source_bin_positions = select_window_bins(
+        source_activity,
+        window,
+        prepared.config.windows,
+        prepared.config.temporal,
+    )
+    if not np.array_equal(bin_positions, source_bin_positions):
+        raise ValueError("Target and source selected-window bin axes differ.")
+    history = build_history_matrices(
+        target_window[condition_trials],
+        source_window[condition_trials],
+        tensor_rows[condition_trials],
+        bin_positions,
+        prepared.config.temporal.lag_bins,
+        prepared.config.temporal.order_bins,
+    )
+    restricted = add_intercept(history.target_history)
+    full = add_intercept(
+        np.column_stack((history.target_history, history.source_history))
+    )
+    return _GrangerModelData(
+        responses=history.responses,
+        restricted_design=restricted,
+        full_design=full,
+        restricted_info=_design_diagnostics(restricted),
+        full_info=_design_diagnostics(full),
+        n_trials=int(np.unique(history.row_trial).size),
+        n_rows=int(history.responses.shape[0]),
+    )
+
+
 def _empty_score_row(
     prepared: PreparedInterregionalSession,
     direction: str,
@@ -394,6 +496,8 @@ def _empty_score_row(
 
 def _fold_ids_on_tensor(prepared: PreparedInterregionalSession) -> np.ndarray:
     """Map nullable full-table fold IDs onto the scientific count-tensor axis."""
+    if prepared.fold_assignment is None:
+        raise ValueError("CV analysis requires a prepared fold assignment.")
     full_fold_ids = np.asarray(prepared.fold_assignment.fold_ids, dtype=object)
     return full_fold_ids[prepared.pfc_counts.trial_rows]
 
@@ -1216,3 +1320,637 @@ def run_poisson_cross_validation(
         ),
     )
     return fold_scores, target_summaries, population_summaries
+
+
+def _granger_row_base(
+    *,
+    prepared: PreparedInterregionalSession,
+    direction: str,
+    representation: str,
+    model_family: str,
+    condition: str,
+    window: str,
+    target_id: str,
+    target_rank: int | None,
+    data: _GrangerModelData,
+) -> dict[str, object]:
+    """Return one null-metric row in the frozen Granger schema."""
+    return {
+        "session_id": prepared.session_id,
+        "direction": direction,
+        "representation": representation,
+        "model_family": model_family,
+        "condition": condition,
+        "window": window,
+        "target_id": target_id,
+        "evaluation_scope": "in_sample",
+        "target_rank": target_rank,
+        "restricted_status": "ok",
+        "restricted_reason": "",
+        "full_status": "ok",
+        "full_reason": "",
+        "status": "ok",
+        "reason": "",
+        "diagnostic": "",
+        "n_trials": data.n_trials,
+        "n_rows": data.n_rows,
+        "restricted_feature_count": data.restricted_info[0],
+        "full_feature_count": data.full_info[0],
+        "restricted_rank": data.restricted_info[1],
+        "full_rank": data.full_info[1],
+        "restricted_df_resid": data.restricted_info[2],
+        "full_df_resid": data.full_info[2],
+        "restricted_converged": None,
+        "full_converged": None,
+        "restricted_iterations": None,
+        "full_iterations": None,
+        "sse_restricted": None,
+        "sse_full": None,
+        "linear_granger": None,
+        "llf_restricted": None,
+        "llf_full": None,
+        "deviance_restricted": None,
+        "deviance_full": None,
+        "likelihood_ratio": None,
+        "mean_deviance_improvement": None,
+    }
+
+
+def _unavailable_granger_row(
+    base: dict[str, object],
+    restricted_reason: str | None,
+    full_reason: str | None,
+    *,
+    metric_reason: str | None = None,
+) -> dict[str, object]:
+    """Apply frozen fit/metric unavailability precedence to one Granger row."""
+    row = dict(base)
+    row["restricted_status"] = (
+        "fit_unavailable" if restricted_reason else "ok"
+    )
+    row["restricted_reason"] = restricted_reason or ""
+    row["full_status"] = "fit_unavailable" if full_reason else "ok"
+    row["full_reason"] = full_reason or ""
+    fit_reason = restricted_reason or full_reason
+    row["status"] = "fit_unavailable" if fit_reason else "metric_unavailable"
+    row["reason"] = fit_reason or metric_reason or "nested_fit_inconsistency"
+    return row
+
+
+def _cell_design_reasons(data: _GrangerModelData) -> tuple[str | None, str | None]:
+    """Return frozen restricted/full availability reasons for one cell."""
+    if data.n_trials == 0:
+        return "no_eligible_trials", "no_eligible_trials"
+    if data.n_rows == 0:
+        return "history_exceeds_window", "history_exceeds_window"
+    restricted = {
+        "rank_deficient": "rank_deficient_restricted",
+        "nonpositive_df": "nonpositive_df_restricted",
+    }.get(data.restricted_info[3])
+    full = {
+        "rank_deficient": "rank_deficient_full",
+        "nonpositive_df": "nonpositive_df_full",
+    }.get(data.full_info[3])
+    return restricted, full
+
+
+def _score_linear_granger_cell(
+    *,
+    prepared: PreparedInterregionalSession,
+    direction: str,
+    representation: str,
+    condition: str,
+    window: str,
+    target_activity: np.ndarray,
+    source_activity: np.ndarray,
+    target_ids: tuple[str, ...],
+    target_ranks: tuple[int | None, ...],
+    condition_trials: np.ndarray,
+    tensor_rows: np.ndarray,
+    progress_callback: ProgressCallback | None,
+    cell_index: int,
+    total_cells: int,
+) -> list[dict[str, object]]:
+    """Fit and score one multi-target in-sample linear Granger cell."""
+    data = _build_granger_model_data(
+        prepared=prepared,
+        window=window,
+        target_activity=target_activity,
+        source_activity=source_activity,
+        condition_trials=condition_trials,
+        tensor_rows=tensor_rows,
+    )
+    identity = {
+        "model_family": "ols",
+        "representation": representation,
+        "direction": direction,
+        "condition": condition,
+        "window": window,
+        "fold_id": None,
+        "cell_index": cell_index,
+        "total_cells": total_cells,
+        "total_targets": len(target_ids),
+    }
+    _emit_progress(
+        progress_callback,
+        "analysis_cell_start",
+        **identity,
+        **_granger_cell_progress_details(data),
+    )
+    bases = [
+        _granger_row_base(
+            prepared=prepared,
+            direction=direction,
+            representation=representation,
+            model_family="ols",
+            condition=condition,
+            window=window,
+            target_id=target_id,
+            target_rank=target_ranks[position],
+            data=data,
+        )
+        for position, target_id in enumerate(target_ids)
+    ]
+    available_targets = data.responses.shape[1]
+    restricted_reason, full_reason = _cell_design_reasons(data)
+    if restricted_reason or full_reason:
+        rows = [
+            _unavailable_granger_row(
+                base,
+                (
+                    "pca_insufficient_components"
+                    if position >= available_targets
+                    else restricted_reason
+                ),
+                (
+                    "pca_insufficient_components"
+                    if position >= available_targets
+                    else full_reason
+                ),
+            )
+            for position, base in enumerate(bases)
+        ]
+        _emit_progress(
+            progress_callback,
+            "analysis_cell_end",
+            **identity,
+            completed_targets=len(rows),
+            unavailable_targets=len(rows),
+        )
+        return rows
+
+    restricted_fit = fit_ols_targets(data.restricted_design, data.responses)
+    full_fit = fit_ols_targets(data.full_design, data.responses)
+    restricted_predictions = predict_ols_targets(
+        data.restricted_design, restricted_fit.coefficients
+    )
+    full_predictions = predict_ols_targets(data.full_design, full_fit.coefficients)
+    rows: list[dict[str, object]] = []
+    for position, base in enumerate(bases):
+        if position >= available_targets:
+            rows.append(
+                _unavailable_granger_row(
+                    base,
+                    "pca_insufficient_components",
+                    "pca_insufficient_components",
+                )
+            )
+            continue
+        restricted_constant = bool(restricted_fit.constant_targets[position])
+        full_constant = bool(full_fit.constant_targets[position])
+        if restricted_constant or full_constant:
+            rows.append(
+                _unavailable_granger_row(
+                    base,
+                    "constant_training_target" if restricted_constant else None,
+                    "constant_training_target" if full_constant else None,
+                )
+            )
+            continue
+        try:
+            scores = compute_linear_granger(
+                data.responses[:, position],
+                restricted_predictions[:, position],
+                full_predictions[:, position],
+            )
+        except GrangerUnavailable as error:
+            rows.append(
+                _unavailable_granger_row(
+                    base, None, None, metric_reason=error.reason
+                )
+            )
+            continue
+        row = dict(base)
+        row.update(
+            restricted_rank=restricted_fit.rank,
+            full_rank=full_fit.rank,
+            restricted_df_resid=restricted_fit.df_resid,
+            full_df_resid=full_fit.df_resid,
+            sse_restricted=scores.sse_restricted,
+            sse_full=scores.sse_full,
+            linear_granger=scores.linear_granger,
+            diagnostic=scores.diagnostic,
+        )
+        rows.append(row)
+    _emit_progress(
+        progress_callback,
+        "analysis_cell_end",
+        **identity,
+        completed_targets=len(rows),
+        unavailable_targets=sum(item["status"] != "ok" for item in rows),
+    )
+    return rows
+
+
+def _score_poisson_granger_cell(
+    *,
+    prepared: PreparedInterregionalSession,
+    direction: str,
+    condition: str,
+    window: str,
+    target_activity: np.ndarray,
+    source_activity: np.ndarray,
+    target_ids: tuple[str, ...],
+    condition_trials: np.ndarray,
+    tensor_rows: np.ndarray,
+    progress_callback: ProgressCallback | None,
+    cell_index: int,
+    total_cells: int,
+) -> list[dict[str, object]]:
+    """Fit and score one target-wise in-sample Poisson Granger cell."""
+    data = _build_granger_model_data(
+        prepared=prepared,
+        window=window,
+        target_activity=target_activity,
+        source_activity=source_activity,
+        condition_trials=condition_trials,
+        tensor_rows=tensor_rows,
+    )
+    identity = {
+        "model_family": "poisson",
+        "representation": "units",
+        "direction": direction,
+        "condition": condition,
+        "window": window,
+        "fold_id": None,
+        "cell_index": cell_index,
+        "total_cells": total_cells,
+        "total_targets": len(target_ids),
+    }
+    _emit_progress(
+        progress_callback,
+        "analysis_cell_start",
+        **identity,
+        **_granger_cell_progress_details(data),
+    )
+    design_restricted, design_full = _cell_design_reasons(data)
+    rows: list[dict[str, object]] = []
+    for position, target_id in enumerate(target_ids):
+        base = _granger_row_base(
+            prepared=prepared,
+            direction=direction,
+            representation="units",
+            model_family="poisson",
+            condition=condition,
+            window=window,
+            target_id=target_id,
+            target_rank=None,
+            data=data,
+        )
+        reasons = {"restricted": design_restricted, "full": design_full}
+        fits: dict[str, PoissonFit | None] = {"restricted": None, "full": None}
+        predictions: dict[str, np.ndarray | None] = {
+            "restricted": None,
+            "full": None,
+        }
+        response = data.responses[:, position] if data.n_rows else np.empty(0)
+        for side, design in (
+            ("restricted", data.restricted_design),
+            ("full", data.full_design),
+        ):
+            if reasons[side] is not None:
+                continue
+            try:
+                fits[side] = fit_poisson_target(design, response)
+                predictions[side] = predict_poisson_mean(
+                    design, fits[side].parameters
+                )
+            except PoissonFitUnavailable as error:
+                reasons[side] = _poisson_side_reason(error.reason, side)
+        if reasons["restricted"] or reasons["full"]:
+            row = _unavailable_granger_row(
+                base, reasons["restricted"], reasons["full"]
+            )
+        else:
+            restricted_fit = fits["restricted"]
+            full_fit = fits["full"]
+            assert restricted_fit is not None and full_fit is not None
+            assert predictions["restricted"] is not None
+            assert predictions["full"] is not None
+            try:
+                scores = compute_poisson_granger(
+                    response, predictions["restricted"], predictions["full"]
+                )
+            except GrangerUnavailable as error:
+                row = _unavailable_granger_row(
+                    base, None, None, metric_reason=error.reason
+                )
+            else:
+                row = dict(base)
+                row.update(
+                    restricted_rank=restricted_fit.rank,
+                    full_rank=full_fit.rank,
+                    restricted_df_resid=restricted_fit.df_resid,
+                    full_df_resid=full_fit.df_resid,
+                    restricted_converged=restricted_fit.converged,
+                    full_converged=full_fit.converged,
+                    restricted_iterations=restricted_fit.iterations,
+                    full_iterations=full_fit.iterations,
+                    llf_restricted=scores.llf_restricted,
+                    llf_full=scores.llf_full,
+                    deviance_restricted=scores.deviance_restricted,
+                    deviance_full=scores.deviance_full,
+                    likelihood_ratio=scores.likelihood_ratio,
+                    mean_deviance_improvement=scores.mean_deviance_improvement,
+                    diagnostic=scores.diagnostic,
+                )
+        rows.append(row)
+        completed = position + 1
+        if _target_progress_due(completed, len(target_ids)):
+            _emit_progress(
+                progress_callback,
+                "poisson_target_progress",
+                **identity,
+                completed_targets=completed,
+                unavailable_targets=sum(item["status"] != "ok" for item in rows),
+                last_target_id=target_id,
+            )
+    _emit_progress(
+        progress_callback,
+        "analysis_cell_end",
+        **identity,
+        completed_targets=len(rows),
+        unavailable_targets=sum(item["status"] != "ok" for item in rows),
+    )
+    return rows
+
+
+def _descriptive_pca_table(
+    prepared: PreparedInterregionalSession,
+    fitted: RegionalPCATransforms,
+) -> pd.DataFrame:
+    """Return the two frozen metadata rows for one descriptive PCA pair."""
+    requested = {
+        "PFC": prepared.config.pca.pfc_components,
+        "HPC": prepared.config.pca.hpc_components,
+    }
+    rows = []
+    for region, transform in (("PFC", fitted.pfc), ("HPC", fitted.hpc)):
+        rows.append(
+            {
+                "session_id": prepared.session_id,
+                "scope": "descriptive",
+                "fold_id": None,
+                "region": region,
+                "status": "ok",
+                "reason": "",
+                "requested_components": requested[region],
+                "actual_components": transform.actual_components,
+                "n_training_trials": fitted.n_training_trials,
+                "n_training_observations": transform.n_training_observations,
+                "retained_unit_ids_json": json.dumps(
+                    list(transform.retained_unit_ids), separators=(",", ":")
+                ),
+                "omitted_unit_ids_json": json.dumps(
+                    list(transform.omitted_unit_ids), separators=(",", ":")
+                ),
+            }
+        )
+    return result_table_from_rows("pca_fits", rows)
+
+
+def _summarize_granger_populations(scores: pd.DataFrame) -> pd.DataFrame:
+    """Summarize defined in-sample target magnitudes as median and quartiles."""
+    rows: list[dict[str, object]] = []
+    key_columns = (
+        "session_id",
+        "direction",
+        "representation",
+        "model_family",
+        "condition",
+        "window",
+    )
+    if scores.empty:
+        return result_table_from_rows("population_summaries", rows)
+    for keys, group in scores.groupby(list(key_columns), sort=False, dropna=False):
+        model_family = str(keys[3])
+        metric_names = (
+            ("linear_granger",)
+            if model_family == "ols"
+            else ("likelihood_ratio", "mean_deviance_improvement")
+        )
+        for metric_name in metric_names:
+            values = group.loc[
+                group["status"].eq("ok") & group[metric_name].notna(), metric_name
+            ].to_numpy(dtype=np.float64)
+            common = dict(zip(key_columns, keys, strict=True))
+            if values.size:
+                q25, median, q75 = np.quantile(
+                    values, [0.25, 0.5, 0.75], method="linear"
+                )
+                rows.append(
+                    {
+                        **common,
+                        "evaluation_scope": "in_sample",
+                        "metric_name": metric_name,
+                        "status": "ok",
+                        "reason": "",
+                        "n_targets": int(values.size),
+                        "q25": float(q25),
+                        "median": float(median),
+                        "q75": float(q75),
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        **common,
+                        "evaluation_scope": "in_sample",
+                        "metric_name": metric_name,
+                        "status": "not_applicable",
+                        "reason": "no_complete_targets",
+                        "n_targets": 0,
+                        "q25": None,
+                        "median": None,
+                        "q75": None,
+                    }
+                )
+    return result_table_from_rows("population_summaries", rows)
+
+
+def run_descriptive_granger(
+    prepared: PreparedInterregionalSession,
+    *,
+    descriptive_pcas: RegionalPCATransforms | None = None,
+    progress_callback: ProgressCallback | None = None,
+    stages: tuple[str, ...] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Run requested bidirectional in-sample Granger-style analyses.
+
+    Parameters
+    ----------
+    prepared : PreparedInterregionalSession
+        Regional activity has shape ``(trial, whole_window_bin, unit)`` in
+        spike counts per bin. Condition masks use all scientifically eligible
+        trials and do not require CV blocks.
+    descriptive_pcas : RegionalPCATransforms or None, optional
+        Reusable session-wide descriptive transform. Fold-scoped transforms
+        are rejected. When omitted, one pair is fit if linear PC Granger is
+        requested.
+    progress_callback : callable or None, optional
+        Execution-only receiver for Poisson cell/target progress dictionaries.
+    stages : tuple[str, ...] or None, optional
+        Requested subset of ``linear_granger`` and ``poisson_granger``. ``None``
+        uses all Granger stages in ``prepared.config.analyses``. A subset is
+        useful only for execution-stage logging; it does not change inputs.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame, pandas.DataFrame]
+        Frozen ``granger_scores``, in-sample ``population_summaries``, and
+        descriptive ``pca_fits`` tables. Linear magnitudes and Poisson metrics
+        are dimensionless; counts, ranks, and row totals are unitless.
+    """
+    configured = set(prepared.config.analyses) & {
+        "linear_granger",
+        "poisson_granger",
+    }
+    requested = configured if stages is None else set(stages)
+    if not requested:
+        raise ValueError("run_descriptive_granger requires a Granger stage.")
+    if not requested <= configured or not requested <= {
+        "linear_granger",
+        "poisson_granger",
+    }:
+        raise ValueError("stages must be configured Granger analyses.")
+    tensor_rows = prepared.pfc_counts.trial_rows
+    condition_masks = {
+        name: prepared.trial_masks.condition_masks[name][tensor_rows]
+        for name in prepared.config.filters.conditions
+    }
+    unit_activity = {
+        "PFC": prepared.pfc_counts.counts,
+        "HPC": prepared.hpc_counts.counts,
+    }
+    unit_ids = {
+        "PFC": prepared.pfc_counts.unit_ids,
+        "HPC": prepared.hpc_counts.unit_ids,
+    }
+    pca_fits = result_table_from_rows("pca_fits", [])
+    pc_activity: dict[str, np.ndarray] = {}
+    pc_ids: dict[str, tuple[str, ...]] = {}
+    pc_ranks: dict[str, tuple[int, ...]] = {}
+    if "linear_granger" in requested and "pcs" in prepared.config.representations:
+        if descriptive_pcas is None:
+            descriptive_pcas = fit_descriptive_regional_pcas(
+                pfc_activity=unit_activity["PFC"],
+                hpc_activity=unit_activity["HPC"],
+                pfc_unit_ids=unit_ids["PFC"],
+                hpc_unit_ids=unit_ids["HPC"],
+                scientific_trials=np.ones(len(tensor_rows), dtype=bool),
+                condition_masks=condition_masks,
+                requested_conditions=prepared.config.filters.conditions,
+                requested_components={
+                    "PFC": prepared.config.pca.pfc_components,
+                    "HPC": prepared.config.pca.hpc_components,
+                },
+            )
+        if descriptive_pcas.scope != "descriptive" or descriptive_pcas.fold_id is not None:
+            raise ValueError("PC Granger requires one descriptive PCA transform.")
+        pca_fits = _descriptive_pca_table(prepared, descriptive_pcas)
+        for region, transform, requested_count in (
+            ("PFC", descriptive_pcas.pfc, prepared.config.pca.pfc_components),
+            ("HPC", descriptive_pcas.hpc, prepared.config.pca.hpc_components),
+        ):
+            pc_activity[region] = transform_regional_activity(
+                unit_activity[region], unit_ids[region], transform
+            )
+            pc_ids[region] = tuple(
+                f"{region}:PC{rank:02d}" for rank in range(1, requested_count + 1)
+            )
+            pc_ranks[region] = tuple(range(1, requested_count + 1))
+
+    score_rows: list[dict[str, object]] = []
+    directions = (("HPC_to_PFC", "PFC"), ("PFC_to_HPC", "HPC"))
+    if "linear_granger" in requested:
+        total_cells = (
+            len(directions)
+            * len(prepared.config.representations)
+            * len(prepared.config.filters.conditions)
+            * len(prepared.config.prediction_windows)
+        )
+        cell_index = 0
+        for direction, target_region in directions:
+            source_region = "HPC" if target_region == "PFC" else "PFC"
+            for representation in prepared.config.representations:
+                if representation == "units":
+                    target_activity = unit_activity[target_region]
+                    source_activity = unit_activity[source_region]
+                    target_ids = unit_ids[target_region]
+                    target_ranks = (None,) * len(target_ids)
+                else:
+                    target_activity = pc_activity[target_region]
+                    source_activity = pc_activity[source_region]
+                    target_ids = pc_ids[target_region]
+                    target_ranks = pc_ranks[target_region]
+                for condition in prepared.config.filters.conditions:
+                    for window in prepared.config.prediction_windows:
+                        cell_index += 1
+                        score_rows.extend(
+                            _score_linear_granger_cell(
+                                prepared=prepared,
+                                direction=direction,
+                                representation=representation,
+                                condition=condition,
+                                window=window,
+                                target_activity=target_activity,
+                                source_activity=source_activity,
+                                target_ids=target_ids,
+                                target_ranks=target_ranks,
+                                condition_trials=condition_masks[condition],
+                                tensor_rows=tensor_rows,
+                                progress_callback=progress_callback,
+                                cell_index=cell_index,
+                                total_cells=total_cells,
+                            )
+                        )
+    if "poisson_granger" in requested:
+        total_cells = (
+            len(directions)
+            * len(prepared.config.filters.conditions)
+            * len(prepared.config.prediction_windows)
+        )
+        cell_index = 0
+        for direction, target_region in directions:
+            source_region = "HPC" if target_region == "PFC" else "PFC"
+            for condition in prepared.config.filters.conditions:
+                for window in prepared.config.prediction_windows:
+                    cell_index += 1
+                    score_rows.extend(
+                        _score_poisson_granger_cell(
+                            prepared=prepared,
+                            direction=direction,
+                            condition=condition,
+                            window=window,
+                            target_activity=unit_activity[target_region],
+                            source_activity=unit_activity[source_region],
+                            target_ids=unit_ids[target_region],
+                            condition_trials=condition_masks[condition],
+                            tensor_rows=tensor_rows,
+                            progress_callback=progress_callback,
+                            cell_index=cell_index,
+                            total_cells=total_cells,
+                        )
+                    )
+    scores = result_table_from_rows("granger_scores", score_rows)
+    return scores, _summarize_granger_populations(scores), pca_fits

@@ -21,6 +21,7 @@ from src.neural_analysis.interregional.persistence import (
 from src.neural_analysis.interregional.plotting import (
     plot_absolute_cv_scores,
     plot_cv_increment_summary,
+    plot_granger_summary,
     plot_ols_poisson_mse_comparison,
 )
 from src.neural_analysis.interregional.records import InterregionalResults
@@ -136,13 +137,64 @@ def _ordered_present(values) -> tuple[str, ...]:
 
 def available_display_values(result: InterregionalResults) -> dict[str, tuple[str, ...]]:
     """Return display selectors derived only from rows present in a saved result."""
-    summaries = result.target_summaries
+    cv = result.target_summaries
+    granger = result.granger_scores
+    scopes = []
+    conditions = []
+    windows = []
+    representations = []
+    families = []
+    metrics = []
+    if not cv.empty:
+        scopes.extend(cv["evaluation_scope"])
+        conditions.extend(cv["condition"])
+        windows.extend(cv["window"])
+        representations.extend(cv["representation"])
+        families.extend(cv["model_family"])
+        metrics.extend(cv["metric_name"])
+    if not granger.empty:
+        scopes.extend(granger["evaluation_scope"])
+        conditions.extend(granger["condition"])
+        windows.extend(granger["window"])
+        representations.extend(granger["representation"])
+        families.extend(granger["model_family"])
+        if granger["model_family"].eq("ols").any():
+            metrics.append("linear_granger")
+        if granger["model_family"].eq("poisson").any():
+            metrics.append("mean_deviance_improvement")
     return {
-        "conditions": _ordered_present(summaries["condition"]),
-        "windows": _ordered_present(summaries["window"]),
-        "representations": _ordered_present(summaries["representation"]),
-        "model_families": _ordered_present(summaries["model_family"]),
-        "metrics": _ordered_present(summaries["metric_name"]),
+        "evaluation_scopes": _ordered_present(scopes),
+        "conditions": _ordered_present(conditions),
+        "windows": _ordered_present(windows),
+        "representations": _ordered_present(representations),
+        "model_families": _ordered_present(families),
+        "metrics": _ordered_present(metrics),
+    }
+
+
+def _scope_display_values(
+    result: InterregionalResults, scope: str
+) -> dict[str, tuple[str, ...]]:
+    """Return compatible selectors for one saved evaluation scope."""
+    if scope == "held_out_cv":
+        rows = result.target_summaries
+        metrics = _ordered_present(rows["metric_name"])
+    elif scope == "in_sample":
+        rows = result.granger_scores
+        metric_values = []
+        if rows["model_family"].eq("ols").any():
+            metric_values.append("linear_granger")
+        if rows["model_family"].eq("poisson").any():
+            metric_values.append("mean_deviance_improvement")
+        metrics = tuple(metric_values)
+    else:
+        raise ValueError("Unknown saved evaluation scope.")
+    return {
+        "conditions": _ordered_present(rows["condition"]),
+        "windows": _ordered_present(rows["window"]),
+        "representations": _ordered_present(rows["representation"]),
+        "model_families": _ordered_present(rows["model_family"]),
+        "metrics": metrics,
     }
 
 
@@ -204,17 +256,68 @@ def render_interregional_view(st_module: object, session: ResolvedSession) -> No
         }
     )
     selectors = available_display_values(result)
-    if not all(selectors.values()):
-        st_module.warning("The saved run has no complete target-summary display rows.")
+    if not selectors["evaluation_scopes"]:
+        st_module.warning("The saved run has no target-level display rows.")
         st_module.dataframe(result.fold_scores)
         return
-    condition = st_module.selectbox("Condition", selectors["conditions"])
-    window = st_module.selectbox("Window", selectors["windows"])
-    representation = st_module.selectbox(
-        "Representation", selectors["representations"]
+    evaluation_scope = st_module.selectbox(
+        "Evaluation scope", selectors["evaluation_scopes"]
     )
-    model_family = st_module.selectbox("Model family", selectors["model_families"])
-    metric = st_module.selectbox("Metric", selectors["metrics"])
+    scoped = _scope_display_values(result, evaluation_scope)
+    condition = st_module.selectbox("Condition", scoped["conditions"])
+    scope_rows = (
+        result.target_summaries
+        if evaluation_scope == "held_out_cv"
+        else result.granger_scores
+    )
+    condition_rows = scope_rows.loc[scope_rows["condition"].eq(condition)]
+    window = st_module.selectbox(
+        "Window", _ordered_present(condition_rows["window"])
+    )
+    window_rows = condition_rows.loc[condition_rows["window"].eq(window)]
+    representation = st_module.selectbox(
+        "Representation", _ordered_present(window_rows["representation"])
+    )
+    representation_rows = window_rows.loc[
+        window_rows["representation"].eq(representation)
+    ]
+    available_families = _ordered_present(representation_rows["model_family"])
+    model_family = st_module.selectbox("Model family", available_families)
+    family_rows = representation_rows.loc[
+        representation_rows["model_family"].eq(model_family)
+    ]
+    if evaluation_scope == "held_out_cv":
+        compatible_metrics = _ordered_present(family_rows["metric_name"])
+    elif model_family == "ols":
+        compatible_metrics = ("linear_granger",)
+    else:
+        compatible_metrics = ("mean_deviance_improvement",)
+    metric = st_module.selectbox("Metric", compatible_metrics)
+    if evaluation_scope == "in_sample":
+        selected_granger = result.granger_scores.loc[
+            result.granger_scores["condition"].eq(condition)
+            & result.granger_scores["window"].eq(window)
+            & result.granger_scores["representation"].eq(representation)
+            & result.granger_scores["model_family"].eq(model_family)
+        ]
+        st_module.subheader("Descriptive in-sample Granger scores")
+        st_module.caption(
+            "These magnitudes are descriptive, not significance tests and not causal "
+            "evidence. No model is computed in this saved-only view."
+        )
+        st_module.dataframe(selected_granger)
+        figure, _ = plot_granger_summary(
+            result.granger_scores,
+            result.population_summaries,
+            representation=representation,
+            model_family=model_family,
+            window=window,
+            coverage_assumption_version=result.coverage_assumption_version,
+        )
+        st_module.pyplot(figure)
+        st_module.subheader("PCA fits")
+        st_module.dataframe(result.pca_fits)
+        return
     selected_targets = result.target_summaries.loc[
         result.target_summaries["condition"].eq(condition)
         & result.target_summaries["window"].eq(window)
@@ -239,7 +342,7 @@ def render_interregional_view(st_module: object, session: ResolvedSession) -> No
         )
         st_module.pyplot(figure)
     if model_family == "ols" and {"r2_restricted", "r2_full"} <= set(
-        selectors["metrics"]
+        compatible_metrics
     ):
         figure, _ = plot_absolute_cv_scores(
             result.target_summaries,
@@ -251,7 +354,7 @@ def render_interregional_view(st_module: object, session: ResolvedSession) -> No
         )
         st_module.pyplot(figure)
     if model_family == "poisson" and {"ols", "poisson"} <= set(
-        selectors["model_families"]
+        available_families
     ):
         st_module.caption(
             "Exploratory OLS/Poisson held-out count-MSE comparison; this is not a "

@@ -378,6 +378,157 @@ def plot_absolute_cv_scores(
     return figure, axis
 
 
+def plot_granger_summary(
+    granger_scores: pd.DataFrame,
+    population_summaries: pd.DataFrame,
+    *,
+    representation: str,
+    model_family: str,
+    window: str,
+    coverage_assumption_version: str,
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot saved descriptive Granger targets with median/IQR overlays.
+
+    Parameters
+    ----------
+    granger_scores : pandas.DataFrame
+        Frozen in-sample rows. Linear values are log residual-variance ratios;
+        Poisson values are mean deviance improvement per fitted row.
+    population_summaries : pandas.DataFrame
+        Frozen in-sample target-distribution quartiles for the same metrics.
+    representation, model_family, window : str
+        Display-only labels already present in the saved tables.
+    coverage_assumption_version : str
+        Saved coverage declaration shown verbatim in the caption.
+
+    Returns
+    -------
+    tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]
+        Opaque light-mode figure and primary axis. Point artists carry stable
+        target IDs as their Matplotlib ``gid`` values.
+    """
+    required = {
+        "direction",
+        "representation",
+        "model_family",
+        "condition",
+        "window",
+        "target_id",
+        "status",
+    }
+    missing = required - set(granger_scores.columns)
+    if missing:
+        raise ValueError(f"granger_scores is missing columns: {sorted(missing)}")
+    if model_family == "ols":
+        metric_name = "linear_granger"
+        y_label = "Linear Granger magnitude - in-sample log residual-variance ratio"
+    elif model_family == "poisson":
+        metric_name = "mean_deviance_improvement"
+        y_label = "Mean deviance improvement - Poisson Granger-style, in-sample"
+    else:
+        raise ValueError("model_family must be 'ols' or 'poisson'.")
+    selected = granger_scores.loc[
+        granger_scores["representation"].eq(representation)
+        & granger_scores["model_family"].eq(model_family)
+        & granger_scores["window"].eq(window)
+    ].copy()
+    if selected.empty:
+        raise ValueError("No saved Granger rows match the display selection.")
+    conditions = tuple(dict.fromkeys(selected["condition"].astype(str)))
+    figure, axis = plt.subplots(figsize=(max(8.0, 2.6 * len(conditions)), 6.5))
+    _style_light_figure(figure, axis)
+    offsets = {"HPC_to_PFC": -0.35, "PFC_to_HPC": 0.35}
+    for condition_index, condition in enumerate(conditions):
+        center = condition_index * 3.0
+        availability: dict[str, tuple[int, int]] = {}
+        for direction in _DIRECTIONS:
+            position = center + offsets[direction]
+            rows = selected.loc[
+                selected["condition"].eq(condition)
+                & selected["direction"].eq(direction)
+            ]
+            complete = rows.loc[rows["status"].eq("ok") & rows[metric_name].notna()]
+            availability[direction] = (len(complete), len(rows) - len(complete))
+            jitter = (
+                np.linspace(-0.22, 0.22, len(complete))
+                if len(complete) > 1
+                else np.zeros(len(complete), dtype=np.float64)
+            )
+            for target_index, row in enumerate(complete.itertuples(index=False)):
+                (artist,) = axis.plot(
+                    position + float(jitter[target_index]),
+                    float(getattr(row, metric_name)),
+                    marker="o",
+                    linestyle="none",
+                    markersize=5.5,
+                    color=_DIRECTION_COLORS[direction],
+                    alpha=0.8,
+                )
+                artist.set_gid(str(row.target_id))
+            summary = population_summaries.loc[
+                population_summaries["evaluation_scope"].eq("in_sample")
+                & population_summaries["representation"].eq(representation)
+                & population_summaries["model_family"].eq(model_family)
+                & population_summaries["window"].eq(window)
+                & population_summaries["condition"].eq(condition)
+                & population_summaries["direction"].eq(direction)
+                & population_summaries["metric_name"].eq(metric_name)
+                & population_summaries["status"].eq("ok")
+            ]
+            if len(summary) == 1:
+                item = summary.iloc[0]
+                axis.vlines(
+                    position,
+                    float(item["q25"]),
+                    float(item["q75"]),
+                    color="black",
+                    linewidth=3.0,
+                    zorder=3,
+                )
+                axis.plot(
+                    [position - 0.13, position + 0.13],
+                    [float(item["median"]), float(item["median"])],
+                    color="black",
+                    linewidth=2.0,
+                    zorder=4,
+                )
+        hpc_counts = availability["HPC_to_PFC"]
+        pfc_counts = availability["PFC_to_HPC"]
+        annotation = axis.text(
+            center,
+            -0.12,
+            f"HPC->PFC: {hpc_counts[0]} / {hpc_counts[1]}\n"
+            f"PFC->HPC: {pfc_counts[0]} / {pfc_counts[1]}",
+            transform=axis.get_xaxis_transform(),
+            ha="center",
+            va="top",
+            fontsize=7,
+            color="black",
+        )
+        annotation.set_gid("availability-counts")
+    axis.axhline(0.0, color="#666666", linestyle="--", linewidth=1.0)
+    axis.set_xticks([index * 3.0 for index in range(len(conditions))], conditions)
+    axis.set_ylabel(y_label)
+    axis.set_xlabel("Condition (blue: HPC to PFC; red: PFC to HPC)")
+    axis.set_title(f"Descriptive in-sample Granger: {representation}, {window}")
+    figure.text(
+        0.5,
+        0.01,
+        (
+            "Points are individual targets; black marks show population median and IQR. "
+            "These descriptive in-sample magnitudes are not significance tests and are not "
+            "causal evidence. Loaded spike coverage is assumed complete under "
+            f"{coverage_assumption_version}."
+        ),
+        ha="center",
+        va="bottom",
+        fontsize=9,
+        wrap=True,
+    )
+    figure.subplots_adjust(left=0.16, right=0.97, bottom=0.30, top=0.91)
+    return figure, axis
+
+
 def save_standard_regression_figures(
     result: InterregionalResults,
     figures_directory: Path | str,
@@ -403,13 +554,13 @@ def save_standard_regression_figures(
     if not destination.is_dir():
         raise ValueError("figures_directory must be an existing directory.")
     summaries = result.target_summaries
-    if summaries.empty:
-        return ()
     saved: list[Path] = []
     combinations = (
         summaries[["representation", "model_family", "window"]]
         .drop_duplicates()
         .sort_values(["representation", "model_family", "window"])
+        if not summaries.empty
+        else pd.DataFrame(columns=["representation", "model_family", "window"])
     )
     for combination in combinations.itertuples(index=False):
         cell = summaries.loc[
@@ -469,6 +620,27 @@ def save_standard_regression_figures(
                 coverage_assumption_version=result.coverage_assumption_version,
             )
             path = destination / f"cv_mse_ols_poisson_{cell.condition}_{cell.window}.png"
+            figure.savefig(path, dpi=150, facecolor="white", transparent=False)
+            plt.close(figure)
+            saved.append(path)
+    if not result.granger_scores.empty:
+        granger_cells = (
+            result.granger_scores[["representation", "model_family", "window"]]
+            .drop_duplicates()
+            .sort_values(["representation", "model_family", "window"])
+        )
+        for cell in granger_cells.itertuples(index=False):
+            figure, _ = plot_granger_summary(
+                result.granger_scores,
+                result.population_summaries,
+                representation=str(cell.representation),
+                model_family=str(cell.model_family),
+                window=str(cell.window),
+                coverage_assumption_version=result.coverage_assumption_version,
+            )
+            path = destination / (
+                f"granger_{cell.representation}_{cell.model_family}_{cell.window}.png"
+            )
             figure.savefig(path, dpi=150, facecolor="white", transparent=False)
             plt.close(figure)
             saved.append(path)

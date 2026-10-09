@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-09 09:05 EDT.
+**Snapshot date:** 2026-10-09 09:22 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -33,13 +33,17 @@ The user directed that continuous monitoring stop and the job run unattended. At
 requested spot check it remained active in Poisson cell 7 of 10 with process peak RSS unchanged at
 approximately 8.17 GiB. The user has now authorized WP10 tests-first implementation on synthetic
 data while explicitly leaving WP9 scientific acceptance, any experimental Granger run, a scale
-test, and a full retry gated on inspected completed output.
+test, and a full retry gated on inspected completed output. WP10 is now implemented and GREEN on
+local seeded synthetic data: linear and Poisson Granger metrics, all-scientific-row preparation,
+descriptive PCA scope, complete target rows, saved summaries/figures, matrix-size telemetry, and
+saved-only webapp display are present. No experimental Granger data were loaded or run.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `e857bf6`;
-- plan-owned files: `docs/neural_regression_plan.md`; only the plan is currently modified;
+- HEAD before the pending WP10 production commit: `c01ffcb`;
+- plan-owned tracked worktree files are the WP10 source and documentation changes described in the
+  09:22 EDT record below;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
 - none of those unrelated entries belongs to this plan or may be staged, changed, removed, or
   absorbed into a later package.
@@ -67,9 +71,10 @@ test, and a full retry gated on inspected completed output.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit the WP10 activation record, then write and commit the complete RED
-Granger test package before production edits. Leave Slurm job `30991341` unattended. Do not run
-Granger on experimental data, submit another job, or treat WP9 as scientifically accepted.
+**Next exact action:** commit and push the locally GREEN WP10 source/documentation package, then
+stop at the WP11 and experimental-run gates. Leave Slurm job `30991341` unattended until the user
+requests its completed-output inspection. Do not run Granger on experimental data, submit another
+job, or treat WP9 as scientifically accepted.
 
 ### Authority order
 
@@ -103,7 +108,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 benchmark running with early memory plateau | Let job `30991341` finish unattended, then inspect its complete output |
-| WP10 | Linear and Poisson descriptive Granger analyses | Synthetic tests-first implementation authorized provisionally | RED tests, implementation, local synthetic GREEN; real data remains gated |
+| WP10 | Linear and Poisson descriptive Granger analyses | Code-complete and GREEN on seeded synthetic data | Commit/push; experimental data remains gated |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
 ### Resume checklist
@@ -1114,6 +1119,40 @@ Use this template:
   demonstrate RED, then implement. Do not run CT026 Granger or poll the Poisson benchmark as part
   of this package.
 
+#### 2026-10-09 09:22 EDT - WP10 descriptive Granger implementation locally GREEN
+
+- Tests-first evidence: the activation record was committed as `43cce19`; the initial frozen
+  numerical, pipeline, plotting, runner, and saved-view tests were committed as `aa5c01c` after
+  their expected RED failures. The isolated test-spy fixture correction was committed as
+  `fa5edad`. A final RED pass exposed three concrete reporting gaps--missing descriptive-cell
+  matrix telemetry, a held-out-only heading in a Granger-only report, and an incompatible Poisson
+  selector for PC Granger--and those tests were committed separately as `c01ffcb` before the
+  production fixes.
+- Numerical implementation: `granger.py` now calculates the linear natural-log SSE ratio and
+  Poisson likelihood-ratio/deviance improvement on identical in-sample rows. It rejects undefined
+  zero-residual and substantive nested-fit inconsistencies while retaining the frozen
+  `nested_roundoff` diagnostic for tolerance-scale numerical noise. The installed SciPy
+  `gammaln(x, out=None)` API was inspected directly before first project use.
+- Pipeline implementation: Granger-only preparation no longer constructs block folds. Linear and
+  Poisson stages are independently selectable, use every scientifically eligible condition row,
+  preserve the exact configured lag/history contract, materialize target-local unavailable rows,
+  and emit the frozen in-sample score and population-summary tables. PC linear Granger uses only a
+  separately fitted descriptive all-data PCA transform; fold transforms remain rejected.
+- Execution and presentation: the offline session runner logs linear and Poisson Granger as
+  separate stages, records exact response/design shapes and byte sizes for every descriptive
+  analysis cell, saves separate Granger figures, and writes a Granger-only report without a false
+  held-out-results section. The saved-only webapp exposes an evaluation-scope selector and filters
+  model families to combinations actually present, so PC Granger cannot offer Poisson.
+- Verification: `uv run pytest -q src/tests/neural_analysis/test_interregional_*.py` completed with
+  155 passed in 17.51 seconds. Ruff reported `All checks passed!` for every changed Python source
+  and test file.
+- Scope boundary: no experimental session was loaded, no Granger analysis was run on CT026, no
+  cluster job was submitted or polled, and Slurm job `30991341` remains unattended. WP9 scientific
+  acceptance and WP11 experimental inspection remain separately gated.
+- Exact next action: commit the bounded WP10 production/documentation diff without unrelated files
+  and push. Then stop pending a user
+  request to inspect the completed WP9 benchmark or separately authorize WP11 experimental work.
+
 ## Plan objective and status
 
 This plan implements `docs/spec_neural_regression_v3.md`. It was approved and is now the
@@ -1626,8 +1665,8 @@ points from configuration.
 
 The persisted run manifest records the generating entry point. Apart from the configured
 `session_metadata_path`, expanded consumed-file paths, file hashes, runtime versions, and Git
-identity do not enter this pure computational record. Tables for stages not yet implemented are
-present with their frozen empty schemas, which keeps later additions backward compatible. Large
+identity do not enter this pure computational record. Tables for stages not requested in a run are
+present with their frozen empty schemas, which keeps stage combinations backward compatible. Large
 per-bin count/design arrays and fitted estimator objects are not retained.
 Deterministic paths record `randomness_used=false` and `random_seed=null` rather than inventing a
 seed.
