@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-09 19:13 EDT.
+**Snapshot date:** 2026-10-09 19:22 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -50,12 +50,17 @@ The user approved a bounded post-implementation performance package: document a 
 before code changes, profile the current rank-validation and IRLS costs, then use tests-first work to
 reuse already-computed design diagnostics without changing the estimator, scientific rows, or
 public standalone validation contract.
+That WP12 package is now implemented and locally GREEN. The actual-shape profile found that rank
+reuse provides a modest per-fit saving while Statsmodels IRLS remains dominant; the optimization is
+therefore retained as a simple removal of redundant work, not presented as a solution to the
+multi-hour runtime. The fast-first documentation, tests-only RED commit, implementation commit,
+focused suites, and complete 2,892-test neural suite are recorded below.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this documentation-first performance package: `108a585`;
-- the tracked worktree was clean before these documentation-only edits;
+- HEAD before the final WP12 handoff record: `9ac40f4`;
+- the tracked worktree was clean after the committed documentation, tests, and implementation;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
 - none of those unrelated entries belongs to this plan or may be staged, changed, removed, or
   absorbed into a later package.
@@ -83,10 +88,9 @@ public standalone validation contract.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit and push the fast-first user documentation and this authorization
-record without production-code changes. Then profile the current implementation, write and commit
-the diagnostic-reuse tests in RED, and only afterward implement the approved optimization. Leave
-Poisson-CV job `30991341` running without intervention; no retry or replacement is implied.
+**Next exact action:** commit and push this completed WP12 evidence record, then stop. Leave
+Poisson-CV job `30991341` running without intervention. Inspect its finalized output only after an
+explicit user request; no retry, replacement, or performance-validation job is implied.
 
 ### Authority order
 
@@ -122,7 +126,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 benchmark running with early memory plateau | Let job `30991341` finish unattended, then inspect its complete output |
 | WP10 | Linear and Poisson descriptive Granger analyses | Code-complete, synthetic-GREEN, and bounded CT026 runs technically complete | User scientific review; no additional run implied |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Neural suite GREEN; both Granger modes technically complete; Poisson CV and user scientific review pending | Leave job `30991341` untouched; obtain user decision on completed Granger output |
-| WP12 | Poisson profiling, shared design diagnostics, and fast-first operations guide | Documentation-first package authorized; production code unchanged | Commit/push docs, profile, then tests-only RED commit |
+| WP12 | Poisson profiling, shared design diagnostics, and fast-first operations guide | Complete and locally GREEN; production rerun not performed | Push final evidence; retain fast-first operational split |
 
 ### Resume checklist
 
@@ -1444,6 +1448,47 @@ Use this template:
   Poisson/pipeline tests, Ruff, and the complete neural-analysis suite before claiming completion.
 - Exact next action: commit and push this documentation-only package. Then run the baseline profile
   and begin the tests-only RED phase. Job `30991341` continues unattended.
+
+#### 2026-10-09 19:22 EDT - WP12 design-rank reuse locally complete
+
+- Documentation-first gate: commit `02d67c7` added the fast-first workflow, made the portable
+  example request all non-Poisson analyses, documented separate Poisson CV and Poisson Granger
+  submissions, and recorded the approved optimization before any production code changed. The
+  example JSON decoded successfully. The commit was pushed before the RED phase began.
+- Baseline profile: one seeded 20,163-row by 470-coefficient fit at the cluster's eight-thread limit
+  converged in six iterations and took 2.51 seconds. CProfile attributed 2.35 seconds to the
+  validated Statsmodels fit and 0.29 seconds to all three observed rank calls combined, including
+  Statsmodels' internal calls. This established before implementation that reusing the one project
+  rank check could remove real work but could not explain or eliminate the multi-hour IRLS tail.
+- RED evidence and commit: four focused tests required a supplied full rank to bypass the project
+  decomposition, rejected an incompatible supplied rank, and required both five-fold Poisson CV
+  and Poisson Granger to pass the two cell-level ranks to every target. All four failed against the
+  unchanged source for the intended missing behavior; Ruff passed. The tests-only commit is
+  `4d8104f`.
+- Implementation and contract: commit `9ac40f4` added an optional keyword-only
+  `precomputed_rank` to `fit_poisson_target`. With `None`, the standalone public function retains
+  its complete rank validation. Internal CV and Granger callers pass the rank already computed from
+  the exact unchanged shared design; type, bounds, full-rank status, finite data, intercept,
+  response, estimator, convergence, and cleanup validation remain in place. No dependency,
+  estimator setting, scientific row, axis, unit, or saved schema changed.
+- Measured effect: three paired actual-shape six-iteration fits had median elapsed times of 1.791
+  seconds with independent project rank calculation and 1.679 seconds with the cell rank reused,
+  a median saving of 0.113 seconds for that full-design target fit. This is a bounded local timing,
+  not a production-runtime guarantee. At current dimensions it supports an expected scale of
+  minutes saved across a complete CV run, while difficult target-dependent IRLS remains the
+  dominant runtime and may still require hours.
+- GREEN evidence: the four new tests passed; the complete Poisson, pipeline, and Granger files
+  passed 60/60; all inter-regional tests passed 161/161 in 12.33 seconds; Ruff passed the edited
+  source and tests; and `uv run pytest -q src/tests/neural_analysis` passed 2,892 tests with 49
+  existing warnings in 251.33 seconds. A final focused rerun after the small clarity refactor passed
+  60/60 in 2.54 seconds, and `git diff --check` passed.
+- Production boundary: no experimental data was loaded by the new commit, no cluster job was
+  submitted, and running job `30991341` was not altered or rechecked during implementation. It runs
+  the older exact commit and therefore provides no validation of this optimization. The already
+  completed Poisson Granger evidence also predates this change.
+- Exact next action: commit and push this final evidence record, then stop. A later production
+  timing run or more aggressive IRLS/parallel optimization requires separate evidence and user
+  approval.
 
 ## Plan objective and status
 
