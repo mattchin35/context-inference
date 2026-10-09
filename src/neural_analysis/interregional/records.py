@@ -829,6 +829,94 @@ def validate_fold_score_key_grid(
         raise ValueError("fold-score key grid is incomplete, duplicated, or contains extra keys.")
 
 
+def expected_granger_score_keys(
+    session_id: str,
+    config: InterregionalAnalysisConfig,
+    resolved_populations: Sequence[ResolvedRegionalPopulation],
+) -> tuple[tuple[object, ...], ...]:
+    """Return the complete applicable descriptive Granger score key grid.
+
+    ``resolved_populations`` contains exactly one ordered PFC and HPC
+    population. Returned tuples follow ``GRANGER_SCORE_KEY``; counts and PCA
+    ranks are dimensionless, and Poisson applies only to direct-unit targets.
+    """
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError("session_id must be a nonempty string.")
+    populations = {population.role: population for population in resolved_populations}
+    if set(populations) != {"PFC", "HPC"} or len(resolved_populations) != 2:
+        raise ValueError(
+            "resolved_populations must contain exactly one PFC and one HPC population."
+        )
+    validate_resolved_populations(populations["PFC"], populations["HPC"])
+    model_families = []
+    if "linear_granger" in config.analyses:
+        model_families.append("ols")
+    if "poisson_granger" in config.analyses:
+        model_families.append("poisson")
+    target_region_by_direction = {"HPC_to_PFC": "PFC", "PFC_to_HPC": "HPC"}
+    requested_components = {
+        "PFC": config.pca.pfc_components,
+        "HPC": config.pca.hpc_components,
+    }
+    keys: list[tuple[object, ...]] = []
+    for direction, target_region in target_region_by_direction.items():
+        for representation in config.representations:
+            if representation == "units":
+                targets = populations[target_region].unit_ids
+            else:
+                targets = tuple(
+                    f"{target_region}:PC{rank:02d}"
+                    for rank in range(1, requested_components[target_region] + 1)
+                )
+            for model_family in model_families:
+                if model_family == "poisson" and representation == "pcs":
+                    continue
+                for condition in config.filters.conditions:
+                    for window in config.prediction_windows:
+                        for target_id in targets:
+                            keys.append(
+                                (
+                                    session_id,
+                                    direction,
+                                    representation,
+                                    model_family,
+                                    condition,
+                                    window,
+                                    target_id,
+                                )
+                            )
+    return tuple(sorted(keys))
+
+
+def validate_granger_score_key_grid(
+    table: pd.DataFrame,
+    session_id: str,
+    config: InterregionalAnalysisConfig,
+    resolved_populations: Sequence[ResolvedRegionalPopulation],
+) -> None:
+    """Require exactly the complete applicable Granger primary-key grid.
+
+    ``table`` may contain the full frozen score schema or only the columns in
+    ``GRANGER_SCORE_KEY``. Additional columns are ignored by this grid check.
+    """
+    missing_columns = set(GRANGER_SCORE_KEY) - set(table.columns)
+    if missing_columns:
+        raise ValueError(
+            f"Granger key grid is missing columns: {sorted(missing_columns)}"
+        )
+    actual = [
+        tuple(row)
+        for row in table.loc[:, GRANGER_SCORE_KEY].itertuples(index=False, name=None)
+    ]
+    expected = expected_granger_score_keys(
+        session_id, config, resolved_populations
+    )
+    if len(actual) != len(set(actual)) or set(actual) != set(expected):
+        raise ValueError(
+            "Granger key grid is incomplete, duplicated, or contains extra keys."
+        )
+
+
 def default_units_and_axes() -> dict[str, object]:
     """Return the exact JSON-compatible units and axis metadata mapping."""
     return {

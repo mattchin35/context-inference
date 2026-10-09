@@ -54,6 +54,7 @@ from .records import (
     make_empty_result_tables,
     result_table_from_rows,
     validate_fold_score_key_grid,
+    validate_granger_score_key_grid,
     validate_interregional_results,
 )
 from .resource_usage import ResourceMonitor
@@ -523,6 +524,13 @@ def compute_single_session(
     if {"ols_cv", "poisson_cv"} & set(plan.config.analyses):
         validate_fold_score_key_grid(
             fold_scores, plan.session_id, plan.config, plan.resolved_populations
+        )
+    if {"linear_granger", "poisson_granger"} & set(plan.config.analyses):
+        validate_granger_score_key_grid(
+            tables["granger_scores"],
+            plan.session_id,
+            plan.config,
+            plan.resolved_populations,
         )
     result = InterregionalResults(
         schema_version=RESULT_SCHEMA_VERSION,
