@@ -20,15 +20,25 @@ same 18 targets under `all`, `correct_rewarded`, `omission`, `incorrect`,
 normative amendments `docs/task_variable_spec_v6.md` and
 `docs/task_variable_spec_v7.md`.
 
+**Completed six-condition evidence:** Slurm job `30990871` completed the full
+fixed-mode CT026 run at 2026-10-09T06:19:58Z. All 108 configured
+condition-target cells reached durable completion, with five structurally
+unavailable condition-target cells, no run warnings, 3,504,521,216 bytes peak
+RSS, and 48,185.293 seconds wall time. The run requested 57,600 categorical
+and 72,000 numerical time-bin fit cells. Modeling consumed 48,070.298 seconds,
+confirming that per-time-bin estimation, especially direct-unit estimation,
+dominates the measured workload.
+
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08
+**Snapshot date:** 2026-10-09
 
 **Current phase:** WP0-WP11 are complete. The condition-resolved v3 extension
 is implemented tests-first through production commit `d7c6b1c`; its final
 documentation and real synthetic schema-2 gate began with RED commit
 `8138aeb`; documentation GREEN is `e00653b`. The complete affected local suite
-passed 945 tests. No all-condition experimental job has been submitted.
+passed 945 tests. The all-condition experimental run subsequently completed as
+Slurm job `30990871`; the measured evidence is recorded above.
 The first v2 bounded run proved the
 convergence repair but exposed a competing-resume lifecycle defect during
 diagnosis. The approved repair is committed through `77ff461`, pushed, and
@@ -134,13 +144,12 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
   added the missing cleanup-failure test, and locked the valid one-usable-unit
   PCA edge against the older helper's stricter minimum.
 
-**Next exact action:** push the completed v3 implementation and local gate.
-Then update the tracked-clean cluster checkout, create and verify the
-exact six-condition CT026 configuration, and run matching local/cluster dry
-runs. The first full condition submission must use one CPU, `8G`,
-`3-00:00:00`, and the `condition_validation` profile. A real submission remains
-a separately confirmed exact action; WP13 remains deferred until this output
-is inspected.
+**Next exact action:** inspect the completed six-condition CT026 output. WP13
+batch execution remains deferred until the single-session output is accepted.
+The separate condition-generalization proposal is governed by
+`docs/task_variable_condition_generalization_spec_v1.md` and its own
+implementation plan; documentation approval does not authorize its code or
+scientific execution.
 
 ## Condition-resolved extension
 
@@ -3233,6 +3242,20 @@ representation
 outer_fold
 regularization_mode
 ```
+
+This identity is literal: a new estimator is fitted for every `time_bin`
+value. The fold-local regional scaler and PCA basis are shared across those
+fits, but coefficients and intercepts are time-bin-specific. A time-resolved
+curve therefore joins held-out scores from independently fitted readouts; it
+does not evaluate one fixed decoder repeatedly through time. In fixed mode the
+requested outer-fit count is
+
+```
+targets * conditions * time_bins * regions * representations * outer_folds
+```
+
+For the completed CT026 condition-resolved run this was
+`18 * 6 * 40 * 3 * 2 * 5 = 129,600` requested fit cells.
 
 It records status/reason, train/test counts, class counts when applicable,
 requested/effective feature counts, estimator parameters, convergence status,

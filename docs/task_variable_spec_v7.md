@@ -58,6 +58,13 @@ with no eligible rows, a constant target, or another already declared
 scientific invalidity is retained as explicit unavailable output; it is not
 dropped, pooled with another condition, or assigned a fabricated score.
 
+Condition resolution does not change the revision-5 per-time-bin estimator
+contract. Within every condition-target cell, each time bin receives a newly
+fit decoder for every outer-fold/region/representation combination. Fold-local
+scaling and PCA are reused across time bins, but estimator coefficients and
+intercepts are not. Adjacent plotted time points therefore remain scores from
+different fitted decoders, not repeated evaluations of one decoder.
+
 Execution is condition-major in canonical configured order, then target-major
 in canonical configured order. Durable progress uses `condition::target`
 identifiers. Condition-aware checkpoint files use

@@ -351,6 +351,37 @@ quantity across the time axis, including post-event bins.
 The task design is accepted as preventing overlap between different trials'
 selected windows, so no additional overlap exclusion is required.
 
+### 8.1 Per-time-bin estimator contract
+
+Time resolution comes from fitting a separate estimator at every time bin. For
+each target, outer fold, region configuration, and representation, the
+pipeline fits one decoder from only the selected bin's neural features. The
+fitted coefficients and intercept at one time bin are not reused to score an
+adjacent time bin.
+
+Training-only unit scaling and each regional PCA basis are the exception: they
+are fit from the pooled training-trial x time-bin observations described in
+Section 9, then reused across all time-bin estimators in that fold. Thus the
+preprocessing coordinate system is shared across time, but the predictive
+readout is independently optimized at each time bin.
+
+Consequently, adjacent points in a time-resolved score plot represent scores
+from different fitted decoders. The plot answers whether an independently
+optimized linear readout is available at each time; it does not show one
+fixed decoder being followed through time and does not by itself establish a
+temporally invariant population code.
+
+In fixed mode, the requested outer-estimator count before declared
+invalidities is
+
+```
+n_targets * n_conditions * n_time_bins * 3 region configurations
+    * 2 representations * n_outer_folds
+```
+
+Revision 5 originally had one pooled `all` condition. Revision 7 supplies the
+condition axis used in the general expression above.
+
 ## 9. Neural representations
 
 The initial implementation computes both representations below for all three
