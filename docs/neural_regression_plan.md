@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-09 11:27 EDT.
+**Snapshot date:** 2026-10-09 13:07 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -36,14 +36,18 @@ data while explicitly leaving WP9 scientific acceptance, any experimental Grange
 test, and a full retry gated on inspected completed output. WP10 is now implemented and GREEN on
 local seeded synthetic data: linear and Poisson Granger metrics, all-scientific-row preparation,
 descriptive PCA scope, complete target rows, saved summaries/figures, matrix-size telemetry, and
-saved-only webapp display are present. No experimental Granger data were loaded or run.
+saved-only webapp display are present. The separately approved bounded CT026 linear- and
+Poisson-Granger jobs both completed from exact commit `6340b48`. The Poisson run completed all 469
+targets in approximately 96.5 minutes with a 10.02-GiB process peak that was essentially flat after
+target 25 of the first direction. It returned 404 valid scores and 65 explicit nonconvergence rows;
+the detailed technical evidence and interpretation limits are recorded below. The independent
+Poisson-CV job `30991341` remains outside this inspection and must continue unattended.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before the pending WP10 production commit: `c01ffcb`;
-- plan-owned tracked worktree files are the WP10 source and documentation changes described in the
-  09:22 EDT record below;
+- HEAD before this Poisson-Granger completion record: `53da57c`;
+- the tracked worktree was clean before this documentation-only update;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
 - none of those unrelated entries belongs to this plan or may be staged, changed, removed, or
   absorbed into a later package.
@@ -71,9 +75,10 @@ saved-only webapp display are present. No experimental Granger data were loaded 
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit and push the completed linear-Granger inspection record. Leave
-Poisson-Granger job `31002084` and Poisson-CV job `30991341` unattended. The user reviews the
-linear result scientifically; no additional production run or retry is implied.
+**Next exact action:** commit and push the completed Poisson-Granger inspection record. Leave
+Poisson-CV job `30991341` untouched until the user explicitly requests its completed-output
+inspection. The user reviews both Granger results scientifically; no additional production run or
+retry is implied.
 
 ### Authority order
 
@@ -107,8 +112,8 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 benchmark running with early memory plateau | Let job `30991341` finish unattended, then inspect its complete output |
-| WP10 | Linear and Poisson descriptive Granger analyses | Code-complete, synthetic-GREEN, and pushed through `9b87574` | Experimental data remains gated |
-| WP11 | Final synthetic integration, documentation, and one-session full inspection | Linear Granger technically complete; Poisson Granger running; user scientific review pending | Leave Poisson jobs unattended; obtain user decision on linear output |
+| WP10 | Linear and Poisson descriptive Granger analyses | Code-complete, synthetic-GREEN, and bounded CT026 runs technically complete | User scientific review; no additional run implied |
+| WP11 | Final synthetic integration, documentation, and one-session full inspection | Neural suite GREEN; both Granger modes technically complete; Poisson CV and user scientific review pending | Leave job `30991341` untouched; obtain user decision on completed Granger output |
 
 ### Resume checklist
 
@@ -1334,6 +1339,58 @@ Use this template:
   not queried during this result inspection and remain unattended.
 - Exact next action: commit and push this record, then await the user's scientific decision or an
   explicit request to inspect another completed job.
+
+#### 2026-10-09 13:07 EDT - bounded Poisson Granger run technically complete
+
+- Completion identity: Slurm job `31002084` exited the queue and its scheduler log reports
+  `SessionRunReport(..., status='completed')`. The finalized immutable run is
+  `interregional_regression_20261009T151155015701Z_8c643ee367a5` under
+  `analysis_runs/interregional_granger_poisson_benchmarks`, with fingerprint
+  `8c643ee367a5a64a9f28b443b9a057692e461665f6e05c59045fb07f5d13129a`. The exact execution
+  commit was `6340b482cdbfc2beae0af9e685e195c0589c5497`, and the checkout was tracked-clean. Slurm
+  accounting did not return a usable row at inspection time, so no scheduler state or MaxRSS is
+  claimed beyond the completed wrapper log and internal telemetry.
+- Execution evidence: the production trusted loader validated the saved result. The run completed
+  in 5,791.82 seconds (approximately 96 minutes 32 seconds); input validation and hashing took
+  2.08 seconds, preparation 7.10 seconds, Poisson Granger 5,783.50 seconds, and persistence,
+  plotting, and summary writing together took approximately 1.10 seconds. The complete resource
+  summary contains 233 records and reports process peak RSS 10,755,375,104 bytes (approximately
+  10.02 GiB); cluster cgroup fields were unavailable.
+- Memory conclusion: process peak RSS rose from 1.05 GiB at the first cell start to 9.97 GiB by
+  target 25 of 160, remained 9.97 GiB through the end of that direction, and ranged only from
+  9.97 to 10.02 GiB across all 309 targets in the second direction. It ended at 10.02 GiB. This
+  completed all targets without progressive target-wise growth and is production evidence that the
+  previously reproduced cyclic-retention/OOM defect is resolved for this bounded Granger run. It
+  is not a general upper bound for other sessions or configurations.
+- Data/result completeness: 646 trials entered the `all` condition and both directions used 25,194
+  matched history rows, or 39 rows per eligible trial. The frozen grid contains 469 unit targets:
+  160 PFC targets for HPC-to-PFC and 309 HPC targets for PFC-to-HPC. Of these, 404 were valid and
+  65 were explicitly `fit_unavailable`, an overall unavailable rate of 13.86%. HPC-to-PFC had
+  137 valid and 23 unavailable targets (14.38% unavailable); PFC-to-HPC had 267 valid and 42
+  unavailable targets (13.59% unavailable). No target row was omitted.
+- Fit diagnostics: the primary row reasons were 45 `poisson_nonconverged_restricted` and 20
+  `poisson_nonconverged_full`. In detail, three HPC-to-PFC targets failed both fits, 20 failed only
+  the full fit, and all 42 unavailable PFC-to-HPC targets failed both fits. All valid fits reported
+  convergence, with median six iterations for both restricted and full models; maxima were 22/30
+  iterations for HPC-to-PFC and 40/48 for PFC-to-HPC. There were no roundoff or other diagnostics.
+- Descriptive magnitudes: valid HPC-to-PFC targets had median mean deviance improvement 0.0184414,
+  IQR 0.0146195-0.0248271, and range 0.0111833-0.0478394. Valid PFC-to-HPC targets had median
+  0.0216088, IQR 0.0143955-0.0342415, and range 0.00614908-0.189916. The latter median is larger,
+  but the distributions overlap and the unavailable fits need not be random; this bounded
+  descriptive run does not establish a directional-strength difference.
+- Presentation QA: `granger_units_poisson_whole.png` is readable, shows individual targets plus
+  population median/IQR and valid/unavailable counts, uses the correct mean-deviance-improvement
+  label, and prominently identifies the result as descriptive and in-sample. Its caption states
+  that the values are neither significance tests nor causal evidence and repeats the complete
+  spike-coverage assumption.
+- Interpretation boundary: this establishes technical production completion for bounded
+  all/whole unit Poisson Granger on CT026. It does not establish formal inference, causality,
+  full-condition validation, general memory bounds, or user scientific acceptance. The 13.86%
+  unavailable rate is material and must remain visible in any interpretation. Poisson-CV job
+  `30991341` was not queried during this inspection and remains untouched.
+- Exact next action: commit and push this record, then await the user's scientific decision or an
+  explicit request to inspect job `30991341` after it has completed. No retry or new production run
+  is implied.
 
 ## Plan objective and status
 
