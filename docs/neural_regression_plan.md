@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-09 10:43 EDT.
+**Snapshot date:** 2026-10-09 10:51 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -71,9 +71,10 @@ saved-only webapp display are present. No experimental Granger data were loaded 
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** execute the approved code-only WP11 synthetic qualification described in the
-10:43 EDT record below. Leave Slurm job `30991341` unattended. Do not run experimental data,
-submit another job, change production worker policy, or treat WP9 as scientifically accepted.
+**Next exact action:** commit and push the WP11 documentation checkpoint. The code-only portion is
+complete; stop at the real-session/production gate. Leave Slurm job `30991341` unattended. Do not
+run experimental data, submit another job, change production worker policy, or treat WP9 as
+scientifically accepted.
 
 ### Authority order
 
@@ -108,7 +109,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 benchmark running with early memory plateau | Let job `30991341` finish unattended, then inspect its complete output |
 | WP10 | Linear and Poisson descriptive Granger analyses | Code-complete, synthetic-GREEN, and pushed through `9b87574` | Experimental data remains gated |
-| WP11 | Final synthetic integration, documentation, and one-session full inspection | Code-only synthetic qualification authorized; real-session portion not authorized | RED tests, bounded implementation, full local suites; real command separately approved |
+| WP11 | Final synthetic integration, documentation, and one-session full inspection | Code-only portion complete and synthetic-GREEN; real-session portion not authorized | Commit/push docs; real command separately approved |
 
 ### Resume checklist
 
@@ -1178,6 +1179,35 @@ Use this template:
 - Exact next action: commit this activation record, commit failing tests before production edits,
   demonstrate RED, then implement the smallest bounded changes and run the full neural-analysis
   and import suites plus Ruff.
+
+#### 2026-10-09 10:51 EDT - WP11 code-only qualification complete
+
+- RED/GREEN evidence and commits: `11df639` contains only the failing Granger-grid and combined-run
+  tests. Both failed because the expected/validation functions were absent. The combined synthetic
+  production path itself completed before reaching that missing assertion. `cd204be` then added
+  the result-grid contract and session-boundary enforcement; both focused tests passed.
+- Combined integration evidence: one immutable seeded run executed fold PCA, OLS CV, Poisson CV,
+  linear Granger, and Poisson Granger in canonical order. It reloaded with 30 complete CV key rows,
+  six complete Granger key rows, ten fold-PCA provenance rows, two descriptive-PCA provenance rows,
+  both evaluation scopes, all expected figure families, and both held-out and descriptive report
+  sections.
+- Attributable verification: the complete interregional suite plus the package import smoke test
+  passed with 160 tests in 22.19 seconds. Ruff reported `All checks passed!` for every changed
+  Python source and test file.
+- Broad-suite result: `uv run pytest -q src/tests/neural_analysis` completed with 2,886 passed and
+  two failures in 314.80 seconds. Both failures are the pre-existing quickstart glob treating the
+  tracked other-task file `docs/examples/neural_analysis/task_decoding_config.json` as session
+  metadata and then reporting its absent `schema_version`. This WP11 package did not modify that
+  file or the unrelated quickstart contract; the exact failures remain recorded rather than being
+  misrepresented as a fully green broad suite.
+- Documentation: the top-level neural-analysis README now describes all four stages and explicitly
+  labels the workflow code-complete and synthetic-verified but not production-verified. It retains
+  the complete-coverage, predictive-only, descriptive-only, and no-causal-claim limitations.
+- Scope boundary: no experimental data were loaded, the Poisson cluster job was not polled, and no
+  production performance, worker-policy, or scientific-acceptance claim was made.
+- Exact next action: commit and push this documentation checkpoint, then stop. Later, inspect the
+  completed Poisson benchmark when requested and obtain separate approval for any experimental
+  all-stage session command and output path.
 
 ## Plan objective and status
 

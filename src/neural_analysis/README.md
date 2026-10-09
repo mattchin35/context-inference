@@ -182,8 +182,11 @@ directory for a new source/configuration identity.
 ## Inter-regional PFC/HPC regression
 
 The inter-regional workflow performs bidirectional held-out OLS using direct
-units and optional fold-local regional PCs. Its scientific configuration is
-separate from session metadata; copy
+units and optional fold-local regional PCs, target-wise held-out Poisson GLMs
+for direct-unit counts, and separate descriptive in-sample linear and Poisson
+Granger-style comparisons. The four stages are independently configured except
+that Poisson CV retains its matched OLS CV comparison. Its scientific
+configuration is separate from session metadata; copy
 `docs/examples/neural_analysis/interregional_regression_config.json.example`,
 replace the absolute metadata path and explicit probe roles, then run:
 
@@ -207,6 +210,13 @@ copied runners, stage log, scientific summary, and PNG figures. Select
 these saved outputs. The view is read-only and never runs or resumes analysis.
 See `src/neural_analysis/interregional/README.md` for axes, units, module
 ownership, persistence details, and interpretation limits.
+
+The implementation is code-complete and verified on seeded synthetic data but
+is not yet production-verified for the full Poisson or Granger workload.
+Held-out CV metrics are predictive summaries. Granger values are descriptive
+in-sample nested-model improvements, not significance tests or causal evidence.
+Loaded spike coverage is currently assumed complete across every requested
+trial window.
 
 ## Python API
 
