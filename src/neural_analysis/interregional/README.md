@@ -58,17 +58,96 @@ no whitening, and no random generator. The same regional fold transforms are
 used across directions, conditions, and windows. Descriptive all-data PCA is a
 separate scope and is rejected by cross-validation.
 
-## Commands
+## Fast-first workflow
 
 Start from
 `docs/examples/neural_analysis/interregional_regression_config.json.example`,
 replace its absolute metadata path and probe IDs, and keep outputs outside the
-Git checkout.
+Git checkout. The example intentionally runs every non-Poisson analysis first:
+
+```json
+"representations": ["units", "pcs"],
+"analyses": ["ols_cv", "linear_granger"]
+```
+
+Use a descriptive output root such as
+`/absolute/session/path/analysis_runs/interregional_fast`. Run the dry-run, then
+create the immutable result:
 
 ```bash
 uv run python -m src.neural_analysis.interregional.run_session dry-run \
-  --config /path/to/session/interregional_regression_config.json
+  --config /path/to/session/interregional_fast_config.json
 
+uv run python -m src.neural_analysis.interregional.run_session new \
+  --config /path/to/session/interregional_fast_config.json
+
+# Use the same configuration through Slurm when local execution is unsuitable.
+sbatch src/shell_scripts/interregional_regression_slurm.sh new \
+  --config /absolute/cluster/path/interregional_fast_config.json
+```
+
+Wait for a nonhidden finalized run directory before interpreting results. Read
+its `summary.md` and inspect every PNG beneath `figures/`. The metadata-driven
+webapp provides the same completed-run-only view:
+
+```bash
+uv run streamlit run src/neural_analysis/psth_webapp.py -- \
+  --session-metadata /path/to/session/neural_session.json
+```
+
+Select **Inter-regional regression results**. The default result locator is
+`analysis_runs`; if the configuration uses another session-relative output
+root, enter that locator in the results view. The webapp never starts or
+resumes computation.
+
+## Submit Poisson work afterward
+
+Do not add Poisson stages to the fast configuration when early access to the
+fast result matters: a combined run remains hidden and incomplete until its
+slowest requested stage finishes. Instead, copy the validated session settings
+into two separate configurations with distinct output roots.
+
+For held-out Poisson CV use:
+
+```json
+"representations": ["units"],
+"analyses": ["ols_cv", "poisson_cv"]
+```
+
+`poisson_cv` deliberately requires `ols_cv` in the same run so its exploratory
+OLS/Poisson MSE comparison uses identical folds and rows. Repeating this fast
+unit OLS stage is preferable to composing results across immutable runs.
+
+For descriptive Poisson Granger use:
+
+```json
+"representations": ["units"],
+"analyses": ["poisson_granger"]
+```
+
+Dry-run both configurations before submission, then submit them independently:
+
+```bash
+uv run python -m src.neural_analysis.interregional.run_session dry-run \
+  --config /path/to/session/interregional_poisson_cv_config.json
+uv run python -m src.neural_analysis.interregional.run_session dry-run \
+  --config /path/to/session/interregional_poisson_granger_config.json
+
+sbatch src/shell_scripts/interregional_regression_slurm.sh new \
+  --config /absolute/cluster/path/interregional_poisson_cv_config.json
+sbatch src/shell_scripts/interregional_regression_slurm.sh new \
+  --config /absolute/cluster/path/interregional_poisson_granger_config.json
+```
+
+Each job writes its own trace while running and publishes only after atomic
+finalization. Inspect its `resource_summary.json`, `summary.md`, and figures
+after completion. A retry is never submitted automatically.
+
+## General commands
+
+The same single-session command can explicitly create another immutable run:
+
+```bash
 uv run python -m src.neural_analysis.interregional.run_session new \
   --config /path/to/session/interregional_regression_config.json
 
@@ -99,7 +178,8 @@ is missing, and do not construct folds. Linear PC Granger fits one separate
 session-wide descriptive PCA basis; it never reuses fold-local CV transforms.
 
 The cluster wrapper runs the same session command in the frozen offline
-environment; it does not implement a separate computation path:
+environment; it does not implement a separate computation path. For any other
+configuration:
 
 ```bash
 sbatch src/shell_scripts/interregional_regression_slurm.sh new \

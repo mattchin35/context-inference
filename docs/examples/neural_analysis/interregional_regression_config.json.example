@@ -39,6 +39,6 @@
   },
   "pca": {"pfc_components": 10, "hpc_components": 10},
   "representations": ["units", "pcs"],
-  "analyses": ["ols_cv"],
+  "analyses": ["ols_cv", "linear_granger"],
   "run": {"output_root": null}
 }

@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-09 13:07 EDT.
+**Snapshot date:** 2026-10-09 19:13 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -42,12 +42,20 @@ targets in approximately 96.5 minutes with a 10.02-GiB process peak that was ess
 target 25 of the first direction. It returned 404 valid scores and 65 explicit nonconvergence rows;
 the detailed technical evidence and interpretation limits are recorded below. The independent
 Poisson-CV job `30991341` remains outside this inspection and must continue unattended.
+At the latest requested one-shot check, that job was still actively computing after approximately
+27.5 hours: all ten OLS cells and nine of ten Poisson cells were complete, and the final cell had
+reached target 25 of 309. Memory remained flat near 8.17 GiB and scheduler accounting showed active
+CPU use, so the remaining issue is runtime rather than memory accumulation or a stalled process.
+The user approved a bounded post-implementation performance package: document a fast-first workflow
+before code changes, profile the current rank-validation and IRLS costs, then use tests-first work to
+reuse already-computed design diagnostics without changing the estimator, scientific rows, or
+public standalone validation contract.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this Poisson-Granger completion record: `53da57c`;
-- the tracked worktree was clean before this documentation-only update;
+- HEAD before this documentation-first performance package: `108a585`;
+- the tracked worktree was clean before these documentation-only edits;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
 - none of those unrelated entries belongs to this plan or may be staged, changed, removed, or
   absorbed into a later package.
@@ -75,10 +83,10 @@ Poisson-CV job `30991341` remains outside this inspection and must continue unat
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit and push the completed Poisson-Granger inspection record. Leave
-Poisson-CV job `30991341` untouched until the user explicitly requests its completed-output
-inspection. The user reviews both Granger results scientifically; no additional production run or
-retry is implied.
+**Next exact action:** commit and push the fast-first user documentation and this authorization
+record without production-code changes. Then profile the current implementation, write and commit
+the diagnostic-reuse tests in RED, and only afterward implement the approved optimization. Leave
+Poisson-CV job `30991341` running without intervention; no retry or replacement is implied.
 
 ### Authority order
 
@@ -114,6 +122,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 benchmark running with early memory plateau | Let job `30991341` finish unattended, then inspect its complete output |
 | WP10 | Linear and Poisson descriptive Granger analyses | Code-complete, synthetic-GREEN, and bounded CT026 runs technically complete | User scientific review; no additional run implied |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Neural suite GREEN; both Granger modes technically complete; Poisson CV and user scientific review pending | Leave job `30991341` untouched; obtain user decision on completed Granger output |
+| WP12 | Poisson profiling, shared design diagnostics, and fast-first operations guide | Documentation-first package authorized; production code unchanged | Commit/push docs, profile, then tests-only RED commit |
 
 ### Resume checklist
 
@@ -1391,6 +1400,50 @@ Use this template:
 - Exact next action: commit and push this record, then await the user's scientific decision or an
   explicit request to inspect job `30991341` after it has completed. No retry or new production run
   is implied.
+
+#### 2026-10-09 19:13 EDT - Poisson runtime diagnosis and optimization package authorized
+
+- Live-job evidence: the user requested one bounded check of Poisson-CV job `30991341`. It remained
+  `RUNNING` after approximately 27.5 hours on `cpu-747`. All ten OLS cells completed in about 27
+  seconds, all five HPC-to-PFC Poisson folds completed in approximately 26-29 minutes each, and four
+  of five PFC-to-HPC Poisson folds completed in approximately 2.81, 16.38, 4.19, and 1.70 hours.
+  The final fold had reached target 25 of 309. No cancellation, retry, or replacement was requested
+  or performed.
+- Resource diagnosis: the trace retained a flat 8,772,345,856-byte process peak (approximately
+  8.17 GiB), while `sstat` reported approximately 5.6 average utilized CPUs from the eight-CPU
+  allocation. Equal-sized PFC-to-HPC folds varied by nearly an order of magnitude, localizing the
+  long runtime to target-dependent computation inside the fit loop rather than input loading,
+  output I/O, a memory leak, or an idle process.
+- Workload diagnosis: the bounded CV configuration requires 469 targets times five folds times two
+  nested models, or 4,690 Poisson GLM fits. Each fold uses approximately 20,100 training rows with
+  161 or 310 restricted coefficients and 470 full coefficients. Statsmodels IRLS may perform up to
+  100 weighted least-squares iterations per fit. The pipeline already computes rank and residual
+  degrees of freedom once per cell/design, but the public target-fit boundary currently repeats
+  `numpy.linalg.matrix_rank` for every one of the 4,690 fits. The relative rank-versus-IRLS cost
+  remains to be measured; no speedup is claimed yet.
+- User decision and scope: the user approved profiling plus reuse of the existing design
+  diagnostics, with user documentation edited before implementation. The estimator, IRLS tolerance,
+  maximum iterations, folds, rows, units, metrics, unavailable policy, and external dependencies
+  remain unchanged. More aggressive solver changes or within-session parallelism are not included.
+- Documentation endpoint: the package README now begins with a fast-first workflow. The portable
+  example requests `representations=["units","pcs"]` and
+  `analyses=["ols_cv","linear_granger"]`, producing all non-Poisson results in an independent
+  immutable run before slow jobs are submitted. The guide then supplies separate, exact local and
+  Slurm commands for `ols_cv` plus `poisson_cv` and for standalone `poisson_granger`, requires
+  distinct output roots, and explains completed-run inspection. Poisson CV deliberately repeats
+  unit OLS in its own run to preserve matched folds/rows; cross-run result composition is rejected
+  as disproportionate complexity for a roughly 27-second stage.
+- Tests required before implementation: preserve standalone input/rank validation; prove one
+  restricted and one full diagnostic calculation per analysis cell rather than per target; prove
+  repeated targets reuse diagnostics; preserve fit values, iteration diagnostics, unavailable
+  reasons, and generated CV/Granger tables on seeded data; and retain generation-0 cleanup at the
+  target-fit boundary. Tests must be committed in RED before production changes.
+- Performance verification: first measure the unchanged implementation with explicit rank and IRLS
+  timings on a bounded representative workload. After GREEN, repeat the same workload and report
+  rank-call count and elapsed-time changes without a brittle wall-clock assertion. Run focused
+  Poisson/pipeline tests, Ruff, and the complete neural-analysis suite before claiming completion.
+- Exact next action: commit and push this documentation-only package. Then run the baseline profile
+  and begin the tests-only RED phase. Job `30991341` continues unattended.
 
 ## Plan objective and status
 
