@@ -234,7 +234,12 @@ def _fit_validated_poisson_target(
         model = None
 
 
-def fit_poisson_target(design: np.ndarray, count_response: np.ndarray) -> PoissonFit:
+def fit_poisson_target(
+    design: np.ndarray,
+    count_response: np.ndarray,
+    *,
+    precomputed_rank: int | None = None,
+) -> PoissonFit:
     """Fit one strict unpenalized Poisson GLM with a log link.
 
     Parameters
@@ -246,6 +251,10 @@ def fit_poisson_target(design: np.ndarray, count_response: np.ndarray) -> Poisso
     count_response : numpy.ndarray
         Vector with shape ``(observation,)`` containing nonnegative integer
         spike counts per bin. Counts are neither scaled nor converted to rates.
+    precomputed_rank : int or None, optional
+        Exact matrix rank previously computed from this same unchanged design.
+        Supplying it avoids a repeated decomposition when many targets share
+        one design. ``None`` retains independent public rank validation.
 
     Returns
     -------
@@ -269,7 +278,18 @@ def fit_poisson_target(design: np.ndarray, count_response: np.ndarray) -> Poisso
         raise ValueError("design must contain an explicit intercept in its first column.")
 
     feature_count = int(x.shape[1])
-    rank = int(np.linalg.matrix_rank(x))
+    if precomputed_rank is None:
+        rank = int(np.linalg.matrix_rank(x))
+    elif isinstance(precomputed_rank, (int, np.integer)) and not isinstance(
+        precomputed_rank, (bool, np.bool_)
+    ):
+        rank = int(precomputed_rank)
+    else:
+        raise ValueError("precomputed_rank must be an integer or None.")
+    if rank < 0 or rank > feature_count:
+        raise ValueError(
+            "precomputed_rank must be between zero and the design feature count."
+        )
     if rank != feature_count:
         raise ValueError(
             f"Poisson design is rank deficient: rank {rank}, features {feature_count}."

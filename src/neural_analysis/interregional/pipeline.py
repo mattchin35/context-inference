@@ -853,6 +853,10 @@ def _score_one_poisson_fold(
         "restricted": (data.restricted_train, data.restricted_test),
         "full": (data.full_train, data.full_test),
     }
+    design_ranks = {
+        "restricted": data.restricted_info[1],
+        "full": data.full_info[1],
+    }
     rows: list[dict[str, object]] = []
     for target_position, target_id in enumerate(target_ids):
         training_counts = data.train_responses[:, target_position]
@@ -865,7 +869,11 @@ def _score_one_poisson_fold(
                 continue
             train_design, test_design = designs[side]
             try:
-                fitted = fit_poisson_target(train_design, training_counts)
+                fitted = fit_poisson_target(
+                    train_design,
+                    training_counts,
+                    precomputed_rank=design_ranks[side],
+                )
                 fits[side] = fitted
                 expected_counts = predict_poisson_mean(test_design, fitted.parameters)
                 side_scores[side] = score_poisson_predictions(
@@ -1604,6 +1612,10 @@ def _score_poisson_granger_cell(
         **_granger_cell_progress_details(data),
     )
     design_restricted, design_full = _cell_design_reasons(data)
+    design_ranks = {
+        "restricted": data.restricted_info[1],
+        "full": data.full_info[1],
+    }
     rows: list[dict[str, object]] = []
     for position, target_id in enumerate(target_ids):
         base = _granger_row_base(
@@ -1631,7 +1643,11 @@ def _score_poisson_granger_cell(
             if reasons[side] is not None:
                 continue
             try:
-                fits[side] = fit_poisson_target(design, response)
+                fits[side] = fit_poisson_target(
+                    design,
+                    response,
+                    precomputed_rank=design_ranks[side],
+                )
                 predictions[side] = predict_poisson_mean(
                     design, fits[side].parameters
                 )
