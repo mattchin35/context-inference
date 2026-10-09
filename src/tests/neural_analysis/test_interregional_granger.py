@@ -320,6 +320,37 @@ def test_linear_and_poisson_granger_stages_are_runtime_independent(monkeypatch) 
     assert poisson_scores["likelihood_ratio"].notna().any()
 
 
+def test_poisson_granger_reuses_each_cell_design_rank_across_targets(
+    monkeypatch,
+) -> None:
+    """Each descriptive direction passes its two shared ranks to target fits."""
+    prepared = _prepared(analyses=("poisson_granger",))
+    original_diagnostics = pipeline._design_diagnostics
+    original_fit = pipeline.fit_poisson_target
+    diagnostic_calls = 0
+    fitted_designs: list[tuple[int, int | None]] = []
+
+    def count_diagnostics(design):
+        """Count shared direction diagnostics while preserving their result."""
+        nonlocal diagnostic_calls
+        diagnostic_calls += 1
+        return original_diagnostics(design)
+
+    def record_fit(design, count_response, **fit_kwargs):
+        """Record the reused rank and delegate to the production target fit."""
+        fitted_designs.append((design.shape[1], fit_kwargs.get("precomputed_rank")))
+        return original_fit(design, count_response, **fit_kwargs)
+
+    monkeypatch.setattr(pipeline, "_design_diagnostics", count_diagnostics)
+    monkeypatch.setattr(pipeline, "fit_poisson_target", record_fit)
+
+    pipeline.run_descriptive_granger(prepared)
+
+    assert diagnostic_calls == 4
+    assert len(fitted_designs) == 8
+    assert all(rank == feature_count for feature_count, rank in fitted_designs)
+
+
 def test_lag_restricted_pipeline_preserves_requested_history_gap(monkeypatch) -> None:
     """A lag above one is not silently filled with recent source bins."""
     prepared = _prepared(lag_bins=2)

@@ -116,6 +116,50 @@ def test_poisson_fit_uses_explicit_unpenalized_statsmodels_path(monkeypatch) -> 
     assert fit.iterations == 3
 
 
+def test_poisson_fit_reuses_a_precomputed_full_rank(monkeypatch) -> None:
+    """A shared design rank can bypass the redundant target-wise decomposition."""
+
+    class FakeModel:
+        """Return a valid fit without performing Statsmodels rank checks."""
+
+        def fit(self, **kwargs):
+            del kwargs
+            return SimpleNamespace(
+                params=np.array([0.2, -0.1]),
+                converged=True,
+                fit_history={"iteration": 3},
+            )
+
+    monkeypatch.setattr(poisson.sm, "GLM", lambda *args, **kwargs: FakeModel())
+    monkeypatch.setattr(
+        poisson.np.linalg,
+        "matrix_rank",
+        lambda _design: (_ for _ in ()).throw(
+            AssertionError("rank should be reused")
+        ),
+    )
+
+    fit = poisson.fit_poisson_target(
+        _design(np.arange(5)),
+        np.array([1, 2, 1, 3, 2]),
+        precomputed_rank=2,
+    )
+
+    assert fit.rank == 2
+    assert fit.feature_count == 2
+    assert fit.df_resid == 3
+
+
+def test_poisson_fit_rejects_an_incompatible_precomputed_rank() -> None:
+    """Reused diagnostics must still identify a full-column-rank design."""
+    with pytest.raises(ValueError, match="rank deficient: rank 1, features 2"):
+        poisson.fit_poisson_target(
+            _design(np.arange(5)),
+            np.array([1, 2, 1, 3, 2]),
+            precomputed_rank=1,
+        )
+
+
 def test_poisson_fit_matches_default_irls_reference() -> None:
     """The public fit preserves default IRLS parameters, predictions, and iterations."""
     rng = np.random.default_rng(20261008)

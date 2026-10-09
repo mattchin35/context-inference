@@ -482,19 +482,48 @@ def test_poisson_cv_reuses_every_unit_ols_fold_and_history_identity() -> None:
     assert poisson_scores["model_family"].eq("poisson").all()
 
 
+def test_poisson_cv_reuses_each_cell_design_rank_across_targets(monkeypatch) -> None:
+    """Each fold computes two design ranks and passes them to every target fit."""
+    prepared = _poisson_prepared()
+    original_diagnostics = pipeline._design_diagnostics
+    original_fit = pipeline.fit_poisson_target
+    diagnostic_calls = 0
+    fitted_designs: list[tuple[int, int | None]] = []
+
+    def count_diagnostics(design):
+        """Count shared cell diagnostics while preserving their exact result."""
+        nonlocal diagnostic_calls
+        diagnostic_calls += 1
+        return original_diagnostics(design)
+
+    def record_fit(design, count_response, **fit_kwargs):
+        """Record the reused rank and delegate to the production target fit."""
+        fitted_designs.append((design.shape[1], fit_kwargs.get("precomputed_rank")))
+        return original_fit(design, count_response, **fit_kwargs)
+
+    monkeypatch.setattr(pipeline, "_design_diagnostics", count_diagnostics)
+    monkeypatch.setattr(pipeline, "fit_poisson_target", record_fit)
+
+    pipeline.run_poisson_cross_validation(prepared)
+
+    assert diagnostic_calls == 20
+    assert len(fitted_designs) == 40
+    assert all(rank == feature_count for feature_count, rank in fitted_designs)
+
+
 def test_poisson_cv_local_fit_failure_does_not_abort_other_targets(monkeypatch) -> None:
     """One recognized target fit error remains local while later fits continue."""
     prepared = _poisson_prepared()
     original_fit = pipeline.fit_poisson_target
     call_count = 0
 
-    def fail_once(design, count_response):
+    def fail_once(design, count_response, **fit_kwargs):
         """Fail the first target fit, then delegate every independent fit."""
         nonlocal call_count
         call_count += 1
         if call_count == 1:
             raise PoissonFitUnavailable("poisson_nonconverged", "synthetic")
-        return original_fit(design, count_response)
+        return original_fit(design, count_response, **fit_kwargs)
 
     monkeypatch.setattr(pipeline, "fit_poisson_target", fail_once)
 
@@ -511,8 +540,9 @@ def test_poisson_cv_allows_unexpected_fit_errors_to_reach_run_boundary(monkeypat
     """Programming or API errors are not converted into scientific status rows."""
     prepared = _poisson_prepared()
 
-    def unexpected_error(design, count_response):
+    def unexpected_error(design, count_response, **fit_kwargs):
         """Represent an unexpected bug below the orchestration boundary."""
+        del design, count_response, fit_kwargs
         raise RuntimeError("unexpected")
 
     monkeypatch.setattr(pipeline, "fit_poisson_target", unexpected_error)
