@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-09 11:07 EDT.
+**Snapshot date:** 2026-10-09 11:11 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -71,9 +71,9 @@ saved-only webapp display are present. No experimental Granger data were loaded 
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit and push the GREEN quickstart correction and 11:07 EDT checkpoint,
-then execute the two approved bounded Granger submissions from an isolated exact-commit cluster
-worktree. Leave Slurm job `30991341` and its checkout untouched.
+**Next exact action:** commit and push the 11:11 EDT submission receipts, then leave Granger jobs
+`31002082` and `31002084` and Poisson-CV job `30991341` unattended. Inspect a job only when the
+user requests a check or after separately requested completion review; do not retry automatically.
 
 ### Authority order
 
@@ -108,7 +108,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 benchmark running with early memory plateau | Let job `30991341` finish unattended, then inspect its complete output |
 | WP10 | Linear and Poisson descriptive Granger analyses | Code-complete, synthetic-GREEN, and pushed through `9b87574` | Experimental data remains gated |
-| WP11 | Final synthetic integration, documentation, and one-session full inspection | Code-only portion complete; bounded CT026 Granger validation now authorized | Documentation-first checkpoint, neural-suite repair, then two one-shot bounded jobs |
+| WP11 | Final synthetic integration, documentation, and one-session full inspection | Code-only portion complete; bounded linear/Poisson Granger jobs running | Leave jobs unattended; later inspect immutable outputs and obtain user scientific review |
 
 ### Resume checklist
 
@@ -1266,6 +1266,40 @@ Use this template:
 - Scope and next action: commit and push this test correction plus checkpoint. Then create the
   isolated exact-commit cluster worktree and proceed with the two already authorized config
   comparisons, dry-runs, and one-shot submissions. Job `30991341` remains untouched and unpolled.
+
+#### 2026-10-09 11:11 EDT - bounded Granger jobs submitted; monitoring stopped
+
+- Isolation and reproducibility: the checkout serving job `30991341` remains at `ce84903` and was
+  not fast-forwarded. A separate detached worktree was created at
+  `/gs/gsfs0/home/mchin1/context-inference-granger-validation` on exact pushed commit
+  `6340b482cdbfc2beae0af9e685e195c0589c5497`. It was tracked-clean and successfully used the
+  existing environment through frozen `uv --no-sync --offline`; no dependency was downloaded.
+- Configuration integrity: both configs were derived without overwriting the existing bounded
+  config. Canonical comparisons proved every nonauthorized field equal. The linear config differs
+  only by `analyses=["linear_granger"]`, `representations=["units","pcs"]`, and its distinct
+  output root. The Poisson config differs only by `analyses=["poisson_granger"]` and its distinct
+  output root.
+- Dry-runs: both production dry-runs planned session `CT026_2026-08-03_111938` from 274,440,585
+  input bytes with no output path or error.
+- Linear submission: exactly one job, Slurm `31002082`, was submitted with name
+  `interregional_granger_linear`. The one-time startup check found it `RUNNING` on `cpu-733`; its
+  scheduler log records isolated repository commit `6340b48`, tracked-clean status, eight-thread
+  limits, `uv 0.12.17`, and the exact linear config argument.
+- Poisson submission: exactly one job, Slurm `31002084`, was submitted with name
+  `interregional_granger_poisson`. The one-time startup check found it `RUNNING` on `cpu-727`; its
+  scheduler log records the same exact commit and environment plus the exact Poisson config
+  argument.
+- Output boundary: the approved roots are respectively
+  `analysis_runs/interregional_granger_linear_benchmarks` and
+  `analysis_runs/interregional_granger_poisson_benchmarks` beneath the CT026 session. Their hidden
+  immutable working directories had not yet appeared during the bounded startup check, so no
+  initial resource record is claimed. No additional poll was performed.
+- Interpretation and monitoring: scheduler acceptance and correct startup are not completion,
+  memory, unavailable-rate, or scientific evidence. Jobs `31002082`, `31002084`, and `30991341`
+  now run unattended. No automatic retry, replacement, or further submission is authorized.
+- Exact next action: commit and push this receipt. Later, on explicit request, inspect scheduler
+  accounting, logs, resource traces/summaries, immutable results, figures, unavailable rows, and
+  scientific plausibility for whichever jobs have completed.
 
 ## Plan objective and status
 
