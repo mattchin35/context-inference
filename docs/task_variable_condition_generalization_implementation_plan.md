@@ -1,4 +1,4 @@
-# Task-Variable Condition-Generalization Implementation Plan
+# Pooled-Window Task-Variable Decoding and Condition-Generalization Plan
 
 **Status:** Documentation approved; implementation not yet authorized. No code,
 tests, experimental data, or cluster jobs are authorized by this document.
@@ -10,7 +10,8 @@ tests, experimental data, or cluster jobs are authorized by this document.
 `docs/task_variable_spec_v6.md`, `docs/task_variable_spec_v7.md`, and
 `docs/task_variable_implementation_plan.md` describe the existing
 condition-specific per-time-bin decoder and remain unchanged in scientific
-meaning.
+meaning. This file retains its committed name while the planned workflow now
+treats native temporal stability and condition transfer as coequal outputs.
 
 ## 1. Approved planning decisions
 
@@ -22,6 +23,8 @@ meaning.
 - A run selects any explicit nonempty subset or all three windows.
 - Runtime never changes that selection automatically.
 - Every configured condition receives a native condition decoder.
+- Every native decoder is evaluated across the complete time axis as a primary
+  temporal-stability result.
 - The correct-rewarded decoder is evaluated on every configured destination.
 - One decoder is fit per training window and fold, not per evaluation time.
 - The frozen decoder is evaluated separately at every existing time bin.
@@ -29,23 +32,34 @@ meaning.
 - The first experimental benchmark uses only `pre_choice`.
 - Running all windows is decided explicitly after measured performance is
   reviewed.
+- `full` is exactly the complete choice-aligned [-2 s, +2 s) interval.
+- Compatible completed per-time-bin runs may be compared read-only; the pooled
+  workflow never reruns them implicitly.
 
 ## 2. Architecture
 
 Keep the workflow inside `src/neural_analysis/task_decoding`, but give it
 separate entry points, configuration, result schema, and run identity.
 
+The saved run exposes three views from one pooled-window computation:
+
+1. native temporal stability, `B -> B`, for every configured condition;
+2. reference transfer, `correct_rewarded -> B`, paired with the native result;
+   and
+3. an optional read-only comparison with an independently completed current
+   per-time-bin run.
+
 Proposed modules:
 
 | Module | Responsibility |
 | --- | --- |
-| `generalization_config.py` | Dedicated validated configuration, canonical windows, scientific serialization, and analysis identity. |
-| `generalization_splits.py` | Target-specific master block folds shared by reference and native comparisons. |
-| `condition_generalization.py` | Pooled-window transforms, weighted model fitting, frozen time-resolved evaluation, native/transfer pairing, and gaps. |
-| `generalization_results.py` | NPZ schema, validation, checkpoints, manifests, atomic publication, and read-only loading. |
-| `generalization_plotting.py` | Transfer/native time courses and generalization-gap figures. |
-| `run_generalization_session.py` | Single-session prepare/new/resume/status lifecycle. |
-| `run_generalization_batch.py` | Dry-run planning and session-level local/Slurm batching. |
+| `pooled_decoding_config.py` | Dedicated validated configuration, canonical windows, scientific serialization, and analysis identity. |
+| `pooled_decoding_splits.py` | Target-specific master block folds shared by native and transfer comparisons. |
+| `pooled_decoding.py` | Pooled-window transforms, weighted fitting, frozen time-resolved native evaluation, transfer evaluation, and gaps. |
+| `pooled_decoding_results.py` | NPZ schema, validation, checkpoints, manifests, atomic publication, and read-only loading. |
+| `pooled_decoding_plotting.py` | Native temporal-stability, transfer/native, generalization-gap, and compatible existing-run comparison figures. |
+| `run_pooled_decoding_session.py` | Single-session prepare/new/resume/status lifecycle. |
+| `run_pooled_decoding_batch.py` | Dry-run planning and session-level local/Slurm batching. |
 
 Reuse existing modules where their public contracts match:
 
@@ -80,13 +94,22 @@ For each target:
    `1 / n_training_bins`;
 7. fit one fixed elastic-net estimator;
 8. evaluate its unchanged transform and estimator at every evaluation time on
-   held-out destination trials;
-9. score the reference-transfer and destination-native predictions on the
-   same destination fold rows; and
-10. calculate fold-paired native-minus-transfer gaps.
+   held-out trials from its own condition, producing the primary pooled-native
+   temporal-stability curve;
+9. reuse the correct-rewarded model at every evaluation time in each held-out
+   destination condition;
+10. score reference-transfer and destination-native predictions on the same
+    destination fold rows; and
+11. calculate fold-paired native-minus-transfer gaps.
 
 The correct-rewarded native model is the reference model. Cache and reuse it
 across destinations; never refit it for each transfer pair.
+
+An optional read-only comparison step may load a completed current
+task-decoding run. It may calculate a time-specific readout advantage only
+after exact scientific and fold-identity validation; otherwise it produces a
+clearly labeled unpaired overlay or refuses the comparison. It never invokes
+the current fitting pipeline.
 
 ## 4. Configuration contract
 
@@ -224,16 +247,19 @@ production code.
 
 1. Exactly one estimator is fit per model identity, independent of evaluation
    time and destination count.
-2. The correct-rewarded model is reused for every reference transfer.
-3. Each destination receives one native model.
-4. The same fitted estimator is evaluated at every time bin.
-5. Categorical probabilities retain positive-class orientation.
-6. Numerical predictions retain native target units.
-7. Transfer and native metrics use identical destination held-out rows.
-8. Gaps equal native minus transfer cell by cell.
-9. A constant reference target leaves transfer unavailable while an eligible
+2. Every condition's native model is evaluated at every time bin as a primary
+   result.
+3. Selecting `full` at 100 ms fits one model per identity rather than 40.
+4. The correct-rewarded model is reused for every reference transfer.
+5. Each destination receives one native model.
+6. The same fitted estimator is evaluated at every time bin.
+7. Categorical probabilities retain positive-class orientation.
+8. Numerical predictions retain native target units.
+9. Transfer and native metrics use identical destination held-out rows.
+10. Gaps equal native minus transfer cell by cell.
+11. A constant reference target leaves transfer unavailable while an eligible
    native destination remains valid.
-10. Convergence and nonfinite artifacts use reviewed unavailable reasons;
+12. Convergence and nonfinite artifacts use reviewed unavailable reasons;
     unexpected exceptions propagate.
 
 ### 7.5 Result-schema and lifecycle tests
@@ -246,102 +272,118 @@ production code.
 6. Final publication is atomic and complete-run reentry is read-only.
 7. Source/config/input changes invalidate resume.
 8. Old task-decoding runs remain readable and are never discovered as
-   condition-generalization runs.
+   pooled-window runs.
 9. Dry run loads no large spike arrays and fits no estimators.
 10. Local detached and Slurm ownership follow the existing no-double-execution
     contract.
+11. Existing-run comparison validates exact session, target, condition, time,
+    region, representation, estimator, and fold identities.
+12. Incompatible folds suppress the paired time-specific-minus-pooled
+    difference without suppressing a clearly labeled descriptive overlay.
 
 ### 7.6 Plotting and interpretation tests
 
 1. Each figure identifies training window, train/test conditions, target,
    region, representation, and metric.
-2. Transfer and native curves use the same time axis and destination rows.
-3. Gap figures use native minus transfer and show a zero reference.
-4. Outcome and switch/stay contrasts are not presented as mutually exclusive.
-5. Unavailable cells are visually distinct from below-chance scores.
-6. Captions state that one pooled-window decoder is evaluated through time.
-7. Plotting loads saved results only and never invokes fitting.
+2. Native temporal-stability curves are available without selecting a transfer
+   destination.
+3. Transfer and native curves use the same time axis and destination rows.
+4. Gap figures use native minus transfer and show a zero reference.
+5. Existing-versus-pooled comparison labels paired differences versus
+   descriptive overlays correctly.
+6. Outcome and switch/stay contrasts are not presented as mutually exclusive.
+7. Unavailable cells are visually distinct from below-chance scores.
+8. Captions state that one pooled-window decoder is evaluated through time.
+9. Plotting loads saved results only and never invokes fitting.
 
 ### 7.7 Seeded synthetic scientific tests
 
-1. Stable-code fixture: transfer and native decoding are both strong, with a
-   small gap.
-2. Remapped-code fixture: native decoding is strong and transfer is weak.
-3. Absent-code fixture: both are weak without a false remapping conclusion.
-4. Delayed-code fixture: one reference decoder produces a shifted destination
+1. Stable-within-condition fixture: full-window native decoding remains strong
+   across the interval in which the fixed readout is expressed.
+2. Time-varying-within-condition fixture: independent time-bin decoders remain
+   strong while one full-window native decoder is weak.
+3. Stable-transfer fixture: transfer and native decoding are both strong, with
+   a small gap.
+4. Remapped-condition fixture: native decoding is strong and transfer is weak.
+5. Absent-code fixture: both are weak without a false remapping conclusion.
+6. Delayed-code fixture: one reference decoder produces a shifted destination
    time-course peak.
-5. Multi-window fixture: pre-, post-, and full-window models are distinct and
+7. Multi-window fixture: pre-, post-, and full-window models are distinct and
    selecting extra windows does not change pre-choice outputs.
-6. End-to-end fixture: loading, tensors, models, checkpoints, persistence,
+8. Comparison fixture: compatible existing results permit a paired difference
+   and incompatible folds permit only a labeled descriptive overlay.
+9. End-to-end fixture: loading, tensors, models, checkpoints, persistence,
    validation, summary, figures, resume, and complete reentry all execute.
 
 ## 8. Work packages and approval gates
 
-### CG-WP0: specification and implementation plan
+### PW-WP0: specification and implementation plan
 
 - Deliverables: these two documentation files plus explicit clarification in
   the existing task-variable documents.
 - Gate: user approves the scientific and execution contracts before tests.
 - Current state: documentation drafting authorized; no implementation.
 
-### CG-WP1: configuration, windows, and master folds
+### PW-WP1: configuration, windows, and master folds
 
 - RED: Section 7.1 and 7.2 tests.
-- GREEN: `generalization_config.py`, `generalization_splits.py`, and minimal
+- GREEN: `pooled_decoding_config.py`, `pooled_decoding_splits.py`, and minimal
   shared helpers.
 - Gate: exact window bins, canonical ordering, deterministic shared folds, and
   leakage review.
 
-### CG-WP2: pooled-window transforms and weighted models
+### PW-WP2: pooled-window transforms and weighted models
 
 - RED: Section 7.3 plus sample-weight API characterization.
 - GREEN: pooled feature assembly and one-model fitting primitives.
 - Gate: trial weights, transform boundaries, stable identities, and no
   evaluation-time refitting.
 
-### CG-WP3: transfer, native evaluation, and gaps
+### PW-WP3: native temporal stability, transfer, and gaps
 
 - RED: Section 7.4 tests.
-- GREEN: reference reuse, native fits, time-resolved evaluation, metrics, and
-  paired gaps.
-- Gate: exact estimator call counts and synthetic stable/remapped behavior.
+- GREEN: native time-resolved evaluation, reference reuse, transfer metrics,
+  and paired gaps.
+- Gate: exact estimator call counts plus synthetic stable, time-varying, and
+  remapped behavior.
 
-### CG-WP4: schema, checkpoints, and persistence
+### PW-WP4: schema, checkpoints, and persistence
 
 - RED: scientific arrays, validation, sentinel, checkpoint, and compatibility
   tests from Section 7.5.
-- GREEN: `generalization_results.py` and immutable atomic publication.
+- GREEN: `pooled_decoding_results.py` and immutable atomic publication.
 - Gate: independent result validation and exact dense-prediction byte decision.
 
-### CG-WP5: single-session lifecycle
+### PW-WP5: single-session lifecycle
 
 - RED: prepare/new/resume/status, execution ownership, failure preservation,
   and complete-reentry tests.
-- GREEN: `run_generalization_session.py` and orchestration.
+- GREEN: `run_pooled_decoding_session.py` and orchestration.
 - Gate: seeded one-shot and interrupted/resumed runs.
 
-### CG-WP6: reporting and saved-result loading
+### PW-WP6: reporting and saved-result comparison
 
 - RED: Section 7.6 tests.
-- GREEN: `generalization_plotting.py`, summaries, default PNGs, and optional
-  integration into the existing read-only app through a separate routed view.
+- GREEN: `pooled_decoding_plotting.py`, summaries, default PNGs, compatible
+  existing-run comparison, and optional integration into the existing
+  read-only app through a separate routed view.
 - Gate: plotting never loads raw spikes or fits a model.
 
-### CG-WP7: batch planning and Slurm execution
+### PW-WP7: batch planning and Slurm execution
 
 - RED: dry-run dimensions, resource profiles, per-session isolation, array
   manifest, and failure-locality tests.
-- GREEN: `run_generalization_batch.py` plus reviewed shell/Slurm support.
+- GREEN: `run_pooled_decoding_batch.py` plus reviewed shell/Slurm support.
 - Gate: exact local/cluster dry-run agreement and synthetic scheduler smoke.
 
-### CG-WP8: synthetic end-to-end scientific gate
+### PW-WP8: synthetic end-to-end scientific gate
 
 - Run every Section 7.7 fixture through the real public entry point.
 - Require exact deterministic rerun, complete schema validation, all expected
   figures, and no unexplained invalid cells.
 - Gate: user approves synthetic outputs before experimental data.
 
-### CG-WP9: CT026 pre-choice benchmark
+### PW-WP9: CT026 pre-choice benchmark
 
 - Use all 18 targets, all six conditions, both representations, three region
   configurations, five outer folds, 100 ms bins, fixed regularization, and only
@@ -351,16 +393,16 @@ production code.
   invalidity, operation timings, checkpoint bytes, and final output bytes.
 - Gate: user inspects scientific plots and approves any broader window run.
 
-### CG-WP10: post-choice/full-window characterization
+### PW-WP10: post-choice/full-window characterization
 
-- If approved after CG-WP9, run `post_choice` and `full` as separately named
+- If approved after PW-WP9, run `post_choice` and `full` as separately named
   immutable configurations or one explicitly configured multi-window run.
 - Verify that adding windows leaves pre-choice results byte-for-byte unchanged
   where the schema permits direct comparison.
 - Decide explicitly whether routine session configs select pre-choice only,
   pre/post, or all three. Do not encode a runtime-triggered policy.
 
-### CG-WP11: experimental batch
+### PW-WP11: experimental batch
 
 - Prepare a reviewed session manifest and resource envelope.
 - Default parallelism is one session per worker/job-array element.
@@ -373,8 +415,9 @@ production code.
 
 The current six-condition CT026 task-decoding run requested 129,600
 time-bin-specific fixed-mode cells and spent approximately 48,070 seconds in
-modeling. The generalization workflow replaces time-bin-specific training with
-pooled-window training:
+modeling. The pooled-window workflow replaces time-bin-specific training with
+one native model per selected training window; condition transfer reuses the
+already fitted correct-rewarded native model:
 
 | Selected windows | Unique fixed-mode models before invalidity |
 | --- | ---: |
@@ -393,8 +436,9 @@ Instrumentation must separate:
 - transform fitting;
 - stacked feature construction;
 - categorical/numerical estimator fitting;
+- native evaluation across times;
 - reference evaluation across destinations/times;
-- native evaluation;
+- compatible existing-run comparison;
 - checkpoint serialization; and
 - final assembly/plotting.
 
@@ -417,13 +461,13 @@ After the contracts are approved and implementation begins, maintain:
 - output inspection notes; and
 - explicit remaining approval gates.
 
-The existing task-variable specifications should receive no new
-condition-generalization requirements. They remain references for the current
-per-time-bin workflow; all new behavior belongs here.
+The existing task-variable specifications should receive no new pooled-window
+or condition-generalization requirements. They remain references for the
+current per-time-bin workflow; all new behavior belongs here.
 
 ## 11. Next action after documentation approval
 
 Review the completed documentation diff. If the scientific contract is
-approved, authorize CG-WP1 planning and tests separately. The first code change
+approved, authorize PW-WP1 planning and tests separately. The first code change
 must be a RED test commit; implementation must not begin from documentation
 approval alone.

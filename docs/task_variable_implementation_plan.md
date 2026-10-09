@@ -146,7 +146,7 @@ all caused by convergence warnings at the frozen 100-iteration ceiling.
 
 **Next exact action:** inspect the completed six-condition CT026 output. WP13
 batch execution remains deferred until the single-session output is accepted.
-The separate condition-generalization proposal is governed by
+The separate pooled-window/condition-generalization proposal is governed by
 `docs/task_variable_condition_generalization_spec_v1.md` and its own
 implementation plan; documentation approval does not authorize its code or
 scientific execution.

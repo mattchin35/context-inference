@@ -1,4 +1,4 @@
-# Task-Variable Condition-Generalization Analysis Specification
+# Pooled-Window Task-Variable Decoding and Condition-Generalization Specification
 
 **Status:** Revision 1, planning only. This document does not authorize code
 changes or scientific computation.
@@ -11,15 +11,18 @@ changes or scientific computation.
 authority for existing target definitions, trial conditions, neural inputs,
 unit identities, rate tensors, estimator families, metrics, and provenance
 unless this document explicitly defines different behavior for the new
-condition-generalization workflow. The existing documents continue to
-describe the implemented condition-specific, per-time-bin decoding analysis.
+pooled-window workflow. The existing documents continue to describe the
+implemented condition-specific, per-time-bin decoding analysis. This file
+retains its committed name while its scope now includes both native temporal
+stability and condition generalization.
 
 ## 1. Scientific goal
 
 The existing task-variable decoder asks whether an independently optimized
-linear readout can decode a target at each time within each condition. This
-analysis instead asks whether a population readout learned from
-correct-rewarded trials transfers to held-out trials from other conditions.
+linear readout can decode a target at each time within each condition. The new
+workflow constrains one decoder to be shared across a selected training window
+and then repeatedly evaluates that frozen decoder across the complete time
+axis.
 
 The primary direction remains:
 
@@ -27,7 +30,20 @@ The primary direction remains:
 neural activity -> task variable
 ```
 
-The new comparison is:
+It has two coequal scientific views.
+
+The native temporal-stability view is:
+
+```
+condition B pooled across a training window -> condition B at time t
+```
+
+It asks whether one shared within-condition population readout remains usable
+across time. The `full` training window pools the complete choice-aligned
+[-2 s, +2 s) interval and is the direct stable-readout counterpart to the
+existing sequence of independently optimized time-bin decoders.
+
+The condition-transfer view is:
 
 ```
 correct_rewarded -> test condition
@@ -36,27 +52,40 @@ test condition -> same test condition
 ```
 
 The first term measures transfer of the reference-condition readout. The
-second measures native decodability in the destination condition. Strong
-native decoding with weak reference transfer supports a condition-dependent
-change in the usable population readout. Weak performance in both does not
-support that conclusion because the target may simply be poorly decodable in
-the destination condition.
+second is the same native pooled-window result used by the temporal-stability
+view. Strong native decoding with weak reference transfer supports a
+condition-dependent change in the usable population readout. Weak performance
+in both does not support that conclusion because the target may simply be
+poorly decodable in the destination condition.
+
+Comparing the existing time-bin-specific score with the new pooled-native
+score is descriptive. A strong time-bin-specific score with a weak
+pooled-native score supports a time-specific readout advantage, not by itself
+a claim of biological remapping or newly created information.
+
+| Existing time-bin-specific score | Pooled-native score | Descriptive interpretation |
+| --- | --- | --- |
+| Strong | Strong | One shared readout and independently optimized readouts both recover the target. |
+| Strong | Weak | The usable optimal readout may change through time, or the constrained pooled fit may be disadvantaged. |
+| Weak | Weak | The target is not reliably decoded by either readout in that interval. |
+| Weak | Strong | Inspect sampling, regularization, and estimator variance before interpreting the difference. |
 
 This remains a predictive population analysis. It does not establish causal
 neural encoding, individual-neuron remapping, or publication-level inference.
 
 ## 2. Analysis identity and separation
 
-Condition generalization is a separate analysis identity and saved-run type.
-It lives under `src/neural_analysis/task_decoding` so it can reuse the current
-validated inputs and modeling primitives, but it must not change the meaning
-or result schema of existing task-variable decoding runs.
+Pooled-window decoding and condition generalization form one separate analysis
+identity and saved-run type. They live under
+`src/neural_analysis/task_decoding` so they can reuse the current validated
+inputs and modeling primitives, but they must not change the meaning or result
+schema of existing task-variable decoding runs.
 
 The initial implementation will have its own single-session and batch entry
 points, immutable run directory, configuration, checkpoints, result schema,
 summary, and figures. Existing task-variable results remain readable and may
-be used as descriptive context, but they are not silently merged into a new
-generalization run.
+be selected by a read-only comparison view, but they are not silently merged
+into a new pooled-window run.
 
 ## 3. Terminology
 
@@ -66,8 +95,15 @@ generalization run.
   reference decoder is evaluated.
 - **Native decoder:** a decoder trained and evaluated within one destination
   condition using the common held-out block assignment.
+- **Pooled-native evaluation:** repeated evaluation through time of one frozen
+  native decoder trained from a named multi-bin window.
 - **Reference transfer:** evaluation of a `correct_rewarded` decoder on a
   destination condition.
+- **Time-bin-specific decoder:** one independently fitted decoder at one time
+  bin from the existing task-variable workflow.
+- **Time-specific readout advantage:** the descriptive time-bin-specific score
+  minus the pooled-native score when their saved-run identities are compatible
+  enough for comparison.
 - **Training window:** a named interval whose bins are pooled to fit one
   decoder.
 - **Evaluation time:** one existing event-relative time bin at which a frozen
@@ -138,9 +174,9 @@ Revision 1 defines three canonical half-open training windows:
 
 | Identifier | Bounds relative to alignment | Purpose |
 | --- | --- | --- |
-| `pre_choice` | [-0.5 s, 0 s) | Default anticipatory/choice-period reference readout. |
-| `post_choice` | [0 s, +0.5 s) | Immediate post-choice/outcome-period reference readout. |
-| `full` | [-2 s, +2 s) | Strong test of one readout pooled across the entire analyzed interval. |
+| `pre_choice` | [-0.5 s, 0 s) | Default anticipatory/choice-period native and reference readout. |
+| `post_choice` | [0 s, +0.5 s) | Immediate post-choice/outcome-period native and reference readout. |
+| `full` | [-2 s, +2 s) | One native/reference readout pooled across the complete analyzed interval. |
 
 Configuration contains an ordered, nonempty `training_window_names` list.
 Omitting it selects only `pre_choice`. Unknown names and duplicates are errors;
@@ -255,8 +291,10 @@ correct-rewarded result; it must not be fit twice.
 
 For `K` configured conditions and one training window, fit one native model
 per condition, target, outer fold, region configuration, and representation.
-The correct-rewarded native model also supplies every reference-transfer
-evaluation.
+Every native model is evaluated across the complete time axis in its own
+condition. These pooled-native curves are primary outputs, not merely controls
+for condition transfer. The correct-rewarded native model also supplies every
+reference-transfer evaluation.
 
 The required evaluation pairs are:
 
@@ -274,10 +312,10 @@ bin from held-out destination trials. Categorical models save and score the
 positive-class probability with the current positive-class orientation.
 Numerical models save and score predictions in native target units.
 
-The decoder is never refit across evaluation times. Adjacent points in a new
-generalization curve are repeated evaluations of the same fold-specific
-pooled-window decoder, unlike adjacent points in the existing task-variable
-decoding curves.
+The decoder is never refit across evaluation times. Adjacent points in every
+pooled-native or transfer curve are repeated evaluations of the same
+fold-specific pooled-window decoder, unlike adjacent points in the existing
+task-variable decoding curves.
 
 ## 11. Metrics and generalization gaps
 
@@ -301,6 +339,29 @@ gap(B) = score(B -> B) - score(correct_rewarded -> B)
 A positive gap means the destination-native readout outperformed the
 transferred reference readout. The gap is descriptive and is not a confidence
 interval or single-session significance test.
+
+For a compatible completed per-time-bin task-decoding run, the read-only
+reporting layer may also show:
+
+```
+time-specific readout advantage(t)
+    = existing independently fit score(t) - pooled-native score(t)
+```
+
+This contrast compares an unconstrained sequence of time-bin-specific
+readouts with one decoder constrained across a training window. It is not a
+generalization gap and must not be labeled remapping, new encoding, or a
+significance test. The pooled model has more correlated training rows but far
+fewer free coefficient vectors, so differences can reflect model flexibility,
+regularization, convergence, or variance as well as temporal changes in the
+usable population readout.
+
+Only calculate this difference when session, target, condition, time bins,
+regions, representations, estimator controls, and held-out fold identities
+match exactly. If the fold identities differ, permit a clearly labeled
+descriptive overlay of primary means but do not calculate a paired difference.
+The pooled-window computation must never require or rerun the existing
+time-bin-specific analysis.
 
 Primary display values require all configured outer folds to be valid, as in
 the current task-variable analysis. Preserve individual valid folds and exact
@@ -394,14 +455,20 @@ condition generalization.
 
 ## 15. Reporting
 
-For each training window and destination condition, default figures compare:
+For each training window and condition, default figures first show the native
+pooled-window score across evaluation time. For each destination condition,
+condition-transfer figures compare:
 
 - `correct_rewarded -> destination`; and
 - `destination -> destination`.
 
 Curves use the complete evaluation-time axis and identify target, region,
 representation, metric, training window, train condition, and destination.
-Generalization-gap plots show native minus transfer with a zero reference.
+Generalization-gap plots show native minus transfer with a zero reference. A
+read-only comparison view may overlay a compatible existing time-bin-specific
+curve. It shows a time-specific readout-advantage difference only when exact
+fold and scientific identities match; otherwise it labels the overlay as
+unpaired and descriptive.
 
 Outcome conditions and switch/stay conditions must be visually separated or
 clearly labeled as overlapping contrasts. Do not present all condition names
@@ -410,10 +477,12 @@ as mutually exclusive levels.
 Captions must state that:
 
 - one pooled-window decoder is repeatedly evaluated through time;
+- native pooled-window curves test temporal stability of one readout;
 - folds are grouped by behavioral block;
 - native and transfer scores use the same destination held-out trials;
 - fold variation is not a confidence interval; and
-- transfer failure alone does not prove remapping.
+- neither transfer failure nor a time-specific readout advantage alone proves
+  remapping.
 
 Use light mode and PNG by default, following the current plotting contract.
 
@@ -458,21 +527,30 @@ revised plan.
 
 Before experimental use, seeded synthetic tests must demonstrate:
 
-1. a stable population code transfers and has a small native-transfer gap;
-2. a destination-specific remapped code remains natively decodable but has
+1. a time-invariant within-condition code is recovered by the full-window
+   pooled-native decoder across its expression period;
+2. a sign-changing or rotating within-condition code remains decodable by
+   independent time-bin models but is not falsely labeled stable by one
+   full-window decoder;
+3. a stable population code transfers and has a small native-transfer gap;
+4. a destination-specific remapped code remains natively decodable but has
    weak reference transfer and a positive gap;
-3. an absent destination signal makes both native and transfer weak;
-4. a delayed shared code produces a shifted peak in the time-resolved transfer
+5. an absent destination signal makes both native and transfer weak;
+6. a delayed shared code produces a shifted peak in the time-resolved transfer
    curve without fitting time-specific decoders;
-5. a reference-constant target is explicitly unavailable while an eligible
+7. a reference-constant target is explicitly unavailable while an eligible
    native destination can remain available;
-6. overlapping conditions cannot leak a trial across train/test blocks;
-7. every stacked time row from a trial remains in one fold and trial weights
+8. overlapping conditions cannot leak a trial across train/test blocks;
+9. every stacked time row from a trial remains in one fold and trial weights
    sum to one;
-8. test-condition rescaling or PCA refitting never occurs;
-9. selecting multiple training windows creates distinct models and provenance;
-10. selecting all three windows does not change the pre-choice result; and
-11. seeded reruns reproduce arrays and metadata exactly.
+10. test-condition rescaling or PCA refitting never occurs;
+11. selecting `full` at 100 ms fits one model per model identity, not 40;
+12. selecting multiple training windows creates distinct models and
+    provenance;
+13. selecting all three windows does not change the pre-choice result;
+14. compatible current results permit an exact comparison and incompatible
+    folds suppress the paired difference; and
+15. seeded reruns reproduce arrays and metadata exactly.
 
 ## 18. Revision-1 exclusions
 
@@ -496,8 +574,12 @@ These require later reviewed amendments rather than silent expansion.
 - Other supported windows: `post_choice` and `full`.
 - Any explicit subset or all three windows may be configured.
 - Every configured condition receives a native decoder.
+- Native pooled-window time courses are primary scientific outputs.
 - Every configured destination receives reference-transfer evaluation.
 - Evaluation remains time resolved across the full existing axis.
 - One decoder is fit per training window, not per evaluation time.
+- `full` means exactly the complete choice-aligned [-2 s, +2 s) interval.
+- Compatible current per-time-bin results may be compared read-only, without
+  refitting either analysis.
 - Window selection never changes automatically after launch.
 - Existing task-variable specification and result meaning remain unchanged.
