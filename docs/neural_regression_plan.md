@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-09 11:11 EDT.
+**Snapshot date:** 2026-10-09 11:27 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -71,9 +71,9 @@ saved-only webapp display are present. No experimental Granger data were loaded 
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit and push the 11:11 EDT submission receipts, then leave Granger jobs
-`31002082` and `31002084` and Poisson-CV job `30991341` unattended. Inspect a job only when the
-user requests a check or after separately requested completion review; do not retry automatically.
+**Next exact action:** commit and push the completed linear-Granger inspection record. Leave
+Poisson-Granger job `31002084` and Poisson-CV job `30991341` unattended. The user reviews the
+linear result scientifically; no additional production run or retry is implied.
 
 ### Authority order
 
@@ -108,7 +108,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 benchmark running with early memory plateau | Let job `30991341` finish unattended, then inspect its complete output |
 | WP10 | Linear and Poisson descriptive Granger analyses | Code-complete, synthetic-GREEN, and pushed through `9b87574` | Experimental data remains gated |
-| WP11 | Final synthetic integration, documentation, and one-session full inspection | Code-only portion complete; bounded linear/Poisson Granger jobs running | Leave jobs unattended; later inspect immutable outputs and obtain user scientific review |
+| WP11 | Final synthetic integration, documentation, and one-session full inspection | Linear Granger technically complete; Poisson Granger running; user scientific review pending | Leave Poisson jobs unattended; obtain user decision on linear output |
 
 ### Resume checklist
 
@@ -1300,6 +1300,40 @@ Use this template:
 - Exact next action: commit and push this receipt. Later, on explicit request, inspect scheduler
   accounting, logs, resource traces/summaries, immutable results, figures, unavailable rows, and
   scientific plausibility for whichever jobs have completed.
+
+#### 2026-10-09 11:27 EDT - bounded linear Granger run technically complete
+
+- Completion identity: Slurm job `31002082` exited the queue and its scheduler log reports
+  `SessionRunReport(..., status='completed')`. The finalized immutable run is
+  `interregional_regression_20261009T151154915329Z_104214d201b2` under
+  `analysis_runs/interregional_granger_linear_benchmarks`, with fingerprint
+  `104214d201b299345ccde7cedc706b533ccf90787f7c9eb4767a38be8697d02d`. Slurm accounting had not
+  published a usable row at inspection time; no scheduler MaxRSS is claimed.
+- Execution evidence: the trusted result loader passed. The run completed in 13.93 seconds after
+  initial validation/hashing; preparation took 7.21 seconds and linear Granger 5.54 seconds. The
+  resource summary is complete with 23 records and process peak RSS 1,349,885,952 bytes
+  (approximately 1.26 GiB); cluster cgroup fields were unavailable.
+- Data/result completeness: 650 trial-membership rows were retained, 646 trials entered the `all`
+  condition, and every direction/representation used 25,194 matched history rows (39 per eligible
+  trial). The complete frozen grid contains 489 rows: 160 PFC unit targets, 309 HPC unit targets,
+  and ten PC targets in each direction. All 489 rows are `ok`; there are no unavailable reasons or
+  roundoff diagnostics. Both descriptive PCA fits retained all selected units and returned all ten
+  requested components from 25,840 training observations.
+- Descriptive magnitudes: unit medians were 0.0187929 for HPC-to-PFC and 0.0117355 for PFC-to-HPC;
+  PC medians were 0.0092217 for HPC-to-PFC and 0.0211639 for PFC-to-HPC. Ranges were
+  0.011067-0.066271 and 0.006014-0.15805 for units, and 0.005735-0.034073 and
+  0.005598-0.087426 for PCs, respectively. Because unit and PC summaries show different directional
+  patterns, no simple directional-strength conclusion is warranted.
+- Presentation QA: both PNGs are readable, show individual targets with population median/IQR and
+  availability counts, use the correct in-sample log residual-variance label, and state that the
+  values are neither significance tests nor causal evidence. The report contains the same caveats
+  and reports zero unavailable fitted rows.
+- Interpretation boundary: this establishes technical production completion for bounded
+  all/whole linear Granger on CT026, not formal inference, causality, full-condition validation, or
+  user scientific acceptance. Poisson-Granger job `31002084` and Poisson-CV job `30991341` were
+  not queried during this result inspection and remain unattended.
+- Exact next action: commit and push this record, then await the user's scientific decision or an
+  explicit request to inspect another completed job.
 
 ## Plan objective and status
 
