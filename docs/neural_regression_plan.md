@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-08 15:38 EDT.
+**Snapshot date:** 2026-10-09 09:05 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -29,14 +29,16 @@ project-side collection boundary is implemented and locally GREEN. Repeated publ
 had flat post-fit RSS in the scaled synthetic check. The separately approved bounded CT026
 benchmark is now running as Slurm job `30991341`; its first Poisson cell passed the prior OOM window,
 reached target 25, and held process peak RSS at approximately 8.17 GiB across repeated heartbeats.
-The user directed that continuous monitoring stop and the job run unattended. No scale test, full
-retry, or WP10 is authorized. WP9 scientific acceptance and WP10 remain blocked on an inspected
-completed output.
+The user directed that continuous monitoring stop and the job run unattended. At the latest
+requested spot check it remained active in Poisson cell 7 of 10 with process peak RSS unchanged at
+approximately 8.17 GiB. The user has now authorized WP10 tests-first implementation on synthetic
+data while explicitly leaving WP9 scientific acceptance, any experimental Granger run, a scale
+test, and a full retry gated on inspected completed output.
 
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before this handoff record: `ce84903`;
+- HEAD before this handoff record: `e857bf6`;
 - plan-owned files: `docs/neural_regression_plan.md`; only the plan is currently modified;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
 - none of those unrelated entries belongs to this plan or may be staged, changed, removed, or
@@ -65,9 +67,9 @@ completed output.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** leave Slurm job `30991341` unattended. After it finishes, inspect scheduler
-accounting, the log, complete resource trace/summary, unavailable-target counts, and the immutable
-result before proposing any scale test, full retry, or WP10 work. Do not poll continuously.
+**Next exact action:** commit the WP10 activation record, then write and commit the complete RED
+Granger test package before production edits. Leave Slurm job `30991341` unattended. Do not run
+Granger on experimental data, submit another job, or treat WP9 as scientifically accepted.
 
 ### Authority order
 
@@ -101,7 +103,7 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
 | WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 benchmark running with early memory plateau | Let job `30991341` finish unattended, then inspect its complete output |
-| WP10 | Linear and Poisson descriptive Granger analyses | Not authorized | WP9 GREEN and inspected Poisson output |
+| WP10 | Linear and Poisson descriptive Granger analyses | Synthetic tests-first implementation authorized provisionally | RED tests, implementation, local synthetic GREEN; real data remains gated |
 | WP11 | Final synthetic integration, documentation, and one-session full inspection | Not authorized | WP10 GREEN; real-session command separately approved |
 
 ### Resume checklist
@@ -1080,6 +1082,37 @@ Use this template:
 - Exact next action and authorization: after the job finishes, inspect `sacct`, the scheduler log,
   the full resource trace and completion summary, unavailable-target counts, finalized result,
   figures, and report. Do not submit anything else automatically.
+
+#### 2026-10-09 09:05 EDT - WP10 provisional synthetic implementation activated
+
+- State and authorization: the user approved moving ahead with WP10 coding while the bounded WP9
+  benchmark runs. This explicitly relaxes the prior package-order gate for tests, source changes,
+  documentation, local synthetic verification, commits, and push only. WP9 remains scientifically
+  unaccepted, and no WP10 experimental-data run or additional cluster submission is authorized.
+- Benchmark context: the latest requested spot check found Slurm job `30991341` still running after
+  approximately 17.5 hours. It had reached Poisson cell 7 of 10 and at least target 75 of 309 in
+  that cell. Process peak RSS remained approximately 8.17 GiB, unchanged for more than 17 hours;
+  runtime, rather than memory, is now the observed operational concern.
+- Architecture: add focused `granger.py` numerical functions; add a separate
+  `run_descriptive_granger(...)` pipeline over all scientifically eligible rows; reuse the existing
+  descriptive PCA scope; permit Granger-only preparation without fold construction; populate the
+  frozen `granger_scores`, descriptive `pca_fits`, and in-sample population-summary schemas; and
+  add separate plotting, saved-summary, and read-only viewer presentation. Do not mix Granger and
+  held-out CV metrics or add inference fields.
+- Dependencies: use existing NumPy, SciPy, Statsmodels, Pynapple, pandas, and project components.
+  Add no dependency and do not change the fitted scientific estimators.
+- Tests to write before implementation: hand-calculated linear and Poisson metrics;
+  likelihood-ratio/deviance agreement; roundoff and substantive nested-fit inconsistency; zero
+  residual and unavailable fits; exact scientifically eligible rows including missing-block
+  trials; Granger-only execution without folds or CV; descriptive/fold PCA scope isolation; exact
+  lag-history behavior; complete frozen result grids; separate labeled figures; and viewer options
+  without significance, causal, or compute language. Existing CV suites must remain unchanged.
+- Performance boundary: construct one restricted/full design per analysis cell, fit multi-target
+  OLS once per design, retain target-wise Poisson cleanup, and add no within-session parallelism.
+  Only small seeded synthetic data may run during implementation.
+- Exact next action: commit this activation record, write and commit the complete WP10 test package,
+  demonstrate RED, then implement. Do not run CT026 Granger or poll the Poisson benchmark as part
+  of this package.
 
 ## Plan objective and status
 
