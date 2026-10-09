@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-09 11:00 EDT.
+**Snapshot date:** 2026-10-09 11:07 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -71,10 +71,9 @@ saved-only webapp display are present. No experimental Granger data were loaded 
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit the 11:00 EDT authorization record below before any test edit. Then
-correct the neural quickstart discovery contract, verify and push it, and execute the two approved
-bounded Granger submissions from an isolated exact-commit cluster worktree. Leave Slurm job
-`30991341` and its checkout untouched.
+**Next exact action:** commit and push the GREEN quickstart correction and 11:07 EDT checkpoint,
+then execute the two approved bounded Granger submissions from an isolated exact-commit cluster
+worktree. Leave Slurm job `30991341` and its checkout untouched.
 
 ### Authority order
 
@@ -1255,6 +1254,18 @@ Use this template:
   schemas based only on submission/startup.
 - Exact next action: commit this documentation-only authorization record. Then make the single
   quickstart test correction and follow the verified/pushed/isolated-submission sequence above.
+
+#### 2026-10-09 11:07 EDT - neural quickstart suite restored
+
+- Change: metadata example discovery now selects `*_session.json`, so it continues validating all
+  three session templates while correctly ignoring the colocated task-decoding configuration. No
+  production source, scientific behavior, dependency, or example file changed.
+- Verification: the focused quickstart plus package-import tests passed 7/7 in 3.16 seconds; Ruff
+  reported `All checks passed!`; and the full neural-analysis suite passed 2,888 tests with 49
+  existing warnings in 316.76 seconds.
+- Scope and next action: commit and push this test correction plus checkpoint. Then create the
+  isolated exact-commit cluster worktree and proceed with the two already authorized config
+  comparisons, dry-runs, and one-shot submissions. Job `30991341` remains untouched and unpolled.
 
 ## Plan objective and status
 

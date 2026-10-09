@@ -16,6 +16,11 @@ _README = _ROOT / "src/neural_analysis/README.md"
 _EXAMPLES = _ROOT / "docs/examples/neural_analysis"
 
 
+def _session_metadata_examples() -> tuple[Path, ...]:
+    """Return only example files that implement the session-metadata contract."""
+    return tuple(sorted(_EXAMPLES.glob("*_session.json")))
+
+
 def test_required_examples_cover_supported_acquisition_families() -> None:
     """Required examples stay valid while allowing additional example files."""
     required_families = {
@@ -23,7 +28,7 @@ def test_required_examples_cover_supported_acquisition_families() -> None:
         "spikeglx_session.json": {"spikeglx"},
         "differently_named_session.json": {"open_ephys"},
     }
-    example_paths = sorted(_EXAMPLES.glob("*.json"))
+    example_paths = _session_metadata_examples()
 
     assert set(required_families) <= {path.name for path in example_paths}
     for path in example_paths:
@@ -111,7 +116,7 @@ def test_each_example_can_be_copied_and_validated_as_an_incomplete_template(
     tmp_path: Path,
 ) -> None:
     """The documented copy-and-edit start succeeds without requiring real files."""
-    for example in sorted(_EXAMPLES.glob("*.json")):
+    for example in _session_metadata_examples():
         session_root = tmp_path / example.stem
         session_root.mkdir()
         metadata_path = session_root / "neural_session.json"
