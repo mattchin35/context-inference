@@ -8,7 +8,7 @@ scope. Experimental-data and batch runs still require their separately documente
 
 ## Live handoff snapshot
 
-**Snapshot date:** 2026-10-09 19:22 EDT.
+**Snapshot date:** 2026-10-10 16:43 EDT.
 
 **Current phase:** WP1-WP8 are complete and GREEN. The standard linear workflow now includes
 validated contracts, Pynapple count preparation, deterministic block CV, direct-unit OLS,
@@ -26,26 +26,26 @@ the same unpenalized IRLS estimator is implemented and locally GREEN, but the se
 repeat bounded benchmark, Slurm job `30991248`, was also OOM-killed. QR slowed rather than bounded
 the memory growth. The actual Statsmodels cyclic-retention cause was reproduced, and the approved
 project-side collection boundary is implemented and locally GREEN. Repeated public-function fits
-had flat post-fit RSS in the scaled synthetic check. The separately approved bounded CT026
-benchmark is now running as Slurm job `30991341`; its first Poisson cell passed the prior OOM window,
-reached target 25, and held process peak RSS at approximately 8.17 GiB across repeated heartbeats.
-The user directed that continuous monitoring stop and the job run unattended. At the latest
-requested spot check it remained active in Poisson cell 7 of 10 with process peak RSS unchanged at
-approximately 8.17 GiB. The user has now authorized WP10 tests-first implementation on synthetic
-data while explicitly leaving WP9 scientific acceptance, any experimental Granger run, a scale
-test, and a full retry gated on inspected completed output. WP10 is now implemented and GREEN on
-local seeded synthetic data: linear and Poisson Granger metrics, all-scientific-row preparation,
+had flat post-fit RSS in the scaled synthetic check. The corrected bounded CT026 Poisson-CV job
+`30991341` has now completed and atomically finalized from exact tracked-clean commit `ce84903`.
+Its 28-hour-40-minute execution retained a flat 8.17-GiB peak after the first Poisson cell, providing
+production evidence that the diagnosed cyclic-retention/OOM failure is resolved for this bounded
+configuration. The trusted result contains every requested fold row; 381 of 2,345 Poisson fold rows
+were explicitly unavailable because of nonconvergence, leaving 121 of 160 HPC-to-PFC targets and
+242 of 309 PFC-to-HPC targets with all five folds. Median incremental deviance explained was
+negative in both directions, and held-out Poisson MSE was usually worse than OLS, with several
+large but genuine converged prediction-error outliers. WP9 is therefore technically production-
+complete, while scientific acceptance and an MSE-figure readability decision remain with the user.
+The user authorized WP10 tests-first implementation on synthetic data while explicitly leaving
+scientific acceptance and wider experimental runs gated on inspected output. WP10 is implemented
+and GREEN on local seeded synthetic data: linear and Poisson Granger metrics,
+all-scientific-row preparation,
 descriptive PCA scope, complete target rows, saved summaries/figures, matrix-size telemetry, and
 saved-only webapp display are present. The separately approved bounded CT026 linear- and
 Poisson-Granger jobs both completed from exact commit `6340b48`. The Poisson run completed all 469
 targets in approximately 96.5 minutes with a 10.02-GiB process peak that was essentially flat after
 target 25 of the first direction. It returned 404 valid scores and 65 explicit nonconvergence rows;
 the detailed technical evidence and interpretation limits are recorded below. The independent
-Poisson-CV job `30991341` remains outside this inspection and must continue unattended.
-At the latest requested one-shot check, that job was still actively computing after approximately
-27.5 hours: all ten OLS cells and nine of ten Poisson cells were complete, and the final cell had
-reached target 25 of 309. Memory remained flat near 8.17 GiB and scheduler accounting showed active
-CPU use, so the remaining issue is runtime rather than memory accumulation or a stalled process.
 The user approved a bounded post-implementation performance package: document a fast-first workflow
 before code changes, profile the current rank-validation and IRLS costs, then use tests-first work to
 reuse already-computed design diagnostics without changing the estimator, scientific rows, or
@@ -59,8 +59,9 @@ focused suites, and complete 2,892-test neural suite are recorded below.
 **Repository state at this snapshot:**
 
 - branch: `refactor`;
-- HEAD before the final WP12 handoff record: `9ac40f4`;
-- the tracked worktree was clean after the committed documentation, tests, and implementation;
+- HEAD before this Poisson-CV completion record: `734f3d7`;
+- the only plan-owned tracked edit is this documentation record; two unrelated task-variable
+  planning documents are modified by another known noninterfering task and remain untouched;
 - the worktree also contains many unrelated pre-existing untracked files/directories; and
 - none of those unrelated entries belongs to this plan or may be staged, changed, removed, or
   absorbed into a later package.
@@ -88,9 +89,9 @@ focused suites, and complete 2,892-test neural suite are recorded below.
 - existing repository plans were inspected for their Sol/Terra, interruption, and authoritative
   handoff patterns before this revision.
 
-**Next exact action:** commit and push this completed WP12 evidence record, then stop. Leave
-Poisson-CV job `30991341` running without intervention. Inspect its finalized output only after an
-explicit user request; no retry, replacement, or performance-validation job is implied.
+**Next exact action:** commit and push the Poisson-CV completion/inspection record, then obtain the
+user's scientific decision. Do not rerun the analysis or hide/clamp the extreme MSE values. A
+readability-only MSE-figure change requires its own approved tests-first package.
 
 ### Authority order
 
@@ -123,9 +124,9 @@ reinterpret the scientific specification to fit an implementation convenience.
 | WP6 | Standard-regression plotting, metadata webapp, and documentation | Complete | WP7 may begin after authorization |
 | WP7 | Standard-regression synthetic integration and bounded performance check | Complete | WP8 may begin only after its separate approval |
 | WP8 | One-session standard-regression scientific inspection | Complete and user-accepted | WP9 may proceed |
-| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 benchmark running with early memory plateau | Let job `30991341` finish unattended, then inspect its complete output |
+| WP9 | Unit Poisson CV, MSE comparison, plotting, and integration | Bounded CT026 run technically complete; convergence and prediction-instability limitations inspected | User scientific decision; no automatic rerun |
 | WP10 | Linear and Poisson descriptive Granger analyses | Code-complete, synthetic-GREEN, and bounded CT026 runs technically complete | User scientific review; no additional run implied |
-| WP11 | Final synthetic integration, documentation, and one-session full inspection | Neural suite GREEN; both Granger modes technically complete; Poisson CV and user scientific review pending | Leave job `30991341` untouched; obtain user decision on completed Granger output |
+| WP11 | Final synthetic integration, documentation, and one-session full inspection | Neural suite GREEN; Poisson CV and both Granger modes technically complete; user scientific review pending | Obtain user decision on completed outputs and MSE-figure readability |
 | WP12 | Poisson profiling, shared design diagnostics, and fast-first operations guide | Complete and locally GREEN; production rerun not performed | Push final evidence; retain fast-first operational split |
 
 ### Resume checklist
@@ -1489,6 +1490,68 @@ Use this template:
 - Exact next action: commit and push this final evidence record, then stop. A later production
   timing run or more aggressive IRLS/parallel optimization requires separate evidence and user
   approval.
+
+#### 2026-10-10 16:43 EDT - bounded Poisson CV run technically complete
+
+- Completion identity: Slurm job `30991341` left the queue and its wrapper log reports
+  `SessionRunReport(..., status='completed')`. The finalized immutable run is
+  `interregional_regression_20261008T193213443945Z_c82a1985285b` under
+  `analysis_runs/interregional_memory_benchmarks`, with fingerprint
+  `c82a1985285babda61a53ca8cfcd75f051dc8238af9c27e43d36d2215552f90b`. It executed exact
+  tracked-clean commit `ce84903fac3362bc1a4a2b3d2e26d7fa60d9d676`. Slurm accounting returned
+  no usable row at inspection time, so no scheduler MaxRSS is claimed.
+- Execution evidence: the production trusted loader validated the saved result. Total recorded
+  runtime was 103,245.09 seconds (approximately 28 hours 40 minutes 45 seconds): preparation took
+  7.40 seconds, all OLS CV took 21.29 seconds, and Poisson CV took 103,209.67 seconds. Persistence,
+  figures, and summary writing completed normally, with no captured warning. The complete resource
+  summary contains 3,580 records and reports process peak RSS 8,772,345,856 bytes (approximately
+  8.17 GiB); cgroup memory fields were unavailable.
+- Memory and cell timing: peak RSS reached 8.17 GiB in the first Poisson fold and remained there
+  through all ten folds, confirming that target-wise memory no longer accumulated. HPC-to-PFC
+  folds took 26-29 minutes each. PFC-to-HPC folds took approximately 2.81, 16.38, 4.19, 1.70, and
+  1.29 hours. Equal matrix sizes but highly variable target progress confirm a compute-bound,
+  target/fold-dependent IRLS tail rather than an I/O or memory failure.
+- Fold completeness: all 2,345 OLS fold rows were `ok`. The run also retained all 2,345 requested
+  Poisson fold rows; 1,964 were `ok` and 381 were explicitly `fit_unavailable` (16.25%).
+  HPC-to-PFC had 138/800 unavailable fold rows (17.25%), distributed 26, 28, 28, 30, and 26 across
+  folds. PFC-to-HPC had 243/1,545 unavailable rows (15.73%), distributed 46, 47, 46, 55, and 49.
+  Primary reasons were 260 `poisson_nonconverged_restricted` and 121
+  `poisson_nonconverged_full`; no row was silently omitted.
+- Fit diagnostics: among valid HPC-to-PFC rows, both fits had median six iterations; restricted
+  fits had 95th percentile eight and maximum 23, while full fits had 95th percentile 22 and maximum
+  99. Valid PFC-to-HPC fits also had median six iterations; restricted fits had 95th percentile 23
+  and maximum 100, and full fits had 95th percentile 23 and maximum 86. This supports the observed
+  long-tail runtime without changing the explicit convergence policy.
+- Complete-target availability: Poisson primary summaries require all five paired folds. They were
+  complete for 121/160 HPC-to-PFC targets, leaving 39 unavailable (24.38%), and 242/309 PFC-to-HPC
+  targets, leaving 67 unavailable (21.68%). Overall, 363/469 targets were complete and 106/469
+  (22.60%) were unavailable. These rates are material and must accompany any interpretation.
+- Held-out prediction: OLS median incremental R-squared was -0.0113674 for HPC-to-PFC and
+  -0.00416772 for PFC-to-HPC, with 14/160 and 96/309 positive targets. For complete Poisson targets,
+  median incremental deviance explained was -0.0130307 (IQR -0.0217349 to -0.00558366) for
+  HPC-to-PFC and -0.00372229 (IQR -0.0116511 to 0.00435342) for PFC-to-HPC; 13/121 and 93/242 were
+  positive. Thus, the population median does not show held-out incremental improvement from adding
+  the other region in either direction. No significance or causal conclusion follows.
+- Exploratory full-model MSE: positive OLS-minus-Poisson MSE would favor Poisson. Among complete
+  targets, the median was instead -0.0089190 for HPC-to-PFC and -0.0194432 for PFC-to-HPC; only
+  3/121 and 3/242 targets were positive. Several converged held-out fits were extremely unstable.
+  For example, ProbeB:66 fold 0 had full-model Poisson MSE 1,091.06 versus OLS MSE 0.583 despite
+  ordinary convergence, and ProbeB:322 fold 0 had 650.72 versus 0.099. These are saved prediction
+  failures, not missing rows or plotting artifacts; they must not be clipped or silently removed.
+- Presentation QA: the OLS absolute/incremental figures and Poisson incremental figure are readable,
+  correctly labeled, and show complete/unavailable counts and predictive/noncausal caveats. The
+  MSE figure faithfully includes the extreme converged values, but those points expand its linear
+  axis to approximately -310 and visually compress the bulk of targets near zero. The figure is
+  technically correct but scientifically hard to inspect; a later readability-only view (for
+  example, an inset or second robust-scale panel while retaining every value) should be planned and
+  tested separately rather than altering this immutable run.
+- Version boundary: this run predates WP12 rank reuse and therefore does not validate commit
+  `9ac40f4`. The measured WP12 change is expected to remove only minutes of redundant rank work and
+  does not alter the conclusion that IRLS dominates runtime.
+- Interpretation and next action: WP9 is technically production-complete for bounded all/whole
+  unit OLS plus Poisson CV on CT026. This does not establish causality, formal inference,
+  full-condition generalization, or user scientific acceptance. Commit and push this record, then
+  obtain the user's decision; do not automatically rerun or change the estimator.
 
 ## Plan objective and status
 
