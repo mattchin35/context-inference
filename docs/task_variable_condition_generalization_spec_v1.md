@@ -1,7 +1,7 @@
 # Pooled-Window Task-Variable Decoding and Condition-Generalization Specification
 
-**Status:** Revision 1, planning only. This document does not authorize code
-changes or scientific computation.
+**Status:** Revision 1 documentation revision complete; awaiting user review.
+This document does not authorize code changes or scientific computation.
 
 **Implementation plan:** See
 `docs/task_variable_condition_generalization_implementation_plan.md`.
@@ -60,8 +60,9 @@ poorly decodable in the destination condition.
 
 Comparing the existing time-bin-specific score with the new pooled-native
 score is descriptive. A strong time-bin-specific score with a weak
-pooled-native score supports a time-specific readout advantage, not by itself
-a claim of biological remapping or newly created information.
+pooled-native score can reflect a difference between independently
+cross-validated time-specific and pooled curves; it is not by itself evidence
+of biological remapping or newly created information.
 
 | Existing time-bin-specific score | Pooled-native score | Descriptive interpretation |
 | --- | --- | --- |
@@ -81,10 +82,11 @@ identity and saved-run type. They live under
 inputs and modeling primitives, but they must not change the meaning or result
 schema of existing task-variable decoding runs.
 
-The initial implementation will have its own single-session and batch entry
-points, immutable run directory, configuration, checkpoints, result schema,
-summary, and figures. Existing task-variable results remain readable and may
-be selected by a read-only comparison view, but they are not silently merged
+The initial implementation has its own single-session entry point, immutable
+run directory, small configuration overlay, checkpoints, result schema,
+summary, and figures. Batch/Slurm execution and an automated read-only
+comparison view are deferred until the synthetic and single-session gates pass.
+Existing task-variable results remain readable and are never silently merged
 into a new pooled-window run.
 
 ## 3. Terminology
@@ -101,9 +103,14 @@ into a new pooled-window run.
   destination condition.
 - **Time-bin-specific decoder:** one independently fitted decoder at one time
   bin from the existing task-variable workflow.
-- **Time-specific readout advantage:** the descriptive time-bin-specific score
-  minus the pooled-native score when their saved-run identities are compatible
-  enough for comparison.
+- **Time-specific versus pooled comparison:** a descriptive side-by-side view
+  of independently completed time-bin-specific and pooled-native results. It
+  is not a paired metric in revision 1. The existing decoder fits its regional
+  scaler/PCA basis across the complete analysis window, whereas `pre_choice`
+  and `post_choice` pooled models fit those transforms only in their named
+  windows. Thus those overlays compare preprocessing as well as readout
+  constraints. The `full` pooled model is the closest transform-matched
+  comparison.
 - **Training window:** a named interval whose bins are pooled to fit one
   decoder.
 - **Evaluation time:** one existing event-relative time bin at which a frozen
@@ -127,12 +134,14 @@ existing canonical order:
 5. `switch`; and
 6. `stay`.
 
-Omitting the destination-condition field selects all six conditions. The
-reference condition is always included if an explicit subset omits it. The
-complete example also selects all six conditions explicitly. Condition masks
-retain their existing meanings and may overlap. In particular, switch/stay are
-not treated as mutually exclusive levels of the same outcome factor as
-correct-rewarded/omission/incorrect.
+Conditions are inherited from the referenced base task-decoding configuration.
+Its existing default remains `all`; the pooled workflow does not silently give
+that field a second meaning. The reference condition is always added in
+canonical order if the base subset omits it. The portable complete example
+selects all six conditions explicitly in its base configuration. Condition
+masks retain their existing meanings and may overlap. In particular,
+switch/stay are not treated as mutually exclusive levels of the same outcome
+factor as correct-rewarded/omission/incorrect.
 
 All test rows come only from held-out behavioral blocks. Therefore an
 overlapping switch/stay and correct-rewarded membership cannot place the same
@@ -149,6 +158,14 @@ For each target, the master eligible population is the intersection of:
 - existing baseline eligibility;
 - target-specific eligibility; and
 - bilateral complete neural-window coverage.
+
+The saved masks remain independent audit facts: `target_eligible` records only
+target validity, while `master_eligible` records the complete intersection.
+When a row fails more than one requirement, its single saved reason uses this
+fixed precedence: `baseline_ineligible`, then `target_ineligible`, then
+`neural_window_unavailable`; eligible rows use no reason. The common neural
+tensor contains only baseline-valid rows with bilateral coverage, so a tensor
+row can have fold ID `-1` only when it is target-ineligible.
 
 Training and evaluation then intersect this master population with condition
 and fold masks. A condition filter must never redefine previous/next-trial
@@ -183,6 +200,16 @@ Omitting it selects only `pre_choice`. Unknown names and duplicates are errors;
 accepted names are restored to the canonical table order. Any subset,
 including all three windows, is allowed.
 
+To avoid duplicating the existing validated task-decoding configuration, the
+pooled configuration is a small overlay with exactly `base_config_path` and
+optional `training_window_names`. The referenced base configuration supplies
+the session/input paths, conditions, targets, bin width, PCA counts, grouped
+fold count, fixed estimator controls, trusted bounds, and output root. It must
+select `choice_time` alignment and fixed regularization. The resolved base
+scientific payload, effective condition list, fixed reference condition,
+resolved window definitions, pooled-overlay file identity, and base-config
+file identity are part of the pooled run fingerprint.
+
 Window selection is immutable scientific configuration. Runtime measurements
 must never cause a running analysis to add or remove windows automatically.
 The first experimental benchmark uses `pre_choice`. Running all three windows
@@ -191,7 +218,9 @@ runtime, memory, and output size.
 
 Every training-window boundary must coincide with existing time-bin edges.
 Failure to align exactly is a configuration error; bins are never truncated,
-rounded, or partially included.
+rounded, or partially included. A bin is selected only when its complete
+half-open interval `[edge_i, edge_{i+1})` is contained in the named half-open
+training window.
 
 ## 7. Pooled-window training representation
 
@@ -214,31 +243,42 @@ window. It does not receive time as a feature and does not receive a hidden
 one-hot bin identity.
 
 Repeated bins from one trial are correlated observations, not independent
-trials. Assign every stacked row weight `1 / n_training_bins`, so every trial
-has total training weight one. Do not report the stacked row count as the
-independent sample count. Save both the trial count and stacked observation
-count.
+trials. Give every stacked row sample weight `1 / n_training_bins`, so each
+eligible training trial has total weight one regardless of whether its window
+contains 5 or 40 bins. This weighting does not make rows independent; trials
+remain the sampling units. It preserves the intended loss-to-penalty scale for
+the configured SAGA logistic regression. Scikit-learn's ElasticNet normalizes
+a uniform sample-weight vector to sum to the row count, so its fit is unchanged
+by these equal weights. Both estimator calls receive the weight vector rather
+than relying on this implementation detail. Save the trial count, stacked
+observation count, and fixed weighting policy; never report the stacked row
+count as the independent sample count.
 
 All bins from a trial remain in the same outer and, in any future tuned mode,
 inner partition. Row-wise random splitting is forbidden.
 
 The initial scientific implementation supports fixed regularization only.
-Tuned regularization requires a later specification amendment because
-sample-weight handling, inner grouped splits, and fit counts must be reviewed
-separately.
+Tuned regularization requires a later specification amendment because inner
+grouped splits and fit counts must be reviewed separately.
 
 ## 8. Shared master block folds
 
 One deterministic target-specific outer block assignment is shared by every
 reference-transfer and native-condition comparison for that target.
 
-Construct the assignment on all master-eligible target rows before condition
-filtering:
+Construct the assignment after projecting complete-table target values,
+eligibility, conditions, and behavioral block identities onto the common
+bilateral neural-tensor row axis. Use all master-eligible tensor rows before
+condition filtering:
 
 - categorical targets use deterministic `StratifiedGroupKFold`;
 - numerical targets use deterministic `GroupKFold`;
 - groups are canonical behavioral block identities; and
 - the configured outer fold count is five or an explicitly configured three.
+
+Saved full-table arrays keep the chronological audit trail;
+`trial_row_indices` is the explicit mapping from common tensor row to that
+table. Split indices and neural tensors use only the common tensor-row axis.
 
 After applying condition masks, validate every required training and test
 subset rather than assuming the master split guarantees condition-specific
@@ -340,28 +380,29 @@ A positive gap means the destination-native readout outperformed the
 transferred reference readout. The gap is descriptive and is not a confidence
 interval or single-session significance test.
 
-For a compatible completed per-time-bin task-decoding run, the read-only
-reporting layer may also show:
+For `correct_rewarded`, the native and reference-transfer source are the same
+stored evaluation. Its valid gap is therefore exactly zero and serves as a
+schema invariant; it never causes a duplicate fit or evaluation.
 
-```
-time-specific readout advantage(t)
-    = existing independently fit score(t) - pooled-native score(t)
-```
+After the pooled single-session result is validated, an optional read-only
+report may place completed per-time-bin and pooled-native complete-fold means
+on the same axes for common session, target, condition, time, region,
+representation, and metric only when neural-source and unit-selection identity
+also match. Both transform-training provenances must be present and labeled.
+Because the two analyses can use different eligible populations and fold
+assignments, revision 1 does not subtract them or present them as paired
+observations. The report states that the existing decoder fits its regional
+transform across the complete analysis window, while pre/post pooled models
+fit window-specific transforms; the `full` pooled model is the nearest
+transform-matched comparison. The overlay must be labeled as independently
+cross-validated and descriptive.
 
-This contrast compares an unconstrained sequence of time-bin-specific
-readouts with one decoder constrained across a training window. It is not a
-generalization gap and must not be labeled remapping, new encoding, or a
-significance test. The pooled model has more correlated training rows but far
-fewer free coefficient vectors, so differences can reflect model flexibility,
-regularization, convergence, or variance as well as temporal changes in the
-usable population readout.
-
-Only calculate this difference when session, target, condition, time bins,
-regions, representations, estimator controls, and held-out fold identities
-match exactly. If the fold identities differ, permit a clearly labeled
-descriptive overlay of primary means but do not calculate a paired difference.
-The pooled-window computation must never require or rerun the existing
-time-bin-specific analysis.
+This view compares an unconstrained sequence of time-bin-specific readouts
+with one decoder constrained across a training window. Differences can reflect
+model flexibility, regularization, convergence, sampling, or estimator
+variance as well as temporal changes in the usable population readout. They
+must not be labeled remapping, new encoding, or a significance test. The
+pooled-window computation never requires or reruns the existing analysis.
 
 Primary display values require all configured outer folds to be valid, as in
 the current task-variable analysis. Preserve individual valid folds and exact
@@ -391,6 +432,14 @@ errors fail the run and preserve completed checkpoints.
 ## 13. Result contract
 
 Results must make model identity distinct from evaluation-pair identity.
+
+Revision 1 uses analysis version `pooled-task-variable-decoding-v1` and result
+schema version `1`. The implementation plan freezes the required array names,
+axis order, dtypes, status values, sentinels, reason-code vocabulary,
+checkpoint filenames, and run-directory layout. The scientific axes are
+training window, condition/evaluation pair, target, outer fold, region,
+representation, evaluation time, and metric. Model arrays omit evaluation
+time and destination because one fitted model is reused.
 
 Model provenance is indexed by:
 
@@ -426,32 +475,48 @@ reason, and score. Paired generalization gaps have the same axes without a
 free train-condition axis because their two source pairs are fixed by the
 destination.
 
-Store full-table condition masks, target eligibility, master fold identities,
-exact time-bin edges/centers, exact training-window bin masks, stable unit
-identities, units, configuration, source fingerprint, input manifest, random
-seed, analysis version, and software versions. Use named arrays in a
-versioned NPZ plus JSON metadata sidecars. Do not overwrite earlier runs.
+Store full-table condition masks and target eligibility. Separately store the
+common bilateral neural-tensor row mapping and target-specific fold identities
+on that tensor-row axis. The pipeline projects full-table target values,
+eligibility, conditions, and block identities through `trial_row_indices`
+before splitting or decoding; neural tensors are never treated as though they
+contain every chronological table row. Also store exact time-bin
+edges/centers, exact training-window bin masks, stable unit and feature
+identities, transform selection/count provenance, coefficients, intercepts,
+estimator controls, train/test counts, the fixed sample-weight policy, units,
+configuration, source fingerprint, input manifest, random seed, analysis
+version, and software versions. As in the current task decoder, fitted
+scaler/PCA matrices are reconstructed from immutable inputs and code rather
+than persisted. Use named arrays in a versioned NPZ plus JSON metadata
+sidecars with `allow_pickle=False`. Do not overwrite earlier runs.
 
-Per-trial out-of-fold predictions are scientifically useful but can dominate
-storage when all windows, targets, regions, representations, conditions, and
-times are selected. Revision 1 requires fold metrics and sufficient
-provenance to reproduce them. Whether dense per-trial predictions are retained
-must be resolved by the synthetic size benchmark before the result schema is
-frozen; they must not be added implicitly without an explicit axis and byte
-estimate.
+Revision 1 does not store dense per-trial out-of-fold predictions. It computes
+probability-dependent metrics in memory and stores fold-level metrics plus the
+model, fold, source, and configuration provenance needed to reproduce them.
+Adding dense predictions requires a later reviewed schema
+revision with a concrete scientific consumer and byte estimate.
 
 ## 14. Checkpointing and execution
 
-Checkpoint at least at the training-window/target boundary so an interrupted
-run does not repeat all completed model families. Checkpoints are immutable,
-fingerprinted, and must include every configured condition and required
-evaluation pair for that cell before being considered complete.
+Checkpoint exactly one training-window/target cell so an interrupted run does
+not repeat completed model families. The execution loop produces and saves one
+window-target result at a time; no checkpoint API accepts an aggregate that
+also contains other windows. Checkpoints are immutable, fingerprinted, and
+include every configured condition, fold, region, representation, required
+evaluation pair, evaluation time, and metric for that cell before being
+considered complete.
 
-Provide separate single-session and batch commands with dry-run, local
-detached execution, status, exact resume, Slurm single-session execution, and
-session-level Slurm arrays. Reuse the current lifecycle design where its
-contracts apply, but do not make existing task-decoding commands infer or run
-condition generalization.
+Terminal completion and `final_results_published` are set only after the final
+result, summary, and required figures all validate. Exact completed reentry is
+read-only.
+
+The validated revision-1 workflow first provides single-session dry-run,
+`new`, local detached execution, `status`, and exact `resume`. Reuse the current
+lifecycle behavior where its contracts apply, but do not make existing
+task-decoding commands infer or run pooled decoding. Slurm single-session and
+session-array execution are a later work package entered only after synthetic
+validation, a user-inspected experimental session, and a measured resource
+envelope.
 
 ## 15. Reporting
 
@@ -464,11 +529,17 @@ condition-transfer figures compare:
 
 Curves use the complete evaluation-time axis and identify target, region,
 representation, metric, training window, train condition, and destination.
-Generalization-gap plots show native minus transfer with a zero reference. A
-read-only comparison view may overlay a compatible existing time-bin-specific
-curve. It shows a time-specific readout-advantage difference only when exact
-fold and scientific identities match; otherwise it labels the overlay as
-unpaired and descriptive.
+Generalization-gap plots show native minus transfer with a zero reference.
+Every time-course figure visibly shades or marks the named training interval.
+Captions distinguish held-out evaluation times inside that interval from
+out-of-window temporal generalization. For `full`, every displayed time is
+within the training-time distribution even though all evaluated trials remain
+held out.
+
+After single-session validation, an optional separate read-only report may
+overlay a completed existing time-bin-specific curve on common coordinates.
+It labels both curves as independently cross-validated and descriptive and
+does not calculate a time-specific-minus-pooled difference.
 
 Outcome conditions and switch/stay conditions must be visually separated or
 clearly labeled as overlapping contrasts. Do not present all condition names
@@ -480,9 +551,10 @@ Captions must state that:
 - native pooled-window curves test temporal stability of one readout;
 - folds are grouped by behavioral block;
 - native and transfer scores use the same destination held-out trials;
-- fold variation is not a confidence interval; and
-- neither transfer failure nor a time-specific readout advantage alone proves
-  remapping.
+- fold variation is not a confidence interval;
+- the existing and pooled curves can differ in transform-training windows; and
+- neither transfer failure nor a difference between independently
+  cross-validated time-specific and pooled curves alone proves remapping.
 
 Use light mode and PNG by default, following the current plotting contract.
 
@@ -504,6 +576,18 @@ With three windows, six conditions, 18 targets, and five folds, this is:
 With the default pre-choice window only, it is 3,240 models. Reference
 transfer to additional destinations adds predictions and scores, not another
 reference-model fit.
+
+Regional transforms are shared across the three region configurations and two
+representations for one window/condition/target/fold cell. The exact requested
+transform-fit count is therefore:
+
+```
+n_training_windows * n_conditions * n_targets * n_outer_folds
+    * 2 anatomical regions
+```
+
+It is independent of representation, region configuration, evaluation time,
+and destination count.
 
 These counts do not predict runtime directly. A pooled-window model contains
 more rows than one current time-bin model: five rows per trial at 100 ms for
@@ -541,16 +625,14 @@ Before experimental use, seeded synthetic tests must demonstrate:
 7. a reference-constant target is explicitly unavailable while an eligible
    native destination can remain available;
 8. overlapping conditions cannot leak a trial across train/test blocks;
-9. every stacked time row from a trial remains in one fold and trial weights
-   sum to one;
+9. every stacked time row from a trial remains in one fold and receives
+   `1 / n_training_bins` weight, so every eligible trial has total weight one;
 10. test-condition rescaling or PCA refitting never occurs;
 11. selecting `full` at 100 ms fits one model per model identity, not 40;
 12. selecting multiple training windows creates distinct models and
     provenance;
 13. selecting all three windows does not change the pre-choice result;
-14. compatible current results permit an exact comparison and incompatible
-    folds suppress the paired difference; and
-15. seeded reruns reproduce arrays and metadata exactly.
+14. seeded reruns reproduce arrays and metadata exactly.
 
 ## 18. Revision-1 exclusions
 
@@ -561,6 +643,10 @@ Revision 1 excludes:
 - train-time x test-time decoder matrices;
 - automatic window selection based on runtime or performance;
 - test-condition recalibration;
+- dense per-trial prediction storage;
+- a paired time-specific-minus-pooled score;
+- web-app integration;
+- batch or Slurm implementation before the single-session benchmark;
 - cross-session pooled neural features;
 - inferential statistics across sessions; and
 - claims about causal encoding or individual-neuron remapping.
@@ -579,7 +665,7 @@ These require later reviewed amendments rather than silent expansion.
 - Evaluation remains time resolved across the full existing axis.
 - One decoder is fit per training window, not per evaluation time.
 - `full` means exactly the complete choice-aligned [-2 s, +2 s) interval.
-- Compatible current per-time-bin results may be compared read-only, without
-  refitting either analysis.
+- After single-session validation, compatible current per-time-bin results may
+  be overlaid read-only and descriptively, without subtraction or refitting.
 - Window selection never changes automatically after launch.
 - Existing task-variable specification and result meaning remain unchanged.
