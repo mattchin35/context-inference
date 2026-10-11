@@ -51,12 +51,16 @@ versus
 test condition -> same test condition
 ```
 
-The first term measures transfer of the reference-condition readout. The
-second is the same native pooled-window result used by the temporal-stability
-view. Strong native decoding with weak reference transfer supports a
-condition-dependent change in the usable population readout. Weak performance
-in both does not support that conclusion because the target may simply be
-poorly decodable in the destination condition.
+The first term evaluates the complete reference-condition predictive pipeline:
+its reference-trained scaler, PCA basis when applicable, and estimator. The
+second is the same native pooled-window pipeline used by the
+temporal-stability view, with preprocessing and estimator fit only on the
+destination training rows. Strong native decoding with weak reference transfer
+therefore supports a condition-dependent change somewhere in the usable
+predictive mapping. It does not isolate a change in estimator coefficients or
+linear readout because preprocessing and regularization scale can also differ.
+Weak performance in both does not support a condition-generalization claim
+because the target may simply be poorly decodable in the destination.
 
 Comparing the existing time-bin-specific score with the new pooled-native
 score is descriptive. A strong time-bin-specific score with a weak
@@ -77,10 +81,11 @@ neural encoding, individual-neuron remapping, or publication-level inference.
 ## 2. Analysis identity and separation
 
 Pooled-window decoding and condition generalization form one separate analysis
-identity and saved-run type. They live under
-`src/neural_analysis/task_decoding` so they can reuse the current validated
-inputs and modeling primitives, but they must not change the meaning or result
-schema of existing task-variable decoding runs.
+identity and saved-run type. They live in the
+`src/neural_analysis/task_decoding/pooled` subpackage so they can reuse current
+validated inputs and modeling primitives without entering the existing
+decoder's top-level source-fingerprint scope. They must not change the meaning
+or result schema of existing task-variable decoding runs.
 
 The initial implementation has its own single-session entry point, immutable
 run directory, small configuration overlay, checkpoints, result schema,
@@ -95,12 +100,13 @@ into a new pooled-window run.
   train the readout transferred to other conditions.
 - **Destination condition:** a configured condition on which a fitted
   reference decoder is evaluated.
-- **Native decoder:** a decoder trained and evaluated within one destination
-  condition using the common held-out block assignment.
+- **Native decoder:** a complete scaler/PCA/estimator pipeline trained and
+  evaluated within one destination condition using the common held-out block
+  assignment.
 - **Pooled-native evaluation:** repeated evaluation through time of one frozen
   native decoder trained from a named multi-bin window.
-- **Reference transfer:** evaluation of a `correct_rewarded` decoder on a
-  destination condition.
+- **Reference transfer:** evaluation of the complete `correct_rewarded`
+  scaler/PCA/estimator pipeline on a destination condition.
 - **Time-bin-specific decoder:** one independently fitted decoder at one time
   bin from the existing task-variable workflow.
 - **Time-specific versus pooled comparison:** a descriptive side-by-side view
@@ -115,9 +121,10 @@ into a new pooled-window run.
   decoder.
 - **Evaluation time:** one existing event-relative time bin at which a frozen
   pooled-window decoder is evaluated.
-- **Generalization gap:** the paired native-condition score minus the
-  reference-transfer score on the same destination condition, held-out fold,
-  evaluation time, metric, region, and representation.
+- **Generalization gap:** the paired native-pipeline score minus the
+  reference-pipeline transfer score on the same destination condition,
+  held-out fold, evaluation time, metric, region, and representation. It is a
+  complete-pipeline contrast, not an estimator-coefficient contrast.
 
 ## 4. Fixed reference and configured conditions
 
@@ -139,13 +146,13 @@ Its existing default remains `all`; the pooled workflow does not silently give
 that field a second meaning. The reference condition is always added in
 canonical order if the base subset omits it. The portable complete example
 selects all six conditions explicitly in its base configuration. Condition
-masks retain their existing meanings and may overlap. In particular,
-switch/stay are not treated as mutually exclusive levels of the same outcome
-factor as correct-rewarded/omission/incorrect.
-
-All test rows come only from held-out behavioral blocks. Therefore an
-overlapping switch/stay and correct-rewarded membership cannot place the same
-trial in both model training and evaluation.
+masks retain their existing meanings and may overlap. `switch` and `stay`
+require the current trial to be unrewarded, so they are disjoint from
+`correct_rewarded`; they can overlap `omission` or `incorrect`, and `all`
+overlaps every condition. They are therefore not mutually exclusive levels of
+the same factor as the outcome conditions. All evaluation rows come only from
+held-out behavioral blocks, so overlap among configured masks cannot place the
+same behavioral block in model training and evaluation.
 
 ## 5. Targets and eligibility
 
@@ -207,8 +214,14 @@ the session/input paths, conditions, targets, bin width, PCA counts, grouped
 fold count, fixed estimator controls, trusted bounds, and output root. It must
 select `choice_time` alignment and fixed regularization. The resolved base
 scientific payload, effective condition list, fixed reference condition,
-resolved window definitions, pooled-overlay file identity, and base-config
-file identity are part of the pooled run fingerprint.
+and resolved window definitions are part of the pooled run fingerprint. Exact
+submitted overlay/base JSON files are copied into the immutable run directory
+for audit, but their paths, formatting, and raw bytes do not change scientific
+identity. Execution and resume use the canonical resolved configuration rather
+than rereading those external files. Because its scientific paths are portable
+relative paths, preparation also records the absolute resolved session root as
+execution-only provenance. The run-directory parent supplies the reconstructed
+output root; neither absolute path enters scientific identity.
 
 Window selection is immutable scientific configuration. Runtime measurements
 must never cause a running analysis to add or remove windows automatically.
@@ -284,6 +297,15 @@ After applying condition masks, validate every required training and test
 subset rather than assuming the master split guarantees condition-specific
 class or target support. Do not change folds, search seeds, or fall back to
 trial-wise splitting when a subset is unavailable.
+
+Validation uses independent trials, not stacked time rows. An empty training
+or test subset is unavailable as empty. A categorical training or test subset
+must contain both canonical classes 0 and 1. A numerical training subset must
+contain at least two finite trials and at least two distinct target values. A
+numerical test subset has the same two-trial/two-value requirement because
+held-out R2 is otherwise undefined. Nonempty numerical subsets that fail this
+rule are target-unavailable, not empty. These rules are applied before fitting
+or scoring and never alter the shared fold assignment.
 
 For fold `f`:
 
@@ -376,9 +398,24 @@ both underlying scores are valid:
 gap(B) = score(B -> B) - score(correct_rewarded -> B)
 ```
 
-A positive gap means the destination-native readout outperformed the
-transferred reference readout. The gap is descriptive and is not a confidence
-interval or single-session significance test.
+A positive gap means the destination-native predictive pipeline outperformed
+the transferred reference pipeline. Revision 1 intentionally compares the two
+complete pipelines. This preserves the primary scientific contrast: whether a
+pipeline learned only from `correct_rewarded` generalizes, versus whether the
+same target remains decodable when all training-only preprocessing and fitting
+are learned within the destination. It also keeps destination data out of the
+reference transform.
+
+The price of that choice is interpretive. Native and reference pipelines can
+differ in scaling statistics, retained features, PCA bases, regularization on
+the resulting feature scales, and estimator coefficients. Even the direct-unit
+representation retains condition-specific scaling. The gap cannot identify
+which component caused transfer failure and must not be described as an
+isolated change in linear readout weights. A shared-preprocessing comparison
+would answer a narrower question but could handicap the destination model with
+a reference-derived feature basis; it is outside revision 1. The retained gap
+is descriptive and is not a confidence interval or single-session significance
+test.
 
 For `correct_rewarded`, the native and reference-transfer source are the same
 stored evaluation. Its valid gap is therefore exactly zero and serves as a
@@ -415,8 +452,10 @@ Declared unavailable states include:
 - the reference or native training subset is empty;
 - a categorical training subset lacks two classes;
 - a categorical held-out subset lacks both required classes;
-- a numerical training or held-out target is constant or too small for its
-  metric;
+- a numerical training subset has fewer than two independent trials or fewer
+  than two distinct finite target values;
+- a numerical held-out subset has fewer than two independent trials or fewer
+  than two distinct finite target values required for R2;
 - grouped folds cannot satisfy the requested contract;
 - no usable training feature remains;
 - a convergence warning occurs;
@@ -506,9 +545,20 @@ include every configured condition, fold, region, representation, required
 evaluation pair, evaluation time, and metric for that cell before being
 considered complete.
 
+Prepared execution and resume reconstruct the base and pooled configuration
+objects from canonical `config.json`, the saved absolute session root, and the
+run-directory location. They never parse the submitted audit copies. Every
+reconstructed scientific path must remain below that root, and the saved input
+manifest is revalidated against those paths before loading large arrays or
+accepting a checkpoint. A missing root, path escape, changed/missing input, or
+configuration/frozen-control mismatch fails the run.
+
 Terminal completion and `final_results_published` are set only after the final
 result, summary, and required figures all validate. Exact completed reentry is
-read-only.
+read-only. Execution provenance hashes and snapshots the pooled launch,
+pipeline, and plotting modules; execution, resume, and completed reentry
+validate all three snapshots even though plotting is not part of the
+scientific-result fingerprint.
 
 The validated revision-1 workflow first provides single-session dry-run,
 `new`, local detached execution, `status`, and exact `resume`. Reuse the current
@@ -520,9 +570,13 @@ envelope.
 
 ## 15. Reporting
 
-For each training window and condition, default figures first show the native
-pooled-window score across evaluation time. For each destination condition,
-condition-transfer figures compare:
+For each training-window/target pair, completion requires exactly three
+multi-panel PNGs: native, transfer, and gap. Panels identify every applicable
+metric, region, and representation; labeled rows or curves distinguish the
+configured conditions and evaluation pairs. Detailed per-condition or
+per-model figures are optional, generated on demand, and are not completion
+artifacts. The native figure shows each configured condition across evaluation
+time. For each destination condition, the transfer figure compares:
 
 - `correct_rewarded -> destination`; and
 - `destination -> destination`.
@@ -551,6 +605,8 @@ Captions must state that:
 - native pooled-window curves test temporal stability of one readout;
 - folds are grouped by behavioral block;
 - native and transfer scores use the same destination held-out trials;
+- native and transfer are complete pipelines with separately trained
+  preprocessing, so their gap does not isolate estimator weights;
 - fold variation is not a confidence interval;
 - the existing and pooled curves can differ in transform-training windows; and
 - neither transfer failure nor a difference between independently
@@ -597,11 +653,12 @@ stacked-row dimensions, predicted evaluation counts, exact major-array bytes,
 and selected windows without loading large spike arrays or fitting.
 
 The first experimental benchmark selects only `pre_choice`. After it
-completes, inspect wall time, CPU time, peak RSS, estimator timing by
-representation and target family, invalidity, checkpoint size, and final
-output size. Selecting all three windows for routine execution is a separate
-explicit configuration decision based on those measurements, not an automatic
-threshold inside the program.
+completes, inspect wall time, CPU time, peak RSS, aggregate requested and
+valid/unavailable computation counts, checkpoint size, and final output size.
+Detailed per-representation or target-family timing is added only if this
+benchmark identifies a concrete profiling need. Selecting all three windows
+for routine execution is a separate explicit configuration decision based on
+those measurements, not an automatic threshold inside the program.
 
 Default batch parallelism is across sessions after per-session resources are
 measured. Do not add within-session parallel fitting without profiling and a
@@ -617,8 +674,8 @@ Before experimental use, seeded synthetic tests must demonstrate:
    independent time-bin models but is not falsely labeled stable by one
    full-window decoder;
 3. a stable population code transfers and has a small native-transfer gap;
-4. a destination-specific remapped code remains natively decodable but has
-   weak reference transfer and a positive gap;
+4. a destination-specific predictive mapping remains natively decodable but
+   has weak reference transfer and a positive complete-pipeline gap;
 5. an absent destination signal makes both native and transfer weak;
 6. a delayed shared code produces a shifted peak in the time-resolved transfer
    curve without fitting time-specific decoders;
@@ -634,6 +691,12 @@ Before experimental use, seeded synthetic tests must demonstrate:
 13. selecting all three windows does not change the pre-choice result;
 14. seeded reruns reproduce arrays and metadata exactly.
 
+Every pooled outcome above is produced through the pooled synchronous
+computation API. Case 2's independent-time-bin clause is a test oracle, not a
+pooled output: the test calls the existing `modeling.fit_and_score` separately
+at each bin on the same seeded fixture and grouped folds. The oracle is not
+persisted and does not add another production analysis path.
+
 ## 18. Revision-1 exclusions
 
 Revision 1 excludes:
@@ -643,6 +706,8 @@ Revision 1 excludes:
 - train-time x test-time decoder matrices;
 - automatic window selection based on runtime or performance;
 - test-condition recalibration;
+- a shared-preprocessing native/reference contrast intended to isolate
+  estimator coefficients;
 - dense per-trial prediction storage;
 - a paired time-specific-minus-pooled score;
 - web-app integration;
@@ -662,6 +727,8 @@ These require later reviewed amendments rather than silent expansion.
 - Every configured condition receives a native decoder.
 - Native pooled-window time courses are primary scientific outputs.
 - Every configured destination receives reference-transfer evaluation.
+- Native-minus-transfer gaps intentionally compare complete pipelines with
+  separately trained preprocessing and cannot isolate coefficient changes.
 - Evaluation remains time resolved across the full existing axis.
 - One decoder is fit per training window, not per evaluation time.
 - `full` means exactly the complete choice-aligned [-2 s, +2 s) interval.

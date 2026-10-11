@@ -21,15 +21,15 @@ summary.
 
 | Field | Current value |
 | --- | --- |
-| Snapshot date | 2026-10-10 |
+| Snapshot date | 2026-10-11 |
 | Branch | `refactor` |
-| Repository HEAD at documentation audit | `775e182b4df8273ecc2a3df9e245fdf15b9fb931` |
-| Last commit touching these documents | `108a585` (`new task variable plans for generalized encoding analysis`) |
+| Repository HEAD at documentation audit | `7aa3411539c5572aefce3654bc1b1a9d287e193c` |
+| Last commit touching these documents | `7aa3411` (`updating task variable plans for generalized encoding analysis`) |
 | Current work package | PW-WP0: specification and implementation plan |
-| Current phase | PW-WP0 revision and validation complete; awaiting user approval; no RED test commit exists |
+| Current phase | External-review corrections and validation complete; awaiting user approval; no RED test commit exists |
 | Completed work packages | None |
 | Active implementation files | None |
-| Latest validation | 2026-10-10: referenced paths present; code fences balanced; ASCII-only edits; contract scan clean; `git diff --check` passed; installed scikit-learn weighting APIs characterized |
+| Latest validation | 2026-10-11: all review findings through the parent-initializer dependency and test-only time-bin oracle resolved; required-clause and stale-contract scans clean; code fences balanced; ASCII-only edits; `git diff --check` passed |
 | Open blockers | User review and approval of the revised scientific and implementation contracts |
 | Exact next action | Review this document and the companion specification; after approval, plan and commit PW-WP1 RED tests |
 
@@ -46,17 +46,16 @@ user approval all pass.
 
 | Work package | RED commit | GREEN/refactor commit | Focused tests | Full regression | Review and approval | State |
 | --- | --- | --- | --- | --- | --- | --- |
-| PW-WP0 documentation | Not applicable | Pending | Documentation checks passed 2026-10-10 | Not applicable | User review pending | Awaiting approval |
+| PW-WP0 documentation | Not applicable | Pending | Documentation checks passed 2026-10-11 | Not applicable | User review pending | Awaiting approval |
 | PW-WP1 configuration and folds | - | - | - | - | - | Not started |
 | PW-WP2 scientific core | - | - | - | - | - | Not started |
-| PW-WP3 result schema and checkpoints | - | - | - | - | - | Not started |
-| PW-WP4 reporting | - | - | - | - | - | Not started |
-| PW-WP5 single-session lifecycle and usage | - | - | - | - | - | Not started |
-| PW-WP6 synthetic end-to-end gate | - | - | - | - | - | Not started |
-| PW-WP7 CT026 benchmark | - | - | - | - | - | Not started |
-| PW-WP8 optional descriptive comparison | - | - | - | - | - | Deferred |
-| PW-WP9 cluster and batch execution | - | - | - | - | - | Deferred |
-| PW-WP10 additional windows and experimental batch | - | - | - | - | - | Deferred |
+| PW-WP3 result schema, checkpoints, and synchronous computation | - | - | - | - | - | Not started |
+| PW-WP4 synthetic scientific gate | - | - | - | - | - | Not started |
+| PW-WP5 reporting, lifecycle, resources, and usage | - | - | - | - | - | Not started |
+| PW-WP6 CT026 benchmark | - | - | - | - | - | Not started |
+| PW-WP7 optional descriptive comparison | - | - | - | - | - | Deferred |
+| PW-WP8 cluster and batch execution | - | - | - | - | - | Deferred |
+| PW-WP9 additional windows and experimental batch | - | - | - | - | - | Deferred |
 
 ### 1.2 Handoff update requirements
 
@@ -87,6 +86,19 @@ installed scikit-learn source/API characterization for LogisticRegression and
 ElasticNet sample-weight behavior
 ```
 
+The formatting, ASCII, fence-balance, stale-contract, and required-clause
+checks were rerun successfully on 2026-10-11 after the prepared-run,
+dependency-scope, reporting-provenance, resource-schema, parent-initializer,
+and synthetic-oracle corrections.
+
+The 2026-10-10 external review corrections also fixed the canonical condition
+overlap description, froze the complete-pipeline interpretation and limits of
+the native-minus-transfer gap, added exact state propagation and numerical
+eligibility, isolated pooled source scope, resolved configuration
+serialization/identity, replaced repeated evaluation records with dense
+arrays, reduced required figures to `3*W*T`, simplified resource evidence, and
+moved the synchronous synthetic gate ahead of reporting infrastructure.
+
 The installed scikit-learn version is 1.8.0; both estimator `fit` signatures
 accept `sample_weight`. On a 120-row, six-feature synthetic fixture with NumPy
 seed `20261010`, strict controls (`max_iter=10000`, `tol=1e-10`) gave maximum
@@ -111,6 +123,11 @@ identity here after the user approves and commits them.
 - Every configured condition has a native pooled decoder evaluated across the
   complete time axis.
 - The correct-rewarded decoder is evaluated on every configured destination.
+- Native-minus-transfer gaps intentionally compare two complete predictive
+  pipelines with separately fitted training-condition scaling, feature
+  retention/PCA, regularization scale, and estimator coefficients. They test
+  whole-pipeline transfer and must not be interpreted as isolated readout
+  weight changes.
 - One estimator is fit per window/condition/target/fold/region/representation,
   never per evaluation time or destination.
 - Revision 1 uses fixed regularization only.
@@ -127,23 +144,28 @@ identity here after the user approves and commits them.
 
 ## 3. Minimal architecture and reuse boundary
 
-Keep the workflow in `src/neural_analysis/task_decoding` with a separate
-analysis identity. Follow the current config/modeling/results/pipeline/plotting
-separation, but do not add an independent split module, batch module, web-app
-route, or generic framework before a concrete need is demonstrated.
+Keep the workflow in the small
+`src/neural_analysis/task_decoding/pooled` subpackage with a separate analysis
+identity. This prevents new pooled modules from entering the existing
+decoder's top-level `task_decoding/*.py` fingerprint glob. Follow the current
+config/modeling/results/pipeline/plotting separation, but do not add an
+independent split module, batch module, web-app route, or generic framework
+before a concrete need is demonstrated.
 
 ### 3.1 New files required for the validated single-session workflow
 
 | File | Purpose |
 | --- | --- |
-| `pooled_config.py` | Validate a small pooled-analysis overlay and resolve the existing base task-decoding configuration. |
-| `pooled_decoding.py` | Assemble pooled features, fit one fixed model, evaluate it through time, and construct native/transfer/gap records. |
-| `pooled_results.py` | Define, save, load, and strictly validate schema-1 checkpoints and final results. |
-| `pooled_pipeline.py` | Plan, prepare, execute, resume, and inspect one session while reusing current lifecycle helpers where extraction is safe. |
-| `pooled_plotting.py` | Load saved pooled results and create the required native, transfer, and gap figures. |
-| `run_pooled_session.py` | Thin `dry-run`, `new`, `resume`, and `status` CLI; no scientific logic. |
+| `pooled/__init__.py` | Mark the package boundary; contain no scientific logic. |
+| `pooled/config.py` | Validate a small pooled-analysis overlay and resolve the existing base task-decoding configuration. |
+| `pooled/decoding.py` | Assemble pooled features, fit one fixed model, evaluate it through time, and construct native/transfer/gap arrays. |
+| `pooled/results.py` | Define, save, load, fingerprint, and strictly validate schema-1 checkpoints and final results. |
+| `pooled/pipeline.py` | Plan, prepare, execute, resume, and inspect one session while reusing current lifecycle helpers where extraction is safe. |
+| `pooled/plotting.py` | Load saved pooled results and create the required native, transfer, and gap figures. |
+| `pooled/run_session.py` | Thin `dry-run`, `new`, `resume`, and `status` CLI; no scientific logic. |
 
-Six focused modules are justified by separate data contracts. Do not create
+Six focused modules plus the package initializer are justified by separate
+data contracts. Do not create
 classes that only wrap functions, introduce a shared plugin system, or refactor
 the current decoder speculatively.
 
@@ -162,11 +184,14 @@ the current decoder speculatively.
   `fit_and_score` implementation because pooled evaluation must reuse one fit
   many times. Existing `fit_and_score` delegates to that seam and retains its
   current public behavior and byte contracts.
-- `results.py`: input-manifest and scientific-source fingerprint behavior,
-  not its existing result schema.
+- `results.py`: input-manifest helpers and current top-level fingerprint
+  enumeration, not its existing result schema. Narrow its cleanliness check
+  from every descendant Python path to the same direct top-level paths, so a
+  dirty nested pooled module neither changes nor blocks the existing analysis;
+  protect that one-line scope correction with regression tests.
 - `resource_usage.py`: retain the current schema, validator, and tracker
-  unchanged, while adding the separate pooled resource contract in Section
-  6.6 and reusing its low-level measurement and atomic-write helpers.
+  unchanged. The pooled pipeline may reuse the public RSS-normalization helper,
+  but its lean sidecar contract remains local to the pooled workflow.
 - Current execution-guard, detached-launch, atomic-write, and status behavior
   may be extracted into small shared helpers only if focused regression tests
   first prove that the existing public commands and byte contracts are
@@ -180,9 +205,9 @@ removes literal duplication and preserves both callers clearly.
 ### 3.3 Explicitly deferred files and features
 
 - No `pooled_decoding_splits.py`; use `modeling.make_outer_splits`.
-- No `run_pooled_batch.py` or pooled Slurm code before PW-WP9.
+- No pooled batch or Slurm code before PW-WP8.
 - No web-app integration in revision 1.
-- No automatic loader for current per-time-bin results before PW-WP8.
+- No automatic loader for current per-time-bin results before PW-WP7.
 - No tuned regularization, train-time x test-time matrix, arbitrary windows,
   inferential statistics, or within-session multiprocessing.
 
@@ -236,9 +261,15 @@ Its public functions are:
 
 ```text
 load_pooled_decoding_config(path: Path | str) -> PooledDecodingConfig
-scientific_pooled_config_payload(config: PooledDecodingConfig) -> dict[str, object]
 resolve_training_windows(config: PooledDecodingConfig,
                          time_bin_edges_s: np.ndarray) -> tuple[TrainingWindow, ...]
+scientific_pooled_config_payload(
+    config: PooledDecodingConfig,
+    training_windows: Sequence[TrainingWindow],
+) -> dict[str, object]
+load_prepared_pooled_decoding_config(
+    run_directory: Path | str,
+) -> tuple[PooledDecodingConfig, tuple[TrainingWindow, ...]]
 ```
 
 `TrainingWindow` records `name`, `(start_s, stop_s)`, and a one-dimensional
@@ -246,8 +277,39 @@ ascending integer `bin_indices` array. Bounds and time axes are seconds
 relative to choice. The scientific payload embeds the canonical base
 scientific payload, effective `condition_names`, fixed
 `reference_condition`, and resolved window definitions; a change to any of
-them changes the run fingerprint. The pooled overlay file and referenced base
-config file are both included by byte identity in the input manifest.
+them changes the run fingerprint. Planning derives the canonical time-bin
+edges from the validated base bounds and bin width, resolves windows first,
+and passes those immutable definitions to the serializer. Execution validates
+the loaded tensor axes against them.
+
+Canonical resolved configuration content, not JSON formatting or the original
+configuration pathname, determines scientific identity. Preparation copies
+the submitted overlay and referenced base JSON to
+`pooled_config.input.json` and `base_config.input.json` for audit, even when
+either source lies outside the session root. These byte copies are not
+scientific inputs and are not added to the session-contained input manifest;
+execution and resume use the immutable resolved `config.json`, not mutable
+external configuration files.
+
+Preparation stores the absolute resolved session root under the exact
+`execution.json` key `session_root` as execution-only provenance; it is
+excluded from scientific/config identity.
+`load_prepared_pooled_decoding_config` reads only `config.json`,
+`execution.json`, and the run-directory location. It reconstructs every
+session-relative scientific path below that saved root, reconstructs
+`output_root` as `run_directory.parent`, uses
+`run_directory/base_config.input.json` only as the inert `base_config_path`
+audit location, rebuilds `TaskDecodingConfig`, `PooledDecodingConfig`, and the
+resolved `TrainingWindow` records, and validates all frozen controls and
+canonical ordering. It never parses either audit JSON copy. Missing or
+nonabsolute roots, path escape, payload drift, and invalid reconstructed
+configuration fail before neural data are loaded.
+
+After reconstruction, `run_prepared_pooled_decoding` recomputes and validates
+the saved input manifest against the reconstructed absolute paths before
+loading large arrays or accepting a checkpoint. Thus moving or formatting the
+original submitted configurations cannot affect resume, while moved, missing,
+or changed scientific inputs are rejected.
 
 ## 5. Scientific core API and data flow
 
@@ -411,17 +473,19 @@ evaluate_pooled_model(
     pfc_test_rates_hz: np.ndarray,
     hpc_test_rates_hz: np.ndarray,
     test_targets: np.ndarray,
-    test_trial_indices: np.ndarray,
     evaluation_time_centers_s: np.ndarray,
-) -> tuple[PooledEvaluationRecord, ...]
+) -> PooledEvaluationResult
 ```
 
 Held-out tensors have shape `(test_trial, evaluation_time, regional_unit)` in
-Hz; targets and common tensor-row positions have shape `(test_trial,)`;
-centers have shape `(evaluation_time,)` in choice-relative seconds. The fitted
-transform and estimator are applied unchanged at each time. The return has one
-immutable record per time and applicable metric, including test indices,
-counts, status, reason, and score. It never refits, recenters, rescales, or
+Hz; targets have shape `(test_trial,)`; centers have shape
+`(evaluation_time,)` in choice-relative seconds. The fitted transform and
+estimator are applied unchanged at each time. The immutable return contains
+dense `(evaluation_time, metric)` status, reason, and score arrays plus the
+single test-trial count and categorical class counts when applicable. It does
+not repeat test indices per time or metric. Pair/fold membership is exactly
+reconstructable from saved condition masks, target fold IDs, and
+`trial_row_indices`. The function never refits, recenters, rescales, or
 recalibrates.
 
 ```text
@@ -452,9 +516,10 @@ axis. This function handles one window-target checkpoint cell, orchestrates
 every native model, reuses each correct-rewarded model for all destination
 evaluations, and computes fold-level native-minus-transfer gaps only from
 scores on identical destination rows. `PooledWindowTargetResult` contains the
-complete durable model, evaluation, gap, transform-status/count, and fold
-records for that cell. Shape/identity violations raise; declared scientific
-insufficiency remains in the returned records. The pipeline retains the
+complete dense model, evaluation, gap, transform-status/count, and fold
+arrays for that cell. It does not materialize a Python record for every
+time/metric cell. Shape/identity violations raise; declared scientific
+insufficiency remains in the returned result. The pipeline retains the
 full-table `(N,)` audit arrays and `trial_row_indices (M,)` separately for
 final assembly.
 
@@ -504,6 +569,8 @@ sidecar categories used by the existing workflow. NPZ loading always uses
 analysis_runs/
   pooled_task_variable_decoding_<UTC timestamp>/
     config.json
+    pooled_config.input.json     # exact submitted overlay; audit only
+    base_config.input.json       # exact referenced base JSON; audit only
     input_manifest.json
     scientific_source.json
     execution.json
@@ -517,27 +584,34 @@ analysis_runs/
     resource_usage.json
     results.npz                 # present only after atomic final publication
     summary.md                  # present only for a complete run
-    run_pooled_session.py       # immutable launch-module snapshot
-    pooled_pipeline.py          # immutable main-analysis snapshot
+    run_session.py              # immutable launch-module snapshot
+    pipeline.py                 # immutable main-analysis snapshot
+    plotting.py                 # immutable reporting-module snapshot
     checkpoints/
       <window>__<target>.npz
     figures/
-      native__<window>__<target>__<region>__<representation>__<metric>.png
-      transfer__<window>__<target>__<region>__<representation>__<metric>.png
-      gap__<window>__<target>__<region>__<representation>__<metric>.png
+      native__<window>__<target>.png
+      transfer__<window>__<target>.png
+      gap__<window>__<target>.png
 ```
 
-`config.json` is the resolved pooled scientific payload and already embeds the
-resolved base payload; no redundant base-config copy is written. A checkpoint
-key is exactly `<training_window>::<target>`. Filename labels use the existing
-strict filename-safe identifier rule. One checkpoint is complete only when it
-holds all configured conditions, folds, regions, representations, evaluation
-pairs, and times for that cell.
+`config.json` is the canonical resolved scientific payload and embeds the
+resolved base payload. The two `*.input.json` files preserve exact submitted
+bytes for audit but do not determine identity and are not reread during
+execution. A checkpoint key is exactly `<training_window>::<target>`. Filename
+labels use the existing strict filename-safe identifier rule. One checkpoint
+is complete only when it holds all configured conditions, folds, regions,
+representations, evaluation pairs, and times for that cell.
 
-The source snapshots are copied from the exact fingerprinted repository files
-at preparation and validated byte-for-byte on complete reentry. PW-WP9 defines
-the batch run-directory additions only when the batch launcher exists; the
-single-session schema contains no future placeholder.
+Required figure count is `3*W*T`: 54 PNGs for the first one-window/18-target
+benchmark and 162 for all three windows. More granular views are optional and
+generated only on request.
+
+The launch, main, and plotting source snapshots are copied at preparation,
+hashed and named in execution metadata, and validated byte-for-byte before
+execution, resume, and complete reentry. PW-WP8 defines the batch run-directory
+additions only when the batch launcher exists; the single-session schema
+contains no future placeholder.
 
 ### 6.2 Coordinate arrays
 
@@ -653,12 +727,31 @@ and the exact axis list for every array. Fitted
 scaler/PCA matrices are not saved: immutable inputs, configuration, folds,
 source fingerprint, selection rules, and model records are the reproduction
 contract, matching the current task decoder's level of persisted transform
-provenance. The scientific source fingerprint includes every new pooled module
-plus the reused `activity.py`, `conditions.py`, `config.py`, `modeling.py`,
-`resource_usage.py`, `results.py`, and `targets.py` files and the current direct
-runtime dependencies already covered by task decoding. The array names,
-dtypes, and axes in this section are exact; implementations must not factor,
-rename, or omit them because values happen to repeat across axes.
+provenance. `pooled/results.py` owns a pooled fingerprint function with an
+explicit fixed scientific source list: `pooled/__init__.py`,
+`pooled/config.py`, `pooled/decoding.py`, `pooled/results.py`, and
+`pooled/pipeline.py`; the parent initializer
+`src/neural_analysis/task_decoding/__init__.py`; the reused top-level
+`activity.py`, `conditions.py`, `config.py`, `modeling.py`, `results.py`, and
+`targets.py`; the condition-mask implementation
+`src/neural_analysis/spike_behavior/trials.py`; and every path in the existing
+`_DIRECT_RUNTIME_PATHS`. The parent initializer is explicit because importing
+the pooled package executes it. `trials.py` is explicit because
+`conditions.py` imports `make_trial_type_masks` from it and the existing direct
+dependency list does not include it. Reporting-only `pooled/plotting.py` and
+the thin `pooled/run_session.py` CLI are excluded from scientific identity but
+are hashed and snapshotted in execution provenance; telemetry-only
+`resource_usage.py` remains outside scientific identity. The fingerprint
+function does not glob the package. An unrelated new file therefore cannot
+silently enter either analysis identity.
+The existing top-level fingerprint function remains unchanged and excludes
+the nested pooled package by construction. Its companion cleanliness check is
+made consistent with that direct top-level scope; the pooled validator
+separately requires every explicitly listed pooled dependency to be clean and
+tracked. The existing identity correctly changes if a reused top-level
+scientific file such as `modeling.py` changes. The array names, dtypes, and
+axes in this section are exact; implementations must not factor, rename, or
+omit them because values happen to repeat across axes.
 
 Do not save per-trial predictions in revision 1. AUC is computed in memory
 from held-out positive-class probabilities. Reproduction is provided by fold
@@ -692,7 +785,7 @@ invalid_metric
 source_score_unavailable
 ```
 
-`pooled_decoding.POOLED_REASON_CODES` is the sole ordered vocabulary used by
+`pooled.decoding.POOLED_REASON_CODES` is the sole ordered vocabulary used by
 producers and validators; `reason_code_names` serializes that exact order.
 
 Pooled scientific functions choose these codes at the decision point or map a
@@ -735,7 +828,56 @@ run instead of being relabeled unavailable. The validator rejects undeclared
 or over-width codes; every declared code must fit NumPy `U32` without
 truncation.
 
-### 6.5 Persistence and lifecycle APIs
+### 6.5 Exact status and reason propagation
+
+The status values have one interpretation everywhere. `valid` requires a
+reason index of `-1`. `unavailable` requires one declared reason. Float output
+for an unavailable cell is NaN and its active-feature mask is false.
+`not_applicable` is used only for metric-family mismatch: `r2` for categorical
+targets and `balanced_accuracy`/`auc` for numerical targets. Those metric cells
+in both evaluation and gap arrays have reason `-1` and NaN scores; transform
+and model cells are never `not_applicable`. The propagation table below
+therefore applies only to metrics applicable to the target family.
+
+Counts use observed values whenever the relevant subset or operation is
+known. An observed empty subset is count zero. A count that cannot be known
+because an upstream stage was not reached is `-1`, never zero. Requested
+regional unit/PC counts and training/test trial counts are populated whenever
+their defining inputs are available. For a transform not attempted,
+usable-unit, component-limit, and effective-PC counts are `-1`; after an
+attempt, its observed counts are retained even if the transform is
+unavailable. Model stacked-row and effective-feature counts are `-1` until
+those stages are reached. Categorical class counts use observed class-0/class-1
+counts; numerical class-count arrays are always `(-1, -1)`. Model convergence
+is `not_run` before an estimator attempt, `converged` for a valid fit,
+`warning` for `fit_convergence_failure`, and `invalid` for another attempted
+but unavailable fit.
+
+Numerical training and test subsets are valid only with at least two
+independent finite trials and at least two distinct finite target values.
+Categorical training and test subsets are valid only when nonempty and both
+classes 0 and 1 are present. The following table is exhaustive:
+
+| Earliest outcome | Transform cell | Dependent model cell | Applicable evaluation cells | Gap cell |
+| --- | --- | --- | --- | --- |
+| Target outer split unavailable | `unavailable`, `target_outer_unavailable` | copy the same status/reason | copy the same status/reason | `unavailable`, `source_score_unavailable` |
+| Training subset empty or target-invalid before transform fitting | `unavailable`, exact training-subset reason | copy the same status/reason | copy the same status/reason | `unavailable`, `source_score_unavailable` |
+| One regional transform unavailable | failing anatomical transform uses its exact PFC/HPC code; the other retains its own state | PFC/HPC-only models copy their source code; a combined model uses `regional_transform_unavailable` | copy the model status/reason | `unavailable`, `source_score_unavailable` |
+| Transforms valid but requested model has no usable features | `valid`, no reason | `unavailable`, `no_features` | copy `no_features` | `unavailable`, `source_score_unavailable` |
+| Estimator fit unavailable | `valid`, no reason | `unavailable`, exact mapped fit code | copy the model status/reason | `unavailable`, `source_score_unavailable` |
+| Model valid but destination test subset empty or target-invalid | unchanged | `valid`, no reason | `unavailable`, exact test-subset reason | `unavailable`, `source_score_unavailable` |
+| Prediction or metric unavailable | unchanged | `valid`, no reason | `unavailable`, exact mapped evaluation code | `unavailable`, `source_score_unavailable` |
+| Score valid | `valid`, no reason | `valid`, no reason | `valid`, no reason | `valid`, no reason if both source scores are valid |
+
+Upstream reasons are copied without reinterpretation except for the two
+explicit aggregation boundaries in the table: combined-region transform
+failure becomes `regional_transform_unavailable`, and any missing gap source
+becomes `source_score_unavailable`. Evaluation cells inherit the exact model
+reason when the model is unavailable. A valid correct-rewarded self-gap is
+exactly zero; if its shared source evaluation is unavailable, it follows the
+ordinary unavailable-gap rule.
+
+### 6.6 Persistence and lifecycle APIs
 
 ```text
 save_pooled_checkpoint(path: Path, *, checkpoint_key: str,
@@ -754,6 +896,24 @@ Savers validate before one atomic publication. Loaders use
 `allow_pickle=False`, validate the complete schema, and return no fitted
 scikit-learn objects.
 
+The scientific stage also exposes one synchronous computation API used by the
+synthetic gate before lifecycle, detached execution, or plotting is
+implemented:
+
+```text
+compute_or_resume_pooled_results(
+    config: PooledDecodingConfig,
+    training_windows: Sequence[TrainingWindow],
+    work_directory: Path,
+) -> pathlib.Path
+```
+
+It loads the configured session inputs, writes or restores fingerprinted
+window-target checkpoints under the supplied working directory, and atomically
+publishes validated `results.npz`. It does not create terminal lifecycle state,
+reports, or figures. The later full lifecycle calls this same function; there
+is no second scientific path.
+
 ```text
 plan_pooled_decoding_session(config_path: Path | str) -> dict[str, object]
 prepare_pooled_decoding_run(config_path: Path | str) -> pathlib.Path
@@ -763,21 +923,22 @@ inspect_pooled_decoding_status(run_directory: Path | str) -> dict[str, object]
 
 Planning reads small metadata and reports exact dimensions/resources without
 loading spikes or fitting. Preparation writes the immutable identity and
-lifecycle sidecars. Execution is the only function that loads full neural
-arrays or fits. Status reads only small sidecars and validates a completed
-result without mutating it. `run_pooled_session.main(argv)` only parses CLI
-arguments and delegates to these functions.
+lifecycle sidecars. `run_prepared_pooled_decoding` calls the synchronous
+computation API, then adds reporting and terminal publication; it is not a
+second compute path. Those two execution functions are the only functions that
+load full neural arrays or fit. Status reads only small sidecars and validates
+a completed result without mutating it.
+`pooled.run_session.main(argv)` only parses CLI arguments and delegates to
+these functions.
 
-### 6.6 Pooled resource-usage contract
+### 6.7 Lean pooled resource-usage contract
 
 The current `RESOURCE_USAGE_SCHEMA_VERSION`, `ResourceUsageTracker`, and
 `validate_resource_usage_payload` remain unchanged for existing task-decoding
-runs. In the same `resource_usage.py` module, PW-WP5 adds a distinct
-`POOLED_RESOURCE_USAGE_SCHEMA_VERSION = 1`, `PooledResourceUsageTracker`,
-`validate_pooled_resource_envelope`, and
-`validate_pooled_resource_usage_payload`. Both trackers may reuse the existing
-`resource.getrusage`, RSS-normalization, output-size, and atomic-JSON helpers,
-but neither validator accepts the other analysis's payload.
+runs. The pooled pipeline records its smaller schema-1 sidecar locally, using
+standard elapsed/CPU clocks, `resource.getrusage`, and the existing public RSS
+normalizer. Do not add a second tracker class or nested per-operation timing
+framework before the first benchmark demonstrates a need.
 
 The pooled resource envelope has exactly these integer fields:
 
@@ -802,82 +963,66 @@ planned_major_array_bytes
 ```
 
 Family fit counts may individually be zero; all dimensions and byte counts are
-positive, and categorical plus numerical fit count is positive. The envelope
-comes from dry run and is identical across every resume.
+nonnegative, required dimensions are positive, and categorical plus numerical
+fit count is positive. The envelope comes from dry run and is identical across
+every resume.
 
 The pooled payload has exactly `schema_version`, `analysis_type` (fixed to
 `"pooled_task_variable_decoding"`), `measurement_method`, `status`,
 `peak_rss_bytes`, `wall_time_seconds`, `user_cpu_seconds`,
 `system_cpu_seconds`, `cpu_efficiency`, `resource_envelope`,
-`completed_checkpoint_keys`, `target_split_measurements`,
-`checkpoint_measurements`, `stage_timing_seconds`, `operation_counts`, and
-`output_size_bytes`. Measurement method remains `"resource.getrusage"`, and
-statuses retain the current running/failed/interrupted/complete vocabulary. A
-checkpoint key is the canonical
-`<training_window>::<target>` identity. A complete payload contains every and
-only the canonical `W * T` keys, in pipeline order; it never uses the current
-schema's `C * T` completion rule.
+`completed_checkpoint_keys`, `restored_checkpoint_keys`,
+`stage_timing_seconds`, `result_counts`, `checkpoint_size_bytes`, and
+`output_size_bytes`. Stage timings have exactly `input_loading`, `modeling`,
+`final_assembly`, and `reporting`; they are aggregate diagnostics, not an
+operation ledger. `schema_version` is integer `1`; `measurement_method` is
+exactly `"resource.getrusage"`; and `status` is exactly one of `running`,
+`failed`, `interrupted`, or `complete`.
 
-`target_split_measurements` is keyed once per target because the master split
-is shared across windows. Each value contains exactly `target_family`,
-`timing_available`, nullable `total_seconds`, and `call_count`; the call count
-is zero for a restored timing-unavailable split and a positive cumulative
-count when deterministic split construction was repeated across resumes.
-Each
-`checkpoint_measurements` value contains exactly `training_window`,
-`target_identifier`, `target_family`, `timing_available`, nullable
-`total_seconds`, `requested_counts`, `valid_model_cell_count`,
-`unavailable_model_cell_count`, `valid_evaluation_metric_cell_count`,
-`unavailable_evaluation_metric_cell_count`, `timing_seconds`, and
-`operation_counts`. `requested_counts` has exactly `estimator_fits`,
-`transform_fits`, and `evaluation_metric_cells`. When timing is available, the
-last two mappings have the same exact operation structure (zero-valued entries
-remain present):
+`result_counts` has exactly these nonnegative integer keys:
 
-- `regional_transform`, keyed by `PFC` and `HPC`;
-- `feature_construction`, `stacking`, `estimator`, `native_evaluation`, and
-  `transfer_evaluation`, each keyed by the six canonical
-  `<region>|<representation>` identities; and
-- scalar `checkpoint_serialization`.
+```text
+requested_transform_cells
+valid_transform_cells
+unavailable_transform_cells
+requested_model_cells
+valid_model_cells
+unavailable_model_cells
+requested_evaluation_metric_cells
+valid_evaluation_metric_cells
+unavailable_evaluation_metric_cells
+```
 
-For one window-target checkpoint, the requested counts are `C*F*R*P`
-estimator fits, `C*F*A` transform fits, and `E*F*R*P*Q*K_T` evaluation metric
-cells, where `A=2`, `R=3`, `P=2`, and `K_T` is two for a categorical target or
-one for a numerical target. The reference self-pair is counted only under
-`native_evaluation`; `transfer_evaluation` contains the other `C-1` reference
-transfer pairs, so no metric cell is counted twice.
+Requested counts describe the immutable full run and match the envelope in
+every status: transforms equal `transform_fit_count`, models equal
+`categorical_fit_count + numerical_fit_count`, and evaluations equal
+`evaluation_metric_cell_count`. Valid and unavailable counts describe
+validated completed checkpoints only. Their sum is at most the requested count for a running,
+failed, or interrupted payload and equals it for `complete`. Metric-family
+`not_applicable` padding is excluded from all three evaluation counts.
 
-Evaluation operation counts count produced metric cells, not Python function
-calls; categorical evaluation can therefore add two cells while numerical
-evaluation adds one. Timing still records elapsed work once, under the
-applicable native or transfer operation.
+A checkpoint key is the canonical `<training_window>::<target>` identity. A
+complete payload contains every and only the canonical `W * T` completed keys
+in pipeline order; restored keys are an ordered subset of completed keys. A
+noncomplete payload may contain any canonical ordered subset.
 
-The top-level `operation_counts` has exactly
-`requested_estimator_fits`, `measured_estimator_fits`,
-`requested_transform_fits`, `measured_transform_fits`,
-`requested_evaluation_metric_cells`, `measured_evaluation_metric_cells`,
-`valid_model_cells`, `unavailable_model_cells`,
-`valid_evaluation_metric_cells`, and `unavailable_evaluation_metric_cells`.
-On complete evidence, requested aggregates must equal the corresponding
-envelope counts and all aggregates must equal the sums of checkpoint records.
-Valid plus unavailable model cells must equal requested estimator fits; valid
-plus unavailable evaluation cells must equal requested applicable metric
-cells. Measured operation counts may be lower than requested counts when a
-declared earlier scientific invalidity prevents downstream work.
-Complete `stage_timing_seconds` has exactly `input_loading`, `final_assembly`,
-and `reporting`; target splits and all checkpoint-local stages stay in their
-dedicated records rather than being double-counted there.
+`peak_rss_bytes`, `checkpoint_size_bytes`, and `output_size_bytes` are
+nonnegative integers in every status. Wall/user/system seconds are
+nonnegative finite numbers. `cpu_efficiency` is the nonnegative finite
+`(user + system) / wall` ratio when wall time is positive and JSON `null` only
+when it is zero. Each stage-timing value is either a
+nonnegative finite number or `null` when that stage was not entered; all four
+are non-null for `complete`. Times and process usage cover only the current
+process invocation and are not fabricated for work performed by an earlier
+process. `checkpoint_size_bytes` is the current sum of validated checkpoint
+files. `output_size_bytes` is the current sum of all regular files below the
+run directory except `resource_usage.json` and its atomic-publication
+temporaries, so writing the sidecar cannot change its own value. For
+`complete`, it is measured only after all other final artifacts publish.
 
-Resume loads matching prior evidence. A restored checkpoint retains its prior
-measurement values unchanged when the key, window, target, family, and run
-envelope match. If no matching historical record exists, it is recorded with
-`timing_available=false`, null total time, and empty measured timing/count
-maps, while its requested and valid/unavailable counts are reconstructed from
-the validated checkpoint. Timing is never fabricated. Partial, failed, and
-interrupted snapshots may contain a strict prefix/subset of checkpoint keys;
-`checkpoint_measurements` always has exactly the same keys as that completed
-list. Complete evidence also has every target split record in target order.
-Complete validation enforces the full `W * T` identity and aggregate rules.
+This evidence is sufficient to choose the first cluster memory/time envelope.
+Finer per-target or per-operation telemetry is deferred until the CT026
+benchmark shows a concrete diagnostic need.
 
 ## 7. Tests committed before production
 
@@ -889,14 +1034,13 @@ or the test is demonstrably wrong.
 
 | File | Scope |
 | --- | --- |
-| `src/tests/neural_analysis/task_decoding/test_pooled_config.py` | Overlay configuration, canonical windows, serialization, identity |
-| `src/tests/neural_analysis/task_decoding/test_pooled_decoding.py` | Master folds, stacking, model fitting, reuse, evaluation, gaps, invalidity |
+| `src/tests/neural_analysis/task_decoding/pooled/test_config.py` | Overlay configuration, canonical windows, serialization, identity |
+| `src/tests/neural_analysis/task_decoding/pooled/test_decoding.py` | Master folds, stacking, model fitting, reuse, evaluation, gaps, invalidity |
 | `src/tests/neural_analysis/task_decoding/test_modeling.py` | Regression coverage for extracted fit/evaluate seams and unchanged `fit_and_score` behavior |
-| `src/tests/neural_analysis/task_decoding/test_pooled_results.py` | Exact arrays, dtypes, axes, reason vocabulary, checkpoints, safe load/save |
-| `src/tests/neural_analysis/task_decoding/test_pooled_pipeline.py` | Planning, prepare/run/resume/status, ownership, atomic completion |
-| `src/tests/neural_analysis/task_decoding/test_pooled_plotting.py` | Saved-result-only figures and captions |
-| `src/tests/neural_analysis/task_decoding/test_resource_usage.py` | Existing resource-schema regression and distinct pooled envelope/checkpoint accounting |
-| `src/tests/neural_analysis/task_decoding/test_pooled_synthetic.py` | Seeded public-entry-point scientific cases |
+| `src/tests/neural_analysis/task_decoding/pooled/test_results.py` | Exact arrays, dtypes, axes, reason vocabulary, checkpoints, safe load/save |
+| `src/tests/neural_analysis/task_decoding/pooled/test_pipeline.py` | Synchronous computation, planning, prepare/run/resume/status, ownership, atomic completion, lean resource sidecar |
+| `src/tests/neural_analysis/task_decoding/pooled/test_plotting.py` | Saved-result-only compact figures and captions |
+| `src/tests/neural_analysis/task_decoding/pooled/test_synthetic.py` | Seeded public-entry-point scientific cases |
 
 ### 7.2 Required tests
 
@@ -905,8 +1049,14 @@ Configuration and folds:
 1. Omitted windows select only `pre_choice`; subsets restore canonical order.
 2. Unknown fields, invalid base mode/alignment, empty/duplicate/unknown or
    misaligned windows fail.
-3. Serialization embeds the base payload, reference condition, exact bounds,
-   bin indices, and analysis version.
+3. Window resolution precedes serialization; canonical serialization embeds
+   the base payload, reference condition, exact bounds/bin indices, and
+   analysis version. Semantically identical source JSON with different paths
+   or formatting has one identity; exact source bytes are preserved only in
+   the two audit copies. A prepared loader reconstructs both config objects and
+   windows solely from canonical `config.json`, absolute execution-only
+   `session_root`, and `run_directory.parent`; it never parses the audit
+   copies and rejects missing or escaping reconstructed paths.
 4. Full-table values, masks, and blocks project through `trial_row_indices`
    without reordering; master eligibility is the exact baseline/target/
    bilateral intersection; rows failing multiple predicates retain the
@@ -966,49 +1116,62 @@ Results:
 20. A checkpoint contains exactly one window-target cell and cannot be reused
     across a different window, target, condition set, source, config, schema,
     or code fingerprint.
+21. Every row of the exact Section 6.5 propagation table is exercised,
+    including before-fit failures, copied upstream reasons, combined-region
+    replacement, metric-family `not_applicable` padding, observed-zero versus
+    unknown-count sentinels, and exact categorical/numerical subset rules.
+22. Synchronous one-shot and interrupted/resumed computation produce
+    byte-identical scientific arrays and canonical metadata. The pooled source
+    fingerprint changes for every explicitly scoped dependency, including
+    `task_decoding/__init__.py` and `spike_behavior/trials.py`, and ignores an
+    unrelated new file; adding or editing the nested package neither enters nor
+    blocks the existing top-level fingerprint/cleanliness scope, while dirty or
+    untracked pooled dependencies block a pooled run.
 
-Reporting:
+Scientific fixtures, before reporting/lifecycle work:
 
-21. Figures identify window, train/test conditions, target, region,
-    representation, metric, and time units; unavailable differs from
-    below-chance performance. Every time-course marks the training interval,
-    and captions distinguish held-out in-window evaluation from out-of-window
-    temporal generalization (`full` has no out-of-window time).
-22. Plotting reads saved results only and never loads spikes or fits models.
-
-Lifecycle and usage:
-
-23. Interrupted execution preserves complete checkpoints; exact resume skips
-    them; final publication occurs only after validated results, summary, and
-    required figures exist; complete reentry is read-only; launch snapshots
-    match the fingerprinted source bytes.
-24. Dry run loads no large spike arrays or fits; it computes exact `G` and
-    major-array bytes from selected source-unit/requested-PC metadata.
-25. The pooled envelope has exactly the fields in Section 6.6; complete
-    evidence requires exactly `W * T` canonical checkpoint keys and reconciles
-    requested/measured transform, estimator, evaluation, validity, and timing
-    aggregates across multi-window execution and resume.
-26. Restored pooled checkpoints preserve matching prior measurements; missing
-    prior timing is explicit rather than fabricated; condition-by-target
-    completion, mismatched identities, unknown fields, and inconsistent
-    aggregates are rejected.
-27. The existing resource schema, validator, tracker, and serialized payloads
-    retain their current behavior and `C * T` completion rule.
-28. Existing per-time-bin runs remain readable and are never discovered as
-    pooled runs; log and summary record the goal, session, parameters, scripts,
-    warnings/errors, and elapsed time.
-29. The portable example resolves to all six conditions and all 18 targets;
-    README commands name the pooled entry point and immutable run directory.
-
-Scientific fixtures:
-
-30. Seeded stable, rotating/sign-changing, stable-transfer, remapped,
+23. Seeded stable, rotating/sign-changing, stable-transfer, remapped,
     absent-code, delayed-code, constant-reference, overlapping-condition, and
-    multi-window fixtures produce their specified qualitative outcomes.
-31. The full-window fixture fits once per model identity, not once per time.
-32. One-shot and interrupted/resumed synthetic runs produce byte-identical
-    scientific arrays and canonical metadata plus complete validated results,
-    summary, and required PNGs.
+    multi-window fixtures produce every pooled outcome through the synchronous
+    public computation path. For the rotating/sign-changing case only, the
+    independent-time-bin decodability oracle calls the existing
+    `modeling.fit_and_score` separately at each bin on the same seeded fixture;
+    it is test-only, is not stored as a pooled result, and does not create a
+    second pooled production path.
+24. The full-window fixture fits once per model identity, not once per time.
+25. One-shot and interrupted/resumed synthetic runs have no unexplained
+    unavailable cells and preserve exact checkpoints and complete validated
+    `results.npz`.
+
+Reporting, lifecycle, resources, and usage:
+
+26. Completion creates exactly three multi-panel PNGs per window/target:
+    native, transfer, and gap. Panels/captions identify condition/pair, region,
+    representation, metric, time units, the training interval, unavailable
+    cells, and in-window versus out-of-window evaluation. The gap caption says
+    it compares complete pipelines and cannot isolate estimator weights.
+27. Plotting reads saved results only and never loads spikes or fits models.
+28. Interrupted execution preserves complete checkpoints; exact resume skips
+    them; terminal publication occurs only after validated results, summary,
+    and required figures exist; reconstructed paths are revalidated against
+    the input manifest before any checkpoint is accepted; complete reentry is
+    read-only; launch snapshots match the launch/main/plotting source hashes
+    and bytes recorded at preparation.
+29. Dry run loads no large spike arrays or fits; it computes exact `G`,
+    requested aggregate counts, and planned major-array bytes from small
+    metadata.
+30. The lean Section 6.7 resource payload accepts only the frozen schema,
+    method, statuses, exact `result_counts` keys, canonical completed/restored
+    `W*T` checkpoint identities, and declared null/nonnegative sentinels.
+    Complete and partial count reconciliation is exact; restored work never
+    receives fabricated timing; output size excludes the sidecar and its
+    temporaries; the existing resource schema and tracker remain unchanged.
+31. Existing per-time-bin runs remain readable and are never discovered as
+    pooled runs; log and summary record the goal, session, parameters, scripts,
+    warnings/errors, elapsed time, and the comparison's scientific limits.
+32. The portable example resolves to all six conditions and all 18 targets;
+    README commands name `src.neural_analysis.task_decoding.pooled.run_session`
+    and the immutable run directory.
 
 Every work package must also run all existing tests under
 `src/tests/neural_analysis/task_decoding` to protect the current workflow.
@@ -1025,8 +1188,9 @@ Every work package must also run all existing tests under
 
 ### PW-WP1: configuration and master folds
 
-- RED: tests 1-5 in `test_pooled_config.py` and `test_pooled_decoding.py`.
-- GREEN: `pooled_config.py` plus the minimal master-fold helper.
+- RED: tests 1-5 in `pooled/test_config.py` and `pooled/test_decoding.py`.
+- GREEN: `pooled/config.py`, including canonical prepared-run reconstruction,
+  plus the minimal master-fold helper.
 - Gate: focused tests, existing task-decoding tests, independent leakage/API
   review, user approval, and ledger update.
 
@@ -1035,51 +1199,48 @@ Every work package must also run all existing tests under
 - RED: tests 6-15 and focused seeded unit fixtures, including regression tests
   for the existing `fit_and_score` API.
 - GREEN: the minimal fit/evaluate extraction in `modeling.py` and
-  `pooled_decoding.py`; reuse current transforms, estimators, and metrics
+  `pooled/decoding.py`; reuse current transforms, estimators, and metrics
   without changing existing public behavior.
 - Gate: exact estimator and transform call counts, verified weighting
   semantics, no evaluation refit/recalibration, scientific review, full
   regression, and ledger update.
 
-### PW-WP3: result schema and checkpoints
+### PW-WP3: result schema, checkpoints, and synchronous computation
 
-- RED: tests 16-20 in `test_pooled_results.py`.
-- GREEN: `pooled_results.py`, schema-1 validation, immutable atomic checkpoint
-  save/load, and no prediction arrays.
-- Gate: independent byte/axis/sentinel/reason-code review and ledger update.
+- RED: tests 16-22 in `pooled/test_results.py` and
+  `pooled/test_pipeline.py`.
+- GREEN: `pooled/results.py`, schema-1 validation, exact status propagation,
+  explicit source fingerprinting, the minimal existing-cleanliness scope fix,
+  immutable atomic checkpoint save/load, and the synchronous
+  preparation/computation path with no prediction arrays.
+- Gate: independent byte/axis/sentinel/reason-code/source-scope review,
+  one-shot/resume equality, full regression, and ledger update.
 
-### PW-WP4: reporting
+### PW-WP4: synthetic end-to-end scientific gate
 
-- RED: tests 21-22 in `test_pooled_plotting.py` against validated saved-result
-  fixtures.
-- GREEN: `pooled_plotting.py` with saved-result-only required-PNG rendering.
-  Lifecycle and summary integration remain in PW-WP5.
-- Gate: visibly marked training intervals, complete captions, readable
-  light-mode outputs, user inspection, full regression, and ledger update.
+- RED: tests 23-25 through the synchronous public entry point.
+- GREEN: only fixes required by those scientific contracts; no reporting,
+  detached execution, telemetry expansion, or new feature scope.
+- Gate: deterministic complete validated scientific results, no unexplained
+  unavailable cells, exact fit counts, one-shot/resume equality, independent
+  scientific review, user inspection, and ledger update.
 
-### PW-WP5: single-session lifecycle and usage documentation
+### PW-WP5: reporting, lifecycle, resources, and usage documentation
 
-- RED: tests 23-29 in `test_pooled_pipeline.py`, `test_resource_usage.py`, and
-  focused configuration/documentation checks. Existing resource-schema
-  regression tests are committed before adding the pooled tracker.
-- GREEN: `pooled_pipeline.py` and thin `run_pooled_session.py` with dry-run,
-  `new`, `resume`, local detached execution, and `status`; integrate validated
-  pooled resource evidence and saved-result summary/PNG rendering before
-  terminal completion; add
+- RED: tests 26-32 in `pooled/test_plotting.py`, `pooled/test_pipeline.py`, and
+  focused configuration/documentation checks.
+- GREEN: `pooled/plotting.py`, `pooled/pipeline.py`, and thin
+  `pooled/run_session.py` with compact multi-panel reporting, dry-run, `new`,
+  `resume`, local detached execution, `status`, and the lean resource sidecar;
+  revalidate reconstructed inputs before checkpoint acceptance; integrate
+  validated summary/PNG rendering before terminal completion; add
   `docs/examples/neural_analysis/pooled_task_decoding_config.json`, and the
   pooled usage section in `src/neural_analysis/task_decoding/README.md`.
-- Gate: ownership/failure-preservation review, atomic complete publication,
-  portable examples, full regression, user inspection, and ledger update.
+- Gate: exactly `3*W*T` required PNGs, explicit complete-pipeline limitation,
+  ownership/failure-preservation review, atomic completion, portable examples,
+  full regression, user inspection, and ledger update.
 
-### PW-WP6: synthetic end-to-end scientific gate
-
-- RED: tests 30-32 through the real public entry point.
-- GREEN: only fixes required by those contracts; no new feature scope.
-- Gate: deterministic complete validated results, summary, and figures; no
-  unexplained unavailable cells; one-shot/resume equality; independent
-  scientific review; user inspection; and ledger update.
-
-### PW-WP7: CT026 pre-choice benchmark
+### PW-WP6: CT026 pre-choice benchmark
 
 - Prepare an immutable all-target/all-condition pre-choice configuration.
 - Run dry-run first, then one user-approved experimental session.
@@ -1088,10 +1249,10 @@ Every work package must also run all existing tests under
 - Gate: user inspects scientific results before any new feature, window, or
   multi-session execution is authorized.
 
-### PW-WP8: optional descriptive comparison
+### PW-WP7: optional descriptive comparison
 
 - Enter only if the user wants a consolidated existing-versus-pooled figure
-  after PW-WP7.
+  after PW-WP6.
 - Compare saved complete-fold means only after validating common session,
   target, condition, time, region, representation, and metric coordinates plus
   matching neural-source/unit-selection identity. Require and label both
@@ -1105,9 +1266,9 @@ Every work package must also run all existing tests under
   rerun either analysis.
 - This work package is not required for a valid pooled analysis.
 
-### PW-WP9: cluster and batch execution
+### PW-WP8: cluster and batch execution
 
-- Enter only after PW-WP7 supplies a measured resource envelope and the user
+- Enter only after PW-WP6 supplies a measured resource envelope and the user
   approves cluster implementation.
 - Reuse or minimally generalize reviewed current Slurm/lifecycle behavior.
 - Add dry-run and session-manifest tests before code. Default parallelism is
@@ -1115,10 +1276,10 @@ Every work package must also run all existing tests under
 - A synthetic scheduler smoke precedes experimental submission. Submission and
   retrieval are separately approved external actions.
 
-### PW-WP10: additional windows and experimental batch
+### PW-WP9: additional windows and experimental batch
 
 - Run post-choice/full only with an explicit immutable configuration approved
-  after PW-WP7.
+  after PW-WP6.
 - Verify adding windows does not change pre-choice scientific arrays.
 - Batch only a reviewed session manifest inside the measured resource
   envelope; larger sessions require a new benchmark.
@@ -1143,14 +1304,15 @@ windows.
 
 Dry run reports model/evaluation/transform counts, stacked shapes, selected
 source-unit counts, exact `G`, and exact planned major-array bytes without
-loading spikes. Runtime instrumentation separates
-input loading, target split construction, transform fitting, stacking,
-categorical/numerical fitting, native evaluation, transfer evaluation,
-checkpoint serialization, final assembly, and reporting (including plotting).
+loading spikes. Initial runtime instrumentation records only aggregate input
+loading, modeling, final assembly, and reporting times plus process wall/CPU/
+peak-RSS and checkpoint/final-output sizes. Add finer timing only when the
+first benchmark identifies a bottleneck that the aggregate evidence cannot
+localize.
 
 Prioritize correctness and clarity. Do not add Numba, Cython, a new estimator,
 within-session multiprocessing, sparse/on-disk schemas, or caching beyond the
-declared reference-model reuse unless profiling after PW-WP7 identifies a real
+declared reference-model reuse unless profiling after PW-WP6 identifies a real
 bottleneck and the user approves a revised plan.
 
 ## 10. Implementation discipline
