@@ -1,8 +1,8 @@
 # Pooled-Window Task-Variable Decoding and Condition-Generalization Plan
 
-**Status:** Documentation revision complete; awaiting user review and
-approval. Implementation is not yet authorized. No code, tests, experimental
-computation, or cluster work is authorized by this document.
+**Status:** Revision-1 documentation was approved on 2026-10-11. PW-WP1 is
+implemented and awaiting review and approval. PW-WP2 and later work packages,
+experimental computation, and cluster work are not yet authorized.
 
 **Scientific contract:**
 `docs/task_variable_condition_generalization_spec_v1.md`.
@@ -23,15 +23,15 @@ summary.
 | --- | --- |
 | Snapshot date | 2026-10-11 |
 | Branch | `refactor` |
-| Repository HEAD at documentation audit | `7aa3411539c5572aefce3654bc1b1a9d287e193c` |
-| Last commit touching these documents | `7aa3411` (`updating task variable plans for generalized encoding analysis`) |
-| Current work package | PW-WP0: specification and implementation plan |
-| Current phase | External-review corrections and validation complete; awaiting user approval; no RED test commit exists |
-| Completed work packages | None |
-| Active implementation files | None |
-| Latest validation | 2026-10-11: all review findings through the parent-initializer dependency and test-only time-bin oracle resolved; required-clause and stale-contract scans clean; code fences balanced; ASCII-only edits; `git diff --check` passed |
-| Open blockers | User review and approval of the revised scientific and implementation contracts |
-| Exact next action | Review this document and the companion specification; after approval, plan and commit PW-WP1 RED tests |
+| PW-WP1 implementation HEAD | `65f8a2e5eb04071dbecf26debc03e334a6625fd2` |
+| Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
+| Current work package | PW-WP1: configuration and master folds |
+| Current phase | GREEN/refactor complete; independent review and user approval pending |
+| Completed work packages | PW-WP0 documentation |
+| Active implementation files | `pooled/__init__.py`, `pooled/config.py`, and `pooled/decoding.py` |
+| Latest validation | 2026-10-11: focused pooled tests `20 passed`; full `src/tests/neural_analysis/task_decoding` regression `890 passed, 27 warnings`; `git diff --check` passed |
+| Open blockers | Independent review and user approval of PW-WP1 before PW-WP2 |
+| Exact next action | Review PW-WP1 commits and contracts; do not begin PW-WP2 until approval |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -46,8 +46,8 @@ user approval all pass.
 
 | Work package | RED commit | GREEN/refactor commit | Focused tests | Full regression | Review and approval | State |
 | --- | --- | --- | --- | --- | --- | --- |
-| PW-WP0 documentation | Not applicable | Pending | Documentation checks passed 2026-10-11 | Not applicable | User review pending | Awaiting approval |
-| PW-WP1 configuration and folds | - | - | - | - | - | Not started |
+| PW-WP0 documentation | Not applicable | `7df0100` | Documentation checks passed 2026-10-11 | Not applicable | User approved 2026-10-11 | Complete |
+| PW-WP1 configuration and folds | `ebc8cc8`, `7aec299` | `65f8a2e` | `20 passed` | `890 passed, 27 warnings` | Independent review and user approval pending | Awaiting review |
 | PW-WP2 scientific core | - | - | - | - | - | Not started |
 | PW-WP3 result schema, checkpoints, and synchronous computation | - | - | - | - | - | Not started |
 | PW-WP4 synthetic scientific gate | - | - | - | - | - | Not started |

@@ -1,7 +1,8 @@
 # Pooled-Window Task-Variable Decoding and Condition-Generalization Specification
 
-**Status:** Revision 1 documentation revision complete; awaiting user review.
-This document does not authorize code changes or scientific computation.
+**Status:** Revision 1 approved on 2026-10-11. PW-WP1 implementation is
+awaiting review. This document does not authorize experimental computation or
+later implementation work packages.
 
 **Implementation plan:** See
 `docs/task_variable_condition_generalization_implementation_plan.md`.
