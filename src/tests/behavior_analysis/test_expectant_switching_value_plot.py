@@ -58,6 +58,7 @@ def test_mouse_history_expectant_value_plot_is_one_light_panel(monkeypatch, tmp_
     ]
     assert captured["kwargs"]["theme"] == "light"
     assert captured["kwargs"]["show_legend"] is True
+    assert captured["kwargs"]["figsize"] == (24, 5)
     assert len(captured["fig"].axes) == 1
     assert save_path == tmp_path / "CT016_2026-06-10_120000_mouse_history_expectant_switching_values.png"
     assert save_path.exists()

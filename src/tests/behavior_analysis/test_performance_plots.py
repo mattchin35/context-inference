@@ -268,6 +268,7 @@ def test_expectant_diagnostic_reward_count_and_strength_use_separate_y_axes(
         sess_id_full="CT999_axis_test",
     )
 
+    assert tuple(captured["fig"].get_size_inches()) == (24.0, 10.0)
     assert len(captured["fig"].axes) == 5
     count_axis = captured["fig"].axes[3]
     strength_axis = captured["fig"].axes[4]
