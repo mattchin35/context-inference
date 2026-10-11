@@ -3,17 +3,53 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from src.neural_analysis.task_decoding.pooled import config as pooled_config
 from src.neural_analysis.task_decoding.pooled import decoding, pipeline, results
+from src.tests.neural_analysis.task_decoding.test_pipeline import write_session_inputs
 from src.tests.neural_analysis.task_decoding.pooled.test_config import (
     canonical_edges,
     write_configuration_tree,
 )
 from src.tests.neural_analysis.task_decoding.pooled.test_results import make_result_template
+
+
+def _write_real_pooled_overlay(
+    tmp_path: Path,
+    *,
+    training_window_names: tuple[str, ...] = ("pre_choice",),
+) -> tuple[Path, dict[str, Path]]:
+    """Create one metadata-valid base session plus a portable pooled overlay.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-owned directory for the complete synthetic session tree.
+    training_window_names : tuple[str, ...], default=("pre_choice",)
+        Canonical pooled window identifiers to request.
+
+    Returns
+    -------
+    tuple[pathlib.Path, dict[str, pathlib.Path]]
+        Pooled overlay path and the established small session fixture paths.
+    """
+    paths = write_session_inputs(tmp_path)
+    overlay = paths["session_root"] / "pooled_task_decoding_config.json"
+    overlay.write_text(
+        json.dumps(
+            {
+                "base_config_path": paths["config"].name,
+                "training_window_names": list(training_window_names),
+            }
+        ),
+        encoding="ascii",
+    )
+    return overlay, paths
 
 
 def _empty_cell(target_identifier: str) -> decoding.PooledWindowTargetResult:
@@ -254,3 +290,362 @@ def test_checkpoint_key_order_is_window_then_target_and_reference_pair_is_unique
     )
     assert len(pair_coordinates) == len(set(pair_coordinates))
     assert pair_coordinates.count(("correct_rewarded", "correct_rewarded")) == 1
+
+
+def test_dry_run_reports_exact_pooled_counts_and_bytes_without_scientific_loading(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Planning uses small inputs and exact formulas, never spikes, tensors, or fits."""
+    overlay, _paths = _write_real_pooled_overlay(tmp_path)
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        """Fail if dry planning reaches a full neural or model allocation path."""
+        raise AssertionError("dry run reached a forbidden scientific operation")
+
+    monkeypatch.setattr(pipeline.activity, "load_region_activity", forbidden)
+    monkeypatch.setattr(pipeline.activity, "build_session_rate_tensors", forbidden)
+    monkeypatch.setattr(pipeline.modeling, "make_estimator", forbidden)
+    monkeypatch.setattr(results, "initialize_pooled_result_arrays", forbidden)
+    monkeypatch.setattr(results, "validate_pooled_source_cleanliness", lambda *_: None)
+
+    plan = pipeline.plan_pooled_decoding_session(overlay)
+
+    envelope = plan["resource_envelope"]
+    assert plan["training_window_names"] == ("pre_choice",)
+    assert plan["condition_names"] == ("all", "correct_rewarded")
+    assert plan["target_names"] == ("current_action", "relative_doubt")
+    assert envelope == {
+        "full_trial_count": 12,
+        "tensor_trial_count": 12,
+        "pfc_unit_count": 2,
+        "hpc_unit_count": 2,
+        "time_bin_count": 8,
+        "training_window_count": 1,
+        "condition_count": 2,
+        "evaluation_pair_count": 3,
+        "target_count": 2,
+        "outer_fold_count": 3,
+        "coefficient_feature_capacity": 4,
+        "categorical_fit_count": 36,
+        "numerical_fit_count": 36,
+        "transform_fit_count": 24,
+        "evaluation_metric_cell_count": 1296,
+        "tensor_allocation_bytes": envelope["tensor_allocation_bytes"],
+        "planned_major_array_bytes": envelope["planned_major_array_bytes"],
+    }
+    coefficient_cells = 1 * 2 * 2 * 3 * 3 * 2 * 4
+    evaluation_cells = 3 * 2 * 3 * 3 * 2 * 8 * 3
+    gap_cells = 2 * 2 * 3 * 3 * 2 * 8 * 3
+    assert envelope["planned_major_array_bytes"] == (
+        envelope["tensor_allocation_bytes"]
+        + coefficient_cells * (8 + 1)
+        + evaluation_cells * (8 + 1 + 2)
+        + gap_cells * (8 + 1 + 2)
+    )
+
+
+def _complete_resource_payload() -> dict[str, object]:
+    """Return one minimal complete lean pooled resource payload.
+
+    Returns
+    -------
+    dict[str, object]
+        Exact schema-1 JSON mapping for two completed checkpoint cells.
+    """
+    return {
+        "schema_version": 1,
+        "analysis_type": "pooled_task_variable_decoding",
+        "measurement_method": "resource.getrusage",
+        "status": "complete",
+        "peak_rss_bytes": 1024,
+        "wall_time_seconds": 2.0,
+        "user_cpu_seconds": 1.0,
+        "system_cpu_seconds": 0.5,
+        "cpu_efficiency": 0.75,
+        "resource_envelope": {
+            "full_trial_count": 12,
+            "tensor_trial_count": 12,
+            "pfc_unit_count": 2,
+            "hpc_unit_count": 2,
+            "time_bin_count": 8,
+            "training_window_count": 1,
+            "condition_count": 2,
+            "evaluation_pair_count": 3,
+            "target_count": 2,
+            "outer_fold_count": 3,
+            "coefficient_feature_capacity": 4,
+            "categorical_fit_count": 36,
+            "numerical_fit_count": 36,
+            "transform_fit_count": 24,
+            "evaluation_metric_cell_count": 1296,
+            "tensor_allocation_bytes": 4096,
+            "planned_major_array_bytes": 65536,
+        },
+        "completed_checkpoint_keys": [
+            "pre_choice::current_action",
+            "pre_choice::relative_doubt",
+        ],
+        "restored_checkpoint_keys": ["pre_choice::current_action"],
+        "stage_timing_seconds": {
+            "input_loading": 0.1,
+            "modeling": 0.2,
+            "final_assembly": 0.1,
+            "reporting": 0.1,
+        },
+        "result_counts": {
+            "requested_transform_cells": 24,
+            "valid_transform_cells": 0,
+            "unavailable_transform_cells": 24,
+            "requested_model_cells": 72,
+            "valid_model_cells": 0,
+            "unavailable_model_cells": 72,
+            "requested_evaluation_metric_cells": 1296,
+            "valid_evaluation_metric_cells": 0,
+            "unavailable_evaluation_metric_cells": 1296,
+        },
+        "checkpoint_size_bytes": 2048,
+        "output_size_bytes": 8192,
+    }
+
+
+def test_lean_resource_payload_has_exact_schema_order_and_reconciliation() -> None:
+    """Pooled telemetry rejects drift, invalid subsets, and partial complete counts."""
+    canonical = (
+        "pre_choice::current_action",
+        "pre_choice::relative_doubt",
+    )
+    payload = _complete_resource_payload()
+
+    assert pipeline.validate_pooled_resource_usage_payload(
+        payload,
+        canonical_checkpoint_keys=canonical,
+    ) == payload
+
+    with pytest.raises(ValueError, match="field|schema|unexpected"):
+        pipeline.validate_pooled_resource_usage_payload(
+            {**payload, "extra": True},
+            canonical_checkpoint_keys=canonical,
+        )
+    invalid_order = {**payload, "completed_checkpoint_keys": list(reversed(canonical))}
+    with pytest.raises(ValueError, match="checkpoint|canonical|order"):
+        pipeline.validate_pooled_resource_usage_payload(
+            invalid_order,
+            canonical_checkpoint_keys=canonical,
+        )
+    invalid_restored = {
+        **payload,
+        "restored_checkpoint_keys": ["pre_choice::relative_doubt", canonical[0]],
+    }
+    with pytest.raises(ValueError, match="restored|order|subset"):
+        pipeline.validate_pooled_resource_usage_payload(
+            invalid_restored,
+            canonical_checkpoint_keys=canonical,
+        )
+    invalid_counts = {
+        **payload,
+        "result_counts": {
+            **payload["result_counts"],
+            "unavailable_model_cells": 71,
+        },
+    }
+    with pytest.raises(ValueError, match="count|reconcil"):
+        pipeline.validate_pooled_resource_usage_payload(
+            invalid_counts,
+            canonical_checkpoint_keys=canonical,
+        )
+
+
+def test_output_size_excludes_resource_sidecar_and_atomic_temporaries(tmp_path: Path) -> None:
+    """Self-reporting bytes remain stable while the resource sidecar is replaced."""
+    (tmp_path / "results.npz").write_bytes(b"result")
+    (tmp_path / "summary.md").write_bytes(b"summary")
+    (tmp_path / "resource_usage.json").write_bytes(b"old-resource")
+    (tmp_path / ".resource_usage.json.temporary").write_bytes(b"temporary")
+    expected = len(b"result") + len(b"summary")
+
+    assert pipeline.measure_pooled_output_size_bytes(tmp_path) == expected
+
+
+def test_prepared_lifecycle_interrupts_resumes_completes_and_reenters_read_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Lifecycle publication preserves checkpoints and makes completion immutable."""
+    overlay, _paths = _write_real_pooled_overlay(tmp_path)
+    monkeypatch.setattr(results, "validate_pooled_source_cleanliness", lambda *_: None)
+    run_directory = pipeline.prepare_pooled_decoding_run(overlay)
+
+    required_prepared = {
+        "config.json",
+        "pooled_config.input.json",
+        "base_config.input.json",
+        "input_manifest.json",
+        "scientific_source.json",
+        "execution.json",
+        "run_state.json",
+        "run.log",
+        "run_command.txt",
+        "resume_command.txt",
+        "status_command.txt",
+        "run_session.py",
+        "pipeline.py",
+        "plotting.py",
+        "resource_usage.json",
+    }
+    assert required_prepared.issubset(path.name for path in run_directory.iterdir())
+    execution = json.loads((run_directory / "execution.json").read_text())
+    for filename in ("run_session.py", "pipeline.py", "plotting.py"):
+        snapshot = run_directory / filename
+        record = execution["source_snapshots"][filename]
+        assert snapshot.stat().st_size == record["size_bytes"]
+        assert pipeline.sha256_file(snapshot) == record["sha256"]
+
+    calls: list[str] = []
+
+    def compute_cell(_context, _window, target_identifier):
+        """Return deterministic unavailable work while recording resume behavior."""
+        calls.append(target_identifier)
+        return _empty_cell(target_identifier)
+
+    monkeypatch.setattr(pipeline, "_compute_window_target", compute_cell)
+    original_save = results.save_pooled_checkpoint
+    saved_count = 0
+
+    def interrupt_after_first(path, *, checkpoint_key, run_fingerprint, result):
+        """Publish one valid checkpoint before simulating operator interruption."""
+        nonlocal saved_count
+        original_save(
+            path,
+            checkpoint_key=checkpoint_key,
+            run_fingerprint=run_fingerprint,
+            result=result,
+        )
+        saved_count += 1
+        if saved_count == 1:
+            raise KeyboardInterrupt("synthetic interruption")
+
+    monkeypatch.setattr(results, "save_pooled_checkpoint", interrupt_after_first)
+    with pytest.raises(KeyboardInterrupt, match="synthetic interruption"):
+        pipeline.run_prepared_pooled_decoding(run_directory)
+    interrupted_state = json.loads((run_directory / "run_state.json").read_text())
+    assert interrupted_state["lifecycle"] == "interrupted"
+    assert interrupted_state["final_results_published"] is False
+    assert len(list((run_directory / "checkpoints").glob("*.npz"))) == 1
+
+    monkeypatch.setattr(results, "save_pooled_checkpoint", original_save)
+    calls.clear()
+    pipeline.run_prepared_pooled_decoding(run_directory)
+    assert calls == ["relative_doubt"]
+    completed_state = json.loads((run_directory / "run_state.json").read_text())
+    assert completed_state["lifecycle"] == "complete"
+    assert completed_state["final_results_published"] is True
+    assert (run_directory / "results.npz").is_file()
+    assert (run_directory / "summary.md").is_file()
+    assert len(list((run_directory / "figures").glob("*.png"))) == 6
+    summary = (run_directory / "summary.md").read_text(encoding="utf-8").lower()
+    for required in (
+        "goal",
+        "session",
+        "parameters",
+        "scripts",
+        "warnings",
+        "errors",
+        "elapsed",
+        "complete pipelines",
+        "cannot isolate estimator weights",
+    ):
+        assert required in summary
+
+    tracked = {
+        path.relative_to(run_directory): (path.stat().st_mtime_ns, path.read_bytes())
+        for path in run_directory.rglob("*")
+        if path.is_file()
+    }
+    assert pipeline.run_prepared_pooled_decoding(run_directory) is None
+    assert tracked == {
+        path.relative_to(run_directory): (path.stat().st_mtime_ns, path.read_bytes())
+        for path in run_directory.rglob("*")
+        if path.is_file()
+    }
+    status = pipeline.inspect_pooled_decoding_status(run_directory)
+    assert status["lifecycle"] == "complete"
+    assert status["final_results_published"] is True
+    assert status["result_valid"] is True
+
+
+def test_prepared_execution_revalidates_inputs_before_accepting_checkpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A changed original input fails before checkpoint loading or computation."""
+    overlay, paths = _write_real_pooled_overlay(tmp_path)
+    monkeypatch.setattr(results, "validate_pooled_source_cleanliness", lambda *_: None)
+    run_directory = pipeline.prepare_pooled_decoding_run(overlay)
+    paths["augmented"].write_text("changed\n", encoding="ascii")
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        """Reject checkpoint or neural work after manifest validation fails."""
+        raise AssertionError("execution passed the input-manifest boundary")
+
+    monkeypatch.setattr(results, "load_pooled_checkpoint", forbidden)
+    monkeypatch.setattr(pipeline, "compute_or_resume_pooled_results", forbidden)
+
+    with pytest.raises(ValueError, match="input|manifest|changed|identity"):
+        pipeline.run_prepared_pooled_decoding(run_directory)
+    state = json.loads((run_directory / "run_state.json").read_text())
+    assert state["lifecycle"] == "failed"
+    assert state["final_results_published"] is False
+
+
+def test_thin_cli_routes_dry_run_new_resume_detached_and_status(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The pooled command surface delegates without owning scientific logic."""
+    from src.neural_analysis.task_decoding.pooled import run_session
+
+    overlay, _paths = _write_real_pooled_overlay(tmp_path)
+    prepared = tmp_path / "prepared-pooled-run"
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        pipeline,
+        "plan_pooled_decoding_session",
+        lambda path: calls.append(("plan", Path(path))) or {"target_count": 2},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "prepare_pooled_decoding_run",
+        lambda path: calls.append(("prepare", Path(path))) or prepared,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "run_prepared_pooled_decoding",
+        lambda path: calls.append(("run", Path(path))),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "inspect_pooled_decoding_status",
+        lambda path: calls.append(("status", Path(path))) or {"lifecycle": "prepared"},
+    )
+    monkeypatch.setattr(
+        run_session,
+        "_launch_detached",
+        lambda path: calls.append(("detach", Path(path))),
+    )
+
+    assert run_session.main(["dry-run", "--config", str(overlay)]) == 0
+    assert run_session.main(["new", "--config", str(overlay)]) == 0
+    assert run_session.main(["resume", "--run-directory", str(prepared)]) == 0
+    assert run_session.main(
+        ["resume", "--run-directory", str(prepared), "--detach"]
+    ) == 0
+    assert run_session.main(["status", "--run-directory", str(prepared)]) == 0
+    assert calls == [
+        ("plan", overlay),
+        ("prepare", overlay),
+        ("run", prepared),
+        ("run", prepared),
+        ("detach", prepared),
+        ("status", prepared),
+    ]

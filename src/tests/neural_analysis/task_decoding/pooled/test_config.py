@@ -7,6 +7,7 @@ import shutil
 import numpy as np
 import pytest
 
+from src.neural_analysis.task_decoding import config as base_config
 from src.neural_analysis.task_decoding.pooled import config as pooled_config
 
 
@@ -328,3 +329,24 @@ def test_prepared_loader_preserves_base_input_file_contracts(tmp_path):
     )
     with pytest.raises(ValueError, match="feature|JSON|object"):
         pooled_config.load_prepared_pooled_decoding_config(run_directory)
+
+
+def test_portable_example_and_readme_expose_the_reviewed_single_session_cli() -> None:
+    """The checked-in overlay selects the complete base example vocabulary."""
+    repository_root = Path(__file__).resolve().parents[5]
+    example_directory = repository_root / "docs/examples/neural_analysis"
+    overlay_path = example_directory / "pooled_task_decoding_config.json"
+    overlay = json.loads(overlay_path.read_text(encoding="utf-8"))
+    base_path = example_directory / overlay["base_config_path"]
+    base = json.loads(base_path.read_text(encoding="utf-8"))
+    readme = (
+        repository_root / "src/neural_analysis/task_decoding/README.md"
+    ).read_text(encoding="utf-8")
+
+    assert set(overlay) == {"base_config_path", "training_window_names"}
+    assert overlay["base_config_path"] == "task_decoding_config.json"
+    assert base["condition_names"] == list(base_config.CONDITION_IDENTIFIERS)
+    assert base["target_names"] == list(base_config.TARGET_IDENTIFIERS)
+    command = "src.neural_analysis.task_decoding.pooled.run_session"
+    assert readme.count(command) >= 4
+    assert "immutable run directory" in readme.lower()
