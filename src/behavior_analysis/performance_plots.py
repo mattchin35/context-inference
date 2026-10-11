@@ -134,21 +134,25 @@ def plot_expectant_switching_diagnostics(
         axis.tick_params(colors="black")
         axis.grid(alpha=0.2)
 
-    axes[0].step(
-        trial_index,
-        numeric["action"],
-        where="mid",
+    valid_choices = numeric["action"].isin([0, 1])
+    axes[0].scatter(
+        trial_index[valid_choices],
+        numeric.loc[valid_choices, "action"],
         color="#111111",
+        marker="o",
+        s=12,
         label="Observed choice (1=left)",
+        zorder=3,
     )
-    rewarded = numeric["reward"] > 0
+    rewarded = valid_choices & (numeric["reward"] > 0)
     axes[0].scatter(
         trial_index[rewarded],
         numeric.loc[rewarded, "action"],
         color="#2ca02c",
         marker="o",
-        s=24,
-        label="Reward",
+        s=42,
+        label="Rewarded choice",
+        zorder=4,
     )
     if "state" in trial_df.columns:
         state_values = trial_df["state"].replace({"right": 0, "left": 1})
@@ -194,21 +198,34 @@ def plot_expectant_switching_diagnostics(
     axes[2].set_ylabel("Signed component")
     axes[2].legend(loc="upper right", frameon=False, ncol=2)
 
-    axes[3].plot(
+    reward_count_line = axes[3].plot(
         trial_index,
         numeric["expectancy_reward_count"],
         color="#1f77b4",
         label="Reward count",
     )
-    axes[3].plot(
+    axes[3].set_ylabel("Reward count", color="#1f77b4")
+    axes[3].tick_params(axis="y", labelcolor="#1f77b4")
+    axes[3].set_xlabel("Trial")
+
+    expectancy_axis = axes[3].twinx()
+    expectancy_axis.set_facecolor("none")
+    expectancy_strength_line = expectancy_axis.plot(
         trial_index,
         numeric["expectancy_strength"],
         color="#2ca02c",
         label="Expectancy strength",
     )
-    axes[3].set_ylabel("Count / strength")
-    axes[3].set_xlabel("Trial")
-    axes[3].legend(loc="upper right", frameon=False)
+    expectancy_axis.set_ylabel("Expectancy strength", color="#2ca02c")
+    expectancy_axis.tick_params(axis="y", colors="#2ca02c")
+    expectancy_axis.grid(False)
+    diagnostic_lines = reward_count_line + expectancy_strength_line
+    axes[3].legend(
+        diagnostic_lines,
+        [line.get_label() for line in diagnostic_lines],
+        loc="upper right",
+        frameon=False,
+    )
 
     fig.suptitle(f"Expectant-switching diagnostics: {sess_id_full}", color="black")
     valid_behavior = (
