@@ -2133,6 +2133,8 @@ def test_preparation_cleanliness_rejects_every_dirty_direct_dependency(
         (" M docs/unrelated.md\n", False),
         (" M src/neural_analysis/task_decoding/modeling.py\n", True),
         ("?? src/neural_analysis/task_decoding/new_science.py\n", True),
+        (" M src/neural_analysis/task_decoding/pooled/decoding.py\n", False),
+        ("?? src/neural_analysis/task_decoding/pooled/unrelated.py\n", False),
         (
             "?? src/neural_analysis/task_decoding/__pycache__/pipeline.cpython-314.pyc\n",
             False,
@@ -2145,7 +2147,7 @@ def test_preparation_cleanliness_handles_package_untracked_missing_and_unrelated
     tmp_path,
     monkeypatch,
 ):
-    """Scientific Python blocks while unrelated docs and bytecode do not."""
+    """Top-level scientific Python blocks while nested pooled paths do not."""
     repository_root = write_scoped_source_tree(tmp_path, name="repository")
     calls = patch_git_commands(
         monkeypatch,
