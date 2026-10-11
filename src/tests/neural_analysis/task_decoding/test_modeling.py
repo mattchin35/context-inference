@@ -1203,6 +1203,258 @@ def test_fit_and_score_extracts_saved_positive_class_from_nonconstant_probabilit
     assert fit_result.metrics["auc"] == pytest.approx(1.0)
 
 
+def test_fit_estimator_passes_exact_sample_weights_once_and_evaluation_never_refits():
+    """The reusable seam should preserve weights and freeze the fitted estimator."""
+
+    class WeightSpyClassifier:
+        """Record fit inputs and expose deterministic binary probabilities."""
+
+        def __init__(self):
+            """Initialize empty call histories."""
+            self.fit_weights = []
+            self.predict_calls = 0
+
+        def fit(self, features, targets, *, sample_weight):
+            """Record one weight vector and expose valid fitted attributes."""
+            self.fit_weights.append(sample_weight)
+            self.coef_ = np.ones((1, features.shape[1]))
+            self.intercept_ = np.array([0.25])
+            self.classes_ = np.array([0, 1])
+            return self
+
+        def predict_proba(self, features):
+            """Return finite probabilities without mutating fit state."""
+            self.predict_calls += 1
+            positive = np.linspace(0.2, 0.8, len(features))
+            return np.column_stack((1.0 - positive, positive))
+
+    estimator = WeightSpyClassifier()
+    weights = np.array([0.25, 0.25, 0.5, 0.5], dtype=float)
+    fitted = modeling.fit_estimator(
+        estimator,
+        np.arange(8.0).reshape(4, 2),
+        np.array([0, 1, 0, 1]),
+        target_family="categorical",
+        sample_weight=weights,
+    )
+    evaluation = modeling.evaluate_fitted_estimator(
+        fitted,
+        np.arange(8.0, 16.0).reshape(4, 2),
+        np.array([0, 0, 1, 1]),
+        target_family="categorical",
+    )
+
+    assert fitted.is_valid
+    assert evaluation.is_valid
+    assert len(estimator.fit_weights) == 1
+    assert estimator.fit_weights[0] is weights
+    assert estimator.predict_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("family", "strict_tolerance", "production_tolerance"),
+    [
+        ("categorical", 1e-8, 1e-3),
+        ("numerical", 1e-8, 1e-12),
+    ],
+)
+def test_weighted_repeated_rows_match_single_rows_under_declared_tolerances(
+    family,
+    strict_tolerance,
+    production_tolerance,
+):
+    """Equal per-trial weight preserves strict and production model solutions."""
+    rng = np.random.default_rng(20261010)
+    single_features = rng.normal(size=(120, 6))
+    if family == "categorical":
+        single_targets = (single_features[:, 0] - 0.4 * single_features[:, 1] > 0).astype(int)
+    else:
+        single_targets = 2.0 * single_features[:, 0] - single_features[:, 1] + 0.25
+    repeated_features = np.repeat(single_features, 4, axis=0)
+    repeated_targets = np.repeat(single_targets, 4)
+    repeated_weights = np.full(repeated_targets.size, 0.25)
+
+    if family == "categorical":
+        strict_single = LogisticRegression(
+            C=1.0,
+            l1_ratio=0.5,
+            solver="saga",
+            tol=1e-10,
+            max_iter=10000,
+            random_state=1729,
+        )
+        strict_repeated = LogisticRegression(
+            C=1.0,
+            l1_ratio=0.5,
+            solver="saga",
+            tol=1e-10,
+            max_iter=10000,
+            random_state=1729,
+        )
+    else:
+        strict_single = ElasticNet(alpha=1.0, l1_ratio=0.5, tol=1e-10, max_iter=10000)
+        strict_repeated = ElasticNet(alpha=1.0, l1_ratio=0.5, tol=1e-10, max_iter=10000)
+    strict_fit_single = modeling.fit_estimator(
+        strict_single,
+        single_features,
+        single_targets,
+        target_family=family,
+    )
+    strict_fit_repeated = modeling.fit_estimator(
+        strict_repeated,
+        repeated_features,
+        repeated_targets,
+        target_family=family,
+        sample_weight=repeated_weights,
+    )
+
+    production_fit_single = modeling.fit_estimator(
+        modeling.make_estimator(target_family=family),
+        single_features,
+        single_targets,
+        target_family=family,
+    )
+    production_fit_repeated = modeling.fit_estimator(
+        modeling.make_estimator(target_family=family),
+        repeated_features,
+        repeated_targets,
+        target_family=family,
+        sample_weight=repeated_weights,
+    )
+
+    assert strict_fit_single.is_valid and strict_fit_repeated.is_valid
+    assert production_fit_single.is_valid and production_fit_repeated.is_valid
+    np.testing.assert_allclose(
+        strict_fit_single.coefficients,
+        strict_fit_repeated.coefficients,
+        atol=strict_tolerance,
+        rtol=0.0,
+    )
+    assert strict_fit_single.intercept == pytest.approx(
+        strict_fit_repeated.intercept,
+        abs=strict_tolerance,
+    )
+    np.testing.assert_allclose(
+        production_fit_single.coefficients,
+        production_fit_repeated.coefficients,
+        atol=production_tolerance,
+        rtol=0.0,
+    )
+    assert production_fit_single.intercept == pytest.approx(
+        production_fit_repeated.intercept,
+        abs=production_tolerance,
+    )
+
+
+def test_fit_failure_and_evaluation_failure_vocabularies_are_closed():
+    """Every reviewed failure state should be explicit and independently enumerable."""
+    assert {member.value for member in modeling.FitFailureKind} == {
+        "convergence_warning",
+        "invalid_coefficient_or_intercept_shape",
+        "nonfinite_coefficient_or_intercept",
+        "invalid_class_structure",
+        "ambiguous_positive_class",
+    }
+    assert {member.value for member in modeling.EvaluationFailureKind} == {
+        "invalid_probability_shape",
+        "nonfinite_probability",
+        "positive_score_alignment_invalid",
+        "categorical_test_classes_invalid",
+        "invalid_numerical_prediction",
+        "invalid_regression_metric",
+    }
+
+
+def test_fit_and_score_matches_the_extracted_fit_and_evaluate_seams_exactly():
+    """The legacy wrapper should preserve valid metrics, orientation, and artifacts."""
+
+    class ReversedClassifier:
+        """Expose positive class one in the first probability column."""
+
+        def fit(self, features, targets):
+            """Expose deterministic reversed-class coefficients."""
+            self.coef_ = np.array([[2.0, -3.0]])
+            self.intercept_ = np.array([0.75])
+            self.classes_ = np.array([1, 0])
+            return self
+
+        def predict_proba(self, features):
+            """Return positive scores in column zero."""
+            positive = np.array([0.9, 0.2, 0.8, 0.1])
+            return np.column_stack((positive, 1.0 - positive))
+
+    train_features = np.arange(8.0).reshape(4, 2)
+    train_targets = np.array([0, 1, 0, 1])
+    held_out_features = np.arange(8.0, 16.0).reshape(4, 2)
+    held_out_targets = np.array([1, 0, 1, 0])
+    fitted = modeling.fit_estimator(
+        ReversedClassifier(),
+        train_features,
+        train_targets,
+        target_family="categorical",
+    )
+    evaluation = modeling.evaluate_fitted_estimator(
+        fitted,
+        held_out_features,
+        held_out_targets,
+        target_family="categorical",
+    )
+    legacy = modeling.fit_and_score(
+        ReversedClassifier(),
+        train_features,
+        train_targets,
+        held_out_features,
+        held_out_targets,
+        target_family="categorical",
+    )
+
+    assert legacy.is_valid == fitted.is_valid == evaluation.is_valid
+    assert legacy.reason is None
+    np.testing.assert_array_equal(legacy.coefficients, fitted.coefficients)
+    assert legacy.intercept == fitted.intercept
+    assert legacy.metrics == evaluation.metrics
+    assert legacy.positive_class == fitted.positive_class == evaluation.positive_class == 1
+    np.testing.assert_array_equal(legacy.positive_scores, evaluation.positive_scores)
+    assert legacy.convergence_status == fitted.convergence_status == "converged"
+
+
+def test_legacy_failure_adapter_is_exhaustive_and_rejects_unknown_states():
+    """Every seam failure retains its exact historical human-readable reason."""
+    expected = {
+        modeling.FitFailureKind.CONVERGENCE_WARNING: "convergence_warning",
+        modeling.FitFailureKind.INVALID_COEFFICIENT_OR_INTERCEPT_SHAPE: (
+            "invalid coefficient or intercept shape"
+        ),
+        modeling.FitFailureKind.NONFINITE_COEFFICIENT_OR_INTERCEPT: (
+            "non-finite coefficient or intercept"
+        ),
+        modeling.FitFailureKind.INVALID_CLASS_STRUCTURE: (
+            "categorical estimator must expose binary classes including positive class 1"
+        ),
+        modeling.FitFailureKind.AMBIGUOUS_POSITIVE_CLASS: "positive class is ambiguous",
+        modeling.EvaluationFailureKind.INVALID_PROBABILITY_SHAPE: "invalid probability shape",
+        modeling.EvaluationFailureKind.NONFINITE_PROBABILITY: "non-finite probability or score",
+        modeling.EvaluationFailureKind.POSITIVE_SCORE_ALIGNMENT_INVALID: (
+            "positive_scores must be finite and align with target_values."
+        ),
+        modeling.EvaluationFailureKind.CATEGORICAL_TEST_CLASSES_INVALID: (
+            "Categorical metrics require held-out values from both classes."
+        ),
+        modeling.EvaluationFailureKind.INVALID_NUMERICAL_PREDICTION: (
+            "non-finite prediction or score"
+        ),
+        modeling.EvaluationFailureKind.INVALID_REGRESSION_METRIC: (
+            "constant, singleton, or non-finite held-out numerical target"
+        ),
+    }
+    assert {
+        failure: modeling._legacy_reason_for_modeling_failure(failure)
+        for failure in (*modeling.FitFailureKind, *modeling.EvaluationFailureKind)
+    } == expected
+    with pytest.raises(ValueError, match="Unknown modeling failure"):
+        modeling._legacy_reason_for_modeling_failure("invalid_metric")
+
+
 def test_regression_r2_preserves_native_values_and_rejects_constant_or_singleton_test_targets():
     """R2 is native-scale; constant/singleton held-out target vectors are unavailable."""
     assert modeling.regression_r2(
