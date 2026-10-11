@@ -1,8 +1,9 @@
 # Pooled-Window Task-Variable Decoding and Condition-Generalization Plan
 
-**Status:** Revision-1 documentation and PW-WP1 were approved on 2026-10-11.
-PW-WP2 is implemented and awaiting review and approval. PW-WP3 and later work
-packages, experimental computation, and cluster work are not yet authorized.
+**Status:** Revision-1 documentation, PW-WP1, and PW-WP2 were approved on
+2026-10-11. PW-WP3 is implemented and awaiting review and approval. PW-WP4 and
+later work packages, experimental computation, and cluster work are not yet
+authorized.
 
 **Scientific contract:**
 `docs/task_variable_condition_generalization_spec_v1.md`.
@@ -25,14 +26,15 @@ summary.
 | Branch | `refactor` |
 | PW-WP1 implementation HEAD | `65f8a2e5eb04071dbecf26debc03e334a6625fd2` |
 | PW-WP2 implementation HEAD | `2ffb1ab94323db375d5c8dd5154c770a9809ba66` |
+| PW-WP3 implementation HEAD | `bf431956e2e23128f8cb8817c47a6c1adde518da` |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
-| Current work package | PW-WP2: pooled scientific core |
+| Current work package | PW-WP3: result schema, checkpoints, and synchronous computation |
 | Current phase | GREEN/refactor complete; independent review and user approval pending |
-| Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds |
-| Active implementation files | `modeling.py` and `pooled/decoding.py` |
-| Latest validation | 2026-10-11: focused modeling/pooled-core tests `128 passed, 2 warnings`; full `src/tests/neural_analysis/task_decoding` regression `912 passed, 27 warnings`; Ruff, syntax compilation, docstring-presence scan, and `git diff --check` passed |
-| Open blockers | Independent review and user approval of PW-WP2 before PW-WP3 |
-| Exact next action | Review PW-WP2 commits and scientific contracts; do not begin PW-WP3 until approval |
+| Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core |
+| Active implementation files | `pooled/results.py`, `pooled/pipeline.py`, `pooled/decoding.py`, and the narrow legacy cleanliness correction in `results.py` |
+| Latest validation | 2026-10-11: PW-WP3 contract tests `11 passed`; combined pooled/legacy-results tests `425 passed`; full `src/tests/neural_analysis/task_decoding` regression `925 passed, 27 warnings`; focused Ruff and `git diff --check` passed |
+| Open blockers | Independent review and user approval of PW-WP3 before PW-WP4 |
+| Exact next action | Review PW-WP3 commits, schema bytes/axes/sentinels, reason propagation, and source scope; do not begin PW-WP4 until approval |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -49,8 +51,8 @@ user approval all pass.
 | --- | --- | --- | --- | --- | --- | --- |
 | PW-WP0 documentation | Not applicable | `7df0100` | Documentation checks passed 2026-10-11 | Not applicable | User approved 2026-10-11 | Complete |
 | PW-WP1 configuration and folds | `ebc8cc8`, `7aec299` | `65f8a2e` | `20 passed` | `890 passed, 27 warnings` | User approved by authorizing PW-WP2 on 2026-10-11 | Complete |
-| PW-WP2 scientific core | `2c00910` | `2ffb1ab` | `128 passed, 2 warnings` | `912 passed, 27 warnings` | Independent review and user approval pending | Awaiting review |
-| PW-WP3 result schema, checkpoints, and synchronous computation | - | - | - | - | - | Not started |
+| PW-WP2 scientific core | `2c00910` | `2ffb1ab` | `128 passed, 2 warnings` | `912 passed, 27 warnings` | User approved by authorizing PW-WP3 on 2026-10-11 | Complete |
+| PW-WP3 result schema, checkpoints, and synchronous computation | `46db250`, `0d95c95` | `bf43195` | `11 passed`; combined boundary `425 passed` | `925 passed, 27 warnings` | Independent review and user approval pending | Awaiting review |
 | PW-WP4 synthetic scientific gate | - | - | - | - | - | Not started |
 | PW-WP5 reporting, lifecycle, resources, and usage | - | - | - | - | - | Not started |
 | PW-WP6 CT026 benchmark | - | - | - | - | - | Not started |
@@ -155,6 +157,55 @@ The relevant source/test paths are clean at implementation commit `2ffb1ab`;
 unrelated pre-existing untracked repository files remain untouched. The exact
 next safe action is independent scientific/API review and user approval of
 PW-WP2. PW-WP3 result-schema or persistence work remains unauthorized.
+
+### 1.5 PW-WP3 implementation evidence
+
+PW-WP3 followed tests-first commits. Commit `46db250` added the result-schema,
+checkpoint, fingerprint, cleanliness, synchronous-computation, and resume
+contracts without production changes. The RED run failed during collection
+because `pooled.results` and `pooled.pipeline` did not exist. Commit `0d95c95`
+corrected only a genuine test expectation error: model, evaluation, and gap
+shape tuples had omitted their region axis. No scientific requirement changed.
+
+Commit `bf43195` implemented the exact schema-1 primitive arrays, safe
+non-pickle atomic checkpoints and final result loading, explicit pooled source
+identity, the narrow legacy nested-package cleanliness correction, target
+audit projection, checkpoint-to-dense status/reason propagation, and the one
+synchronous computation/resume path. It also added checkpoint identity fields
+to `PooledWindowTargetResult`. It did not add lifecycle state, reports,
+plotting, a CLI, resource telemetry, detached execution, or prediction arrays.
+
+The PW-WP3 contract command:
+
+```text
+uv run pytest -q \
+  src/tests/neural_analysis/task_decoding/pooled/test_results.py \
+  src/tests/neural_analysis/task_decoding/pooled/test_pipeline.py
+```
+
+produced `11 passed`. The broader focused command over the complete pooled
+package plus legacy result persistence produced `425 passed in 6.05s`. The
+full relevant regression command:
+
+```text
+uv run pytest -q src/tests/neural_analysis/task_decoding
+```
+
+produced `925 passed, 27 warnings in 124.27s`. The warnings are the same
+existing Pynapple bin-boundary, grouped-split class-count, and empty plotting
+slice warnings. Focused Ruff and `git diff --check` passed.
+
+A repository-wide `uv run pytest -q` attempt was also made and stopped during
+collection with 20 unrelated environment errors: `autograd` is absent and a
+local `statsmodels` module shadows the external package needed by interregional
+tests. PW-WP3 introduced neither dependency and the task-decoding boundary is
+fully green, so no out-of-scope dependency or import changes were made.
+
+No synthetic or experimental run directory was created. CPU time, peak RSS,
+and output size were not collected because PW-WP3 tests only small synthetic
+in-memory fixtures. Unrelated pre-existing workspace changes remain untouched.
+The exact next safe action is independent schema/source/API review and user
+approval of PW-WP3. PW-WP4 synthetic scientific-gate work remains unauthorized.
 
 ## 2. Fixed revision-1 decisions
 
