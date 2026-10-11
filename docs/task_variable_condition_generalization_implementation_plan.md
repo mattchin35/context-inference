@@ -1,8 +1,8 @@
 # Pooled-Window Task-Variable Decoding and Condition-Generalization Plan
 
-**Status:** Revision-1 documentation was approved on 2026-10-11. PW-WP1 is
-implemented and awaiting review and approval. PW-WP2 and later work packages,
-experimental computation, and cluster work are not yet authorized.
+**Status:** Revision-1 documentation and PW-WP1 were approved on 2026-10-11.
+PW-WP2 is implemented and awaiting review and approval. PW-WP3 and later work
+packages, experimental computation, and cluster work are not yet authorized.
 
 **Scientific contract:**
 `docs/task_variable_condition_generalization_spec_v1.md`.
@@ -24,14 +24,15 @@ summary.
 | Snapshot date | 2026-10-11 |
 | Branch | `refactor` |
 | PW-WP1 implementation HEAD | `65f8a2e5eb04071dbecf26debc03e334a6625fd2` |
+| PW-WP2 implementation HEAD | `2ffb1ab94323db375d5c8dd5154c770a9809ba66` |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
-| Current work package | PW-WP1: configuration and master folds |
+| Current work package | PW-WP2: pooled scientific core |
 | Current phase | GREEN/refactor complete; independent review and user approval pending |
-| Completed work packages | PW-WP0 documentation |
-| Active implementation files | `pooled/__init__.py`, `pooled/config.py`, and `pooled/decoding.py` |
-| Latest validation | 2026-10-11: focused pooled tests `20 passed`; full `src/tests/neural_analysis/task_decoding` regression `890 passed, 27 warnings`; `git diff --check` passed |
-| Open blockers | Independent review and user approval of PW-WP1 before PW-WP2 |
-| Exact next action | Review PW-WP1 commits and contracts; do not begin PW-WP2 until approval |
+| Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds |
+| Active implementation files | `modeling.py` and `pooled/decoding.py` |
+| Latest validation | 2026-10-11: focused modeling/pooled-core tests `128 passed, 2 warnings`; full `src/tests/neural_analysis/task_decoding` regression `912 passed, 27 warnings`; Ruff, syntax compilation, docstring-presence scan, and `git diff --check` passed |
+| Open blockers | Independent review and user approval of PW-WP2 before PW-WP3 |
+| Exact next action | Review PW-WP2 commits and scientific contracts; do not begin PW-WP3 until approval |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -47,8 +48,8 @@ user approval all pass.
 | Work package | RED commit | GREEN/refactor commit | Focused tests | Full regression | Review and approval | State |
 | --- | --- | --- | --- | --- | --- | --- |
 | PW-WP0 documentation | Not applicable | `7df0100` | Documentation checks passed 2026-10-11 | Not applicable | User approved 2026-10-11 | Complete |
-| PW-WP1 configuration and folds | `ebc8cc8`, `7aec299` | `65f8a2e` | `20 passed` | `890 passed, 27 warnings` | Independent review and user approval pending | Awaiting review |
-| PW-WP2 scientific core | - | - | - | - | - | Not started |
+| PW-WP1 configuration and folds | `ebc8cc8`, `7aec299` | `65f8a2e` | `20 passed` | `890 passed, 27 warnings` | User approved by authorizing PW-WP2 on 2026-10-11 | Complete |
+| PW-WP2 scientific core | `2c00910` | `2ffb1ab` | `128 passed, 2 warnings` | `912 passed, 27 warnings` | Independent review and user approval pending | Awaiting review |
 | PW-WP3 result schema, checkpoints, and synchronous computation | - | - | - | - | - | Not started |
 | PW-WP4 synthetic scientific gate | - | - | - | - | - | Not started |
 | PW-WP5 reporting, lifecycle, resources, and usage | - | - | - | - | - | Not started |
@@ -109,8 +110,51 @@ production controls, the coefficient/intercept deltas were
 therefore separates exact weight-plumbing tests from explicitly toleranced
 numerical characterization.
 
-The documentation changes are uncommitted at this snapshot. Record the commit
-identity here after the user approves and commits them.
+The approved documentation is committed at `7df0100`; the PW-WP1 handoff
+update is committed at `3ea2f1c`.
+
+### 1.4 PW-WP2 implementation evidence
+
+PW-WP2 followed tests-first commits. Commit `2c00910` added the scientific-core
+contracts without production changes. The focused RED command was:
+
+```text
+uv run pytest -q src/tests/neural_analysis/task_decoding/test_modeling.py \
+  src/tests/neural_analysis/task_decoding/pooled/test_decoding.py
+```
+
+It produced the expected `22 failed, 106 passed, 2 warnings`; every failure
+was a missing PW-WP2 API or enum. Commit `2ffb1ab` implemented the minimal
+fit/evaluate seam and pooled core. The same focused command then produced
+`128 passed, 2 warnings`. The full regression command:
+
+```text
+uv run pytest -q src/tests/neural_analysis/task_decoding
+```
+
+produced `912 passed, 27 warnings in 139.47s`. The 27 warnings are the same
+existing Pynapple bin-boundary, grouped-split class-count, and empty plotting
+slice warnings present before PW-WP2. `uv run ruff check` on the four changed
+source/test files, syntax compilation, an AST docstring-presence scan, and
+`git diff --check` also passed.
+
+The public change in `modeling.py` is limited to closed fit/evaluation failure
+enums, frozen runtime fit/evaluation containers, and reusable
+`fit_estimator`/`evaluate_fitted_estimator` functions. Existing
+`fit_and_score` now delegates to them with no sample-weight keyword and retains
+its legacy result/reason contracts. `pooled/decoding.py` adds stacking, exactly
+two anatomical transform fits per valid condition/fold cell, weighted model
+fitting, frozen through-time evaluation, reference-model reuse, and exact
+native-minus-transfer gaps. No result persistence, pipeline lifecycle,
+plotting, experimental-data execution, dependency, or new module was added.
+
+No synthetic or experimental run directory was created. Elapsed focused and
+full test times were 10.38 s and 139.47 s; CPU time, peak RSS, and output size
+were not collected because PW-WP2 does not run the resource-tracked pipeline.
+The relevant source/test paths are clean at implementation commit `2ffb1ab`;
+unrelated pre-existing untracked repository files remain untouched. The exact
+next safe action is independent scientific/API review and user approval of
+PW-WP2. PW-WP3 result-schema or persistence work remains unauthorized.
 
 ## 2. Fixed revision-1 decisions
 
