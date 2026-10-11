@@ -187,6 +187,101 @@ def test_plot_expectant_switching_diagnostics_saves_light_mode_png(tmp_path: Pat
     assert np.allclose(image[0, 0, :3], 1.0)
 
 
+def test_expectant_diagnostic_choices_use_size_coded_markers_without_choice_line(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Choices should be dots, with rewarded choices emphasized by marker size."""
+    performance_plots = _import_performance_plots()
+    captured = {}
+    trial_df = pd.DataFrame(
+        {
+            "action": [1, 0, "no_choice", 1],
+            "reward": [1, 0, 0, 1],
+            "state": ["left", "left", "right", "right"],
+            "simple_probe_persistence_prob_left": [0.5, 0.4, np.nan, 0.7],
+            "expectancy_persistence_doubt_prob_left": [0.5, 0.3, np.nan, 0.8],
+            "previous_choice": [0, 1, np.nan, -1],
+            "reward_triggered_probe": [0, -1, np.nan, 0],
+            "expectant_switch": [0, -0.02, np.nan, 0],
+            "doubt_choice_signal": [0, 0, np.nan, 0.39],
+            "expectancy_reward_count": [0, 1, np.nan, 2],
+            "expectancy_strength": [0.002, 0.018, np.nan, 0.119],
+        }
+    )
+
+    def capture_figure(fig, save_path):
+        captured["fig"] = fig
+        captured["save_path"] = save_path
+
+    monkeypatch.setattr(performance_plots, "save_performance_figure", capture_figure)
+
+    performance_plots.plot_expectant_switching_diagnostics(
+        trial_df,
+        plot_path=tmp_path,
+        sess_id_full="CT999_marker_test",
+    )
+
+    choice_axis = captured["fig"].axes[0]
+    line_labels = {line.get_label() for line in choice_axis.lines}
+    collections = {collection.get_label(): collection for collection in choice_axis.collections}
+    assert "Observed choice (1=left)" not in line_labels
+    assert set(collections) == {"Observed choice (1=left)", "Rewarded choice"}
+    assert collections["Observed choice (1=left)"].get_offsets().shape[0] == 3
+    assert collections["Rewarded choice"].get_offsets().shape[0] == 2
+    assert collections["Rewarded choice"].get_sizes()[0] > (
+        collections["Observed choice (1=left)"].get_sizes()[0]
+    )
+    plt.close(captured["fig"])
+
+
+def test_expectant_diagnostic_reward_count_and_strength_use_separate_y_axes(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Reward count and expectancy strength should retain independent scales."""
+    performance_plots = _import_performance_plots()
+    captured = {}
+    trial_df = pd.DataFrame(
+        {
+            "action": [1, 1, 0, 1],
+            "reward": [1, 1, 0, 1],
+            "simple_probe_persistence_prob_left": [0.5, 0.5, 0.5, 0.12],
+            "expectancy_persistence_doubt_prob_left": [0.5, 0.49, 0.42, 0.21],
+            "previous_choice": [0, 1, 1, -1],
+            "reward_triggered_probe": [0, -1, -1, 0],
+            "expectant_switch": [0, -0.02, -0.12, 0],
+            "doubt_choice_signal": [0, 0, 0, 0.39],
+            "expectancy_reward_count": [0, 5, 10, 15],
+            "expectancy_strength": [0.002, 0.018, 0.119, 0.25],
+        }
+    )
+
+    def capture_figure(fig, save_path):
+        captured["fig"] = fig
+
+    monkeypatch.setattr(performance_plots, "save_performance_figure", capture_figure)
+
+    performance_plots.plot_expectant_switching_diagnostics(
+        trial_df,
+        plot_path=tmp_path,
+        sess_id_full="CT999_axis_test",
+    )
+
+    assert len(captured["fig"].axes) == 5
+    count_axis = captured["fig"].axes[3]
+    strength_axis = captured["fig"].axes[4]
+    assert count_axis.get_ylabel() == "Reward count"
+    assert strength_axis.get_ylabel() == "Expectancy strength"
+    assert [line.get_label() for line in count_axis.lines] == ["Reward count"]
+    assert [line.get_label() for line in strength_axis.lines] == ["Expectancy strength"]
+    legend_labels = {text.get_text() for text in count_axis.get_legend().get_texts()}
+    assert legend_labels == {"Reward count", "Expectancy strength"}
+    assert count_axis.get_ylim()[1] > 15
+    assert strength_axis.get_ylim()[1] < 1
+    plt.close(captured["fig"])
+
+
 def test_plot_session_agent_mouse_agreement_saves_overall_lines(monkeypatch, tmp_path: Path):
     """Agent-agreement plot should draw one overall block line per short agent label."""
     performance_plots = _import_performance_plots()
