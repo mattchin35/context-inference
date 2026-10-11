@@ -226,6 +226,11 @@ class PooledWindowTargetResult:
         Keys are ``(condition, fold)`` and values are shared anatomical fits.
     unavailable_reason : str or None
         ``target_outer_unavailable`` when orchestration cannot begin.
+    target_identifier, target_family : str
+        Stable target name and categorical/numerical family.
+    outer_fold_ids : numpy.ndarray
+        Target-wide fold map shaped ``(tensor_trial,)`` with ``-1`` for
+        target-ineligible rows.
     """
 
     models: Mapping[tuple[str, int, str, str], FittedPooledModel]
@@ -233,6 +238,9 @@ class PooledWindowTargetResult:
     gaps: Mapping[tuple[str, int, str, str], PooledGapResult]
     transforms: Mapping[tuple[str, int], PooledTransforms]
     unavailable_reason: str | None
+    target_identifier: str
+    target_family: str
+    outer_fold_ids: np.ndarray
 
 
 def _boolean_trial_mask(value: np.ndarray, name: str) -> np.ndarray:
@@ -1420,6 +1428,9 @@ def decode_pooled_window_target(
             gaps={},
             transforms={},
             unavailable_reason="target_outer_unavailable",
+            target_identifier=target_identifier,
+            target_family=target_family,
+            outer_fold_ids=np.asarray(outer_split.fold_ids, dtype=int).copy(),
         )
 
     models: dict[tuple[str, int, str, str], FittedPooledModel] = {}
@@ -1590,4 +1601,7 @@ def decode_pooled_window_target(
         gaps=gaps,
         transforms=transforms_by_cell,
         unavailable_reason=None,
+        target_identifier=target_identifier,
+        target_family=target_family,
+        outer_fold_ids=np.asarray(outer_split.fold_ids, dtype=int).copy(),
     )
