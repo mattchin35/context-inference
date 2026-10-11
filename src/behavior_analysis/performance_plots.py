@@ -125,7 +125,7 @@ def plot_expectant_switching_diagnostics(
     fig, axes = plt.subplots(
         4,
         1,
-        figsize=(12, 10),
+        figsize=(24, 10),
         sharex=True,
         facecolor="white",
     )

@@ -821,6 +821,7 @@ def plot_mouse_history_expectant_switching_values(
         save_path=None,
         show=False,
         theme=theme,
+        figsize=(24, 5),
     )
     caption = (
         f"k0={params.expectancy_threshold:g}, scale={params.expectancy_scale:g}, "
