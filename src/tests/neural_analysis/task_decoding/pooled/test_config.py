@@ -303,3 +303,28 @@ def test_prepared_loader_rejects_missing_root_path_escape_and_payload_drift(tmp_
     (run_directory / "config.json").write_text(json.dumps(drifted_payload), encoding="ascii")
     with pytest.raises(ValueError, match="payload|frozen|canonical|drift"):
         pooled_config.load_prepared_pooled_decoding_config(run_directory)
+
+
+def test_prepared_loader_preserves_base_input_file_contracts(tmp_path):
+    """Reconstruction should retain metadata-root and feature-JSON validation."""
+    run_directory, original_payload = write_prepared_run(tmp_path)
+    session_root = run_directory.parent.parent
+
+    nested_metadata = session_root / "nested" / "neural_session.json"
+    nested_metadata.parent.mkdir()
+    nested_metadata.write_text("{}\n", encoding="ascii")
+    nested_payload = json.loads(json.dumps(original_payload))
+    nested_payload["base_config"]["session_metadata_path"] = (
+        "nested/neural_session.json"
+    )
+    (run_directory / "config.json").write_text(json.dumps(nested_payload), encoding="ascii")
+    with pytest.raises(ValueError, match="session_root|metadata"):
+        pooled_config.load_prepared_pooled_decoding_config(run_directory)
+
+    (run_directory / "config.json").write_text(json.dumps(original_payload), encoding="ascii")
+    (session_root / "processed/trial_feature_params.json").write_text(
+        "[]\n",
+        encoding="ascii",
+    )
+    with pytest.raises(ValueError, match="feature|JSON|object"):
+        pooled_config.load_prepared_pooled_decoding_config(run_directory)
