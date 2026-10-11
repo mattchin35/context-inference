@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import Enum
 import math
 import numbers
 import time
@@ -278,6 +279,91 @@ class FitResult:
     positive_class: int | float | None
     positive_scores: np.ndarray | None
     convergence_status: str
+
+
+class FitFailureKind(str, Enum):
+    """Closed scientific failure states produced while fitting an estimator."""
+
+    CONVERGENCE_WARNING = "convergence_warning"
+    INVALID_COEFFICIENT_OR_INTERCEPT_SHAPE = "invalid_coefficient_or_intercept_shape"
+    NONFINITE_COEFFICIENT_OR_INTERCEPT = "nonfinite_coefficient_or_intercept"
+    INVALID_CLASS_STRUCTURE = "invalid_class_structure"
+    AMBIGUOUS_POSITIVE_CLASS = "ambiguous_positive_class"
+
+
+class EvaluationFailureKind(str, Enum):
+    """Closed scientific failure states produced while evaluating a fixed fit."""
+
+    INVALID_PROBABILITY_SHAPE = "invalid_probability_shape"
+    NONFINITE_PROBABILITY = "nonfinite_probability"
+    POSITIVE_SCORE_ALIGNMENT_INVALID = "positive_score_alignment_invalid"
+    CATEGORICAL_TEST_CLASSES_INVALID = "categorical_test_classes_invalid"
+    INVALID_NUMERICAL_PREDICTION = "invalid_numerical_prediction"
+    INVALID_REGRESSION_METRIC = "invalid_regression_metric"
+
+
+@dataclass(frozen=True)
+class FittedEstimator:
+    """Runtime state for one estimator fit that can be evaluated repeatedly.
+
+    Parameters
+    ----------
+    is_valid : bool
+        Whether the estimator and its coefficient artifacts are usable.
+    estimator : object or None
+        Fitted sklearn-compatible estimator, or None after scientific fit
+        invalidity.
+    coefficients : numpy.ndarray
+        Oriented one-dimensional coefficients, shape ``(feature,)``. For a
+        categorical target, positive values point toward class one.
+    intercept : float
+        Oriented scalar intercept on the estimator response scale.
+    positive_class : int or float or None
+        Positive class one for categorical targets, otherwise None.
+    positive_class_column : int or None
+        Probability-column position for class one, otherwise None.
+    convergence_status : str
+        ``"converged"``, ``"warning"``, or ``"invalid"``.
+    failure_kind : FitFailureKind or None
+        Closed scientific fit failure, or None for a valid fit.
+    feature_count : int
+        Input feature width expected by later evaluations.
+    """
+
+    is_valid: bool
+    estimator: object | None
+    coefficients: np.ndarray
+    intercept: float
+    positive_class: int | float | None
+    positive_class_column: int | None
+    convergence_status: str
+    failure_kind: FitFailureKind | None
+    feature_count: int
+
+
+@dataclass(frozen=True)
+class FitEvaluation:
+    """Metrics from evaluating one fixed estimator without refitting.
+
+    Parameters
+    ----------
+    is_valid : bool
+        Whether predictions and all applicable metrics are finite and valid.
+    metrics : dict[str, float]
+        Categorical balanced accuracy/AUC or numerical native-target R2.
+    positive_class : int or float or None
+        Saved categorical positive class, otherwise None.
+    positive_scores : numpy.ndarray or None
+        Held-out class-one probabilities, shape ``(held_out_trial,)``.
+    failure_kind : EvaluationFailureKind or None
+        Closed scientific evaluation failure, or None for valid metrics.
+    """
+
+    is_valid: bool
+    metrics: dict[str, float]
+    positive_class: int | float | None
+    positive_scores: np.ndarray | None
+    failure_kind: EvaluationFailureKind | None
 
 
 @dataclass(frozen=True)
@@ -1354,6 +1440,343 @@ def regression_r2(target_values: np.ndarray, predictions: np.ndarray) -> float |
     return score if math.isfinite(score) else None
 
 
+def _invalid_fitted_estimator(
+    failure_kind: FitFailureKind,
+    feature_count: int,
+    *,
+    convergence_status: str,
+) -> FittedEstimator:
+    """Build one unavailable fitted-estimator runtime state.
+
+    Parameters
+    ----------
+    failure_kind : FitFailureKind
+        Reviewed semantic reason the estimator cannot be evaluated.
+    feature_count : int
+        Input feature width, dimensionless.
+    convergence_status : str
+        ``"warning"`` or ``"invalid"`` for this attempted fit.
+
+    Returns
+    -------
+    FittedEstimator
+        Unavailable runtime state with no retained estimator and NaN fit
+        artifacts shaped to the original feature axis.
+    """
+    return FittedEstimator(
+        is_valid=False,
+        estimator=None,
+        coefficients=np.full(feature_count, np.nan, dtype=float),
+        intercept=float("nan"),
+        positive_class=None,
+        positive_class_column=None,
+        convergence_status=convergence_status,
+        failure_kind=failure_kind,
+        feature_count=feature_count,
+    )
+
+
+def fit_estimator(
+    estimator: object,
+    train_features: np.ndarray,
+    train_targets: np.ndarray,
+    *,
+    target_family: str,
+    sample_weight: np.ndarray | None = None,
+) -> FittedEstimator:
+    """Fit one estimator and retain reusable validated runtime state.
+
+    Parameters
+    ----------
+    estimator : object
+        Unfitted sklearn-compatible estimator exposing ``fit``, ``coef_``,
+        and ``intercept_``; categorical estimators also expose ``classes_``.
+    train_features : numpy.ndarray
+        Finite matrix shaped ``(training_row, feature)`` in standardized-unit
+        or PCA-score feature scale.
+    train_targets : numpy.ndarray
+        One-dimensional categorical labels or numerical native-unit targets,
+        shape ``(training_row,)``.
+    target_family : {"categorical", "numerical"}
+        Selects class-orientation validation.
+    sample_weight : numpy.ndarray or None
+        Optional finite nonnegative weights shaped ``(training_row,)`` with a
+        positive sum. The validated object is passed to the estimator without
+        modification; None omits the keyword entirely.
+
+    Returns
+    -------
+    FittedEstimator
+        Valid reusable estimator state or a closed scientific failure state.
+
+    Raises
+    ------
+    Exception
+        Invalid input contracts and unexpected estimator errors propagate.
+    """
+    train_matrix = _validate_feature_matrix(train_features, "train_features")
+    train_values = _validate_vector(train_targets, "train_targets")
+    if train_matrix.shape[0] != train_values.size:
+        raise ValueError("Feature rows must match target values for the fit partition.")
+    if sample_weight is not None:
+        weights = np.asarray(sample_weight)
+        numeric_weights = np.issubdtype(weights.dtype, np.number) and not np.issubdtype(
+            weights.dtype,
+            np.bool_,
+        )
+        if (
+            weights.ndim != 1
+            or weights.shape != train_values.shape
+            or not numeric_weights
+            or not np.isfinite(weights).all()
+            or (weights < 0).any()
+            or float(np.sum(weights)) <= 0.0
+        ):
+            raise ValueError(
+                "sample_weight must be finite, nonnegative, aligned to training rows, "
+                "and have positive sum."
+            )
+
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always", ConvergenceWarning)
+        if sample_weight is None:
+            estimator.fit(train_matrix, train_values)
+        else:
+            estimator.fit(train_matrix, train_values, sample_weight=sample_weight)
+    if any(issubclass(item.category, ConvergenceWarning) for item in caught_warnings):
+        return _invalid_fitted_estimator(
+            FitFailureKind.CONVERGENCE_WARNING,
+            train_matrix.shape[1],
+            convergence_status="warning",
+        )
+
+    coefficients = np.asarray(estimator.coef_, dtype=float).reshape(-1)
+    intercept_values = np.asarray(estimator.intercept_, dtype=float).reshape(-1)
+    if coefficients.size != train_matrix.shape[1] or intercept_values.size != 1:
+        return _invalid_fitted_estimator(
+            FitFailureKind.INVALID_COEFFICIENT_OR_INTERCEPT_SHAPE,
+            train_matrix.shape[1],
+            convergence_status="invalid",
+        )
+    if not np.isfinite(coefficients).all() or not np.isfinite(intercept_values).all():
+        return _invalid_fitted_estimator(
+            FitFailureKind.NONFINITE_COEFFICIENT_OR_INTERCEPT,
+            train_matrix.shape[1],
+            convergence_status="invalid",
+        )
+    intercept = float(intercept_values[0])
+
+    positive_class: int | float | None = None
+    positive_class_column: int | None = None
+    if target_family == "categorical":
+        classes = np.asarray(estimator.classes_)
+        if classes.size != 2 or 1 not in classes:
+            return _invalid_fitted_estimator(
+                FitFailureKind.INVALID_CLASS_STRUCTURE,
+                train_matrix.shape[1],
+                convergence_status="invalid",
+            )
+        positive_columns = np.flatnonzero(classes == 1)
+        if positive_columns.size != 1:
+            return _invalid_fitted_estimator(
+                FitFailureKind.AMBIGUOUS_POSITIVE_CLASS,
+                train_matrix.shape[1],
+                convergence_status="invalid",
+            )
+        positive_class = 1
+        positive_class_column = int(positive_columns[0])
+        if classes[0] == positive_class:
+            coefficients = -coefficients
+            intercept = -intercept
+    elif target_family != "numerical":
+        raise ValueError("target_family must be 'categorical' or 'numerical'.")
+
+    return FittedEstimator(
+        is_valid=True,
+        estimator=estimator,
+        coefficients=coefficients,
+        intercept=intercept,
+        positive_class=positive_class,
+        positive_class_column=positive_class_column,
+        convergence_status="converged",
+        failure_kind=None,
+        feature_count=train_matrix.shape[1],
+    )
+
+
+def _invalid_fit_evaluation(failure_kind: EvaluationFailureKind) -> FitEvaluation:
+    """Build one unavailable evaluation state without prediction artifacts.
+
+    Parameters
+    ----------
+    failure_kind : EvaluationFailureKind
+        Reviewed prediction or metric failure.
+
+    Returns
+    -------
+    FitEvaluation
+        Unavailable evaluation with empty metrics and no positive scores.
+    """
+    return FitEvaluation(
+        is_valid=False,
+        metrics={},
+        positive_class=None,
+        positive_scores=None,
+        failure_kind=failure_kind,
+    )
+
+
+def evaluate_fitted_estimator(
+    fitted: FittedEstimator,
+    held_out_features: np.ndarray,
+    held_out_targets: np.ndarray,
+    *,
+    target_family: str,
+) -> FitEvaluation:
+    """Evaluate one fixed estimator without fitting or recalibrating it.
+
+    Parameters
+    ----------
+    fitted : FittedEstimator
+        Valid fitted runtime state returned by :func:`fit_estimator`.
+    held_out_features : numpy.ndarray
+        Finite matrix shaped ``(held_out_trial, feature)`` on the same feature
+        scale and width used for fitting.
+    held_out_targets : numpy.ndarray
+        One-dimensional categorical labels or numerical native-unit targets,
+        shape ``(held_out_trial,)``.
+    target_family : {"categorical", "numerical"}
+        Chooses prediction and metric semantics.
+
+    Returns
+    -------
+    FitEvaluation
+        Finite applicable metrics or one closed scientific evaluation failure.
+
+    Raises
+    ------
+    Exception
+        Unavailable fitted state, invalid input contracts, and unexpected
+        estimator errors propagate.
+    """
+    if not isinstance(fitted, FittedEstimator) or not fitted.is_valid:
+        raise ValueError("fitted must be a valid FittedEstimator.")
+    if fitted.estimator is None:
+        raise ValueError("A valid FittedEstimator must retain its estimator.")
+    held_out_matrix = _validate_feature_matrix(held_out_features, "held_out_features")
+    held_out_values = _validate_vector(held_out_targets, "held_out_targets")
+    if held_out_matrix.shape[0] != held_out_values.size:
+        raise ValueError("Feature rows must match target values for the held-out partition.")
+    if held_out_matrix.shape[1] != fitted.feature_count:
+        raise ValueError("Held-out feature width must match the fitted feature width.")
+
+    if target_family == "categorical":
+        probability_matrix = np.asarray(
+            fitted.estimator.predict_proba(held_out_matrix),
+            dtype=float,
+        )
+        if probability_matrix.shape != (held_out_matrix.shape[0], 2):
+            return _invalid_fit_evaluation(EvaluationFailureKind.INVALID_PROBABILITY_SHAPE)
+        if not np.isfinite(probability_matrix).all():
+            return _invalid_fit_evaluation(EvaluationFailureKind.NONFINITE_PROBABILITY)
+        if fitted.positive_class_column is None or fitted.positive_class is None:
+            raise ValueError("Categorical fitted state lacks positive-class orientation.")
+        positive_scores = probability_matrix[:, fitted.positive_class_column]
+        if positive_scores.shape != held_out_values.shape or not np.isfinite(
+            positive_scores
+        ).all():
+            return _invalid_fit_evaluation(
+                EvaluationFailureKind.POSITIVE_SCORE_ALIGNMENT_INVALID
+            )
+        classes = np.unique(held_out_values)
+        if classes.size != 2 or fitted.positive_class not in classes:
+            return _invalid_fit_evaluation(
+                EvaluationFailureKind.CATEGORICAL_TEST_CLASSES_INVALID
+            )
+        metrics = classification_metrics(
+            held_out_values,
+            positive_scores,
+            positive_class=fitted.positive_class,
+        )
+        return FitEvaluation(
+            is_valid=True,
+            metrics=metrics,
+            positive_class=fitted.positive_class,
+            positive_scores=positive_scores,
+            failure_kind=None,
+        )
+    if target_family == "numerical":
+        predictions = np.asarray(fitted.estimator.predict(held_out_matrix), dtype=float).reshape(-1)
+        if predictions.shape != held_out_values.shape or not np.isfinite(predictions).all():
+            return _invalid_fit_evaluation(
+                EvaluationFailureKind.INVALID_NUMERICAL_PREDICTION
+            )
+        score = regression_r2(held_out_values, predictions)
+        if score is None:
+            return _invalid_fit_evaluation(EvaluationFailureKind.INVALID_REGRESSION_METRIC)
+        return FitEvaluation(
+            is_valid=True,
+            metrics={"r2": score},
+            positive_class=None,
+            positive_scores=None,
+            failure_kind=None,
+        )
+    raise ValueError("target_family must be 'categorical' or 'numerical'.")
+
+
+def _legacy_reason_for_modeling_failure(
+    failure_kind: FitFailureKind | EvaluationFailureKind,
+) -> str:
+    """Map one closed modeling failure to the exact legacy reason text.
+
+    Parameters
+    ----------
+    failure_kind : FitFailureKind or EvaluationFailureKind
+        Reviewed semantic failure from the reusable fitting seam.
+
+    Returns
+    -------
+    str
+        Exact historical :class:`FitResult` reason.
+
+    Raises
+    ------
+    ValueError
+        If the state is not a declared modeling failure enum member.
+    """
+    reasons = {
+        FitFailureKind.CONVERGENCE_WARNING: "convergence_warning",
+        FitFailureKind.INVALID_COEFFICIENT_OR_INTERCEPT_SHAPE: (
+            "invalid coefficient or intercept shape"
+        ),
+        FitFailureKind.NONFINITE_COEFFICIENT_OR_INTERCEPT: (
+            "non-finite coefficient or intercept"
+        ),
+        FitFailureKind.INVALID_CLASS_STRUCTURE: (
+            "categorical estimator must expose binary classes including positive class 1"
+        ),
+        FitFailureKind.AMBIGUOUS_POSITIVE_CLASS: "positive class is ambiguous",
+        EvaluationFailureKind.INVALID_PROBABILITY_SHAPE: "invalid probability shape",
+        EvaluationFailureKind.NONFINITE_PROBABILITY: "non-finite probability or score",
+        EvaluationFailureKind.POSITIVE_SCORE_ALIGNMENT_INVALID: (
+            "positive_scores must be finite and align with target_values."
+        ),
+        EvaluationFailureKind.CATEGORICAL_TEST_CLASSES_INVALID: (
+            "Categorical metrics require held-out values from both classes."
+        ),
+        EvaluationFailureKind.INVALID_NUMERICAL_PREDICTION: "non-finite prediction or score",
+        EvaluationFailureKind.INVALID_REGRESSION_METRIC: (
+            "constant, singleton, or non-finite held-out numerical target"
+        ),
+    }
+    if not isinstance(failure_kind, (FitFailureKind, EvaluationFailureKind)):
+        raise ValueError(f"Unknown modeling failure {failure_kind!r}.")
+    try:
+        return reasons[failure_kind]
+    except KeyError as error:
+        raise ValueError(f"Unknown modeling failure {failure_kind!r}.") from error
+
+
 def _invalid_fit_result(reason: str, feature_count: int, *, convergence_status: str) -> FitResult:
     """Build a compact invalid fit result without suppressing unexpected errors.
 
@@ -1431,112 +1854,46 @@ def fit_and_score(
     if train_matrix.shape[1] != held_out_matrix.shape[1]:
         raise ValueError("Train and held-out feature matrices must have equal feature width.")
 
-    with warnings.catch_warnings(record=True) as caught_warnings:
-        warnings.simplefilter("always", ConvergenceWarning)
-        estimator.fit(train_matrix, train_values)
-    if any(issubclass(item.category, ConvergenceWarning) for item in caught_warnings):
+    fitted = fit_estimator(
+        estimator,
+        train_matrix,
+        train_values,
+        target_family=target_family,
+        sample_weight=None,
+    )
+    if not fitted.is_valid:
+        if fitted.failure_kind is None:
+            raise ValueError("Unavailable fitted estimator lacks a failure kind.")
         return _invalid_fit_result(
-            "convergence_warning",
+            _legacy_reason_for_modeling_failure(fitted.failure_kind),
             train_matrix.shape[1],
-            convergence_status="warning",
+            convergence_status=fitted.convergence_status,
         )
-    coefficients = np.asarray(estimator.coef_, dtype=float).reshape(-1)
-    intercept_values = np.asarray(estimator.intercept_, dtype=float).reshape(-1)
-    if coefficients.size != train_matrix.shape[1] or intercept_values.size != 1:
-        return _invalid_fit_result(
-            "invalid coefficient or intercept shape",
-            train_matrix.shape[1],
-            convergence_status="invalid",
-        )
-    if not np.isfinite(coefficients).all() or not np.isfinite(intercept_values).all():
-        return _invalid_fit_result(
-            "non-finite coefficient or intercept",
-            train_matrix.shape[1],
-            convergence_status="invalid",
-        )
-    intercept = float(intercept_values[0])
 
-    if target_family == "categorical":
-        classes = np.asarray(estimator.classes_)
-        if classes.size != 2 or 1 not in classes:
-            return _invalid_fit_result(
-                "categorical estimator must expose binary classes including positive class 1",
-                train_matrix.shape[1],
-                convergence_status="invalid",
-            )
-        positive_class = 1
-        probability_matrix = np.asarray(estimator.predict_proba(held_out_matrix), dtype=float)
-        if probability_matrix.shape != (held_out_matrix.shape[0], classes.size):
-            return _invalid_fit_result(
-                "invalid probability shape",
-                train_matrix.shape[1],
-                convergence_status="invalid",
-            )
-        if not np.isfinite(probability_matrix).all():
-            return _invalid_fit_result(
-                "non-finite probability or score",
-                train_matrix.shape[1],
-                convergence_status="invalid",
-            )
-        positive_column = np.flatnonzero(classes == positive_class)
-        if positive_column.size != 1:
-            return _invalid_fit_result(
-                "positive class is ambiguous",
-                train_matrix.shape[1],
-                convergence_status="invalid",
-            )
-        positive_scores = probability_matrix[:, int(positive_column[0])]
-        try:
-            metrics = classification_metrics(
-                held_out_values,
-                positive_scores,
-                positive_class=positive_class,
-            )
-        except ValueError as error:
-            return _invalid_fit_result(
-                str(error),
-                train_matrix.shape[1],
-                convergence_status="invalid",
-            )
-        if classes[0] == positive_class:
-            coefficients = -coefficients
-            intercept = -intercept
-        return FitResult(
-            is_valid=True,
-            reason=None,
-            coefficients=coefficients,
-            intercept=intercept,
-            metrics=metrics,
-            positive_class=positive_class,
-            positive_scores=positive_scores,
-            convergence_status="converged",
+    evaluation = evaluate_fitted_estimator(
+        fitted,
+        held_out_matrix,
+        held_out_values,
+        target_family=target_family,
+    )
+    if not evaluation.is_valid:
+        if evaluation.failure_kind is None:
+            raise ValueError("Unavailable fit evaluation lacks a failure kind.")
+        return _invalid_fit_result(
+            _legacy_reason_for_modeling_failure(evaluation.failure_kind),
+            train_matrix.shape[1],
+            convergence_status="invalid",
         )
-    if target_family == "numerical":
-        predictions = np.asarray(estimator.predict(held_out_matrix), dtype=float).reshape(-1)
-        if predictions.shape != held_out_values.shape or not np.isfinite(predictions).all():
-            return _invalid_fit_result(
-                "non-finite prediction or score",
-                train_matrix.shape[1],
-                convergence_status="invalid",
-            )
-        score = regression_r2(held_out_values, predictions)
-        if score is None:
-            return _invalid_fit_result(
-                "constant, singleton, or non-finite held-out numerical target",
-                train_matrix.shape[1],
-                convergence_status="invalid",
-            )
-        return FitResult(
-            is_valid=True,
-            reason=None,
-            coefficients=coefficients,
-            intercept=intercept,
-            metrics={"r2": score},
-            positive_class=None,
-            positive_scores=None,
-            convergence_status="converged",
-        )
-    raise ValueError("target_family must be 'categorical' or 'numerical'.")
+    return FitResult(
+        is_valid=True,
+        reason=None,
+        coefficients=fitted.coefficients,
+        intercept=fitted.intercept,
+        metrics=evaluation.metrics,
+        positive_class=evaluation.positive_class,
+        positive_scores=evaluation.positive_scores,
+        convergence_status=fitted.convergence_status,
+    )
 
 
 def _validate_feature_matrix(features: object, name: str) -> np.ndarray:
