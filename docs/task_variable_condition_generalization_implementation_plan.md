@@ -1,9 +1,9 @@
 # Pooled-Window Task-Variable Decoding and Condition-Generalization Plan
 
-**Status:** Revision-1 documentation, PW-WP1, and PW-WP2 were approved on
-2026-10-11. PW-WP3 is implemented and awaiting review and approval. PW-WP4 and
-later work packages, experimental computation, and cluster work are not yet
-authorized.
+**Status:** Revision-1 documentation and PW-WP1 through PW-WP3 were approved
+on 2026-10-11. PW-WP4 synthetic validation is implemented and awaiting review
+and approval. PW-WP5 and later work packages, experimental computation, and
+cluster work are not yet authorized.
 
 **Scientific contract:**
 `docs/task_variable_condition_generalization_spec_v1.md`.
@@ -27,14 +27,15 @@ summary.
 | PW-WP1 implementation HEAD | `65f8a2e5eb04071dbecf26debc03e334a6625fd2` |
 | PW-WP2 implementation HEAD | `2ffb1ab94323db375d5c8dd5154c770a9809ba66` |
 | PW-WP3 implementation HEAD | `bf431956e2e23128f8cb8817c47a6c1adde518da` |
+| PW-WP4 validation HEAD | `a99630f` |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
-| Current work package | PW-WP3: result schema, checkpoints, and synchronous computation |
-| Current phase | GREEN/refactor complete; independent review and user approval pending |
-| Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core |
-| Active implementation files | `pooled/results.py`, `pooled/pipeline.py`, `pooled/decoding.py`, and the narrow legacy cleanliness correction in `results.py` |
-| Latest validation | 2026-10-11: PW-WP3 contract tests `11 passed`; combined pooled/legacy-results tests `425 passed`; full `src/tests/neural_analysis/task_decoding` regression `925 passed, 27 warnings`; focused Ruff and `git diff --check` passed |
-| Open blockers | Independent review and user approval of PW-WP3 before PW-WP4 |
-| Exact next action | Review PW-WP3 commits, schema bytes/axes/sentinels, reason propagation, and source scope; do not begin PW-WP4 until approval |
+| Current work package | PW-WP4: synthetic end-to-end scientific gate |
+| Current phase | Synthetic validation complete; independent review and user approval pending |
+| Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation |
+| Active implementation files | `pooled/test_synthetic.py`; no PW-WP4 production change was required |
+| Latest validation | 2026-10-11: PW-WP4 synthetic tests `3 passed in 32.65s`; complete pooled suite `50 passed in 32.99s`; full `src/tests/neural_analysis/task_decoding` regression `928 passed, 27 warnings in 154.64s`; focused Ruff and `git diff --check` passed |
+| Open blockers | Independent scientific review, user inspection, and approval of PW-WP4 before PW-WP5 |
+| Exact next action | Review seeded outcomes, fit counts, persisted gaps, multi-window invariance, and resume equality; do not begin PW-WP5 until approval |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -52,8 +53,8 @@ user approval all pass.
 | PW-WP0 documentation | Not applicable | `7df0100` | Documentation checks passed 2026-10-11 | Not applicable | User approved 2026-10-11 | Complete |
 | PW-WP1 configuration and folds | `ebc8cc8`, `7aec299` | `65f8a2e` | `20 passed` | `890 passed, 27 warnings` | User approved by authorizing PW-WP2 on 2026-10-11 | Complete |
 | PW-WP2 scientific core | `2c00910` | `2ffb1ab` | `128 passed, 2 warnings` | `912 passed, 27 warnings` | User approved by authorizing PW-WP3 on 2026-10-11 | Complete |
-| PW-WP3 result schema, checkpoints, and synchronous computation | `46db250`, `0d95c95` | `bf43195` | `11 passed`; combined boundary `425 passed` | `925 passed, 27 warnings` | Independent review and user approval pending | Awaiting review |
-| PW-WP4 synthetic scientific gate | - | - | - | - | - | Not started |
+| PW-WP3 result schema, checkpoints, and synchronous computation | `46db250`, `0d95c95` | `bf43195` | `11 passed`; combined boundary `425 passed` | `925 passed, 27 warnings` | User approved by authorizing PW-WP4 on 2026-10-11 | Complete |
+| PW-WP4 synthetic scientific gate | `a99630f` | Not required; PW-WP3 passed the new gate unchanged | `3 passed`; pooled suite `50 passed` | `928 passed, 27 warnings` | Independent review and user approval pending | Awaiting review |
 | PW-WP5 reporting, lifecycle, resources, and usage | - | - | - | - | - | Not started |
 | PW-WP6 CT026 benchmark | - | - | - | - | - | Not started |
 | PW-WP7 optional descriptive comparison | - | - | - | - | - | Deferred |
@@ -206,6 +207,55 @@ and output size were not collected because PW-WP3 tests only small synthetic
 in-memory fixtures. Unrelated pre-existing workspace changes remain untouched.
 The exact next safe action is independent schema/source/API review and user
 approval of PW-WP3. PW-WP4 synthetic scientific-gate work remains unauthorized.
+
+### 1.6 PW-WP4 synthetic validation evidence
+
+Commit `a99630f` added tests 23-25 in `pooled/test_synthetic.py` before any
+PW-WP4 production edit. The seeded fixture uses 24 trials in 12 intact
+behavioral blocks, 40 canonical 100 ms bins, two selected units per region,
+three fixed outer folds, and fixed seed `20261011`. Tests inject this already
+prepared scientific input only at the session-loading seam, then exercise the
+public `compute_or_resume_pooled_results` path through model fitting, dense
+assembly, immutable checkpoints, final publication, and strict reload.
+
+The synthetic gate covers stable within-condition decoding, stable transfer,
+sign-changing/rotating code, destination remapping, absent destination code,
+delayed shared code, constant-reference unavailability, overlapping
+conditions, and all three training windows. The rotating case uses the
+existing `modeling.fit_and_score` only as a test-side independent-bin oracle.
+Persisted native-minus-transfer gaps are checked directly. The multi-window
+fixture produces distinct models and proves that adding post-choice/full
+windows leaves the pre-choice result unchanged.
+
+The first complete run of the new tests passed unchanged against the committed
+PW-WP3 implementation. The assertions were then strengthened to inspect saved
+gap arrays and genuinely different rotating-window models; they again passed:
+
+```text
+uv run pytest -q \
+  src/tests/neural_analysis/task_decoding/pooled/test_synthetic.py
+```
+
+produced `3 passed in 32.65s`. Because the new scientific contracts exposed no
+production defect, PW-WP4 has no GREEN production commit. Adding a synthetic
+production path or otherwise changing already-correct code would violate the
+single-path and minimal-scope decisions.
+
+The full-window fixture recorded exactly 36 estimator calls:
+`2 conditions * 1 target * 3 folds * 3 regions * 2 representations`, independent
+of its 40 evaluation bins. The interrupted two-window run preserved the first
+checkpoint byte-for-byte, restored it, computed only remaining cells, and
+matched one-shot arrays and canonical metadata exactly. Every unavailable cell
+in the constant-reference case had an explicit compact reason; stable runs had
+no unavailable scientific status.
+
+The complete pooled suite produced `50 passed in 32.99s`. The full relevant
+regression command produced `928 passed, 27 warnings in 154.64s`; warnings are
+the unchanged Pynapple bin-boundary, grouped-split class-count, and empty
+plotting-slice warnings. Focused Ruff and `git diff --check` passed. No
+experimental session, report, lifecycle feature, plotting, CLI, dependency,
+or production module was added. The exact next safe action is independent
+scientific review and user approval of PW-WP4; PW-WP5 remains unauthorized.
 
 ## 2. Fixed revision-1 decisions
 
