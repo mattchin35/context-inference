@@ -124,6 +124,25 @@ def test_single_trial_panel_keeps_model_value_visible() -> None:
     plt.close(figure)
 
 
+def test_trial_axes_use_only_integer_trial_indices() -> None:
+    """Discrete trial counts must never be labeled with fractional ticks."""
+    scenarios = build_default_scenarios()[:4]
+    model = build_observable_models()[0]
+    result = run_benchmark(scenarios, (model,), include_oracle=False)
+    figure = plot_model_behavior_atlas(
+        scenarios,
+        result.replays,
+        model.model_id,
+        model.display_label,
+        model.parameters,
+    )[0]
+
+    for axis, scenario in zip(figure.axes, scenarios):
+        ticks = axis.get_xticks()
+        np.testing.assert_array_equal(ticks, np.arange(scenario.action.size))
+    plt.close(figure)
+
+
 def test_combined_agreement_contains_each_model_and_chance_reference() -> None:
     """One descriptive figure compares all selected sample-level agreements."""
     scenarios = build_default_scenarios()[:4]
