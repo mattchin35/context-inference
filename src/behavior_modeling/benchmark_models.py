@@ -173,8 +173,16 @@ class BenchmarkModelSpec:
         )
 
 
-def build_observable_models() -> tuple[BenchmarkModelSpec, ...]:
+def build_observable_models(
+    parameters: Mapping[str, Mapping[str, float | int | str]] | None = None,
+) -> tuple[BenchmarkModelSpec, ...]:
     """Construct the 13 canonical models restricted to observable history.
+
+    Parameters
+    ----------
+    parameters : mapping or None
+        Complete resolved parameter mapping for all 14 model IDs. ``None`` uses
+        canonical defaults. Override validation occurs at the runner boundary.
 
     Returns
     -------
@@ -182,7 +190,30 @@ def build_observable_models() -> tuple[BenchmarkModelSpec, ...]:
         Ordered fresh model specifications. Replay calls create new state, so
         specifications may be reused safely across independent samples.
     """
-    simple_config = ExpectantSwitchingFeatureConfig()
+    resolved = _complete_parameter_mapping(parameters)
+    simple_parameters = resolved["simple_probe_persistence"]
+    full_parameters = resolved["expectancy_persistence_doubt"]
+    exemplar_config = ExpectantSwitchingFeatureConfig(
+        simple=SimpleProbePersistenceParams(
+            persistence_weight=float(simple_parameters["persistence_weight"]),
+            probe_weight=float(simple_parameters["probe_weight"]),
+        ),
+        full=ExpectancyPersistenceDoubtParams(
+            curve=ExpectancyCurveParams(
+                threshold=float(full_parameters["expectancy_threshold"]),
+                scale=float(full_parameters["expectancy_scale"]),
+            ),
+            doubt_lambda=float(full_parameters["doubt_lambda"]),
+            persistence_weight=float(full_parameters["persistence_weight"]),
+            expectancy_weight=float(full_parameters["expectancy_weight"]),
+            doubt_weight=float(full_parameters["doubt_weight"]),
+        ),
+    )
+    observer_parameters = resolved["history_ideal_observer"]
+    forgetting_q_parameters = resolved["forgetting_q_learning"]
+    probe_doubt_parameters = resolved["probe_persistence_doubt"]
+    direct_parameters = resolved["direct_expectancy_switch_doubt"]
+    global_parameters = resolved["global_reward_expectancy_doubt"]
     return (
         _spec("chance", "Chance", {}, _replay_chance),
         _spec(
@@ -201,77 +232,68 @@ def build_observable_models() -> tuple[BenchmarkModelSpec, ...]:
         _spec(
             "simple_probe_persistence",
             "Probe + persistence",
-            {"persistence_weight": 1.0, "probe_weight": 1.0},
+            simple_parameters,
             lambda history: _replay_existing_exemplar(
-                history, "simple_probe_persistence", simple_config
+                history, "simple_probe_persistence", exemplar_config
             ),
         ),
         _spec(
             "expectancy_persistence_doubt",
             "Expectancy + persistence + doubt",
-            {
-                "expectancy_threshold": 3.0,
-                "expectancy_scale": 1.0,
-                "doubt_lambda": 0.5,
-                "persistence_weight": 1.0,
-                "expectancy_weight": 1.0,
-                "doubt_weight": 1.0,
-            },
+            full_parameters,
             lambda history: _replay_existing_exemplar(
-                history, "expectancy_persistence_doubt", simple_config
+                history, "expectancy_persistence_doubt", exemplar_config
             ),
         ),
         _spec(
             "history_ideal_observer",
             "Mouse-history ideal observer",
-            _history_observer_parameters(),
-            _replay_history_observer,
+            observer_parameters,
+            lambda history: _replay_history_observer(history, observer_parameters),
         ),
         _spec(
             "forgetting_q_learning",
             "Forgetting Q-learning",
-            {
-                "decay": 0.7,
-                "reward_update_rate": 0.3,
-                "action_history_bias": 0.0,
-                "action_temperature": 1.0,
-            },
-            _replay_forgetting_q,
+            forgetting_q_parameters,
+            lambda history: _replay_forgetting_q(
+                history, forgetting_q_parameters
+            ),
         ),
         _spec(
             "probe_persistence_doubt",
             "Probe + persistence + doubt",
-            {
-                "persistence_weight": 1.0,
-                "probe_weight": 2.0,
-                "doubt_weight": 1.4,
-                "doubt_lambda": 0.5,
-            },
-            _replay_probe_persistence_doubt,
+            probe_doubt_parameters,
+            lambda history: _replay_probe_persistence_doubt(
+                history, probe_doubt_parameters
+            ),
         ),
         _spec(
             "direct_expectancy_switch_doubt",
             "Direct expectancy switch + doubt",
-            _direct_expectancy_parameters(),
-            _replay_direct_expectancy,
+            direct_parameters,
+            lambda history: _replay_direct_expectancy(history, direct_parameters),
         ),
         _spec(
             "global_reward_expectancy_doubt",
             "Global reward expectancy + doubt",
-            _global_expectancy_parameters(),
-            _replay_global_expectancy,
+            global_parameters,
+            lambda history: _replay_global_expectancy(history, global_parameters),
         ),
         _spec(
             "threshold_probe_return_3_3",
             "Threshold probe/return (3, 3)",
-            {"reward_threshold": 3, "omission_threshold": 3},
-            lambda history: _replay_threshold(history, 3, 3, "threshold_probe_return_3_3"),
+            resolved["threshold_probe_return_3_3"],
+            lambda history: _replay_threshold(
+                history, 3, 3, "threshold_probe_return_3_3"
+            ),
         ),
         _spec(
             "threshold_probe_return_1_1",
             "Threshold probe/return (1, 1)",
-            {"reward_threshold": 1, "omission_threshold": 1},
-            lambda history: _replay_threshold(history, 1, 1, "threshold_probe_return_1_1"),
+            resolved["threshold_probe_return_1_1"],
+            lambda history: _replay_threshold(
+                history, 1, 1, "threshold_probe_return_1_1"
+            ),
         ),
     )
 
@@ -399,9 +421,30 @@ def _replay_existing_exemplar(
     )
 
 
-def _replay_history_observer(history: ObservableHistory) -> ModelReplay:
+def _replay_history_observer(
+    history: ObservableHistory,
+    parameters: Mapping[str, float | int | str],
+) -> ModelReplay:
     agent = HMMRewardDecayRelativeDoubt(
-        AgentParams(**_history_observer_agent_parameters()),
+        AgentParams(
+            HMM_transition_prob=float(
+                parameters["context_transition_probability"]
+            ),
+            HMM_value_mode="bayesian_log_odds",
+            HMM_log_odds_tanh_scale=float(
+                parameters["log_odds_tanh_scale"]
+            ),
+            HMM_reward_decay_lambda=float(parameters["reward_decay_lambda"]),
+            relative_doubt_lambda=float(parameters["doubt_lambda"]),
+            HMM_active_reward_probability=float(
+                parameters["active_reward_probability"]
+            ),
+            HMM_inactive_reward_probability=float(
+                parameters["inactive_reward_probability"]
+            ),
+            logistic_alpha=float(parameters["action_history_bias"]),
+            action_temperature=float(parameters["action_temperature"]),
+        ),
         TaskParams(mean_correct_reward=1.0, mean_incorrect_reward=0.0),
         rng=np.random.default_rng(0),
     )
@@ -431,19 +474,29 @@ def _replay_history_observer(history: ObservableHistory) -> ModelReplay:
     )
 
 
-def _replay_forgetting_q(history: ObservableHistory) -> ModelReplay:
+def _replay_forgetting_q(
+    history: ObservableHistory,
+    parameters: Mapping[str, float | int | str],
+) -> ModelReplay:
     drive = _empty_output(history)
     p_left = _empty_output(history)
     q_right_values = _empty_output(history)
     q_left_values = _empty_output(history)
     q_values = np.zeros(2, dtype=float)
+    last_action_sign = 0.0
     for index in np.flatnonzero(history.valid):
         q_right_values[index], q_left_values[index] = q_values
         drive[index] = q_values[1] - q_values[0]
-        p_left[index] = expit(drive[index])
-        q_values *= 0.7
+        p_left[index] = expit(
+            float(parameters["action_history_bias"]) * last_action_sign
+            + drive[index] / float(parameters["action_temperature"])
+        )
+        q_values *= float(parameters["decay"])
         action = int(history.action[index])
-        q_values[action] += 0.3 * float(history.reward[index])
+        q_values[action] += float(parameters["reward_update_rate"]) * float(
+            history.reward[index]
+        )
+        last_action_sign = 1.0 if action == 1 else -1.0
     return _finalize(
         "forgetting_q_learning",
         history.action,
@@ -458,7 +511,10 @@ def _replay_forgetting_q(history: ObservableHistory) -> ModelReplay:
 # Proposed adapters
 
 
-def _replay_probe_persistence_doubt(history: ObservableHistory) -> ModelReplay:
+def _replay_probe_persistence_doubt(
+    history: ObservableHistory,
+    parameters: Mapping[str, float | int | str],
+) -> ModelReplay:
     previous = PreviousOutcomeState()
     doubt = CounterfactualDoubtState()
     drive = _empty_output(history)
@@ -473,9 +529,15 @@ def _replay_probe_persistence_doubt(history: ObservableHistory) -> ModelReplay:
     )
     for index in np.flatnonzero(history.valid):
         persistence, probe = previous_outcome_signals(previous)
-        doubt_raw = counterfactual_doubt_raw_value(doubt, 0.5)
+        doubt_raw = counterfactual_doubt_raw_value(
+            doubt, float(parameters["doubt_lambda"])
+        )
         doubt_choice = -doubt_raw
-        drive[index] = persistence + 2.0 * probe + 1.4 * doubt_choice
+        drive[index] = (
+            float(parameters["persistence_weight"]) * persistence
+            + float(parameters["probe_weight"]) * probe
+            + float(parameters["doubt_weight"]) * doubt_choice
+        )
         p_left[index] = (1.0 + np.tanh(drive[index])) / 2.0
         states["previous_choice"][index] = persistence
         states["previous_reward"][index] = previous.previous_reward
@@ -496,7 +558,10 @@ def _replay_probe_persistence_doubt(history: ObservableHistory) -> ModelReplay:
     )
 
 
-def _replay_direct_expectancy(history: ObservableHistory) -> ModelReplay:
+def _replay_direct_expectancy(
+    history: ObservableHistory,
+    parameters: Mapping[str, float | int | str],
+) -> ModelReplay:
     previous = PreviousOutcomeState()
     expectancy = RewardConfirmedExpectancyState()
     doubt = CounterfactualDoubtState()
@@ -511,20 +576,30 @@ def _replay_direct_expectancy(history: ObservableHistory) -> ModelReplay:
         "doubt_raw_value",
         "omission_drive",
     )
-    curve = ExpectancyCurveParams(threshold=2.5, scale=0.5)
+    curve = ExpectancyCurveParams(
+        threshold=float(parameters["expectancy_threshold"]),
+        scale=float(parameters["expectancy_scale"]),
+    )
     for index in np.flatnonzero(history.valid):
         persistence, _ = previous_outcome_signals(previous)
         strength = float(expectancy_strength(expectancy.reward_count, curve))
-        doubt_raw = counterfactual_doubt_raw_value(doubt, 0.5)
+        doubt_raw = counterfactual_doubt_raw_value(
+            doubt, float(parameters["doubt_lambda"])
+        )
         if previous.previous_choice is None:
             p_left[index] = 0.5
             omission_drive = np.nan
         elif previous.previous_reward > 0:
-            p_switch = 0.1 + 0.8 * strength
+            p_switch = float(parameters["minimum_switch_probability"]) + float(
+                parameters["switch_probability_span"]
+            ) * strength
             p_left[index] = _left_probability_from_switch(persistence, p_switch)
             omission_drive = np.nan
         else:
-            omission_drive = persistence + 1.4 * (-doubt_raw)
+            omission_drive = (
+                float(parameters["omission_persistence_weight"]) * persistence
+                + float(parameters["doubt_weight"]) * (-doubt_raw)
+            )
             p_left[index] = (1.0 + np.tanh(omission_drive)) / 2.0
         _record_expectancy_states(
             states, index, previous, expectancy, strength, doubt_raw, omission_drive
@@ -544,7 +619,10 @@ def _replay_direct_expectancy(history: ObservableHistory) -> ModelReplay:
     )
 
 
-def _replay_global_expectancy(history: ObservableHistory) -> ModelReplay:
+def _replay_global_expectancy(
+    history: ObservableHistory,
+    parameters: Mapping[str, float | int | str],
+) -> ModelReplay:
     previous = PreviousOutcomeState()
     doubt = CounterfactualDoubtState()
     reward_accumulator = 0.0
@@ -558,20 +636,30 @@ def _replay_global_expectancy(history: ObservableHistory) -> ModelReplay:
         "doubt_raw_value",
         "omission_drive",
     )
-    curve = ExpectancyCurveParams(threshold=2.0, scale=0.5)
+    curve = ExpectancyCurveParams(
+        threshold=float(parameters["expectancy_threshold"]),
+        scale=float(parameters["expectancy_scale"]),
+    )
     for index in np.flatnonzero(history.valid):
         persistence, _ = previous_outcome_signals(previous)
         strength = float(expectancy_strength(reward_accumulator, curve))
-        doubt_raw = counterfactual_doubt_raw_value(doubt, 0.5)
+        doubt_raw = counterfactual_doubt_raw_value(
+            doubt, float(parameters["doubt_lambda"])
+        )
         if previous.previous_choice is None:
             p_left[index] = 0.5
             omission_drive = np.nan
         elif previous.previous_reward > 0:
-            p_switch = 0.1 + 0.8 * strength
+            p_switch = float(parameters["minimum_switch_probability"]) + float(
+                parameters["switch_probability_span"]
+            ) * strength
             p_left[index] = _left_probability_from_switch(persistence, p_switch)
             omission_drive = np.nan
         else:
-            omission_drive = persistence + 1.4 * (-doubt_raw)
+            omission_drive = (
+                float(parameters["omission_persistence_weight"]) * persistence
+                + float(parameters["doubt_weight"]) * (-doubt_raw)
+            )
             p_left[index] = (1.0 + np.tanh(omission_drive)) / 2.0
         states["previous_choice"][index] = persistence
         states["previous_reward"][index] = previous.previous_reward
@@ -582,7 +670,10 @@ def _replay_global_expectancy(history: ObservableHistory) -> ModelReplay:
         action = int(history.action[index])
         reward = float(history.reward[index])
         previous = update_previous_outcome(previous, action, reward)
-        reward_accumulator = 0.8 * reward_accumulator + float(reward > 0)
+        reward_accumulator = (
+            float(parameters["reward_decay"]) * reward_accumulator
+            + float(reward > 0)
+        )
         doubt = update_counterfactual_doubt(doubt, action, reward)
     return _finalize(
         "global_reward_expectancy_doubt",
@@ -814,21 +905,6 @@ def _record_expectancy_states(
     states["omission_drive"][index] = omission_drive
 
 
-def _history_observer_agent_parameters() -> dict[str, float | str]:
-    """Return constructor fields for the canonical executable observer."""
-    return {
-        "HMM_transition_prob": 0.2,
-        "HMM_value_mode": "bayesian_log_odds",
-        "HMM_log_odds_tanh_scale": 1.0,
-        "HMM_reward_decay_lambda": 0.1,
-        "relative_doubt_lambda": 0.5,
-        "HMM_active_reward_probability": 0.8,
-        "HMM_inactive_reward_probability": 0.0,
-        "logistic_alpha": 0.0,
-        "action_temperature": 1.0,
-    }
-
-
 def _history_observer_parameters() -> dict[str, float | str]:
     """Return complete report parameters for the canonical observer."""
     return {
@@ -863,3 +939,83 @@ def _global_expectancy_parameters() -> dict[str, float]:
         **_direct_expectancy_parameters(),
         "expectancy_threshold": 2.0,
     }
+
+
+def canonical_model_parameters() -> dict[str, dict[str, float | int | str]]:
+    """Return independent canonical parameter dictionaries for all 14 models.
+
+    Returns
+    -------
+    dict
+        Mapping from stable model ID to its complete fixed parameter record.
+        Numeric values are unitless unless their model documentation specifies
+        trial, inverse-trial, or probability units.
+    """
+    return {
+        "chance": {},
+        "immediate_persistence": {},
+        "wsls": {},
+        "win_switch_lose_stay": {},
+        ORACLE_MODEL_ID: {},
+        "simple_probe_persistence": {
+            "persistence_weight": 1.0,
+            "probe_weight": 1.0,
+        },
+        "expectancy_persistence_doubt": {
+            "expectancy_threshold": 3.0,
+            "expectancy_scale": 1.0,
+            "doubt_lambda": 0.5,
+            "persistence_weight": 1.0,
+            "expectancy_weight": 1.0,
+            "doubt_weight": 1.0,
+        },
+        "history_ideal_observer": _history_observer_parameters(),
+        "forgetting_q_learning": {
+            "decay": 0.7,
+            "reward_update_rate": 0.3,
+            "action_history_bias": 0.0,
+            "action_temperature": 1.0,
+        },
+        "probe_persistence_doubt": {
+            "persistence_weight": 1.0,
+            "probe_weight": 2.0,
+            "doubt_weight": 1.4,
+            "doubt_lambda": 0.5,
+        },
+        "direct_expectancy_switch_doubt": _direct_expectancy_parameters(),
+        "global_reward_expectancy_doubt": _global_expectancy_parameters(),
+        "threshold_probe_return_3_3": {
+            "reward_threshold": 3,
+            "omission_threshold": 3,
+        },
+        "threshold_probe_return_1_1": {
+            "reward_threshold": 1,
+            "omission_threshold": 1,
+        },
+    }
+
+
+def _complete_parameter_mapping(
+    parameters: Mapping[str, Mapping[str, float | int | str]] | None,
+) -> dict[str, dict[str, float | int | str]]:
+    """Copy a complete resolved mapping or return fresh canonical defaults."""
+    canonical = canonical_model_parameters()
+    if parameters is None:
+        return canonical
+    if set(parameters) != set(canonical):
+        missing = sorted(set(canonical).difference(parameters))
+        extra = sorted(set(parameters).difference(canonical))
+        raise ValueError(
+            "Resolved model parameters must contain every canonical model ID; "
+            f"missing={missing}, extra={extra}."
+        )
+    resolved: dict[str, dict[str, float | int | str]] = {}
+    for model_id, canonical_values in canonical.items():
+        supplied_values = dict(parameters[model_id])
+        if set(supplied_values) != set(canonical_values):
+            raise ValueError(
+                f"Resolved parameters for {model_id!r} do not match the "
+                "canonical field set."
+            )
+        resolved[model_id] = supplied_values
+    return resolved
