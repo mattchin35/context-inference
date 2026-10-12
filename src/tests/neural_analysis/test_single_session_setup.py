@@ -169,10 +169,10 @@ def test_commands_are_copyable_and_owned_by_existing_parsers(tmp_path: Path) -> 
     pooled_tokens = shlex.split(commands["condition_generalization"].local_preflight)
     ppc_preview_tokens = shlex.split(commands["spike_phase_ppc"].local_preview)
     ppc_final_tokens = shlex.split(commands["spike_phase_ppc"].local_final)
-    assert task_parser().parse_args(task_tokens[4:]).command == "dry-run"
-    assert pooled_parser().parse_args(pooled_tokens[4:]).command == "dry-run"
-    assert parse_launcher_command(ppc_preview_tokens[4:]).shuffle_count == 100
-    final = parse_launcher_command(ppc_final_tokens[4:])
+    assert task_parser().parse_args(task_tokens[5:]).command == "dry-run"
+    assert pooled_parser().parse_args(pooled_tokens[5:]).command == "dry-run"
+    assert parse_launcher_command(ppc_preview_tokens[5:]).shuffle_count == 100
+    final = parse_launcher_command(ppc_final_tokens[5:])
     assert final.shuffle_count == 1000
     assert final.final_run is True
     assert "--dry-run" in commands["spike_phase_ppc"].local_preflight
