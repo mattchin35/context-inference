@@ -281,6 +281,7 @@ def _plot_sample_axis(
     )
     _mark_context(axis, scenario)
     axis.set_xlim(-0.5, max(0.5, scenario.action.size - 0.5))
+    axis.set_xticks(trial_index)
     axis.set_ylim(-1.1, 1.1)
     axis.set_yticks([-1.0, 0.0, 1.0], ["R", "0", "L"])
     axis.set_xlabel("Trial")
