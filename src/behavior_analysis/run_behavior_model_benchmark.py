@@ -73,6 +73,13 @@ OVERRIDE_FIELDS = {
         "doubt_weight",
         "doubt_lambda",
     },
+    "home_referenced_expectancy_doubt": {
+        "expectancy_threshold",
+        "expectancy_scale",
+        "expectancy_weight",
+        "doubt_weight",
+        "doubt_lambda",
+    },
 }
 NONNEGATIVE_FIELDS = {
     "expectancy_threshold",
@@ -104,7 +111,7 @@ def resolve_benchmark_parameters(
     Returns
     -------
     dict
-        Complete independent parameter dictionaries for all 14 model IDs.
+        Complete independent parameter dictionaries for all 15 model IDs.
 
     Raises
     ------

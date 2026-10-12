@@ -8,6 +8,7 @@ separate function with a deliberately different interface.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType
 from typing import Callable, Mapping
 
@@ -49,6 +50,7 @@ OBSERVABLE_MODEL_IDS = (
     "probe_persistence_doubt",
     "direct_expectancy_switch_doubt",
     "global_reward_expectancy_doubt",
+    "home_referenced_expectancy_doubt",
     "threshold_probe_return_3_3",
     "threshold_probe_return_1_1",
 )
@@ -176,19 +178,20 @@ class BenchmarkModelSpec:
 def build_observable_models(
     parameters: Mapping[str, Mapping[str, float | int | str]] | None = None,
 ) -> tuple[BenchmarkModelSpec, ...]:
-    """Construct the 13 canonical models restricted to observable history.
+    """Construct the 14 canonical models restricted to observable history.
 
     Parameters
     ----------
     parameters : mapping or None
-        Complete resolved parameter mapping for all 14 model IDs. ``None`` uses
+        Complete resolved parameter mapping for all 15 model IDs. ``None`` uses
         canonical defaults. Override validation occurs at the runner boundary.
 
     Returns
     -------
     tuple of BenchmarkModelSpec
-        Ordered fresh model specifications. Replay calls create new state, so
-        specifications may be reused safely across independent samples.
+        Ordered fresh specifications for the 14 observable models. Replay
+        calls create new state, so specifications may be reused safely across
+        independent samples.
     """
     resolved = _complete_parameter_mapping(parameters)
     simple_parameters = resolved["simple_probe_persistence"]
@@ -214,6 +217,7 @@ def build_observable_models(
     probe_doubt_parameters = resolved["probe_persistence_doubt"]
     direct_parameters = resolved["direct_expectancy_switch_doubt"]
     global_parameters = resolved["global_reward_expectancy_doubt"]
+    home_expectancy_parameters = resolved["home_referenced_expectancy_doubt"]
     return (
         _spec("chance", "Chance", {}, _replay_chance),
         _spec(
@@ -278,6 +282,15 @@ def build_observable_models(
             "Global reward expectancy + doubt",
             global_parameters,
             lambda history: _replay_global_expectancy(history, global_parameters),
+        ),
+        _spec(
+            "home_referenced_expectancy_doubt",
+            "Home-referenced expectancy + doubt",
+            home_expectancy_parameters,
+            partial(
+                _replay_home_referenced_expectancy_doubt,
+                parameters=home_expectancy_parameters,
+            ),
         ),
         _spec(
             "threshold_probe_return_3_3",
@@ -685,6 +698,86 @@ def _replay_global_expectancy(
     )
 
 
+def _replay_home_referenced_expectancy_doubt(
+    history: ObservableHistory,
+    parameters: Mapping[str, float | int | str],
+) -> ModelReplay:
+    """Replay persistent signed expectancy plus omission doubt.
+
+    Parameters
+    ----------
+    history : ObservableHistory
+        Aligned one-dimensional action, reward, and validity arrays. Actions
+        use ``0=right, 1=left`` and rewards use task reward units.
+    parameters : mapping
+        Fixed threshold, scale, weights, and inverse-trial doubt rate for the
+        complete independent sample.
+
+    Returns
+    -------
+    ModelReplay
+        Aligned pre-trial probabilities, left-positive values and drive, and
+        component states. Every array has shape ``(n_trials,)``.
+    """
+    expectancy = RewardConfirmedExpectancyState()
+    doubt = CounterfactualDoubtState()
+    drive = _empty_output(history)
+    p_left = _empty_output(history)
+    states = _state_outputs(
+        history,
+        "expectancy_confirmed_side",
+        "expectancy_reward_count",
+        "expectancy_strength",
+        "expectancy_choice",
+        "doubt_raw_value",
+        "doubt_choice",
+    )
+    curve = ExpectancyCurveParams(
+        threshold=float(parameters["expectancy_threshold"]),
+        scale=float(parameters["expectancy_scale"]),
+    )
+    expectancy_weight = float(parameters["expectancy_weight"])
+    doubt_weight = float(parameters["doubt_weight"])
+    doubt_lambda = float(parameters["doubt_lambda"])
+
+    for index in np.flatnonzero(history.valid):
+        strength = float(expectancy_strength(expectancy.reward_count, curve))
+        if expectancy.confirmed_side is None:
+            confirmed_side = np.nan
+            expectancy_choice = 0.0
+        else:
+            confirmed_side = float(expectancy.confirmed_side)
+            home_sign = 1.0 if expectancy.confirmed_side == 1 else -1.0
+            expectancy_choice = home_sign * (1.0 - 2.0 * strength)
+        doubt_raw = counterfactual_doubt_raw_value(doubt, doubt_lambda)
+        doubt_choice = -doubt_raw
+        drive[index] = (
+            expectancy_weight * expectancy_choice + doubt_weight * doubt_choice
+        )
+        p_left[index] = (1.0 + np.tanh(drive[index])) / 2.0
+
+        states["expectancy_confirmed_side"][index] = confirmed_side
+        states["expectancy_reward_count"][index] = expectancy.reward_count
+        states["expectancy_strength"][index] = strength
+        states["expectancy_choice"][index] = expectancy_choice
+        states["doubt_raw_value"][index] = doubt_raw
+        states["doubt_choice"][index] = doubt_choice
+
+        action = int(history.action[index])
+        reward = float(history.reward[index])
+        expectancy = update_reward_confirmed_expectancy(expectancy, action, reward)
+        doubt = update_counterfactual_doubt(doubt, action, reward)
+
+    return _finalize(
+        "home_referenced_expectancy_doubt",
+        history.action,
+        history.valid,
+        p_left,
+        drive,
+        states,
+    )
+
+
 def _replay_threshold(
     history: ObservableHistory,
     reward_threshold: int,
@@ -942,7 +1035,7 @@ def _global_expectancy_parameters() -> dict[str, float]:
 
 
 def canonical_model_parameters() -> dict[str, dict[str, float | int | str]]:
-    """Return independent canonical parameter dictionaries for all 14 models.
+    """Return independent canonical parameter dictionaries for all 15 models.
 
     Returns
     -------
@@ -984,6 +1077,13 @@ def canonical_model_parameters() -> dict[str, dict[str, float | int | str]]:
         },
         "direct_expectancy_switch_doubt": _direct_expectancy_parameters(),
         "global_reward_expectancy_doubt": _global_expectancy_parameters(),
+        "home_referenced_expectancy_doubt": {
+            "expectancy_threshold": 2.5,
+            "expectancy_scale": 0.5,
+            "expectancy_weight": 1.0,
+            "doubt_weight": 1.0,
+            "doubt_lambda": 0.5,
+        },
         "threshold_probe_return_3_3": {
             "reward_threshold": 3,
             "omission_threshold": 3,
