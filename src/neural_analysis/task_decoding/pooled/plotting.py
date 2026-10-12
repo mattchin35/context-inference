@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+import textwrap
 
 import matplotlib
 
@@ -248,10 +249,25 @@ def plot_pooled_timecourses(
             axis.set_title(f"{region} | {representation}")
             axis.set_ylabel(", ".join(metric_names[list(metric_indices)]))
             axis.grid(alpha=0.2)
-            if plotted:
-                axis.legend(fontsize=7, loc="best")
     for axis in axes[-1, :]:
         axis.set_xlabel("Evaluation time from choice (seconds)")
+
+    # A single reserved legend column keeps the full transfer comparison out
+    # of all six scientific panels while preserving canonical curve order.
+    legend_handles: dict[str, object] = {}
+    for axis in axes.reshape(-1):
+        handles, labels = axis.get_legend_handles_labels()
+        for handle, label in zip(handles, labels, strict=True):
+            legend_handles.setdefault(label, handle)
+    if legend_handles:
+        figure.legend(
+            handles=tuple(legend_handles.values()),
+            labels=tuple(legend_handles),
+            loc="center left",
+            bbox_to_anchor=(0.775, 0.53),
+            fontsize=7,
+            frameon=False,
+        )
     temporal_scope = (
         "All displayed evaluation times are in-window for the full training-time "
         "distribution."
@@ -281,8 +297,15 @@ def plot_pooled_timecourses(
         f"{figure_kind.title()} | {target_name} | {window_name}",
         fontsize=15,
     )
-    figure.text(0.01, 0.01, caption, ha="left", va="bottom", fontsize=8, wrap=True)
-    figure.tight_layout(rect=(0.0, 0.09, 1.0, 0.95))
+    figure.text(
+        0.01,
+        0.01,
+        textwrap.fill(caption, width=180),
+        ha="left",
+        va="bottom",
+        fontsize=8,
+    )
+    figure.tight_layout(rect=(0.0, 0.13, 0.76, 0.95))
     return figure
 
 
