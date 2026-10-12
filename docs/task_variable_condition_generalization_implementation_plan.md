@@ -2,9 +2,9 @@
 
 **Status:** Revision-1 documentation, PW-WP1 through PW-WP6, and PW-WP9a were
 approved. The CT026 all-window run is scientifically complete and validated.
-The user authorized test-first PW-WP8 cluster/batch implementation with a
-24-hour `normal`-partition envelope; external synchronization and submission
-remain separate actions and have not been performed.
+PW-WP8 implementation and local/cluster validation passed, and the separately
+approved first 24-hour `normal`-partition cluster run is active. Result return
+and array submission remain later actions.
 
 **Scientific contract:**
 `docs/task_variable_condition_generalization_spec_v1.md`.
@@ -37,12 +37,12 @@ summary.
 | PW-WP8 cluster/batch GREEN HEAD | `62bccb7` |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
 | Current work package | PW-WP8: cluster and batch execution |
-| Current phase | GREEN implementation and regression validation are committed; user review is pending |
+| Current phase | First single-session cluster validation is running as Slurm job `31045198` |
 | Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate; PW-WP5 reporting, lifecycle, resources, usage, and runtime-provenance correction; PW-WP6 CT026 benchmark and reporting correction; PW-WP9a CT026 all-window validation |
 | Active implementation files | `pooled/slurm.py`, `pooled/run_batch.py`, `pooled/run_session.py`, `pooled/pipeline.py`, pooled Slurm wrapper, scientist README, and this handoff |
-| Latest validation | 2026-10-12: WP8 contracts `13 passed`; focused CLI compatibility gate `14 passed`; pooled suite `82 passed`; full task-decoding suite `960 passed, 27 warnings`; Ruff, `git diff --check`, and wrapper shell syntax passed. The accepted PW-WP9a run completed 54/54 checkpoints in 3:35:20 with 1,107,640,320-byte peak RSS and 150,824,741 output bytes. |
-| Open blockers | User review; no external synchronization or cluster submission has been performed or authorized by implementation alone |
-| Exact next action | User reviews commit `62bccb7`; after separate approval, perform the documented manual session sync and first single-session cluster submission |
+| Latest validation | 2026-10-12: local WP8 contracts `13 passed`, pooled suite `82 passed`, and full task-decoding suite `960 passed, 27 warnings`; cluster Python 3.14 passed WP8 `13 passed` and pooled `82 passed`. Non-destructive sync checked 14,888 paths and transferred 4.14 GB with `analysis_runs` excluded. The cluster dry-run matched the accepted workload and produced source fingerprint `cb1663cd...21e71` and run fingerprint `3bd97eaa...0da67`. |
+| Open blockers | Job `31045198` must reach durable complete/result-valid state before its run can serve as matching-source array evidence or be returned locally |
+| Exact next action | Await Slurm completion outside an active Codex process, then inspect exact run `pooled_task_variable_decoding_20261012T150220Z`; do not submit an array or copy results before validation |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -66,7 +66,7 @@ user approval all pass.
 | PW-WP6 CT026 benchmark | Reporting correction `3342579`; test-fixture correction `5049e47` | Reporting correction `ed09fe7` | Plotting `4 passed`; pooled `68 passed`; 54/54 actual layouts pass geometry audit; fresh result exact-equality audit passed | `946 passed, 27 warnings` | User accepted the corrected figures, fresh telemetry, and benchmark on 2026-10-11 | Complete |
 | PW-WP7 optional descriptive comparison | - | - | - | - | - | Deferred |
 | PW-WP9a CT026 all-window validation | `25de6ce` | `7a60043`; launch record `3f8a238` | Existing focused contracts `5 passed`; exact dry-run and completed artifact validation passed | `947 passed, 27 warnings` before execution | User accepted completed run and prioritized PW-WP8 | Complete |
-| PW-WP8 cluster and batch execution | `29ddd56` | `62bccb7` | WP8 contracts `13 passed`; pooled suite `82 passed`; Ruff and shell syntax passed | `960 passed, 27 warnings` | User approved the implementation plan; final implementation review pending | GREEN committed |
+| PW-WP8 cluster and batch execution | `29ddd56` | `62bccb7` | Local WP8 `13 passed`, pooled `82 passed`; cluster WP8 `13 passed`, pooled `82 passed`; Ruff and shell syntax passed | `960 passed, 27 warnings` | User approved implementation and the first external cluster run | Cluster validation running |
 | PW-WP9b experimental batch | - | - | - | - | Depends on PW-WP8 and reviewed manifest | Deferred |
 
 ### 1.2 Handoff update requirements
@@ -562,6 +562,44 @@ choice, but it cannot admit an array under the exact-source evidence rule. The
 first completed single cluster run from the new commit becomes the matching
 array evidence. This is an intentional conservative gate, not an instruction
 to rerun the 3.6-hour workload under an active Codex process.
+
+### 1.12 PW-WP8 first cluster validation launch
+
+The user separately approved push, non-destructive input synchronization,
+cluster validation, dry-run, and one CT026 all-window submission. Branch
+`refactor` was pushed and the tracked-clean cluster checkout at
+`/gs/gsfs0/users/mchin1/context-inference` was fast-forwarded to exact commit
+`d30c8ac5e858292aacd236bcd9e03a0573b99bd9`. Partition `normal` was up with a
+three-day partition ceiling. The locked cluster Python 3.14 environment passed
+all 13 PW-WP8 contracts and the complete pooled suite (`82 passed`).
+
+Manual rsync copied the CT026 session to
+`/gs/gsfs0/users/mchin1/contextProjectData/CT026/CT026_20260803_latent_inference`
+without a delete option and with `analysis_runs` excluded. It checked 14,888
+paths and transferred 4,142,521,938 bytes. The local and cluster all-window
+overlay hashes both equal
+`f755b26fe67a28d5a55e37b51ba32feb480a2af2afd523922908dd5568c4113e`.
+
+The exact cluster dry-run reproduced 646 tensor trials, 160 PFC units, 309 HPC
+units, 40 evaluation bins, three windows, 9,720 model fits, 3,240 transform
+fits, 96,951,680 tensor-allocation bytes, and 174,332,600 planned-major-array
+bytes. Its scientific-source fingerprint is
+`cb1663cd4bb96b9c50a75d4557c0c1a997c5b9cd196b3064505492ee9ee21e71` and
+run fingerprint is
+`3bd97eaa13354e2abae2facb687df5eab65c8a4180f3b963846f7ebb6140da67`.
+
+One submission was accepted at `2026-10-12T15:02:21Z` as Slurm job
+`31045198`, array element zero, with the reviewed one-CPU, 3-GiB, 24-hour
+request. Its exact run directory is:
+
+`/gs/gsfs0/home/mchin1/contextProjectData/CT026/CT026_20260803_latent_inference/analysis_runs/pooled_task_variable_decoding_20261012T150220Z`
+
+The scheduler log is
+`/gs/gsfs0/users/mchin1/logs/pooled_task_decoding_31045198_0.log`. Initial
+pipeline status was `running`, resource status was `running`, with zero of 54
+checkpoints and no final publication. `squeue` showed element `31045198_0`
+running on `cpu-781`. Completion must be awaited outside an active Codex
+process. No array was submitted and no result was copied back.
 
 ## 2. Fixed revision-1 decisions
 
