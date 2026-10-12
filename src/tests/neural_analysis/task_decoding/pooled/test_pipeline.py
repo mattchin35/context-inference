@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -626,6 +628,63 @@ def test_prepared_execution_revalidates_inputs_before_accepting_checkpoint(
     assert resource_payload["completed_checkpoint_keys"] == []
 
 
+def test_preparation_records_runtime_versions_and_single_thread_limits(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Prepared provenance freezes software versions and numerical thread limits."""
+    overlay, _paths = _write_real_pooled_overlay(tmp_path)
+    monkeypatch.setattr(results, "validate_pooled_source_cleanliness", lambda *_: None)
+    for variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        monkeypatch.setenv(variable, "1")
+
+    run_directory = pipeline.prepare_pooled_decoding_run(overlay)
+    execution = json.loads((run_directory / "execution.json").read_text())
+
+    assert execution["runtime_versions"] == results.collect_software_versions()
+    assert execution["thread_limits"] == {
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+    }
+
+
+@pytest.mark.parametrize("drift", ["runtime_versions", "thread_limits"])
+def test_prepared_execution_rejects_runtime_drift_before_neural_loading(
+    tmp_path: Path,
+    monkeypatch,
+    drift: str,
+) -> None:
+    """Resume rejects environment drift before opening large neural arrays."""
+    overlay, _paths = _write_real_pooled_overlay(tmp_path)
+    monkeypatch.setattr(results, "validate_pooled_source_cleanliness", lambda *_: None)
+    for variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        monkeypatch.setenv(variable, "1")
+    run_directory = pipeline.prepare_pooled_decoding_run(overlay)
+
+    if drift == "runtime_versions":
+        current = results.collect_software_versions()
+        monkeypatch.setattr(
+            results,
+            "collect_software_versions",
+            lambda: {**current, "numpy": "changed"},
+        )
+    else:
+        monkeypatch.setenv("OPENBLAS_NUM_THREADS", "2")
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        """Fail if provenance validation reaches large neural loading."""
+        raise AssertionError("runtime drift reached neural loading")
+
+    monkeypatch.setattr(pipeline.activity, "load_region_activity", forbidden)
+    with pytest.raises(ValueError, match="runtime|version|thread"):
+        pipeline.run_prepared_pooled_decoding(run_directory)
+
+    state = json.loads((run_directory / "run_state.json").read_text())
+    assert state["lifecycle"] == "failed"
+    assert state["final_results_published"] is False
+
+
 def test_active_execution_owner_rejection_is_read_only(
     tmp_path: Path,
     monkeypatch,
@@ -732,3 +791,36 @@ def test_detached_private_child_waits_for_parent_receipt_before_execution(
         ["_execute-prepared", "--run-directory", str(prepared)]
     ) == 0
     assert calls == [("receipt", prepared), ("run", prepared)]
+
+
+def test_pooled_entry_sets_thread_limits_before_lazy_pipeline_import() -> None:
+    """A fresh pooled CLI process limits numerical threads before pipeline import."""
+    script = """
+import builtins
+import os
+for key in ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS'):
+    os.environ.pop(key, None)
+seen = []
+real_import = builtins.__import__
+def guarded(name, *args, **kwargs):
+    if name.startswith(('numpy', 'scipy', 'sklearn',
+                        'src.neural_analysis.task_decoding.pooled.pipeline')):
+        assert all(os.environ.get(key) == '1' for key in
+                   ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS'))
+        seen.append(name)
+    return real_import(name, *args, **kwargs)
+builtins.__import__ = guarded
+from src.neural_analysis.task_decoding.pooled import run_session
+assert all(os.environ.get(key) == '1' for key in
+           ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS'))
+run_session._pipeline_module()
+assert any('pipeline' in name for name in seen)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr

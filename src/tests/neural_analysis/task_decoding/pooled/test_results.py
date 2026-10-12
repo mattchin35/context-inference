@@ -120,6 +120,19 @@ def test_schema_one_template_has_every_exact_axis_shape_dtype_and_sentinel():
     assert np.all(arrays["outer_fold_ids"] == -1)
     assert np.isnan(arrays["evaluation_scores"]).all()
     assert metadata["schema_version"] == 1
+    assert set(metadata["software_versions"]) == {
+        "python",
+        "numpy",
+        "scipy",
+        "pandas",
+        "sklearn",
+        "pynapple",
+        "matplotlib",
+    }
+    assert all(
+        isinstance(version, str) and version
+        for version in metadata["software_versions"].values()
+    )
     assert metadata["axes"]["evaluation_scores"] == [
         "window",
         "pair",
@@ -132,6 +145,23 @@ def test_schema_one_template_has_every_exact_axis_shape_dtype_and_sentinel():
     ]
     assert not any("prediction" in name for name in arrays)
     results.validate_pooled_result_arrays(arrays, metadata)
+
+
+def test_schema_validation_rejects_missing_or_malformed_software_versions():
+    """Software-version provenance is required and has one exact string schema."""
+    arrays, metadata = make_result_template()
+    missing = dict(metadata)
+    missing.pop("software_versions")
+    with pytest.raises(ValueError, match="software|version"):
+        results.validate_pooled_result_arrays(arrays, missing)
+
+    malformed = dict(metadata)
+    malformed["software_versions"] = {
+        **metadata["software_versions"],
+        "numpy": 2,
+    }
+    with pytest.raises(ValueError, match="software|version"):
+        results.validate_pooled_result_arrays(arrays, malformed)
 
 
 @pytest.mark.parametrize(
