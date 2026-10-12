@@ -148,6 +148,12 @@ def test_save_and_plot_session_expectant_selectivity_writes_separate_outputs(
         lambda *_args, **_kwargs: session.figure_path / "selectivity.png",
         raising=False,
     )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_session_expectant_model_selectivity_scatter",
+        lambda *_args, **_kwargs: session.figure_path / "scatter.png",
+        raising=False,
+    )
 
     saved_blocks, saved_events, paths = (
         main_module.save_and_plot_expectant_model_selectivity_for_session(
@@ -162,75 +168,8 @@ def test_save_and_plot_session_expectant_selectivity_writes_separate_outputs(
     assert paths["block_table"].exists()
     assert paths["event_table"].exists()
     assert paths["metadata"].exists()
-    assert paths["plot"] == session.figure_path / "selectivity.png"
-
-
-def test_save_and_plot_multisession_expectant_selectivity_combines_sessions(
-    tmp_path,
-    monkeypatch,
-):
-    """Cross-session selectivity should retain session and date provenance."""
-    main_module = load_main_module()
-    saved_sessions = [
-        main_module.SavedSessionAnalysis(
-            session=SimpleNamespace(sess_id_full="s1", date="2026-05-25"),
-            block_performance=pd.DataFrame(),
-            augmented_trial_df=pd.DataFrame({"session_marker": [1]}),
-        ),
-        main_module.SavedSessionAnalysis(
-            session=SimpleNamespace(sess_id_full="s2", date="2026-05-29"),
-            block_performance=pd.DataFrame(),
-            augmented_trial_df=pd.DataFrame({"session_marker": [2]}),
-        ),
-    ]
-
-    def fake_blocks(trial_df, **_kwargs):
-        marker = int(trial_df["session_marker"].iloc[0])
-        return pd.DataFrame(
-            {"block_id": [marker], "model": ["Probe+P+D"], "agreement_delta": [0.1]}
-        )
-
-    def fake_events(trial_df, **_kwargs):
-        marker = int(trial_df["session_marker"].iloc[0])
-        return pd.DataFrame(
-            {"model": ["Probe+P+D"], "event_type": [f"event_{marker}"]}
-        )
-
-    monkeypatch.setattr(
-        main_module.expectant_switching_selectivity,
-        "compute_block_model_selectivity",
-        fake_blocks,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        main_module.expectant_switching_selectivity,
-        "compute_event_model_selectivity",
-        fake_events,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        main_module.performance_plots,
-        "plot_cross_session_expectant_model_selectivity",
-        lambda *_args, **_kwargs: tmp_path / "cross.png",
-        raising=False,
-    )
-
-    blocks, events, paths = (
-        main_module.save_and_plot_multisession_expectant_model_selectivity(
-            saved_sessions,
-            output_path=tmp_path,
-            mouse="CT016",
-            min_valid_choices=5,
-        )
-    )
-
-    assert blocks["session_id"].tolist() == ["s1", "s2"]
-    assert blocks["date"].tolist() == ["2026-05-25", "2026-05-29"]
-    assert events["session_id"].tolist() == ["s1", "s2"]
-    assert paths["block_table"].exists()
-    assert paths["event_table"].exists()
-    assert paths["metadata"].exists()
-    assert paths["plot"] == tmp_path / "cross.png"
+    assert paths["block_plot"] == session.figure_path / "selectivity.png"
+    assert paths["scatter_plot"] == session.figure_path / "scatter.png"
 
 
 def test_collect_configured_trial_features_forwards_supplied_params(tmp_path, monkeypatch):
@@ -369,7 +308,7 @@ def test_expectant_session_outputs_call_value_and_component_plots(tmp_path, monk
 
 
 def test_multisession_agent_agreement_only_returns_before_hmm_work(monkeypatch):
-    """Agreement/selectivity plots should not require concatenation or HMM work."""
+    """Agreement-only plotting should not require concatenation or HMM work."""
     main_module = load_main_module()
     session = SimpleNamespace(sess_id_full="CT016_test", date="2026-06-10")
     saved_session = object()
@@ -396,11 +335,6 @@ def test_multisession_agent_agreement_only_returns_before_hmm_work(monkeypatch):
     )
     monkeypatch.setattr(
         main_module,
-        "save_and_plot_multisession_expectant_model_selectivity",
-        lambda **_kwargs: calls.append("selectivity"),
-    )
-    monkeypatch.setattr(
-        main_module,
         "concatenate_saved_sessions",
         lambda _sessions: (_ for _ in ()).throw(AssertionError("HMM path reached")),
     )
@@ -408,7 +342,7 @@ def test_multisession_agent_agreement_only_returns_before_hmm_work(monkeypatch):
     result = main_module.main_multisession(agent_agreement_only=True)
 
     assert result is None
-    assert calls == ["agreement", "selectivity"]
+    assert calls == ["agreement"]
 
 
 def write_saved_session(

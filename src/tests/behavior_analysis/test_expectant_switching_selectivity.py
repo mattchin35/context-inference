@@ -151,19 +151,15 @@ def test_session_selectivity_plot_has_three_aligned_panels(
     plt.close(captured["fig"])
 
 
-def test_cross_session_selectivity_plot_has_one_panel_per_candidate(
+def test_session_selectivity_scatter_has_one_panel_per_candidate(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    """The cross-session figure compares both candidates with the ideal."""
-    first = selectivity.compute_block_model_selectivity(_selectivity_trials())
-    first["date"] = "2026-05-25"
-    first["session_id"] = "s1"
-    second = first.copy()
-    second["date"] = "2026-05-29"
-    second["session_id"] = "s2"
-    second["agreement_delta"] = second["agreement_delta"] + 0.2
-    combined = pd.concat([first, second], ignore_index=True)
+    """The session scatter compares each candidate with the ideal by block."""
+    block_table = selectivity.compute_block_model_selectivity(
+        _selectivity_trials(),
+        min_valid_choices=5,
+    )
     captured = {}
 
     def capture_figure(fig, save_path):
@@ -175,16 +171,20 @@ def test_cross_session_selectivity_plot_has_one_panel_per_candidate(
         "save_performance_figure",
         capture_figure,
     )
-    save_path = performance_plots.plot_cross_session_expectant_model_selectivity(
-        combined,
+    save_path = performance_plots.plot_session_expectant_model_selectivity_scatter(
+        block_table,
         tmp_path,
-        "CT016",
+        "CT016_test",
     )
 
-    assert save_path.name == "CT016_expectant_model_selectivity_cross_session.png"
+    assert save_path.name == "CT016_test_expectant_model_selectivity_scatter.png"
     assert captured["save_path"] == save_path
-    model_axes = captured["fig"].axes[:2]
+    model_axes = captured["fig"].axes
     assert [axis.get_title() for axis in model_axes] == ["Probe+P+D", "Home E+D"]
-    assert all(axis.get_xlabel() == "Within-block reward -> switch rate" for axis in model_axes)
+    assert all(
+        axis.get_xlabel() == "Within-block reward -> switch rate"
+        for axis in model_axes
+    )
     assert model_axes[0].get_ylabel() == "Candidate - ideal agreement"
+    assert len(model_axes[0].collections) == 2
     plt.close(captured["fig"])
