@@ -220,7 +220,10 @@ def test_native_and_gap_use_one_shared_complete_legend(
         )
         if figure_kind == "gap":
             assert all(
-                any(line.get_ydata().tolist() == [0.0, 0.0] for line in axis.lines)
+                any(
+                    np.asarray(line.get_ydata()).tolist() == [0.0, 0.0]
+                    for line in axis.lines
+                )
                 for axis in figure.axes
             )
     finally:
