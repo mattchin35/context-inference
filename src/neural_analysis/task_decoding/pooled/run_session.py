@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import time
@@ -79,6 +80,11 @@ def _launch_detached(run_directory: Path | str) -> None:
         "--run-directory",
         str(directory),
     ]
+    pipeline = _pipeline_module()
+    execution_path = directory / "execution.json"
+    execution = pipeline._read_json(execution_path)
+    execution["mode"] = "detached"
+    pipeline._write_json(execution_path, execution)
     with console_path.open("a", encoding="utf-8") as console:
         process = subprocess.Popen(
             command,
@@ -93,7 +99,6 @@ def _launch_detached(run_directory: Path | str) -> None:
         "pid": process.pid,
         "run_directory": str(directory),
     }
-    pipeline = _pipeline_module()
     pipeline._write_json(directory / "local_launch.json", receipt)
 
 
@@ -111,7 +116,11 @@ def _wait_for_detached_receipt(run_directory: Path | str) -> None:
         Returns after ``local_launch.json`` names the current process. The
         receipt then participates in stable final output-byte measurement.
     """
-    receipt_path = Path(run_directory).resolve() / "local_launch.json"
+    directory = Path(run_directory).resolve()
+    execution = json.loads((directory / "execution.json").read_text(encoding="utf-8"))
+    if execution.get("mode") != "detached":
+        return
+    receipt_path = directory / "local_launch.json"
     deadline = time.monotonic() + 5.0
     while time.monotonic() < deadline:
         try:
@@ -122,6 +131,35 @@ def _wait_for_detached_receipt(run_directory: Path | str) -> None:
             return
         time.sleep(0.01)
     raise RuntimeError("Matching detached pooled launch receipt was not published.")
+
+
+def _execute_with_signal_handling(run_directory: Path, pipeline: object) -> None:
+    """Run one exact prepared directory with checkpoint-safe TERM handling.
+
+    Parameters
+    ----------
+    run_directory : pathlib.Path
+        Exact immutable prepared pooled run directory.
+    pipeline : object
+        Module-like object exposing ``run_prepared_pooled_decoding``.
+
+    Returns
+    -------
+    None
+        Converts Slurm's pre-timeout SIGTERM into ``KeyboardInterrupt`` so the
+        pipeline durably records interruption before the process exits.
+    """
+    previous_handler = signal.getsignal(signal.SIGTERM)
+
+    def interrupt_for_checkpoint(_signum: int, _frame: object) -> None:
+        """Raise the pipeline's existing interruption path on SIGTERM."""
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, interrupt_for_checkpoint)
+    try:
+        pipeline.run_prepared_pooled_decoding(run_directory)
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -155,7 +193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "_execute-prepared":
             directory = Path(arguments.run_directory)
             _wait_for_detached_receipt(directory)
-            pipeline.run_prepared_pooled_decoding(directory)
+            _execute_with_signal_handling(directory, pipeline)
             return 0
         if arguments.command == "resume":
             directory = Path(arguments.run_directory)

@@ -1,11 +1,10 @@
 # Pooled-Window Task-Variable Decoding and Condition-Generalization Plan
 
-**Status:** Revision-1 documentation and PW-WP1 through PW-WP6 were approved
-on 2026-10-11. The CT026 run is scientifically complete and validated, the
-transfer-figure layout correction is validated, and a fresh immutable
-benchmark supplies complete resource telemetry. PW-WP7 and later work
-packages and cluster work are not authorized. PW-WP9a is authorized only
-through its CT026 all-window dry-run and pre-execution review gate.
+**Status:** Revision-1 documentation, PW-WP1 through PW-WP6, and PW-WP9a were
+approved. The CT026 all-window run is scientifically complete and validated.
+The user authorized test-first PW-WP8 cluster/batch implementation with a
+24-hour `normal`-partition envelope; external synchronization and submission
+remain separate actions and have not been performed.
 
 **Scientific contract:**
 `docs/task_variable_condition_generalization_spec_v1.md`.
@@ -24,7 +23,7 @@ summary.
 
 | Field | Current value |
 | --- | --- |
-| Snapshot date | 2026-10-11 |
+| Snapshot date | 2026-10-12 |
 | Branch | `refactor` |
 | PW-WP1 implementation HEAD | `65f8a2e5eb04071dbecf26debc03e334a6625fd2` |
 | PW-WP2 implementation HEAD | `2ffb1ab94323db375d5c8dd5154c770a9809ba66` |
@@ -34,14 +33,15 @@ summary.
 | PW-WP5 provenance correction HEAD | `715ab95` |
 | PW-WP6 reporting correction HEAD | `ed09fe7` |
 | PW-WP9a dry-run correction HEAD | `7a60043` (RED: `25de6ce`) |
+| PW-WP8 cluster/batch RED HEAD | `29ddd56` |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
-| Current work package | PW-WP9a: CT026 all-window validation |
-| Current phase | PW-WP9a CT026 all-window execution is running detached; final validation is pending |
-| Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate; PW-WP5 reporting, lifecycle, resources, usage, and runtime-provenance correction; PW-WP6 CT026 benchmark and reporting correction |
-| Active implementation files | None; external overlay `pooled_task_decoding_config_pw9a_all_windows.json` selects all three windows and has SHA-256 `f755b26f...c4113e` |
-| Latest validation | 2026-10-12: focused dry-run tests `2 passed`; pooled suite `69 passed`; full task-decoding suite `947 passed, 27 warnings`; Ruff passed; corrected CT026 dry-run reports 3,230 maximum rows for each half-second window and 25,840 for `full`; detached run `pooled_task_variable_decoding_20261012T045944Z` is running with zero completed checkpoints at launch |
-| Open blockers | Final run completion and post-run scientific/resource validation; the full-window direct-unit fits may scale worse than the tenfold aggregate stacked-row exposure relative to the accepted pre-choice benchmark |
-| Exact next action | Poll the detached run status until completion, then validate all result arrays, metadata, checkpoints, telemetry, and figures against the pooled contracts |
+| Current work package | PW-WP8: cluster and batch execution |
+| Current phase | GREEN implementation and regression validation are complete; commit and user review are pending |
+| Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate; PW-WP5 reporting, lifecycle, resources, usage, and runtime-provenance correction; PW-WP6 CT026 benchmark and reporting correction; PW-WP9a CT026 all-window validation |
+| Active implementation files | `pooled/slurm.py`, `pooled/run_batch.py`, `pooled/run_session.py`, `pooled/pipeline.py`, pooled Slurm wrapper, scientist README, and this handoff |
+| Latest validation | 2026-10-12: WP8 contracts `13 passed`; focused CLI compatibility gate `14 passed`; pooled suite `82 passed`; full task-decoding suite `960 passed, 27 warnings`; Ruff, `git diff --check`, and wrapper shell syntax passed. The accepted PW-WP9a run completed 54/54 checkpoints in 3:35:20 with 1,107,640,320-byte peak RSS and 150,824,741 output bytes. |
+| Open blockers | GREEN commit and user review; no external synchronization or cluster submission has been performed or authorized by implementation alone |
+| Exact next action | Commit the validated GREEN implementation, record its commit in this handoff, and stop before any external cluster action |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -64,8 +64,8 @@ user approval all pass.
 | PW-WP5 reporting, lifecycle, resources, and usage | `c29f259`, `718a3dc`, `1e2e9ed`, `48bcfa6`, `15e923a`; fixture correction `9333520` | `1ff6b13`, `715ab95` | Pooled suite `65 passed`; focused Ruff passed | `943 passed, 27 warnings` | User approved entry to PW-WP6 on 2026-10-11; corrective provenance review passed | Complete |
 | PW-WP6 CT026 benchmark | Reporting correction `3342579`; test-fixture correction `5049e47` | Reporting correction `ed09fe7` | Plotting `4 passed`; pooled `68 passed`; 54/54 actual layouts pass geometry audit; fresh result exact-equality audit passed | `946 passed, 27 warnings` | User accepted the corrected figures, fresh telemetry, and benchmark on 2026-10-11 | Complete |
 | PW-WP7 optional descriptive comparison | - | - | - | - | - | Deferred |
-| PW-WP9a CT026 all-window validation | Pending | Pending | Existing focused contracts `5 passed`; exact dry-run completed | Existing `946 passed, 27 warnings` gate | User approved scope through dry-run; execution not authorized | Dry-run correction required |
-| PW-WP8 cluster and batch execution | - | - | - | - | User prioritized after PW-WP9a | Deferred |
+| PW-WP9a CT026 all-window validation | `25de6ce` | `7a60043`; launch record `3f8a238` | Existing focused contracts `5 passed`; exact dry-run and completed artifact validation passed | `947 passed, 27 warnings` before execution | User accepted completed run and prioritized PW-WP8 | Complete |
+| PW-WP8 cluster and batch execution | `29ddd56` | Pending | WP8 contracts `13 passed`; pooled suite `82 passed`; Ruff and shell syntax passed | `960 passed, 27 warnings` | User approved the implementation plan; final implementation review pending | GREEN validated |
 | PW-WP9b experimental batch | - | - | - | - | Depends on PW-WP8 and reviewed manifest | Deferred |
 
 ### 1.2 Handoff update requirements
@@ -523,6 +523,44 @@ Its frozen run fingerprint is
 `9f2e776e073c3d0e2494b39b070f120d59c0ded1ebccf5835d6ad9de0ad148c1`, and its
 detached child was PID `2670329` at launch. Initial status was `running` with no
 completed checkpoints, scientific results, or measured runtime telemetry yet.
+The run then completed all 54 checkpoints in 3:35:20. Its measured peak RSS
+was 1,107,640,320 bytes, CPU utilization was 99.984 percent, and final output
+size was 150,824,741 bytes. Post-run validation accepted the saved scientific
+arrays, metadata, telemetry, checkpoints, and figures.
+
+### 1.11 PW-WP8 cluster and batch implementation
+
+Commit `29ddd56` added 13 RED contracts before production changes: six cover
+single-session Slurm resources/submission/status, six cover bounded manifest
+planning and exact array-index execution, and one covers the portable operator
+workflow. The approved resource request is one task and one CPU per session on
+`--partition=normal`, with `--mem=3G`, `--time=24:00:00`, and
+`--signal=B:TERM@300`. There is no retry, scheduler framework, dependency, or
+within-session parallelism.
+
+`pooled/slurm.py` owns single-run submission receipts and one-query status.
+`pooled/run_batch.py` reuses the existing ordered config-list parser, admits
+every planned resource-envelope dimension against one complete matching-source
+run, prepares an immutable zero-based index-to-run manifest, and submits one
+concurrency-capped array. The shell wrapper enforces a tracked-clean checkout,
+the submitted commit, one numerical thread, and offline locked execution. A
+pre-timeout TERM enters the existing checkpoint-safe interruption path.
+
+Input data are synchronized manually and without deletion from
+`/home/matt/Documents/EXPERIMENTS/contextProjectData` to
+`/gs/gsfs0/users/mchin1/contextProjectData`, one session at a time, using
+`rsync -a --info=progress2 --exclude='/analysis_runs/'`. The wrapper contains
+no SSH or synchronization behavior. Completed results return one exact run at
+a time through `.incoming-<run_id>`, are locally validated as complete and
+`result_valid`, and are atomically renamed only when the final path is absent.
+
+Because the small execution-mode and allocation guard changes reside in the
+scientific-source-tracked `pooled/pipeline.py`, this implementation rotates the
+source fingerprint. The old 3:35:20 run supports the initial 3-GiB resource
+choice, but it cannot admit an array under the exact-source evidence rule. The
+first completed single cluster run from the new commit becomes the matching
+array evidence. This is an intentional conservative gate, not an instruction
+to rerun the 3.6-hour workload under an active Codex process.
 
 ## 2. Fixed revision-1 decisions
 
@@ -1687,13 +1725,16 @@ Every work package must also run all existing tests under
 
 ### PW-WP8: cluster and batch execution
 
-- Enter only after PW-WP6 supplies a measured resource envelope and the user
-  approves cluster implementation.
-- Reuse or minimally generalize reviewed current Slurm/lifecycle behavior.
-- Add dry-run and session-manifest tests before code. Default parallelism is
-  across sessions, one session per worker/job-array element.
-- A synthetic scheduler smoke precedes experimental submission. Submission and
-  retrieval are separately approved external actions.
+- Entered after the completed PW-WP9a run supplied measured telemetry and the
+  user approved the test-first plan.
+- Reuse the reviewed Slurm/lifecycle primitives through pooled-specific thin
+  orchestration; do not add a scheduler abstraction or dependency.
+- Run one session per one-CPU/3-GiB array element, capped by the explicit
+  manifest concurrency. Require a completed matching-source evidence run and
+  compare every planned resource-envelope dimension before preparation.
+- Keep synchronization manual and non-destructive. A synthetic scheduler smoke
+  and all local regressions precede experimental submission. Submission and
+  retrieval remain separately approved external actions.
 
 ### PW-WP9b: experimental batch
 

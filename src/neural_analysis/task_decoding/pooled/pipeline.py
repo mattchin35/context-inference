@@ -1999,13 +1999,21 @@ def _append_log(run_directory: Path, message: str) -> None:
         os.fsync(stream.fileno())
 
 
-def prepare_pooled_decoding_run(config_path: Path | str) -> Path:
+def prepare_pooled_decoding_run(
+    config_path: Path | str,
+    *,
+    execution_mode: str = "foreground",
+) -> Path:
     """Create one immutable pooled identity and resumable lifecycle directory.
 
     Parameters
     ----------
     config_path : pathlib.Path or str
         Portable pooled overlay JSON path.
+    execution_mode : {"foreground", "detached", "slurm"}, default="foreground"
+        Execution provenance recorded with the immutable prepared run. This
+        changes orchestration only; scientific settings and array axes are
+        unchanged.
 
     Returns
     -------
@@ -2013,6 +2021,8 @@ def prepare_pooled_decoding_run(config_path: Path | str) -> Path:
         New session-contained run directory. No spike arrays are loaded and no
         estimator is fit during preparation.
     """
+    if execution_mode not in {"foreground", "detached", "slurm"}:
+        raise ValueError(f"Unsupported pooled execution mode: {execution_mode!r}")
     identity = _collect_small_inputs(config_path)
     config = identity["config"]
     windows = identity["windows"]
@@ -2036,6 +2046,7 @@ def prepare_pooled_decoding_run(config_path: Path | str) -> Path:
         _write_json(
             run_directory / "execution.json",
             {
+                "mode": execution_mode,
                 "prepared_at": _utc_now(),
                 "session_root": str(config.base_config.session_root),
                 "run_fingerprint": identity["run_fingerprint"],
@@ -2409,6 +2420,15 @@ def run_prepared_pooled_decoding(run_directory: Path | str) -> None:
             saved_resource,
             canonical_checkpoint_keys=canonical,
         )
+        if os.environ.get("SLURM_JOB_ID"):
+            from src.neural_analysis.task_decoding.pooled import slurm
+
+            tensor_bytes = envelope["tensor_allocation_bytes"]
+            if tensor_bytes * 2 > slurm.effective_memory_budget_bytes():
+                raise ValueError(
+                    "Pooled tensor allocation exceeds 50% of the effective "
+                    "Slurm memory budget."
+                )
         restored = _validated_checkpoint_keys(
             directory,
             canonical,

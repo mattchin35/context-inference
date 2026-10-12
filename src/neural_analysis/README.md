@@ -577,3 +577,100 @@ mv /local/session/analysis_runs/.incoming-<run_id> \
 Promote the staged directory only after `status --verify-results` succeeds.
 If validation fails, leave the existing local results untouched and repeat a
 non-destructive copy into a fresh staging directory.
+
+### Run pooled-window decoding on Slurm
+
+The pooled wrapper supports one session per Slurm task, either as a single job
+or as a capped job array. Each task requests exactly one CPU, `3G` memory on
+the `normal` partition, and a 24-hour limit (`--partition=normal`, `--mem=3G`,
+`--time=24:00:00`). Slurm sends TERM five minutes before the limit so the
+existing checkpoint/interruption path can finish. Submission is one-shot and
+never retries automatically.
+
+Input synchronization is deliberately manual and non-destructive. Run this
+for each session, replacing `<session-relative-path>` with the path below the
+data root. The exclusion applies because each invocation copies one session:
+
+```bash
+rsync -a --info=progress2 --exclude='/analysis_runs/' \
+  '/home/matt/Documents/EXPERIMENTS/contextProjectData/<session-relative-path>/' \
+  user@cluster:'/gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/'
+```
+
+Do not add a delete option. Config paths must resolve inside the copied
+session, and the cluster checkout must be at the intended commit with no
+tracked changes. Populate its locked environment once with `uv sync --frozen`.
+The scheduled task itself runs offline with one numerical thread.
+
+From the cluster repository root, preview the cluster-visible overlay and
+submit the first session:
+
+```bash
+uv run --frozen python -m \
+  src.neural_analysis.task_decoding.pooled.run_session dry-run \
+  --config /gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/pooled.json
+
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh submit-new \
+  --config /gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/pooled.json
+```
+
+Inspect or explicitly resume that exact immutable run:
+
+```bash
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh status \
+  --run-directory /gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/analysis_runs/<run_id>
+
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh submit-resume \
+  --run-directory /gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/analysis_runs/<run_id>
+```
+
+Because the pooled pipeline participates in the scientific-source fingerprint,
+the first completed run made by this cluster-capable version is the resource
+evidence for its arrays. Do not admit an older run with a different source
+fingerprint. Put one config path per line in a UTF-8 config list; relative
+entries resolve against that list. Dry-run every entry against the completed
+evidence, then submit one capped array (the example permits two simultaneous
+sessions):
+
+```bash
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh batch-dry-run \
+  --config-list /gs/gsfs0/users/mchin1/contextProjectData/pooled_sessions.txt \
+  --resource-run-directory /gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/analysis_runs/<evidence_run_id> \
+  --array-concurrency 2
+
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh submit-array \
+  --config-list /gs/gsfs0/users/mchin1/contextProjectData/pooled_sessions.txt \
+  --resource-run-directory /gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/analysis_runs/<evidence_run_id> \
+  --array-concurrency 2
+```
+
+The submit command creates a timestamped `pooled_batch_runs/` directory beside
+the config list and prints its manifest path. Each zero-based array index maps
+to one exact session-contained run directory; each run can later use the
+single-session status or resume command. Inspect all durable array states with:
+
+```bash
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh batch-status \
+  --manifest /gs/gsfs0/users/mchin1/contextProjectData/pooled_batch_runs/<timestamp>/manifest.json
+```
+
+Return only a run whose cluster status is `complete` and `result_valid` is
+`true`. Copy it into a new hidden sibling, validate it locally, and then use a
+same-filesystem rename to publish it without touching an existing result:
+
+```bash
+mkdir -p '/home/matt/Documents/EXPERIMENTS/contextProjectData/<session-relative-path>/analysis_runs/.incoming-<run_id>'
+rsync -a --info=progress2 \
+  user@cluster:'/gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/analysis_runs/<run_id>/' \
+  '/home/matt/Documents/EXPERIMENTS/contextProjectData/<session-relative-path>/analysis_runs/.incoming-<run_id>/'
+
+uv run python -m src.neural_analysis.task_decoding.pooled.run_session status \
+  --run-directory '/home/matt/Documents/EXPERIMENTS/contextProjectData/<session-relative-path>/analysis_runs/.incoming-<run_id>'
+
+mv '/home/matt/Documents/EXPERIMENTS/contextProjectData/<session-relative-path>/analysis_runs/.incoming-<run_id>' \
+  '/home/matt/Documents/EXPERIMENTS/contextProjectData/<session-relative-path>/analysis_runs/<run_id>'
+```
+
+Perform the rename only after the staged status again reports `complete` and
+`result_valid: true`. If validation fails, retain the staging directory as
+evidence or replace only that unpublished staging copy.
