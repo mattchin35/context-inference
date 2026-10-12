@@ -1,9 +1,9 @@
 # Pooled-Window Task-Variable Decoding and Condition-Generalization Plan
 
-**Status:** Revision-1 documentation and PW-WP1 through PW-WP4 were approved
-on 2026-10-11. PW-WP5 reporting, lifecycle, resources, and usage are
-implemented and awaiting review and approval. PW-WP6 and later work packages,
-experimental computation, and cluster work are not yet authorized.
+**Status:** Revision-1 documentation and PW-WP1 through PW-WP5 were approved
+on 2026-10-11. The PW-WP6 CT026 metadata-only dry-run is complete. Experimental
+computation, PW-WP7 and later work packages, and cluster work are not yet
+authorized.
 
 **Scientific contract:**
 `docs/task_variable_condition_generalization_spec_v1.md`.
@@ -29,14 +29,15 @@ summary.
 | PW-WP3 implementation HEAD | `bf431956e2e23128f8cb8817c47a6c1adde518da` |
 | PW-WP4 validation HEAD | `a99630f` |
 | PW-WP5 implementation HEAD | `1ff6b13d309bc85828bb547be387cd67b6c9ac9b` |
+| PW-WP5 provenance correction HEAD | `715ab95` |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
-| Current work package | PW-WP5: reporting, lifecycle, resources, and usage documentation |
-| Current phase | Implementation and automated gates complete; independent review, user inspection, and approval pending |
-| Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate |
-| Active implementation files | `pooled/plotting.py`, `pooled/pipeline.py`, `pooled/run_session.py`, pooled tests, portable example, and task-decoding README |
-| Latest validation | 2026-10-11: complete pooled suite `60 passed in 40.39s`; full `src/tests/neural_analysis/task_decoding` regression `938 passed, 27 warnings in 153.91s`; focused Ruff and `git diff --check` passed |
-| Open blockers | Independent lifecycle/reporting/resource review, user inspection, and approval of PW-WP5 before the CT026 experimental benchmark |
-| Exact next action | Review dry-run counts, immutable lifecycle/resume behavior, required figures/captions, lean resource evidence, and usage documentation; do not begin PW-WP6 or run CT026 until approval |
+| Current work package | PW-WP6: CT026 pre-choice benchmark |
+| Current phase | Metadata-only dry-run complete; exact experimental execution approval pending |
+| Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate; PW-WP5 reporting, lifecycle, resources, usage, and runtime-provenance correction |
+| Active implementation files | None; the approved CT026 overlay is outside the repository in the session root |
+| Latest validation | 2026-10-11: complete pooled suite `65 passed in 41.84s`; full `src/tests/neural_analysis/task_decoding` regression `943 passed, 27 warnings in 153.19s`; focused Ruff and `git diff --check` passed; CT026 dry-run completed cleanly |
+| Open blockers | User inspection of the measured dry-run envelope and explicit approval before creating or executing the experimental run |
+| Exact next action | Report the CT026 dry-run evidence and wait; do not invoke `new`, create a run directory, load spike arrays, or fit models without approval |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -56,8 +57,8 @@ user approval all pass.
 | PW-WP2 scientific core | `2c00910` | `2ffb1ab` | `128 passed, 2 warnings` | `912 passed, 27 warnings` | User approved by authorizing PW-WP3 on 2026-10-11 | Complete |
 | PW-WP3 result schema, checkpoints, and synchronous computation | `46db250`, `0d95c95` | `bf43195` | `11 passed`; combined boundary `425 passed` | `925 passed, 27 warnings` | User approved by authorizing PW-WP4 on 2026-10-11 | Complete |
 | PW-WP4 synthetic scientific gate | `a99630f` | Not required; PW-WP3 passed the new gate unchanged | `3 passed`; pooled suite `50 passed` | `928 passed, 27 warnings` | User approved by authorizing PW-WP5 on 2026-10-11 | Complete |
-| PW-WP5 reporting, lifecycle, resources, and usage | `c29f259`, `718a3dc`, `1e2e9ed`, `48bcfa6`; fixture correction `9333520` | `1ff6b13` | Pooled suite `60 passed`; focused Ruff passed | `938 passed, 27 warnings` | Independent review and user approval pending | Awaiting review |
-| PW-WP6 CT026 benchmark | - | - | - | - | - | Not started |
+| PW-WP5 reporting, lifecycle, resources, and usage | `c29f259`, `718a3dc`, `1e2e9ed`, `48bcfa6`, `15e923a`; fixture correction `9333520` | `1ff6b13`, `715ab95` | Pooled suite `65 passed`; focused Ruff passed | `943 passed, 27 warnings` | User approved entry to PW-WP6 on 2026-10-11; corrective provenance review passed | Complete |
+| PW-WP6 CT026 benchmark | Not applicable; execution-only work package | Not applicable | Metadata-only dry-run passed | Existing `943 passed, 27 warnings` gate | Experimental execution approval pending | Dry-run complete |
 | PW-WP7 optional descriptive comparison | - | - | - | - | - | Deferred |
 | PW-WP8 cluster and batch execution | - | - | - | - | - | Deferred |
 | PW-WP9 additional windows and experimental batch | - | - | - | - | - | Deferred |
@@ -326,11 +327,48 @@ uv run pytest -q src/tests/neural_analysis/task_decoding
 
 The warnings are the unchanged Pynapple bin-boundary, grouped-split
 class-count, and empty plotting-slice warnings. `git diff --check` also passed.
-No experimental session was loaded, no durable analysis run directory was
-created, and no measured CT026 resource envelope exists yet; lifecycle tests
-used pytest temporary directories. The exact next safe action is independent
-review and user inspection of PW-WP5. Preparing or running the CT026 benchmark
-remains gated on explicit PW-WP5 approval.
+At that PW-WP5 boundary, no experimental session was loaded, no durable
+analysis run directory was created, and no measured CT026 resource envelope
+existed; lifecycle tests used pytest temporary directories. The exact next
+safe action was independent review and user inspection of PW-WP5. Preparing or
+running the CT026 benchmark remained gated on explicit PW-WP5 approval.
+
+After approval to enter PW-WP6, preflight found two narrow contract gaps before
+experimental use: the pooled CLI imported numerical libraries before applying
+the inherited one-thread benchmark limits, and pooled results omitted required
+software-version provenance. Test-first commit `15e923a` produced six intended
+failures with 18 passing focused tests. Commit `715ab95` lazily imports the
+pooled pipeline after setting OpenMP, MKL, and OpenBLAS to one thread; freezes
+runtime versions and thread limits at preparation; rejects drift before neural
+loading; and stores validated software versions in result metadata. No new
+dependency or shared execution framework was introduced.
+
+The corrected gates produced `24 passed` for the focused result/pipeline tests,
+`65 passed in 41.84s` for the complete pooled suite, and `943 passed, 27
+warnings in 153.19s` for the full task-decoding suite. Focused Ruff and `git
+diff --check` passed. The warning categories remained unchanged.
+
+### 1.8 PW-WP6 CT026 dry-run evidence
+
+The approved metadata-only dry-run used session
+`CT026_2026-08-03_111938`, base configuration
+`task_decoding_config_v3_full_conditions.json`, and session-local overlay
+`pooled_task_decoding_config_pw6_pre_choice.json`. It selected only
+`pre_choice`, all six conditions, all 18 targets, five outer folds, three
+region configurations, and both representations. The scientific source was
+clean. Its source fingerprint was
+`31f015ed7f0ff16601d2e8e914e5228cc14bfccfdf447e193097c7c715479080`, and
+the planned run fingerprint was
+`e59243b033139f3628485174c7dea1ef1b665eabbf63787f67aa42db0cfc98b2`.
+
+The exact dry-run envelope was 650 complete-table trials, 646 common bilateral
+tensor trials, 160 PFC units, 309 HPC units, 40 evaluation bins, 1,440
+categorical fits, 1,800 numerical fits, 1,080 regional transform fits, and
+343,200 evaluation-metric cells. Tensor allocation was 96,951,680 bytes and
+planned major-array allocation was 122,745,320 bytes. No spike array was
+loaded, no estimator was fit, and no run directory or scientific result was
+created. The next action is explicit user approval or rejection of the exact
+experimental `new` execution; the dry-run does not authorize it.
 
 ## 2. Fixed revision-1 decisions
 
