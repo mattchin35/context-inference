@@ -31,11 +31,16 @@ def load_main_module():
         "Ideal": "observer_mouse_agreement",
         "Probe+P": "simple_probe_persistence_mouse_agreement",
         "Expect+D+P": "expectancy_persistence_doubt_mouse_agreement",
+        "Probe+P+D": "probe_persistence_doubt_mouse_agreement",
+        "Home E+D": "home_referenced_expectancy_doubt_mouse_agreement",
     }
     behavior_analysis_pkg.raster_plots = ModuleType("behavior_analysis.raster_plots")
     behavior_analysis_pkg.session_analysis = ModuleType("behavior_analysis.session_analysis")
     behavior_analysis_pkg.simulate_priors = ModuleType("behavior_analysis.simulate_priors")
     behavior_analysis_pkg.plot_model_values = ModuleType("behavior_analysis.plot_model_values")
+    behavior_analysis_pkg.expectant_switching_selectivity = ModuleType(
+        "behavior_analysis.expectant_switching_selectivity"
+    )
     behavior_analysis_pkg.block_state_space_modeling = ModuleType(
         "behavior_analysis.block_state_space_modeling"
     )
@@ -51,6 +56,9 @@ def load_main_module():
     sys.modules["behavior_analysis.session_analysis"] = behavior_analysis_pkg.session_analysis
     sys.modules["behavior_analysis.simulate_priors"] = behavior_analysis_pkg.simulate_priors
     sys.modules["behavior_analysis.plot_model_values"] = behavior_analysis_pkg.plot_model_values
+    sys.modules["behavior_analysis.expectant_switching_selectivity"] = (
+        behavior_analysis_pkg.expectant_switching_selectivity
+    )
     sys.modules[
         "behavior_analysis.block_state_space_modeling"
     ] = behavior_analysis_pkg.block_state_space_modeling
@@ -96,6 +104,133 @@ def test_main_uses_canonical_agent_agreement_plot_registry():
     )
     assert "Probe+P" in main_module.AGENT_MOUSE_AGREEMENT_COLUMNS
     assert "Expect+D+P" in main_module.AGENT_MOUSE_AGREEMENT_COLUMNS
+    assert "Probe+P+D" in main_module.AGENT_MOUSE_AGREEMENT_COLUMNS
+    assert "Home E+D" in main_module.AGENT_MOUSE_AGREEMENT_COLUMNS
+
+
+def test_save_and_plot_session_expectant_selectivity_writes_separate_outputs(
+    tmp_path,
+    monkeypatch,
+):
+    """Single-session selectivity outputs should not alter core behavior tables."""
+    main_module = load_main_module()
+    session = SimpleNamespace(
+        sess_id_full="CT016_2026-05-29_132812",
+        date="2026-05-29",
+        processed_data_path=tmp_path / "processed",
+        figure_path=tmp_path / "figures",
+    )
+    session.processed_data_path.mkdir()
+    session.figure_path.mkdir()
+    block_table = pd.DataFrame(
+        {"block_id": [0], "model": ["Probe+P+D"], "agreement_delta": [0.5]}
+    )
+    event_table = pd.DataFrame(
+        {"model": ["Probe+P+D"], "event_type": ["reward_to_switch"]}
+    )
+    trial_df = pd.DataFrame({"action": [1]})
+
+    monkeypatch.setattr(
+        main_module.expectant_switching_selectivity,
+        "compute_block_model_selectivity",
+        lambda *_args, **_kwargs: block_table.copy(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.expectant_switching_selectivity,
+        "compute_event_model_selectivity",
+        lambda *_args, **_kwargs: event_table.copy(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_session_expectant_model_selectivity",
+        lambda *_args, **_kwargs: session.figure_path / "selectivity.png",
+        raising=False,
+    )
+
+    saved_blocks, saved_events, paths = (
+        main_module.save_and_plot_expectant_model_selectivity_for_session(
+            trial_df,
+            session,
+            min_valid_choices=5,
+        )
+    )
+
+    assert saved_blocks.equals(block_table)
+    assert saved_events.equals(event_table)
+    assert paths["block_table"].exists()
+    assert paths["event_table"].exists()
+    assert paths["metadata"].exists()
+    assert paths["plot"] == session.figure_path / "selectivity.png"
+
+
+def test_save_and_plot_multisession_expectant_selectivity_combines_sessions(
+    tmp_path,
+    monkeypatch,
+):
+    """Cross-session selectivity should retain session and date provenance."""
+    main_module = load_main_module()
+    saved_sessions = [
+        main_module.SavedSessionAnalysis(
+            session=SimpleNamespace(sess_id_full="s1", date="2026-05-25"),
+            block_performance=pd.DataFrame(),
+            augmented_trial_df=pd.DataFrame({"session_marker": [1]}),
+        ),
+        main_module.SavedSessionAnalysis(
+            session=SimpleNamespace(sess_id_full="s2", date="2026-05-29"),
+            block_performance=pd.DataFrame(),
+            augmented_trial_df=pd.DataFrame({"session_marker": [2]}),
+        ),
+    ]
+
+    def fake_blocks(trial_df, **_kwargs):
+        marker = int(trial_df["session_marker"].iloc[0])
+        return pd.DataFrame(
+            {"block_id": [marker], "model": ["Probe+P+D"], "agreement_delta": [0.1]}
+        )
+
+    def fake_events(trial_df, **_kwargs):
+        marker = int(trial_df["session_marker"].iloc[0])
+        return pd.DataFrame(
+            {"model": ["Probe+P+D"], "event_type": [f"event_{marker}"]}
+        )
+
+    monkeypatch.setattr(
+        main_module.expectant_switching_selectivity,
+        "compute_block_model_selectivity",
+        fake_blocks,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.expectant_switching_selectivity,
+        "compute_event_model_selectivity",
+        fake_events,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_cross_session_expectant_model_selectivity",
+        lambda *_args, **_kwargs: tmp_path / "cross.png",
+        raising=False,
+    )
+
+    blocks, events, paths = (
+        main_module.save_and_plot_multisession_expectant_model_selectivity(
+            saved_sessions,
+            output_path=tmp_path,
+            mouse="CT016",
+            min_valid_choices=5,
+        )
+    )
+
+    assert blocks["session_id"].tolist() == ["s1", "s2"]
+    assert blocks["date"].tolist() == ["2026-05-25", "2026-05-29"]
+    assert events["session_id"].tolist() == ["s1", "s2"]
+    assert paths["block_table"].exists()
+    assert paths["event_table"].exists()
+    assert paths["metadata"].exists()
+    assert paths["plot"] == tmp_path / "cross.png"
 
 
 def test_collect_configured_trial_features_forwards_supplied_params(tmp_path, monkeypatch):
@@ -179,7 +314,7 @@ def test_save_and_plot_multisession_agent_agreement_uses_existing_plot(
 
 
 def test_expectant_session_outputs_call_value_and_component_plots(tmp_path, monkeypatch):
-    """Each processed session should receive both complementary tuning plots."""
+    """Each processed session should receive legacy and candidate tuning plots."""
     main_module = load_main_module()
     session = SimpleNamespace(
         figure_path=tmp_path,
@@ -202,6 +337,21 @@ def test_expectant_session_outputs_call_value_and_component_plots(tmp_path, monk
         lambda *_args, **_kwargs: calls.append("diagnostic") or tmp_path / "diagnostic.png",
         raising=False,
     )
+    monkeypatch.setattr(
+        main_module.plot_model_values,
+        "plot_mouse_history_candidate_expectant_switching_values",
+        lambda **_kwargs: (trial_df.copy(), tmp_path / "candidate_values.png"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_candidate_expectant_switching_diagnostics",
+        lambda *_args, **_kwargs: (
+            calls.append("candidate_diagnostic")
+            or tmp_path / "candidate_diagnostic.png"
+        ),
+        raising=False,
+    )
 
     outputs = main_module.plot_expectant_switching_for_session(
         augmented_trial_df=trial_df,
@@ -211,7 +361,11 @@ def test_expectant_session_outputs_call_value_and_component_plots(tmp_path, monk
 
     assert outputs["value_plot"] == tmp_path / "values.png"
     assert outputs["diagnostic_plot"] == tmp_path / "diagnostic.png"
-    assert calls == ["diagnostic"]
+    assert outputs["candidate_value_plot"] == tmp_path / "candidate_values.png"
+    assert outputs["candidate_diagnostic_plot"] == (
+        tmp_path / "candidate_diagnostic.png"
+    )
+    assert calls == ["diagnostic", "candidate_diagnostic"]
 
 
 def test_multisession_agent_agreement_only_returns_before_hmm_work(monkeypatch):
@@ -1890,6 +2044,8 @@ def test_ensure_block_agent_mouse_agreement_columns_regenerates_missing_columns(
             observer_mouse_agreement=[0.5, 0.5],
             simple_probe_persistence_mouse_agreement=[0.5, 0.75],
             expectancy_persistence_doubt_mouse_agreement=[0.75, 1.0],
+            probe_persistence_doubt_mouse_agreement=[0.5, 1.0],
+            home_referenced_expectancy_doubt_mouse_agreement=[0.75, 0.5],
         )
 
     monkeypatch.setattr(
@@ -1927,6 +2083,8 @@ def test_prepare_agent_mouse_agreement_block_points_long_format():
                     "observer_mouse_agreement": [0.5, 0.5],
                     "simple_probe_persistence_mouse_agreement": [0.5, 0.75],
                     "expectancy_persistence_doubt_mouse_agreement": [0.75, 1.0],
+                    "probe_persistence_doubt_mouse_agreement": [0.25, 0.5],
+                    "home_referenced_expectancy_doubt_mouse_agreement": [1.0, 0.75],
                 }
             ),
             augmented_trial_df=pd.DataFrame({"cur_block": [0, 1]}),
@@ -1972,6 +2130,8 @@ def test_prepare_agent_mouse_agreement_summary_calculates_session_agent_quartile
                     "observer_mouse_agreement": [0.5, 0.5, 1.0],
                     "simple_probe_persistence_mouse_agreement": [0.25, 0.5, 0.75],
                     "expectancy_persistence_doubt_mouse_agreement": [0.0, 0.5, 1.0],
+                    "probe_persistence_doubt_mouse_agreement": [0.25, 0.5, 0.75],
+                    "home_referenced_expectancy_doubt_mouse_agreement": [1.0, 0.5, 0.0],
                 }
             ),
             augmented_trial_df=pd.DataFrame({"cur_block": [0, 1, 2]}),
