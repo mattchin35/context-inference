@@ -151,6 +151,34 @@ def test_missing_ppc_lfp_input_does_not_block_non_ppc_analyses(tmp_path: Path) -
     assert any("lfp" in blocker for blocker in report.analyses["spike_phase_ppc"].blockers)
 
 
+def test_configured_probe_roles_must_match_requested_roles(tmp_path: Path) -> None:
+    """Readiness rejects anatomy arguments that disagree with configuration files."""
+    cache = tmp_path / "processed" / "ppc-cache"
+    scaffold_session_analysis(
+        tmp_path, pfc_probe_id="ProbePFC", hpc_probe_id="ProbeHPC"
+    )
+    _write_complete_metadata(tmp_path, cache)
+
+    report = inspect_session_readiness(
+        tmp_path,
+        pfc_probe_id="ProbeHPC",
+        hpc_probe_id="ProbePFC",
+        ppc_probe_id="ProbeHPC",
+    )
+
+    assert not report.analyses["task_decoding"].ready
+    assert not report.analyses["condition_generalization"].ready
+    assert not report.analyses["interregional_regression"].ready
+    assert all(
+        any("probe role" in blocker for blocker in report.analyses[name].blockers)
+        for name in (
+            "task_decoding",
+            "condition_generalization",
+            "interregional_regression",
+        )
+    )
+
+
 def test_commands_are_copyable_and_owned_by_existing_parsers(tmp_path: Path) -> None:
     """Generated local commands retain exact existing command interfaces."""
     cache = tmp_path / "processed" / "ppc cache"
