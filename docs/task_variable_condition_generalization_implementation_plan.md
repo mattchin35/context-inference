@@ -4,7 +4,8 @@
 on 2026-10-11. The CT026 run is scientifically complete and validated, the
 transfer-figure layout correction is validated, and a fresh immutable
 benchmark supplies complete resource telemetry. PW-WP7 and later work
-packages and cluster work are not authorized.
+packages and cluster work are not authorized. PW-WP9a is authorized only
+through its CT026 all-window dry-run and pre-execution review gate.
 
 **Scientific contract:**
 `docs/task_variable_condition_generalization_spec_v1.md`.
@@ -33,13 +34,13 @@ summary.
 | PW-WP5 provenance correction HEAD | `715ab95` |
 | PW-WP6 reporting correction HEAD | `ed09fe7` |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
-| Current work package | PW-WP6: CT026 pre-choice benchmark |
-| Current phase | PW-WP6 complete and accepted; later work packages remain deferred pending a new approved plan |
+| Current work package | PW-WP9a: CT026 all-window validation |
+| Current phase | All-window dry-run complete; required stacked-row dry-run evidence is missing and execution is not authorized |
 | Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate; PW-WP5 reporting, lifecycle, resources, usage, and runtime-provenance correction; PW-WP6 CT026 benchmark and reporting correction |
-| Active implementation files | None; original run `pooled_task_variable_decoding_20261012T011808Z` and fresh run `pooled_task_variable_decoding_20261012T021751Z` are immutable outside the repository |
-| Latest validation | 2026-10-12: fresh run `complete`, `final_results_published=true`, 18/18 checkpoints, valid result, 54 corrected figures, full resource telemetry, and exact equality across all 64 saved arrays and metadata versus the original; code gates remain plotting `4 passed`, pooled `68 passed`, full `946 passed, 27 warnings` |
-| Open blockers | None for PW-WP6; later work packages require explicit scope selection and an approved test-first plan |
-| Exact next action | User selects whether to stop, enter optional PW-WP7 comparison, plan PW-WP8 cluster/batch support, or plan PW-WP9 additional windows and experimental execution |
+| Active implementation files | None; external overlay `pooled_task_decoding_config_pw9a_all_windows.json` selects all three windows and has SHA-256 `f755b26f...c4113e` |
+| Latest validation | 2026-10-12: five existing multi-window/configuration/dry-run contracts passed; CT026 all-window dry-run reports 9,720 model fits, 3,240 transforms, 1,029,600 evaluation-metric cells, and 174,332,600 planned major-array bytes; no run directory was created |
+| Open blockers | Dry-run output omits the stacked-row dimensions required by Sections 16 and 9; the forty-bin full-window runtime must not be extrapolated from aggregate fit counts alone |
+| Exact next action | Present a narrow test-first dry-run reporting correction for approval; do not prepare or execute the all-window run until corrected dry-run evidence is reviewed |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -62,8 +63,9 @@ user approval all pass.
 | PW-WP5 reporting, lifecycle, resources, and usage | `c29f259`, `718a3dc`, `1e2e9ed`, `48bcfa6`, `15e923a`; fixture correction `9333520` | `1ff6b13`, `715ab95` | Pooled suite `65 passed`; focused Ruff passed | `943 passed, 27 warnings` | User approved entry to PW-WP6 on 2026-10-11; corrective provenance review passed | Complete |
 | PW-WP6 CT026 benchmark | Reporting correction `3342579`; test-fixture correction `5049e47` | Reporting correction `ed09fe7` | Plotting `4 passed`; pooled `68 passed`; 54/54 actual layouts pass geometry audit; fresh result exact-equality audit passed | `946 passed, 27 warnings` | User accepted the corrected figures, fresh telemetry, and benchmark on 2026-10-11 | Complete |
 | PW-WP7 optional descriptive comparison | - | - | - | - | - | Deferred |
-| PW-WP8 cluster and batch execution | - | - | - | - | - | Deferred |
-| PW-WP9 additional windows and experimental batch | - | - | - | - | - | Deferred |
+| PW-WP9a CT026 all-window validation | Pending | Pending | Existing focused contracts `5 passed`; exact dry-run completed | Existing `946 passed, 27 warnings` gate | User approved scope through dry-run; execution not authorized | Dry-run correction required |
+| PW-WP8 cluster and batch execution | - | - | - | - | User prioritized after PW-WP9a | Deferred |
+| PW-WP9b experimental batch | - | - | - | - | Depends on PW-WP8 and reviewed manifest | Deferred |
 
 ### 1.2 Handoff update requirements
 
@@ -461,6 +463,39 @@ saved arrays, metadata, canonical configuration, input manifest, scientific
 source identity, run fingerprint, runtime versions, and thread limits are
 exactly equal to the original run. The user accepted PW-WP6 on 2026-10-11.
 Do not enter later work packages without a separately approved plan.
+
+### 1.10 PW-WP9a CT026 all-window dry-run evidence
+
+The user prioritized single-session additional-window validation before batch
+infrastructure and approved one CT026 configuration containing `pre_choice`,
+`post_choice`, and `full`, with the existing six conditions, 18 targets, and
+five outer folds. Batch execution remains after PW-WP8. Existing tests already
+cover canonical three-window ordering, exact synthetic pre-choice invariance,
+one fit per full-window model identity, window-then-target checkpoint order,
+and bounded dry-run behavior. The five focused contracts passed unchanged, so
+no production code or redundant scientific test was added.
+
+The external overlay
+`pooled_task_decoding_config_pw9a_all_windows.json` has SHA-256
+`f755b26fe67a28d5a55e37b51ba32feb480a2af2afd523922908dd5568c4113e`.
+Its clean dry-run has scientific-source fingerprint
+`31f015ed7f0ff16601d2e8e914e5228cc14bfccfdf447e193097c7c715479080`
+and run fingerprint
+`8281d9b2ab1b8ffce921f7f8862d24507c633bb5299a955c3aace7ef454c22da`.
+It reports 650 full trials, 646 bilateral tensor trials, 160 PFC units, 309
+HPC units, 40 evaluation bins, three windows, six conditions, 11 evaluation
+pairs, 18 targets, five folds, and coefficient capacity 469. Requested work is
+4,320 categorical fits, 5,400 numerical fits, 3,240 transform fits, and
+1,029,600 evaluation-metric cells. Tensor allocation remains 96,951,680 bytes;
+planned major arrays increase to 174,332,600 bytes. Dry-run created no analysis
+run directory.
+
+The dry-run does not report the required stacked-row dimensions. This omission
+is material because `pre_choice` and `post_choice` use five rows per training
+trial while `full` uses forty. Fit counts therefore do not support a runtime
+forecast for the all-window run. Add only the missing bounded planning evidence
+under a separately approved test-first correction, then rerun dry-run and stop
+for execution review.
 
 ## 2. Fixed revision-1 decisions
 
@@ -1616,6 +1651,13 @@ Every work package must also run all existing tests under
   rerun either analysis.
 - This work package is not required for a valid pooled analysis.
 
+### PW-WP9a: CT026 additional-window validation
+
+- Run post-choice/full only with an explicit immutable configuration approved
+  after PW-WP6.
+- Verify adding windows does not change pre-choice scientific arrays.
+- Stop after CT026 scientific/resource review; do not infer batch authority.
+
 ### PW-WP8: cluster and batch execution
 
 - Enter only after PW-WP6 supplies a measured resource envelope and the user
@@ -1626,11 +1668,8 @@ Every work package must also run all existing tests under
 - A synthetic scheduler smoke precedes experimental submission. Submission and
   retrieval are separately approved external actions.
 
-### PW-WP9: additional windows and experimental batch
+### PW-WP9b: experimental batch
 
-- Run post-choice/full only with an explicit immutable configuration approved
-  after PW-WP6.
-- Verify adding windows does not change pre-choice scientific arrays.
 - Batch only a reviewed session manifest inside the measured resource
   envelope; larger sessions require a new benchmark.
 
