@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import hashlib
+import importlib.metadata
 import json
 import os
 from pathlib import Path
+import platform
 import subprocess
 import tempfile
 
@@ -19,6 +21,14 @@ from src.neural_analysis.task_decoding.pooled.config import ANALYSIS_VERSION, Tr
 
 
 POOLED_RESULT_SCHEMA_VERSION = 1
+_SOFTWARE_DISTRIBUTIONS = {
+    "numpy": "numpy",
+    "scipy": "scipy",
+    "pandas": "pandas",
+    "sklearn": "scikit-learn",
+    "pynapple": "pynapple",
+    "matplotlib": "matplotlib",
+}
 STATUS_NAMES = ("not_applicable", "valid", "unavailable")
 CONVERGENCE_STATUS_NAMES = ("not_run", "converged", "warning", "invalid")
 REGION_NAMES = ("PFC", "HPC", "PFC+HPC")
@@ -41,6 +51,24 @@ POOLED_SCIENTIFIC_SOURCE_PATHS = (
     "src/neural_analysis/spike_behavior/trials.py",
     *base_results._DIRECT_RUNTIME_PATHS,
 )
+
+
+def collect_software_versions() -> dict[str, str]:
+    """Collect the runtime versions required for pooled-run provenance.
+
+    Returns
+    -------
+    dict[str, str]
+        Python and scientific-package versions. Keys are stable package labels;
+        values are nonempty version strings or ``"unavailable"``.
+    """
+    versions = {"python": platform.python_version()}
+    for label, distribution in _SOFTWARE_DISTRIBUTIONS.items():
+        try:
+            versions[label] = importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            versions[label] = "unavailable"
+    return versions
 
 
 _AXES = {
@@ -468,6 +496,7 @@ def initialize_pooled_result_arrays(
         "schema_version": POOLED_RESULT_SCHEMA_VERSION,
         "analysis_version": ANALYSIS_VERSION,
         "random_seed": random_seed,
+        "software_versions": collect_software_versions(),
         "axes": {name: list(axes) for name, axes in _AXES.items()},
         "units": {
             "time": "seconds relative to choice",
@@ -549,6 +578,17 @@ def validate_pooled_result_arrays(
         raise ValueError("Pooled result schema version is invalid.")
     if metadata.get("analysis_version") != ANALYSIS_VERSION:
         raise ValueError("Pooled analysis version is invalid.")
+    software_versions = metadata.get("software_versions")
+    expected_version_keys = {"python", *_SOFTWARE_DISTRIBUTIONS}
+    if (
+        not isinstance(software_versions, Mapping)
+        or set(software_versions) != expected_version_keys
+        or any(
+            not isinstance(version, str) or not version
+            for version in software_versions.values()
+        )
+    ):
+        raise ValueError("Pooled software-version provenance is invalid.")
     if metadata.get("axes") != {name: list(axes) for name, axes in _AXES.items()}:
         raise ValueError("Pooled result axis metadata is invalid.")
     if not isinstance(metadata.get("provenance"), Mapping):

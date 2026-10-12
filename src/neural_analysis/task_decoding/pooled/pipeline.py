@@ -1050,6 +1050,21 @@ def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _thread_limit_mapping() -> dict[str, str]:
+    """Return the exact numerical thread limits used by this process.
+
+    Returns
+    -------
+    dict[str, str]
+        OpenMP, MKL, and OpenBLAS thread-limit environment values. Values are
+        dimensionless decimal strings and may be empty for non-CLI callers.
+    """
+    return {
+        variable: os.environ.get(variable, "")
+        for variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+    }
+
+
 def _canonical_edges(bin_width_ms: int) -> np.ndarray:
     """Build the frozen choice-relative time-bin edge axis.
 
@@ -1962,6 +1977,8 @@ def prepare_pooled_decoding_run(config_path: Path | str) -> Path:
                 "source_snapshots": snapshot_records,
                 "python": sys.version.split()[0],
                 "platform": platform.platform(),
+                "runtime_versions": results.collect_software_versions(),
+                "thread_limits": _thread_limit_mapping(),
             },
         )
         _write_json(
@@ -2012,6 +2029,11 @@ def _validate_prepared_identity(
         Canonical reconstructed settings, windows, and expected run fingerprint.
     """
     _validate_source_snapshots(run_directory)
+    execution = _read_json(run_directory / "execution.json")
+    if execution.get("runtime_versions") != results.collect_software_versions():
+        raise ValueError("Prepared runtime-version mapping differs from current runtime.")
+    if execution.get("thread_limits") != _thread_limit_mapping():
+        raise ValueError("Prepared numerical thread limits differ from current runtime.")
     config, windows = load_prepared_pooled_decoding_config(run_directory)
     task_config = config.base_config
     resolved = resolve_session_metadata(
@@ -2025,7 +2047,6 @@ def _validate_prepared_identity(
     live_source = results.pooled_scientific_source_fingerprint(repository_root)
     if live_source != _read_json(run_directory / "scientific_source.json"):
         raise ValueError("Live scientific source identity changed after preparation.")
-    execution = _read_json(run_directory / "execution.json")
     expected_fingerprint = base_results.build_run_fingerprint(
         ANALYSIS_VERSION,
         str(live_source["fingerprint"]),

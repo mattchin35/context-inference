@@ -11,7 +11,24 @@ import sys
 import time
 from typing import Sequence
 
-from src.neural_analysis.task_decoding.pooled import pipeline
+
+for _thread_variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+    os.environ[_thread_variable] = "1"
+
+
+def _pipeline_module():
+    """Import the numerical pipeline after thread limits are frozen.
+
+    Returns
+    -------
+    module
+        ``src.neural_analysis.task_decoding.pooled.pipeline`` with numerical
+        dependencies imported under one-thread execution limits.
+    """
+    return __import__(
+        "src.neural_analysis.task_decoding.pooled.pipeline",
+        fromlist=["pipeline"],
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -76,6 +93,7 @@ def _launch_detached(run_directory: Path | str) -> None:
         "pid": process.pid,
         "run_directory": str(directory),
     }
+    pipeline = _pipeline_module()
     pipeline._write_json(directory / "local_launch.json", receipt)
 
 
@@ -121,6 +139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         Zero on accepted/successful work, 130 on interruption, otherwise one.
     """
     arguments = _parser().parse_args(argv)
+    pipeline = _pipeline_module()
     try:
         if arguments.command == "dry-run":
             print(json.dumps(pipeline.plan_pooled_decoding_session(arguments.config), indent=2))
