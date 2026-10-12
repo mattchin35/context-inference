@@ -201,8 +201,10 @@ def test_hpc_ppc_has_required_process_resources_and_valid_bash() -> None:
 
     assert syntax.returncode == 0, syntax.stderr
     for directive in (
+        "#SBATCH --partition=normal",
         "#SBATCH --ntasks=1",
         "#SBATCH --cpus-per-task=8",
+        "#SBATCH --time=24:00:00",
         "#SBATCH --signal=B:TERM@300",
     ):
         assert directive in text
