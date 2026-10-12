@@ -1,9 +1,10 @@
 # Pooled-Window Task-Variable Decoding and Condition-Generalization Plan
 
 **Status:** Revision-1 documentation and PW-WP1 through PW-WP5 were approved
-on 2026-10-11. The PW-WP6 CT026 metadata-only dry-run is complete. Experimental
-computation, PW-WP7 and later work packages, and cluster work are not yet
-authorized.
+on 2026-10-11. The PW-WP6 CT026 run is scientifically complete and validated,
+but user review, a transfer-figure layout correction, and a decision about the
+incomplete full-run telemetry remain open. PW-WP7 and later work packages and
+cluster work are not authorized.
 
 **Scientific contract:**
 `docs/task_variable_condition_generalization_spec_v1.md`.
@@ -32,12 +33,12 @@ summary.
 | PW-WP5 provenance correction HEAD | `715ab95` |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
 | Current work package | PW-WP6: CT026 pre-choice benchmark |
-| Current phase | Metadata-only dry-run complete; exact experimental execution approval pending |
+| Current phase | Experimental run terminally valid; scientific/reporting review and telemetry decision pending |
 | Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate; PW-WP5 reporting, lifecycle, resources, usage, and runtime-provenance correction |
-| Active implementation files | None; the approved CT026 overlay is outside the repository in the session root |
-| Latest validation | 2026-10-11: complete pooled suite `65 passed in 41.84s`; full `src/tests/neural_analysis/task_decoding` regression `943 passed, 27 warnings in 153.19s`; focused Ruff and `git diff --check` passed; CT026 dry-run completed cleanly |
-| Open blockers | User inspection of the measured dry-run envelope and explicit approval before creating or executing the experimental run |
-| Exact next action | Report the CT026 dry-run evidence and wait; do not invoke `new`, create a run directory, load spike arrays, or fit models without approval |
+| Active implementation files | None; immutable CT026 run `analysis_runs/pooled_task_variable_decoding_20261012T011808Z` is outside the repository |
+| Latest validation | 2026-10-12: CT026 status `complete`, `final_results_published=true`, 18/18 validated checkpoints, 54 PNGs, and valid `results.npz`; automated code gates remain `65 passed` pooled and `943 passed, 27 warnings` full |
+| Open blockers | User scientific inspection; transfer legends overlap panels/caption; exact full-run CPU/peak-RSS telemetry was lost during operator recovery and requires an explicit accept-or-rerun decision |
+| Exact next action | Present the valid scientific evidence and limitations; do not modify reporting, rerun CT026, or enter PW-WP7+ without a new approved plan |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -58,7 +59,7 @@ user approval all pass.
 | PW-WP3 result schema, checkpoints, and synchronous computation | `46db250`, `0d95c95` | `bf43195` | `11 passed`; combined boundary `425 passed` | `925 passed, 27 warnings` | User approved by authorizing PW-WP4 on 2026-10-11 | Complete |
 | PW-WP4 synthetic scientific gate | `a99630f` | Not required; PW-WP3 passed the new gate unchanged | `3 passed`; pooled suite `50 passed` | `928 passed, 27 warnings` | User approved by authorizing PW-WP5 on 2026-10-11 | Complete |
 | PW-WP5 reporting, lifecycle, resources, and usage | `c29f259`, `718a3dc`, `1e2e9ed`, `48bcfa6`, `15e923a`; fixture correction `9333520` | `1ff6b13`, `715ab95` | Pooled suite `65 passed`; focused Ruff passed | `943 passed, 27 warnings` | User approved entry to PW-WP6 on 2026-10-11; corrective provenance review passed | Complete |
-| PW-WP6 CT026 benchmark | Not applicable; execution-only work package | Not applicable | Metadata-only dry-run passed | Existing `943 passed, 27 warnings` gate | Experimental execution approval pending | Dry-run complete |
+| PW-WP6 CT026 benchmark | Not applicable; execution-only work package | Not applicable | Dry-run and terminal artifact validation passed | Existing `943 passed, 27 warnings` gate | User scientific/reporting review and telemetry decision pending | Awaiting review |
 | PW-WP7 optional descriptive comparison | - | - | - | - | - | Deferred |
 | PW-WP8 cluster and batch execution | - | - | - | - | - | Deferred |
 | PW-WP9 additional windows and experimental batch | - | - | - | - | - | Deferred |
@@ -369,6 +370,60 @@ planned major-array allocation was 122,745,320 bytes. No spike array was
 loaded, no estimator was fit, and no run directory or scientific result was
 created. The next action is explicit user approval or rejection of the exact
 experimental `new` execution; the dry-run does not authorize it.
+
+### 1.9 PW-WP6 CT026 execution evidence and open review
+
+The user approved one detached execution of the exact dry-run identity. It
+created immutable run directory
+`analysis_runs/pooled_task_variable_decoding_20261012T011808Z`. The detached
+worker was not visible from a later sandbox PID namespace. Mistaking that
+namespace isolation for process death, the operator removed its live guard and
+started an attached resume. Both deterministic workers computed the first
+target; the detached owner published the checkpoint first, and the attached
+worker correctly failed rather than overwrite it. The original worker then
+completed all 18 checkpoints, `results.npz`, the summary, and 54 figures. It
+failed only at final byte accounting because its guard had been removed. One
+exact checkpoint-only resume restored all 18 checkpoints and terminally
+published the run with lifecycle `complete`, `final_results_published=true`,
+resource status `complete`, and `result_valid=true`. No checkpoint or
+scientific result was overwritten.
+
+Predicted and requested counts reconciled exactly: 3,240 model cells, 1,080
+transform cells, and 343,200 evaluation-metric cells. Of these, 3,090 models,
+1,030 transforms, and 314,400 evaluation-metric cells were valid. There were
+zero convergence warnings and zero invalid converged-model cells. The 150
+unavailable models and 50 unavailable transforms were explicit
+`training_class_unavailable` cells confined to `current_action_is_correct` in
+`correct_rewarded`, `omission`, and `incorrect`, plus
+`next_choice_switch_stay` in `switch` and `stay`. The 28,800 unavailable
+evaluation cells were the corresponding training-class failures plus
+destination test-class failures for `next_choice_switch_stay`. All numerical
+models were valid.
+
+The final validated output records 10,319,237 checkpoint bytes, 57,222,180
+contract-counted output bytes, a 3,254,408-byte `results.npz`, and 43,518,826
+bytes across 54 PNGs. Primary-worker log timestamps bound the original work
+from 01:18:09Z through completed reporting at 01:45:28Z, or about 1,639 seconds;
+the last checkpoint appeared about 1,604 seconds after start and reporting
+then took about 35 seconds. These are filesystem/log elapsed measurements, not
+the overwritten resource sidecar's stage timings.
+
+The checkpoint-only terminal resume replaced the original worker's resource
+sidecar. Therefore its saved 2.22-second wall time, 2.20 seconds of CPU, and
+360,177,664-byte peak RSS describe finalization only, not the scientific
+computation. The duplicate first-target process separately measured 203.87
+seconds wall time, 203.83 seconds CPU, and 869,347,328-byte peak RSS while
+loading the complete session tensors and computing one categorical target;
+that peak is a measured lower bound for this execution path, not an exact
+full-run peak. Exact full-run CPU time and peak RSS are unavailable. Obtaining
+them requires a separately approved fresh immutable benchmark rather than
+altering this completed run.
+
+The 54 PNG files are structurally valid at 2,100 by 1,540 pixels. Visual
+inspection found that transfer-figure legends overflow their panels and
+collide with lower panels and the caption. Native and gap figures are readable,
+but PW-WP6 remains awaiting user review and a test-first reporting-layout
+decision. Do not enter later work packages or silently rerun CT026.
 
 ## 2. Fixed revision-1 decisions
 
