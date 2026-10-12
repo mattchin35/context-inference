@@ -106,6 +106,24 @@ def test_context_is_labeled_without_continuous_correct_side_trace() -> None:
     plt.close(figure)
 
 
+def test_single_trial_panel_keeps_model_value_visible() -> None:
+    """A one-row sample needs a small value tick because no line segment exists."""
+    scenario = build_default_scenarios()[0]
+    model = build_observable_models()[0]
+    result = run_benchmark((scenario,), (model,), include_oracle=False)
+    figure = plot_model_behavior_atlas(
+        (scenario,),
+        result.replays,
+        model.model_id,
+        model.display_label,
+        model.parameters,
+    )[0]
+
+    labels = [collection.get_label() for collection in figure.axes[0].collections]
+    assert "Model value (single trial)" in labels
+    plt.close(figure)
+
+
 def test_combined_agreement_contains_each_model_and_chance_reference() -> None:
     """One descriptive figure compares all selected sample-level agreements."""
     scenarios = build_default_scenarios()[:4]
