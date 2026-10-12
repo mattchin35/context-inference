@@ -618,6 +618,12 @@ def test_prepared_execution_revalidates_inputs_before_accepting_checkpoint(
     state = json.loads((run_directory / "run_state.json").read_text())
     assert state["lifecycle"] == "failed"
     assert state["final_results_published"] is False
+    resource_payload = json.loads(
+        (run_directory / "resource_usage.json").read_text(encoding="utf-8")
+    )
+    assert resource_payload["status"] == "failed"
+    assert resource_payload["stage_timing_seconds"]["input_loading"] is not None
+    assert resource_payload["completed_checkpoint_keys"] == []
 
 
 def test_active_execution_owner_rejection_is_read_only(
