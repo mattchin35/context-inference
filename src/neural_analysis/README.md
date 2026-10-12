@@ -1,5 +1,11 @@
 # Neural analysis quickstart
 
+For a preparation-only single-session workflow covering task-variable
+decoding, pooled condition generalization, interregional regression, and
+spike-phase/PPC, see [`SINGLE_SESSION_SETUP.md`](SINGLE_SESSION_SETUP.md). The
+setup command scaffolds control files, reports blockers, and prints existing
+commands; it never preprocesses data, runs an analysis, or submits a job.
+
 Neural-session metadata is a small JSON file that tells the existing analysis
 code where one session's behavior, LFP, synchronization, and spike sources are.
 It contains paths and labels only; scientific settings remain in the analysis

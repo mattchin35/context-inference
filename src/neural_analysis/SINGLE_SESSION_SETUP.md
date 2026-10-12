@@ -1,0 +1,107 @@
+# Prepare one neural-analysis session
+
+`single_session_setup` is a preparation-only command for one session. It can
+create missing editable JSON control files, inspect ordinary input paths, and
+print commands for later use. It does not preprocess data, load neural arrays,
+run an analysis, create an analysis run, or submit a Slurm job.
+
+The supported analysis families are:
+
+- task-variable decoding, including all configured task conditions;
+- pooled-window condition generalization;
+- fast-first interregional regression (`ols_cv` and `linear_granger`);
+- spike-phase/PPC.
+
+LFP power and LFP synchrony are not part of this workflow.
+
+## 1. Scaffold editable control files
+
+Start with an existing session directory and its exact PFC and HPC metadata
+probe IDs:
+
+```bash
+uv run python -m src.neural_analysis.single_session_setup init \
+  --session-root '/path/to/CT026/2025-08-04' \
+  --pfc-probe ProbeA \
+  --hpc-probe ProbeB
+```
+
+The command creates only files that are missing:
+
+- `neural_session.json`;
+- `task_decoding_config.json`;
+- `pooled_task_decoding_config.json`;
+- `interregional_regression_config.json`.
+
+Existing files are reported as `preserved` and are never overwritten. The
+three canonical pooled training windows are included by default. Select a
+smaller canonical subset with `--training-windows` if that is the intended
+scientific analysis.
+
+The generated files are editable templates, not inferred scientific truth.
+Review probe roles, paths, regions, channel filters, target/condition lists,
+and output locations before continuing. In particular, the interregional
+configuration must contain an absolute metadata path because that is the
+existing regression configuration contract. Regenerate or edit that path
+after synchronizing a session to a cluster.
+
+## 2. Supply preprocessing products
+
+This command does not create missing preprocessing products. The session must
+already contain the products named by its metadata and configurations:
+
+- augmented chronological trial CSV;
+- trial-feature parameter JSON;
+- aligned probe synchronization files;
+- sorter directories with spike times, spike clusters, and cluster metadata;
+- channel-quality tables;
+- LFP file and preprocessing sidecar for the PPC probe;
+- an existing PPC cache directory directly below `session/processed`;
+- declared LFP sites and at least one site pair, as required by the existing
+  spike-phase launcher.
+
+If these are absent, the readiness report remains blocked and names them. It
+does not attempt to repair, align, infer, or generate them.
+
+## 3. Check readiness and print commands
+
+```bash
+uv run python -m src.neural_analysis.single_session_setup check \
+  --session-root '/path/to/CT026/2025-08-04' \
+  --pfc-probe ProbeA \
+  --hpc-probe ProbeB \
+  --ppc-probe ProbeB \
+  --ppc-cache-directory '/path/to/CT026/2025-08-04/processed/ppc-cache'
+```
+
+Omit `--ppc-cache-directory` only when `neural_session.json` already names the
+intended nonlegacy cache. The report prints `READY` or `BLOCKED` independently
+for each analysis. A missing PPC-only LFP input does not block task decoding or
+interregional regression.
+
+When all four families are ready, the command prints shell-quoted commands for
+later explicit use:
+
+- each existing local preflight/dry-run;
+- each existing local analysis command;
+- each existing cluster wrapper command;
+- both the 100-shuffle PPC preview and explicit 1,000-shuffle final PPC run.
+
+Printing these commands does not execute them. Existing launchers and Slurm
+wrappers retain their own reviewed computation, lifecycle, and resource
+requirements unchanged.
+
+## 4. Cluster path preparation
+
+Synchronize the session non-destructively, excluding existing analysis runs,
+and use a tracked-clean cluster checkout. Then run `check` against the
+cluster-visible session path. This is important because interregional paths
+are absolute and every existing launcher validates paths in the environment
+where it will run.
+
+Do not add deletion to the synchronization command and do not copy a local
+configuration containing unusable local absolute paths. The detailed sync,
+submission, status, resume, and result-return procedures remain in the main
+[`README.md`](README.md), the task-decoding
+[`README.md`](task_decoding/README.md), and the interregional
+[`README.md`](interregional/README.md).
