@@ -2,9 +2,10 @@
 
 **Status:** Revision-1 documentation and PW-WP1 through PW-WP5 were approved
 on 2026-10-11. The PW-WP6 CT026 run is scientifically complete and validated,
-but user review, a transfer-figure layout correction, and a decision about the
-incomplete full-run telemetry remain open. PW-WP7 and later work packages and
-cluster work are not authorized.
+and the transfer-figure layout correction is implemented and validated. User
+review of the corrected preview and a decision about the incomplete full-run
+telemetry remain open. PW-WP7 and later work packages and cluster work are not
+authorized.
 
 **Scientific contract:**
 `docs/task_variable_condition_generalization_spec_v1.md`.
@@ -31,14 +32,15 @@ summary.
 | PW-WP4 validation HEAD | `a99630f` |
 | PW-WP5 implementation HEAD | `1ff6b13d309bc85828bb547be387cd67b6c9ac9b` |
 | PW-WP5 provenance correction HEAD | `715ab95` |
+| PW-WP6 reporting correction HEAD | `ed09fe7` |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
 | Current work package | PW-WP6: CT026 pre-choice benchmark |
-| Current phase | Experimental run terminally valid; scientific/reporting review and telemetry decision pending |
+| Current phase | Experimental run terminally valid; corrected saved-result preview awaiting user review before a separately approved telemetry rerun |
 | Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate; PW-WP5 reporting, lifecycle, resources, usage, and runtime-provenance correction |
-| Active implementation files | None; immutable CT026 run `analysis_runs/pooled_task_variable_decoding_20261012T011808Z` is outside the repository |
-| Latest validation | 2026-10-12: CT026 status `complete`, `final_results_published=true`, 18/18 validated checkpoints, 54 PNGs, and valid `results.npz`; automated code gates remain `65 passed` pooled and `943 passed, 27 warnings` full |
-| Open blockers | User scientific inspection; transfer legends overlap panels/caption; exact full-run CPU/peak-RSS telemetry was lost during operator recovery and requires an explicit accept-or-rerun decision |
-| Exact next action | Present the valid scientific evidence and limitations; do not modify reporting, rerun CT026, or enter PW-WP7+ without a new approved plan |
+| Active implementation files | None; immutable CT026 run `analysis_runs/pooled_task_variable_decoding_20261012T011808Z` remains unchanged outside the repository |
+| Latest validation | 2026-10-12: plotting correction focused `4 passed`, pooled `68 passed`, full `946 passed, 27 warnings`; all 54 actual CT026 layouts pass renderer containment/non-overlap checks; six external previews were rendered with all 91 source-run files unchanged |
+| Open blockers | User inspection of corrected preview; exact full-run CPU/peak-RSS telemetry was lost during operator recovery and requires a separately approved fresh benchmark |
+| Exact next action | Present the corrected preview; if the user approves it and authorizes the rerun, launch exactly one detached fresh benchmark and await it using read-only durable status only |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -59,7 +61,7 @@ user approval all pass.
 | PW-WP3 result schema, checkpoints, and synchronous computation | `46db250`, `0d95c95` | `bf43195` | `11 passed`; combined boundary `425 passed` | `925 passed, 27 warnings` | User approved by authorizing PW-WP4 on 2026-10-11 | Complete |
 | PW-WP4 synthetic scientific gate | `a99630f` | Not required; PW-WP3 passed the new gate unchanged | `3 passed`; pooled suite `50 passed` | `928 passed, 27 warnings` | User approved by authorizing PW-WP5 on 2026-10-11 | Complete |
 | PW-WP5 reporting, lifecycle, resources, and usage | `c29f259`, `718a3dc`, `1e2e9ed`, `48bcfa6`, `15e923a`; fixture correction `9333520` | `1ff6b13`, `715ab95` | Pooled suite `65 passed`; focused Ruff passed | `943 passed, 27 warnings` | User approved entry to PW-WP6 on 2026-10-11; corrective provenance review passed | Complete |
-| PW-WP6 CT026 benchmark | Not applicable; execution-only work package | Not applicable | Dry-run and terminal artifact validation passed | Existing `943 passed, 27 warnings` gate | User scientific/reporting review and telemetry decision pending | Awaiting review |
+| PW-WP6 CT026 benchmark | Reporting correction `3342579`; test-fixture correction `5049e47` | Reporting correction `ed09fe7` | Plotting `4 passed`; pooled `68 passed`; 54/54 actual layouts pass geometry audit | `946 passed, 27 warnings` | Corrected preview and fresh telemetry decision await user review | Awaiting review |
 | PW-WP7 optional descriptive comparison | - | - | - | - | - | Deferred |
 | PW-WP8 cluster and batch execution | - | - | - | - | - | Deferred |
 | PW-WP9 additional windows and experimental batch | - | - | - | - | - | Deferred |
@@ -422,8 +424,24 @@ altering this completed run.
 The 54 PNG files are structurally valid at 2,100 by 1,540 pixels. Visual
 inspection found that transfer-figure legends overflow their panels and
 collide with lower panels and the caption. Native and gap figures are readable,
-but PW-WP6 remains awaiting user review and a test-first reporting-layout
-decision. Do not enter later work packages or silently rerun CT026.
+but the immutable completed run retains its originally generated figures.
+
+The approved test-first reporting correction used RED commit `3342579`, the
+test-fixture correction `5049e47`, and GREEN commit `ed09fe7`. It replaces six
+per-panel legends with one deduplicated legend in a reserved right column and
+reserves a separate wrapped-caption band without changing any saved result,
+curve, coordinate, metric, or scientific computation. The focused plotting
+suite passed 4 tests, the pooled suite passed 68 tests, and the complete
+task-decoding suite passed 946 tests with the same 27 warnings. Renderer-level
+checks on all 54 actual CT026 layouts found every legend and caption contained
+inside the figure and disjoint from every panel and from each other.
+
+Six representative corrected figures were rendered from the validated saved
+result outside the completed run. Recursive size, modification-time, and
+SHA-256 snapshots confirmed that all 91 original run files were unchanged.
+PW-WP6 remains awaiting user inspection of that preview and separate approval
+for a fresh detached benchmark to recover exact full-run CPU and peak-RSS
+telemetry. Do not enter later work packages or silently rerun CT026.
 
 ## 2. Fixed revision-1 decisions
 
