@@ -1,11 +1,10 @@
 # Pooled-Window Task-Variable Decoding and Condition-Generalization Plan
 
-**Status:** Revision-1 documentation and PW-WP1 through PW-WP5 were approved
-on 2026-10-11. The PW-WP6 CT026 run is scientifically complete and validated,
-the transfer-figure layout correction is validated, and a fresh immutable
-benchmark supplies complete resource telemetry. Final PW-WP6 user acceptance
-remains open. PW-WP7 and later work packages and cluster work are not
-authorized.
+**Status:** Revision-1 documentation and PW-WP1 through PW-WP6 were approved
+on 2026-10-11. The CT026 run is scientifically complete and validated, the
+transfer-figure layout correction is validated, and a fresh immutable
+benchmark supplies complete resource telemetry. PW-WP7 and later work
+packages and cluster work are not authorized.
 
 **Scientific contract:**
 `docs/task_variable_condition_generalization_spec_v1.md`.
@@ -35,12 +34,12 @@ summary.
 | PW-WP6 reporting correction HEAD | `ed09fe7` |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
 | Current work package | PW-WP6: CT026 pre-choice benchmark |
-| Current phase | Fresh immutable benchmark terminally valid with exact telemetry and scientific equality; final user acceptance pending |
-| Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate; PW-WP5 reporting, lifecycle, resources, usage, and runtime-provenance correction |
+| Current phase | PW-WP6 complete and accepted; later work packages remain deferred pending a new approved plan |
+| Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate; PW-WP5 reporting, lifecycle, resources, usage, and runtime-provenance correction; PW-WP6 CT026 benchmark and reporting correction |
 | Active implementation files | None; original run `pooled_task_variable_decoding_20261012T011808Z` and fresh run `pooled_task_variable_decoding_20261012T021751Z` are immutable outside the repository |
 | Latest validation | 2026-10-12: fresh run `complete`, `final_results_published=true`, 18/18 checkpoints, valid result, 54 corrected figures, full resource telemetry, and exact equality across all 64 saved arrays and metadata versus the original; code gates remain plotting `4 passed`, pooled `68 passed`, full `946 passed, 27 warnings` |
-| Open blockers | Final user acceptance of PW-WP6; no technical or evidence blocker remains inside PW-WP6 |
-| Exact next action | Present the fresh benchmark evidence for acceptance; do not enter PW-WP7+ without a separately approved plan |
+| Open blockers | None for PW-WP6; later work packages require explicit scope selection and an approved test-first plan |
+| Exact next action | User selects whether to stop, enter optional PW-WP7 comparison, plan PW-WP8 cluster/batch support, or plan PW-WP9 additional windows and experimental execution |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -61,7 +60,7 @@ user approval all pass.
 | PW-WP3 result schema, checkpoints, and synchronous computation | `46db250`, `0d95c95` | `bf43195` | `11 passed`; combined boundary `425 passed` | `925 passed, 27 warnings` | User approved by authorizing PW-WP4 on 2026-10-11 | Complete |
 | PW-WP4 synthetic scientific gate | `a99630f` | Not required; PW-WP3 passed the new gate unchanged | `3 passed`; pooled suite `50 passed` | `928 passed, 27 warnings` | User approved by authorizing PW-WP5 on 2026-10-11 | Complete |
 | PW-WP5 reporting, lifecycle, resources, and usage | `c29f259`, `718a3dc`, `1e2e9ed`, `48bcfa6`, `15e923a`; fixture correction `9333520` | `1ff6b13`, `715ab95` | Pooled suite `65 passed`; focused Ruff passed | `943 passed, 27 warnings` | User approved entry to PW-WP6 on 2026-10-11; corrective provenance review passed | Complete |
-| PW-WP6 CT026 benchmark | Reporting correction `3342579`; test-fixture correction `5049e47` | Reporting correction `ed09fe7` | Plotting `4 passed`; pooled `68 passed`; 54/54 actual layouts pass geometry audit; fresh result exact-equality audit passed | `946 passed, 27 warnings` | User approved corrected preview and detached rerun; final benchmark acceptance pending | Awaiting review |
+| PW-WP6 CT026 benchmark | Reporting correction `3342579`; test-fixture correction `5049e47` | Reporting correction `ed09fe7` | Plotting `4 passed`; pooled `68 passed`; 54/54 actual layouts pass geometry audit; fresh result exact-equality audit passed | `946 passed, 27 warnings` | User accepted the corrected figures, fresh telemetry, and benchmark on 2026-10-11 | Complete |
 | PW-WP7 optional descriptive comparison | - | - | - | - | - | Deferred |
 | PW-WP8 cluster and batch execution | - | - | - | - | - | Deferred |
 | PW-WP9 additional windows and experimental batch | - | - | - | - | - | Deferred |
@@ -460,9 +459,8 @@ transforms with 1,030 valid and 50 unavailable; and 343,200 requested
 evaluation-metric cells with 314,400 valid and 28,800 unavailable. All 64
 saved arrays, metadata, canonical configuration, input manifest, scientific
 source identity, run fingerprint, runtime versions, and thread limits are
-exactly equal to the original run. PW-WP6 now awaits only final user
-acceptance. Do not enter later work packages without a separately approved
-plan.
+exactly equal to the original run. The user accepted PW-WP6 on 2026-10-11.
+Do not enter later work packages without a separately approved plan.
 
 ## 2. Fixed revision-1 decisions
 
