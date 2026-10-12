@@ -1264,6 +1264,65 @@ def _resource_envelope(identity: Mapping[str, object]) -> dict[str, int]:
     }
 
 
+def _training_window_stack_shapes(
+    config: PooledDecodingConfig,
+    windows: Sequence[TrainingWindow],
+    report: activity.ActivityDryRunReport,
+) -> tuple[dict[str, object], ...]:
+    """Report maximum requested model-input shapes for each training window.
+
+    Parameters
+    ----------
+    config : PooledDecodingConfig
+        Validated pooled and base settings containing requested component counts.
+    windows : sequence[TrainingWindow]
+        Canonical training windows whose bin indices define stacked time rows.
+    report : activity.ActivityDryRunReport
+        Bounded activity dimensions before condition, target, and fold filtering.
+
+    Returns
+    -------
+    tuple[dict[str, object], ...]
+        Canonical per-window records. Row counts are dimensionless maxima equal
+        to ``tensor_trial_count * training_bin_count``. Each shape is
+        ``(maximum_stacked_row, requested_feature)``; PCA widths are requested
+        component counts and direct-unit widths are selected unit counts.
+    """
+    feature_counts = {
+        "PFC": {
+            "pca": config.base_config.pfc_pc_count,
+            "units": report.pfc_unit_count,
+        },
+        "HPC": {
+            "pca": config.base_config.hpc_pc_count,
+            "units": report.hpc_unit_count,
+        },
+        "PFC+HPC": {
+            "pca": config.base_config.pfc_pc_count + config.base_config.hpc_pc_count,
+            "units": report.pfc_unit_count + report.hpc_unit_count,
+        },
+    }
+    records: list[dict[str, object]] = []
+    for window in windows:
+        training_bin_count = int(window.bin_indices.size)
+        maximum_row_count = report.tensor_trial_count * training_bin_count
+        records.append(
+            {
+                "window_name": window.name,
+                "training_bin_count": training_bin_count,
+                "maximum_stacked_row_count": maximum_row_count,
+                "maximum_requested_model_input_shapes": {
+                    region_name: {
+                        representation_name: (maximum_row_count, feature_count)
+                        for representation_name, feature_count in representations.items()
+                    }
+                    for region_name, representations in feature_counts.items()
+                },
+            }
+        )
+    return tuple(records)
+
+
 def plan_pooled_decoding_session(config_path: Path | str) -> dict[str, object]:
     """Inspect exact pooled work without loading spike arrays or fitting models.
 
@@ -1275,8 +1334,9 @@ def plan_pooled_decoding_session(config_path: Path | str) -> dict[str, object]:
     Returns
     -------
     dict[str, object]
-        Session/configuration coordinates, exact resource envelope, input
-        source sizes, fingerprints, and cleanliness text. Byte fields are bytes.
+        Session/configuration coordinates, bounded per-window stack dimensions,
+        exact resource envelope, input source sizes, fingerprints, and
+        cleanliness text. Byte fields are bytes; dimensions are counts.
     """
     identity = _collect_small_inputs(config_path)
     config = identity["config"]
@@ -1299,6 +1359,11 @@ def plan_pooled_decoding_session(config_path: Path | str) -> dict[str, object]:
         "training_window_names": tuple(window.name for window in windows),
         "condition_names": config.condition_names,
         "target_names": config.base_config.target_names,
+        "training_window_stack_shapes": _training_window_stack_shapes(
+            config,
+            windows,
+            report,
+        ),
         "resource_envelope": envelope,
         "source_file_sizes_bytes": {
             str(path): int(size)
