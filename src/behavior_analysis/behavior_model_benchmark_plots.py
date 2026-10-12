@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
 
-from src.behavior_analysis.performance_plots import save_performance_figure
 from src.behavior_modeling.benchmark_models import ModelReplay
 from src.behavior_modeling.benchmark_scenarios import BehaviorScenario
 
@@ -158,7 +157,17 @@ def save_benchmark_figure(figure: Figure, output_path: Path) -> None:
     -------
     None
     """
-    save_performance_figure(figure, Path(output_path))
+    path = Path(output_path)
+    try:
+        figure.savefig(
+            path,
+            format="png",
+            dpi=300,
+            bbox_inches="tight",
+            facecolor="white",
+        )
+    finally:
+        plt.close(figure)
 
 
 # ---------------------------------------------------------------------------
