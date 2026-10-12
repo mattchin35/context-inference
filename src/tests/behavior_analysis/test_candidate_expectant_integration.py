@@ -42,9 +42,10 @@ def _candidate_trial_table() -> pd.DataFrame:
             "reward": [1.0, 1.0, 0.0, 0.0],
             "experimenter_reward_given": [0, 1, 0, 0],
             "cur_block": [0, 0, 1, 1],
-            "switch_trial": [False, True, False, True],
-            "prev_correct": [False, True, False, True],
-            "explore_trial": [False, True, False, False],
+            "observer_value": [0.25, 1.5, -0.75, 0.5],
+            "switch_trial": [False, False, False, True],
+            "prev_correct": [False, False, False, True],
+            "explore_trial": [False, False, False, False],
         }
     )
 
@@ -158,8 +159,65 @@ def test_candidate_diagnostic_has_aligned_block_agreement(tmp_path) -> None:
         [1.5, 3.5],
     ]
     assert set(CANDIDATE_VALUE_COLUMNS).issubset(spans.columns)
+    assert "observer_mouse_agreement" in spans.columns
     assert save_path.name == "CT016_test_candidate_expectant_switching.png"
     assert save_path.exists()
+
+
+def test_candidate_diagnostic_compares_signed_values_and_ideal_observer(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Candidate diagnostics align all three value and agreement traces."""
+    params = gtf.TaskParams()
+    trial_df = gtf.collect_candidate_expectant_switching_features(
+        _candidate_trial_table(),
+        params,
+    )
+    captured = {}
+
+    def capture_figure(fig, _save_path):
+        captured["fig"] = fig
+
+    monkeypatch.setattr(
+        performance_plots,
+        "save_performance_figure",
+        capture_figure,
+    )
+    performance_plots.plot_candidate_expectant_switching_diagnostics(
+        trial_df,
+        tmp_path,
+        "CT016_test",
+    )
+
+    value_axis = captured["fig"].axes[0]
+    value_lines = {line.get_label(): line for line in value_axis.lines}
+    assert value_axis.get_ylabel() == "Choice / context / model value"
+    assert {
+        "Probe+P+D value",
+        "Home E+D value",
+        "History ideal value",
+    }.issubset(value_lines)
+    assert value_lines["History ideal value"].get_linestyle() == "--"
+    assert value_lines["History ideal value"].get_ydata().tolist() == [
+        0.25,
+        1.5,
+        -0.75,
+        0.5,
+    ]
+
+    agreement_axis = captured["fig"].axes[1]
+    ideal_segments = [
+        line
+        for line in agreement_axis.lines
+        if line.get_color() == performance_plots.AGENT_MOUSE_AGREEMENT_COLORS["Ideal"]
+    ]
+    assert [line.get_xdata().tolist() for line in ideal_segments] == [
+        [-0.5, 1.5],
+        [1.5, 3.5],
+    ]
+    assert all(line.get_linestyle() == "--" for line in ideal_segments)
+    plt.close(captured["fig"])
 
 
 def test_saved_session_refresh_updates_only_model_outputs(monkeypatch, tmp_path) -> None:
