@@ -800,7 +800,9 @@ predicts switching, while omission predicts staying.
 The oracle emits `V=+1` when the hidden correct side is left and `V=-1` when it
 is right. It is the only benchmark reference allowed to read `correct_side`.
 It is a task-performance ceiling, not a plausible uncued behavioral model, and
-must be labeled as such in every table and plot.
+must be labeled as such in every table and plot. Its switch probability is
+derived relative to the previous valid observed choice, just as for every other
+model; the current choice and outcome are not used in its pre-trial prediction.
 
 ### 10.3 Required existing models
 

@@ -90,6 +90,10 @@ def _assert_replay_contract(replay: ModelReplay, valid: np.ndarray) -> None:
     assert np.all((replay.p_left[valid] >= 0) & (replay.p_left[valid] <= 1))
     assert np.all(np.isnan(replay.p_left[~valid]))
     assert np.all(~replay.exact_tie[~valid])
+    valid_indices = np.flatnonzero(valid)
+    if valid_indices.size:
+        assert np.isnan(replay.p_switch[valid_indices[0]])
+        assert np.all(np.isfinite(replay.p_switch[valid_indices[1:]]))
     assert isinstance(replay.internal_states, MappingProxyType)
     for state in replay.internal_states.values():
         assert state.shape == (n_trials,)
@@ -119,7 +123,7 @@ def test_all_models_satisfy_replay_contract_on_default_suite() -> None:
             assert replay.model_id == model.model_id
             _assert_replay_contract(replay, scenario.valid)
 
-        oracle = replay_oracle(scenario.correct_side, scenario.valid)
+        oracle = replay_oracle(history, scenario.correct_side)
         assert oracle.model_id == ORACLE_MODEL_ID
         _assert_replay_contract(oracle, scenario.valid)
 
@@ -147,9 +151,11 @@ def test_reference_models_match_hand_calculations() -> None:
 def test_oracle_is_separate_and_reads_only_correct_side_and_validity() -> None:
     """The labeled ceiling has a distinct hidden-context interface."""
     valid = np.array([True, False, True])
-    replay = replay_oracle(np.array([1, -1, 0]), valid)
+    history = _history([1, -1, 0], [1.0, np.nan, 0.0], valid)
+    replay = replay_oracle(history, np.array([1, -1, 0]))
     np.testing.assert_array_equal(replay.model_value[[0, 2]], [1.0, -1.0])
     assert np.isnan(replay.model_value[1])
+    assert replay.p_switch[2] == pytest.approx(1.0)
     assert replay.decision_drive is None
 
 

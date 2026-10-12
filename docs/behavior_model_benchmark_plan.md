@@ -175,14 +175,16 @@ model's pre-trial prediction.
 The oracle is deliberately not forced into the ordinary replay interface:
 
 ```python
-replay_oracle(correct_side, valid) -> ModelReplay
+replay_oracle(history: ObservableHistory, correct_side: np.ndarray) -> ModelReplay
 ```
 
 The benchmark orchestrator replays the 13 ordinary models using
 `ObservableHistory`, then invokes the oracle adapter separately and appends its
-result. This is the only code path that receives `correct_side`. It avoids both
-a hidden-information flag on every model and an ordinary-model input object
-that contains forbidden context.
+result. The oracle uses observable previous choices only to derive its aligned
+switch probability; `correct_side` determines its side prediction. This is the
+only code path that receives `correct_side`. It avoids both a hidden-information
+flag on every model and an ordinary-model input object that contains forbidden
+context.
 
 ### 3.4 Model implementations
 
@@ -378,7 +380,9 @@ Tests in `src/tests/behavior_modeling/test_benchmark_models.py`:
 4. Invalid rows remain missing and do not update history.
 5. Chance, persistence, WSLS, reversed WSLS, and oracle match hand calculations.
 6. The ordinary-model registry contains no correct-side input or oracle.
-7. Only the separate oracle adapter accepts `correct_side`.
+7. Only the separate oracle adapter accepts `correct_side`; its observable
+   history input is used to derive switch probability without current-trial
+   leakage.
 
 ### WP3: Existing and proposed models
 
