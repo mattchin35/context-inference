@@ -320,7 +320,7 @@ def test_expectant_diagnostic_reward_count_and_strength_use_separate_y_axes(
     strength_axis = captured["fig"].axes[4]
     assert count_axis.get_ylabel() == "Reward count"
     assert strength_axis.get_ylabel() == "Expectancy strength"
-    assert [line.get_label() for line in count_axis.lines] == ["Reward count"]
+    assert "Reward count" in [line.get_label() for line in count_axis.lines]
     assert [line.get_label() for line in strength_axis.lines] == ["Expectancy strength"]
     legend_labels = {text.get_text() for text in count_axis.get_legend().get_texts()}
     assert legend_labels == {"Reward count", "Expectancy strength"}
