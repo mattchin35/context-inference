@@ -143,3 +143,19 @@ def test_save_benchmark_figure_writes_png_and_closes_only_target(tmp_path) -> No
     assert target_number not in plt.get_fignums()
     assert other_number in plt.get_fignums()
     plt.close(other_figure)
+
+
+def test_save_benchmark_figure_preserves_precomputed_caption_layout(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Saving must not rerun tight_layout after caption space was reserved."""
+    figure = plt.figure()
+
+    def fail_if_relaid_out(*_args, **_kwargs):
+        raise AssertionError("save must preserve the figure's finalized layout")
+
+    monkeypatch.setattr(figure, "tight_layout", fail_if_relaid_out)
+    save_benchmark_figure(figure, tmp_path / "caption-layout.png")
+
+    assert (tmp_path / "caption-layout.png").is_file()
