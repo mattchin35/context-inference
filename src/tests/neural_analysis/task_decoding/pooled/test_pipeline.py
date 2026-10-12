@@ -620,6 +620,34 @@ def test_prepared_execution_revalidates_inputs_before_accepting_checkpoint(
     assert state["final_results_published"] is False
 
 
+def test_active_execution_owner_rejection_is_read_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A losing local writer cannot regress another process's durable state."""
+    overlay, _paths = _write_real_pooled_overlay(tmp_path)
+    monkeypatch.setattr(results, "validate_pooled_source_cleanliness", lambda *_: None)
+    run_directory = pipeline.prepare_pooled_decoding_run(overlay)
+    (run_directory / "execution_guard.json").write_text(
+        '{"pid":123,"claimed_at":"synthetic"}\n',
+        encoding="ascii",
+    )
+    before = {
+        path.relative_to(run_directory): path.read_bytes()
+        for path in run_directory.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(RuntimeError, match="active execution owner"):
+        pipeline.run_prepared_pooled_decoding(run_directory)
+
+    assert before == {
+        path.relative_to(run_directory): path.read_bytes()
+        for path in run_directory.rglob("*")
+        if path.is_file()
+    }
+
+
 def test_thin_cli_routes_dry_run_new_resume_detached_and_status(
     tmp_path: Path,
     monkeypatch,
