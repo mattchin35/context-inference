@@ -1,6 +1,7 @@
 # Behavioral model benchmark: implementation plan
 
-Status: revised draft for review; not approved for implementation.
+Status: implemented; home-referenced expectancy extension approved for
+implementation on 2026-10-12.
 
 Companion specification:
 `docs/behavior_model_benchmark_spec.md`.
@@ -8,7 +9,7 @@ Companion specification:
 ## 1. Purpose and scope
 
 Implement a deterministic benchmark that replays the 22 prescribed behavior
-samples through all 14 fixed model configurations in the specification. The
+samples through all 15 fixed model configurations in the specification. The
 benchmark is intended to show where each consistent model describes behavior
 well or poorly. It will not select models by trial, fit parameters separately
 by sample, or simulate new mouse behavior.
@@ -163,7 +164,7 @@ class BenchmarkModelSpec:
 ```
 
 The parameter mapping is a read-only copy of the resolved values.
-`build_observable_models(config)` returns the 13 models that use only observable
+`build_observable_models(config)` returns the 14 models that use only observable
 history. It does not include the oracle. A common finalizer derives right,
 choice and switch probabilities, the common signed value, and the tie mask from
 a model's primary output. Observed-choice probability is not part of `ModelReplay`
@@ -178,7 +179,7 @@ The oracle is deliberately not forced into the ordinary replay interface:
 replay_oracle(history: ObservableHistory, correct_side: np.ndarray) -> ModelReplay
 ```
 
-The benchmark orchestrator replays the 13 ordinary models using
+The benchmark orchestrator replays the 14 ordinary models using
 `ObservableHistory`, then invokes the oracle adapter separately and appends its
 result. The oracle uses observable previous choices only to derive its aligned
 switch probability; `correct_side` determines its side prediction. This is the
@@ -192,7 +193,7 @@ The complete roster is defined in Section 13 of the specification:
 
 - five reference models, including the separately replayed oracle;
 - four existing model adapters; and
-- five proposed model configurations.
+- six proposed model configurations.
 
 The two threshold configurations share one replay function with distinct fixed
 parameter records. Proposed models reuse existing previous-outcome, expectancy,
@@ -310,7 +311,7 @@ Options:
 - repeatable `--model MODEL_ID` and `--scenario SCENARIO_ID` filters; and
 - optional `--config PATH` for one validated JSON parameter override.
 
-The default evaluates all 22 samples and all 14 models. The override schema,
+The default evaluates all 22 samples and all 15 models. The override schema,
 allowed fields, and value constraints are defined in Section 2.4 of the
 specification. Overrides are merged with canonical defaults once, then the same
 resolved configuration is applied to every selected sample. Unknown keys,
@@ -393,7 +394,7 @@ Continue tests in `test_benchmark_models.py`:
 3. History-observer state and choice probabilities match the executable agent.
 4. History-observer and forgetting-Q use their logistic, not doubled-logit,
    probability links.
-5. All 14 models satisfy the common replay contract on all default samples.
+5. All 15 models satisfy the common replay contract on all default samples.
 6. For every non-oracle model, identical observable prefixes produce identical
    pre-trial `p_left`, `p_right`, `model_value`, applicable `decision_drive`,
    `p_switch`, tie, and internal-state outputs despite different current
@@ -466,7 +467,7 @@ Tests in
 2. Run the full non-neural test subset without editing neural-analysis code.
 3. Generate one single-model smoke atlas and the combined agreement figure.
 4. Obtain user approval of the visual design.
-5. Generate the complete 14-model report only after visual approval.
+5. Generate the complete 15-model report only after visual approval.
 
 The scientific pattern of good and poor correspondence is not a test
 assertion; tests verify calculations, causality, and presentation contracts.
@@ -477,7 +478,7 @@ No new dependency is required. Use NumPy, pandas, SciPy, Matplotlib, and pytest
 already present in the project. All Python commands use `uv run`.
 
 The histories are short, so sequential replay is clearer than parallelism.
-The full run produces 28 atlas PNGs plus one agreement PNG. Figures are created
+The full run produces 30 atlas PNGs plus one agreement PNG. Figures are created
 and closed sequentially, and each replay is reused across its atlas pages.
 Profiling and low-level optimization are unnecessary unless measurements later
 show an actual bottleneck.

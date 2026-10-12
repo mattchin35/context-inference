@@ -106,6 +106,7 @@ accepted override groups and fields are:
 | `probe_persistence_doubt` | `persistence_weight`, `probe_weight`, `doubt_weight`, `doubt_lambda` |
 | `direct_expectancy_switch_doubt` | `expectancy_threshold`, `expectancy_scale`, `minimum_switch_probability`, `switch_probability_span`, `omission_persistence_weight`, `doubt_weight`, `doubt_lambda` |
 | `global_reward_expectancy_doubt` | `reward_decay`, `expectancy_threshold`, `expectancy_scale`, `minimum_switch_probability`, `switch_probability_span`, `omission_persistence_weight`, `doubt_weight`, `doubt_lambda` |
+| `home_referenced_expectancy_doubt` | `expectancy_threshold`, `expectancy_scale`, `expectancy_weight`, `doubt_weight`, `doubt_lambda` |
 
 Validation rules are:
 
@@ -899,7 +900,8 @@ members of the required initial roster.
 
 ### 10.4 Shared counterfactual doubt for proposed models
 
-Three proposed models below reuse the existing counterfactual doubt state.
+Four proposed model families below reuse the existing counterfactual doubt
+state.
 Maintain nonnegative effective omission counts `n_left` and `n_right`, both
 initialized to zero. After every valid trial:
 
@@ -1145,7 +1147,56 @@ After observing the mouse:
 An early return or an overlong excursion is recorded as poor correspondence;
 the model does not change its thresholds in response.
 
-### 10.9 Models excluded from the initial roster
+### 10.9 Proposed model 5: `home_referenced_expectancy_doubt`
+
+This model combines persistent home-referenced reward expectancy and
+side-specific omission doubt on every trial. Reward and omission update the
+two component states; they do not select mutually exclusive decision rules.
+
+Reuse `RewardConfirmedExpectancyState` and the shared counterfactual doubt
+state. A reward on the confirmed side increments its reward count. A reward on
+the opposite side makes that side the new confirmed home with reward count one.
+Any reward clears both omission counts. An omission preserves the confirmed
+home and reward count while incrementing only the chosen side's omission
+count.
+
+With `home_sign=+1` for left and `-1` for right, calculate:
+
+```text
+expectancy_strength =
+    (1 + tanh((reward_count - expectancy_threshold)
+              / expectancy_scale)) / 2
+expectancy_choice = home_sign * (1 - 2 * expectancy_strength)
+
+decision_drive = expectancy_weight * expectancy_choice
+                 + doubt_weight * doubt_choice
+V = tanh(decision_drive)
+P(left) = (1 + V) / 2
+```
+
+Before the first reward, `expectancy_choice=0`; omission doubt may still
+contribute. There is no generic previous-choice persistence term. Below the
+expectancy threshold the expectancy component points home, while above the
+threshold it points to the opposite/probe side. Doubt always points away from
+the side with more accumulated omissions.
+
+Canonical parameters are:
+
+- `expectancy_threshold=2.5` rewarded trials;
+- `expectancy_scale=0.5` rewarded trials;
+- `expectancy_weight=1.0`;
+- `doubt_weight=1.0`; and
+- `doubt_lambda=0.5` inverse omission trials.
+
+These values make reward counts one and two home-preferring and count three
+probe-preferring. Following a below-threshold failed probe, expectancy and
+doubt both favor immediate return. Following an above-threshold failed probe,
+expectancy initially favors remaining on the probe while doubt grows toward
+home; the greedy preference changes to home after the third consecutive probe
+omission. A rewarded probe becomes the new home and restarts its reward count
+at one.
+
+### 10.10 Models excluded from the initial roster
 
 The initial benchmark does not include:
 
@@ -1168,6 +1219,7 @@ motivate its construction:
 | Reward-count expectancy | `PR-01`, `PR-02`, `EX-01`, `EX-02`, `EX-03` |
 | Side-specific expectancy reset | `EX-03`, `EX-04`, `RS-01` |
 | Side-independent reward integration | `EX-02`, `EX-04`, `RS-01` |
+| Persistent home-referenced expectancy plus doubt | `PR-01`, `PR-02`, `EX-01`, `EX-03`, `RS-01`, `CT-01`, `CT-02` |
 | Omission-driven doubt | `AT-04` through `AT-07`, `PR-01`, `PR-03`, `PR-04`, `RS-02` |
 | WSLS-like outcome response | `AT-02` through `AT-07`, `PR-02` |
 | Explicit threshold probe/return | `PR-01`, `PR-02`, `PR-04`, `EX-03`, `EX-04` |
@@ -1266,5 +1318,6 @@ The required initial model roster is:
 - `probe_persistence_doubt`;
 - `direct_expectancy_switch_doubt`;
 - `global_reward_expectancy_doubt`;
+- `home_referenced_expectancy_doubt`;
 - `threshold_probe_return_3_3`; and
 - `threshold_probe_return_1_1`.

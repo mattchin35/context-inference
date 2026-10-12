@@ -39,6 +39,7 @@ EXPECTED_OBSERVABLE_MODEL_IDS = (
     "probe_persistence_doubt",
     "direct_expectancy_switch_doubt",
     "global_reward_expectancy_doubt",
+    "home_referenced_expectancy_doubt",
     "threshold_probe_return_3_3",
     "threshold_probe_return_1_1",
 )
@@ -101,7 +102,7 @@ def _assert_replay_contract(replay: ModelReplay, valid: np.ndarray) -> None:
 
 
 def test_observable_model_registry_is_complete_ordered_and_immutable() -> None:
-    """The registry contains exactly the 13 non-oracle fixed configurations."""
+    """The registry contains exactly the 14 non-oracle fixed configurations."""
     models = build_observable_models()
     assert OBSERVABLE_MODEL_IDS == EXPECTED_OBSERVABLE_MODEL_IDS
     assert tuple(model.model_id for model in models) == EXPECTED_OBSERVABLE_MODEL_IDS
@@ -259,6 +260,123 @@ def test_proposed_model_checkpoint_probabilities() -> None:
         _history(pr02.action, pr02.reward)
     )
     np.testing.assert_allclose(threshold_11.p_switch[1:3], [0.9, 0.9])
+
+
+def test_home_referenced_expectancy_and_doubt_component_matrix() -> None:
+    """Persistent expectancy and omission doubt combine in all matrix cells."""
+    model = _models_by_id()["home_referenced_expectancy_doubt"]
+
+    initial = model.replay(_history([1], [1.0]))
+    assert initial.p_left[0] == pytest.approx(0.5)
+
+    no_home_omission = model.replay(_history([1, 0], [0.0, 0.0]))
+    assert np.isnan(
+        no_home_omission.internal_states["expectancy_confirmed_side"][1]
+    )
+    assert no_home_omission.internal_states["expectancy_choice"][1] == 0.0
+    assert no_home_omission.p_left[1] < 0.5
+
+    home_rewards = model.replay(_history([1, 1, 1, 0], [1.0, 1.0, 1.0, 0.0]))
+    assert home_rewards.p_left[1] == pytest.approx(0.879755, abs=1e-6)
+    assert home_rewards.p_left[2] == pytest.approx(0.821007, abs=1e-6)
+    assert home_rewards.p_right[3] == pytest.approx(0.821007, abs=1e-6)
+
+    below_home_omission = model.replay(
+        _history([1, 1, 1], [1.0, 0.0, 0.0])
+    )
+    assert below_home_omission.p_left[2] == pytest.approx(0.769088, abs=1e-6)
+
+    above_home_omission = model.replay(
+        _history([1, 1, 1, 1, 0], [1.0, 1.0, 1.0, 0.0, 0.0])
+    )
+    assert above_home_omission.p_right[4] == pytest.approx(0.909712, abs=1e-6)
+
+    below_probe_omission = model.replay(
+        _history([1, 0, 1], [1.0, 0.0, 0.0])
+    )
+    assert below_probe_omission.p_left[2] == pytest.approx(0.941423, abs=1e-6)
+
+
+def test_home_referenced_high_expectancy_probe_returns_after_three_omissions() -> None:
+    """High expectancy sustains a probe until accumulated doubt overtakes it."""
+    scenario = next(
+        item for item in build_default_scenarios() if item.scenario_id == "PR-01"
+    )
+    replay = _models_by_id()["home_referenced_expectancy_doubt"].replay(
+        _history(scenario.action, scenario.reward)
+    )
+
+    np.testing.assert_allclose(
+        replay.p_left[4:7],
+        [0.323825, 0.435623, 0.507637],
+        atol=1e-6,
+    )
+    assert replay.p_right[4] > 0.5
+    assert replay.p_right[5] > 0.5
+    assert replay.p_left[6] > 0.5
+
+
+def test_home_referenced_rewarded_probe_becomes_new_home() -> None:
+    """A rewarded probe resets expectancy and doubt around the newly home side."""
+    replay = _models_by_id()["home_referenced_expectancy_doubt"].replay(
+        _history([1, 0, 0], [1.0, 1.0, 0.0])
+    )
+
+    assert replay.internal_states["expectancy_confirmed_side"][2] == 0
+    assert replay.internal_states["expectancy_reward_count"][2] == 1
+    assert replay.internal_states["doubt_raw_value"][2] == 0.0
+    assert replay.p_right[2] == pytest.approx(0.879755, abs=1e-6)
+
+
+def test_home_referenced_scenario_checkpoint_directions() -> None:
+    """Canonical samples exercise the intended fixed matrix without model switching."""
+    scenarios = {item.scenario_id: item for item in build_default_scenarios()}
+    model = _models_by_id()["home_referenced_expectancy_doubt"]
+    replays = {
+        scenario_id: model.replay(
+            _history(scenarios[scenario_id].action, scenarios[scenario_id].reward)
+        )
+        for scenario_id in ("PR-02", "EX-01", "EX-03", "RS-01", "CT-01", "CT-02")
+    }
+
+    pr02 = replays["PR-02"]
+    assert pr02.p_left[1] > 0.5
+    assert pr02.p_left[2] > 0.5
+
+    ex01 = replays["EX-01"]
+    assert ex01.p_left[2] > 0.5
+    assert ex01.p_left[4] > 0.5
+    assert ex01.p_right[5] > 0.5
+
+    ex03 = replays["EX-03"]
+    assert ex03.p_right[3] > 0.5
+    assert ex03.p_right[4] > 0.5
+
+    rs01 = replays["RS-01"]
+    assert rs01.p_right[1] > 0.5
+    assert rs01.p_right[2] > 0.5
+
+    ct01 = replays["CT-01"]
+    ct02 = replays["CT-02"]
+    assert ct01.p_right[4] > 0.5
+    assert ct01.p_left[4] == pytest.approx(ct02.p_left[4])
+
+
+def test_existing_direct_expectancy_model_is_unchanged_by_new_model() -> None:
+    """The additive model must not silently alter the earlier direct model."""
+    scenario = next(
+        item for item in build_default_scenarios() if item.scenario_id == "PR-01"
+    )
+    replay = _models_by_id()["direct_expectancy_switch_doubt"].replay(
+        _history(scenario.action, scenario.reward)
+    )
+
+    assert replay.p_switch[3] == pytest.approx(0.804638, abs=1e-6)
+    np.testing.assert_allclose(
+        replay.p_switch[4:7],
+        [0.289403, 0.442737, 0.543697],
+        atol=1e-6,
+    )
 
 
 def test_non_oracle_predictions_are_causal_for_every_model() -> None:

@@ -71,6 +71,31 @@ def test_partial_overrides_merge_with_defaults_and_affect_replay() -> None:
     assert replay.p_switch[1] > 0.97
 
 
+def test_home_referenced_overrides_merge_and_affect_every_replay() -> None:
+    """The additive model exposes one fixed validated parameter record."""
+    model_id = "home_referenced_expectancy_doubt"
+    resolved = resolve_benchmark_parameters(
+        {model_id: {"expectancy_weight": 2.0, "doubt_weight": 0.5}}
+    )
+
+    assert resolved[model_id] == {
+        "expectancy_threshold": 2.5,
+        "expectancy_scale": 0.5,
+        "expectancy_weight": 2.0,
+        "doubt_weight": 0.5,
+        "doubt_lambda": 0.5,
+    }
+    model = next(
+        item for item in build_observable_models(resolved) if item.model_id == model_id
+    )
+    history = ObservableHistory(
+        action=np.array([1, 1], dtype=np.int8),
+        reward=np.array([1.0, 0.0]),
+        valid=np.array([True, True]),
+    )
+    assert model.replay(history).p_left[1] > 0.97
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -82,6 +107,8 @@ def test_partial_overrides_merge_with_defaults_and_affect_replay() -> None:
         {"probe_persistence_doubt": {"probe_weight": -1.0}},
         {"direct_expectancy_switch_doubt": {"expectancy_scale": 0.0}},
         {"global_reward_expectancy_doubt": {"reward_decay": 1.1}},
+        {"home_referenced_expectancy_doubt": {"expectancy_weight": -0.1}},
+        {"home_referenced_expectancy_doubt": {"expectancy_scale": 0.0}},
         {
             "direct_expectancy_switch_doubt": {
                 "minimum_switch_probability": 0.7,
@@ -177,3 +204,38 @@ def test_smoke_report_creates_exact_documented_artifacts(tmp_path) -> None:
     assert "AT-01" in summary and "chance" in summary
     assert "greedy agreement" in summary.lower()
     assert "completed" in log.lower()
+
+
+def test_home_referenced_report_saves_two_pages_and_auditable_state(tmp_path) -> None:
+    """A full-sample selected-model run exports its plots, state, and parameters."""
+    repository_root = tmp_path / "repository"
+    repository_root.mkdir()
+    run_directory = run_report(
+        tmp_path / "output",
+        model_ids=("home_referenced_expectancy_doubt",),
+        repository_root=repository_root,
+        timestamp=datetime(2026, 10, 12, 17, 0, 0, tzinfo=timezone.utc),
+    )
+
+    assert {
+        path.name
+        for path in (
+            run_directory / "diagnostics" / "home_referenced_expectancy_doubt"
+        ).glob("*.png")
+    } == {"page_01.png", "page_02.png"}
+    with (run_directory / "model_parameters.json").open(encoding="utf-8") as handle:
+        saved_parameters = json.load(handle)
+    assert saved_parameters["home_referenced_expectancy_doubt"] == {
+        "doubt_lambda": 0.5,
+        "doubt_weight": 1.0,
+        "expectancy_scale": 0.5,
+        "expectancy_threshold": 2.5,
+        "expectancy_weight": 1.0,
+    }
+    trial_table = (run_directory / "trialwise_model_outputs.csv").read_text(
+        encoding="utf-8"
+    )
+    assert "state__expectancy_choice" in trial_table.splitlines()[0]
+    assert "warnings=none" in (run_directory / "run.log").read_text(
+        encoding="utf-8"
+    )
